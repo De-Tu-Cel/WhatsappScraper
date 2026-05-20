@@ -45,3 +45,16 @@ class ProcessUrlResponse(BaseModel):
 
 class SearchResponse(BaseModel):
     urls: List[str]
+
+class DeleteCompaniesRequest(BaseModel):
+    ids: List[str]
+
+class UpdateCompanyRequest(BaseModel):
+    name: Optional[str] = None
+    industry: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    website: Optional[str] = None
+    description: Optional[str] = None
+    has_whatsapp: Optional[bool] = None
+    status: Optional[str] = None

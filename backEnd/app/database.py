@@ -85,14 +85,58 @@ class MongoDBManager:
     def get_company_full_data(self, company_id):
         """Obtiene todos los datos de una empresa incluyendo contactos"""
         from bson import ObjectId
-        
+
         company = self.db.companies.find_one({"_id": ObjectId(company_id)})
         if not company:
             return None
-        
+
         # Agregar contactos
         company["contacts"] = list(self.db.contacts.find({"company_id": company_id}))
         company["person_contacts"] = list(self.db.person_contacts.find({"company_id": company_id}))
         company["social_media"] = self.db.social_media.find_one({"company_id": company_id})
-        
+
         return company
+
+    def get_distinct_values(self, field):
+        return sorted([v for v in self.db.companies.distinct(field) if v])
+
+    def list_companies(self, page=1, page_size=10, search=None, industry=None, city=None, has_whatsapp=None):
+        query = {}
+        if search:
+            query["$or"] = [
+                {"name": {"$regex": search, "$options": "i"}},
+                {"website": {"$regex": search, "$options": "i"}},
+                {"domain": {"$regex": search, "$options": "i"}},
+            ]
+        if industry:
+            query["industry"] = {"$regex": industry, "$options": "i"}
+        if city:
+            query["city"] = {"$regex": city, "$options": "i"}
+        if has_whatsapp is not None:
+            query["has_whatsapp"] = has_whatsapp
+
+        total = self.db.companies.count_documents(query)
+        companies = list(
+            self.db.companies.find(
+                query,
+                {"name": 1, "domain": 1, "website": 1, "industry": 1, "city": 1, "state": 1, "has_whatsapp": 1, "status": 1, "created_at": 1}
+            )
+            .sort("created_at", -1)
+            .skip((page - 1) * page_size)
+            .limit(page_size)
+        )
+        return {"total": total, "companies": companies}
+
+    def delete_companies(self, company_ids):
+        from bson import ObjectId
+        result = self.db.companies.delete_many({"_id": {"$in": [ObjectId(cid) for cid in company_ids]}})
+        return result.deleted_count
+
+    def update_company_fields(self, company_id, fields):
+        from bson import ObjectId
+        fields["updated_at"] = datetime.now()
+        result = self.db.companies.update_one(
+            {"_id": ObjectId(company_id)},
+            {"$set": fields}
+        )
+        return result.modified_count > 0

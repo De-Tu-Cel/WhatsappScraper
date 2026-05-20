@@ -5,17 +5,20 @@ import LinkIcon from '@mui/icons-material/Link'
 // import SearchIcon from '@mui/icons-material/Search'   // Prospectos — comentado temporalmente
 import ListAltIcon from '@mui/icons-material/ListAlt'
 import UploadFileIcon from '@mui/icons-material/UploadFile'
+import StorageIcon from '@mui/icons-material/Storage'
 import Sidebar from '../components/Sidebar'
 import dynamic from 'next/dynamic'
 const SingleUrlProcessor = dynamic(() => import('../components/singleUrlProcessor'), { ssr: false })
 // import SearchProspects from '../components/searchProspects'  // comentado temporalmente
 import BatchProcessor from '../components/batchProcessor'
 import CsvImporter from '../components/csvImporter'
+import DatabaseViewer from '../components/databaseViewer'
 
 const NAV_ITEMS = [
   { label: 'URL Individual', icon: <LinkIcon />,       component: <SingleUrlProcessor /> },
   { label: 'Lote (URLs)',    icon: <ListAltIcon />,    component: <BatchProcessor /> },
   { label: 'Importar CSV',  icon: <UploadFileIcon />, component: <CsvImporter /> },
+  { label: 'Base de datos', icon: <StorageIcon />,    component: <DatabaseViewer /> },
   // { label: 'Buscar Prospectos', icon: <SearchIcon />, component: <SearchProspects /> },
 ]
 

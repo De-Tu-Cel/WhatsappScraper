@@ -126,7 +126,6 @@ export default function CsvImporter() {
 
       {/* ── DROP ZONE ── */}
       {!hasFile ? (
-        <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <Box
           onDragOver={e => { e.preventDefault(); setDragging(true) }}
           onDragLeave={() => setDragging(false)}
@@ -134,19 +133,19 @@ export default function CsvImporter() {
           onClick={() => inputRef.current?.click()}
           sx={{
             width: '100%',
+            height: 1085,
             border: `1.5px dashed ${dragging ? C.borderHov : C.border}`,
             borderRadius: 3,
             bgcolor: dragging ? C.bgHov : C.bg,
             display: 'flex', flexDirection: 'column',
             alignItems: 'center', justifyContent: 'center',
             gap: 1.5,
-            py: 8,
             cursor: 'pointer',
             transition: 'border-color 0.2s, background-color 0.2s',
             '&:hover': { borderColor: C.borderHov, bgcolor: C.bgHov },
           }}
         >
-          <InsertDriveFileOutlinedIcon sx={{ fontSize: 40, color: C.dimText }} />
+          <InsertDriveFileOutlinedIcon sx={{ fontSize: 36, color: C.dimText }} />
           <Typography variant="body1" fontWeight={600} color="text.primary">
             Arrastra tu archivo CSV aquí
           </Typography>
@@ -157,7 +156,6 @@ export default function CsvImporter() {
             </Box>
           </Typography>
           <input ref={inputRef} type="file" accept=".csv" hidden onChange={handleInputChange} />
-        </Box>
         </Box>
       ) : (
         /* ── FILE LOADED PILL ── */

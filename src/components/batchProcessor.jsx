@@ -167,13 +167,13 @@ export default function BatchProcessor() {
           size="small"
           sx={{
             position: 'absolute',
-            bottom: 10,
+            bottom: 20,
             right: 10,
-            bgcolor: rawUrls.trim() && !loading ? '#3b82f6' : 'rgba(59,130,246,0.15)',
+            bgcolor: rawUrls.trim() && !loading ? '#0062ffd8' : 'rgba(59,130,246,0.15)',
             color: rawUrls.trim() && !loading ? 'white' : 'rgba(255,255,255,0.3)',
             width: 36, height: 36,
             transition: 'background-color 0.2s',
-            '&:hover': { bgcolor: rawUrls.trim() && !loading ? '#2563eb' : 'rgba(59,130,246,0.15)' },
+            '&:hover': { bgcolor: rawUrls.trim() && !loading ? '#0137ad' : 'rgba(59,130,246,0.15)' },
             '&.Mui-disabled': { bgcolor: 'rgba(59,130,246,0.1)', color: 'rgba(255,255,255,0.2)' },
           }}
         >
@@ -188,7 +188,7 @@ export default function BatchProcessor() {
           <Typography
             variant="caption"
             sx={{
-              position: 'absolute', bottom: 14, right: 54,
+              position: 'absolute', bottom: 25, right: 54,
               color: 'rgba(255,255,255,0.18)', userSelect: 'none',
             }}
           >

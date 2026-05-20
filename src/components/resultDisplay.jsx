@@ -5,7 +5,6 @@ import Card from '@mui/material/Card'
 import CardContent from '@mui/material/CardContent'
 import Typography from '@mui/material/Typography'
 import Chip from '@mui/material/Chip'
-import Divider from '@mui/material/Divider'
 import Alert from '@mui/material/Alert'
 import Table from '@mui/material/Table'
 import TableBody from '@mui/material/TableBody'
@@ -14,9 +13,25 @@ import TableRow from '@mui/material/TableRow'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import PhoneIcon from '@mui/icons-material/Phone'
 import EmailIcon from '@mui/icons-material/Email'
-import LocationOnIcon from '@mui/icons-material/LocationOn'
 import BusinessIcon from '@mui/icons-material/Business'
+import CategoryIcon from '@mui/icons-material/Category'
 import PeopleIcon from '@mui/icons-material/People'
+import NotesIcon from '@mui/icons-material/Notes'
+import ContactsIcon from '@mui/icons-material/Contacts'
+import LanguageIcon from '@mui/icons-material/Language'
+import HandymanIcon from '@mui/icons-material/Handyman'
+import InventoryIcon from '@mui/icons-material/Inventory2'
+import SendIcon from '@mui/icons-material/Send'
+import FingerprintIcon from '@mui/icons-material/Fingerprint'
+
+function SectionTitle({ icon, color = '#60a5fa', children }) {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+      <Box sx={{ color, display: 'flex' }}>{icon}</Box>
+      <Typography variant="subtitle1" fontWeight={600} color="text.primary">{children}</Typography>
+    </Box>
+  )
+}
 
 function MetricCard({ icon, title, value, color = 'primary.main' }) {
   return (
@@ -39,24 +54,24 @@ export default function ResultDisplay({ result }) {
 
   return (
     <Box>
-      <Alert severity="success" sx={{ mb: 3 }}>✅ Proceso completado exitosamente</Alert>
+      <Alert severity="success" sx={{ mb: 3 }}>Proceso completado exitosamente</Alert>
 
       {/* ── MÉTRICAS ── */}
       <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={6} md={3}>
+        <Grid size={3}>
           <MetricCard icon={<BusinessIcon />} title="Empresa"
             value={s.name?.slice(0, 18) || '—'} />
         </Grid>
-        <Grid item xs={6} md={3}>
-          <MetricCard icon={<BusinessIcon />} title="Industria"
+        <Grid size={3}>
+          <MetricCard icon={<CategoryIcon />} title="Industria"
             value={s.industry || '—'} color="secondary.main" />
         </Grid>
-        <Grid item xs={6} md={3}>
+        <Grid size={3}>
           <MetricCard icon={<WhatsAppIcon />} title="WhatsApp"
-            value={result.primary_whatsapp_number ? '✅ Sí' : '❌ No'}
+            value={result.primary_whatsapp_number ? 'Sí' : 'No'}
             color="success.main" />
         </Grid>
-        <Grid item xs={6} md={3}>
+        <Grid size={3}>
           <MetricCard icon={<PeopleIcon />} title="Contactos"
             value={totalContacts} color="warning.main" />
         </Grid>
@@ -65,53 +80,18 @@ export default function ResultDisplay({ result }) {
       {/* ── DESCRIPCIÓN ── */}
       <Card sx={{ mb: 2 }}>
         <CardContent>
-          <Typography variant="h6" gutterBottom>📋 Descripción</Typography>
+          <SectionTitle icon={<NotesIcon fontSize="small" />} color="#a78bfa">Descripción</SectionTitle>
           <Typography color="text.secondary">{s.description}</Typography>
         </CardContent>
       </Card>
 
-      {/* ── ACTIVIDAD + UBICACIÓN ── */}
-      <Grid container spacing={2} sx={{ mb: 2 }}>
-        <Grid item xs={12} md={6}>
-          <Card sx={{ height: '100%' }}>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>🎯 Actividad Principal</Typography>
-              <Typography color="text.secondary">{sx.main_activity || '—'}</Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <Card sx={{ height: '100%' }}>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>📍 Ubicación</Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <LocationOnIcon color="error" />
-                <Typography color="text.secondary">
-                  {[sx.city, sx.state, sx.country].filter(Boolean).join(', ') || '—'}
-                </Typography>
-              </Box>
-              {sx.address && (
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  {sx.address}
-                </Typography>
-              )}
-              {sx.business_hours && (
-                <Typography variant="body2" sx={{ mt: 1 }}>
-                  🕐 {sx.business_hours}
-                </Typography>
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-
       {/* ── CONTACTOS ── */}
       <Card sx={{ mb: 2 }}>
         <CardContent>
-          <Typography variant="h6" gutterBottom>📞 Información de Contacto</Typography>
+          <SectionTitle icon={<ContactsIcon fontSize="small" />} color="#34d399">Información de Contacto</SectionTitle>
           <Grid container spacing={2}>
             {/* WhatsApp */}
-            <Grid item xs={12} md={4}>
+            <Grid size={4}>
               <Box sx={{ p: 2, bgcolor: 'rgba(37,211,102,0.08)', borderRadius: 2, border: '1px solid rgba(37,211,102,0.15)' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
                   <WhatsAppIcon sx={{ color: '#25D366' }} />
@@ -126,7 +106,7 @@ export default function ResultDisplay({ result }) {
               </Box>
             </Grid>
             {/* Teléfonos */}
-            <Grid item xs={12} md={4}>
+            <Grid size={4}>
               <Box sx={{ p: 2, bgcolor: 'rgba(59,130,246,0.08)', borderRadius: 2, border: '1px solid rgba(59,130,246,0.15)' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
                   <PhoneIcon color="primary" />
@@ -141,7 +121,7 @@ export default function ResultDisplay({ result }) {
               </Box>
             </Grid>
             {/* Emails */}
-            <Grid item xs={12} md={4}>
+            <Grid size={4}>
               <Box sx={{ p: 2, bgcolor: 'rgba(239,68,68,0.08)', borderRadius: 2, border: '1px solid rgba(239,68,68,0.15)' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
                   <EmailIcon color="error" />
@@ -163,7 +143,7 @@ export default function ResultDisplay({ result }) {
       {Object.keys(sx.social_media || {}).length > 0 && (
         <Card sx={{ mb: 2 }}>
           <CardContent>
-            <Typography variant="h6" gutterBottom>🌐 Redes Sociales</Typography>
+            <SectionTitle icon={<LanguageIcon fontSize="small" />} color="#38bdf8">Redes Sociales</SectionTitle>
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
               {Object.entries(sx.social_media).map(([platform, url]) => (
                 <Chip
@@ -186,10 +166,10 @@ export default function ResultDisplay({ result }) {
       {(sx.services?.length > 0 || sx.products?.length > 0) && (
         <Grid container spacing={2} sx={{ mb: 2 }}>
           {sx.services?.length > 0 && (
-            <Grid item xs={12} md={6}>
+            <Grid size={6}>
               <Card>
                 <CardContent>
-                  <Typography variant="h6" gutterBottom>🔧 Servicios</Typography>
+                  <SectionTitle icon={<HandymanIcon fontSize="small" />} color="#fb923c">Servicios</SectionTitle>
                   {sx.services.map((s, i) => (
                     <Typography key={i} variant="body2" sx={{ py: 0.5 }}>• {s}</Typography>
                   ))}
@@ -198,10 +178,10 @@ export default function ResultDisplay({ result }) {
             </Grid>
           )}
           {sx.products?.length > 0 && (
-            <Grid item xs={12} md={6}>
+            <Grid size={6}>
               <Card>
                 <CardContent>
-                  <Typography variant="h6" gutterBottom>📦 Productos</Typography>
+                  <SectionTitle icon={<InventoryIcon fontSize="small" />} color="#f472b6">Productos</SectionTitle>
                   {sx.products.map((p, i) => (
                     <Typography key={i} variant="body2" sx={{ py: 0.5 }}>• {p}</Typography>
                   ))}
@@ -216,15 +196,25 @@ export default function ResultDisplay({ result }) {
       {result.send_result && (
         <Card sx={{ mb: 2 }}>
           <CardContent>
-            <Typography variant="h6" gutterBottom>📤 Envío WhatsApp</Typography>
-            <Chip
-              label={`Status: ${result.send_result.status_code}`}
-              color={result.send_result.status_code === 200 ? 'success' : 'error'}
-              sx={{ mr: 1 }}
-            />
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-              Enviado a: {result.to_number}
-            </Typography>
+            <SectionTitle icon={<SendIcon fontSize="small" />} color="#25D366">Envío WhatsApp</SectionTitle>
+            <Box
+              component="pre"
+              sx={{
+                bgcolor: 'rgba(0,0,0,0.35)',
+                border: '1px solid rgba(255,255,255,0.07)',
+                borderRadius: 2,
+                p: 2,
+                fontSize: '0.8rem',
+                fontFamily: '"Roboto Mono", "Courier New", monospace',
+                color: '#86efac',
+                overflow: 'auto',
+                m: 0,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+              }}
+            >
+              {JSON.stringify(result.send_result, null, 2)}
+            </Box>
           </CardContent>
         </Card>
       )}
@@ -232,7 +222,7 @@ export default function ResultDisplay({ result }) {
       {/* ── IDs TÉCNICOS ── */}
       <Card>
         <CardContent>
-          <Typography variant="h6" gutterBottom>🔧 IDs Técnicos</Typography>
+          <SectionTitle icon={<FingerprintIcon fontSize="small" />} color="#94a3b8">IDs Técnicos</SectionTitle>
           <Table size="small">
             <TableBody>
               {[

@@ -159,6 +159,7 @@ export default function BatchProcessor() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: urlList[i] }),
         })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const d = await res.json()
         results.push({
           url:       urlList[i],

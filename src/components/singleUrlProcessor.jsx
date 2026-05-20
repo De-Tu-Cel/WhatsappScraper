@@ -111,13 +111,13 @@ function SearchBar({ url, setUrl, onSearch, loading, compact }) {
         onClick={onSearch}
         disabled={loading}
         sx={{
-          bgcolor: '#3b82f6',
+          bgcolor: '#0062ffd8',
           color: 'white',
           width: 42,
           height: 42,
           flexShrink: 0,
           mr: -1,  // ← ajusta este valor, prueba -0.5, -1, -1.5
-          '&:hover': { bgcolor: '#2563eb' },
+          '&:hover': { bgcolor: '#0137ad' },
           '&.Mui-disabled': { bgcolor: 'rgba(59,130,246,0.3)', color: 'rgba(255,255,255,0.4)' },
         }}
       >

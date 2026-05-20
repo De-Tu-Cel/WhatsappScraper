@@ -6,7 +6,8 @@ import LinkIcon from '@mui/icons-material/Link'
 import ListAltIcon from '@mui/icons-material/ListAlt'
 import UploadFileIcon from '@mui/icons-material/UploadFile'
 import Sidebar from '../components/Sidebar'
-import SingleUrlProcessor from '../components/singleUrlProcessor'
+import dynamic from 'next/dynamic'
+const SingleUrlProcessor = dynamic(() => import('../components/singleUrlProcessor'), { ssr: false })
 // import SearchProspects from '../components/searchProspects'  // comentado temporalmente
 import BatchProcessor from '../components/batchProcessor'
 import CsvImporter from '../components/csvImporter'

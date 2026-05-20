@@ -25,7 +25,16 @@ class WebsiteScraper:
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/124.0.0.0 Safari/537.36"
-            )
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Cache-Control": "max-age=0",
         }
         
         # Diccionario extendido de industrias
@@ -157,6 +166,25 @@ class WebsiteScraper:
         try:
             response = requests.get(url, headers=self.headers, timeout=15)
             response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            if response.status_code == 403:
+                print(f"⚠️ Sitio bloqueó el scraper (403): {url}")
+                return {
+                    "website": url, "domain": urlparse(url).netloc.replace("www.", ""),
+                    "name": urlparse(url).netloc.replace("www.", "").split(".")[0].capitalize(),
+                    "industry": "No detectada", "description": "Sitio no accesible (403)",
+                    "has_whatsapp": False, "status": "blocked",
+                    "last_scraped_at": datetime.now(timezone.utc),
+                    "next_allowed_scrape_at": datetime.now(timezone.utc) + timedelta(days=7),
+                    "created_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc),
+                    "_extra": {}, "_contacts_raw": {
+                        "whatsapp_numbers": [], "all_whatsapp_numbers": [],
+                        "phone_numbers": [], "emails": [], "persons": []
+                    },
+                    "metadata": {"scraped_at": datetime.now(timezone.utc).isoformat()}
+                }
+            raise
         except Exception as e:
             print(f"❌ Error al obtener página: {e}")
             raise

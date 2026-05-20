@@ -88,8 +88,10 @@ const MENU_PROPS = {
         scrollbarWidth: 'thin',
         scrollbarColor: 'rgba(255,255,255,0.15) transparent',
         '&::-webkit-scrollbar': { width: 4 },
+        '&::-webkit-scrollbar-button': { display: 'none' },
         '&::-webkit-scrollbar-track': { background: 'transparent' },
         '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.15)', borderRadius: 2 },
+        '&::-webkit-scrollbar-thumb:hover': { background: 'rgba(255,255,255,0.3)' },
       },
     },
   },
@@ -138,7 +140,7 @@ function EnhancedToolbar({ numSelected, onDelete, onRefresh, onToggleFilter, fil
   return (
     <Toolbar
       sx={[
-        { pl: { sm: 2 }, pr: { xs: 1, sm: 1 }, borderRadius: '12px 12px 0 0' },
+        { pl: { sm: 2 }, pr: { xs: 1, sm: 1 }, borderRadius: '12px 12px 0 0', bgcolor: 'rgba(9, 18, 37, 0.52)' },
         numSelected > 0 && { bgcolor: (t) => alpha(t.palette.error.main, 0.12) },
       ]}
     >
@@ -147,7 +149,7 @@ function EnhancedToolbar({ numSelected, onDelete, onRefresh, onToggleFilter, fil
           {numSelected} seleccionado{numSelected !== 1 ? 's' : ''}
         </Typography>
       ) : (
-        <Box sx={{ flex: '1 1 100%', display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box sx={{ flex: '1 1 100%', display: 'flex', alignItems: 'center', gap: 1}}>
           <StorageIcon sx={{ color: '#3b82f6', fontSize: 20 }} />
           <Typography variant="h6" sx={{ color: 'white', fontWeight: 700, fontSize: '1rem' }}>
             Base de datos
@@ -614,12 +616,10 @@ export default function DatabaseViewer() {
             scrollbarWidth: 'thin',
             scrollbarColor: 'rgba(255,255,255,0.13) transparent',
             '&::-webkit-scrollbar': { width: 5, height: 5 },
-            '&::-webkit-scrollbar-track': { background: 'transparent' },
-            '&::-webkit-scrollbar-thumb': {
-              background: 'rgba(255,255,255,0.13)',
-              borderRadius: 3,
-              '&:hover': { background: 'rgba(255,255,255,0.22)' },
-            },
+            '&::-webkit-scrollbar-button': { display: 'none' },
+            '&::-webkit-scrollbar-track': { background: 'transparent', marginBlock: '40px' },
+            '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.13)', borderRadius: 3 },
+            '&::-webkit-scrollbar-thumb:hover': { background: 'rgba(255,255,255,0.28)' },
           }}
         >
           <Table stickyHeader size="small" aria-label="tabla de empresas">
@@ -750,6 +750,8 @@ export default function DatabaseViewer() {
           page={page}
           onPageChange={(_, p) => setPage(p)}
           onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0) }}
+          labelRowsPerPage="Filas por página:"
+          labelDisplayedRows={({ from, to, count }) => `${from}–${to} de ${count !== -1 ? count : `más de ${to}`}`}
           sx={{
             color: 'rgba(255,255,255,0.5)',
             borderTop: '1px solid rgba(255,255,255,0.07)',

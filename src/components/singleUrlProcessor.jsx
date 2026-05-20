@@ -7,7 +7,36 @@ import CircularProgress from '@mui/material/CircularProgress'
 import Alert from '@mui/material/Alert'
 import Typography from '@mui/material/Typography'
 import SearchIcon from '@mui/icons-material/Search'
+import Skeleton from '@mui/material/Skeleton'
 import ResultDisplay from './resultDisplay'
+
+const SKEL = { bgcolor: 'rgba(255,255,255,0.06)', '&::after': { background: 'linear-gradient(90deg,transparent,rgba(255,255,255,0.04),transparent)' } }
+
+function ResultSkeleton() {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {/* Banner */}
+      <Box sx={{ p: 2.5, borderRadius: 3, border: '1px solid rgba(255,255,255,0.07)', bgcolor: 'rgba(255,255,255,0.02)' }}>
+        <Skeleton variant="text" width={220} height={36} sx={SKEL} />
+        <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+          <Skeleton variant="rounded" width={90} height={22} sx={{ ...SKEL, borderRadius: 10 }} />
+          <Skeleton variant="rounded" width={120} height={22} sx={{ ...SKEL, borderRadius: 10 }} />
+        </Box>
+      </Box>
+      {/* Métricas */}
+      <Box sx={{ display: 'flex', gap: 1.5 }}>
+        {[1,2,3,4].map(i => <Skeleton key={i} variant="rounded" sx={{ ...SKEL, flex: 1, height: 80, borderRadius: 2 }} />)}
+      </Box>
+      {/* Cards */}
+      {[140, 180, 120].map((h, i) => (
+        <Box key={i} sx={{ p: 2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.06)', bgcolor: 'rgba(255,255,255,0.02)' }}>
+          <Skeleton variant="text" width={140} height={22} sx={{ ...SKEL, mb: 1.5 }} />
+          <Skeleton variant="rounded" height={h} sx={SKEL} />
+        </Box>
+      ))}
+    </Box>
+  )
+}
 
 const EXAMPLES = [
   'https://pizzeria-mario.com.mx/',
@@ -219,7 +248,8 @@ export default function SingleUrlProcessor() {
       {/* Resultados */}
       <Box sx={{ borderRadius: 3, p: 1 }}>
         {error && <Alert severity="error">{error}</Alert>}
-        {result && <ResultDisplay result={result} />}
+        {loading && <ResultSkeleton />}
+        {result && !loading && <ResultDisplay result={result} />}
       </Box>
     </Box>
   )

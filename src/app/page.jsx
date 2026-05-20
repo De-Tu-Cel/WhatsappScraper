@@ -32,17 +32,28 @@ export default function DashboardPage() {
 
       <Box sx={{ flexGrow: 1, overflow: 'hidden', minWidth: 0 }}>
         <Box sx={{
-          bgcolor: '#161d2e',
           borderRadius: '16px',
           boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
           border: '1px solid rgba(255,255,255,0.06)',
           p: 4,
           display: 'flex', flexDirection: 'column',
-          flexGrow: 1,          // ← agrega
-          minHeight: 0,         // ← cambia
-          height: '100%',       // ← agrega
+          flexGrow: 1,
+          minHeight: 0,
+          height: '100%',
+          position: 'relative',
+          overflow: 'hidden',
+          background: 'linear-gradient(160deg, rgba(59,130,246,0.11) 0%, rgba(139,92,246,0.07) 35%, #161d2e 65%)',
         }}>
-          {NAV_ITEMS[active].component}
+          {/* brillo radial esquina superior */}
+          <Box sx={{
+            position: 'absolute', top: -60, left: -60,
+            width: 300, height: 300, borderRadius: '50%',
+            background: 'radial-gradient(circle, rgba(99,102,241,0.07) 0%, transparent 70%)',
+            pointerEvents: 'none', zIndex: 0,
+          }} />
+          <Box sx={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
+            {NAV_ITEMS[active].component}
+          </Box>
         </Box>
       </Box>
     </Box>

@@ -331,7 +331,7 @@ export default function CsvImporter() {
               Procesar {allUrls.length} URLs
             </Button>
           ) : (
-            <Box sx={{ display: 'flex', gap: 1.5 }}>
+            <Box sx={{ display: 'flex', gap: 1.5, justifyContent: 'center' }}>
               <Tooltip title={paused ? 'Reanudar' : 'Pausar'}>
                 <IconButton
                   onClick={handlePause}

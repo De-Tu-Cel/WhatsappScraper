@@ -30,17 +30,25 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems }) 
       width: open ? SIDEBAR_FULL : SIDEBAR_MINI,
       transition: 'width 0.28s cubic-bezier(0.4,0,0.2,1)',
       flexShrink: 0,
-      bgcolor: C.sidebar,
       display: 'flex',
       flexDirection: 'column',
       border: `1px solid ${C.sidebarBorder}`,
       borderRadius: '16px',
       overflow: 'hidden',
       boxShadow: '0 4px 24px rgba(0,0,0,0.4)',
+      position: 'relative',
+      background: 'linear-gradient(160deg, rgba(59,130,246,0.1) 0%, rgba(139,92,246,0.07) 30%, #0d1117 65%)',
     }}>
+      {/* brillo radial en esquina superior */}
+      <Box sx={{
+        position: 'absolute', top: -40, left: -40,
+        width: 200, height: 200, borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(99,102,241,0.18) 0%, transparent 70%)',
+        pointerEvents: 'none', zIndex: 0,
+      }} />
       {/* Logo / toggle */}
       <Box sx={{
-        height: 64, px: 1.5, flexShrink: 0,
+        height: 64, px: 1.5, flexShrink: 0, position: 'relative', zIndex: 1,
         display: 'flex', alignItems: 'center',
         justifyContent: open ? 'flex-start' : 'center',
         transition: 'justify-content 0s',
@@ -80,10 +88,10 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems }) 
         </IconButton>
       </Box>
 
-      <Divider sx={{ borderColor: C.sidebarBorder }} />
+      <Divider sx={{ borderColor: C.sidebarBorder, position: 'relative', zIndex: 1 }} />
 
       {/* Nav */}
-      <List sx={{ px: 1, pt: 1.5, flexGrow: 1 }}>
+      <List sx={{ px: 1, pt: 1.5, flexGrow: 1, position: 'relative', zIndex: 1 }}>
         {navItems.map((item, i) => {
           const isActive = active === i
           return (
@@ -133,6 +141,7 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems }) 
         display: 'flex', alignItems: 'center',
         px: 1.5, py: 1.5, flexShrink: 0,
         borderTop: `1px solid ${C.sidebarBorder}`,
+        position: 'relative', zIndex: 1,
       }}>
         <Box sx={{
           display: 'flex', alignItems: 'center',

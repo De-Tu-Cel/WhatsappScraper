@@ -52,7 +52,11 @@ export default function DashboardPage() {
             pointerEvents: 'none', zIndex: 0,
           }} />
           <Box sx={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
-            {NAV_ITEMS[active].component}
+            {NAV_ITEMS.map((item, i) => (
+              <Box key={i} sx={{ display: active === i ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
+                {item.component}
+              </Box>
+            ))}
           </Box>
         </Box>
       </Box>

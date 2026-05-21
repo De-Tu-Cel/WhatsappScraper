@@ -440,7 +440,7 @@ function EditDialog({ open, company, onClose, onSave }) {
           variant="contained"
           onClick={handleSave}
           disabled={saving}
-          sx={{ bgcolor: '#0d66f7', borderRadius: 2, px: 3, fontWeight: 600, '&:hover': { bgcolor: '#1b54cf' }, '&.Mui-disabled': { bgcolor: 'rgba(59,130,246,0.3)' } }}
+          sx={{ bgcolor: '#3b82f6', borderRadius: 2, px: 3, fontWeight: 600, '&:hover': { bgcolor: '#2563eb' }, '&.Mui-disabled': { bgcolor: 'rgba(59,130,246,0.3)' } }}
         >
           {saving ? <CircularProgress size={16} sx={{ color: 'white' }} /> : 'Guardar cambios'}
         </Button>
@@ -602,7 +602,7 @@ export default function DatabaseViewer() {
 
   return (
     <Box sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Paper sx={{ width: '100%', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'hidden', display: 'flex', flexDirection: 'column', flexGrow: 1, position: 'relative', background: 'linear-gradient(160deg, rgba(59,130,246,0.07) 0%, rgba(139,92,246,0.04) 25%, #0d1117 55%)' }}>
+      <Paper sx={{ width: '100%', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'hidden', display: 'flex', flexDirection: 'column', flexGrow: 1, position: 'relative', background: 'linear-gradient(160deg, rgba(59,130,246,0.07) 0%, rgba(139,92,246,0.04) 25%, #0d1117 55%)', boxShadow: '0 8px 40px rgba(0,0,0,0.55), 0 2px 12px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04) inset' }}>
         {/* brillo radial */}
         <Box sx={{ position: 'absolute', top: -50, left: -50, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle, rgba(99,102,241,0.07) 0%, transparent 70%)', pointerEvents: 'none', zIndex: 0 }} />
         <EnhancedToolbar

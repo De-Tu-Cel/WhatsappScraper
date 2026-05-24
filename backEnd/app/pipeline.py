@@ -1,8 +1,10 @@
 # pipeline.py
 from datetime import datetime
 # from pathlib import Path
+import requests
 from config import (
     FALLBACK_TO_NUMBER,
+    N8N_WEBHOOK_URL,
     WHATSAPP_ACCESS_TOKEN,
     WHATSAPP_LANG,
     WHATSAPP_PHONE_NUMBER_ID,
@@ -10,7 +12,6 @@ from config import (
 )
 from database import MongoDBManager
 from scraper import WebsiteScraper
-# from screenshoot import capture_screenshot, capture_whatsapp_chat_screenshot
 from whatsapp_client import WhatAppClient
 
 MESSAGE_TEXT = "Hola, te contactamos desde Detucel."
@@ -211,6 +212,21 @@ def process_url(website: str):
         #     "screenshot_path": whatsapp_chat_screenshot_path,
         #     "created_at": datetime.now(),
         # })
+
+    # ========================================================================
+    # DISPARAR N8N WORKFLOW (canal paralelo vía Twilio)
+    # ========================================================================
+    if N8N_WEBHOOK_URL and to_number:
+        try:
+            requests.post(N8N_WEBHOOK_URL, json={
+                "company_id": company_id,
+                "company_name": scraped.get("name", ""),
+                "to_number": to_number,
+                "website": website,
+            }, timeout=5)
+            print(f"🔗 N8N notificado para {to_number}")
+        except Exception as e:
+            print(f"⚠️ N8N no disponible: {e}")
 
     print(f"✅ Pipeline completado para {website}")
 

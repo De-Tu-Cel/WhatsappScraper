@@ -6,9 +6,13 @@ class ProcessUrlRequest(BaseModel):
 
 class SearchRequest(BaseModel):
     industry: str
-    city: str
+    city: Optional[str] = ""
     keywords: Optional[str] = ""
     num_results: Optional[int] = 10
+    offset: Optional[int] = 0
+
+class CheckUrlsRequest(BaseModel):
+    urls: List[str]
 
 class BatchRequest(BaseModel):
     urls: List[str]
@@ -58,3 +62,17 @@ class UpdateCompanyRequest(BaseModel):
     description: Optional[str] = None
     has_whatsapp: Optional[bool] = None
     status: Optional[str] = None
+
+class N8nMessageSentRequest(BaseModel):
+    company_id: str
+    to_number: str
+    twilio_sid: str
+    message_body: str
+    status: Optional[str] = "sent"
+
+class N8nMessageReceivedRequest(BaseModel):
+    from_number: str
+    to_number: str
+    twilio_sid: str
+    message_body: str
+    received_at: Optional[str] = None

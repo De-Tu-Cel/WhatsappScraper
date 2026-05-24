@@ -42,6 +42,24 @@ const theme = createTheme({
     borderRadius: 10,
   },
   components: {
+    MuiCssBaseline: {
+      styleOverrides: {
+        '*': {
+          scrollbarWidth: 'thin',
+          scrollbarColor: 'rgba(255,255,255,0.12) transparent',
+        },
+        '*::-webkit-scrollbar': { width: 4, height: 4 },
+        '*::-webkit-scrollbar-button': { display: 'none' },
+        '*::-webkit-scrollbar-track': { background: 'transparent' },
+        '*::-webkit-scrollbar-thumb': {
+          background: 'rgba(255,255,255,0.12)',
+          borderRadius: 2,
+        },
+        '*::-webkit-scrollbar-thumb:hover': {
+          background: 'rgba(255,255,255,0.28)',
+        },
+      },
+    },
     MuiButton: {
       styleOverrides: {
         root: {

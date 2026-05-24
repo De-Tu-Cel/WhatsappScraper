@@ -140,3 +140,39 @@ class MongoDBManager:
             {"$set": fields}
         )
         return result.modified_count > 0
+
+    def save_twilio_log(self, direction, company_id, number, message_body, twilio_sid, status, platform="twilio"):
+        doc = {
+            "platform": platform,
+            "direction": direction,
+            "channel": "whatsapp",
+            "company_id": company_id,
+            "message_body": message_body,
+            "twilio_sid": twilio_sid,
+            "status": status,
+            "created_at": datetime.now(),
+        }
+        if direction == "outbound":
+            doc["to_number"] = number
+        else:
+            doc["from_number"] = number
+        result = self.db.message_logs.insert_one(doc)
+        return str(result.inserted_id)
+
+    def check_urls_scraped(self, urls: list) -> dict:
+        from urllib.parse import urlparse
+        domains = {urlparse(u).netloc.replace("www.", ""): u for u in urls if u}
+        existing = self.db.companies.find(
+            {"domain": {"$in": list(domains.keys())}},
+            {"domain": 1}
+        )
+        scraped = {doc["domain"] for doc in existing}
+        return {url: (urlparse(url).netloc.replace("www.", "") in scraped) for url in urls}
+
+    def find_company_id_by_phone(self, phone_number):
+        clean = "".join(filter(str.isdigit, phone_number))
+        contact = self.db.contacts.find_one({
+            "type": "whatsapp",
+            "value": {"$regex": clean[-10:], "$options": "i"},
+        })
+        return contact["company_id"] if contact else None

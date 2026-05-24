@@ -1,6 +1,10 @@
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
-from app.schemas.company import ProcessUrlRequest, SearchRequest, BatchRequest, DeleteCompaniesRequest, UpdateCompanyRequest
+from app.schemas.company import (
+    ProcessUrlRequest, SearchRequest, BatchRequest,
+    CheckUrlsRequest, DeleteCompaniesRequest, UpdateCompanyRequest,
+    N8nMessageSentRequest, N8nMessageReceivedRequest,
+)
 from app.utils import serialize
 from app.pipeline import process_url, run_pipeline_batch   # ← app.pipeline
 from app.searcher import search_prospects                   # ← app.searcher
@@ -18,7 +22,15 @@ def api_process_url(req: ProcessUrlRequest):
 @router.post("/search")
 def api_search(req: SearchRequest):
     try:
-        return {"urls": search_prospects(req.industry, req.city, req.keywords, req.num_results)}
+        return {"urls": search_prospects(req.industry, req.city or "", req.keywords or "", req.num_results, req.offset or 0)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/companies/check-urls")
+def api_check_urls(req: CheckUrlsRequest):
+    try:
+        db = MongoDBManager()
+        return db.check_urls_scraped(req.urls)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -83,5 +95,42 @@ def api_update_company(company_id: str, req: UpdateCompanyRequest):
         return {"updated": updated}
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ── N8N callbacks ─────────────────────────────────────────────────────────────
+
+@router.post("/n8n/message-sent")
+def api_n8n_message_sent(req: N8nMessageSentRequest):
+    """N8N llama este endpoint después de enviar el mensaje por Twilio."""
+    try:
+        db = MongoDBManager()
+        log_id = db.save_twilio_log(
+            direction="outbound",
+            company_id=req.company_id,
+            number=req.to_number,
+            message_body=req.message_body,
+            twilio_sid=req.twilio_sid,
+            status=req.status,
+        )
+        return {"ok": True, "log_id": log_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/n8n/message-received")
+def api_n8n_message_received(req: N8nMessageReceivedRequest):
+    """N8N llama este endpoint cuando Twilio recibe una respuesta del cliente."""
+    try:
+        db = MongoDBManager()
+        company_id = db.find_company_id_by_phone(req.from_number) or "unknown"
+        log_id = db.save_twilio_log(
+            direction="inbound",
+            company_id=company_id,
+            number=req.from_number,
+            message_body=req.message_body,
+            twilio_sid=req.twilio_sid,
+            status="received",
+        )
+        return {"ok": True, "log_id": log_id, "company_id": company_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

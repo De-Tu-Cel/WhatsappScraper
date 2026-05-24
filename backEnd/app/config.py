@@ -18,6 +18,9 @@ WHATSAPP_LANG = os.getenv("WHATSAPP_LANG", "en_US")
 # Número de fallback (si no se encuentra WhatsApp en el sitio)
 FALLBACK_TO_NUMBER = os.getenv("TO_NUMBER", "")
 
+# N8N Integration
+N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "")
+
 # Validación de variables críticas
 if not WHATSAPP_PHONE_NUMBER_ID:
     print("⚠️ WARNING: WHATSAPP_PHONE_NUMBER_ID no está configurado en .env")

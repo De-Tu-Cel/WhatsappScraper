@@ -218,7 +218,7 @@ class WebsiteScraper:
                 "country": self._extract_country(text),
                 "postal_code": self._extract_postal_code(text),
                 "social_media": self._extract_social_media(soup),
-                "business_hours": self._extract_business_hours(text),
+                "business_hours": self._extract_business_hours(text, soup),
                 "services": self._extract_services(text, soup),
                 "products": self._extract_products(text, soup),
             },
@@ -661,18 +661,81 @@ class WebsiteScraper:
     # EXTRACCIÓN DE INFORMACIÓN ADICIONAL
     # ========================================================================
 
-    def _extract_business_hours(self, text: str) -> str:
-        """Extrae horario de atención"""
-        patterns = [
-            r"(?:horario|horarios|abierto)[:\s]*([^\n]{10,100})",
-            r"(?:lunes|monday).*?(?:domingo|sunday)[^\n]{0,50}",
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                return match.group(0).strip()
-        
+    def _extract_business_hours(self, text: str, soup: BeautifulSoup = None) -> str:
+        """Extrae horario de atención buscando primero patrones estructurados con horas HH:MM."""
+        TIME_PAT = re.compile(r'\d{1,2}:\d{2}')
+        DAY_PAT  = re.compile(
+            r'\b(lun|mar|mié|mie|jue|vie|sáb|sab|dom|lunes|martes|miércoles|miercoles|'
+            r'jueves|viernes|sábado|sabado|domingo|mon|tue|wed|thu|fri|sat|sun)\b',
+            re.IGNORECASE
+        )
+
+        # ── 1. HTML estructurado ──────────────────────────────────────────────
+        if soup:
+            # a) Tablas cuyas celdas contengan HH:MM
+            for table in soup.find_all("table"):
+                rows = table.find_all("tr")
+                lines = []
+                for row in rows:
+                    cells = [td.get_text(" ", strip=True) for td in row.find_all(["td", "th"])]
+                    row_text = "  ".join(cells)
+                    if TIME_PAT.search(row_text):
+                        lines.append(row_text)
+                if lines:
+                    return "\n".join(lines)
+
+            # b) <dl>/<dt>/<dd> que contengan horas
+            for dl in soup.find_all("dl"):
+                dl_text = dl.get_text(" ", strip=True)
+                if TIME_PAT.search(dl_text):
+                    pairs = []
+                    for dt, dd in zip(dl.find_all("dt"), dl.find_all("dd")):
+                        pairs.append(f"{dt.get_text(strip=True)}: {dd.get_text(strip=True)}")
+                    if pairs:
+                        return "\n".join(pairs)
+
+            # c) Cualquier contenedor cuya clase/id mencione "horario/hours/schedule"
+            #    y que contenga al menos un HH:MM
+            schedule_el = soup.find(
+                lambda tag: tag.name in ("div", "section", "aside", "ul", "p") and
+                any(kw in " ".join(tag.get("class", []) + [tag.get("id", "")]).lower()
+                    for kw in ("horario", "hours", "schedule", "timetable", "opening"))
+            )
+            if schedule_el and TIME_PAT.search(schedule_el.get_text()):
+                lines = []
+                for line in schedule_el.get_text("\n", strip=True).splitlines():
+                    line = line.strip()
+                    if line and (TIME_PAT.search(line) or DAY_PAT.search(line)):
+                        lines.append(line)
+                if lines:
+                    return "\n".join(lines)
+
+            # d) Cualquier elemento <li> o <p> que contenga día + hora en la misma línea
+            candidates = []
+            for el in soup.find_all(["li", "p", "span", "div"]):
+                el_text = el.get_text(" ", strip=True)
+                if TIME_PAT.search(el_text) and DAY_PAT.search(el_text) and len(el_text) < 120:
+                    candidates.append(el_text)
+            if candidates:
+                return "\n".join(candidates[:7])
+
+        # ── 2. Fallback texto plano: líneas con día + HH:MM ──────────────────
+        hour_lines = []
+        for line in text.splitlines():
+            line = line.strip()
+            if TIME_PAT.search(line) and DAY_PAT.search(line) and len(line) < 120:
+                hour_lines.append(line)
+        if hour_lines:
+            return "\n".join(hour_lines[:7])
+
+        # ── 3. Último recurso: patrón "horario:" seguido de HH:MM en la misma línea ──
+        match = re.search(
+            r"(?:horario|horarios|abierto)[^\n]{0,30}\d{1,2}:\d{2}[^\n]{0,80}",
+            text, re.IGNORECASE
+        )
+        if match:
+            return match.group(0).strip()
+
         return ""
 
     def _extract_services(self, text: str, soup: BeautifulSoup) -> List[str]:

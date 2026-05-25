@@ -3,6 +3,14 @@ from typing import Optional, List, Dict, Any
 
 class ProcessUrlRequest(BaseModel):
     url: str
+    message_template: Optional[str] = None
+    skip_send: Optional[bool] = False
+
+class SendMessageRequest(BaseModel):
+    company_id: str
+    to_number: str
+    message: str
+    website: Optional[str] = ""
 
 class SearchRequest(BaseModel):
     industry: str
@@ -76,3 +84,32 @@ class N8nMessageReceivedRequest(BaseModel):
     twilio_sid: str
     message_body: str
     received_at: Optional[str] = None
+
+# ── Evolution API webhook payloads ────────────────────────────────────────────
+
+class EvolutionMessageKey(BaseModel):
+    remoteJid: Optional[str] = None
+    fromMe: Optional[bool] = None
+    id: Optional[str] = None
+
+class EvolutionMessageData(BaseModel):
+    key: Optional[EvolutionMessageKey] = None
+    pushName: Optional[str] = None
+    message: Optional[Dict[str, Any]] = None
+    messageType: Optional[str] = None
+    messageTimestamp: Optional[int] = None
+    instanceId: Optional[str] = None
+    source: Optional[str] = None
+
+class EvolutionWebhookRequest(BaseModel):
+    """Generic Evolution API webhook envelope."""
+    event: str
+    instance: Optional[str] = None
+    data: Optional[Dict[str, Any]] = None
+
+class EvolutionStatusUpdate(BaseModel):
+    """Payload for messages.update event."""
+    keyId: Optional[str] = None
+    remoteJid: Optional[str] = None
+    fromMe: Optional[bool] = None
+    status: Optional[str] = None  # PENDING, SENT, DELIVERED, READ, FAILED

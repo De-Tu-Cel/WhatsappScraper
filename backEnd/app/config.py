@@ -1,9 +1,10 @@
 # config.py
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-# Cargar variables de entorno
-load_dotenv()
+# Cargar variables de entorno — busca .env junto a este archivo primero, luego sube
+load_dotenv(dotenv_path=Path(__file__).parent / '.env')
 
 # MongoDB
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
@@ -21,12 +22,20 @@ FALLBACK_TO_NUMBER = os.getenv("TO_NUMBER", "")
 # N8N Integration
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "")
 
+# Evolution API (WhatsApp personal number)
+EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "http://localhost:8080")
+EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "")
+EVOLUTION_INSTANCE = os.getenv("EVOLUTION_INSTANCE", "")
+
 # Validación de variables críticas
 if not WHATSAPP_PHONE_NUMBER_ID:
     print("⚠️ WARNING: WHATSAPP_PHONE_NUMBER_ID no está configurado en .env")
 
 if not WHATSAPP_ACCESS_TOKEN:
     print("⚠️ WARNING: WHATSAPP_ACCESS_TOKEN no está configurado en .env")
+
+# Groq API (clasificación de respuestas)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 # Debug: Mostrar qué se cargó (solo para desarrollo)
 if __name__ == "__main__":

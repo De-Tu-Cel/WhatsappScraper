@@ -9,14 +9,31 @@ from config import (
     WHATSAPP_LANG,
     WHATSAPP_PHONE_NUMBER_ID,
     WHATSAPP_TEMPLATE,
+    EVOLUTION_API_URL,
+    EVOLUTION_API_KEY,
+    EVOLUTION_INSTANCE,
 )
 from database import MongoDBManager
 from scraper import WebsiteScraper
 from whatsapp_client import WhatAppClient
+from whatsapp_evolution import EvolutionClient
 
-MESSAGE_TEXT = "Hola, te contactamos desde Detucel."
+DEFAULT_MESSAGE = "Hola, te contactamos desde Detucel."
 
-def process_url(website: str):
+def _render_message(template: str, scraped: dict, website: str) -> str:
+    if not template:
+        return DEFAULT_MESSAGE
+    _extra = scraped.get("_extra", {})
+    name     = scraped.get("name") or scraped.get("metadata", {}).get("title") or "estimado cliente"
+    city     = _extra.get("city") or scraped.get("city") or "tu ciudad"
+    industry = scraped.get("industry") or "tu sector"
+    return (template
+        .replace("{{nombre}}",    name)
+        .replace("{{ciudad}}",    city)
+        .replace("{{industria}}", industry)
+        .replace("{{web}}",       website))
+
+def process_url(website: str, message_template: str = None, skip_send: bool = False):
     """
     Pipeline completo con scraper extenso
     """
@@ -34,12 +51,18 @@ def process_url(website: str):
     _cr = scraped.get("_contacts_raw", {})
 
     print(f"💾 Guardando empresa en base de datos...")
+    from urllib.parse import urlparse as _urlparse
+    _domain = _urlparse(website).netloc.lower().replace("www.", "")
+
+    has_whatsapp = bool(_cr.get("whatsapp_numbers"))
+
     company_id = db.insert_company({
         "name": scraped["name"],
         "industry": scraped["industry"],
         "description": scraped["description"],
         "main_activity": _extra.get("main_activity"),
         "website": website,
+        "domain": _domain,
         "address": _extra.get("address"),
         "city": _extra.get("city"),
         "state": _extra.get("state"),
@@ -49,6 +72,7 @@ def process_url(website: str):
         "services": _extra.get("services"),
         "products": _extra.get("products"),
         "metadata": scraped["metadata"],
+        "has_whatsapp": has_whatsapp,
     })
 
     print(f"✅ Empresa guardada con ID: {company_id}")
@@ -167,7 +191,9 @@ def process_url(website: str):
     whatsapp_chat_screenshot_path = None
     whatsapp_chat_screenshot_evidence_id = None
 
-    if to_number:
+    MESSAGE_TEXT = _render_message(message_template, scraped, website)
+
+    if to_number and not skip_send:
         print(f"📤 Enviando mensaje de WhatsApp a {to_number}...")
         send_result = wa.send_template_message(to_number, WHATSAPP_TEMPLATE, WHATSAPP_LANG)
 
@@ -214,19 +240,39 @@ def process_url(website: str):
         # })
 
     # ========================================================================
-    # DISPARAR N8N WORKFLOW (canal paralelo vía Twilio)
+    # EVOLUTION API — envío por número personal de WhatsApp
     # ========================================================================
-    if N8N_WEBHOOK_URL and to_number:
-        try:
-            requests.post(N8N_WEBHOOK_URL, json={
-                "company_id": company_id,
-                "company_name": scraped.get("name", ""),
-                "to_number": to_number,
-                "website": website,
-            }, timeout=5)
-            print(f"🔗 N8N notificado para {to_number}")
-        except Exception as e:
-            print(f"⚠️ N8N no disponible: {e}")
+    evolution_log_id = None
+    evolution_result = None
+
+    if EVOLUTION_API_KEY and EVOLUTION_INSTANCE and to_number and not skip_send:
+        print(f"📲 Enviando por Evolution API a {to_number}...")
+        evo = EvolutionClient(EVOLUTION_API_URL, EVOLUTION_API_KEY, EVOLUTION_INSTANCE)
+        evolution_result = evo.send_text(to_number, MESSAGE_TEXT)
+
+        evo_json = evolution_result.get("response_json", {})
+        evo_message_id = (
+            evo_json.get("key", {}).get("id")
+            or evo_json.get("id")
+            or None
+        )
+        evo_status = "sent" if evolution_result.get("status_code") == 201 else "failed"
+
+        evolution_log_id = db.insert_message_log({
+            "channel": "whatsapp",
+            "platform": "evolution",
+            "company_id": company_id,
+            "to_number": to_number,
+            "message_text": MESSAGE_TEXT,
+            "status_code": evolution_result.get("status_code"),
+            "message_id": evo_message_id,
+            "api_response": evo_json,
+            "raw_text": evolution_result.get("raw_text"),
+            "sent_at": evolution_result.get("sent_at"),
+            "status": evo_status,
+            "direction": "outbound",
+        })
+        print(f"✅ Evolution API: {evo_status} (id={evo_message_id})")
 
     print(f"✅ Pipeline completado para {website}")
 
@@ -247,8 +293,10 @@ def process_url(website: str):
         "message_evidence_id": message_evidence_id,
         "whatsapp_chat_screenshot_path": whatsapp_chat_screenshot_path,
         "whatsapp_chat_screenshot_evidence_id": whatsapp_chat_screenshot_evidence_id,
-        "person_contact_ids": person_contact_ids,  # ← NUEVO
-        "social_media_id": social_media_id,  # ← NUEVO
+        "person_contact_ids": person_contact_ids,
+        "social_media_id": social_media_id,
+        "evolution_log_id": evolution_log_id,
+        "evolution_result": evolution_result,
     }
     
 def run_pipeline_batch(urls: list) -> dict:

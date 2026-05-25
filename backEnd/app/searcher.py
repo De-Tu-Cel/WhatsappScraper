@@ -10,15 +10,42 @@ load_dotenv()
 SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
 
 EXCLUDED_DOMAINS = {
+    # Enciclopedias
     'wikipedia.org', 'wikimedia.org', 'wikidata.org',
-    'youtube.com', 'youtu.be',
+    # Video
+    'youtube.com', 'youtu.be', 'vimeo.com',
+    # Redes sociales
     'facebook.com', 'instagram.com', 'twitter.com', 'x.com', 'tiktok.com',
-    'linkedin.com', 'pinterest.com',
-    'google.com', 'google.com.mx', 'maps.google.com',
+    'linkedin.com', 'pinterest.com', 'snapchat.com', 'threads.net',
+    # Buscadores y mapas
+    'google.com', 'google.com.mx', 'maps.google.com', 'bing.com', 'duckduckgo.com',
+    # Directorios de negocios
     'yelp.com', 'yelp.com.mx', 'tripadvisor.com', 'tripadvisor.com.mx',
+    'cylex.mx', 'cylex.com', 'cylex-mexico.com',
+    'seccion-amarilla.com', 'paginasamarillas.com.mx', 'paginas-amarillas.mx',
+    'foursquare.com', 'empresasdebogota.com', 'empresite.com',
+    'hotfrog.mx', 'hotfrog.com', 'dnbmx.com',
+    'infobel.com', 'kompass.com', 'manta.com',
+    # E-commerce y marketplaces
     'mercadolibre.com', 'amazon.com', 'amazon.com.mx', 'ebay.com',
-    'reddit.com', 'quora.com', 'yahoo.com',
-    'gov.mx', 'gob.mx', 'imss.gob.mx',
+    'walmart.com', 'walmart.com.mx', 'liverpool.com.mx', 'soriana.com',
+    # Blogs y revistas de comida/viajes
+    'directoalpaladar.com.mx', 'directoalpaladar.com',
+    'foodandtravel.mx', 'foodandpleasure.com', 'foodandwine.com',
+    'travelmania.mx', 'wayak.mx', 'booking.com', 'airbnb.com',
+    'timeout.com', 'eltenedor.es', 'thefork.com',
+    # Noticias y medios
+    'eluniversal.com.mx', 'milenio.com', 'excelsior.com.mx',
+    'reforma.com', 'jornada.com.mx', 'proceso.com.mx',
+    'infobae.com', 'expansion.mx', 'forbes.com.mx',
+    # Software de restaurantes / SaaS
+    'bistrosoft.com', 'poster.com', 'square.com', 'toast.com',
+    # Foros y preguntas
+    'reddit.com', 'quora.com', 'yahoo.com', 'answers.com',
+    # Gobierno
+    'gov.mx', 'gob.mx', 'imss.gob.mx', 'sat.gob.mx',
+    # Otros
+    'apple.com', 'play.google.com',
 }
 
 
@@ -37,16 +64,38 @@ def _get_domain(url: str) -> str:
         return url
 
 
+MAJOR_CITIES = [
+    "Ciudad de México", "Guadalajara", "Monterrey", "Puebla", "Querétaro",
+    "León", "Mérida", "Tijuana", "San Luis Potosí", "Aguascalientes",
+    "Cancún", "Morelia", "Hermosillo", "Chihuahua", "Veracruz",
+]
+
 def _build_variations(industry: str, city: str = "") -> list[str]:
-    location = city.strip() if city.strip() else "México"
     ind = industry.strip()
-    return [
-        f"{ind} empresa en {location}",
-        f"{ind} en {location} contacto teléfono",
-        f"{ind} {location} página web",
-        f"mejores {ind} en {location}",
-        f"{ind} {location} negocio local",
-    ]
+    if city.strip():
+        loc = city.strip()
+        return [
+            f"{ind} {loc} contacto teléfono dirección",
+            f"{ind} {loc} página oficial",
+            f"{ind} {loc} sitio web whatsapp",
+            f"{ind} {loc} -directorio -blog -revista -tripadvisor -yelp",
+            f"site:.mx {ind} {loc} contacto",
+            f"{ind} {loc} número teléfono dirección",
+            f"{ind} cerca de {loc} página web",
+        ]
+    else:
+        # Sin ciudad: combina queries genéricas + rotación por ciudades principales
+        base = [
+            f"{ind} México contacto teléfono dirección",
+            f"{ind} México página oficial",
+            f"site:.mx {ind} contacto whatsapp",
+            f"{ind} México -directorio -blog -tripadvisor -yelp",
+            f"{ind} México sitio web oficial",
+        ]
+        city_queries = [
+            f"{ind} {c} contacto teléfono" for c in MAJOR_CITIES
+        ]
+        return base + city_queries
 
 
 def _fetch_ddg(query: str, max_results: int = 40) -> list[str]:

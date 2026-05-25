@@ -71,27 +71,29 @@ const ALERT_TITLES = {
 }
 
 const MENU_PROPS = {
-  PaperProps: {
-    sx: {
-      bgcolor: '#0d1117',
-      border: '1px solid rgba(255,255,255,0.1)',
-      borderRadius: 2,
-      mt: 0.5,
-      '& .MuiMenuItem-root': {
-        fontSize: '0.82rem',
-        color: 'rgba(255,255,255,0.75)',
-        '&:hover': { bgcolor: 'rgba(59,130,246,0.12)' },
-        '&.Mui-selected': { bgcolor: 'rgba(59,130,246,0.18)', color: 'white' },
-        '&.Mui-selected:hover': { bgcolor: 'rgba(59,130,246,0.25)' },
-      },
-      '& ul': {
-        scrollbarWidth: 'thin',
-        scrollbarColor: 'rgba(255,255,255,0.15) transparent',
-        '&::-webkit-scrollbar': { width: 4 },
-        '&::-webkit-scrollbar-button': { display: 'none' },
-        '&::-webkit-scrollbar-track': { background: 'transparent' },
-        '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.15)', borderRadius: 2 },
-        '&::-webkit-scrollbar-thumb:hover': { background: 'rgba(255,255,255,0.3)' },
+  slotProps: {
+    paper: {
+      sx: {
+        bgcolor: '#0d1117',
+        border: '1px solid rgba(255,255,255,0.1)',
+        borderRadius: 2,
+        mt: 0.5,
+        '& .MuiMenuItem-root': {
+          fontSize: '0.82rem',
+          color: 'rgba(255,255,255,0.75)',
+          '&:hover': { bgcolor: 'rgba(59,130,246,0.12)' },
+          '&.Mui-selected': { bgcolor: 'rgba(59,130,246,0.18)', color: 'white' },
+          '&.Mui-selected:hover': { bgcolor: 'rgba(59,130,246,0.25)' },
+        },
+        '& ul': {
+          scrollbarWidth: 'thin',
+          scrollbarColor: 'rgba(255,255,255,0.15) transparent',
+          '&::-webkit-scrollbar': { width: 4 },
+          '&::-webkit-scrollbar-button': { display: 'none' },
+          '&::-webkit-scrollbar-track': { background: 'transparent' },
+          '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.15)', borderRadius: 2 },
+          '&::-webkit-scrollbar-thumb:hover': { background: 'rgba(255,255,255,0.3)' },
+        },
       },
     },
   },
@@ -140,7 +142,7 @@ function EnhancedToolbar({ numSelected, onDelete, onRefresh, onToggleFilter, fil
   return (
     <Toolbar
       sx={[
-        { pl: { sm: 2 }, pr: { xs: 1, sm: 1 }, borderRadius: '12px 12px 0 0', bgcolor: 'rgba(9, 18, 37, 0.52)' },
+        { pl: { sm: 2 }, pr: { xs: 1, sm: 1 }, borderRadius: '12px 12px 0 0', position: 'relative', zIndex: 1, background: 'linear-gradient(135deg, rgba(59,130,246,0.1) 0%, rgba(139,92,246,0.06) 50%, rgba(9,18,37,0.6) 100%)' },
         numSelected > 0 && { bgcolor: (t) => alpha(t.palette.error.main, 0.12) },
       ]}
     >
@@ -188,7 +190,7 @@ function FilterBar({ filters, onChange, industries, cities }) {
   const [openWA,       setOpenWA]       = useState(false)
 
   return (
-    <Box sx={{ px: 2, pb: 2, display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+    <Box sx={{ px: 2, pt: 2, pb: 2, display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
       <TextField
         size="small"
         placeholder="Buscar empresa o sitio…"
@@ -310,10 +312,19 @@ function EditDialog({ open, company, onClose, onSave }) {
       fullWidth
       PaperProps={{
         sx: {
-          bgcolor: '#1b3d70',
+          background: 'linear-gradient(160deg, rgba(59,130,246,0.12) 0%, rgba(139,92,246,0.08) 35%, #0d1117 65%)',
           border: '1px solid rgba(255,255,255,0.08)',
           borderRadius: 3,
           boxShadow: '0 24px 64px rgba(0,0,0,0.7)',
+          overflow: 'hidden',
+          position: 'relative',
+          '&::before': {
+            content: '""',
+            position: 'absolute', top: -50, left: -50,
+            width: 200, height: 200, borderRadius: '50%',
+            background: 'radial-gradient(circle, rgba(99,102,241,0.1) 0%, transparent 70%)',
+            pointerEvents: 'none',
+          },
         },
       }}
     >
@@ -431,7 +442,7 @@ function EditDialog({ open, company, onClose, onSave }) {
           variant="contained"
           onClick={handleSave}
           disabled={saving}
-          sx={{ bgcolor: '#0d66f7', borderRadius: 2, px: 3, fontWeight: 600, '&:hover': { bgcolor: '#1b54cf' }, '&.Mui-disabled': { bgcolor: 'rgba(59,130,246,0.3)' } }}
+          sx={{ bgcolor: '#3b82f6', borderRadius: 2, px: 3, fontWeight: 600, '&:hover': { bgcolor: '#2563eb' }, '&.Mui-disabled': { bgcolor: 'rgba(59,130,246,0.3)' } }}
         >
           {saving ? <CircularProgress size={16} sx={{ color: 'white' }} /> : 'Guardar cambios'}
         </Button>
@@ -593,7 +604,9 @@ export default function DatabaseViewer() {
 
   return (
     <Box sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Paper sx={{ width: '100%', bgcolor: '#0d1117', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'hidden', display: 'flex', flexDirection: 'column', flexGrow: 1 }}>
+      <Paper sx={{ width: '100%', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'hidden', display: 'flex', flexDirection: 'column', flexGrow: 1, position: 'relative', background: 'linear-gradient(160deg, rgba(59,130,246,0.07) 0%, rgba(139,92,246,0.04) 25%, #0d1117 55%)', boxShadow: '0 8px 40px rgba(0,0,0,0.55), 0 2px 12px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04) inset' }}>
+        {/* brillo radial */}
+        <Box sx={{ position: 'absolute', top: -50, left: -50, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle, rgba(99,102,241,0.07) 0%, transparent 70%)', pointerEvents: 'none', zIndex: 0 }} />
         <EnhancedToolbar
           numSelected={numSelected}
           onDelete={handleDelete}
@@ -602,7 +615,9 @@ export default function DatabaseViewer() {
           filterOpen={filterOpen}
         />
 
-        <Collapse in={filterOpen}>
+        <Box sx={{ borderTop: '1px solid rgba(255,255,255,0.07)', position: 'relative', zIndex: 1 }} />
+
+        <Collapse in={filterOpen} sx={{ position: 'relative', zIndex: 1 }}>
           <Box sx={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
             <FilterBar filters={filters} onChange={handleFilterChange} industries={industries} cities={cities} />
           </Box>
@@ -610,7 +625,7 @@ export default function DatabaseViewer() {
 
         <TableContainer
           sx={{
-            flexGrow: 1,
+            flexGrow: 1, position: 'relative', zIndex: 1,
             overflow: 'auto',
             height: 0,
             scrollbarWidth: 'thin',

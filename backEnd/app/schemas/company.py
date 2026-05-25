@@ -3,12 +3,24 @@ from typing import Optional, List, Dict, Any
 
 class ProcessUrlRequest(BaseModel):
     url: str
+    message_template: Optional[str] = None
+    skip_send: Optional[bool] = False
+
+class SendMessageRequest(BaseModel):
+    company_id: str
+    to_number: str
+    message: str
+    website: Optional[str] = ""
 
 class SearchRequest(BaseModel):
     industry: str
-    city: str
+    city: Optional[str] = ""
     keywords: Optional[str] = ""
     num_results: Optional[int] = 10
+    offset: Optional[int] = 0
+
+class CheckUrlsRequest(BaseModel):
+    urls: List[str]
 
 class BatchRequest(BaseModel):
     urls: List[str]
@@ -58,3 +70,46 @@ class UpdateCompanyRequest(BaseModel):
     description: Optional[str] = None
     has_whatsapp: Optional[bool] = None
     status: Optional[str] = None
+
+class N8nMessageSentRequest(BaseModel):
+    company_id: str
+    to_number: str
+    twilio_sid: str
+    message_body: str
+    status: Optional[str] = "sent"
+
+class N8nMessageReceivedRequest(BaseModel):
+    from_number: str
+    to_number: str
+    twilio_sid: str
+    message_body: str
+    received_at: Optional[str] = None
+
+# ── Evolution API webhook payloads ────────────────────────────────────────────
+
+class EvolutionMessageKey(BaseModel):
+    remoteJid: Optional[str] = None
+    fromMe: Optional[bool] = None
+    id: Optional[str] = None
+
+class EvolutionMessageData(BaseModel):
+    key: Optional[EvolutionMessageKey] = None
+    pushName: Optional[str] = None
+    message: Optional[Dict[str, Any]] = None
+    messageType: Optional[str] = None
+    messageTimestamp: Optional[int] = None
+    instanceId: Optional[str] = None
+    source: Optional[str] = None
+
+class EvolutionWebhookRequest(BaseModel):
+    """Generic Evolution API webhook envelope."""
+    event: str
+    instance: Optional[str] = None
+    data: Optional[Dict[str, Any]] = None
+
+class EvolutionStatusUpdate(BaseModel):
+    """Payload for messages.update event."""
+    keyId: Optional[str] = None
+    remoteJid: Optional[str] = None
+    fromMe: Optional[bool] = None
+    status: Optional[str] = None  # PENDING, SENT, DELIVERED, READ, FAILED

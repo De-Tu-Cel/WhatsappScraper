@@ -332,22 +332,32 @@ export default function CsvImporter() {
             </Button>
           ) : (
             <Box sx={{ display: 'flex', gap: 1.5 }}>
-              <Tooltip title={paused ? 'Reanudar' : 'Pausar'}>
-                <IconButton
-                  onClick={handlePause}
-                  sx={{ color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.2)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.18)' } }}
-                >
-                  {paused ? <PlayArrowIcon sx={{ fontSize: 20 }} /> : <PauseIcon sx={{ fontSize: 20 }} />}
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Cancelar">
-                <IconButton
-                  onClick={handleCancel}
-                  sx={{ color: '#f87171', bgcolor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.18)' } }}
-                >
-                  <StopIcon sx={{ fontSize: 20 }} />
-                </IconButton>
-              </Tooltip>
+              <Button
+                fullWidth
+                onClick={handlePause}
+                startIcon={paused ? <PlayArrowIcon /> : <PauseIcon />}
+                sx={{
+                  flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem',
+                  color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)',
+                  border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5,
+                  '&:hover': { bgcolor: 'rgba(251,191,36,0.15)', borderColor: 'rgba(251,191,36,0.45)' },
+                }}
+              >
+                {paused ? 'Reanudar' : 'Pausar'}
+              </Button>
+              <Button
+                fullWidth
+                onClick={handleCancel}
+                startIcon={<StopIcon />}
+                sx={{
+                  flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem',
+                  color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)',
+                  border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5,
+                  '&:hover': { bgcolor: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.45)' },
+                }}
+              >
+                Cancelar
+              </Button>
             </Box>
           )}
         </Box>

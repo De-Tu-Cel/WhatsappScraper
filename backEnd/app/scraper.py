@@ -39,66 +39,168 @@ class WebsiteScraper:
         
         # Diccionario extendido de industrias
         self.INDUSTRY_KEYWORDS = {
-            "Gas LP": [
-                "gas", "lp", "cilindro", "tanque", "combustible", "gasera", 
-                "gasolinera", "estacion", "gas lp", "gas natural"
-            ],
+            # ── Alimentos ─────────────────────────────────────────────────────
             "Alimentos y Bebidas": [
-                "restaurant", "restaurante", "comida", "cocina", "bar", "cafeteria", 
-                "menu", "menú", "chef", "platillo", "catering", "alimentos", "bebidas"
+                "restaurant", "restaurante", "taqueria", "taquería", "taco", "tacos",
+                "panaderia", "panadería", "pan", "pasteleria", "pastelería", "pastel",
+                "cafeteria", "cafetería", "cafe", "café", "comida", "cocina", "bar",
+                "menu", "menú", "chef", "platillo", "catering", "alimentos", "bebidas",
+                "antojitos", "mariscos", "sushi", "pizza", "hamburguesa", "torta",
+                "loncheria", "lonchería", "fonda", "birria", "carnitas", "barbacoa",
             ],
-            "Retail": [
-                "tienda", "shop", "venta", "catalogo", "catálogo", "productos", 
-                "ecommerce", "compra", "boutique", "comercio", "retail"
-            ],
-            "Tecnología": [
-                "software", "app", "sistema", "desarrollo", "it", "tech", "digital", 
-                "web", "programacion", "programación", "tecnologia", "tecnología"
-            ],
-            "Servicios": [
-                "servicio", "servicios", "consultoria", "consultoría", "asesoria", 
-                "asesoría", "mantenimiento", "reparacion", "reparación", "limpieza",
-                "asesor", "consultor", "consulting"
-            ],
+            # ── Salud ─────────────────────────────────────────────────────────
             "Salud": [
-                "hospital", "clinica", "clínica", "medico", "médico", "doctor", 
-                "salud", "farmacia", "medicina", "dental", "odontologia", "odontología"
+                "hospital", "clinica", "clínica", "medico", "médico", "doctor",
+                "salud", "farmacia", "medicina", "dental", "odontologia", "odontología",
+                "dentista", "nutricion", "nutrición", "nutriologo", "nutriólogo",
+                "psicologia", "psicología", "psicologo", "psicólogo", "terapia",
+                "laboratorio", "optometria", "optometría", "optica", "óptica",
             ],
+            "Veterinaria": [
+                "veterinaria", "veterinario", "mascota", "mascotas", "perro", "gato",
+                "animales", "pet", "perruno", "clinica veterinaria", "grooming",
+                "guarderia canina", "guardería canina", "tienda mascotas",
+            ],
+            # ── Belleza ───────────────────────────────────────────────────────
+            "Belleza": [
+                "salon", "salón", "belleza", "estetica", "estética", "spa",
+                "peluqueria", "peluquería", "barberia", "barbería", "barbero",
+                "uñas", "manicure", "pedicure", "maquillaje", "depilacion",
+                "depilación", "facial", "masaje", "bronceado", "cejas", "pestañas",
+            ],
+            # ── Deportes ──────────────────────────────────────────────────────
+            "Deportes / Fitness": [
+                "gimnasio", "gym", "fitness", "entrenamiento", "ejercicio", "pesas",
+                "crossfit", "yoga", "pilates", "musculacion", "musculación", "cardio",
+                "membresia", "membresía", "instructor", "rutina", "smartfit", "sport",
+                "atletismo", "natacion", "natación", "canchas", "boxeo", "spinning",
+                "zumba", "funcional", "personal trainer",
+            ],
+            # ── Servicios del hogar ───────────────────────────────────────────
+            "Servicios del Hogar": [
+                "plomero", "plomeria", "plomería", "electricista", "electricidad",
+                "lavanderia", "lavandería", "tintoreria", "tintorería", "limpieza",
+                "fumigacion", "fumigación", "pintura", "pintor", "jardineria",
+                "jardinería", "jardinero", "herreria", "herrería", "cerrajero",
+                "cerrajeria", "cerrajería", "carpintero", "carpinteria", "carpintería",
+                "mudanza", "mudanzas", "control de plagas",
+            ],
+            # ── Servicios profesionales ───────────────────────────────────────
+            "Servicios": [
+                "servicio", "servicios", "consultoria", "consultoría", "asesoria",
+                "asesoría", "mantenimiento", "reparacion", "reparación",
+                "asesor", "consultor", "consulting", "outsourcing",
+            ],
+            # ── Comercio / Retail ─────────────────────────────────────────────
+            "Ferretería / Construcción Retail": [
+                "ferreteria", "ferretería", "materiales", "construccion", "tornillo",
+                "pintura", "herramienta", "herramientas", "madera", "vidrio",
+                "plomeria retail", "electricidad retail",
+            ],
+            "Muebles / Decoración": [
+                "muebles", "muebleria", "mueblería", "decoracion", "decoración",
+                "hogar", "sala", "recamara", "recámara", "colchon", "colchón",
+                "cocina integral", "closet", "tapiceria", "tapicería",
+            ],
+            "Electrónica": [
+                "electronica", "electrónica", "celular", "telefono", "teléfono",
+                "computadora", "laptop", "tablet", "iphone", "samsung", "reparacion celular",
+                "accesorio", "accesorios", "gadget", "tecnología retail",
+            ],
+            "Abarrotes / Minisuper": [
+                "abarrotes", "minisuper", "mini super", "tienda", "super",
+                "mercado", "despensa", "dulceria", "dulcería", "papeleria", "papelería",
+                "cremeria", "cremería", "carniceria", "carnicería",
+            ],
+            "Ropa / Moda": [
+                "ropa", "moda", "boutique", "vestido", "calzado", "zapatos",
+                "tenis", "camisa", "pantalon", "pantalón", "playera", "uniforme",
+                "taller de costura", "costura", "bordado", "estampado",
+            ],
+            "Retail General": [
+                "tienda", "shop", "catalogo", "catálogo", "productos",
+                "ecommerce", "compra", "comercio", "retail", "venta al público",
+            ],
+            # ── Educación ─────────────────────────────────────────────────────
             "Educación": [
-                "escuela", "universidad", "curso", "capacitacion", "capacitación", 
-                "educacion", "educación", "academia", "instituto", "colegio"
+                "escuela", "universidad", "curso", "capacitacion", "capacitación",
+                "educacion", "educación", "academia", "instituto", "colegio",
+                "guarderia", "guardería", "kinder", "preescolar", "primaria",
+                "tutor", "tutoria", "tutoría", "clases particulares",
+                "idiomas", "ingles", "inglés", "frances", "francés", "idioma",
+                "escuela de manejo", "driving school",
             ],
-            "Construcción": [
-                "construccion", "construcción", "obra", "arquitectura", "ingeniero", 
-                "edificio", "remodelacion", "remodelación", "albañil"
+            # ── Hospedaje / Eventos ───────────────────────────────────────────
+            "Hospedaje": [
+                "hotel", "hostal", "hosteria", "hostería", "motel", "cabaña", "cabañas",
+                "glamping", "airbnb", "habitacion", "habitación", "cuarto", "suite",
+                "resort", "posada", "bed and breakfast", "alojamiento",
             ],
-            "Transporte": [
-                "transporte", "logistica", "logística", "envio", "envío", 
-                "paqueteria", "paquetería", "mensajeria", "mensajería", "mudanza"
+            "Eventos / Entretenimiento": [
+                "salon de eventos", "salón de eventos", "salon de fiestas", "salón de fiestas",
+                "banquetes", "evento", "eventos", "boda", "bodas", "quinceañera",
+                "fotografia", "fotografía", "fotografo", "fotógrafo", "dj", "musica",
+                "musica en vivo", "animacion", "animación", "show", "teatro", "cine",
             ],
-            "Manufactura": [
-                "fabrica", "fábrica", "manufactura", "produccion", "producción", 
-                "industrial", "planta", "maquila"
+            # ── Profesionales ─────────────────────────────────────────────────
+            "Legal": [
+                "abogado", "legal", "juridico", "jurídico", "notaria", "notaría",
+                "derecho", "asesor legal", "licenciado", "despacho juridico",
+                "despacho jurídico", "bufete",
+            ],
+            "Contabilidad / Finanzas": [
+                "contador", "contadora", "contabilidad", "contable", "fiscal",
+                "declaracion", "declaración", "impuesto", "impuestos", "sat",
+                "nomina", "nómina", "auditoria", "auditoría", "despacho contable",
             ],
             "Inmobiliaria": [
-                "inmobiliaria", "bienes raices", "bienes raíces", "propiedad", 
-                "renta", "venta casa", "departamento", "terreno"
+                "inmobiliaria", "bienes raices", "bienes raíces", "propiedad",
+                "renta", "venta casa", "departamento", "terreno", "casa", "lote",
+                "agente inmobiliario", "broker", "plusvalia", "plusvalía",
             ],
+            # ── Construcción ──────────────────────────────────────────────────
+            "Construcción": [
+                "construccion", "construcción", "obra", "arquitectura", "arquitecto",
+                "ingeniero", "edificio", "remodelacion", "remodelación", "albañil",
+                "contratista", "diseño arquitectonico", "diseño arquitectónico",
+                "urbanismo", "concreto", "acero", "estructuras",
+            ],
+            # ── Automotriz ────────────────────────────────────────────────────
             "Automotriz": [
-                "auto", "taller", "mecanico", "mecánico", "refacciones", 
-                "vehiculo", "vehículo", "carro", "automovil", "automóvil"
+                "taller mecanico", "taller mecánico", "mecanico", "mecánico",
+                "refacciones", "auto", "carro", "vehiculo", "vehículo", "automovil",
+                "automóvil", "hojalateria", "hojalatería", "pintura automotriz",
+                "llantas", "frenos", "alineacion", "alineación", "balanceo",
+                "servicio automotriz", "agencia autos",
             ],
-            "Belleza": [
-                "salon", "salón", "belleza", "estetica", "estética", "spa", 
-                "peluqueria", "peluquería", "barberia", "barbería"
+            # ── Transporte ────────────────────────────────────────────────────
+            "Transporte / Logística": [
+                "transporte", "logistica", "logística", "envio", "envío",
+                "paqueteria", "paquetería", "mensajeria", "mensajería", "flete",
+                "carga", "distribucion", "distribución", "acarreo", "grua", "grúa",
             ],
-            "Legal": [
-                "abogado", "legal", "juridico", "jurídico", "notaria", "notaría", 
-                "derecho", "asesor legal", "licenciado"
+            # ── Industria / Manufactura ───────────────────────────────────────
+            "Manufactura": [
+                "fabrica", "fábrica", "manufactura", "produccion", "producción",
+                "industrial", "planta", "maquila", "ensamble", "proceso industrial",
             ],
+            # ── Gas / Energía ─────────────────────────────────────────────────
+            "Gas LP / Energía": [
+                "gas", "gas lp", "cilindro", "tanque", "gasera", "combustible",
+                "gas natural", "energia", "energía", "solar", "panel solar",
+            ],
+            # ── Financiero ────────────────────────────────────────────────────
             "Financiero": [
-                "banco", "credito", "crédito", "prestamo", "préstamo", "financiero", 
-                "inversion", "inversión", "seguros", "finanzas"
+                "banco", "credito", "crédito", "prestamo", "préstamo", "financiero",
+                "inversion", "inversión", "seguros", "finanzas", "caja de ahorro",
+                "cooperativa", "microfinanciera", "hipoteca",
+            ],
+            # ── Tecnología ────────────────────────────────────────────────────
+            "Tecnología": [
+                "software", "desarrollo web", "desarrollo de software", "programacion",
+                "programación", "it", "tech", "tecnologia", "tecnología",
+                "inteligencia artificial", "ia", "saas", "erp", "crm",
+                "ciberseguridad", "redes", "infraestructura ti",
             ],
         }
 

@@ -36,6 +36,7 @@ class WebsiteScraper:
             "Sec-Fetch-Site": "none",
             "Cache-Control": "max-age=0",
         }
+        self._cs = None  # cloudscraper session, inicializado bajo demanda
         
         # Diccionario extendido de industrias
         self.INDUSTRY_KEYWORDS = {
@@ -264,12 +265,14 @@ class WebsiteScraper:
             }
         """
         print(f"🔍 Scrapeando: {url}")
-        
+
         try:
-            response = requests.get(url, headers=self.headers, timeout=15)
+            response = self._get_page(url, timeout=15)
+            if response is None:
+                raise requests.exceptions.HTTPError("No response")
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
-            if response.status_code == 403:
+            if response is not None and response.status_code == 403:
                 print(f"⚠️ Sitio bloqueó el scraper (403): {url}")
                 return {
                     "website": url, "domain": urlparse(url).netloc.replace("www.", ""),
@@ -293,7 +296,10 @@ class WebsiteScraper:
         
         soup = BeautifulSoup(response.text, "html.parser")
         text = soup.get_text(" ", strip=True)
-        
+
+        # Datos adicionales de fuentes estáticas (JSON-LD, __NEXT_DATA__, script vars)
+        structured_phones, structured_wa = self._extract_from_scripts(soup)
+
         domain = urlparse(url).netloc.replace("www.", "")
 
         # Extraer todos los datos
@@ -328,8 +334,12 @@ class WebsiteScraper:
             # Contactos en bruto (se guardan en contacts, no en companies)
             "_contacts_raw": {
                 "whatsapp_numbers": [],
-                "all_whatsapp_numbers": self._extract_whatsapp_numbers(soup, text),
-                "phone_numbers": self._extract_phone_numbers(soup, text),
+                "all_whatsapp_numbers": list(dict.fromkeys(
+                    self._extract_whatsapp_numbers(soup, text) + structured_wa
+                )),
+                "phone_numbers": list(dict.fromkeys(
+                    self._extract_phone_numbers(soup, text) + structured_phones
+                )),
                 "emails": self._extract_emails(text),
                 "persons": self._extract_person_contacts(soup, text),
             },
@@ -344,20 +354,107 @@ class WebsiteScraper:
             }
         }
 
+        # ── Subpage crawl: AI ranks every internal link by contact-info probability ──
+        all_links = self._find_all_internal_links(soup, url, domain)
+
+        # Sitios JS/SPA no exponen links en HTML estático — probar rutas comunes de contacto
+        if not all_links:
+            base = url.rstrip("/")
+            _COMMON_PATHS = [
+                "/contactanos", "/contacto", "/contact", "/contact-us", "/contactenos",
+                "/nosotros", "/about", "/about-us", "/quienes-somos",
+                "/ubicaciones", "/ubicacion", "/sucursales", "/sucursal",
+                "/telefono", "/telefonos", "/directorio", "/informacion",
+            ]
+            all_links = [{"url": base + p, "text": p.strip("/"), "path": p} for p in _COMMON_PATHS]
+            print(f"⚠️  Sitio JS/SPA detectado (0 links en HTML) — probando {len(all_links)} rutas comunes")
+
+        sub_urls  = self._ai_rank_subpages(all_links, result.get("industry", ""))
+        print(f"🔗 {len(all_links)} links encontrados → crawleando top {min(8, len(sub_urls))}")
+        for sub_url in sub_urls[:8]:
+            sub_soup, sub_text = self._scrape_subpage(sub_url)
+            if not sub_soup:
+                continue
+            sub_phones_s, sub_wa_s = self._extract_from_scripts(sub_soup)
+            for num in self._extract_whatsapp_numbers(sub_soup, sub_text) + sub_wa_s:
+                if num not in result["_contacts_raw"]["all_whatsapp_numbers"]:
+                    result["_contacts_raw"]["all_whatsapp_numbers"].append(num)
+            for phone in self._extract_phone_numbers(sub_soup, sub_text) + sub_phones_s:
+                if phone not in result["_contacts_raw"]["phone_numbers"]:
+                    result["_contacts_raw"]["phone_numbers"].append(phone)
+            for email in self._extract_emails(sub_text):
+                if email not in result["_contacts_raw"]["emails"]:
+                    result["_contacts_raw"]["emails"].append(email)
+            if not result["_extra"]["business_hours"]:
+                bh = self._extract_business_hours(sub_text, sub_soup)
+                if bh:
+                    result["_extra"]["business_hours"] = bh
+            if not result["_extra"]["address"]:
+                addr = self._extract_address(sub_text, sub_soup)
+                if addr:
+                    result["_extra"]["address"] = addr
+
         if result["_contacts_raw"]["all_whatsapp_numbers"]:
-            result["_contacts_raw"]["whatsapp_numbers"] = [result["_contacts_raw"]["all_whatsapp_numbers"][0]]
+            result["_contacts_raw"]["whatsapp_numbers"] = result["_contacts_raw"]["all_whatsapp_numbers"]
             result["has_whatsapp"] = True
+
+        # ── Fallback Playwright: si el scraping estático no encontró ningún contacto ──
+        no_contacts_found = (
+            not result["_contacts_raw"]["all_whatsapp_numbers"] and
+            not result["_contacts_raw"]["phone_numbers"]
+        )
+        if no_contacts_found:
+            print(f"🎭 Sin contactos en HTML estático — intentando Playwright para {url}")
+            # Intentar primero la página de contacto directamente
+            contact_candidates = [
+                url.rstrip("/") + "/contactanos",
+                url.rstrip("/") + "/contacto",
+                url.rstrip("/") + "/contact",
+                url,
+            ]
+            for pw_url in contact_candidates:
+                js_html = self._get_page_js(pw_url)
+                if not js_html:
+                    break  # Playwright no disponible
+                js_soup = BeautifulSoup(js_html, "html.parser")
+                js_text = js_soup.get_text(" ", strip=True)
+                js_phones_s, js_wa_s = self._extract_from_scripts(js_soup)
+                found_wa  = self._extract_whatsapp_numbers(js_soup, js_text) + js_wa_s
+                found_tel = self._extract_phone_numbers(js_soup, js_text) + js_phones_s
+                for n in found_wa:
+                    if n not in result["_contacts_raw"]["all_whatsapp_numbers"]:
+                        result["_contacts_raw"]["all_whatsapp_numbers"].append(n)
+                for n in found_tel:
+                    if n not in result["_contacts_raw"]["phone_numbers"]:
+                        result["_contacts_raw"]["phone_numbers"].append(n)
+                if found_wa or found_tel:
+                    print(f"🎭 Playwright encontró contactos en {pw_url}")
+                    # Re-detectar industria con el texto completo renderizado
+                    if result.get("industry") in ("No detectada", "", None):
+                        detected = self._detect_industry(js_text, js_soup)
+                        if detected != "No detectada":
+                            result["industry"] = detected
+                            print(f"🏷️  Industria detectada desde Playwright: {detected}")
+                    break
+            if result["_contacts_raw"]["all_whatsapp_numbers"]:
+                result["_contacts_raw"]["whatsapp_numbers"] = result["_contacts_raw"]["all_whatsapp_numbers"]
+                result["has_whatsapp"] = True
 
         # Deduplicación y guardado en MongoDB
         existing = self.companies_col.find_one({"domain": domain})
         if existing:
             next_scrape = existing.get("next_allowed_scrape_at")
-            if next_scrape and next_scrape.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc):
-                print(f"⏭️  Dominio ya scrapeado recientemente: {domain}")
+            already_has_contact = existing.get("has_whatsapp") or self.contacts_col.find_one(
+                {"company_id": existing["_id"], "type": {"$in": ["whatsapp", "phone"]}}
+            )
+            # Solo saltar si ya tiene contactos — si no encontró nada antes, reintentar siempre
+            if next_scrape and next_scrape.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc) and already_has_contact:
+                print(f"⏭️  Dominio ya scrapeado recientemente con contactos: {domain}")
                 result["_db_action"] = "skipped_duplicate"
                 result["_company_id"] = existing["_id"]
                 return result
             else:
+                print(f"🔄 Re-scrapeando {domain} (sin contactos previos o cooldown expirado)")
                 self.companies_col.update_one(
                     {"_id": existing["_id"]},
                     {"$set": {
@@ -378,6 +475,283 @@ class WebsiteScraper:
         self._save_contacts(result["_contacts_raw"], result["_company_id"], url)
 
         return result
+
+    # ========================================================================
+    # FETCH CON FALLBACK CLOUDFLARE
+    # ========================================================================
+
+    def _get_page(self, url: str, timeout: int = 15):
+        """
+        Intenta requests primero. Si Cloudflare bloquea (403 / 503 / 999),
+        reintenta con cloudscraper que resuelve el desafío JS automáticamente.
+        Devuelve el objeto Response o None si ambos fallan.
+        """
+        _CF_CODES = {403, 503, 999}
+        try:
+            resp = requests.get(url, headers=self.headers, timeout=timeout)
+            if resp.status_code not in _CF_CODES:
+                return resp
+            print(f"🛡️  Cloudflare detectado ({resp.status_code}) en {url} — reintentando con cloudscraper…")
+        except Exception:
+            pass
+
+        try:
+            import cloudscraper
+            if self._cs is None:
+                self._cs = cloudscraper.create_scraper(
+                    browser={"browser": "chrome", "platform": "windows", "mobile": False}
+                )
+            resp = self._cs.get(url, timeout=timeout)
+            if resp.status_code == 200:
+                print(f"✅ cloudscraper superó el desafío: {url}")
+                return resp
+            print(f"⚠️  cloudscraper recibió {resp.status_code} en {url}")
+        except Exception as e:
+            print(f"⚠️  cloudscraper falló en {url}: {e}")
+
+        return None
+
+    # ========================================================================
+    # MULTI-PAGE CRAWLING — AI-powered
+    # ========================================================================
+
+    # Fallback keywords when Groq is unavailable
+    _CONTACT_KEYWORDS = [
+        "contact", "contacto", "contactanos", "contáctanos",
+        "about", "nosotros", "quienes", "empresa", "about-us",
+        "servicio", "servicios", "service", "services",
+        "ubicacion", "ubicación", "donde", "where", "sucursal",
+        "llamanos", "llamenos", "telefono", "teléfono",
+        "team", "equipo", "directorio", "offices", "stores",
+        "find-us", "reach", "info", "informacion", "branch",
+    ]
+
+    def _find_all_internal_links(self, soup: BeautifulSoup, base_url: str, base_domain: str) -> List[Dict]:
+        """Extract every unique internal link with its anchor text and path."""
+        seen: set = set()
+        links: List[Dict] = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip()
+            if not href or href.startswith("#") or href.startswith("mailto:") or href.startswith("tel:"):
+                continue
+            full = urljoin(base_url, href).split("?")[0].split("#")[0].rstrip("/")
+            if urlparse(full).netloc.replace("www.", "") != base_domain:
+                continue
+            if full == base_url.rstrip("/") or full in seen:
+                continue
+            seen.add(full)
+            text = a.get_text(strip=True)[:80]
+            links.append({"url": full, "text": text, "path": urlparse(full).path})
+        return links
+
+    def _ai_rank_subpages(self, links: List[Dict], industry: str = "") -> List[str]:
+        """
+        Ask Groq to rank internal links by probability of containing contact info.
+        Falls back to keyword scoring if Groq is not configured or fails.
+        """
+        import os, json as _json, re as _re
+        groq_key = os.getenv("GROQ_API_KEY", "")
+
+        # Páginas de contacto garantizadas — siempre van primero sin importar el ranking
+        _MUST_CRAWL = {
+            "contacto", "contactanos", "contacténos", "contact", "contactus",
+            "contactenos", "ubicacion", "ubicaciones", "sucursales", "sucursal",
+            "telefono", "telefonos", "directorio", "reach-us", "find-us",
+        }
+        must_urls = [
+            lk["url"] for lk in links
+            if any(kw in lk["path"].lower() for kw in _MUST_CRAWL)
+        ]
+        non_must  = [lk for lk in links if lk["url"] not in set(must_urls)]
+
+        if groq_key and links:
+            try:
+                from groq import Groq
+                client = Groq(api_key=groq_key)
+                batch = non_must[:40]
+                lines = [
+                    f"{i+1}. path={lk['path']!r}  texto={lk['text']!r}"
+                    for i, lk in enumerate(batch)
+                ]
+                industry_hint = f" (industria del negocio: {industry})" if industry else ""
+                prompt = (
+                    f"Eres un analizador de sitios web de negocios mexicanos{industry_hint}.\n"
+                    f"Tu tarea: identificar qué páginas internas tienen mayor probabilidad de "
+                    f"contener información de contacto: teléfonos, WhatsApp, dirección física, "
+                    f"horarios de atención o datos del equipo.\n\n"
+                    f"Analiza el path de la URL Y el texto del link (anchor text).\n\n"
+                    f"Links internos encontrados:\n"
+                    + "\n".join(lines) +
+                    f"\n\nDevuelve SOLO un array JSON con los números de los links ordenados "
+                    f"de MAYOR a menor probabilidad de tener información de contacto. "
+                    f"Incluye todos los que tengan alguna probabilidad, no solo los obvios.\n"
+                    f"Ejemplo de respuesta: [3, 7, 1, 12, 5]"
+                )
+                resp = client.chat.completions.create(
+                    model="llama-3.1-8b-instant",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=300,
+                    temperature=0,
+                )
+                content = resp.choices[0].message.content.strip()
+                m = _re.search(r'\[[\d,\s]+\]', content)
+                if m:
+                    indices = _json.loads(m.group(0))
+                    ranked = [batch[i - 1]["url"] for i in indices if 1 <= i <= len(batch)]
+                    # Append any links Groq didn't mention, sorted by keyword score
+                    ranked_set = set(ranked) | set(must_urls)
+                    rest = self._keyword_score_links([lk for lk in non_must if lk["url"] not in ranked_set])
+                    print(f"🤖 AI ranked {len(ranked)} subpages + {len(must_urls)} páginas de contacto garantizadas")
+                    return must_urls + ranked + rest
+            except Exception as exc:
+                print(f"⚠️  Groq subpage ranking failed ({exc}), using keyword fallback")
+
+        keyword_ranked = self._keyword_score_links(non_must)
+        return must_urls + keyword_ranked
+
+    def _keyword_score_links(self, links: List[Dict]) -> List[str]:
+        """Fallback: score links by keyword presence in path + anchor text."""
+        scored = []
+        for lk in links:
+            path_lower = lk["path"].lower()
+            text_lower = lk["text"].lower()
+            score = sum(1 for kw in self._CONTACT_KEYWORDS if kw in path_lower or kw in text_lower)
+            if score > 0:
+                scored.append((score, lk["url"]))
+        scored.sort(key=lambda x: -x[0])
+        return [url for _, url in scored]
+
+    def _get_page_js(self, url: str, timeout: int = 20) -> Optional[str]:
+        """
+        Renderiza la página con Playwright (Chromium headless) y devuelve el HTML
+        completo tras ejecutar JS. Solo se usa cuando los métodos estáticos fallan.
+        Devuelve el HTML como string o None si Playwright no está disponible/falla.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            return None
+
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=True)
+                ctx = browser.new_context(
+                    user_agent=self.headers["User-Agent"],
+                    locale="es-MX",
+                    viewport={"width": 1280, "height": 800},
+                )
+                page = ctx.new_page()
+                page.goto(url, wait_until="networkidle", timeout=timeout * 1000)
+                html = page.content()
+                browser.close()
+                print(f"🎭 Playwright renderizó {url} ({len(html)} chars)")
+                return html
+        except Exception as e:
+            print(f"⚠️  Playwright falló en {url}: {e}")
+            return None
+
+    def _scrape_subpage(self, url: str):
+        """Fetch a subpage; returns (soup, text) or (None, '') on failure."""
+        try:
+            resp = self._get_page(url, timeout=10)
+            if resp is not None and resp.status_code == 200:
+                sub_soup = BeautifulSoup(resp.text, "html.parser")
+                return sub_soup, sub_soup.get_text(" ", strip=True)
+        except Exception:
+            pass
+        return None, ""
+
+    # ========================================================================
+    # EXTRACCIÓN DESDE SCRIPTS (JSON-LD, __NEXT_DATA__, vars inline)
+    # ========================================================================
+
+    def _extract_from_scripts(self, soup: BeautifulSoup):
+        """
+        Extrae teléfonos y WhatsApps de fuentes JS estáticas:
+          1. JSON-LD (<script type="application/ld+json">)
+          2. __NEXT_DATA__ (Next.js SSR props)
+          3. Patrones de teléfono en texto de cualquier <script>
+        Devuelve (phones: list[str], wa_numbers: list[str])
+        """
+        import json as _json
+
+        phones: List[str] = []
+        wa_numbers: List[str] = []
+
+        _PHONE_RE = re.compile(
+            r'(?:\+52[\s\-]?)?'
+            r'(?:\d{3}[\s\.\-]\d{3}[\s\.\-]\d{4}'      # 800 123 4567
+            r'|\d{2}[\s\.\-]\d{4}[\s\.\-]\d{4}'          # 55 1234 5678
+            r'|\d{10}'                                     # 10 dígitos continuos
+            r'|\(\d{3}\)\s*\d{3}[\s\-]?\d{4})'           # (800) 123-4567
+        )
+
+        def _harvest(text_blob: str):
+            """Busca números en un bloque de texto plano."""
+            for m in _PHONE_RE.finditer(text_blob):
+                raw = m.group(0)
+                clean = self._normalize_phone(raw)
+                if clean and clean not in phones:
+                    if "whatsapp" in text_blob[max(0, m.start()-30):m.end()+30].lower():
+                        if clean not in wa_numbers:
+                            wa_numbers.append(clean)
+                    else:
+                        phones.append(clean)
+
+        def _walk_json(obj):
+            """Recorre recursivamente un dict/list buscando campos de teléfono."""
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    k_low = k.lower()
+                    if any(kw in k_low for kw in ("phone", "telephone", "tel", "whatsapp", "celular", "movil", "móvil")):
+                        if isinstance(v, str) and v.strip():
+                            clean = self._normalize_phone(v)
+                            if clean:
+                                target = wa_numbers if "whatsapp" in k_low else phones
+                                if clean not in target:
+                                    target.append(clean)
+                    else:
+                        _walk_json(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    _walk_json(item)
+            elif isinstance(obj, str) and len(obj) < 30:
+                clean = self._normalize_phone(obj)
+                if clean and clean not in phones:
+                    phones.append(clean)
+
+        for script in soup.find_all("script"):
+            stype = script.get("type", "")
+            sid   = script.get("id", "")
+            content = script.string or ""
+            if not content.strip():
+                continue
+
+            # 1. JSON-LD estructurado
+            if "application/ld+json" in stype:
+                try:
+                    data = _json.loads(content)
+                    _walk_json(data)
+                except Exception:
+                    pass
+                continue
+
+            # 2. __NEXT_DATA__ (Next.js)
+            if sid == "__NEXT_DATA__" or "application/json" in stype:
+                try:
+                    data = _json.loads(content)
+                    _walk_json(data)
+                    print(f"📦 __NEXT_DATA__ procesado ({len(str(data))} chars)")
+                except Exception:
+                    pass
+                continue
+
+            # 3. Cualquier script inline — buscar patrones de teléfono
+            _harvest(content)
+
+        if phones or wa_numbers:
+            print(f"📜 Scripts: {len(phones)} teléfonos, {len(wa_numbers)} WhatsApps encontrados")
+        return phones, wa_numbers
 
     # ========================================================================
     # EXTRACCIÓN DE DATOS DE EMPRESA
@@ -611,6 +985,9 @@ class WebsiteScraper:
             r"\+?\d{1,3}[\s\-]?\(?\d{2,4}\)?[\s\-]?\d{3,4}[\s\-]?\d{4}",
             r"\d{10}",
             r"\(\d{3}\)\s*\d{3}[\s\-]?\d{4}",
+            r"\d{3}[\s\.\-]\d{3}[\s\.\-]\d{4}",   # 800 123 4567 / 800.123.4567
+            r"\d{2}[\s\.\-]\d{4}[\s\.\-]\d{4}",   # 55 1234 5678
+            r"\d{3}[\s\.\-]\d{4}[\s\.\-]\d{4}",   # 800 1234 5678 (lada larga)
         ]
         
         for pattern in phone_patterns:
@@ -627,19 +1004,28 @@ class WebsiteScraper:
         return normalized
 
     def _normalize_phone(self, raw_number: str, default_country_code="+52") -> Optional[str]:
-        """Normaliza número telefónico"""
+        """Normaliza número telefónico mexicano. Descarta números con código país distinto a +52."""
         digits = re.sub(r"\D", "", raw_number)
-        
-        if not 10 <= len(digits) <= 15:
-            return None
-        
-        if raw_number.strip().startswith("+"):
-            return f"+{digits}"
-        
+
+        # 10 dígitos → número local mexicano
         if len(digits) == 10:
             return f"{default_country_code}{digits}"
-        
-        return f"+{digits}"
+
+        # 12 dígitos comenzando con 52 → +52XXXXXXXXXX
+        if len(digits) == 12 and digits.startswith("52"):
+            return f"+{digits}"
+
+        # 13 dígitos comenzando con 521 → +521XXXXXXXXXX (formato móvil antiguo MX)
+        if len(digits) == 13 and digits.startswith("521"):
+            return f"+{digits}"
+
+        # Número explícito con + al inicio: solo aceptar si es código MX
+        if raw_number.strip().startswith("+"):
+            if digits.startswith("52") and len(digits) in (12, 13):
+                return f"+{digits}"
+            return None  # otro país — descartar
+
+        return None
 
     def _extract_emails(self, text: str) -> List[str]:
         """Extrae emails"""

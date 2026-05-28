@@ -4,7 +4,8 @@ from app.schemas.company import (
     ProcessUrlRequest, SearchRequest, BatchRequest,
     CheckUrlsRequest, DeleteCompaniesRequest, UpdateCompanyRequest,
     N8nMessageSentRequest, N8nMessageReceivedRequest,
-    EvolutionWebhookRequest, SendMessageRequest,
+    EvolutionWebhookRequest, SendMessageRequest, ReportRequest,
+    UpdateContactsRequest,
 )
 from app.utils import serialize
 from app.pipeline import process_url, run_pipeline_batch   # ← app.pipeline
@@ -51,7 +52,14 @@ def api_send_message(req: SendMessageRequest):
 @router.post("/search")
 def api_search(req: SearchRequest):
     try:
-        return {"urls": search_prospects(req.industry, req.city or "", req.keywords or "", req.num_results, req.offset or 0)}
+        db = MongoDBManager()
+        known = db.get_all_scraped_domains()
+        urls  = search_prospects(
+            req.industry, req.city or "", req.keywords or "",
+            req.num_results, req.offset or 0,
+            exclude_domains=known,
+        )
+        return {"urls": urls}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -296,6 +304,54 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
 
         return {"ok": True, "action": "ignored", "event": event}
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/companies/{company_id}/contacts")
+def api_update_contacts(company_id: str, req: UpdateContactsRequest):
+    try:
+        db = MongoDBManager()
+        db.replace_whatsapp_contacts(company_id, req.whatsapp_numbers)
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ── Reports ───────────────────────────────────────────────────────────────────
+
+@router.post("/reports/{company_id}")
+def api_generate_report(company_id: str, req: ReportRequest):
+    try:
+        from fastapi.responses import StreamingResponse
+        from app.report_generator import generate_report
+
+        db = MongoDBManager()
+        company = db.get_company_full_data(company_id)
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        analytics_list = db.get_analytics()
+        analytics = next((a for a in analytics_list if a.get("company_id") == company_id), {})
+
+        thread = db.get_conversation_thread(company_id)
+
+        pdf_buf = generate_report(
+            company=serialize(company),
+            analytics=analytics,
+            thread=thread,
+            screenshot_b64=req.screenshot_b64,
+        )
+
+        company_name = (company.get("name") or company.get("domain") or "empresa").replace(" ", "_")
+        filename = f"reporte-{company_name}.pdf"
+
+        return StreamingResponse(
+            pdf_buf,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

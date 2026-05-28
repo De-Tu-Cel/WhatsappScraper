@@ -51,7 +51,14 @@ class MongoDBManager:
         ))
 
     def get_contacts_by_company(self, company_id):
-        return list(self.db.contacts.find({"company_id": company_id}))
+        return list(
+            self.db.contacts.find({"company_id": company_id}).sort([
+                ("updated_at", -1),
+                ("is_primary", -1),
+                ("created_at", -1),
+                ("_id", -1),
+            ])
+        )
 
     def update_evidence(self, evidence_id, update_data):
         update_data["updated_at"] = datetime.now()
@@ -90,10 +97,24 @@ class MongoDBManager:
         if not company:
             return None
 
-        # Agregar contactos
-        company["contacts"] = list(self.db.contacts.find({"company_id": company_id}))
+        # Agregar contactos ordenados para que el número más reciente quede primero
+        company["contacts"] = list(
+            self.db.contacts.find({"company_id": company_id}).sort([
+                ("updated_at", -1),
+                ("is_primary", -1),
+                ("created_at", -1),
+                ("_id", -1),
+            ])
+        )
         company["person_contacts"] = list(self.db.person_contacts.find({"company_id": company_id}))
         company["social_media"] = self.db.social_media.find_one({"company_id": company_id})
+
+        last_log = self.db.message_logs.find_one(
+            {"company_id": company_id, "direction": "outbound"},
+            sort=[("created_at", -1)],
+            projection={"_id": 1},
+        )
+        company["last_message_log_id"] = str(last_log["_id"]) if last_log else None
 
         return company
 
@@ -159,6 +180,27 @@ class MongoDBManager:
         result = self.db.message_logs.insert_one(doc)
         return str(result.inserted_id)
 
+    def get_all_scraped_domains(self) -> set:
+        """Return the set of all domain strings already in the companies collection."""
+        from urllib.parse import urlparse
+
+        def clean(u):
+            try:
+                return urlparse(u).netloc.lower().replace("www.", "")
+            except Exception:
+                return ""
+
+        docs = self.db.companies.find({}, {"domain": 1, "website": 1})
+        out = set()
+        for d in docs:
+            if d.get("domain"):
+                out.add(d["domain"].lower().replace("www.", ""))
+            if d.get("website"):
+                c = clean(d["website"])
+                if c:
+                    out.add(c)
+        return out
+
     def check_urls_scraped(self, urls: list) -> dict:
         from urllib.parse import urlparse
 
@@ -192,6 +234,26 @@ class MongoDBManager:
             "value": {"$regex": clean[-10:], "$options": "i"},
         })
         return contact["company_id"] if contact else None
+
+    def replace_whatsapp_contacts(self, company_id: str, numbers: list):
+        """Replace all WhatsApp contacts for a company with the given list."""
+        self.db.contacts.delete_many({"company_id": company_id, "type": "whatsapp"})
+        now = datetime.now()
+        for i, num in enumerate(numbers):
+            if num.strip():
+                self.db.contacts.insert_one({
+                    "company_id": company_id,
+                    "type": "whatsapp",
+                    "value": num.strip(),
+                    "is_primary": i == 0,
+                    "created_at": now,
+                    "updated_at": now,
+                })
+        has_whatsapp = len(numbers) > 0
+        self.db.companies.update_one(
+            {"_id": __import__('bson').ObjectId(company_id)},
+            {"$set": {"has_whatsapp": has_whatsapp, "updated_at": now}}
+        )
 
     def save_evolution_log(self, direction: str, company_id: str, number: str,
                            message_body: str, message_id: str = None,

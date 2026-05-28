@@ -282,8 +282,9 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
     return {
         "website": website,
         "company_id": company_id,
-        "scraped": scraped,  # Ahora incluye TODOS los datos nuevos
+        "scraped": scraped,
         "primary_whatsapp_number": primary_whatsapp_number,
+        "all_whatsapp_numbers": _cr.get("all_whatsapp_numbers", []),
         "to_number": to_number,
         "screenshot_path": screenshot_path,
         "screenshot_file_id": screenshot_file_id,

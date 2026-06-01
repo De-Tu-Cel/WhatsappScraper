@@ -113,3 +113,9 @@ class EvolutionStatusUpdate(BaseModel):
     remoteJid: Optional[str] = None
     fromMe: Optional[bool] = None
     status: Optional[str] = None  # PENDING, SENT, DELIVERED, READ, FAILED
+
+class ReportRequest(BaseModel):
+    screenshot_b64: Optional[str] = None
+
+class UpdateContactsRequest(BaseModel):
+    whatsapp_numbers: List[str] = []

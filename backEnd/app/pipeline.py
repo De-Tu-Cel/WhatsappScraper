@@ -56,26 +56,34 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
 
     has_whatsapp = bool(_cr.get("whatsapp_numbers"))
 
-    company_id = db.insert_company({
-        "name": scraped["name"],
-        "industry": scraped["industry"],
-        "description": scraped["description"],
-        "main_activity": _extra.get("main_activity"),
-        "website": website,
-        "domain": _domain,
-        "address": _extra.get("address"),
-        "city": _extra.get("city"),
-        "state": _extra.get("state"),
-        "country": _extra.get("country"),
-        "postal_code": _extra.get("postal_code"),
-        "business_hours": _extra.get("business_hours"),
-        "services": _extra.get("services"),
-        "products": _extra.get("products"),
-        "metadata": scraped["metadata"],
-        "has_whatsapp": has_whatsapp,
-    })
+    # El scraper ya maneja dedup/update internamente y devuelve el company_id
+    _db_action = scraped.get("_db_action")
+    _scraped_id = scraped.get("_company_id")
 
-    print(f"✅ Empresa guardada con ID: {company_id}")
+    if _db_action in ("skipped_duplicate", "updated") and _scraped_id:
+        # Empresa ya existía — usar el ID existente, no crear duplicado
+        company_id = str(_scraped_id)
+        print(f"♻️  Empresa ya existente ({_db_action}), reutilizando ID: {company_id}")
+    else:
+        company_id = db.insert_company({
+            "name": scraped["name"],
+            "industry": scraped["industry"],
+            "description": scraped["description"],
+            "main_activity": _extra.get("main_activity"),
+            "website": website,
+            "domain": _domain,
+            "address": _extra.get("address"),
+            "city": _extra.get("city"),
+            "state": _extra.get("state"),
+            "country": _extra.get("country"),
+            "postal_code": _extra.get("postal_code"),
+            "business_hours": _extra.get("business_hours"),
+            "services": _extra.get("services"),
+            "products": _extra.get("products"),
+            "metadata": scraped["metadata"],
+            "has_whatsapp": has_whatsapp,
+        })
+        print(f"✅ Empresa nueva guardada con ID: {company_id}")
 
     # ========================================================================
     # GUARDAR CONTACTOS DE WHATSAPP
@@ -282,8 +290,9 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
     return {
         "website": website,
         "company_id": company_id,
-        "scraped": scraped,  # Ahora incluye TODOS los datos nuevos
+        "scraped": scraped,
         "primary_whatsapp_number": primary_whatsapp_number,
+        "all_whatsapp_numbers": _cr.get("all_whatsapp_numbers", []),
         "to_number": to_number,
         "screenshot_path": screenshot_path,
         "screenshot_file_id": screenshot_file_id,

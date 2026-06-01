@@ -51,7 +51,14 @@ class MongoDBManager:
         ))
 
     def get_contacts_by_company(self, company_id):
-        return list(self.db.contacts.find({"company_id": company_id}))
+        return list(
+            self.db.contacts.find({"company_id": company_id}).sort([
+                ("updated_at", -1),
+                ("is_primary", -1),
+                ("created_at", -1),
+                ("_id", -1),
+            ])
+        )
 
     def update_evidence(self, evidence_id, update_data):
         update_data["updated_at"] = datetime.now()
@@ -90,10 +97,24 @@ class MongoDBManager:
         if not company:
             return None
 
-        # Agregar contactos
-        company["contacts"] = list(self.db.contacts.find({"company_id": company_id}))
+        # Agregar contactos ordenados para que el número más reciente quede primero
+        company["contacts"] = list(
+            self.db.contacts.find({"company_id": company_id}).sort([
+                ("updated_at", -1),
+                ("is_primary", -1),
+                ("created_at", -1),
+                ("_id", -1),
+            ])
+        )
         company["person_contacts"] = list(self.db.person_contacts.find({"company_id": company_id}))
         company["social_media"] = self.db.social_media.find_one({"company_id": company_id})
+
+        last_log = self.db.message_logs.find_one(
+            {"company_id": company_id, "direction": "outbound"},
+            sort=[("created_at", -1)],
+            projection={"_id": 1},
+        )
+        company["last_message_log_id"] = str(last_log["_id"]) if last_log else None
 
         return company
 
@@ -159,6 +180,27 @@ class MongoDBManager:
         result = self.db.message_logs.insert_one(doc)
         return str(result.inserted_id)
 
+    def get_all_scraped_domains(self) -> set:
+        """Return the set of all domain strings already in the companies collection."""
+        from urllib.parse import urlparse
+
+        def clean(u):
+            try:
+                return urlparse(u).netloc.lower().replace("www.", "")
+            except Exception:
+                return ""
+
+        docs = self.db.companies.find({}, {"domain": 1, "website": 1})
+        out = set()
+        for d in docs:
+            if d.get("domain"):
+                out.add(d["domain"].lower().replace("www.", ""))
+            if d.get("website"):
+                c = clean(d["website"])
+                if c:
+                    out.add(c)
+        return out
+
     def check_urls_scraped(self, urls: list) -> dict:
         from urllib.parse import urlparse
 
@@ -192,6 +234,26 @@ class MongoDBManager:
             "value": {"$regex": clean[-10:], "$options": "i"},
         })
         return contact["company_id"] if contact else None
+
+    def replace_whatsapp_contacts(self, company_id: str, numbers: list):
+        """Replace all WhatsApp contacts for a company with the given list."""
+        self.db.contacts.delete_many({"company_id": company_id, "type": "whatsapp"})
+        now = datetime.now()
+        for i, num in enumerate(numbers):
+            if num.strip():
+                self.db.contacts.insert_one({
+                    "company_id": company_id,
+                    "type": "whatsapp",
+                    "value": num.strip(),
+                    "is_primary": i == 0,
+                    "created_at": now,
+                    "updated_at": now,
+                })
+        has_whatsapp = len(numbers) > 0
+        self.db.companies.update_one(
+            {"_id": __import__('bson').ObjectId(company_id)},
+            {"$set": {"has_whatsapp": has_whatsapp, "updated_at": now}}
+        )
 
     def save_evolution_log(self, direction: str, company_id: str, number: str,
                            message_body: str, message_id: str = None,
@@ -379,6 +441,56 @@ class MongoDBManager:
                 pass
             if not company:
                 continue
+
+            # Per-number breakdown — normalize to last 10 digits to avoid format mismatches
+            def _norm(n):
+                return (n or "").replace("+", "").replace(" ", "").replace("-", "")[-10:]
+
+            msgs = list(self.db.message_logs.find(
+                {"company_id": company_id},
+                {"direction": 1, "to_number": 1, "from_number": 1, "number": 1, "analysis": 1, "created_at": 1}
+            ))
+            num_map = {}  # key = normalized 10-digit number
+            num_raw  = {}  # key = normalized → raw display number
+            for m in msgs:
+                direction = m.get("direction", "outbound")
+                raw = (m.get("to_number") if direction == "outbound"
+                       else m.get("from_number") or m.get("number"))
+                n = _norm(raw)
+                if not n:
+                    continue
+                if n not in num_map:
+                    num_map[n] = {"sent": 0, "inbound": []}
+                    num_raw[n] = raw  # keep first seen raw value for display
+                if direction == "outbound":
+                    num_map[n]["sent"] += 1
+                else:
+                    num_map[n]["inbound"].append(m)
+
+            numbers = []
+            for n, data in num_map.items():
+                analyzed = [m for m in data["inbound"] if m.get("analysis")]
+                entry = {
+                    "number": num_raw[n],  # use original format for display
+                    "sent": data["sent"],
+                    "responses": len(data["inbound"]),
+                    "category": None, "response_quality": None,
+                    "reaction_time_min": None, "business_hours": None,
+                }
+                if analyzed:
+                    first = analyzed[0]
+                    entry["category"]        = first["analysis"].get("category")
+                    entry["notes"]           = first["analysis"].get("notes") or ""
+                    entry["business_hours"]  = first["analysis"].get("business_hours")
+                    qualities = [m["analysis"].get("response_quality") or 0 for m in analyzed]
+                    reactions = [m["analysis"].get("reaction_time_min") or 0 for m in analyzed]
+                    entry["response_quality"]   = round(sum(qualities) / len(qualities), 1)
+                    entry["reaction_time_min"]  = round(sum(reactions) / len(reactions), 1)
+                # last inbound timestamp for this number
+                inbound_dates = [m.get("created_at") for m in data["inbound"] if m.get("created_at")]
+                entry["last_at"] = max(inbound_dates).isoformat() if inbound_dates else None
+                numbers.append(entry)
+
             results.append({
                 "company_id": company_id,
                 "company_name": company["name"],
@@ -391,5 +503,6 @@ class MongoDBManager:
                 "notes": g["notes"] or "",
                 "total_responses": g["total_responses"],
                 "last_at": g["last_at"].isoformat() if g["last_at"] else None,
+                "numbers": numbers,
             })
         return results

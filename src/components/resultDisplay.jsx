@@ -138,7 +138,7 @@ function ContactColumn({ icon, title, items, color, emptyMsg }) {
       </Box>
       {items?.length > 0
         ? items.map(n => (
-            <Typography key={n} variant="body2" sx={{ py: 0.3, color, fontWeight: 500, textAlign: 'center', fontSize: '0.82rem' }}>
+            <Typography key={n} variant="body2" sx={{ py: 0.3, color, fontWeight: 500, textAlign: 'center', fontSize: '0.82rem', wordBreak: 'break-all', overflowWrap: 'anywhere' }}>
               {n}
             </Typography>
           ))
@@ -180,16 +180,34 @@ export default function ResultDisplay({ result }) {
         }} />
 
         <Box sx={{ position: 'relative', zIndex: 1, p: 3, display: 'flex', alignItems: 'center', gap: 2.5 }}>
-          {/* Avatar con inicial */}
+          {/* Avatar con favicon */}
           <Box sx={{
             width: 56, height: 56, flexShrink: 0, borderRadius: 2.5,
             bgcolor: 'rgba(99,102,241,0.2)',
             border: '1.5px solid rgba(99,102,241,0.35)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '1.5rem', fontWeight: 800, color: '#a5b4fc',
-            textTransform: 'uppercase',
+            overflow: 'hidden',
           }}>
-            {(s.name || domain || '?')[0]}
+            {domain ? (
+              <Box
+                component="img"
+                src={`https://www.google.com/s2/favicons?domain=${domain}&sz=64`}
+                alt={s.name || domain}
+                sx={{ width: 32, height: 32, objectFit: 'contain' }}
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none'
+                  e.currentTarget.nextSibling.style.display = 'flex'
+                }}
+              />
+            ) : null}
+            <Box sx={{
+              display: domain ? 'none' : 'flex',
+              alignItems: 'center', justifyContent: 'center',
+              width: '100%', height: '100%',
+              fontSize: '1.5rem', fontWeight: 800, color: '#a5b4fc', textTransform: 'uppercase',
+            }}>
+              {(s.name || domain || '?')[0]}
+            </Box>
           </Box>
 
           {/* Info principal */}
@@ -363,10 +381,8 @@ export default function ResultDisplay({ result }) {
         <Table size="small">
           <TableBody>
             {[
-              ['company_id',              result.company_id],
-              ['message_log_id',          result.message_log_id],
-              ['screenshot_evidence_id',  result.screenshot_evidence_id],
-              ['social_media_id',         result.social_media_id],
+              ['company_id',     result.company_id],
+              ['message_log_id', result.message_log_id],
             ].map(([k, v]) => (
               <TableRow key={k} sx={{ '& td': { borderBottom: '1px solid rgba(255,255,255,0.04)', py: 0.8 } }}>
                 <TableCell sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem', width: 200, fontFamily: 'monospace' }}>{k}</TableCell>

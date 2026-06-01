@@ -1,0 +1,780 @@
+'use client'
+import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react'
+import Box from '@mui/material/Box'
+import Typography from '@mui/material/Typography'
+import Chip from '@mui/material/Chip'
+import CircularProgress from '@mui/material/CircularProgress'
+import Table from '@mui/material/Table'
+import TableHead from '@mui/material/TableHead'
+import TableBody from '@mui/material/TableBody'
+import TableRow from '@mui/material/TableRow'
+import TableCell from '@mui/material/TableCell'
+import TableContainer from '@mui/material/TableContainer'
+import TableSortLabel from '@mui/material/TableSortLabel'
+import Tooltip from '@mui/material/Tooltip'
+import IconButton from '@mui/material/IconButton'
+import BarChartIcon from '@mui/icons-material/BarChart'
+import PersonIcon from '@mui/icons-material/Person'
+import SmartToyIcon from '@mui/icons-material/SmartToy'
+import FlashOnIcon from '@mui/icons-material/FlashOn'
+import StarIcon from '@mui/icons-material/Star'
+import AccessTimeIcon from '@mui/icons-material/AccessTime'
+import RefreshIcon from '@mui/icons-material/Refresh'
+import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf'
+import SendIcon from '@mui/icons-material/Send'
+import CheckCircleIcon from '@mui/icons-material/CheckCircle'
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined'
+import Snackbar from '@mui/material/Snackbar'
+import Alert from '@mui/material/Alert'
+import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight'
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
+import WhatsAppIcon from '@mui/icons-material/WhatsApp'
+import { loadAndyConfig, saveAndyConfig } from './Settings'
+
+const CATEGORY_CONFIG = {
+  humano:     { label: 'Humano',     color: '#4ade80', bg: 'rgba(34,197,94,0.12)',   icon: '👤' },
+  automatico: { label: 'Automático', color: '#facc15', bg: 'rgba(250,204,21,0.12)',  icon: '⚡' },
+  bot:        { label: 'Bot',        color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', icon: '🤖' },
+  bot_ia:     { label: 'Bot IA',     color: '#c084fc', bg: 'rgba(192,132,252,0.15)', icon: '🧠' },
+}
+
+function getCategoryConfig(row) {
+  if (row.category === 'bot' && row.is_ai) return CATEGORY_CONFIG.bot_ia
+  return CATEGORY_CONFIG[row.category] || { label: 'Sin clasificar', color: '#94a3b8', bg: 'rgba(148,163,184,0.08)', icon: '⏳' }
+}
+
+function QualityDots({ score, color }) {
+  const filled = Math.round(score || 0)
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3 }}>
+      {[1, 2, 3, 4, 5].map(i => (
+        <Box key={i} sx={{
+          fontSize: '0.75rem',
+          color: i <= filled ? color : 'rgba(255,255,255,0.15)',
+          lineHeight: 1,
+        }}>
+          ●
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
+function formatReactionTime(minutes) {
+  if (minutes === null || minutes === undefined) return '—'
+  if (minutes < 60) return `${Math.round(minutes)}m`
+  const h = Math.floor(minutes / 60)
+  const m = Math.round(minutes % 60)
+  return m > 0 ? `${h}h ${m}m` : `${h}h`
+}
+
+function BusinessHoursChip({ value }) {
+  if (value === null || value === undefined) {
+    return <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.78rem' }}>—</Typography>
+  }
+  return value ? (
+    <Chip label="Hábil" size="small" sx={{
+      height: 18, fontSize: '0.65rem',
+      bgcolor: 'rgba(34,197,94,0.12)', color: '#4ade80',
+      border: '1px solid rgba(34,197,94,0.25)',
+    }} />
+  ) : (
+    <Chip label="Fuera" size="small" sx={{
+      height: 18, fontSize: '0.65rem',
+      bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)',
+      border: '1px solid rgba(255,255,255,0.1)',
+    }} />
+  )
+}
+
+function formatLastAt(iso) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  const now = new Date()
+  const diff = now - d
+  if (diff < 60000) return 'ahora'
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m`
+  if (diff < 86400000) return d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })
+}
+
+const CELL_SX = {
+  borderBottom: '1px solid rgba(255,255,255,0.04)',
+  color: 'rgba(255,255,255,0.8)',
+  fontSize: '0.8rem',
+  py: 1.2,
+  px: 1.5,
+}
+
+const HEADER_CELL_SX = {
+  bgcolor: 'var(--card-bg, #161d2e)',
+  borderBottom: '1px solid rgba(255,255,255,0.07)',
+  color: 'rgba(255,255,255,0.4)',
+  fontSize: '0.72rem',
+  fontWeight: 600,
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+  py: 1.2,
+  px: 1.5,
+}
+
+// Hidden conversation renderer for html2canvas
+// Must be in the viewport (not left:-9999) so html2canvas can read it
+function ConversationCapture({ thread, captureRef, visible }) {
+  if (!visible) return null
+  return (
+    <Box sx={{
+      position: 'fixed', top: '-9999px', left: '0',
+      pointerEvents: 'none', width: 520,
+    }}>
+      <Box
+        ref={captureRef}
+        sx={{
+          width: 500,
+          bgcolor: '#0d1117',
+          p: '12px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+        }}
+      >
+        {thread.map((msg, i) => {
+          const isOut = msg.direction === 'outbound'
+          return (
+            <Box key={i} sx={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
+              <Box sx={{
+                maxWidth: '78%',
+                px: '12px', py: '7px',
+                borderRadius: isOut ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
+                bgcolor: isOut ? '#1a3a5c' : '#1e2a3a',
+                border: `1px solid ${isOut ? 'rgba(59,130,246,0.35)' : 'rgba(255,255,255,0.1)'}`,
+              }}>
+                <Box sx={{ color: 'rgba(255,255,255,0.9)', fontSize: '13px', lineHeight: 1.45,
+                           fontFamily: 'system-ui, sans-serif', whiteSpace: 'pre-wrap' }}>
+                  {msg.body || msg.message_body || ''}
+                </Box>
+                <Box sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '10px', mt: '3px',
+                           textAlign: 'right', fontFamily: 'system-ui, sans-serif' }}>
+                  {msg.created_at ? new Date(msg.created_at).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) : ''}
+                </Box>
+              </Box>
+            </Box>
+          )
+        })}
+      </Box>
+    </Box>
+  )
+}
+
+export default function Analytics() {
+  const [data, setData]               = useState([])
+  const [loading, setLoading]         = useState(true)
+  const [generating, setGenerating]         = useState(null)
+  const [reportThread, setReportThread]     = useState([])
+  const [captureVisible, setCaptureVisible] = useState(false)
+  const [expandedRows, setExpandedRows]     = useState(new Set())
+
+  function toggleExpand(company_id) {
+    setExpandedRows(prev => {
+      const next = new Set(prev)
+      next.has(company_id) ? next.delete(company_id) : next.add(company_id)
+      return next
+    })
+  }
+  const captureRef = useRef(null)
+  const [snack, setSnack] = useState({ open: false, message: '', severity: 'error' })
+  const notify = (message, severity = 'error') => setSnack({ open: true, message, severity })
+  const [sortField, setSortField] = useState('last_at')
+  const [sortDir, setSortDir]     = useState('desc')
+  const [andyStatus, setAndyStatus] = useState({}) // { [company_id]: 'loading'|'success'|'error' }
+
+  const handleSort = (field) => {
+    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortField(field); setSortDir('asc') }
+  }
+
+  const fetchData = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch('/api/analytics')
+      const json = await res.json()
+      setData(Array.isArray(json) ? json : [])
+    } catch {
+      setData([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { fetchData() }, [fetchData])
+
+  const handleGenerateReport = useCallback(async (row, filterNum = null) => {
+    const genKey = filterNum ? `${row.company_id}_${filterNum}` : row.company_id
+    setGenerating(genKey)
+    try {
+      // 1. Pre-load html2canvas so import doesn't block render
+      const html2canvasModule = import('html2canvas')
+
+      // 2. Fetch thread and show capture div
+      const threadRes = await fetch(`/api/conversations/${row.company_id}`)
+      const thread = threadRes.ok ? await threadRes.json() : []
+      const normFn = n => (n || '').replace(/\D/g,'').slice(-10)
+      const rawThread = Array.isArray(thread) ? thread : []
+      const threadArr = filterNum
+        ? rawThread.filter(m => normFn(m.to_number || m.from_number || m.number) === normFn(filterNum))
+        : rawThread
+      setReportThread(threadArr)
+      setCaptureVisible(true)
+
+      // 3. Wait for React to render the messages into the DOM
+      await new Promise(r => setTimeout(r, 800))
+
+      // 4. Capture with html2canvas
+      let screenshotB64 = null
+      try {
+        const html2canvas = (await html2canvasModule).default
+        if (captureRef.current) {
+          // Resolve CSS variable to actual hex so html2canvas can use it
+          const resolvedBg = getComputedStyle(document.documentElement)
+            .getPropertyValue('--sidebar-bg').trim() || '#0d1117'
+          const canvas = await html2canvas(captureRef.current, {
+            backgroundColor: resolvedBg,
+            scale: 2,
+            logging: false,
+            useCORS: true,
+            allowTaint: true,
+            foreignObjectRendering: false,
+            windowWidth: 520,
+            windowHeight: captureRef.current.scrollHeight || 600,
+          })
+          if (canvas.width > 0 && canvas.height > 0) {
+            screenshotB64 = canvas.toDataURL('image/png')
+          }
+        } else {
+          console.warn('captureRef.current is null — component may not have mounted')
+        }
+      } catch (e) {
+        console.warn('html2canvas failed:', e)
+        notify('No se pudo capturar el screenshot; el reporte se generará sin imagen.', 'warning')
+      }
+
+      // 4. POST to report endpoint
+      const reportRes = await fetch(`/api/reports/${row.company_id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ screenshot_b64: screenshotB64 }),
+      })
+
+      if (!reportRes.ok) {
+        const errText = await reportRes.text()
+        notify(`Error al generar el reporte: ${errText || reportRes.statusText}`)
+        return
+      }
+
+      // 5. Download
+      const blob = await reportRes.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      const name = (row.company_name || row.company_id || 'empresa').replace(/\s+/g, '_')
+      const suffix = filterNum ? `_${filterNum.replace(/\D/g,'').slice(-4)}` : ''
+      a.href = url
+      a.download = `reporte-${name}${suffix}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+      notify('Reporte generado correctamente.', 'success')
+    } catch (e) {
+      notify(`Error inesperado: ${e?.message || 'intenta de nuevo'}`)
+    } finally {
+      setGenerating(null)  // genKey cleared
+      setReportThread([])
+      setCaptureVisible(false)
+    }
+  }, [])
+
+  // filterNum: si se pasa, filtra thread y contacto a ese número específico
+  const handleSendToAndy = useCallback(async (row, filterNum = null) => {
+    const cfg = loadAndyConfig()
+    if (!cfg.url || !cfg.user || !cfg.pass) {
+      notify('Configura URL, usuario y contraseña de Andy en ⚙ Configuración → Integración Bot', 'warning')
+      return
+    }
+    const key = filterNum ? `${row.company_id}_${filterNum}` : row.company_id
+    setAndyStatus(prev => ({ ...prev, [key]: 'loading' }))
+    try {
+      // 1. Fetch company + thread in parallel
+      const [companyRes, threadRes] = await Promise.all([
+        fetch(`/api/companies/${row.company_id}`),
+        fetch(`/api/conversations/${row.company_id}`),
+      ])
+      const company  = companyRes.ok  ? await companyRes.json()  : {}
+      const threadRaw = threadRes.ok  ? await threadRes.json()   : []
+      const thread   = Array.isArray(threadRaw) ? threadRaw : []
+
+      // 2. Check/refresh token
+      let token = cfg.token || ''
+      try {
+        const credRes = await fetch(`${cfg.url}/api/credential`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ user: cfg.user, pass: cfg.pass }),
+        })
+        if (credRes.ok) {
+          const cred = await credRes.json()
+          if (cred.lifetime === 'false' && cred.token) {
+            token = cred.token
+            saveAndyConfig({ ...cfg, token })
+          }
+        }
+      } catch { /* credential endpoint unreachable — proceed with stored token */ }
+
+      // 3. Build payload
+      const contacts = company.contacts || []
+      const norm     = n => (n || '').replace(/\D/g,'').slice(-10)
+      const allWa    = contacts.filter(c => c.type === 'whatsapp').map(c => c.value)
+      const targetNums = filterNum ? allWa.filter(n => norm(n) === norm(filterNum)) : allWa
+
+      // Build per-number whatsapp array with canal + messages
+      const whatsapp = targetNums.map((numero, i) => {
+        const numNorm   = norm(numero)
+        const numThread = thread.filter(m => norm(m.to_number || m.from_number || m.number) === numNorm)
+        const numData   = (row.numbers || []).find(n => norm(n.number) === numNorm) || {}
+        const canal     = numData.category ? {
+          categoria:            numData.category,
+          tiempo_respuesta_min: numData.reaction_time_min ?? null,
+          notas:                numData.notes || null,
+        } : null
+        return {
+          numero,
+          es_principal: i === 0,
+          canal,
+          mensajes: numThread.map(m => ({
+            de:     m.direction === 'outbound' ? 'nosotros' : 'empresa',
+            texto:  m.body || m.message_body || '',
+            hora:   m.created_at || '',
+            estado: m.status || '',
+          })),
+        }
+      })
+
+      const payload = {
+        pending: 'pending',
+        company: {
+          company_name: row.company_name || company.name || '',
+          industry:     row.industry     || company.industry || '',
+          whatsapp,
+        },
+      }
+
+      // 4. POST to Andy's endpoint
+      const endpoint = (cfg.endpoint || '/api/pending').startsWith('/') ? cfg.endpoint || '/api/pending' : `/${cfg.endpoint}`
+      const sendRes = await fetch(`${cfg.url}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify(payload),
+      })
+      if (!sendRes.ok) throw new Error(`HTTP ${sendRes.status}`)
+
+      setAndyStatus(prev => ({ ...prev, [key]: 'success' }))
+      notify(`Datos${filterNum ? ` del número ${filterNum.slice(-4)}` : ''} enviados a Andy.`, 'success')
+    } catch (e) {
+      setAndyStatus(prev => ({ ...prev, [key]: 'error' }))
+      notify(`Error al enviar a Andy: ${e?.message || 'verifica la configuración'}`)
+    }
+  }, [])
+
+  const sortedData = [...data].sort((a, b) => {
+    let av = a[sortField] ?? '', bv = b[sortField] ?? ''
+    if (typeof av === 'string') av = av.toLowerCase()
+    if (typeof bv === 'string') bv = bv.toLowerCase()
+    if (av < bv) return sortDir === 'asc' ? -1 : 1
+    if (av > bv) return sortDir === 'asc' ? 1 : -1
+    return 0
+  })
+
+  const total    = data.length
+  const humanPct = total ? Math.round((data.filter(d => d.category === 'humano').length / total) * 100) : 0
+  const botAutoPct = total
+    ? Math.round((data.filter(d => d.category === 'bot' || d.category === 'automatico').length / total) * 100)
+    : 0
+  const avgQuality = total
+    ? (data.reduce((acc, d) => acc + (d.response_quality || 0), 0) / total).toFixed(1)
+    : '—'
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, gap: 2, position: 'relative' }}>
+
+      <ConversationCapture thread={reportThread} captureRef={captureRef} visible={captureVisible} />
+
+      {/* Header */}
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexShrink: 0 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <Box sx={{
+            width: 36, height: 36, borderRadius: 2,
+            bgcolor: 'rgba(var(--accent-rgb, 99,102,241), 0.15)', border: '1px solid rgba(var(--accent-rgb, 99,102,241), 0.25)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <BarChartIcon sx={{ color: 'var(--accent, #a5b4fc)', fontSize: 20 }} />
+          </Box>
+          <Box>
+            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.2 }}>
+              Análisis de Respuestas
+            </Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem' }}>
+              Clasificación y métricas de respuestas recibidas
+            </Typography>
+          </Box>
+        </Box>
+        <Tooltip title="Actualizar">
+          <IconButton size="small" onClick={fetchData}
+            sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'white' } }}>
+            <RefreshIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </Box>
+
+      {/* Summary chips */}
+      <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', flexShrink: 0 }}>
+        <Box sx={{
+          display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
+          bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2,
+        }}>
+          <StarIcon sx={{ fontSize: 15, color: 'rgba(255,255,255,0.4)' }} />
+          <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>Total analizadas:</Typography>
+          <Typography sx={{ fontSize: '0.85rem', color: 'white', fontWeight: 700 }}>{total}</Typography>
+        </Box>
+
+        <Box sx={{
+          display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
+          bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2,
+        }}>
+          <PersonIcon sx={{ fontSize: 15, color: '#4ade80' }} />
+          <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>% Humano:</Typography>
+          <Typography sx={{ fontSize: '0.85rem', color: '#4ade80', fontWeight: 700 }}>{humanPct}%</Typography>
+        </Box>
+
+        <Box sx={{
+          display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
+          bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2,
+        }}>
+          <SmartToyIcon sx={{ fontSize: 15, color: '#a78bfa' }} />
+          <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>% Bot/Auto:</Typography>
+          <Typography sx={{ fontSize: '0.85rem', color: '#a78bfa', fontWeight: 700 }}>{botAutoPct}%</Typography>
+        </Box>
+
+        <Box sx={{
+          display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
+          bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2,
+        }}>
+          <FlashOnIcon sx={{ fontSize: 15, color: '#facc15' }} />
+          <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>Calidad promedio:</Typography>
+          <Typography sx={{ fontSize: '0.85rem', color: '#facc15', fontWeight: 700 }}>{avgQuality}</Typography>
+        </Box>
+      </Box>
+
+      {/* Table / states */}
+      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto',
+        scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent',
+        '&::-webkit-scrollbar': { width: 4 },
+        '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 },
+      }}>
+        {loading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', pt: 6 }}>
+            <CircularProgress size={32} sx={{ color: 'var(--accent, #6366f1)' }} />
+          </Box>
+        ) : data.length === 0 ? (
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', pt: 6, gap: 1.5 }}>
+            <BarChartIcon sx={{ fontSize: 48, color: 'rgba(255,255,255,0.08)' }} />
+            <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.85rem', textAlign: 'center', maxWidth: 360 }}>
+              Sin respuestas analizadas aún — las clasificaciones aparecerán aquí cuando las empresas respondan tus mensajes.
+            </Typography>
+          </Box>
+        ) : (
+          <TableContainer>
+            <Table size="small" stickyHeader>
+              <TableHead>
+                <TableRow>
+                  {/* Columna expand — sin label */}
+                  <TableCell sx={{ ...HEADER_CELL_SX, width: 32, px: 0.5 }} />
+                  {[
+                    { field: 'company_name', label: 'Empresa' },
+                    { field: 'industry',     label: 'Industria' },
+                    { field: 'category',     label: 'Categoría' },
+                  ].map(({ field, label }) => (
+                    <TableCell key={field} sx={HEADER_CELL_SX}>
+                      <TableSortLabel active={sortField === field} direction={sortField === field ? sortDir : 'asc'}
+                        onClick={() => handleSort(field)}
+                        sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
+                        {label}
+                      </TableSortLabel>
+                    </TableCell>
+                  ))}
+                  <TableCell sx={HEADER_CELL_SX}>
+                    <TableSortLabel active={sortField === 'response_quality'} direction={sortField === 'response_quality' ? sortDir : 'asc'}
+                      onClick={() => handleSort('response_quality')}
+                      sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        <StarIcon sx={{ fontSize: 12 }} /> Calidad
+                      </Box>
+                    </TableSortLabel>
+                  </TableCell>
+                  <TableCell sx={{ ...HEADER_CELL_SX, whiteSpace: 'nowrap' }}>
+                    <TableSortLabel active={sortField === 'reaction_time_min'} direction={sortField === 'reaction_time_min' ? sortDir : 'asc'}
+                      onClick={() => handleSort('reaction_time_min')}
+                      sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        <AccessTimeIcon sx={{ fontSize: 12 }} /> T. Reacción
+                      </Box>
+                    </TableSortLabel>
+                  </TableCell>
+                  <TableCell sx={HEADER_CELL_SX}>
+                    <TableSortLabel active={sortField === 'last_at'} direction={sortField === 'last_at' ? sortDir : 'asc'}
+                      onClick={() => handleSort('last_at')}
+                      sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
+                      Última respuesta
+                    </TableSortLabel>
+                  </TableCell>
+                  <TableCell sx={HEADER_CELL_SX}>Notas</TableCell>
+                  <TableCell sx={HEADER_CELL_SX}>Andy</TableCell>
+                  <TableCell sx={HEADER_CELL_SX}>Reporte</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {sortedData.map((row) => {
+                  const cat = getCategoryConfig(row)
+                  const notesText = row.notes || ''
+                  const notesTruncated = notesText.length > 60 ? notesText.slice(0, 60) + '…' : notesText
+                  const isGenerating = generating === row.company_id
+                  const hasMultiple = (row.numbers?.length || 0) > 1
+                  const isExpanded = expandedRows.has(row.company_id)
+                  return (
+                    <Fragment key={row.company_id}>
+                    <TableRow sx={{
+                      '&:hover': { bgcolor: 'rgba(255,255,255,0.025)' },
+                      transition: 'background 0.15s',
+                    }}>
+                      {/* Expand button */}
+                      <TableCell sx={{ ...CELL_SX, px: 0.5, width: 32 }}>
+                        {hasMultiple && (
+                          <IconButton size="small" onClick={() => toggleExpand(row.company_id)}
+                            sx={{ color: 'rgba(255,255,255,0.3)', p: 0.3, '&:hover': { color: 'var(--accent,#a5b4fc)' } }}>
+                            {isExpanded
+                              ? <KeyboardArrowDownIcon sx={{ fontSize: 16 }} />
+                              : <KeyboardArrowRightIcon sx={{ fontSize: 16 }} />}
+                          </IconButton>
+                        )}
+                      </TableCell>
+
+                      {/* Empresa */}
+                      <TableCell sx={CELL_SX}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                          <Typography sx={{ color: 'rgba(255,255,255,0.85)', fontWeight: 600, fontSize: '0.8rem' }}>
+                            {row.company_name || row.company_id}
+                          </Typography>
+                          {hasMultiple && (
+                            <Chip label={`${row.numbers.length} núms`} size="small" sx={{
+                              height: 16, fontSize: '0.6rem',
+                              bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.15)',
+                              color: 'var(--accent,#a5b4fc)',
+                              border: '1px solid rgba(var(--accent-rgb,99,102,241),0.3)',
+                            }} />
+                          )}
+                        </Box>
+                        {row.domain && (
+                          <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.7rem' }}>
+                            {row.domain}
+                          </Typography>
+                        )}
+                      </TableCell>
+
+                      {/* Industria */}
+                      <TableCell sx={CELL_SX}>
+                        <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.78rem' }}>
+                          {row.industry || '—'}
+                        </Typography>
+                      </TableCell>
+
+                      {/* Categoría */}
+                      <TableCell sx={CELL_SX}>
+                        {!hasMultiple && <Chip label={`${cat.icon} ${cat.label}`} size="small" sx={{ height: 20, fontSize: '0.7rem', bgcolor: cat.bg, color: cat.color, border: `1px solid ${cat.color}44` }} />}
+                      </TableCell>
+
+                      {/* Calidad */}
+                      <TableCell sx={CELL_SX}>
+                        {!hasMultiple && (row.response_quality != null
+                          ? <QualityDots score={row.response_quality} color={cat.color} />
+                          : <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.78rem' }}>—</Typography>)}
+                      </TableCell>
+
+                      {/* T. Reacción */}
+                      <TableCell sx={CELL_SX}>
+                        {!hasMultiple && (
+                          <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
+                            {formatReactionTime(row.reaction_time_min)}
+                          </Typography>
+                        )}
+                      </TableCell>
+
+
+                      {/* Última respuesta */}
+                      <TableCell sx={CELL_SX}>
+                        {!hasMultiple && (
+                          <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.78rem' }}>
+                            {formatLastAt(row.last_at)}
+                          </Typography>
+                        )}
+                      </TableCell>
+
+                      {/* Notas */}
+                      <TableCell sx={{ ...CELL_SX, maxWidth: 200 }}>
+                        {!hasMultiple && (notesText
+                          ? <Tooltip title={notesText} placement="top"><Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.75rem', cursor: 'default' }}>{notesTruncated}</Typography></Tooltip>
+                          : <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.75rem' }}>—</Typography>)}
+                      </TableCell>
+
+                      {/* Andy — si multi: envía TODOS los números */}
+                      <TableCell sx={CELL_SX}>
+                        {(() => {
+                          const st = andyStatus[row.company_id]
+                          const tip = hasMultiple
+                            ? (st === 'success' ? 'Todos enviados a Andy' : st === 'loading' ? 'Enviando…' : 'Enviar todos los números a Andy')
+                            : (st === 'success' ? 'Enviado a Andy' : st === 'error' ? 'Error — reintentar' : st === 'loading' ? 'Enviando…' : 'Enviar a Andy')
+                          return (
+                            <Tooltip title={tip}>
+                              <span>
+                                <IconButton size="small" disabled={st === 'loading'} onClick={() => handleSendToAndy(row)}
+                                  sx={{ color: st === 'success' ? '#4ade80' : st === 'error' ? '#f87171' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.15)' } }}>
+                                  {st === 'loading' ? <CircularProgress size={14} sx={{ color: 'var(--accent,#6366f1)' }} /> : st === 'success' ? <CheckCircleIcon sx={{ fontSize: 16 }} /> : st === 'error' ? <ErrorOutlineIcon sx={{ fontSize: 16 }} /> : <SendIcon sx={{ fontSize: 16 }} />}
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          )
+                        })()}
+                      </TableCell>
+
+                      {/* Reporte */}
+                      <TableCell sx={CELL_SX}>
+                        {!hasMultiple && (() => {
+                          const noContact = !row.total_responses
+                          const tip = isGenerating ? 'Generando…' : generating ? 'Espera…' : noContact ? 'Sin conversación registrada' : 'Reporte PDF'
+                          return (
+                            <Tooltip title={tip}>
+                              <span>
+                                <IconButton size="small" disabled={!!generating || noContact} onClick={() => handleGenerateReport(row)}
+                                  sx={{ color: isGenerating ? 'var(--accent,#6366f1)' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>
+                                  {isGenerating ? <CircularProgress size={14} sx={{ color: 'var(--accent,#6366f1)' }} /> : <PictureAsPdfIcon sx={{ fontSize: 16 }} />}
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          )
+                        })()}
+                      </TableCell>
+                    </TableRow>
+
+                    {/* Filas expandibles — una por número, alineadas con columnas */}
+                    {hasMultiple && isExpanded && row.numbers.map(n => {
+                      const nCat    = getCategoryConfig({ category: n.category })
+                      const replied = n.responses > 0
+                      const shortNum = (n.number || '').replace(/\D/g,'').slice(-10)
+                        .replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')
+                      const numKey  = `${row.company_id}_${n.number}`
+                      const andySt  = andyStatus[numKey]
+                      const genKey  = numKey
+                      const isGenNum = generating === genKey
+                      const NSUB = { ...CELL_SX, bgcolor: 'rgba(0,0,0,0.15)', borderBottom: '1px solid rgba(255,255,255,0.04)' }
+                      return (
+                        <TableRow key={numKey}>
+                          <TableCell sx={{ ...NSUB, px: 0.5, width: 32 }} />
+                          {/* Número */}
+                          <TableCell sx={{ ...NSUB, pl: 3 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7 }}>
+                              <WhatsAppIcon sx={{ fontSize: 13, color: replied ? '#4ade80' : 'rgba(255,255,255,0.2)', filter: replied ? 'drop-shadow(0 0 4px #4ade8066)' : 'none' }} />
+                              <Typography sx={{ fontSize: '0.72rem', fontFamily: 'monospace', color: 'rgba(255,255,255,0.7)' }}>{shortNum}</Typography>
+                            </Box>
+                          </TableCell>
+                          {/* Industria — vacía */}
+                          <TableCell sx={NSUB} />
+                          {/* Categoría */}
+                          <TableCell sx={NSUB}>
+                            {replied
+                              ? <Chip label={`${nCat.icon} ${nCat.label}`} size="small" sx={{ height: 18, fontSize: '0.65rem', bgcolor: nCat.bg, color: nCat.color, border: `1px solid ${nCat.color}44` }} />
+                              : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin respuesta</Typography>}
+                          </TableCell>
+                          {/* Calidad */}
+                          <TableCell sx={NSUB}>
+                            {n.response_quality != null
+                              ? <QualityDots score={n.response_quality} color={nCat.color} />
+                              : <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.75rem' }}>—</Typography>}
+                          </TableCell>
+                          {/* T. Reacción */}
+                          <TableCell sx={NSUB}>
+                            <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.75rem' }}>
+                              {n.reaction_time_min != null ? formatReactionTime(n.reaction_time_min) : '—'}
+                            </Typography>
+                          </TableCell>
+                          {/* Última respuesta — fecha real */}
+                          <TableCell sx={NSUB}>
+                            <Typography sx={{ fontSize: '0.75rem', color: replied ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.15)' }}>
+                              {n.last_at ? formatLastAt(n.last_at) : '—'}
+                            </Typography>
+                          </TableCell>
+                          {/* Notas del análisis de ese número */}
+                          <TableCell sx={{ ...NSUB, maxWidth: 200 }}>
+                            {n.notes
+                              ? <Tooltip title={n.notes} placement="top">
+                                  <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem', cursor: 'default', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
+                                    {n.notes.length > 55 ? n.notes.slice(0, 55) + '…' : n.notes}
+                                  </Typography>
+                                </Tooltip>
+                              : <Typography sx={{ color: 'rgba(255,255,255,0.15)', fontSize: '0.72rem' }}>—</Typography>}
+                          </TableCell>
+                          {/* Andy por número */}
+                          <TableCell sx={NSUB}>
+                            <Tooltip title={andySt === 'success' ? 'Enviado' : andySt === 'error' ? 'Error — reintentar' : andySt === 'loading' ? 'Enviando…' : `Enviar ${shortNum} a Andy`}>
+                              <span>
+                                <IconButton size="small" disabled={andySt === 'loading'} onClick={() => handleSendToAndy(row, n.number)}
+                                  sx={{ color: andySt === 'success' ? '#4ade80' : andySt === 'error' ? '#f87171' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.15)' } }}>
+                                  {andySt === 'loading' ? <CircularProgress size={14} sx={{ color: 'var(--accent,#6366f1)' }} /> : andySt === 'success' ? <CheckCircleIcon sx={{ fontSize: 16 }} /> : andySt === 'error' ? <ErrorOutlineIcon sx={{ fontSize: 16 }} /> : <SendIcon sx={{ fontSize: 16 }} />}
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </TableCell>
+                          {/* PDF por número */}
+                          <TableCell sx={NSUB}>
+                            <Tooltip title={isGenNum ? 'Generando…' : generating ? 'Espera…' : !replied ? 'Sin conversación registrada' : `PDF de ${shortNum}`}>
+                              <span>
+                                <IconButton size="small" disabled={!!generating || !replied} onClick={() => handleGenerateReport(row, n.number)}
+                                  sx={{ color: isGenNum ? 'var(--accent,#6366f1)' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>
+                                  {isGenNum ? <CircularProgress size={14} sx={{ color: 'var(--accent,#6366f1)' }} /> : <PictureAsPdfIcon sx={{ fontSize: 16 }} />}
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                    </Fragment>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </Box>
+
+      <Snackbar
+        open={snack.open}
+        autoHideDuration={5000}
+        onClose={() => setSnack(s => ({ ...s, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          severity={snack.severity}
+          onClose={() => setSnack(s => ({ ...s, open: false }))}
+          sx={{ width: '100%' }}
+        >
+          {snack.message}
+        </Alert>
+      </Snackbar>
+    </Box>
+  )
+}

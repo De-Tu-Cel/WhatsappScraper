@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { alpha } from '@mui/material/styles'
+import { isValidUrl, urlValidationMsg, isValidWhatsAppNumber, waNumberValidationMsg } from '@/lib/validators'
 import Box from '@mui/material/Box'
 import Paper from '@mui/material/Paper'
 import Table from '@mui/material/Table'
@@ -38,6 +38,7 @@ import Snackbar from '@mui/material/Snackbar'
 import Skeleton from '@mui/material/Skeleton'
 import Divider from '@mui/material/Divider'
 import Avatar from '@mui/material/Avatar'
+import LinearProgress from '@mui/material/LinearProgress'
 import DeleteIcon from '@mui/icons-material/Delete'
 import EditIcon from '@mui/icons-material/Edit'
 import FilterListIcon from '@mui/icons-material/FilterList'
@@ -45,8 +46,12 @@ import SearchIcon from '@mui/icons-material/Search'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import StorageIcon from '@mui/icons-material/Storage'
-import BusinessIcon from '@mui/icons-material/Business'
+import VisibilityIcon from '@mui/icons-material/Visibility'
+import SendIcon from '@mui/icons-material/Send'
+import MessageIcon from '@mui/icons-material/Message'
 import { visuallyHidden } from '@mui/utils'
+import ResultDisplay from './resultDisplay'
+import { MessageComposer, TEMPLATES } from './singleUrlProcessor'
 
 const HEAD_CELLS = [
   { id: 'name',         label: 'Empresa',    align: 'left',   sortable: true  },
@@ -74,7 +79,7 @@ const MENU_PROPS = {
   slotProps: {
     paper: {
       sx: {
-        bgcolor: '#0d1117',
+        bgcolor: 'var(--sidebar-bg, #0d1117)',
         border: '1px solid rgba(255,255,255,0.1)',
         borderRadius: 2,
         mt: 0.5,
@@ -117,9 +122,13 @@ const FIELD_SX = {
   '& .MuiInputBase-root': { color: 'rgba(255,255,255,0.85)' },
   '& .MuiInputLabel-root': { color: 'rgba(255,255,255,0.35)' },
   '& .MuiInputLabel-root.Mui-focused': { color: '#3b82f6' },
+  '& .MuiInputLabel-root.Mui-error': { color: '#f87171' },
   '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.1)' },
   '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.22)' },
   '& .MuiInputBase-root.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#3b82f6' },
+  '& .MuiInputBase-root.Mui-error .MuiOutlinedInput-notchedOutline': { borderColor: '#ef4444 !important' },
+  '& .MuiFormHelperText-root': { color: 'rgba(255,255,255,0.3)' },
+  '& .MuiFormHelperText-root.Mui-error': { color: '#f87171' },
 }
 
 const SKEL_SX = {
@@ -137,48 +146,98 @@ function truncate(str, n = 32) {
   return str.length > n ? str.slice(0, n) + '…' : str
 }
 
-// ─── Toolbar ──────────────────────────────────────────────────────────────────
-function EnhancedToolbar({ numSelected, onDelete, onRefresh, onToggleFilter, filterOpen }) {
-  return (
-    <Toolbar
-      sx={[
-        { pl: { sm: 2 }, pr: { xs: 1, sm: 1 }, borderRadius: '12px 12px 0 0', position: 'relative', zIndex: 1, background: 'linear-gradient(135deg, rgba(59,130,246,0.1) 0%, rgba(139,92,246,0.06) 50%, rgba(9,18,37,0.6) 100%)' },
-        numSelected > 0 && { bgcolor: (t) => alpha(t.palette.error.main, 0.12) },
-      ]}
-    >
-      {numSelected > 0 ? (
-        <Typography variant="subtitle1" sx={{ flex: '1 1 100%', color: 'error.light', fontWeight: 600 }}>
-          {numSelected} seleccionado{numSelected !== 1 ? 's' : ''}
-        </Typography>
-      ) : (
-        <Box sx={{ flex: '1 1 100%', display: 'flex', alignItems: 'center', gap: 1}}>
-          <StorageIcon sx={{ color: '#3b82f6', fontSize: 20 }} />
-          <Typography variant="h6" sx={{ color: 'white', fontWeight: 700, fontSize: '1rem' }}>
-            Base de datos
-          </Typography>
-        </Box>
-      )}
+function renderTemplate(template, row) {
+  if (!template) return ''
+  return template.text
+    .replace(/\{\{nombre\}\}/g,    row.name     || '')
+    .replace(/\{\{ciudad\}\}/g,    row.city     || '')
+    .replace(/\{\{industria\}\}/g, row.industry || '')
+    .replace(/\{\{web\}\}/g,       row.website  || row.domain || '')
+}
 
-      {numSelected > 0 ? (
-        <Tooltip title="Eliminar seleccionados">
-          <IconButton onClick={onDelete} color="error">
-            <DeleteIcon />
-          </IconButton>
-        </Tooltip>
-      ) : (
-        <Box sx={{ display: 'flex', gap: 0.5 }}>
-          <Tooltip title="Actualizar">
-            <IconButton onClick={onRefresh} size="small" sx={{ color: 'rgba(255,255,255,0.5)', '&:hover': { color: 'white' } }}>
-              <RefreshIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Filtros">
-            <IconButton onClick={onToggleFilter} size="small" sx={{ color: filterOpen ? '#3b82f6' : 'rgba(255,255,255,0.5)', '&:hover': { color: 'white' } }}>
-              <FilterListIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Box>
-      )}
+// ─── Toolbar ──────────────────────────────────────────────────────────────────
+function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescraping, selectedWithWA, onRefresh, onToggleFilter, filterOpen }) {
+  return (
+    <Toolbar sx={{
+      pl: { sm: 2 }, pr: { xs: 1, sm: 1 },
+      borderRadius: '12px 12px 0 0', position: 'relative', zIndex: 1,
+      background: 'linear-gradient(135deg, rgba(var(--accent-rgb, 59,130,246), 0.1) 0%, rgba(var(--accent-rgb, 59,130,246), 0.04) 50%, transparent 100%)',
+      minHeight: '56px !important',
+    }}>
+      {/* Left: title always visible + selection chip */}
+      <Box sx={{ flex: '1 1 100%', display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <StorageIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 20, flexShrink: 0 }} />
+        <Typography variant="h6" sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', whiteSpace: 'nowrap' }}>
+          Base de datos
+        </Typography>
+        {numSelected > 0 && (
+          <Chip
+            label={`${numSelected} seleccionada${numSelected !== 1 ? 's' : ''}`}
+            size="small"
+            sx={{ height: 22, fontSize: '0.7rem', fontWeight: 600, bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.15)', color: 'var(--accent, #60a5fa)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.3)' }}
+          />
+        )}
+      </Box>
+
+      {/* Right: contextual actions */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
+        {numSelected > 0 ? (
+          <>
+            <Tooltip title={selectedWithWA === 0 ? 'Ninguna empresa seleccionada tiene WhatsApp' : `Enviar mensaje a ${selectedWithWA} con WhatsApp`}>
+              <span>
+                <Button size="small" onClick={onCampaign} disabled={selectedWithWA === 0}
+                  startIcon={<MessageIcon sx={{ fontSize: '14px !important' }} />}
+                  sx={{
+                    fontSize: '0.75rem', fontWeight: 600, textTransform: 'none',
+                    color: '#4ade80', bgcolor: 'rgba(34,197,94,0.1)',
+                    border: '1px solid rgba(34,197,94,0.25)', borderRadius: 1.5,
+                    px: 1.5, py: 0.5,
+                    '&:hover': { bgcolor: 'rgba(34,197,94,0.18)', borderColor: 'rgba(34,197,94,0.45)' },
+                    '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'transparent', border: '1px solid rgba(255,255,255,0.08)' },
+                  }}
+                >
+                  Enviar{selectedWithWA > 0 ? ` (${selectedWithWA})` : ''}
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title={rescraping ? `Re-scrapeando ${rescraping}…` : `Re-scrapear ${numSelected} empresa${numSelected !== 1 ? 's' : ''}`}>
+              <span>
+                <Button size="small" onClick={onRescrape} disabled={!!rescraping}
+                  startIcon={rescraping ? <CircularProgress size={12} sx={{ color: 'inherit' }} /> : <RefreshIcon sx={{ fontSize: '14px !important' }} />}
+                  sx={{
+                    fontSize: '0.75rem', fontWeight: 600, textTransform: 'none',
+                    color: '#60a5fa', bgcolor: 'rgba(59,130,246,0.1)',
+                    border: '1px solid rgba(59,130,246,0.25)', borderRadius: 1.5,
+                    px: 1.5, py: 0.5,
+                    '&:hover': { bgcolor: 'rgba(59,130,246,0.18)', borderColor: 'rgba(59,130,246,0.45)' },
+                    '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'transparent', border: '1px solid rgba(255,255,255,0.08)' },
+                  }}>
+                  Re-scrapear
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title={`Eliminar ${numSelected} empresa${numSelected !== 1 ? 's' : ''}`}>
+              <IconButton onClick={onDelete} size="small"
+                sx={{ color: 'rgba(255,255,255,0.3)', ml: 0.5, '&:hover': { color: '#f87171', bgcolor: 'rgba(239,68,68,0.1)' } }}>
+                <DeleteIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </>
+        ) : (
+          <>
+            <Tooltip title="Actualizar">
+              <IconButton onClick={onRefresh} size="small" sx={{ color: 'rgba(255,255,255,0.5)', '&:hover': { color: 'white' } }}>
+                <RefreshIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Filtros">
+              <IconButton onClick={onToggleFilter} size="small" sx={{ color: filterOpen ? '#3b82f6' : 'rgba(255,255,255,0.5)', '&:hover': { color: 'white' } }}>
+                <FilterListIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </>
+        )}
+      </Box>
     </Toolbar>
   )
 }
@@ -275,9 +334,15 @@ function FilterBar({ filters, onChange, industries, cities }) {
 }
 
 // ─── Edit dialog ──────────────────────────────────────────────────────────────
-function EditDialog({ open, company, onClose, onSave }) {
+function EditDialog({ open, company, contacts, onClose, onSave }) {
   const [form, setForm] = useState({})
   const [saving, setSaving] = useState(false)
+  const [waNumbers, setWaNumbers] = useState([])
+  const [newNum, setNewNum] = useState('')
+  const [newNumError, setNewNumError] = useState('')
+  const [editingIdx, setEditingIdx] = useState(null)
+  const [editingVal, setEditingVal] = useState('')
+  const [editingError, setEditingError] = useState('')
 
   useEffect(() => {
     if (company) {
@@ -294,11 +359,40 @@ function EditDialog({ open, company, onClose, onSave }) {
     }
   }, [company])
 
+  useEffect(() => {
+    if (contacts) { setWaNumbers(contacts); setEditingIdx(null) }
+  }, [contacts])
+
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+
+  const addNum = () => {
+    const n = newNum.trim()
+    if (!n) { setNewNumError('El número no puede estar vacío'); return }
+    const err = waNumberValidationMsg(n)
+    if (err) { setNewNumError(err); return }
+    if (waNumbers.includes(n)) { setNewNumError('Este número ya está en la lista'); return }
+    setWaNumbers(prev => [...prev, n])
+    setNewNum('')
+    setNewNumError('')
+  }
+  const removeNum = (idx) => setWaNumbers(prev => prev.filter((_, i) => i !== idx))
+
+  const startEdit = (idx) => { setEditingIdx(idx); setEditingVal(waNumbers[idx]); setEditingError('') }
+  const commitEdit = () => {
+    const v = editingVal.trim()
+    if (!v) { setEditingError('El número no puede estar vacío'); return }
+    const err = waNumberValidationMsg(v)
+    if (err) { setEditingError(err); return }
+    if (waNumbers.some((n, i) => n === v && i !== editingIdx)) { setEditingError('Este número ya está en la lista'); return }
+    setWaNumbers(prev => prev.map((n, i) => i === editingIdx ? v : n))
+    setEditingIdx(null)
+    setEditingVal('')
+    setEditingError('')
+  }
 
   const handleSave = async () => {
     setSaving(true)
-    await onSave(company._id, form)
+    await onSave(company._id, form, waNumbers)
     setSaving(false)
   }
 
@@ -310,26 +404,16 @@ function EditDialog({ open, company, onClose, onSave }) {
       onClose={onClose}
       maxWidth="sm"
       fullWidth
-      PaperProps={{
-        sx: {
-          background: 'linear-gradient(160deg, rgba(59,130,246,0.12) 0%, rgba(139,92,246,0.08) 35%, #0d1117 65%)',
-          border: '1px solid rgba(255,255,255,0.08)',
+      slotProps={{ paper: { sx: {
+          background: 'var(--sidebar-bg, #0d1117)',
+          border: '1px solid rgba(255,255,255,0.1)',
           borderRadius: 3,
-          boxShadow: '0 24px 64px rgba(0,0,0,0.7)',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.85)',
           overflow: 'hidden',
-          position: 'relative',
-          '&::before': {
-            content: '""',
-            position: 'absolute', top: -50, left: -50,
-            width: 200, height: 200, borderRadius: '50%',
-            background: 'radial-gradient(circle, rgba(99,102,241,0.1) 0%, transparent 70%)',
-            pointerEvents: 'none',
-          },
-        },
-      }}
+        } } }}
     >
       {/* Header */}
-      <DialogTitle sx={{ p: 0 , bgcolor: 'rgba(4, 13, 27, 0.81)', borderBottom: '1px solid rgba(255, 255, 255, 0.07)'}}>
+      <DialogTitle sx={{ p: 0, bgcolor: 'var(--surface, #111827)', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
         <Box sx={{
           px: 3, pt: 3, pb: 2.5,
           display: 'flex', alignItems: 'center', gap: 2,
@@ -357,21 +441,56 @@ function EditDialog({ open, company, onClose, onSave }) {
         </Box>
       </DialogTitle>
 
-      <DialogContent sx={{ px: 3, pt: 2.5, pb: 1, display: 'flex', flexDirection: 'column', gap: 0, bgcolor: 'inherit' }}>
+      <DialogContent sx={{ px: 3, pt: 2.5, pb: 1, display: 'flex', flexDirection: 'column', gap: 0, bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
         {/* Sección: General */}
         <Typography variant="overline" sx={{ color: '#3b82f6', fontSize: '0.65rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
           Información general
         </Typography>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, mb: 2.5 }}>
-          <TextField label="Nombre"    size="small" fullWidth sx={FIELD_SX} value={form.name    || ''} onChange={(e) => set('name',    e.target.value)} />
-          <TextField label="Sitio web" size="small" fullWidth sx={FIELD_SX} value={form.website || ''} onChange={(e) => set('website', e.target.value)} />
+          <TextField label="Nombre" size="small" fullWidth sx={FIELD_SX}
+            value={form.name || ''}
+            onChange={(e) => set('name', e.target.value)}
+            error={form.name !== undefined && !form.name?.trim()}
+            helperText={form.name !== undefined && !form.name?.trim() ? 'El nombre es requerido' : ''}
+          />
+          {(() => {
+            const webErr = form.website?.trim() ? urlValidationMsg(form.website.trim()) : ''
+            return (
+              <TextField label="Sitio web" size="small" fullWidth sx={FIELD_SX}
+                value={form.website || ''}
+                onChange={(e) => set('website', e.target.value)}
+                error={!!webErr}
+                helperText={webErr || 'Ej: https://empresa.com.mx'}
+              />
+            )
+          })()}
           <Box sx={{ display: 'flex', gap: 1.5 }}>
             <TextField label="Industria" size="small" fullWidth sx={FIELD_SX} value={form.industry || ''} onChange={(e) => set('industry', e.target.value)} />
             <TextField label="Ciudad"    size="small" fullWidth sx={FIELD_SX} value={form.city     || ''} onChange={(e) => set('city',     e.target.value)} />
           </Box>
           <Box sx={{ display: 'flex', gap: 1.5 }}>
-            <TextField label="Estado" size="small" fullWidth sx={FIELD_SX} value={form.state  || ''} onChange={(e) => set('state',  e.target.value)} />
-            <TextField label="Status" size="small" fullWidth sx={FIELD_SX} value={form.status || ''} onChange={(e) => set('status', e.target.value)} />
+            <TextField label="Estado / Región" size="small" fullWidth sx={FIELD_SX} value={form.state || ''} onChange={(e) => set('state', e.target.value)} />
+            <Box sx={{ flex: 1 }}>
+              <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', mb: 0.5 }}>Etapa de contacto</Typography>
+              <Select size="small" fullWidth value={form.status || ''} onChange={(e) => set('status', e.target.value)}
+                displayEmpty
+                sx={{ color: 'rgba(255,255,255,0.85)', fontSize: '0.85rem',
+                  '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.1)' },
+                  '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.22)' },
+                  '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#3b82f6' },
+                  '& .MuiSvgIcon-root': { color: 'rgba(255,255,255,0.3)' },
+                }}
+                MenuProps={{ PaperProps: { sx: { bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.08)' } } }}
+              >
+                <MenuItem value="" sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem' }}>Sin definir</MenuItem>
+                <MenuItem value="pendiente"   sx={{ color: 'rgba(255,255,255,0.8)', fontSize: '0.82rem' }}>⏳ Pendiente de contactar</MenuItem>
+                <MenuItem value="contactado"  sx={{ color: '#60a5fa', fontSize: '0.82rem' }}>📨 Contactado</MenuItem>
+                <MenuItem value="interesado"  sx={{ color: '#4ade80', fontSize: '0.82rem' }}>✅ Interesado</MenuItem>
+                <MenuItem value="seguimiento" sx={{ color: '#fbbf24', fontSize: '0.82rem' }}>🔔 Seguimiento pendiente</MenuItem>
+                <MenuItem value="no_interesado" sx={{ color: '#f87171', fontSize: '0.82rem' }}>❌ No interesado</MenuItem>
+                <MenuItem value="cliente"     sx={{ color: '#a78bfa', fontSize: '0.82rem' }}>⭐ Cliente</MenuItem>
+              </Select>
+            </Box>
           </Box>
         </Box>
 
@@ -429,23 +548,122 @@ function EditDialog({ open, company, onClose, onSave }) {
             }}
           />
         </Box>
+
+        <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', my: 2 }} />
+        <Typography variant="overline" sx={{ color: '#3b82f6', fontSize: '0.65rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
+          Números de WhatsApp
+        </Typography>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.8, mb: 1.5 }}>
+          {waNumbers.length === 0 && (
+            <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.78rem' }}>Sin números registrados</Typography>
+          )}
+          {waNumbers.map((n, i) => (
+            editingIdx === i ? (
+              <Box key={i} sx={{ display: 'flex', gap: 1 }}>
+                <Box sx={{ flex: 1 }}>
+                  <TextField
+                    size="small" autoFocus fullWidth value={editingVal}
+                    onChange={(e) => { setEditingVal(e.target.value); if (editingError) setEditingError('') }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') { setEditingIdx(null); setEditingError('') } }}
+                    onBlur={commitEdit}
+                    error={!!editingError}
+                    sx={{ ...FIELD_SX,
+                      '& .MuiInputBase-root': { color: i === 0 ? '#4ade80' : 'rgba(255,255,255,0.85)', fontSize: '0.82rem' },
+                      '& .MuiInputBase-root.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: i === 0 ? '#4ade80' : '#3b82f6' },
+                    }}
+                  />
+                  {editingError && <Typography sx={{ color: '#f87171', fontSize: '0.68rem', mt: 0.3 }}>{editingError}</Typography>}
+                </Box>
+              </Box>
+            ) : (
+              <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1,
+                px: 1.5, py: 0.6, borderRadius: 1.5,
+                bgcolor: i === 0 ? 'rgba(34,197,94,0.08)' : 'rgba(255,255,255,0.04)',
+                border: `1px solid ${i === 0 ? 'rgba(34,197,94,0.2)' : 'rgba(255,255,255,0.08)'}`,
+                cursor: 'pointer', '&:hover': { bgcolor: i === 0 ? 'rgba(34,197,94,0.14)' : 'rgba(255,255,255,0.07)' },
+              }}>
+                {i === 0 && (
+                  <Typography sx={{ fontSize: '0.6rem', color: '#4ade80', fontWeight: 700,
+                    bgcolor: 'rgba(34,197,94,0.15)', px: 0.6, borderRadius: 0.5, lineHeight: '16px' }}>
+                    PRINCIPAL
+                  </Typography>
+                )}
+                <Typography onClick={() => startEdit(i)}
+                  sx={{ flex: 1, fontSize: '0.82rem', color: i === 0 ? '#4ade80' : 'rgba(255,255,255,0.75)',
+                        fontFamily: 'monospace' }}>
+                  {n}
+                </Typography>
+                <Tooltip title="Editar">
+                  <IconButton size="small" onClick={() => startEdit(i)}
+                    sx={{ color: 'rgba(255,255,255,0.2)', p: 0.3, '&:hover': { color: '#3b82f6' } }}>
+                    <EditIcon sx={{ fontSize: 13 }} />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Eliminar">
+                  <IconButton size="small" onClick={() => removeNum(i)}
+                    sx={{ color: 'rgba(255,255,255,0.2)', p: 0.3, '&:hover': { color: '#f87171' } }}>
+                    <DeleteIcon sx={{ fontSize: 13 }} />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            )
+          ))}
+        </Box>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <TextField size="small" fullWidth placeholder="+52 55 1234 5678" value={newNum}
+              onChange={(e) => { setNewNum(e.target.value); if (newNumError) setNewNumError('') }}
+              onKeyDown={(e) => e.key === 'Enter' && addNum()}
+              error={!!newNumError}
+              sx={FIELD_SX} />
+            <Button onClick={addNum} variant="outlined" size="small"
+              disabled={!newNum.trim()}
+              sx={{ borderColor: 'rgba(34,197,94,0.3)', color: '#4ade80', minWidth: 64,
+                    '&:hover': { borderColor: '#4ade80', bgcolor: 'rgba(34,197,94,0.08)' },
+                    '&.Mui-disabled': { borderColor: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.2)' } }}>
+              Agregar
+            </Button>
+          </Box>
+          {newNumError && (
+            <Typography sx={{ color: '#f87171', fontSize: '0.72rem', pl: 0.5 }}>{newNumError}</Typography>
+          )}
+        </Box>
       </DialogContent>
 
-      <DialogActions sx={{ px: 3, pb: 3, pt: 2, gap: 1, bgcolor: 'inherit' }}>
+      <DialogActions sx={{ px: 3, pb: 3, pt: 2, gap: 1, bgcolor: 'var(--sidebar-bg, #0d1117)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
         <Button
           onClick={onClose}
           sx={{ color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, px: 2.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.7)' } }}
         >
           Cancelar
         </Button>
-        <Button
-          variant="contained"
-          onClick={handleSave}
-          disabled={saving}
-          sx={{ bgcolor: '#3b82f6', borderRadius: 2, px: 3, fontWeight: 600, '&:hover': { bgcolor: '#2563eb' }, '&.Mui-disabled': { bgcolor: 'rgba(59,130,246,0.3)' } }}
-        >
-          {saving ? <CircularProgress size={16} sx={{ color: 'white' }} /> : 'Guardar cambios'}
-        </Button>
+        {(() => {
+          const nameErr   = !form.name?.trim()
+          const webErr    = !!(form.website?.trim() && urlValidationMsg(form.website.trim()))
+          const waErr     = form.has_whatsapp && waNumbers.length === 0
+          const isInvalid = nameErr || webErr || waErr
+          const tooltip   = nameErr   ? 'El nombre de la empresa es requerido'
+                          : webErr    ? 'El sitio web tiene un formato inválido'
+                          : waErr     ? 'La empresa tiene WhatsApp activo pero no hay números registrados'
+                          : ''
+          return (
+            <Tooltip title={tooltip} disableHoverListener={!isInvalid || saving}>
+              <span>
+                <Button
+                  variant="contained"
+                  onClick={handleSave}
+                  disabled={saving || isInvalid}
+                  sx={{ bgcolor: '#3b82f6', borderRadius: 2, px: 3, fontWeight: 600,
+                    '&:hover': { bgcolor: '#2563eb' },
+                    '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.25)' },
+                  }}
+                >
+                  {saving ? <CircularProgress size={16} sx={{ color: 'rgba(255,255,255,0.5)' }} /> : 'Guardar cambios'}
+                </Button>
+              </span>
+            </Tooltip>
+          )
+        })()}
       </DialogActions>
     </Dialog>
   )
@@ -489,6 +707,208 @@ function SkeletonRows({ count }) {
   ))
 }
 
+// ─── Campaign dialog ──────────────────────────────────────────────────────────
+const MAX_CAMPAIGN_MSG = 4096
+
+function CampaignDialog({ open, selectedRows, onClose, onNotify }) {
+  const [msgText,   setMsgText]   = useState(TEMPLATES[0].text)
+  const [sending,   setSending]   = useState(false)
+  const [progress,  setProgress]  = useState(0)
+  const [results,   setResults]   = useState([])
+  const [done,      setDone]      = useState(false)
+  const [activeTpl, setActiveTpl] = useState(TEMPLATES[0].id)
+
+  useEffect(() => {
+    if (!open) { setSending(false); setProgress(0); setResults([]); setDone(false) }
+  }, [open])
+
+  function applyTemplate(tpl) {
+    setActiveTpl(tpl.id)
+    setMsgText(tpl.text)
+  }
+
+  const waRows      = selectedRows.filter(r => r.has_whatsapp)
+  const sentCount   = results.filter(r => r.status === 'sent').length
+  const failedCount = results.filter(r => r.status === 'failed').length
+  const noWaCount   = results.filter(r => r.status === 'no_wa').length
+  const charCount   = msgText.length
+  const msgInvalid  = !msgText.trim() || charCount > MAX_CAMPAIGN_MSG
+
+  async function handleSend() {
+    if (msgInvalid) return
+    setSending(true); setProgress(0); setResults([]); setDone(false)
+    const res = []
+    for (let i = 0; i < waRows.length; i++) {
+      const row = waRows[i]
+      setProgress(Math.round(((i + 1) / waRows.length) * 100))
+      try {
+        const compRes  = await fetch(`/api/companies/${row._id}`)
+        const data     = await compRes.json()
+        const contacts = data.contacts?.filter(c => c.type === 'whatsapp').map(c => c.value) || []
+        if (contacts.length === 0) {
+          res.push({ name: row.name, status: 'no_wa' }); setResults([...res]); continue
+        }
+        const message = msgText
+          .replace(/\{\{nombre\}\}/g,    row.name     || '')
+          .replace(/\{\{ciudad\}\}/g,    row.city     || '')
+          .replace(/\{\{industria\}\}/g, row.industry || '')
+          .replace(/\{\{web\}\}/g,       row.website  || row.domain || '')
+        let lastStatus = 'failed'
+        for (const num of contacts) {
+          const r = await fetch('/api/send-message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ company_id: row._id, to_number: num, message, website: row.website }),
+          })
+          const json = await r.json()
+          if (json.status === 'sent') lastStatus = 'sent'
+        }
+        res.push({ name: row.name, status: lastStatus })
+      } catch {
+        res.push({ name: row.name, status: 'failed' })
+      }
+      setResults([...res])
+    }
+    setSending(false); setDone(true)
+    const sent = res.filter(r => r.status === 'sent').length
+    onNotify(
+      `${sent} mensaje${sent !== 1 ? 's' : ''} enviado${sent !== 1 ? 's' : ''}`,
+      sent > 0 ? 'success' : 'warning'
+    )
+  }
+
+  return (
+    <Dialog open={open} onClose={!sending ? onClose : undefined} maxWidth="sm" fullWidth
+      slotProps={{ paper: { sx: { bgcolor: 'var(--sidebar-bg, #0d1117)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 3, boxShadow: '0 24px 64px rgba(0,0,0,0.85)', overflow: 'hidden' } } }}>
+      <DialogTitle sx={{ p: 0, bgcolor: 'var(--surface, #111827)', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+        <Box sx={{ px: 3, pt: 3, pb: 2.5, display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Box sx={{ width: 44, height: 44, flexShrink: 0, bgcolor: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 2.5, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <MessageIcon sx={{ color: '#4ade80', fontSize: 22 }} />
+          </Box>
+          <Box>
+            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.3 }}>Enviar campaña</Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.78rem', mt: 0.25 }}>
+              {waRows.length} empresa{waRows.length !== 1 ? 's' : ''} con WhatsApp seleccionada{waRows.length !== 1 ? 's' : ''}
+            </Typography>
+          </Box>
+        </Box>
+      </DialogTitle>
+
+      <DialogContent sx={{ px: 3, pt: 2.5, pb: 1, bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
+        {/* Plantillas como punto de partida */}
+        <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
+          Punto de partida
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.8 }}>
+          {TEMPLATES.map(t => (
+            <Chip key={t.id} label={t.label} size="small"
+              onClick={() => !sending && applyTemplate(t)}
+              sx={{
+                fontSize: '0.72rem', height: 26, cursor: sending ? 'default' : 'pointer',
+                bgcolor: activeTpl === t.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
+                color:   activeTpl === t.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
+                border:  `1px solid ${activeTpl === t.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                '&:hover': !sending ? { bgcolor: 'rgba(34,197,94,0.1)' } : {},
+              }} />
+          ))}
+        </Box>
+
+        {/* Editor libre */}
+        <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
+          Mensaje
+        </Typography>
+        <Box
+          component="textarea"
+          value={msgText}
+          onChange={e => setMsgText(e.target.value)}
+          disabled={sending}
+          rows={5}
+          sx={{
+            width: '100%', boxSizing: 'border-box', resize: 'vertical',
+            bgcolor: 'var(--bg, #080c14)', color: '#f1f5f9',
+            border: `1.5px solid ${charCount > MAX_CAMPAIGN_MSG ? 'rgba(239,68,68,0.6)' : 'rgba(255,255,255,0.1)'}`,
+            borderRadius: '10px', p: 1.5, fontSize: '0.85rem', lineHeight: 1.7,
+            fontFamily: '"Roboto","Helvetica","Arial",sans-serif',
+            outline: 'none', transition: 'border-color 0.2s',
+            '&:hover':  { borderColor: charCount > MAX_CAMPAIGN_MSG ? 'rgba(239,68,68,0.8)' : 'rgba(255,255,255,0.22)' },
+            '&:focus':  { borderColor: charCount > MAX_CAMPAIGN_MSG ? '#ef4444' : 'rgba(59,130,246,0.6)', boxShadow: `0 0 0 3px ${charCount > MAX_CAMPAIGN_MSG ? 'rgba(239,68,68,0.08)' : 'rgba(59,130,246,0.1)'}` },
+            '&:disabled': { opacity: 0.5, cursor: 'not-allowed' },
+            '&::placeholder': { color: 'rgba(255,255,255,0.2)' },
+            scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.12) transparent',
+          }}
+        />
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 0.6, mb: 1.5 }}>
+          <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.25)' }}>
+            Variables: <Box component="span" sx={{ color: '#4ade80', fontFamily: 'monospace' }}>{'{{nombre}}'}</Box>{' '}
+            <Box component="span" sx={{ color: '#60a5fa', fontFamily: 'monospace' }}>{'{{ciudad}}'}</Box>{' '}
+            <Box component="span" sx={{ color: '#fbbf24', fontFamily: 'monospace' }}>{'{{industria}}'}</Box>{' '}
+            <Box component="span" sx={{ color: '#a78bfa', fontFamily: 'monospace' }}>{'{{web}}'}</Box>
+          </Typography>
+          <Typography sx={{ fontSize: '0.68rem', color: charCount > MAX_CAMPAIGN_MSG ? '#f87171' : charCount > MAX_CAMPAIGN_MSG * 0.9 ? '#fbbf24' : 'rgba(255,255,255,0.25)', fontVariantNumeric: 'tabular-nums' }}>
+            {charCount} / {MAX_CAMPAIGN_MSG}
+          </Typography>
+        </Box>
+
+        {/* Progress / Results */}
+        {(sending || done) && (
+          <Box sx={{ mb: 1 }}>
+            {sending && (
+              <Box sx={{ mb: 1.5 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.78rem' }}>
+                    Enviando… {results.length} de {waRows.length}
+                  </Typography>
+                  <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>{progress}%</Typography>
+                </Box>
+                <LinearProgress variant="determinate" value={progress}
+                  sx={{ borderRadius: 4, height: 5, bgcolor: 'rgba(34,197,94,0.1)', '& .MuiLinearProgress-bar': { background: 'linear-gradient(90deg,#22c55e,#4ade80)', borderRadius: 4 } }} />
+              </Box>
+            )}
+            {done && (
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                <Chip label={`${sentCount} enviado${sentCount !== 1 ? 's' : ''}`} size="small"
+                  sx={{ bgcolor: 'rgba(34,197,94,0.12)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', fontSize: '0.72rem', height: 24 }} />
+                {failedCount > 0 && (
+                  <Chip label={`${failedCount} fallido${failedCount !== 1 ? 's' : ''}`} size="small"
+                    sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', fontSize: '0.72rem', height: 24 }} />
+                )}
+                {noWaCount > 0 && (
+                  <Chip label={`${noWaCount} sin número`} size="small"
+                    sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.1)', fontSize: '0.72rem', height: 24 }} />
+                )}
+              </Box>
+            )}
+          </Box>
+        )}
+      </DialogContent>
+
+      <DialogActions sx={{ px: 3, pb: 3, pt: 2, gap: 1, bgcolor: 'var(--sidebar-bg, #0d1117)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+        <Button onClick={onClose} disabled={sending}
+          sx={{ color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, px: 2.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.7)' } }}>
+          {done ? 'Cerrar' : 'Cancelar'}
+        </Button>
+        {!done && (
+          <Button
+            onClick={handleSend}
+            disabled={sending || waRows.length === 0 || msgInvalid}
+            startIcon={sending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 16 }} />}
+            sx={{
+              bgcolor: !sending && waRows.length > 0 && !msgInvalid ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.05)',
+              color:   !sending && waRows.length > 0 && !msgInvalid ? '#4ade80' : 'rgba(255,255,255,0.3)',
+              border:  `1px solid ${!sending && waRows.length > 0 && !msgInvalid ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
+              borderRadius: 2, px: 3, fontWeight: 600,
+              '&:hover': { bgcolor: !sending && waRows.length > 0 && !msgInvalid ? 'rgba(34,197,94,0.28)' : 'rgba(255,255,255,0.05)' },
+              '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.2)', border: '1px solid rgba(255,255,255,0.07)' },
+            }}
+          >
+            {sending ? 'Enviando…' : `Enviar a ${waRows.length} empresa${waRows.length !== 1 ? 's' : ''}`}
+          </Button>
+        )}
+      </DialogActions>
+    </Dialog>
+  )
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function DatabaseViewer() {
   const [rows, setRows] = useState([])
@@ -502,6 +922,16 @@ export default function DatabaseViewer() {
   const [filterOpen, setFilterOpen] = useState(false)
   const [filters, setFilters] = useState({ search: '', industry: '', city: '', has_whatsapp: '' })
   const [editTarget, setEditTarget] = useState(null)
+  const [viewTarget, setViewTarget] = useState(null)
+  const [viewData, setViewData] = useState(null)
+  const [viewLoading, setViewLoading] = useState(false)
+  const [msgTarget, setMsgTarget] = useState(null)
+  const [msgData, setMsgData] = useState(null)
+  const [msgSending, setMsgSending] = useState(false)
+  const [editContacts, setEditContacts] = useState([])
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [rescraping, setRescraping]       = useState('')   // label del progreso
+  const [campaignOpen, setCampaignOpen]   = useState(false)
   const [snack, setSnack] = useState({ open: false, msg: '', severity: 'success' })
   const [industries, setIndustries] = useState([])
   const [cities, setCities] = useState([])
@@ -566,7 +996,8 @@ export default function DatabaseViewer() {
     )
   }
 
-  const handleDelete = async () => {
+  const handleDeleteConfirmed = async () => {
+    setConfirmDelete(false)
     if (!selected.length) return
     try {
       const res = await fetch('/api/companies', {
@@ -583,14 +1014,155 @@ export default function DatabaseViewer() {
     }
   }
 
-  const handleSaveEdit = async (id, fields) => {
+  const handleRescrape = async () => {
+    const targets = sortedRows.filter(r => selected.includes(r._id))
+    if (!targets.length) { notify('Selecciona al menos una empresa', 'warning'); return }
+    let ok = 0, fail = 0, noUrl = 0
+    for (const row of targets) {
+      const label = `${row.name || row.domain || 'empresa'} (${ok + fail + noUrl + 1}/${targets.length})`
+      setRescraping(label)
+      if (!row.website && !row.domain) { noUrl++; continue }
+      try {
+        const res = await fetch(`/api/companies/${row._id}/rescrape`, { method: 'POST' })
+        if (res.ok) ok++; else fail++
+      } catch { fail++ }
+    }
+    setRescraping('')
+    setSelected([])
+    fetchData()
+    const parts = [`${ok} actualizadas`]
+    if (fail)  parts.push(`${fail} fallidas`)
+    if (noUrl) parts.push(`${noUrl} sin URL`)
+    notify(`Re-scraping completo: ${parts.join(', ')}`, ok > 0 ? 'success' : 'error')
+  }
+
+  const handleOpenView = async (row) => {
+    setViewTarget(row)
+    setViewData(null)
+    setViewLoading(true)
     try {
-      const res = await fetch(`/api/companies/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(fields),
+      const res = await fetch(`/api/companies/${row._id}`)
+      const data = await res.json()
+      // Adapt to the format ResultDisplay expects
+      setViewData({
+        website: data.website,
+        scraped: {
+          name: data.name,
+          industry: data.industry,
+          description: data.description,
+          domain: data.domain,
+          _extra: {
+            city: data.city,
+            state: data.state,
+            address: data.address,
+            business_hours: data.business_hours,
+            services: data.services,
+            products: data.products,
+            social_media: data.social_media?.platforms || {},
+          },
+          _contacts_raw: {
+            whatsapp_numbers: data.contacts?.filter(c => c.type === 'whatsapp').map(c => c.value) || [],
+            all_whatsapp_numbers: data.contacts?.filter(c => c.type === 'whatsapp').map(c => c.value) || [],
+            phone_numbers: data.contacts?.filter(c => c.type === 'phone').map(c => c.value) || [],
+            emails: data.contacts?.filter(c => c.type === 'email').map(c => c.value) || [],
+            persons: data.person_contacts || [],
+          },
+          metadata: data.metadata || {},
+        },
+        primary_whatsapp_number: data.contacts?.find(c => c.type === 'whatsapp' && c.is_primary)?.value
+          || data.contacts?.find(c => c.type === 'whatsapp')?.value || null,
+        to_number: data.contacts?.find(c => c.type === 'whatsapp')?.value || null,
+        company_id: row._id,
+        message_log_id: data.last_message_log_id || null,
       })
-      if (!res.ok) throw new Error()
+    } catch {
+      notify('No se pudo cargar la información', 'error')
+      setViewTarget(null)
+    } finally {
+      setViewLoading(false)
+    }
+  }
+
+  const handleOpenMsg = async (row) => {
+    setMsgTarget(row)
+    setMsgData(null)
+    setViewLoading(true)
+    try {
+      const res = await fetch(`/api/companies/${row._id}`)
+      const data = await res.json()
+      setMsgData({
+        website: data.website,
+        scraped: {
+          name: data.name,
+          industry: data.industry,
+          _extra: { city: data.city, state: data.state },
+          _contacts_raw: {
+            whatsapp_numbers: data.contacts?.filter(c => c.type === 'whatsapp').map(c => c.value) || [],
+            all_whatsapp_numbers: data.contacts?.filter(c => c.type === 'whatsapp').map(c => c.value) || [],
+          },
+        },
+        primary_whatsapp_number: data.contacts?.find(c => c.type === 'whatsapp' && c.is_primary)?.value
+          || data.contacts?.find(c => c.type === 'whatsapp')?.value || null,
+        company_id: row._id,
+      })
+    } catch {
+      notify('No se pudo cargar la información', 'error')
+      setMsgTarget(null)
+    } finally {
+      setViewLoading(false)
+    }
+  }
+
+  const handleSendFromDB = async (messageText, numbers) => {
+    if (!msgData) return
+    const nums = Array.isArray(numbers) ? numbers : [numbers]
+    if (nums.length === 0) return
+    setMsgSending(true)
+    let successCount = 0
+    let lastErr = null
+    for (const toNumber of nums) {
+      try {
+        const res = await fetch('/api/send-message', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            company_id: msgData.company_id,
+            to_number: toNumber,
+            message: messageText,
+            website: msgData.website,
+          }),
+        })
+        const json = await res.json()
+        if (!res.ok) throw new Error(json.detail || 'Error')
+        successCount++
+      } catch (err) {
+        lastErr = err
+      }
+    }
+    setMsgSending(false)
+    if (successCount > 0) {
+      notify(`Mensaje enviado a ${successCount} número${successCount > 1 ? 's' : ''}`, 'success')
+      setMsgTarget(null)
+    } else {
+      notify(lastErr?.message || 'No se pudo enviar el mensaje', 'error')
+    }
+  }
+
+  const handleSaveEdit = async (id, fields, waNumbers) => {
+    try {
+      const [r1, r2] = await Promise.all([
+        fetch(`/api/companies/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(fields),
+        }),
+        fetch(`/api/companies/${id}/contacts`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ whatsapp_numbers: waNumbers }),
+        }),
+      ])
+      if (!r1.ok || !r2.ok) throw new Error()
       notify('Los cambios fueron guardados correctamente', 'success')
       setEditTarget(null)
       fetchData()
@@ -599,17 +1171,35 @@ export default function DatabaseViewer() {
     }
   }
 
-  const numSelected = selected.length
-  const rowCount = sortedRows.length
+  const handleOpenEdit = async (row) => {
+    setEditTarget(row)
+    setEditContacts([])
+    try {
+      const res = await fetch(`/api/companies/${row._id}`)
+      const data = await res.json()
+      setEditContacts(data.contacts?.filter(c => c.type === 'whatsapp').map(c => c.value) || [])
+    } catch {}
+  }
+
+  const numSelected    = selected.length
+  const rowCount       = sortedRows.length
+  const selectedWithWA = useMemo(
+    () => sortedRows.filter(r => selected.includes(r._id) && r.has_whatsapp).length,
+    [sortedRows, selected]
+  )
 
   return (
     <Box sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Paper sx={{ width: '100%', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'hidden', display: 'flex', flexDirection: 'column', flexGrow: 1, position: 'relative', background: 'linear-gradient(160deg, rgba(59,130,246,0.07) 0%, rgba(139,92,246,0.04) 25%, #0d1117 55%)', boxShadow: '0 8px 40px rgba(0,0,0,0.55), 0 2px 12px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04) inset' }}>
+      <Paper sx={{ width: '100%', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'hidden', display: 'flex', flexDirection: 'column', flexGrow: 1, position: 'relative', background: 'var(--sidebar-bg, #0d1117)', boxShadow: '0 8px 40px rgba(0,0,0,0.55), 0 2px 12px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04) inset' }}>
         {/* brillo radial */}
-        <Box sx={{ position: 'absolute', top: -50, left: -50, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle, rgba(99,102,241,0.07) 0%, transparent 70%)', pointerEvents: 'none', zIndex: 0 }} />
+        <Box sx={{ position: 'absolute', top: -50, left: -50, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle, rgba(var(--accent-rgb, 99,102,241), 0.07) 0%, transparent 70%)', pointerEvents: 'none', zIndex: 0 }} />
         <EnhancedToolbar
           numSelected={numSelected}
-          onDelete={handleDelete}
+          onDelete={() => setConfirmDelete(true)}
+          onCampaign={() => setCampaignOpen(true)}
+          onRescrape={handleRescrape}
+          rescraping={rescraping}
+          selectedWithWA={selectedWithWA}
           onRefresh={fetchData}
           onToggleFilter={() => setFilterOpen((o) => !o)}
           filterOpen={filterOpen}
@@ -640,7 +1230,7 @@ export default function DatabaseViewer() {
           <Table stickyHeader size="small" aria-label="tabla de empresas">
             <TableHead>
               <TableRow>
-                <TableCell padding="checkbox" sx={{ bgcolor: '#161d2e', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                <TableCell padding="checkbox" sx={{ bgcolor: 'var(--card-bg, #161d2e)', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
                   <Checkbox
                     color="primary"
                     indeterminate={numSelected > 0 && numSelected < rowCount}
@@ -654,7 +1244,7 @@ export default function DatabaseViewer() {
                     key={hc.id}
                     align={hc.align}
                     sortDirection={orderBy === hc.id ? order : false}
-                    sx={{ bgcolor: '#161d2e', color: 'rgba(255,255,255,0.55)', fontWeight: 600, fontSize: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.08)', whiteSpace: 'nowrap' }}
+                    sx={{ bgcolor: 'var(--card-bg, #161d2e)', color: 'rgba(255,255,255,0.55)', fontWeight: 600, fontSize: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.08)', whiteSpace: 'nowrap' }}
                   >
                     {hc.sortable ? (
                       <Box sx={{ display: 'flex', width: '100%', justifyContent: hc.align === 'center' ? 'center' : 'flex-start' }}>
@@ -681,7 +1271,7 @@ export default function DatabaseViewer() {
                     ) : hc.label}
                   </TableCell>
                 ))}
-                <TableCell sx={{ bgcolor: '#161d2e', borderBottom: '1px solid rgba(255,255,255,0.08)' }} />
+                <TableCell sx={{ bgcolor: 'var(--card-bg, #161d2e)', borderBottom: '1px solid rgba(255,255,255,0.08)' }} />
               </TableRow>
             </TableHead>
             <TableBody>
@@ -717,19 +1307,27 @@ export default function DatabaseViewer() {
                         />
                       </TableCell>
                       <TableCell onClick={() => handleSelectRow(row._id)}>
-                        <Typography sx={{ fontSize: '0.82rem', fontWeight: 500, color: 'white' }}>
-                          {truncate(row.name, 28) || '—'}
-                        </Typography>
+                        <Tooltip title={row.name || '—'} placement="top" disableHoverListener={!row.name || row.name.length <= 28}>
+                          <Typography sx={{ fontSize: '0.82rem', fontWeight: 500, color: 'white' }}>
+                            {truncate(row.name, 28) || '—'}
+                          </Typography>
+                        </Tooltip>
                       </TableCell>
                       <TableCell onClick={() => handleSelectRow(row._id)}>
-                        <Typography component="a" href={row.website} target="_blank" rel="noopener"
-                          onClick={(e) => e.stopPropagation()}
-                          sx={{ fontSize: '0.78rem', color: '#60a5fa', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
-                        >
-                          {truncate(row.website || row.domain, 30)}
-                        </Typography>
+                        <Tooltip title={row.website || row.domain || '—'} placement="top" disableHoverListener={!((row.website || row.domain || '').length > 30)}>
+                          <Typography component="a" href={row.website} target="_blank" rel="noopener"
+                            onClick={(e) => e.stopPropagation()}
+                            sx={{ fontSize: '0.78rem', color: '#60a5fa', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+                          >
+                            {truncate(row.website || row.domain, 30)}
+                          </Typography>
+                        </Tooltip>
                       </TableCell>
-                      <TableCell align="center" onClick={() => handleSelectRow(row._id)}>{truncate(row.industry, 22)}</TableCell>
+                      <TableCell align="center" onClick={() => handleSelectRow(row._id)}>
+                        <Tooltip title={row.industry || '—'} placement="top" disableHoverListener={!row.industry || row.industry.length <= 22}>
+                          <span>{truncate(row.industry, 22)}</span>
+                        </Tooltip>
+                      </TableCell>
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>{row.city || '—'}</TableCell>
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>
                         {row.has_whatsapp ? (
@@ -742,8 +1340,22 @@ export default function DatabaseViewer() {
                       </TableCell>
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>{formatDate(row.created_at)}</TableCell>
                       <TableCell align="right" sx={{ pr: 1 }}>
+                        <Tooltip title="Ver información">
+                          <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenView(row) }}
+                            sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: '#a78bfa', bgcolor: 'rgba(167,139,250,0.1)' } }}>
+                            <VisibilityIcon sx={{ fontSize: 15 }} />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title={row.has_whatsapp ? "Enviar mensaje" : "Sin WhatsApp registrado"}>
+                          <span>
+                            <IconButton size="small" disabled={!row.has_whatsapp} onClick={(e) => { e.stopPropagation(); handleOpenMsg(row) }}
+                              sx={{ color: row.has_whatsapp ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.1)', '&:hover': { color: '#4ade80', bgcolor: 'rgba(74,222,128,0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>
+                              <SendIcon sx={{ fontSize: 15 }} />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
                         <Tooltip title="Editar">
-                          <IconButton size="small" onClick={(e) => { e.stopPropagation(); setEditTarget(row) }}
+                          <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenEdit(row) }}
                             sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: '#3b82f6', bgcolor: 'rgba(59,130,246,0.1)' } }}>
                             <EditIcon sx={{ fontSize: 15 }} />
                           </IconButton>
@@ -779,9 +1391,83 @@ export default function DatabaseViewer() {
         />
       </Paper>
 
+      {/* Modal: Ver información scrapeada */}
+      <Dialog open={!!viewTarget} onClose={() => setViewTarget(null)} maxWidth="lg" fullWidth
+        slotProps={{ paper: { sx: { bgcolor: 'var(--bg, #080c14)', backgroundImage: 'none', background: 'var(--bg, #080c14)', borderRadius: 3, border: '1px solid rgba(255,255,255,0.08)', p: 0 } } }}>
+        <DialogContent sx={{ p: 2.5, bgcolor: 'var(--bg, #080c14)', '&:first-of-type': { pt: 2.5 } }}>
+          {viewLoading && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 6, gap: 2 }}>
+              <CircularProgress size={36} sx={{ color: '#6366f1' }} />
+              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem' }}>Cargando información de la empresa…</Typography>
+            </Box>
+          )}
+          {!viewLoading && viewData && <ResultDisplay result={viewData} />}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2, bgcolor: 'var(--bg, #080c14)' }}>
+          <Button onClick={() => setViewTarget(null)} sx={{ color: 'rgba(255,255,255,0.5)' }}>Cerrar</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Modal: Enviar mensaje */}
+      <Dialog open={!!msgTarget} onClose={() => setMsgTarget(null)} maxWidth="sm" fullWidth
+        slotProps={{ paper: { sx: { bgcolor: 'var(--bg, #080c14)', backgroundImage: 'none', background: 'var(--bg, #080c14)', borderRadius: 3, border: '1px solid rgba(255,255,255,0.08)' } } }}>
+        <DialogTitle sx={{ color: 'white', fontWeight: 700, pb: 1, bgcolor: 'var(--bg, #080c14)' }}>
+          Enviar mensaje a {msgTarget?.name || msgTarget?.domain || '—'}
+        </DialogTitle>
+        <DialogContent sx={{ pt: 0, bgcolor: 'var(--bg, #080c14)' }}>
+          {viewLoading && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 6, gap: 2 }}>
+              <CircularProgress size={36} sx={{ color: '#6366f1' }} />
+              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem' }}>Cargando números de contacto…</Typography>
+            </Box>
+          )}
+          {!viewLoading && msgData && (
+            <MessageComposer result={msgData} onSend={handleSendFromDB} sending={msgSending} />
+          )}
+          {!viewLoading && msgData && !msgData.primary_whatsapp_number && (
+            <Alert severity="warning" sx={{ mt: 2, bgcolor: 'rgba(251,146,60,0.1)', color: '#fb923c', border: '1px solid rgba(251,146,60,0.2)' }}>
+              Esta empresa no tiene número de WhatsApp registrado.
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2, bgcolor: 'var(--bg, #080c14)' }}>
+          <Button onClick={() => setMsgTarget(null)} sx={{ color: 'rgba(255,255,255,0.5)' }}>Cancelar</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Confirmación de borrado */}
+      <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)} maxWidth="xs" fullWidth
+        slotProps={{ paper: { sx: { bgcolor: 'var(--sidebar-bg, #0d1117)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 3 } } }}>
+        <DialogTitle sx={{ color: 'white', fontWeight: 700, pb: 1 }}>
+          ¿Eliminar {selected.length} empresa{selected.length !== 1 ? 's' : ''}?
+        </DialogTitle>
+        <DialogContent>
+          <Typography sx={{ color: 'rgba(255,255,255,0.55)', fontSize: '0.88rem' }}>
+            Esta acción es permanente y no se puede deshacer. Se eliminarán todos los datos asociados.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
+          <Button onClick={() => setConfirmDelete(false)} sx={{ color: 'rgba(255,255,255,0.5)', borderRadius: 2 }}>
+            Cancelar
+          </Button>
+          <Button onClick={handleDeleteConfirmed} variant="contained"
+            sx={{ bgcolor: '#ef4444', borderRadius: 2, fontWeight: 700, '&:hover': { bgcolor: '#dc2626' } }}>
+            Eliminar
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <CampaignDialog
+        open={campaignOpen}
+        selectedRows={sortedRows.filter(r => selected.includes(r._id))}
+        onClose={() => setCampaignOpen(false)}
+        onNotify={notify}
+      />
+
       <EditDialog
         open={!!editTarget}
         company={editTarget}
+        contacts={editContacts}
         onClose={() => setEditTarget(null)}
         onSave={handleSaveEdit}
       />

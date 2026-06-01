@@ -48,8 +48,8 @@ class EvolutionClient:
 def _clean_number(number: str) -> str:
     """Normalize to international format without + or spaces."""
     digits = "".join(filter(str.isdigit, number))
-    # If Mexican number starts with 52 and has 12 digits, keep as-is
-    # If 10-digit local, prepend 52
     if len(digits) == 10:
-        digits = "52" + digits
+        digits = "521" + digits   # local → Mexican mobile
+    elif len(digits) == 12 and digits.startswith("52"):
+        digits = "521" + digits[2:]  # 52XXXXXXXXXX → 521XXXXXXXXXX
     return digits

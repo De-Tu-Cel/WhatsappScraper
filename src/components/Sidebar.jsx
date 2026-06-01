@@ -11,20 +11,21 @@ import StorefrontIcon from '@mui/icons-material/Storefront'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import MenuIcon from '@mui/icons-material/Menu'
 import AccountCircleIcon from '@mui/icons-material/AccountCircle'
+import SettingsIcon from '@mui/icons-material/Settings'
 
 const SIDEBAR_FULL = 248
 const SIDEBAR_MINI = 64
 
 const C = {
-  sidebar:       '#0d1117',
-  sidebarBorder: 'rgba(255,255,255,0.07)',
-  accent:        '#3b82f6',
-  accentGlow:    'rgba(59,130,246,0.18)',
-  accentText:    '#60a5fa',
-  dimText:       'rgba(255,255,255,0.38)',
+  sidebarBorder: 'rgba(255,255,255,0.10)',
+  accent:        'var(--accent, #3b82f6)',
+  accentGlow:    'var(--accent-glow, rgba(59,130,246,0.18))',
+  accentText:    'var(--accent, #60a5fa)',
+  dimText:       'rgba(255,255,255,0.45)',
+  text:          'rgba(255,255,255,0.92)',
 }
 
-export default function Sidebar({ open, setOpen, active, setActive, navItems }) {
+export default function Sidebar({ open, setOpen, active, setActive, navItems, settingsOpen, onSettingsClick }) {
   return (
     <Box sx={{
       width: open ? SIDEBAR_FULL : SIDEBAR_MINI,
@@ -37,13 +38,13 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems }) 
       overflow: 'hidden',
       boxShadow: '0 4px 24px rgba(0,0,0,0.4)',
       position: 'relative',
-      background: 'linear-gradient(160deg, rgba(59,130,246,0.1) 0%, rgba(139,92,246,0.07) 30%, #0d1117 65%)',
+      background: 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.10) 0%, rgba(var(--accent-rgb,59,130,246),0.03) 45%, var(--sidebar-bg, #0d1117) 70%)',
     }}>
       {/* brillo radial en esquina superior */}
       <Box sx={{
         position: 'absolute', top: -40, left: -40,
         width: 200, height: 200, borderRadius: '50%',
-        background: 'radial-gradient(circle, rgba(99,102,241,0.18) 0%, transparent 70%)',
+        background: 'radial-gradient(circle, rgba(var(--accent-rgb,99,102,241),0.18) 0%, transparent 70%)',
         pointerEvents: 'none', zIndex: 0,
       }} />
       {/* Logo / toggle */}
@@ -70,7 +71,7 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems }) 
             <StorefrontIcon sx={{ color: C.accentText, fontSize: 20 }} />
           </Box>
           <Box>
-            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2 }}>Lector</Typography>
+            <Typography sx={{ color: C.text, fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2 }}>Lector</Typography>
             <Typography sx={{ color: C.accentText, fontWeight: 600, fontSize: '0.85rem', lineHeight: 1.2 }}>Comercial</Typography>
           </Box>
         </Box>
@@ -93,7 +94,7 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems }) 
       {/* Nav */}
       <List sx={{ px: 1, pt: 1.5, flexGrow: 1, position: 'relative', zIndex: 1 }}>
         {navItems.map((item, i) => {
-          const isActive = active === i
+          const isActive = !settingsOpen && active === i
           return (
             <Tooltip key={i} title={open ? '' : item.label} placement="right" arrow>
               <ListItemButton
@@ -106,7 +107,7 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems }) 
                   justifyContent: open ? 'flex-start' : 'center',
                   px: open ? 1.5 : 1,
                   transition: 'padding 0.28s cubic-bezier(0.4,0,0.2,1)',
-                  '&:hover': { bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.85)' },
+                  '&:hover': { bgcolor: 'rgba(255,255,255,0.08)', color: C.text },
                 }}
               >
                 <ListItemIcon sx={{
@@ -135,6 +136,48 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems }) 
           )
         })}
       </List>
+
+      {/* Settings button — separado del nav */}
+      <Box sx={{ px: 1, pb: 1, position: 'relative', zIndex: 1 }}>
+        <Divider sx={{ borderColor: C.sidebarBorder, mb: 1 }} />
+        <Tooltip title={open ? '' : 'Configuración'} placement="right" arrow>
+          <ListItemButton
+            onClick={onSettingsClick}
+            sx={{
+              borderRadius: 2, minHeight: 44,
+              color: settingsOpen ? 'white' : C.dimText,
+              bgcolor: settingsOpen ? C.accentGlow : 'transparent',
+              outline: settingsOpen ? `1px solid ${C.accent}` : '1px solid transparent',
+              justifyContent: open ? 'flex-start' : 'center',
+              px: open ? 1.5 : 1,
+              transition: 'padding 0.28s cubic-bezier(0.4,0,0.2,1)',
+              '&:hover': { bgcolor: 'rgba(255,255,255,0.08)', color: C.text },
+            }}
+          >
+            <ListItemIcon sx={{
+              color: settingsOpen ? C.accent : C.dimText,
+              minWidth: 0,
+              mr: open ? 1.5 : 0,
+              transition: 'margin-right 0.28s cubic-bezier(0.4,0,0.2,1)',
+              justifyContent: 'center',
+              '& svg': { fontSize: 20 },
+            }}>
+              <SettingsIcon />
+            </ListItemIcon>
+            <Box sx={{
+              overflow: 'hidden',
+              opacity: open ? 1 : 0,
+              maxWidth: open ? 160 : 0,
+              transition: 'opacity 0.2s ease, max-width 0.28s cubic-bezier(0.4,0,0.2,1)',
+              whiteSpace: 'nowrap',
+            }}>
+              <Typography sx={{ fontSize: '0.875rem', fontWeight: settingsOpen ? 600 : 400, color: 'inherit' }}>
+                Configuración
+              </Typography>
+            </Box>
+          </ListItemButton>
+        </Tooltip>
+      </Box>
 
       {/* Footer */}
       <Box sx={{

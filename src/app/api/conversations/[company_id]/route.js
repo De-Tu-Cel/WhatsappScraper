@@ -4,8 +4,8 @@ const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000'
 
 export async function GET(request, { params }) {
   try {
-    const { id } = await params
-    const res = await fetch(`${BACKEND_URL}/api/companies/${id}`)
+    const { company_id } = await params
+    const res = await fetch(`${BACKEND_URL}/api/conversations/${company_id}`)
     const data = await res.json()
     return NextResponse.json(data, { status: res.status })
   } catch (error) {
@@ -13,15 +13,10 @@ export async function GET(request, { params }) {
   }
 }
 
-export async function PUT(request, { params }) {
+export async function POST(request, { params }) {
   try {
-    const { id } = await params
-    const body = await request.json()
-    const res = await fetch(`${BACKEND_URL}/api/companies/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
+    const { company_id } = await params
+    const res = await fetch(`${BACKEND_URL}/api/conversations/${company_id}/read`, { method: 'POST' })
     const data = await res.json()
     return NextResponse.json(data, { status: res.status })
   } catch (error) {

@@ -358,20 +358,18 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     story.append(Spacer(1, 4 * mm))
     story.append(SummaryBar(sent_c, recv_c, read_c, PW, h=18 * mm))
 
-    # ── PAGE 2: Screenshot + Sugerencias ──────────────────────────────────────
-    story.append(PageBreak())
-
-    # Screenshot section
+    # ── Screenshot en página 1, justo después del resumen ─────────────────────
+    story.append(Spacer(1, 5 * mm))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=C["border"], spaceAfter=5))
     story.append(Paragraph("Evidencia de Conversación", _st("h2",
         fontSize=11, fontName="Helvetica-Bold", textColor=C["primary"],
-        leading=15, spaceAfter=5)))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=C["border"], spaceAfter=6))
+        leading=14, spaceAfter=4)))
 
     if screenshot_b64:
         try:
             raw = screenshot_b64.split(",", 1)[-1] if "," in screenshot_b64 else screenshot_b64
             img_buf = io.BytesIO(base64.b64decode(raw))
-            img = Image(img_buf, width=PW, height=120 * mm, kind="bound")
+            img = Image(img_buf, width=PW, height=100 * mm, kind="bound")
             story.append(img)
         except Exception:
             story.append(Paragraph("(No se pudo procesar la imagen.)",
@@ -384,10 +382,9 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     story.append(Paragraph(" · ".join(caption_parts),
         _st("cap", fontSize=7, textColor=C["muted"], alignment=TA_CENTER, spaceAfter=0)))
 
-    story.append(Spacer(1, 5 * mm))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=C["border"], spaceAfter=5))
+    # ── PAGE 2: Sugerencias ───────────────────────────────────────────────────
+    story.append(PageBreak())
 
-    # Suggestions section
     story.append(Paragraph("Sugerencias de Mejora", _st("h4",
         fontSize=11, fontName="Helvetica-Bold", textColor=C["green"],
         leading=15, spaceAfter=5)))

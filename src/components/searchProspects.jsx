@@ -25,6 +25,9 @@ import ReplayIcon from '@mui/icons-material/Replay'
 import CheckBoxIcon from '@mui/icons-material/CheckBox'
 import IndeterminateCheckBoxIcon from '@mui/icons-material/IndeterminateCheckBox'
 import HistoryIcon from '@mui/icons-material/History'
+import MessageIcon from '@mui/icons-material/Message'
+import SendIcon from '@mui/icons-material/Send'
+import { TEMPLATES } from './singleUrlProcessor'
 
 const INDUSTRY_GROUPS = [
   { label: 'Alimentos',     color: '#f97316', items: ['Restaurantes', 'Taquerías', 'Panaderías', 'Cafeterías', 'Catering'] },
@@ -86,6 +89,16 @@ function useTypewriter(strings, active) {
   return display
 }
 
+function renderTemplate(text, scraped) {
+  if (!text) return ''
+  const extra = scraped?._extra || {}
+  return text
+    .replace(/\{\{nombre\}\}/g,    scraped?.name || '')
+    .replace(/\{\{ciudad\}\}/g,    extra.city || '')
+    .replace(/\{\{industria\}\}/g, scraped?.industry || '')
+    .replace(/\{\{web\}\}/g,       scraped?.website || '')
+}
+
 export default function SearchProspects() {
   const pauseRef  = useRef(false)
   const cancelRef = useRef(false)
@@ -105,10 +118,21 @@ export default function SearchProspects() {
   const [history,     setHistory]     = useState([])
   const [acOpen,      setAcOpen]      = useState(false)
   const [acIdx,       setAcIdx]       = useState(0)
+  const [selectedTpl, setSelectedTpl] = useState(TEMPLATES[0].id)
+  const [msgText,     setMsgText]     = useState(TEMPLATES[0].text)
+  const [sendingAll,  setSendingAll]  = useState(false)
+  const [waSelected,  setWaSelected]  = useState(new Set())
+  const msgRef = useRef(null)
 
   useEffect(() => {
     try { setHistory(JSON.parse(localStorage.getItem('searchHistory') || '[]')) } catch {}
   }, [])
+
+  // Auto-select all WA rows when results change
+  useEffect(() => {
+    const ids = results.filter(r => r.ok && r.company_id && (r.all_whatsapp?.length > 0 || r.whatsapp)).map(r => r.company_id)
+    setWaSelected(new Set(ids))
+  }, [results])
 
   const placeholder = useTypewriter(INDUSTRY_EXAMPLES, !industry && found.length === 0 && !processing && !searching)
   const ALL_INDUSTRIES = INDUSTRY_GROUPS.flatMap(g => g.items.map(item => ({ item, color: g.color })))
@@ -122,8 +146,10 @@ export default function SearchProspects() {
   const visibleFound = found
     .slice(0, visibleCount)
     .filter(r => filterScraped === 'all' ? true : filterScraped === 'new' ? !r.scraped : r.scraped)
-  const selectedCount = found.filter(r => r.selected).length
-  const allSelected   = found.length > 0 && found.every(r => r.selected)
+  const selectedCount    = found.filter(r => r.selected).length
+  const processableCount = found.filter(r => r.selected && !r.scraped).length
+  const skippedCount     = found.filter(r => r.selected && r.scraped).length
+  const allSelected      = found.length > 0 && found.filter(r => !r.scraped).every(r => r.selected) && found.some(r => !r.scraped)
   const newCount      = found.filter(r => !r.scraped).length
   const scrapedCount  = found.filter(r => r.scraped).length
   const okCount       = results.filter(r => r.ok).length
@@ -176,10 +202,13 @@ export default function SearchProspects() {
     setVisibleCount(c => Math.min(c + numResults, found.length))
   }
 
-  function toggleAll(val) { setFound(f => f.map(r => ({ ...r, selected: val }))) }
+  // "Select all" only selects new ones — scraped ones are never auto-selected
+  function toggleAll(val) {
+    setFound(f => f.map(r => ({ ...r, selected: val ? !r.scraped : false })))
+  }
   function toggleOne(i)   { setFound(f => f.map((r, idx) => idx === i ? { ...r, selected: !r.selected } : r)) }
-  function selectOnlyNew()     { setFound(f => f.map(r => ({ ...r, selected: !r.scraped }))) }
-  function deselectScraped()   { setFound(f => f.map(r => ({ ...r, selected: r.scraped ? false : r.selected }))) }
+  function selectOnlyNew()   { setFound(f => f.map(r => ({ ...r, selected: !r.scraped }))) }
+  function deselectScraped() { setFound(f => f.map(r => ({ ...r, selected: r.scraped ? false : r.selected }))) }
 
   async function runProcessLoop(urls, baseResults) {
     const res = [...baseResults]
@@ -191,13 +220,21 @@ export default function SearchProspects() {
       try {
         const r = await fetch('/api/process-url', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: urls[i] }),
+          body: JSON.stringify({ url: urls[i], skip_send: true }),
         })
         if (!r.ok) throw new Error()
         const d = await r.json()
-        res.push({ url: urls[i], empresa: d.scraped?.name || '—', industria: d.scraped?.industry || '—', whatsapp: d.primary_whatsapp_number || '', status_wa: d.send_result?.status_code || '—', ok: true })
+        res.push({
+          url: urls[i], empresa: d.scraped?.name || '—', industria: d.scraped?.industry || '—',
+          whatsapp: d.primary_whatsapp_number || '',
+          all_whatsapp: d.all_whatsapp_numbers || (d.primary_whatsapp_number ? [d.primary_whatsapp_number] : []),
+          company_id: d.company_id || '',
+          scraped_data: d.scraped,
+          status_wa: d.send_result?.status_code || '—',
+          msg_status: null, ok: true,
+        })
       } catch {
-        res.push({ url: urls[i], empresa: '—', industria: '—', whatsapp: '', status_wa: '—', ok: false })
+        res.push({ url: urls[i], empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, status_wa: '—', msg_status: null, ok: false })
       }
       setResults([...res])
     }
@@ -205,10 +242,14 @@ export default function SearchProspects() {
   }
 
   async function handleProcess() {
-    const urls = found.filter(r => r.selected).map(r => r.url)
-    if (!urls.length) return
+    // Always skip already-scraped URLs regardless of selection state
+    const toProcess = found.filter(r => r.selected && !r.scraped)
+    const skipped   = found.filter(r => r.selected && r.scraped).length
+    if (!toProcess.length) return
+    const urls = toProcess.map(r => r.url)
     pauseRef.current = false; cancelRef.current = false
     setResults([]); setProgress(0); setProcessing(true); setDone(false); setPaused(false)
+    if (skipped > 0) console.info(`⏭️ Saltando ${skipped} URL(s) ya scrapeadas`)
     await runProcessLoop(urls, [])
     setProgress(100); setCurrentUrl(''); setProcessing(false); setPaused(false); setDone(true)
   }
@@ -234,8 +275,42 @@ export default function SearchProspects() {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'prospectos.csv'; a.click()
   }
 
+  const waRows       = results.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
+  const alreadySent  = results.some(r => r.msg_status === 'sent' || r.msg_status === 'failed')
+  const sentCount    = results.filter(r => r.msg_status === 'sent').length
+
+  async function handleSendAll() {
+    const targets = waRows.filter(r => waSelected.has(r.company_id))
+    if (!targets.length) return
+    setSendingAll(true)
+    const updated = [...results]
+    for (let i = 0; i < targets.length; i++) {
+      const row = targets[i]
+      const idx = results.findIndex(r => r.url === row.url)
+      try {
+        const message = renderTemplate(msgText, row.scraped_data)
+        const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
+        let lastStatus = 'failed'
+        for (const num of numbers) {
+          const res = await fetch('/api/send-message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ company_id: row.company_id, to_number: num, message: message || msgText, website: row.url }),
+          })
+          const json = await res.json()
+          if (json.status === 'sent') lastStatus = 'sent'
+        }
+        updated[idx] = { ...updated[idx], msg_status: lastStatus }
+      } catch {
+        updated[idx] = { ...updated[idx], msg_status: 'failed' }
+      }
+      setResults([...updated])
+    }
+    setSendingAll(false)
+  }
+
   function exportUrlsTxt() {
-    const text = found.map(r => r.url).join('\n')
+    const text = found.filter(r => r.selected).map(r => r.url).join('\n')
     const blob = new Blob([text], { type: 'text/plain' })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
     a.download = `urls-${industry || 'prospectos'}.txt`; a.click()
@@ -244,18 +319,18 @@ export default function SearchProspects() {
   /* ── Selector de cantidad (reutilizable) ── */
   const CountSelector = ({ size = 'md' }) => (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-      {size === 'md' && <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>Resultados por búsqueda</Typography>}
-      {size === 'sm' && <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>Resultados</Typography>}
+      {size === 'md' && <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>Empresas a mostrar</Typography>}
+      {size === 'sm' && <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>Mostrar</Typography>}
       <Box sx={{ display: 'flex', gap: size === 'md' ? 0.6 : 0.5 }}>
         {[5, 10, 20, 30].map(n => (
           <Box key={n} onClick={() => setNumResults(n)} sx={{
             px: size === 'md' ? 1.5 : 1.2, py: size === 'md' ? 0.4 : 0.3,
             borderRadius: 10, cursor: 'pointer', fontSize: size === 'md' ? '0.75rem' : '0.72rem', fontWeight: 700,
-            bgcolor: numResults === n ? 'rgba(59,130,246,0.2)' : 'rgba(255,255,255,0.04)',
-            color: numResults === n ? '#60a5fa' : 'rgba(255,255,255,0.28)',
-            border: `1px solid ${numResults === n ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.07)'}`,
+            bgcolor: numResults === n ? 'rgba(var(--accent-rgb, 59,130,246), 0.2)' : 'rgba(255,255,255,0.04)',
+            color: numResults === n ? 'var(--accent, #60a5fa)' : 'rgba(255,255,255,0.28)',
+            border: `1px solid ${numResults === n ? 'rgba(var(--accent-rgb, 59,130,246), 0.4)' : 'rgba(255,255,255,0.07)'}`,
             transition: 'all 0.15s',
-            '&:hover': { bgcolor: 'rgba(59,130,246,0.12)', color: '#93c5fd' },
+            '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.12)', color: 'var(--accent, #93c5fd)' },
           }}>{n}</Box>
         ))}
       </Box>
@@ -267,13 +342,13 @@ export default function SearchProspects() {
     <Box sx={{ position: 'relative', width: compact ? '100%' : { xs: '100%', sm: '580px' } }}>
       <Box sx={{
         display: 'flex', alignItems: 'center',
-        bgcolor: '#0d1117', borderRadius: '50px',
+        bgcolor: 'var(--sidebar-bg, #0d1117)', borderRadius: '50px',
         boxShadow: compact ? '0 2px 8px rgba(0,0,0,0.3)' : '0 4px 28px rgba(0,0,0,0.55)',
-        border: '1.5px solid rgba(59,130,246,0.22)',
+        border: '1.5px solid rgba(var(--accent-rgb, 59,130,246), 0.22)',
         px: 2.5, py: 0.4,
         transition: 'box-shadow 0.2s, border-color 0.2s',
-        '&:focus-within': { boxShadow: '0 6px 30px rgba(59,130,246,0.25)', borderColor: 'rgba(59,130,246,0.5)' },
-        '&:hover': { borderColor: 'rgba(59,130,246,0.38)' },
+        '&:focus-within': { boxShadow: '0 6px 30px rgba(var(--accent-rgb, 59,130,246), 0.25)', borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.5)' },
+        '&:hover': { borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.38)' },
       }}>
         <TravelExploreIcon sx={{ color: 'rgba(255,255,255,0.2)', fontSize: 18, mr: 1, flexShrink: 0 }} />
         <TextField
@@ -305,15 +380,15 @@ export default function SearchProspects() {
           slotProps={{ input: { disableUnderline: true } }}
           sx={{ '& input': { fontSize: compact ? '0.92rem' : '1rem', py: 0.9, color: '#f1f5f9', '&::placeholder': { color: 'rgba(255,255,255,0.28)', opacity: 1 } } }}
         />
-        <IconButton onClick={handleSearch} disabled={searching || !industry.trim()} sx={{ bgcolor: '#3b82f6', color: 'white', width: 38, height: 38, flexShrink: 0, mr: -1, '&:hover': { bgcolor: '#2563eb' }, '&.Mui-disabled': { bgcolor: 'rgba(59,130,246,0.25)', color: 'rgba(255,255,255,0.3)' } }}>
+        <IconButton onClick={handleSearch} disabled={searching || !industry.trim()} sx={{ bgcolor: 'var(--accent, #3b82f6)', color: 'white', width: 38, height: 38, flexShrink: 0, mr: -1, '&:hover': { bgcolor: 'var(--accent, #2563eb)' }, '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.25)', color: 'rgba(255,255,255,0.3)' } }}>
           {searching ? <CircularProgress size={18} sx={{ color: 'white' }} /> : <SearchIcon fontSize="small" />}
         </IconButton>
       </Box>
       {acOpen && acMatches.length > 0 && (
-        <Box sx={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 30, bgcolor: '#0d1117', border: '1px solid rgba(59,130,246,0.28)', borderRadius: 2, overflow: 'hidden', boxShadow: '0 8px 28px rgba(0,0,0,0.6)' }}>
+        <Box sx={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 30, bgcolor: 'var(--sidebar-bg, #0d1117)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.28)', borderRadius: 2, overflow: 'hidden', boxShadow: '0 8px 28px rgba(0,0,0,0.6)' }}>
           {acMatches.slice(0, 6).map(({ item, color }, i) => (
             <Box key={item} onMouseDown={() => { setIndustry(item); setAcOpen(false); handleSearch(item) }} onMouseEnter={() => setAcIdx(i)}
-              sx={{ px: 2, py: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 1, bgcolor: i === acIdx ? 'rgba(59,130,246,0.1)' : 'transparent', transition: 'all 0.1s' }}>
+              sx={{ px: 2, py: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 1, bgcolor: i === acIdx ? 'rgba(var(--accent-rgb, 59,130,246), 0.1)' : 'transparent', transition: 'all 0.1s' }}>
               <Box component="span" sx={{ fontSize: '0.85rem' }}>
                 <Box component="span" sx={{ color: 'rgba(255,255,255,0.35)' }}>{industry}</Box>
                 <Box component="span" sx={{ color: i === acIdx ? color : 'rgba(255,255,255,0.8)', fontWeight: 600 }}>{item.slice(industry.length)}</Box>
@@ -347,7 +422,7 @@ export default function SearchProspects() {
               <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.68rem' }}>Recientes:</Typography>
               {history.map(h => (
                 <Box key={h} onClick={() => { setIndustry(h); handleSearch(h) }}
-                  sx={{ px: 1.2, py: 0.3, borderRadius: 10, cursor: 'pointer', fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', transition: 'all 0.15s', '&:hover': { color: '#60a5fa', bgcolor: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)' } }}>
+                  sx={{ px: 1.2, py: 0.3, borderRadius: 10, cursor: 'pointer', fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', transition: 'all 0.15s', '&:hover': { color: 'var(--accent, #60a5fa)', bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.1)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)' } }}>
                   {h}
                 </Box>
               ))}
@@ -375,7 +450,7 @@ export default function SearchProspects() {
 
       {/* ── Barra compacta cuando hay resultados ── */}
       {hasResults && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', p: 1.5, borderRadius: 2, border: '1px solid rgba(255,255,255,0.07)', bgcolor: 'rgba(13,17,23,0.6)' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', p: 1.5, borderRadius: 2, border: '1px solid rgba(255,255,255,0.07)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
           {SearchBar({ compact: true })}
           {CountSelector({ size: 'sm' })}
         </Box>
@@ -418,50 +493,75 @@ export default function SearchProspects() {
               <Box component="span" sx={{ fontWeight: 700 }}>{scrapedCount}</Box> ya en BD
             </Typography>
             <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
-              <Tooltip title="Exportar URLs como .txt" placement="top">
-                <Button size="small" startIcon={<DownloadIcon sx={{ fontSize: 13 }} />} onClick={exportUrlsTxt}
-                  sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.7rem', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 1.5, px: 1.2, py: 0.3, textTransform: 'none', minWidth: 0, '&:hover': { bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.7)' } }}>
-                  Exportar lista
-                </Button>
+              <Tooltip title={selectedCount === 0 ? 'Selecciona al menos una empresa para exportar' : 'Exportar URLs seleccionadas como .txt'} placement="top">
+                <span>
+                  <Button size="small" startIcon={<DownloadIcon sx={{ fontSize: 13 }} />} onClick={exportUrlsTxt} disabled={selectedCount === 0}
+                    sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.7rem', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 1.5, px: 1.2, py: 0.3, textTransform: 'none', minWidth: 0, '&:hover': { bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.7)' }, '&.Mui-disabled': { opacity: 0.35 } }}>
+                    Exportar URLs
+                  </Button>
+                </span>
               </Tooltip>
+              {results.length > 0 && (
+                <Tooltip title="Exportar empresa, teléfono y datos extraídos como .csv" placement="top">
+                  <Button size="small" startIcon={<DownloadIcon sx={{ fontSize: 13 }} />} onClick={downloadCsv}
+                    sx={{ color: '#4ade80', fontSize: '0.7rem', border: '1px solid rgba(74,222,128,0.3)', borderRadius: 1.5, px: 1.2, py: 0.3, textTransform: 'none', minWidth: 0, bgcolor: 'rgba(34,197,94,0.08)', '&:hover': { bgcolor: 'rgba(34,197,94,0.15)' } }}>
+                    Exportar resultados
+                  </Button>
+                </Tooltip>
+              )}
             </Box>
           </Box>
 
           {/* Barra de acciones */}
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-              <Checkbox size="small" checked={allSelected} indeterminate={selectedCount > 0 && !allSelected}
-                onChange={e => toggleAll(e.target.checked)}
-                sx={{ color: 'rgba(255,255,255,0.3)', '&.Mui-checked': { color: '#3b82f6' }, p: 0.5 }} />
-              <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.78rem' }}>{selectedCount} de {found.length}</Typography>
+              <Tooltip title={newCount === 0 ? 'No hay empresas nuevas para seleccionar' : 'Seleccionar / deseleccionar todas las nuevas'} placement="top">
+                <span>
+                  <Checkbox size="small" checked={allSelected} indeterminate={processableCount > 0 && !allSelected}
+                    disabled={newCount === 0}
+                    onChange={e => toggleAll(e.target.checked)}
+                    sx={{ color: 'rgba(255,255,255,0.3)', '&.Mui-checked': { color: 'var(--accent, #3b82f6)' }, p: 0.5 }} />
+                </span>
+              </Tooltip>
+              <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.78rem' }}>
+                {processableCount > 0 ? `${processableCount} nuevas` : '0'} de {found.length}
+                {skippedCount > 0 && (
+                  <Box component="span" sx={{ color: '#fbbf24', ml: 0.8 }}>· {skippedCount} ya en BD</Box>
+                )}
+              </Typography>
 
               {/* Selección rápida */}
-              <Tooltip title="Seleccionar solo nuevas" placement="top">
+              <Tooltip title="Marcar solo las empresas que aún no has visitado" placement="top">
                 <Box onClick={selectOnlyNew} sx={{ display: 'flex', alignItems: 'center', gap: 0.4, px: 1, py: 0.35, borderRadius: 1.2, cursor: 'pointer', fontSize: '0.7rem', color: '#4ade80', bgcolor: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', transition: 'all 0.15s', '&:hover': { bgcolor: 'rgba(34,197,94,0.15)' } }}>
-                  <CheckBoxIcon sx={{ fontSize: 12 }} /> Nuevas
+                  <CheckBoxIcon sx={{ fontSize: 12 }} /> Sel. nuevas
                 </Box>
               </Tooltip>
-              <Tooltip title="Deseleccionar ya scrapeadas" placement="top">
+              <Tooltip title="Desmarcar empresas que ya están en la base de datos" placement="top">
                 <Box onClick={deselectScraped} sx={{ display: 'flex', alignItems: 'center', gap: 0.4, px: 1, py: 0.35, borderRadius: 1.2, cursor: 'pointer', fontSize: '0.7rem', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)', transition: 'all 0.15s', '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' } }}>
-                  <IndeterminateCheckBoxIcon sx={{ fontSize: 12 }} /> Quitar BD
+                  <IndeterminateCheckBoxIcon sx={{ fontSize: 12 }} /> Desel. en BD
                 </Box>
               </Tooltip>
 
               {/* Filtros */}
               {[
-                { key: 'all',     label: `Todas (${found.length})`,      color: '#60a5fa', bg: 'rgba(59,130,246,0.1)',  border: 'rgba(59,130,246,0.25)' },
-                { key: 'new',     label: `Nuevas (${newCount})`,          color: '#4ade80', bg: 'rgba(34,197,94,0.1)',   border: 'rgba(34,197,94,0.25)'  },
-                { key: 'scraped', label: `En BD (${scrapedCount})`,       color: '#fbbf24', bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.25)' },
+                { key: 'all',     label: `Todas (${found.length})`,        color: '#60a5fa', bg: 'rgba(59,130,246,0.1)',  border: 'rgba(59,130,246,0.25)' },
+                { key: 'new',     label: `Nuevas (${newCount})`,            color: '#4ade80', bg: 'rgba(34,197,94,0.1)',   border: 'rgba(34,197,94,0.25)'  },
+                { key: 'scraped', label: `Ya en BD (${scrapedCount})`,      color: '#fbbf24', bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.25)' },
               ].map(f => (
                 <Chip key={f.key} label={f.label} size="small" onClick={() => setFilterScraped(f.key)}
                   sx={{ height: 22, fontSize: '0.68rem', cursor: 'pointer', bgcolor: filterScraped === f.key ? f.bg : 'rgba(255,255,255,0.04)', color: filterScraped === f.key ? f.color : 'rgba(255,255,255,0.35)', border: `1px solid ${filterScraped === f.key ? f.border : 'rgba(255,255,255,0.08)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
               ))}
             </Box>
 
-            <Button variant="contained" onClick={handleProcess} disabled={selectedCount === 0} startIcon={<PlayArrowIcon />}
-              sx={{ bgcolor: '#3b82f6', fontWeight: 600, textTransform: 'none', px: 2, py: 0.8, borderRadius: 1.5, fontSize: '0.85rem', '&:hover': { bgcolor: '#2563eb' }, '&.Mui-disabled': { bgcolor: 'rgba(59,130,246,0.15)', color: 'rgba(255,255,255,0.3)' } }}>
-              Procesar {selectedCount > 0 ? selectedCount : ''} seleccionadas
-            </Button>
+            <Tooltip title={skippedCount > 0 ? `${skippedCount} ya en BD se saltarán automáticamente` : ''} placement="top">
+              <span>
+                <Button variant="contained" onClick={handleProcess} disabled={processableCount === 0} startIcon={<PlayArrowIcon />}
+                  sx={{ bgcolor: 'var(--accent, #3b82f6)', fontWeight: 600, textTransform: 'none', px: 2, py: 0.8, borderRadius: 1.5, fontSize: '0.85rem', '&:hover': { bgcolor: 'var(--accent, #2563eb)' }, '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.15)', color: 'rgba(255,255,255,0.3)' } }}>
+                  Procesar {processableCount > 0 ? processableCount : ''} nueva{processableCount !== 1 ? 's' : ''}
+                  {skippedCount > 0 && ` (omitiendo ${skippedCount})`}
+                </Button>
+              </span>
+            </Tooltip>
           </Box>
 
           {/* Lista URL con favicon + dominio */}
@@ -471,9 +571,9 @@ export default function SearchProspects() {
               const domain = getDomain(item.url)
               return (
                 <Box key={realIdx} onClick={() => toggleOne(realIdx)}
-                  sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.1, cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.05)', bgcolor: item.selected ? 'rgba(59,130,246,0.05)' : 'transparent', '&:hover': { bgcolor: item.selected ? 'rgba(59,130,246,0.08)' : 'rgba(255,255,255,0.02)' }, '&:last-of-type': { borderBottom: 'none' }, transition: 'background-color 0.15s', animation: `${fadeSlideIn} 0.22s ease both`, animationDelay: `${realIdx * 0.025}s` }}>
+                  sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.1, cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.05)', bgcolor: item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.05)' : 'transparent', '&:hover': { bgcolor: item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.08)' : 'rgba(255,255,255,0.02)' }, '&:last-of-type': { borderBottom: 'none' }, transition: 'background-color 0.15s', animation: `${fadeSlideIn} 0.22s ease both`, animationDelay: `${realIdx * 0.025}s` }}>
                   <Checkbox size="small" checked={item.selected} onChange={() => toggleOne(realIdx)} onClick={e => e.stopPropagation()}
-                    sx={{ color: 'rgba(255,255,255,0.25)', '&.Mui-checked': { color: '#3b82f6' }, p: 0.5, flexShrink: 0 }} />
+                    sx={{ color: 'rgba(255,255,255,0.25)', '&.Mui-checked': { color: 'var(--accent, #3b82f6)' }, p: 0.5, flexShrink: 0 }} />
                   {/* Favicon */}
                   <Box component="img"
                     src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`}
@@ -484,12 +584,12 @@ export default function SearchProspects() {
                   {/* Dominio + URL completa al hover */}
                   <Tooltip title={item.url} placement="top" arrow>
                     <Typography component="a" href={item.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
-                      sx={{ fontSize: '0.82rem', fontWeight: item.scraped ? 400 : 500, color: item.scraped ? 'rgba(255,255,255,0.28)' : item.selected ? '#60a5fa' : 'rgba(255,255,255,0.55)', textDecoration: 'none', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', '&:hover': { textDecoration: 'underline' } }}>
+                      sx={{ fontSize: '0.82rem', fontWeight: item.scraped ? 400 : 500, color: item.scraped ? 'rgba(255,255,255,0.28)' : item.selected ? 'var(--accent, #60a5fa)' : 'rgba(255,255,255,0.55)', textDecoration: 'none', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', '&:hover': { textDecoration: 'underline' } }}>
                       {domain}
                     </Typography>
                   </Tooltip>
                   {item.scraped
-                    ? <Chip label="Ya en BD" size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)', flexShrink: 0 }} />
+                    ? <Chip label="Visitada" size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)', flexShrink: 0 }} />
                     : <Chip label="Nuevo"    size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(34,197,94,0.1)',  color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)',  flexShrink: 0 }} />
                   }
                 </Box>
@@ -498,7 +598,7 @@ export default function SearchProspects() {
             {visibleCount < found.length && (
               <Box sx={{ p: 1.5, display: 'flex', justifyContent: 'center', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
                 <Button size="small" onClick={handleLoadMore}
-                  sx={{ color: '#60a5fa', fontSize: '0.78rem', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 1.5, px: 2, textTransform: 'none', '&:hover': { bgcolor: 'rgba(59,130,246,0.08)' } }}>
+                  sx={{ color: 'var(--accent, #60a5fa)', fontSize: '0.78rem', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.2)', borderRadius: 1.5, px: 2, textTransform: 'none', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)' } }}>
                   Mostrar {Math.min(numResults, found.length - visibleCount)} más ({found.length - visibleCount} restantes)
                 </Button>
               </Box>
@@ -510,18 +610,18 @@ export default function SearchProspects() {
       {/* ── Progress (fase 2) ── */}
       {processing && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Box sx={{ px: 2.5, py: 2, bgcolor: paused ? 'rgba(251,191,36,0.05)' : 'rgba(59,130,246,0.05)', border: `1px solid ${paused ? 'rgba(251,191,36,0.2)' : 'rgba(59,130,246,0.15)'}`, borderRadius: 2, transition: 'all 0.3s' }}>
+          <Box sx={{ px: 2.5, py: 2, bgcolor: paused ? 'rgba(251,191,36,0.05)' : 'rgba(var(--accent-rgb, 59,130,246), 0.05)', border: `1px solid ${paused ? 'rgba(251,191,36,0.2)' : 'rgba(var(--accent-rgb, 59,130,246), 0.15)'}`, borderRadius: 2, transition: 'all 0.3s' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                {paused ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} /> : <CircularProgress size={14} sx={{ color: '#3b82f6' }} />}
+                {paused ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} /> : <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />}
                 <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
                   {paused ? 'Pausado —' : 'Procesando'} {results.length} de {found.filter(r => r.selected).length}
                 </Typography>
               </Box>
-              <Typography sx={{ color: paused ? '#fbbf24' : '#60a5fa', fontWeight: 700, fontSize: '0.82rem' }}>{progress}%</Typography>
+              <Typography sx={{ color: paused ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>{progress}%</Typography>
             </Box>
             <LinearProgress variant="determinate" value={progress}
-              sx={{ borderRadius: 4, height: 6, bgcolor: paused ? 'rgba(251,191,36,0.1)' : 'rgba(59,130,246,0.1)', '& .MuiLinearProgress-bar': { background: paused ? 'linear-gradient(90deg,#f59e0b,#fbbf24)' : 'linear-gradient(90deg,#3b82f6,#60a5fa)', borderRadius: 4 } }} />
+              sx={{ borderRadius: 4, height: 6, bgcolor: paused ? 'rgba(251,191,36,0.1)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)', '& .MuiLinearProgress-bar': { background: paused ? 'linear-gradient(90deg,#f59e0b,#fbbf24)' : 'linear-gradient(90deg, var(--accent, #3b82f6), var(--accent, #60a5fa))', borderRadius: 4 } }} />
             {currentUrl && !paused && (
               <Typography sx={{ mt: 1, color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{currentUrl}</Typography>
             )}
@@ -558,6 +658,134 @@ export default function SearchProspects() {
         </Box>
       )}
 
+      {/* ── Panel de envío masivo ── */}
+      {done && results.length > 0 && (
+        <Box sx={{ p: 2, borderRadius: 2, border: '1px solid rgba(34,197,94,0.15)', bgcolor: 'rgba(34,197,94,0.03)' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <MessageIcon sx={{ fontSize: 16, color: '#4ade80' }} />
+              <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>Enviar mensajes</Typography>
+            </Box>
+            {waRows.length > 0 && (
+              <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={`${waRows.length} con WhatsApp`} size="small"
+                sx={{ fontSize: '0.7rem', height: 22, bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', '& .MuiChip-icon': { color: '#4ade80' } }} />
+            )}
+          </Box>
+          {/* Selector de destinatarios WhatsApp */}
+          {waRows.length > 0 && (
+            <Box sx={{ mb: 1.5 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.8 }}>
+                <Checkbox size="small"
+                  checked={waRows.every(r => waSelected.has(r.company_id))}
+                  indeterminate={waRows.some(r => waSelected.has(r.company_id)) && !waRows.every(r => waSelected.has(r.company_id))}
+                  onChange={e => setWaSelected(e.target.checked ? new Set(waRows.map(r => r.company_id)) : new Set())}
+                  sx={{ color: 'rgba(255,255,255,0.25)', '&.Mui-checked': { color: '#4ade80' }, '&.MuiCheckbox-indeterminate': { color: '#4ade80' }, p: 0.5 }} />
+                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
+                  Destinatarios — {waRows.filter(r => waSelected.has(r.company_id)).length} de {waRows.length} seleccionados
+                </Typography>
+              </Box>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6, maxHeight: 90, overflowY: 'auto',
+                scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent' }}>
+                {waRows.map(r => {
+                  const on = waSelected.has(r.company_id)
+                  return (
+                    <Chip key={r.company_id} size="small"
+                      icon={<WhatsAppIcon sx={{ fontSize: '12px !important', color: on ? '#4ade80 !important' : 'rgba(255,255,255,0.25) !important' }} />}
+                      label={r.empresa || r.url}
+                      onClick={() => setWaSelected(prev => {
+                        const next = new Set(prev)
+                        on ? next.delete(r.company_id) : next.add(r.company_id)
+                        return next
+                      })}
+                      sx={{
+                        height: 22, fontSize: '0.7rem', cursor: 'pointer',
+                        bgcolor: on ? 'rgba(34,197,94,0.12)' : 'rgba(255,255,255,0.04)',
+                        color:   on ? '#4ade80'              : 'rgba(255,255,255,0.3)',
+                        border: `1px solid ${on ? 'rgba(34,197,94,0.3)' : 'rgba(255,255,255,0.08)'}`,
+                        textDecoration: on ? 'none' : 'line-through',
+                        '& .MuiChip-label': { px: 0.8 },
+                        transition: 'all 0.15s',
+                      }} />
+                  )
+                })}
+              </Box>
+            </Box>
+          )}
+
+          <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>Plantilla base</Typography>
+          <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.5 }}>
+            {TEMPLATES.map(t => (
+              <Chip key={t.id} label={t.label} size="small" onClick={() => {
+                setSelectedTpl(t.id)
+                const el = msgRef.current
+                if (el) { el.value = t.text; el.dispatchEvent(new Event('input', { bubbles: true })) }
+              }} sx={{
+                fontSize: '0.7rem', height: 24, cursor: 'pointer',
+                bgcolor: selectedTpl === t.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
+                color:   selectedTpl === t.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
+                border:  `1px solid ${selectedTpl === t.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
+              }} />
+            ))}
+          </Box>
+          {/* Variable chips */}
+          <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 1 }}>
+            {[['{{nombre}}','#818cf8'],['{{ciudad}}','#38bdf8'],['{{industria}}','#fb923c'],['{{web}}','#a78bfa']].map(([v, color]) => (
+              <Box key={v} onClick={() => {
+                const el = msgRef.current; if (!el) return
+                el.setRangeText(v, el.selectionStart, el.selectionEnd, 'end')
+                el.dispatchEvent(new Event('input', { bubbles: true }))
+                el.focus()
+              }} sx={{
+                px: 1, py: 0.25, borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700,
+                cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace',
+                bgcolor: `${color}18`, color, border: `1px solid ${color}40`,
+                '&:hover': { bgcolor: `${color}30` },
+              }}>{v}</Box>
+            ))}
+            <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', alignSelf: 'center', ml: 0.5 }}>
+              clic para insertar
+            </Typography>
+          </Box>
+          {/* Textarea editable — uncontrolled so native Ctrl+Z works */}
+          <Box component="textarea" ref={msgRef} defaultValue={msgText} onInput={e => setMsgText(e.target.value)}
+            sx={{
+              width: '100%', minHeight: 100, maxHeight: 200, resize: 'vertical',
+              bgcolor: 'var(--sidebar-bg, #0d1117)', color: '#e2e8f0',
+              border: '1px solid rgba(255,255,255,0.1)', borderRadius: 1.5,
+              p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit',
+              outline: 'none', mb: 0.5,
+              '&:focus': { borderColor: 'rgba(34,197,94,0.4)' },
+            }} />
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
+            <Typography sx={{ fontSize: '0.65rem', color: msgText.length > 4000 ? '#f87171' : 'rgba(255,255,255,0.2)' }}>
+              {msgText.length} / 4096
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
+            <Button
+              onClick={handleSendAll}
+              disabled={waRows.filter(r => waSelected.has(r.company_id)).length === 0 || alreadySent || sendingAll}
+              startIcon={sendingAll ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
+              size="small"
+              sx={{
+                fontSize: '0.78rem', fontWeight: 700, flexShrink: 0,
+                bgcolor: waRows.length > 0 && !alreadySent && !sendingAll ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
+                color:   waRows.length > 0 && !alreadySent && !sendingAll ? '#4ade80' : 'rgba(255,255,255,0.3)',
+                border:  `1px solid ${waRows.length > 0 && !alreadySent && !sendingAll ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
+                borderRadius: 1.5, px: 2, py: 0.6,
+                '&:hover': { bgcolor: waRows.length > 0 && !alreadySent && !sendingAll ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
+                '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
+              }}
+            >
+              {(() => {
+                const sel = waRows.filter(r => waSelected.has(r.company_id)).length
+                return alreadySent ? `${sentCount} mensajes enviados` : sendingAll ? 'Enviando…' : `Enviar a ${sel} empresa${sel !== 1 ? 's' : ''} con WhatsApp`
+              })()}
+            </Button>
+          </Box>
+        </Box>
+      )}
+
       {/* ── Tarjetas de resultados ── */}
       {results.length > 0 && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, flexGrow: 1, minHeight: 0 }}>
@@ -572,7 +800,7 @@ export default function SearchProspects() {
               )}
               {done && (
                 <Button size="small" startIcon={<DownloadIcon sx={{ fontSize: 14 }} />} onClick={downloadCsv}
-                  sx={{ color: '#60a5fa', fontSize: '0.75rem', border: '1px solid rgba(59,130,246,0.25)', borderRadius: 1.5, px: 1.5, py: 0.4, textTransform: 'none', '&:hover': { bgcolor: 'rgba(59,130,246,0.08)' } }}>
+                  sx={{ color: 'var(--accent, #60a5fa)', fontSize: '0.75rem', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)', borderRadius: 1.5, px: 1.5, py: 0.4, textTransform: 'none', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)' } }}>
                   Descargar CSV
                 </Button>
               )}

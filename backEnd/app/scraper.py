@@ -88,9 +88,9 @@ class WebsiteScraper:
             ],
             # ── Servicios profesionales ───────────────────────────────────────
             "Servicios": [
-                "servicio", "servicios", "consultoria", "consultoría", "asesoria",
-                "asesoría", "mantenimiento", "reparacion", "reparación",
+                "consultoria", "consultoría", "asesoria", "asesoría",
                 "asesor", "consultor", "consulting", "outsourcing",
+                "despacho", "firma de servicios", "servicios profesionales",
             ],
             # ── Comercio / Retail ─────────────────────────────────────────────
             "Ferretería / Construcción Retail": [
@@ -136,6 +136,10 @@ class WebsiteScraper:
                 "hotel", "hostal", "hosteria", "hostería", "motel", "cabaña", "cabañas",
                 "glamping", "airbnb", "habitacion", "habitación", "cuarto", "suite",
                 "resort", "posada", "bed and breakfast", "alojamiento",
+                "reservacion", "reservación", "check-in", "checkout", "recepcion",
+                "recepción", "noche", "noches", "tarifa", "tarifas", "estancia",
+                "huesped", "huésped", "huespedes", "huéspedes", "lobby",
+                "alberca", "desayuno incluido", "hab", "hotelero", "hotelera",
             ],
             "Eventos / Entretenimiento": [
                 "salon de eventos", "salón de eventos", "salon de fiestas", "salón de fiestas",
@@ -172,7 +176,14 @@ class WebsiteScraper:
                 "refacciones", "auto", "carro", "vehiculo", "vehículo", "automovil",
                 "automóvil", "hojalateria", "hojalatería", "pintura automotriz",
                 "llantas", "frenos", "alineacion", "alineación", "balanceo",
-                "servicio automotriz", "agencia autos",
+                "servicio automotriz", "agencia autos", "agencia de autos",
+                "seminuevos", "autos nuevos", "autos usados", "concesionaria",
+                "concesionario", "distribuidor autorizado", "test drive",
+                "prueba de manejo", "cotizar auto", "financiamiento automotriz",
+                "mantenimiento automotriz", "garantia de fabrica", "kilometraje",
+                "autos", "carros", "nissan", "honda", "toyota", "ford",
+                "chevrolet", "volkswagen", "bmw", "kia", "mazda", "audi",
+                "hyundai", "ram", "jeep", "dodge",
             ],
             # ── Transporte ────────────────────────────────────────────────────
             "Transporte / Logística": [
@@ -199,9 +210,10 @@ class WebsiteScraper:
             # ── Tecnología ────────────────────────────────────────────────────
             "Tecnología": [
                 "software", "desarrollo web", "desarrollo de software", "programacion",
-                "programación", "it", "tech", "tecnologia", "tecnología",
-                "inteligencia artificial", "ia", "saas", "erp", "crm",
-                "ciberseguridad", "redes", "infraestructura ti",
+                "programación", "tecnologia", "tecnología",
+                "inteligencia artificial", "saas", "erp", "crm",
+                "ciberseguridad", "infraestructura ti", "startup",
+                "app movil", "aplicacion movil", "empresa tecnologica",
             ],
         }
 
@@ -228,7 +240,7 @@ class WebsiteScraper:
         self.contacts_col = db["contacts"]
         self.scraping_runs_col = db["scraping_runs"]
 
-    def scrape_site(self, url: str) -> Dict:
+    def scrape_site(self, url: str, force: bool = False) -> Dict:
         """
         Scraping completo de un sitio web
         
@@ -365,13 +377,15 @@ class WebsiteScraper:
                 "/nosotros", "/about", "/about-us", "/quienes-somos",
                 "/ubicaciones", "/ubicacion", "/sucursales", "/sucursal",
                 "/telefono", "/telefonos", "/directorio", "/informacion",
+                "/ayuda", "/help", "/soporte", "/support", "/atencion",
+                "/atencion-al-cliente", "/servicio-al-cliente", "/asistencia",
             ]
             all_links = [{"url": base + p, "text": p.strip("/"), "path": p} for p in _COMMON_PATHS]
             print(f"⚠️  Sitio JS/SPA detectado (0 links en HTML) — probando {len(all_links)} rutas comunes")
 
         sub_urls  = self._ai_rank_subpages(all_links, result.get("industry", ""))
         print(f"🔗 {len(all_links)} links encontrados → crawleando top {min(8, len(sub_urls))}")
-        for sub_url in sub_urls[:8]:
+        for sub_url in sub_urls[:12]:
             sub_soup, sub_text = self._scrape_subpage(sub_url)
             if not sub_soup:
                 continue
@@ -448,21 +462,28 @@ class WebsiteScraper:
                 {"company_id": existing["_id"], "type": {"$in": ["whatsapp", "phone"]}}
             )
             # Solo saltar si ya tiene contactos — si no encontró nada antes, reintentar siempre
-            if next_scrape and next_scrape.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc) and already_has_contact:
+            if not force and next_scrape and next_scrape.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc) and already_has_contact:
                 print(f"⏭️  Dominio ya scrapeado recientemente con contactos: {domain}")
                 result["_db_action"] = "skipped_duplicate"
                 result["_company_id"] = existing["_id"]
                 return result
             else:
                 print(f"🔄 Re-scrapeando {domain} (sin contactos previos o cooldown expirado)")
+                update_fields = {
+                    "has_whatsapp": result["has_whatsapp"],
+                    "last_scraped_at": result["last_scraped_at"],
+                    "next_allowed_scrape_at": result["next_allowed_scrape_at"],
+                    "updated_at": datetime.now(timezone.utc),
+                }
+                if force:
+                    for field in ("name","industry","description","city","state","country",
+                                  "address","phone_numbers","whatsapp_numbers","all_whatsapp_numbers",
+                                  "social_media","business_hours","services","products"):
+                        if field in result:
+                            update_fields[field] = result[field]
                 self.companies_col.update_one(
                     {"_id": existing["_id"]},
-                    {"$set": {
-                        "has_whatsapp": result["has_whatsapp"],
-                        "last_scraped_at": result["last_scraped_at"],
-                        "next_allowed_scrape_at": result["next_allowed_scrape_at"],
-                        "updated_at": datetime.now(timezone.utc),
-                    }}
+                    {"$set": update_fields}
                 )
                 result["_db_action"] = "updated"
                 result["_company_id"] = existing["_id"]
@@ -524,6 +545,9 @@ class WebsiteScraper:
         "llamanos", "llamenos", "telefono", "teléfono",
         "team", "equipo", "directorio", "offices", "stores",
         "find-us", "reach", "info", "informacion", "branch",
+        "ayuda", "help", "soporte", "support", "atencion",
+        "atención", "atencion-al-cliente", "servicio-al-cliente",
+        "customer-service", "asistencia", "centro-de-ayuda",
     ]
 
     def _find_all_internal_links(self, soup: BeautifulSoup, base_url: str, base_domain: str) -> List[Dict]:
@@ -557,6 +581,9 @@ class WebsiteScraper:
             "contacto", "contactanos", "contacténos", "contact", "contactus",
             "contactenos", "ubicacion", "ubicaciones", "sucursales", "sucursal",
             "telefono", "telefonos", "directorio", "reach-us", "find-us",
+            "ayuda", "help", "soporte", "support", "atencion", "atención",
+            "atencion-al-cliente", "servicio-al-cliente", "customer-service",
+            "asistencia", "centro-de-ayuda",
         }
         must_urls = [
             lk["url"] for lk in links
@@ -788,17 +815,24 @@ class WebsiteScraper:
 
     def _detect_industry(self, text: str, soup: BeautifulSoup) -> str:
         """Detecta industria con keywords extendidos"""
+        import re as _re
         text_lower = text.lower()
-        
+        _words = set(__import__("re").findall(r"[\w\u00C0-\u024F]+", text_lower))
+
+        def _count(kw: str, t: str) -> int:
+            if " " in kw:
+                return t.count(kw)
+            return 1 if kw in _words else 0
+
         scores = {}
         for industry, keywords in self.INDUSTRY_KEYWORDS.items():
-            score = sum(text_lower.count(keyword) for keyword in keywords)
+            score = sum(_count(kw, text_lower) for kw in keywords)
             if score > 0:
                 scores[industry] = score
-        
+
         if scores:
             return max(scores, key=scores.get)
-        
+
         return "No detectada"
 
     def _extract_description(self, soup: BeautifulSoup, text: str) -> str:
@@ -1338,8 +1372,20 @@ class WebsiteScraper:
             })
 
         for contact in all_contacts:
-            if not self.contacts_col.find_one({"normalized_value": contact["normalized_value"]}):
-                self.contacts_col.insert_one(contact)
+            # Upsert: filtra por company_id + tipo + valor normalizado
+            # Evita duplicados dentro de la misma empresa sin afectar otras
+            self.contacts_col.update_one(
+                {
+                    "company_id": company_id,
+                    "type":       contact["type"],
+                    "normalized_value": contact["normalized_value"],
+                },
+                {
+                    "$set":         {k: v for k, v in contact.items() if k != "created_at"},
+                    "$setOnInsert": {"created_at": contact["created_at"]},
+                },
+                upsert=True,
+            )
 
     def run_scraping_batch(self, urls: List[str], triggered_by: str = "user") -> Dict:
         """Scrapea múltiples URLs y registra la ejecución en scraping_runs"""

@@ -28,11 +28,14 @@ import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import TableChartIcon from '@mui/icons-material/TableChart'
 import LinkIcon from '@mui/icons-material/Link'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
+import MessageIcon from '@mui/icons-material/Message'
+import SendIcon from '@mui/icons-material/Send'
+import { TEMPLATES } from './singleUrlProcessor'
 
 const URL_REGEX = /^https?:\/\//i
 
 const TABLE_HEAD_CELL = {
-  bgcolor: '#161d2e',
+  bgcolor: 'var(--card-bg, #161d2e)',
   color: 'rgba(255,255,255,0.5)',
   fontWeight: 700,
   fontSize: '0.7rem',
@@ -42,7 +45,7 @@ const TABLE_HEAD_CELL = {
 }
 
 // ─── Stat card ────────────────────────────────────────────────────────────────
-function StatCard({ icon, label, value, color, bgColor, borderColor }) {
+function StatCard({ icon, label, value, color, bgColor, borderColor, iconBg, iconBorder }) {
   return (
     <Box sx={{
       flex: 1, minWidth: 0,
@@ -54,8 +57,8 @@ function StatCard({ icon, label, value, color, bgColor, borderColor }) {
     }}>
       <Box sx={{
         width: 32, height: 32, flexShrink: 0,
-        bgcolor: `${color}22`,
-        border: `1px solid ${color}44`,
+        bgcolor: iconBg || `${color}22`,
+        border: `1px solid ${iconBorder || `${color}44`}`,
         borderRadius: 1.5,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
@@ -69,6 +72,32 @@ function StatCard({ icon, label, value, color, bgColor, borderColor }) {
   )
 }
 
+function renderTemplate(text, scraped) {
+  if (!text) return ''
+  const extra = scraped?._extra || {}
+  return text
+    .replace(/\{\{nombre\}\}/g,    scraped?.name || '')
+    .replace(/\{\{ciudad\}\}/g,    extra.city || '')
+    .replace(/\{\{industria\}\}/g, scraped?.industry || '')
+    .replace(/\{\{web\}\}/g,       scraped?.website || '')
+}
+
+function downloadTemplate() {
+  const csv = [
+    'url',
+    'https://restaurante-ejemplo.com.mx',
+    'https://ferreteria-sur.mx',
+    'https://clinica-dental-garcia.com',
+    'https://hotel-boutique-oaxaca.mx',
+    'https://taller-mecanico-express.com',
+  ].join('\n')
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = 'plantilla_importacion.csv'
+  a.click()
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function CsvImporter() {
   const inputRef   = useRef(null)
@@ -79,7 +108,7 @@ export default function CsvImporter() {
   const [fileName,   setFileName]   = useState('')
   const [urlCol,     setUrlCol]     = useState('')
   const [allUrls,    setAllUrls]    = useState([])
-  const [preview,    setPreview]    = useState([])   // [{col, sample}]
+  const [preview,    setPreview]    = useState([])
   const [loading,    setLoading]    = useState(false)
   const [paused,     setPaused]     = useState(false)
   const [results,    setResults]    = useState([])
@@ -88,6 +117,10 @@ export default function CsvImporter() {
   const [done,       setDone]       = useState(false)
   const [page,       setPage]       = useState(0)
   const [rowsPerPage,setRowsPerPage]= useState(25)
+  const [selectedTpl,setSelectedTpl]= useState(TEMPLATES[0].id)
+  const [msgText,    setMsgText]    = useState(TEMPLATES[0].text)
+  const [sendingAll, setSendingAll] = useState(false)
+  const msgRef = useRef(null)
 
   function parseFile(file) {
     if (!file || !file.name.endsWith('.csv')) return
@@ -142,22 +175,26 @@ export default function CsvImporter() {
         const r = await fetch('/api/process-url', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: allUrls[i] }),
+          body: JSON.stringify({ url: allUrls[i], skip_send: true }),
         })
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const d = await r.json()
         const duplicate = d.duplicate === true
         res.push({
-          url:       allUrls[i],
-          empresa:   d.scraped?.name || '—',
-          industria: d.scraped?.industry || '—',
-          whatsapp:  d.primary_whatsapp_number || '',
-          status_wa: d.send_result?.status_code || '—',
-          ok:        true,
+          url:         allUrls[i],
+          empresa:     d.scraped?.name || '—',
+          industria:   d.scraped?.industry || '—',
+          whatsapp:    d.primary_whatsapp_number || '',
+          all_whatsapp: d.all_whatsapp_numbers || (d.primary_whatsapp_number ? [d.primary_whatsapp_number] : []),
+          company_id:  d.company_id || '',
+          scraped_data: d.scraped,
+          status_wa:   d.send_result?.status_code || '—',
+          msg_status:  null,
+          ok:          true,
           duplicate,
         })
       } catch {
-        res.push({ url: allUrls[i], empresa: '—', industria: '—', whatsapp: '', status_wa: '—', ok: false, duplicate: false })
+        res.push({ url: allUrls[i], empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, status_wa: '—', msg_status: null, ok: false, duplicate: false })
       }
       setResults([...res])
     }
@@ -196,6 +233,41 @@ export default function CsvImporter() {
     a.click()
   }
 
+
+  const waRows      = results.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
+  const alreadySent = results.some(r => r.msg_status === 'sent' || r.msg_status === 'failed')
+  const sentCount   = results.filter(r => r.msg_status === 'sent').length
+
+  async function handleSendAll() {
+    const targets = waRows
+    if (!targets.length) return
+    setSendingAll(true)
+    const updated = [...results]
+    for (let i = 0; i < targets.length; i++) {
+      const row = targets[i]
+      const idx = results.findIndex(r => r.url === row.url)
+      try {
+        const message = renderTemplate(msgText, row.scraped_data)
+        const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
+        let lastStatus = 'failed'
+        for (const num of numbers) {
+          const res = await fetch('/api/send-message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ company_id: row.company_id, to_number: num, message: message || msgText, website: row.url }),
+          })
+          const json = await res.json()
+          if (json.status === 'sent') lastStatus = 'sent'
+        }
+        updated[idx] = { ...updated[idx], msg_status: lastStatus }
+      } catch {
+        updated[idx] = { ...updated[idx], msg_status: 'failed' }
+      }
+      setResults([...updated])
+    }
+    setSendingAll(false)
+  }
+
   const hasFile    = allUrls.length > 0
   const okCount    = results.filter(r => r.ok && !r.duplicate).length
   const errCount   = results.filter(r => !r.ok).length
@@ -222,12 +294,12 @@ export default function CsvImporter() {
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
         <Box sx={{
           width: 38, height: 38, flexShrink: 0,
-          bgcolor: 'rgba(59,130,246,0.12)',
-          border: '1px solid rgba(59,130,246,0.25)',
+          bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.12)',
+          border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)',
           borderRadius: 2,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
-          <TableChartIcon sx={{ color: '#60a5fa', fontSize: 20 }} />
+          <TableChartIcon sx={{ color: 'var(--accent, #60a5fa)', fontSize: 20 }} />
         </Box>
         <Box>
           <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.3 }}>
@@ -248,25 +320,25 @@ export default function CsvImporter() {
           onClick={() => inputRef.current?.click()}
           sx={{
             width: '100%', flexGrow: 1, minHeight: 220,
-            border: `1.5px dashed ${dragging ? 'rgba(59,130,246,0.7)' : 'rgba(255,255,255,0.1)'}`,
+            border: `1.5px dashed ${dragging ? 'rgba(var(--accent-rgb, 59,130,246), 0.7)' : 'rgba(255,255,255,0.1)'}`,
             borderRadius: 3,
-            bgcolor: dragging ? 'rgba(59,130,246,0.08)' : 'rgba(59,130,246,0.03)',
+            bgcolor: dragging ? 'rgba(var(--accent-rgb, 59,130,246), 0.08)' : 'rgba(var(--accent-rgb, 59,130,246), 0.03)',
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
             gap: 2, cursor: 'pointer',
             transition: 'border-color 0.2s, background-color 0.2s, transform 0.15s',
             transform: dragging ? 'scale(1.01)' : 'scale(1)',
-            '&:hover': { borderColor: 'rgba(59,130,246,0.5)', bgcolor: 'rgba(59,130,246,0.06)' },
+            '&:hover': { borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.5)', bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.06)' },
           }}
         >
           <Box sx={{
             width: 56, height: 56,
-            bgcolor: dragging ? 'rgba(59,130,246,0.2)' : 'rgba(59,130,246,0.1)',
-            border: `1px solid ${dragging ? 'rgba(59,130,246,0.5)' : 'rgba(59,130,246,0.2)'}`,
+            bgcolor: dragging ? 'rgba(var(--accent-rgb, 59,130,246), 0.2)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)',
+            border: `1px solid ${dragging ? 'rgba(var(--accent-rgb, 59,130,246), 0.5)' : 'rgba(var(--accent-rgb, 59,130,246), 0.2)'}`,
             borderRadius: 3,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             transition: 'all 0.2s',
           }}>
-            <UploadFileIcon sx={{ color: dragging ? '#60a5fa' : 'rgba(59,130,246,0.6)', fontSize: 28, transition: 'color 0.2s' }} />
+            <UploadFileIcon sx={{ color: dragging ? 'var(--accent, #60a5fa)' : 'rgba(var(--accent-rgb, 59,130,246), 0.6)', fontSize: 28, transition: 'color 0.2s' }} />
           </Box>
           <Box sx={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
             <Typography sx={{ color: 'rgba(255,255,255,0.75)', fontWeight: 600, fontSize: '0.9rem' }}>
@@ -274,18 +346,26 @@ export default function CsvImporter() {
             </Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.78rem' }}>
               o{' '}
-              <Box component="span" sx={{ color: '#60a5fa', fontWeight: 500 }}>haz clic para seleccionar</Box>
+              <Box component="span" sx={{ color: 'var(--accent, #60a5fa)', fontWeight: 500 }}>haz clic para seleccionar</Box>
             </Typography>
           </Box>
           <Chip label=".csv" size="small" sx={{ bgcolor: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.08)', fontSize: '0.7rem', height: 20 }} />
+          <Button
+            size="small"
+            startIcon={<DownloadIcon sx={{ fontSize: 14 }} />}
+            onClick={e => { e.stopPropagation(); downloadTemplate() }}
+            sx={{ color: 'var(--accent, #60a5fa)', fontSize: '0.72rem', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)', borderRadius: 1.5, px: 1.5, py: 0.4, textTransform: 'none', bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.06)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.14)' } }}
+          >
+            Descargar plantilla de ejemplo
+          </Button>
           <input ref={inputRef} type="file" accept=".csv" hidden onChange={handleInputChange} />
         </Box>
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           {/* File pill */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, px: 2, py: 1.5, borderRadius: 2, border: '1px solid rgba(59,130,246,0.2)', bgcolor: 'rgba(59,130,246,0.06)' }}>
-            <Box sx={{ width: 36, height: 36, flexShrink: 0, bgcolor: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <InsertDriveFileOutlinedIcon sx={{ color: '#60a5fa', fontSize: 18 }} />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, px: 2, py: 1.5, borderRadius: 2, border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.2)', bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.06)' }}>
+            <Box sx={{ width: 36, height: 36, flexShrink: 0, bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.12)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.2)', borderRadius: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <InsertDriveFileOutlinedIcon sx={{ color: 'var(--accent, #60a5fa)', fontSize: 18 }} />
             </Box>
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <Typography sx={{ color: 'rgba(255,255,255,0.85)', fontWeight: 600, fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -322,10 +402,10 @@ export default function CsvImporter() {
               disabled={!urlCol || !allUrls.length}
               startIcon={<PlayArrowIcon sx={{ fontSize: 38 }} />}
               sx={{
-                bgcolor: '#3b82f6', fontWeight: 600, fontSize: '0.95rem',
+                bgcolor: 'var(--accent, #3b82f6)', fontWeight: 600, fontSize: '0.95rem',
                 py: 1.2, textTransform: 'none', borderRadius: 1.5,
-                '&:hover': { bgcolor: '#2563eb' },
-                '&.Mui-disabled': { bgcolor: 'rgba(59,130,246,0.2)', color: 'rgba(255,255,255,0.3)' },
+                '&:hover': { bgcolor: 'var(--accent, #2563eb)', filter: 'brightness(0.9)' },
+                '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.2)', color: 'rgba(255,255,255,0.3)' },
               }}
             >
               Procesar {allUrls.length} URLs
@@ -365,18 +445,18 @@ export default function CsvImporter() {
 
       {/* ── Progress card ── */}
       {loading && (
-        <Box sx={{ px: 2.5, py: 2, bgcolor: paused ? 'rgba(251,191,36,0.05)' : 'rgba(59,130,246,0.05)', border: `1px solid ${paused ? 'rgba(251,191,36,0.2)' : 'rgba(59,130,246,0.15)'}`, borderRadius: 2, transition: 'all 0.3s' }}>
+        <Box sx={{ px: 2.5, py: 2, bgcolor: paused ? 'rgba(251,191,36,0.05)' : 'rgba(var(--accent-rgb, 59,130,246), 0.05)', border: `1px solid ${paused ? 'rgba(251,191,36,0.2)' : 'rgba(var(--accent-rgb, 59,130,246), 0.15)'}`, borderRadius: 2, transition: 'all 0.3s' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               {paused
                 ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} />
-                : <CircularProgress size={14} sx={{ color: '#3b82f6' }} />
+                : <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />
               }
               <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
                 {paused ? 'Pausado —' : 'Procesando'} {results.length} de {allUrls.length}
               </Typography>
             </Box>
-            <Typography sx={{ color: paused ? '#fbbf24' : '#60a5fa', fontWeight: 700, fontSize: '0.82rem' }}>
+            <Typography sx={{ color: paused ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>
               {progress}%
             </Typography>
           </Box>
@@ -385,11 +465,11 @@ export default function CsvImporter() {
             value={progress}
             sx={{
               borderRadius: 4, height: 6,
-              bgcolor: paused ? 'rgba(251,191,36,0.1)' : 'rgba(59,130,246,0.1)',
+              bgcolor: paused ? 'rgba(251,191,36,0.1)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)',
               '& .MuiLinearProgress-bar': {
                 background: paused
                   ? 'linear-gradient(90deg, #f59e0b, #fbbf24)'
-                  : 'linear-gradient(90deg, #3b82f6, #60a5fa)',
+                  : 'linear-gradient(90deg, var(--accent, #3b82f6), var(--accent, #60a5fa))',
                 borderRadius: 4,
               },
             }}
@@ -406,9 +486,93 @@ export default function CsvImporter() {
       {results.length > 0 && (
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
           <StatCard icon={<CheckCircleIcon sx={{ fontSize: 16, color: '#4ade80' }} />} label="Procesadas" value={okCount} color="#4ade80" bgColor="rgba(34,197,94,0.06)" borderColor="rgba(34,197,94,0.18)" />
-          <StatCard icon={<WhatsAppIcon sx={{ fontSize: 16, color: '#60a5fa' }} />} label="Con WhatsApp" value={waCount} color="#60a5fa" bgColor="rgba(59,130,246,0.06)" borderColor="rgba(59,130,246,0.18)" />
+          <StatCard icon={<WhatsAppIcon sx={{ fontSize: 16, color: 'var(--accent, #60a5fa)' }} />} label="Con WhatsApp" value={waCount} color="var(--accent, #60a5fa)" bgColor="rgba(var(--accent-rgb, 59,130,246), 0.06)" borderColor="rgba(var(--accent-rgb, 59,130,246), 0.18)" iconBg="rgba(var(--accent-rgb, 59,130,246), 0.13)" iconBorder="rgba(var(--accent-rgb, 59,130,246), 0.27)" />
           <StatCard icon={<WarningAmberIcon sx={{ fontSize: 16, color: '#fbbf24' }} />} label="Duplicados" value={dupCount} color="#fbbf24" bgColor="rgba(251,191,36,0.06)" borderColor="rgba(251,191,36,0.18)" />
           <StatCard icon={<ErrorIcon sx={{ fontSize: 16, color: '#f87171' }} />} label="Errores" value={errCount} color="#f87171" bgColor="rgba(239,68,68,0.06)" borderColor="rgba(239,68,68,0.18)" />
+        </Box>
+      )}
+
+      {/* ── Panel de envío masivo ── */}
+      {done && results.length > 0 && (
+        <Box sx={{ p: 2, borderRadius: 2, border: '1px solid rgba(34,197,94,0.15)', bgcolor: 'rgba(34,197,94,0.03)' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <MessageIcon sx={{ fontSize: 16, color: '#4ade80' }} />
+              <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>Enviar mensajes</Typography>
+            </Box>
+            {waRows.length > 0 && (
+              <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={`${waRows.length} con WhatsApp`} size="small"
+                sx={{ fontSize: '0.7rem', height: 22, bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', '& .MuiChip-icon': { color: '#4ade80' } }} />
+            )}
+          </Box>
+          <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>Plantilla base</Typography>
+          <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.5 }}>
+            {TEMPLATES.map(t => (
+              <Chip key={t.id} label={t.label} size="small" onClick={() => {
+                setSelectedTpl(t.id)
+                const el = msgRef.current
+                if (el) { el.value = t.text; el.dispatchEvent(new Event('input', { bubbles: true })) }
+              }} sx={{
+                fontSize: '0.7rem', height: 24, cursor: 'pointer',
+                bgcolor: selectedTpl === t.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
+                color:   selectedTpl === t.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
+                border:  `1px solid ${selectedTpl === t.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
+              }} />
+            ))}
+          </Box>
+          {/* Variable chips */}
+          <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 1 }}>
+            {[['{{nombre}}','#818cf8'],['{{ciudad}}','#38bdf8'],['{{industria}}','#fb923c'],['{{web}}','#a78bfa']].map(([v, color]) => (
+              <Box key={v} onClick={() => {
+                const el = msgRef.current; if (!el) return
+                el.setRangeText(v, el.selectionStart, el.selectionEnd, 'end')
+                el.dispatchEvent(new Event('input', { bubbles: true }))
+                el.focus()
+              }} sx={{
+                px: 1, py: 0.25, borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700,
+                cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace',
+                bgcolor: `${color}18`, color, border: `1px solid ${color}40`,
+                '&:hover': { bgcolor: `${color}30` },
+              }}>{v}</Box>
+            ))}
+            <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', alignSelf: 'center', ml: 0.5 }}>
+              clic para insertar
+            </Typography>
+          </Box>
+          {/* Textarea editable — uncontrolled so native Ctrl+Z works */}
+          <Box component="textarea" ref={msgRef} defaultValue={msgText} onInput={e => setMsgText(e.target.value)}
+            sx={{
+              width: '100%', minHeight: 100, maxHeight: 200, resize: 'vertical',
+              bgcolor: 'var(--sidebar-bg, #0d1117)', color: '#e2e8f0',
+              border: '1px solid rgba(255,255,255,0.1)', borderRadius: 1.5,
+              p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit',
+              outline: 'none', mb: 0.5,
+              '&:focus': { borderColor: 'rgba(34,197,94,0.4)' },
+            }} />
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
+            <Typography sx={{ fontSize: '0.65rem', color: msgText.length > 4000 ? '#f87171' : 'rgba(255,255,255,0.2)' }}>
+              {msgText.length} / 4096
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
+            <Button
+              onClick={handleSendAll}
+              disabled={waRows.length === 0 || alreadySent || sendingAll}
+              startIcon={sendingAll ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
+              size="small"
+              sx={{
+                fontSize: '0.78rem', fontWeight: 700, flexShrink: 0,
+                bgcolor: waRows.length > 0 && !alreadySent && !sendingAll ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
+                color:   waRows.length > 0 && !alreadySent && !sendingAll ? '#4ade80' : 'rgba(255,255,255,0.3)',
+                border:  `1px solid ${waRows.length > 0 && !alreadySent && !sendingAll ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
+                borderRadius: 1.5, px: 2, py: 0.6,
+                '&:hover': { bgcolor: waRows.length > 0 && !alreadySent && !sendingAll ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
+                '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
+              }}
+            >
+              {alreadySent ? `${sentCount} mensajes enviados` : sendingAll ? 'Enviando…' : `Enviar a ${waRows.length} empresa${waRows.length !== 1 ? 's' : ''} con WhatsApp`}
+            </Button>
+          </Box>
         </Box>
       )}
 
@@ -424,7 +588,7 @@ export default function CsvImporter() {
                 size="small"
                 startIcon={<DownloadIcon sx={{ fontSize: 14 }} />}
                 onClick={downloadCsv}
-                sx={{ color: '#60a5fa', fontSize: '0.75rem', border: '1px solid rgba(59,130,246,0.25)', borderRadius: 1.5, px: 1.5, py: 0.4, textTransform: 'none', '&:hover': { bgcolor: 'rgba(59,130,246,0.08)' } }}
+                sx={{ color: 'var(--accent, #60a5fa)', fontSize: '0.75rem', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)', borderRadius: 1.5, px: 1.5, py: 0.4, textTransform: 'none', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)' } }}
               >
                 Descargar CSV
               </Button>
@@ -455,7 +619,7 @@ export default function CsvImporter() {
                     <TableRow key={i} sx={{ bgcolor: rowBg(r), '& td': { borderBottom: rowBorder(r) } }}>
                       <TableCell sx={{ maxWidth: 200 }}>
                         <Typography component="a" href={r.url} target="_blank" rel="noopener"
-                          sx={{ fontSize: '0.78rem', color: r.ok ? '#60a5fa' : '#f87171', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}>
+                          sx={{ fontSize: '0.78rem', color: r.ok ? 'var(--accent, #60a5fa)' : '#f87171', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}>
                           {r.url.length > 32 ? r.url.slice(0, 32) + '…' : r.url}
                         </Typography>
                       </TableCell>

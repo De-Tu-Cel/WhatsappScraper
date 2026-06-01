@@ -64,3 +64,16 @@ desktop.ini
 
 # ── Claude Code ─────────────────────────────────────────────────
 .claude/
+
+# ── Scripts y archivos de prueba ────────────────────────────────
+backEnd/insert_test*.py
+test_*.pdf
+test_*.csv
+
+# ── Evolution API (Docker) ───────────────────────────────────────
+evolution/
+
+# ── Playwright (navegadores descargados localmente) ──────────────
+playwright-report/
+test-results/
+.playwright/

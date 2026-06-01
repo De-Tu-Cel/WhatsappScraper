@@ -19,7 +19,9 @@ def api_process_url(req: ProcessUrlRequest):
     try:
         return serialize(process_url(req.url, message_template=req.message_template, skip_send=req.skip_send))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        msg = str(e)
+        status = 422 if any(k in msg.lower() for k in ("no response", "http error", "timeout", "connection", "name or service")) else 500
+        raise HTTPException(status_code=status, detail=msg)
 
 @router.post("/send-message")
 def api_send_message(req: SendMessageRequest):
@@ -307,6 +309,32 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.post("/companies/{company_id}/rescrape")
+def api_rescrape_company(company_id: str):
+    try:
+        from app.scraper import WebsiteScraper
+        db = MongoDBManager()
+        company = db.get_company_full_data(company_id)
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+        website = company.get("website") or company.get("domain")
+        if not website:
+            raise HTTPException(status_code=400, detail="La empresa no tiene URL registrada")
+        if not website.startswith("http"):
+            website = f"https://{website}"
+        scraper = WebsiteScraper()
+        result  = scraper.scrape_site(website, force=True)
+        return serialize({
+            "ok": True,
+            "action": result.get("_db_action", "unknown"),
+            "industry": result.get("industry"),
+            "has_whatsapp": result.get("has_whatsapp"),
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/companies/{company_id}/contacts")
 def api_update_contacts(company_id: str, req: UpdateContactsRequest):

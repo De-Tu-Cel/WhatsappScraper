@@ -441,6 +441,56 @@ class MongoDBManager:
                 pass
             if not company:
                 continue
+
+            # Per-number breakdown — normalize to last 10 digits to avoid format mismatches
+            def _norm(n):
+                return (n or "").replace("+", "").replace(" ", "").replace("-", "")[-10:]
+
+            msgs = list(self.db.message_logs.find(
+                {"company_id": company_id},
+                {"direction": 1, "to_number": 1, "from_number": 1, "number": 1, "analysis": 1, "created_at": 1}
+            ))
+            num_map = {}  # key = normalized 10-digit number
+            num_raw  = {}  # key = normalized → raw display number
+            for m in msgs:
+                direction = m.get("direction", "outbound")
+                raw = (m.get("to_number") if direction == "outbound"
+                       else m.get("from_number") or m.get("number"))
+                n = _norm(raw)
+                if not n:
+                    continue
+                if n not in num_map:
+                    num_map[n] = {"sent": 0, "inbound": []}
+                    num_raw[n] = raw  # keep first seen raw value for display
+                if direction == "outbound":
+                    num_map[n]["sent"] += 1
+                else:
+                    num_map[n]["inbound"].append(m)
+
+            numbers = []
+            for n, data in num_map.items():
+                analyzed = [m for m in data["inbound"] if m.get("analysis")]
+                entry = {
+                    "number": num_raw[n],  # use original format for display
+                    "sent": data["sent"],
+                    "responses": len(data["inbound"]),
+                    "category": None, "response_quality": None,
+                    "reaction_time_min": None, "business_hours": None,
+                }
+                if analyzed:
+                    first = analyzed[0]
+                    entry["category"]        = first["analysis"].get("category")
+                    entry["notes"]           = first["analysis"].get("notes") or ""
+                    entry["business_hours"]  = first["analysis"].get("business_hours")
+                    qualities = [m["analysis"].get("response_quality") or 0 for m in analyzed]
+                    reactions = [m["analysis"].get("reaction_time_min") or 0 for m in analyzed]
+                    entry["response_quality"]   = round(sum(qualities) / len(qualities), 1)
+                    entry["reaction_time_min"]  = round(sum(reactions) / len(reactions), 1)
+                # last inbound timestamp for this number
+                inbound_dates = [m.get("created_at") for m in data["inbound"] if m.get("created_at")]
+                entry["last_at"] = max(inbound_dates).isoformat() if inbound_dates else None
+                numbers.append(entry)
+
             results.append({
                 "company_id": company_id,
                 "company_name": company["name"],
@@ -453,5 +503,6 @@ class MongoDBManager:
                 "notes": g["notes"] or "",
                 "total_responses": g["total_responses"],
                 "last_at": g["last_at"].isoformat() if g["last_at"] else None,
+                "numbers": numbers,
             })
         return results

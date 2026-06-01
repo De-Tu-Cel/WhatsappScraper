@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { isValidUrl } from '@/lib/validators'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import LinearProgress from '@mui/material/LinearProgress'
@@ -23,6 +24,8 @@ import ErrorIcon from '@mui/icons-material/Error'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import LinkIcon from '@mui/icons-material/Link'
 import InboxIcon from '@mui/icons-material/Inbox'
+import MessageIcon from '@mui/icons-material/Message'
+import { TEMPLATES } from './singleUrlProcessor'
 
 const EXAMPLES = [
   'https://pizzeria-mario.com.mx/\nhttps://ferreteria-sanchez.mx/\nhttps://spa-belleza-queretaro.com/\nhttps://taller-mecanico-hdz.mx/\nhttps://restaurante-oaxaca.com.mx/\nhttps://constructora-garcia.mx/',
@@ -112,12 +115,12 @@ function EmptyState() {
     }}>
       <Box sx={{
         width: 52, height: 52,
-        bgcolor: 'rgba(59,130,246,0.08)',
-        border: '1px solid rgba(59,130,246,0.18)',
+        bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)',
+        border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.18)',
         borderRadius: 3,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
-        <InboxIcon sx={{ color: 'rgba(59,130,246,0.5)', fontSize: 26 }} />
+        <InboxIcon sx={{ color: 'rgba(var(--accent-rgb, 59,130,246), 0.5)', fontSize: 26 }} />
       </Box>
       <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.85rem', fontWeight: 500 }}>
         Sin resultados aún
@@ -130,13 +133,29 @@ function EmptyState() {
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
+function renderTemplate(text, scraped) {
+  if (!text) return ''
+  const extra = scraped?._extra || {}
+  return text
+    .replace(/\{\{nombre\}\}/g,    scraped?.name || '')
+    .replace(/\{\{ciudad\}\}/g,    extra.city || '')
+    .replace(/\{\{industria\}\}/g, scraped?.industry || '')
+    .replace(/\{\{web\}\}/g,       scraped?.website || '')
+}
+
 export default function BatchProcessor() {
-  const [rawUrls,    setRawUrls]    = useState('')
-  const [loading,    setLoading]    = useState(false)
-  const [rows,       setRows]       = useState([])
-  const [progress,   setProgress]   = useState(0)
-  const [currentUrl, setCurrentUrl] = useState('')
-  const [done,       setDone]       = useState(false)
+  const [rawUrls,     setRawUrls]     = useState('')
+  const [loading,     setLoading]     = useState(false)
+  const [rows,        setRows]        = useState([])
+  const [progress,    setProgress]    = useState(0)
+  const [currentUrl,  setCurrentUrl]  = useState('')
+  const [phase,       setPhase]       = useState('')
+  const [done,        setDone]        = useState(false)
+  const [selectedTpl, setSelectedTpl] = useState(TEMPLATES[0].id)
+  const [msgText,     setMsgText]     = useState(TEMPLATES[0].text)
+  const [sending,     setSending]     = useState(false)
+  const msgRef     = useRef(null)
+  const urlsRef    = useRef(null)
 
   const placeholder = useTypewriter(EXAMPLES, !rawUrls && !loading)
 
@@ -144,41 +163,83 @@ export default function BatchProcessor() {
     () => rawUrls.split('\n').map(u => u.trim()).filter(Boolean),
     [rawUrls]
   )
+  const invalidUrls   = useMemo(() => urlList.filter(u => !isValidUrl(u)), [urlList])
+  const duplicateUrls = useMemo(() => urlList.filter((u, i) => urlList.indexOf(u) !== i), [urlList])
+  const overLimit     = urlList.length > 50
+  const canBatch      = urlList.length > 0 && !overLimit && invalidUrls.length === 0 && duplicateUrls.length === 0
+
+
+  const waRows      = rows.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
+  const alreadySent = rows.some(r => r.msg_status === 'sent' || r.msg_status === 'failed')
 
   async function handleBatch() {
     if (!urlList.length) return
     setRows([]); setProgress(0); setLoading(true); setDone(false)
 
-    const results = []
+    const scraped = []
+    setPhase('scraping')
     for (let i = 0; i < urlList.length; i++) {
       setCurrentUrl(urlList[i])
-      setProgress(Math.round((i / urlList.length) * 100))
+      setProgress(Math.round(((i + 1) / urlList.length) * 100))
       try {
         const res = await fetch('/api/process-url', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: urlList[i] }),
+          body: JSON.stringify({ url: urlList[i], skip_send: true }),
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const d = await res.json()
-        results.push({
-          url:       urlList[i],
-          empresa:   d.scraped?.name || '—',
+        scraped.push({
+          url: urlList[i], empresa: d.scraped?.name || '—',
           industria: d.scraped?.industry || '—',
-          whatsapp:  d.primary_whatsapp_number || '',
-          status_wa: d.send_result?.status_code || '—',
-          ok:        true,
+          whatsapp: d.primary_whatsapp_number || '',
+          all_whatsapp: d.all_whatsapp_numbers || (d.primary_whatsapp_number ? [d.primary_whatsapp_number] : []),
+          company_id: d.company_id || '',
+          scraped_data: d.scraped,
+          ok: true, msg_status: null,
         })
       } catch {
-        results.push({ url: urlList[i], empresa: '—', industria: '—', whatsapp: '', status_wa: '—', ok: false })
+        scraped.push({ url: urlList[i], empresa: '—', industria: '—', whatsapp: '', company_id: '', scraped_data: null, ok: false, msg_status: null })
       }
-      setRows([...results])
+      setRows([...scraped])
     }
-    setProgress(100)
-    setCurrentUrl('')
-    setLoading(false)
-    setDone(true)
+    setProgress(100); setCurrentUrl(''); setPhase(''); setLoading(false); setDone(true)
   }
+
+  async function handleSendAll() {
+    const targets = rows.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
+    if (!targets.length) return
+    setSending(true); setPhase('sending')
+    const updated = [...rows]
+    for (let i = 0; i < targets.length; i++) {
+      const row = targets[i]
+      setCurrentUrl(row.url)
+      setProgress(Math.round(((i + 1) / targets.length) * 100))
+      const idx = rows.findIndex(r => r.url === row.url)
+      try {
+        const message = renderTemplate(msgText, row.scraped_data)
+        const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
+        let lastStatus = 'failed'
+        for (const num of numbers) {
+          const res = await fetch('/api/send-message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ company_id: row.company_id, to_number: num, message: message || msgText, website: row.url }),
+          })
+          const json = await res.json()
+          if (json.status === 'sent') lastStatus = 'sent'
+        }
+        updated[idx] = { ...updated[idx], msg_status: lastStatus }
+      } catch {
+        updated[idx] = { ...updated[idx], msg_status: 'failed' }
+      }
+      setRows([...updated])
+    }
+    setProgress(100); setCurrentUrl(''); setPhase(''); setSending(false)
+  }
+
+  const sentCount  = rows.filter(r => r.msg_status === 'sent').length
+  const noWaCount  = rows.filter(r => r.msg_status === 'no_wa' || (!r.whatsapp && r.ok)).length
 
   function downloadCsv() {
     const headers = ['url', 'empresa', 'industria', 'whatsapp', 'status_wa', 'status']
@@ -195,7 +256,8 @@ export default function BatchProcessor() {
 
   const okCount  = rows.filter(r => r.ok).length
   const errCount = rows.filter(r => !r.ok).length
-  const waCount  = rows.filter(r => r.whatsapp).length
+  const waCount  = rows.filter(r => r.all_whatsapp?.length > 0 || r.whatsapp).length
+
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, height: '100%' }}>
@@ -205,12 +267,12 @@ export default function BatchProcessor() {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <Box sx={{
             width: 38, height: 38, flexShrink: 0,
-            bgcolor: 'rgba(59,130,246,0.12)',
-            border: '1px solid rgba(59,130,246,0.25)',
+            bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.12)',
+            border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)',
             borderRadius: 2,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
-            <ListAltIcon sx={{ color: '#60a5fa', fontSize: 20 }} />
+            <ListAltIcon sx={{ color: 'var(--accent, #60a5fa)', fontSize: 20 }} />
           </Box>
           <Box>
             <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.3 }}>
@@ -229,13 +291,13 @@ export default function BatchProcessor() {
             label={`${urlList.length} URL${urlList.length !== 1 ? 's' : ''}`}
             size="small"
             sx={{
-              bgcolor: 'rgba(59,130,246,0.12)',
-              color: '#60a5fa',
-              border: '1px solid rgba(59,130,246,0.25)',
+              bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.12)',
+              color: 'var(--accent, #60a5fa)',
+              border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)',
               fontWeight: 600,
               fontSize: '0.72rem',
               height: 24,
-              '& .MuiChip-icon': { color: '#60a5fa' },
+              '& .MuiChip-icon': { color: 'var(--accent, #60a5fa)' },
             }}
           />
         )}
@@ -249,14 +311,14 @@ export default function BatchProcessor() {
             position: 'absolute', top: 10, right: 10, zIndex: 1,
             display: 'flex', alignItems: 'center', gap: 0.5,
           }}>
-            <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.7rem', userSelect: 'none' }}>
+            <Typography sx={{ color: overLimit ? '#f87171' : 'rgba(255,255,255,0.2)', fontSize: '0.7rem', fontWeight: overLimit ? 700 : 400, userSelect: 'none' }}>
               {urlList.length} / 50
             </Typography>
             {!loading && (
               <Tooltip title="Limpiar">
                 <IconButton
                   size="small"
-                  onClick={() => { setRawUrls(''); setRows([]); setDone(false) }}
+                  onClick={() => { if (urlsRef.current) { urlsRef.current.value = ''; urlsRef.current.dispatchEvent(new Event('input', { bubbles: true })) } setRows([]); setDone(false) }}
                   sx={{ color: 'rgba(255,255,255,0.2)', p: 0.3, '&:hover': { color: 'rgba(255,255,255,0.6)' } }}
                 >
                   <CloseIcon sx={{ fontSize: 14 }} />
@@ -268,8 +330,9 @@ export default function BatchProcessor() {
 
         <Box
           component="textarea"
-          value={rawUrls}
-          onChange={e => setRawUrls(e.target.value)}
+          ref={urlsRef}
+          defaultValue=""
+          onInput={e => setRawUrls(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && e.ctrlKey && handleBatch()}
           placeholder={placeholder || ''}
           rows={9}
@@ -278,9 +341,9 @@ export default function BatchProcessor() {
             width: '100%',
             resize: 'vertical',
             boxSizing: 'border-box',
-            bgcolor: '#0d1117',
+            bgcolor: 'var(--sidebar-bg, #0d1117)',
             color: '#f1f5f9',
-            border: '1.5px solid rgba(59,130,246,0.2)',
+            border: '1.5px solid rgba(var(--accent-rgb, 59,130,246), 0.2)',
             borderRadius: '12px',
             p: 2,
             pt: rawUrls ? 3.5 : 2,
@@ -293,12 +356,12 @@ export default function BatchProcessor() {
             transition: 'border-color 0.2s, box-shadow 0.2s',
             '&::placeholder': { color: 'rgba(255,255,255,0.22)' },
             '&:hover': {
-              borderColor: 'rgba(59,130,246,0.55)',
-              boxShadow: '0 0 0 3px rgba(59,130,246,0.08)',
+              borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.55)',
+              boxShadow: '0 0 0 3px rgba(var(--accent-rgb, 59,130,246), 0.08)',
             },
             '&:focus': {
-              borderColor: 'rgba(59,130,246,0.7)',
-              boxShadow: '0 0 0 3px rgba(59,130,246,0.12)',
+              borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.7)',
+              boxShadow: '0 0 0 3px rgba(var(--accent-rgb, 59,130,246), 0.12)',
             },
             '&:disabled': { opacity: 0.5, cursor: 'not-allowed' },
             scrollbarWidth: 'thin',
@@ -321,19 +384,40 @@ export default function BatchProcessor() {
           </Typography>
         )}
 
+        {/* Mensajes de error de validación */}
+        {!loading && urlList.length > 0 && (overLimit || invalidUrls.length > 0 || duplicateUrls.length > 0) && (
+          <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+            {overLimit && (
+              <Typography sx={{ color: '#f87171', fontSize: '0.72rem' }}>
+                ⚠ Máximo 50 URLs. Estás pegando {urlList.length} — elimina {urlList.length - 50}.
+              </Typography>
+            )}
+            {invalidUrls.length > 0 && (
+              <Typography sx={{ color: '#f87171', fontSize: '0.72rem' }}>
+                ⚠ {invalidUrls.length} URL{invalidUrls.length > 1 ? 's inválidas' : ' inválida'} (deben empezar con https:// o http://): {invalidUrls.slice(0, 2).join(', ')}{invalidUrls.length > 2 ? `… y ${invalidUrls.length - 2} más` : ''}
+              </Typography>
+            )}
+            {duplicateUrls.length > 0 && (
+              <Typography sx={{ color: '#fbbf24', fontSize: '0.72rem' }}>
+                ⚠ {duplicateUrls.length} URL{duplicateUrls.length > 1 ? 's duplicadas' : ' duplicada'}: {[...new Set(duplicateUrls)].slice(0, 2).join(', ')}{duplicateUrls.length > 2 ? '…' : ''}
+              </Typography>
+            )}
+          </Box>
+        )}
+
         {/* Botón enviar */}
         <IconButton
           onClick={handleBatch}
-          disabled={loading || !rawUrls.trim()}
+          disabled={loading || !canBatch}
           size="small"
           sx={{
             position: 'absolute', bottom: 20, right: 10,
-            bgcolor: rawUrls.trim() && !loading ? '#3b82f6' : 'rgba(59,130,246,0.1)',
-            color: rawUrls.trim() && !loading ? 'white' : 'rgba(255,255,255,0.25)',
+            bgcolor: canBatch && !loading ? 'var(--accent, #3b82f6)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)',
+            color: canBatch && !loading ? 'white' : 'rgba(255,255,255,0.25)',
             width: 36, height: 36,
             transition: 'all 0.2s',
-            '&:hover': { bgcolor: rawUrls.trim() && !loading ? '#2563eb' : 'rgba(59,130,246,0.1)' },
-            '&.Mui-disabled': { bgcolor: 'rgba(59,130,246,0.08)', color: 'rgba(255,255,255,0.15)' },
+            '&:hover': { bgcolor: canBatch && !loading ? 'var(--accent, #2563eb)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)' },
+            '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)', color: 'rgba(255,255,255,0.15)' },
           }}
         >
           {loading
@@ -346,18 +430,18 @@ export default function BatchProcessor() {
       {loading && (
         <Box sx={{
           px: 2.5, py: 2,
-          bgcolor: 'rgba(59,130,246,0.05)',
-          border: '1px solid rgba(59,130,246,0.15)',
+          bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.05)',
+          border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.15)',
           borderRadius: 2,
         }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <CircularProgress size={14} sx={{ color: '#3b82f6' }} />
+              <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />
               <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
-                Procesando {rows.length + 1} de {urlList.length}
+                {phase === 'sending' ? `Enviando mensajes — ${rows.filter(r => r.msg_status === 'sent').length} enviados` : `Scrapeando — ${rows.length} de ${urlList.length}`}
               </Typography>
             </Box>
-            <Typography sx={{ color: '#60a5fa', fontWeight: 700, fontSize: '0.82rem' }}>
+            <Typography sx={{ color: 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>
               {progress}%
             </Typography>
           </Box>
@@ -365,9 +449,9 @@ export default function BatchProcessor() {
             variant="determinate"
             value={progress}
             sx={{
-              borderRadius: 4, height: 6, bgcolor: 'rgba(59,130,246,0.1)',
+              borderRadius: 4, height: 6, bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.1)',
               '& .MuiLinearProgress-bar': {
-                background: 'linear-gradient(90deg, #3b82f6, #60a5fa)',
+                background: 'linear-gradient(90deg, var(--accent, #3b82f6), var(--accent, #60a5fa))',
                 borderRadius: 4,
               },
             }}
@@ -380,6 +464,101 @@ export default function BatchProcessor() {
               {currentUrl}
             </Typography>
           )}
+        </Box>
+      )}
+
+      {/* ── Post-scraping: template + send ── */}
+      {done && (
+        <Box sx={{ p: 2, borderRadius: 2, border: '1px solid rgba(34,197,94,0.15)', bgcolor: 'rgba(34,197,94,0.03)' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <MessageIcon sx={{ fontSize: 16, color: '#4ade80' }} />
+              <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>Enviar mensajes</Typography>
+            </Box>
+            {waRows.length > 0 && (
+              <Chip
+                icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />}
+                label={`${waRows.length} con WhatsApp`}
+                size="small"
+                sx={{
+                  fontSize: '0.7rem', height: 22,
+                  bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80',
+                  border: '1px solid rgba(34,197,94,0.25)',
+                  '& .MuiChip-icon': { color: '#4ade80' },
+                }}
+              />
+            )}
+          </Box>
+          <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
+            Plantilla base
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.5 }}>
+            {TEMPLATES.map(t => (
+              <Chip key={t.id} label={t.label} size="small" onClick={() => {
+                setSelectedTpl(t.id)
+                const el = msgRef.current
+                if (el) { el.value = t.text; el.dispatchEvent(new Event('input', { bubbles: true })) }
+              }} sx={{
+                fontSize: '0.7rem', height: 24, cursor: 'pointer',
+                bgcolor: selectedTpl === t.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
+                color:   selectedTpl === t.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
+                border:  `1px solid ${selectedTpl === t.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
+              }} />
+            ))}
+          </Box>
+          {/* Variable chips */}
+          <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 1 }}>
+            {[['{{nombre}}','#818cf8'],['{{ciudad}}','#38bdf8'],['{{industria}}','#fb923c'],['{{web}}','#a78bfa']].map(([v, color]) => (
+              <Box key={v} onClick={() => {
+                const el = msgRef.current; if (!el) return
+                el.setRangeText(v, el.selectionStart, el.selectionEnd, 'end')
+                el.dispatchEvent(new Event('input', { bubbles: true }))
+                el.focus()
+              }} sx={{
+                px: 1, py: 0.25, borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700,
+                cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace',
+                bgcolor: `${color}18`, color, border: `1px solid ${color}40`,
+                '&:hover': { bgcolor: `${color}30` },
+              }}>{v}</Box>
+            ))}
+            <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', alignSelf: 'center', ml: 0.5 }}>
+              clic para insertar
+            </Typography>
+          </Box>
+          {/* Textarea editable — uncontrolled so native Ctrl+Z works */}
+          <Box component="textarea" ref={msgRef} defaultValue={msgText} onInput={e => setMsgText(e.target.value)}
+            sx={{
+              width: '100%', minHeight: 100, maxHeight: 200, resize: 'vertical',
+              bgcolor: 'var(--sidebar-bg, #0d1117)', color: '#e2e8f0',
+              border: '1px solid rgba(255,255,255,0.1)', borderRadius: 1.5,
+              p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit',
+              outline: 'none', mb: 0.5,
+              '&:focus': { borderColor: 'rgba(34,197,94,0.4)' },
+            }} />
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
+            <Typography sx={{ fontSize: '0.65rem', color: msgText.length > 4000 ? '#f87171' : 'rgba(255,255,255,0.2)' }}>
+              {msgText.length} / 4096
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
+            <Button
+              onClick={handleSendAll}
+              disabled={waRows.length === 0 || alreadySent || sending}
+              startIcon={sending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
+              size="small"
+              sx={{
+                fontSize: '0.78rem', fontWeight: 700, flexShrink: 0,
+                bgcolor: waRows.length > 0 && !alreadySent && !sending ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
+                color:   waRows.length > 0 && !alreadySent && !sending ? '#4ade80' : 'rgba(255,255,255,0.3)',
+                border:  `1px solid ${waRows.length > 0 && !alreadySent && !sending ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
+                borderRadius: 1.5, px: 2, py: 0.6,
+                '&:hover': { bgcolor: waRows.length > 0 && !alreadySent && !sending ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
+                '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
+              }}
+            >
+              {alreadySent ? 'Mensajes enviados' : sending ? 'Enviando…' : `Enviar a ${waRows.length} empresa${waRows.length !== 1 ? 's' : ''} con WhatsApp`}
+            </Button>
+          </Box>
         </Box>
       )}
 
@@ -402,6 +581,16 @@ export default function BatchProcessor() {
             bgColor="rgba(59,130,246,0.06)"
             borderColor="rgba(59,130,246,0.18)"
           />
+          {alreadySent && (
+            <StatCard
+              icon={<SendIcon sx={{ fontSize: 16, color: '#a78bfa' }} />}
+              label="Mensajes enviados"
+              value={sentCount}
+              color="#a78bfa"
+              bgColor="rgba(167,139,250,0.06)"
+              borderColor="rgba(167,139,250,0.18)"
+            />
+          )}
           <StatCard
             icon={<ErrorIcon sx={{ fontSize: 16, color: '#f87171' }} />}
             label="Errores"
@@ -428,10 +617,10 @@ export default function BatchProcessor() {
                 startIcon={<DownloadIcon sx={{ fontSize: 14 }} />}
                 onClick={downloadCsv}
                 sx={{
-                  color: '#60a5fa', fontSize: '0.75rem',
-                  border: '1px solid rgba(59,130,246,0.25)',
+                  color: 'var(--accent, #60a5fa)', fontSize: '0.75rem',
+                  border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)',
                   borderRadius: 1.5, px: 1.5, py: 0.4,
-                  '&:hover': { bgcolor: 'rgba(59,130,246,0.08)' },
+                  '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)' },
                 }}
               >
                 Descargar CSV
@@ -455,9 +644,9 @@ export default function BatchProcessor() {
             <Table size="small" stickyHeader>
               <TableHead>
                 <TableRow>
-                  {['URL', 'Empresa', 'Industria', 'WhatsApp', 'WA Status', 'Estado'].map(h => (
+                  {['URL', 'Empresa', 'Industria', 'WhatsApp', alreadySent ? 'Mensaje' : null, 'Estado'].filter(Boolean).map(h => (
                     <TableCell key={h} sx={{
-                      bgcolor: '#161d2e',
+                      bgcolor: 'var(--card-bg, #161d2e)',
                       color: 'rgba(255,255,255,0.5)',
                       fontWeight: 700,
                       fontSize: '0.7rem',
@@ -487,18 +676,30 @@ export default function BatchProcessor() {
                     <TableCell sx={{ color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{r.empresa}</TableCell>
                     <TableCell sx={{ color: 'rgba(255,255,255,0.55)' }}>{r.industria}</TableCell>
                     <TableCell>
-                      {r.whatsapp ? (
-                        <Chip
-                          icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />}
-                          label={r.whatsapp}
-                          size="small"
-                          sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#4ade80' } }}
-                        />
+                      {(r.all_whatsapp?.length > 0 || r.whatsapp) ? (
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+                          {(r.all_whatsapp?.length > 0 ? r.all_whatsapp : [r.whatsapp]).map((num, ni) => (
+                            <Chip key={ni}
+                              icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />}
+                              label={num}
+                              size="small"
+                              sx={{ bgcolor: ni === 0 ? 'rgba(34,197,94,0.1)' : 'rgba(34,197,94,0.06)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#4ade80' } }}
+                            />
+                          ))}
+                        </Box>
                       ) : (
                         <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>
                       )}
                     </TableCell>
-                    <TableCell sx={{ color: 'rgba(255,255,255,0.4)' }}>{r.status_wa}</TableCell>
+                    {alreadySent && (
+                      <TableCell>
+                        {r.msg_status === 'sent'    && <Chip label="Enviado"   size="small" sx={{ bgcolor: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)', height: 20, fontSize: '0.68rem' }} />}
+                        {r.msg_status === 'failed'  && <Chip label="Falló"     size="small" sx={{ bgcolor: 'rgba(239,68,68,0.1)',   color: '#f87171', border: '1px solid rgba(239,68,68,0.25)',   height: 20, fontSize: '0.68rem' }} />}
+                        {r.msg_status === 'no_wa'   && <Chip label="Sin WA"    size="small" sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.08)', height: 20, fontSize: '0.68rem' }} />}
+                        {r.msg_status === 'skipped' && <Chip label="Saltado"   size="small" sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.08)', height: 20, fontSize: '0.68rem' }} />}
+                        {!r.msg_status && <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>}
+                      </TableCell>
+                    )}
                     <TableCell>
                       {r.ok ? (
                         <Chip label="OK" size="small" icon={<CheckCircleIcon sx={{ fontSize: '12px !important' }} />}

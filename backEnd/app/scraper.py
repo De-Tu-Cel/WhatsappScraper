@@ -195,6 +195,9 @@ class WebsiteScraper:
             "Manufactura": [
                 "fabrica", "fábrica", "manufactura", "produccion", "producción",
                 "industrial", "planta", "maquila", "ensamble", "proceso industrial",
+                "acero", "acería", "metalurgia", "metal", "metales", "hierro",
+                "aluminio", "lámina", "varilla", "tubería", "fundición",
+                "siderurgia", "chatarra", "trefilado", "galvanizado",
             ],
             # ── Gas / Energía ─────────────────────────────────────────────────
             "Gas LP / Energía": [
@@ -453,6 +456,9 @@ class WebsiteScraper:
             if result["_contacts_raw"]["all_whatsapp_numbers"]:
                 result["_contacts_raw"]["whatsapp_numbers"] = result["_contacts_raw"]["all_whatsapp_numbers"]
                 result["has_whatsapp"] = True
+
+        # ── Enriquecimiento con IA: rellenar campos vacíos en una sola llamada ──
+        self._groq_enrich_result(result, text[:2000])
 
         # Deduplicación y guardado en MongoDB
         existing = self.companies_col.find_one({"domain": domain})
@@ -814,10 +820,16 @@ class WebsiteScraper:
         return domain.split(".")[0].capitalize()
 
     def _detect_industry(self, text: str, soup: BeautifulSoup) -> str:
-        """Detecta industria con keywords extendidos"""
+        """Groq clasifica la industria; keywords como fallback si Groq falla."""
+        # 1. Intentar con Groq primero
+        groq_result = self._classify_industry_groq(text[:1500])
+        if groq_result:
+            return groq_result
+
+        # 2. Fallback: keywords
         import re as _re
         text_lower = text.lower()
-        _words = set(__import__("re").findall(r"[\w\u00C0-\u024F]+", text_lower))
+        _words = set(_re.findall(r"[\w\u00C0-\u024F]+", text_lower))
 
         def _count(kw: str, t: str) -> int:
             if " " in kw:
@@ -830,10 +842,96 @@ class WebsiteScraper:
             if score > 0:
                 scores[industry] = score
 
-        if scores:
-            return max(scores, key=scores.get)
+        return max(scores, key=scores.get) if scores else "No detectada"
 
-        return "No detectada"
+    def _classify_industry_groq(self, text_snippet: str) -> str:
+        """Usa Groq para clasificar industria cuando keywords no son suficientes."""
+        import os, json
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        if not groq_key or not text_snippet.strip():
+            return ""
+        try:
+            import requests
+            categories = list(self.INDUSTRY_KEYWORDS.keys())
+            prompt = (
+                f"Clasifica esta empresa en UNA de estas categor\u00EDas exactas:\n"
+                f"{', '.join(categories)}\n\n"
+                f"Texto del sitio web:\n{text_snippet}\n\n"
+                f"Responde SOLO con el nombre exacto de la categor\u00EDa. "
+                f"Si no encaja en ninguna responde: No detectada"
+            )
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                json={"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}], "max_tokens": 20, "temperature": 0},
+                timeout=8,
+            )
+            result = resp.json()["choices"][0]["message"]["content"].strip()
+            # Validar que sea una categor\u00EDa v\u00E1lida
+            if result in self.INDUSTRY_KEYWORDS or result == "No detectada":
+                return result
+        except Exception:
+            pass
+        return ""
+
+    def _groq_enrich_result(self, result: dict, text_snippet: str) -> None:
+        """Una sola llamada a Groq para rellenar campos vacíos: descripción, horarios, servicios, ciudad."""
+        import os, json, requests as _req
+
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        if not groq_key or not text_snippet.strip():
+            return
+
+        extra = result.get("_extra", {})
+
+        # Detectar qué campos faltan
+        need_desc    = not result.get("description") or result["description"] == "Descripción no disponible"
+        need_hours   = not extra.get("business_hours")
+        need_services= not result.get("services") or len(result.get("services", [])) < 2
+        need_city    = not extra.get("city")
+
+        if not any([need_desc, need_hours, need_services, need_city]):
+            return  # Todo ya está, no llamar a Groq
+
+        fields_needed = []
+        if need_desc:     fields_needed.append('"descripcion": "2 oraciones sobre qué hace la empresa (null si no hay info)"')
+        if need_hours:    fields_needed.append('"horarios": "Horario normalizado ej: Lun-Vie 9:00-18:00, Sáb 10:00-14:00 (null si no hay info)"')
+        if need_services: fields_needed.append('"servicios": ["lista", "de", "servicios", "o", "productos"] (array vacío si no hay info)')
+        if need_city:     fields_needed.append('"ciudad": "nombre de la ciudad o municipio donde opera (null si no hay info)"')
+
+        prompt = (
+            f"Extrae del siguiente texto de un sitio web mexicano solo estos campos en JSON:\n"
+            f"{{{', '.join(fields_needed)}}}\n\n"
+            f"Texto:\n{text_snippet}\n\n"
+            f"Responde ÚNICAMENTE con el JSON, sin explicaciones."
+        )
+
+        try:
+            resp = _req.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                json={"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}],
+                      "max_tokens": 300, "temperature": 0},
+                timeout=10,
+            )
+            raw = resp.json()["choices"][0]["message"]["content"].strip()
+            # Extraer JSON de la respuesta
+            start = raw.find("{")
+            end   = raw.rfind("}") + 1
+            if start >= 0 and end > start:
+                data = json.loads(raw[start:end])
+                if need_desc and data.get("descripcion"):
+                    result["description"] = data["descripcion"]
+                if need_hours and data.get("horarios"):
+                    result["_extra"]["business_hours"] = data["horarios"]
+                if need_services and data.get("servicios"):
+                    svs = data["servicios"]
+                    if isinstance(svs, list) and svs:
+                        result["services"] = svs[:8]
+                if need_city and data.get("ciudad"):
+                    result["_extra"]["city"] = data["ciudad"]
+        except Exception:
+            pass  # Groq falló — no bloquear el scraping
 
     def _extract_description(self, soup: BeautifulSoup, text: str) -> str:
         """Extrae descripción de la empresa"""
@@ -920,34 +1018,53 @@ class WebsiteScraper:
         return ""
 
     def _extract_city(self, text: str) -> str:
-        """Extrae ciudad"""
-        # Ciudades principales de México
+        """Extrae ciudad buscando lo que aparece antes de un estado conocido."""
+        import re as _re
+
+        states_pat = (r'(Ciudad de México|Estado de México|Nuevo León|Jalisco|Puebla|'
+                      r'Veracruz|Guanajuato|Chihuahua|Coahuila|Sonora|Oaxaca|Tamaulipas|'
+                      r'Sinaloa|Baja California Sur|Baja California|Guerrero|Michoacán|'
+                      r'Hidalgo|Tabasco|Yucatán|Querétaro|San Luis Potosí|Morelos|'
+                      r'Aguascalientes|Tlaxcala|Quintana Roo|Nayarit|Campeche|'
+                      r'Zacatecas|Colima|Durango|Chiapas)')
+        m = _re.search(r'([A-ZÁÉÍÓÚÑ][^,\n]{2,50}),\s*' + states_pat, text)
+        if m:
+            candidate = m.group(1).strip()
+            if not _re.search(r'\d|[Cc]ol\.|[Cc]olonia|[Aa]v\.|[Cc]alle|[Zz]ona', candidate):
+                return candidate.title()
+
+        # Fallback: lista de ciudades conocidas
         cities = [
-            "Querétaro", "Ciudad de México", "CDMX", "Guadalajara", "Monterrey",
-            "Puebla", "Tijuana", "León", "Juárez", "Torreón", "San Luis Potosí",
-            "Mérida", "Aguascalientes", "Mexicali", "Culiacán", "Cancún"
+            "Ciudad de México", "Guadalajara", "Monterrey", "Puebla", "Tijuana",
+            "León", "Juárez", "Torreón", "San Luis Potosí", "Mérida", "Querétaro",
+            "Aguascalientes", "Mexicali", "Culiacán", "Cancún", "Tlalnepantla",
+            "Ecatepec", "Naucalpan", "Nezahualcóyotl", "Zapopan", "Saltillo",
+            "San Pedro Garza García", "Chihuahua", "Hermosillo", "Veracruz",
+            "Morelia", "Toluca", "Oaxaca", "Villahermosa", "Tuxtla Gutiérrez",
+            "Tepic", "Colima", "La Paz", "Durango", "Zacatecas", "Campeche",
+            "Chetumal", "Pachuca", "Tlaxcala", "Cuernavaca",
         ]
-        
-        text_lower = text.lower()
+        tl = text.lower()
         for city in cities:
-            if city.lower() in text_lower:
+            if city.lower() in tl:
                 return city
-        
         return ""
 
     def _extract_state(self, text: str) -> str:
-        """Extrae estado"""
+        """Extrae estado — los 32 estados de México."""
         states = [
-            "Querétaro", "Qro", "Ciudad de México", "CDMX", "Jalisco", "Nuevo León",
-            "Puebla", "Baja California", "Guanajuato", "Chihuahua", "Coahuila",
-            "San Luis Potosí", "Yucatán", "Aguascalientes", "Sinaloa", "Quintana Roo"
+            "Ciudad de México", "Estado de México", "Jalisco", "Nuevo León",
+            "Veracruz", "Puebla", "Guanajuato", "Chihuahua", "Michoacán",
+            "Oaxaca", "Tamaulipas", "Sinaloa", "Coahuila", "Guerrero",
+            "Baja California", "Sonora", "Hidalgo", "San Luis Potosí",
+            "Tabasco", "Yucatán", "Querétaro", "Morelos", "Aguascalientes",
+            "Tlaxcala", "Quintana Roo", "Nayarit", "Campeche", "Zacatecas",
+            "Colima", "Durango", "Chiapas", "Baja California Sur",
         ]
-        
-        text_lower = text.lower()
+        tl = text.lower()
         for state in states:
-            if state.lower() in text_lower:
+            if state.lower() in tl:
                 return state
-        
         return ""
 
     def _extract_country(self, text: str) -> str:

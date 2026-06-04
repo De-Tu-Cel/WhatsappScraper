@@ -31,6 +31,27 @@ class EvolutionClient:
                 "error": str(exc),
             }
 
+    def fetch_messages(self, number: str, limit: int = 100) -> list:
+        """Fetch message history for a number from Evolution API."""
+        clean = _clean_number(number)
+        jid   = f"{clean}@s.whatsapp.net"
+        url   = f"{self.base_url}/chat/findMessages/{self.instance}"
+        try:
+            resp = requests.post(url, json={
+                "where": {"key": {"remoteJid": jid}},
+                "limit": limit,
+            }, headers=self.headers, timeout=15)
+            data = resp.json()
+            # Response can be {"messages": {"records": [...]}} or {"messages": [...]}
+            msgs = data.get("messages", data)
+            if isinstance(msgs, dict):
+                return msgs.get("records", [])
+            if isinstance(msgs, list):
+                return msgs
+        except Exception:
+            pass
+        return []
+
     def check_number(self, number: str) -> bool:
         """Check whether a number has WhatsApp (Evolution API /chat/whatsappNumbers)."""
         clean = _clean_number(number)

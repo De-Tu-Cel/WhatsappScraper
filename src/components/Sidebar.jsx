@@ -10,8 +10,10 @@ import Tooltip from '@mui/material/Tooltip'
 import StorefrontIcon from '@mui/icons-material/Storefront'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import MenuIcon from '@mui/icons-material/Menu'
-import AccountCircleIcon from '@mui/icons-material/AccountCircle'
+import LogoutIcon from '@mui/icons-material/Logout'
 import SettingsIcon from '@mui/icons-material/Settings'
+import { useUser } from '../context/UserContext'
+import { useLang } from '../context/LangContext'
 
 const SIDEBAR_FULL = 248
 const SIDEBAR_MINI = 64
@@ -26,6 +28,8 @@ const C = {
 }
 
 export default function Sidebar({ open, setOpen, active, setActive, navItems, settingsOpen, onSettingsClick }) {
+  const { user, logout } = useUser()
+  const { t } = useLang()
   return (
     <Box sx={{
       width: open ? SIDEBAR_FULL : SIDEBAR_MINI,
@@ -140,7 +144,7 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
       {/* Settings button — separado del nav */}
       <Box sx={{ px: 1, pb: 1, position: 'relative', zIndex: 1 }}>
         <Divider sx={{ borderColor: C.sidebarBorder, mb: 1 }} />
-        <Tooltip title={open ? '' : 'Configuración'} placement="right" arrow>
+        <Tooltip title={open ? '' : t.settings.title} placement="right" arrow>
           <ListItemButton
             onClick={onSettingsClick}
             sx={{
@@ -172,7 +176,7 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
               whiteSpace: 'nowrap',
             }}>
               <Typography sx={{ fontSize: '0.875rem', fontWeight: settingsOpen ? 600 : 400, color: 'inherit' }}>
-                Configuración
+                {t.settings.title}
               </Typography>
             </Box>
           </ListItemButton>
@@ -192,18 +196,39 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
           justifyContent: open ? 'flex-start' : 'center',
           pl: open ? 0.5 : 0,
         }}>
-          <AccountCircleIcon sx={{ fontSize: 22, color: C.dimText, flexShrink: 0 }} />
+          {/* Avatar */}
           <Box sx={{
-            overflow: 'hidden',
-            opacity: open ? 1 : 0,
-            maxWidth: open ? 160 : 0,
-            transition: 'opacity 0.2s ease, max-width 0.28s cubic-bezier(0.4,0,0.2,1)',
-            whiteSpace: 'nowrap', ml: open ? 1.5 : 0,
+            width: 30, height: 30, borderRadius: '50%', flexShrink: 0,
+            bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.2)',
+            border: '1.5px solid rgba(var(--accent-rgb,59,130,246),0.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
-            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.18)' }}>
-              v1.0 · Detucel
+            <Typography sx={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--accent,#60a5fa)', textTransform: 'uppercase' }}>
+              {(user?.display_name || user?.username || '?')[0]}
             </Typography>
           </Box>
+          <Box sx={{
+            overflow: 'hidden', flex: 1, minWidth: 0,
+            opacity: open ? 1 : 0,
+            maxWidth: open ? 120 : 0,
+            transition: 'opacity 0.2s ease, max-width 0.28s cubic-bezier(0.4,0,0.2,1)',
+            whiteSpace: 'nowrap', ml: open ? 1 : 0,
+          }}>
+            <Typography sx={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.78rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {user?.display_name || user?.username || ''}
+            </Typography>
+            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.18)' }}>
+              v1.0 · DeTuCel
+            </Typography>
+          </Box>
+          {open && (
+            <Tooltip title="Cerrar sesión">
+              <IconButton size="small" onClick={logout}
+                sx={{ ml: 'auto', color: C.dimText, flexShrink: 0, '&:hover': { color: '#f87171' } }}>
+                <LogoutIcon sx={{ fontSize: 16 }} />
+              </IconButton>
+            </Tooltip>
+          )}
         </Box>
       </Box>
     </Box>

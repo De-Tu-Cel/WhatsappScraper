@@ -919,6 +919,7 @@ export default function DatabaseViewer() {
   const [order, setOrder] = useState('desc')
   const [orderBy, setOrderBy] = useState('created_at')
   const [selected, setSelected] = useState([])
+  const [rowCache, setRowCache] = useState({})  // id → row, acumula filas de todas las páginas
   const [filterOpen, setFilterOpen] = useState(false)
   const [filters, setFilters] = useState({ search: '', industry: '', city: '', has_whatsapp: '' })
   const [editTarget, setEditTarget] = useState(null)
@@ -958,8 +959,15 @@ export default function DatabaseViewer() {
       })
       const res = await fetch(`/api/companies?${params}`)
       const data = await res.json()
-      setRows(data.companies || [])
+      const companies = data.companies || []
+      setRows(companies)
       setTotal(data.total || 0)
+      // Acumular filas en caché para calcular selecciones cross-page
+      setRowCache(prev => {
+        const next = { ...prev }
+        companies.forEach(r => { next[r._id] = r })
+        return next
+      })
     } catch {
       notify('No se pudieron cargar los datos', 'error')
     } finally {
@@ -968,7 +976,11 @@ export default function DatabaseViewer() {
   }, [page, rowsPerPage, filters])
 
   useEffect(() => { fetchData() }, [fetchData])
-  useEffect(() => { setPage(0) }, [filters])
+  useEffect(() => {
+    setPage(0)
+    setRowCache({})   // limpiar caché al cambiar filtros
+    setSelected([])   // limpiar selección al cambiar filtros
+  }, [filters])
 
   const handleFilterChange = (key, value) => setFilters((f) => ({ ...f, [key]: value }))
 
@@ -1183,9 +1195,15 @@ export default function DatabaseViewer() {
 
   const numSelected    = selected.length
   const rowCount       = sortedRows.length
+  // selectedWithWA usa el caché cross-page para no perder el conteo al paginar
   const selectedWithWA = useMemo(
-    () => sortedRows.filter(r => selected.includes(r._id) && r.has_whatsapp).length,
-    [sortedRows, selected]
+    () => selected.filter(id => rowCache[id]?.has_whatsapp).length,
+    [selected, rowCache]
+  )
+  // Filas seleccionadas usando caché (para CampaignDialog cross-page)
+  const selectedRowsFull = useMemo(
+    () => selected.map(id => rowCache[id]).filter(Boolean),
+    [selected, rowCache]
   )
 
   return (
@@ -1459,7 +1477,7 @@ export default function DatabaseViewer() {
 
       <CampaignDialog
         open={campaignOpen}
-        selectedRows={sortedRows.filter(r => selected.includes(r._id))}
+        selectedRows={selectedRowsFull}
         onClose={() => setCampaignOpen(false)}
         onNotify={notify}
       />

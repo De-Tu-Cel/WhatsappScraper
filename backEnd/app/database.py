@@ -258,7 +258,8 @@ class MongoDBManager:
     def save_evolution_log(self, direction: str, company_id: str, number: str,
                            message_body: str, message_id: str = None,
                            message_type: str = "conversation",
-                           status: str = "received", raw_data: dict = None):
+                           status: str = "received", raw_data: dict = None,
+                           interactive: dict = None):
         doc = {
             "platform": "evolution",
             "direction": direction,
@@ -271,6 +272,8 @@ class MongoDBManager:
             "raw_data": raw_data or {},
             "created_at": datetime.now(),
         }
+        if interactive:
+            doc["interactive"] = interactive
         if direction == "outbound":
             doc["to_number"] = number
         else:
@@ -292,16 +295,23 @@ class MongoDBManager:
             {"$sort": {"created_at": -1}},
             {"$group": {
                 "_id": "$company_id",
-                "last_message": {"$first": "$message_body"},
-                "last_direction": {"$first": "$direction"},
-                "last_at": {"$first": "$created_at"},
-                "last_status": {"$first": "$status"},
-                "total": {"$sum": 1},
-                "unread": {"$sum": {"$cond": [
+                "last_message":       {"$first": "$message_body"},
+                "last_direction":     {"$first": "$direction"},
+                "last_at":            {"$first": "$created_at"},
+                "last_status":        {"$first": "$status"},
+                "total":              {"$sum": 1},
+                "unread":             {"$sum": {"$cond": [
                     {"$and": [
                         {"$eq": ["$direction", "inbound"]},
                         {"$ne": ["$status", "read"]},
                     ]}, 1, 0
+                ]}},
+                # Who first contacted this company
+                "first_sent_by_name": {"$last": {"$cond": [
+                    {"$eq": ["$direction", "outbound"]}, "$sent_by_name", None
+                ]}},
+                "first_sent_by_user": {"$last": {"$cond": [
+                    {"$eq": ["$direction", "outbound"]}, "$sent_by_username", None
                 ]}},
             }},
             {"$sort": {"last_at": -1}},
@@ -334,13 +344,15 @@ class MongoDBManager:
                 "domain": company.get("domain", ""),
                 "website": company.get("website", ""),
                 "industry": company.get("industry", ""),
-                "last_message": g["last_message"] or "",
-                "last_direction": g["last_direction"],
-                "last_at": g["last_at"].isoformat() if g["last_at"] else None,
-                "last_status": g["last_status"],
-                "total": g["total"],
-                "unread": g["unread"],
-                "last_analysis": last_inbound_analyzed.get("analysis") if last_inbound_analyzed else None,
+                "last_message":       g["last_message"] or "",
+                "last_direction":     g["last_direction"],
+                "last_at":            g["last_at"].isoformat() if g["last_at"] else None,
+                "last_status":        g["last_status"],
+                "total":              g["total"],
+                "unread":             g["unread"],
+                "sent_by_name":       g.get("first_sent_by_name") or "",
+                "sent_by_username":   g.get("first_sent_by_user") or "",
+                "last_analysis":      last_inbound_analyzed.get("analysis") if last_inbound_analyzed else None,
             })
         # Deduplicate by company_name — keep the entry with the most recent message
         seen_names = {}
@@ -368,7 +380,7 @@ class MongoDBManager:
             },
             {"_id": 1, "direction": 1, "message_body": 1, "message_text": 1,
              "status": 1, "created_at": 1, "sent_at": 1, "platform": 1,
-             "to_number": 1, "from_number": 1, "message_id": 1}
+             "to_number": 1, "from_number": 1, "message_id": 1, "interactive": 1}
         ).sort("created_at", 1))
 
         # Deduplicate: if same message_id exists as both outbound and inbound, keep outbound only
@@ -396,11 +408,18 @@ class MongoDBManager:
             {"$set": {"status": "read", "updated_at": datetime.now()}}
         )
 
-    def get_last_outbound_for_company(self, company_id: str):
-        return self.db.message_logs.find_one(
-            {"company_id": company_id, "direction": "outbound"},
-            sort=[("created_at", -1)]
-        )
+    def get_last_outbound_for_company(self, company_id: str, before_dt=None, to_number: str = None):
+        """Returns the most recent outbound message before before_dt (and optionally matching to_number)."""
+        query = {"company_id": company_id, "direction": "outbound"}
+        if before_dt:
+            query["created_at"] = {"$lte": before_dt}
+        if to_number:
+            norm = to_number.replace("+","").replace(" ","")[-10:]
+            query["$or"] = [
+                {"to_number": {"$regex": norm}},
+                {"number":    {"$regex": norm}},
+            ]
+        return self.db.message_logs.find_one(query, sort=[("created_at", -1)])
 
     def save_message_analysis(self, log_id: str, analysis: dict):
         from bson import ObjectId
@@ -409,7 +428,7 @@ class MongoDBManager:
             {"$set": {"analysis": analysis}}
         )
 
-    def get_analytics(self):
+    def get_analytics(self, page: int = 1, page_size: int = 20):
         """Aggregate response analysis data per company for the dashboard."""
         pipeline = [
             {"$match": {"direction": "inbound", "analysis": {"$exists": True}}},
@@ -505,4 +524,12 @@ class MongoDBManager:
                 "last_at": g["last_at"].isoformat() if g["last_at"] else None,
                 "numbers": numbers,
             })
-        return results
+        total = len(results)
+        start = (page - 1) * page_size
+        return {
+            "total":     total,
+            "page":      page,
+            "page_size": page_size,
+            "pages":     (total + page_size - 1) // page_size,
+            "items":     results[start: start + page_size],
+        }

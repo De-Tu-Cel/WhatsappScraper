@@ -1,5 +1,6 @@
-'use client'
+﻿'use client'
 import { useState, useEffect, useRef } from 'react'
+import { authFetch } from '@/lib/api'
 import Box from '@mui/material/Box'
 import TextField from '@mui/material/TextField'
 import IconButton from '@mui/material/IconButton'
@@ -216,11 +217,11 @@ export function MessageComposer({ result, onSend, sending }) {
       <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1, pr: 0.5 }}>
         <Typography sx={{ fontSize: '0.68rem', color: charCount > MAX_WA_MSG ? '#f87171' : charCount > MAX_WA_MSG * 0.9 ? '#fbbf24' : 'rgba(255,255,255,0.25)' }}>
           {charCount} / {MAX_WA_MSG}
-          {charCount > MAX_WA_MSG && ' — demasiado largo'}
+          {charCount > MAX_WA_MSG && ' —demasiado largo'}
         </Typography>
       </Box>
 
-      {/* Variables insertables — deshabilitadas si no se encontró el dato */}
+      {/* Variables insertables —deshabilitadas si no se encontró el dato */}
       <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.35)', mb: 0.8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
         Insertar datos del negocio
       </Typography>
@@ -302,7 +303,7 @@ function useTypewriter(strings, active) {
           setDisplay(word.slice(0, next))
           timer = setTimeout(tick, 80)
         } else {
-          // finished typing — pause 1.4 s then start deleting
+          // finished typing —pause 1.4 s then start deleting
           ref.current = { ...s, deleting: true }
           timer = setTimeout(tick, 1400)
         }
@@ -313,7 +314,7 @@ function useTypewriter(strings, active) {
           setDisplay(word.slice(0, next))
           timer = setTimeout(tick, 45)
         } else {
-          // finished deleting — brief gap then next word
+          // finished deleting —brief gap then next word
           ref.current = { wordIdx: (s.wordIdx + 1) % strings.length, charIdx: 0, deleting: false }
           timer = setTimeout(tick, 300)
         }
@@ -412,7 +413,7 @@ export default function SingleUrlProcessor() {
     setSendSuccess(false)
     setLoading(true)
     try {
-      const res = await fetch('/api/process-url', {
+      const res = await authFetch('/api/process-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, skip_send: true }),
@@ -436,7 +437,7 @@ export default function SingleUrlProcessor() {
     try {
       for (const toNumber of nums) {
         try {
-          const res = await fetch('/api/send-message', {
+          const res = await authFetch('/api/send-message', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -464,7 +465,7 @@ export default function SingleUrlProcessor() {
     }
   }
 
-  /* ── ESTADO INICIAL: barra centrada ── */
+  /* â”€â”€ ESTADO INICIAL: barra centrada â”€â”€ */
   if (!hasResult && !loading) {
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, minHeight: 0, gap: 1 }}>
@@ -478,7 +479,7 @@ export default function SingleUrlProcessor() {
     )
   }
 
-  /* ── CON RESULTADO: barra arriba + resultados + composer ── */
+  /* â”€â”€ CON RESULTADO: barra arriba + resultados + composer â”€â”€ */
   return (
     <Box sx={{ overflowY: 'auto', height: '100%' }}>
       {/* Barra superior */}
@@ -494,7 +495,7 @@ export default function SingleUrlProcessor() {
         {result && !loading && <ResultDisplay result={result} />}
       </Box>
 
-      {/* Compositor — solo si hay WhatsApp y ya terminó el scrape */}
+      {/* Compositor —solo si hay WhatsApp y ya terminó el scrape */}
       {result && !loading && (
         hasWhatsapp
           ? <>
@@ -503,10 +504,11 @@ export default function SingleUrlProcessor() {
             </>
           : <Box sx={{ mt: 3, p: 2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.07)', bgcolor: 'rgba(255,255,255,0.02)', textAlign: 'center' }}>
               <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.85rem' }}>
-                No se encontró número de WhatsApp — no es posible enviar mensaje
+                No se encontro el numero de WhatsApp, no es posible enviar mensaje
               </Typography>
             </Box>
       )}
     </Box>
   )
 }
+

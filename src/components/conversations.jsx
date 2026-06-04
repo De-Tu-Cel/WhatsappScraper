@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { MAX_WA_MSG } from '@/lib/validators'
+import { authFetch } from '@/lib/api'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -18,6 +19,14 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import DoneAllIcon from '@mui/icons-material/DoneAll'
 import DoneIcon from '@mui/icons-material/Done'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
+import Popover from '@mui/material/Popover'
+import EmojiEmotionsIcon from '@mui/icons-material/EmojiEmotions'
+
+const EMOJI_GROUPS = [
+  { label: 'Frecuentes', emojis: ['😀','😂','🥹','😊','😍','🤩','😎','🥳','😅','😭','😤','🤔','👍','👎','👋','🙌','🤝','❤️','🔥','✅','⭐','🎉','💯','🚀'] },
+  { label: 'Negocio',    emojis: ['📞','📱','💬','📧','📝','💼','🏢','💰','📊','📈','🤝','⏰','📅','✔️','❌','⚠️','💡','🔔','📌','🔍'] },
+  { label: 'Gestos',     emojis: ['👏','🙏','💪','🤞','✌️','🤙','👌','🫡','🫶','🫂','😁','😇','🥰','😘','🤗','😶','🙄','😴','🤯','🥴'] },
+]
 
 function formatTime(iso) {
   if (!iso) return ''
@@ -95,21 +104,144 @@ function ConversationItem({ conv, active, onClick }) {
             {formatTime(conv.last_at)}
           </Typography>
         </Box>
-        <Typography sx={{
-          color: isInbound ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.3)',
-          fontSize: '0.73rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          fontStyle: isInbound ? 'normal' : 'italic',
-        }}>
-          {isInbound ? '' : 'Tú: '}{conv.last_message || '—'}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+          {conv.sent_by_name && (
+            <Typography sx={{ fontSize: '0.65rem', color: 'var(--accent,#a5b4fc)', flexShrink: 0, fontWeight: 600 }}>
+              {conv.sent_by_name.split(' ')[0]}·
+            </Typography>
+          )}
+          <Typography sx={{
+            color: isInbound ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.3)',
+            fontSize: '0.73rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            fontStyle: isInbound ? 'normal' : 'italic', flex: 1, minWidth: 0,
+          }}>
+            {conv.last_message || '—'}
+          </Typography>
+        </Box>
       </Box>
     </Box>
   )
 }
 
-function MessageBubble({ msg }) {
-  const isOut = msg.direction === 'outbound'
-  const body  = msg.body || '—'
+const MEDIA_LABELS = {
+  '[sticker]':  { emoji: '🎭', label: 'Sticker' },
+  '[audio]':    { emoji: '🎵', label: 'Audio' },
+  '[imagen]':   { emoji: '🖼️', label: 'Imagen' },
+  '[image]':    { emoji: '🖼️', label: 'Imagen' },
+  '[video]':    { emoji: '🎬', label: 'Video' },
+  '[location]': { emoji: '📍', label: 'Ubicación' },
+  '[contact]':  { emoji: '👤', label: 'Contacto' },
+  '[document]': { emoji: '📄', label: 'Documento' },
+}
+
+function InteractiveMessage({ interactive, isOut, onReply }) {
+  const [open, setOpen] = useState(false)
+  const [anchor, setAnchor] = useState(null)
+  const [sent, setSent] = useState(null)
+  const { type, text, options = [] } = interactive
+  const accent = isOut ? 'rgba(var(--accent-rgb,99,102,241),0.9)' : 'rgba(255,255,255,0.85)'
+  const borderColor = isOut ? 'rgba(var(--accent-rgb,99,102,241),0.4)' : 'rgba(255,255,255,0.18)'
+
+  function handleSelect(opt) {
+    if (sent || isOut) return
+    setSent(opt)
+    setOpen(false)
+    onReply?.(opt)
+  }
+
+  return (
+    <Box>
+      {text && (
+        <Typography sx={{ color: 'rgba(255,255,255,0.88)', fontSize: '0.83rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', mb: options.length ? 1 : 0,
+          fontFamily: '"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",system-ui,sans-serif' }}>
+          {text}
+        </Typography>
+      )}
+
+      {type === 'buttons' && options.length <= 3 && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, borderTop: `1px solid ${borderColor}`, pt: 0.8 }}>
+          {options.map((opt, i) => {
+            const isSent = sent === opt
+            return (
+              <Box key={i} onClick={() => handleSelect(opt)} sx={{
+                py: 0.6, px: 1, borderRadius: 1.5, textAlign: 'center',
+                cursor: isOut || sent ? 'default' : 'pointer',
+                border: `1px solid ${isSent ? 'rgba(74,222,128,0.5)' : borderColor}`,
+                bgcolor: isSent ? 'rgba(74,222,128,0.12)' : 'rgba(255,255,255,0.04)',
+                transition: 'all 0.15s',
+                '&:hover': !isOut && !sent ? { bgcolor: 'rgba(255,255,255,0.1)', borderColor: accent } : {},
+              }}>
+                <Typography sx={{ color: isSent ? '#4ade80' : accent, fontSize: '0.8rem', fontWeight: 600 }}>
+                  {isSent ? `✓ ${opt}` : opt}
+                </Typography>
+              </Box>
+            )
+          })}
+        </Box>
+      )}
+
+      {(type === 'list' || (type === 'buttons' && options.length > 3)) && (
+        <>
+          <Box onClick={e => { setAnchor(e.currentTarget); setOpen(true) }} sx={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.8,
+            mt: 0.5, py: 0.7, borderRadius: 1.5, cursor: 'pointer',
+            borderTop: `1px solid ${borderColor}`,
+            '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' },
+          }}>
+            <Typography sx={{ fontSize: '0.85rem', lineHeight: 1 }}>📋</Typography>
+            <Typography sx={{ color: accent, fontSize: '0.8rem', fontWeight: 600 }}>
+              Ver opciones ({options.length})
+            </Typography>
+            <Typography sx={{ color: accent, fontSize: '0.75rem' }}>›</Typography>
+          </Box>
+          <Popover open={open} anchorEl={anchor} onClose={() => setOpen(false)}
+            anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+            transformOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+            slotProps={{ paper: { sx: { bgcolor: 'var(--sidebar-bg,#0d1117)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 2, minWidth: 220, maxWidth: 300, overflow: 'hidden' } } }}>
+            <Box sx={{ p: 1.5 }}>
+              <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.06em', mb: 1 }}>Opciones</Typography>
+              {options.map((opt, i) => {
+                const isSent = sent === opt
+                return (
+                  <Box key={i} onClick={() => handleSelect(opt)} sx={{
+                    py: 0.8, px: 1, borderRadius: 1.5, mb: 0.4, cursor: isOut || sent ? 'default' : 'pointer',
+                    bgcolor: isSent ? 'rgba(74,222,128,0.1)' : 'rgba(255,255,255,0.04)',
+                    border: `1px solid ${isSent ? 'rgba(74,222,128,0.4)' : 'rgba(255,255,255,0.08)'}`,
+                    transition: 'all 0.15s',
+                    '&:hover': !isOut && !sent ? { bgcolor: 'rgba(255,255,255,0.08)' } : {},
+                  }}>
+                    <Typography sx={{ color: isSent ? '#4ade80' : 'rgba(255,255,255,0.85)', fontSize: '0.82rem', fontWeight: isSent ? 600 : 400 }}>
+                      {isSent ? `✓ ${opt}` : opt}
+                    </Typography>
+                  </Box>
+                )
+              })}
+            </Box>
+          </Popover>
+        </>
+      )}
+
+      {type === 'poll' && (
+        <Box sx={{ mt: 0.5, borderTop: `1px solid ${borderColor}`, pt: 0.8 }}>
+          <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.06em', mb: 0.8 }}>📊 Encuesta</Typography>
+          {options.map((opt, i) => (
+            <Box key={i} sx={{ mb: 0.5 }}>
+              <Typography sx={{ color: 'rgba(255,255,255,0.75)', fontSize: '0.78rem', mb: 0.2 }}>{opt}</Typography>
+              <Box sx={{ height: 4, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.08)' }} />
+            </Box>
+          ))}
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+function MessageBubble({ msg, onReply }) {
+  const isOut  = msg.direction === 'outbound'
+  const raw    = msg.body || msg.message_body || ''
+  const media  = MEDIA_LABELS[raw.trim().toLowerCase()]
+  const body   = raw || '—'
+  const interactive = msg.interactive
   return (
     <Box sx={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start', mb: 0.8, px: 2 }}>
       <Box sx={{
@@ -117,9 +249,20 @@ function MessageBubble({ msg }) {
         bgcolor: isOut ? 'rgba(var(--accent-rgb, 99,102,241), 0.22)' : 'rgba(255,255,255,0.07)',
         border: `1px solid ${isOut ? 'rgba(var(--accent-rgb, 99,102,241), 0.3)' : 'rgba(255,255,255,0.09)'}`,
       }}>
-        <Typography sx={{ color: 'rgba(255,255,255,0.88)', fontSize: '0.83rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-          {body}
-        </Typography>
+        {interactive ? (
+          <InteractiveMessage interactive={interactive} isOut={isOut} onReply={onReply} />
+        ) : media ? (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+            <Typography sx={{ fontSize: '1.4rem', lineHeight: 1 }}>{media.emoji}</Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.78rem', fontStyle: 'italic' }}>
+              {media.label}
+            </Typography>
+          </Box>
+        ) : (
+          <Typography sx={{ color: 'rgba(255,255,255,0.88)', fontSize: '0.83rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: '"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",system-ui,sans-serif' }}>
+            {body}
+          </Typography>
+        )}
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 0.5, mt: 0.4 }}>
           <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.65rem' }}>
             {formatTime(msg.created_at)}
@@ -143,6 +286,11 @@ export default function Conversations() {
   const [waNumbers, setWaNumbers]       = useState([])
   const [selectedNums, setSelectedNums] = useState([])
   const [activeNum, setActiveNum]       = useState('all')
+  const [syncing, setSyncing]           = useState(false)
+  const [emojiAnchor, setEmojiAnchor]   = useState(null)
+  const [emojiGroup, setEmojiGroup]     = useState(0)
+  const syncingRef                      = useRef(false)
+  const lastSyncedRef                   = useRef(null)  // evita re-sync al mismo company
   const threadLenRef = useRef(0)
   const messagesBoxRef = useRef(null)
   const replyRef  = useRef(null)
@@ -219,38 +367,57 @@ export default function Conversations() {
     return () => clearInterval(id)
   }, [fetchConvs, fetchThread, selected])
 
-  useEffect(() => {
-    if (selected) {
-      threadLenRef.current = 0
-      setActiveNum('all')
-      fetchThread(selected.company_id, true)
-      fetchCompanyNumbers(selected.company_id)
-    }
-  }, [selected, fetchThread, fetchCompanyNumbers])
-
   // Sync reply target with active tab
   useEffect(() => {
     if (activeNum) setSelectedNums([activeNum])
     else setSelectedNums(waNumbers)
   }, [activeNum, waNumbers])
 
+  const handleSync = useCallback(async (companyId, force = false) => {
+    if (!companyId || syncingRef.current) return
+    if (!force && lastSyncedRef.current === companyId) return
+    syncingRef.current = true
+    lastSyncedRef.current = companyId
+    setSyncing(true)
+    try {
+      const res  = await fetch(`/api/conversations/${companyId}/sync`, { method: 'POST' })
+      const data = await res.json()
+      if ((data.synced ?? 0) > 0) {
+        await fetchThread(companyId, true)
+        await fetchConvs()
+      }
+    } catch {}
+    finally { syncingRef.current = false; setSyncing(false) }
+  }, [fetchThread, fetchConvs])
+
+  useEffect(() => {
+    if (selected) {
+      threadLenRef.current = 0
+      setActiveNum('all')
+      fetchThread(selected.company_id, true)
+      fetchCompanyNumbers(selected.company_id)
+      handleSync(selected.company_id)
+    }
+  }, [selected, fetchThread, fetchCompanyNumbers, handleSync])
+
   function toggleNum(n) {
     setSelectedNums(prev => prev.includes(n) ? prev.filter(x => x !== n) : [...prev, n])
   }
 
-  async function handleSendReply() {
+  async function handleSendReply(overrideText = null) {
+    const text  = overrideText ?? reply
     const toSend = selectedNums.length > 0 ? selectedNums : waNumbers.slice(0, 1)
-    if (!reply.trim() || !selected || toSend.length === 0) return
+    if (!text.trim() || !selected || toSend.length === 0) return
     setSending(true)
     try {
       for (const num of toSend) {
-        await fetch('/api/send-message', {
+        await authFetch('/api/send-message', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             company_id: selected.company_id,
             to_number: num,
-            message: reply.trim(),
+            message: text.trim(),
             website: selected.website || '',
           }),
         })
@@ -386,6 +553,9 @@ export default function Conversations() {
                     href={selected.website} target="_blank" clickable
                     sx={{ fontSize: '0.7rem', height: 20, bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.1)', maxWidth: 180, overflow: 'hidden' }} />
                 )}
+              {syncing && (
+                <CircularProgress size={12} sx={{ color: 'rgba(255,255,255,0.2)', mr: 0.5 }} />
+              )}
                 <Tooltip title="Actualizar">
                   <IconButton size="small" onClick={() => fetchThread(selected.company_id, true)}
                     sx={{ color: 'rgba(255,255,255,0.3)', '&:hover': { color: 'white' } }}>
@@ -474,12 +644,54 @@ export default function Conversations() {
                 <Box sx={{ textAlign: 'center', pt: 4 }}>
                   <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.8rem' }}>Sin mensajes</Typography>
                 </Box>
-              ) : visibleThread.map(m => <MessageBubble key={m._id} msg={m} />)}
+              ) : visibleThread.map(m => (
+                <MessageBubble key={m._id} msg={m} onReply={opt => handleSendReply(opt)} />
+              ))}
             </Box>
+
+            {/* Emoji picker popover */}
+            <Popover
+              open={Boolean(emojiAnchor)} anchorEl={emojiAnchor}
+              onClose={() => setEmojiAnchor(null)}
+              anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
+              transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+              slotProps={{ paper: { sx: { bgcolor: 'var(--sidebar-bg,#0d1117)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, p: 1.5, width: 300 } } }}
+            >
+              {/* Tabs de grupos */}
+              <Box sx={{ display: 'flex', gap: 0.5, mb: 1 }}>
+                {EMOJI_GROUPS.map((g, i) => (
+                  <Box key={g.label} onClick={() => setEmojiGroup(i)} sx={{
+                    px: 1, py: 0.3, borderRadius: 1.5, cursor: 'pointer', fontSize: '0.65rem',
+                    bgcolor: emojiGroup === i ? 'rgba(var(--accent-rgb,99,102,241),0.2)' : 'rgba(255,255,255,0.05)',
+                    color: emojiGroup === i ? 'var(--accent,#a5b4fc)' : 'rgba(255,255,255,0.4)',
+                    border: `1px solid ${emojiGroup === i ? 'rgba(var(--accent-rgb,99,102,241),0.35)' : 'transparent'}`,
+                  }}>{g.label}</Box>
+                ))}
+              </Box>
+              {/* Grid de emojis */}
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.3 }}>
+                {EMOJI_GROUPS[emojiGroup].emojis.map(e => (
+                  <Box key={e} onClick={() => {
+                    setReply(prev => prev + e)
+                    replyRef.current?.querySelector('textarea')?.focus()
+                  }} sx={{
+                    fontSize: '1.35rem', cursor: 'pointer', p: 0.4, borderRadius: 1,
+                    lineHeight: 1, transition: 'transform 0.1s',
+                    '&:hover': { bgcolor: 'rgba(255,255,255,0.08)', transform: 'scale(1.25)' },
+                  }}>{e}</Box>
+                ))}
+              </Box>
+            </Popover>
 
             {/* Input de respuesta — siempre visible, fuera del scroll */}
             <Box sx={{ px: 2, pt: 1.5, pb: 1, borderTop: '1px solid rgba(255,255,255,0.07)', flexShrink: 0, bgcolor: 'rgba(0,0,0,0.15)' }}>
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-end' }}>
+                <Tooltip title="Emojis">
+                  <IconButton size="small" onClick={e => setEmojiAnchor(e.currentTarget)}
+                    sx={{ color: 'rgba(255,255,255,0.3)', flexShrink: 0, mb: 0.5, '&:hover': { color: '#facc15' } }}>
+                    <EmojiEmotionsIcon sx={{ fontSize: 20 }} />
+                  </IconButton>
+                </Tooltip>
                 <TextField ref={replyRef} fullWidth multiline maxRows={4} size="small"
                   placeholder="Escribe una respuesta... (Enter para enviar)" value={reply}
                   onChange={e => setReply(e.target.value)}

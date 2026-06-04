@@ -212,7 +212,9 @@ def _fetch_ddg(query: str, max_results: int = 80) -> list[str]:
     urls = []
     try:
         with DDGS() as ddgs:
-            for r in ddgs.text(query, region="mx-es", max_results=max_results):
+            # wt-wt = worldwide, evita sesgo por IP del servidor
+            # safesearch=off da más resultados de negocios reales
+            for r in ddgs.text(query, region="wt-wt", safesearch="off", max_results=max_results):
                 href = r.get("href")
                 if href and _is_business_url(href):
                     urls.append(href)

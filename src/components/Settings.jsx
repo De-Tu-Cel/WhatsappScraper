@@ -1,10 +1,13 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Divider from '@mui/material/Divider'
 import Tooltip from '@mui/material/Tooltip'
 import TextField from '@mui/material/TextField'
+import Dialog from '@mui/material/Dialog'
+import DialogContent from '@mui/material/DialogContent'
+import CircularProgress from '@mui/material/CircularProgress'
 import SettingsIcon from '@mui/icons-material/Settings'
 import LanguageIcon from '@mui/icons-material/Language'
 import PaletteIcon from '@mui/icons-material/Palette'
@@ -12,6 +15,14 @@ import DarkModeIcon from '@mui/icons-material/DarkMode'
 import CheckIcon from '@mui/icons-material/Check'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
 import LinkIcon from '@mui/icons-material/Link'
+import QrCode2Icon from '@mui/icons-material/QrCode2'
+import VisibilityIcon from '@mui/icons-material/Visibility'
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
+import ContentCopyIcon from '@mui/icons-material/ContentCopy'
+import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
+import AccountCircleIcon from '@mui/icons-material/AccountCircle'
+import { useUser } from '../context/UserContext'
+import { useLang } from '../context/LangContext'
 
 export const ACCENTS = [
   // Marca
@@ -89,6 +100,17 @@ const LANGS = [
 const DEFAULT_SETTINGS = { accent: '#3b82f6', theme: 'navy', lang: 'es' }
 
 const DEFAULT_ANDY = { url: '', endpoint: '/api/pending', user: '', pass: '', token: '' }
+const DEFAULT_EVO  = { url: 'http://localhost:8080', apiKey: '', instance: '' }
+
+export function loadEvoConfig() {
+  if (typeof window === 'undefined') return DEFAULT_EVO
+  try { return { ...DEFAULT_EVO, ...JSON.parse(localStorage.getItem('evo_config') || '{}') } }
+  catch { return DEFAULT_EVO }
+}
+export function saveEvoConfig(cfg) {
+  if (typeof window === 'undefined') return
+  localStorage.setItem('evo_config', JSON.stringify({ ...DEFAULT_EVO, ...cfg }))
+}
 
 export function loadAndyConfig() {
   if (typeof window === 'undefined') return DEFAULT_ANDY
@@ -175,15 +197,184 @@ function Section({ icon, title, children }) {
   )
 }
 
+const INPUT_SX = { '& .MuiOutlinedInput-root': { bgcolor: 'rgba(255,255,255,0.04)', fontSize: '0.82rem', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' }, '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' } }, '& input': { color: 'white' } }
+
+function AccountSection({ user, connStatus, connPhone, evo }) {
+  const [code,      setCode]      = useState(null)  // null=no cargado, ''=no tiene, 'XXXX'=código
+  const [revealed,  setRevealed]  = useState(false)
+  const [copied,    setCopied]    = useState(false)
+  const [loading,   setLoading]   = useState(false)
+
+  async function loadCode() {
+    setLoading(true)
+    try {
+      const token = localStorage.getItem('user_token')
+      const r = await fetch('/api/auth/recovery-code', { headers: { 'x-user-token': token } })
+      const d = await r.json()
+      setCode(d.recovery_code || '')
+      setRevealed(true)
+    } catch { setCode('') }
+    finally { setLoading(false) }
+  }
+
+  function copyCode() {
+    if (!code) return
+    navigator.clipboard.writeText(code)
+    setCopied(true); setTimeout(() => setCopied(false), 2000)
+  }
+
+  const masked = code ? code.slice(0,3) + '·'.repeat(6) + code.slice(-3) : '············'
+
+  return (
+    <Section icon={<AccountCircleIcon />} title="Mi cuenta">
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.2 }}>
+
+        {/* Perfil */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1.5, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+          <Box sx={{ width: 40, height: 40, borderRadius: '50%', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1.5px solid rgba(var(--accent-rgb,59,130,246),0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Typography sx={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--accent,#60a5fa)', textTransform: 'uppercase' }}>{(user?.display_name || '?')[0]}</Typography>
+          </Box>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.88rem' }}>{user?.display_name}</Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem' }}>
+              {user?.email || `@${user?.username}`} · {user?.role === 'admin' ? 'Administrador' : 'Agente'}
+            </Typography>
+          </Box>
+        </Box>
+
+        {/* WhatsApp vinculado */}
+        {(connStatus === 'connected' || connPhone) && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1.2, borderRadius: 2, bgcolor: 'rgba(37,211,102,0.06)', border: '1px solid rgba(37,211,102,0.15)' }}>
+            <PhoneAndroidIcon sx={{ fontSize: 15, color: '#4ade80', flexShrink: 0 }} />
+            <Box>
+              <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>WhatsApp vinculado</Typography>
+              <Typography sx={{ color: '#4ade80', fontSize: '0.82rem', fontWeight: 600, fontFamily: 'monospace' }}>{connPhone || evo.instance}</Typography>
+            </Box>
+          </Box>
+        )}
+
+        {/* Código de recuperación */}
+        <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'rgba(250,204,21,0.05)', border: '1px solid rgba(250,204,21,0.15)' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+            <Typography sx={{ color: '#facc15', fontSize: '0.72rem', fontWeight: 700 }}>🔑 Código de recuperación</Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.65rem' }}>
+              Úsalo si olvidas tu PIN
+            </Typography>
+          </Box>
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {/* Código */}
+            <Box sx={{ flex: 1, py: 0.8, px: 1.2, borderRadius: 1.5, bgcolor: 'rgba(0,0,0,0.25)', border: '1px solid rgba(250,204,21,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Typography sx={{ fontFamily: 'monospace', fontSize: '0.95rem', fontWeight: 700, letterSpacing: '0.18em', color: revealed && code ? '#facc15' : 'rgba(255,255,255,0.25)' }}>
+                {revealed ? (code || 'No disponible') : masked}
+              </Typography>
+            </Box>
+
+            {/* Botón ver/ocultar */}
+            <Tooltip title={revealed ? 'Ocultar' : 'Ver código'}>
+              <Box onClick={revealed ? () => setRevealed(false) : loadCode} sx={{
+                p: 0.8, borderRadius: 1.5, cursor: 'pointer',
+                bgcolor: 'rgba(250,204,21,0.1)', border: '1px solid rgba(250,204,21,0.2)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                '&:hover': { bgcolor: 'rgba(250,204,21,0.2)' },
+              }}>
+                {loading
+                  ? <CircularProgress size={14} sx={{ color: '#facc15' }} />
+                  : revealed
+                  ? <VisibilityOffIcon sx={{ fontSize: 16, color: '#facc15' }} />
+                  : <VisibilityIcon sx={{ fontSize: 16, color: '#facc15' }} />}
+              </Box>
+            </Tooltip>
+
+            {/* Copiar */}
+            {revealed && code && (
+              <Tooltip title={copied ? '¡Copiado!' : 'Copiar'}>
+                <Box onClick={copyCode} sx={{
+                  p: 0.8, borderRadius: 1.5, cursor: 'pointer',
+                  bgcolor: copied ? 'rgba(74,222,128,0.15)' : 'rgba(255,255,255,0.06)',
+                  border: `1px solid ${copied ? 'rgba(74,222,128,0.3)' : 'rgba(255,255,255,0.1)'}`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  '&:hover': { bgcolor: 'rgba(255,255,255,0.1)' },
+                }}>
+                  <ContentCopyIcon sx={{ fontSize: 15, color: copied ? '#4ade80' : 'rgba(255,255,255,0.4)', display: 'block' }} />
+                </Box>
+              </Tooltip>
+            )}
+          </Box>
+        </Box>
+      </Box>
+    </Section>
+  )
+}
+
+function EvoAdvanced({ evo, saveEvo }) {
+  const [open, setOpen] = useState(false)
+
+  async function handleSave() {
+    try {
+      await fetch('/api/config/evolution', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(evo),
+      })
+    } catch {}
+  }
+
+  return (
+    <Box>
+      <Box onClick={() => setOpen(o => !o)} sx={{
+        display: 'flex', alignItems: 'center', gap: 0.8, cursor: 'pointer',
+        color: 'rgba(255,255,255,0.25)', py: 0.3,
+        '&:hover': { color: 'rgba(255,255,255,0.45)' },
+      }}>
+        <Typography sx={{ fontSize: '0.68rem', letterSpacing: '0.04em', color: 'inherit' }}>
+          {open ? '▾' : '▸'} Configuración avanzada
+        </Typography>
+      </Box>
+
+      {open && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.2, mt: 1, pl: 1, borderLeft: '2px solid rgba(255,255,255,0.07)' }}>
+          <Box>
+            <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', mb: 0.4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>URL del servidor</Typography>
+            <TextField fullWidth size="small" placeholder="http://localhost:8080"
+              value={evo.url} onChange={e => saveEvo({ url: e.target.value })} sx={INPUT_SX} />
+          </Box>
+          <Box>
+            <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', mb: 0.4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>API Key</Typography>
+            <TextField fullWidth size="small" type="password" placeholder="••••••••"
+              value={evo.apiKey} onChange={e => saveEvo({ apiKey: e.target.value })} sx={INPUT_SX} />
+          </Box>
+          <Box>
+            <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', mb: 0.4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Nombre de instancia</Typography>
+            <TextField fullWidth size="small" placeholder="detucel"
+              value={evo.instance} onChange={e => saveEvo({ instance: e.target.value })} sx={INPUT_SX} />
+          </Box>
+          <Box onClick={handleSave} sx={{
+            alignSelf: 'flex-start', px: 1.5, py: 0.4, borderRadius: 1.5, cursor: 'pointer',
+            bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)',
+            border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)',
+            '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.25)' },
+          }}>
+            <Typography sx={{ fontSize: '0.72rem', color: 'var(--accent,#60a5fa)' }}>Guardar</Typography>
+          </Box>
+        </Box>
+      )}
+    </Box>
+  )
+}
+
 export default function Settings() {
+  const { user }                = useUser()
+  const { setLang }             = useLang()
   const [settings, setSettings] = useState(DEFAULT_SETTINGS)
   const [andy, setAndy]         = useState(DEFAULT_ANDY)
+  const [evo,  setEvo]          = useState(DEFAULT_EVO)
 
   useEffect(() => {
     const s = loadSettings()
     setSettings(s)
     applySettings(s)
     setAndy(loadAndyConfig())
+    setEvo(loadEvoConfig())
   }, [])
 
   function save(patch) {
@@ -199,6 +390,128 @@ export default function Settings() {
     const next = { ...andy, ...patch }
     setAndy(next)
     saveAndyConfig(next)
+  }
+
+  function saveEvo(patch) {
+    const next = { ...evo, ...patch }
+    setEvo(next)
+    saveEvoConfig(next)
+  }
+
+  // ── QR Connection state ──
+  const [qrOpen,       setQrOpen]       = useState(false)
+  const [qrImage,      setQrImage]      = useState(null)
+  const [qrStatus,     setQrStatus]     = useState('idle') // idle | phone | creating | waiting | connected | error
+  const [qrPhone,      setQrPhone]      = useState('')
+  const [phoneInput,   setPhoneInput]   = useState('')
+  const [connStatus,   setConnStatus]   = useState('checking') // checking | connected | disconnected
+  const [connPhone,    setConnPhone]    = useState('')
+  const pollRef = useRef(null)
+
+  // Verificar estado real de conexión al cargar
+  useEffect(() => {
+    async function checkConn() {
+      const cfg = loadEvoConfig()
+      if (!cfg.instance) { setConnStatus('disconnected'); return }
+      try {
+        const r = await fetch(`/api/evolution/instance/${cfg.instance}?type=status`)
+        const d = await r.json()
+        const state = d.instance?.state || d.state || ''
+        if (state === 'open') {
+          setConnStatus('connected')
+          setConnPhone(d.instance?.profileName || d.instance?.wid?.user || cfg.instance)
+        } else {
+          setConnStatus('disconnected')
+        }
+      } catch { setConnStatus('disconnected') }
+    }
+    checkConn()
+  }, [])
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+  }, [])
+
+  const fetchQr = useCallback(async (name) => {
+    try {
+      const r = await fetch(`/api/evolution/instance/${name}?type=qr`)
+      const d = await r.json()
+      const b64 = d.base64 || d.qrcode?.base64 || d.qr?.base64
+      if (b64) setQrImage(b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`)
+    } catch {}
+  }, [])
+
+  const checkStatus = useCallback(async (name) => {
+    try {
+      const r = await fetch(`/api/evolution/instance/${name}?type=status`)
+      const d = await r.json()
+      const state = d.instance?.state || d.state || ''
+      if (state === 'open') {
+        stopPolling()
+        setQrStatus('connected')
+        const phone = d.instance?.profileName || d.instance?.wid?.user || name
+        setQrPhone(phone)
+        saveEvoConfig({ ...loadEvoConfig(), instance: name })
+        setEvo(prev => ({ ...prev, instance: name }))
+        setConnStatus('connected')
+        setConnPhone(phoneInput || phone)
+        // Save instance + phone to user profile in backend
+        const token = localStorage.getItem('user_token')
+        if (token) {
+          fetch('/api/auth/evolution', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'x-user-token': token },
+            body: JSON.stringify({ instance: name, number: phoneInput || phone }),
+          }).catch(() => {})
+        }
+      }
+    } catch {}
+  }, [stopPolling])
+
+  async function handleConnect() {
+    // Open phone input step first
+    setPhoneInput('')
+    setQrStatus('phone')
+    setQrImage(null)
+    setQrOpen(true)
+  }
+
+  async function handleStartConnection() {
+    // Reutilizar siempre la misma instancia por usuario — sin timestamps
+    const instanceName = `${user?.username || 'user'}-wa`
+    saveEvo({ instance: instanceName })
+    setQrStatus('creating')
+    try {
+      const res = await fetch('/api/evolution/instance', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instanceName }),
+      })
+      const data = await res.json()
+      const instanceKey = data?.hash?.apikey || data?.apikey
+      if (instanceKey) saveEvo({ apiKey: instanceKey })
+
+      // Auto-register webhook for the new instance
+      await fetch('/api/evolution/instance/webhook', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instanceName }),
+      }).catch(() => {})
+
+      setQrStatus('waiting')
+      await fetchQr(instanceName)
+      pollRef.current = setInterval(async () => {
+        await checkStatus(instanceName)
+        await fetchQr(instanceName)
+      }, 3000)
+    } catch {
+      setQrStatus('error')
+    }
+  }
+
+  function handleCloseQr() {
+    stopPolling()
+    setQrOpen(false)
+    setQrStatus('idle')
+    setQrImage(null)
   }
 
   const currentAccent = ACCENTS.find(a => a.value === settings.accent) || ACCENTS[0]
@@ -230,7 +543,7 @@ export default function Settings() {
             {LANGS.map(l => {
               const active = settings.lang === l.value
               return (
-                <Box key={l.value} onClick={() => save({ lang: l.value })} sx={{
+                <Box key={l.value} onClick={() => { save({ lang: l.value }); setLang(l.value) }} sx={{
                   flex: 1, py: 1.2, px: 1.5, borderRadius: 2, cursor: 'pointer',
                   display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 1,
                   bgcolor: active ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.03)',
@@ -239,7 +552,7 @@ export default function Settings() {
                   transition: 'all 0.15s',
                   '&:hover': { bgcolor: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.18)' },
                 }}>
-                  <Typography sx={{ fontSize: '1.1rem', lineHeight: 1, flexShrink: 0 }}>{l.flag}</Typography>
+                  <Typography sx={{ fontSize: '1.1rem', lineHeight: 1, flexShrink: 0, top: -1.2, position: 'relative' }}>{l.flag}</Typography>
                   <Typography sx={{
                     fontSize: '0.82rem',
                     fontWeight: active ? 700 : 400,
@@ -250,11 +563,13 @@ export default function Settings() {
                   </Typography>
                   {/* Always rendered — opacity prevents layout shift */}
                   <CheckIcon sx={{
-                    fontSize: 14,
+                    fontSize: 16,
                     color: 'var(--accent,#3b82f6)',
                     flexShrink: 0,
                     opacity: active ? 1 : 0,
                     transition: 'opacity 0.15s',
+                    position: 'relative',
+                    
                   }} />
                 </Box>
               )
@@ -473,6 +788,218 @@ export default function Settings() {
             </Box>
           </Box>
         </Section>
+
+        {/* ── Modal QR ── */}
+        <Dialog open={qrOpen} onClose={handleCloseQr} maxWidth="xs" fullWidth
+          slotProps={{ paper: { sx: { bgcolor: 'var(--card-bg,#161d2e)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 3, boxShadow: '0 24px 64px rgba(0,0,0,0.7)' } } }}>
+          <DialogContent sx={{ textAlign: 'center', py: 3, bgcolor: 'var(--card-bg,#161d2e)' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, mb: 2 }}>
+              <PhoneAndroidIcon sx={{ color: '#25d366', fontSize: 22 }} />
+              <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem' }}>
+                Conectar WhatsApp
+              </Typography>
+            </Box>
+
+            {/* Paso 1 — ingresar número */}
+            {qrStatus === 'phone' && (
+              <Box sx={{ py: 1, px: 0.5, bgcolor: 'var(--surface,#111827)', borderRadius: 2, p: 2, border: '1px solid rgba(255,255,255,0.07)' }}>
+                <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.8rem', mb: 2, lineHeight: 1.5 }}>
+                  Ingresa el número sin espacios ni símbolo +
+                </Typography>
+
+                {/* Input estilo WhatsApp */}
+                <Box sx={{
+                  display: 'flex', alignItems: 'center', gap: 0,
+                  bgcolor: 'var(--surface,#111827)', borderRadius: 2,
+                  border: '1.5px solid rgba(255,255,255,0.1)',
+                  overflow: 'hidden', mb: 2,
+                  '&:focus-within': { borderColor: '#25d366', boxShadow: '0 0 0 3px rgba(37,211,102,0.1)' },
+                  transition: 'all 0.15s',
+                }}>
+                  {/* Prefijo fijo */}
+                  <Box sx={{ px: 1.5, py: 1.2, bgcolor: 'rgba(37,211,102,0.08)', borderRight: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
+                    <Typography sx={{ color: '#4ade80', fontSize: '0.95rem', fontWeight: 600, fontFamily: 'monospace' }}>+52</Typography>
+                  </Box>
+                  {/* Input limpio */}
+                  <Box
+                    component="input"
+                    autoFocus
+                    type="tel"
+                    placeholder="5512345678"
+                    value={phoneInput.replace(/\D/g, '').replace(/^52/, '')}
+                    onChange={e => {
+                      const digits = e.target.value.replace(/\D/g, '').slice(0, 10)
+                      setPhoneInput('+52' + digits)
+                    }}
+                    onKeyDown={e => { if (e.key === 'Enter' && phoneInput.replace(/\D/g,'').length >= 12) handleStartConnection() }}
+                    sx={{
+                      flex: 1, border: 'none', outline: 'none', bgcolor: 'transparent',
+                      color: 'white', fontSize: '1.1rem', fontFamily: 'monospace',
+                      letterSpacing: '0.08em', px: 1.5, py: 1.2,
+                      '&::placeholder': { color: 'rgba(255,255,255,0.2)' },
+                    }}
+                  />
+                </Box>
+
+                <Box onClick={() => phoneInput.replace(/\D/g,'').length >= 12 && handleStartConnection()} sx={{
+                  py: 1.1, borderRadius: 2, cursor: phoneInput.replace(/\D/g,'').length >= 12 ? 'pointer' : 'default', textAlign: 'center',
+                  bgcolor: phoneInput.replace(/\D/g,'').length >= 12 ? 'rgba(37,211,102,0.15)' : 'rgba(255,255,255,0.04)',
+                  border: `1px solid ${phoneInput.replace(/\D/g,'').length >= 12 ? 'rgba(37,211,102,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                  transition: 'all 0.15s',
+                  '&:hover': phoneInput.replace(/\D/g,'').length >= 12 ? { bgcolor: 'rgba(37,211,102,0.25)' } : {},
+                }}>
+                  <Typography sx={{ color: phoneInput.replace(/\D/g,'').length >= 12 ? '#25d366' : 'rgba(255,255,255,0.2)', fontWeight: 700, fontSize: '0.88rem' }}>
+                    Continuar →
+                  </Typography>
+                </Box>
+                <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.68rem', mt: 1.5, textAlign: 'center' }}>
+                  Debes tener WhatsApp activo en ese número
+                </Typography>
+              </Box>
+            )}
+
+            {qrStatus === 'creating' && (
+              <Box sx={{ py: 4, bgcolor: 'var(--surface,#111827)', borderRadius: 2, border: '1px solid rgba(255,255,255,0.07)' }}>
+                <CircularProgress size={40} sx={{ color: '#25d366' }} />
+                <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.82rem', mt: 2 }}>
+                  Preparando tu conexión…
+                </Typography>
+              </Box>
+            )}
+
+            {qrStatus === 'waiting' && (
+              <Box sx={{ bgcolor: 'var(--surface,#111827)', borderRadius: 2, p: 2, border: '1px solid rgba(255,255,255,0.07)' }}>
+                {/* Número que se está vinculando */}
+                {phoneInput && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, px: 1.5, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(37,211,102,0.08)', border: '1px solid rgba(37,211,102,0.2)' }}>
+                    <PhoneAndroidIcon sx={{ fontSize: 15, color: '#4ade80' }} />
+                    <Typography sx={{ color: '#4ade80', fontSize: '0.82rem', fontFamily: 'monospace', fontWeight: 600 }}>
+                      {phoneInput}
+                    </Typography>
+                  </Box>
+                )}
+
+                {qrImage ? (
+                  <Box sx={{ display: 'inline-block' }}>
+                    <Box component="img" src={qrImage} alt="QR Code"
+                      sx={{ width: 220, height: 220, borderRadius: 2, border: '4px solid white', display: 'block' }} />
+                  </Box>
+                ) : (
+                  <Box sx={{ width: 220, height: 220, mx: 'auto', borderRadius: 2,
+                    bgcolor: 'var(--surface,#111827)', border: '1px solid rgba(255,255,255,0.07)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <CircularProgress size={32} sx={{ color: '#25d366' }} />
+                  </Box>
+                )}
+
+                {/* Indicador de espera — separado del QR */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.5, justifyContent: 'center' }}>
+                  <CircularProgress size={12} sx={{ color: '#25d366' }} />
+                  <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.7rem' }}>Esperando escaneo…</Typography>
+                </Box>
+
+                <Box sx={{ mt: 1.5, textAlign: 'left', width: '100%', maxWidth: 240 }}>
+                  {[
+                    'Abre WhatsApp en tu celular',
+                    'Toca los 3 puntos (⋮) → Dispositivos vinculados',
+                    'Toca "Vincular un dispositivo"',
+                    'Apunta la cámara a este código QR',
+                  ].map((step, i) => (
+                    <Box key={i} sx={{ display: 'flex', gap: 1, mb: 0.8 }}>
+                      <Box sx={{ width: 18, height: 18, borderRadius: '50%', bgcolor: 'rgba(37,211,102,0.2)', border: '1px solid rgba(37,211,102,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, mt: 0.1 }}>
+                        <Typography sx={{ fontSize: '0.55rem', color: '#4ade80', fontWeight: 800 }}>{i+1}</Typography>
+                      </Box>
+                      <Typography sx={{ color: 'rgba(255,255,255,0.55)', fontSize: '0.75rem', lineHeight: 1.4 }}>{step}</Typography>
+                    </Box>
+                  ))}
+                </Box>
+              </Box>
+            )}
+
+            {qrStatus === 'connected' && (
+              <Box sx={{ py: 2, bgcolor: 'rgba(37,211,102,0.06)', borderRadius: 2, border: '1px solid rgba(37,211,102,0.18)' }}>
+                <Box sx={{ width: 64, height: 64, borderRadius: '50%', bgcolor: 'rgba(37,211,102,0.15)',
+                  border: '2px solid #25d366', display: 'flex', alignItems: 'center', justifyContent: 'center', mx: 'auto', mb: 2 }}>
+                  <CheckIcon sx={{ color: '#25d366', fontSize: 32 }} />
+                </Box>
+                <Typography sx={{ color: '#25d366', fontWeight: 700, fontSize: '1rem' }}>
+                  ¡Número vinculado!
+                </Typography>
+                <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.85rem', mt: 0.5, fontFamily: 'monospace' }}>
+                  {phoneInput || qrPhone}
+                </Typography>
+                <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem', mt: 0.5 }}>
+                  Los mensajes saldrán desde este número
+                </Typography>
+                <Box onClick={handleCloseQr} sx={{
+                  mt: 2.5, px: 3, py: 0.8, borderRadius: 2, cursor: 'pointer', display: 'inline-block',
+                  bgcolor: 'rgba(37,211,102,0.15)', border: '1px solid rgba(37,211,102,0.3)',
+                  '&:hover': { bgcolor: 'rgba(37,211,102,0.25)' },
+                }}>
+                  <Typography sx={{ color: '#25d366', fontSize: '0.82rem', fontWeight: 600 }}>Listo</Typography>
+                </Box>
+              </Box>
+            )}
+
+            {qrStatus === 'error' && (
+              <Box sx={{ py: 1.5, px: 2, bgcolor: 'rgba(248,113,113,0.06)', borderRadius: 2, border: '1px solid rgba(248,113,113,0.2)' }}>
+                <Typography sx={{ color: '#f87171', fontSize: '0.85rem' }}>
+                  No se pudo crear la instancia. Verifica que Evolution API esté activo y la API Key sea correcta.
+                </Typography>
+              </Box>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* ── WhatsApp ── */}
+        <Section icon={<PhoneAndroidIcon />} title="Mi WhatsApp">
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+
+            {connStatus === 'checking' ? (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 0.5 }}>
+                <CircularProgress size={16} sx={{ color: 'rgba(255,255,255,0.25)' }} />
+                <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem' }}>Verificando conexión…</Typography>
+              </Box>
+            ) : connStatus === 'connected' ? (
+              /* ── Conectado ── */
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: 1.5, borderRadius: 2, bgcolor: 'rgba(37,211,102,0.08)', border: '1px solid rgba(37,211,102,0.22)' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+                  <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: '#25d366', boxShadow: '0 0 8px #25d366aa', flexShrink: 0 }} />
+                  <Box>
+                    <Typography sx={{ color: '#4ade80', fontWeight: 600, fontSize: '0.85rem' }}>Número conectado</Typography>
+                    <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem' }}>{connPhone || evo.instance}</Typography>
+                  </Box>
+                </Box>
+                <Box onClick={handleConnect} sx={{ px: 1.2, py: 0.5, borderRadius: 1.5, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.1)', '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' } }}>
+                  <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.35)' }}>Cambiar</Typography>
+                </Box>
+              </Box>
+            ) : (
+              /* ── Sin conectar ── */
+              <Box>
+                <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)', mb: 1.5, lineHeight: 1.5 }}>
+                  Vincula tu número de WhatsApp para enviar mensajes directamente desde la app.
+                </Typography>
+                <Box onClick={handleConnect} sx={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1,
+                  py: 1.3, borderRadius: 2, cursor: 'pointer',
+                  bgcolor: 'rgba(37,211,102,0.12)', border: '1px solid rgba(37,211,102,0.3)',
+                  transition: 'all 0.15s',
+                  '&:hover': { bgcolor: 'rgba(37,211,102,0.2)', borderColor: 'rgba(37,211,102,0.5)' },
+                }}>
+                  <QrCode2Icon sx={{ fontSize: 18, color: '#25d366' }} />
+                  <Typography sx={{ fontWeight: 700, fontSize: '0.88rem', color: '#25d366' }}>
+                    Conectar mi número de WhatsApp
+                  </Typography>
+                </Box>
+              </Box>
+            )}
+
+          </Box>
+        </Section>
+
+        {/* ── Mi cuenta ── */}
+        <AccountSection user={user} connStatus={connStatus} connPhone={connPhone} evo={evo} />
 
       </Box>
     </Box>

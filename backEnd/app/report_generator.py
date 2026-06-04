@@ -47,6 +47,29 @@ CATEGORY_INFO = {
 }
 
 
+def _safe(text) -> str:
+    if not text:
+        return ""
+    s = str(text)
+    s = s.replace("\u2014", "-")
+    s = s.replace("\u2013", "-")
+    s = s.replace("\u2018", "'")
+    s = s.replace("\u2019", "'")
+    s = s.replace("\u201c", '"')
+    s = s.replace("\u201d", '"')
+    s = s.replace("\u2026", "...")
+    s = s.replace("\u00b7", ".")
+    s = s.replace("\u2022", "-")
+    s = s.replace("\u2190", "<")
+    s = s.replace("\u2192", ">")
+    s = s.replace("\u00a0", " ")
+    return s.encode("latin-1", errors="replace").decode("latin-1")
+_OrigParagraph = Paragraph
+
+def Paragraph(text, style, *args, **kwargs):  # noqa: N802
+    return _OrigParagraph(_safe(text), style, *args, **kwargs)
+
+
 def _st(name, **kw):
     kw.setdefault("fontName", "Helvetica")
     kw.setdefault("textColor", C["text"])
@@ -152,11 +175,11 @@ class CardGrid(Flowable):
             # Title
             self.canv.setFillColor(C["muted"])
             self.canv.setFont("Helvetica-Bold", 7)
-            self.canv.drawString(x + 10, y + ch - 16, title.upper())
+            self.canv.drawString(x + 10, y + ch - 16, _safe(title).upper())
             # Value
             self.canv.setFillColor(color)
             self.canv.setFont("Helvetica-Bold", 17)
-            self.canv.drawString(x + 10, y + ch - 36, str(value))
+            self.canv.drawString(x + 10, y + ch - 36, _safe(str(value)))
             # Extra (e.g. QualityDots rendered inline)
             if extra is not None:
                 extra.canv = self.canv
@@ -191,10 +214,10 @@ class SummaryBar(Flowable):
             self.canv.roundRect(x, 0, cw - 3, self._h, 3, fill=0, stroke=1)
             self.canv.setFillColor(color)
             self.canv.setFont("Helvetica-Bold", fs_val)
-            self.canv.drawString(x + 8, self._h * 0.45, val)
+            self.canv.drawString(x + 8, self._h * 0.45, _safe(val))
             self.canv.setFillColor(C["muted"])
             self.canv.setFont("Helvetica", fs_label)
-            self.canv.drawString(x + 8, 5, label)
+            self.canv.drawString(x + 8, 5, _safe(label))
 
 
 # ─── Page callbacks ───────────────────────────────────────────────────────────
@@ -252,6 +275,20 @@ def _suggestions(analytics: dict, industry: str) -> list[str]:
 # ─── Main generator ───────────────────────────────────────────────────────────
 
 def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64: str | None) -> io.BytesIO:
+    # Sanitize all string values in dicts to avoid latin-1 encoding errors
+    def _safe_dict(d):
+        if isinstance(d, dict):
+            return {k: _safe_dict(v) for k, v in d.items()}
+        if isinstance(d, list):
+            return [_safe_dict(i) for i in d]
+        if isinstance(d, str):
+            return _safe(d)
+        return d
+
+    company   = _safe_dict(company)
+    analytics = _safe_dict(analytics)
+    thread    = _safe_dict(thread)
+
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
@@ -266,13 +303,13 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     except ValueError:
         now_str = datetime.now().strftime("%d de %B de %Y, %H:%M")
 
-    company_name = company.get("name") or company.get("domain") or "Empresa"
-    industry     = company.get("industry") or analytics.get("industry") or "—"
-    domain       = company.get("domain") or ""
+    company_name = _safe(company.get("name") or company.get("domain") or "Empresa")
+    industry     = _safe(company.get("industry") or analytics.get("industry") or "-")
+    domain       = _safe(company.get("domain") or "")
     wa_number    = ""
     for c in (company.get("contacts") or []):
         if c.get("type") == "whatsapp":
-            wa_number = c.get("value", "")
+            wa_number = _safe(c.get("value", ""))
             break
 
     cat_key             = analytics.get("category", "humano")
@@ -293,10 +330,10 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     recv_c = sum(1 for m in thread if m.get("direction") == "inbound")
     read_c = sum(1 for m in thread if m.get("status") == "read")
 
-    hours_label = ("Horario hábil" if biz_hours else ("Fuera de horario" if biz_hours is not None else "—"))
+    hours_label = ("Horario habil" if biz_hours else ("Fuera de horario" if biz_hours is not None else "-"))
     hours_color = C["humano"] if biz_hours else C["muted"]
 
-    suggestions = _suggestions(analytics, industry) or [
+    suggestions = [_safe(s) for s in (_suggestions(analytics, industry) or [])] or [
         "Activar respuestas automáticas fuera de horario para no perder prospectos.",
         "Configurar un mensaje de bienvenida con precios y servicios principales.",
         "Reducir el tiempo de respuesta a menos de 10 minutos durante horario hábil.",
@@ -419,6 +456,29 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
         _st("bn", fontSize=7, alignment=TA_CENTER, leading=11),
     ))
 
+    # Patch canvas to sanitize all text before drawing
+    _orig_build = doc.build
+    def _safe_build(*a, **kw):
+        from reportlab.pdfgen.canvas import Canvas
+        _orig_ds  = Canvas.drawString
+        _orig_drs = Canvas.drawRightString
+        _orig_dcs = Canvas.drawCentredString
+        def _safe_ds(self, x, y, text, *args, **kwargs):
+            return _orig_ds(self, x, y, _safe(text), *args, **kwargs)
+        def _safe_drs(self, x, y, text, *args, **kwargs):
+            return _orig_drs(self, x, y, _safe(text), *args, **kwargs)
+        def _safe_dcs(self, x, y, text, *args, **kwargs):
+            return _orig_dcs(self, x, y, _safe(text), *args, **kwargs)
+        Canvas.drawString        = _safe_ds
+        Canvas.drawRightString   = _safe_drs
+        Canvas.drawCentredString = _safe_dcs
+        try:
+            return _orig_build(*a, **kw)
+        finally:
+            Canvas.drawString        = _orig_ds
+            Canvas.drawRightString   = _orig_drs
+            Canvas.drawCentredString = _orig_dcs
+    doc.build = _safe_build
     doc.build(story, onFirstPage=_page_bg, onLaterPages=_page_bg)
     buf.seek(0)
     return buf

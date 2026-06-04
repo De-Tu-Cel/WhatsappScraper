@@ -155,6 +155,7 @@ export default function ResultDisplay({ result }) {
   const cr = s._contacts_raw || {}
   const totalContacts = (cr.emails?.length || 0) + (cr.phone_numbers?.length || 0)
   const domain = s.domain || s.website?.replace(/https?:\/\/(www\.)?/, '').split('/')[0] || ''
+  const contacted = result?.already_contacted
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
@@ -226,6 +227,13 @@ export default function ResultDisplay({ result }) {
               {domain && (
                 <Chip icon={<LinkIcon sx={{ fontSize: '11px !important' }} />} label={domain} size="small" component="a" href={s.website} target="_blank" clickable
                   sx={{ bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.1)', fontSize: '0.7rem', height: 20, '& .MuiChip-icon': { color: 'rgba(255,255,255,0.3)' }, '&:hover': { bgcolor: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.7)' } }} />
+              )}
+              {contacted?.contacted && (
+                <Chip
+                  label={`⚠️ Ya contactada${contacted.by_name ? ` por ${contacted.by_name.split(' ')[0]}` : ''}`}
+                  size="small"
+                  sx={{ bgcolor: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.3)', fontSize: '0.68rem', height: 20 }}
+                />
               )}
             </Box>
           </Box>

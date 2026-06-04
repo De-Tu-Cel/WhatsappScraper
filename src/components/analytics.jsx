@@ -10,10 +10,12 @@ import TableBody from '@mui/material/TableBody'
 import TableRow from '@mui/material/TableRow'
 import TableCell from '@mui/material/TableCell'
 import TableContainer from '@mui/material/TableContainer'
+import TablePagination from '@mui/material/TablePagination'
 import TableSortLabel from '@mui/material/TableSortLabel'
 import Tooltip from '@mui/material/Tooltip'
 import IconButton from '@mui/material/IconButton'
 import BarChartIcon from '@mui/icons-material/BarChart'
+import SearchIcon from '@mui/icons-material/Search'
 import PersonIcon from '@mui/icons-material/Person'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
 import FlashOnIcon from '@mui/icons-material/FlashOn'
@@ -24,10 +26,14 @@ import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf'
 import SendIcon from '@mui/icons-material/Send'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined'
+import TextField from '@mui/material/TextField'
+import InputAdornment from '@mui/material/InputAdornment'
 import Snackbar from '@mui/material/Snackbar'
 import Alert from '@mui/material/Alert'
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight'
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
+import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import { loadAndyConfig, saveAndyConfig } from './Settings'
 
@@ -185,7 +191,13 @@ export default function Analytics() {
   const [snack, setSnack] = useState({ open: false, message: '', severity: 'error' })
   const notify = (message, severity = 'error') => setSnack({ open: true, message, severity })
   const [sortField, setSortField] = useState('last_at')
+  const [filterCat, setFilterCat] = useState('all')
+  const [searchText, setSearchText] = useState('')
   const [sortDir, setSortDir]     = useState('desc')
+  const [page, setPage]           = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const [totalItems, setTotalItems] = useState(0)
+  const PAGE_SIZE = 20
   const [andyStatus, setAndyStatus] = useState({}) // { [company_id]: 'loading'|'success'|'error' }
 
   const handleSort = (field) => {
@@ -193,12 +205,14 @@ export default function Analytics() {
     else { setSortField(field); setSortDir('asc') }
   }
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (pg = page) => {
     setLoading(true)
     try {
-      const res = await fetch('/api/analytics')
+      const res  = await fetch(`/api/analytics?page=${pg}&page_size=${PAGE_SIZE}`)
       const json = await res.json()
-      setData(Array.isArray(json) ? json : [])
+      setData(json.items || [])
+      setTotalPages(json.pages || 1)
+      setTotalItems(json.total || 0)
     } catch {
       setData([])
     } finally {
@@ -206,7 +220,7 @@ export default function Analytics() {
     }
   }, [])
 
-  useEffect(() => { fetchData() }, [fetchData])
+  useEffect(() => { fetchData(page) }, [fetchData, page])
 
   const handleGenerateReport = useCallback(async (row, filterNum = null) => {
     const genKey = filterNum ? `${row.company_id}_${filterNum}` : row.company_id
@@ -382,7 +396,22 @@ export default function Analytics() {
     }
   }, [])
 
-  const sortedData = [...data].sort((a, b) => {
+  const filteredData = data.filter(row => {
+    if (filterCat !== 'all') {
+      if (filterCat === 'sin_clasificar') {
+        if (row.category && row.category !== 'sin_clasificar') return false
+      } else if (row.category !== filterCat) return false
+    }
+    if (searchText.trim()) {
+      const q = searchText.toLowerCase()
+      if (!(row.company_name || '').toLowerCase().includes(q) &&
+          !(row.industry    || '').toLowerCase().includes(q) &&
+          !(row.domain      || '').toLowerCase().includes(q)) return false
+    }
+    return true
+  })
+
+  const sortedData = [...filteredData].sort((a, b) => {
     let av = a[sortField] ?? '', bv = b[sortField] ?? ''
     if (typeof av === 'string') av = av.toLowerCase()
     if (typeof bv === 'string') bv = bv.toLowerCase()
@@ -391,11 +420,12 @@ export default function Analytics() {
     return 0
   })
 
-  const total    = data.length
-  const humanPct = total ? Math.round((data.filter(d => d.category === 'humano').length / total) * 100) : 0
-  const botAutoPct = total
-    ? Math.round((data.filter(d => d.category === 'bot' || d.category === 'automatico').length / total) * 100)
-    : 0
+  const total       = data.length
+  const pct = cat  => total ? Math.round((data.filter(d => d.category === cat).length / total) * 100) : 0
+  const humanPct   = pct('humano')
+  const autoPct    = pct('automatico')
+  const botPct     = pct('bot')
+  const botIaPct   = pct('bot_ia')
   const avgQuality = total
     ? (data.reduce((acc, d) => acc + (d.response_quality || 0), 0) / total).toFixed(1)
     : '—'
@@ -425,7 +455,7 @@ export default function Analytics() {
           </Box>
         </Box>
         <Tooltip title="Actualizar">
-          <IconButton size="small" onClick={fetchData}
+          <IconButton size="small" onClick={() => fetchData(page)}
             sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'white' } }}>
             <RefreshIcon fontSize="small" />
           </IconButton>
@@ -452,23 +482,95 @@ export default function Analytics() {
           <Typography sx={{ fontSize: '0.85rem', color: '#4ade80', fontWeight: 700 }}>{humanPct}%</Typography>
         </Box>
 
-        <Box sx={{
-          display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
-          bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2,
-        }}>
-          <SmartToyIcon sx={{ fontSize: 15, color: '#a78bfa' }} />
-          <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>% Bot/Auto:</Typography>
-          <Typography sx={{ fontSize: '0.85rem', color: '#a78bfa', fontWeight: 700 }}>{botAutoPct}%</Typography>
-        </Box>
+        {[
+          { icon: '⚡', color: '#facc15', label: 'Automático', value: autoPct },
+          { icon: '🤖', color: '#a78bfa', label: 'Bot',        value: botPct  },
+          { icon: '🧠', color: '#c084fc', label: 'Bot IA',     value: botIaPct},
+        ].map(({ icon, color, label, value }) => (
+          <Box key={label} sx={{
+            display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
+            bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2,
+          }}>
+            <Typography sx={{ fontSize: '0.9rem', lineHeight: 1 }}>{icon}</Typography>
+            <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>{label}:</Typography>
+            <Typography sx={{ fontSize: '0.85rem', color, fontWeight: 700 }}>{value}%</Typography>
+          </Box>
+        ))}
 
         <Box sx={{
           display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
           bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2,
         }}>
-          <FlashOnIcon sx={{ fontSize: 15, color: '#facc15' }} />
+          <StarIcon sx={{ fontSize: 15, color: '#facc15' }} />
           <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>Calidad promedio:</Typography>
           <Typography sx={{ fontSize: '0.85rem', color: '#facc15', fontWeight: 700 }}>{avgQuality}</Typography>
         </Box>
+      </Box>
+
+      {/* ── Filtros ── */}
+      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', flexShrink: 0 }}>
+        {/* Buscador */}
+        <TextField size="small" placeholder="Buscar empresa o industria…" value={searchText}
+          onChange={e => setSearchText(e.target.value)}
+          slotProps={{ input: { startAdornment: (
+            <InputAdornment position="start">
+              <SearchIcon sx={{ fontSize: 15, color: 'rgba(255,255,255,0.3)' }} />
+            </InputAdornment>
+          )}}}
+          sx={{ width: 220, '& .MuiOutlinedInput-root': { fontSize: '0.8rem', bgcolor: 'var(--card-bg,#161d2e)', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(255,255,255,0.2)' } }, '& input': { color: 'white', py: 0.7 } }} />
+
+        {/* Chips de categoría */}
+        {[
+          { value: 'all',           label: 'Todos',         color: 'rgba(255,255,255,0.6)',  bg: 'rgba(255,255,255,0.06)'  },
+          { value: 'humano',        label: '👤 Humano',     color: '#4ade80',                bg: 'rgba(74,222,128,0.1)'    },
+          { value: 'automatico',    label: '⚡ Automático', color: '#facc15',                bg: 'rgba(250,204,21,0.1)'    },
+          { value: 'bot',           label: '🤖 Bot',        color: '#a78bfa',                bg: 'rgba(167,139,250,0.1)'   },
+          { value: 'bot_ia',        label: '🧠 Bot IA',     color: '#c084fc',                bg: 'rgba(192,132,252,0.1)'   },
+          { value: 'sin_clasificar',label: '⏳ Sin clasificar', color: '#94a3b8',            bg: 'rgba(148,163,184,0.08)'  },
+        ].map(f => {
+          const isActive = filterCat === f.value
+          const count    = f.value === 'all' ? data.length
+                         : f.value === 'sin_clasificar' ? data.filter(d => !d.category || d.category === 'sin_clasificar').length
+                         : data.filter(d => d.category === f.value).length
+          return (
+            <Box key={f.value} onClick={() => { setFilterCat(f.value); setPage(1) }} sx={{
+              display: 'flex', alignItems: 'center', gap: 0.5,
+              px: 1.2, py: 0.45, borderRadius: 99, cursor: 'pointer',
+              bgcolor: isActive ? f.bg : 'var(--card-bg,#161d2e)',
+              border: `1px solid ${isActive ? f.color + '66' : 'rgba(255,255,255,0.08)'}`,
+              transition: 'all 0.15s',
+              '&:hover': { bgcolor: f.bg, borderColor: f.color + '44' },
+            }}>
+              <Typography sx={{ fontSize: '0.75rem', fontWeight: isActive ? 700 : 400, color: isActive ? f.color : 'rgba(255,255,255,0.45)', whiteSpace: 'nowrap' }}>
+                {f.label}
+              </Typography>
+              {count > 0 && (
+                <Box sx={{ bgcolor: isActive ? f.color + '33' : 'rgba(255,255,255,0.06)', borderRadius: 99, px: 0.6, minWidth: 18, textAlign: 'center' }}>
+                  <Typography sx={{ fontSize: '0.6rem', color: isActive ? f.color : 'rgba(255,255,255,0.3)', fontWeight: 700, lineHeight: 1.6 }}>{count}</Typography>
+                </Box>
+              )}
+            </Box>
+          )
+        })}
+
+        {/* Limpiar filtros */}
+        {(filterCat !== 'all' || searchText) && (
+          <Box onClick={() => { setFilterCat('all'); setSearchText(''); setPage(1) }} sx={{
+            px: 1, py: 0.45, borderRadius: 99, cursor: 'pointer',
+            border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.35)',
+            fontSize: '0.72rem', transition: 'all 0.15s',
+            '&:hover': { color: '#f87171', borderColor: 'rgba(248,113,113,0.3)' },
+          }}>
+            <Typography sx={{ fontSize: '0.72rem', color: 'inherit' }}>✕ Limpiar</Typography>
+          </Box>
+        )}
+
+        {/* Contador de resultados cuando hay filtro activo */}
+        {(filterCat !== 'all' || searchText) && (
+          <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.25)', ml: 'auto' }}>
+            {sortedData.length} de {data.length} empresas
+          </Typography>
+        )}
       </Box>
 
       {/* Table / states */}
@@ -760,6 +862,55 @@ export default function Analytics() {
           </TableContainer>
         )}
       </Box>
+
+      {/* Paginación */}
+      {totalPages > 1 && (
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2, py: 1, borderTop: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
+          <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.3)' }}>
+            {totalItems} empresas · página {page} de {totalPages}
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <Box onClick={() => setPage(p => Math.max(1, p - 1))} sx={{
+              width: 30, height: 30, borderRadius: 1.5, cursor: page > 1 ? 'pointer' : 'default',
+              bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+              color: page > 1 ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.15)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              transition: 'all 0.15s',
+              '&:hover': page > 1 ? { bgcolor: 'rgba(255,255,255,0.08)' } : {},
+            }}>
+              <ChevronLeftIcon sx={{ fontSize: 18 }} />
+            </Box>
+            {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+              const pg = totalPages <= 7 ? i + 1
+                : page <= 4 ? i + 1
+                : page >= totalPages - 3 ? totalPages - 6 + i
+                : page - 3 + i
+              return (
+                <Box key={pg} onClick={() => setPage(pg)} sx={{
+                  width: 32, height: 30, borderRadius: 1.5, cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  bgcolor: pg === page ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.04)',
+                  border: `1px solid ${pg === page ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.08)'}`,
+                  color: pg === page ? 'white' : 'rgba(255,255,255,0.5)',
+                  fontSize: '0.78rem', fontWeight: pg === page ? 700 : 400,
+                  transition: 'all 0.15s',
+                  '&:hover': pg !== page ? { bgcolor: 'rgba(255,255,255,0.08)' } : {},
+                }}>{pg}</Box>
+              )
+            })}
+            <Box onClick={() => setPage(p => Math.min(totalPages, p + 1))} sx={{
+              width: 30, height: 30, borderRadius: 1.5, cursor: page < totalPages ? 'pointer' : 'default',
+              bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+              color: page < totalPages ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.15)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              transition: 'all 0.15s',
+              '&:hover': page < totalPages ? { bgcolor: 'rgba(255,255,255,0.08)' } : {},
+            }}>
+              <ChevronRightIcon sx={{ fontSize: 18 }} />
+            </Box>
+          </Box>
+        </Box>
+      )}
 
       <Snackbar
         open={snack.open}

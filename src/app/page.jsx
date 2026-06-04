@@ -1,5 +1,8 @@
 'use client'
 import { useState, useEffect, useLayoutEffect } from 'react'
+import { useUser } from '../context/UserContext'
+import LoginScreen from '../components/LoginScreen'
+import CircularProgress from '@mui/material/CircularProgress'
 
 const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect
 import Box from '@mui/material/Box'
@@ -19,6 +22,8 @@ import CsvImporter from '../components/csvImporter'
 import DatabaseViewer from '../components/databaseViewer'
 import Conversations from '../components/conversations'
 import Analytics from '../components/analytics'
+import AdminPanel from '../components/AdminPanel'
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
 import Settings, { loadSettings, applySettings } from '../components/Settings'
 
 const NAV_ITEMS = [
@@ -28,14 +33,24 @@ const NAV_ITEMS = [
   { label: 'Base de datos',     icon: <StorageIcon />,    component: <DatabaseViewer /> },
   { label: 'Buscar Prospectos', icon: <SearchIcon />,     component: <SearchProspects /> },
   { label: 'Conversaciones',    icon: <ForumIcon />,      component: <Conversations /> },
-  { label: 'Análisis',          icon: <AnalyticsIcon />,  component: <Analytics /> },
+  { label: 'Análisis',          icon: <AnalyticsIcon />,           component: <Analytics /> },
+  { label: 'Administración',   icon: <AdminPanelSettingsIcon />,  component: <AdminPanel />, adminOnly: true },
 ]
 
 export default function DashboardPage() {
+  const { user, loading: authLoading } = useUser()
+  const [hasUsers, setHasUsers]   = useState(true)
   const [active,       setActive]       = useState(0)
   const [open,         setOpen]         = useState(true)
   const [mounted,      setMounted]      = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+
+  // Verificar si hay usuarios registrados (para mostrar form de registro)
+  useEffect(() => {
+    fetch('/api/auth/users', { headers: { 'x-user-token': 'check' } })
+      .then(r => r.status === 403 ? setHasUsers(true) : r.json().then(d => setHasUsers(Array.isArray(d) ? d.length > 0 : true)))
+      .catch(() => setHasUsers(false))
+  }, [])
 
   useIsomorphicLayoutEffect(() => {
     const saved = Number(localStorage.getItem('activeTab') ?? 0)
@@ -44,9 +59,21 @@ export default function DashboardPage() {
     setMounted(true)
   }, [])
 
+  // Todos los hooks deben ir ANTES de cualquier return condicional
   useEffect(() => {
     if (mounted) localStorage.setItem('activeTab', active)
   }, [active, mounted])
+
+  const visibleNavItems = NAV_ITEMS.filter(item => !item.adminOnly || user?.role === 'admin')
+
+  // ── Returns condicionales al final, tras todos los hooks ──
+  if (authLoading) return (
+    <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'var(--bg,#080c14)' }}>
+      <CircularProgress sx={{ color: 'var(--accent,#3b82f6)' }} />
+    </Box>
+  )
+
+  if (!user) return <LoginScreen hasUsers={hasUsers} />
 
   function handleNavClick(i) {
     setActive(i)
@@ -58,7 +85,7 @@ export default function DashboardPage() {
       <Sidebar
         open={open} setOpen={setOpen}
         active={mounted ? active : -1} setActive={handleNavClick}
-        navItems={NAV_ITEMS}
+        navItems={visibleNavItems}
         settingsOpen={settingsOpen}
         onSettingsClick={() => setSettingsOpen(s => !s)}
       />
@@ -89,7 +116,7 @@ export default function DashboardPage() {
               <Settings />
             </Box>
             {/* Nav items */}
-            {NAV_ITEMS.map((item, i) => (
+            {visibleNavItems.map((item, i) => (
               <Box key={i} sx={{ display: mounted && !settingsOpen && active === i ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
                 {item.component}
               </Box>

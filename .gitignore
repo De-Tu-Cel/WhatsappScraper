@@ -65,8 +65,24 @@ desktop.ini
 # ── Claude Code ─────────────────────────────────────────────────
 .claude/
 
-# ── Scripts y archivos de prueba ────────────────────────────────
+# ── Scripts y archivos de prueba / utilidades temporales ────────
 backEnd/insert_test*.py
+backEnd/app/create_test_user.py
+backEnd/app/create_user.py
+backEnd/app/link_instance.py
+backEnd/app/check_instances.py
+backEnd/app/check_msgs.py
+backEnd/app/fix_names.py
+backEnd/app/fix_reaction.py
+backEnd/app/fix_safe.py
+backEnd/app/fix_encoding.py
+backEnd/app/patch_canvas.py
+backEnd/app/patch_drawstring.py
+backEnd/app/read_safe.py
+backEnd/app/update_user_email.py
+backEnd/create_user.py
+backEnd/app/create_user.py
+fix_encoding.py
 test_*.pdf
 test_*.csv
 
@@ -77,3 +93,11 @@ evolution/
 playwright-report/
 test-results/
 .playwright/
+
+# ── Producción / builds ──────────────────────────────────────────
+*.pyc
+backEnd/app/__pycache__/
+backEnd/__pycache__/
+
+# ── PDFs generados por el sistema ────────────────────────────────
+reporte-*.pdf

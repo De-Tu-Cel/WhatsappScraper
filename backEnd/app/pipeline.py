@@ -33,7 +33,7 @@ def _render_message(template: str, scraped: dict, website: str) -> str:
         .replace("{{industria}}", industry)
         .replace("{{web}}",       website))
 
-def process_url(website: str, message_template: str = None, skip_send: bool = False):
+def process_url(website: str, message_template: str = None, skip_send: bool = False, user_token: str = None):
     """
     Pipeline completo con scraper extenso
     """
@@ -253,9 +253,24 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
     evolution_log_id = None
     evolution_result = None
 
-    if EVOLUTION_API_KEY and EVOLUTION_INSTANCE and to_number and not skip_send:
-        print(f"📲 Enviando por Evolution API a {to_number}...")
-        evo = EvolutionClient(EVOLUTION_API_URL, EVOLUTION_API_KEY, EVOLUTION_INSTANCE)
+    # Usar instancia del usuario logueado si hay token, sino la global del .env
+    _evo_instance = EVOLUTION_INSTANCE
+    _sent_by_name = ""
+    _sent_by_user = ""
+    if user_token:
+        try:
+            from auth import get_user_by_token
+            _user = get_user_by_token(user_token)
+            if _user and _user.get("evolution_instance"):
+                _evo_instance = _user["evolution_instance"]
+                _sent_by_name = _user.get("display_name", "")
+                _sent_by_user = _user.get("username", "")
+        except Exception:
+            pass
+
+    if EVOLUTION_API_KEY and _evo_instance and to_number and not skip_send:
+        print(f"📲 Enviando por Evolution API a {to_number} (instancia: {_evo_instance})...")
+        evo = EvolutionClient(EVOLUTION_API_URL, EVOLUTION_API_KEY, _evo_instance)
         evolution_result = evo.send_text(to_number, MESSAGE_TEXT)
 
         evo_json = evolution_result.get("response_json", {})
@@ -279,6 +294,8 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
             "sent_at": evolution_result.get("sent_at"),
             "status": evo_status,
             "direction": "outbound",
+            "sent_by_username": _sent_by_user,
+            "sent_by_name":     _sent_by_name,
         })
         print(f"✅ Evolution API: {evo_status} (id={evo_message_id})")
 

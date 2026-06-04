@@ -1,5 +1,9 @@
 'use client'
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import Dialog from '@mui/material/Dialog'
+import DialogContent from '@mui/material/DialogContent'
+import DialogActions from '@mui/material/DialogActions'
+import { authFetch } from '@/lib/api'
 import { keyframes } from '@mui/system'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
@@ -121,18 +125,28 @@ export default function SearchProspects() {
   const [selectedTpl, setSelectedTpl] = useState(TEMPLATES[0].id)
   const [msgText,     setMsgText]     = useState(TEMPLATES[0].text)
   const [sendingAll,  setSendingAll]  = useState(false)
-  const [waSelected,  setWaSelected]  = useState(new Set())
+  const [waDeselected, setWaDeselected] = useState(new Set())
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, names: '', resolve: null }) // números que el usuario quitó manualmente
   const msgRef = useRef(null)
 
   useEffect(() => {
     try { setHistory(JSON.parse(localStorage.getItem('searchHistory') || '[]')) } catch {}
   }, [])
 
-  // Auto-select all WA rows when results change
-  useEffect(() => {
-    const ids = results.filter(r => r.ok && r.company_id && (r.all_whatsapp?.length > 0 || r.whatsapp)).map(r => r.company_id)
-    setWaSelected(new Set(ids))
-  }, [results])
+  // Reset deselected when new results arrive
+  useEffect(() => { setWaDeselected(new Set()) }, [results])
+
+  // waRows y waRowsUnique deben ir ANTES de effectiveWaSelected
+  const waRowsAll    = results.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
+  const waRowsUnique = useMemo(() => {
+    const seen = new Set()
+    return waRowsAll.filter(r => seen.has(r.company_id) ? false : seen.add(r.company_id))
+  }, [waRowsAll])
+
+  // Siempre sincronizado — sin delay de un render
+  const effectiveWaSelected = useMemo(() =>
+    new Set(waRowsUnique.map(r => r.company_id).filter(id => !waDeselected.has(id))),
+  [waRowsUnique, waDeselected])
 
   const placeholder = useTypewriter(INDUSTRY_EXAMPLES, !industry && found.length === 0 && !processing && !searching)
   const ALL_INDUSTRIES = INDUSTRY_GROUPS.flatMap(g => g.items.map(item => ({ item, color: g.color })))
@@ -184,7 +198,7 @@ export default function SearchProspects() {
     try {
       const res = await fetch('/api/search', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ industry: query, num_results: numResults, offset: 0 }),
+        body: JSON.stringify({ industry: query, city: '', num_results: numResults, offset: 0 }),
       })
       if (!res.ok) throw new Error()
       const { urls } = await res.json()
@@ -238,6 +252,24 @@ export default function SearchProspects() {
       }
       setResults([...res])
     }
+
+    // Check which companies were already contacted and by whom
+    const ids = res.filter(r => r.company_id).map(r => r.company_id)
+    if (ids.length > 0) {
+      try {
+        const cr = await fetch('/api/companies/check-contacted', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ company_ids: ids }),
+        })
+        if (cr.ok) {
+          const contactMap = await cr.json()
+          setResults(prev => prev.map(r => r.company_id && contactMap[r.company_id]
+            ? { ...r, already_contacted: contactMap[r.company_id] }
+            : r
+          ))
+        }
+      } catch {}
+    }
     return res
   }
 
@@ -275,13 +307,23 @@ export default function SearchProspects() {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'prospectos.csv'; a.click()
   }
 
-  const waRows       = results.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
   const alreadySent  = results.some(r => r.msg_status === 'sent' || r.msg_status === 'failed')
   const sentCount    = results.filter(r => r.msg_status === 'sent').length
 
   async function handleSendAll() {
-    const targets = waRows.filter(r => waSelected.has(r.company_id))
+    const targets = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id))
     if (!targets.length) return
+
+    // Warn about already-contacted companies — MUI dialog
+    const alreadyContacted = targets.filter(r => r.already_contacted?.contacted)
+    if (alreadyContacted.length > 0) {
+      const names = alreadyContacted.map(r => `${r.empresa} (${r.already_contacted.by_name || 'un agente'})`).join(', ')
+      const confirmed = await new Promise(resolve =>
+        setConfirmDialog({ open: true, names, resolve })
+      )
+      if (!confirmed) return
+    }
+
     setSendingAll(true)
     const updated = [...results]
     for (let i = 0; i < targets.length; i++) {
@@ -292,7 +334,7 @@ export default function SearchProspects() {
         const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
         let lastStatus = 'failed'
         for (const num of numbers) {
-          const res = await fetch('/api/send-message', {
+          const res = await authFetch('/api/send-message', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ company_id: row.company_id, to_number: num, message: message || msgText, website: row.url }),
@@ -403,6 +445,39 @@ export default function SearchProspects() {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, height: '100%' }}>
+
+      {/* Modal de confirmación — empresas ya contactadas */}
+      <Dialog open={confirmDialog.open} maxWidth="xs" fullWidth
+        slotProps={{ paper: { sx: { bgcolor: 'var(--card-bg,#161d2e)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 3 } } }}>
+        <DialogContent sx={{ pt: 3, bgcolor: 'var(--card-bg,#161d2e)' }}>
+          <Box sx={{ display: 'flex', gap: 1.5, mb: 1.5 }}>
+            <Box sx={{ width: 38, height: 38, borderRadius: '50%', bgcolor: 'rgba(251,191,36,0.15)', border: '1.5px solid rgba(251,191,36,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <Typography sx={{ fontSize: '1.1rem' }}>⚠️</Typography>
+            </Box>
+            <Box>
+              <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.95rem', mb: 0.5 }}>
+                Empresas ya contactadas
+              </Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', lineHeight: 1.5 }}>
+                {confirmDialog.names}
+              </Typography>
+            </Box>
+          </Box>
+          <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.78rem' }}>
+            ¿Deseas enviarles el mensaje de todas formas?
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 2.5, pb: 2.5, gap: 1, bgcolor: 'var(--card-bg,#161d2e)' }}>
+          <Box onClick={() => { setConfirmDialog(d => ({ ...d, open: false })); confirmDialog.resolve?.(false) }}
+            sx={{ px: 2, py: 0.7, borderRadius: 2, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.12)', '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' } }}>
+            <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.82rem' }}>Cancelar</Typography>
+          </Box>
+          <Box onClick={() => { setConfirmDialog(d => ({ ...d, open: false })); confirmDialog.resolve?.(true) }}
+            sx={{ px: 2, py: 0.7, borderRadius: 2, cursor: 'pointer', bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)', '&:hover': { bgcolor: 'rgba(251,191,36,0.2)' } }}>
+            <Typography sx={{ color: '#facc15', fontWeight: 700, fontSize: '0.82rem' }}>Enviar de todas formas</Typography>
+          </Box>
+        </DialogActions>
+      </Dialog>
 
       {/* ── Estado inicial: centrado ── */}
       {!hasResults && (
@@ -666,35 +741,35 @@ export default function SearchProspects() {
               <MessageIcon sx={{ fontSize: 16, color: '#4ade80' }} />
               <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>Enviar mensajes</Typography>
             </Box>
-            {waRows.length > 0 && (
-              <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={`${waRows.length} con WhatsApp`} size="small"
+            {waRowsUnique.length > 0 && (
+              <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={`${waRowsUnique.length} con WhatsApp`} size="small"
                 sx={{ fontSize: '0.7rem', height: 22, bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', '& .MuiChip-icon': { color: '#4ade80' } }} />
             )}
           </Box>
           {/* Selector de destinatarios WhatsApp */}
-          {waRows.length > 0 && (
+          {waRowsUnique.length > 0 && (
             <Box sx={{ mb: 1.5 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.8 }}>
                 <Checkbox size="small"
-                  checked={waRows.every(r => waSelected.has(r.company_id))}
-                  indeterminate={waRows.some(r => waSelected.has(r.company_id)) && !waRows.every(r => waSelected.has(r.company_id))}
-                  onChange={e => setWaSelected(e.target.checked ? new Set(waRows.map(r => r.company_id)) : new Set())}
+                  checked={waRowsUnique.every(r => effectiveWaSelected.has(r.company_id))}
+                  indeterminate={waRowsUnique.some(r => effectiveWaSelected.has(r.company_id)) && !waRowsUnique.every(r => effectiveWaSelected.has(r.company_id))}
+                  onChange={e => setWaDeselected(e.target.checked ? new Set() : new Set(waRowsUnique.map(r => r.company_id)))}
                   sx={{ color: 'rgba(255,255,255,0.25)', '&.Mui-checked': { color: '#4ade80' }, '&.MuiCheckbox-indeterminate': { color: '#4ade80' }, p: 0.5 }} />
                 <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
-                  Destinatarios — {waRows.filter(r => waSelected.has(r.company_id)).length} de {waRows.length} seleccionados
+                  Destinatarios — {effectiveWaSelected.size} de {waRowsUnique.length} seleccionados
                 </Typography>
               </Box>
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6, maxHeight: 90, overflowY: 'auto',
                 scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent' }}>
-                {waRows.map(r => {
-                  const on = waSelected.has(r.company_id)
+                {waRowsUnique.map(r => {
+                  const on = effectiveWaSelected.has(r.company_id)
                   return (
                     <Chip key={r.company_id} size="small"
                       icon={<WhatsAppIcon sx={{ fontSize: '12px !important', color: on ? '#4ade80 !important' : 'rgba(255,255,255,0.25) !important' }} />}
                       label={r.empresa || r.url}
-                      onClick={() => setWaSelected(prev => {
+                      onClick={() => setWaDeselected(prev => {
                         const next = new Set(prev)
-                        on ? next.delete(r.company_id) : next.add(r.company_id)
+                        on ? next.add(r.company_id) : next.delete(r.company_id)
                         return next
                       })}
                       sx={{
@@ -764,23 +839,20 @@ export default function SearchProspects() {
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
             <Button
               onClick={handleSendAll}
-              disabled={waRows.filter(r => waSelected.has(r.company_id)).length === 0 || alreadySent || sendingAll}
+              disabled={effectiveWaSelected.size === 0 || alreadySent || sendingAll}
               startIcon={sendingAll ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
               size="small"
               sx={{
                 fontSize: '0.78rem', fontWeight: 700, flexShrink: 0,
-                bgcolor: waRows.length > 0 && !alreadySent && !sendingAll ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
-                color:   waRows.length > 0 && !alreadySent && !sendingAll ? '#4ade80' : 'rgba(255,255,255,0.3)',
-                border:  `1px solid ${waRows.length > 0 && !alreadySent && !sendingAll ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
+                bgcolor: waRowsUnique.length > 0 && !alreadySent && !sendingAll ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
+                color:   waRowsUnique.length > 0 && !alreadySent && !sendingAll ? '#4ade80' : 'rgba(255,255,255,0.3)',
+                border:  `1px solid ${waRowsUnique.length > 0 && !alreadySent && !sendingAll ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
                 borderRadius: 1.5, px: 2, py: 0.6,
-                '&:hover': { bgcolor: waRows.length > 0 && !alreadySent && !sendingAll ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
+                '&:hover': { bgcolor: waRowsUnique.length > 0 && !alreadySent && !sendingAll ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
                 '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
               }}
             >
-              {(() => {
-                const sel = waRows.filter(r => waSelected.has(r.company_id)).length
-                return alreadySent ? `${sentCount} mensajes enviados` : sendingAll ? 'Enviando…' : `Enviar a ${sel} empresa${sel !== 1 ? 's' : ''} con WhatsApp`
-              })()}
+              {alreadySent ? `${sentCount} mensajes enviados` : sendingAll ? 'Enviando…' : `Enviar a ${effectiveWaSelected.size} empresa${effectiveWaSelected.size !== 1 ? 's' : ''} con WhatsApp`}
             </Button>
           </Box>
         </Box>

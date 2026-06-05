@@ -52,7 +52,11 @@ export default function DashboardPage() {
   // Verificar si hay usuarios registrados (para mostrar form de registro)
   useEffect(() => {
     fetch('/api/auth/users', { headers: { 'x-user-token': 'check' } })
-      .then(r => r.status === 403 ? setHasUsers(true) : r.json().then(d => setHasUsers(Array.isArray(d) ? d.length > 0 : true)))
+      .then(r => {
+        if (r.status === 401 || r.status === 403) return setHasUsers(true)
+        if (!r.ok) return setHasUsers(false)
+        return r.json().then(d => setHasUsers(Array.isArray(d) ? d.length > 0 : true))
+      })
       .catch(() => setHasUsers(false))
   }, [])
 

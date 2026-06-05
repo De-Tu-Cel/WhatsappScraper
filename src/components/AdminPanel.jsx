@@ -8,22 +8,29 @@ import Dialog from '@mui/material/Dialog'
 import DialogContent from '@mui/material/DialogContent'
 import TextField from '@mui/material/TextField'
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
-import PersonIcon from '@mui/icons-material/Person'
 import LockResetIcon from '@mui/icons-material/LockReset'
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
 import RefreshIcon from '@mui/icons-material/Refresh'
+import PersonAddIcon from '@mui/icons-material/PersonAdd'
 import { useUser } from '../context/UserContext'
+import { useLang } from '../context/LangContext'
 
 const token = () => typeof window !== 'undefined' ? localStorage.getItem('user_token') : ''
 
 export default function AdminPanel() {
   const { user } = useUser()
+  const { t } = useLang()
   const [users,   setUsers]   = useState([])
   const [loading, setLoading] = useState(true)
-  const [resetTarget, setResetTarget] = useState(null) // {id, username}
-  const [newPin,  setNewPin]  = useState('')
-  const [saving,  setSaving]  = useState(false)
-  const [msg,     setMsg]     = useState('')
+  const [resetTarget, setResetTarget] = useState(null)
+  const [newPin,      setNewPin]      = useState('')
+  const [saving,      setSaving]      = useState(false)
+  const [msg,         setMsg]         = useState('')
+  // Create user dialog
+  const [createOpen,  setCreateOpen]  = useState(false)
+  const [newUser,     setNewUser]     = useState({ display_name: '', username: '', email: '', pin: '', pin2: '' })
+  const [createMsg,   setCreateMsg]   = useState('')
+  const [creating,    setCreating]    = useState(false)
 
   const fetchUsers = useCallback(async () => {
     setLoading(true)
@@ -35,6 +42,27 @@ export default function AdminPanel() {
   }, [])
 
   useEffect(() => { fetchUsers() }, [fetchUsers])
+
+  async function handleCreateUser() {
+    if (!newUser.display_name.trim() || !newUser.username.trim() || !newUser.email.includes('@') || newUser.pin.length < 4) {
+      setCreateMsg('Completa todos los campos'); return
+    }
+    if (newUser.pin !== newUser.pin2) { setCreateMsg('Los PINs no coinciden'); return }
+    setCreating(true); setCreateMsg('')
+    try {
+      const r = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
+        body: JSON.stringify({ display_name: newUser.display_name, username: newUser.username, email: newUser.email, pin: newUser.pin }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setCreateMsg(d.detail || 'Error'); return }
+      setCreateOpen(false)
+      setNewUser({ display_name: '', username: '', email: '', pin: '', pin2: '' })
+      fetchUsers()
+    } catch { setCreateMsg('Error de red') }
+    finally { setCreating(false) }
+  }
 
   async function handleResetPin() {
     if (newPin.length < 4) { setMsg('PIN mínimo 4 dígitos'); return }
@@ -65,7 +93,7 @@ export default function AdminPanel() {
 
   if (user?.role !== 'admin') return (
     <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-      <Typography sx={{ color: 'rgba(255,255,255,0.3)' }}>Solo administradores pueden ver esta sección</Typography>
+      <Typography sx={{ color: 'rgba(255,255,255,0.3)' }}>{t.admin.noAccess}</Typography>
     </Box>
   )
 
@@ -78,15 +106,23 @@ export default function AdminPanel() {
             <AdminPanelSettingsIcon sx={{ color: 'var(--accent,#a5b4fc)', fontSize: 20 }} />
           </Box>
           <Box>
-            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem' }}>Panel de administración</Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem' }}>{users.length} usuario{users.length !== 1 ? 's' : ''} registrado{users.length !== 1 ? 's' : ''}</Typography>
+            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem' }}>{t.admin.title}</Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem' }}>{users.length} {t.admin.users}{users.length !== 1 ? 's' : ''}</Typography>
           </Box>
         </Box>
-        <Tooltip title="Actualizar">
-          <Box onClick={fetchUsers} sx={{ cursor: 'pointer', color: 'rgba(255,255,255,0.35)', '&:hover': { color: 'white' }, display: 'flex' }}>
-            <RefreshIcon fontSize="small" />
-          </Box>
-        </Tooltip>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Tooltip title="Nuevo usuario">
+            <Box onClick={() => { setCreateOpen(true); setCreateMsg('') }} sx={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 0.5, px: 1.2, py: 0.4, borderRadius: 1.5, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)', color: 'var(--accent,#60a5fa)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.22)' } }}>
+              <PersonAddIcon sx={{ fontSize: 16 }} />
+              <Typography sx={{ fontSize: '0.72rem', fontWeight: 600, color: 'inherit' }}>Nuevo</Typography>
+            </Box>
+          </Tooltip>
+          <Tooltip title="Actualizar">
+            <Box onClick={fetchUsers} sx={{ cursor: 'pointer', color: 'rgba(255,255,255,0.35)', '&:hover': { color: 'white' }, display: 'flex' }}>
+              <RefreshIcon fontSize="small" />
+            </Box>
+          </Tooltip>
+        </Box>
       </Box>
 
       {/* Lista de usuarios */}
@@ -110,10 +146,10 @@ export default function AdminPanel() {
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
                 <Typography sx={{ color: 'white', fontWeight: 600, fontSize: '0.85rem' }}>{u.display_name}</Typography>
-                {u.id === user?.id && <Typography sx={{ fontSize: '0.6rem', color: 'var(--accent,#60a5fa)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', px: 0.8, py: 0.1, borderRadius: 1 }}>Tú</Typography>}
+                {u.id === user?.id && <Typography sx={{ fontSize: '0.6rem', color: 'var(--accent,#60a5fa)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', px: 0.8, py: 0.1, borderRadius: 1 }}>{t.admin.you}</Typography>}
               </Box>
               <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem' }}>
-                @{u.username} · {u.email || 'sin correo'}
+                @{u.username} · {u.email || t.admin.noEmail}
               </Typography>
               {u.connected_number && (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, mt: 0.2 }}>
@@ -137,7 +173,7 @@ export default function AdminPanel() {
                   transition: 'all 0.15s',
                 }}>
                   <Typography sx={{ fontSize: '0.68rem', fontWeight: 600, color: u.role === 'admin' ? 'var(--accent,#60a5fa)' : 'rgba(255,255,255,0.4)' }}>
-                    {u.role === 'admin' ? '⭐ Admin' : '👤 Agente'}
+                    {u.role === 'admin' ? `⭐ ${t.admin.admin}` : `👤 ${t.admin.user}`}
                   </Typography>
                 </Box>
               </Tooltip>
@@ -165,12 +201,12 @@ export default function AdminPanel() {
         <DialogContent sx={{ bgcolor: 'var(--card-bg,#161d2e)', py: 3 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
             <LockResetIcon sx={{ color: '#facc15', fontSize: 20 }} />
-            <Typography sx={{ color: 'white', fontWeight: 700 }}>Resetear PIN de {resetTarget?.username}</Typography>
+            <Typography sx={{ color: 'white', fontWeight: 700 }}>{t.admin.resetPin} — {resetTarget?.username}</Typography>
           </Box>
           <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.78rem', mb: 2 }}>
-            El usuario deberá usar este PIN la próxima vez que inicie sesión.
+            {t.admin.pinInfo}
           </Typography>
-          <TextField fullWidth size="small" type="password" placeholder="Nuevo PIN (mínimo 4 dígitos)"
+          <TextField fullWidth size="small" type="password" placeholder={t.admin.newPin}
             value={newPin} onChange={e => setNewPin(e.target.value)} autoFocus
             inputProps={{ maxLength: 8, inputMode: 'numeric' }}
             sx={{ mb: 1.5, '& .MuiOutlinedInput-root': { bgcolor: 'rgba(255,255,255,0.05)', fontSize: '0.9rem', borderRadius: 2, '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&.Mui-focused fieldset': { borderColor: '#facc15' } }, '& input': { color: 'white' } }} />
@@ -181,6 +217,50 @@ export default function AdminPanel() {
             </Box>
             <Box onClick={handleResetPin} sx={{ px: 2, py: 0.7, borderRadius: 2, cursor: 'pointer', bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)', '&:hover': { bgcolor: 'rgba(251,191,36,0.2)' } }}>
               {saving ? <CircularProgress size={14} sx={{ color: '#facc15' }} /> : <Typography sx={{ color: '#facc15', fontWeight: 700, fontSize: '0.82rem' }}>Resetear PIN</Typography>}
+            </Box>
+          </Box>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal crear usuario */}
+      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="xs" fullWidth
+        slotProps={{ paper: { sx: { bgcolor: 'var(--card-bg,#161d2e)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 3 } } }}>
+        <DialogContent sx={{ bgcolor: 'var(--card-bg,#161d2e)', py: 3 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2.5 }}>
+            <PersonAddIcon sx={{ color: 'var(--accent,#60a5fa)', fontSize: 20 }} />
+            <Typography sx={{ color: 'white', fontWeight: 700 }}>Crear nuevo usuario</Typography>
+          </Box>
+          {[
+            { label: 'Nombre completo', key: 'display_name', ph: 'Ana García' },
+            { label: 'Usuario',         key: 'username',     ph: 'ana' },
+            { label: 'Correo',          key: 'email',        ph: 'ana@detucel.mx' },
+          ].map(f => (
+            <Box key={f.key} sx={{ mb: 1.5 }}>
+              <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', mb: 0.4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{f.label}</Typography>
+              <TextField fullWidth size="small" placeholder={f.ph}
+                value={newUser[f.key]} onChange={e => setNewUser(p => ({ ...p, [f.key]: e.target.value }))}
+                sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'rgba(255,255,255,0.05)', fontSize: '0.88rem', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' } }, '& input': { color: 'white' } }} />
+            </Box>
+          ))}
+          {[
+            { label: 'PIN (mínimo 4 dígitos)', key: 'pin' },
+            { label: 'Confirmar PIN',          key: 'pin2' },
+          ].map(f => (
+            <Box key={f.key} sx={{ mb: 1.5 }}>
+              <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', mb: 0.4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{f.label}</Typography>
+              <TextField fullWidth size="small" type="password" placeholder="••••••"
+                value={newUser[f.key]} onChange={e => setNewUser(p => ({ ...p, [f.key]: e.target.value }))}
+                inputProps={{ maxLength: 8 }}
+                sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'rgba(255,255,255,0.05)', fontSize: '0.88rem', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' } }, '& input': { color: 'white' } }} />
+            </Box>
+          ))}
+          {createMsg && <Typography sx={{ fontSize: '0.75rem', color: '#f87171', mb: 1 }}>{createMsg}</Typography>}
+          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', mt: 0.5 }}>
+            <Box onClick={() => setCreateOpen(false)} sx={{ px: 2, py: 0.7, borderRadius: 2, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.1)', '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' } }}>
+              <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.82rem' }}>Cancelar</Typography>
+            </Box>
+            <Box onClick={handleCreateUser} sx={{ px: 2, py: 0.7, borderRadius: 2, cursor: 'pointer', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.25)' } }}>
+              {creating ? <CircularProgress size={14} sx={{ color: 'var(--accent,#60a5fa)' }} /> : <Typography sx={{ color: 'var(--accent,#60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>Crear usuario</Typography>}
             </Box>
           </Box>
         </DialogContent>

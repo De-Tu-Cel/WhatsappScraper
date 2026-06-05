@@ -1,5 +1,6 @@
 'use client'
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { useLang } from '../context/LangContext'
 import Dialog from '@mui/material/Dialog'
 import DialogContent from '@mui/material/DialogContent'
 import DialogActions from '@mui/material/DialogActions'
@@ -33,18 +34,7 @@ import MessageIcon from '@mui/icons-material/Message'
 import SendIcon from '@mui/icons-material/Send'
 import { TEMPLATES } from './singleUrlProcessor'
 
-const INDUSTRY_GROUPS = [
-  { label: 'Alimentos',     color: '#f97316', items: ['Restaurantes', 'Taquerías', 'Panaderías', 'Cafeterías', 'Catering'] },
-  { label: 'Salud',         color: '#22c55e', items: ['Dentistas', 'Clínicas', 'Farmacias', 'Veterinarias', 'Gimnasios'] },
-  { label: 'Belleza',       color: '#ec4899', items: ['Estéticas', 'Spas', 'Peluquerías', 'Salones de uñas'] },
-  { label: 'Servicios',     color: '#60a5fa', items: ['Plomeros', 'Electricistas', 'Talleres mecánicos', 'Lavanderías', 'Mudanzas'] },
-  { label: 'Comercio',      color: '#a78bfa', items: ['Ferreterías', 'Tiendas de ropa', 'Electrónica', 'Muebles', 'Abarrotes'] },
-  { label: 'Profesionales', color: '#fbbf24', items: ['Abogados', 'Contadores', 'Arquitectos', 'Agencias inmobiliarias'] },
-  { label: 'Educación',     color: '#34d399', items: ['Academias', 'Guarderías', 'Tutores', 'Escuelas de idiomas'] },
-  { label: 'Hospedaje',     color: '#f87171', items: ['Hoteles', 'Hostales', 'Cabañas', 'Salones de eventos'] },
-]
-
-const INDUSTRY_EXAMPLES = ['Restaurantes en CDMX', 'Ferreterías en Guadalajara', 'Dentistas en Monterrey', 'Talleres mecánicos', 'Spas y estéticas', 'Hoteles boutique']
+// INDUSTRY_GROUPS and INDUSTRY_EXAMPLES are built inside the component from translations
 
 const fadeSlideIn = keyframes`
   from { opacity: 0; transform: translateY(6px); }
@@ -147,6 +137,27 @@ export default function SearchProspects() {
   const effectiveWaSelected = useMemo(() =>
     new Set(waRowsUnique.map(r => r.company_id).filter(id => !waDeselected.has(id))),
   [waRowsUnique, waDeselected])
+
+  const { t } = useLang()
+
+  const INDUSTRY_GROUPS = useMemo(() => {
+    const i = t.search.industries
+    return [
+      { label: i.groupAlimentos,     color: '#f97316', items: [i.restaurantes, i.taqueria,    i.panaderia,  i.cafeteria,  i.catering] },
+      { label: i.groupSalud,         color: '#22c55e', items: [i.dentistas,    i.clinicas,     i.farmacias,  i.veterinarias, i.gimnasios] },
+      { label: i.groupBelleza,       color: '#ec4899', items: [i.esteticas,    i.spas,         i.peluquerias, i.salonesUnas] },
+      { label: i.groupServicios,     color: '#60a5fa', items: [i.plomeros,     i.electricistas, i.talleresAuto, i.lavanderia, i.mudanzas] },
+      { label: i.groupComercio,      color: '#a78bfa', items: [i.ferreteria,   i.tiendasRopa,  i.electronica, i.muebles,    i.abarrotes] },
+      { label: i.groupProfesionales, color: '#fbbf24', items: [i.abogados,     i.contadores,   i.arquitectos, i.agenciasInmob] },
+      { label: i.groupEducacion,     color: '#34d399', items: [i.academias,    i.guarderias,   i.tutores,    i.escuelasIdiomas] },
+      { label: i.groupHospedaje,     color: '#f87171', items: [i.hoteles,      i.hostales,     i.cabanas,    i.salonesEventos] },
+    ]
+  }, [t])
+
+  const INDUSTRY_EXAMPLES = useMemo(() => {
+    const i = t.search.industries
+    return [i.ex1, i.ex2, i.ex3, i.ex4, i.ex5, i.ex6]
+  }, [t])
 
   const placeholder = useTypewriter(INDUSTRY_EXAMPLES, !industry && found.length === 0 && !processing && !searching)
   const ALL_INDUSTRIES = INDUSTRY_GROUPS.flatMap(g => g.items.map(item => ({ item, color: g.color })))
@@ -317,7 +328,7 @@ export default function SearchProspects() {
     // Warn about already-contacted companies — MUI dialog
     const alreadyContacted = targets.filter(r => r.already_contacted?.contacted)
     if (alreadyContacted.length > 0) {
-      const names = alreadyContacted.map(r => `${r.empresa} (${r.already_contacted.by_name || 'un agente'})`).join(', ')
+      const names = alreadyContacted.map(r => `${r.empresa} (${r.already_contacted.by_name || t.search.byAgent})`).join(', ')
       const confirmed = await new Promise(resolve =>
         setConfirmDialog({ open: true, names, resolve })
       )
@@ -361,8 +372,8 @@ export default function SearchProspects() {
   /* ── Selector de cantidad (reutilizable) ── */
   const CountSelector = ({ size = 'md' }) => (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-      {size === 'md' && <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>Empresas a mostrar</Typography>}
-      {size === 'sm' && <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>Mostrar</Typography>}
+      {size === 'md' && <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>{t.search.showCount}</Typography>}
+      {size === 'sm' && <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>{t.search.show}</Typography>}
       <Box sx={{ display: 'flex', gap: size === 'md' ? 0.6 : 0.5 }}>
         {[5, 10, 20, 30].map(n => (
           <Box key={n} onClick={() => setNumResults(n)} sx={{
@@ -456,7 +467,7 @@ export default function SearchProspects() {
             </Box>
             <Box>
               <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.95rem', mb: 0.5 }}>
-                Empresas ya contactadas
+                {t.search.alreadyWarning}
               </Typography>
               <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', lineHeight: 1.5 }}>
                 {confirmDialog.names}
@@ -464,17 +475,17 @@ export default function SearchProspects() {
             </Box>
           </Box>
           <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.78rem' }}>
-            ¿Deseas enviarles el mensaje de todas formas?
+            {t.search.askSendAnyway}
           </Typography>
         </DialogContent>
         <DialogActions sx={{ px: 2.5, pb: 2.5, gap: 1, bgcolor: 'var(--card-bg,#161d2e)' }}>
           <Box onClick={() => { setConfirmDialog(d => ({ ...d, open: false })); confirmDialog.resolve?.(false) }}
             sx={{ px: 2, py: 0.7, borderRadius: 2, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.12)', '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' } }}>
-            <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.82rem' }}>Cancelar</Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.82rem' }}>{t.common.cancel}</Typography>
           </Box>
           <Box onClick={() => { setConfirmDialog(d => ({ ...d, open: false })); confirmDialog.resolve?.(true) }}
             sx={{ px: 2, py: 0.7, borderRadius: 2, cursor: 'pointer', bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)', '&:hover': { bgcolor: 'rgba(251,191,36,0.2)' } }}>
-            <Typography sx={{ color: '#facc15', fontWeight: 700, fontSize: '0.82rem' }}>Enviar de todas formas</Typography>
+            <Typography sx={{ color: '#facc15', fontWeight: 700, fontSize: '0.82rem' }}>{t.search.sendAnyway}</Typography>
           </Box>
         </DialogActions>
       </Dialog>
@@ -483,8 +494,8 @@ export default function SearchProspects() {
       {!hasResults && (
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 2.5, pb: 4 }}>
           <Box sx={{ textAlign: 'center' }}>
-            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1.35rem', mb: 0.5 }}>¿Qué industria buscas hoy?</Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem' }}>Busca prospectos por industria o elige una categoría</Typography>
+            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1.35rem', mb: 0.5 }}>{t.search.heading}</Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem' }}>{t.search.headingSub}</Typography>
           </Box>
 
           {SearchBar({ compact: false })}
@@ -756,7 +767,7 @@ export default function SearchProspects() {
                   onChange={e => setWaDeselected(e.target.checked ? new Set() : new Set(waRowsUnique.map(r => r.company_id)))}
                   sx={{ color: 'rgba(255,255,255,0.25)', '&.Mui-checked': { color: '#4ade80' }, '&.MuiCheckbox-indeterminate': { color: '#4ade80' }, p: 0.5 }} />
                 <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
-                  Destinatarios — {effectiveWaSelected.size} de {waRowsUnique.length} seleccionados
+                  {t.search.recipients} — {effectiveWaSelected.size} {t.search.of} {waRowsUnique.length} {t.search.selectedLabel}
                 </Typography>
               </Box>
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6, maxHeight: 90, overflowY: 'auto',
@@ -852,7 +863,7 @@ export default function SearchProspects() {
                 '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
               }}
             >
-              {alreadySent ? `${sentCount} mensajes enviados` : sendingAll ? 'Enviando…' : `Enviar a ${effectiveWaSelected.size} empresa${effectiveWaSelected.size !== 1 ? 's' : ''} con WhatsApp`}
+              {alreadySent ? `${sentCount} ${t.search.sentCount}` : sendingAll ? t.single.sending : `${t.search.sendButton} ${effectiveWaSelected.size} ${t.search.companies}`}
             </Button>
           </Box>
         </Box>

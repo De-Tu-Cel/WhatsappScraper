@@ -24,7 +24,7 @@ def verify_pin(pin: str, hashed: str) -> bool:
 ALLOWED_DOMAIN = "detucel.mx"
 
 def create_user(username: str, display_name: str, pin: str,
-                email: str = "", evolution_instance: str = "", role: str = "agent") -> dict:
+                email: str = "", evolution_instance: str = "", role: str = "user") -> dict:
     db = _db()
     if email:
         domain = email.strip().lower().split("@")[-1]

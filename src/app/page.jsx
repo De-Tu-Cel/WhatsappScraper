@@ -25,25 +25,29 @@ import Analytics from '../components/analytics'
 import AdminPanel from '../components/AdminPanel'
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
 import Settings, { loadSettings, applySettings } from '../components/Settings'
+import { useLang } from '../context/LangContext'
 
-const NAV_ITEMS = [
-  { label: 'URL Individual',    icon: <LinkIcon />,       component: <SingleUrlProcessor /> },
-  { label: 'Lote (URLs)',       icon: <ListAltIcon />,    component: <BatchProcessor /> },
-  { label: 'Importar CSV',      icon: <UploadFileIcon />, component: <CsvImporter /> },
-  { label: 'Base de datos',     icon: <StorageIcon />,    component: <DatabaseViewer /> },
-  { label: 'Buscar Prospectos', icon: <SearchIcon />,     component: <SearchProspects /> },
-  { label: 'Conversaciones',    icon: <ForumIcon />,      component: <Conversations /> },
-  { label: 'Análisis',          icon: <AnalyticsIcon />,           component: <Analytics /> },
-  { label: 'Administración',   icon: <AdminPanelSettingsIcon />,  component: <AdminPanel />, adminOnly: true },
+const NAV_KEYS = [
+  { key: 'single',   icon: <LinkIcon />,              component: <SingleUrlProcessor /> },
+  { key: 'batch',    icon: <ListAltIcon />,            component: <BatchProcessor /> },
+  { key: 'csv',      icon: <UploadFileIcon />,         component: <CsvImporter /> },
+  { key: 'database', icon: <StorageIcon />,            component: <DatabaseViewer /> },
+  { key: 'search',   icon: <SearchIcon />,             component: <SearchProspects /> },
+  { key: 'convs',    icon: <ForumIcon />,              component: <Conversations /> },
+  { key: 'analytics',icon: <AnalyticsIcon />,          component: <Analytics /> },
+  { key: 'admin',    icon: <AdminPanelSettingsIcon />, component: <AdminPanel />, adminOnly: true },
 ]
 
 export default function DashboardPage() {
-  const { user, loading: authLoading } = useUser()
+  const { user, loading: authLoading, showWarning, countdown, stayLoggedIn, logout } = useUser()
   const [hasUsers, setHasUsers]   = useState(true)
   const [active,       setActive]       = useState(0)
   const [open,         setOpen]         = useState(true)
   const [mounted,      setMounted]      = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+
+  const { t } = useLang()
+  const NAV_ITEMS = NAV_KEYS.map(item => ({ ...item, label: t.nav[item.key] || item.key }))
 
   // Verificar si hay usuarios registrados (para mostrar form de registro)
   useEffect(() => {
@@ -81,7 +85,44 @@ export default function DashboardPage() {
   }
 
   return (
-    <Box sx={{ display: 'flex', height: '100vh', bgcolor: 'var(--bg, #080c14)', p: 1.5, gap: 1.5, boxSizing: 'border-box' }}>
+    <Box sx={{ display: 'flex', height: '100vh', bgcolor: 'var(--bg, #080c14)', p: 1.5, gap: 1.5, boxSizing: 'border-box', position: 'relative' }}>
+
+      {/* ── Inactivity warning banner ── */}
+      {showWarning && (
+        <Box sx={{
+          position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 9999, display: 'flex', alignItems: 'center', gap: 2,
+          px: 3, py: 1.5, borderRadius: 3,
+          bgcolor: 'rgba(15,20,35,0.97)', backdropFilter: 'blur(12px)',
+          border: '1px solid rgba(251,191,36,0.4)',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(251,191,36,0.15)',
+          animation: 'fadeUp 0.3s ease',
+        }}>
+          <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#facc15', boxShadow: '0 0 8px #facc1599', flexShrink: 0 }} />
+          <Box>
+            <Box sx={{ color: 'white', fontWeight: 700, fontSize: '0.88rem' }}>
+              ¿Sigues ahí?
+            </Box>
+            <Box sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.75rem' }}>
+              Sesión cerrará en {Math.floor(countdown / 60)}:{String(countdown % 60).padStart(2, '0')} min
+            </Box>
+          </Box>
+          <Box onClick={stayLoggedIn} sx={{
+            px: 1.8, py: 0.6, borderRadius: 2, cursor: 'pointer', flexShrink: 0,
+            bgcolor: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.35)',
+            '&:hover': { bgcolor: 'rgba(251,191,36,0.28)' }, transition: 'all 0.15s',
+          }}>
+            <Box sx={{ color: '#facc15', fontWeight: 700, fontSize: '0.8rem' }}>Continuar</Box>
+          </Box>
+          <Box onClick={logout} sx={{
+            px: 1.5, py: 0.6, borderRadius: 2, cursor: 'pointer', flexShrink: 0,
+            border: '1px solid rgba(255,255,255,0.1)',
+            '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' }, transition: 'all 0.15s',
+          }}>
+            <Box sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.8rem' }}>Cerrar sesión</Box>
+          </Box>
+        </Box>
+      )}
       <Sidebar
         open={open} setOpen={setOpen}
         active={mounted ? active : -1} setActive={handleNavClick}

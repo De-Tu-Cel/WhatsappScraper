@@ -573,9 +573,11 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
                 # Outbound — try to update existing pipeline log, otherwise create new entry
                 updated = db.update_evolution_message_status(message_id, status) if message_id else False
                 if not updated:
+                    # Try to link to a company by destination number
+                    auto_company_id = db.find_company_id_by_phone(number) or "manual"
                     db.save_evolution_log(
                         direction="outbound",
-                        company_id="manual",
+                        company_id=auto_company_id,
                         number=number,
                         message_body=message_body,
                         message_id=message_id,

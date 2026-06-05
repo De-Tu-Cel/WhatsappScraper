@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { isValidUrl } from '@/lib/validators'
+import { useLang } from '../context/LangContext'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import LinearProgress from '@mui/material/LinearProgress'
@@ -105,7 +106,7 @@ function StatCard({ icon, label, value, color, bgColor, borderColor }) {
 }
 
 // ─── Empty state ──────────────────────────────────────────────────────────────
-function EmptyState() {
+function EmptyState({ t }) {
   return (
     <Box sx={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
@@ -123,10 +124,10 @@ function EmptyState() {
         <InboxIcon sx={{ color: 'rgba(var(--accent-rgb, 59,130,246), 0.5)', fontSize: 26 }} />
       </Box>
       <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.85rem', fontWeight: 500 }}>
-        Sin resultados aún
+        {t.batch.emptyTitle}
       </Typography>
       <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.75rem' }}>
-        Pega tus URLs arriba y presiona enviar
+        {t.batch.emptyHint}
       </Typography>
     </Box>
   )
@@ -144,6 +145,7 @@ function renderTemplate(text, scraped) {
 }
 
 export default function BatchProcessor() {
+  const { t, lang } = useLang()
   const [rawUrls,     setRawUrls]     = useState('')
   const [loading,     setLoading]     = useState(false)
   const [rows,        setRows]        = useState([])
@@ -276,10 +278,10 @@ export default function BatchProcessor() {
           </Box>
           <Box>
             <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.3 }}>
-              Procesamiento en lote
+              {t.batch.heading}
             </Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem' }}>
-              Pega una URL por línea · máx. 50 URLs
+              {t.batch.subtitle}
             </Typography>
           </Box>
         </Box>
@@ -315,7 +317,7 @@ export default function BatchProcessor() {
               {urlList.length} / 50
             </Typography>
             {!loading && (
-              <Tooltip title="Limpiar">
+              <Tooltip title={t.batch.clear}>
                 <IconButton
                   size="small"
                   onClick={() => { if (urlsRef.current) { urlsRef.current.value = ''; urlsRef.current.dispatchEvent(new Event('input', { bubbles: true })) } setRows([]); setDone(false) }}
@@ -389,17 +391,23 @@ export default function BatchProcessor() {
           <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 0.4 }}>
             {overLimit && (
               <Typography sx={{ color: '#f87171', fontSize: '0.72rem' }}>
-                ⚠ Máximo 50 URLs. Estás pegando {urlList.length} — elimina {urlList.length - 50}.
+                ⚠ {lang === 'en'
+                  ? `Maximum 50 URLs. You are pasting ${urlList.length} — remove ${urlList.length - 50}.`
+                  : `Máximo 50 URLs. Estás pegando ${urlList.length} — elimina ${urlList.length - 50}.`}
               </Typography>
             )}
             {invalidUrls.length > 0 && (
               <Typography sx={{ color: '#f87171', fontSize: '0.72rem' }}>
-                ⚠ {invalidUrls.length} URL{invalidUrls.length > 1 ? 's inválidas' : ' inválida'} (deben empezar con https:// o http://): {invalidUrls.slice(0, 2).join(', ')}{invalidUrls.length > 2 ? `… y ${invalidUrls.length - 2} más` : ''}
+                ⚠ {lang === 'en'
+                  ? `${invalidUrls.length} invalid URL${invalidUrls.length > 1 ? 's' : ''} (must start with https:// or http://): ${invalidUrls.slice(0, 2).join(', ')}${invalidUrls.length > 2 ? `… and ${invalidUrls.length - 2} more` : ''}`
+                  : `${invalidUrls.length} URL${invalidUrls.length > 1 ? 's inválidas' : ' inválida'} (deben empezar con https:// o http://): ${invalidUrls.slice(0, 2).join(', ')}${invalidUrls.length > 2 ? `… y ${invalidUrls.length - 2} más` : ''}`}
               </Typography>
             )}
             {duplicateUrls.length > 0 && (
               <Typography sx={{ color: '#fbbf24', fontSize: '0.72rem' }}>
-                ⚠ {duplicateUrls.length} URL{duplicateUrls.length > 1 ? 's duplicadas' : ' duplicada'}: {[...new Set(duplicateUrls)].slice(0, 2).join(', ')}{duplicateUrls.length > 2 ? '…' : ''}
+                ⚠ {lang === 'en'
+                  ? `${duplicateUrls.length} duplicate URL${duplicateUrls.length > 1 ? 's' : ''}: ${[...new Set(duplicateUrls)].slice(0, 2).join(', ')}${duplicateUrls.length > 2 ? '…' : ''}`
+                  : `${duplicateUrls.length} URL${duplicateUrls.length > 1 ? 's duplicadas' : ' duplicada'}: ${[...new Set(duplicateUrls)].slice(0, 2).join(', ')}${duplicateUrls.length > 2 ? '…' : ''}`}
               </Typography>
             )}
           </Box>
@@ -438,7 +446,13 @@ export default function BatchProcessor() {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />
               <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
-                {phase === 'sending' ? `Enviando mensajes — ${rows.filter(r => r.msg_status === 'sent').length} enviados` : `Scrapeando — ${rows.length} de ${urlList.length}`}
+                {phase === 'sending'
+                  ? lang === 'en'
+                    ? `Sending messages — ${rows.filter(r => r.msg_status === 'sent').length} sent`
+                    : `Enviando mensajes — ${rows.filter(r => r.msg_status === 'sent').length} enviados`
+                  : lang === 'en'
+                    ? `Scraping — ${rows.length} of ${urlList.length}`
+                    : `Scrapeando — ${rows.length} de ${urlList.length}`}
               </Typography>
             </Box>
             <Typography sx={{ color: 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>
@@ -473,12 +487,12 @@ export default function BatchProcessor() {
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.2 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <MessageIcon sx={{ fontSize: 16, color: '#4ade80' }} />
-              <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>Enviar mensajes</Typography>
+              <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>{t.batch.sendMessages}</Typography>
             </Box>
             {waRows.length > 0 && (
               <Chip
                 icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />}
-                label={`${waRows.length} con WhatsApp`}
+                label={`${waRows.length} ${t.batch.withWa}`}
                 size="small"
                 sx={{
                   fontSize: '0.7rem', height: 22,
@@ -490,7 +504,7 @@ export default function BatchProcessor() {
             )}
           </Box>
           <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
-            Plantilla base
+            {t.batch.baseTemplate}
           </Typography>
           <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.5 }}>
             {TEMPLATES.map(t => (
@@ -522,7 +536,7 @@ export default function BatchProcessor() {
               }}>{v}</Box>
             ))}
             <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', alignSelf: 'center', ml: 0.5 }}>
-              clic para insertar
+              {t.batch.clickInsert}
             </Typography>
           </Box>
           {/* Textarea editable — uncontrolled so native Ctrl+Z works */}
@@ -556,7 +570,13 @@ export default function BatchProcessor() {
                 '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
               }}
             >
-              {alreadySent ? 'Mensajes enviados' : sending ? 'Enviando…' : `Enviar a ${waRows.length} empresa${waRows.length !== 1 ? 's' : ''} con WhatsApp`}
+              {alreadySent
+                ? t.batch.msgSent
+                : sending
+                  ? t.batch.sending
+                  : lang === 'en'
+                    ? `Send to ${waRows.length} ${waRows.length !== 1 ? 'companies' : 'company'} with WhatsApp`
+                    : `Enviar a ${waRows.length} empresa${waRows.length !== 1 ? 's' : ''} con WhatsApp`}
             </Button>
           </Box>
         </Box>
@@ -567,7 +587,7 @@ export default function BatchProcessor() {
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
           <StatCard
             icon={<CheckCircleIcon sx={{ fontSize: 16, color: '#4ade80' }} />}
-            label="Procesadas"
+            label={t.batch.processed}
             value={okCount}
             color="#4ade80"
             bgColor="rgba(34,197,94,0.06)"
@@ -575,7 +595,7 @@ export default function BatchProcessor() {
           />
           <StatCard
             icon={<WhatsAppIcon sx={{ fontSize: 16, color: '#60a5fa' }} />}
-            label="Con WhatsApp"
+            label={t.batch.withWa}
             value={waCount}
             color="#60a5fa"
             bgColor="rgba(59,130,246,0.06)"
@@ -584,7 +604,7 @@ export default function BatchProcessor() {
           {alreadySent && (
             <StatCard
               icon={<SendIcon sx={{ fontSize: 16, color: '#a78bfa' }} />}
-              label="Mensajes enviados"
+              label={t.batch.msgSent}
               value={sentCount}
               color="#a78bfa"
               bgColor="rgba(167,139,250,0.06)"
@@ -593,7 +613,7 @@ export default function BatchProcessor() {
           )}
           <StatCard
             icon={<ErrorIcon sx={{ fontSize: 16, color: '#f87171' }} />}
-            label="Errores"
+            label={t.batch.errors}
             value={errCount}
             color="#f87171"
             bgColor="rgba(239,68,68,0.06)"
@@ -604,12 +624,12 @@ export default function BatchProcessor() {
 
       {/* ── Results ── */}
       {done && rows.length === 0 ? (
-        <EmptyState />
+        <EmptyState t={t} />
       ) : rows.length > 0 ? (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, flexGrow: 1, minHeight: 0 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.75rem', fontWeight: 600, letterSpacing: 0.5 }}>
-              RESULTADOS
+              {t.batch.results}
             </Typography>
             {!loading && (
               <Button
@@ -623,7 +643,7 @@ export default function BatchProcessor() {
                   '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)' },
                 }}
               >
-                Descargar CSV
+                {t.batch.download}
               </Button>
             )}
           </Box>
@@ -644,7 +664,7 @@ export default function BatchProcessor() {
             <Table size="small" stickyHeader>
               <TableHead>
                 <TableRow>
-                  {['URL', 'Empresa', 'Industria', 'WhatsApp', alreadySent ? 'Mensaje' : null, 'Estado'].filter(Boolean).map(h => (
+                  {['URL', t.batch.colCompany, t.batch.colIndustry, 'WhatsApp', alreadySent ? t.batch.colMessage : null, t.batch.colStatus].filter(Boolean).map(h => (
                     <TableCell key={h} sx={{
                       bgcolor: 'var(--card-bg, #161d2e)',
                       color: 'rgba(255,255,255,0.5)',
@@ -693,9 +713,9 @@ export default function BatchProcessor() {
                     </TableCell>
                     {alreadySent && (
                       <TableCell>
-                        {r.msg_status === 'sent'    && <Chip label="Enviado"   size="small" sx={{ bgcolor: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)', height: 20, fontSize: '0.68rem' }} />}
-                        {r.msg_status === 'failed'  && <Chip label="Falló"     size="small" sx={{ bgcolor: 'rgba(239,68,68,0.1)',   color: '#f87171', border: '1px solid rgba(239,68,68,0.25)',   height: 20, fontSize: '0.68rem' }} />}
-                        {r.msg_status === 'no_wa'   && <Chip label="Sin WA"    size="small" sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.08)', height: 20, fontSize: '0.68rem' }} />}
+                        {r.msg_status === 'sent'    && <Chip label={t.batch.chipSent}   size="small" sx={{ bgcolor: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)', height: 20, fontSize: '0.68rem' }} />}
+                        {r.msg_status === 'failed'  && <Chip label={t.batch.chipFailed} size="small" sx={{ bgcolor: 'rgba(239,68,68,0.1)',   color: '#f87171', border: '1px solid rgba(239,68,68,0.25)',   height: 20, fontSize: '0.68rem' }} />}
+                        {r.msg_status === 'no_wa'   && <Chip label={t.batch.chipNoWa}   size="small" sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.08)', height: 20, fontSize: '0.68rem' }} />}
                         {r.msg_status === 'skipped' && <Chip label="Saltado"   size="small" sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.08)', height: 20, fontSize: '0.68rem' }} />}
                         {!r.msg_status && <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>}
                       </TableCell>
@@ -716,7 +736,7 @@ export default function BatchProcessor() {
           </TableContainer>
         </Box>
       ) : !loading && (
-        <EmptyState />
+        <EmptyState t={t} />
       )}
     </Box>
   )

@@ -31,6 +31,7 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import MessageIcon from '@mui/icons-material/Message'
 import SendIcon from '@mui/icons-material/Send'
 import { TEMPLATES } from './singleUrlProcessor'
+import { useLang } from '../context/LangContext'
 
 const URL_REGEX = /^https?:\/\//i
 
@@ -100,6 +101,7 @@ function downloadTemplate() {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function CsvImporter() {
+  const { t } = useLang()
   const inputRef   = useRef(null)
   const pauseRef   = useRef(false)
   const cancelRef  = useRef(false)
@@ -303,10 +305,10 @@ export default function CsvImporter() {
         </Box>
         <Box>
           <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.3 }}>
-            Importar CSV
+            {t.csv.title}
           </Typography>
           <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem' }}>
-            Sube un CSV con URLs 
+            {t.csv.subtitle}
           </Typography>
         </Box>
       </Box>
@@ -342,11 +344,11 @@ export default function CsvImporter() {
           </Box>
           <Box sx={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
             <Typography sx={{ color: 'rgba(255,255,255,0.75)', fontWeight: 600, fontSize: '0.9rem' }}>
-              {dragging ? 'Suelta aquí tu archivo' : 'Arrastra tu archivo CSV aquí'}
+              {dragging ? t.csv.dropHere : t.csv.drag}
             </Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.78rem' }}>
-              o{' '}
-              <Box component="span" sx={{ color: 'var(--accent, #60a5fa)', fontWeight: 500 }}>haz clic para seleccionar</Box>
+              {t.csv.or}{' '}
+              <Box component="span" sx={{ color: 'var(--accent, #60a5fa)', fontWeight: 500 }}>{t.csv.select}</Box>
             </Typography>
           </Box>
           <Chip label=".csv" size="small" sx={{ bgcolor: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.08)', fontSize: '0.7rem', height: 20 }} />
@@ -356,7 +358,7 @@ export default function CsvImporter() {
             onClick={e => { e.stopPropagation(); downloadTemplate() }}
             sx={{ color: 'var(--accent, #60a5fa)', fontSize: '0.72rem', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)', borderRadius: 1.5, px: 1.5, py: 0.4, textTransform: 'none', bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.06)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.14)' } }}
           >
-            Descargar plantilla de ejemplo
+            {t.csv.template}
           </Button>
           <input ref={inputRef} type="file" accept=".csv" hidden onChange={handleInputChange} />
         </Box>
@@ -372,11 +374,10 @@ export default function CsvImporter() {
                 {fileName}
               </Typography>
               <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem' }}>
-                {allUrls.length} URLs detectadas
-                
+                {allUrls.length} {t.csv.urlsDetected}
               </Typography>
             </Box>
-            <Tooltip title="Quitar archivo">
+            <Tooltip title={t.csv.removeFile}>
               <IconButton size="small" onClick={handleReset} sx={{ color: 'rgba(255,255,255,0.3)', '&:hover': { color: 'rgba(255,255,255,0.7)' } }}>
                 <CloseIcon sx={{ fontSize: 16 }} />
               </IconButton>
@@ -388,7 +389,7 @@ export default function CsvImporter() {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.75, bgcolor: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)', borderRadius: 1.5 }}>
               <WarningAmberIcon sx={{ fontSize: 14, color: '#fbbf24' }} />
               <Typography sx={{ color: '#fbbf24', fontSize: '0.75rem' }}>
-                No se detectó ninguna columna con URLs válidas
+                {t.csv.noUrlCol}
               </Typography>
             </Box>
           )}
@@ -408,7 +409,7 @@ export default function CsvImporter() {
                 '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.2)', color: 'rgba(255,255,255,0.3)' },
               }}
             >
-              Procesar {allUrls.length} URLs
+              {t.csv.process} {allUrls.length} URLs
             </Button>
           ) : (
             <Box sx={{ display: 'flex', gap: 1.5 }}>
@@ -423,7 +424,7 @@ export default function CsvImporter() {
                   '&:hover': { bgcolor: 'rgba(251,191,36,0.15)', borderColor: 'rgba(251,191,36,0.45)' },
                 }}
               >
-                {paused ? 'Reanudar' : 'Pausar'}
+                {paused ? t.csv.resume : t.csv.pause}
               </Button>
               <Button
                 fullWidth
@@ -436,7 +437,7 @@ export default function CsvImporter() {
                   '&:hover': { bgcolor: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.45)' },
                 }}
               >
-                Cancelar
+                {t.csv.cancel}
               </Button>
             </Box>
           )}
@@ -453,7 +454,7 @@ export default function CsvImporter() {
                 : <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />
               }
               <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
-                {paused ? 'Pausado —' : 'Procesando'} {results.length} de {allUrls.length}
+                {paused ? t.csv.paused : t.csv.processing} {results.length} {t.csv.of} {allUrls.length}
               </Typography>
             </Box>
             <Typography sx={{ color: paused ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>
@@ -485,10 +486,10 @@ export default function CsvImporter() {
       {/* ── Stat cards ── */}
       {results.length > 0 && (
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-          <StatCard icon={<CheckCircleIcon sx={{ fontSize: 16, color: '#4ade80' }} />} label="Procesadas" value={okCount} color="#4ade80" bgColor="rgba(34,197,94,0.06)" borderColor="rgba(34,197,94,0.18)" />
-          <StatCard icon={<WhatsAppIcon sx={{ fontSize: 16, color: 'var(--accent, #60a5fa)' }} />} label="Con WhatsApp" value={waCount} color="var(--accent, #60a5fa)" bgColor="rgba(var(--accent-rgb, 59,130,246), 0.06)" borderColor="rgba(var(--accent-rgb, 59,130,246), 0.18)" iconBg="rgba(var(--accent-rgb, 59,130,246), 0.13)" iconBorder="rgba(var(--accent-rgb, 59,130,246), 0.27)" />
-          <StatCard icon={<WarningAmberIcon sx={{ fontSize: 16, color: '#fbbf24' }} />} label="Duplicados" value={dupCount} color="#fbbf24" bgColor="rgba(251,191,36,0.06)" borderColor="rgba(251,191,36,0.18)" />
-          <StatCard icon={<ErrorIcon sx={{ fontSize: 16, color: '#f87171' }} />} label="Errores" value={errCount} color="#f87171" bgColor="rgba(239,68,68,0.06)" borderColor="rgba(239,68,68,0.18)" />
+          <StatCard icon={<CheckCircleIcon sx={{ fontSize: 16, color: '#4ade80' }} />} label={t.csv.processed} value={okCount} color="#4ade80" bgColor="rgba(34,197,94,0.06)" borderColor="rgba(34,197,94,0.18)" />
+          <StatCard icon={<WhatsAppIcon sx={{ fontSize: 16, color: 'var(--accent, #60a5fa)' }} />} label={t.csv.withWa} value={waCount} color="var(--accent, #60a5fa)" bgColor="rgba(var(--accent-rgb, 59,130,246), 0.06)" borderColor="rgba(var(--accent-rgb, 59,130,246), 0.18)" iconBg="rgba(var(--accent-rgb, 59,130,246), 0.13)" iconBorder="rgba(var(--accent-rgb, 59,130,246), 0.27)" />
+          <StatCard icon={<WarningAmberIcon sx={{ fontSize: 16, color: '#fbbf24' }} />} label={t.csv.duplicates} value={dupCount} color="#fbbf24" bgColor="rgba(251,191,36,0.06)" borderColor="rgba(251,191,36,0.18)" />
+          <StatCard icon={<ErrorIcon sx={{ fontSize: 16, color: '#f87171' }} />} label={t.csv.errors} value={errCount} color="#f87171" bgColor="rgba(239,68,68,0.06)" borderColor="rgba(239,68,68,0.18)" />
         </Box>
       )}
 
@@ -498,25 +499,25 @@ export default function CsvImporter() {
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.2 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <MessageIcon sx={{ fontSize: 16, color: '#4ade80' }} />
-              <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>Enviar mensajes</Typography>
+              <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>{t.csv.sendMessages}</Typography>
             </Box>
             {waRows.length > 0 && (
-              <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={`${waRows.length} con WhatsApp`} size="small"
+              <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={`${waRows.length} ${t.csv.withWhatsApp}`} size="small"
                 sx={{ fontSize: '0.7rem', height: 22, bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', '& .MuiChip-icon': { color: '#4ade80' } }} />
             )}
           </Box>
-          <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>Plantilla base</Typography>
+          <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>{t.csv.baseTemplate}</Typography>
           <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.5 }}>
-            {TEMPLATES.map(t => (
-              <Chip key={t.id} label={t.label} size="small" onClick={() => {
-                setSelectedTpl(t.id)
+            {TEMPLATES.map(tpl => (
+              <Chip key={tpl.id} label={tpl.label} size="small" onClick={() => {
+                setSelectedTpl(tpl.id)
                 const el = msgRef.current
-                if (el) { el.value = t.text; el.dispatchEvent(new Event('input', { bubbles: true })) }
+                if (el) { el.value = tpl.text; el.dispatchEvent(new Event('input', { bubbles: true })) }
               }} sx={{
                 fontSize: '0.7rem', height: 24, cursor: 'pointer',
-                bgcolor: selectedTpl === t.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
-                color:   selectedTpl === t.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
-                border:  `1px solid ${selectedTpl === t.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                bgcolor: selectedTpl === tpl.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
+                color:   selectedTpl === tpl.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
+                border:  `1px solid ${selectedTpl === tpl.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
               }} />
             ))}
           </Box>
@@ -536,7 +537,7 @@ export default function CsvImporter() {
               }}>{v}</Box>
             ))}
             <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', alignSelf: 'center', ml: 0.5 }}>
-              clic para insertar
+              {t.csv.clickInsert}
             </Typography>
           </Box>
           {/* Textarea editable — uncontrolled so native Ctrl+Z works */}
@@ -570,7 +571,11 @@ export default function CsvImporter() {
                 '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
               }}
             >
-              {alreadySent ? `${sentCount} mensajes enviados` : sendingAll ? 'Enviando…' : `Enviar a ${waRows.length} empresa${waRows.length !== 1 ? 's' : ''} con WhatsApp`}
+              {alreadySent
+                ? `${sentCount} ${t.csv.msgSent}`
+                : sendingAll
+                  ? t.csv.sending
+                  : `${t.csv.sendTo} ${waRows.length} ${waRows.length !== 1 ? t.csv.companies : t.csv.company} ${t.csv.withWhatsApp}`}
             </Button>
           </Box>
         </Box>
@@ -581,7 +586,7 @@ export default function CsvImporter() {
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, flexGrow: 1, minHeight: 0 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem', fontWeight: 600, letterSpacing: 0.5 }}>
-              RESULTADOS
+              {t.csv.results}
             </Typography>
             {!loading && (
               <Button
@@ -590,7 +595,7 @@ export default function CsvImporter() {
                 onClick={downloadCsv}
                 sx={{ color: 'var(--accent, #60a5fa)', fontSize: '0.75rem', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)', borderRadius: 1.5, px: 1.5, py: 0.4, textTransform: 'none', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)' } }}
               >
-                Descargar CSV
+                {t.csv.download}
               </Button>
             )}
           </Box>

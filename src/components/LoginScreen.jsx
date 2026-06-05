@@ -12,6 +12,7 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import LockResetIcon from '@mui/icons-material/LockReset'
 import { useUser } from '../context/UserContext'
+import { useLang } from '../context/LangContext'
 
 /* ── Animaciones ─────────────────────────────────────────────────────────── */
 const gradientShift = keyframes`
@@ -73,7 +74,7 @@ function PinField({ value, onChange, placeholder = '••••••', label, 
 
 function SubmitBtn({ loading, label }) {
   const [hovered, setHovered] = useState(false)
-  const isEnter = label.includes('→') || label.includes('Entrar')
+  const isEnter = label.includes('→')
   return (
     <Box component="button" type="submit" disabled={loading}
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
@@ -140,6 +141,7 @@ function ErrorBox({ msg, success }) {
 
 export default function LoginScreen({ hasUsers }) {
   const { login, register } = useUser()
+  const { t } = useLang()
   const [mode,         setMode]         = useState(hasUsers ? 'login' : 'register')
   const [username,     setUsername]     = useState('')
   const [displayName,  setDisplayName]  = useState('')
@@ -282,10 +284,10 @@ export default function LoginScreen({ hasUsers }) {
               Lector Comercial
             </Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem', mt: 0.5 }}>
-              {mode === 'login'    ? 'Bienvenido de vuelta'
-             : mode === 'register' ? 'Crea tu cuenta'
-             : mode === 'recover'  ? 'Recuperar acceso'
-             :                       'Guarda tu código'}
+              {mode === 'login'    ? t.login.welcome
+             : mode === 'register' ? t.login.register
+             : mode === 'recover'  ? t.login.recover
+             :                       t.login.saveCode}
             </Typography>
           </Box>
 
@@ -296,20 +298,20 @@ export default function LoginScreen({ hasUsers }) {
           {mode === 'login' && (
             <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, animation: `${fadeUp} 0.3s ease` }}>
               <Box>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Usuario</Typography>
-                <TextField fullWidth size="small" placeholder="Ej: marco.dominguez" autoFocus
+                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{t.login.user}</Typography>
+                <TextField fullWidth size="small" placeholder="marco.dominguez" autoFocus
                   value={username} onChange={e => setUsername(e.target.value.toLowerCase())}
                   autoComplete="username" sx={INPUT_SX} />
               </Box>
               <PinField label="PIN" value={pin} onChange={setPin} autoComplete="current-password" />
               {error && <ErrorBox msg={error} success={error.startsWith('✓')} />}
-              <SubmitBtn loading={loading} label="Entrar →" />
+              <SubmitBtn loading={loading} label={`${t.login.enter} →`} />
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
                 {hasUsers && (
-                  <Typography onClick={() => reset('register')} sx={LINK_SX}>Crear cuenta</Typography>
+                  <Typography onClick={() => reset('register')} sx={LINK_SX}>{t.login.createAcc}</Typography>
                 )}
                 <Typography onClick={() => reset('recover')} sx={{ ...LINK_SX, ml: 'auto', display: 'flex', alignItems: 'center', gap: 0.4 }}>
-                  <LockResetIcon sx={{ fontSize: 13 }} /> Olvidé mi PIN
+                  <LockResetIcon sx={{ fontSize: 13 }} /> {t.login.forgotPin}
                 </Typography>
               </Box>
             </Box>
@@ -319,7 +321,7 @@ export default function LoginScreen({ hasUsers }) {
           {mode === 'register' && (
             <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, animation: `${fadeUp} 0.3s ease` }}>
               <Box>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Correo corporativo</Typography>
+                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{t.login.email}</Typography>
                 <TextField fullWidth size="small" placeholder="nombre" autoFocus
                   value={email.replace('@detucel.mx', '')}
                   onChange={e => setEmail(e.target.value.toLowerCase().replace(/\s/g,'').replace('@detucel.mx','') + '@detucel.mx')}
@@ -330,23 +332,23 @@ export default function LoginScreen({ hasUsers }) {
                   sx={INPUT_SX} />
               </Box>
               <Box>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Nombre completo</Typography>
-                <TextField fullWidth size="small" placeholder="Ej: Marco Domínguez"
+                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{t.login.fullName}</Typography>
+                <TextField fullWidth size="small" placeholder="Marco Domínguez"
                   value={displayName} onChange={e => setDisplayName(e.target.value)} sx={INPUT_SX} />
               </Box>
               <Box>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Usuario</Typography>
-                <TextField fullWidth size="small" placeholder="ej: marco"
+                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{t.login.user}</Typography>
+                <TextField fullWidth size="small" placeholder="marco"
                   value={username} onChange={e => setUsername(e.target.value.toLowerCase().replace(/\s/g,''))}
                   autoComplete="username" sx={INPUT_SX} />
               </Box>
-              <PinField label="PIN (mínimo 4 dígitos)" value={pin} onChange={setPin} autoComplete="new-password" />
-              <PinField label="Confirmar PIN" value={pin2} onChange={setPin2} placeholder="••••••" autoComplete="new-password" />
+              <PinField label={t.login.pin} value={pin} onChange={setPin} autoComplete="new-password" />
+              <PinField label={t.login.confirmPin} value={pin2} onChange={setPin2} placeholder="••••••" autoComplete="new-password" />
               {error && <ErrorBox msg={error} />}
               <SubmitBtn loading={loading} label="Crear cuenta" />
               {hasUsers && (
                 <Typography onClick={() => reset('login')} sx={{ ...LINK_SX, textAlign: 'center', mt: 0.5 }}>
-                  ¿Ya tienes cuenta? Inicia sesión
+                  {t.login.hasAcc}
                 </Typography>
               )}
             </Box>
@@ -401,9 +403,9 @@ export default function LoginScreen({ hasUsers }) {
               </Box>
               <PinField label="Nuevo PIN" value={newPin} onChange={setNewPin} placeholder="nuevo PIN" autoComplete="new-password" />
               {error && <ErrorBox msg={error} success={error.startsWith('✓')} />}
-              <SubmitBtn loading={loading} label="Cambiar PIN" />
+              <SubmitBtn loading={loading} label={t.login.changePin} />
               <Typography onClick={() => reset('login')} sx={{ ...LINK_SX, textAlign: 'center', mt: 0.5 }}>
-                ← Volver al inicio de sesión
+                {t.login.back}
               </Typography>
             </Box>
           )}

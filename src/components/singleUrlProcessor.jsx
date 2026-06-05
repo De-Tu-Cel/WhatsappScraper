@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 import { useState, useEffect, useRef } from 'react'
 import { authFetch } from '@/lib/api'
 import Box from '@mui/material/Box'
@@ -13,6 +13,7 @@ import Chip from '@mui/material/Chip'
 import Tooltip from '@mui/material/Tooltip'
 import ResultDisplay from './resultDisplay'
 import { isValidUrl, urlValidationMsg, MAX_WA_MSG } from '@/lib/validators'
+import { useLang } from '../context/LangContext'
 
 const SKEL = { bgcolor: 'rgba(255,255,255,0.06)', '&::after': { background: 'linear-gradient(90deg,transparent,rgba(255,255,255,0.04),transparent)' } }
 
@@ -43,6 +44,33 @@ function ResultSkeleton() {
 }
 
 // ── Plantillas de mensaje ────────────────────────────────────────────────────
+export function getTemplates(t) {
+  return [
+    {
+      id: 'general',
+      label: t.single.tplWith,
+      desc: t.single.tplWithDesc,
+      needs: ['nombre', 'ciudad'],
+      text: t.single.tplWithText,
+    },
+    {
+      id: 'sin_ciudad',
+      label: t.single.tplName,
+      desc: t.single.tplNameDesc,
+      needs: ['nombre'],
+      text: t.single.tplNameText,
+    },
+    {
+      id: 'industria',
+      label: t.single.tplIndustry,
+      desc: t.single.tplIndustryDesc,
+      needs: ['nombre', 'industria'],
+      text: t.single.tplIndustryText,
+    },
+  ]
+}
+
+// Static export kept for backwards-compatibility (uses Spanish strings)
 export const TEMPLATES = [
   {
     id: 'general',
@@ -67,12 +95,14 @@ export const TEMPLATES = [
   },
 ]
 
-const VARIABLES = [
-  { key: '{{nombre}}',    field: 'nombre',    label: 'Nombre del negocio', color: '#4ade80', bg: 'rgba(34,197,94,0.08)',  border: 'rgba(34,197,94,0.2)'  },
-  { key: '{{ciudad}}',    field: 'ciudad',    label: 'Ciudad',             color: '#60a5fa', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.2)' },
-  { key: '{{industria}}', field: 'industria', label: 'Giro / industria',   color: '#fbbf24', bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.2)' },
-  { key: '{{web}}',       field: 'web',       label: 'Sitio web',          color: '#a78bfa', bg: 'rgba(139,92,246,0.08)', border: 'rgba(139,92,246,0.2)' },
-]
+function getVariables(t) {
+  return [
+    { key: '{{nombre}}',    field: 'nombre',    label: t.single.varNombre,    color: '#4ade80', bg: 'rgba(34,197,94,0.08)',  border: 'rgba(34,197,94,0.2)'  },
+    { key: '{{ciudad}}',    field: 'ciudad',    label: t.single.varCiudad,    color: '#60a5fa', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.2)' },
+    { key: '{{industria}}', field: 'industria', label: t.single.varIndustria, color: '#fbbf24', bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.2)' },
+    { key: '{{web}}',       field: 'web',       label: t.single.varWeb,       color: '#a78bfa', bg: 'rgba(139,92,246,0.08)', border: 'rgba(139,92,246,0.2)' },
+  ]
+}
 
 function extractValues(data) {
   const scraped = data?.scraped || {}
@@ -94,9 +124,13 @@ function renderWithValues(text, vals) {
 }
 
 export function MessageComposer({ result, onSend, sending }) {
+  const { t } = useLang()
   const inputRef = useRef(null)
   const vals = extractValues(result)
   const [charCount, setCharCount] = useState(0)
+
+  const TEMPLATES_I18N = getTemplates(t)
+  const VARIABLES_I18N = getVariables(t)
 
   // All WA numbers found by the scraper
   const allNumbers = result?.scraped?._contacts_raw?.all_whatsapp_numbers || []
@@ -106,9 +140,9 @@ export function MessageComposer({ result, onSend, sending }) {
   const toggleNum = (n) => setSelectedNums(prev => prev.includes(n) ? prev.filter(x => x !== n) : [...prev, n])
 
   // Auto-select first available template
-  const firstAvailable = TEMPLATES.find(t => t.needs.every(n => vals[n]))
-  const [activeTemplate, setActiveTemplate] = useState(firstAvailable?.id || TEMPLATES[0].id)
-  const [defaultText, setDefaultText] = useState(() => renderWithValues((firstAvailable || TEMPLATES[0]).text, vals))
+  const firstAvailable = TEMPLATES_I18N.find(tpl => tpl.needs.every(n => vals[n]))
+  const [activeTemplate, setActiveTemplate] = useState(firstAvailable?.id || TEMPLATES_I18N[0].id)
+  const [defaultText, setDefaultText] = useState(() => renderWithValues((firstAvailable || TEMPLATES_I18N[0]).text, vals))
 
   function applyTemplate(tpl) {
     setActiveTemplate(tpl.id)
@@ -124,7 +158,7 @@ export function MessageComposer({ result, onSend, sending }) {
   }
 
   function insertValue(varKey) {
-    const v = VARIABLES.find(v => v.key === varKey)
+    const v = VARIABLES_I18N.find(v => v.key === varKey)
     const realValue = vals[v?.field] || ''
     if (!realValue) return
     const el = inputRef.current
@@ -141,18 +175,18 @@ export function MessageComposer({ result, onSend, sending }) {
     <Box sx={{ mt: 3, p: 2.5, borderRadius: 2, border: '1px solid rgba(34,197,94,0.2)', bgcolor: 'rgba(34,197,94,0.04)' }}>
       {/* Header */}
       <Typography sx={{ fontWeight: 700, fontSize: '0.9rem', color: '#4ade80', mb: 0.5 }}>
-        Enviar mensaje de WhatsApp
+        {t.single.msgTitle}
       </Typography>
 
       {/* Selector de número */}
       {numbers.length > 0 && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, flexWrap: 'wrap' }}>
           <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)' }}>
-            {numbers.length > 1 ? 'Enviar a:' : 'Número:'}
+            {numbers.length > 1 ? t.single.sendTo : t.single.number}
           </Typography>
           {numbers.length > 1 && (
             <Chip
-              label={selectedNums.length === numbers.length ? 'Todos ✓' : 'Todos'}
+              label={selectedNums.length === numbers.length ? t.single.allSelected : t.single.allUnselected}
               size="small"
               onClick={() => setSelectedNums(selectedNums.length === numbers.length ? [] : [...numbers])}
               sx={{ fontSize: '0.68rem', height: 22, cursor: 'pointer',
@@ -178,24 +212,24 @@ export function MessageComposer({ result, onSend, sending }) {
 
       {/* Plantillas */}
       <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.35)', mb: 0.8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-        Punto de partida
+        {t.single.startingPoint}
       </Typography>
       <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 2 }}>
-        {TEMPLATES.map(t => {
-          const missingFields = t.needs.filter(n => !vals[n])
+        {TEMPLATES_I18N.map(tpl => {
+          const missingFields = tpl.needs.filter(n => !vals[n])
           const disabled = missingFields.length > 0
-          const missingLabels = missingFields.map(f => VARIABLES.find(v => v.field === f)?.label).join(', ')
+          const missingLabels = missingFields.map(f => VARIABLES_I18N.find(v => v.field === f)?.label).join(', ')
           return (
-            <Tooltip key={t.id} title={disabled ? `Falta: ${missingLabels}` : t.desc} placement="top">
+            <Tooltip key={tpl.id} title={disabled ? `${t.single.missing}${missingLabels}` : tpl.desc} placement="top">
               <span>
-                <Chip label={t.label} size="small"
-                  onClick={() => !disabled && applyTemplate(t)}
+                <Chip label={tpl.label} size="small"
+                  onClick={() => !disabled && applyTemplate(tpl)}
                   sx={{ fontSize: '0.7rem', height: 26,
                     cursor: disabled ? 'not-allowed' : 'pointer',
                     opacity: disabled ? 0.35 : 1,
-                    bgcolor: activeTemplate === t.id ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
-                    color:   activeTemplate === t.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
-                    border:  `1px solid ${activeTemplate === t.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                    bgcolor: activeTemplate === tpl.id ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
+                    color:   activeTemplate === tpl.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
+                    border:  `1px solid ${activeTemplate === tpl.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
                     '&:hover': !disabled ? { bgcolor: 'rgba(34,197,94,0.1)' } : {},
                   }} />
               </span>
@@ -206,7 +240,7 @@ export function MessageComposer({ result, onSend, sending }) {
 
       {/* Editor */}
       <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.35)', mb: 0.8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-        Escribe o edita el mensaje
+        {t.single.editMsg}
       </Typography>
       <TextField key={activeTemplate} fullWidth multiline rows={4} size="small"
         defaultValue={defaultText} inputRef={inputRef}
@@ -217,19 +251,19 @@ export function MessageComposer({ result, onSend, sending }) {
       <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1, pr: 0.5 }}>
         <Typography sx={{ fontSize: '0.68rem', color: charCount > MAX_WA_MSG ? '#f87171' : charCount > MAX_WA_MSG * 0.9 ? '#fbbf24' : 'rgba(255,255,255,0.25)' }}>
           {charCount} / {MAX_WA_MSG}
-          {charCount > MAX_WA_MSG && ' —demasiado largo'}
+          {charCount > MAX_WA_MSG && ` ${t.single.tooLongSuffix}`}
         </Typography>
       </Box>
 
       {/* Variables insertables —deshabilitadas si no se encontró el dato */}
       <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.35)', mb: 0.8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-        Insertar datos del negocio
+        {t.single.insertData}
       </Typography>
       <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 2 }}>
-        {VARIABLES.map(v => {
+        {VARIABLES_I18N.map(v => {
           const available = !!vals[v.field]
           return (
-            <Tooltip key={v.key} title={available ? `Insertar: ${vals[v.field]}` : 'No se encontró este dato'} placement="top">
+            <Tooltip key={v.key} title={available ? `${t.single.insert}${vals[v.field]}` : t.single.notFound} placement="top">
               <span>
                 <Chip label={v.label} size="small"
                   onClick={() => available && insertValue(v.key)}
@@ -248,10 +282,10 @@ export function MessageComposer({ result, onSend, sending }) {
       {/* Botón enviar */}
       {selectedNums.length === 0 && numbers.length > 1 && (
         <Typography sx={{ color: '#fbbf24', fontSize: '0.72rem', mb: 1 }}>
-          Selecciona al menos un número para enviar.
+          {t.single.selectNum}
         </Typography>
       )}
-      <Box onClick={() => { const t = getCurrentText(); if (!sending && t.trim() && selectedNums.length > 0 && t.length <= MAX_WA_MSG) onSend(t, selectedNums) }}
+      <Box onClick={() => { const txt = getCurrentText(); if (!sending && txt.trim() && selectedNums.length > 0 && txt.length <= MAX_WA_MSG) onSend(txt, selectedNums) }}
         sx={{
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1,
           py: 1.2, borderRadius: 1.5,
@@ -264,7 +298,7 @@ export function MessageComposer({ result, onSend, sending }) {
         }}>
         {sending
           ? <CircularProgress size={16} sx={{ color: '#4ade80' }} />
-          : <Typography sx={{ fontSize: '0.85rem', fontWeight: 700, color: '#4ade80' }}>Confirmar y enviar mensaje</Typography>
+          : <Typography sx={{ fontSize: '0.85rem', fontWeight: 700, color: '#4ade80' }}>{t.single.confirm}</Typography>
         }
       </Box>
     </Box>
@@ -329,6 +363,7 @@ function useTypewriter(strings, active) {
 }
 
 function SearchBar({ url, setUrl, onSearch, loading, compact }) {
+  const { t } = useLang()
   const placeholder = useTypewriter(EXAMPLES, !url && !compact)
   const urlError = url.trim() && !isValidUrl(url.trim()) ? urlValidationMsg(url.trim()) : ''
   const canSearch = !loading && url.trim() && !urlError
@@ -362,7 +397,7 @@ function SearchBar({ url, setUrl, onSearch, loading, compact }) {
           fullWidth variant="standard" value={url}
           onChange={e => setUrl(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && canSearch && onSearch()}
-          placeholder={placeholder || 'https://empresa.com.mx/'}
+          placeholder={placeholder || t.single.urlPlaceholder}
           slotProps={{ input: { disableUnderline: true } }}
           sx={{
             '& input': {
@@ -373,7 +408,7 @@ function SearchBar({ url, setUrl, onSearch, loading, compact }) {
             '& .MuiInput-root::after':  { display: 'none' },
           }}
         />
-        <Tooltip title={urlError || (!url.trim() ? 'Ingresa una URL para continuar' : '')} disableHoverListener={canSearch}>
+        <Tooltip title={urlError || (!url.trim() ? t.single.urlEmpty : '')} disableHoverListener={canSearch}>
           <span>
             <IconButton onClick={onSearch} disabled={!canSearch} sx={{
               bgcolor: 'var(--accent, #3b82f6)', color: 'white', width: 42, height: 42, flexShrink: 0, mr: -1,
@@ -395,6 +430,7 @@ function SearchBar({ url, setUrl, onSearch, loading, compact }) {
 }
 
 export default function SingleUrlProcessor() {
+  const { t } = useLang()
   const [url, setUrl] = useState('')
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
@@ -465,13 +501,13 @@ export default function SingleUrlProcessor() {
     }
   }
 
-  /* â”€â”€ ESTADO INICIAL: barra centrada â”€â”€ */
+  /* ── ESTADO INICIAL: barra centrada ── */
   if (!hasResult && !loading) {
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, minHeight: 0, gap: 1 }}>
         <Box sx={{ textAlign: 'center', mb: 1 }}>
           <Typography variant="h4" fontWeight={700} color="text.primary" gutterBottom>
-            ¿Que empresa estas buscando hoy?
+            {t.single.heading}
           </Typography>
         </Box>
         <SearchBar url={url} setUrl={setUrl} onSearch={handleScrape} loading={loading} compact={false} />
@@ -479,7 +515,7 @@ export default function SingleUrlProcessor() {
     )
   }
 
-  /* â”€â”€ CON RESULTADO: barra arriba + resultados + composer â”€â”€ */
+  /* ── CON RESULTADO: barra arriba + resultados + composer ── */
   return (
     <Box sx={{ overflowY: 'auto', height: '100%' }}>
       {/* Barra superior */}
@@ -511,4 +547,3 @@ export default function SingleUrlProcessor() {
     </Box>
   )
 }
-

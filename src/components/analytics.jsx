@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react'
+import { useLang } from '../context/LangContext'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Chip from '@mui/material/Chip'
@@ -430,6 +431,8 @@ export default function Analytics() {
     ? (data.reduce((acc, d) => acc + (d.response_quality || 0), 0) / total).toFixed(1)
     : '—'
 
+  const { t } = useLang()
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, gap: 2, position: 'relative' }}>
 
@@ -447,10 +450,10 @@ export default function Analytics() {
           </Box>
           <Box>
             <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.2 }}>
-              Análisis de Respuestas
+              {t.analytics.title}
             </Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem' }}>
-              Clasificación y métricas de respuestas recibidas
+              {t.analytics.subtitle}
             </Typography>
           </Box>
         </Box>
@@ -469,7 +472,7 @@ export default function Analytics() {
           bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2,
         }}>
           <StarIcon sx={{ fontSize: 15, color: 'rgba(255,255,255,0.4)' }} />
-          <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>Total analizadas:</Typography>
+          <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>{t.analytics.total}:</Typography>
           <Typography sx={{ fontSize: '0.85rem', color: 'white', fontWeight: 700 }}>{total}</Typography>
         </Box>
 
@@ -502,7 +505,7 @@ export default function Analytics() {
           bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2,
         }}>
           <StarIcon sx={{ fontSize: 15, color: '#facc15' }} />
-          <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>Calidad promedio:</Typography>
+          <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>{t.analytics.avgQuality}:</Typography>
           <Typography sx={{ fontSize: '0.85rem', color: '#facc15', fontWeight: 700 }}>{avgQuality}</Typography>
         </Box>
       </Box>
@@ -510,7 +513,7 @@ export default function Analytics() {
       {/* ── Filtros ── */}
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', flexShrink: 0 }}>
         {/* Buscador */}
-        <TextField size="small" placeholder="Buscar empresa o industria…" value={searchText}
+        <TextField size="small" placeholder={t.analytics.searchPh} value={searchText}
           onChange={e => setSearchText(e.target.value)}
           slotProps={{ input: { startAdornment: (
             <InputAdornment position="start">
@@ -598,9 +601,9 @@ export default function Analytics() {
                   {/* Columna expand — sin label */}
                   <TableCell sx={{ ...HEADER_CELL_SX, width: 32, px: 0.5 }} />
                   {[
-                    { field: 'company_name', label: 'Empresa' },
-                    { field: 'industry',     label: 'Industria' },
-                    { field: 'category',     label: 'Categoría' },
+                    { field: 'company_name', label: t.analytics.company },
+                    { field: 'industry',     label: t.analytics.industry },
+                    { field: 'category',     label: t.analytics.category },
                   ].map(({ field, label }) => (
                     <TableCell key={field} sx={HEADER_CELL_SX}>
                       <TableSortLabel active={sortField === field} direction={sortField === field ? sortDir : 'asc'}
@@ -615,7 +618,7 @@ export default function Analytics() {
                       onClick={() => handleSort('response_quality')}
                       sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <StarIcon sx={{ fontSize: 12 }} /> Calidad
+                        <StarIcon sx={{ fontSize: 12 }} /> {t.analytics.quality}
                       </Box>
                     </TableSortLabel>
                   </TableCell>
@@ -624,7 +627,7 @@ export default function Analytics() {
                       onClick={() => handleSort('reaction_time_min')}
                       sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <AccessTimeIcon sx={{ fontSize: 12 }} /> T. Reacción
+                        <AccessTimeIcon sx={{ fontSize: 12 }} /> {t.analytics.reaction}
                       </Box>
                     </TableSortLabel>
                   </TableCell>
@@ -632,7 +635,7 @@ export default function Analytics() {
                     <TableSortLabel active={sortField === 'last_at'} direction={sortField === 'last_at' ? sortDir : 'asc'}
                       onClick={() => handleSort('last_at')}
                       sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
-                      Última respuesta
+                      {t.analytics.lastResp}
                     </TableSortLabel>
                   </TableCell>
                   <TableCell sx={HEADER_CELL_SX}>Notas</TableCell>

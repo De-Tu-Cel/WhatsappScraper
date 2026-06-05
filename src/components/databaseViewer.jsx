@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useLang } from '../context/LangContext'
 import { isValidUrl, urlValidationMsg, isValidWhatsAppNumber, waNumberValidationMsg } from '@/lib/validators'
 import Box from '@mui/material/Box'
 import Paper from '@mui/material/Paper'
@@ -53,26 +54,32 @@ import { visuallyHidden } from '@mui/utils'
 import ResultDisplay from './resultDisplay'
 import { MessageComposer, TEMPLATES } from './singleUrlProcessor'
 
-const HEAD_CELLS = [
-  { id: 'name',         label: 'Empresa',    align: 'left',   sortable: true  },
-  { id: 'website',      label: 'Sitio web',  align: 'left',   sortable: false },
-  { id: 'industry',     label: 'Industria',  align: 'center', sortable: true  },
-  { id: 'city',         label: 'Ciudad',     align: 'center', sortable: true  },
-  { id: 'has_whatsapp', label: 'WhatsApp',   align: 'center', sortable: true  },
-  { id: 'created_at',   label: 'Registrado', align: 'center', sortable: true  },
-]
+function getHeadCells(t) {
+  return [
+    { id: 'name',         label: t.db.colCompany,    align: 'left',   sortable: true  },
+    { id: 'website',      label: t.db.colWebsite,    align: 'left',   sortable: false },
+    { id: 'industry',     label: t.db.colIndustry,   align: 'center', sortable: true  },
+    { id: 'city',         label: t.db.colCity,       align: 'center', sortable: true  },
+    { id: 'has_whatsapp', label: t.db.whatsapp,      align: 'center', sortable: true  },
+    { id: 'created_at',   label: t.db.colRegistered, align: 'center', sortable: true  },
+  ]
+}
 
-const WHATSAPP_OPTIONS = [
-  { value: '', label: 'Todos' },
-  { value: 'true', label: 'Con WA' },
-  { value: 'false', label: 'Sin WA' },
-]
+function getWhatsappOptions(t) {
+  return [
+    { value: '', label: t.db.waAll },
+    { value: 'true', label: t.db.waWith },
+    { value: 'false', label: t.db.waWithout },
+  ]
+}
 
-const ALERT_TITLES = {
-  success: 'Listo',
-  error: 'Error',
-  info: 'Info',
-  warning: 'Advertencia',
+function getAlertTitles(t) {
+  return {
+    success: t.db.alertDone,
+    error:   t.common.error,
+    info:    'Info',
+    warning: t.db.alertWarning,
+  }
 }
 
 const MENU_PROPS = {
@@ -157,6 +164,7 @@ function renderTemplate(template, row) {
 
 // ─── Toolbar ──────────────────────────────────────────────────────────────────
 function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescraping, selectedWithWA, onRefresh, onToggleFilter, filterOpen }) {
+  const { t } = useLang()
   return (
     <Toolbar sx={{
       pl: { sm: 2 }, pr: { xs: 1, sm: 1 },
@@ -168,11 +176,11 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
       <Box sx={{ flex: '1 1 100%', display: 'flex', alignItems: 'center', gap: 1.5 }}>
         <StorageIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 20, flexShrink: 0 }} />
         <Typography variant="h6" sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', whiteSpace: 'nowrap' }}>
-          Base de datos
+          {t.db.heading}
         </Typography>
         {numSelected > 0 && (
           <Chip
-            label={`${numSelected} seleccionada${numSelected !== 1 ? 's' : ''}`}
+            label={`${numSelected} ${numSelected !== 1 ? t.db.selected : t.db.selectedSingle}`}
             size="small"
             sx={{ height: 22, fontSize: '0.7rem', fontWeight: 600, bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.15)', color: 'var(--accent, #60a5fa)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.3)' }}
           />
@@ -183,7 +191,7 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
         {numSelected > 0 ? (
           <>
-            <Tooltip title={selectedWithWA === 0 ? 'Ninguna empresa seleccionada tiene WhatsApp' : `Enviar mensaje a ${selectedWithWA} con WhatsApp`}>
+            <Tooltip title={selectedWithWA === 0 ? t.db.noWaSelected : `${t.db.sendMsgTo} ${selectedWithWA} ${t.db.withWA}`}>
               <span>
                 <Button size="small" onClick={onCampaign} disabled={selectedWithWA === 0}
                   startIcon={<MessageIcon sx={{ fontSize: '14px !important' }} />}
@@ -196,11 +204,11 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
                     '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'transparent', border: '1px solid rgba(255,255,255,0.08)' },
                   }}
                 >
-                  Enviar{selectedWithWA > 0 ? ` (${selectedWithWA})` : ''}
+                  {t.db.send}{selectedWithWA > 0 ? ` (${selectedWithWA})` : ''}
                 </Button>
               </span>
             </Tooltip>
-            <Tooltip title={rescraping ? `Re-scrapeando ${rescraping}…` : `Re-scrapear ${numSelected} empresa${numSelected !== 1 ? 's' : ''}`}>
+            <Tooltip title={rescraping ? `${t.db.rescraping} ${rescraping}…` : `${t.db.rescrape} ${numSelected} ${t.db.companySingular}${numSelected !== 1 ? 's' : ''}`}>
               <span>
                 <Button size="small" onClick={onRescrape} disabled={!!rescraping}
                   startIcon={rescraping ? <CircularProgress size={12} sx={{ color: 'inherit' }} /> : <RefreshIcon sx={{ fontSize: '14px !important' }} />}
@@ -212,11 +220,11 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
                     '&:hover': { bgcolor: 'rgba(59,130,246,0.18)', borderColor: 'rgba(59,130,246,0.45)' },
                     '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'transparent', border: '1px solid rgba(255,255,255,0.08)' },
                   }}>
-                  Re-scrapear
+                  {t.db.rescrape}
                 </Button>
               </span>
             </Tooltip>
-            <Tooltip title={`Eliminar ${numSelected} empresa${numSelected !== 1 ? 's' : ''}`}>
+            <Tooltip title={`${t.db.delete} ${numSelected} ${t.db.companySingular}${numSelected !== 1 ? 's' : ''}`}>
               <IconButton onClick={onDelete} size="small"
                 sx={{ color: 'rgba(255,255,255,0.3)', ml: 0.5, '&:hover': { color: '#f87171', bgcolor: 'rgba(239,68,68,0.1)' } }}>
                 <DeleteIcon fontSize="small" />
@@ -225,12 +233,12 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
           </>
         ) : (
           <>
-            <Tooltip title="Actualizar">
+            <Tooltip title={t.db.refresh}>
               <IconButton onClick={onRefresh} size="small" sx={{ color: 'rgba(255,255,255,0.5)', '&:hover': { color: 'white' } }}>
                 <RefreshIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Filtros">
+            <Tooltip title={t.db.filters}>
               <IconButton onClick={onToggleFilter} size="small" sx={{ color: filterOpen ? '#3b82f6' : 'rgba(255,255,255,0.5)', '&:hover': { color: 'white' } }}>
                 <FilterListIcon fontSize="small" />
               </IconButton>
@@ -244,15 +252,18 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
 
 // ─── Filter bar ───────────────────────────────────────────────────────────────
 function FilterBar({ filters, onChange, industries, cities }) {
+  const { t } = useLang()
   const [openIndustry, setOpenIndustry] = useState(false)
   const [openCity,     setOpenCity]     = useState(false)
   const [openWA,       setOpenWA]       = useState(false)
+
+  const whatsappOptions = getWhatsappOptions(t)
 
   return (
     <Box sx={{ px: 2, pt: 2, pb: 2, display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
       <TextField
         size="small"
-        placeholder="Buscar empresa o sitio…"
+        placeholder={t.db.searchPh}
         value={filters.search}
         onChange={(e) => onChange('search', e.target.value)}
         sx={{
@@ -274,55 +285,55 @@ function FilterBar({ filters, onChange, industries, cities }) {
       />
 
       <FormControl size="small" sx={{ minWidth: 160 }}>
-        <InputLabel id="filter-industry-label" sx={LABEL_SX}>Industria</InputLabel>
+        <InputLabel id="filter-industry-label" sx={LABEL_SX}>{t.db.industry}</InputLabel>
         <Select
           labelId="filter-industry-label"
           open={openIndustry}
           onClose={() => setOpenIndustry(false)}
           onOpen={() => setOpenIndustry(true)}
           value={filters.industry}
-          label="Industria"
+          label={t.db.industry}
           onChange={(e) => onChange('industry', e.target.value)}
           sx={SELECT_SX}
           MenuProps={MENU_PROPS}
         >
-          <MenuItem value=""><em>Todas</em></MenuItem>
+          <MenuItem value=""><em>{t.db.allF}</em></MenuItem>
           {industries.map((v) => <MenuItem key={v} value={v}>{v}</MenuItem>)}
         </Select>
       </FormControl>
 
       <FormControl size="small" sx={{ minWidth: 140 }}>
-        <InputLabel id="filter-city-label" sx={LABEL_SX}>Ciudad</InputLabel>
+        <InputLabel id="filter-city-label" sx={LABEL_SX}>{t.db.city}</InputLabel>
         <Select
           labelId="filter-city-label"
           open={openCity}
           onClose={() => setOpenCity(false)}
           onOpen={() => setOpenCity(true)}
           value={filters.city}
-          label="Ciudad"
+          label={t.db.city}
           onChange={(e) => onChange('city', e.target.value)}
           sx={SELECT_SX}
           MenuProps={MENU_PROPS}
         >
-          <MenuItem value=""><em>Todas</em></MenuItem>
+          <MenuItem value=""><em>{t.db.allF}</em></MenuItem>
           {cities.map((v) => <MenuItem key={v} value={v}>{v}</MenuItem>)}
         </Select>
       </FormControl>
 
       <FormControl size="small" sx={{ minWidth: 120 }}>
-        <InputLabel id="filter-wa-label" sx={LABEL_SX}>WhatsApp</InputLabel>
+        <InputLabel id="filter-wa-label" sx={LABEL_SX}>{t.db.whatsapp}</InputLabel>
         <Select
           labelId="filter-wa-label"
           open={openWA}
           onClose={() => setOpenWA(false)}
           onOpen={() => setOpenWA(true)}
           value={filters.has_whatsapp}
-          label="WhatsApp"
+          label={t.db.whatsapp}
           onChange={(e) => onChange('has_whatsapp', e.target.value)}
           sx={SELECT_SX}
           MenuProps={MENU_PROPS}
         >
-          {WHATSAPP_OPTIONS.map((o) => (
+          {whatsappOptions.map((o) => (
             <MenuItem key={o.value} value={o.value}>
               {o.value === '' ? <em>{o.label}</em> : o.label}
             </MenuItem>
@@ -335,6 +346,7 @@ function FilterBar({ filters, onChange, industries, cities }) {
 
 // ─── Edit dialog ──────────────────────────────────────────────────────────────
 function EditDialog({ open, company, contacts, onClose, onSave }) {
+  const { t } = useLang()
   const [form, setForm] = useState({})
   const [saving, setSaving] = useState(false)
   const [waNumbers, setWaNumbers] = useState([])
@@ -367,10 +379,10 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
 
   const addNum = () => {
     const n = newNum.trim()
-    if (!n) { setNewNumError('El número no puede estar vacío'); return }
+    if (!n) { setNewNumError(t.db.numEmpty); return }
     const err = waNumberValidationMsg(n)
     if (err) { setNewNumError(err); return }
-    if (waNumbers.includes(n)) { setNewNumError('Este número ya está en la lista'); return }
+    if (waNumbers.includes(n)) { setNewNumError(t.db.numDuplicate); return }
     setWaNumbers(prev => [...prev, n])
     setNewNum('')
     setNewNumError('')
@@ -380,10 +392,10 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
   const startEdit = (idx) => { setEditingIdx(idx); setEditingVal(waNumbers[idx]); setEditingError('') }
   const commitEdit = () => {
     const v = editingVal.trim()
-    if (!v) { setEditingError('El número no puede estar vacío'); return }
+    if (!v) { setEditingError(t.db.numEmpty); return }
     const err = waNumberValidationMsg(v)
     if (err) { setEditingError(err); return }
-    if (waNumbers.some((n, i) => n === v && i !== editingIdx)) { setEditingError('Este número ya está en la lista'); return }
+    if (waNumbers.some((n, i) => n === v && i !== editingIdx)) { setEditingError(t.db.numDuplicate); return }
     setWaNumbers(prev => prev.map((n, i) => i === editingIdx ? v : n))
     setEditingIdx(null)
     setEditingVal('')
@@ -432,7 +444,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
           </Avatar>
           <Box>
             <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.3 }}>
-              Editar empresa
+              {t.db.editTitle}
             </Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.78rem', mt: 0.25 }}>
               {truncate(company?.name || '', 40)}
@@ -471,7 +483,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
           <Box sx={{ display: 'flex', gap: 1.5 }}>
             <TextField label="Estado / Región" size="small" fullWidth sx={FIELD_SX} value={form.state || ''} onChange={(e) => set('state', e.target.value)} />
             <Box sx={{ flex: 1 }}>
-              <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', mb: 0.5 }}>Etapa de contacto</Typography>
+              <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', mb: 0.5 }}>{t.db.contactStage}</Typography>
               <Select size="small" fullWidth value={form.status || ''} onChange={(e) => set('status', e.target.value)}
                 displayEmpty
                 sx={{ color: 'rgba(255,255,255,0.85)', fontSize: '0.85rem',
@@ -482,13 +494,13 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
                 }}
                 MenuProps={{ PaperProps: { sx: { bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.08)' } } }}
               >
-                <MenuItem value="" sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem' }}>Sin definir</MenuItem>
-                <MenuItem value="pendiente"   sx={{ color: 'rgba(255,255,255,0.8)', fontSize: '0.82rem' }}>⏳ Pendiente de contactar</MenuItem>
-                <MenuItem value="contactado"  sx={{ color: '#60a5fa', fontSize: '0.82rem' }}>📨 Contactado</MenuItem>
-                <MenuItem value="interesado"  sx={{ color: '#4ade80', fontSize: '0.82rem' }}>✅ Interesado</MenuItem>
-                <MenuItem value="seguimiento" sx={{ color: '#fbbf24', fontSize: '0.82rem' }}>🔔 Seguimiento pendiente</MenuItem>
-                <MenuItem value="no_interesado" sx={{ color: '#f87171', fontSize: '0.82rem' }}>❌ No interesado</MenuItem>
-                <MenuItem value="cliente"     sx={{ color: '#a78bfa', fontSize: '0.82rem' }}>⭐ Cliente</MenuItem>
+                <MenuItem value="" sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem' }}>{t.db.stageNone}</MenuItem>
+                <MenuItem value="pendiente"    sx={{ color: 'rgba(255,255,255,0.8)', fontSize: '0.82rem' }}>{t.db.stagePending}</MenuItem>
+                <MenuItem value="contactado"   sx={{ color: '#60a5fa', fontSize: '0.82rem' }}>{t.db.stageContacted}</MenuItem>
+                <MenuItem value="interesado"   sx={{ color: '#4ade80', fontSize: '0.82rem' }}>{t.db.stageInterested}</MenuItem>
+                <MenuItem value="seguimiento"  sx={{ color: '#fbbf24', fontSize: '0.82rem' }}>{t.db.stageFollowUp}</MenuItem>
+                <MenuItem value="no_interesado"sx={{ color: '#f87171', fontSize: '0.82rem' }}>{t.db.stageNotInt}</MenuItem>
+                <MenuItem value="cliente"      sx={{ color: '#a78bfa', fontSize: '0.82rem' }}>{t.db.stageClient}</MenuItem>
               </Select>
             </Box>
           </Box>
@@ -593,7 +605,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
                         fontFamily: 'monospace' }}>
                   {n}
                 </Typography>
-                <Tooltip title="Editar">
+                <Tooltip title={t.db.editBtn}>
                   <IconButton size="small" onClick={() => startEdit(i)}
                     sx={{ color: 'rgba(255,255,255,0.2)', p: 0.3, '&:hover': { color: '#3b82f6' } }}>
                     <EditIcon sx={{ fontSize: 13 }} />
@@ -911,6 +923,9 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function DatabaseViewer() {
+  const { t } = useLang()
+  const headCells  = getHeadCells(t)
+  const alertTitles = getAlertTitles(t)
   const [rows, setRows] = useState([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -1257,7 +1272,7 @@ export default function DatabaseViewer() {
                     sx={{ color: 'rgba(255,255,255,0.3)', '&.Mui-checked': { color: '#3b82f6' } }}
                   />
                 </TableCell>
-                {HEAD_CELLS.map((hc) => (
+                {headCells.map((hc) => (
                   <TableCell
                     key={hc.id}
                     align={hc.align}
@@ -1297,7 +1312,7 @@ export default function DatabaseViewer() {
                 <SkeletonRows count={rowsPerPage} />
               ) : sortedRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={HEAD_CELLS.length + 2} align="center" sx={{ py: 6, color: 'rgba(255,255,255,0.3)', borderBottom: 'none' }}>
+                  <TableCell colSpan={headCells.length + 2} align="center" sx={{ py: 6, color: 'rgba(255,255,255,0.3)', borderBottom: 'none' }}>
                     Sin resultados
                   </TableCell>
                 </TableRow>
@@ -1358,13 +1373,13 @@ export default function DatabaseViewer() {
                       </TableCell>
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>{formatDate(row.created_at)}</TableCell>
                       <TableCell align="right" sx={{ pr: 1 }}>
-                        <Tooltip title="Ver información">
+                        <Tooltip title={t.db.viewInfo}>
                           <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenView(row) }}
                             sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: '#a78bfa', bgcolor: 'rgba(167,139,250,0.1)' } }}>
                             <VisibilityIcon sx={{ fontSize: 15 }} />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip title={row.has_whatsapp ? "Enviar mensaje" : "Sin WhatsApp registrado"}>
+                        <Tooltip title={row.has_whatsapp ? t.db.sendMsg : t.db.noWaReg}>
                           <span>
                             <IconButton size="small" disabled={!row.has_whatsapp} onClick={(e) => { e.stopPropagation(); handleOpenMsg(row) }}
                               sx={{ color: row.has_whatsapp ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.1)', '&:hover': { color: '#4ade80', bgcolor: 'rgba(74,222,128,0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>
@@ -1372,7 +1387,7 @@ export default function DatabaseViewer() {
                             </IconButton>
                           </span>
                         </Tooltip>
-                        <Tooltip title="Editar">
+                        <Tooltip title={t.db.editBtn}>
                           <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenEdit(row) }}
                             sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: '#3b82f6', bgcolor: 'rgba(59,130,246,0.1)' } }}>
                             <EditIcon sx={{ fontSize: 15 }} />
@@ -1507,7 +1522,7 @@ export default function DatabaseViewer() {
           }}
         >
           <AlertTitle sx={{ fontWeight: 700, fontSize: '0.85rem' }}>
-            {ALERT_TITLES[snack.severity]}
+            {alertTitles[snack.severity]}
           </AlertTitle>
           <Typography sx={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.7)' }}>
             {snack.msg}

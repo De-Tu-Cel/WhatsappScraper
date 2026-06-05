@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { MAX_WA_MSG } from '@/lib/validators'
 import { authFetch } from '@/lib/api'
+import { useLang } from '../context/LangContext'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -27,6 +28,17 @@ const EMOJI_GROUPS = [
   { label: 'Negocio',    emojis: ['📞','📱','💬','📧','📝','💼','🏢','💰','📊','📈','🤝','⏰','📅','✔️','❌','⚠️','💡','🔔','📌','🔍'] },
   { label: 'Gestos',     emojis: ['👏','🙏','💪','🤞','✌️','🤙','👌','🫡','🫶','🫂','😁','😇','🥰','😘','🤗','😶','🙄','😴','🤯','🥴'] },
 ]
+
+const AGENT_COLORS = [
+  '#60a5fa', '#4ade80', '#f472b6', '#fb923c',
+  '#a78bfa', '#34d399', '#f87171', '#facc15',
+]
+function agentColor(name) {
+  if (!name) return 'rgba(255,255,255,0.35)'
+  let hash = 0
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash)
+  return AGENT_COLORS[Math.abs(hash) % AGENT_COLORS.length]
+}
 
 function formatTime(iso) {
   if (!iso) return ''
@@ -106,9 +118,17 @@ function ConversationItem({ conv, active, onClick }) {
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
           {conv.sent_by_name && (
-            <Typography sx={{ fontSize: '0.65rem', color: 'var(--accent,#a5b4fc)', flexShrink: 0, fontWeight: 600 }}>
-              {conv.sent_by_name.split(' ')[0]}·
-            </Typography>
+            <Box sx={{
+              display: 'flex', alignItems: 'center', gap: 0.3, flexShrink: 0,
+              bgcolor: agentColor(conv.sent_by_name) + '18',
+              border: `1px solid ${agentColor(conv.sent_by_name)}44`,
+              borderRadius: 1, px: 0.6, py: 0.1,
+            }}>
+              <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: agentColor(conv.sent_by_name), flexShrink: 0 }} />
+              <Typography sx={{ fontSize: '0.62rem', color: agentColor(conv.sent_by_name), fontWeight: 700, lineHeight: 1.4 }}>
+                {conv.sent_by_name.split(' ')[0]}
+              </Typography>
+            </Box>
           )}
           <Typography sx={{
             color: isInbound ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.3)',
@@ -291,6 +311,7 @@ export default function Conversations() {
   const [emojiGroup, setEmojiGroup]     = useState(0)
   const syncingRef                      = useRef(false)
   const lastSyncedRef                   = useRef(null)  // evita re-sync al mismo company
+  const { t } = useLang()
   const threadLenRef = useRef(0)
   const messagesBoxRef = useRef(null)
   const replyRef  = useRef(null)
@@ -423,6 +444,8 @@ export default function Conversations() {
         })
       }
       setReply('')
+      // Clear the uncontrolled textarea too
+      if (replyRef._textarea) replyRef._textarea.value = ''
       const cid = selected.company_id
       setTimeout(() => fetchThread(cid, true), 800)
       ;[3000, 6000, 10000].forEach(ms => setTimeout(() => fetchThread(cid, false, true), ms))
@@ -472,7 +495,7 @@ export default function Conversations() {
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <WhatsAppIcon sx={{ color: '#4ade80', fontSize: 20 }} />
-              <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.95rem' }}>Conversaciones</Typography>
+              <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.95rem' }}>{t.convs.title}</Typography>
             </Box>
             <Tooltip title="Actualizar">
               <IconButton size="small" onClick={() => { setLoading(true); fetchConvs() }}
@@ -481,7 +504,7 @@ export default function Conversations() {
               </IconButton>
             </Tooltip>
           </Box>
-          <TextField fullWidth size="small" placeholder="Buscar empresa..." value={search}
+          <TextField fullWidth size="small" placeholder={t.convs.search} value={search}
             onChange={e => setSearch(e.target.value)}
             slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 16, color: 'rgba(255,255,255,0.3)' }} /></InputAdornment> } }}
             sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.8rem', bgcolor: 'rgba(255,255,255,0.04)', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' } }, '& input': { color: 'white', py: 0.8 } }} />
@@ -497,7 +520,7 @@ export default function Conversations() {
             <Box sx={{ px: 2, pt: 4, textAlign: 'center' }}>
               <WhatsAppIcon sx={{ fontSize: 36, color: 'rgba(255,255,255,0.1)', mb: 1 }} />
               <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem' }}>
-                {search ? 'Sin resultados' : 'Aún no hay conversaciones'}
+                {search ? t.common.noData : t.convs.noConvs}
               </Typography>
             </Box>
           ) : filtered.map(c => (
@@ -693,8 +716,10 @@ export default function Conversations() {
                   </IconButton>
                 </Tooltip>
                 <TextField ref={replyRef} fullWidth multiline maxRows={4} size="small"
-                  placeholder="Escribe una respuesta... (Enter para enviar)" value={reply}
-                  onChange={e => setReply(e.target.value)}
+                  placeholder={t.convs.reply}
+                  defaultValue=""
+                  slotProps={{ htmlInput: { ref: el => { if (el) replyRef._textarea = el } } }}
+                  onInput={e => setReply(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendReply() } }}
                   error={reply.length > MAX_WA_MSG}
                   sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.85rem', bgcolor: 'rgba(255,255,255,0.04)',

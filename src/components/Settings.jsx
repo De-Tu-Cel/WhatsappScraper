@@ -200,6 +200,7 @@ function Section({ icon, title, children }) {
 const INPUT_SX = { '& .MuiOutlinedInput-root': { bgcolor: 'rgba(255,255,255,0.04)', fontSize: '0.82rem', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' }, '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' } }, '& input': { color: 'white' } }
 
 function AccountSection({ user, connStatus, connPhone, evo }) {
+  const { t } = useLang()
   const [code,      setCode]      = useState(null)  // null=no cargado, ''=no tiene, 'XXXX'=código
   const [revealed,  setRevealed]  = useState(false)
   const [copied,    setCopied]    = useState(false)
@@ -226,7 +227,7 @@ function AccountSection({ user, connStatus, connPhone, evo }) {
   const masked = code ? code.slice(0,3) + '·'.repeat(6) + code.slice(-3) : '············'
 
   return (
-    <Section icon={<AccountCircleIcon />} title="Mi cuenta">
+    <Section icon={<AccountCircleIcon />} title={t.settings.account}>
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.2 }}>
 
         {/* Perfil */}
@@ -237,7 +238,7 @@ function AccountSection({ user, connStatus, connPhone, evo }) {
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.88rem' }}>{user?.display_name}</Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem' }}>
-              {user?.email || `@${user?.username}`} · {user?.role === 'admin' ? 'Administrador' : 'Agente'}
+              {user?.email || `@${user?.username}`} · {user?.role === 'admin' ? t.settings.adminRole : t.settings.agentRole}
             </Typography>
           </Box>
         </Box>
@@ -247,7 +248,7 @@ function AccountSection({ user, connStatus, connPhone, evo }) {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1.2, borderRadius: 2, bgcolor: 'rgba(37,211,102,0.06)', border: '1px solid rgba(37,211,102,0.15)' }}>
             <PhoneAndroidIcon sx={{ fontSize: 15, color: '#4ade80', flexShrink: 0 }} />
             <Box>
-              <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>WhatsApp vinculado</Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{t.settings.waLinked}</Typography>
               <Typography sx={{ color: '#4ade80', fontSize: '0.82rem', fontWeight: 600, fontFamily: 'monospace' }}>{connPhone || evo.instance}</Typography>
             </Box>
           </Box>
@@ -256,9 +257,9 @@ function AccountSection({ user, connStatus, connPhone, evo }) {
         {/* Código de recuperación */}
         <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'rgba(250,204,21,0.05)', border: '1px solid rgba(250,204,21,0.15)' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-            <Typography sx={{ color: '#facc15', fontSize: '0.72rem', fontWeight: 700 }}>🔑 Código de recuperación</Typography>
+            <Typography sx={{ color: '#facc15', fontSize: '0.72rem', fontWeight: 700 }}>🔑 {t.settings.recoveryCode}</Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.65rem' }}>
-              Úsalo si olvidas tu PIN
+              {t.settings.recoveryHint}
             </Typography>
           </Box>
 
@@ -266,12 +267,12 @@ function AccountSection({ user, connStatus, connPhone, evo }) {
             {/* Código */}
             <Box sx={{ flex: 1, py: 0.8, px: 1.2, borderRadius: 1.5, bgcolor: 'rgba(0,0,0,0.25)', border: '1px solid rgba(250,204,21,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Typography sx={{ fontFamily: 'monospace', fontSize: '0.95rem', fontWeight: 700, letterSpacing: '0.18em', color: revealed && code ? '#facc15' : 'rgba(255,255,255,0.25)' }}>
-                {revealed ? (code || 'No disponible') : masked}
+                {revealed ? (code || t.settings.notAvailable) : masked}
               </Typography>
             </Box>
 
             {/* Botón ver/ocultar */}
-            <Tooltip title={revealed ? 'Ocultar' : 'Ver código'}>
+            <Tooltip title={revealed ? t.settings.hide : t.settings.viewCode}>
               <Box onClick={revealed ? () => setRevealed(false) : loadCode} sx={{
                 p: 0.8, borderRadius: 1.5, cursor: 'pointer',
                 bgcolor: 'rgba(250,204,21,0.1)', border: '1px solid rgba(250,204,21,0.2)',
@@ -288,7 +289,7 @@ function AccountSection({ user, connStatus, connPhone, evo }) {
 
             {/* Copiar */}
             {revealed && code && (
-              <Tooltip title={copied ? '¡Copiado!' : 'Copiar'}>
+              <Tooltip title={copied ? t.settings.copied : t.settings.copy}>
                 <Box onClick={copyCode} sx={{
                   p: 0.8, borderRadius: 1.5, cursor: 'pointer',
                   bgcolor: copied ? 'rgba(74,222,128,0.15)' : 'rgba(255,255,255,0.06)',
@@ -308,6 +309,7 @@ function AccountSection({ user, connStatus, connPhone, evo }) {
 }
 
 function EvoAdvanced({ evo, saveEvo }) {
+  const { t } = useLang()
   const [open, setOpen] = useState(false)
 
   async function handleSave() {
@@ -327,14 +329,14 @@ function EvoAdvanced({ evo, saveEvo }) {
         '&:hover': { color: 'rgba(255,255,255,0.45)' },
       }}>
         <Typography sx={{ fontSize: '0.68rem', letterSpacing: '0.04em', color: 'inherit' }}>
-          {open ? '▾' : '▸'} Configuración avanzada
+          {open ? '▾' : '▸'} {t.settings.advancedSettings}
         </Typography>
       </Box>
 
       {open && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.2, mt: 1, pl: 1, borderLeft: '2px solid rgba(255,255,255,0.07)' }}>
           <Box>
-            <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', mb: 0.4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>URL del servidor</Typography>
+            <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', mb: 0.4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{t.settings.serverUrl}</Typography>
             <TextField fullWidth size="small" placeholder="http://localhost:8080"
               value={evo.url} onChange={e => saveEvo({ url: e.target.value })} sx={INPUT_SX} />
           </Box>
@@ -344,7 +346,7 @@ function EvoAdvanced({ evo, saveEvo }) {
               value={evo.apiKey} onChange={e => saveEvo({ apiKey: e.target.value })} sx={INPUT_SX} />
           </Box>
           <Box>
-            <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', mb: 0.4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Nombre de instancia</Typography>
+            <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', mb: 0.4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{t.settings.instanceName}</Typography>
             <TextField fullWidth size="small" placeholder="detucel"
               value={evo.instance} onChange={e => saveEvo({ instance: e.target.value })} sx={INPUT_SX} />
           </Box>
@@ -354,7 +356,7 @@ function EvoAdvanced({ evo, saveEvo }) {
             border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)',
             '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.25)' },
           }}>
-            <Typography sx={{ fontSize: '0.72rem', color: 'var(--accent,#60a5fa)' }}>Guardar</Typography>
+            <Typography sx={{ fontSize: '0.72rem', color: 'var(--accent,#60a5fa)' }}>{t.settings.save}</Typography>
           </Box>
         </Box>
       )}
@@ -364,7 +366,7 @@ function EvoAdvanced({ evo, saveEvo }) {
 
 export default function Settings() {
   const { user }                = useUser()
-  const { setLang }             = useLang()
+  const { t, setLang }          = useLang()
   const [settings, setSettings] = useState(DEFAULT_SETTINGS)
   const [andy, setAndy]         = useState(DEFAULT_ANDY)
   const [evo,  setEvo]          = useState(DEFAULT_EVO)
@@ -530,15 +532,15 @@ export default function Settings() {
           <SettingsIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 20 }} />
         </Box>
         <Box>
-          <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1.05rem', lineHeight: 1.2 }}>Configuración</Typography>
-          <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.75rem' }}>Apariencia de la interfaz</Typography>
+          <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1.05rem', lineHeight: 1.2 }}>{t.settings.title}</Typography>
+          <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.75rem' }}>{t.settings.subtitle}</Typography>
         </Box>
       </Box>
 
       <Box sx={{ flex: 1, overflowY: 'auto', px: 0.5, scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent' }}>
 
         {/* ── Idioma ── */}
-        <Section icon={<LanguageIcon />} title="Idioma">
+        <Section icon={<LanguageIcon />} title={t.settings.language}>
           <Box sx={{ display: 'flex', gap: 1 }}>
             {LANGS.map(l => {
               const active = settings.lang === l.value
@@ -576,14 +578,14 @@ export default function Settings() {
             })}
           </Box>
           <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.2)', mt: 0.8 }}>
-            Traducción completa disponible próximamente.
+            {t.settings.langComingSoon}
           </Typography>
         </Section>
 
         <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', mb: 3 }} />
 
         {/* ── Color de acento ── */}
-        <Section icon={<PaletteIcon />} title="Color de acento">
+        <Section icon={<PaletteIcon />} title={t.settings.accent}>
           {/* Current accent preview bar */}
           <Box sx={{
             mb: 1.5, px: 1.5, py: 1, borderRadius: 2,
@@ -641,7 +643,7 @@ export default function Settings() {
         <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', mb: 3 }} />
 
         {/* ── Tema base ── */}
-        <Section icon={<DarkModeIcon />} title="Tema base">
+        <Section icon={<DarkModeIcon />} title={t.settings.theme}>
           {/* Current theme preview bar */}
           <Box sx={{
             mb: 1.5, px: 1.5, py: 1, borderRadius: 2,
@@ -727,15 +729,15 @@ export default function Settings() {
         </Section>
 
         {/* ── Integración Bot (Andy) ── */}
-        <Section icon={<SmartToyIcon />} title="Integración Bot">
+        <Section icon={<SmartToyIcon />} title={t.settings.andy}>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
             <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.35)', mb: 0.5 }}>
-              Configuración del servidor Own-WA de Andy. Guarda las credenciales una vez y el token se gestiona automáticamente.
+              {t.settings.andyDesc}
             </Typography>
 
             {/* URL base */}
             <Box>
-              <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>URL del servidor</Typography>
+              <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{t.settings.serverUrl}</Typography>
               <TextField fullWidth size="small" placeholder="https://own-wa.detucel.mx"
                 value={andy.url} onChange={e => saveAndy({ url: e.target.value })}
                 sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'rgba(255,255,255,0.04)', fontSize: '0.82rem', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' }, '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' } }, '& input': { color: 'white' } }} />
@@ -743,7 +745,7 @@ export default function Settings() {
 
             {/* Endpoint */}
             <Box>
-              <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Endpoint de datos</Typography>
+              <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{t.settings.andyEndpoint}</Typography>
               <TextField fullWidth size="small" placeholder="/api/pending"
                 value={andy.endpoint} onChange={e => saveAndy({ endpoint: e.target.value })}
                 sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'rgba(255,255,255,0.04)', fontSize: '0.82rem', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' }, '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' } }, '& input': { color: 'white' } }} />
@@ -752,13 +754,13 @@ export default function Settings() {
             {/* Usuario + Contraseña */}
             <Box sx={{ display: 'flex', gap: 1 }}>
               <Box sx={{ flex: 1 }}>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Usuario</Typography>
-                <TextField fullWidth size="small" placeholder="usuario"
+                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{t.settings.andyUser}</Typography>
+                <TextField fullWidth size="small" placeholder={t.settings.andyUserPh}
                   value={andy.user} onChange={e => saveAndy({ user: e.target.value })}
                   sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'rgba(255,255,255,0.04)', fontSize: '0.82rem', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' }, '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' } }, '& input': { color: 'white' } }} />
               </Box>
               <Box sx={{ flex: 1 }}>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Contraseña</Typography>
+                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{t.settings.andyPass}</Typography>
                 <TextField fullWidth size="small" type="password" placeholder="••••••••"
                   value={andy.pass} onChange={e => saveAndy({ pass: e.target.value })}
                   sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'rgba(255,255,255,0.04)', fontSize: '0.82rem', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' }, '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' } }, '& input': { color: 'white' } }} />
@@ -768,13 +770,13 @@ export default function Settings() {
             {/* Token (read-only) */}
             {andy.token && (
               <Box sx={{ p: 1.2, borderRadius: 1.5, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.06)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.18)' }}>
-                <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', mb: 0.3, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Token activo (auto-gestionado)</Typography>
+                <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', mb: 0.3, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{t.settings.andyToken}</Typography>
                 <Typography sx={{ fontSize: '0.7rem', color: 'var(--accent,#60a5fa)', fontFamily: 'monospace', wordBreak: 'break-all' }}>
                   {andy.token.slice(0, 40)}…
                 </Typography>
                 <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.2)', mt: 0.5, cursor: 'pointer', '&:hover': { color: '#f87171' } }}
                   onClick={() => saveAndy({ token: '' })}>
-                  Limpiar token
+                  {t.settings.andyClear}
                 </Typography>
               </Box>
             )}
@@ -952,7 +954,7 @@ export default function Settings() {
         </Dialog>
 
         {/* ── WhatsApp ── */}
-        <Section icon={<PhoneAndroidIcon />} title="Mi WhatsApp">
+        <Section icon={<PhoneAndroidIcon />} title={t.settings.whatsapp}>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
 
             {connStatus === 'checking' ? (

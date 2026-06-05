@@ -10,10 +10,11 @@ services:
     environment:
       - BACKEND_URL=http://backend:8000
       - NODE_ENV=production
+    ports:
+      - "3000"
     depends_on:
       - backend
     restart: unless-stopped
-    # No exponer puerto — Coolify/Nginx lo maneja
 
   # ── Backend (FastAPI) ─────────────────────────────────────────
   backend:
@@ -21,24 +22,17 @@ services:
       context: ./backEnd
       dockerfile: Dockerfile.backend
     environment:
-      - MONGODB_URI=mongodb://mongo:27017
+      - MONGODB_URI=${MONGODB_URI}
       - DATABASE_NAME=commercial
       - EVOLUTION_API_URL=http://evolution:8080
       - EVOLUTION_API_KEY=${EVOLUTION_API_KEY}
       - EVOLUTION_INSTANCE=${EVOLUTION_INSTANCE}
       - GROQ_API_KEY=${GROQ_API_KEY}
+    ports:
+      - "8000"
     depends_on:
-      - mongo
       - evolution
     restart: unless-stopped
-
-  # ── MongoDB ───────────────────────────────────────────────────
-  mongo:
-    image: mongo:7
-    volumes:
-      - mongo_data:/data/db
-    restart: unless-stopped
-    # Puerto 27017 interno — no expuesto
 
   # ── Evolution API ─────────────────────────────────────────────
   evolution:
@@ -49,12 +43,13 @@ services:
       - SERVER_PORT=8080
       - AUTHENTICATION_TYPE=apikey
       - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY}
-      - WEBHOOK_GLOBAL_URL=https://${DOMAIN}/api/evolution/webhook
+      - WEBHOOK_GLOBAL_URL=${WEBHOOK_URL}
       - WEBHOOK_GLOBAL_ENABLED=true
       - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
       - WEBHOOK_EVENTS_MESSAGES_UPDATE=true
+    ports:
+      - "8080"
     restart: unless-stopped
 
 volumes:
-  mongo_data:
   evolution_data:

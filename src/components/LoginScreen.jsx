@@ -52,6 +52,8 @@ const INPUT_SX = {
     },
   },
   '& input': { color: 'white', py: 1.3 },
+  '& input::-ms-reveal': { display: 'none' },
+  '& input::-ms-clear': { display: 'none' },
 }
 
 function PinField({ value, onChange, placeholder = '••••••', label, autoComplete }) {

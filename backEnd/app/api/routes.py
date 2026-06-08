@@ -102,6 +102,23 @@ def api_recover_pin(body: dict):
         raise HTTPException(status_code=400, detail="Código de recuperación incorrecto")
     return {"ok": True}
 
+@router.post("/auth/forgot-pin")
+def api_forgot_pin(body: dict):
+    from app.auth import request_pin_reset
+    request_pin_reset(body.get("email", ""))
+    return {"ok": True}  # always succeed — no email enumeration
+
+@router.post("/auth/reset-pin")
+def api_reset_pin(body: dict):
+    from app.auth import confirm_pin_reset
+    new_pin = body.get("new_pin", "")
+    if len(new_pin) < 4:
+        raise HTTPException(status_code=400, detail="PIN mínimo 4 dígitos")
+    ok = confirm_pin_reset(body.get("token", ""), new_pin)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Código inválido o expirado")
+    return {"ok": True}
+
 @router.post("/auth/admin/reset-pin")
 def api_admin_reset_pin(body: dict, x_user_token: Optional[str] = Header(None)):
     admin = _require_user(x_user_token)

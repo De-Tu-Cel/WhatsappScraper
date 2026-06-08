@@ -1,7 +1,7 @@
 # auth.py — User authentication and session management
 import bcrypt
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from bson import ObjectId
 from app.database import MongoDBManager
 
@@ -63,6 +63,42 @@ def recover_pin(username: str, recovery_code: str, new_pin: str) -> bool:
     new_code = str(uuid.uuid4()).replace("-", "").upper()[:12]
     db.users.update_one({"_id": user["_id"]}, {
         "$set": {"pin_hash": hash_pin(new_pin), "recovery_code": new_code, "session_token": None}
+    })
+    return True
+
+
+def request_pin_reset(email: str) -> bool:
+    """Generates a reset token and sends it by email. Always returns True (no email enumeration)."""
+    db = _db()
+    user = db.users.find_one({"email": email.strip().lower(), "active": True})
+    if not user:
+        return True  # silently succeed — don't reveal if email exists
+    token = str(uuid.uuid4()).replace("-", "").upper()[:8]
+    expiry = datetime.now() + timedelta(minutes=15)
+    db.users.update_one({"_id": user["_id"]}, {
+        "$set": {"reset_token": token, "reset_token_expiry": expiry}
+    })
+    from app.email_service import send_reset_email
+    send_reset_email(user["email"], user.get("display_name", user["username"]), token)
+    return True
+
+
+def confirm_pin_reset(token: str, new_pin: str) -> bool:
+    db = _db()
+    user = db.users.find_one({"reset_token": token.upper().strip(), "active": True})
+    if not user:
+        return False
+    if datetime.now() > user.get("reset_token_expiry", datetime.min):
+        return False
+    new_code = str(uuid.uuid4()).replace("-", "").upper()[:12]
+    db.users.update_one({"_id": user["_id"]}, {
+        "$set": {
+            "pin_hash": hash_pin(new_pin),
+            "recovery_code": new_code,
+            "session_token": None,
+            "reset_token": None,
+            "reset_token_expiry": None,
+        }
     })
     return True
 

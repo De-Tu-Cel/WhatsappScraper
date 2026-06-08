@@ -54,6 +54,12 @@ const INPUT_SX = {
   '& input': { color: 'white', py: 1.3 },
   '& input::-ms-reveal': { display: 'none' },
   '& input::-ms-clear': { display: 'none' },
+  '& input:-webkit-autofill, & input:-webkit-autofill:hover, & input:-webkit-autofill:focus': {
+    WebkitBoxShadow: '0 0 0px 1000px rgba(255,255,255,0.04) inset',
+    WebkitTextFillColor: 'white',
+    caretColor: 'white',
+    transition: 'background-color 5000s ease-in-out 0s',
+  },
 }
 
 function PinField({ value, onChange, placeholder = '••••••', label, autoComplete }) {
@@ -152,6 +158,8 @@ export default function LoginScreen({ hasUsers }) {
   const [pin2,         setPin2]         = useState('')
   const [recoveryCode, setRecoveryCode] = useState('')
   const [newPin,       setNewPin]       = useState('')
+  const [resetToken,   setResetToken]   = useState('')
+  const [resetEmail,   setResetEmail]   = useState('')
   const [loading,      setLoading]      = useState(false)
   const [error,        setError]        = useState('')
   const [savedCode,    setSavedCode]    = useState('')
@@ -163,6 +171,7 @@ export default function LoginScreen({ hasUsers }) {
   function reset(newMode) {
     setMode(newMode); setError(''); setPin(''); setPin2('')
     setUsername(''); setDisplayName(''); setEmail(''); setRecoveryCode(''); setNewPin('')
+    setResetToken(''); setResetEmail('')
   }
 
   async function handleSubmit(e) {
@@ -203,6 +212,36 @@ export default function LoginScreen({ hasUsers }) {
           body: JSON.stringify({ username: username.trim(), recovery_code: recoveryCode.trim(), new_pin: newPin }),
         })
         if (!res.ok) throw new Error((await res.json()).detail || 'Código incorrecto')
+        reset('login')
+        setError('✓ PIN actualizado. Inicia sesión con tu nuevo PIN.')
+      } catch (err) { setError(err.message) }
+      finally { setLoading(false) }
+    }
+
+    if (mode === 'forgot') {
+      const fullEmail = resetEmail.trim() + '@detucel.mx'
+      if (!resetEmail.trim()) { setError('Ingresa tu correo'); return }
+      setLoading(true)
+      try {
+        await fetch('/api/auth/forgot-pin', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: fullEmail }),
+        })
+        setMode('reset_pin')
+        setError('✓ Si el correo existe, recibirás un código en los próximos minutos.')
+      } catch (err) { setError(err.message) }
+      finally { setLoading(false) }
+    }
+
+    if (mode === 'reset_pin') {
+      if (!resetToken.trim() || newPin.length < 4) { setError('Completa todos los campos'); return }
+      setLoading(true)
+      try {
+        const res = await fetch('/api/auth/reset-pin', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: resetToken.trim(), new_pin: newPin }),
+        })
+        if (!res.ok) throw new Error((await res.json()).detail || 'Código inválido o expirado')
         reset('login')
         setError('✓ PIN actualizado. Inicia sesión con tu nuevo PIN.')
       } catch (err) { setError(err.message) }
@@ -286,10 +325,12 @@ export default function LoginScreen({ hasUsers }) {
               Lector Comercial
             </Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem', mt: 0.5 }}>
-              {mode === 'login'    ? t.login.welcome
-             : mode === 'register' ? t.login.register
-             : mode === 'recover'  ? t.login.recover
-             :                       t.login.saveCode}
+              {mode === 'login'     ? t.login.welcome
+             : mode === 'register'  ? t.login.register
+             : mode === 'recover'   ? t.login.recover
+             : mode === 'forgot'    ? 'Recuperación por correo'
+             : mode === 'reset_pin' ? 'Ingresa el código del correo'
+             :                        t.login.saveCode}
             </Typography>
           </Box>
 
@@ -401,12 +442,65 @@ export default function LoginScreen({ hasUsers }) {
                 <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Código de recuperación</Typography>
                 <TextField fullWidth size="small" placeholder="XXXXXXXXXXXX"
                   value={recoveryCode} onChange={e => setRecoveryCode(e.target.value.toUpperCase())}
-                  inputProps={{ style: { fontFamily: 'monospace', letterSpacing: '0.1em' } }} sx={INPUT_SX} />
+                  slotProps={{ htmlInput: { style: { fontFamily: 'monospace', letterSpacing: '0.1em' } } }} sx={INPUT_SX} />
               </Box>
               <PinField label="Nuevo PIN" value={newPin} onChange={setNewPin} placeholder="nuevo PIN" autoComplete="new-password" />
               {error && <ErrorBox msg={error} success={error.startsWith('✓')} />}
               <SubmitBtn loading={loading} label={t.login.changePin} />
-              <Typography onClick={() => reset('login')} sx={{ ...LINK_SX, textAlign: 'center', mt: 0.5 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
+                <Typography onClick={() => reset('login')} sx={LINK_SX}>{t.login.back}</Typography>
+                <Typography onClick={() => reset('forgot')} sx={{ ...LINK_SX, color: 'rgba(96,165,250,0.5)' }}>
+                  Recibir código por email
+                </Typography>
+              </Box>
+            </Box>
+          )}
+
+          {/* ── OLVIDÉ MI CÓDIGO — pedir email ── */}
+          {mode === 'forgot' && (
+            <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, animation: `${fadeUp} 0.3s ease` }}>
+              <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'rgba(96,165,250,0.07)', border: '1px solid rgba(96,165,250,0.2)' }}>
+                <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', lineHeight: 1.5 }}>
+                  Te enviaremos un código de 8 caracteres a tu correo <strong style={{ color: 'rgba(255,255,255,0.65)' }}>@detucel.mx</strong>. Expira en 15 minutos.
+                </Typography>
+              </Box>
+              <Box>
+                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Correo</Typography>
+                <TextField fullWidth size="small" placeholder="nombre" autoFocus
+                  value={resetEmail}
+                  onChange={e => setResetEmail(e.target.value.toLowerCase().replace(/\s/g, '').replace('@detucel.mx', ''))}
+                  slotProps={{ input: { endAdornment: (
+                    <Box sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem', whiteSpace: 'nowrap', pr: 0.5 }}>@detucel.mx</Box>
+                  )}}}
+                  sx={INPUT_SX} />
+              </Box>
+              {error && <ErrorBox msg={error} success={error.startsWith('✓')} />}
+              <SubmitBtn loading={loading} label="Enviar código →" />
+              <Typography onClick={() => reset('recover')} sx={{ ...LINK_SX, textAlign: 'center', mt: 0.5 }}>
+                {t.login.back}
+              </Typography>
+            </Box>
+          )}
+
+          {/* ── INGRESAR CÓDIGO DEL EMAIL + NUEVO PIN ── */}
+          {mode === 'reset_pin' && (
+            <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, animation: `${fadeUp} 0.3s ease` }}>
+              <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'rgba(74,222,128,0.07)', border: '1px solid rgba(74,222,128,0.2)' }}>
+                <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', lineHeight: 1.5 }}>
+                  Revisa tu bandeja de entrada y pega el código de 8 caracteres que te enviamos.
+                </Typography>
+              </Box>
+              <Box>
+                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Código del correo</Typography>
+                <TextField fullWidth size="small" placeholder="XXXXXXXX" autoFocus
+                  value={resetToken} onChange={e => setResetToken(e.target.value.toUpperCase())}
+                  slotProps={{ htmlInput: { style: { fontFamily: 'monospace', letterSpacing: '0.2em', textAlign: 'center' }, maxLength: 8 } }}
+                  sx={INPUT_SX} />
+              </Box>
+              <PinField label="Nuevo PIN" value={newPin} onChange={setNewPin} placeholder="nuevo PIN" autoComplete="new-password" />
+              {error && <ErrorBox msg={error} success={error.startsWith('✓')} />}
+              <SubmitBtn loading={loading} label="Cambiar PIN →" />
+              <Typography onClick={() => reset('forgot')} sx={{ ...LINK_SX, textAlign: 'center', mt: 0.5 }}>
                 {t.login.back}
               </Typography>
             </Box>

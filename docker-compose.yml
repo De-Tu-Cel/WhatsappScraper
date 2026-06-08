@@ -36,7 +36,7 @@ services:
 
   # ── Evolution API ─────────────────────────────────────────────
   evolution:
-    image: atendai/evolution-api:latest
+    image: atendai/evolution-api:v1.8.2
     volumes:
       - evolution_data:/evolution/instances
     environment:

@@ -237,8 +237,9 @@ class WebsiteScraper:
         }
 
         # Conexión MongoDB
-        client = MongoClient("mongodb://localhost:27017/")
-        db = client["comercial"]
+        import os
+        client = MongoClient(os.getenv("MONGODB_URI", "mongodb://localhost:27017/"))
+        db = client[os.getenv("DATABASE_NAME", "comercial")]
         self.companies_col = db["companies"]
         self.contacts_col = db["contacts"]
         self.scraping_runs_col = db["scraping_runs"]

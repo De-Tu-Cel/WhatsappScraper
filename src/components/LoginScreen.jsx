@@ -60,6 +60,9 @@ const INPUT_SX = {
     caretColor: 'white',
     transition: 'background-color 5000s ease-in-out 0s',
   },
+  '& .MuiOutlinedInput-root:has(input:-webkit-autofill)': {
+    bgcolor: 'rgba(255,255,255,0.04)',
+  },
 }
 
 function PinField({ value, onChange, placeholder = '••••••', label, autoComplete }) {

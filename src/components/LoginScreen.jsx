@@ -61,7 +61,10 @@ const INPUT_SX = {
     transition: 'background-color 5000s ease-in-out 0s',
   },
   '& .MuiOutlinedInput-root:has(input:-webkit-autofill)': {
-    bgcolor: 'rgba(255,255,255,0.04)',
+    background: 'rgba(255,255,255,0.04) !important',
+  },
+  '& .MuiOutlinedInput-root:has(input:-webkit-autofill) .MuiInputAdornment-root': {
+    background: 'rgba(255,255,255,0.04) !important',
   },
 }
 

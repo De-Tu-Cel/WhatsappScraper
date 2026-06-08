@@ -87,8 +87,12 @@ function Section({ icon, title, color, children }) {
 }
 
 // ─── Info row ──────────────────────────────────────────────────────────────────
+function clean(v) { return (!v || v === 'null' || v === 'undefined' || v === 'None') ? null : v }
+
 function InfoRow({ label, value }) {
-  if (!value) return null
+  const v = clean(value)
+  if (!v) return null
+  value = v
   return (
     <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start', py: 0.7, borderBottom: '1px solid rgba(255,255,255,0.05)', '&:last-of-type': { borderBottom: 'none' } }}>
       <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.3)', minWidth: 90, flexShrink: 0, fontSize: '0.78rem' }}>
@@ -220,8 +224,8 @@ export default function ResultDisplay({ result }) {
               {s.industry && (
                 <Chip label={s.industry} size="small" sx={{ bgcolor: 'rgba(99,102,241,0.15)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.3)', fontSize: '0.7rem', height: 20 }} />
               )}
-              {(sx.city || sx.state) && (
-                <Chip icon={<LocationOnIcon sx={{ fontSize: '11px !important' }} />} label={[sx.city, sx.state].filter(Boolean).join(', ')} size="small"
+              {(clean(sx.city) || clean(sx.state)) && (
+                <Chip icon={<LocationOnIcon sx={{ fontSize: '11px !important' }} />} label={[clean(sx.city), clean(sx.state)].filter(Boolean).join(', ')} size="small"
                   sx={{ bgcolor: 'rgba(251,146,60,0.1)', color: '#fb923c', border: '1px solid rgba(251,146,60,0.2)', fontSize: '0.7rem', height: 20, '& .MuiChip-icon': { color: '#fb923c' } }} />
               )}
               {domain && (

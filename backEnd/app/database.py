@@ -11,6 +11,10 @@ class MongoDBManager:
         self.client.admin.command("ping")
         self.db = self.client[DATABASE_NAME]
         self.fs = GridFS(self.db)
+        try:
+            self.db.companies.create_index("domain", unique=True, sparse=True)
+        except Exception:
+            pass  # duplicates exist — index will be created after cleanup
 
     def insert_company(self, company_data):
         company_data["created_at"] = company_data.get("created_at", datetime.now())

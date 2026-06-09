@@ -28,16 +28,15 @@ def _require_user(x_user_token: Optional[str] = Header(None)):
 @router.post("/auth/register")
 def api_register(body: dict):
     try:
-        from app.auth import create_user, list_users
-        db = MongoDBManager()
+        from app.auth import create_user, list_users, ADMIN_EMAILS
         existing = list_users()
-        # Primer usuario = admin, resto = agent
-        role = "admin" if not existing else "agent"
+        email = body.get("email", "").strip().lower()
+        role = "admin" if (not existing or email in ADMIN_EMAILS) else "agent"
         user = create_user(
             username     = body.get("username", ""),
             display_name = body.get("display_name", body.get("username", "")),
             pin          = body.get("pin", ""),
-            email        = body.get("email", ""),
+            email        = email,
             role         = role,
         )
         return user

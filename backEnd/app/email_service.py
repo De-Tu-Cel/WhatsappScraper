@@ -1,10 +1,16 @@
 import os
-import requests
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 
 def send_reset_email(to_email: str, display_name: str, token: str) -> bool:
-    api_key = os.getenv("RESEND_API_KEY", "")
-    if not api_key:
+    smtp_host = os.getenv("SMTP_HOST", "smtp.hostinger.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER", "")
+    smtp_pass = os.getenv("SMTP_PASSWORD", "")
+    if not smtp_user or not smtp_pass:
+        print("[Email] SMTP no configurado")
         return False
 
     html = f"""
@@ -19,7 +25,11 @@ def send_reset_email(to_email: str, display_name: str, token: str) -> bool:
     <!-- Header -->
     <div style="background:linear-gradient(135deg,#0e2d5c 0%,#060f0c 100%);padding:28px 32px 24px;border-bottom:1px solid rgba(21,87,245,0.2)">
       <div style="display:inline-flex;align-items:center;gap:12px">
-        <div style="width:44px;height:44px;border-radius:12px;background:rgba(21,87,245,0.2);border:1.5px solid rgba(21,87,245,0.5);display:flex;align-items:center;justify-content:center;font-size:22px;line-height:1">🏪</div>
+        <div style="width:44px;height:44px;border-radius:12px;background:rgba(21,87,245,0.12);border:1.5px solid rgba(21,87,245,0.45);display:inline-flex;align-items:flex-end;justify-content:center;gap:3px;padding:10px 11px 10px">
+            <div style="width:6px;height:10px;border-radius:2px 2px 1px 1px;background:rgba(21,87,245,0.55)"></div>
+            <div style="width:6px;height:15px;border-radius:2px 2px 1px 1px;background:rgba(21,87,245,0.8)"></div>
+            <div style="width:6px;height:21px;border-radius:2px 2px 1px 1px;background:#1557f5"></div>
+          </div>
         <div>
           <div style="color:#fff;font-size:17px;font-weight:800;letter-spacing:-0.02em;line-height:1.2">Lector Comercial</div>
           <div style="color:rgba(255,255,255,0.35);font-size:12px;margin-top:2px">by DeTuCel</div>
@@ -65,19 +75,28 @@ def send_reset_email(to_email: str, display_name: str, token: str) -> bool:
 </html>
     """
 
-    response = requests.post(
-        "https://api.resend.com/emails",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "from": "Lector Comercial <noreply@detucel.com>",
-            "to": to_email,
-            "subject": "Recupera tu PIN · Lector Comercial",
-            "html": html,
-        },
-        timeout=10,
-    )
-    print(f"[Resend] status={response.status_code} body={response.text}")
-    return response.status_code == 200
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "Recupera tu PIN · Lector Comercial"
+        msg["From"]    = f"Lector Comercial <{smtp_user}>"
+        msg["To"]      = to_email
+        msg.attach(MIMEText(html, "html", "utf-8"))
+
+        if smtp_port == 465:
+            import ssl
+            ctx = ssl.create_default_context()
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, context=ctx) as server:
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(smtp_user, to_email, msg.as_string())
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port) as server:
+                server.ehlo()
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(smtp_user, to_email, msg.as_string())
+
+        print(f"[Email] Enviado a {to_email}")
+        return True
+    except Exception as e:
+        print(f"[Email] Error: {e}")
+        return False

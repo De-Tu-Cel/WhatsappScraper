@@ -7,82 +7,42 @@ from app.config import GROQ_API_KEY
 from app.database import MongoDBManager
 
 _PROMPT_TEMPLATE = """\
-Eres un analista de canales de comunicación B2B especializado en WhatsApp para PYMEs mexicanas. \
-Tu tarea: detectar si la respuesta fue de un humano real o un sistema automatizado, y evaluar qué tan útil fue para el proceso de venta.
+Eres un director comercial con 15 años de experiencia en ventas B2B por WhatsApp en Latinoamérica. \
+Evalúas respuestas de prospectos con criterio brutalmente honesto — tu análisis define si un agente invierte tiempo en este lead o no.
 
-CONTEXTO: En México, la mayoría de las PYMEs usan WhatsApp Business pero lo atiende una persona real. \
-Las respuestas informales, cortas o con errores ortográficos son NORMALES y señal de humano, no de bot.
+MENSAJE ENVIADO: {outbound_body}
+RESPUESTA DEL PROSPECTO: {inbound_body}
 
-═══════════════════════════════════════
-MENSAJE ENVIADO (prospección):
-{outbound_body}
+── PASO 1: CLASIFICAR ORIGEN ──
+- "humano": persona real. Señales: informalidad, errores, responde aunque sea vagamente al tema
+- "automatico": plantilla sin personalización (horarios, folio, "en breve te atendemos")
+- "bot": sistema con lógica propia (menú, pide datos, nombre artificial, ignora completamente el mensaje)
+Regla: ante la duda → humano. Solo "automatico" o "bot" si hay evidencia clara.
 
-RESPUESTA RECIBIDA:
-{inbound_body}
-═══════════════════════════════════════
+── PASO 2: CALIDAD COMERCIAL (criterio estricto) ──
+Pregúntate: ¿Esta respuesta acerca o aleja una venta? ¿Hay señal de intención real?
 
-CATEGORÍAS:
+1 — Ruido: no aporta nada. "Ok", "👍", "Gracias", "Recibido", emoji solo, respuesta de 1-2 palabras sin contenido
+2 — Cortesía vacía: reconoce el contacto pero evita el tema. "Ahorita te marco", "Luego hablamos", "Estamos en reunión"
+3 — Apertura tibia: toca el tema pero sin compromiso. "Mándame info", "¿De qué se trata?", "Puede interesarnos"
+4 — Señal real: muestra interés concreto. Hace preguntas específicas, da contexto de su situación, menciona necesidad o timing
+5 — Lead caliente: intención clara de avanzar. Pide cotización, propone llamada/reunión, menciona presupuesto o urgencia
 
-"humano" — persona real que leyó y contestó:
-  ✓ Respuestas cortas o coloquiales: "Ok", "Muy bien", "Claro", "Sí", "Ahí te marco", "👍"
-  ✓ Faltas de ortografía, sin acentos, abreviaciones: "xq", "tmb", "k", "pq", "ntp", "ahorita"
-  ✓ Lenguaje regional mexicano o informal
-  ✓ Responde aunque sea de forma mínima al tema
-  ✓ Tiempo de respuesta 1–120 minutos
-  ✓ Continuación natural de la conversación
+IMPORTANTE: El 80% de las respuestas son 1 o 2. Un 3 requiere que el prospecto haya dicho algo específico sobre el tema. Un 4 o 5 son excepcionales y deben ganarse con evidencia textual concreta.
 
-"automatico" — respuesta automática sin IA ni flujo complejo:
-  ✓ "Gracias por contactarnos, en breve te atendemos"
-  ✓ Mensaje de fuera de horario con horarios exactos listados
-  ✓ Contiene número de ticket, folio o ID automático
-  ✓ Texto genérico idéntico que se envía a cualquier contacto
-  ✗ NO tiene ningún elemento personalizado al mensaje recibido
+── PASO 3: NOTAS (máximo 12 palabras) ──
+Di exactamente qué reveló la respuesta sobre la intención de compra. Sé clínico, no optimista.
+✓ "Pidió precio de tanque estacionario, tiene urgencia de cambio"
+✓ "Cortesía pura, no leyó el mensaje, no hay señal"
+✓ "Mencionó proveedor actual Zeta Gas, abierto a cotizar"
+✗ "Respuesta breve" / "Muestra interés" / "Acuse de recepción"
 
-"bot" — sistema automatizado con flujo o IA (señales EXCLUSIVAS):
-  ✓ Se presenta con nombre de persona artificial ("Soy Olivia", "Hola, soy Ana")
-  ✓ Dice explícitamente ser asistente virtual / chatbot / cuenta oficial
-  ✓ Ofrece menú numerado o botones de opciones estructuradas
-  ✓ Pide datos del usuario como primer paso (nombre, correo, empresa)
-  ✓ Responde en < 30 segundos con texto largo y perfectamente formateado
-  ✓ IGNORA completamente el contenido del mensaje y ejecuta su guión propio
+is_ai (solo si bot): true=IA conversacional, false=flujo rígido/menú
+bot_quality (solo si bot): 1=básico 3=funcional 5=IA avanzada
+ai_confidence: 0.0-1.0
 
-REGLAS FINALES:
-- Si hay duda entre humano y bot SIN señales explícitas de sistema → es HUMANO
-- Si la respuesta contiene nombre de asistente virtual, menú numerado o folio automático → NO puede ser humano
-- Las PYMEs mexicanas rara vez tienen bots; si no hay señal clara, es una persona desde su celular
-
-═══════════════════════════════════════
-EJEMPLOS DE CLASIFICACIÓN:
-
-Enviado: "Hola, somos DeTuCel y quisiéramos hablar sobre tu negocio"
-Respuesta: "Muy bien" (4 min) → humano, quality=2, notes="Acuse breve de recepción"
-
-Enviado: "Hola, somos DeTuCel y quisiéramos hablar sobre tu negocio"
-Respuesta: "k onda si me interesa dime mas" (12 min) → humano, quality=4, notes="Interés genuino con lenguaje informal"
-
-Enviado: "Hola, somos DeTuCel..."
-Respuesta: "Gracias por escribirnos. Nuestro horario es Lun-Vie 9-6pm. En breve le atendemos." (inmediato) → automatico, quality=1
-
-Enviado: "Hola, somos DeTuCel..."
-Respuesta: "Hola! Soy Olivia, asistente virtual de [Empresa]. Para continuar ingresa tu nombre:" (8 seg) → bot, is_ai=false, quality=1
-
-Enviado: "Hola, somos DeTuCel..."
-Respuesta: "¡Hola! Entiendo que deseas más información sobre nuestros servicios. Con gusto te ayudo. ¿Sobre qué área específica tienes dudas?" (15 seg) → bot, is_ai=true, quality=3
-═══════════════════════════════════════
-
-ESCALA DE CALIDAD (response_quality, SIEMPRE 1-5):
-1 = Ignora el mensaje / respuesta genérica sin valor
-2 = Acuse mínimo de recepción ("Ok", "Muy bien", "Recibido")
-3 = Responde brevemente al tema o muestra algo de interés
-4 = Proporciona información útil o hace preguntas relevantes al negocio
-5 = Interés genuino: solicita reunión, pide detalles, expresa intención clara
-
-is_ai (solo si category="bot"): true=IA conversacional fluida / false=flujo rígido o menús
-bot_quality (solo si category="bot"): 1=básico, 3=funcional, 5=IA avanzada
-ai_confidence: 0.0=sin IA, 1.0=IA confirmada
-
-Responde ÚNICAMENTE con JSON válido sin markdown:
-{{"category": "humano|automatico|bot", "is_ai": false, "ai_confidence": 0.0, "response_quality": 1-5, "bot_quality": null, "notes": "observación concisa en español"}}\
+Responde SOLO con JSON válido:
+{{"category":"humano|automatico|bot","is_ai":false,"ai_confidence":0.0,"response_quality":1,"bot_quality":null,"notes":"observación clínica"}}\
 """
 
 _ERROR_RESULT = {
@@ -125,8 +85,8 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
         chat_response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=256,
+            temperature=0,
+            max_tokens=150,
         )
         raw = chat_response.choices[0].message.content.strip()
         # Strip markdown code fences if present

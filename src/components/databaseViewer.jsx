@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
+const display = v => (!v || ['null','none','undefined','n/a'].includes(String(v).trim().toLowerCase())) ? '—' : v
 import { useLang } from '../context/LangContext'
 import { isValidUrl, urlValidationMsg, isValidWhatsAppNumber, waNumberValidationMsg } from '@/lib/validators'
 import Box from '@mui/material/Box'
@@ -1361,7 +1362,7 @@ export default function DatabaseViewer() {
                           <span>{truncate(row.industry, 22)}</span>
                         </Tooltip>
                       </TableCell>
-                      <TableCell align="center" onClick={() => handleSelectRow(row._id)}>{row.city || '—'}</TableCell>
+                      <TableCell align="center" onClick={() => handleSelectRow(row._id)}>{display(row.city)}</TableCell>
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>
                         {row.has_whatsapp ? (
                           <Chip icon={<WhatsAppIcon sx={{ fontSize: '13px !important' }} />} label="Sí" size="small"

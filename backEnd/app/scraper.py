@@ -855,11 +855,15 @@ class WebsiteScraper:
             import requests
             categories = list(self.INDUSTRY_KEYWORDS.keys())
             prompt = (
-                f"Clasifica esta empresa en UNA de estas categor\u00EDas exactas:\n"
-                f"{', '.join(categories)}\n\n"
-                f"Texto del sitio web:\n{text_snippet}\n\n"
-                f"Responde SOLO con el nombre exacto de la categor\u00EDa. "
-                f"Si no encaja en ninguna responde: No detectada"
+                f"Eres un clasificador de industrias. Analiza el texto de este sitio web y elige UNA categor\u00EDa.\n\n"
+                f"CATEGOR\u00CDAS DISPONIBLES:\n"
+                f"{chr(10).join(f'- {c}' for c in categories)}\n\n"
+                f"TEXTO DEL SITIO:\n{text_snippet}\n\n"
+                f"INSTRUCCIONES:\n"
+                f"- Responde \u00DANICAMENTE con el nombre exacto de la categor\u00EDa (copia y pega).\n"
+                f"- Si la empresa distribuye o vende gas LP, GLP, gas natural o combustibles \u2192 responde: Gas LP / Energ\u00EDa\n"
+                f"- Si no encaja en ninguna \u2192 responde: No detectada\n"
+                f"- NO expliques nada, solo el nombre de la categor\u00EDa."
             )
             resp = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
@@ -921,15 +925,19 @@ class WebsiteScraper:
             end   = raw.rfind("}") + 1
             if start >= 0 and end > start:
                 data = json.loads(raw[start:end])
-                if need_desc and data.get("descripcion"):
+                def _val(v):
+                    if not v: return None
+                    if str(v).strip().lower() in ("null", "none", "n/a", "no disponible", "no hay info", ""): return None
+                    return v
+                if need_desc and _val(data.get("descripcion")):
                     result["description"] = data["descripcion"]
-                if need_hours and data.get("horarios"):
+                if need_hours and _val(data.get("horarios")):
                     result["_extra"]["business_hours"] = data["horarios"]
                 if need_services and data.get("servicios"):
                     svs = data["servicios"]
                     if isinstance(svs, list) and svs:
                         result["services"] = svs[:8]
-                if need_city and data.get("ciudad"):
+                if need_city and _val(data.get("ciudad")):
                     result["_extra"]["city"] = data["ciudad"]
         except Exception:
             pass  # Groq falló — no bloquear el scraping

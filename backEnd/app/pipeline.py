@@ -60,10 +60,10 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
     _db_action = scraped.get("_db_action")
     _scraped_id = scraped.get("_company_id")
 
-    if _db_action in ("skipped_duplicate", "updated") and _scraped_id:
-        # Empresa ya existía — usar el ID existente, no crear duplicado
+    if _scraped_id:
+        # El scraper ya guardó la empresa (created/updated/skipped) — reutilizar ID
         company_id = str(_scraped_id)
-        print(f"♻️  Empresa ya existente ({_db_action}), reutilizando ID: {company_id}")
+        print(f"♻️  Empresa guardada por scraper ({_db_action}), ID: {company_id}")
     else:
         company_id = db.insert_company({
             "name": scraped["name"],

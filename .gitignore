@@ -87,7 +87,7 @@ test_*.pdf
 test_*.csv
 
 # ── Evolution API (Docker) ───────────────────────────────────────
-evolution/
+/evolution/
 
 # ── Playwright (navegadores descargados localmente) ──────────────
 playwright-report/

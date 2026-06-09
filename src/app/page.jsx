@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useLayoutEffect } from 'react'
+import React, { useState, useEffect, useLayoutEffect } from 'react'
 import { useUser } from '../context/UserContext'
 import LoginScreen from '../components/LoginScreen'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -163,7 +163,7 @@ export default function DashboardPage() {
             {/* Nav items */}
             {visibleNavItems.map((item, i) => (
               <Box key={i} sx={{ display: mounted && !settingsOpen && active === i ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-                {item.component}
+                {React.cloneElement(item.component, { isActive: mounted && !settingsOpen && active === i })}
               </Box>
             ))}
           </Box>

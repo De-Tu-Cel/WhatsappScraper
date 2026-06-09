@@ -923,7 +923,7 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify }) {
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
-export default function DatabaseViewer() {
+export default function DatabaseViewer({ isActive }) {
   const { t } = useLang()
   const headCells  = getHeadCells(t)
   const alertTitles = getAlertTitles(t)
@@ -992,6 +992,7 @@ export default function DatabaseViewer() {
   }, [page, rowsPerPage, filters])
 
   useEffect(() => { fetchData() }, [fetchData])
+  useEffect(() => { if (isActive) fetchData() }, [isActive])
   useEffect(() => {
     setPage(0)
     setRowCache({})   // limpiar caché al cambiar filtros

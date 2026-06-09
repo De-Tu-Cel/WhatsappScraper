@@ -496,9 +496,27 @@ class WebsiteScraper:
                 result["_company_id"] = existing["_id"]
         else:
             company_doc = {k: v for k, v in result.items() if not k.startswith("_")}
-            inserted = self.companies_col.insert_one(company_doc)
-            result["_db_action"] = "created"
-            result["_company_id"] = inserted.inserted_id
+            company_doc.setdefault("created_at", datetime.now(timezone.utc))
+            try:
+                res = self.companies_col.update_one(
+                    {"domain": domain},
+                    {"$setOnInsert": company_doc},
+                    upsert=True,
+                )
+                if res.upserted_id:
+                    result["_db_action"] = "created"
+                    result["_company_id"] = res.upserted_id
+                else:
+                    existing_doc = self.companies_col.find_one({"domain": domain})
+                    result["_db_action"] = "updated"
+                    result["_company_id"] = existing_doc["_id"] if existing_doc else None
+            except Exception as e:
+                if "E11000" in str(e) or "duplicate key" in str(e):
+                    existing_doc = self.companies_col.find_one({"domain": domain})
+                    result["_db_action"] = "skipped_duplicate"
+                    result["_company_id"] = existing_doc["_id"] if existing_doc else None
+                else:
+                    raise
 
         self._save_contacts(result["_contacts_raw"], result["_company_id"], url)
 

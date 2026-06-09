@@ -208,7 +208,7 @@ export default function AdminPanel() {
           </Typography>
           <TextField fullWidth size="small" type="password" placeholder={t.admin.newPin}
             value={newPin} onChange={e => setNewPin(e.target.value)} autoFocus
-            inputProps={{ maxLength: 8, inputMode: 'numeric' }}
+            slotProps={{ htmlInput: { maxLength: 8, inputMode: 'numeric' } }}
             sx={{ mb: 1.5, '& .MuiOutlinedInput-root': { bgcolor: 'rgba(255,255,255,0.05)', fontSize: '0.9rem', borderRadius: 2, '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&.Mui-focused fieldset': { borderColor: '#facc15' } }, '& input': { color: 'white' } }} />
           {msg && <Typography sx={{ fontSize: '0.75rem', color: msg.startsWith('✓') ? '#4ade80' : '#f87171', mb: 1 }}>{msg}</Typography>}
           <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>

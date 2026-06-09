@@ -22,6 +22,7 @@ def verify_pin(pin: str, hashed: str) -> bool:
 
 
 ALLOWED_DOMAIN = "detucel.mx"
+ADMIN_EMAILS   = {"marco@detucel.mx", "gilad@detucel.mx"}
 
 def create_user(username: str, display_name: str, pin: str,
                 email: str = "", evolution_instance: str = "", role: str = "user") -> dict:
@@ -141,14 +142,16 @@ def list_users() -> list:
 def _serialize_user(user: dict) -> dict:
     if not user:
         return {}
+    email = user.get("email", "")
+    role  = "admin" if email in ADMIN_EMAILS else user.get("role", "agent")
     return {
         "id":                 str(user.get("_id", "")),
         "username":           user.get("username", ""),
         "display_name":       user.get("display_name", ""),
-        "email":              user.get("email", ""),
+        "email":              email,
         "evolution_instance": user.get("evolution_instance", ""),
         "connected_number":   user.get("connected_number", ""),
-        "role":               user.get("role", "agent"),
+        "role":               role,
         "session_token":      user.get("session_token"),
         "created_at":         user.get("created_at", ""),
     }

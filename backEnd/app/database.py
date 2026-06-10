@@ -237,7 +237,16 @@ class MongoDBManager:
             "type": "whatsapp",
             "value": {"$regex": clean[-10:], "$options": "i"},
         })
-        return contact["company_id"] if contact else None
+        if contact:
+            return contact["company_id"]
+        # Fallback: last company we sent a message to in the past hour
+        from datetime import datetime, timedelta
+        recent = self.db.message_logs.find_one(
+            {"direction": "outbound", "status": {"$ne": "failed"},
+             "created_at": {"$gte": datetime.now() - timedelta(hours=1)}},
+            sort=[("created_at", -1)],
+        )
+        return recent["company_id"] if recent else None
 
     def replace_whatsapp_contacts(self, company_id: str, numbers: list):
         """Replace all WhatsApp contacts for a company with the given list."""

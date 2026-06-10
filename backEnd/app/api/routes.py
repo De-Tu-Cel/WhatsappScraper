@@ -826,9 +826,9 @@ def api_evo_register_webhook(body: dict):
             raise HTTPException(status_code=400, detail="instanceName requerido")
         from app.config import APP_PUBLIC_URL
         webhook_url = f"{APP_PUBLIC_URL}/api/evolution/webhook"
-        payload = {"webhook": {"url": webhook_url, "enabled": True,
+        payload = {"url": webhook_url, "enabled": True,
             "events": ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "MESSAGES_SET"],
-            "webhookByEvents": False, "webhookBase64": False}}
+            "webhookByEvents": False, "webhookBase64": False}
         r = _req.post(f"{EVOLUTION_API_URL}/webhook/set/{name}",
             headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
             json=payload, timeout=10)

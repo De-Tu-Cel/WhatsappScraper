@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 
 class ProcessUrlRequest(BaseModel):
     url: str
@@ -105,7 +105,12 @@ class EvolutionWebhookRequest(BaseModel):
     """Generic Evolution API webhook envelope."""
     event: str
     instance: Optional[str] = None
-    data: Optional[Dict[str, Any]] = None
+    data: Optional[Union[Dict[str, Any], List[Any]]] = None
+    destination: Optional[str] = None
+    date_time: Optional[str] = None
+    sender: Optional[str] = None
+    server_url: Optional[str] = None
+    apikey: Optional[str] = None
 
 class EvolutionStatusUpdate(BaseModel):
     """Payload for messages.update event."""

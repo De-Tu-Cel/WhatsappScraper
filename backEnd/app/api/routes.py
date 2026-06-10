@@ -193,7 +193,7 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         log_doc = {
             "channel": "whatsapp", "platform": "evolution", "direction": "outbound",
             "company_id": req.company_id, "to_number": req.to_number,
-            "message_text": req.message, "message_id": message_id,
+            "message_body": req.message, "message_text": req.message, "message_id": message_id,
             "status_code": evo_result.get("status_code"),
             "api_response": evo_json, "status": status,
             "sent_at": evo_result.get("sent_at"),

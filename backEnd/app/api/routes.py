@@ -858,3 +858,72 @@ def api_get_analytics(
         return serialize(db.get_analytics(page=page, page_size=page_size))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ── One-time data cleanup ──────────────────────────────────────────────────────
+
+@router.post("/admin/cleanup-contacts")
+def api_cleanup_contacts():
+    """
+    One-time cleanup:
+    1. Remove +521XXXXXXXXXX contacts when +52XXXXXXXXXX duplicate exists.
+    2. Delete phantom outbound message_logs (empty body, to numbers not in contacts).
+    """
+    try:
+        db = MongoDBManager()
+
+        def _norm10(n):
+            return (n or "").replace("+", "").replace(" ", "").replace("-", "")[-10:]
+
+        # ── 1. Deduplicate +521 contacts ──────────────────────────────────────
+        contacts_removed = 0
+        all_wa = list(db.db.contacts.find({"type": "whatsapp"}, {"_id": 1, "company_id": 1, "value": 1}))
+
+        # Group by (company_id, last-10-digits)
+        from collections import defaultdict
+        groups = defaultdict(list)
+        for c in all_wa:
+            key = (c["company_id"], _norm10(c["value"]))
+            groups[key].append(c)
+
+        ids_to_delete = []
+        for (cid, n10), contacts in groups.items():
+            if len(contacts) <= 1:
+                continue
+            digits_list = [(c, (c["value"] or "").replace("+","").replace(" ","").replace("-","")) for c in contacts]
+            # Keep +52XXXXXXXXXX (12 digits); remove +521XXXXXXXXXX (13 digits)
+            to_keep   = [c for c, d in digits_list if len(d) == 12]
+            to_remove = [c for c, d in digits_list if len(d) == 13]
+            if to_keep and to_remove:
+                ids_to_delete.extend([c["_id"] for c in to_remove])
+
+        if ids_to_delete:
+            from bson import ObjectId
+            db.db.contacts.delete_many({"_id": {"$in": ids_to_delete}})
+            contacts_removed = len(ids_to_delete)
+
+        # ── 2. Delete phantom outbound logs (empty body, number not in contacts) ──
+        phantom_deleted = 0
+        registered_nums = set(
+            _norm10(c["value"])
+            for c in db.db.contacts.find({"type": "whatsapp"}, {"value": 1})
+        )
+        phantoms = list(db.db.message_logs.find(
+            {"direction": "outbound", "platform": "evolution",
+             "$or": [{"message_body": ""}, {"message_body": {"$exists": False}}]},
+            {"_id": 1, "to_number": 1}
+        ))
+        phantom_ids = [
+            p["_id"] for p in phantoms
+            if _norm10(p.get("to_number", "")) not in registered_nums
+        ]
+        if phantom_ids:
+            db.db.message_logs.delete_many({"_id": {"$in": phantom_ids}})
+            phantom_deleted = len(phantom_ids)
+
+        return {
+            "ok": True,
+            "contacts_removed": contacts_removed,
+            "phantom_logs_deleted": phantom_deleted,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

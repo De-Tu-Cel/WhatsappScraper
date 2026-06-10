@@ -824,9 +824,10 @@ def api_evo_register_webhook(body: dict):
         name = body.get("instanceName", "").strip()
         if not name:
             raise HTTPException(status_code=400, detail="instanceName requerido")
-        webhook_url = "http://host.docker.internal:8000/api/evolution/webhook"
+        from app.config import APP_PUBLIC_URL
+        webhook_url = f"{APP_PUBLIC_URL}/api/evolution/webhook"
         payload = {"webhook": {"url": webhook_url, "enabled": True,
-            "events": ["MESSAGES_UPSERT", "MESSAGES_UPDATE"],
+            "events": ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "MESSAGES_SET"],
             "webhookByEvents": False, "webhookBase64": False}}
         r = _req.post(f"{EVOLUTION_API_URL}/webhook/set/{name}",
             headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},

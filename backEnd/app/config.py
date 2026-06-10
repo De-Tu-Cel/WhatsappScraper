@@ -23,9 +23,10 @@ FALLBACK_TO_NUMBER = os.getenv("TO_NUMBER", "")
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "")
 
 # Evolution API (WhatsApp personal number)
-EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "http://localhost:8080")
-EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "")
-EVOLUTION_INSTANCE = os.getenv("EVOLUTION_INSTANCE", "")
+EVOLUTION_API_URL      = os.getenv("EVOLUTION_API_URL", "http://localhost:8080")
+EVOLUTION_API_KEY      = os.getenv("EVOLUTION_API_KEY", "")
+EVOLUTION_INSTANCE     = os.getenv("EVOLUTION_INSTANCE", "")
+APP_PUBLIC_URL         = os.getenv("APP_PUBLIC_URL", "https://app.detucel.com")
 
 # Groq API (clasificación de respuestas)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")

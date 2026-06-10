@@ -341,6 +341,10 @@ export default function Conversations() {
           if (msgs.length === prev.length) return prev
           return msgs
         })
+        if (msgs.length > threadLenRef.current) {
+          fetch(`/api/conversations/${companyId}`, { method: 'POST' }).catch(() => {})
+          setConvs(prev => prev.map(c => c.company_id === companyId ? { ...c, unread: 0 } : c))
+        }
       } else {
         setThread(msgs)
       }

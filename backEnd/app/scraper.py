@@ -1129,9 +1129,6 @@ class WebsiteScraper:
                     number = href.split("phone=")[-1].split("&")[0]
                     candidates.append(number)
             
-            elif href.startswith("tel:"):
-                candidates.append(href[4:])
-        
         # 2. Texto con contexto "WhatsApp"
         whatsapp_context = re.findall(
             r"(?:whatsapp|wa)[:\s]*(\+?\d[\d\s\-\(\)]{8,}\d)",

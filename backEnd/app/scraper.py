@@ -1190,9 +1190,9 @@ class WebsiteScraper:
         if len(digits) == 12 and digits.startswith("52"):
             return f"+{digits}"
 
-        # 13 dígitos comenzando con 521 → +521XXXXXXXXXX (formato móvil antiguo MX)
+        # 13 dígitos comenzando con 521 → normalizar a +52XXXXXXXXXX (quitar el "1" antiguo)
         if len(digits) == 13 and digits.startswith("521"):
-            return f"+{digits}"
+            return f"+52{digits[3:]}"
 
         # Número explícito con + al inicio: solo aceptar si es código MX
         if raw_number.strip().startswith("+"):

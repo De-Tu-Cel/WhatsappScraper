@@ -499,6 +499,34 @@ class MongoDBManager:
                 else:
                     num_map[n]["inbound"].append(m)
 
+            # Merge bot/unknown inbound-only numbers into the primary registered contact.
+            # Bot numbers (e.g. WhatsApp Business senders) have no outbound and are not
+            # in the contacts collection — they pollute the per-number breakdown.
+            registered_contacts = list(self.db.contacts.find(
+                {"company_id": company_id, "type": "whatsapp"}, {"value": 1}
+            ))
+            registered_norms = {_norm(c["value"]) for c in registered_contacts}
+
+            def _primary_num():
+                for rn in registered_norms:
+                    if rn in num_map and num_map[rn]["sent"] > 0:
+                        return rn
+                for rn in registered_norms:
+                    if rn in num_map:
+                        return rn
+                # fallback: number with most outbound
+                return max(num_map, key=lambda k: num_map[k]["sent"], default=None)
+
+            primary = _primary_num()
+            if primary:
+                for n in list(num_map.keys()):
+                    if n == primary:
+                        continue
+                    if n not in registered_norms and num_map[n]["sent"] == 0:
+                        num_map[primary]["inbound"].extend(num_map[n]["inbound"])
+                        del num_map[n]
+                        num_raw.pop(n, None)
+
             numbers = []
             for n, data in num_map.items():
                 analyzed = [m for m in data["inbound"] if m.get("analysis")]

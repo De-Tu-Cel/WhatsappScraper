@@ -689,6 +689,32 @@ def api_update_contacts(company_id: str, req: UpdateContactsRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ── Check contacted ───────────────────────────────────────────────────────────
+
+@router.post("/companies/check-contacted")
+def api_check_contacted(payload: dict):
+    """Returns a map of company_id → last outbound message info for the given IDs."""
+    try:
+        from bson import ObjectId
+        db = MongoDBManager()
+        company_ids = payload.get("company_ids", [])
+        result = {}
+        for cid in company_ids:
+            log = db.db.message_logs.find_one(
+                {"company_id": cid, "direction": "outbound"},
+                sort=[("created_at", -1)],
+                projection={"sent_by_name": 1, "sent_by_username": 1, "created_at": 1, "status": 1},
+            )
+            if log:
+                result[cid] = {
+                    "sent_by":    log.get("sent_by_name") or log.get("sent_by_username") or "—",
+                    "sent_at":    log["created_at"].isoformat() if log.get("created_at") else None,
+                    "status":     log.get("status"),
+                }
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ── Reports ───────────────────────────────────────────────────────────────────
 
 @router.post("/reports/{company_id}")

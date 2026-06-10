@@ -13,7 +13,7 @@ class EvolutionClient:
         """Send a plain-text WhatsApp message via Evolution API."""
         clean = _clean_number(number)
         url = f"{self.base_url}/message/sendText/{self.instance}"
-        payload = {"number": clean, "text": text}
+        payload = {"number": clean, "textMessage": {"text": text}}
         try:
             resp = requests.post(url, json=payload, headers=self.headers, timeout=15)
             return {

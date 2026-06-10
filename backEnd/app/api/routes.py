@@ -186,9 +186,10 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
             raise HTTPException(status_code=400, detail="Sin instancia de WhatsApp configurada")
         evo = EvolutionClient(EVOLUTION_API_URL, EVOLUTION_API_KEY, instance)
         evo_result = evo.send_text(req.to_number, req.message)
+        print(f"[SendMsg] to={req.to_number} status_code={evo_result.get('status_code')} raw={evo_result.get('raw_text','')[:300]}")
         evo_json = evo_result.get("response_json", {})
         message_id = evo_json.get("key", {}).get("id") or evo_json.get("id")
-        status = "sent" if evo_result.get("status_code") == 201 else "failed"
+        status = "sent" if evo_result.get("status_code") in (200, 201) else "failed"
         log_doc = {
             "channel": "whatsapp", "platform": "evolution", "direction": "outbound",
             "company_id": req.company_id, "to_number": req.to_number,

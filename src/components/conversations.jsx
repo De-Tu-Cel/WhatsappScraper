@@ -42,7 +42,7 @@ function agentColor(name) {
 
 function formatTime(iso) {
   if (!iso) return ''
-  const d = new Date(iso)
+  const d = new Date(iso.endsWith('Z') ? iso : iso + 'Z')
   const now = new Date()
   const diff = now - d
   if (diff < 60000) return 'ahora'

@@ -27,13 +27,6 @@ EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "http://localhost:8080")
 EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "")
 EVOLUTION_INSTANCE = os.getenv("EVOLUTION_INSTANCE", "")
 
-# Validación de variables críticas
-if not WHATSAPP_PHONE_NUMBER_ID:
-    print("⚠️ WARNING: WHATSAPP_PHONE_NUMBER_ID no está configurado en .env")
-
-if not WHATSAPP_ACCESS_TOKEN:
-    print("⚠️ WARNING: WHATSAPP_ACCESS_TOKEN no está configurado en .env")
-
 # Groq API (clasificación de respuestas)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 

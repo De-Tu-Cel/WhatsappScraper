@@ -96,7 +96,7 @@ function BusinessHoursChip({ value }) {
 
 function formatLastAt(iso) {
   if (!iso) return '—'
-  const d = new Date(iso)
+  const d = new Date(iso.endsWith('Z') ? iso : iso + 'Z')
   const now = new Date()
   const diff = now - d
   if (diff < 60000) return 'ahora'
@@ -162,7 +162,7 @@ function ConversationCapture({ thread, captureRef, visible }) {
                 </Box>
                 <Box sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '10px', mt: '3px',
                            textAlign: 'right', fontFamily: 'system-ui, sans-serif' }}>
-                  {msg.created_at ? new Date(msg.created_at).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) : ''}
+                  {msg.created_at ? new Date(msg.created_at.endsWith('Z') ? msg.created_at : msg.created_at + 'Z').toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) : ''}
                 </Box>
               </Box>
             </Box>

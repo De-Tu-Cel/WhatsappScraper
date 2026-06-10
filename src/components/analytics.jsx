@@ -649,7 +649,8 @@ export default function Analytics() {
                   const notesText = row.notes || ''
                   const notesTruncated = notesText.length > 60 ? notesText.slice(0, 60) + '…' : notesText
                   const isGenerating = generating === row.company_id
-                  const hasMultiple = (row.numbers?.length || 0) > 1
+                  const validNumbers = (row.numbers || []).filter(n => (n.number || '').replace(/\D/g,'').length >= 10)
+                  const hasMultiple = validNumbers.length > 1
                   const isExpanded = expandedRows.has(row.company_id)
                   return (
                     <Fragment key={row.company_id}>
@@ -676,7 +677,7 @@ export default function Analytics() {
                             {row.company_name || row.company_id}
                           </Typography>
                           {hasMultiple && (
-                            <Chip label={`${row.numbers.length} núms`} size="small" sx={{
+                            <Chip label={`${validNumbers.length} núms`} size="small" sx={{
                               height: 16, fontSize: '0.6rem',
                               bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.15)',
                               color: 'var(--accent,#a5b4fc)',
@@ -776,7 +777,7 @@ export default function Analytics() {
                     </TableRow>
 
                     {/* Filas expandibles — una por número, alineadas con columnas */}
-                    {hasMultiple && isExpanded && row.numbers.map(n => {
+                    {hasMultiple && isExpanded && row.numbers.filter(n => (n.number || '').replace(/\D/g,'').length >= 10).map(n => {
                       const nCat    = getCategoryConfig({ category: n.category })
                       const replied = n.responses > 0
                       const shortNum = (n.number || '').replace(/\D/g,'').slice(-10)

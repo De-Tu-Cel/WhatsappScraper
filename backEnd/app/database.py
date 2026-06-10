@@ -522,8 +522,11 @@ class MongoDBManager:
                 for n in list(num_map.keys()):
                     if n == primary:
                         continue
-                    if n not in registered_norms and num_map[n]["sent"] == 0:
+                    # Merge if: not a registered contact AND (inbound-only OR outbound-only with no inbound)
+                    # This consolidates bot replies AND stale outbound-only entries for deleted contacts
+                    if n not in registered_norms:
                         num_map[primary]["inbound"].extend(num_map[n]["inbound"])
+                        num_map[primary]["sent"] += num_map[n]["sent"]
                         del num_map[n]
                         num_raw.pop(n, None)
 

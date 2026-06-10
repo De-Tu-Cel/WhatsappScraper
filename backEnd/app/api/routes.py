@@ -572,54 +572,51 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
         from datetime import datetime
         db = MongoDBManager()
         event = req.event
-        data = req.data or {}
+        data = req.data
+        print(f"[Webhook] event={event} data_type={type(data).__name__}")
 
         if event == "messages.upsert":
-            key = data.get("key", {})
-            from_me = key.get("fromMe", False)
-            remote_jid = key.get("remoteJid", "")
-            message_id = key.get("id", "")
-            number = remote_jid.split("@")[0]
-            message_obj = data.get("message", {})
-            message_body, interactive_data = _extract_body_and_interactive(message_obj)
-            message_type = data.get("messageType", "conversation")
-            status_raw = data.get("status", "PENDING")
-            status = STATUS_MAP.get(status_raw, status_raw.lower())
+            # data can be a single message dict or a list of messages
+            messages_list = data if isinstance(data, list) else [data] if data else []
+            results = []
+            for msg in messages_list:
+                if not isinstance(msg, dict):
+                    continue
+                key = msg.get("key", {})
+                from_me = key.get("fromMe", False)
+                remote_jid = key.get("remoteJid", "")
+                message_id = key.get("id", "")
+                number = remote_jid.split("@")[0]
+                message_obj = msg.get("message", {})
+                message_body, interactive_data = _extract_body_and_interactive(message_obj)
+                message_type = msg.get("messageType", "conversation")
+                status_raw = msg.get("status", "PENDING")
+                status = STATUS_MAP.get(status_raw, status_raw.lower())
+                print(f"[Webhook] msg from_me={from_me} number={number} body={str(message_body)[:80]}")
 
-            if from_me:
-                # Outbound — try to update existing pipeline log, otherwise create new entry
-                updated = db.update_evolution_message_status(message_id, status) if message_id else False
-                if not updated:
-                    # Try to link to a company by destination number
-                    auto_company_id = db.find_company_id_by_phone(number) or "manual"
-                    db.save_evolution_log(
-                        direction="outbound",
-                        company_id=auto_company_id,
-                        number=number,
-                        message_body=message_body,
-                        message_id=message_id,
-                        status=status,
-                        raw_data=data,
+                if from_me:
+                    updated = db.update_evolution_message_status(message_id, status) if message_id else False
+                    if not updated:
+                        auto_company_id = db.find_company_id_by_phone(number) or "manual"
+                        db.save_evolution_log(
+                            direction="outbound", company_id=auto_company_id,
+                            number=number, message_body=message_body,
+                            message_id=message_id, status=status, raw_data=msg,
+                        )
+                    results.append("outbound_logged")
+                else:
+                    company_id = db.find_company_id_by_phone(number) or "unknown"
+                    log_id = db.save_evolution_log(
+                        direction="inbound", company_id=company_id,
+                        number=number, message_body=message_body,
+                        message_id=message_id, message_type=message_type,
+                        status="received", raw_data=msg, interactive=interactive_data,
                     )
-                return {"ok": True, "action": "outbound_logged"}
-            else:
-                # Inbound reply from prospect
-                company_id = db.find_company_id_by_phone(number) or "unknown"
-                log_id = db.save_evolution_log(
-                    direction="inbound",
-                    company_id=company_id,
-                    number=number,
-                    message_body=message_body,
-                    message_id=message_id,
-                    message_type=message_type,
-                    status="received",
-                    raw_data=data,
-                    interactive=interactive_data,
-                )
-                if GROQ_API_KEY and message_body and company_id != "unknown":
-                    from app.classifier import classify_and_save
-                    background_tasks.add_task(classify_and_save, log_id, company_id, message_body, datetime.now())
-                return {"ok": True, "action": "inbound_saved", "log_id": log_id, "company_id": company_id}
+                    if GROQ_API_KEY and message_body and company_id != "unknown":
+                        from app.classifier import classify_and_save
+                        background_tasks.add_task(classify_and_save, log_id, company_id, message_body, datetime.now())
+                    results.append(f"inbound_saved:{company_id}")
+            return {"ok": True, "action": results}
 
         elif event == "messages.update":
             updates = data if isinstance(data, list) else [data]

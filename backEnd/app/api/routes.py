@@ -596,7 +596,10 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
 
                 if from_me:
                     updated = db.update_evolution_message_status(message_id, status) if message_id else False
-                    if not updated:
+                    if not updated and message_body:
+                        # Only create a new outbound log if there is actual message content.
+                        # Evolution API fires from_me=True delivery/sync events with empty body
+                        # for incoming Business API messages — those must not create phantom logs.
                         auto_company_id = db.find_company_id_by_phone(number) or "manual"
                         db.save_evolution_log(
                             direction="outbound", company_id=auto_company_id,

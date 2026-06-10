@@ -255,7 +255,6 @@ def _suggestions(analytics: dict, industry: str) -> list[str]:
             f"- Tipo de atención: {analytics.get('category','?')}\n"
             f"- Calidad de respuesta (1-5): {analytics.get('response_quality', 0)}\n"
             f"- Tiempo de reacción: {analytics.get('reaction_time_min', 0)} minutos\n"
-            f"- Dentro de horario hábil: {analytics.get('business_hours')}\n"
             f"- Notas: {analytics.get('notes') or 'Sin notas'}\n\n"
             f"Genera exactamente 4 sugerencias de mejora concretas para su canal WhatsApp. "
             f"Una por línea, sin numeración ni viñetas, máximo 110 caracteres cada una, en español."
@@ -316,8 +315,6 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     cat_label, cat_color = CATEGORY_INFO.get(cat_key, ("Desconocido", C["muted"]))
     quality             = float(analytics.get("response_quality") or 0)
     reaction            = float(analytics.get("reaction_time_min") or 0)
-    biz_hours           = analytics.get("business_hours")
-
     def reaction_str(m):
         if m is None: return "—"
         m = float(m)
@@ -329,9 +326,6 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     sent_c = sum(1 for m in thread if m.get("direction") == "outbound")
     recv_c = sum(1 for m in thread if m.get("direction") == "inbound")
     read_c = sum(1 for m in thread if m.get("status") == "read")
-
-    hours_label = ("Horario habil" if biz_hours else ("Fuera de horario" if biz_hours is not None else "-"))
-    hours_color = C["humano"] if biz_hours else C["muted"]
 
     suggestions = [_safe(s) for s in (_suggestions(analytics, industry) or [])] or [
         "Activar respuestas automáticas fuera de horario para no perder prospectos.",
@@ -386,7 +380,6 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
             ("Categoría",           cat_label,              cat_color,   None),
             ("Calidad de respuesta","",                      cat_color,   QualityDots(quality, cat_color)),
             ("Tiempo de reacción",  reaction_str(reaction), C["primary"], None),
-            ("Horario",             hours_label,            hours_color,  None),
         ],
         width=PW,
         card_h=24 * mm,

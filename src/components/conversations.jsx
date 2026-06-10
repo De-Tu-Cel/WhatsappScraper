@@ -478,12 +478,16 @@ export default function Conversations() {
 
   // Messages for the active tab (normalized comparison)
   const visibleThread = useMemo(() => {
-    if (!activeNum) return thread
+    if (!activeNum || activeNum === 'all') return thread
     const target = norm(activeNum)
-    return thread.filter(m =>
-      norm(m.to_number || m.from_number || m.number) === target
-    )
-  }, [thread, activeNum])
+    return thread.filter(m => {
+      const msgNum = norm(m.to_number || m.from_number || m.number)
+      if (msgNum === target) return true
+      // Include inbound messages from bot/business numbers not in our contacts
+      if (m.direction === 'inbound' && !waNumbers.some(n => norm(n) === msgNum)) return true
+      return false
+    })
+  }, [thread, activeNum, waNumbers])
 
   return (
     <Box sx={{ display: 'flex', height: '100%', minHeight: 0, gap: 0, borderRadius: 2, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.07)' }}>

@@ -240,18 +240,30 @@ class MongoDBManager:
         })
         if contact:
             return contact["company_id"]
-        # 2. JID learned from a previous send (WhatsApp Business bot JIDs)
+        # 2. JID learned from a previous inbound (WhatsApp Business bot JIDs)
         jid_doc = self.db.jid_map.find_one({"jid": clean})
         if jid_doc:
             return jid_doc["company_id"]
-        # 3. Fallback: last outbound in the past hour
+        # 3. Strict fallback: only attribute if exactly one company was contacted
+        # in the past hour. Multiple companies = ambiguous, return None.
         from datetime import datetime, timedelta
-        recent = self.db.message_logs.find_one(
+        cutoff = datetime.now() - timedelta(hours=1)
+        recent = list(self.db.message_logs.find(
             {"direction": "outbound", "status": {"$ne": "failed"},
-             "created_at": {"$gte": datetime.now() - timedelta(hours=1)}},
-            sort=[("created_at", -1)],
-        )
-        return recent["company_id"] if recent else None
+             "created_at": {"$gte": cutoff}},
+            {"company_id": 1},
+        ))
+        unique = {r["company_id"] for r in recent if r.get("company_id")}
+        if len(unique) == 1:
+            company_id = unique.pop()
+            # Learn this JID so future replies always go to the right chat
+            self.db.jid_map.update_one(
+                {"jid": clean},
+                {"$set": {"company_id": company_id, "updated_at": datetime.now()}},
+                upsert=True,
+            )
+            return company_id
+        return None
 
     def replace_whatsapp_contacts(self, company_id: str, numbers: list):
         """Replace all WhatsApp contacts for a company with the given list."""

@@ -410,6 +410,15 @@ def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks):
                             or msg_obj.get("imageMessage", {}).get("caption")
                             or ("" if not msg_obj else "[media]"))
 
+                actual_jid = key.get("remoteJid", "").split("@")[0]
+                if actual_jid and actual_jid != number:
+                    from datetime import datetime as _dt
+                    db.db.jid_map.update_one(
+                        {"jid": actual_jid},
+                        {"$set": {"company_id": company_id, "updated_at": _dt.now()}},
+                        upsert=True,
+                    )
+
                 log_id = db.save_evolution_log(
                     direction  = "outbound" if from_me else "inbound",
                     company_id = company_id,

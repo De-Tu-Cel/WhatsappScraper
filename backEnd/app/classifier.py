@@ -89,11 +89,10 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
             max_tokens=150,
         )
         raw = chat_response.choices[0].message.content.strip()
-        # Strip markdown code fences if present
         if raw.startswith("```"):
-            raw = raw.split("```")[1]
+            raw = raw.split("```")[1].strip()
             if raw.startswith("json"):
-                raw = raw[4:]
+                raw = raw[4:].strip()
         result = json.loads(raw)
         category = result.get("category", "humano")
         is_ai = bool(result.get("is_ai", False)) if category == "bot" else False
@@ -105,7 +104,9 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
             "bot_quality": result.get("bot_quality"),
             "notes": result.get("notes", ""),
         }
-    except Exception:
+    except Exception as e:
+        import traceback, logging
+        logging.getLogger(__name__).error("classify_response failed: %s\n%s", e, traceback.format_exc())
         return {
             "category": "humano",
             "response_quality": 3,

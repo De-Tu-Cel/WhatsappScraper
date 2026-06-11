@@ -239,7 +239,6 @@ class MongoDBManager:
         })
         if contact:
             return contact["company_id"]
-        # Fallback: last company we sent a message to in the past hour
         from datetime import datetime, timedelta
         recent = self.db.message_logs.find_one(
             {"direction": "outbound", "status": {"$ne": "failed"},

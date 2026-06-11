@@ -1,5 +1,6 @@
 'use client'
 import { useState, useRef } from 'react'
+import * as XLSX from 'xlsx'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import LinearProgress from '@mui/material/LinearProgress'
@@ -125,18 +126,33 @@ export default function CsvImporter() {
   const msgRef = useRef(null)
 
   function parseFile(file) {
-    if (!file || !file.name.endsWith('.csv')) return
+    if (!file) return
+    const name = file.name.toLowerCase()
+    const isExcel = name.endsWith('.xlsx') || name.endsWith('.xls')
+    const isCsv   = name.endsWith('.csv')
+    if (!isExcel && !isCsv) return
     setFileName(file.name)
     const reader = new FileReader()
     reader.onload = ev => {
-      const lines = ev.target.result.split('\n').filter(Boolean)
-      const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''))
-      const rows = lines.slice(1).map(line =>
-        Object.fromEntries(line.split(',').map((v, i) => [headers[i], v.trim().replace(/"/g, '')]))
-      )
+      let headers, rows
+      if (isExcel) {
+        const wb = XLSX.read(ev.target.result, { type: 'array' })
+        const ws = wb.Sheets[wb.SheetNames[0]]
+        const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+        if (!data.length) { setUrlCol(''); setAllUrls([]); setPreview([]); return }
+        headers = data[0].map(h => String(h).trim())
+        rows = data.slice(1).map(row =>
+          Object.fromEntries(headers.map((h, i) => [h, String(row[i] ?? '').trim()]))
+        )
+      } else {
+        const lines = ev.target.result.split('\n').filter(Boolean)
+        headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''))
+        rows = lines.slice(1).map(line =>
+          Object.fromEntries(line.split(',').map((v, i) => [headers[i], v.trim().replace(/"/g, '')]))
+        )
+      }
       const detected = headers.find(h => rows.some(r => URL_REGEX.test(r[h]))) || ''
       const urls = detected ? rows.map(r => r[detected]).filter(u => URL_REGEX.test(u)) : []
-      // Preview: up to 3 columns with sample values
       const cols = headers.slice(0, 4).map(h => ({ col: h, sample: rows.slice(0, 1).map(r => r[h]).join('') }))
       setUrlCol(detected)
       setAllUrls(urls)
@@ -145,7 +161,8 @@ export default function CsvImporter() {
       setDone(false)
       setPage(0)
     }
-    reader.readAsText(file)
+    if (isExcel) reader.readAsArrayBuffer(file)
+    else reader.readAsText(file)
   }
 
   function handleDrop(e) { e.preventDefault(); setDragging(false); parseFile(e.dataTransfer.files?.[0]) }
@@ -351,7 +368,11 @@ export default function CsvImporter() {
               <Box component="span" sx={{ color: 'var(--accent, #60a5fa)', fontWeight: 500 }}>{t.csv.select}</Box>
             </Typography>
           </Box>
-          <Chip label=".csv" size="small" sx={{ bgcolor: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.08)', fontSize: '0.7rem', height: 20 }} />
+          <Box sx={{ display: 'flex', gap: 0.5 }}>
+            {['.csv', '.xlsx', '.xls'].map(ext => (
+              <Chip key={ext} label={ext} size="small" sx={{ bgcolor: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.08)', fontSize: '0.7rem', height: 20 }} />
+            ))}
+          </Box>
           <Button
             size="small"
             startIcon={<DownloadIcon sx={{ fontSize: 14 }} />}
@@ -360,7 +381,7 @@ export default function CsvImporter() {
           >
             {t.csv.template}
           </Button>
-          <input ref={inputRef} type="file" accept=".csv" hidden onChange={handleInputChange} />
+          <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" hidden onChange={handleInputChange} />
         </Box>
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>

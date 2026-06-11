@@ -7,7 +7,7 @@ import { UserProvider } from '../context/UserContext'
 import { LangProvider } from '../context/LangContext'
 
 export const metadata = {
-  title: 'Lector Comercial',
+  title: 'Mystery Shopper',
   description: 'Herramienta de prospección y análisis de empresas',
 }
 
@@ -57,6 +57,7 @@ const THEME_SCRIPT = `(function(){
       crepusculo:{bg:'#0b0b1e',sb:'#121228',sf:'#181835',cd:'#1e1e40'},
       canela:{bg:'#130a04',sb:'#1f1207',sf:'#261609',cd:'#2e1a0b'},
       detucel:{bg:'#071a10',sb:'#0a1628',sf:'#0d2216',cd:'#102a1e'},
+      diurna:{bg:'#15100a',sb:'#1e170b',sf:'#25200d',cd:'#2d2610'},
     };
 
     function hexToRgb(h){

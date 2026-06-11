@@ -90,6 +90,7 @@ export const THEMES = [
   { label: 'Olivo',      value: 'olivo',     bg: '#0b0e05', sidebar: '#131808', surface: '#18200b', card: '#1d270d', preview: ['#0b0e05','#131808','#1d270d'] },
   { label: 'Crepúsculo', value: 'crepusculo',bg: '#0b0b1e', sidebar: '#121228', surface: '#181835', card: '#1e1e40', preview: ['#0b0b1e','#121228','#1e1e40'] },
   { label: 'Canela',     value: 'canela',    bg: '#130a04', sidebar: '#1f1207', surface: '#261609', card: '#2e1a0b', preview: ['#130a04','#1f1207','#2e1a0b'] },
+  { label: 'Diurna',    value: 'diurna',    bg: '#15100a', sidebar: '#1e170b', surface: '#25200d', card: '#2d2610', preview: ['#15100a','#1e170b','#2d2610'] },
 ]
 
 const LANGS = [

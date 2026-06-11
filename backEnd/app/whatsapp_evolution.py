@@ -70,7 +70,7 @@ def _clean_number(number: str) -> str:
     """Normalize to international format without + or spaces."""
     digits = "".join(filter(str.isdigit, number))
     if len(digits) == 10:
-        digits = "521" + digits   # local → Mexican mobile
-    elif len(digits) == 12 and digits.startswith("52"):
-        digits = "521" + digits[2:]  # 52XXXXXXXXXX → 521XXXXXXXXXX
+        digits = "52" + digits    # local 10-digit → Mexican
+    elif len(digits) == 13 and digits.startswith("521"):
+        digits = "52" + digits[3:]  # old +521 format → current +52
     return digits

@@ -204,6 +204,19 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 log_doc["sent_by_username"] = sender.get("username", "")
                 log_doc["sent_by_name"]     = sender.get("display_name", "")
         log_id = db.insert_message_log(log_doc)
+
+        # Learn the real WhatsApp JID returned by Evolution so inbound bot
+        # replies from that JID are attributed to the correct company.
+        remote_jid = evo_json.get("key", {}).get("remoteJid", "")
+        jid_num = remote_jid.split("@")[0] if remote_jid else ""
+        if jid_num and status == "sent":
+            from datetime import datetime as _dt
+            db.db.jid_map.update_one(
+                {"jid": jid_num},
+                {"$set": {"company_id": req.company_id, "updated_at": _dt.now()}},
+                upsert=True,
+            )
+
         return {"ok": True, "status": status, "log_id": log_id, "message_id": message_id}
     except HTTPException:
         raise

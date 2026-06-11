@@ -233,12 +233,18 @@ class MongoDBManager:
 
     def find_company_id_by_phone(self, phone_number):
         clean = "".join(filter(str.isdigit, phone_number))
+        # 1. Registered contact (exact last-10-digit match)
         contact = self.db.contacts.find_one({
             "type": "whatsapp",
             "value": {"$regex": clean[-10:], "$options": "i"},
         })
         if contact:
             return contact["company_id"]
+        # 2. JID learned from a previous send (WhatsApp Business bot JIDs)
+        jid_doc = self.db.jid_map.find_one({"jid": clean})
+        if jid_doc:
+            return jid_doc["company_id"]
+        # 3. Fallback: last outbound in the past hour
         from datetime import datetime, timedelta
         recent = self.db.message_logs.find_one(
             {"direction": "outbound", "status": {"$ne": "failed"},

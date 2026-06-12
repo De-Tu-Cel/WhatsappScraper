@@ -669,11 +669,13 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
             updates = data if isinstance(data, list) else [data]
             for upd in updates:
                 key = upd.get("key", {})
-                message_id = key.get("id", "")
-                remote_jid = key.get("remoteJid", "")
-                status_raw = upd.get("update", {}).get("status", "")
-                status = STATUS_MAP.get(status_raw, status_raw.lower())
-                # Learn @lid mapping from delivery ACK — outbound messages use real @lid in key
+                # Delivery ACK uses flat structure {remoteJid, id, status}
+                # Other updates use nested {key: {remoteJid, id}, update: {status}}
+                message_id = key.get("id") or upd.get("id", "")
+                remote_jid = key.get("remoteJid") or upd.get("remoteJid", "")
+                status_raw = upd.get("update", {}).get("status") or upd.get("status", "")
+                status = STATUS_MAP.get(status_raw, status_raw.lower() if status_raw else "")
+                # Learn @lid mapping from delivery ACK
                 if remote_jid.endswith("@lid") and message_id:
                     jid_num = remote_jid.split("@")[0]
                     if not db.db.jid_map.find_one({"jid": jid_num}):

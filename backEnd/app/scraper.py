@@ -819,9 +819,16 @@ class WebsiteScraper:
         # 2. Title tag (limpiando separadores)
         if soup.title and soup.title.string:
             title = soup.title.string.strip()
+            domain_hint = urlparse(url).netloc.replace("www.", "").split(".")[0].lower()
             for sep in ["|", "-", "–", "—", ":", "•"]:
                 if sep in title:
-                    return title.split(sep)[0].strip()
+                    parts = [p.strip() for p in title.split(sep) if p.strip()]
+                    # Prefer the part that matches the domain (brand name)
+                    for p in parts:
+                        if domain_hint in p.lower():
+                            return p
+                    # Otherwise take the longest part (more descriptive)
+                    return max(parts, key=len)
             return title
         
         # 3. H1 principal

@@ -608,7 +608,7 @@ export default function Conversations() {
                   {waNumbers.map(num => {
                     const isActive  = activeNum === num || waNumbers.length === 1
                     const stats     = numStats[num] || { sent: 0, received: 0 }
-                    const replied   = stats.received > 0
+                    const replied   = stats.sent > 0 || stats.received > 0
                     const formatted = num.replace(/\D/g, '').slice(-10)
                       .replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')
                     return (

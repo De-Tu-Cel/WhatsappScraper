@@ -1384,7 +1384,7 @@ export default function DatabaseViewer({ isActive }) {
                         <Tooltip title={row.has_whatsapp ? t.db.sendMsg : t.db.noWaReg}>
                           <span>
                             <IconButton size="small" disabled={!row.has_whatsapp} onClick={(e) => { e.stopPropagation(); handleOpenMsg(row) }}
-                              sx={{ color: row.has_whatsapp ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.1)', '&:hover': { color: '#4ade80', bgcolor: 'rgba(74,222,128,0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>
+                              sx={{ color: row.contacted ? '#4ade80' : row.has_whatsapp ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.1)', '&:hover': { color: '#4ade80', bgcolor: 'rgba(74,222,128,0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>
                               <SendIcon sx={{ fontSize: 15 }} />
                             </IconButton>
                           </span>

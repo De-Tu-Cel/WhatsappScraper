@@ -150,6 +150,17 @@ class MongoDBManager:
             .skip((page - 1) * page_size)
             .limit(page_size)
         )
+        # Mark which companies have been contacted (any outbound message)
+        if companies:
+            ids = [str(c["_id"]) for c in companies]
+            contacted_set = {
+                doc["company_id"] for doc in self.db.message_logs.find(
+                    {"company_id": {"$in": ids}, "direction": "outbound"},
+                    {"company_id": 1},
+                )
+            }
+            for c in companies:
+                c["contacted"] = str(c["_id"]) in contacted_set
         return {"total": total, "companies": companies}
 
     def delete_companies(self, company_ids):

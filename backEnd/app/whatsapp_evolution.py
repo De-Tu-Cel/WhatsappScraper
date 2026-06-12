@@ -72,13 +72,19 @@ class EvolutionClient:
         try:
             resp = requests.post(url, json={"numbers": [clean]}, headers=self.headers, timeout=10)
             data = resp.json()
+            print(f"[getJID] number={clean} response={str(data)[:300]}")
             if isinstance(data, list) and data:
                 item = data[0]
-                # jid field may contain @lid or @s.whatsapp.net
+                # Prefer @lid JID if present in any field
+                for field in ("jid", "remoteJid", "lid", "businessJid"):
+                    val = item.get(field, "")
+                    if val and "@lid" in val:
+                        return val.split("@")[0]
+                # Fall back to any JID
                 jid = item.get("jid") or item.get("remoteJid") or ""
                 return jid.split("@")[0] if jid else ""
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[getJID] error: {e}")
         return ""
 
     def fetch_messages_by_jid(self, jid: str, limit: int = 100) -> list:

@@ -670,11 +670,49 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
             for upd in updates:
                 key = upd.get("key", {})
                 message_id = key.get("id", "")
+                remote_jid = key.get("remoteJid", "")
                 status_raw = upd.get("update", {}).get("status", "")
                 status = STATUS_MAP.get(status_raw, status_raw.lower())
+                # Learn @lid mapping from delivery ACK — outbound messages use real @lid in key
+                if remote_jid.endswith("@lid") and message_id:
+                    jid_num = remote_jid.split("@")[0]
+                    if not db.db.jid_map.find_one({"jid": jid_num}):
+                        log = db.db.message_logs.find_one(
+                            {"message_id": message_id, "direction": "outbound"}
+                        )
+                        if log and log.get("company_id"):
+                            from datetime import datetime as _dt
+                            db.db.jid_map.update_one(
+                                {"jid": jid_num},
+                                {"$set": {"company_id": log["company_id"], "updated_at": _dt.now()}},
+                                upsert=True,
+                            )
+                            print(f"[JID] learned from delivery ACK: {jid_num} → {log['company_id']}")
                 if message_id and status:
                     db.update_evolution_message_status(message_id, status)
             return {"ok": True, "action": "status_updated"}
+
+        elif event == "send.message":
+            # Log full data to understand what's available; also try to learn @lid
+            print(f"[Webhook] send.message data={str(data)[:500]}")
+            if isinstance(data, dict):
+                key = data.get("key", {})
+                remote_jid = key.get("remoteJid", "")
+                message_id = key.get("id", "")
+                if remote_jid.endswith("@lid") and message_id:
+                    jid_num = remote_jid.split("@")[0]
+                    log = db.db.message_logs.find_one(
+                        {"message_id": message_id, "direction": "outbound"}
+                    )
+                    if log and log.get("company_id"):
+                        from datetime import datetime as _dt
+                        db.db.jid_map.update_one(
+                            {"jid": jid_num},
+                            {"$set": {"company_id": log["company_id"], "updated_at": _dt.now()}},
+                            upsert=True,
+                        )
+                        print(f"[JID] learned from send.message: {jid_num} → {log['company_id']}")
+            return {"ok": True, "action": "send_logged"}
 
         return {"ok": True, "action": "ignored", "event": event}
 

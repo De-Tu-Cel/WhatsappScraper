@@ -65,6 +65,40 @@ class EvolutionClient:
             pass
         return False
 
+    def get_jid(self, number: str) -> str:
+        """Return the real WhatsApp JID (may be @lid for Business API) for a number."""
+        clean = _clean_number(number)
+        url = f"{self.base_url}/chat/whatsappNumbers/{self.instance}"
+        try:
+            resp = requests.post(url, json={"numbers": [clean]}, headers=self.headers, timeout=10)
+            data = resp.json()
+            if isinstance(data, list) and data:
+                item = data[0]
+                # jid field may contain @lid or @s.whatsapp.net
+                jid = item.get("jid") or item.get("remoteJid") or ""
+                return jid.split("@")[0] if jid else ""
+        except Exception:
+            pass
+        return ""
+
+    def fetch_messages_by_jid(self, jid: str, limit: int = 100) -> list:
+        """Fetch messages using an explicit JID string (supports @lid format)."""
+        url = f"{self.base_url}/chat/findMessages/{self.instance}"
+        try:
+            resp = requests.post(url, json={
+                "where": {"key": {"remoteJid": jid}},
+                "limit": limit,
+            }, headers=self.headers, timeout=15)
+            data = resp.json()
+            msgs = data.get("messages", data)
+            if isinstance(msgs, dict):
+                return msgs.get("records", [])
+            if isinstance(msgs, list):
+                return msgs
+        except Exception:
+            pass
+        return []
+
 
 def _clean_number(number: str) -> str:
     """Normalize to international format without + or spaces."""

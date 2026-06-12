@@ -185,11 +185,36 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         if not instance:
             raise HTTPException(status_code=400, detail="Sin instancia de WhatsApp configurada")
         evo = EvolutionClient(EVOLUTION_API_URL, EVOLUTION_API_KEY, instance)
+
+        # Resolve the real WhatsApp JID (may be @lid for Business API numbers)
+        # BEFORE sending so the mapping is ready when the bot replies instantly.
+        from datetime import datetime as _dt
+        real_jid_num = evo.get_jid(req.to_number)
+        if real_jid_num:
+            db.db.jid_map.update_one(
+                {"jid": real_jid_num},
+                {"$set": {"company_id": req.company_id, "updated_at": _dt.now()}},
+                upsert=True,
+            )
+            print(f"[SendMsg] jid_learned={real_jid_num} → {req.company_id}")
+
         evo_result = evo.send_text(req.to_number, req.message)
         print(f"[SendMsg] to={req.to_number} status_code={evo_result.get('status_code')} raw={evo_result.get('raw_text','')[:300]}")
         evo_json = evo_result.get("response_json", {})
         message_id = evo_json.get("key", {}).get("id") or evo_json.get("id")
         status = "sent" if evo_result.get("status_code") in (200, 201) else "failed"
+
+        # Also try to learn JID from send response (fallback if get_jid failed)
+        if not real_jid_num and status == "sent":
+            remote_jid = evo_json.get("key", {}).get("remoteJid", "")
+            jid_num = remote_jid.split("@")[0] if remote_jid else ""
+            if jid_num:
+                db.db.jid_map.update_one(
+                    {"jid": jid_num},
+                    {"$set": {"company_id": req.company_id, "updated_at": _dt.now()}},
+                    upsert=True,
+                )
+
         log_doc = {
             "channel": "whatsapp", "platform": "evolution", "direction": "outbound",
             "company_id": req.company_id, "to_number": req.to_number,
@@ -204,18 +229,6 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 log_doc["sent_by_username"] = sender.get("username", "")
                 log_doc["sent_by_name"]     = sender.get("display_name", "")
         log_id = db.insert_message_log(log_doc)
-
-        # Learn the real WhatsApp JID returned by Evolution so inbound bot
-        # replies from that JID are attributed to the correct company.
-        remote_jid = evo_json.get("key", {}).get("remoteJid", "")
-        jid_num = remote_jid.split("@")[0] if remote_jid else ""
-        if jid_num and status == "sent":
-            from datetime import datetime as _dt
-            db.db.jid_map.update_one(
-                {"jid": jid_num},
-                {"$set": {"company_id": req.company_id, "updated_at": _dt.now()}},
-                upsert=True,
-            )
 
         return {"ok": True, "status": status, "log_id": log_id, "message_id": message_id}
     except HTTPException:
@@ -384,7 +397,16 @@ def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks):
             )
             cutoff = first_outbound["created_at"] if first_outbound else None
 
+            # Fetch via @s.whatsapp.net, then also via @lid if known in jid_map
             messages = evo.fetch_messages(number, limit=100)
+            lid_entry = db.db.jid_map.find_one({"company_id": company_id})
+            if lid_entry:
+                lid_jid = f"{lid_entry['jid']}@lid"
+                lid_msgs = evo.fetch_messages_by_jid(lid_jid, limit=100)
+                seen_ids = {m.get("key", {}).get("id") for m in messages}
+                for lm in lid_msgs:
+                    if lm.get("key", {}).get("id") not in seen_ids:
+                        messages.append(lm)
             for m in messages:
                 key      = m.get("key", {})
                 msg_id   = key.get("id", "")

@@ -475,7 +475,7 @@ export default function CsvImporter() {
                 : <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />
               }
               <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
-                {paused ? t.csv.paused : t.csv.processing} {results.length} {t.csv.of} {allUrls.length}
+                {paused ? t.csv.paused : t.csv.processing} {results.length + 1} {t.csv.of} {allUrls.length}
               </Typography>
             </Box>
             <Typography sx={{ color: paused ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>

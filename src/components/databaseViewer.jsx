@@ -164,21 +164,40 @@ function renderTemplate(template, row) {
 }
 
 // ─── Toolbar ──────────────────────────────────────────────────────────────────
-function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescraping, selectedWithWA, onRefresh, onToggleFilter, filterOpen }) {
+function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescraping, selectedWithWA, onRefresh, onToggleFilter, filterOpen, total }) {
   const { t } = useLang()
   return (
     <Toolbar sx={{
       pl: { sm: 2 }, pr: { xs: 1, sm: 1 },
       borderRadius: '12px 12px 0 0', position: 'relative', zIndex: 1,
-      background: 'linear-gradient(135deg, rgba(var(--accent-rgb, 59,130,246), 0.1) 0%, rgba(var(--accent-rgb, 59,130,246), 0.04) 50%, transparent 100%)',
-      minHeight: '56px !important',
+      background: 'linear-gradient(135deg, rgba(var(--accent-rgb, 59,130,246), 0.12) 0%, rgba(var(--accent-rgb, 59,130,246), 0.04) 60%, transparent 100%)',
+      minHeight: '60px !important',
+      borderBottom: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.15)',
+      '&::after': {
+        content: '""', position: 'absolute', bottom: 0, left: 16, right: 16, height: '1px',
+        background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.4) 40%, rgba(var(--accent-rgb,59,130,246),0.4) 60%, transparent)',
+      },
     }}>
-      {/* Left: title always visible + selection chip */}
+      {/* Left: icon + title + stats */}
       <Box sx={{ flex: '1 1 100%', display: 'flex', alignItems: 'center', gap: 1.5 }}>
-        <StorageIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 20, flexShrink: 0 }} />
-        <Typography variant="h6" sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', whiteSpace: 'nowrap' }}>
-          {t.db.heading}
-        </Typography>
+        <Box sx={{
+          width: 32, height: 32, borderRadius: '9px', flexShrink: 0,
+          background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.25) 0%, rgba(var(--accent-rgb,59,130,246),0.1) 100%)',
+          border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <StorageIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 16 }} />
+        </Box>
+        <Box>
+          <Typography variant="h6" sx={{ color: 'white', fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2 }}>
+            {t.db.heading}
+          </Typography>
+          {total > 0 && (
+            <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', lineHeight: 1, mt: 0.2 }}>
+              {total.toLocaleString()} {total === 1 ? t.db.companySingular : t.db.companySingular + 's'} registradas
+            </Typography>
+          )}
+        </Box>
         {numSelected > 0 && (
           <Chip
             label={`${numSelected} ${numSelected !== 1 ? t.db.selected : t.db.selectedSingle}`}
@@ -481,30 +500,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
             <TextField label="Industria" size="small" fullWidth sx={FIELD_SX} value={form.industry || ''} onChange={(e) => set('industry', e.target.value)} />
             <TextField label="Ciudad"    size="small" fullWidth sx={FIELD_SX} value={form.city     || ''} onChange={(e) => set('city',     e.target.value)} />
           </Box>
-          <Box sx={{ display: 'flex', gap: 1.5 }}>
-            <TextField label="Estado / Región" size="small" fullWidth sx={FIELD_SX} value={form.state || ''} onChange={(e) => set('state', e.target.value)} />
-            <Box sx={{ flex: 1 }}>
-              <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', mb: 0.5 }}>{t.db.contactStage}</Typography>
-              <Select size="small" fullWidth value={form.status || ''} onChange={(e) => set('status', e.target.value)}
-                displayEmpty
-                sx={{ color: 'rgba(255,255,255,0.85)', fontSize: '0.85rem',
-                  '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.1)' },
-                  '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.22)' },
-                  '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#3b82f6' },
-                  '& .MuiSvgIcon-root': { color: 'rgba(255,255,255,0.3)' },
-                }}
-                MenuProps={{ PaperProps: { sx: { bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.08)' } } }}
-              >
-                <MenuItem value="" sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem' }}>{t.db.stageNone}</MenuItem>
-                <MenuItem value="pendiente"    sx={{ color: 'rgba(255,255,255,0.8)', fontSize: '0.82rem' }}>{t.db.stagePending}</MenuItem>
-                <MenuItem value="contactado"   sx={{ color: '#60a5fa', fontSize: '0.82rem' }}>{t.db.stageContacted}</MenuItem>
-                <MenuItem value="interesado"   sx={{ color: '#4ade80', fontSize: '0.82rem' }}>{t.db.stageInterested}</MenuItem>
-                <MenuItem value="seguimiento"  sx={{ color: '#fbbf24', fontSize: '0.82rem' }}>{t.db.stageFollowUp}</MenuItem>
-                <MenuItem value="no_interesado"sx={{ color: '#f87171', fontSize: '0.82rem' }}>{t.db.stageNotInt}</MenuItem>
-                <MenuItem value="cliente"      sx={{ color: '#a78bfa', fontSize: '0.82rem' }}>{t.db.stageClient}</MenuItem>
-              </Select>
-            </Box>
-          </Box>
+          <TextField label="Estado / Región" size="small" fullWidth sx={FIELD_SX} value={form.state || ''} onChange={(e) => set('state', e.target.value)} />
         </Box>
 
         <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', mb: 2.5 }} />
@@ -1238,6 +1234,7 @@ export default function DatabaseViewer({ isActive }) {
           onRefresh={fetchData}
           onToggleFilter={() => setFilterOpen((o) => !o)}
           filterOpen={filterOpen}
+          total={total}
         />
 
         <Box sx={{ borderTop: '1px solid rgba(255,255,255,0.07)', position: 'relative', zIndex: 1 }} />
@@ -1366,11 +1363,11 @@ export default function DatabaseViewer({ isActive }) {
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>{display(row.city)}</TableCell>
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>
                         {row.has_whatsapp ? (
-                          <Chip icon={<WhatsAppIcon sx={{ fontSize: '13px !important' }} />} label="Sí" size="small"
-                            sx={{ bgcolor: 'rgba(34,197,94,0.12)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', height: 20, fontSize: '0.7rem', '& .MuiChip-icon': { color: '#4ade80' } }} />
+                          <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label="Sí" size="small"
+                            sx={{ bgcolor: 'rgba(34,197,94,0.16)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.4)', height: 22, fontSize: '0.7rem', fontWeight: 700, px: 0.3, boxShadow: '0 0 8px rgba(34,197,94,0.2)', '& .MuiChip-icon': { color: '#22c55e' } }} />
                         ) : (
                           <Chip label="No" size="small"
-                            sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)', height: 20, fontSize: '0.7rem' }} />
+                            sx={{ bgcolor: 'rgba(239,68,68,0.08)', color: 'rgba(248,113,113,0.55)', border: '1px solid rgba(239,68,68,0.18)', height: 22, fontSize: '0.7rem', fontWeight: 600, px: 0.3 }} />
                         )}
                       </TableCell>
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>{formatDate(row.created_at)}</TableCell>

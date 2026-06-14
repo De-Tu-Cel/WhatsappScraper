@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import TextField from '@mui/material/TextField'
@@ -12,7 +12,7 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import LockResetIcon from '@mui/icons-material/LockReset'
 import { useUser } from '../context/UserContext'
-import { useLang } from '../context/LangContext'
+import { T } from '../lib/translations'
 
 /* ── Animaciones ─────────────────────────────────────────────────────────── */
 const gradientShift = keyframes`
@@ -36,6 +36,51 @@ const arrowBounce = keyframes`
   0%,100% { transform: translateX(0); }
   50%      { transform: translateX(5px); }
 `
+const glowPulse = keyframes`
+  0%,100% { opacity: 0.5; transform: translate(-50%,-50%) scale(1); }
+  50%      { opacity: 1;   transform: translate(-50%,-50%) scale(1.15); }
+`
+
+/* ── Partículas flotantes ─────────────────────────────────────────────────── */
+function Particles() {
+  const canvasRef = useRef(null)
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    let animId
+    const resize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight }
+    resize()
+    window.addEventListener('resize', resize)
+    const pts = Array.from({ length: 55 }, () => ({
+      x:  Math.random() * window.innerWidth,
+      y:  Math.random() * window.innerHeight,
+      r:  Math.random() * 1.4 + 0.4,
+      vx: (Math.random() - 0.5) * 0.28,
+      vy: (Math.random() - 0.5) * 0.28,
+      a:  Math.random() * 0.35 + 0.08,
+      hue: Math.random() < 0.7 ? '21,87,245' : '22,101,52',
+    }))
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      pts.forEach(p => {
+        p.x += p.vx; p.y += p.vy
+        if (p.x < 0) p.x = canvas.width
+        if (p.x > canvas.width)  p.x = 0
+        if (p.y < 0) p.y = canvas.height
+        if (p.y > canvas.height) p.y = 0
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2)
+        ctx.fillStyle = `rgba(${p.hue},${p.a})`
+        ctx.fill()
+      })
+      animId = requestAnimationFrame(draw)
+    }
+    draw()
+    return () => { cancelAnimationFrame(animId); window.removeEventListener('resize', resize) }
+  }, [])
+  return <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0 }} />
+}
 
 /* ── Estilos del input ───────────────────────────────────────────────────── */
 const INPUT_SX = {
@@ -45,10 +90,10 @@ const INPUT_SX = {
     borderRadius: '12px',
     transition: 'all 0.2s',
     '& fieldset': { borderColor: 'rgba(255,255,255,0.1)', borderRadius: '12px', transition: 'all 0.2s' },
-    '&:hover fieldset': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' },
+    '&:hover fieldset': { borderColor: 'rgba(21,87,245,0.45)' },
     '&.Mui-focused': {
-      bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.05)',
-      '& fieldset': { borderColor: 'var(--accent,#3b82f6)', borderWidth: 1.5 },
+      bgcolor: 'rgba(21,87,245,0.06)',
+      '& fieldset': { borderColor: '#1557f5', borderWidth: 1.5 },
     },
   },
   '& input': { color: 'white', py: 1.3 },
@@ -75,12 +120,11 @@ function PinField({ value, onChange, placeholder = '••••••', label, 
       <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{label}</Typography>
       <TextField fullWidth size="small" type={show ? 'text' : 'password'}
         placeholder={placeholder} value={value} onChange={e => onChange(e.target.value)}
-        slotProps={{ htmlInput: { maxLength: 8, inputMode: 'numeric' } }} autoComplete={autoComplete}
-        slotProps={{ input: { endAdornment: (
+        slotProps={{ htmlInput: { maxLength: 8, inputMode: 'numeric' }, input: { endAdornment: (
           <Box onClick={() => setShow(s => !s)} sx={{ cursor: 'pointer', color: 'rgba(255,255,255,0.25)', display: 'flex', alignItems: 'center', pr: 0.5, '&:hover': { color: 'rgba(255,255,255,0.6)' }, transition: 'color 0.15s' }}>
             {show ? <VisibilityOffIcon sx={{ fontSize: 18 }} /> : <VisibilityIcon sx={{ fontSize: 18 }} />}
           </Box>
-        )}}}
+        )}}} autoComplete={autoComplete}
         sx={INPUT_SX} />
     </Box>
   )
@@ -155,7 +199,7 @@ function ErrorBox({ msg, success }) {
 
 export default function LoginScreen({ hasUsers }) {
   const { login, register } = useUser()
-  const { t } = useLang()
+  const t = T.es
   const [mode,         setMode]         = useState(hasUsers ? 'login' : 'register')
   const [username,     setUsername]     = useState('')
   const [displayName,  setDisplayName]  = useState('')
@@ -279,40 +323,41 @@ export default function LoginScreen({ hasUsers }) {
         `,
       }} />
 
-      {/* Brillo central muy sutil detrás de la card */}
+      {/* Partículas flotantes */}
+      <Particles />
+
+      {/* Glow pulsante detrás del card */}
       <Box sx={{
         position: 'absolute', top: '50%', left: '50%',
-        transform: 'translate(-50%,-50%)',
-        width: 500, height: 400,
-        background: 'radial-gradient(ellipse, rgba(21,87,245,0.07) 0%, transparent 65%)',
-        pointerEvents: 'none',
+        width: 620, height: 520, pointerEvents: 'none',
+        background: 'radial-gradient(ellipse, rgba(21,87,245,0.18) 0%, rgba(22,101,52,0.09) 45%, transparent 70%)',
+        animation: `${glowPulse} 4s ease-in-out infinite`,
       }} />
 
       {/* Grid de puntos sutil */}
       <Box sx={{
         position: 'absolute', inset: 0, pointerEvents: 'none',
-        backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)',
+        backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.035) 1px, transparent 1px)',
         backgroundSize: '36px 36px',
         maskImage: 'radial-gradient(ellipse 70% 70% at 50% 50%, black 0%, transparent 100%)',
       }} />
 
       {/* Card principal */}
       <Box sx={{
-        position: 'relative', zIndex: 1,
-        width: '100%', maxWidth: 400, mx: 2,
-        opacity: mounted ? 1 : 0,
-        transform: mounted ? 'translateY(0)' : 'translateY(30px)',
-        transition: 'opacity 0.5s ease, transform 0.5s ease',
-      }}>
+          position: 'relative', zIndex: 1,
+          width: '100%', maxWidth: 400, mx: 2,
+          opacity: mounted ? 1 : 0,
+          transform: mounted ? 'translateY(0)' : 'translateY(30px)',
+          transition: 'opacity 0.5s ease, transform 0.5s ease',
+        }}>
         <Box sx={{
-          bgcolor: 'rgba(8,18,34,0.9)',
-          backdropFilter: 'blur(24px)',
+          backdropFilter: 'blur(28px)',
           borderRadius: '24px', p: 4,
-          boxShadow: '0 32px 80px rgba(0,0,0,0.7)',
+          boxShadow: '0 32px 80px rgba(0,0,0,0.75)',
           border: '1px solid transparent',
           background: `
-            linear-gradient(rgba(8,18,34,0.92), rgba(8,18,34,0.92)) padding-box,
-            linear-gradient(135deg, rgba(21,87,245,0.4) 0%, rgba(255,255,255,0.06) 50%, rgba(14,45,30,0.3) 100%) border-box
+            linear-gradient(175deg, rgba(10,28,72,0.94) 0%, rgba(6,22,14,0.94) 100%) padding-box,
+            linear-gradient(135deg, rgba(21,87,245,0.5) 0%, rgba(255,255,255,0.05) 50%, rgba(22,101,52,0.4) 100%) border-box
           `,
         }}>
 
@@ -320,15 +365,15 @@ export default function LoginScreen({ hasUsers }) {
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 4 }}>
             <Box sx={{
               width: 72, height: 72, borderRadius: '20px', mb: 2.5,
-              background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.3) 0%, rgba(var(--accent-rgb,59,130,246),0.1) 100%)',
-              border: '1.5px solid rgba(var(--accent-rgb,59,130,246),0.4)',
+              background: 'linear-gradient(135deg, rgba(21,87,245,0.22) 0%, rgba(22,101,52,0.15) 100%)',
+              border: '1.5px solid rgba(21,87,245,0.45)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               animation: `${pulse} 3s ease-in-out infinite`,
             }}>
-              <StorefrontIcon sx={{ color: 'var(--accent,#60a5fa)', fontSize: 36 }} />
+              <StorefrontIcon sx={{ color: '#4f86f7', fontSize: 36 }} />
             </Box>
             <Typography sx={{ color: 'white', fontWeight: 800, fontSize: '1.5rem', letterSpacing: '-0.02em', lineHeight: 1.1 }}>
-              Lector Comercial
+              Mystery Shopper
             </Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem', mt: 0.5 }}>
               {mode === 'login'     ? t.login.welcome
@@ -341,8 +386,7 @@ export default function LoginScreen({ hasUsers }) {
           </Box>
 
           {/* Separador */}
-          <Box sx={{ height: '1px', background: 'linear-gradient(90deg, transparent, rgba(21,87,245,0.3), rgba(14,45,30,0.3), transparent)', mb: 3.5, mt: -1 }} />
-
+<Box sx={{ height: '1px', background: 'linear-gradient(90deg, transparent 0%, rgba(21,87,245,0.45) 50%, transparent 100%)', mb: 3.5, mt: -1 }} />
           {/* ── LOGIN ── */}
           {mode === 'login' && (
             <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, animation: `${fadeUp} 0.3s ease` }}>
@@ -515,7 +559,7 @@ export default function LoginScreen({ hasUsers }) {
 
         {/* Versión debajo del card */}
         <Typography sx={{ textAlign: 'center', color: 'rgba(255,255,255,0.15)', fontSize: '0.68rem', mt: 2 }}>
-          Lector Comercial · DeTuCel © 2026
+          Mystery Shopper · DeTuCel © 2026
         </Typography>
       </Box>
     </Box>

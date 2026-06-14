@@ -320,7 +320,9 @@ export default function Conversations() {
     try {
       const res = await fetch('/api/conversations')
       const data = await res.json()
-      setConvs(Array.isArray(data) ? data : [])
+      const list = Array.isArray(data) ? data : []
+      setConvs(list)
+      setSelected(prev => prev && list.find(c => c.company_id === prev.company_id) ? prev : null)
     } catch {
       setConvs([])
     } finally {
@@ -633,18 +635,6 @@ export default function Conversations() {
                         }}>
                           {formatted}
                         </Typography>
-                        {replied && (
-                          <Box sx={{
-                            display: 'flex', alignItems: 'center', gap: 0.3,
-                            bgcolor: 'rgba(74,222,128,0.12)',
-                            border: '1px solid rgba(74,222,128,0.3)',
-                            borderRadius: 99, px: 0.7, py: 0.15,
-                          }}>
-                            <Typography sx={{ fontSize: '0.58rem', color: '#4ade80', fontWeight: 700, lineHeight: 1.5 }}>
-                              {stats.received} resp.
-                            </Typography>
-                          </Box>
-                        )}
                       </Box>
                     )
                   })}

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { isValidUrl } from '@/lib/validators'
+import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
@@ -223,7 +224,7 @@ export default function BatchProcessor() {
         const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
         let lastStatus = 'failed'
         for (const num of numbers) {
-          const res = await fetch('/api/send-message', {
+          const res = await authFetch('/api/send-message', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ company_id: row.company_id, to_number: num, message: message || msgText, website: row.url }),

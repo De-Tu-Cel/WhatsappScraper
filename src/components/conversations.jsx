@@ -312,6 +312,7 @@ export default function Conversations() {
   const [emojiGroup, setEmojiGroup]     = useState(0)
   const syncingRef                      = useRef(false)
   const lastSyncedRef                   = useRef(null)  // evita re-sync al mismo company
+  const currentCompanyRef               = useRef(null)  // evita race condition en fetchCompanyNumbers
   const { t } = useLang()
   const { user } = useUser()
   const [myConvsOnly, setMyConvsOnly] = useState(false)
@@ -372,16 +373,21 @@ export default function Conversations() {
   }, [])
 
   const fetchCompanyNumbers = useCallback(async (companyId) => {
+    currentCompanyRef.current = companyId
     try {
       const res = await fetch(`/api/companies/${companyId}`)
       const data = await res.json()
-      const numbers = (data.contacts || [])
-        .filter(c => c.type === 'whatsapp')
-        .map(c => c.value)
+      if (currentCompanyRef.current !== companyId) return
+      const numbers = [...new Set(
+        (data.contacts || [])
+          .filter(c => c.type === 'whatsapp')
+          .map(c => c.value)
+      )]
       setWaNumbers(numbers)
       setSelectedNums(numbers)
       setActiveNum(numbers.length > 0 ? numbers[0] : null)
     } catch {
+      if (currentCompanyRef.current !== companyId) return
       setWaNumbers([])
       setActiveNum(null)
     }

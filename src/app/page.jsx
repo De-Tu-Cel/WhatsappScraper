@@ -26,6 +26,7 @@ import AdminPanel from '../components/AdminPanel'
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
 import Settings, { loadSettings, applySettings } from '../components/Settings'
 import { useLang } from '../context/LangContext'
+import AppTour from '../components/AppTour'
 
 const NAV_KEYS = [
   { key: 'single',   icon: <LinkIcon />,              component: <SingleUrlProcessor /> },
@@ -90,6 +91,8 @@ export default function DashboardPage() {
 
   return (
     <Box sx={{ display: 'flex', height: '100vh', bgcolor: 'var(--bg, #080c14)', p: 1.5, gap: 1.5, boxSizing: 'border-box', position: 'relative' }}>
+
+      <AppTour username={user?.username} />
 
       {/* ── Inactivity warning banner ── */}
       {showWarning && (

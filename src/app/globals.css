@@ -1,0 +1,14 @@
+/* react-joyride beacon */
+.react-joyride__beacon {
+  outline: none !important;
+}
+.react-joyride__beacon > span {
+  background-color: #1557f5 !important;
+  background: #1557f5 !important;
+  border-color: #1557f5 !important;
+  border-radius: 50% !important;
+}
+.react-joyride__beacon > span:last-child {
+  background-color: rgba(21, 87, 245, 0.3) !important;
+  background: rgba(21, 87, 245, 0.3) !important;
+}

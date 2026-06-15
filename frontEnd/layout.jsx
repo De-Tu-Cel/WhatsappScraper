@@ -5,7 +5,7 @@ import '@fontsource/roboto/700.css'
 import ThemeRegistry from '../components/ThemeRegistry'
 
 export const metadata = {
-  title: 'Lector Comercial',
+  title: 'Mystery Shopper',
   description: 'Herramienta de prospección y análisis de empresas',
 }
 

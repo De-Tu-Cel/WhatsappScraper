@@ -31,7 +31,7 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
   const { user, logout } = useUser()
   const { t } = useLang()
   return (
-    <Box sx={{
+    <Box id="tour-sidebar" sx={{
       width: open ? SIDEBAR_FULL : SIDEBAR_MINI,
       transition: 'width 0.28s cubic-bezier(0.4,0,0.2,1)',
       flexShrink: 0,
@@ -75,8 +75,8 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
             <StorefrontIcon sx={{ color: C.accentText, fontSize: 20 }} />
           </Box>
           <Box>
-            <Typography sx={{ color: C.text, fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2 }}>Lector</Typography>
-            <Typography sx={{ color: C.accentText, fontWeight: 600, fontSize: '0.85rem', lineHeight: 1.2 }}>Comercial</Typography>
+            <Typography sx={{ color: C.text, fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2 }}>Mystery</Typography>
+            <Typography sx={{ color: C.accentText, fontWeight: 600, fontSize: '0.85rem', lineHeight: 1.2 }}>Shopper</Typography>
           </Box>
         </Box>
 
@@ -102,6 +102,7 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
           return (
             <Tooltip key={i} title={open ? '' : item.label} placement="right" arrow>
               <ListItemButton
+                id={`tour-nav-${item.key}`}
                 onClick={() => setActive(i)}
                 sx={{
                   borderRadius: 2, mb: 0.5, minHeight: 44,

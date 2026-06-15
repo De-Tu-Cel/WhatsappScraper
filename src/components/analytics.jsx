@@ -577,25 +577,26 @@ export default function Analytics() {
       </Box>
 
       {/* Table / states */}
-      <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto',
-        scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent',
-        '&::-webkit-scrollbar': { width: 4 },
-        '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 },
-      }}>
+      <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', pt: 6 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flex: 1, pt: 6 }}>
             <CircularProgress size={32} sx={{ color: 'var(--accent, #6366f1)' }} />
           </Box>
         ) : data.length === 0 ? (
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', pt: 6, gap: 1.5 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, pt: 6, gap: 1.5 }}>
             <BarChartIcon sx={{ fontSize: 48, color: 'rgba(255,255,255,0.08)' }} />
             <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.85rem', textAlign: 'center', maxWidth: 360 }}>
               Sin respuestas analizadas aún — las clasificaciones aparecerán aquí cuando las empresas respondan tus mensajes.
             </Typography>
           </Box>
         ) : (
-          <TableContainer>
-            <Table size="small" stickyHeader>
+          <TableContainer sx={{
+            flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'auto',
+            scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent',
+            '&::-webkit-scrollbar': { width: 4, height: 4 },
+            '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 },
+          }}>
+            <Table size="small" stickyHeader sx={{ minWidth: 800 }}>
               <TableHead>
                 <TableRow>
                   {/* Columna expand — sin label */}

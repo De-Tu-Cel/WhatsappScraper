@@ -12,6 +12,7 @@ import LockResetIcon from '@mui/icons-material/LockReset'
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteForever'
 import { useUser } from '../context/UserContext'
 import { useLang } from '../context/LangContext'
 
@@ -31,6 +32,9 @@ export default function AdminPanel() {
   const [newUser,     setNewUser]     = useState({ display_name: '', username: '', email: '', pin: '', pin2: '' })
   const [createMsg,   setCreateMsg]   = useState('')
   const [creating,    setCreating]    = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [deleting,     setDeleting]    = useState(false)
+  const [deleteMsg,    setDeleteMsg]   = useState('')
 
   const fetchUsers = useCallback(async () => {
     setLoading(true)
@@ -77,6 +81,19 @@ export default function AdminPanel() {
       else setMsg((await r.json()).detail || 'Error')
     } catch { setMsg('Error de red') }
     finally { setSaving(false) }
+  }
+
+  async function handleDeleteUser() {
+    setDeleting(true); setDeleteMsg('')
+    try {
+      const r = await fetch(`/api/auth/admin/user/${deleteTarget.id}`, {
+        method: 'DELETE',
+        headers: { 'x-user-token': token() },
+      })
+      if (r.ok) { setDeleteTarget(null); fetchUsers() }
+      else setDeleteMsg((await r.json()).detail || 'Error al eliminar')
+    } catch { setDeleteMsg('Error de red') }
+    finally { setDeleting(false) }
   }
 
   async function toggleRole(u) {
@@ -190,6 +207,21 @@ export default function AdminPanel() {
                   <LockResetIcon sx={{ fontSize: 16 }} />
                 </Box>
               </Tooltip>
+
+              {/* Eliminar usuario */}
+              {u.id !== user?.id && (
+                <Tooltip title="Eliminar usuario">
+                  <Box onClick={() => { setDeleteTarget(u); setDeleteMsg('') }} sx={{
+                    p: 0.6, borderRadius: 1.5, cursor: 'pointer',
+                    bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+                    display: 'flex', alignItems: 'center',
+                    '&:hover': { bgcolor: 'rgba(239,68,68,0.1)', borderColor: 'rgba(239,68,68,0.3)', color: '#f87171' },
+                    color: 'rgba(255,255,255,0.3)', transition: 'all 0.15s',
+                  }}>
+                    <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                  </Box>
+                </Tooltip>
+              )}
             </Box>
           </Box>
         ))}
@@ -217,6 +249,32 @@ export default function AdminPanel() {
             </Box>
             <Box onClick={handleResetPin} sx={{ px: 2, py: 0.7, borderRadius: 2, cursor: 'pointer', bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)', '&:hover': { bgcolor: 'rgba(251,191,36,0.2)' } }}>
               {saving ? <CircularProgress size={14} sx={{ color: '#facc15' }} /> : <Typography sx={{ color: '#facc15', fontWeight: 700, fontSize: '0.82rem' }}>Resetear PIN</Typography>}
+            </Box>
+          </Box>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal eliminar usuario */}
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth
+        slotProps={{ paper: { sx: { bgcolor: 'var(--card-bg,#161d2e)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 3 } } }}>
+        <DialogContent sx={{ bgcolor: 'var(--card-bg,#161d2e)', py: 3 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+            <DeleteOutlineIcon sx={{ color: '#f87171', fontSize: 20 }} />
+            <Typography sx={{ color: 'white', fontWeight: 700 }}>Eliminar usuario</Typography>
+          </Box>
+          <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.82rem', mb: 0.5 }}>
+            ¿Eliminar a <strong style={{ color: 'white' }}>{deleteTarget?.display_name}</strong> (@{deleteTarget?.username})?
+          </Typography>
+          <Typography sx={{ color: 'rgba(248,113,113,0.7)', fontSize: '0.75rem', mb: 2 }}>
+            Esta acción no se puede deshacer.
+          </Typography>
+          {deleteMsg && <Typography sx={{ fontSize: '0.75rem', color: '#f87171', mb: 1 }}>{deleteMsg}</Typography>}
+          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+            <Box onClick={() => setDeleteTarget(null)} sx={{ px: 2, py: 0.7, borderRadius: 2, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.1)', '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' } }}>
+              <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.82rem' }}>Cancelar</Typography>
+            </Box>
+            <Box onClick={handleDeleteUser} sx={{ px: 2, py: 0.7, borderRadius: 2, cursor: 'pointer', bgcolor: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)', '&:hover': { bgcolor: 'rgba(239,68,68,0.22)' } }}>
+              {deleting ? <CircularProgress size={14} sx={{ color: '#f87171' }} /> : <Typography sx={{ color: '#f87171', fontWeight: 700, fontSize: '0.82rem' }}>Eliminar</Typography>}
             </Box>
           </Box>
         </DialogContent>

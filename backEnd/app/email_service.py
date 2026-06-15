@@ -24,17 +24,31 @@ def send_reset_email(to_email: str, display_name: str, token: str) -> bool:
 
     <!-- Header -->
     <div style="background:linear-gradient(135deg,#0e2d5c 0%,#060f0c 100%);padding:28px 32px 24px;border-bottom:1px solid rgba(21,87,245,0.2)">
-      <div style="display:inline-flex;align-items:center;gap:12px">
-        <div style="width:44px;height:44px;border-radius:12px;background:rgba(21,87,245,0.12);border:1.5px solid rgba(21,87,245,0.45);display:inline-flex;align-items:flex-end;justify-content:center;gap:3px;padding:10px 11px 10px">
-            <div style="width:6px;height:10px;border-radius:2px 2px 1px 1px;background:rgba(21,87,245,0.55)"></div>
-            <div style="width:6px;height:15px;border-radius:2px 2px 1px 1px;background:rgba(21,87,245,0.8)"></div>
-            <div style="width:6px;height:21px;border-radius:2px 2px 1px 1px;background:#1557f5"></div>
-          </div>
-        <div>
-          <div style="color:#fff;font-size:17px;font-weight:800;letter-spacing:-0.02em;line-height:1.2">Lector Comercial</div>
-          <div style="color:rgba(255,255,255,0.35);font-size:12px;margin-top:2px">by DeTuCel</div>
-        </div>
-      </div>
+      <table cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td valign="middle" style="padding-right:16px">
+            <table cellpadding="0" cellspacing="0" border="0" style="width:56px;height:56px;border-radius:14px;background:rgba(21,87,245,0.12);border:1.5px solid rgba(21,87,245,0.45)">
+              <tr>
+                <td align="center" valign="bottom" style="padding:0 0 10px 0">
+                  <table cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td style="width:7px;height:12px;border-radius:2px 2px 1px 1px;background:rgba(21,87,245,0.55);vertical-align:bottom"></td>
+                      <td style="width:3px"></td>
+                      <td style="width:7px;height:18px;border-radius:2px 2px 1px 1px;background:rgba(21,87,245,0.8);vertical-align:bottom"></td>
+                      <td style="width:3px"></td>
+                      <td style="width:7px;height:26px;border-radius:2px 2px 1px 1px;background:#1557f5;vertical-align:bottom"></td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </td>
+          <td valign="middle">
+            <div style="color:#fff;font-size:18px;font-weight:800;letter-spacing:-0.02em;line-height:1.2">Mystery Shopper</div>
+            <div style="color:rgba(255,255,255,0.35);font-size:12px;margin-top:4px">by DeTuCel</div>
+          </td>
+        </tr>
+      </table>
     </div>
 
     <!-- Body -->
@@ -64,10 +78,12 @@ def send_reset_email(to_email: str, display_name: str, token: str) -> bool:
     </div>
 
     <!-- Footer -->
-    <div style="border-top:1px solid rgba(255,255,255,0.06);padding:16px 32px;display:flex;align-items:center;justify-content:space-between">
-      <span style="font-size:11px;color:rgba(255,255,255,0.2)">DeTuCel &copy; 2026</span>
-      <span style="font-size:11px;color:rgba(255,255,255,0.2)">noreply@detucel.com</span>
-    </div>
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-top:1px solid rgba(255,255,255,0.06)">
+      <tr>
+        <td style="padding:16px 32px;font-size:11px;color:rgba(255,255,255,0.2)">DeTuCel &copy; 2026</td>
+        <td style="padding:16px 32px;font-size:11px;color:rgba(255,255,255,0.2);text-align:right">noreply@detucel.com</td>
+      </tr>
+    </table>
 
   </div>
 
@@ -77,8 +93,8 @@ def send_reset_email(to_email: str, display_name: str, token: str) -> bool:
 
     try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = "Recupera tu PIN · Lector Comercial"
-        msg["From"]    = f"Lector Comercial <{smtp_user}>"
+        msg["Subject"] = "Recupera tu PIN · Mystery Shopper"
+        msg["From"]    = f"Mystery Shopper <{smtp_user}>"
         msg["To"]      = to_email
         msg.attach(MIMEText(html, "html", "utf-8"))
 

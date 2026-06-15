@@ -150,6 +150,20 @@ def api_admin_change_role(body: dict, x_user_token: Optional[str] = Header(None)
     )
     return {"ok": True}
 
+@router.delete("/auth/admin/user/{user_id}")
+def api_admin_delete_user(user_id: str, x_user_token: Optional[str] = Header(None)):
+    admin = _require_user(x_user_token)
+    if admin.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo admins")
+    if user_id == admin.get("id"):
+        raise HTTPException(status_code=400, detail="No puedes eliminarte a ti mismo")
+    from bson import ObjectId
+    db = MongoDBManager()
+    result = db.db.users.delete_one({"_id": ObjectId(user_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    return {"ok": True}
+
 @router.patch("/auth/evolution")
 def api_update_evolution(body: dict, x_user_token: Optional[str] = Header(None)):
     from app.auth import update_evolution

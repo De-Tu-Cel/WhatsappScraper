@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { MAX_WA_MSG } from '@/lib/validators'
 import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
+import { useUser } from '../context/UserContext'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -312,13 +313,15 @@ export default function Conversations() {
   const syncingRef                      = useRef(false)
   const lastSyncedRef                   = useRef(null)  // evita re-sync al mismo company
   const { t } = useLang()
+  const { user } = useUser()
+  const [myConvsOnly, setMyConvsOnly] = useState(false)
   const threadLenRef = useRef(0)
   const messagesBoxRef = useRef(null)
   const replyRef  = useRef(null)
 
   const fetchConvs = useCallback(async () => {
     try {
-      const res = await fetch('/api/conversations')
+      const res = await authFetch('/api/conversations')
       const data = await res.json()
       const list = Array.isArray(data) ? data : []
       setConvs(list)
@@ -459,10 +462,12 @@ export default function Conversations() {
     finally { setSending(false) }
   }
 
-  const filtered = convs.filter(c =>
-    (c.company_name || '').toLowerCase().includes(search.toLowerCase()) ||
-    (c.industry     || '').toLowerCase().includes(search.toLowerCase())
-  )
+  const filtered = convs.filter(c => {
+    if (myConvsOnly && c.sent_by_username !== user?.username) return false
+    const q = search.toLowerCase()
+    return (c.company_name || '').toLowerCase().includes(q) ||
+           (c.industry     || '').toLowerCase().includes(q)
+  })
 
   // Normalize: keep last 10 digits only for comparison
   const norm = n => (n || '').replace(/\D/g, '').slice(-10)
@@ -518,6 +523,25 @@ export default function Conversations() {
             onChange={e => setSearch(e.target.value)}
             slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 16, color: 'rgba(255,255,255,0.3)' }} /></InputAdornment> } }}
             sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.8rem', bgcolor: 'rgba(255,255,255,0.04)', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' } }, '& input': { color: 'white', py: 0.8 } }} />
+
+          {/* Toggle mis conversaciones / todas */}
+          <Box sx={{ display: 'flex', mt: 1.5, bgcolor: 'rgba(255,255,255,0.04)', borderRadius: 2, p: 0.4, gap: 0.4 }}>
+            {[
+              { label: 'Todas', value: false },
+              { label: 'Mis convs', value: true },
+            ].map(opt => (
+              <Box key={String(opt.value)} onClick={() => setMyConvsOnly(opt.value)}
+                sx={{
+                  flex: 1, textAlign: 'center', py: 0.55, borderRadius: 1.5, cursor: 'pointer',
+                  fontSize: '0.72rem', fontWeight: 600, transition: 'all 0.15s',
+                  bgcolor: myConvsOnly === opt.value ? 'var(--accent, #3b82f6)' : 'transparent',
+                  color: myConvsOnly === opt.value ? 'white' : 'rgba(255,255,255,0.4)',
+                  '&:hover': { color: myConvsOnly === opt.value ? 'white' : 'rgba(255,255,255,0.7)' },
+                }}>
+                {opt.label}
+              </Box>
+            ))}
+          </Box>
         </Box>
 
         {/* Lista */}

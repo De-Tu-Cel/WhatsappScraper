@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { authFetch } from '@/lib/api'
 const display = v => (!v || ['null','none','undefined','n/a'].includes(String(v).trim().toLowerCase())) ? '—' : v
 import { useLang } from '../context/LangContext'
 import { isValidUrl, urlValidationMsg, isValidWhatsAppNumber, waNumberValidationMsg } from '@/lib/validators'
@@ -764,7 +765,7 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify }) {
           .replace(/\{\{web\}\}/g,       row.website  || row.domain || '')
         let lastStatus = 'failed'
         for (const num of contacts) {
-          const r = await fetch('/api/send-message', {
+          const r = await authFetch('/api/send-message', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ company_id: row._id, to_number: num, message, website: row.website }),
@@ -1147,7 +1148,7 @@ export default function DatabaseViewer({ isActive }) {
     let lastErr = null
     for (const toNumber of nums) {
       try {
-        const res = await fetch('/api/send-message', {
+        const res = await authFetch('/api/send-message', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

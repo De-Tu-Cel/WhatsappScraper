@@ -242,7 +242,7 @@ class MongoDBManager:
 
         return {url: (clean_domain(url) in scraped_domains) for url in urls}
 
-    def find_company_id_by_phone(self, phone_number):
+    def find_company_id_by_phone(self, phone_number, allow_fallback=False):
         clean = "".join(filter(str.isdigit, phone_number))
         # 1. Registered contact (exact last-10-digit match)
         contact = self.db.contacts.find_one({
@@ -251,12 +251,14 @@ class MongoDBManager:
         })
         if contact:
             return contact["company_id"]
-        # 2. JID learned from a previous inbound (WhatsApp Business bot JIDs)
+        # 2. JID learned from a previous delivery ACK or inbound
         jid_doc = self.db.jid_map.find_one({"jid": clean})
         if jid_doc:
             return jid_doc["company_id"]
-        # 3. Strict fallback: only attribute if exactly one company was contacted
-        # in the past hour. Multiple companies = ambiguous, return None.
+        # 3. Fallback only for delivery ACKs (messages.update), never for real
+        # inbound messages — otherwise personal contacts get mis-attributed.
+        if not allow_fallback:
+            return None
         from datetime import datetime, timedelta
         cutoff = datetime.now() - timedelta(hours=1)
         recent = list(self.db.message_logs.find(
@@ -267,7 +269,6 @@ class MongoDBManager:
         unique = {r["company_id"] for r in recent if r.get("company_id")}
         if len(unique) == 1:
             company_id = unique.pop()
-            # Learn this JID so future replies always go to the right chat
             self.db.jid_map.update_one(
                 {"jid": clean},
                 {"$set": {"company_id": company_id, "updated_at": datetime.now()}},

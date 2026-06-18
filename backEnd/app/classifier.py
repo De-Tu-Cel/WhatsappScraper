@@ -1,10 +1,15 @@
 # classifier.py
 """Groq-based classifier for inbound WhatsApp responses."""
 import json
-from datetime import datetime
+import logging
+import threading
+import time
+from datetime import datetime, timedelta
 
 from app.config import GROQ_API_KEY
 from app.database import MongoDBManager
+
+log = logging.getLogger(__name__)
 
 _PROMPT_TEMPLATE = """\
 Eres un director comercial con 15 años de experiencia en ventas B2B por WhatsApp en Latinoamérica. \
@@ -116,27 +121,56 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
         }
 
 
+_AUTO_FOLLOWUP_MINUTES = 5   # wait up to 5 min for human after auto-response
+
+
 def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_at: datetime):
-    """Background task: classify the inbound message and persist the analysis."""
+    """Background task: classify inbound message. For auto-responses, waits for a possible
+    human follow-up message before finalising the classification."""
     try:
         from bson import ObjectId
         db = MongoDBManager()
 
-        # Get the inbound message to know which number replied
+        # Check if this message resolves a pending human-followup for the same company
+        pending = db.db.message_logs.find_one({
+            "company_id": company_id,
+            "direction": "inbound",
+            "analysis.pending_human_check": True,
+            "analysis.followup_deadline": {"$gte": received_at},
+        })
+        if pending:
+            # A human message arrived within the wait window — upgrade the prior auto analysis
+            prior_id = str(pending["_id"])
+            prior_outbound = db.get_last_outbound_for_company(
+                company_id,
+                before_dt=pending.get("created_at", received_at),
+            )
+            outbound_body = (prior_outbound or {}).get("message_body") or ""
+            reaction_time_min = None
+            if prior_outbound and prior_outbound.get("created_at"):
+                delta = received_at - prior_outbound["created_at"]
+                reaction_time_min = round(delta.total_seconds() / 60, 1)
+            upgraded = classify_response(inbound_body, outbound_body, reaction_time_min)
+            upgraded["reaction_time_min"] = reaction_time_min
+            upgraded["business_hours"] = is_business_hours(received_at)
+            upgraded["classified_at"] = datetime.now().isoformat()
+            upgraded["pending_human_check"] = False
+            upgraded["upgraded_from_auto"] = True
+            db.save_message_analysis(prior_id, upgraded)
+            # Also classify the current message normally (it will link to the same company)
+
+        # Standard classification for this message
         inbound_doc = db.db.message_logs.find_one({"_id": ObjectId(log_id)}, {"from_number": 1, "number": 1})
         from_number = (inbound_doc or {}).get("from_number") or (inbound_doc or {}).get("number")
 
-        # Find the most recent outbound BEFORE this inbound arrived, ideally to the same number
         last_outbound = db.get_last_outbound_for_company(
             company_id, before_dt=received_at, to_number=from_number
         )
-        # Fallback: any outbound before this inbound
         if not last_outbound:
             last_outbound = db.get_last_outbound_for_company(company_id, before_dt=received_at)
 
         outbound_body = ""
         reaction_time_min = None
-
         if last_outbound:
             outbound_body = last_outbound.get("message_body") or last_outbound.get("message_text") or ""
             last_sent_at = last_outbound.get("created_at")
@@ -146,12 +180,120 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
                 reaction_time_min = minutes if minutes >= 0 else None
 
         business_hours = is_business_hours(received_at)
-
         analysis = classify_response(inbound_body, outbound_body, reaction_time_min)
         analysis["reaction_time_min"] = reaction_time_min
         analysis["business_hours"] = business_hours
         analysis["classified_at"] = datetime.now().isoformat()
 
+        # If auto-response: mark as pending human-followup for the next 5 minutes
+        if analysis.get("category") in ("automatico", "bot"):
+            analysis["pending_human_check"] = True
+            analysis["followup_deadline"] = received_at + timedelta(minutes=_AUTO_FOLLOWUP_MINUTES)
+        else:
+            analysis["pending_human_check"] = False
+
         db.save_message_analysis(log_id, analysis)
     except Exception:
         pass  # background task — fail silently
+
+
+_NO_REPLY_WAIT_MINUTES = 30   # classify outbound with no reply after this window
+_SWEEP_INTERVAL_SEC    = 300  # run sweep every 5 minutes
+
+
+def _sweep_pending():
+    """
+    Runs every 5 minutes. Two jobs:
+
+    1. Expire pending_human_check — auto/bot messages whose followup window
+       passed without a human reply: mark pending_human_check=False so the UI
+       stops waiting and shows the final auto/bot classification.
+
+    2. Mark no-reply — outbound messages sent more than 30 minutes ago with
+       no inbound response at all: save an analysis with category='sin_respuesta'.
+    """
+    try:
+        db = MongoDBManager()
+        now = datetime.now()
+
+        # ── Job 1: expire stale pending_human_check ──────────────────────────
+        db.db.message_logs.update_many(
+            {
+                "direction": "inbound",
+                "analysis.pending_human_check": True,
+                "analysis.followup_deadline": {"$lt": now},
+            },
+            {"$set": {"analysis.pending_human_check": False}},
+        )
+
+        # ── Job 2: no-reply outbound → mark sin_respuesta ────────────────────
+        cutoff = now - timedelta(minutes=_NO_REPLY_WAIT_MINUTES)
+        # Find outbound messages older than cutoff with no analysis yet
+        outbounds = list(db.db.message_logs.find(
+            {
+                "direction": "outbound",
+                "created_at": {"$lte": cutoff},
+                "analysis": {"$exists": False},
+            },
+            {"_id": 1, "company_id": 1, "to_number": 1, "created_at": 1},
+        ))
+
+        for ob in outbounds:
+            company_id = str(ob.get("company_id", ""))
+            sent_at    = ob.get("created_at")
+            # Check if ANY inbound arrived for this company after this outbound
+            has_reply = db.db.message_logs.find_one({
+                "company_id": company_id,
+                "direction": "inbound",
+                "created_at": {"$gt": sent_at},
+            })
+            if not has_reply:
+                db.save_message_analysis(str(ob["_id"]), {
+                    "category":        "sin_respuesta",
+                    "response_quality": 0,
+                    "notes":           f"Sin respuesta tras {_NO_REPLY_WAIT_MINUTES} min",
+                    "classified_at":   now.isoformat(),
+                    "pending_human_check": False,
+                })
+        # ── Job 3: re-resolve inbound messages saved with company_id="unknown" ──
+        unknowns = list(db.db.message_logs.find(
+            {
+                "direction": "inbound",
+                "company_id": "unknown",
+                "created_at": {"$gte": now - timedelta(hours=24)},
+            },
+            {"_id": 1, "from_number": 1, "message_body": 1},
+        ))
+        for msg in unknowns:
+            from_number = msg.get("from_number", "")
+            if not from_number:
+                continue
+            resolved = db.find_company_id_by_phone(from_number)
+            if resolved:
+                db.db.message_logs.update_one(
+                    {"_id": msg["_id"]},
+                    {"$set": {"company_id": resolved}},
+                )
+                body = msg.get("message_body", "")
+                if body and GROQ_API_KEY:
+                    import threading as _t
+                    _t.Thread(
+                        target=classify_and_save,
+                        args=(str(msg["_id"]), resolved, body, now),
+                        daemon=True,
+                    ).start()
+
+    except Exception:
+        log.exception("_sweep_pending failed")
+
+
+def start_classifier_background():
+    """Launch the periodic sweep as a daemon thread. Call once at app startup."""
+    def _loop():
+        while True:
+            time.sleep(_SWEEP_INTERVAL_SEC)
+            _sweep_pending()
+
+    t = threading.Thread(target=_loop, daemon=True, name="classifier-sweep")
+    t.start()
+    log.info("Classifier background sweep started (every %ds)", _SWEEP_INTERVAL_SEC)

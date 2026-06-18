@@ -1,5 +1,6 @@
 # scraper.py - VERSIÓN EXTENDIDA
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from urllib.parse import urljoin, urlparse
@@ -7,6 +8,10 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
+
+# Serializa llamadas a Groq para no exceder el límite de tokens por minuto
+# cuando múltiples scrapers corren en paralelo.
+_GROQ_LOCK = threading.Lock()
 
 
 class WebsiteScraper:
@@ -459,7 +464,7 @@ class WebsiteScraper:
                 result["has_whatsapp"] = True
 
         # ── Enriquecimiento con IA: rellenar campos vacíos en una sola llamada ──
-        self._groq_enrich_result(result, text[:2000])
+        self._groq_enrich_result(result, text[:1000])
 
         # Deduplicación y guardado en MongoDB
         existing = self.companies_col.find_one({"domain": domain})
@@ -617,40 +622,47 @@ class WebsiteScraper:
         non_must  = [lk for lk in links if lk["url"] not in set(must_urls)]
 
         if groq_key and links:
+            import time as _time
+            from groq import Groq
+            client = Groq(api_key=groq_key)
+            batch = non_must[:20]
+            lines = [
+                f"{i+1}. {lk['path']!r}"
+                for i, lk in enumerate(batch)
+            ]
+            industry_hint = f" (industria del negocio: {industry})" if industry else ""
+            prompt = (
+                f"Paths de páginas internas{industry_hint}. "
+                f"Ordena por probabilidad de tener contacto (tel, WA, dirección, horarios):\n"
+                + "\n".join(lines) +
+                f"\n\nResponde SOLO con array JSON de números. Ejemplo: [3,7,1]"
+            )
+
+            def _call_groq():
+                with _GROQ_LOCK:
+                    return client.chat.completions.create(
+                        model="llama-3.1-8b-instant",
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=80,
+                        temperature=0,
+                    )
+
             try:
-                from groq import Groq
-                client = Groq(api_key=groq_key)
-                batch = non_must[:40]
-                lines = [
-                    f"{i+1}. path={lk['path']!r}  texto={lk['text']!r}"
-                    for i, lk in enumerate(batch)
-                ]
-                industry_hint = f" (industria del negocio: {industry})" if industry else ""
-                prompt = (
-                    f"Eres un analizador de sitios web de negocios mexicanos{industry_hint}.\n"
-                    f"Tu tarea: identificar qué páginas internas tienen mayor probabilidad de "
-                    f"contener información de contacto: teléfonos, WhatsApp, dirección física, "
-                    f"horarios de atención o datos del equipo.\n\n"
-                    f"Analiza el path de la URL Y el texto del link (anchor text).\n\n"
-                    f"Links internos encontrados:\n"
-                    + "\n".join(lines) +
-                    f"\n\nDevuelve SOLO un array JSON con los números de los links ordenados "
-                    f"de MAYOR a menor probabilidad de tener información de contacto. "
-                    f"Incluye todos los que tengan alguna probabilidad, no solo los obvios.\n"
-                    f"Ejemplo de respuesta: [3, 7, 1, 12, 5]"
-                )
-                resp = client.chat.completions.create(
-                    model="llama-3.1-8b-instant",
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=300,
-                    temperature=0,
-                )
+                try:
+                    resp = _call_groq()
+                except Exception as exc:
+                    wait_m = _re.search(r'try again in (\d+\.?\d*)s', str(exc))
+                    if wait_m:
+                        _time.sleep(float(wait_m.group(1)) + 0.5)
+                        resp = _call_groq()
+                    else:
+                        raise
+
                 content = resp.choices[0].message.content.strip()
                 m = _re.search(r'\[[\d,\s]+\]', content)
                 if m:
                     indices = _json.loads(m.group(0))
                     ranked = [batch[i - 1]["url"] for i in indices if 1 <= i <= len(batch)]
-                    # Append any links Groq didn't mention, sorted by keyword score
                     ranked_set = set(ranked) | set(must_urls)
                     rest = self._keyword_score_links([lk for lk in non_must if lk["url"] not in ranked_set])
                     print(f"🤖 AI ranked {len(ranked)} subpages + {len(must_urls)} páginas de contacto garantizadas")
@@ -848,7 +860,7 @@ class WebsiteScraper:
     def _detect_industry(self, text: str, soup: BeautifulSoup) -> str:
         """Groq clasifica la industria; keywords como fallback si Groq falla."""
         # 1. Intentar con Groq primero
-        groq_result = self._classify_industry_groq(text[:1500])
+        groq_result = self._classify_industry_groq(text[:800])
         if groq_result:
             return groq_result
 
@@ -941,7 +953,7 @@ class WebsiteScraper:
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
                 json={"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": 300, "temperature": 0},
+                      "max_tokens": 150, "temperature": 0},
                 timeout=10,
             )
             raw = resp.json()["choices"][0]["message"]["content"].strip()

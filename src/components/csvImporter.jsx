@@ -22,7 +22,7 @@ import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutl
 import DownloadIcon from '@mui/icons-material/Download'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import PauseIcon from '@mui/icons-material/Pause'
-import StopIcon from '@mui/icons-material/Stop'
+import HighlightOffIcon from '@mui/icons-material/Stop'
 import CloseIcon from '@mui/icons-material/Close'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import ErrorIcon from '@mui/icons-material/Error'
@@ -181,41 +181,45 @@ export default function CsvImporter() {
     setResults([]); setProgress(0); setLoading(true); setDone(false); setPaused(false); setPage(0)
 
     const res = []
-    for (let i = 0; i < allUrls.length; i++) {
-      // Wait while paused
+    const CONCURRENCY = 4
+    for (let i = 0; i < allUrls.length; i += CONCURRENCY) {
       while (pauseRef.current && !cancelRef.current) {
         await new Promise(r => setTimeout(r, 200))
       }
       if (cancelRef.current) break
 
-      setCurrentUrl(allUrls[i])
+      const chunk = allUrls.slice(i, i + CONCURRENCY)
+      setCurrentUrl(chunk[0])
       setProgress(Math.round((i / allUrls.length) * 100))
 
-      try {
-        const r = await fetch('/api/process-url', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: allUrls[i], skip_send: true }),
-        })
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        const d = await r.json()
-        const duplicate = d.duplicate === true
-        res.push({
-          url:         allUrls[i],
-          empresa:     d.scraped?.name || '—',
-          industria:   d.scraped?.industry || '—',
-          whatsapp:    d.primary_whatsapp_number || '',
-          all_whatsapp: d.all_whatsapp_numbers || (d.primary_whatsapp_number ? [d.primary_whatsapp_number] : []),
-          company_id:  d.company_id || '',
-          scraped_data: d.scraped,
-          status_wa:   d.send_result?.status_code || '—',
-          msg_status:  null,
-          ok:          true,
-          duplicate,
-        })
-      } catch {
-        res.push({ url: allUrls[i], empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, status_wa: '—', msg_status: null, ok: false, duplicate: false })
-      }
+      const chunkResults = await Promise.all(chunk.map(async (url) => {
+        try {
+          const r = await fetch('/api/process-url', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, skip_send: true }),
+          })
+          if (!r.ok) throw new Error(`HTTP ${r.status}`)
+          const d = await r.json()
+          const duplicate = d.duplicate === true
+          return {
+            url,
+            empresa:     d.scraped?.name || '—',
+            industria:   d.scraped?.industry || '—',
+            whatsapp:    d.primary_whatsapp_number || '',
+            all_whatsapp: d.all_whatsapp_numbers || (d.primary_whatsapp_number ? [d.primary_whatsapp_number] : []),
+            company_id:  d.company_id || '',
+            scraped_data: d.scraped,
+            status_wa:   d.send_result?.status_code || '—',
+            msg_status:  null,
+            ok:          true,
+            duplicate,
+          }
+        } catch {
+          return { url, empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, status_wa: '—', msg_status: null, ok: false, duplicate: false }
+        }
+      }))
+      res.push(...chunkResults)
       setResults([...res])
     }
 
@@ -451,7 +455,7 @@ export default function CsvImporter() {
               <Button
                 fullWidth
                 onClick={handleCancel}
-                startIcon={<StopIcon />}
+                startIcon={<HighlightOffIcon />}
                 sx={{
                   flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem',
                   color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)',

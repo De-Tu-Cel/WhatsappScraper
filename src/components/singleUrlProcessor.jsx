@@ -8,6 +8,7 @@ import CircularProgress from '@mui/material/CircularProgress'
 import Alert from '@mui/material/Alert'
 import Typography from '@mui/material/Typography'
 import SearchIcon from '@mui/icons-material/Search'
+import HighlightOffIcon from '@mui/icons-material/HighlightOff'
 import Skeleton from '@mui/material/Skeleton'
 import Chip from '@mui/material/Chip'
 import Tooltip from '@mui/material/Tooltip'
@@ -73,25 +74,25 @@ export function getTemplates(t) {
 // Static export kept for backwards-compatibility (uses Spanish strings)
 export const TEMPLATES = [
   {
-    id: 'general',
-    label: 'Con nombre y ciudad',
-    desc: 'Menciona el nombre del negocio y la ciudad',
-    needs: ['nombre', 'ciudad'],
-    text: 'Hola {{nombre}}, somos Detucel. Nos especializamos en soluciones digitales para negocios como el tuyo en {{ciudad}}. ¿Te gustaría conocer cómo podemos ayudarte? 😊',
-  },
-  {
-    id: 'sin_ciudad',
-    label: 'Solo con nombre',
-    desc: 'Para cuando no se detectó la ciudad',
-    needs: ['nombre'],
-    text: 'Hola {{nombre}}, somos Detucel. Nos especializamos en soluciones digitales para negocios. ¿Te gustaría conocer cómo podemos ayudarte? 😊',
+    id: 'industria_ciudad',
+    label: 'Industria + ciudad',
+    desc: 'Menciona el giro del negocio y la ciudad — el más personalizado',
+    needs: ['nombre', 'industria', 'ciudad'],
+    text: 'Hola {{nombre}}, encontré tu negocio de {{industria}} en {{ciudad}} y me gustaría presentarte algo que puede ayudarte. ¿Tienes un momento? 😊',
   },
   {
     id: 'industria',
     label: 'Con giro del negocio',
-    desc: 'Menciona el tipo de negocio (restaurante, taller, etc.)',
+    desc: 'Menciona el tipo de negocio (salon, taller, restaurante…)',
     needs: ['nombre', 'industria'],
-    text: 'Hola {{nombre}}, somos Detucel. Trabajamos con negocios del sector {{industria}} en México y nos gustaría presentarte nuestros servicios. ¿Tienes un momento? 🙌',
+    text: 'Hola {{nombre}}, vi que tienes un negocio de {{industria}} y tengo algo que podría interesarte. ¿Tienes disponibilidad para platicar? 🙌',
+  },
+  {
+    id: 'general',
+    label: 'Solo con nombre',
+    desc: 'Para cuando no se detectó industria ni ciudad',
+    needs: ['nombre'],
+    text: 'Hola {{nombre}}, encontré tu negocio en línea y me gustaría presentarte una propuesta. ¿Tienes un momento? 😊',
   },
 ]
 
@@ -362,7 +363,7 @@ function useTypewriter(strings, active) {
   return display
 }
 
-function SearchBar({ url, setUrl, onSearch, loading, compact }) {
+function SearchBar({ url, setUrl, onSearch, loading, compact, onCancel }) {
   const { t } = useLang()
   const placeholder = useTypewriter(EXAMPLES, !url && !compact)
   const urlError = url.trim() && !isValidUrl(url.trim()) ? urlValidationMsg(url.trim()) : ''
@@ -408,17 +409,30 @@ function SearchBar({ url, setUrl, onSearch, loading, compact }) {
             '& .MuiInput-root::after':  { display: 'none' },
           }}
         />
-        <Tooltip title={urlError || (!url.trim() ? t.single.urlEmpty : '')} disableHoverListener={canSearch}>
-          <span>
-            <IconButton onClick={onSearch} disabled={!canSearch} sx={{
-              bgcolor: 'var(--accent, #3b82f6)', color: 'white', width: 42, height: 42, flexShrink: 0, mr: -1,
-              '&:hover': { bgcolor: 'var(--accent, #2563eb)' },
-              '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.2)', color: 'rgba(255,255,255,0.4)' },
-            }}>
-              {loading ? <CircularProgress size={20} sx={{ color: 'white' }} /> : <SearchIcon fontSize="small" />}
-            </IconButton>
-          </span>
-        </Tooltip>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mr: -1, flexShrink: 0 }}>
+          <Tooltip title={urlError || (!url.trim() ? t.single.urlEmpty : '')} disableHoverListener={canSearch}>
+            <span>
+              <IconButton onClick={onSearch} disabled={!canSearch} sx={{
+                bgcolor: 'var(--accent, #3b82f6)', color: 'white', width: 42, height: 42,
+                '&:hover': { bgcolor: 'var(--accent, #2563eb)' },
+                '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.2)', color: 'rgba(255,255,255,0.4)' },
+              }}>
+                {loading ? <CircularProgress size={20} sx={{ color: 'white' }} /> : <SearchIcon fontSize="small" />}
+              </IconButton>
+            </span>
+          </Tooltip>
+          {loading && onCancel && (
+            <Tooltip title="Cancelar búsqueda">
+              <IconButton onClick={onCancel} sx={{
+                bgcolor: 'rgba(239,68,68,0.12)', color: 'rgba(248,113,113,0.8)', width: 42, height: 42,
+                border: '1px solid rgba(239,68,68,0.2)',
+                '&:hover': { bgcolor: 'rgba(239,68,68,0.25)', color: '#f87171' },
+              }}>
+                <HighlightOffIcon sx={{ fontSize: 20 }} />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
       </Box>
       {urlError && (
         <Typography sx={{ color: '#f87171', fontSize: '0.72rem', mt: 0.6, pl: 2 }}>
@@ -440,6 +454,11 @@ export default function SingleUrlProcessor() {
 
   const hasResult = result || error
   const hasWhatsapp = !!result?.primary_whatsapp_number
+  const abortRef = useRef(null)
+
+  function handleCancel() {
+    if (abortRef.current) abortRef.current.abort()
+  }
 
   // Step 1: scrape only (no send)
   async function handleScrape() {
@@ -448,18 +467,21 @@ export default function SingleUrlProcessor() {
     setResult(null)
     setSendSuccess(false)
     setLoading(true)
+    abortRef.current = new AbortController()
     try {
       const res = await authFetch('/api/process-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, skip_send: true }),
+        signal: abortRef.current.signal,
       })
       if (!res.ok) throw new Error(`Error ${res.status}`)
       setResult(await res.json())
     } catch (e) {
-      setError(`Error al analizar la URL: ${e.message}`)
+      if (e.name !== 'AbortError') setError(`Error al analizar la URL: ${e.message}`)
     } finally {
       setLoading(false)
+      abortRef.current = null
     }
   }
 
@@ -510,7 +532,7 @@ export default function SingleUrlProcessor() {
             {t.single.heading}
           </Typography>
         </Box>
-        <SearchBar url={url} setUrl={setUrl} onSearch={handleScrape} loading={loading} compact={false} />
+        <SearchBar url={url} setUrl={setUrl} onSearch={handleScrape} loading={loading} compact={false} onCancel={handleCancel} />
       </Box>
     )
   }
@@ -520,8 +542,7 @@ export default function SingleUrlProcessor() {
     <Box sx={{ overflowY: 'auto', height: '100%' }}>
       {/* Barra superior */}
       <Box sx={{ bgcolor: 'var(--sidebar-bg, #0d1117)', borderRadius: 2, p: 2, mb: 3, display: 'flex', alignItems: 'center', gap: 2, border: '1px solid rgba(255,255,255,0.07)' }}>
-        <SearchBar url={url} setUrl={setUrl} onSearch={handleScrape} loading={loading} compact={true} />
-        {loading && <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>Analizando...</Typography>}
+        <SearchBar url={url} setUrl={setUrl} onSearch={handleScrape} loading={loading} compact={true} onCancel={handleCancel} />
       </Box>
 
       {/* Resultados */}

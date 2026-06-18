@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { authFetch } from '@/lib/api'
 const display = v => (!v || ['null','none','undefined','n/a'].includes(String(v).trim().toLowerCase())) ? '—' : v
 import { useLang } from '../context/LangContext'
@@ -721,12 +721,13 @@ function SkeletonRows({ count }) {
 const MAX_CAMPAIGN_MSG = 4096
 
 function CampaignDialog({ open, selectedRows, onClose, onNotify }) {
-  const [msgText,   setMsgText]   = useState(TEMPLATES[0].text)
-  const [sending,   setSending]   = useState(false)
-  const [progress,  setProgress]  = useState(0)
-  const [results,   setResults]   = useState([])
-  const [done,      setDone]      = useState(false)
-  const [activeTpl, setActiveTpl] = useState(TEMPLATES[0].id)
+  const [msgText,      setMsgText]      = useState(TEMPLATES[0].text)
+  const [sending,      setSending]      = useState(false)
+  const [progress,     setProgress]     = useState(0)
+  const [results,      setResults]      = useState([])
+  const [done,         setDone]         = useState(false)
+  const sendingRef = useRef(false)
+  const [activeTpl,    setActiveTpl]    = useState(TEMPLATES[0].id)
 
   useEffect(() => {
     if (!open) { setSending(false); setProgress(0); setResults([]); setDone(false) }
@@ -745,7 +746,8 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify }) {
   const msgInvalid  = !msgText.trim() || charCount > MAX_CAMPAIGN_MSG
 
   async function handleSend() {
-    if (msgInvalid) return
+    if (msgInvalid || sendingRef.current) return
+    sendingRef.current = true
     setSending(true); setProgress(0); setResults([]); setDone(false)
     const res = []
     for (let i = 0; i < waRows.length; i++) {
@@ -778,8 +780,12 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify }) {
         res.push({ name: row.name, status: 'failed' })
       }
       setResults([...res])
+      if (i < waRows.length - 1) {
+        const delay = Math.floor(Math.random() * 6000 + 7000) // 7–13 segundos
+        await new Promise(r => setTimeout(r, delay))
+      }
     }
-    setSending(false); setDone(true)
+    setSending(false); setDone(true); sendingRef.current = false
     const sent = res.filter(r => r.status === 'sent').length
     onNotify(
       `${sent} mensaje${sent !== 1 ? 's' : ''} enviado${sent !== 1 ? 's' : ''}`,
@@ -1044,14 +1050,18 @@ export default function DatabaseViewer({ isActive }) {
     const targets = sortedRows.filter(r => selected.includes(r._id))
     if (!targets.length) { notify('Selecciona al menos una empresa', 'warning'); return }
     let ok = 0, fail = 0, noUrl = 0
-    for (const row of targets) {
-      const label = `${row.name || row.domain || 'empresa'} (${ok + fail + noUrl + 1}/${targets.length})`
-      setRescraping(label)
-      if (!row.website && !row.domain) { noUrl++; continue }
-      try {
-        const res = await fetch(`/api/companies/${row._id}/rescrape`, { method: 'POST' })
-        if (res.ok) ok++; else fail++
-      } catch { fail++ }
+    const CONCURRENCY = 4
+    for (let i = 0; i < targets.length; i += CONCURRENCY) {
+      const chunk = targets.slice(i, i + CONCURRENCY)
+      const first = chunk[0]
+      setRescraping(`${first.name || first.domain || 'empresa'} (${i + 1}–${Math.min(i + CONCURRENCY, targets.length)}/${targets.length})`)
+      await Promise.all(chunk.map(async (row) => {
+        if (!row.website && !row.domain) { noUrl++; return }
+        try {
+          const res = await fetch(`/api/companies/${row._id}/rescrape`, { method: 'POST' })
+          if (res.ok) ok++; else fail++
+        } catch { fail++ }
+      }))
     }
     setRescraping('')
     setSelected([])

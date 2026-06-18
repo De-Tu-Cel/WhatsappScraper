@@ -25,11 +25,39 @@ EXCLUDED_DOMAINS = {
     'google.com', 'google.com.mx', 'maps.google.com', 'bing.com', 'duckduckgo.com',
     # Directorios de negocios
     'yelp.com', 'yelp.com.mx', 'tripadvisor.com', 'tripadvisor.com.mx',
-    'cylex.mx', 'cylex.com', 'cylex-mexico.com',
-    'seccion-amarilla.com', 'paginasamarillas.com.mx', 'paginas-amarillas.mx',
+    'cylex.mx', 'cylex.com', 'cylex-mexico.com', 'cybo.com',
+    'seccion-amarilla.com', 'seccionamarilla.com.mx',
+    'paginasamarillas.com.mx', 'paginas-amarillas.mx',
     'foursquare.com', 'empresasdebogota.com', 'empresite.com',
     'hotfrog.mx', 'hotfrog.com', 'dnbmx.com',
     'infobel.com', 'kompass.com', 'manta.com',
+    'infoisinfo.com', 'infoisinfo.com.mx',
+    'salir.com', 'mx.salir.com',
+    'bripemedia.com', 'design.bripemedia.com',
+    'tusalondeeventos.com', 'peluquerias.com.mx',
+    'monterrey10.com.mx',
+    # Directorios de agenda / reservas
+    'agendapro.com', 'fresha.com', 'mindbodyonline.com',
+    'treatwell.com', 'booksy.com', 'vagaro.com',
+    # Clasificados y directorios de servicios
+    'locanto.com', 'locanto.com.mx',
+    'vivanuncios.com.mx', 'segundamano.mx',
+    'bodas.com.mx', 'zankyou.com.mx',
+    # Directorios de salones de marca (L'Oréal, Kérastase, etc.)
+    'lorealprofessionnel.com', 'salones-es.lorealprofessionnel.com',
+    'hair-salon-en.lorealprofessionnel.com',
+    'kerastase.com', 'kerastase.com.mx',
+    'schwarzkopfpro.com', 'schwarzkopf.com.mx',
+    'wella.com', 'wella.com.mx',
+    # Empleo
+    'occ.com', 'occ.com.mx', 'indeed.com', 'indeed.com.mx',
+    'computrabajo.com', 'bumeran.com',
+    # Aerolíneas, cadenas nacionales (no prospectos locales)
+    'aeromexico.com', 'volaris.com', 'vivaaerobus.com',
+    'sephora.com.mx', 'maccosmetics.com', 'clinique.com',
+    # Mapas y directorios geográficos
+    'mapquest.com', 'yellowpages.com', 'superpages.com',
+    'grandhotelier.com', 'spa.grandhotelier.com',
     # E-commerce y marketplaces
     'mercadolibre.com', 'amazon.com', 'amazon.com.mx', 'ebay.com',
     'walmart.com', 'walmart.com.mx', 'liverpool.com.mx', 'soriana.com',
@@ -87,6 +115,19 @@ EXCLUDED_PATH_PATTERNS = [
     '/nota/', '/notas/', '/reportaje/', '/reportajes/', '/tendencias/',
     '/actualidad/', '/mundo/', '/economia/', '/finanzas/', '/salud/',
     '/lifestyle/', '/entrevista/', '/entrevistas/',
+    # Páginas de resultados / listados de directorios
+    '/resultados/', '/busqueda/', '/buscar/', '/search/',
+    '/directorio/', '/listado/', '/listing/', '/listings/',
+    '/salones-de-belleza/', '/salones/', '/negocios/',
+    '/ciudades/', '/ciudad/', '/estados/', '/estado/',
+    '/nuevo-leon/', '/monterrey/', '/cdmx/',
+    # Páginas de empleo en directorios
+    '/empleos/', '/empleo/', '/jobs/', '/vacantes/',
+    # Páginas de proveedores/distribuidores de marcas
+    '/salon-finder', '/salon-finder/', '/find-a-salon', '/find-a-salon/',
+    '/salones-peluqueria', '/hair-salon/', '/peluquerias/',
+    # Páginas de mapa/región genérica
+    '/in/mx-', '/lp/en/', '/mp/mx/',
 ]
 
 EXCLUDED_TLD_PATTERNS = ['.edu.mx', '.gob.mx', '.gov.mx', '.edu.']

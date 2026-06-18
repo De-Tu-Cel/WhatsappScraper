@@ -20,7 +20,7 @@ import Skeleton from '@mui/material/Skeleton'
 import SearchIcon from '@mui/icons-material/Search'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import PauseIcon from '@mui/icons-material/Pause'
-import StopIcon from '@mui/icons-material/Stop'
+import HighlightOffIcon from '@mui/icons-material/HighlightOff'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import ErrorIcon from '@mui/icons-material/Error'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
@@ -94,8 +94,9 @@ function renderTemplate(text, scraped) {
 }
 
 export default function SearchProspects() {
-  const pauseRef  = useRef(false)
-  const cancelRef = useRef(false)
+  const pauseRef       = useRef(false)
+  const cancelRef      = useRef(false)
+  const abortSearchRef = useRef(null)
 
   const [industry,    setIndustry]    = useState('')
   const [numResults,  setNumResults]  = useState(10)
@@ -205,19 +206,23 @@ export default function SearchProspects() {
   async function handleSearch(overrideIndustry) {
     const query = (typeof overrideIndustry === 'string' ? overrideIndustry : industry).trim()
     if (!query) return
+    abortSearchRef.current?.abort()
+    const ctrl = new AbortController()
+    abortSearchRef.current = ctrl
     setSearching(true); setFound([]); setResults([]); setDone(false); setVisibleCount(numResults); setFilterScraped('all')
     try {
       const res = await fetch('/api/search', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ industry: query, city: '', num_results: numResults, offset: 0 }),
+        signal: ctrl.signal,
       })
       if (!res.ok) throw new Error()
       const { urls } = await res.json()
       const marked = await fetchAndMark(urls)
       setFound(marked)
       saveHistory(query)
-    } catch {
-      setFound([])
+    } catch (err) {
+      if (err?.name !== 'AbortError') setFound([])
     } finally {
       setSearching(false)
     }
@@ -237,30 +242,35 @@ export default function SearchProspects() {
 
   async function runProcessLoop(urls, baseResults) {
     const res = [...baseResults]
-    for (let i = 0; i < urls.length; i++) {
+    const CONCURRENCY = 4
+    for (let i = 0; i < urls.length; i += CONCURRENCY) {
       while (pauseRef.current && !cancelRef.current) await new Promise(r => setTimeout(r, 200))
       if (cancelRef.current) break
-      setCurrentUrl(urls[i])
+      const chunk = urls.slice(i, i + CONCURRENCY)
+      setCurrentUrl(chunk[0])
       setProgress(Math.round(((baseResults.length + i) / (baseResults.length + urls.length)) * 100))
-      try {
-        const r = await fetch('/api/process-url', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: urls[i], skip_send: true }),
-        })
-        if (!r.ok) throw new Error()
-        const d = await r.json()
-        res.push({
-          url: urls[i], empresa: d.scraped?.name || '—', industria: d.scraped?.industry || '—',
-          whatsapp: d.primary_whatsapp_number || '',
-          all_whatsapp: d.all_whatsapp_numbers || (d.primary_whatsapp_number ? [d.primary_whatsapp_number] : []),
-          company_id: d.company_id || '',
-          scraped_data: d.scraped,
-          status_wa: d.send_result?.status_code || '—',
-          msg_status: null, ok: true,
-        })
-      } catch {
-        res.push({ url: urls[i], empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, status_wa: '—', msg_status: null, ok: false })
-      }
+      const chunkResults = await Promise.all(chunk.map(async (url) => {
+        try {
+          const r = await fetch('/api/process-url', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, skip_send: true }),
+          })
+          if (!r.ok) throw new Error()
+          const d = await r.json()
+          return {
+            url, empresa: d.scraped?.name || '—', industria: d.scraped?.industry || '—',
+            whatsapp: d.primary_whatsapp_number || '',
+            all_whatsapp: d.all_whatsapp_numbers || (d.primary_whatsapp_number ? [d.primary_whatsapp_number] : []),
+            company_id: d.company_id || '',
+            scraped_data: d.scraped,
+            status_wa: d.send_result?.status_code || '—',
+            msg_status: null, ok: true,
+          }
+        } catch {
+          return { url, empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, status_wa: '—', msg_status: null, ok: false }
+        }
+      }))
+      res.push(...chunkResults)
       setResults([...res])
     }
 
@@ -309,7 +319,13 @@ export default function SearchProspects() {
   }
 
   function handlePause()  { pauseRef.current = !pauseRef.current; setPaused(pauseRef.current) }
-  function handleCancel() { cancelRef.current = true; pauseRef.current = false; setPaused(false) }
+  function handleCancel() {
+    cancelRef.current = true
+    pauseRef.current  = false
+    setPaused(false)
+    abortSearchRef.current?.abort()
+    setSearching(false)
+  }
 
   function downloadCsv() {
     const headers = ['url', 'empresa', 'industria', 'whatsapp', 'status_wa', 'estado']
@@ -335,9 +351,11 @@ export default function SearchProspects() {
       if (!confirmed) return
     }
 
+    cancelRef.current = false
     setSendingAll(true)
     const updated = [...results]
     for (let i = 0; i < targets.length; i++) {
+      if (cancelRef.current) break
       const row = targets[i]
       const idx = results.findIndex(r => r.url === row.url)
       try {
@@ -433,9 +451,22 @@ export default function SearchProspects() {
           slotProps={{ input: { disableUnderline: true } }}
           sx={{ '& input': { fontSize: compact ? '0.92rem' : '1rem', py: 0.9, color: '#f1f5f9', '&::placeholder': { color: 'rgba(255,255,255,0.28)', opacity: 1 } } }}
         />
-        <IconButton onClick={handleSearch} disabled={searching || !industry.trim()} sx={{ bgcolor: 'var(--accent, #3b82f6)', color: 'white', width: 38, height: 38, flexShrink: 0, mr: -1, '&:hover': { bgcolor: 'var(--accent, #2563eb)' }, '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.25)', color: 'rgba(255,255,255,0.3)' } }}>
-          {searching ? <CircularProgress size={18} sx={{ color: 'white' }} /> : <SearchIcon fontSize="small" />}
-        </IconButton>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mr: -1, flexShrink: 0 }}>
+          <IconButton onClick={handleSearch} disabled={searching || !industry.trim()} sx={{ bgcolor: 'var(--accent, #3b82f6)', color: 'white', width: 38, height: 38, '&:hover': { bgcolor: 'var(--accent, #2563eb)' }, '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.25)', color: 'rgba(255,255,255,0.3)' } }}>
+            {searching ? <CircularProgress size={18} sx={{ color: 'white' }} /> : <SearchIcon fontSize="small" />}
+          </IconButton>
+          {searching && (
+            <Tooltip title="Cancelar búsqueda">
+              <IconButton onClick={handleCancel} sx={{
+                bgcolor: 'rgba(239,68,68,0.12)', color: 'rgba(248,113,113,0.8)', width: 38, height: 38,
+                border: '1px solid rgba(239,68,68,0.2)',
+                '&:hover': { bgcolor: 'rgba(239,68,68,0.25)', color: '#f87171' },
+              }}>
+                <HighlightOffIcon sx={{ fontSize: 20 }} />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
       </Box>
       {acOpen && acMatches.length > 0 && (
         <Box sx={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 30, bgcolor: 'var(--sidebar-bg, #0d1117)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.28)', borderRadius: 2, overflow: 'hidden', boxShadow: '0 8px 28px rgba(0,0,0,0.6)' }}>
@@ -717,7 +748,7 @@ export default function SearchProspects() {
               sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' } }}>
               {paused ? 'Reanudar' : 'Pausar'}
             </Button>
-            <Button fullWidth onClick={handleCancel} startIcon={<StopIcon />}
+            <Button fullWidth onClick={handleCancel} startIcon={<HighlightOffIcon />}
               sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>
               Cancelar
             </Button>
@@ -848,6 +879,14 @@ export default function SearchProspects() {
             </Typography>
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
+            {sendingAll && (
+              <Tooltip title="Cancelar envío">
+                <IconButton size="small" onClick={handleCancel}
+                  sx={{ color: 'rgba(248,113,113,0.7)', '&:hover': { color: '#f87171' } }}>
+                  <HighlightOffIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </Tooltip>
+            )}
             <Button
               onClick={handleSendAll}
               disabled={effectiveWaSelected.size === 0 || alreadySent || sendingAll}

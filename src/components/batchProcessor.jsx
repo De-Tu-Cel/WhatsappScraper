@@ -21,6 +21,7 @@ import SendIcon from '@mui/icons-material/Send'
 import DownloadIcon from '@mui/icons-material/Download'
 import ListAltIcon from '@mui/icons-material/ListAlt'
 import CloseIcon from '@mui/icons-material/Close'
+import HighlightOffIcon from '@mui/icons-material/HighlightOff'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import ErrorIcon from '@mui/icons-material/Error'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
@@ -157,8 +158,11 @@ export default function BatchProcessor() {
   const [selectedTpl, setSelectedTpl] = useState(TEMPLATES[0].id)
   const [msgText,     setMsgText]     = useState(TEMPLATES[0].text)
   const [sending,     setSending]     = useState(false)
-  const msgRef     = useRef(null)
-  const urlsRef    = useRef(null)
+  const msgRef      = useRef(null)
+  const urlsRef     = useRef(null)
+  const sendingRef  = useRef(false)
+  const cancelRef   = useRef(false)
+  const abortCtrl   = useRef(null)
 
   const placeholder = useTypewriter(EXAMPLES, !rawUrls && !loading)
 
@@ -175,46 +179,74 @@ export default function BatchProcessor() {
   const waRows      = rows.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
   const alreadySent = rows.some(r => r.msg_status === 'sent' || r.msg_status === 'failed')
 
+  function handleCancelBatch() {
+    cancelRef.current = true
+    if (abortCtrl.current) abortCtrl.current.abort()
+    setLoading(false); setSending(false)
+    setPhase(''); setCurrentUrl('')
+    sendingRef.current = false
+  }
+
   async function handleBatch() {
     if (!urlList.length) return
+    cancelRef.current = false
     setRows([]); setProgress(0); setLoading(true); setDone(false)
 
     const scraped = []
+    const CONCURRENCY = 4
     setPhase('scraping')
-    for (let i = 0; i < urlList.length; i++) {
-      setCurrentUrl(urlList[i])
-      setProgress(Math.round(((i + 1) / urlList.length) * 100))
-      try {
-        const res = await fetch('/api/process-url', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: urlList[i], skip_send: true }),
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const d = await res.json()
-        scraped.push({
-          url: urlList[i], empresa: d.scraped?.name || '—',
-          industria: d.scraped?.industry || '—',
-          whatsapp: d.primary_whatsapp_number || '',
-          all_whatsapp: d.all_whatsapp_numbers || (d.primary_whatsapp_number ? [d.primary_whatsapp_number] : []),
-          company_id: d.company_id || '',
-          scraped_data: d.scraped,
-          ok: true, msg_status: null,
-        })
-      } catch {
-        scraped.push({ url: urlList[i], empresa: '—', industria: '—', whatsapp: '', company_id: '', scraped_data: null, ok: false, msg_status: null })
+    try {
+      for (let i = 0; i < urlList.length; i += CONCURRENCY) {
+        if (cancelRef.current) break
+        abortCtrl.current = new AbortController()
+        const chunk = urlList.slice(i, i + CONCURRENCY)
+        setCurrentUrl(chunk[0])
+        const chunkResults = await Promise.all(chunk.map(async (url) => {
+          try {
+            const res = await fetch('/api/process-url', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url, skip_send: true }),
+              signal: abortCtrl.current.signal,
+            })
+            if (!res.ok) throw new Error(`HTTP ${res.status}`)
+            const d = await res.json()
+            return {
+              url, empresa: d.scraped?.name || '—',
+              industria: d.scraped?.industry || '—',
+              whatsapp: d.primary_whatsapp_number || '',
+              all_whatsapp: d.all_whatsapp_numbers || (d.primary_whatsapp_number ? [d.primary_whatsapp_number] : []),
+              company_id: d.company_id || '',
+              scraped_data: d.scraped,
+              ok: true, msg_status: null,
+            }
+          } catch (e) {
+            if (e.name === 'AbortError') return null
+            return { url, empresa: '—', industria: '—', whatsapp: '', company_id: '', scraped_data: null, ok: false, msg_status: null }
+          }
+        }))
+        const valid = chunkResults.filter(Boolean)
+        scraped.push(...valid)
+        setRows([...scraped])
+        setProgress(Math.round((scraped.length / urlList.length) * 100))
       }
-      setRows([...scraped])
+    } finally {
+      abortCtrl.current = null
+      if (!cancelRef.current) setDone(true)
+      setProgress(cancelRef.current ? 0 : 100)
+      setCurrentUrl(''); setPhase(''); setLoading(false)
     }
-    setProgress(100); setCurrentUrl(''); setPhase(''); setLoading(false); setDone(true)
   }
 
   async function handleSendAll() {
     const targets = rows.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
-    if (!targets.length) return
+    if (!targets.length || sendingRef.current) return
+    cancelRef.current = false
+    sendingRef.current = true
     setSending(true); setPhase('sending')
     const updated = [...rows]
     for (let i = 0; i < targets.length; i++) {
+      if (cancelRef.current) break
       const row = targets[i]
       setCurrentUrl(row.url)
       setProgress(Math.round(((i + 1) / targets.length) * 100))
@@ -237,8 +269,12 @@ export default function BatchProcessor() {
         updated[idx] = { ...updated[idx], msg_status: 'failed' }
       }
       setRows([...updated])
+      if (i < targets.length - 1) {
+        const delay = Math.floor(Math.random() * 6000 + 7000) // 7–13 segundos
+        await new Promise(r => setTimeout(r, delay))
+      }
     }
-    setProgress(100); setCurrentUrl(''); setPhase(''); setSending(false)
+    setProgress(100); setCurrentUrl(''); setPhase(''); setSending(false); sendingRef.current = false
   }
 
   const sentCount  = rows.filter(r => r.msg_status === 'sent').length
@@ -456,9 +492,17 @@ export default function BatchProcessor() {
                     : `Scrapeando — ${rows.length} de ${urlList.length}`}
               </Typography>
             </Box>
-            <Typography sx={{ color: 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>
-              {progress}%
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography sx={{ color: 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>
+                {progress}%
+              </Typography>
+              <Tooltip title={lang === 'en' ? 'Cancel' : 'Cancelar'}>
+                <IconButton size="small" onClick={handleCancelBatch}
+                  sx={{ color: 'rgba(248,113,113,0.7)', p: 0.3, '&:hover': { color: '#f87171' } }}>
+                  <HighlightOffIcon sx={{ fontSize: 15 }} />
+                </IconButton>
+              </Tooltip>
+            </Box>
           </Box>
           <LinearProgress
             variant="determinate"
@@ -556,6 +600,14 @@ export default function BatchProcessor() {
             </Typography>
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
+            {sending && (
+              <Tooltip title={lang === 'en' ? 'Cancel sending' : 'Cancelar envío'}>
+                <IconButton size="small" onClick={handleCancelBatch}
+                  sx={{ color: 'rgba(248,113,113,0.7)', '&:hover': { color: '#f87171' } }}>
+                  <HighlightOffIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </Tooltip>
+            )}
             <Button
               onClick={handleSendAll}
               disabled={waRows.length === 0 || alreadySent || sending}

@@ -23,6 +23,16 @@ class MongoDBManager:
 
     def insert_contact(self, contact_data):
         contact_data["created_at"] = contact_data.get("created_at", datetime.now())
+        if contact_data.get("type") == "whatsapp":
+            value = contact_data.get("value", "")
+            clean10 = "".join(filter(str.isdigit, value))[-10:]
+            existing = self.db.contacts.find_one({
+                "company_id": contact_data["company_id"],
+                "type": "whatsapp",
+                "value": {"$regex": clean10, "$options": "i"},
+            })
+            if existing:
+                return str(existing["_id"])
         result = self.db.contacts.insert_one(contact_data)
         return str(result.inserted_id)
 
@@ -74,8 +84,22 @@ class MongoDBManager:
     
     def insert_person_contact(self, contact_data):
         contact_data["created_at"] = contact_data.get("created_at", datetime.now())
-        result = self.db.person_contacts.insert_one(contact_data)
-        return str(result.inserted_id)
+        contact_data["updated_at"] = datetime.now()
+        key = {
+            "company_id": contact_data.get("company_id"),
+            "name":       contact_data.get("name", ""),
+            "role":       contact_data.get("role", ""),
+        }
+        result = self.db.person_contacts.update_one(
+            key,
+            {"$set": {k: v for k, v in contact_data.items() if k != "created_at"},
+             "$setOnInsert": {"created_at": contact_data["created_at"]}},
+            upsert=True,
+        )
+        if result.upserted_id:
+            return str(result.upserted_id)
+        doc = self.db.person_contacts.find_one(key, {"_id": 1})
+        return str(doc["_id"]) if doc else None
 
     def insert_social_media(self, social_data):
         """Inserta redes sociales de la empresa"""
@@ -244,17 +268,21 @@ class MongoDBManager:
 
     def find_company_id_by_phone(self, phone_number, allow_fallback=False):
         clean = "".join(filter(str.isdigit, phone_number))
-        # 1. Registered contact (exact last-10-digit match)
+        clean_norm = ("52" + clean[3:]) if (len(clean) == 13 and clean.startswith("521")) else clean
+        # 1. JID map — most authoritative: records which company we SENT to this number.
+        # Checked first because the same number can be a contact of multiple companies
+        # (e.g. Oh Express scraped both as individual branches and as parent company).
+        # jid_map is populated at send-time so it always points to the right conversation.
+        jid_doc = self.db.jid_map.find_one({"jid": {"$in": [clean, clean_norm]}})
+        if jid_doc:
+            return jid_doc["company_id"]
+        # 2. Registered contact fallback (exact last-10-digit match)
         contact = self.db.contacts.find_one({
             "type": "whatsapp",
             "value": {"$regex": clean[-10:], "$options": "i"},
         })
         if contact:
             return contact["company_id"]
-        # 2. JID learned from a previous delivery ACK or inbound
-        jid_doc = self.db.jid_map.find_one({"jid": clean})
-        if jid_doc:
-            return jid_doc["company_id"]
         # 3. Fallback only for delivery ACKs (messages.update), never for real
         # inbound messages — otherwise personal contacts get mis-attributed.
         if not allow_fallback:
@@ -301,7 +329,20 @@ class MongoDBManager:
                            message_body: str, message_id: str = None,
                            message_type: str = "conversation",
                            status: str = "received", raw_data: dict = None,
-                           interactive: dict = None):
+                           interactive: dict = None,
+                           related_to_number: str = None):
+        # Dedup: if this message_id already exists, avoid duplicate entries.
+        # If the existing record has company_id="unknown" and we now know the real
+        # company, upgrade it in place (handles the race: inbound before JID learned).
+        if message_id:
+            existing = self.db.message_logs.find_one({"message_id": message_id})
+            if existing:
+                if existing.get("company_id") == "unknown" and company_id and company_id != "unknown":
+                    self.db.message_logs.update_one(
+                        {"_id": existing["_id"]},
+                        {"$set": {"company_id": company_id}},
+                    )
+                return str(existing["_id"])
         doc = {
             "platform": "evolution",
             "direction": direction,
@@ -320,6 +361,12 @@ class MongoDBManager:
             doc["to_number"] = number
         else:
             doc["from_number"] = number
+            if related_to_number:
+                doc["related_to_number"] = related_to_number
+            # Mark for analysis so the analytics panel can show a loading indicator.
+            # Skip unknown company_id — classifier won't run for them anyway.
+            if message_body and message_body != "[media]" and company_id not in (None, "unknown"):
+                doc["analysis_status"] = "pending"
         result = self.db.message_logs.insert_one(doc)
         return str(result.inserted_id)
 
@@ -412,17 +459,28 @@ class MongoDBManager:
                     deduped[idx] = r
         return deduped
 
-    def get_conversation_thread(self, company_id: str):
-        """Returns all messages for a company sorted by time, deduplicated."""
+    def get_conversation_thread(self, company_id: str, number: str = None):
+        """Returns messages for a company sorted by time, deduplicated.
+        If `number` is given, only returns messages relevant to that specific number.
+        """
+        query = {
+            "company_id": company_id,
+            "direction": {"$in": ["outbound", "inbound"]},
+            "status": {"$ne": "failed"},
+        }
+        if number:
+            clean10 = "".join(filter(str.isdigit, number))[-10:]
+            query["$or"] = [
+                {"direction": "outbound", "to_number": {"$regex": clean10}},
+                {"direction": "inbound",  "related_to_number": {"$regex": clean10}},
+                {"direction": "inbound",  "from_number": {"$regex": clean10}},
+            ]
         messages = list(self.db.message_logs.find(
-            {
-                "company_id": company_id,
-                "direction": {"$in": ["outbound", "inbound"]},  # exclude entries with no direction (e.g. failed Meta API logs)
-                "status": {"$ne": "failed"},                    # exclude failed sends
-            },
+            query,
             {"_id": 1, "direction": 1, "message_body": 1, "message_text": 1,
              "status": 1, "created_at": 1, "sent_at": 1, "platform": 1,
-             "to_number": 1, "from_number": 1, "message_id": 1, "interactive": 1}
+             "to_number": 1, "from_number": 1, "message_id": 1, "interactive": 1,
+             "related_to_number": 1}
         ).sort("created_at", 1))
 
         # Deduplicate: if same message_id exists as both outbound and inbound, keep outbound only
@@ -467,27 +525,50 @@ class MongoDBManager:
         from bson import ObjectId
         self.db.message_logs.update_one(
             {"_id": ObjectId(log_id)},
-            {"$set": {"analysis": analysis}}
+            {"$set": {"analysis": analysis, "analysis_status": "done"}},
         )
 
     def get_analytics(self, page: int = 1, page_size: int = 20):
         """Aggregate response analysis data per company for the dashboard."""
-        pipeline = [
-            {"$match": {"direction": "inbound", "analysis": {"$exists": True}}},
-            {"$sort": {"created_at": -1}},
-            {"$group": {
-                "_id": "$company_id",
-                "last_at": {"$first": "$created_at"},
-                "category": {"$first": "$analysis.category"},
-                "response_quality": {"$avg": "$analysis.response_quality"},
-                "reaction_time_min": {"$avg": "$analysis.reaction_time_min"},
-                "business_hours": {"$first": "$analysis.business_hours"},
-                "notes": {"$first": "$analysis.notes"},
-                "total_responses": {"$sum": 1},
-            }},
-            {"$sort": {"last_at": -1}},
-        ]
-        groups = list(self.db.message_logs.aggregate(pipeline))
+        # Companies with at least one analyzed inbound
+        inbound_groups = {
+            g["_id"]: g
+            for g in self.db.message_logs.aggregate([
+                {"$match": {"direction": "inbound", "analysis": {"$exists": True}}},
+                {"$sort": {"created_at": -1}},
+                {"$group": {
+                    "_id": "$company_id",
+                    "last_at": {"$first": "$created_at"},
+                    "category": {"$first": "$analysis.category"},
+                    "response_quality": {"$avg": "$analysis.response_quality"},
+                    "reaction_time_min": {"$avg": "$analysis.reaction_time_min"},
+                    "business_hours": {"$first": "$analysis.business_hours"},
+                    "notes": {"$first": "$analysis.notes"},
+                    "total_responses": {"$sum": 1},
+                }},
+            ])
+        }
+        # Companies with outbound messages only (no analyzed inbound yet)
+        outbound_groups = {
+            g["_id"]: g
+            for g in self.db.message_logs.aggregate([
+                {"$match": {"direction": "outbound"}},
+                {"$sort": {"created_at": -1}},
+                {"$group": {"_id": "$company_id", "last_at": {"$first": "$created_at"}}},
+            ])
+        }
+        # Merge: prioritize inbound_groups, add outbound-only companies
+        merged = dict(inbound_groups)
+        for cid, og in outbound_groups.items():
+            if cid not in merged:
+                merged[cid] = {
+                    "_id": cid,
+                    "last_at": og["last_at"],
+                    "category": None, "response_quality": None,
+                    "reaction_time_min": None, "business_hours": None,
+                    "notes": None, "total_responses": 0,
+                }
+        groups = sorted(merged.values(), key=lambda g: g.get("last_at") or "", reverse=True)
         results = []
         for g in groups:
             company_id = g["_id"]
@@ -551,51 +632,94 @@ class MongoDBManager:
                 for n in list(num_map.keys()):
                     if n == primary:
                         continue
-                    # Merge if: not a registered contact AND (inbound-only OR outbound-only with no inbound)
-                    # This consolidates bot replies AND stale outbound-only entries for deleted contacts
-                    if n not in registered_norms:
+                    # Only merge pure inbound-only noise (bot/central numbers we never sent to).
+                    # Numbers we explicitly sent outbound to (sent > 0) stay as separate rows
+                    # even if they're not in the registered contacts — e.g. multiple WA numbers
+                    # scraped from the same company.
+                    if n not in registered_norms and num_map[n]["sent"] == 0:
                         num_map[primary]["inbound"].extend(num_map[n]["inbound"])
-                        num_map[primary]["sent"] += num_map[n]["sent"]
                         del num_map[n]
                         num_raw.pop(n, None)
 
+            # Company-level fallback analysis — used for numbers we sent to but
+            # whose response came from a central WA Business number (different from_number).
+            company_analyzed = []
+            for data in num_map.values():
+                company_analyzed.extend([m for m in data["inbound"] if m.get("analysis")])
+
+            # Skip companies where we never actually sent a message
+            total_sent = sum(d["sent"] for d in num_map.values())
+            if total_sent == 0:
+                continue
+
             numbers = []
             for n, data in num_map.items():
+                # Only include numbers we explicitly sent to
+                if data["sent"] == 0:
+                    continue
                 analyzed = [m for m in data["inbound"] if m.get("analysis")]
                 entry = {
-                    "number": num_raw[n],  # use original format for display
+                    "number": num_raw[n],
                     "sent": data["sent"],
                     "responses": len(data["inbound"]),
                     "category": None, "response_quality": None,
                     "reaction_time_min": None, "business_hours": None,
+                    "notes": "Sin respuesta",
+                    "inherited_analysis": False,
                 }
                 if analyzed:
                     first = analyzed[0]
-                    entry["category"]        = first["analysis"].get("category")
-                    entry["notes"]           = first["analysis"].get("notes") or ""
-                    entry["business_hours"]  = first["analysis"].get("business_hours")
+                    entry["category"]          = first["analysis"].get("category")
+                    entry["notes"]             = first["analysis"].get("notes") or ""
+                    entry["business_hours"]    = first["analysis"].get("business_hours")
                     qualities = [m["analysis"].get("response_quality") or 0 for m in analyzed]
                     reactions = [m["analysis"].get("reaction_time_min") or 0 for m in analyzed]
-                    entry["response_quality"]   = round(sum(qualities) / len(qualities), 1)
-                    entry["reaction_time_min"]  = round(sum(reactions) / len(reactions), 1)
-                # last inbound timestamp for this number
+                    entry["response_quality"]  = round(sum(qualities) / len(qualities), 1)
+                    entry["reaction_time_min"] = round(sum(reactions) / len(reactions), 1)
+                elif company_analyzed:
+                    # No direct match — inherit company-level analysis (central WA Business number).
+                    best = company_analyzed[0]
+                    entry["category"]          = best["analysis"].get("category")
+                    entry["notes"]             = best["analysis"].get("notes") or ""
+                    entry["business_hours"]    = best["analysis"].get("business_hours")
+                    entry["response_quality"]  = best["analysis"].get("response_quality")
+                    entry["reaction_time_min"] = best["analysis"].get("reaction_time_min")
+                    entry["inherited_analysis"] = True
                 inbound_dates = [m.get("created_at") for m in data["inbound"] if m.get("created_at")]
                 entry["last_at"] = max(inbound_dates).isoformat() if inbound_dates else None
                 numbers.append(entry)
 
+            # Check if any inbound for this company is still awaiting classification.
+            # Search both string and ObjectId forms — old docs may store company_id as ObjectId.
+            from bson import ObjectId as _ObjId
+            cid_str = str(company_id)
+            try:
+                cid_variants = [cid_str, _ObjId(cid_str)]
+            except Exception:
+                cid_variants = [cid_str]
+            _cnt = self.db.message_logs.count_documents({
+                "company_id": {"$in": cid_variants},
+                "direction": "inbound",
+                "analysis_status": "pending",
+            })
+            analyzing = _cnt > 0
+
+            # Company-level analysis: use real data from inbound_groups, or null if no responses
+            has_real_analysis = g["total_responses"] > 0 and g["category"]
             results.append({
                 "company_id": company_id,
                 "company_name": company["name"],
                 "industry": company.get("industry", ""),
                 "domain": company.get("domain", ""),
-                "category": g["category"] or "humano",
-                "response_quality": round(g["response_quality"] or 0, 1),
-                "reaction_time_min": round(g["reaction_time_min"] or 0, 1),
-                "business_hours": g.get("business_hours"),
-                "notes": g["notes"] or "",
+                "category": g["category"] if has_real_analysis else None,
+                "response_quality": round(g["response_quality"] or 0, 1) if has_real_analysis else None,
+                "reaction_time_min": round(g["reaction_time_min"] or 0, 1) if has_real_analysis else None,
+                "business_hours": g.get("business_hours") if has_real_analysis else None,
+                "notes": g["notes"] or "" if has_real_analysis else "",
                 "total_responses": g["total_responses"],
                 "last_at": g["last_at"].isoformat() if g["last_at"] else None,
                 "numbers": numbers,
+                "analyzing": analyzing,
             })
         total = len(results)
         start = (page - 1) * page_size

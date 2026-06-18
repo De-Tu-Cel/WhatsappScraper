@@ -1,4 +1,5 @@
 # pipeline.py
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 # from pathlib import Path
 import requests
@@ -18,7 +19,7 @@ from scraper import WebsiteScraper
 from whatsapp_client import WhatAppClient
 from whatsapp_evolution import EvolutionClient
 
-DEFAULT_MESSAGE = "Hola, te contactamos desde Detucel."
+DEFAULT_MESSAGE = "Hola, encontré tu negocio en línea y me gustaría presentarte algo que puede ayudarte. ¿Tienes un momento? 😊"
 
 def _render_message(template: str, scraped: dict, website: str) -> str:
     if not template:
@@ -325,57 +326,46 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
         "evolution_result": evolution_result,
     }
     
+_BATCH_WORKERS = 4  # URLs procesadas en paralelo
+
+
 def run_pipeline_batch(urls: list) -> dict:
     """
-    Procesa múltiples URLs en lote
-    
-    Args:
-        urls: Lista de URLs a procesar
-    
-    Returns:
-        {
-            "summary": {
-                "procesados": int,
-                "con_wa": int,
-                "mensajes_enviados": int,
-                "errores": int
-            },
-            "results": [...]
-        }
+    Procesa múltiples URLs en lote (4 workers en paralelo).
     """
-    results = []
+    ordered: dict[str, dict] = {}  # url → result entry, preserves input order
+
+    def _process_one(url: str) -> tuple[str, dict]:
+        try:
+            result = process_url(url)
+            return url, {"url": url, "status": "ok", "result": result}
+        except Exception as e:
+            return url, {"url": url, "status": "error", "error": str(e)}
+
+    with ThreadPoolExecutor(max_workers=_BATCH_WORKERS) as pool:
+        futures = {pool.submit(_process_one, url): url for url in urls}
+        for future in as_completed(futures):
+            url, entry = future.result()
+            ordered[url] = entry
+
+    # Reconstruct in original input order
+    results = [ordered[url] for url in urls if url in ordered]
+
     summary = {
         "procesados": 0,
         "con_wa": 0,
         "mensajes_enviados": 0,
-        "errores": 0
+        "errores": 0,
     }
-
-    for url in urls:
-        try:
-            result = process_url(url)
-            results.append({
-                "url": url,
-                "status": "ok",
-                "result": result
-            })
-            summary["procesados"] += 1
-            
-            if result.get("primary_whatsapp_number"):
-                summary["con_wa"] += 1
-            
-            if result.get("send_result") and result["send_result"].get("status_code") == 200:
-                summary["mensajes_enviados"] += 1
-                
-        except Exception as e:
-            results.append({
-                "url": url,
-                "status": "error",
-                "error": str(e)
-            })
+    for entry in results:
+        if entry["status"] == "error":
             summary["errores"] += 1
+        else:
+            summary["procesados"] += 1
+            r = entry["result"]
+            if r.get("primary_whatsapp_number"):
+                summary["con_wa"] += 1
+            if r.get("send_result") and r["send_result"].get("status_code") == 200:
+                summary["mensajes_enviados"] += 1
 
-    return {
-        "summary": summary,
-        "results": results
-    }
+    return {"summary": summary, "results": results}

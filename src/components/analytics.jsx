@@ -138,7 +138,7 @@ function ConversationCapture({ thread, captureRef, visible }) {
         ref={captureRef}
         sx={{
           width: 500,
-          bgcolor: '#0d1117',
+          bgcolor: '#f8fafc',
           p: '12px',
           display: 'flex',
           flexDirection: 'column',
@@ -153,14 +153,15 @@ function ConversationCapture({ thread, captureRef, visible }) {
                 maxWidth: '78%',
                 px: '12px', py: '7px',
                 borderRadius: isOut ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
-                bgcolor: isOut ? '#1a3a5c' : '#1e2a3a',
-                border: `1px solid ${isOut ? 'rgba(59,130,246,0.35)' : 'rgba(255,255,255,0.1)'}`,
+                bgcolor: isOut ? '#dbeafe' : '#ffffff',
+                border: `1px solid ${isOut ? 'rgba(37,99,235,0.25)' : 'rgba(0,0,0,0.1)'}`,
+                boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
               }}>
-                <Box sx={{ color: 'rgba(255,255,255,0.9)', fontSize: '13px', lineHeight: 1.45,
+                <Box sx={{ color: isOut ? '#1e40af' : '#1e293b', fontSize: '13px', lineHeight: 1.45,
                            fontFamily: 'system-ui, sans-serif', whiteSpace: 'pre-wrap' }}>
                   {msg.body || msg.message_body || ''}
                 </Box>
-                <Box sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '10px', mt: '3px',
+                <Box sx={{ color: '#94a3b8', fontSize: '10px', mt: '3px',
                            textAlign: 'right', fontFamily: 'system-ui, sans-serif' }}>
                   {msg.created_at ? new Date(msg.created_at.endsWith('Z') ? msg.created_at : msg.created_at + 'Z').toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) : ''}
                 </Box>
@@ -223,6 +224,25 @@ export default function Analytics() {
 
   useEffect(() => { fetchData(page) }, [fetchData, page])
 
+  // Silent refetch — updates data without triggering the full loading spinner
+  const silentRefetch = useCallback(async (pg = page) => {
+    try {
+      const res  = await fetch(`/api/analytics?page=${pg}&page_size=${PAGE_SIZE}`)
+      const json = await res.json()
+      setData(json.items || [])
+      setTotalPages(json.pages || 1)
+      setTotalItems(json.total || 0)
+    } catch { /* ignore */ }
+  }, [page])
+
+  // Auto-refetch while any company is being analyzed by Groq
+  useEffect(() => {
+    const hasAnalyzing = data.some(r => r.analyzing)
+    if (!hasAnalyzing) return
+    const id = setTimeout(() => silentRefetch(page), 8000)
+    return () => clearTimeout(id)
+  }, [data, page, silentRefetch])
+
   const handleGenerateReport = useCallback(async (row, filterNum = null) => {
     const genKey = filterNum ? `${row.company_id}_${filterNum}` : row.company_id
     setGenerating(genKey)
@@ -249,11 +269,8 @@ export default function Analytics() {
       try {
         const html2canvas = (await html2canvasModule).default
         if (captureRef.current) {
-          // Resolve CSS variable to actual hex so html2canvas can use it
-          const resolvedBg = getComputedStyle(document.documentElement)
-            .getPropertyValue('--sidebar-bg').trim() || '#0d1117'
           const canvas = await html2canvas(captureRef.current, {
-            backgroundColor: resolvedBg,
+            backgroundColor: '#f8fafc',
             scale: 2,
             logging: false,
             useCORS: true,
@@ -677,6 +694,11 @@ export default function Analytics() {
                           <Typography sx={{ color: 'rgba(255,255,255,0.85)', fontWeight: 600, fontSize: '0.8rem' }}>
                             {row.company_name || row.company_id}
                           </Typography>
+                          {row.analyzing && (
+                            <Tooltip title="Analizando respuesta…">
+                              <CircularProgress size={11} thickness={5} sx={{ color: 'var(--accent,#a5b4fc)', opacity: 0.8, flexShrink: 0 }} />
+                            </Tooltip>
+                          )}
                           {hasMultiple && (
                             <Chip label={`${validNumbers.length} núms`} size="small" sx={{
                               height: 16, fontSize: '0.6rem',
@@ -702,14 +724,16 @@ export default function Analytics() {
 
                       {/* Categoría */}
                       <TableCell sx={CELL_SX}>
-                        {!hasMultiple && <Chip label={`${cat.icon} ${cat.label}`} size="small" sx={{ height: 20, fontSize: '0.7rem', bgcolor: cat.bg, color: cat.color, border: `1px solid ${cat.color}44` }} />}
+                        {!hasMultiple && (row.category
+                          ? <Chip label={`${cat.icon} ${cat.label}`} size="small" sx={{ height: 20, fontSize: '0.7rem', bgcolor: cat.bg, color: cat.color, border: `1px solid ${cat.color}44` }} />
+                          : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>)}
                       </TableCell>
 
                       {/* Calidad */}
                       <TableCell sx={CELL_SX}>
                         {!hasMultiple && (row.response_quality != null
                           ? <QualityDots score={row.response_quality} color={cat.color} />
-                          : <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.78rem' }}>—</Typography>)}
+                          : <QualityDots score={0} color="rgba(255,255,255,0.1)" />)}
                       </TableCell>
 
                       {/* T. Reacción */}
@@ -779,8 +803,10 @@ export default function Analytics() {
 
                     {/* Filas expandibles — una por número, alineadas con columnas */}
                     {hasMultiple && isExpanded && row.numbers.filter(n => (n.number || '').replace(/\D/g,'').length >= 10).map(n => {
-                      const nCat    = getCategoryConfig({ category: n.category })
-                      const replied = n.responses > 0
+                      const nCat     = getCategoryConfig({ category: n.category })
+                      const replied  = n.responses > 0
+                      const inherited = n.inherited_analysis === true
+                      const hasAnalysis = !!n.category
                       const shortNum = (n.number || '').replace(/\D/g,'').slice(-10)
                         .replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')
                       const numKey  = `${row.company_id}_${n.number}`
@@ -789,28 +815,40 @@ export default function Analytics() {
                       const isGenNum = generating === genKey
                       const NSUB = { ...CELL_SX, bgcolor: 'rgba(0,0,0,0.15)', borderBottom: '1px solid rgba(255,255,255,0.04)' }
                       return (
-                        <TableRow key={numKey}>
+                        <TableRow key={numKey} sx={{ opacity: replied ? 1 : 0.45 }}>
                           <TableCell sx={{ ...NSUB, px: 0.5, width: 32 }} />
                           {/* Número */}
                           <TableCell sx={{ ...NSUB, pl: 3 }}>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7 }}>
-                              <WhatsAppIcon sx={{ fontSize: 13, color: replied ? '#4ade80' : 'rgba(255,255,255,0.2)', filter: replied ? 'drop-shadow(0 0 4px #4ade8066)' : 'none' }} />
-                              <Typography sx={{ fontSize: '0.72rem', fontFamily: 'monospace', color: 'rgba(255,255,255,0.7)' }}>{shortNum}</Typography>
+                              <WhatsAppIcon sx={{
+                                fontSize: 13,
+                                color: replied ? '#4ade80' : 'rgba(255,255,255,0.18)',
+                                filter: replied ? 'drop-shadow(0 0 4px #4ade8066)' : 'grayscale(1)',
+                              }} />
+                              <Typography sx={{ fontSize: '0.72rem', fontFamily: 'monospace', color: replied ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.35)' }}>{shortNum}</Typography>
                             </Box>
                           </TableCell>
                           {/* Industria — vacía */}
                           <TableCell sx={NSUB} />
                           {/* Categoría */}
                           <TableCell sx={NSUB}>
-                            {replied
-                              ? <Chip label={`${nCat.icon} ${nCat.label}`} size="small" sx={{ height: 18, fontSize: '0.65rem', bgcolor: nCat.bg, color: nCat.color, border: `1px solid ${nCat.color}44` }} />
-                              : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin respuesta</Typography>}
+                            {!replied
+                              ? <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>
+                              : hasAnalysis
+                                ? <Chip
+                                    label={`${nCat.icon} ${nCat.label}`}
+                                    size="small"
+                                    sx={{ height: 18, fontSize: '0.65rem', bgcolor: nCat.bg, color: nCat.color,
+                                          border: `1px solid ${nCat.color}44`,
+                                          opacity: inherited ? 0.65 : 1 }}
+                                  />
+                                : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>}
                           </TableCell>
                           {/* Calidad */}
                           <TableCell sx={NSUB}>
-                            {n.response_quality != null
+                            {replied && n.response_quality != null
                               ? <QualityDots score={n.response_quality} color={nCat.color} />
-                              : <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.75rem' }}>—</Typography>}
+                              : <QualityDots score={0} color="rgba(255,255,255,0.1)" />}
                           </TableCell>
                           {/* T. Reacción */}
                           <TableCell sx={NSUB}>
@@ -818,28 +856,30 @@ export default function Analytics() {
                               {n.reaction_time_min != null ? formatReactionTime(n.reaction_time_min) : '—'}
                             </Typography>
                           </TableCell>
-                          {/* Última respuesta — fecha real */}
+                          {/* Última respuesta */}
                           <TableCell sx={NSUB}>
                             <Typography sx={{ fontSize: '0.75rem', color: replied ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.15)' }}>
                               {n.last_at ? formatLastAt(n.last_at) : '—'}
                             </Typography>
                           </TableCell>
-                          {/* Notas del análisis de ese número */}
+                          {/* Notas */}
                           <TableCell sx={{ ...NSUB, maxWidth: 200 }}>
-                            {n.notes
-                              ? <Tooltip title={n.notes} placement="top">
-                                  <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem', cursor: 'default', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
-                                    {n.notes.length > 55 ? n.notes.slice(0, 55) + '…' : n.notes}
-                                  </Typography>
-                                </Tooltip>
-                              : <Typography sx={{ color: 'rgba(255,255,255,0.15)', fontSize: '0.72rem' }}>—</Typography>}
+                            {!replied
+                              ? <Typography sx={{ color: 'rgba(248,113,113,0.5)', fontSize: '0.72rem', fontStyle: 'italic' }}>No hubo respuesta</Typography>
+                              : n.notes
+                                ? <Tooltip title={n.notes} placement="top">
+                                    <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem', cursor: 'default', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
+                                      {n.notes.length > 55 ? n.notes.slice(0, 55) + '…' : n.notes}
+                                    </Typography>
+                                  </Tooltip>
+                                : <Typography sx={{ color: 'rgba(255,255,255,0.15)', fontSize: '0.72rem' }}>—</Typography>}
                           </TableCell>
-                          {/* Andy por número */}
+                          {/* Andy por número — deshabilitado si no respondió */}
                           <TableCell sx={NSUB}>
-                            <Tooltip title={andySt === 'success' ? 'Enviado' : andySt === 'error' ? 'Error — reintentar' : andySt === 'loading' ? 'Enviando…' : `Enviar ${shortNum} a Andy`}>
+                            <Tooltip title={!replied ? 'Sin respuesta' : andySt === 'success' ? 'Enviado' : andySt === 'error' ? 'Error — reintentar' : andySt === 'loading' ? 'Enviando…' : `Enviar ${shortNum} a Andy`}>
                               <span>
-                                <IconButton size="small" disabled={andySt === 'loading'} onClick={() => handleSendToAndy(row, n.number)}
-                                  sx={{ color: andySt === 'success' ? '#4ade80' : andySt === 'error' ? '#f87171' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.15)' } }}>
+                                <IconButton size="small" disabled={!replied || andySt === 'loading'} onClick={() => handleSendToAndy(row, n.number)}
+                                  sx={{ color: andySt === 'success' ? '#4ade80' : andySt === 'error' ? '#f87171' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>
                                   {andySt === 'loading' ? <CircularProgress size={14} sx={{ color: 'var(--accent,#6366f1)' }} /> : andySt === 'success' ? <CheckCircleIcon sx={{ fontSize: 16 }} /> : andySt === 'error' ? <ErrorOutlineIcon sx={{ fontSize: 16 }} /> : <SendIcon sx={{ fontSize: 16 }} />}
                                 </IconButton>
                               </span>
@@ -847,7 +887,7 @@ export default function Analytics() {
                           </TableCell>
                           {/* PDF por número */}
                           <TableCell sx={NSUB}>
-                            <Tooltip title={isGenNum ? 'Generando…' : generating ? 'Espera…' : !replied ? 'Sin conversación registrada' : `PDF de ${shortNum}`}>
+                            <Tooltip title={isGenNum ? 'Generando…' : generating ? 'Espera…' : !replied ? 'Sin respuesta' : `PDF de ${shortNum}`}>
                               <span>
                                 <IconButton size="small" disabled={!!generating || !replied} onClick={() => handleGenerateReport(row, n.number)}
                                   sx={{ color: isGenNum ? 'var(--accent,#6366f1)' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>

@@ -1,11 +1,20 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))  # ← añade backEnd/app/ al path
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
+from app.classifier import start_classifier_background
 
-app = FastAPI(title="Mystery Shopper API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    start_classifier_background()
+    yield
+
+
+app = FastAPI(title="Mystery Shopper API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

@@ -334,12 +334,13 @@ export default function Conversations() {
     }
   }, [])
 
-  const fetchThread = useCallback(async (companyId, scrollToBottom = false, silent = false) => {
+  const fetchThread = useCallback(async (companyId, scrollToBottom = false, silent = false, numFilter = null) => {
     if (!silent) {
       if (scrollToBottom) setThreadLoad(true)
     }
     try {
-      const res = await fetch(`/api/conversations/${companyId}`)
+      const params = numFilter && numFilter !== 'all' ? `?number=${encodeURIComponent(numFilter)}` : ''
+      const res = await fetch(`/api/conversations/${companyId}${params}`)
       const data = await res.json()
       const msgs = Array.isArray(data) ? data : []
       if (silent) {
@@ -385,11 +386,10 @@ export default function Conversations() {
       )]
       setWaNumbers(numbers)
       setSelectedNums(numbers)
-      setActiveNum(numbers.length > 0 ? numbers[0] : null)
+      // Don't override activeNum here — it's already set to 'all' by the selection effect
     } catch {
       if (currentCompanyRef.current !== companyId) return
       setWaNumbers([])
-      setActiveNum(null)
     }
   }, [])
 
@@ -398,16 +398,22 @@ export default function Conversations() {
   useEffect(() => {
     const id = setInterval(() => {
       fetchConvs()
-      if (selected) fetchThread(selected.company_id, false, true)
+      if (selected) fetchThread(selected.company_id, false, true, activeNum !== 'all' ? activeNum : null)
     }, 20000)
     return () => clearInterval(id)
-  }, [fetchConvs, fetchThread, selected])
+  }, [fetchConvs, fetchThread, selected, activeNum])
 
   // Sync reply target with active tab
   useEffect(() => {
-    if (activeNum) setSelectedNums([activeNum])
-    else setSelectedNums(waNumbers)
+    if (activeNum && activeNum !== 'all') setSelectedNums([activeNum])
+    else setSelectedNums(waNumbers.slice(0, 1))
   }, [activeNum, waNumbers])
+
+  // Re-fetch thread when user switches to a specific number tab
+  useEffect(() => {
+    if (!selected || !activeNum || activeNum === 'all') return
+    fetchThread(selected.company_id, false, false, activeNum)
+  }, [activeNum, selected, fetchThread])
 
   const handleSync = useCallback(async (companyId, force = false) => {
     if (!companyId || syncingRef.current) return
@@ -497,11 +503,15 @@ export default function Conversations() {
   const visibleThread = useMemo(() => {
     if (!activeNum || activeNum === 'all') return thread
     const target = norm(activeNum)
+    // Only show unknown-number inbound in this tab if we actually sent to this number
+    const sentToThisNum = thread.some(m =>
+      m.direction === 'outbound' && norm(m.to_number || m.number) === target
+    )
     return thread.filter(m => {
       const msgNum = norm(m.to_number || m.from_number || m.number)
       if (msgNum === target) return true
-      // Include inbound messages from bot/business numbers not in our contacts
-      if (m.direction === 'inbound' && !waNumbers.some(n => norm(n) === msgNum)) return true
+      // Include inbound from business/unknown numbers only if we sent to this tab's number
+      if (m.direction === 'inbound' && !waNumbers.some(n => norm(n) === msgNum)) return sentToThisNum
       return false
     })
   }, [thread, activeNum, waNumbers])
@@ -620,7 +630,7 @@ export default function Conversations() {
                 <CircularProgress size={12} sx={{ color: 'rgba(255,255,255,0.2)', mr: 0.5 }} />
               )}
                 <Tooltip title="Actualizar">
-                  <IconButton size="small" onClick={() => fetchThread(selected.company_id, true)}
+                  <IconButton size="small" onClick={() => fetchThread(selected.company_id, true, false, activeNum !== 'all' ? activeNum : null)}
                     sx={{ color: 'rgba(255,255,255,0.3)', '&:hover': { color: 'white' } }}>
                     <RefreshIcon sx={{ fontSize: 16 }} />
                   </IconButton>
@@ -638,20 +648,19 @@ export default function Conversations() {
                   '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.15)', borderRadius: 2 },
                 }}>
                   {waNumbers.map(num => {
-                    const isActive  = activeNum === num || waNumbers.length === 1
+                    const isActive  = activeNum === num
                     const stats     = numStats[num] || { sent: 0, received: 0 }
                     const replied   = stats.sent > 0 || stats.received > 0
                     const formatted = num.replace(/\D/g, '').slice(-10)
                       .replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')
                     return (
-                      <Box key={num} onClick={() => waNumbers.length > 1 && setActiveNum(num)} sx={{
+                      <Box key={num} onClick={() => setActiveNum(isActive ? 'all' : num)} sx={{
                         display: 'flex', alignItems: 'center', gap: 0.6, flexShrink: 0,
-                        px: 1.2, py: 0.5, borderRadius: 99,
-                        cursor: waNumbers.length > 1 ? 'pointer' : 'default',
+                        px: 1.2, py: 0.5, borderRadius: 99, cursor: 'pointer',
                         bgcolor: isActive ? 'rgba(var(--accent-rgb,99,102,241),0.15)' : 'rgba(255,255,255,0.05)',
                         border: `1px solid ${isActive ? 'rgba(var(--accent-rgb,99,102,241),0.4)' : 'rgba(255,255,255,0.1)'}`,
                         transition: 'all 0.15s',
-                        '&:hover': waNumbers.length > 1 ? { bgcolor: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.2)' } : {},
+                        '&:hover': { bgcolor: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.2)' },
                       }}>
                         <WhatsAppIcon sx={{
                           fontSize: 13, flexShrink: 0,
@@ -672,11 +681,10 @@ export default function Conversations() {
               )}
             </Box>
 
-            {/* Los chips de número ya están en el header — aquí solo la etiqueta de contexto */}
-            {waNumbers.length > 1 && (
+            {waNumbers.length > 1 && activeNum && activeNum !== 'all' && (
               <Box sx={{ px: 2, py: 0.6, borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
                 <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-                  Chat · {activeNum ? activeNum.replace(/\D/g,'').slice(-10).replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3') : 'selecciona un número'}
+                  Filtrando · {activeNum.replace(/\D/g,'').slice(-10).replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')}
                 </Typography>
               </Box>
             )}
@@ -690,6 +698,13 @@ export default function Conversations() {
               {threadLoad ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4 }}>
                   <CircularProgress size={24} sx={{ color: 'var(--accent, #6366f1)' }} />
+                </Box>
+              ) : waNumbers.length > 1 && (!activeNum || activeNum === 'all') ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2, px: 3 }}>
+                  <WhatsAppIcon sx={{ fontSize: 40, color: 'rgba(37,211,102,0.2)' }} />
+                  <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.85rem', textAlign: 'center' }}>
+                    Selecciona un número para ver la conversación
+                  </Typography>
                 </Box>
               ) : visibleThread.length === 0 ? (
                 <Box sx={{ textAlign: 'center', pt: 4 }}>
@@ -755,11 +770,12 @@ export default function Conversations() {
                 <Tooltip title={
                   reply.length > MAX_WA_MSG ? `Demasiado largo (máx. ${MAX_WA_MSG})` :
                   waNumbers.length === 0 ? 'Sin números WhatsApp registrados' :
+                  (waNumbers.length > 1 && (!activeNum || activeNum === 'all')) ? 'Selecciona un número primero' :
                   selectedNums.length === 0 ? 'Selecciona al menos un número' : 'Enviar (Enter)'
                 }>
                   <span>
                     <IconButton onClick={handleSendReply}
-                      disabled={!reply.trim() || sending || reply.length > MAX_WA_MSG || (waNumbers.length > 0 && selectedNums.length === 0)}
+                      disabled={!reply.trim() || sending || reply.length > MAX_WA_MSG || (waNumbers.length > 0 && selectedNums.length === 0) || (waNumbers.length > 1 && (!activeNum || activeNum === 'all'))}
                       sx={{ bgcolor: 'rgba(var(--accent-rgb, 99,102,241), 0.2)', border: '1px solid rgba(var(--accent-rgb, 99,102,241), 0.3)', borderRadius: 2, color: 'var(--accent, #a5b4fc)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 99,102,241), 0.35)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.15)' } }}>
                       {sending ? <CircularProgress size={18} sx={{ color: 'var(--accent, #a5b4fc)' }} /> : <SendIcon sx={{ fontSize: 18 }} />}
                     </IconButton>

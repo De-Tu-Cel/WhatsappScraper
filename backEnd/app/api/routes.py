@@ -1199,28 +1199,38 @@ def api_all_pending():
     return {"count": len(docs), "docs": docs}
 
 @router.post("/admin/requeue-unanalyzed")
-def api_requeue_unanalyzed():
-    """Mark old inbound messages (no analysis, no analysis_status) as pending so the classifier picks them up."""
+def api_requeue_unanalyzed(background_tasks: BackgroundTasks):
+    """Find old inbound messages with no analysis and run the classifier on each one."""
+    from app.classifier import classify_and_save
+    from bson import ObjectId
     db = MongoDBManager()
-    result = db.db.message_logs.update_many(
+    pending_docs = list(db.db.message_logs.find(
         {
             "direction": "inbound",
             "analysis_status": {"$exists": False},
             "analysis": {"$exists": False},
             "company_id": {"$exists": True, "$nin": [None, "unknown", "undefined", "manual"]},
+            "message_body": {"$exists": True, "$ne": "[media]"},
         },
-        {"$set": {"analysis_status": "pending"}}
-    )
-    return {"ok": True, "requeued": result.modified_count}
+        {"_id": 1, "company_id": 1, "message_body": 1, "created_at": 1}
+    ))
+    for doc in pending_docs:
+        log_id     = str(doc["_id"])
+        company_id = str(doc["company_id"])
+        body       = doc.get("message_body") or ""
+        created    = doc.get("created_at") or datetime.now()
+        db.db.message_logs.update_one({"_id": doc["_id"]}, {"$set": {"analysis_status": "pending"}})
+        background_tasks.add_task(classify_and_save, log_id, company_id, body, created)
+    return {"ok": True, "queued": len(pending_docs)}
 
 
 @router.delete("/admin/all-pending")
 def api_delete_all_pending():
-    """DEV ONLY — delete all _test docs and reset unknown pending to done."""
+    """DEV ONLY — delete test docs and reset ALL orphaned pending to done."""
     db = MongoDBManager()
     deleted = db.db.message_logs.delete_many({"_test": True}).deleted_count
     reset   = db.db.message_logs.update_many(
-        {"analysis_status": "pending", "company_id": {"$in": ["unknown", "undefined"]}},
+        {"analysis_status": "pending"},
         {"$set": {"analysis_status": "done"}}
     ).modified_count
-    return {"ok": True, "deleted_test": deleted, "reset_unknown": reset}
+    return {"ok": True, "deleted_test": deleted, "reset_pending": reset}

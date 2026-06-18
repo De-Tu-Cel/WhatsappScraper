@@ -1198,6 +1198,22 @@ def api_all_pending():
         d["company_id"] = str(d.get("company_id", "MISSING"))
     return {"count": len(docs), "docs": docs}
 
+@router.post("/admin/requeue-unanalyzed")
+def api_requeue_unanalyzed():
+    """Mark old inbound messages (no analysis, no analysis_status) as pending so the classifier picks them up."""
+    db = MongoDBManager()
+    result = db.db.message_logs.update_many(
+        {
+            "direction": "inbound",
+            "analysis_status": {"$exists": False},
+            "analysis": {"$exists": False},
+            "company_id": {"$exists": True, "$nin": [None, "unknown", "undefined", "manual"]},
+        },
+        {"$set": {"analysis_status": "pending"}}
+    )
+    return {"ok": True, "requeued": result.modified_count}
+
+
 @router.delete("/admin/all-pending")
 def api_delete_all_pending():
     """DEV ONLY — delete all _test docs and reset unknown pending to done."""

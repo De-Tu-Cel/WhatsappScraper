@@ -656,7 +656,7 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
                 message_type = msg.get("messageType", "conversation")
                 status_raw = msg.get("status", "PENDING")
                 status = STATUS_MAP.get(status_raw, status_raw.lower())
-                print(f"[Webhook] msg from_me={from_me} number={number} body={str(message_body)[:80]}")
+                print(f"[Webhook] msg from_me={from_me} number={number} type={message_type}")
 
                 if from_me:
                     updated = db.update_evolution_message_status(message_id, status) if message_id else False

@@ -556,9 +556,10 @@ export default function Analytics() {
             <Box key={f.value} onClick={() => { setFilterCat(f.value); setPage(1) }} sx={{
               display: 'flex', alignItems: 'center', gap: 0.5,
               px: 1.2, py: 0.45, borderRadius: 99, cursor: 'pointer',
-              bgcolor: isActive ? f.bg : 'var(--card-bg,#161d2e)',
+              bgcolor: isActive ? f.bg : 'transparent',
               border: `1px solid ${isActive ? f.color + '66' : 'rgba(255,255,255,0.08)'}`,
-              transition: 'all 0.15s',
+              transition: 'background-color 0.15s ease, border-color 0.15s ease',
+              WebkitTapHighlightColor: 'transparent',
               '&:hover': { bgcolor: f.bg, borderColor: f.color + '44' },
             }}>
               <Typography sx={{ fontSize: '0.75rem', fontWeight: isActive ? 700 : 400, color: isActive ? f.color : 'rgba(255,255,255,0.45)', whiteSpace: 'nowrap' }}>
@@ -618,10 +619,24 @@ export default function Analytics() {
                 <TableRow>
                   {/* Columna expand — sin label */}
                   <TableCell sx={{ ...HEADER_CELL_SX, width: 32, px: 0.5 }} />
+                  {/* Empresa */}
+                  <TableCell sx={HEADER_CELL_SX}>
+                    <TableSortLabel active={sortField === 'company_name'} direction={sortField === 'company_name' ? sortDir : 'asc'}
+                      onClick={() => handleSort('company_name')}
+                      sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
+                      {t.analytics.company}
+                    </TableSortLabel>
+                  </TableCell>
+                  {/* Número */}
+                  <TableCell sx={{ ...HEADER_CELL_SX, whiteSpace: 'nowrap' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      <WhatsAppIcon sx={{ fontSize: 12 }} /> Número
+                    </Box>
+                  </TableCell>
+                  {/* Industria + Categoría */}
                   {[
-                    { field: 'company_name', label: t.analytics.company },
-                    { field: 'industry',     label: t.analytics.industry },
-                    { field: 'category',     label: t.analytics.category },
+                    { field: 'industry', label: t.analytics.industry },
+                    { field: 'category', label: t.analytics.category },
                   ].map(({ field, label }) => (
                     <TableCell key={field} sx={HEADER_CELL_SX}>
                       <TableSortLabel active={sortField === field} direction={sortField === field ? sortDir : 'asc'}
@@ -713,6 +728,21 @@ export default function Analytics() {
                             {row.domain}
                           </Typography>
                         )}
+                      </TableCell>
+
+                      {/* Número */}
+                      <TableCell sx={CELL_SX}>
+                        {!hasMultiple && validNumbers[0] && (() => {
+                          const n0 = validNumbers[0]
+                          const sn = (n0.number || '').replace(/\D/g,'').slice(-10).replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')
+                          const replied0 = n0.responses > 0
+                          return (
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                              <WhatsAppIcon sx={{ fontSize: 12, color: replied0 ? '#4ade80' : 'rgba(255,255,255,0.18)', filter: replied0 ? 'drop-shadow(0 0 3px #4ade8066)' : 'grayscale(1)', flexShrink: 0 }} />
+                              <Typography sx={{ fontSize: '0.72rem', fontFamily: 'monospace', color: replied0 ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.35)' }}>{sn}</Typography>
+                            </Box>
+                          )
+                        })()}
                       </TableCell>
 
                       {/* Industria */}
@@ -817,15 +847,31 @@ export default function Analytics() {
                       return (
                         <TableRow key={numKey} sx={{ opacity: replied ? 1 : 0.45 }}>
                           <TableCell sx={{ ...NSUB, px: 0.5, width: 32 }} />
-                          {/* Número */}
+                          {/* Empresa — nombre de sucursal o número como fallback */}
                           <TableCell sx={{ ...NSUB, pl: 3 }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7 }}>
+                            <Box>
+                              <Typography sx={{ fontSize: '0.75rem', fontWeight: n.label ? 600 : 400, color: replied ? (n.label ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.55)') : 'rgba(255,255,255,0.3)', lineHeight: 1.3, fontFamily: n.label ? 'inherit' : 'monospace' }}>
+                                {n.label || shortNum}
+                              </Typography>
+                              {n.source && (
+                                <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.22)', lineHeight: 1.2 }}>
+                                  {n.source}
+                                </Typography>
+                              )}
+                            </Box>
+                          </TableCell>
+                          {/* Número */}
+                          <TableCell sx={NSUB}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                               <WhatsAppIcon sx={{
-                                fontSize: 13,
+                                fontSize: 12,
                                 color: replied ? '#4ade80' : 'rgba(255,255,255,0.18)',
-                                filter: replied ? 'drop-shadow(0 0 4px #4ade8066)' : 'grayscale(1)',
+                                filter: replied ? 'drop-shadow(0 0 3px #4ade8066)' : 'grayscale(1)',
+                                flexShrink: 0,
                               }} />
-                              <Typography sx={{ fontSize: '0.72rem', fontFamily: 'monospace', color: replied ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.35)' }}>{shortNum}</Typography>
+                              <Typography sx={{ fontSize: '0.72rem', fontFamily: 'monospace', color: replied ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.28)' }}>
+                                {shortNum}
+                              </Typography>
                             </Box>
                           </TableCell>
                           {/* Industria — vacía */}

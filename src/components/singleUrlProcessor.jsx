@@ -1,6 +1,8 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import { authFetch } from '@/lib/api'
+import { useInstanceStatus } from '../hooks/useInstanceStatus'
+import { InstanceDisconnectedBanner } from './InstanceStatusBanner'
 import Box from '@mui/material/Box'
 import TextField from '@mui/material/TextField'
 import IconButton from '@mui/material/IconButton'
@@ -124,7 +126,7 @@ function renderWithValues(text, vals) {
     .replace(/\{\{web\}\}/g,       vals.web       ?? '')
 }
 
-export function MessageComposer({ result, onSend, sending }) {
+export function MessageComposer({ result, onSend, sending, disabled }) {
   const { t } = useLang()
   const inputRef = useRef(null)
   const vals = extractValues(result)
@@ -286,14 +288,14 @@ export function MessageComposer({ result, onSend, sending }) {
           {t.single.selectNum}
         </Typography>
       )}
-      <Box onClick={() => { const txt = getCurrentText(); if (!sending && txt.trim() && selectedNums.length > 0 && txt.length <= MAX_WA_MSG) onSend(txt, selectedNums) }}
+      <Box onClick={() => { const txt = getCurrentText(); if (!sending && !disabled && txt.trim() && selectedNums.length > 0 && txt.length <= MAX_WA_MSG) onSend(txt, selectedNums) }}
         sx={{
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1,
           py: 1.2, borderRadius: 1.5,
-          cursor: (sending || selectedNums.length === 0 || charCount > MAX_WA_MSG) ? 'default' : 'pointer',
-          bgcolor: (sending || selectedNums.length === 0 || charCount > MAX_WA_MSG) ? 'rgba(34,197,94,0.1)' : 'rgba(34,197,94,0.18)',
+          cursor: (sending || disabled || selectedNums.length === 0 || charCount > MAX_WA_MSG) ? 'default' : 'pointer',
+          bgcolor: (sending || disabled || selectedNums.length === 0 || charCount > MAX_WA_MSG) ? 'rgba(34,197,94,0.1)' : 'rgba(34,197,94,0.18)',
           border: '1px solid rgba(34,197,94,0.35)',
-          opacity: (sending || selectedNums.length === 0 || charCount > MAX_WA_MSG) ? 0.5 : 1,
+          opacity: (sending || disabled || selectedNums.length === 0 || charCount > MAX_WA_MSG) ? 0.5 : 1,
           transition: 'all 0.15s',
           '&:hover': !(sending || selectedNums.length === 0) ? { bgcolor: 'rgba(34,197,94,0.28)', borderColor: 'rgba(34,197,94,0.6)' } : {},
         }}>
@@ -370,7 +372,7 @@ function SearchBar({ url, setUrl, onSearch, loading, compact, onCancel }) {
   const canSearch = !loading && url.trim() && !urlError
 
   return (
-    <Box sx={{ width: compact ? '100%' : { xs: '100%', sm: '620px' } }}>
+    <Box sx={{ width: '100%', maxWidth: compact ? '100%' : 620 }}>
       <Box sx={{
         display: 'flex',
         alignItems: 'center',
@@ -451,6 +453,7 @@ export default function SingleUrlProcessor() {
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
   const [sendSuccess, setSendSuccess] = useState(false)
+  const { status: instanceStatus, isDisconnected } = useInstanceStatus()
 
   const hasResult = result || error
   const hasWhatsapp = !!result?.primary_whatsapp_number
@@ -505,7 +508,10 @@ export default function SingleUrlProcessor() {
               website: result.website,
             }),
           })
-          if (!res.ok) throw new Error(`Error ${res.status}`)
+          if (!res.ok) {
+            const errJson = await res.json().catch(() => ({}))
+            throw new Error(errJson.detail || `Error ${res.status}`)
+          }
           successCount++
         } catch (e) {
           lastErr = e
@@ -556,8 +562,9 @@ export default function SingleUrlProcessor() {
       {result && !loading && (
         hasWhatsapp
           ? <>
+              <InstanceDisconnectedBanner status={instanceStatus} sx={{ mt: 2, mb: 1 }} />
               {sendSuccess && <Alert severity="success" sx={{ mt: 2 }}>Mensaje enviado correctamente</Alert>}
-              {!sendSuccess && <MessageComposer result={result} onSend={handleSend} sending={sending} />}
+              {!sendSuccess && <MessageComposer result={result} onSend={handleSend} sending={sending} disabled={isDisconnected} />}
             </>
           : <Box sx={{ mt: 3, p: 2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.07)', bgcolor: 'rgba(255,255,255,0.02)', textAlign: 'center' }}>
               <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.85rem' }}>

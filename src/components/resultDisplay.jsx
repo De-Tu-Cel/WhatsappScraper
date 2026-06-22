@@ -347,7 +347,6 @@ export default function ResultDisplay({ result }) {
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <PersonIcon sx={{ fontSize: 15, color: '#c084fc' }} />
                   <Typography variant="body2" fontWeight={700} sx={{ color: 'rgba(255,255,255,0.85)' }}>{p.name}</Typography>
-                  {p.role && <Chip label={p.role} size="small" sx={{ height: 18, fontSize: '0.65rem', bgcolor: 'rgba(192,132,252,0.1)', color: '#c084fc', border: '1px solid rgba(192,132,252,0.2)' }} />}
                 </Box>
                 {p.email && <Typography variant="caption" sx={{ color: '#f87171', ml: 3 }}>{p.email}</Typography>}
                 {p.phone && <Typography variant="caption" sx={{ color: '#60a5fa', ml: 3 }}>{p.phone}</Typography>}

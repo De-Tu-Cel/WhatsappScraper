@@ -6,15 +6,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
 from app.classifier import start_classifier_background
+from app.scheduler import start_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     start_classifier_background()
+    start_scheduler()
     yield
 
 
-app = FastAPI(title="Mystery Shopper API", lifespan=lifespan)
+app = FastAPI(title="Lector Comercial API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

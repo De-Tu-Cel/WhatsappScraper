@@ -5,6 +5,8 @@ import Dialog from '@mui/material/Dialog'
 import DialogContent from '@mui/material/DialogContent'
 import DialogActions from '@mui/material/DialogActions'
 import { authFetch } from '@/lib/api'
+import { useInstanceStatus } from '../hooks/useInstanceStatus'
+import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
 import { keyframes } from '@mui/system'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
@@ -116,6 +118,8 @@ export default function SearchProspects() {
   const [selectedTpl, setSelectedTpl] = useState(TEMPLATES[0].id)
   const [msgText,     setMsgText]     = useState(TEMPLATES[0].text)
   const [sendingAll,  setSendingAll]  = useState(false)
+  const [sendError,   setSendError]   = useState('')
+  const { status: instanceStatus, isDisconnected } = useInstanceStatus()
   const [waDeselected, setWaDeselected] = useState(new Set())
   const [confirmDialog, setConfirmDialog] = useState({ open: false, names: '', resolve: null }) // números que el usuario quitó manualmente
   const msgRef = useRef(null)
@@ -368,6 +372,13 @@ export default function SearchProspects() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ company_id: row.company_id, to_number: num, message: message || msgText, website: row.url }),
           })
+          if (!res.ok) {
+            const errJson = await res.json().catch(() => ({}))
+            const detail = errJson.detail || `Error ${res.status}`
+            setSendError(detail)
+            setTimeout(() => setSendError(''), 10_000)
+            throw new Error(detail)
+          }
           const json = await res.json()
           if (json.status === 'sent') lastStatus = 'sent'
         }
@@ -376,6 +387,16 @@ export default function SearchProspects() {
         updated[idx] = { ...updated[idx], msg_status: 'failed' }
       }
       setResults([...updated])
+      if (i < targets.length - 1 && !cancelRef.current) {
+        const sentSoFar = i + 1
+        if (sentSoFar % 5 === 0) {
+          const longBreak = Math.floor(Math.random() * 300000 + 180000) // 3–8 min
+          await new Promise(r => setTimeout(r, longBreak))
+        } else {
+          const delay = Math.floor(Math.random() * 30000 + 25000) // 25–55 seg
+          await new Promise(r => setTimeout(r, delay))
+        }
+      }
     }
     setSendingAll(false)
   }
@@ -410,7 +431,7 @@ export default function SearchProspects() {
 
   /* ── Barra de búsqueda pill ── */
   const SearchBar = ({ compact }) => (
-    <Box sx={{ position: 'relative', width: compact ? '100%' : { xs: '100%', sm: '580px' } }}>
+    <Box sx={{ position: 'relative', width: '100%', maxWidth: compact ? '100%' : 580 }}>
       <Box sx={{
         display: 'flex', alignItems: 'center',
         bgcolor: 'var(--sidebar-bg, #0d1117)', borderRadius: '50px',
@@ -534,7 +555,7 @@ export default function SearchProspects() {
 
           {/* Historial reciente */}
           {history.length > 0 && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', width: { xs: '100%', sm: '580px' } }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', width: '100%', maxWidth: 580 }}>
               <HistoryIcon sx={{ fontSize: 13, color: 'rgba(255,255,255,0.2)' }} />
               <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.68rem' }}>Recientes:</Typography>
               {history.map(h => (
@@ -547,7 +568,7 @@ export default function SearchProspects() {
           )}
 
           {/* Grid de industrias */}
-          <Box sx={{ width: { xs: '100%', sm: '580px' }, overflowY: 'auto', maxHeight: 320 }}>
+          <Box sx={{ width: '100%', maxWidth: 580, overflowY: 'auto', maxHeight: 320 }}>
             {INDUSTRY_GROUPS.map(group => (
               <Box key={group.label} sx={{ mb: 1.8 }}>
                 <Typography sx={{ color: group.color, fontSize: '0.65rem', fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', mb: 0.7, opacity: 0.7 }}>{group.label}</Typography>
@@ -878,6 +899,8 @@ export default function SearchProspects() {
               {msgText.length} / 4096
             </Typography>
           </Box>
+          <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />
+          <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
             {sendingAll && (
               <Tooltip title="Cancelar envío">
@@ -889,7 +912,7 @@ export default function SearchProspects() {
             )}
             <Button
               onClick={handleSendAll}
-              disabled={effectiveWaSelected.size === 0 || alreadySent || sendingAll}
+              disabled={effectiveWaSelected.size === 0 || alreadySent || sendingAll || isDisconnected}
               startIcon={sendingAll ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
               size="small"
               sx={{

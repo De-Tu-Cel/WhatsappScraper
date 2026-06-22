@@ -89,6 +89,7 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
     # ========================================================================
     # GUARDAR CONTACTOS DE WHATSAPP
     # ========================================================================
+    _wa_label_map = {c["number"]: c.get("label", "") for c in _cr.get("whatsapp_contacts", [])}
     primary_whatsapp_number = None
     if _cr.get("whatsapp_numbers"):
         primary_whatsapp_number = _cr["whatsapp_numbers"][0]
@@ -98,6 +99,7 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
             "company_id": company_id,
             "type": "whatsapp",
             "value": primary_whatsapp_number,
+            "label": _wa_label_map.get(primary_whatsapp_number, ""),
             "source": website,
             "is_primary": True,
         })
@@ -107,6 +109,7 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
                 "company_id": company_id,
                 "type": "whatsapp",
                 "value": wa_num,
+                "label": _wa_label_map.get(wa_num, ""),
                 "source": website,
                 "is_primary": False,
             })
@@ -143,10 +146,9 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
         person_id = db.insert_person_contact({
             "company_id": company_id,
             "name": contact["name"],
-            "role": contact["role"],
-            "email": contact["email"],
-            "phone": contact["phone"],
-            "whatsapp": contact["whatsapp"],
+            "email": contact.get("email", ""),
+            "phone": contact.get("phone", ""),
+            "whatsapp": contact.get("whatsapp", ""),
             "source": website,
         })
         person_contact_ids.append(person_id)

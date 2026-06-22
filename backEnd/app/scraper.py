@@ -323,6 +323,14 @@ class WebsiteScraper:
 
         domain = urlparse(url).netloc.replace("www.", "")
 
+        # Extraer WhatsApp con labels (una sola pasada sobre el HTML)
+        _wa_contacts_main = self._extract_whatsapp_with_labels(soup, text)
+        _wa_seen = {c["number"] for c in _wa_contacts_main}
+        for _n in structured_wa:
+            if _n not in _wa_seen:
+                _wa_contacts_main.append({"number": _n, "label": ""})
+                _wa_seen.add(_n)
+
         # Extraer todos los datos
         result = {
             # Campos para MongoDB companies
@@ -354,10 +362,9 @@ class WebsiteScraper:
 
             # Contactos en bruto (se guardan en contacts, no en companies)
             "_contacts_raw": {
+                "whatsapp_contacts": list(_wa_contacts_main),
                 "whatsapp_numbers": [],
-                "all_whatsapp_numbers": list(dict.fromkeys(
-                    self._extract_whatsapp_numbers(soup, text) + structured_wa
-                )),
+                "all_whatsapp_numbers": [c["number"] for c in _wa_contacts_main],
                 "phone_numbers": list(dict.fromkeys(
                     self._extract_phone_numbers(soup, text) + structured_phones
                 )),
@@ -399,9 +406,19 @@ class WebsiteScraper:
             if not sub_soup:
                 continue
             sub_phones_s, sub_wa_s = self._extract_from_scripts(sub_soup)
-            for num in self._extract_whatsapp_numbers(sub_soup, sub_text) + sub_wa_s:
+            _existing_wa_nums = {c["number"] for c in result["_contacts_raw"]["whatsapp_contacts"]}
+            for contact in self._extract_whatsapp_with_labels(sub_soup, sub_text):
+                if contact["number"] not in result["_contacts_raw"]["all_whatsapp_numbers"]:
+                    result["_contacts_raw"]["all_whatsapp_numbers"].append(contact["number"])
+                if contact["number"] not in _existing_wa_nums:
+                    result["_contacts_raw"]["whatsapp_contacts"].append(contact)
+                    _existing_wa_nums.add(contact["number"])
+            for num in sub_wa_s:
                 if num not in result["_contacts_raw"]["all_whatsapp_numbers"]:
                     result["_contacts_raw"]["all_whatsapp_numbers"].append(num)
+                if num not in _existing_wa_nums:
+                    result["_contacts_raw"]["whatsapp_contacts"].append({"number": num, "label": ""})
+                    _existing_wa_nums.add(num)
             for phone in self._extract_phone_numbers(sub_soup, sub_text) + sub_phones_s:
                 if phone not in result["_contacts_raw"]["phone_numbers"]:
                     result["_contacts_raw"]["phone_numbers"].append(phone)
@@ -442,11 +459,21 @@ class WebsiteScraper:
                 js_soup = BeautifulSoup(js_html, "html.parser")
                 js_text = js_soup.get_text(" ", strip=True)
                 js_phones_s, js_wa_s = self._extract_from_scripts(js_soup)
-                found_wa  = self._extract_whatsapp_numbers(js_soup, js_text) + js_wa_s
+                _pw_contacts = self._extract_whatsapp_with_labels(js_soup, js_text)
+                found_wa  = [c["number"] for c in _pw_contacts] + js_wa_s
                 found_tel = self._extract_phone_numbers(js_soup, js_text) + js_phones_s
-                for n in found_wa:
+                _existing_pw = {c["number"] for c in result["_contacts_raw"]["whatsapp_contacts"]}
+                for c in _pw_contacts:
+                    if c["number"] not in result["_contacts_raw"]["all_whatsapp_numbers"]:
+                        result["_contacts_raw"]["all_whatsapp_numbers"].append(c["number"])
+                    if c["number"] not in _existing_pw:
+                        result["_contacts_raw"]["whatsapp_contacts"].append(c)
+                        _existing_pw.add(c["number"])
+                for n in js_wa_s:
                     if n not in result["_contacts_raw"]["all_whatsapp_numbers"]:
                         result["_contacts_raw"]["all_whatsapp_numbers"].append(n)
+                    if n not in _existing_pw:
+                        result["_contacts_raw"]["whatsapp_contacts"].append({"number": n, "label": ""})
                 for n in found_tel:
                     if n not in result["_contacts_raw"]["phone_numbers"]:
                         result["_contacts_raw"]["phone_numbers"].append(n)
@@ -1131,38 +1158,115 @@ class WebsiteScraper:
     # EXTRACCIÓN DE CONTACTOS
     # ========================================================================
 
-    def _extract_whatsapp_numbers(self, soup: BeautifulSoup, text: str) -> List[str]:
-        """Extrae números de WhatsApp"""
-        candidates = []
-        
-        # 1. Links de WhatsApp
+    def _extract_wa_label(self, link_tag) -> str:
+        """Extrae el nombre de sucursal/label del contexto cercano a un link wa.me."""
+        _GENERIC = re.compile(
+            r"^(whatsapp|wa|contacto|cont[aá]ctanos|chat|escr[ií]benos|com[uú]nicate|env[ií]anos|"
+            r"mensaje|enviar|tel[eé]fono|llama|llamanos|ll[aá]manos|escr[ií]benos|ubi[ck]aci[oó]n|"
+            r"direcci[oó]n|horario|sucursal|tienda|local)$",
+            re.IGNORECASE,
+        )
+        _PHONE_RE = re.compile(r"[\d\s\(\)\-\+]{7,}")
+
+        def _clean(raw: str) -> str:
+            cleaned = _PHONE_RE.sub("", raw).strip(" \t\n\r|•·–—/\\")
+            return cleaned if 2 < len(cleaned) < 60 else ""
+
+        def _is_generic(text: str) -> bool:
+            return bool(_GENERIC.match(text.strip()))
+
+        # 1. Alt de imagen dentro del link (más específico que el texto del link)
+        img = link_tag.find("img")
+        if img and img.get("alt"):
+            alt = _clean(img["alt"])
+            if alt and not _is_generic(alt):
+                return alt
+
+        # 2. Texto del link mismo (si no es genérico)
+        link_text = _clean(link_tag.get_text(" ", strip=True))
+        if link_text and not _is_generic(link_text):
+            return link_text
+
+        # 3. Buscar heading (h1-h6) más cercano — subir hasta 6 niveles en el DOM
+        node = link_tag.parent
+        for _ in range(6):
+            if node is None:
+                break
+            # Buscar heading hermano previo o dentro del mismo contenedor
+            heading = node.find_previous_sibling(re.compile(r"^h[1-6]$"))
+            if not heading:
+                heading = node.find(re.compile(r"^h[1-6]$"))
+            if heading:
+                h_text = _clean(heading.get_text(" ", strip=True))
+                if h_text and not _is_generic(h_text):
+                    return h_text
+            node = node.parent
+
+        # 4. Texto del contenedor más cercano con un solo fragmento significativo
+        node = link_tag.parent
+        for _ in range(4):
+            if node is None:
+                break
+            container_text = _clean(node.get_text(" ", strip=True))
+            for fragment in re.split(r"[|•·\n\r–—]", container_text):
+                fragment = fragment.strip()
+                if 3 < len(fragment) < 60 and not _is_generic(fragment):
+                    return fragment
+            node = node.parent
+
+        return ""
+
+    def _extract_whatsapp_with_labels(self, soup: BeautifulSoup, text: str) -> List[Dict]:
+        """Extrae números de WhatsApp junto con su label de sucursal/contexto."""
+        seen: set = set()
+        result: List[Dict] = []
+
         for link in soup.find_all("a", href=True):
             href = link["href"].strip()
-            
+            raw_num = None
             if "wa.me/" in href:
-                number = href.split("wa.me/")[-1].split("?")[0].split("/")[0]
-                candidates.append(number)
-            
-            elif "api.whatsapp.com/send" in href:
-                if "phone=" in href:
-                    number = href.split("phone=")[-1].split("&")[0]
-                    candidates.append(number)
-            
-        # 2. Texto con contexto "WhatsApp"
-        whatsapp_context = re.findall(
-            r"(?:whatsapp|wa)[:\s]*(\+?\d[\d\s\-\(\)]{8,}\d)",
-            text,
-            re.IGNORECASE
-        )
-        candidates.extend(whatsapp_context)
-        
-        # 3. Normalizar y deduplicar
+                raw_num = href.split("wa.me/")[-1].split("?")[0].split("/")[0]
+            elif "api.whatsapp.com/send" in href and "phone=" in href:
+                raw_num = href.split("phone=")[-1].split("&")[0]
+            if not raw_num:
+                continue
+            clean = self._normalize_phone(raw_num)
+            if clean and clean not in seen:
+                seen.add(clean)
+                result.append({"number": clean, "label": self._extract_wa_label(link)})
+
+        # Texto con contexto "whatsapp" (sin label disponible)
+        for raw_num in re.findall(
+            r"(?:whatsapp|wa)[:\s]*(\+?\d[\d\s\-\(\)]{8,}\d)", text, re.IGNORECASE
+        ):
+            clean = self._normalize_phone(raw_num)
+            if clean and clean not in seen:
+                seen.add(clean)
+                result.append({"number": clean, "label": ""})
+
+        return result
+
+    def _extract_whatsapp_numbers(self, soup: BeautifulSoup, text: str) -> List[str]:
+        """Extrae números de WhatsApp (solo números, sin label). Usado en subpages."""
+        candidates = []
+
+        for link in soup.find_all("a", href=True):
+            href = link["href"].strip()
+            if "wa.me/" in href:
+                candidates.append(href.split("wa.me/")[-1].split("?")[0].split("/")[0])
+            elif "api.whatsapp.com/send" in href and "phone=" in href:
+                candidates.append(href.split("phone=")[-1].split("&")[0])
+
+        candidates.extend(re.findall(
+            r"(?:whatsapp|wa)[:\s]*(\+?\d[\d\s\-\(\)]{8,}\d)", text, re.IGNORECASE
+        ))
+
         normalized = []
         for candidate in candidates:
             clean = self._normalize_phone(candidate)
             if clean and clean not in normalized:
                 normalized.append(clean)
-        
+
         return normalized
 
     def _extract_phone_numbers(self, soup: BeautifulSoup, text: str) -> List[str]:
@@ -1233,25 +1337,18 @@ class WebsiteScraper:
         return list(dict.fromkeys(emails))
 
     def _extract_person_contacts(self, soup: BeautifulSoup, text: str) -> List[Dict]:
-        """
-        Extrae contactos de personas específicas
-        Busca: Nombre + Rol + Email/Teléfono
-        """
+        """Extrae nombres asociados a teléfonos (sucursales, personas, ubicaciones).
+        Nota: los resultados van a person_contacts y se usan como labels de números en analytics,
+        pero NO se muestran en la UI como 'Personas de contacto'."""
         contacts = []
-        
-        # 1. Buscar secciones de equipo/contacto
         team_sections = soup.find_all(["div", "section"], class_=re.compile(
-            r"(team|equipo|contact|contacto|staff|about|nosotros)", re.IGNORECASE
+            r"(team|equipo|contact|contacto|staff|about|nosotros|sucursal|ubicacion|location|branch)",
+            re.IGNORECASE
         ))
-        
         for section in team_sections:
-            section_text = section.get_text(" ", strip=True)
-            contacts.extend(self._parse_contacts_from_text(section_text))
-        
-        # 2. Si no encontró nada, buscar en todo el texto
+            contacts.extend(self._parse_contacts_from_text(section.get_text(" ", strip=True)))
         if not contacts:
-            contacts = self._parse_contacts_from_text(text[:5000])  # Primeros 5000 chars
-        
+            contacts = self._parse_contacts_from_text(text[:5000])
         return contacts
 
     def _parse_contacts_from_text(self, text: str) -> List[Dict]:
@@ -1269,26 +1366,22 @@ class WebsiteScraper:
                 continue
             
             context = text[max(0, name_pos - 150):min(len(text), name_pos + 250)]
-            
-            # Detectar rol
-            role = self._detect_role(context)
-            
+
             # Buscar email cerca
             email_match = re.search(
                 r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
                 context
             )
             email = email_match.group(0) if email_match else ""
-            
+
             # Buscar teléfono cerca
             phone_match = re.search(r"\+?\d[\d\s\-\(\)]{8,}\d", context)
             phone = self._normalize_phone(phone_match.group(0)) if phone_match else ""
-            
-            # Solo agregar si tiene rol identificable y al menos email o teléfono
-            if role != "Contacto General" and (email or phone):
+
+            # Solo agregar si tiene al menos email o teléfono
+            if email or phone:
                 contacts.append({
                     "name": name.strip(),
-                    "role": role,
                     "email": email,
                     "phone": phone,
                     "whatsapp": phone if "whatsapp" in context.lower() else "",

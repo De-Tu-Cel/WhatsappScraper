@@ -103,6 +103,20 @@ EXCLUDED_DOMAINS = {
     # Otros
     'apple.com', 'play.google.com', 'spotify.com', 'soundcloud.com',
     'eventbrite.com', 'ticketmaster.com', 'meetup.com',
+    # Franquicias y cadenas nacionales (cientos de sucursales, no son un negocio local contactable)
+    'smartfit.com', 'smartfit.com.mx', 'oxxo.com', '7-eleven.com.mx',
+    'starbucks.com', 'starbucks.com.mx', 'mcdonalds.com', 'mcdonalds.com.mx',
+    'dominospizza.com.mx', 'pizzahut.com.mx', 'subway.com', 'kfc.com',
+    'burger-king.com.mx', 'vips.com.mx', 'sanborns.com.mx', 'walmart.com.mx',
+    'sams.com.mx', 'costco.com.mx', 'soriana.com', 'chedraui.com.mx',
+    'bodegaaurrera.com.mx', 'heb.com.mx', 'superama.com.mx',
+    'liverpool.com.mx', 'sanborns.com.mx', 'sears.com.mx', 'palacio.com.mx',
+    'izzi.mx', 'totalplay.com.mx', 'megacable.com.mx', 'telmex.com',
+    'telcel.com', 'att.com.mx', 'movistar.com.mx',
+    # Asociaciones, cámaras y federaciones gremiales
+    'canirac.org.mx', 'coparmex.org.mx', 'concamin.org.mx', 'canacintra.org.mx',
+    'amfac.com.mx', 'conacero.org.mx', 'canaco.org.mx', 'amvo.org.mx',
+    'anade.org.mx', 'anpact.com.mx', 'cmic.org.mx',
 }
 
 
@@ -128,6 +142,12 @@ EXCLUDED_PATH_PATTERNS = [
     '/salones-peluqueria', '/hair-salon/', '/peluquerias/',
     # Páginas de mapa/región genérica
     '/in/mx-', '/lp/en/', '/mp/mx/',
+    # Páginas de asociaciones / contenido sectorial genérico
+    '/sector/', '/industria/', '/gremio/', '/asociacion/', '/camara/',
+    '/tendencias/', '/estadisticas/', '/mercado/', '/analisis-de-mercado/',
+    '/informe/', '/reporte/', '/estudio/', '/investigacion/',
+    '/franquicias/', '/franquicia/', '/sucursales/', '/sucursal/',
+    '/encuentra-tu/', '/find-your/', '/localizador/', '/locator/',
 ]
 
 EXCLUDED_TLD_PATTERNS = ['.edu.mx', '.gob.mx', '.gov.mx', '.edu.']
@@ -286,24 +306,27 @@ def _ai_filter_urls(urls: list[str], industry: str) -> list[str]:
             client = Groq(api_key=GROQ_API_KEY)
             lines = [f"{i+1}. {u}" for i, u in enumerate(batch)]
             prompt = (
-                f'Eres un filtro estricto de URLs. Se buscan ÚNICAMENTE sitios web oficiales '
-                f'de negocios reales del sector "{industry}" en México — empresas con dirección física, '
-                f'servicio o producto propio.\n\n'
-                f'INCLUIR: sitio oficial de un gimnasio, restaurante, clínica, tienda, taller, etc.\n'
-                f'EXCLUIR (eliminar sin dudar):\n'
-                f'  - Artículos, noticias, reportajes, columnas de opinión\n'
-                f'  - Recopilados o listicles: "Los mejores X en Y", "Top 10 X", "Guía de X", "Dónde comer X"\n'
-                f'  - Páginas que solo MENCIONAN o LISTAN negocios de terceros sin ser el negocio en sí\n'
-                f'  - Revistas digitales, blogs, portales de contenido\n'
-                f'  - Directorios (Yelp, Sección Amarilla, Hotfrog, Kompass...)\n'
-                f'  - Redes sociales, YouTube, Wikipedia\n'
-                f'  - Marketplaces (MercadoLibre, Amazon...)\n'
-                f'  - Software/SaaS del sector (no son el negocio, son proveedores)\n'
-                f'  - Cualquier URL con /blog/, /noticias/, /articulo/, /post/ o año en la ruta\n\n'
-                f'URLs:\n' + '\n'.join(lines) + '\n\n'
-                f'Lista SOLO los números de URLs que sean sitios oficiales de negocios reales, '
-                f'ordenados de mayor a menor relevancia para "{industry}".\n'
-                f'Responde ÚNICAMENTE con un array JSON de enteros. Ejemplo: [3, 1, 7, 12]'
+                f'Eres un filtro ESTRICTO de URLs. Se buscan ÚNICAMENTE sitios web oficiales '
+                f'de negocios LOCALES e INDEPENDIENTES del sector "{industry}" en México.\n\n'
+                f'INCLUIR SOLO si es la página oficial de UN negocio específico con dirección física propia:\n'
+                f'  ✓ Gimnasio local, restaurante, clínica, tienda, taller, despacho, salón, etc.\n\n'
+                f'EXCLUIR SIN EXCEPCIÓN (devuelve lista vacía si ninguna aplica):\n'
+                f'  ✗ Artículos, noticias, reportajes, blogs, columnas de opinión\n'
+                f'  ✗ Listicles: "Los mejores X", "Top 10", "Guía de", "Dónde ir", "Lugares para"\n'
+                f'  ✗ Páginas que LISTAN o MENCIONAN negocios de terceros\n'
+                f'  ✗ Revistas, portales de contenido, medios digitales\n'
+                f'  ✗ Directorios (Yelp, Sección Amarilla, Hotfrog, Páginas Amarillas, Kompass)\n'
+                f'  ✗ Redes sociales, YouTube, Wikipedia, Quora, Reddit\n'
+                f'  ✗ Marketplaces (MercadoLibre, Amazon, Uber Eats, Rappi)\n'
+                f'  ✗ Franquicias o cadenas NACIONALES con cientos de sucursales (SmartFit, OXXO, 7-Eleven, Starbucks, McDonald\'s, Domino\'s, etc.)\n'
+                f'  ✗ Asociaciones gremiales, cámaras de comercio, federaciones del sector\n'
+                f'  ✗ Proveedores de software/SaaS para el sector (no son el negocio, son herramientas)\n'
+                f'  ✗ Páginas gubernamentales o educativas\n'
+                f'  ✗ URLs con /blog/, /noticias/, /articulo/, /post/ o año en la ruta\n\n'
+                f'URLs a evaluar:\n' + '\n'.join(lines) + '\n\n'
+                f'Responde ÚNICAMENTE con un array JSON de enteros con los números de URLs aprobadas, '
+                f'ordenadas de mayor a menor relevancia. Si ninguna califica, responde []. '
+                f'Ejemplo: [3, 1, 7] o []'
             )
             resp = client.chat.completions.create(
                 model="llama-3.1-8b-instant",
@@ -312,18 +335,16 @@ def _ai_filter_urls(urls: list[str], industry: str) -> list[str]:
                 temperature=0,
             )
             content = resp.choices[0].message.content.strip()
-            m = re.search(r'\[[\d,\s]+\]', content)
+            m = re.search(r'\[[\d,\s]*\]', content)
             if m:
                 indices = json.loads(m.group(0))
+                # Solo incluir las aprobadas por Groq — las rechazadas se descartan
                 batch_ranked = [batch[i - 1] for i in indices if 1 <= i <= len(batch)]
-                # URLs this batch that Groq didn't include → append at end
-                batch_rest = [u for u in batch if u not in set(batch_ranked)]
                 ranked.extend(batch_ranked)
-                ranked.extend(batch_rest)
                 continue
         except Exception:
             pass
-        # Fallback: keep batch as-is
+        # Fallback sin Groq: mantener el batch tal cual
         ranked.extend(batch)
 
     return ranked

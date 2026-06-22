@@ -13,6 +13,7 @@ import UploadFileIcon from '@mui/icons-material/UploadFile'
 import StorageIcon from '@mui/icons-material/Storage'
 import ForumIcon from '@mui/icons-material/Forum'
 import AnalyticsIcon from '@mui/icons-material/Analytics'
+import ScheduleSendIcon from '@mui/icons-material/ScheduleSend'
 import Sidebar from '../components/Sidebar'
 import dynamic from 'next/dynamic'
 const SingleUrlProcessor = dynamic(() => import('../components/singleUrlProcessor'), { ssr: false })
@@ -22,11 +23,11 @@ import CsvImporter from '../components/csvImporter'
 import DatabaseViewer from '../components/databaseViewer'
 import Conversations from '../components/conversations'
 import Analytics from '../components/analytics'
+import ScheduledSends from '../components/scheduledSends'
 import AdminPanel from '../components/AdminPanel'
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
 import Settings, { loadSettings, applySettings } from '../components/Settings'
 import { useLang } from '../context/LangContext'
-import AppTour from '../components/AppTour'
 
 const NAV_KEYS = [
   { key: 'single',   icon: <LinkIcon />,              component: <SingleUrlProcessor /> },
@@ -36,6 +37,7 @@ const NAV_KEYS = [
   { key: 'search',   icon: <SearchIcon />,             component: <SearchProspects /> },
   { key: 'convs',    icon: <ForumIcon />,              component: <Conversations /> },
   { key: 'analytics',icon: <AnalyticsIcon />,          component: <Analytics /> },
+  { key: 'schedule', icon: <ScheduleSendIcon />,       component: <ScheduledSends /> },
   { key: 'admin',    icon: <AdminPanelSettingsIcon />, component: <AdminPanel />, adminOnly: true },
 ]
 
@@ -91,8 +93,6 @@ export default function DashboardPage() {
 
   return (
     <Box sx={{ display: 'flex', height: '100vh', bgcolor: 'var(--bg, #080c14)', p: 1.5, gap: 1.5, boxSizing: 'border-box', position: 'relative' }}>
-
-      <AppTour username={user?.username} />
 
       {/* ── Inactivity warning banner ── */}
       {showWarning && (

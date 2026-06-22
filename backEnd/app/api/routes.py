@@ -150,20 +150,6 @@ def api_admin_change_role(body: dict, x_user_token: Optional[str] = Header(None)
     )
     return {"ok": True}
 
-@router.delete("/auth/admin/user/{user_id}")
-def api_admin_delete_user(user_id: str, x_user_token: Optional[str] = Header(None)):
-    admin = _require_user(x_user_token)
-    if admin.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Solo admins")
-    if user_id == admin.get("id"):
-        raise HTTPException(status_code=400, detail="No puedes eliminarte a ti mismo")
-    from bson import ObjectId
-    db = MongoDBManager()
-    result = db.db.users.delete_one({"_id": ObjectId(user_id)})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    return {"ok": True}
-
 @router.patch("/auth/evolution")
 def api_update_evolution(body: dict, x_user_token: Optional[str] = Header(None)):
     from app.auth import update_evolution
@@ -198,6 +184,27 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 instance = user["evolution_instance"]
         if not instance:
             raise HTTPException(status_code=400, detail="Sin instancia de WhatsApp configurada")
+
+        # ── Pre-flight: verify instance is connected before attempting send ──
+        try:
+            import requests as _req
+            _sr = _req.get(
+                f"{EVOLUTION_API_URL}/instance/connectionState/{instance}",
+                headers={"apikey": EVOLUTION_API_KEY},
+                timeout=4,
+            )
+            _data = _sr.json()
+            _state = (_data.get("instance") or {}).get("state") or _data.get("state", "")
+            if _state and _state != "open":
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Instancia '{instance}' desconectada (estado: {_state}). Ve a Configuración → WhatsApp para reconectar.",
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # Si el chequeo falla (timeout, etc.) intentamos enviar de todas formas
+
         evo = EvolutionClient(EVOLUTION_API_URL, EVOLUTION_API_KEY, instance)
 
         # Resolve the real WhatsApp JID (may be @lid for Business API numbers)
@@ -207,7 +214,7 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         if real_jid_num:
             db.db.jid_map.update_one(
                 {"jid": real_jid_num},
-                {"$set": {"company_id": req.company_id, "to_number": req.to_number, "updated_at": _dt.now()}},
+                {"$set": {"company_id": req.company_id, "updated_at": _dt.now()}},
                 upsert=True,
             )
             print(f"[SendMsg] jid_learned={real_jid_num} → {req.company_id}")
@@ -488,16 +495,10 @@ def api_get_conversations():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/conversations/{company_id}")
-def api_get_conversation_thread(company_id: str, number: Optional[str] = Query(None)):
+def api_get_conversation_thread(company_id: str):
     try:
         db = MongoDBManager()
-        raw_total = db.db.message_logs.count_documents({"company_id": company_id})
-        raw_inbound = db.db.message_logs.count_documents({"company_id": company_id, "direction": "inbound"})
-        result = db.get_conversation_thread(company_id, number=number)
-        out_count = sum(1 for m in result if m.get("direction") == "outbound")
-        in_count  = sum(1 for m in result if m.get("direction") == "inbound")
-        print(f"[Thread] company={company_id} raw_total={raw_total} raw_inbound={raw_inbound} returned={len(result)} out={out_count} in={in_count}")
-        return serialize(result)
+        return serialize(db.get_conversation_thread(company_id))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -656,7 +657,7 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
                 message_type = msg.get("messageType", "conversation")
                 status_raw = msg.get("status", "PENDING")
                 status = STATUS_MAP.get(status_raw, status_raw.lower())
-                print(f"[Webhook] msg from_me={from_me} number={number} type={message_type}")
+                print(f"[Webhook] msg from_me={from_me} number={number} body={str(message_body)[:80]}")
 
                 if from_me:
                     updated = db.update_evolution_message_status(message_id, status) if message_id else False
@@ -664,34 +665,20 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
                         # Only create a new outbound log if there is actual message content.
                         # Evolution API fires from_me=True delivery/sync events with empty body
                         # for incoming Business API messages — those must not create phantom logs.
-                        auto_company_id = db.find_company_id_by_phone(number, allow_fallback=True)
-                        if not auto_company_id:
-                            # Personal outbound message — no known company, skip saving
-                            results.append("ignored_personal")
-                        else:
-                            db.save_evolution_log(
-                                direction="outbound", company_id=auto_company_id,
-                                number=number, message_body=message_body,
-                                message_id=message_id, status=status, raw_data=msg,
-                            )
-                            results.append("outbound_logged")
+                        auto_company_id = db.find_company_id_by_phone(number) or "manual"
+                        db.save_evolution_log(
+                            direction="outbound", company_id=auto_company_id,
+                            number=number, message_body=message_body,
+                            message_id=message_id, status=status, raw_data=msg,
+                        )
+                    results.append("outbound_logged")
                 else:
-                    # No fallback for real inbound messages — unknown numbers must not
-                    # be attributed to whatever company happened to be recently active.
                     company_id = db.find_company_id_by_phone(number) or "unknown"
-                    print(f"[Webhook] inbound resolved: number={number} → company_id={company_id}")
-                    # Resolve which specific number this conversation belongs to
-                    # (needed when WA Business uses a central bot with @lid JIDs)
-                    clean_num = "".join(filter(str.isdigit, number))
-                    clean_norm = ("52" + clean_num[3:]) if (len(clean_num) == 13 and clean_num.startswith("521")) else clean_num
-                    jid_entry = db.db.jid_map.find_one({"jid": {"$in": [clean_num, clean_norm]}})
-                    related_to_number = jid_entry.get("to_number") if jid_entry else None
                     log_id = db.save_evolution_log(
                         direction="inbound", company_id=company_id,
                         number=number, message_body=message_body,
                         message_id=message_id, message_type=message_type,
                         status="received", raw_data=msg, interactive=interactive_data,
-                        related_to_number=related_to_number,
                     )
                     if GROQ_API_KEY and message_body and company_id != "unknown":
                         from app.classifier import classify_and_save
@@ -720,11 +707,7 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
                             from datetime import datetime as _dt
                             db.db.jid_map.update_one(
                                 {"jid": jid_num},
-                                {"$set": {
-                                    "company_id": log["company_id"],
-                                    "to_number":  log.get("to_number"),
-                                    "updated_at": _dt.now(),
-                                }},
+                                {"$set": {"company_id": log["company_id"], "updated_at": _dt.now()}},
                                 upsert=True,
                             )
                             print(f"[JID] learned from delivery ACK: {jid_num} → {log['company_id']}")
@@ -1077,160 +1060,232 @@ def api_cleanup_contacts():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/admin/fix-inbound-company")
-def api_fix_inbound_company():
-    """
-    Reassign inbound message_logs to the correct company using jid_map.
-    Fixes messages that were saved under the wrong company_id because the same
-    phone number appears as a contact of multiple companies.
-    """
+# ── Scheduled Sends ───────────────────────────────────────────────────────────
+
+@router.get("/admin/companies-with-numbers")
+def api_companies_with_numbers(x_user_token: Optional[str] = Header(None)):
+    """Return all companies that have at least one WhatsApp contact.
+    Each number is flagged if it already belongs to an active (pending/running) send."""
+    _require_user(x_user_token)
     try:
         db = MongoDBManager()
 
-        # Load all jid_map entries that have a to_number (we actively sent to them)
-        jid_entries = list(db.db.jid_map.find(
-            {"company_id": {"$exists": True}, "to_number": {"$exists": True}},
-            {"jid": 1, "company_id": 1, "to_number": 1}
-        ))
+        # Collect numbers currently in active campaigns
+        active_numbers: set = set()
+        active_sends = db.db.scheduled_sends.find(
+            {"status": {"$in": ["pending", "running"]}},
+            {"selected_numbers": 1},
+        )
+        for s in active_sends:
+            for n in s.get("selected_numbers") or []:
+                num = n.get("number", "")
+                if num:
+                    active_numbers.add(num)
 
-        fixed = 0
-        for entry in jid_entries:
-            correct_cid = entry["company_id"]
-            to_number = entry.get("to_number", "")
-            clean10 = "".join(filter(str.isdigit, to_number))[-10:]
-            if not clean10:
-                continue
-            # Find inbound messages from this number that are under a different company
-            inbounds = list(db.db.message_logs.find({
-                "direction": "inbound",
-                "company_id": {"$ne": correct_cid},
-                "from_number": {"$regex": clean10},
-            }, {"_id": 1}))
-            for msg in inbounds:
-                db.db.message_logs.update_one(
-                    {"_id": msg["_id"]},
-                    {"$set": {"company_id": correct_cid}}
-                )
-                fixed += 1
+        # Aggregate companies with their WhatsApp contacts
+        pipeline = [
+            {
+                "$lookup": {
+                    "from": "contacts",
+                    "let": {"cid": {"$toString": "$_id"}},
+                    "pipeline": [
+                        {"$match": {"$expr": {"$and": [
+                            {"$eq": ["$company_id", "$$cid"]},
+                            {"$eq": ["$type", "whatsapp"]},
+                        ]}}},
+                        {"$project": {"value": 1, "label": 1}},
+                    ],
+                    "as": "wa_contacts",
+                },
+            },
+            {"$match": {"wa_contacts.0": {"$exists": True}}},
+            {"$project": {"name": 1, "business_name": 1, "industry": 1, "domain": 1, "wa_contacts": 1}},
+            {"$sort": {"name": 1}},
+        ]
+        companies = list(db.db.companies.aggregate(pipeline))
 
-        return {"ok": True, "fixed": fixed}
+        result = []
+        for c in companies:
+            numbers = []
+            for contact in c.get("wa_contacts", []):
+                num = contact.get("value", "")
+                numbers.append({
+                    "contact_id": str(contact["_id"]),
+                    "number": num,
+                    "label": contact.get("label", ""),
+                    "active": num in active_numbers,
+                })
+            result.append({
+                "_id": str(c["_id"]),
+                "name": c.get("name") or c.get("business_name") or "",
+                "industry": c.get("industry", ""),
+                "domain": c.get("domain", ""),
+                "numbers": numbers,
+            })
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _auto_resolve_test(log_id: str):
-    """Background task: resolve test pending doc after 5s to simulate Groq finishing."""
-    import time as _time
-    from bson import ObjectId as _ObjId
-    _time.sleep(5)
-    db = MongoDBManager()
-    db.db.message_logs.update_one(
-        {"_id": _ObjId(log_id)},
-        {"$set": {"analysis_status": "done", "analysis": {"category": "humano", "response_quality": 3, "notes": "[test resuelto]"}}}
-    )
+@router.get("/admin/scheduled-sends")
+def api_list_scheduled_sends(x_user_token: Optional[str] = Header(None)):
+    """List all scheduled send campaigns, sorted by scheduled_at descending."""
+    _require_user(x_user_token)
+    try:
+        db = MongoDBManager()
+        docs = list(db.db.scheduled_sends.find(
+            {},
+            sort=[("scheduled_at", -1)],
+        ))
+        return serialize(docs)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/admin/test-analyzing/{company_id}")
-def api_test_analyzing(company_id: str, background_tasks: BackgroundTasks):
-    """DEV ONLY — mark one inbound as pending (or insert fake outbound+inbound) to test the analytics spinner."""
-    from datetime import datetime as _dt
-    db = MongoDBManager()
-    # Ensure there's at least one outbound so the company passes total_sent > 0
-    has_outbound = db.db.message_logs.find_one({"company_id": company_id, "direction": "outbound"})
-    if not has_outbound:
-        db.db.message_logs.insert_one({
-            "platform": "evolution", "direction": "outbound", "channel": "whatsapp",
-            "company_id": company_id, "message_body": "[test outbound]",
-            "message_type": "conversation", "status": "sent",
-            "to_number": "5200000000000", "created_at": _dt.now(),
-            "_test": True,
-        })
-    msg = db.db.message_logs.find_one({"company_id": company_id, "direction": "inbound"})
-    if msg:
-        db.db.message_logs.update_one({"_id": msg["_id"]}, {"$set": {"analysis_status": "pending"}})
-        background_tasks.add_task(_auto_resolve_test, str(msg["_id"]))
-        return {"ok": True, "message_id": str(msg["_id"]), "created": False}
-    result = db.db.message_logs.insert_one({
-        "platform": "evolution", "direction": "inbound", "channel": "whatsapp",
-        "company_id": company_id, "message_body": "[test spinner]",
-        "message_type": "conversation", "status": "received",
-        "from_number": "5200000000000", "created_at": _dt.now(),
-        "analysis_status": "pending", "_test": True,
-    })
-    background_tasks.add_task(_auto_resolve_test, str(result.inserted_id))
-    return {"ok": True, "message_id": str(result.inserted_id), "created": True}
+@router.post("/admin/scheduled-sends")
+def api_create_scheduled_send(body: dict, x_user_token: Optional[str] = Header(None)):
+    """Create a new scheduled send campaign."""
+    user = _require_user(x_user_token)
+    try:
+        from datetime import datetime, timezone
+        db = MongoDBManager()
+
+        name = body.get("name", "").strip()
+        industry = body.get("industry", "").strip()
+        message = body.get("message", "").strip()
+        scheduled_at_str = body.get("scheduled_at", "")
+        company_ids = body.get("company_ids") or []
+        selected_numbers = body.get("selected_numbers") or []
+
+        if not name:
+            raise HTTPException(status_code=400, detail="El campo 'name' es requerido")
+        if not message:
+            raise HTTPException(status_code=400, detail="El campo 'message' es requerido")
+        if not scheduled_at_str:
+            raise HTTPException(status_code=400, detail="El campo 'scheduled_at' es requerido")
+
+        # Parse ISO datetime — support trailing Z and +offset
+        scheduled_at_str_clean = scheduled_at_str.replace("Z", "+00:00")
+        try:
+            scheduled_at = datetime.fromisoformat(scheduled_at_str_clean)
+            # Convert to naive UTC for consistent storage
+            if scheduled_at.tzinfo is not None:
+                scheduled_at = scheduled_at.astimezone(timezone.utc).replace(tzinfo=None)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Formato de scheduled_at inválido (usa ISO 8601)")
+
+        doc = {
+            "name": name,
+            "industry": industry,
+            "company_ids": company_ids,
+            "selected_numbers": selected_numbers,
+            "message": message,
+            "scheduled_at": scheduled_at,
+            "status": "pending",
+            "sent_count": 0,
+            "error_count": 0,
+            "total_count": 0,
+            "created_at": datetime.now(),
+            "created_by_username": user.get("username", ""),
+            "created_by_name": user.get("display_name", ""),
+        }
+        result = db.db.scheduled_sends.insert_one(doc)
+        doc["_id"] = str(result.inserted_id)
+        return serialize(doc)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/admin/test-analyzing/{company_id}/reset")
-def api_test_analyzing_reset(company_id: str):
-    """DEV ONLY — reset all pending analysis_status for a company."""
-    db = MongoDBManager()
-    db.db.message_logs.delete_many({"company_id": company_id, "_test": True})
-    result = db.db.message_logs.update_many(
-        {"company_id": company_id, "analysis_status": "pending"},
-        {"$set": {"analysis_status": "done"}},
-    )
-    return {"ok": True, "reset": result.modified_count}
-
-@router.get("/admin/test-analyzing-debug/{company_id}")
-def api_test_analyzing_debug(company_id: str):
-    db = MongoDBManager()
-    pending = db.db.message_logs.count_documents({"company_id": company_id, "direction": "inbound", "analysis_status": "pending"})
-    done    = db.db.message_logs.count_documents({"company_id": company_id, "direction": "inbound", "analysis_status": "done"})
-    no_flag = db.db.message_logs.count_documents({"company_id": company_id, "direction": "inbound", "analysis_status": {"$exists": False}})
-    total   = db.db.message_logs.count_documents({"company_id": company_id, "direction": "inbound"})
-    out     = db.db.message_logs.count_documents({"company_id": company_id, "direction": "outbound"})
-    sample  = db.db.message_logs.find_one({"company_id": company_id, "direction": "inbound"}, {"_id": 1, "analysis_status": 1, "company_id": 1})
-    if sample:
-        sample["_id"] = str(sample["_id"])
-    return {"pending": pending, "done": done, "no_flag": no_flag, "total_inbound": total, "total_outbound": out, "sample": sample}
-
-@router.get("/admin/all-pending")
-def api_all_pending():
-    """DEV ONLY — list all message_logs with analysis_status=pending."""
-    db = MongoDBManager()
-    docs = list(db.db.message_logs.find(
-        {"analysis_status": "pending"},
-        {"_id": 1, "company_id": 1, "direction": 1, "message_body": 1}
-    ))
-    for d in docs:
-        d["_id"] = str(d["_id"])
-        d["company_id"] = str(d.get("company_id", "MISSING"))
-    return {"count": len(docs), "docs": docs}
-
-@router.post("/admin/requeue-unanalyzed")
-def api_requeue_unanalyzed(background_tasks: BackgroundTasks):
-    """Find old inbound messages with no analysis and run the classifier on each one."""
-    from app.classifier import classify_and_save
-    from bson import ObjectId
-    db = MongoDBManager()
-    pending_docs = list(db.db.message_logs.find(
-        {
-            "direction": "inbound",
-            "analysis_status": {"$exists": False},
-            "analysis": {"$exists": False},
-            "company_id": {"$exists": True, "$nin": [None, "unknown", "undefined", "manual"]},
-            "message_body": {"$exists": True, "$ne": "[media]"},
-        },
-        {"_id": 1, "company_id": 1, "message_body": 1, "created_at": 1}
-    ))
-    for doc in pending_docs:
-        log_id     = str(doc["_id"])
-        company_id = str(doc["company_id"])
-        body       = doc.get("message_body") or ""
-        created    = doc.get("created_at") or datetime.now()
-        db.db.message_logs.update_one({"_id": doc["_id"]}, {"$set": {"analysis_status": "pending"}})
-        background_tasks.add_task(classify_and_save, log_id, company_id, body, created)
-    return {"ok": True, "queued": len(pending_docs)}
+@router.get("/admin/scheduled-sends/{job_id}")
+def api_get_scheduled_send(job_id: str, x_user_token: Optional[str] = Header(None)):
+    """Get a single scheduled send job (used for live progress polling)."""
+    _require_user(x_user_token)
+    try:
+        from bson import ObjectId
+        db = MongoDBManager()
+        doc = db.db.scheduled_sends.find_one({"_id": ObjectId(job_id)})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Envio programado no encontrado")
+        return serialize(doc)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/admin/all-pending")
-def api_delete_all_pending():
-    """DEV ONLY — delete test docs and reset ALL orphaned pending to done."""
-    db = MongoDBManager()
-    deleted = db.db.message_logs.delete_many({"_test": True}).deleted_count
-    reset   = db.db.message_logs.update_many(
-        {"analysis_status": "pending"},
-        {"$set": {"analysis_status": "done"}}
-    ).modified_count
-    return {"ok": True, "deleted_test": deleted, "reset_pending": reset}
+@router.put("/admin/scheduled-sends/{job_id}")
+def api_update_scheduled_send(job_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    """Update a pending scheduled send (name, message, scheduled_at, selected_numbers)."""
+    _require_user(x_user_token)
+    try:
+        from bson import ObjectId
+        from datetime import datetime, timezone
+        db = MongoDBManager()
+
+        doc = db.db.scheduled_sends.find_one({"_id": ObjectId(job_id)}, {"status": 1})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Envio programado no encontrado")
+        if doc.get("status") != "pending":
+            raise HTTPException(status_code=400, detail="Solo se pueden editar envios pendientes")
+
+        update: dict = {}
+        if "name" in body:
+            update["name"] = str(body["name"]).strip()
+        if "message" in body:
+            update["message"] = str(body["message"]).strip()
+        if "selected_numbers" in body:
+            update["selected_numbers"] = body["selected_numbers"]
+        if "scheduled_at" in body:
+            sat_str = str(body["scheduled_at"]).replace("Z", "+00:00")
+            try:
+                sat = datetime.fromisoformat(sat_str)
+                if sat.tzinfo is not None:
+                    sat = sat.astimezone(timezone.utc).replace(tzinfo=None)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Formato de scheduled_at inválido")
+            update["scheduled_at"] = sat
+
+        if not update:
+            raise HTTPException(status_code=400, detail="No hay campos para actualizar")
+
+        db.db.scheduled_sends.update_one(
+            {"_id": ObjectId(job_id), "status": "pending"},
+            {"$set": update},
+        )
+        updated = db.db.scheduled_sends.find_one({"_id": ObjectId(job_id)})
+        return serialize(updated)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/admin/scheduled-sends/{job_id}")
+def api_cancel_scheduled_send(job_id: str, x_user_token: Optional[str] = Header(None)):
+    """Cancel pending/running sends; permanently delete finished ones."""
+    _require_user(x_user_token)
+    try:
+        from bson import ObjectId
+        from datetime import datetime
+        db = MongoDBManager()
+
+        doc = db.db.scheduled_sends.find_one({"_id": ObjectId(job_id)}, {"status": 1})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Envio programado no encontrado")
+
+        status = doc.get("status", "")
+        if status in ("pending", "running"):
+            db.db.scheduled_sends.update_one(
+                {"_id": ObjectId(job_id)},
+                {"$set": {"status": "cancelled", "cancelled_at": datetime.now()}},
+            )
+            return {"ok": True, "action": "cancelled"}
+        else:
+            db.db.scheduled_sends.delete_one({"_id": ObjectId(job_id)})
+            return {"ok": True, "action": "deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

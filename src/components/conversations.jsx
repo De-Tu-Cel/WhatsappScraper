@@ -14,6 +14,7 @@ import Badge from '@mui/material/Badge'
 import Tooltip from '@mui/material/Tooltip'
 import InputAdornment from '@mui/material/InputAdornment'
 import SendIcon from '@mui/icons-material/Send'
+import WifiOffIcon from '@mui/icons-material/WifiOff'
 import SearchIcon from '@mui/icons-material/Search'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import BusinessIcon from '@mui/icons-material/Business'
@@ -23,6 +24,8 @@ import DoneIcon from '@mui/icons-material/Done'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import Popover from '@mui/material/Popover'
 import EmojiEmotionsIcon from '@mui/icons-material/EmojiEmotions'
+import { useInstanceStatus } from '../hooks/useInstanceStatus'
+import { InstanceDisconnectedBanner, SendErrorBanner, InstanceStatusDot } from './InstanceStatusBanner'
 
 const EMOJI_GROUPS = [
   { label: 'Frecuentes', emojis: ['😀','😂','🥹','😊','😍','🤩','😎','🥳','😅','😭','😤','🤔','👍','👎','👋','🙌','🤝','❤️','🔥','✅','⭐','🎉','💯','🚀'] },
@@ -319,6 +322,8 @@ export default function Conversations() {
   const threadLenRef = useRef(0)
   const messagesBoxRef = useRef(null)
   const replyRef  = useRef(null)
+  const [sendError, setSendError] = useState('')
+  const { status: instanceStatus, isDisconnected } = useInstanceStatus()
 
   const fetchConvs = useCallback(async () => {
     try {
@@ -447,13 +452,14 @@ export default function Conversations() {
   }
 
   async function handleSendReply(overrideText = null) {
-    const text  = overrideText ?? reply
+    const text   = overrideText ?? reply
     const toSend = selectedNums.length > 0 ? selectedNums : waNumbers.slice(0, 1)
     if (!text.trim() || !selected || toSend.length === 0) return
+    setSendError('')
     setSending(true)
     try {
       for (const num of toSend) {
-        await authFetch('/api/send-message', {
+        const res = await authFetch('/api/send-message', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -463,14 +469,26 @@ export default function Conversations() {
             website: selected.website || '',
           }),
         })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(err.detail || `Error ${res.status}`)
+        }
       }
       setReply('')
-      // Clear the uncontrolled textarea too
       if (replyRef._textarea) replyRef._textarea.value = ''
       const cid = selected.company_id
       setTimeout(() => fetchThread(cid, true), 800)
       ;[3000, 6000, 10000].forEach(ms => setTimeout(() => fetchThread(cid, false, true), ms))
-    } catch {}
+    } catch (err) {
+      const msg = err.message || 'No se pudo enviar el mensaje'
+      setSendError(msg)
+      // Si es error de instancia desconectada, actualizar el estado local
+      if (err.message?.includes('desconectada') || err.message?.includes('503')) {
+        setInstanceStatus('disconnected')
+      }
+      // Limpiar el error después de 8 segundos
+      setTimeout(() => setSendError(''), 8000)
+    }
     finally { setSending(false) }
   }
 
@@ -751,6 +769,10 @@ export default function Conversations() {
 
             {/* Input de respuesta — siempre visible, fuera del scroll */}
             <Box sx={{ px: 2, pt: 1.5, pb: 1, borderTop: '1px solid rgba(255,255,255,0.07)', flexShrink: 0, bgcolor: 'rgba(0,0,0,0.15)' }}>
+
+              <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1.2 }} />
+              <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1.2 }} />
+
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-end' }}>
                 <Tooltip title="Emojis">
                   <IconButton size="small" onClick={e => setEmojiAnchor(e.currentTarget)}
@@ -759,15 +781,16 @@ export default function Conversations() {
                   </IconButton>
                 </Tooltip>
                 <TextField ref={replyRef} fullWidth multiline maxRows={4} size="small"
-                  placeholder={t.convs.reply}
+                  placeholder={instanceStatus === 'disconnected' ? 'Instancia desconectada — ve a Configuración' : t.convs.reply}
                   defaultValue=""
                   slotProps={{ htmlInput: { ref: el => { if (el) replyRef._textarea = el } } }}
                   onInput={e => setReply(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendReply() } }}
                   error={reply.length > MAX_WA_MSG}
                   sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.85rem', bgcolor: 'rgba(255,255,255,0.04)',
-                    '& fieldset': { borderColor: reply.length > MAX_WA_MSG ? '#ef4444' : 'rgba(255,255,255,0.1)' } }, '& textarea': { color: 'white' } }} />
+                    '& fieldset': { borderColor: reply.length > MAX_WA_MSG ? '#ef4444' : instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.1)' } }, '& textarea': { color: 'white' } }} />
                 <Tooltip title={
+                  instanceStatus === 'disconnected' ? 'Instancia WhatsApp desconectada' :
                   reply.length > MAX_WA_MSG ? `Demasiado largo (máx. ${MAX_WA_MSG})` :
                   waNumbers.length === 0 ? 'Sin números WhatsApp registrados' :
                   (waNumbers.length > 1 && (!activeNum || activeNum === 'all')) ? 'Selecciona un número primero' :
@@ -775,14 +798,16 @@ export default function Conversations() {
                 }>
                   <span>
                     <IconButton onClick={handleSendReply}
-                      disabled={!reply.trim() || sending || reply.length > MAX_WA_MSG || (waNumbers.length > 0 && selectedNums.length === 0) || (waNumbers.length > 1 && (!activeNum || activeNum === 'all'))}
-                      sx={{ bgcolor: 'rgba(var(--accent-rgb, 99,102,241), 0.2)', border: '1px solid rgba(var(--accent-rgb, 99,102,241), 0.3)', borderRadius: 2, color: 'var(--accent, #a5b4fc)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 99,102,241), 0.35)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.15)' } }}>
-                      {sending ? <CircularProgress size={18} sx={{ color: 'var(--accent, #a5b4fc)' }} /> : <SendIcon sx={{ fontSize: 18 }} />}
+                      disabled={instanceStatus === 'disconnected' || !reply.trim() || sending || reply.length > MAX_WA_MSG || (waNumbers.length > 0 && selectedNums.length === 0) || (waNumbers.length > 1 && (!activeNum || activeNum === 'all'))}
+                      sx={{ bgcolor: instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.12)' : 'rgba(var(--accent-rgb, 99,102,241), 0.2)', border: `1px solid ${instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.25)' : 'rgba(var(--accent-rgb, 99,102,241), 0.3)'}`, borderRadius: 2, color: instanceStatus === 'disconnected' ? '#ef4444' : 'var(--accent, #a5b4fc)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 99,102,241), 0.35)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.15)' } }}>
+                      {sending ? <CircularProgress size={18} sx={{ color: 'var(--accent, #a5b4fc)' }} /> : instanceStatus === 'disconnected' ? <WifiOffIcon sx={{ fontSize: 18 }} /> : <SendIcon sx={{ fontSize: 18 }} />}
                     </IconButton>
                   </span>
                 </Tooltip>
               </Box>
-              <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 0.4 }}>
+
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 0.4 }}>
+                <InstanceStatusDot status={instanceStatus} />
                 <Typography sx={{ fontSize: '0.65rem', color: reply.length > MAX_WA_MSG ? '#f87171' : reply.length > MAX_WA_MSG * 0.9 ? '#fbbf24' : 'rgba(255,255,255,0.2)' }}>
                   {reply.length} / {MAX_WA_MSG}
                 </Typography>

@@ -3,6 +3,8 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { isValidUrl } from '@/lib/validators'
 import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
+import { useInstanceStatus } from '../hooks/useInstanceStatus'
+import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import LinearProgress from '@mui/material/LinearProgress'
@@ -158,6 +160,8 @@ export default function BatchProcessor() {
   const [selectedTpl, setSelectedTpl] = useState(TEMPLATES[0].id)
   const [msgText,     setMsgText]     = useState(TEMPLATES[0].text)
   const [sending,     setSending]     = useState(false)
+  const [sendError,   setSendError]   = useState('')
+  const { status: instanceStatus, isDisconnected } = useInstanceStatus()
   const msgRef      = useRef(null)
   const urlsRef     = useRef(null)
   const sendingRef  = useRef(false)
@@ -261,6 +265,13 @@ export default function BatchProcessor() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ company_id: row.company_id, to_number: num, message: message || msgText, website: row.url }),
           })
+          if (!res.ok) {
+            const errJson = await res.json().catch(() => ({}))
+            const detail = errJson.detail || `Error ${res.status}`
+            setSendError(detail)
+            setTimeout(() => setSendError(''), 10_000)
+            throw new Error(detail)
+          }
           const json = await res.json()
           if (json.status === 'sent') lastStatus = 'sent'
         }
@@ -270,8 +281,16 @@ export default function BatchProcessor() {
       }
       setRows([...updated])
       if (i < targets.length - 1) {
-        const delay = Math.floor(Math.random() * 6000 + 7000) // 7–13 segundos
-        await new Promise(r => setTimeout(r, delay))
+        // Pausa larga cada 5 mensajes enviados (simula descanso humano)
+        const sentSoFar = i + 1
+        if (sentSoFar % 5 === 0) {
+          const longBreak = Math.floor(Math.random() * 300000 + 180000) // 3–8 min
+          setPhase(`Pausa (${Math.round(longBreak / 60000)}min)…`)
+          await new Promise(r => setTimeout(r, longBreak))
+        } else {
+          const delay = Math.floor(Math.random() * 30000 + 25000) // 25–55 seg
+          await new Promise(r => setTimeout(r, delay))
+        }
       }
     }
     setProgress(100); setCurrentUrl(''); setPhase(''); setSending(false); sendingRef.current = false
@@ -599,6 +618,8 @@ export default function BatchProcessor() {
               {msgText.length} / 4096
             </Typography>
           </Box>
+          <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />
+          <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
             {sending && (
               <Tooltip title={lang === 'en' ? 'Cancel sending' : 'Cancelar envío'}>
@@ -610,7 +631,7 @@ export default function BatchProcessor() {
             )}
             <Button
               onClick={handleSendAll}
-              disabled={waRows.length === 0 || alreadySent || sending}
+              disabled={waRows.length === 0 || alreadySent || sending || isDisconnected}
               startIcon={sending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
               size="small"
               sx={{

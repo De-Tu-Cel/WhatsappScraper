@@ -6,6 +6,9 @@ import threading
 import time
 from datetime import datetime, timedelta
 
+# Allow at most 2 concurrent Groq calls to stay within TPM limits
+_GROQ_SEMAPHORE = threading.Semaphore(2)
+
 from app.config import GROQ_API_KEY
 from app.database import MongoDBManager
 
@@ -87,12 +90,27 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
             outbound_body=outbound_body or "(sin texto)",
             inbound_body=inbound_body or "(sin texto)",
         ) + reaction_hint
-        chat_response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=150,
-        )
+
+        _messages = [{"role": "user", "content": prompt}]
+        chat_response = None
+        with _GROQ_SEMAPHORE:
+            for _attempt in range(4):
+                try:
+                    chat_response = client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=_messages,
+                        temperature=0,
+                        max_tokens=150,
+                    )
+                    break
+                except Exception as _e:
+                    _is_429 = "429" in str(_e) or "rate_limit" in str(_e).lower()
+                    if _is_429 and _attempt < 3:
+                        _wait = 5 * (2 ** _attempt)  # 5s, 10s, 20s
+                        log.warning("Groq 429 — reintentando en %ds (intento %d/4)", _wait, _attempt + 1)
+                        time.sleep(_wait)
+                    else:
+                        raise
         raw = chat_response.choices[0].message.content.strip()
         if raw.startswith("```"):
             raw = raw.split("```")[1].strip()
@@ -110,8 +128,8 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
             "notes": result.get("notes", ""),
         }
     except Exception as e:
-        import traceback, logging
-        logging.getLogger(__name__).error("classify_response failed: %s\n%s", e, traceback.format_exc())
+        import traceback
+        log.error("classify_response failed: %s\n%s", e, traceback.format_exc())
         return {
             "category": "humano",
             "response_quality": 3,

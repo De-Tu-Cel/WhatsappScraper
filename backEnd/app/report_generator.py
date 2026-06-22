@@ -497,7 +497,7 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
 
     # Nivel de calidad label
     story.append(Paragraph(
-        f'Nivel: <b><font color="#{qual_color.hexval()[1:] if hasattr(qual_color,"hexval") else "1e293b"}">{qual_level}</font></b>'
+        f'Nivel: <b><font color="#{qual_color.hexval()[-6:] if hasattr(qual_color,"hexval") else "1e293b"}">{qual_level}</font></b>'
         f'&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;Respuesta: <b>{speed_label}</b>'
         f'{"&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;Bot IA: Si" if is_ai else ""}',
         _st("ql", fontSize=8, textColor=C["muted"], leading=11, spaceAfter=3),

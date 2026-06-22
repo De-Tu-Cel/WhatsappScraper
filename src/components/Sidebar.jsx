@@ -14,6 +14,7 @@ import LogoutIcon from '@mui/icons-material/Logout'
 import SettingsIcon from '@mui/icons-material/Settings'
 import { useUser } from '../context/UserContext'
 import { useLang } from '../context/LangContext'
+import { useInstanceStatus } from '../hooks/useInstanceStatus'
 
 const SIDEBAR_FULL = 248
 const SIDEBAR_MINI = 64
@@ -27,9 +28,83 @@ const C = {
   text:          'rgba(255,255,255,0.92)',
 }
 
+const GROUPS = [
+  { label: 'Prospección', keys: ['single', 'batch', 'csv', 'database', 'search'] },
+  { label: 'Comunicación', keys: ['convs', 'schedule'] },
+  { label: 'Análisis',     keys: ['analytics'] },
+  { label: 'Sistema',      keys: ['admin'] },
+]
+
+function NavItem({ item, index, isActive, open, onClick }) {
+  return (
+    <Tooltip key={index} title={open ? '' : item.label} placement="right" arrow>
+      <ListItemButton
+        id={`tour-nav-${item.key}`}
+        onClick={() => onClick(index)}
+        sx={{
+          borderRadius: 2, mb: 0.5, minHeight: 42,
+          color: isActive ? 'white' : C.dimText,
+          bgcolor: isActive ? C.accentGlow : 'transparent',
+          outline: isActive ? '1px solid rgba(59,130,246,0.25)' : '1px solid transparent',
+          justifyContent: open ? 'flex-start' : 'center',
+          px: open ? 1.5 : 1,
+          transition: 'padding 0.28s cubic-bezier(0.4,0,0.2,1)',
+          '&:hover': { bgcolor: 'rgba(255,255,255,0.08)', color: C.text },
+        }}
+      >
+        <ListItemIcon sx={{
+          color: isActive ? C.accent : C.dimText,
+          minWidth: 0,
+          mr: open ? 1.5 : 0,
+          transition: 'margin-right 0.28s cubic-bezier(0.4,0,0.2,1)',
+          justifyContent: 'center',
+          '& svg': { fontSize: 20 },
+        }}>
+          {item.icon}
+        </ListItemIcon>
+        <Box sx={{
+          overflow: 'hidden',
+          opacity: open ? 1 : 0,
+          maxWidth: open ? 160 : 0,
+          transition: 'opacity 0.2s ease, max-width 0.28s cubic-bezier(0.4,0,0.2,1)',
+          whiteSpace: 'nowrap',
+        }}>
+          <Typography sx={{ fontSize: '0.875rem', fontWeight: isActive ? 600 : 400, color: 'inherit' }}>
+            {item.label}
+          </Typography>
+        </Box>
+      </ListItemButton>
+    </Tooltip>
+  )
+}
+
+function GroupLabel({ label, open }) {
+  return (
+    <Box sx={{
+      overflow: 'hidden',
+      opacity: open ? 1 : 0,
+      maxHeight: open ? 28 : 0,
+      transition: 'opacity 0.2s ease, max-height 0.25s cubic-bezier(0.4,0,0.2,1)',
+      px: 1.5, mb: 0.5,
+    }}>
+      <Typography sx={{
+        fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.08em',
+        textTransform: 'uppercase', color: 'rgba(255,255,255,0.22)',
+        userSelect: 'none',
+      }}>
+        {label}
+      </Typography>
+    </Box>
+  )
+}
+
 export default function Sidebar({ open, setOpen, active, setActive, navItems, settingsOpen, onSettingsClick }) {
   const { user, logout } = useUser()
   const { t } = useLang()
+  const { status: instanceStatus } = useInstanceStatus()
+
+  const itemsByKey = Object.fromEntries(navItems.map((item, i) => [item.key, { item, index: i }]))
+
   return (
     <Box id="tour-sidebar" sx={{
       width: open ? SIDEBAR_FULL : SIDEBAR_MINI,
@@ -51,12 +126,12 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
         background: 'radial-gradient(circle, rgba(var(--accent-rgb,99,102,241),0.18) 0%, transparent 70%)',
         pointerEvents: 'none', zIndex: 0,
       }} />
+
       {/* Logo / toggle */}
       <Box sx={{
         height: 64, px: 1.5, flexShrink: 0, position: 'relative', zIndex: 1,
         display: 'flex', alignItems: 'center',
         justifyContent: open ? 'flex-start' : 'center',
-        transition: 'justify-content 0s',
       }}>
         <Box sx={{
           display: 'flex', alignItems: 'center', gap: 1,
@@ -95,96 +170,77 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
 
       <Divider sx={{ borderColor: C.sidebarBorder, position: 'relative', zIndex: 1 }} />
 
-      {/* Nav */}
-      <List sx={{ px: 1, pt: 1.5, flexGrow: 1, position: 'relative', zIndex: 1 }}>
-        {navItems.map((item, i) => {
-          const isActive = !settingsOpen && active === i
+      {/* Nav — agrupado */}
+      <List sx={{ px: 1, pt: 1.5, pb: 0.5, flexGrow: 1, position: 'relative', zIndex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+        {GROUPS.map((group, gi) => {
+          const groupItems = group.keys
+            .map(k => itemsByKey[k])
+            .filter(Boolean)
+          if (groupItems.length === 0) return null
+
+          const isLast = gi === GROUPS.length - 1
           return (
-            <Tooltip key={i} title={open ? '' : item.label} placement="right" arrow>
-              <ListItemButton
-                id={`tour-nav-${item.key}`}
-                onClick={() => setActive(i)}
-                sx={{
-                  borderRadius: 2, mb: 0.5, minHeight: 44,
-                  color: isActive ? 'white' : C.dimText,
-                  bgcolor: isActive ? C.accentGlow : 'transparent',
-                  outline: isActive ? '1px solid rgba(59,130,246,0.25)' : '1px solid transparent',
-                  justifyContent: open ? 'flex-start' : 'center',
-                  px: open ? 1.5 : 1,
-                  transition: 'padding 0.28s cubic-bezier(0.4,0,0.2,1)',
-                  '&:hover': { bgcolor: 'rgba(255,255,255,0.08)', color: C.text },
-                }}
-              >
-                <ListItemIcon sx={{
-                  color: isActive ? C.accent : C.dimText,
-                  minWidth: 0,
-                  mr: open ? 1.5 : 0,
-                  transition: 'margin-right 0.28s cubic-bezier(0.4,0,0.2,1)',
-                  justifyContent: 'center',
-                  '& svg': { fontSize: 20 },
-                }}>
-                  {item.icon}
-                </ListItemIcon>
-                <Box sx={{
-                  overflow: 'hidden',
-                  opacity: open ? 1 : 0,
-                  maxWidth: open ? 160 : 0,
-                  transition: 'opacity 0.2s ease, max-width 0.28s cubic-bezier(0.4,0,0.2,1)',
-                  whiteSpace: 'nowrap',
-                }}>
-                  <Typography sx={{ fontSize: '0.875rem', fontWeight: isActive ? 600 : 400, color: 'inherit' }}>
-                    {item.label}
-                  </Typography>
-                </Box>
-              </ListItemButton>
-            </Tooltip>
+            <Box key={group.label} sx={{ mb: isLast ? 0 : 1 }}>
+              <GroupLabel label={group.label} open={open} />
+              {groupItems.map(({ item, index }) => (
+                <NavItem
+                  key={item.key}
+                  item={item}
+                  index={index}
+                  isActive={!settingsOpen && active === index}
+                  open={open}
+                  onClick={setActive}
+                />
+              ))}
+              {/* Settings se añade al final del grupo Sistema */}
+              {group.label === 'Sistema' && (
+                <Tooltip title={open ? '' : t.settings.title} placement="right" arrow>
+                  <ListItemButton
+                    onClick={onSettingsClick}
+                    sx={{
+                      borderRadius: 2, mb: 0.5, minHeight: 42,
+                      color: settingsOpen ? 'white' : C.dimText,
+                      bgcolor: settingsOpen ? C.accentGlow : 'transparent',
+                      outline: settingsOpen ? `1px solid rgba(59,130,246,0.25)` : '1px solid transparent',
+                      justifyContent: open ? 'flex-start' : 'center',
+                      px: open ? 1.5 : 1,
+                      transition: 'padding 0.28s cubic-bezier(0.4,0,0.2,1)',
+                      '&:hover': { bgcolor: 'rgba(255,255,255,0.08)', color: C.text },
+                    }}
+                  >
+                    <ListItemIcon sx={{
+                      color: settingsOpen ? C.accent : C.dimText,
+                      minWidth: 0,
+                      mr: open ? 1.5 : 0,
+                      transition: 'margin-right 0.28s cubic-bezier(0.4,0,0.2,1)',
+                      justifyContent: 'center',
+                      '& svg': { fontSize: 20 },
+                    }}>
+                      <SettingsIcon />
+                    </ListItemIcon>
+                    <Box sx={{
+                      overflow: 'hidden',
+                      opacity: open ? 1 : 0,
+                      maxWidth: open ? 160 : 0,
+                      transition: 'opacity 0.2s ease, max-width 0.28s cubic-bezier(0.4,0,0.2,1)',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      <Typography sx={{ fontSize: '0.875rem', fontWeight: settingsOpen ? 600 : 400, color: 'inherit' }}>
+                        {t.settings.title}
+                      </Typography>
+                    </Box>
+                  </ListItemButton>
+                </Tooltip>
+              )}
+              {!isLast && (
+                <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', mt: 1 }} />
+              )}
+            </Box>
           )
         })}
       </List>
 
-      {/* Settings button — separado del nav */}
-      <Box sx={{ px: 1, pb: 1, position: 'relative', zIndex: 1 }}>
-        <Divider sx={{ borderColor: C.sidebarBorder, mb: 1 }} />
-        <Tooltip title={open ? '' : t.settings.title} placement="right" arrow>
-          <ListItemButton
-            onClick={onSettingsClick}
-            sx={{
-              borderRadius: 2, minHeight: 44,
-              color: settingsOpen ? 'white' : C.dimText,
-              bgcolor: settingsOpen ? C.accentGlow : 'transparent',
-              outline: settingsOpen ? `1px solid ${C.accent}` : '1px solid transparent',
-              justifyContent: open ? 'flex-start' : 'center',
-              px: open ? 1.5 : 1,
-              transition: 'padding 0.28s cubic-bezier(0.4,0,0.2,1)',
-              '&:hover': { bgcolor: 'rgba(255,255,255,0.08)', color: C.text },
-            }}
-          >
-            <ListItemIcon sx={{
-              color: settingsOpen ? C.accent : C.dimText,
-              minWidth: 0,
-              mr: open ? 1.5 : 0,
-              transition: 'margin-right 0.28s cubic-bezier(0.4,0,0.2,1)',
-              justifyContent: 'center',
-              '& svg': { fontSize: 20 },
-            }}>
-              <SettingsIcon />
-            </ListItemIcon>
-            <Box sx={{
-              overflow: 'hidden',
-              opacity: open ? 1 : 0,
-              maxWidth: open ? 160 : 0,
-              transition: 'opacity 0.2s ease, max-width 0.28s cubic-bezier(0.4,0,0.2,1)',
-              whiteSpace: 'nowrap',
-            }}>
-              <Typography sx={{ fontSize: '0.875rem', fontWeight: settingsOpen ? 600 : 400, color: 'inherit' }}>
-                {t.settings.title}
-              </Typography>
-            </Box>
-          </ListItemButton>
-        </Tooltip>
-      </Box>
-
-      {/* Footer */}
+      {/* Footer: avatar + estado instancia + logout */}
       <Box sx={{
         display: 'flex', alignItems: 'center',
         px: 1.5, py: 1.5, flexShrink: 0,
@@ -208,6 +264,7 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
               {(user?.display_name || user?.username || '?')[0]}
             </Typography>
           </Box>
+
           <Box sx={{
             overflow: 'hidden', flex: 1, minWidth: 0,
             opacity: open ? 1 : 0,
@@ -218,10 +275,21 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
             <Typography sx={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.78rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {user?.display_name || user?.username || ''}
             </Typography>
-            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.18)' }}>
-              v1.0 · DeTuCel
-            </Typography>
+            {/* Estado de instancia debajo del nombre */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.2 }}>
+              <Box sx={{
+                width: 5, height: 5, borderRadius: '50%', flexShrink: 0,
+                bgcolor: instanceStatus === 'connected' ? '#22c55e' : instanceStatus === 'disconnected' ? '#ef4444' : 'rgba(255,255,255,0.2)',
+              }} />
+              <Typography sx={{
+                fontSize: '0.6rem',
+                color: instanceStatus === 'connected' ? 'rgba(34,197,94,0.6)' : instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.7)' : 'rgba(255,255,255,0.2)',
+              }}>
+                {instanceStatus === 'connected' ? 'WhatsApp conectado' : instanceStatus === 'disconnected' ? 'Desconectado' : 'Verificando…'}
+              </Typography>
+            </Box>
           </Box>
+
           {open && (
             <Tooltip title="Cerrar sesión">
               <IconButton size="small" onClick={logout}

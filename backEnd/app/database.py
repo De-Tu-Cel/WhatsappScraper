@@ -1,4 +1,5 @@
 # database.py
+import re
 from pymongo import MongoClient
 from datetime import datetime
 from gridfs import GridFS
@@ -32,6 +33,12 @@ class MongoDBManager:
                 "value": {"$regex": clean10, "$options": "i"},
             })
             if existing:
+                new_label = contact_data.get("label", "")
+                if new_label and not existing.get("label"):
+                    self.db.contacts.update_one(
+                        {"_id": existing["_id"]},
+                        {"$set": {"label": new_label}},
+                    )
                 return str(existing["_id"])
         result = self.db.contacts.insert_one(contact_data)
         return str(result.inserted_id)
@@ -88,7 +95,6 @@ class MongoDBManager:
         key = {
             "company_id": contact_data.get("company_id"),
             "name":       contact_data.get("name", ""),
-            "role":       contact_data.get("role", ""),
         }
         result = self.db.person_contacts.update_one(
             key,
@@ -613,9 +619,20 @@ class MongoDBManager:
             # Bot numbers (e.g. WhatsApp Business senders) have no outbound and are not
             # in the contacts collection — they pollute the per-number breakdown.
             registered_contacts = list(self.db.contacts.find(
-                {"company_id": company_id, "type": "whatsapp"}, {"value": 1}
+                {"company_id": company_id, "type": "whatsapp"}, {"value": 1, "label": 1, "source": 1}
             ))
             registered_norms = {_norm(c["value"]) for c in registered_contacts}
+            contact_meta = {_norm(c["value"]): c for c in registered_contacts}
+
+            # Build name map from person_contacts: normalized phone → first name found
+            _person_name_map = {}
+            for pc in self.db.person_contacts.find(
+                {"company_id": company_id}, {"name": 1, "phone": 1, "whatsapp": 1}
+            ):
+                for _field in ("whatsapp", "phone"):
+                    _pnum = _norm(pc.get(_field, "") or "")
+                    if _pnum and _pnum not in _person_name_map and pc.get("name"):
+                        _person_name_map[_pnum] = pc["name"]
 
             def _primary_num():
                 for rn in registered_norms:
@@ -658,8 +675,19 @@ class MongoDBManager:
                 if data["sent"] == 0:
                     continue
                 analyzed = [m for m in data["inbound"] if m.get("analysis")]
+                _meta = contact_meta.get(n, {})
+                _src = _meta.get("source", "") or ""
+                _raw_label = (_meta.get("label", "") or "").strip()
+                _GENERIC_LABELS = {"whatsapp", "wa", "contacto", "chat", "mensaje", "escríbenos",
+                                   "escribenos", "comunícate", "comunicate", "envíanos", "envianos"}
+                _label = "" if _raw_label.lower() in _GENERIC_LABELS else _raw_label
+                # Fallback: usar nombre de persona/sucursal si el contacto no tiene label
+                if not _label:
+                    _label = _person_name_map.get(n, "")
                 entry = {
                     "number": num_raw[n],
+                    "label": _label,
+                    "source": re.sub(r"^https?://(www\.)?", "", _src).rstrip("/") if _src else "",
                     "sent": data["sent"],
                     "responses": len(data["inbound"]),
                     "category": None, "response_quality": None,

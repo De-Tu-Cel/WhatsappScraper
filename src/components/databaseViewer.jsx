@@ -55,6 +55,8 @@ import MessageIcon from '@mui/icons-material/Message'
 import { visuallyHidden } from '@mui/utils'
 import ResultDisplay from './resultDisplay'
 import { MessageComposer, TEMPLATES } from './singleUrlProcessor'
+import { useInstanceStatus } from '../hooks/useInstanceStatus'
+import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
 
 function getHeadCells(t) {
   return [
@@ -165,7 +167,7 @@ function renderTemplate(template, row) {
 }
 
 // ─── Toolbar ──────────────────────────────────────────────────────────────────
-function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescraping, selectedWithWA, onRefresh, onToggleFilter, filterOpen, total }) {
+function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescraping, selectedWithWA, onRefresh, onToggleFilter, filterOpen, total, instanceStatus }) {
   const { t } = useLang()
   return (
     <Toolbar sx={{
@@ -212,17 +214,20 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
         {numSelected > 0 ? (
           <>
-            <Tooltip title={selectedWithWA === 0 ? t.db.noWaSelected : `${t.db.sendMsgTo} ${selectedWithWA} ${t.db.withWA}`}>
+            <Tooltip title={instanceStatus === 'disconnected' ? 'Instancia WhatsApp desconectada — ve a Configuración para reconectar' : selectedWithWA === 0 ? t.db.noWaSelected : `${t.db.sendMsgTo} ${selectedWithWA} ${t.db.withWA}`}>
               <span>
-                <Button size="small" onClick={onCampaign} disabled={selectedWithWA === 0}
+                <Button size="small" onClick={onCampaign} disabled={selectedWithWA === 0 || instanceStatus === 'disconnected'}
                   startIcon={<MessageIcon sx={{ fontSize: '14px !important' }} />}
                   sx={{
                     fontSize: '0.75rem', fontWeight: 600, textTransform: 'none',
-                    color: '#4ade80', bgcolor: 'rgba(34,197,94,0.1)',
-                    border: '1px solid rgba(34,197,94,0.25)', borderRadius: 1.5,
-                    px: 1.5, py: 0.5,
-                    '&:hover': { bgcolor: 'rgba(34,197,94,0.18)', borderColor: 'rgba(34,197,94,0.45)' },
-                    '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'transparent', border: '1px solid rgba(255,255,255,0.08)' },
+                    color: instanceStatus === 'disconnected' ? '#ef4444' : '#4ade80',
+                    bgcolor: instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.08)' : 'rgba(34,197,94,0.1)',
+                    border: `1px solid ${instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.25)' : 'rgba(34,197,94,0.25)'}`,
+                    borderRadius: 1.5, px: 1.5, py: 0.5,
+                    '&:hover': { bgcolor: instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.12)' : 'rgba(34,197,94,0.18)', borderColor: instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.45)' : 'rgba(34,197,94,0.45)' },
+                    '&.Mui-disabled': instanceStatus === 'disconnected'
+                      ? { color: '#ef4444', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)' }
+                      : { color: 'rgba(255,255,255,0.2)', bgcolor: 'transparent', border: '1px solid rgba(255,255,255,0.08)' },
                   }}
                 >
                   {t.db.send}{selectedWithWA > 0 ? ` (${selectedWithWA})` : ''}
@@ -720,9 +725,10 @@ function SkeletonRows({ count }) {
 // ─── Campaign dialog ──────────────────────────────────────────────────────────
 const MAX_CAMPAIGN_MSG = 4096
 
-function CampaignDialog({ open, selectedRows, onClose, onNotify }) {
+function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus = 'unknown', isDisconnected = false }) {
   const [msgText,      setMsgText]      = useState(TEMPLATES[0].text)
   const [sending,      setSending]      = useState(false)
+  const [sendError,    setSendError]    = useState('')
   const [progress,     setProgress]     = useState(0)
   const [results,      setResults]      = useState([])
   const [done,         setDone]         = useState(false)
@@ -772,6 +778,13 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify }) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ company_id: row._id, to_number: num, message, website: row.website }),
           })
+          if (!r.ok) {
+            const errJson = await r.json().catch(() => ({}))
+            const detail = errJson.detail || `Error ${r.status}`
+            setSendError(detail)
+            setTimeout(() => setSendError(''), 10_000)
+            throw new Error(detail)
+          }
           const json = await r.json()
           if (json.status === 'sent') lastStatus = 'sent'
         }
@@ -781,8 +794,14 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify }) {
       }
       setResults([...res])
       if (i < waRows.length - 1) {
-        const delay = Math.floor(Math.random() * 6000 + 7000) // 7–13 segundos
-        await new Promise(r => setTimeout(r, delay))
+        const sentSoFar = i + 1
+        if (sentSoFar % 5 === 0) {
+          const longBreak = Math.floor(Math.random() * 300000 + 180000) // 3–8 min
+          await new Promise(r => setTimeout(r, longBreak))
+        } else {
+          const delay = Math.floor(Math.random() * 30000 + 25000) // 25–55 seg
+          await new Promise(r => setTimeout(r, delay))
+        }
       }
     }
     setSending(false); setDone(true); sendingRef.current = false
@@ -865,6 +884,9 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify }) {
           </Typography>
         </Box>
 
+        <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1.5 }} />
+        <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1.5 }} />
+
         {/* Progress / Results */}
         {(sending || done) && (
           <Box sx={{ mb: 1 }}>
@@ -906,7 +928,7 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify }) {
         {!done && (
           <Button
             onClick={handleSend}
-            disabled={sending || waRows.length === 0 || msgInvalid}
+            disabled={sending || waRows.length === 0 || msgInvalid || isDisconnected}
             startIcon={sending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 16 }} />}
             sx={{
               bgcolor: !sending && waRows.length > 0 && !msgInvalid ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.05)',
@@ -955,6 +977,7 @@ export default function DatabaseViewer({ isActive }) {
   const [snack, setSnack] = useState({ open: false, msg: '', severity: 'success' })
   const [industries, setIndustries] = useState([])
   const [cities, setCities] = useState([])
+  const { status: instanceStatus, isDisconnected } = useInstanceStatus()
 
   const notify = (msg, severity = 'success') => setSnack({ open: true, msg, severity })
 
@@ -1246,6 +1269,7 @@ export default function DatabaseViewer({ isActive }) {
           onToggleFilter={() => setFilterOpen((o) => !o)}
           filterOpen={filterOpen}
           total={total}
+          instanceStatus={instanceStatus}
         />
 
         <Box sx={{ borderTop: '1px solid rgba(255,255,255,0.07)', position: 'relative', zIndex: 1 }} />
@@ -1458,6 +1482,7 @@ export default function DatabaseViewer({ isActive }) {
           Enviar mensaje a {msgTarget?.name || msgTarget?.domain || '—'}
         </DialogTitle>
         <DialogContent sx={{ pt: 0, bgcolor: 'var(--bg, #080c14)' }}>
+          <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1.5 }} />
           {viewLoading && (
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 6, gap: 2 }}>
               <CircularProgress size={36} sx={{ color: '#6366f1' }} />
@@ -1465,7 +1490,7 @@ export default function DatabaseViewer({ isActive }) {
             </Box>
           )}
           {!viewLoading && msgData && (
-            <MessageComposer result={msgData} onSend={handleSendFromDB} sending={msgSending} />
+            <MessageComposer result={msgData} onSend={handleSendFromDB} sending={msgSending} disabled={isDisconnected} />
           )}
           {!viewLoading && msgData && !msgData.primary_whatsapp_number && (
             <Alert severity="warning" sx={{ mt: 2, bgcolor: 'rgba(251,146,60,0.1)', color: '#fb923c', border: '1px solid rgba(251,146,60,0.2)' }}>
@@ -1505,6 +1530,8 @@ export default function DatabaseViewer({ isActive }) {
         selectedRows={selectedRowsFull}
         onClose={() => setCampaignOpen(false)}
         onNotify={notify}
+        instanceStatus={instanceStatus}
+        isDisconnected={isDisconnected}
       />
 
       <EditDialog

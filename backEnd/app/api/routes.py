@@ -1289,3 +1289,59 @@ def api_cancel_scheduled_send(job_id: str, x_user_token: Optional[str] = Header(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Analytics backfill ───────────────────────────────────────────────────────
+
+_REQUEUE_FILTER = {
+    "direction": "inbound",
+    "analysis_status": {"$exists": False},
+    "analysis": {"$exists": False},
+    "company_id": {"$exists": True, "$nin": [None, "unknown", "undefined", "manual"]},
+    "message_body": {"$exists": True, "$ne": "[media]"},
+}
+
+@router.post("/admin/requeue-unanalyzed")
+def api_requeue_unanalyzed(background_tasks: BackgroundTasks, limit: int = 20):
+    """Find old inbound messages with no analysis and run the classifier on each one.
+    Processes at most `limit` messages per call; returns `remaining` so the caller
+    knows whether to invoke again for the next batch."""
+    from app.classifier import classify_and_save
+    from datetime import datetime
+    db = MongoDBManager()
+    total_unqueued = db.db.message_logs.count_documents(_REQUEUE_FILTER)
+    pending_docs = list(db.db.message_logs.find(
+        _REQUEUE_FILTER,
+        {"_id": 1, "company_id": 1, "message_body": 1, "created_at": 1},
+    ).limit(limit))
+    for doc in pending_docs:
+        log_id     = str(doc["_id"])
+        company_id = str(doc["company_id"])
+        body       = doc.get("message_body") or ""
+        created    = doc.get("created_at") or datetime.now()
+        db.db.message_logs.update_one({"_id": doc["_id"]}, {"$set": {"analysis_status": "pending"}})
+        background_tasks.add_task(classify_and_save, log_id, company_id, body, created)
+    remaining = max(0, total_unqueued - len(pending_docs))
+    return {"ok": True, "queued": len(pending_docs), "remaining": remaining}
+
+
+@router.get("/admin/all-pending")
+def api_all_pending():
+    """DEV — list all message_logs with analysis_status pending."""
+    db = MongoDBManager()
+    docs = list(db.db.message_logs.find({"analysis_status": "pending"}, {"_id": 1, "company_id": 1, "message_body": 1}))
+    for d in docs:
+        d["_id"] = str(d["_id"])
+    return {"count": len(docs), "docs": docs}
+
+
+@router.delete("/admin/all-pending")
+def api_delete_all_pending():
+    """DEV ONLY — delete test docs and reset ALL orphaned pending to done."""
+    db = MongoDBManager()
+    deleted = db.db.message_logs.delete_many({"_test": True}).deleted_count
+    reset   = db.db.message_logs.update_many(
+        {"analysis_status": "pending"},
+        {"$set": {"analysis_status": "done"}}
+    ).modified_count
+    return {"ok": True, "deleted_test": deleted, "reset_pending": reset}

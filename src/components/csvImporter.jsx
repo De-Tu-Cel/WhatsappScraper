@@ -34,7 +34,7 @@ import LinkIcon from '@mui/icons-material/Link'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import MessageIcon from '@mui/icons-material/Message'
 import SendIcon from '@mui/icons-material/Send'
-import { TEMPLATES } from './singleUrlProcessor'
+import { getTemplates } from './singleUrlProcessor'
 import { useLang } from '../context/LangContext'
 
 const URL_REGEX = /^https?:\/\//i
@@ -106,6 +106,7 @@ function downloadTemplate() {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function CsvImporter() {
   const { t } = useLang()
+  const TEMPLATES = getTemplates(t)
   const inputRef   = useRef(null)
   const pauseRef   = useRef(false)
   const cancelRef  = useRef(false)

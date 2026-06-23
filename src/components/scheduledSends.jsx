@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { authFetch } from '@/lib/api'
+import { useLang } from '../context/LangContext'
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
 import { DatePicker } from '@mui/x-date-pickers/DatePicker'
@@ -51,11 +52,11 @@ const DAYS_ES_L   = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado',
 const USER_TZ     = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : ''
 
 const STATUS_META = {
-  pending:   { label: 'Pendiente',  color: '#3b82f6', bg: 'rgba(59,130,246,0.15)',  icon: <HourglassEmptyIcon sx={{ fontSize: 13 }} /> },
-  running:   { label: 'Enviando',   color: '#f59e0b', bg: 'rgba(245,158,11,0.15)',  icon: <CircularProgress size={11} thickness={5} sx={{ color: '#f59e0b' }} /> },
-  done:      { label: 'Completado', color: '#22c55e', bg: 'rgba(34,197,94,0.15)',   icon: <CheckCircleIcon sx={{ fontSize: 13 }} /> },
-  cancelled: { label: 'Cancelado',  color: '#6b7280', bg: 'rgba(107,114,128,0.15)', icon: <CancelIcon sx={{ fontSize: 13 }} /> },
-  error:     { label: 'Error',      color: '#ef4444', bg: 'rgba(239,68,68,0.15)',   icon: <ErrorIcon sx={{ fontSize: 13 }} /> },
+  pending:   { tKey: 'statusPending',   color: '#3b82f6', bg: 'rgba(59,130,246,0.15)',  icon: <HourglassEmptyIcon sx={{ fontSize: 13 }} /> },
+  running:   { tKey: 'statusRunning',   color: '#f59e0b', bg: 'rgba(245,158,11,0.15)',  icon: <CircularProgress size={11} thickness={5} sx={{ color: '#f59e0b' }} /> },
+  done:      { tKey: 'statusDone',      color: '#22c55e', bg: 'rgba(34,197,94,0.15)',   icon: <CheckCircleIcon sx={{ fontSize: 13 }} /> },
+  cancelled: { tKey: 'statusCancelled', color: '#6b7280', bg: 'rgba(107,114,128,0.15)', icon: <CancelIcon sx={{ fontSize: 13 }} /> },
+  error:     { tKey: 'statusError',     color: '#ef4444', bg: 'rgba(239,68,68,0.15)',   icon: <ErrorIcon sx={{ fontSize: 13 }} /> },
 }
 
 const FIELD_SX = {
@@ -126,6 +127,7 @@ function getWeekStart(date) {
 // ─── Confirm dialog ───────────────────────────────────────────────────────────
 
 function ConfirmDialog({ open, title, body, confirmLabel, danger, onConfirm, onCancel }) {
+  const { t } = useLang()
   return (
     <Dialog open={open} onClose={onCancel} sx={{ '& .MuiDialog-paper': { bgcolor: 'var(--card-bg,#1e293b)', color: 'var(--text,#f1f5f9)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2.5, minWidth: 320 } }}>
       <DialogTitle sx={{ fontSize: '0.95rem', fontWeight: 700, pb: 0.5 }}>{title}</DialogTitle>
@@ -133,10 +135,10 @@ function ConfirmDialog({ open, title, body, confirmLabel, danger, onConfirm, onC
         <Typography sx={{ color: 'rgba(255,255,255,0.55)', fontSize: '0.83rem', lineHeight: 1.5 }}>{body}</Typography>
       </DialogContent>
       <DialogActions sx={{ px: 2, pb: 2, gap: 1 }}>
-        <Button onClick={onCancel} sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.83rem' }}>Cancelar</Button>
+        <Button onClick={onCancel} sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.83rem' }}>{t.common.cancel}</Button>
         <Button onClick={onConfirm} variant="contained"
           sx={{ bgcolor: danger ? '#ef4444' : 'var(--accent,#3b82f6)', textTransform: 'none', fontSize: '0.83rem', fontWeight: 600, borderRadius: 2, '&:hover': { bgcolor: danger ? '#dc2626' : 'rgba(var(--accent-rgb,59,130,246),0.85)' } }}>
-          {confirmLabel || 'Confirmar'}
+          {confirmLabel || t.sched.confirm}
         </Button>
       </DialogActions>
     </Dialog>
@@ -146,10 +148,11 @@ function ConfirmDialog({ open, title, body, confirmLabel, danger, onConfirm, onC
 // ─── Status chip ──────────────────────────────────────────────────────────────
 
 function StatusChip({ status }) {
+  const { t } = useLang()
   const meta = STATUS_META[status] || STATUS_META.pending
   return (
     <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, px: 1, py: 0.25, borderRadius: 1.5, bgcolor: meta.bg, border: `1px solid ${meta.color}44`, color: meta.color, fontSize: '0.72rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
-      {meta.icon}{meta.label}
+      {meta.icon}{t.sched[meta.tKey]}
     </Box>
   )
 }
@@ -157,12 +160,13 @@ function StatusChip({ status }) {
 // ─── Progress bar ─────────────────────────────────────────────────────────────
 
 function SendProgress({ sent, total }) {
+  const { t } = useLang()
   if (!total) return null
   const pct = Math.min(100, Math.round((sent / total) * 100))
   return (
     <Box sx={{ mt: 0.8 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.3 }}>
-        <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.68rem' }}>{sent}/{total} enviados</Typography>
+        <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.68rem' }}>{sent}/{total} {t.sched.sent}</Typography>
         <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.68rem' }}>{pct}%</Typography>
       </Box>
       <LinearProgress variant="determinate" value={pct} sx={{ height: 4, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.07)', '& .MuiLinearProgress-bar': { bgcolor: 'var(--accent,#3b82f6)', borderRadius: 2 } }} />
@@ -173,6 +177,7 @@ function SendProgress({ sent, total }) {
 // ─── Company picker ───────────────────────────────────────────────────────────
 
 function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
+  const { t } = useLang()
   const [companies,          setCompanies]          = useState([])
   const [loadingCo,          setLoadingCo]          = useState(true)
   const [search,             setSearch]             = useState('')
@@ -232,25 +237,25 @@ function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
     <Box sx={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
       <Box sx={{ px: 1.5, py: 1, bgcolor: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.07)', display: 'flex', alignItems: 'center', gap: 0.8 }}>
         <BusinessIcon sx={{ fontSize: 14, color: 'rgba(255,255,255,0.3)' }} />
-        <Typography sx={{ color: 'rgba(255,255,255,0.55)', fontWeight: 700, fontSize: '0.75rem', flex: 1 }}>Destinatarios</Typography>
+        <Typography sx={{ color: 'rgba(255,255,255,0.55)', fontWeight: 700, fontSize: '0.75rem', flex: 1 }}>{t.sched.recipients}</Typography>
         {loadingCo && <CircularProgress size={11} sx={{ color: 'var(--accent,#3b82f6)' }} />}
       </Box>
 
       <Box sx={{ px: 1.5, pt: 1.2, pb: 0.8, borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, bgcolor: 'rgba(255,255,255,0.04)', borderRadius: 1.5, border: '1px solid rgba(255,255,255,0.08)', px: 1, py: 0.4, mb: 1 }}>
           <SearchIcon sx={{ fontSize: 13, color: 'rgba(255,255,255,0.25)' }} />
-          <Box component="input" value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar empresa..." sx={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: 'var(--text,#f1f5f9)', fontSize: '0.78rem', '&::placeholder': { color: 'rgba(255,255,255,0.2)' } }} />
+          <Box component="input" value={search} onChange={e => setSearch(e.target.value)} placeholder={t.sched.searchCo} sx={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: 'var(--text,#f1f5f9)', fontSize: '0.78rem', '&::placeholder': { color: 'rgba(255,255,255,0.2)' } }} />
           {search && <IconButton size="small" onClick={() => setSearch('')} sx={{ p: 0.2, color: 'rgba(255,255,255,0.3)' }}><CloseIcon sx={{ fontSize: 12 }} /></IconButton>}
         </Box>
         {industries.length > 0 && (
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
-            <Chip label="Todas" size="small" onClick={() => setIndustryFilter('')} sx={chipSx(!industryFilter)} />
+            <Chip label={t.sched.allIndustries} size="small" onClick={() => setIndustryFilter('')} sx={chipSx(!industryFilter)} />
             {(showAllIndustries ? industries : industries.slice(0, MAX_IND)).map(ind => (
               <Chip key={ind} label={ind} size="small" onClick={() => setIndustryFilter(f => f === ind ? '' : ind)} sx={chipSx(industryFilter === ind)} />
             ))}
             {industries.length > MAX_IND && (
               <Typography onClick={() => setShowAllIndustries(v => !v)} sx={{ color: 'var(--accent,#3b82f6)', fontSize: '0.68rem', fontWeight: 600, cursor: 'pointer', px: 0.5, '&:hover': { opacity: 0.8 } }}>
-                {showAllIndustries ? 'Ver menos' : `+${industries.length - MAX_IND} más`}
+                {showAllIndustries ? t.sched.showLess : `+${industries.length - MAX_IND} ${t.sched.showMore}`}
               </Typography>
             )}
           </Box>
@@ -260,7 +265,7 @@ function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
       {filtered.length > 0 && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 0.5, borderBottom: '1px solid rgba(255,255,255,0.04)', bgcolor: 'rgba(255,255,255,0.01)' }}>
           <Checkbox size="small" checked={allSel} indeterminate={someSel} onChange={toggleAll} sx={{ p: 0.3, color: 'rgba(255,255,255,0.15)', '&.Mui-checked,&.MuiCheckbox-indeterminate': { color: 'var(--accent,#3b82f6)' } }} />
-          <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.7rem' }}>Seleccionar todo ({allFilteredNums.length})</Typography>
+          <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.7rem' }}>{t.sched.selectAll} ({allFilteredNums.length})</Typography>
         </Box>
       )}
 
@@ -291,7 +296,7 @@ function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
                     <Typography sx={{ color: isSel ? 'var(--text,#f1f5f9)' : 'rgba(255,255,255,0.5)', fontSize: '0.74rem', fontFamily: 'monospace', flex: 1 }}>{fmtNumber(n.number)}</Typography>
                     {n.label && <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.65rem' }}>{n.label}</Typography>}
                     {n.active && (
-                      <Tooltip title="Ya en campaña activa">
+                      <Tooltip title={t.sched.activeInCampaign}>
                         <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.2, bgcolor: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 1, px: 0.5, py: 0.1 }}>
                           <WarningAmberIcon sx={{ fontSize: 9, color: '#f59e0b' }} />
                           <Typography sx={{ color: '#f59e0b', fontSize: '0.6rem', fontWeight: 600 }}>activa</Typography>
@@ -308,10 +313,10 @@ function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
 
       <Box sx={{ px: 1.5, py: 0.8, borderTop: '1px solid rgba(255,255,255,0.07)', bgcolor: 'rgba(255,255,255,0.02)', display: 'flex', alignItems: 'center', gap: 1 }}>
         {selCount === 0
-          ? <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.72rem' }}>Ningún número seleccionado</Typography>
+          ? <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.72rem' }}>{t.sched.noNumSel}</Typography>
           : <>
-              <Typography sx={{ color: 'var(--accent,#3b82f6)', fontSize: '0.72rem', fontWeight: 600 }}>{selCount} número{selCount !== 1 ? 's' : ''}</Typography>
-              {activeSelCount > 0 && <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3 }}><WarningAmberIcon sx={{ fontSize: 12, color: '#f59e0b' }} /><Typography sx={{ color: '#f59e0b', fontSize: '0.68rem' }}>{activeSelCount} ya en campaña</Typography></Box>}
+              <Typography sx={{ color: 'var(--accent,#3b82f6)', fontSize: '0.72rem', fontWeight: 600 }}>{selCount} {selCount !== 1 ? t.sched.numbers : t.sched.numSingular}</Typography>
+              {activeSelCount > 0 && <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3 }}><WarningAmberIcon sx={{ fontSize: 12, color: '#f59e0b' }} /><Typography sx={{ color: '#f59e0b', fontSize: '0.68rem' }}>{activeSelCount} {t.sched.alreadyInCampaign}</Typography></Box>}
             </>
         }
       </Box>
@@ -322,6 +327,7 @@ function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
 // ─── Campaign form (create / edit / duplicate) ────────────────────────────────
 
 function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
+  const { t, lang } = useLang()
   const isEdit = !!editJob
   const src    = duplicateFrom || editJob  // source for pre-filling
 
@@ -345,8 +351,8 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
 
   async function handleSubmit(e) {
     e.preventDefault(); setError('')
-    if (!name.trim() || !message.trim() || !dateVal || !timeVal) { setError('Completa todos los campos requeridos'); return }
-    if (selectedNums.size === 0) { setError('Selecciona al menos un número'); return }
+    if (!name.trim() || !message.trim() || !dateVal || !timeVal) { setError(t.sched.fillAll); return }
+    if (selectedNums.size === 0) { setError(t.sched.selectNum); return }
     setSubmitting(true)
     try {
       const combined = dateVal.hour(timeVal.hour()).minute(timeVal.minute()).second(0)
@@ -360,38 +366,38 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
         { method: isEdit ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(isEdit ? body : { ...body, company_ids: [] }) }
       )
       const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Error al guardar')
+      if (!res.ok) throw new Error(data.detail || t.sched.saveError)
       onDone(data, isEdit)
     } catch (err) { setError(err.message) }
     finally { setSubmitting(false) }
   }
 
   return (
-    <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale="es">
+    <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale={lang}>
     <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, p: 2.5 }}>
-      <TextField label="Identificador del envío *" value={name} onChange={e => setName(e.target.value)} size="small" fullWidth sx={FIELD_SX} />
+      <TextField label={t.sched.nameLabel} value={name} onChange={e => setName(e.target.value)} size="small" fullWidth sx={FIELD_SX} />
       <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
-        <DatePicker label="Fecha *" value={dateVal} onChange={v => setDateVal(v)} disablePast
+        <DatePicker label={t.sched.dateLabel} value={dateVal} onChange={v => setDateVal(v)} disablePast
           slotProps={{ textField: { size: 'small', fullWidth: true, sx: FIELD_SX }, popper: { sx: PICKER_POPPER_SX } }} />
-        <TimePicker label="Hora *" value={timeVal} onChange={v => setTimeVal(v)} ampm
+        <TimePicker label={t.sched.timeLabel} value={timeVal} onChange={v => setTimeVal(v)} ampm
           slotProps={{ textField: { size: 'small', fullWidth: true, sx: FIELD_SX }, popper: { sx: PICKER_POPPER_SX } }} />
       </Box>
       {USER_TZ && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: -0.8 }}>
           <AccessTimeIcon sx={{ fontSize: 12, color: 'rgba(255,255,255,0.2)' }} />
-          <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.68rem' }}>Zona horaria: {USER_TZ}</Typography>
+          <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.68rem' }}>{t.sched.tzLabel} {USER_TZ}</Typography>
         </Box>
       )}
-      <TextField label="Mensaje" value={message} onChange={e => setMessage(e.target.value)} multiline rows={3} fullWidth size="small" sx={FIELD_SX} />
+      <TextField label={t.sched.messageLabel} value={message} onChange={e => setMessage(e.target.value)} multiline rows={3} fullWidth size="small" sx={FIELD_SX} />
       <CompanyPicker selectedNums={selectedNums} numInfoMap={numInfoMap} onChange={(ns, nm) => { setSelectedNums(ns); setNumInfoMap(nm) }} />
       {error && <Box sx={{ px: 1.5, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}><Typography sx={{ color: '#ef4444', fontSize: '0.78rem' }}>{error}</Typography></Box>}
       <Box sx={{ display: 'flex', gap: 1 }}>
         <Button type="submit" variant="contained" disabled={submitting}
           startIcon={submitting ? <CircularProgress size={13} sx={{ color: 'inherit' }} /> : <SendIcon />}
           sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.85)' }, '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.2)' }, textTransform: 'none', fontWeight: 600, fontSize: '0.82rem', borderRadius: 2, px: 2 }}>
-          {submitting ? 'Guardando...' : (isEdit ? 'Guardar' : (duplicateFrom ? 'Crear copia' : 'Programar'))}
+          {submitting ? t.sched.saving : (isEdit ? t.sched.saveLbl : (duplicateFrom ? t.sched.duplicateLbl : t.sched.scheduleLbl))}
         </Button>
-        <Button variant="text" onClick={() => onDone(null, false)} sx={{ color: 'rgba(255,255,255,0.3)', textTransform: 'none', fontSize: '0.8rem' }}>Cancelar</Button>
+        <Button variant="text" onClick={() => onDone(null, false)} sx={{ color: 'rgba(255,255,255,0.3)', textTransform: 'none', fontSize: '0.8rem' }}>{t.common.cancel}</Button>
       </Box>
     </Box>
     </LocalizationProvider>
@@ -447,6 +453,7 @@ function DayCell({ date, jobs, inCurrentMonth, isToday, isSelected, onDayClick, 
 // ─── Month view ───────────────────────────────────────────────────────────────
 
 function MonthView({ jobs, viewYear, viewMonth, selectedDate, onDayClick, onJobClick }) {
+  const { t } = useLang()
   const today  = new Date()
   const days   = useMemo(() => getCalendarDays(viewYear, viewMonth), [viewYear, viewMonth])
   const selDay = selectedDate ? new Date(selectedDate) : null
@@ -457,7 +464,7 @@ function MonthView({ jobs, viewYear, viewMonth, selectedDate, onDayClick, onJobC
   return (
     <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' }}>
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-        {DAYS_ES.map(d => (
+        {t.sched.daysShort.map(d => (
           <Typography key={d} sx={{ textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: '0.7rem', fontWeight: 700, py: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{d}</Typography>
         ))}
       </Box>
@@ -485,6 +492,7 @@ function MonthView({ jobs, viewYear, viewMonth, selectedDate, onDayClick, onJobC
 // ─── Week view ────────────────────────────────────────────────────────────────
 
 function WeekView({ jobs, weekStart, selectedDate, onDayClick, onJobClick }) {
+  const { t } = useLang()
   const today  = new Date()
   const selDay = selectedDate ? new Date(selectedDate) : null
   const days   = useMemo(() => Array.from({ length: 7 }, (_, i) => {
@@ -499,7 +507,7 @@ function WeekView({ jobs, weekStart, selectedDate, onDayClick, onJobClick }) {
           const isTod = isSameDay(d, today)
           return (
             <Box key={i} sx={{ textAlign: 'center', py: 1, borderRight: i < 6 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
-              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{DAYS_ES_L[i]}</Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t.sched.daysLong[i]}</Typography>
               <Box sx={{ width: 30, height: 30, borderRadius: '50%', mx: 'auto', mt: 0.3, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: isTod ? 'var(--accent,#3b82f6)' : 'transparent' }}>
                 <Typography sx={{ color: isTod ? '#fff' : 'rgba(255,255,255,0.7)', fontSize: '0.88rem', fontWeight: 700 }}>{d.getDate()}</Typography>
               </Box>
@@ -542,6 +550,7 @@ function WeekView({ jobs, weekStart, selectedDate, onDayClick, onJobClick }) {
 // ─── List view ────────────────────────────────────────────────────────────────
 
 function ListView({ jobs, onJobClick, onRequestCancel, onRequestDelete, onDuplicate }) {
+  const { t } = useLang()
   const [statusFilter, setStatusFilter] = useState('all')
   const filtered = statusFilter === 'all' ? jobs : jobs.filter(j => j.status === statusFilter)
 
@@ -557,9 +566,9 @@ function ListView({ jobs, onJobClick, onRequestCancel, onRequestDelete, onDuplic
     <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
       {/* Status filter */}
       <Box sx={{ display: 'flex', gap: 0.5, px: 2, py: 1, borderBottom: '1px solid rgba(255,255,255,0.06)', flexWrap: 'wrap', flexShrink: 0 }}>
-        <Chip label="Todos" size="small" onClick={() => setStatusFilter('all')} sx={filterChipSx(statusFilter === 'all')} />
+        <Chip label={t.sched.allStatuses} size="small" onClick={() => setStatusFilter('all')} sx={filterChipSx(statusFilter === 'all')} />
         {Object.entries(STATUS_META).map(([k, v]) => (
-          <Chip key={k} label={v.label} size="small" onClick={() => setStatusFilter(s => s === k ? 'all' : k)} sx={filterChipSx(statusFilter === k)} />
+          <Chip key={k} label={t.sched[v.tKey]} size="small" onClick={() => setStatusFilter(s => s === k ? 'all' : k)} sx={filterChipSx(statusFilter === k)} />
         ))}
       </Box>
 
@@ -567,41 +576,72 @@ function ListView({ jobs, onJobClick, onRequestCancel, onRequestDelete, onDuplic
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', py: 8, gap: 1.5 }}>
           <ScheduleSendIcon sx={{ fontSize: 36, color: 'rgba(255,255,255,0.1)' }} />
           <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.85rem' }}>
-            {statusFilter === 'all' ? 'No hay campañas programadas' : `Sin campañas con estado "${STATUS_META[statusFilter]?.label}"`}
+            {statusFilter === 'all' ? t.sched.noJobs : `${t.sched.noJobsStatus} "${t.sched[STATUS_META[statusFilter]?.tKey]}"`}
           </Typography>
         </Box>
       ) : (
-        <Box sx={{ overflowY: 'auto', flex: 1 }}>
-          <Box sx={{ display: 'grid', gridTemplateColumns: '130px 1fr 110px 120px 90px', gap: 1.5, px: 2, py: 0.8, borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-            {['Fecha', 'Campaña', 'Estado', 'Progreso', ''].map((h, i) => (
-              <Typography key={i} sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.67rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{h}</Typography>
-            ))}
-          </Box>
+        <Box sx={{ overflowY: 'auto', flex: 1, px: 2, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.2 }}>
           {filtered.map(job => {
+            const meta      = STATUS_META[job.status] || STATUS_META.pending
             const canCancel = job.status === 'pending' || job.status === 'running'
             const canEdit   = job.status === 'pending'
             const canDelete = !canCancel
+            const numCount  = job.selected_numbers?.length || 0
+            const pct       = job.total_count ? Math.min(100, Math.round(((job.sent_count||0) / job.total_count) * 100)) : null
             return (
               <Box key={job._id} onClick={() => onJobClick(job)} sx={{
-                display: 'grid', gridTemplateColumns: '130px 1fr 110px 120px 90px',
-                gap: 1.5, alignItems: 'center', px: 2, py: 1.5, cursor: 'pointer',
-                borderBottom: '1px solid rgba(255,255,255,0.05)',
-                '&:hover': { bgcolor: 'rgba(255,255,255,0.025)' }, transition: 'background 0.12s',
+                display: 'flex', alignItems: 'stretch', borderRadius: 2, cursor: 'pointer', overflow: 'hidden',
+                border: `1px solid ${meta.color}33`,
+                bgcolor: 'rgba(255,255,255,0.02)',
+                transition: 'border-color 0.18s, box-shadow 0.18s',
+                '&:hover': { borderColor: `${meta.color}77`, boxShadow: `0 0 12px ${meta.color}28, 0 0 1px ${meta.color}44` },
               }}>
-                <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem' }}>{fmtDate(job.scheduled_at)}</Typography>
-                <Box>
-                  <Typography sx={{ color: 'var(--text,#f1f5f9)', fontSize: '0.83rem', fontWeight: 600 }}>{job.name}</Typography>
-                  <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.68rem' }}>
-                    {job.selected_numbers?.length ? `${job.selected_numbers.length} números` : 'Sin asignar'}
-                  </Typography>
+                {/* Date badge */}
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', px: 1.8, py: 1.5, borderRight: `1px solid ${meta.color}22`, minWidth: 58, flexShrink: 0, bgcolor: `${meta.color}08` }}>
+                  {job.scheduled_at ? (() => {
+                    const d = new Date(job.scheduled_at)
+                    const day = d.toLocaleString('es-MX', { day: '2-digit' })
+                    const mon = d.toLocaleString('es-MX', { month: 'short' }).replace('.','')
+                    const hr  = d.toLocaleString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: false })
+                    return <>
+                      <Typography sx={{ color: 'var(--text,#f1f5f9)', fontSize: '1.15rem', fontWeight: 700, lineHeight: 1 }}>{day}</Typography>
+                      <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.04em', mt: 0.2 }}>{mon}</Typography>
+                      <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.6rem', mt: 0.5, fontFamily: 'monospace' }}>{hr}</Typography>
+                    </>
+                  })() : <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.7rem' }}>—</Typography>}
                 </Box>
-                <StatusChip status={job.status} />
-                <Box onClick={e => e.stopPropagation()}><SendProgress sent={job.sent_count||0} total={job.total_count||0} /></Box>
-                <Box onClick={e => e.stopPropagation()} sx={{ display: 'flex', gap: 0.2 }}>
-                  <Tooltip title="Duplicar"><IconButton size="small" onClick={() => onDuplicate(job)} sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: '#a78bfa' } }}><ContentCopyIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
-                  {canEdit   && <Tooltip title="Editar"><IconButton size="small" onClick={() => onJobClick(job)} sx={{ color: 'rgba(255,255,255,0.28)', '&:hover': { color: 'var(--accent,#3b82f6)' } }}><EditIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>}
-                  {canCancel && <Tooltip title="Cancelar"><IconButton size="small" onClick={() => onRequestCancel(job)} sx={{ color: 'rgba(239,68,68,0.45)', '&:hover': { color: '#ef4444' } }}><CancelIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>}
-                  {canDelete && <Tooltip title="Eliminar"><IconButton size="small" onClick={() => onRequestDelete(job)} sx={{ color: 'rgba(255,255,255,0.18)', '&:hover': { color: '#ef4444' } }}><DeleteIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>}
+
+                {/* Main content */}
+                <Box sx={{ flex: 1, minWidth: 0, px: 1.8, py: 1.4, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 0.5 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                    <Typography sx={{ color: 'var(--text,#f1f5f9)', fontSize: '0.85rem', fontWeight: 700, lineHeight: 1.2, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {job.name}
+                    </Typography>
+                    <StatusChip status={job.status} />
+                  </Box>
+                  <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.7rem' }}>
+                    {numCount ? `${numCount} ${t.sched.numbers}` : t.sched.unassigned}
+                    {job.total_count > 0 ? ` · ${job.sent_count||0}/${job.total_count} ${t.sched.sent}` : ''}
+                  </Typography>
+                  {job.message && (
+                    <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.68rem', mt: 0.1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
+                      {job.message}
+                    </Typography>
+                  )}
+                  {pct !== null && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                      <LinearProgress variant="determinate" value={pct} sx={{ flex: 1, height: 5, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.07)', '& .MuiLinearProgress-bar': { bgcolor: meta.color, borderRadius: 2 } }} />
+                      <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.65rem', minWidth: 28, textAlign: 'right' }}>{pct}%</Typography>
+                    </Box>
+                  )}
+                </Box>
+
+                {/* Actions */}
+                <Box onClick={e => e.stopPropagation()} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 0.3, px: 1, py: 1, borderLeft: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
+                  <Tooltip title={t.sched.ttDuplicate} placement="left"><IconButton size="small" onClick={() => onDuplicate(job)} sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: '#a78bfa' } }}><ContentCopyIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
+                  {canEdit   && <Tooltip title={t.sched.ttEdit} placement="left"><IconButton size="small" onClick={() => onJobClick(job)} sx={{ color: 'rgba(255,255,255,0.28)', '&:hover': { color: 'var(--accent,#3b82f6)' } }}><EditIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>}
+                  {canCancel && <Tooltip title={t.sched.ttCancel} placement="left"><IconButton size="small" onClick={() => onRequestCancel(job)} sx={{ color: 'rgba(239,68,68,0.45)', '&:hover': { color: '#ef4444' } }}><CancelIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>}
+                  {canDelete && <Tooltip title={t.sched.ttDelete} placement="left"><IconButton size="small" onClick={() => onRequestDelete(job)} sx={{ color: 'rgba(255,255,255,0.18)', '&:hover': { color: '#ef4444' } }}><DeleteIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>}
                 </Box>
               </Box>
             )
@@ -615,20 +655,44 @@ function ListView({ jobs, onJobClick, onRequestCancel, onRequestDelete, onDuplic
 // ─── Side panel ───────────────────────────────────────────────────────────────
 
 function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicate }) {
+  const { t } = useLang()
   const isOpen = !!panel
   const isEdit = panel?.mode === 'edit'
+  const isReadOnly = isEdit && panel?.job?.status !== 'pending'
+  const [industryMap, setIndustryMap] = useState({})
+
+  useEffect(() => {
+    if (!isReadOnly || !panel?.job?.selected_numbers?.length) return
+    authFetch('/api/admin/companies-with-numbers')
+      .then(r => r.json())
+      .then(data => {
+        const map = {}
+        ;(data || []).forEach(c => { if (c._id && c.industry) map[String(c._id)] = c.industry })
+        setIndustryMap(map)
+      })
+      .catch(() => {})
+  }, [panel?.job?._id, isReadOnly]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <Box sx={{ width: isOpen ? 390 : 0, flexShrink: 0, overflow: 'hidden', transition: 'width 0.25s cubic-bezier(0.4,0,0.2,1)', borderLeft: isOpen ? '1px solid rgba(255,255,255,0.08)' : 'none', display: 'flex', flexDirection: 'column' }}>
+    <Box sx={{
+      position: 'absolute', top: 0, right: 0, bottom: 0,
+      width: isOpen ? 'min(390px, 55%)' : 0,
+      overflow: 'hidden',
+      transition: 'width 0.25s cubic-bezier(0.4,0,0.2,1)',
+      borderLeft: isOpen ? '1px solid rgba(255,255,255,0.08)' : 'none',
+      display: 'flex', flexDirection: 'column',
+      bgcolor: 'var(--sidebar-bg, #0d1117)',
+      zIndex: 2,
+    }}>
       {isOpen && (
-        <Box sx={{ width: 390, display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
+        <Box sx={{ width: 'min(390px, 55vw)', display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2.5, py: 1.8, borderBottom: '1px solid rgba(255,255,255,0.07)', bgcolor: 'rgba(255,255,255,0.02)', flexShrink: 0 }}>
             <Box sx={{ width: 28, height: 28, borderRadius: 1.5, flexShrink: 0, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               {panel.mode === 'duplicate' ? <ContentCopyIcon sx={{ fontSize: 14, color: '#a78bfa' }} /> : isEdit ? <EditIcon sx={{ fontSize: 14, color: 'var(--accent,#3b82f6)' }} /> : <ScheduleSendIcon sx={{ fontSize: 15, color: 'var(--accent,#3b82f6)' }} />}
             </Box>
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 700, fontSize: '0.88rem', lineHeight: 1.2 }}>
-                {panel.mode === 'duplicate' ? 'Duplicar envío' : isEdit ? 'Editar envío' : 'Programar envío'}
+                {panel.mode === 'duplicate' ? t.sched.duplicatePanel : isEdit ? t.sched.editPanel : t.sched.createPanel}
               </Typography>
               {(isEdit || panel.mode === 'duplicate') && (
                 <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.68rem' }}>{panel.job?.name}</Typography>
@@ -640,42 +704,105 @@ function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicat
           </Box>
 
           {/* Read-only view for non-pending jobs */}
-          {isEdit && panel.job?.status !== 'pending' ? (
-            <Box sx={{ p: 2.5, display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <Box><Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.7rem', mb: 0.5 }}>Estado</Typography><StatusChip status={panel.job.status} /></Box>
-              <Box>
-                <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.7rem', mb: 0.5 }}>Programado</Typography>
-                <Typography sx={{ color: 'var(--text,#f1f5f9)', fontSize: '0.83rem' }}>{fmtDate(panel.job.scheduled_at)}</Typography>
-              </Box>
-              <Box>
-                <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.7rem', mb: 0.5 }}>Mensaje</Typography>
-                <Typography sx={{ color: 'rgba(255,255,255,0.65)', fontSize: '0.82rem', whiteSpace: 'pre-wrap' }}>{panel.job.message}</Typography>
-              </Box>
-              <Box>
-                <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.7rem', mb: 0.3 }}>Números</Typography>
-                <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem' }}>{panel.job.selected_numbers?.length || 0} seleccionados</Typography>
-              </Box>
-              <SendProgress sent={panel.job.sent_count||0} total={panel.job.total_count||0} />
-              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                <Button size="small" startIcon={<ContentCopyIcon />} onClick={() => onDuplicate(panel.job)}
-                  sx={{ color: '#a78bfa', borderColor: 'rgba(167,139,250,0.3)', border: '1px solid', textTransform: 'none', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(167,139,250,0.08)' } }}>
-                  Duplicar
-                </Button>
-                {panel.job.status === 'running' && (
-                  <Button size="small" startIcon={<CancelIcon />} onClick={() => onRequestCancel(panel.job)}
-                    sx={{ color: '#f59e0b', borderColor: 'rgba(245,158,11,0.3)', border: '1px solid', textTransform: 'none', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(245,158,11,0.08)' } }}>
-                    Cancelar envío
-                  </Button>
+          {isReadOnly ? (() => {
+            const job = panel.job
+            const meta = STATUS_META[job.status] || STATUS_META.pending
+            const sent  = job.sent_count || 0
+            const total = job.total_count || (job.selected_numbers?.length || 0)
+            const pct   = total > 0 ? Math.round(sent / total * 100) : 0
+
+            const groupMap = {}
+            for (const num of (job.selected_numbers || [])) {
+              const key = num.company_id || num.company_name || '?'
+              if (!groupMap[key]) groupMap[key] = { company_name: num.company_name || '—', company_id: num.company_id, numbers: [] }
+              groupMap[key].numbers.push(num)
+            }
+            const groups = Object.values(groupMap)
+
+            const LABEL_SX = { color: 'rgba(255,255,255,0.28)', fontSize: '0.66rem', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.06em' }
+
+            return (
+              <Box sx={{ p: 2.5, display: 'flex', flexDirection: 'column', gap: 2, overflowY: 'auto' }}>
+
+                {/* Status + date */}
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                  <StatusChip status={job.status} />
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <AccessTimeIcon sx={{ fontSize: 12, color: 'rgba(255,255,255,0.25)' }} />
+                    <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.3)' }}>{fmtDate(job.scheduled_at)}</Typography>
+                  </Box>
+                </Box>
+
+                {/* Progress */}
+                <Box sx={{ bgcolor: 'rgba(255,255,255,0.03)', borderRadius: 2, p: 1.5, border: `1px solid ${meta.color}22` }}>
+                  <Typography sx={LABEL_SX}>{t.sched.panelProgress}</Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5, mb: 1 }}>
+                    <Typography sx={{ color: meta.color, fontWeight: 700, fontSize: '1.5rem', lineHeight: 1 }}>{sent}</Typography>
+                    <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.78rem' }}>{t.sched.panelOf} {total} {t.sched.sent}</Typography>
+                  </Box>
+                  <LinearProgress variant="determinate" value={Math.min(pct, 100)} sx={{ height: 5, borderRadius: 3, bgcolor: 'rgba(255,255,255,0.07)', '& .MuiLinearProgress-bar': { bgcolor: meta.color, borderRadius: 3 } }} />
+                  <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.65rem', mt: 0.4, textAlign: 'right' }}>{pct}%</Typography>
+                </Box>
+
+                {/* Message */}
+                <Box>
+                  <Typography sx={LABEL_SX}>{t.sched.panelMessage}</Typography>
+                  <Box sx={{ bgcolor: 'rgba(255,255,255,0.03)', borderRadius: 2, p: 1.5, border: '1px solid rgba(255,255,255,0.06)', borderLeft: '3px solid rgba(var(--accent-rgb,59,130,246),0.35)' }}>
+                    <Typography sx={{ color: 'rgba(255,255,255,0.62)', fontSize: '0.82rem', whiteSpace: 'pre-wrap', lineHeight: 1.65 }}>{job.message}</Typography>
+                  </Box>
+                </Box>
+
+                {/* Recipients grouped by company */}
+                {groups.length > 0 && (
+                  <Box>
+                    <Typography sx={LABEL_SX}>{t.sched.panelRecipients} ({job.selected_numbers?.length || 0})</Typography>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.8 }}>
+                      {groups.map(g => {
+                        const industry = industryMap[String(g.company_id)] || ''
+                        return (
+                          <Box key={g.company_id || g.company_name} sx={{ bgcolor: 'rgba(255,255,255,0.03)', borderRadius: 1.5, p: 1.2, border: '1px solid rgba(255,255,255,0.06)' }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7, mb: 0.4, flexWrap: 'wrap' }}>
+                              <BusinessIcon sx={{ fontSize: 12, color: 'rgba(255,255,255,0.28)', flexShrink: 0 }} />
+                              <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 600, fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '55%' }}>{g.company_name}</Typography>
+                              {industry && (
+                                <Chip label={industry} size="small" sx={{ height: 15, fontSize: '0.58rem', color: 'rgba(255,255,255,0.38)', bgcolor: 'rgba(255,255,255,0.06)', border: 'none', '& .MuiChip-label': { px: 0.7 } }} />
+                              )}
+                            </Box>
+                            {g.numbers.map(n => (
+                              <Box key={n.number} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, ml: 2.4, mt: 0.25 }}>
+                                <WhatsAppIcon sx={{ fontSize: 11, color: '#4ade80', flexShrink: 0 }} />
+                                <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.74rem', fontFamily: 'monospace' }}>{n.number}</Typography>
+                              </Box>
+                            ))}
+                          </Box>
+                        )
+                      })}
+                    </Box>
+                  </Box>
                 )}
-                {(panel.job.status === 'done' || panel.job.status === 'cancelled' || panel.job.status === 'error') && (
-                  <Button size="small" startIcon={<DeleteIcon />} onClick={() => onRequestDelete(panel.job)}
-                    sx={{ color: '#ef4444', borderColor: 'rgba(239,68,68,0.3)', border: '1px solid', textTransform: 'none', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.08)' } }}>
-                    Eliminar
+
+                {/* Actions */}
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center', pt: 1.5, mt: 0.5, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                  <Button size="small" startIcon={<ContentCopyIcon />} onClick={() => onDuplicate(job)}
+                    sx={{ color: '#a78bfa', borderColor: 'rgba(167,139,250,0.3)', border: '1px solid', textTransform: 'none', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(167,139,250,0.08)' } }}>
+                    {t.sched.dupBtn}
                   </Button>
-                )}
+                  {job.status === 'running' && (
+                    <Button size="small" startIcon={<CancelIcon />} onClick={() => onRequestCancel(job)}
+                      sx={{ color: '#f59e0b', borderColor: 'rgba(245,158,11,0.3)', border: '1px solid', textTransform: 'none', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(245,158,11,0.08)' } }}>
+                      {t.sched.cancelSendBtn}
+                    </Button>
+                  )}
+                  {(job.status === 'done' || job.status === 'cancelled' || job.status === 'error') && (
+                    <Button size="small" startIcon={<DeleteIcon />} onClick={() => onRequestDelete(job)}
+                      sx={{ color: '#ef4444', borderColor: 'rgba(239,68,68,0.3)', border: '1px solid', textTransform: 'none', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.08)' } }}>
+                      {t.sched.deleteBtn}
+                    </Button>
+                  )}
+                </Box>
               </Box>
-            </Box>
-          ) : (
+            )
+          })() : (
             <CampaignForm
               editJob={isEdit ? panel.job : null}
               defaultDate={panel.mode === 'create' ? panel.defaultDate : undefined}
@@ -692,6 +819,7 @@ function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicat
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function ScheduledSends() {
+  const { t } = useLang()
   const today = new Date()
   const [jobs,      setJobs]      = useState([])
   const [loading,   setLoading]   = useState(true)
@@ -787,17 +915,17 @@ export default function ScheduledSends() {
   const toolbarLabel = useMemo(() => {
     if (calView === 'week') {
       const end = new Date(weekStart); end.setDate(end.getDate() + 6)
-      const sM = MONTHS_ES[weekStart.getMonth()].slice(0, 3)
-      const eM = MONTHS_ES[end.getMonth()].slice(0, 3)
+      const sM = t.sched.months[weekStart.getMonth()].slice(0, 3)
+      const eM = t.sched.months[end.getMonth()].slice(0, 3)
       return weekStart.getMonth() === end.getMonth()
         ? `${weekStart.getDate()}–${end.getDate()} ${sM} ${weekStart.getFullYear()}`
         : `${weekStart.getDate()} ${sM} – ${end.getDate()} ${eM} ${end.getFullYear()}`
     }
-    return `${MONTHS_ES[viewMonth]} ${viewYear}`
-  }, [calView, viewMonth, viewYear, weekStart])
+    return `${t.sched.months[viewMonth]} ${viewYear}`
+  }, [calView, viewMonth, viewYear, weekStart, t])
 
   const hasActive = jobs.some(j => j.status === 'running')
-  const VIEWS = [{ key: 'month', icon: <CalendarMonthIcon sx={{ fontSize: 15 }} />, label: 'Mes' }, { key: 'week', icon: <ViewWeekIcon sx={{ fontSize: 15 }} />, label: 'Semana' }, { key: 'list', icon: <ViewListIcon sx={{ fontSize: 15 }} />, label: 'Lista' }]
+  const VIEWS = [{ key: 'month', icon: <CalendarMonthIcon sx={{ fontSize: 15 }} />, label: t.sched.viewMonth }, { key: 'week', icon: <ViewWeekIcon sx={{ fontSize: 15 }} />, label: t.sched.viewWeek }, { key: 'list', icon: <ViewListIcon sx={{ fontSize: 15 }} />, label: t.sched.viewList }]
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -807,36 +935,40 @@ export default function ScheduledSends() {
           <ScheduleSendIcon sx={{ fontSize: 19, color: 'var(--accent,#3b82f6)' }} />
         </Box>
         <Box>
-          <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 800, fontSize: '1.1rem', lineHeight: 1.2 }}>Envíos Programados</Typography>
-          <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem' }}>Da clic en un día para programar una campaña</Typography>
+          <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 800, fontSize: '1.1rem', lineHeight: 1.2 }}>{t.sched.title}</Typography>
+          <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem' }}>{t.sched.subtitle}</Typography>
         </Box>
         <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 1 }}>
           {hasActive && <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
             <CircularProgress size={11} thickness={5} sx={{ color: '#f59e0b' }} />
-            <Typography sx={{ color: '#f59e0b', fontSize: '0.7rem', fontWeight: 600 }}>En vivo</Typography>
+            <Typography sx={{ color: '#f59e0b', fontSize: '0.7rem', fontWeight: 600 }}>{t.sched.live}</Typography>
           </Box>}
           <Button size="small" variant="contained" startIcon={<AddIcon />}
             onClick={() => setPanel({ mode: 'create', defaultDate: dateToDtLocal(today) })}
             sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.85)' }, textTransform: 'none', fontWeight: 600, fontSize: '0.8rem', borderRadius: 2, px: 1.8 }}>
-            Programar envío
+            {t.sched.scheduleBtn}
           </Button>
         </Box>
       </Box>
 
       {/* Main area */}
-      <Box sx={{ flex: 1, display: 'flex', minHeight: 0, bgcolor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'clip' }}>
-        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <Box sx={{ flex: 1, display: 'flex', minHeight: 0, bgcolor: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'hidden', position: 'relative' }}>
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
           {/* Toolbar */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1.2, borderBottom: '1px solid rgba(255,255,255,0.07)', flexShrink: 0 }}>
-            <IconButton size="small" onClick={navPrev} sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'var(--text,#f1f5f9)' } }}><ChevronLeftIcon sx={{ fontSize: 18 }} /></IconButton>
-            <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 700, fontSize: '0.95rem', minWidth: 190, textAlign: 'center' }}>{toolbarLabel}</Typography>
-            <IconButton size="small" onClick={navNext} sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'var(--text,#f1f5f9)' } }}><ChevronRightIcon sx={{ fontSize: 18 }} /></IconButton>
-            <Button size="small" onClick={goToday} sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.72rem', textTransform: 'none', borderRadius: 1.5, border: '1px solid rgba(255,255,255,0.12)', px: 1.2, py: 0.3, '&:hover': { bgcolor: 'rgba(255,255,255,0.05)' }, ml: 0.5 }}>Hoy</Button>
-            <Box sx={{ ml: 'auto', display: 'flex', bgcolor: 'rgba(255,255,255,0.04)', borderRadius: 1.5, border: '1px solid rgba(255,255,255,0.09)', overflow: 'hidden' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 1.2, borderBottom: '1px solid rgba(255,255,255,0.07)', flexShrink: 0, overflow: 'hidden' }}>
+            {/* Nav group */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
+              <IconButton size="small" onClick={navPrev} sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'var(--text,#f1f5f9)' } }}><ChevronLeftIcon sx={{ fontSize: 18 }} /></IconButton>
+              <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 700, fontSize: '0.9rem', whiteSpace: 'nowrap' }}>{toolbarLabel}</Typography>
+              <IconButton size="small" onClick={navNext} sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'var(--text,#f1f5f9)' } }}><ChevronRightIcon sx={{ fontSize: 18 }} /></IconButton>
+              <Button size="small" onClick={goToday} sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.72rem', textTransform: 'none', borderRadius: 1.5, border: '1px solid rgba(255,255,255,0.12)', px: 1.2, py: 0.3, '&:hover': { bgcolor: 'rgba(255,255,255,0.05)' } }}>{t.sched.today}</Button>
+            </Box>
+            {/* View switcher */}
+            <Box sx={{ ml: 'auto', flexShrink: 0, display: 'flex', bgcolor: 'rgba(255,255,255,0.04)', borderRadius: 1.5, border: '1px solid rgba(255,255,255,0.09)', overflow: 'hidden' }}>
               {VIEWS.map(v => (
                 <Box key={v.key} onClick={() => setCalView(v.key)} sx={{ display: 'flex', alignItems: 'center', gap: 0.4, px: 1.2, py: 0.4, cursor: 'pointer', bgcolor: calView === v.key ? 'rgba(255,255,255,0.08)' : 'transparent', color: calView === v.key ? 'var(--text,#f1f5f9)' : 'rgba(255,255,255,0.35)', transition: 'background-color 0.12s' }}>
                   {v.icon}
-                  <Typography sx={{ fontSize: '0.7rem', fontWeight: calView === v.key ? 600 : 400 }}>{v.label}</Typography>
+                  <Typography sx={{ fontSize: '0.7rem', fontWeight: calView === v.key ? 600 : 400, display: { xs: 'none', sm: 'block' } }}>{v.label}</Typography>
                 </Box>
               ))}
             </Box>
@@ -846,7 +978,7 @@ export default function ScheduledSends() {
           {loading ? (
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 1.5 }}>
               <CircularProgress size={22} sx={{ color: 'var(--accent,#3b82f6)' }} />
-              <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem' }}>Cargando...</Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem' }}>{t.sched.loading}</Typography>
             </Box>
           ) : calView === 'month' ? (
             <MonthView jobs={jobs} viewYear={viewYear} viewMonth={viewMonth}
@@ -872,7 +1004,7 @@ export default function ScheduledSends() {
         open={!!confirm}
         title={confirm?.title || ''}
         body={confirm?.body || ''}
-        confirmLabel={confirm?.action === 'cancel' ? 'Cancelar envío' : 'Eliminar'}
+        confirmLabel={confirm?.action === 'cancel' ? t.sched.confirmCancelSend : t.sched.deleteBtn}
         danger
         onConfirm={handleConfirm}
         onCancel={() => setConfirm(null)}

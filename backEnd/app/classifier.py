@@ -211,8 +211,18 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
             analysis["pending_human_check"] = False
 
         db.save_message_analysis(log_id, analysis)
-    except Exception:
-        pass  # background task — fail silently
+    except Exception as _exc:
+        import traceback
+        log.error("classify_and_save failed for log_id=%s: %s\n%s", log_id, _exc, traceback.format_exc())
+        try:
+            from bson import ObjectId
+            db = MongoDBManager()
+            db.db.message_logs.update_one(
+                {"_id": ObjectId(log_id)},
+                {"$set": {"analysis_status": "error"}},
+            )
+        except Exception:
+            pass
 
 
 _NO_REPLY_WAIT_MINUTES = 30   # classify outbound with no reply after this window

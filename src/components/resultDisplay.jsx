@@ -1,4 +1,5 @@
 'use client'
+import { useLang } from '../context/LangContext'
 import Box from '@mui/material/Box'
 import Grid from '@mui/material/Grid'
 import Card from '@mui/material/Card'
@@ -154,6 +155,8 @@ function ContactColumn({ icon, title, items, color, emptyMsg }) {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function ResultDisplay({ result }) {
+  const { t } = useLang()
+  const r = t.result
   const s  = result?.scraped || {}
   const sx = s._extra || {}
   const cr = s._contacts_raw || {}
@@ -234,7 +237,7 @@ export default function ResultDisplay({ result }) {
               )}
               {contacted?.contacted && (
                 <Chip
-                  label={`⚠️ Ya contactada${contacted.by_name ? ` por ${contacted.by_name.split(' ')[0]}` : ''}`}
+                  label={`${r.alreadyLabel}${contacted.by_name ? ` ${r.alreadyBy} ${contacted.by_name.split(' ')[0]}` : ''}`}
                   size="small"
                   sx={{ bgcolor: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.3)', fontSize: '0.68rem', height: 20 }}
                 />
@@ -254,7 +257,7 @@ export default function ResultDisplay({ result }) {
             <WhatsAppIcon sx={{ fontSize: 22, color: result.primary_whatsapp_number ? '#25D366' : 'rgba(255,255,255,0.18)' }} />
             <Box>
               <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: result.primary_whatsapp_number ? '#4ade80' : 'rgba(255,255,255,0.2)', textTransform: 'uppercase', letterSpacing: 0.8, lineHeight: 1 }}>
-                {result.primary_whatsapp_number ? 'WhatsApp' : 'Sin WA'}
+                {result.primary_whatsapp_number ? r.whatsapp : r.noWa}
               </Typography>
               {result.primary_whatsapp_number && (
                 <Typography sx={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.6)', mt: 0.2 }}>
@@ -268,15 +271,15 @@ export default function ResultDisplay({ result }) {
 
       {/* ── MÉTRICAS ── */}
       <Box sx={{ display: 'flex', gap: 1.5, mb: 2.5, flexWrap: 'wrap' }}>
-        <MetricCard icon={<BusinessIcon sx={{ fontSize: 20 }} />} title="Empresa" value={s.name?.slice(0, 14) || '—'} color="#60a5fa" />
-        <MetricCard icon={<CategoryIcon sx={{ fontSize: 20 }} />} title="Industria" value={s.industry?.split(' ')[0] || '—'} color="#a78bfa" />
-        <MetricCard icon={<WhatsAppIcon sx={{ fontSize: 20 }} />} title="WhatsApp" value={result.primary_whatsapp_number ? 'Sí' : 'No'} color={result.primary_whatsapp_number ? '#4ade80' : '#f87171'} />
-        <MetricCard icon={<PeopleIcon sx={{ fontSize: 20 }} />} title="Contactos" value={totalContacts} color="#fb923c" />
+        <MetricCard icon={<BusinessIcon sx={{ fontSize: 20 }} />} title={r.company}   value={s.name?.slice(0, 14) || '—'} color="#60a5fa" />
+        <MetricCard icon={<CategoryIcon sx={{ fontSize: 20 }} />} title={r.industry}  value={s.industry?.split(' ')[0] || '—'} color="#a78bfa" />
+        <MetricCard icon={<WhatsAppIcon sx={{ fontSize: 20 }} />} title={r.whatsapp}  value={result.primary_whatsapp_number ? t.common.yes : t.common.no} color={result.primary_whatsapp_number ? '#4ade80' : '#f87171'} />
+        <MetricCard icon={<PeopleIcon sx={{ fontSize: 20 }} />}   title={r.contacts}  value={totalContacts} color="#fb923c" />
       </Box>
 
       {/* ── DESCRIPCIÓN ── */}
-      {s.description && s.description !== 'Descripción no disponible' && (
-        <Section icon={<NotesIcon fontSize="small" />} title="Descripción" color="#a78bfa">
+      {s.description && s.description !== r.descNA && (
+        <Section icon={<NotesIcon fontSize="small" />} title={r.description} color="#a78bfa">
           <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.85rem', lineHeight: 1.7 }}>
             {s.description}
           </Typography>
@@ -284,44 +287,44 @@ export default function ResultDisplay({ result }) {
       )}
 
       {/* ── CONTACTOS ── */}
-      <Section icon={<ContactsIcon fontSize="small" />} title="Información de Contacto" color="#34d399">
+      <Section icon={<ContactsIcon fontSize="small" />} title={r.contactInfo} color="#34d399">
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
           <Box sx={{ flex: 1, minWidth: 140, p: 1.5, bgcolor: 'rgba(37,211,102,0.06)', borderRadius: 2, border: '1px solid rgba(37,211,102,0.12)' }}>
-            <ContactColumn icon={<WhatsAppIcon />} title="WhatsApp" items={cr.all_whatsapp_numbers} color="#4ade80" emptyMsg="No encontrado" />
+            <ContactColumn icon={<WhatsAppIcon />} title={r.whatsapp} items={cr.all_whatsapp_numbers} color="#4ade80" emptyMsg={r.notFound} />
           </Box>
           <Box sx={{ flex: 1, minWidth: 140, p: 1.5, bgcolor: 'rgba(59,130,246,0.06)', borderRadius: 2, border: '1px solid rgba(59,130,246,0.12)' }}>
-            <ContactColumn icon={<PhoneIcon />} title="Teléfonos" items={cr.phone_numbers?.slice(0, 8)} color="#60a5fa" emptyMsg="No encontrados" />
+            <ContactColumn icon={<PhoneIcon />} title="Teléfonos" items={cr.phone_numbers?.slice(0, 8)} color="#60a5fa" emptyMsg={r.notFoundPl} />
           </Box>
           <Box sx={{ flex: 1, minWidth: 140, p: 1.5, bgcolor: 'rgba(239,68,68,0.06)', borderRadius: 2, border: '1px solid rgba(239,68,68,0.12)' }}>
-            <ContactColumn icon={<EmailIcon />} title="Emails" items={cr.emails?.slice(0, 8)} color="#f87171" emptyMsg="No encontrados" />
+            <ContactColumn icon={<EmailIcon />} title="Emails" items={cr.emails?.slice(0, 8)} color="#f87171" emptyMsg={r.notFoundPl} />
           </Box>
         </Box>
       </Section>
 
       {/* ── UBICACIÓN ── */}
       {(sx.city || sx.state || sx.address || sx.postal_code) && (
-        <Section icon={<LocationOnIcon fontSize="small" />} title="Ubicación" color="#fb923c">
+        <Section icon={<LocationOnIcon fontSize="small" />} title={r.location} color="#fb923c">
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.2 }}>
-            <InfoRow label="Ciudad"    value={sx.city} />
-            <InfoRow label="Estado"    value={sx.state} />
-            <InfoRow label="País"      value={sx.country} />
-            <InfoRow label="Dirección" value={sx.address} />
-            <InfoRow label="C.P."      value={sx.postal_code} />
+            <InfoRow label={r.city}       value={sx.city} />
+            <InfoRow label={r.state}      value={sx.state} />
+            <InfoRow label={r.country}    value={sx.country} />
+            <InfoRow label={r.address}    value={sx.address} />
+            <InfoRow label={r.postalCode} value={sx.postal_code} />
           </Box>
         </Section>
       )}
 
       {/* ── DATOS DEL NEGOCIO ── */}
       {(sx.main_activity || sx.business_hours || s.metadata) && (
-        <Section icon={<StoreIcon fontSize="small" />} title="Datos del negocio" color="#38bdf8">
+        <Section icon={<StoreIcon fontSize="small" />} title={r.businessData} color="#38bdf8">
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
-            <InfoRow label="Actividad" value={sx.main_activity} />
-            <InfoRow label="Horario"   value={sx.business_hours} />
+            <InfoRow label={r.activity} value={sx.main_activity} />
+            <InfoRow label={r.schedule} value={sx.business_hours} />
             {s.metadata && (
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 1 }}>
                 {[
-                  { label: 'Formulario de contacto', val: s.metadata.has_contact_form },
-                  { label: 'Ecommerce',              val: s.metadata.has_ecommerce },
+                  { label: r.contactForm, val: s.metadata.has_contact_form },
+                  { label: r.ecommerce,   val: s.metadata.has_ecommerce },
                 ].map(({ label, val }) => (
                   <Chip key={label} size="small"
                     icon={val ? <CheckIcon sx={{ fontSize: '13px !important' }} /> : <CloseIcon sx={{ fontSize: '13px !important' }} />}
@@ -330,7 +333,7 @@ export default function ResultDisplay({ result }) {
                   />
                 ))}
                 {s.metadata.language && (
-                  <Chip size="small" label={`Idioma: ${s.metadata.language}`} sx={{ bgcolor: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.08)' }} />
+                  <Chip size="small" label={`${r.language}: ${s.metadata.language}`} sx={{ bgcolor: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.08)' }} />
                 )}
               </Box>
             )}
@@ -340,7 +343,7 @@ export default function ResultDisplay({ result }) {
 
       {/* ── PERSONAS DE CONTACTO ── */}
       {cr.persons?.length > 0 && (
-        <Section icon={<BadgeIcon fontSize="small" />} title="Personas de contacto" color="#c084fc">
+        <Section icon={<BadgeIcon fontSize="small" />} title={r.contactPersons} color="#c084fc">
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             {cr.persons.map((p, i) => (
               <Box key={i} sx={{ p: 1.5, bgcolor: 'rgba(192,132,252,0.05)', border: '1px solid rgba(192,132,252,0.12)', borderRadius: 1.5, display: 'flex', flexDirection: 'column', gap: 0.3 }}>
@@ -361,7 +364,7 @@ export default function ResultDisplay({ result }) {
         <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
           {sx.services?.length > 0 && (
             <Box sx={{ flex: 1 }}>
-              <Section icon={<HandymanIcon fontSize="small" />} title="Servicios" color="#fb923c">
+              <Section icon={<HandymanIcon fontSize="small" />} title={r.services} color="#fb923c">
                 {sx.services.map((item, i) => (
                   <Typography key={i} variant="body2" sx={{ py: 0.5, color: 'rgba(255,255,255,0.6)', fontSize: '0.82rem', borderBottom: '1px solid rgba(255,255,255,0.05)', '&:last-of-type': { borderBottom: 'none' } }}>• {item}</Typography>
                 ))}
@@ -370,7 +373,7 @@ export default function ResultDisplay({ result }) {
           )}
           {sx.products?.length > 0 && (
             <Box sx={{ flex: 1 }}>
-              <Section icon={<InventoryIcon fontSize="small" />} title="Productos" color="#f472b6">
+              <Section icon={<InventoryIcon fontSize="small" />} title={r.products} color="#f472b6">
                 {sx.products.map((item, i) => (
                   <Typography key={i} variant="body2" sx={{ py: 0.5, color: 'rgba(255,255,255,0.6)', fontSize: '0.82rem', borderBottom: '1px solid rgba(255,255,255,0.05)', '&:last-of-type': { borderBottom: 'none' } }}>• {item}</Typography>
                 ))}
@@ -382,13 +385,13 @@ export default function ResultDisplay({ result }) {
 
       {/* ── ENVÍO WHATSAPP ── */}
       {result.send_result && (
-        <Section icon={<SendIcon fontSize="small" />} title="Envío WhatsApp" color="#25D366">
+        <Section icon={<SendIcon fontSize="small" />} title={r.sendWhatsapp} color="#25D366">
           <JsonHighlight data={result.send_result} />
         </Section>
       )}
 
       {/* ── IDs TÉCNICOS ── */}
-      <Section icon={<FingerprintIcon fontSize="small" />} title="IDs Técnicos" color="#64748b">
+      <Section icon={<FingerprintIcon fontSize="small" />} title={r.techIds} color="#64748b">
         <Table size="small">
           <TableBody>
             {[

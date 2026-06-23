@@ -28,11 +28,11 @@ const C = {
   text:          'rgba(255,255,255,0.92)',
 }
 
-const GROUPS = [
-  { label: 'Prospección', keys: ['single', 'batch', 'csv', 'database', 'search'] },
-  { label: 'Comunicación', keys: ['convs', 'schedule'] },
-  { label: 'Análisis',     keys: ['analytics'] },
-  { label: 'Sistema',      keys: ['admin'] },
+const GROUP_KEYS = [
+  { labelKey: 'groupProspeccion',  keys: ['single', 'batch', 'csv', 'database', 'search'] },
+  { labelKey: 'groupComunicacion', keys: ['convs', 'schedule'] },
+  { labelKey: 'groupAnalisis',     keys: ['analytics'] },
+  { labelKey: 'groupSistema',      keys: ['admin'] },
 ]
 
 function NavItem({ item, index, isActive, open, onClick }) {
@@ -172,16 +172,17 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
 
       {/* Nav — agrupado */}
       <List sx={{ px: 1, pt: 1.5, pb: 0.5, flexGrow: 1, position: 'relative', zIndex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
-        {GROUPS.map((group, gi) => {
+        {GROUP_KEYS.map((group, gi) => {
+          const groupLabel = t.nav[group.labelKey]
           const groupItems = group.keys
             .map(k => itemsByKey[k])
             .filter(Boolean)
           if (groupItems.length === 0) return null
 
-          const isLast = gi === GROUPS.length - 1
+          const isLast = gi === GROUP_KEYS.length - 1
           return (
-            <Box key={group.label} sx={{ mb: isLast ? 0 : 1 }}>
-              <GroupLabel label={group.label} open={open} />
+            <Box key={group.labelKey} sx={{ mb: isLast ? 0 : 1 }}>
+              <GroupLabel label={groupLabel} open={open} />
               {groupItems.map(({ item, index }) => (
                 <NavItem
                   key={item.key}
@@ -193,7 +194,7 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
                 />
               ))}
               {/* Settings se añade al final del grupo Sistema */}
-              {group.label === 'Sistema' && (
+              {group.labelKey === 'groupSistema' && (
                 <Tooltip title={open ? '' : t.settings.title} placement="right" arrow>
                   <ListItemButton
                     onClick={onSettingsClick}
@@ -285,13 +286,15 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
                 fontSize: '0.6rem',
                 color: instanceStatus === 'connected' ? 'rgba(34,197,94,0.6)' : instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.7)' : 'rgba(255,255,255,0.2)',
               }}>
-                {instanceStatus === 'connected' ? 'WhatsApp conectado' : instanceStatus === 'disconnected' ? 'Desconectado' : 'Verificando…'}
+                {instanceStatus === 'connected'
+                  ? `WhatsApp ${t.instance.connectedLbl}`
+                  : instanceStatus === 'disconnected' ? t.instance.disconnectedLbl : t.instance.verifying}
               </Typography>
             </Box>
           </Box>
 
           {open && (
-            <Tooltip title="Cerrar sesión">
+            <Tooltip title={t.nav.logout}>
               <IconButton size="small" onClick={logout}
                 sx={{ ml: 'auto', color: C.dimText, flexShrink: 0, '&:hover': { color: '#f87171' } }}>
                 <LogoutIcon sx={{ fontSize: 16 }} />

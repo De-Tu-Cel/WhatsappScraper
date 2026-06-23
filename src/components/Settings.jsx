@@ -26,71 +26,71 @@ import { useLang } from '../context/LangContext'
 
 export const ACCENTS = [
   // Marca
-  { label: 'DeTuCel Blue',  value: '#1557f5', glow: 'rgba(21,87,245,0.35)'   },
+  { tKey: 'accentDtcBlue',     value: '#1557f5', glow: 'rgba(21,87,245,0.35)'   },
   // Fríos
-  { label: 'Azul',          value: '#3b82f6', glow: 'rgba(59,130,246,0.3)'   },
-  { label: 'Azul eléctrico',value: '#0ea5e9', glow: 'rgba(14,165,233,0.3)'   },
-  { label: 'Cian',          value: '#06b6d4', glow: 'rgba(6,182,212,0.3)'    },
-  { label: 'Turquesa',      value: '#14b8a6', glow: 'rgba(20,184,166,0.3)'   },
-  { label: 'Teal neón',     value: '#00ffd5', glow: 'rgba(0,255,213,0.3)'    },
-  { label: 'Menta',         value: '#34d399', glow: 'rgba(52,211,153,0.3)'   },
-  { label: 'Violeta',       value: '#8b5cf6', glow: 'rgba(139,92,246,0.3)'   },
-  { label: 'Lavanda',       value: '#c4b5fd', glow: 'rgba(196,181,253,0.35)' },
-  { label: 'Persa',         value: '#e879f9', glow: 'rgba(232,121,249,0.3)'  },
-  { label: 'Púrpura neón',  value: '#c026d3', glow: 'rgba(192,38,211,0.3)'   },
-  { label: 'Índigo',        value: '#6366f1', glow: 'rgba(99,102,241,0.3)'   },
-  { label: 'Plateado',      value: '#94a3b8', glow: 'rgba(148,163,184,0.3)'  },
+  { tKey: 'accentBlue',        value: '#3b82f6', glow: 'rgba(59,130,246,0.3)'   },
+  { tKey: 'accentElectricBlue',value: '#0ea5e9', glow: 'rgba(14,165,233,0.3)'   },
+  { tKey: 'accentCyan',        value: '#06b6d4', glow: 'rgba(6,182,212,0.3)'    },
+  { tKey: 'accentTurquoise',   value: '#14b8a6', glow: 'rgba(20,184,166,0.3)'   },
+  { tKey: 'accentNeonTeal',    value: '#00ffd5', glow: 'rgba(0,255,213,0.3)'    },
+  { tKey: 'accentMint',        value: '#34d399', glow: 'rgba(52,211,153,0.3)'   },
+  { tKey: 'accentViolet',      value: '#8b5cf6', glow: 'rgba(139,92,246,0.3)'   },
+  { tKey: 'accentLavender',    value: '#c4b5fd', glow: 'rgba(196,181,253,0.35)' },
+  { tKey: 'accentPersian',     value: '#e879f9', glow: 'rgba(232,121,249,0.3)'  },
+  { tKey: 'accentNeonPurple',  value: '#c026d3', glow: 'rgba(192,38,211,0.3)'   },
+  { tKey: 'accentIndigo',      value: '#6366f1', glow: 'rgba(99,102,241,0.3)'   },
+  { tKey: 'accentSilver',      value: '#94a3b8', glow: 'rgba(148,163,184,0.3)'  },
   // Cálidos
-  { label: 'Verde',         value: '#22c55e', glow: 'rgba(34,197,94,0.3)'    },
-  { label: 'Verde lima',    value: '#84cc16', glow: 'rgba(132,204,22,0.3)'   },
-  { label: 'Chartreuse',    value: '#a3e635', glow: 'rgba(163,230,53,0.3)'   },
-  { label: 'Verde neón',    value: '#39ff14', glow: 'rgba(57,255,20,0.3)'    },
-  { label: 'Naranja',       value: '#f97316', glow: 'rgba(249,115,22,0.3)'   },
-  { label: 'Ámbar',         value: '#f59e0b', glow: 'rgba(245,158,11,0.3)'   },
-  { label: 'Amarillo neón', value: '#faff00', glow: 'rgba(250,255,0,0.3)'    },
-  { label: 'Coral',         value: '#f43f5e', glow: 'rgba(244,63,94,0.3)'    },
-  { label: 'Rosa',          value: '#ec4899', glow: 'rgba(236,72,153,0.3)'   },
-  { label: 'Hot pink',      value: '#ff0080', glow: 'rgba(255,0,128,0.3)'    },
-  { label: 'Rojo',          value: '#ef4444', glow: 'rgba(239,68,68,0.3)'    },
+  { tKey: 'accentGreen',       value: '#22c55e', glow: 'rgba(34,197,94,0.3)'    },
+  { tKey: 'accentLime',        value: '#84cc16', glow: 'rgba(132,204,22,0.3)'   },
+  { tKey: 'accentChartreuse',  value: '#a3e635', glow: 'rgba(163,230,53,0.3)'   },
+  { tKey: 'accentNeonGreen',   value: '#39ff14', glow: 'rgba(57,255,20,0.3)'    },
+  { tKey: 'accentOrange',      value: '#f97316', glow: 'rgba(249,115,22,0.3)'   },
+  { tKey: 'accentAmber',       value: '#f59e0b', glow: 'rgba(245,158,11,0.3)'   },
+  { tKey: 'accentNeonYellow',  value: '#faff00', glow: 'rgba(250,255,0,0.3)'    },
+  { tKey: 'accentCoral',       value: '#f43f5e', glow: 'rgba(244,63,94,0.3)'    },
+  { tKey: 'accentPink',        value: '#ec4899', glow: 'rgba(236,72,153,0.3)'   },
+  { tKey: 'accentHotPink',     value: '#ff0080', glow: 'rgba(255,0,128,0.3)'    },
+  { tKey: 'accentRed',         value: '#ef4444', glow: 'rgba(239,68,68,0.3)'    },
 ]
 
 export const THEMES = [
   // Tema de marca — va primero
   {
-    label: 'DeTuCel', value: 'detucel',
+    tKey: 'themeDetucel', value: 'detucel',
     bg: '#182e24', sidebar: '#0e2d5c', surface: '#3a4a5c', card: '#264436',
     preview: ['#0e2d5c', '#3a4a5c', '#264436'],
   },
-  { label: 'Navy',       value: 'navy',      bg: '#080c14', sidebar: '#0d1117', surface: '#111827', card: '#161d2e', preview: ['#080c14','#0d1117','#161d2e'] },
-  { label: 'Carbón',     value: 'carbon',    bg: '#050505', sidebar: '#0d0d0d', surface: '#111111', card: '#141414', preview: ['#050505','#0d0d0d','#1a1a1a'] },
-  { label: 'Pizarra',    value: 'slate',     bg: '#0f172a', sidebar: '#1e293b', surface: '#293548', card: '#334155', preview: ['#0f172a','#1e293b','#334155'] },
-  { label: 'Midnight',   value: 'midnight',  bg: '#0c0a1e', sidebar: '#130f2e', surface: '#191434', card: '#1e1a3a', preview: ['#0c0a1e','#130f2e','#1e1a3a'] },
-  { label: 'Forest',     value: 'forest',    bg: '#051409', sidebar: '#0a1f0e', surface: '#0c2610', card: '#0f2d15', preview: ['#051409','#0a1f0e','#0f2d15'] },
-  { label: 'Rosewood',   value: 'rosewood',  bg: '#140508', sidebar: '#1e0a10', surface: '#250d14', card: '#2d111a', preview: ['#140508','#1e0a10','#2d111a'] },
-  { label: 'Ocean',      value: 'ocean',     bg: '#050f1a', sidebar: '#0a1829', surface: '#0c1f34', card: '#0d2540', preview: ['#050f1a','#0a1829','#0d2540'] },
-  { label: 'Lava',       value: 'lava',      bg: '#120808', sidebar: '#1a0e0e', surface: '#221010', card: '#2a1212', preview: ['#120808','#1a0e0e','#2a1212'] },
-  { label: 'Abyss',      value: 'abyss',     bg: '#020408', sidebar: '#04080f', surface: '#060c18', card: '#080f1e', preview: ['#020408','#04080f','#080f1e'] },
-  { label: 'Void',       value: 'void',      bg: '#000000', sidebar: '#080808', surface: '#0d0d0d', card: '#111111', preview: ['#000000','#080808','#111111'] },
-  { label: 'Copper',     value: 'copper',    bg: '#110a05', sidebar: '#1a1008', surface: '#201409', card: '#2a1a0a', preview: ['#110a05','#1a1008','#2a1a0a'] },
-  { label: 'Storm',      value: 'storm',     bg: '#0b0e13', sidebar: '#131820', surface: '#192030', card: '#1e2535', preview: ['#0b0e13','#131820','#1e2535'] },
-  { label: 'Emerald',    value: 'emerald',   bg: '#041510', sidebar: '#071f18', surface: '#0a261e', card: '#0d2e23', preview: ['#041510','#071f18','#0d2e23'] },
-  { label: 'Dusk',       value: 'dusk',      bg: '#120d1a', sidebar: '#1a1228', surface: '#201535', card: '#271a3d', preview: ['#120d1a','#1a1228','#271a3d'] },
-  { label: 'Aurora',     value: 'aurora',    bg: '#050e10', sidebar: '#091820', surface: '#0b2028', card: '#0d2530', preview: ['#050e10','#091820','#0d2530'] },
-  { label: 'Obsidiana',  value: 'obsidian',  bg: '#09090b', sidebar: '#101014', surface: '#141418', card: '#18181c', preview: ['#09090b','#101014','#18181c'] },
-  { label: 'Desert',     value: 'desert',    bg: '#110e08', sidebar: '#1a160c', surface: '#1f1b0e', card: '#251f10', preview: ['#110e08','#1a160c','#251f10'] },
-  { label: 'Blood Moon', value: 'blood',     bg: '#0f0205', sidebar: '#180309', surface: '#1e040c', card: '#240510', preview: ['#0f0205','#180309','#240510'] },
-  { label: 'Glaciar',    value: 'glacier',   bg: '#060f14', sidebar: '#0c1a24', surface: '#0f1f2e', card: '#132436', preview: ['#060f14','#0c1a24','#132436'] },
-  { label: 'Cinder',     value: 'cinder',    bg: '#100c09', sidebar: '#181310', surface: '#1e1813', card: '#241c16', preview: ['#100c09','#181310','#241c16'] },
+  { tKey: 'themeNavy',      value: 'navy',      bg: '#080c14', sidebar: '#0d1117', surface: '#111827', card: '#161d2e', preview: ['#080c14','#0d1117','#161d2e'] },
+  { tKey: 'themeCarbon',    value: 'carbon',    bg: '#050505', sidebar: '#0d0d0d', surface: '#111111', card: '#141414', preview: ['#050505','#0d0d0d','#1a1a1a'] },
+  { tKey: 'themeSlate',     value: 'slate',     bg: '#0f172a', sidebar: '#1e293b', surface: '#293548', card: '#334155', preview: ['#0f172a','#1e293b','#334155'] },
+  { tKey: 'themeMidnight',  value: 'midnight',  bg: '#0c0a1e', sidebar: '#130f2e', surface: '#191434', card: '#1e1a3a', preview: ['#0c0a1e','#130f2e','#1e1a3a'] },
+  { tKey: 'themeForest',    value: 'forest',    bg: '#051409', sidebar: '#0a1f0e', surface: '#0c2610', card: '#0f2d15', preview: ['#051409','#0a1f0e','#0f2d15'] },
+  { tKey: 'themeRosewood',  value: 'rosewood',  bg: '#140508', sidebar: '#1e0a10', surface: '#250d14', card: '#2d111a', preview: ['#140508','#1e0a10','#2d111a'] },
+  { tKey: 'themeOcean',     value: 'ocean',     bg: '#050f1a', sidebar: '#0a1829', surface: '#0c1f34', card: '#0d2540', preview: ['#050f1a','#0a1829','#0d2540'] },
+  { tKey: 'themeLava',      value: 'lava',      bg: '#120808', sidebar: '#1a0e0e', surface: '#221010', card: '#2a1212', preview: ['#120808','#1a0e0e','#2a1212'] },
+  { tKey: 'themeAbyss',     value: 'abyss',     bg: '#020408', sidebar: '#04080f', surface: '#060c18', card: '#080f1e', preview: ['#020408','#04080f','#080f1e'] },
+  { tKey: 'themeVoid',      value: 'void',      bg: '#000000', sidebar: '#080808', surface: '#0d0d0d', card: '#111111', preview: ['#000000','#080808','#111111'] },
+  { tKey: 'themeCopper',    value: 'copper',    bg: '#110a05', sidebar: '#1a1008', surface: '#201409', card: '#2a1a0a', preview: ['#110a05','#1a1008','#2a1a0a'] },
+  { tKey: 'themeStorm',     value: 'storm',     bg: '#0b0e13', sidebar: '#131820', surface: '#192030', card: '#1e2535', preview: ['#0b0e13','#131820','#1e2535'] },
+  { tKey: 'themeEmerald',   value: 'emerald',   bg: '#041510', sidebar: '#071f18', surface: '#0a261e', card: '#0d2e23', preview: ['#041510','#071f18','#0d2e23'] },
+  { tKey: 'themeDusk',      value: 'dusk',      bg: '#120d1a', sidebar: '#1a1228', surface: '#201535', card: '#271a3d', preview: ['#120d1a','#1a1228','#271a3d'] },
+  { tKey: 'themeAurora',    value: 'aurora',    bg: '#050e10', sidebar: '#091820', surface: '#0b2028', card: '#0d2530', preview: ['#050e10','#091820','#0d2530'] },
+  { tKey: 'themeObsidian',  value: 'obsidian',  bg: '#09090b', sidebar: '#101014', surface: '#141418', card: '#18181c', preview: ['#09090b','#101014','#18181c'] },
+  { tKey: 'themeDesert',    value: 'desert',    bg: '#110e08', sidebar: '#1a160c', surface: '#1f1b0e', card: '#251f10', preview: ['#110e08','#1a160c','#251f10'] },
+  { tKey: 'themeBloodMoon', value: 'blood',     bg: '#0f0205', sidebar: '#180309', surface: '#1e040c', card: '#240510', preview: ['#0f0205','#180309','#240510'] },
+  { tKey: 'themeGlacier',   value: 'glacier',   bg: '#060f14', sidebar: '#0c1a24', surface: '#0f1f2e', card: '#132436', preview: ['#060f14','#0c1a24','#132436'] },
+  { tKey: 'themeCinder',    value: 'cinder',    bg: '#100c09', sidebar: '#181310', surface: '#1e1813', card: '#241c16', preview: ['#100c09','#181310','#241c16'] },
   // Nuevos
-  { label: 'Plum',       value: 'plum',      bg: '#0e0718', sidebar: '#180e24', surface: '#20132e', card: '#271838', preview: ['#0e0718','#180e24','#271838'] },
-  { label: 'Sakura',     value: 'sakura',    bg: '#13070f', sidebar: '#1e0e1a', surface: '#261223', card: '#2e152a', preview: ['#13070f','#1e0e1a','#2e152a'] },
-  { label: 'Titanio',    value: 'titanio',   bg: '#0c0c10', sidebar: '#131318', surface: '#191920', card: '#1f1f28', preview: ['#0c0c10','#131318','#1f1f28'] },
-  { label: 'Royal',      value: 'royal',     bg: '#07091e', sidebar: '#0c1030', surface: '#10153c', card: '#141a48', preview: ['#07091e','#0c1030','#141a48'] },
-  { label: 'Petróleo',   value: 'petroleo',  bg: '#040f0e', sidebar: '#081a18', surface: '#0b2220', card: '#0e2a28', preview: ['#040f0e','#081a18','#0e2a28'] },
-  { label: 'Olivo',      value: 'olivo',     bg: '#0b0e05', sidebar: '#131808', surface: '#18200b', card: '#1d270d', preview: ['#0b0e05','#131808','#1d270d'] },
-  { label: 'Crepúsculo', value: 'crepusculo',bg: '#0b0b1e', sidebar: '#121228', surface: '#181835', card: '#1e1e40', preview: ['#0b0b1e','#121228','#1e1e40'] },
-  { label: 'Canela',     value: 'canela',    bg: '#130a04', sidebar: '#1f1207', surface: '#261609', card: '#2e1a0b', preview: ['#130a04','#1f1207','#2e1a0b'] },
-  { label: 'Diurna',    value: 'diurna',    bg: '#15100a', sidebar: '#1e170b', surface: '#25200d', card: '#2d2610', preview: ['#15100a','#1e170b','#2d2610'] },
+  { tKey: 'themePlum',      value: 'plum',      bg: '#0e0718', sidebar: '#180e24', surface: '#20132e', card: '#271838', preview: ['#0e0718','#180e24','#271838'] },
+  { tKey: 'themeSakura',    value: 'sakura',    bg: '#13070f', sidebar: '#1e0e1a', surface: '#261223', card: '#2e152a', preview: ['#13070f','#1e0e1a','#2e152a'] },
+  { tKey: 'themeTitanium',  value: 'titanio',   bg: '#0c0c10', sidebar: '#131318', surface: '#191920', card: '#1f1f28', preview: ['#0c0c10','#131318','#1f1f28'] },
+  { tKey: 'themeRoyal',     value: 'royal',     bg: '#07091e', sidebar: '#0c1030', surface: '#10153c', card: '#141a48', preview: ['#07091e','#0c1030','#141a48'] },
+  { tKey: 'themePetroleum', value: 'petroleo',  bg: '#040f0e', sidebar: '#081a18', surface: '#0b2220', card: '#0e2a28', preview: ['#040f0e','#081a18','#0e2a28'] },
+  { tKey: 'themeOlive',     value: 'olivo',     bg: '#0b0e05', sidebar: '#131808', surface: '#18200b', card: '#1d270d', preview: ['#0b0e05','#131808','#1d270d'] },
+  { tKey: 'themeTwilight',  value: 'crepusculo',bg: '#0b0b1e', sidebar: '#121228', surface: '#181835', card: '#1e1e40', preview: ['#0b0b1e','#121228','#1e1e40'] },
+  { tKey: 'themeCinnamon',  value: 'canela',    bg: '#130a04', sidebar: '#1f1207', surface: '#261609', card: '#2e1a0b', preview: ['#130a04','#1f1207','#2e1a0b'] },
+  { tKey: 'themeDaytime',   value: 'diurna',    bg: '#15100a', sidebar: '#1e170b', surface: '#25200d', card: '#2d2610', preview: ['#15100a','#1e170b','#2d2610'] },
 ]
 
 const LANGS = [
@@ -601,7 +601,7 @@ export default function Settings() {
             }} />
             <Box>
               <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: currentAccent.value, lineHeight: 1.2 }}>
-                {currentAccent.label}
+                {t.settings[currentAccent.tKey]}
               </Typography>
               <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}>
                 {currentAccent.value}
@@ -614,7 +614,7 @@ export default function Settings() {
             {ACCENTS.map(a => {
               const active = settings.accent === a.value
               return (
-                <Tooltip key={a.value} title={a.label} placement="top" arrow>
+                <Tooltip key={a.value} title={t.settings[a.tKey]} placement="top" arrow>
                   <Box onClick={() => save({ accent: a.value })} sx={{
                     width: 34, height: 34, borderRadius: '50%', cursor: 'pointer',
                     bgcolor: a.value, flexShrink: 0,
@@ -660,7 +660,7 @@ export default function Settings() {
             </Box>
             <Box>
               <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent,#3b82f6)', lineHeight: 1.2 }}>
-                {currentTheme.label}
+                {t.settings[currentTheme.tKey]}
               </Typography>
               <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}>
                 {currentTheme.bg} · {currentTheme.sidebar}
@@ -670,11 +670,11 @@ export default function Settings() {
 
           {/* Theme grid */}
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 1 }}>
-            {THEMES.map(t => {
-              const active = settings.theme === t.value
+            {THEMES.map(thm => {
+              const active = settings.theme === thm.value
               return (
-                <Tooltip key={t.value} title={t.label} placement="top" arrow>
-                  <Box onClick={() => save({ theme: t.value })} sx={{
+                <Tooltip key={thm.value} title={t.settings[thm.tKey]} placement="top" arrow>
+                  <Box onClick={() => save({ theme: thm.value })} sx={{
                     borderRadius: 1.5, overflow: 'hidden', cursor: 'pointer',
                     border: active ? '1.5px solid var(--accent,#3b82f6)' : '1.5px solid rgba(255,255,255,0.07)',
                     boxShadow: active ? '0 0 14px var(--accent-glow,rgba(59,130,246,0.35))' : 'none',
@@ -683,10 +683,10 @@ export default function Settings() {
                   }}>
                     {/* 3-stripe preview */}
                     <Box sx={{ display: 'flex', height: 28, position: 'relative' }}>
-                      {t.preview.map((c, i) => (
+                      {thm.preview.map((c, i) => (
                         <Box key={i} sx={{ flex: 1, bgcolor: c }} />
                       ))}
-                      {t.value === 'detucel' && !active && (
+                      {thm.value === 'detucel' && !active && (
                         <Box sx={{
                           position: 'absolute', top: 2, right: 2,
                           bgcolor: '#1557f5', borderRadius: 0.5,
@@ -699,7 +699,7 @@ export default function Settings() {
                         <Box sx={{
                           position: 'absolute', inset: 0,
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          bgcolor: t.light ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.3)',
+                          bgcolor: thm.light ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.3)',
                         }}>
                           <CheckIcon sx={{ fontSize: 13, color: 'var(--accent,#3b82f6)', filter: 'drop-shadow(0 0 4px var(--accent,#3b82f6))' }} />
                         </Box>
@@ -708,18 +708,18 @@ export default function Settings() {
                     {/* Label */}
                     <Box sx={{
                       px: 0.75, py: 0.5,
-                      bgcolor: t.preview[1],
-                      borderTop: active ? '1px solid var(--accent,#3b82f6)44' : `1px solid ${t.light ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.04)'}`,
+                      bgcolor: thm.preview[1],
+                      borderTop: active ? '1px solid var(--accent,#3b82f6)44' : `1px solid ${thm.light ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.04)'}`,
                     }}>
                       <Typography sx={{
                         fontSize: '0.6rem',
                         fontWeight: active ? 700 : 400,
-                        color: active ? 'var(--accent,#3b82f6)' : (t.light ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.4)'),
+                        color: active ? 'var(--accent,#3b82f6)' : (thm.light ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.4)'),
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                       }}>
-                        {t.label}
+                        {t.settings[thm.tKey]}
                       </Typography>
                     </Box>
                   </Box>

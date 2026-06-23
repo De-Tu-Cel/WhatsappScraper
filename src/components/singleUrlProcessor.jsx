@@ -372,7 +372,7 @@ function SearchBar({ url, setUrl, onSearch, loading, compact, onCancel }) {
   const canSearch = !loading && url.trim() && !urlError
 
   return (
-    <Box sx={{ width: '100%', maxWidth: compact ? '100%' : 620 }}>
+    <Box sx={{ width: '100%' }}>
       <Box sx={{
         display: 'flex',
         alignItems: 'center',
@@ -532,7 +532,7 @@ export default function SingleUrlProcessor() {
   /* ── ESTADO INICIAL: barra centrada ── */
   if (!hasResult && !loading) {
     return (
-      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, minHeight: 0, gap: 1 }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, minHeight: 0, gap: 1, px: 2.5, width: '100%' }}>
         <Box sx={{ textAlign: 'center', mb: 1 }}>
           <Typography variant="h4" fontWeight={700} color="text.primary" gutterBottom>
             {t.single.heading}

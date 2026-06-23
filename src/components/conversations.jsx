@@ -447,10 +447,6 @@ export default function Conversations() {
     }
   }, [selected, fetchThread, fetchCompanyNumbers, handleSync])
 
-  function toggleNum(n) {
-    setSelectedNums(prev => prev.includes(n) ? prev.filter(x => x !== n) : [...prev, n])
-  }
-
   async function handleSendReply(overrideText = null) {
     const text   = overrideText ?? reply
     const toSend = selectedNums.length > 0 ? selectedNums : waNumbers.slice(0, 1)
@@ -482,11 +478,6 @@ export default function Conversations() {
     } catch (err) {
       const msg = err.message || 'No se pudo enviar el mensaje'
       setSendError(msg)
-      // Si es error de instancia desconectada, actualizar el estado local
-      if (err.message?.includes('desconectada') || err.message?.includes('503')) {
-        setInstanceStatus('disconnected')
-      }
-      // Limpiar el error después de 8 segundos
       setTimeout(() => setSendError(''), 8000)
     }
     finally { setSending(false) }
@@ -546,7 +537,7 @@ export default function Conversations() {
               <WhatsAppIcon sx={{ color: '#4ade80', fontSize: 20 }} />
               <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.95rem' }}>{t.convs.title}</Typography>
             </Box>
-            <Tooltip title="Actualizar">
+            <Tooltip title={t.common.refresh}>
               <IconButton size="small" onClick={() => { setLoading(true); fetchConvs() }}
                 sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'white' } }}>
                 <RefreshIcon fontSize="small" />
@@ -561,8 +552,8 @@ export default function Conversations() {
           {/* Toggle mis conversaciones / todas */}
           <Box sx={{ display: 'flex', mt: 1.5, bgcolor: 'rgba(255,255,255,0.04)', borderRadius: 2, p: 0.4, gap: 0.4 }}>
             {[
-              { label: 'Todas', value: false },
-              { label: 'Mis convs', value: true },
+              { label: t.convs.allConvs, value: false },
+              { label: t.convs.myConvs,  value: true },
             ].map(opt => (
               <Box key={String(opt.value)} onClick={() => setMyConvsOnly(opt.value)}
                 sx={{
@@ -602,7 +593,7 @@ export default function Conversations() {
         {!loading && convs.length > 0 && (
           <Box sx={{ px: 2, py: 1, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
             <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.7rem' }}>
-              {convs.length} conversación{convs.length !== 1 ? 'es' : ''} · {convs.reduce((a, c) => a + (c.unread || 0), 0)} sin leer
+              {convs.length} {convs.length !== 1 ? t.convs.conversations : t.convs.conversation} · {convs.reduce((a, c) => a + (c.unread || 0), 0)} {t.convs.unread}
             </Typography>
           </Box>
         )}
@@ -617,10 +608,10 @@ export default function Conversations() {
             </Box>
             <Box sx={{ textAlign: 'center' }}>
               <Typography sx={{ color: 'rgba(255,255,255,0.55)', fontSize: '1rem', fontWeight: 600, mb: 0.5 }}>
-                Ninguna conversación seleccionada
+                {t.convs.noneSelected}
               </Typography>
               <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.8rem' }}>
-                Elige una empresa de la lista para ver el hilo de mensajes
+                {t.convs.pickCompany}
               </Typography>
             </Box>
           </Box>
@@ -647,7 +638,7 @@ export default function Conversations() {
               {syncing && (
                 <CircularProgress size={12} sx={{ color: 'rgba(255,255,255,0.2)', mr: 0.5 }} />
               )}
-                <Tooltip title="Actualizar">
+                <Tooltip title={t.common.refresh}>
                   <IconButton size="small" onClick={() => fetchThread(selected.company_id, true, false, activeNum !== 'all' ? activeNum : null)}
                     sx={{ color: 'rgba(255,255,255,0.3)', '&:hover': { color: 'white' } }}>
                     <RefreshIcon sx={{ fontSize: 16 }} />
@@ -721,7 +712,7 @@ export default function Conversations() {
                 <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2, px: 3 }}>
                   <WhatsAppIcon sx={{ fontSize: 40, color: 'rgba(37,211,102,0.2)' }} />
                   <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.85rem', textAlign: 'center' }}>
-                    Selecciona un número para ver la conversación
+                    {t.convs.selectNumTab}
                   </Typography>
                 </Box>
               ) : visibleThread.length === 0 ? (

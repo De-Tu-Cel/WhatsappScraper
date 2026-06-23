@@ -34,7 +34,7 @@ import IndeterminateCheckBoxIcon from '@mui/icons-material/IndeterminateCheckBox
 import HistoryIcon from '@mui/icons-material/History'
 import MessageIcon from '@mui/icons-material/Message'
 import SendIcon from '@mui/icons-material/Send'
-import { TEMPLATES } from './singleUrlProcessor'
+import { getTemplates } from './singleUrlProcessor'
 
 // INDUSTRY_GROUPS and INDUSTRY_EXAMPLES are built inside the component from translations
 
@@ -96,6 +96,8 @@ function renderTemplate(text, scraped) {
 }
 
 export default function SearchProspects() {
+  const { t } = useLang()
+  const TEMPLATES = getTemplates(t)
   const pauseRef       = useRef(false)
   const cancelRef      = useRef(false)
   const abortSearchRef = useRef(null)
@@ -142,8 +144,6 @@ export default function SearchProspects() {
   const effectiveWaSelected = useMemo(() =>
     new Set(waRowsUnique.map(r => r.company_id).filter(id => !waDeselected.has(id))),
   [waRowsUnique, waDeselected])
-
-  const { t } = useLang()
 
   const INDUSTRY_GROUPS = useMemo(() => {
     const i = t.search.industries
@@ -431,7 +431,7 @@ export default function SearchProspects() {
 
   /* ── Barra de búsqueda pill ── */
   const SearchBar = ({ compact }) => (
-    <Box sx={{ position: 'relative', width: '100%', maxWidth: compact ? '100%' : 580 }}>
+    <Box sx={{ position: 'relative', width: '100%' }}>
       <Box sx={{
         display: 'flex', alignItems: 'center',
         bgcolor: 'var(--sidebar-bg, #0d1117)', borderRadius: '50px',
@@ -477,7 +477,7 @@ export default function SearchProspects() {
             {searching ? <CircularProgress size={18} sx={{ color: 'white' }} /> : <SearchIcon fontSize="small" />}
           </IconButton>
           {searching && (
-            <Tooltip title="Cancelar búsqueda">
+            <Tooltip title={t.search.cancelSearch}>
               <IconButton onClick={handleCancel} sx={{
                 bgcolor: 'rgba(239,68,68,0.12)', color: 'rgba(248,113,113,0.8)', width: 38, height: 38,
                 border: '1px solid rgba(239,68,68,0.2)',
@@ -544,7 +544,7 @@ export default function SearchProspects() {
 
       {/* ── Estado inicial: centrado ── */}
       {!hasResults && (
-        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 2.5, pb: 4 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 2.5, pb: 4, px: 2.5, width: '100%' }}>
           <Box sx={{ textAlign: 'center' }}>
             <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1.35rem', mb: 0.5 }}>{t.search.heading}</Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem' }}>{t.search.headingSub}</Typography>
@@ -555,9 +555,9 @@ export default function SearchProspects() {
 
           {/* Historial reciente */}
           {history.length > 0 && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', width: '100%', maxWidth: 580 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', width: '100%' }}>
               <HistoryIcon sx={{ fontSize: 13, color: 'rgba(255,255,255,0.2)' }} />
-              <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.68rem' }}>Recientes:</Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.68rem' }}>{t.search.recent}</Typography>
               {history.map(h => (
                 <Box key={h} onClick={() => { setIndustry(h); handleSearch(h) }}
                   sx={{ px: 1.2, py: 0.3, borderRadius: 10, cursor: 'pointer', fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', transition: 'all 0.15s', '&:hover': { color: 'var(--accent, #60a5fa)', bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.1)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)' } }}>
@@ -568,7 +568,7 @@ export default function SearchProspects() {
           )}
 
           {/* Grid de industrias */}
-          <Box sx={{ width: '100%', maxWidth: 580, overflowY: 'auto', maxHeight: 320 }}>
+          <Box sx={{ width: '100%', overflowY: 'auto', maxHeight: 'clamp(200px, 35vh, 340px)' }}>
             {INDUSTRY_GROUPS.map(group => (
               <Box key={group.label} sx={{ mb: 1.8 }}>
                 <Typography sx={{ color: group.color, fontSize: '0.65rem', fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', mb: 0.7, opacity: 0.7 }}>{group.label}</Typography>
@@ -671,20 +671,20 @@ export default function SearchProspects() {
               {/* Selección rápida */}
               <Tooltip title="Marcar solo las empresas que aún no has visitado" placement="top">
                 <Box onClick={selectOnlyNew} sx={{ display: 'flex', alignItems: 'center', gap: 0.4, px: 1, py: 0.35, borderRadius: 1.2, cursor: 'pointer', fontSize: '0.7rem', color: '#4ade80', bgcolor: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', transition: 'all 0.15s', '&:hover': { bgcolor: 'rgba(34,197,94,0.15)' } }}>
-                  <CheckBoxIcon sx={{ fontSize: 12 }} /> Sel. nuevas
+                  <CheckBoxIcon sx={{ fontSize: 12 }} /> {t.search.selectNew}
                 </Box>
               </Tooltip>
               <Tooltip title="Desmarcar empresas que ya están en la base de datos" placement="top">
                 <Box onClick={deselectScraped} sx={{ display: 'flex', alignItems: 'center', gap: 0.4, px: 1, py: 0.35, borderRadius: 1.2, cursor: 'pointer', fontSize: '0.7rem', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)', transition: 'all 0.15s', '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' } }}>
-                  <IndeterminateCheckBoxIcon sx={{ fontSize: 12 }} /> Desel. en BD
+                  <IndeterminateCheckBoxIcon sx={{ fontSize: 12 }} /> {t.search.deselectInDB}
                 </Box>
               </Tooltip>
 
               {/* Filtros */}
               {[
-                { key: 'all',     label: `Todas (${found.length})`,        color: '#60a5fa', bg: 'rgba(59,130,246,0.1)',  border: 'rgba(59,130,246,0.25)' },
-                { key: 'new',     label: `Nuevas (${newCount})`,            color: '#4ade80', bg: 'rgba(34,197,94,0.1)',   border: 'rgba(34,197,94,0.25)'  },
-                { key: 'scraped', label: `Ya en BD (${scrapedCount})`,      color: '#fbbf24', bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.25)' },
+                { key: 'all',     label: `${t.search.filterAll} (${found.length})`,        color: '#60a5fa', bg: 'rgba(59,130,246,0.1)',  border: 'rgba(59,130,246,0.25)' },
+                { key: 'new',     label: `${t.search.filterNew} (${newCount})`,            color: '#4ade80', bg: 'rgba(34,197,94,0.1)',   border: 'rgba(34,197,94,0.25)'  },
+                { key: 'scraped', label: `${t.search.filterInDB} (${scrapedCount})`,      color: '#fbbf24', bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.25)' },
               ].map(f => (
                 <Chip key={f.key} label={f.label} size="small" onClick={() => setFilterScraped(f.key)}
                   sx={{ height: 22, fontSize: '0.68rem', cursor: 'pointer', bgcolor: filterScraped === f.key ? f.bg : 'rgba(255,255,255,0.04)', color: filterScraped === f.key ? f.color : 'rgba(255,255,255,0.35)', border: `1px solid ${filterScraped === f.key ? f.border : 'rgba(255,255,255,0.08)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
@@ -767,11 +767,11 @@ export default function SearchProspects() {
           <Box sx={{ display: 'flex', gap: 1.5 }}>
             <Button fullWidth onClick={handlePause} startIcon={paused ? <PlayArrowIcon /> : <PauseIcon />}
               sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' } }}>
-              {paused ? 'Reanudar' : 'Pausar'}
+              {paused ? t.search.resume : t.search.pause}
             </Button>
             <Button fullWidth onClick={handleCancel} startIcon={<HighlightOffIcon />}
               sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>
-              Cancelar
+              {t.search.cancel}
             </Button>
           </Box>
         </Box>
@@ -850,18 +850,18 @@ export default function SearchProspects() {
             </Box>
           )}
 
-          <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>Plantilla base</Typography>
+          <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>{t.batch.baseTemplate}</Typography>
           <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.5 }}>
-            {TEMPLATES.map(t => (
-              <Chip key={t.id} label={t.label} size="small" onClick={() => {
-                setSelectedTpl(t.id)
+            {TEMPLATES.map(tpl => (
+              <Chip key={tpl.id} label={tpl.label} size="small" onClick={() => {
+                setSelectedTpl(tpl.id)
                 const el = msgRef.current
-                if (el) { el.value = t.text; el.dispatchEvent(new Event('input', { bubbles: true })) }
+                if (el) { el.value = tpl.text; el.dispatchEvent(new Event('input', { bubbles: true })) }
               }} sx={{
                 fontSize: '0.7rem', height: 24, cursor: 'pointer',
-                bgcolor: selectedTpl === t.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
-                color:   selectedTpl === t.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
-                border:  `1px solid ${selectedTpl === t.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                bgcolor: selectedTpl === tpl.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
+                color:   selectedTpl === tpl.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
+                border:  `1px solid ${selectedTpl === tpl.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
               }} />
             ))}
           </Box>
@@ -903,7 +903,7 @@ export default function SearchProspects() {
           <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
             {sendingAll && (
-              <Tooltip title="Cancelar envío">
+              <Tooltip title={t.search.cancelSend}>
                 <IconButton size="small" onClick={handleCancel}
                   sx={{ color: 'rgba(248,113,113,0.7)', '&:hover': { color: '#f87171' } }}>
                   <HighlightOffIcon sx={{ fontSize: 16 }} />

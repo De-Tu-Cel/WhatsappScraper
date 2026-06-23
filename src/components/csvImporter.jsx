@@ -39,6 +39,16 @@ import { useLang } from '../context/LangContext'
 
 const URL_REGEX = /^https?:\/\//i
 
+const VAR_COLORS = { nombre: '#818cf8', ciudad: '#38bdf8', industria: '#fb923c', web: '#a78bfa' }
+function highlightVars(text) {
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>')
+    .replace(/\{\{(nombre|ciudad|industria|web)\}\}/g, (_, k) =>
+      `<span style="background:${VAR_COLORS[k]}28;color:${VAR_COLORS[k]};border-radius:4px;padding:0 3px;font-weight:700;">${k}</span>`
+    )
+}
+
 const TABLE_HEAD_CELL = {
   bgcolor: 'var(--card-bg, #161d2e)',
   color: 'rgba(255,255,255,0.5)',
@@ -119,7 +129,8 @@ export default function CsvImporter() {
   const [loading,    setLoading]    = useState(false)
   const [paused,     setPaused]     = useState(false)
   const [results,    setResults]    = useState([])
-  const [progress,   setProgress]   = useState(0)
+  const [progress,        setProgress]        = useState(0)
+  const [completedCount,  setCompletedCount]  = useState(0)
   const [currentUrl, setCurrentUrl] = useState('')
   const [done,       setDone]       = useState(false)
   const [page,       setPage]       = useState(0)
@@ -129,7 +140,12 @@ export default function CsvImporter() {
   const [sendingAll, setSendingAll] = useState(false)
   const [sendError,  setSendError]  = useState('')
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
-  const msgRef = useRef(null)
+  const msgRef       = useRef(null)
+  const highlightRef = useRef(null)
+  function syncScroll() {
+    if (highlightRef.current && msgRef.current)
+      highlightRef.current.scrollTop = msgRef.current.scrollTop
+  }
 
   function parseFile(file) {
     if (!file) return
@@ -183,11 +199,13 @@ export default function CsvImporter() {
     if (!allUrls.length) return
     pauseRef.current  = false
     cancelRef.current = false
-    setResults([]); setProgress(0); setLoading(true); setDone(false); setPaused(false); setPage(0)
+    setResults([]); setProgress(0); setCompletedCount(0); setLoading(true); setDone(false); setPaused(false); setPage(0)
 
     const res = []
     const CONCURRENCY = 4
-    for (let i = 0; i < allUrls.length; i += CONCURRENCY) {
+    const total = allUrls.length
+    let completed = 0
+    for (let i = 0; i < total; i += CONCURRENCY) {
       while (pauseRef.current && !cancelRef.current) {
         await new Promise(r => setTimeout(r, 200))
       }
@@ -195,7 +213,6 @@ export default function CsvImporter() {
 
       const chunk = allUrls.slice(i, i + CONCURRENCY)
       setCurrentUrl(chunk[0])
-      setProgress(Math.round((i / allUrls.length) * 100))
 
       const chunkResults = await Promise.all(chunk.map(async (url) => {
         try {
@@ -207,7 +224,7 @@ export default function CsvImporter() {
           if (!r.ok) throw new Error(`HTTP ${r.status}`)
           const d = await r.json()
           const duplicate = d.duplicate === true
-          return {
+          const row = {
             url,
             empresa:     d.scraped?.name || '—',
             industria:   d.scraped?.industry || '—',
@@ -220,7 +237,15 @@ export default function CsvImporter() {
             ok:          true,
             duplicate,
           }
+          completed++
+          setProgress(Math.round(completed / total * 100))
+          setCompletedCount(completed)
+          setCurrentUrl(url)
+          return row
         } catch {
+          completed++
+          setProgress(Math.round(completed / total * 100))
+          setCompletedCount(completed)
           return { url, empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, status_wa: '—', msg_status: null, ok: false, duplicate: false }
         }
       }))
@@ -334,7 +359,7 @@ export default function CsvImporter() {
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, height: '100%' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, height: '100%', overflowY: 'auto', pb: 2, pr: 0.5 }}>
 
       {/* ── Header ── */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
@@ -502,7 +527,7 @@ export default function CsvImporter() {
                 : <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />
               }
               <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
-                {paused ? t.csv.paused : t.csv.processing} {results.length + 1} {t.csv.of} {allUrls.length}
+                {paused ? t.csv.paused : t.csv.processing} {Math.min(completedCount + 1, allUrls.length)} {t.csv.of} {allUrls.length}
               </Typography>
             </Box>
             <Typography sx={{ color: paused ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>
@@ -571,33 +596,61 @@ export default function CsvImporter() {
           </Box>
           {/* Variable chips */}
           <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 1 }}>
-            {[['{{nombre}}','#818cf8'],['{{ciudad}}','#38bdf8'],['{{industria}}','#fb923c'],['{{web}}','#a78bfa']].map(([v, color]) => (
-              <Box key={v} onClick={() => {
-                const el = msgRef.current; if (!el) return
-                el.setRangeText(v, el.selectionStart, el.selectionEnd, 'end')
-                el.dispatchEvent(new Event('input', { bubbles: true }))
-                el.focus()
-              }} sx={{
-                px: 1, py: 0.25, borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700,
-                cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace',
-                bgcolor: `${color}18`, color, border: `1px solid ${color}40`,
-                '&:hover': { bgcolor: `${color}30` },
-              }}>{v}</Box>
+            {[
+              ['{{nombre}}',   'nombre',    '#818cf8', t.single.varNombre],
+              ['{{ciudad}}',   'ciudad',    '#38bdf8', t.single.varCiudad],
+              ['{{industria}}','industria', '#fb923c', t.single.varIndustria],
+              ['{{web}}',      'web',       '#a78bfa', t.single.varWeb],
+            ].map(([v, display, color, tooltip]) => (
+              <Tooltip key={v} title={tooltip} placement="top" arrow>
+                <Box onClick={() => {
+                  const el = msgRef.current; if (!el) return
+                  el.setRangeText(v, el.selectionStart, el.selectionEnd, 'end')
+                  el.dispatchEvent(new Event('input', { bubbles: true }))
+                  el.focus()
+                }} sx={{
+                  px: 1, py: 0.25, borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700,
+                  cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace',
+                  bgcolor: `${color}22`, color, border: `1px solid ${color}40`,
+                  '&:hover': { bgcolor: `${color}38` },
+                }}>{display}</Box>
+              </Tooltip>
             ))}
             <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', alignSelf: 'center', ml: 0.5 }}>
               {t.csv.clickInsert}
             </Typography>
           </Box>
-          {/* Textarea editable — uncontrolled so native Ctrl+Z works */}
-          <Box component="textarea" ref={msgRef} defaultValue={msgText} onInput={e => setMsgText(e.target.value)}
-            sx={{
-              width: '100%', minHeight: 100, maxHeight: 200, resize: 'vertical',
-              bgcolor: 'var(--sidebar-bg, #0d1117)', color: '#e2e8f0',
-              border: '1px solid rgba(255,255,255,0.1)', borderRadius: 1.5,
-              p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit',
-              outline: 'none', mb: 0.5,
-              '&:focus': { borderColor: 'rgba(34,197,94,0.4)' },
-            }} />
+          {/* Textarea con highlight de variables */}
+          <Box sx={{
+            position: 'relative', mb: 0.5, borderRadius: 1.5,
+            border: '1px solid rgba(255,255,255,0.1)',
+            bgcolor: 'var(--sidebar-bg, #0d1117)',
+            '&:focus-within': { borderColor: 'rgba(34,197,94,0.4)' },
+          }}>
+            <Box
+              ref={highlightRef}
+              dangerouslySetInnerHTML={{ __html: highlightVars(msgText) + ' ' }}
+              sx={{
+                position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit',
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                overflowY: 'hidden', pointerEvents: 'none',
+                color: '#e2e8f0', borderRadius: 1.5,
+              }}
+            />
+            <Box component="textarea" ref={msgRef} defaultValue={msgText}
+              onInput={e => { setMsgText(e.target.value); syncScroll() }}
+              onScroll={syncScroll}
+              sx={{
+                position: 'relative', zIndex: 1, display: 'block',
+                width: '100%', minHeight: 100, maxHeight: 200, resize: 'vertical',
+                bgcolor: 'transparent', color: 'transparent', caretColor: '#e2e8f0',
+                border: 'none', outline: 'none', borderRadius: 1.5,
+                p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit',
+                boxSizing: 'border-box',
+              }}
+            />
+          </Box>
           <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
             <Typography sx={{ fontSize: '0.65rem', color: msgText.length > 4000 ? '#f87171' : 'rgba(255,255,255,0.2)' }}>
               {msgText.length} / 4096
@@ -633,7 +686,7 @@ export default function CsvImporter() {
 
       {/* ── Results table ── */}
       {results.length > 0 && (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, flexGrow: 1, minHeight: 0 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem', fontWeight: 600, letterSpacing: 0.5 }}>
               {t.csv.results}
@@ -650,9 +703,10 @@ export default function CsvImporter() {
             )}
           </Box>
 
-          <Box sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2, overflow: 'hidden' }}>
+          <Box sx={{ border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2, overflow: 'hidden' }}>
             <TableContainer sx={{
-              flexGrow: 1, height: 0, overflow: 'auto',
+              maxHeight: 'clamp(220px, 42vh, 520px)',
+              overflow: 'auto',
               scrollbarWidth: 'thin',
               scrollbarColor: 'rgba(255,255,255,0.1) transparent',
               '&::-webkit-scrollbar': { width: 4, height: 4 },
@@ -664,7 +718,7 @@ export default function CsvImporter() {
               <Table size="small" stickyHeader>
                 <TableHead>
                   <TableRow>
-                    {['URL', 'Empresa', 'Industria', 'WhatsApp', 'WA Status', 'Estado'].map(h => (
+                    {[t.csv.colUrl, t.csv.colEmpresa, t.csv.colIndustria, t.csv.colWhatsApp, t.csv.colWaStatus, t.csv.colStatus].map(h => (
                       <TableCell key={h} sx={TABLE_HEAD_CELL}>{h}</TableCell>
                     ))}
                   </TableRow>
@@ -691,13 +745,13 @@ export default function CsvImporter() {
                       <TableCell sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.8rem' }}>{r.status_wa}</TableCell>
                       <TableCell>
                         {r.duplicate ? (
-                          <Chip label="Duplicado" size="small" icon={<WarningAmberIcon sx={{ fontSize: '12px !important' }} />}
+                          <Chip label={t.csv.statusDup} size="small" icon={<WarningAmberIcon sx={{ fontSize: '12px !important' }} />}
                             sx={{ bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#fbbf24' } }} />
                         ) : r.ok ? (
-                          <Chip label="OK" size="small" icon={<CheckCircleIcon sx={{ fontSize: '12px !important' }} />}
+                          <Chip label={t.csv.statusOk} size="small" icon={<CheckCircleIcon sx={{ fontSize: '12px !important' }} />}
                             sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#4ade80' } }} />
                         ) : (
-                          <Chip label="Error" size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
+                          <Chip label={t.csv.statusError} size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
                             sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' } }} />
                         )}
                       </TableCell>
@@ -715,8 +769,8 @@ export default function CsvImporter() {
               page={page}
               onPageChange={(_, p) => setPage(p)}
               onRowsPerPageChange={e => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0) }}
-              labelRowsPerPage="Filas por página:"
-              labelDisplayedRows={({ from, to, count }) => `${from}–${to} de ${count}`}
+              labelRowsPerPage={t.csv.rowsPerPage}
+              labelDisplayedRows={({ from, to, count }) => `${from}–${to} ${t.csv.rowsOf} ${count}`}
               sx={{
                 color: 'rgba(255,255,255,0.5)',
                 borderTop: '1px solid rgba(255,255,255,0.07)',

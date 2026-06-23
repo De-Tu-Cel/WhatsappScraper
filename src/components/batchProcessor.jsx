@@ -137,6 +137,16 @@ function EmptyState({ t }) {
   )
 }
 
+const VAR_COLORS = { nombre: '#818cf8', ciudad: '#38bdf8', industria: '#fb923c', web: '#a78bfa' }
+function highlightVars(text) {
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>')
+    .replace(/\{\{(nombre|ciudad|industria|web)\}\}/g, (_, k) =>
+      `<span style="background:${VAR_COLORS[k]}28;color:${VAR_COLORS[k]};border-radius:4px;padding:0 3px;font-weight:700;">${k}</span>`
+    )
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 function renderTemplate(text, scraped) {
   if (!text) return ''
@@ -163,7 +173,12 @@ export default function BatchProcessor() {
   const [sending,     setSending]     = useState(false)
   const [sendError,   setSendError]   = useState('')
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
-  const msgRef      = useRef(null)
+  const msgRef       = useRef(null)
+  const highlightRef = useRef(null)
+  function syncScroll() {
+    if (highlightRef.current && msgRef.current)
+      highlightRef.current.scrollTop = msgRef.current.scrollTop
+  }
   const urlsRef     = useRef(null)
   const sendingRef  = useRef(false)
   const cancelRef   = useRef(false)
@@ -199,9 +214,11 @@ export default function BatchProcessor() {
 
     const scraped = []
     const CONCURRENCY = 4
+    const total = urlList.length
+    let completed = 0
     setPhase('scraping')
     try {
-      for (let i = 0; i < urlList.length; i += CONCURRENCY) {
+      for (let i = 0; i < total; i += CONCURRENCY) {
         if (cancelRef.current) break
         abortCtrl.current = new AbortController()
         const chunk = urlList.slice(i, i + CONCURRENCY)
@@ -216,7 +233,7 @@ export default function BatchProcessor() {
             })
             if (!res.ok) throw new Error(`HTTP ${res.status}`)
             const d = await res.json()
-            return {
+            const row = {
               url, empresa: d.scraped?.name || '—',
               industria: d.scraped?.industry || '—',
               whatsapp: d.primary_whatsapp_number || '',
@@ -225,15 +242,20 @@ export default function BatchProcessor() {
               scraped_data: d.scraped,
               ok: true, msg_status: null,
             }
+            completed++
+            setProgress(Math.round(completed / total * 100))
+            setCurrentUrl(url)
+            return row
           } catch (e) {
             if (e.name === 'AbortError') return null
+            completed++
+            setProgress(Math.round(completed / total * 100))
             return { url, empresa: '—', industria: '—', whatsapp: '', company_id: '', scraped_data: null, ok: false, msg_status: null }
           }
         }))
         const valid = chunkResults.filter(Boolean)
         scraped.push(...valid)
         setRows([...scraped])
-        setProgress(Math.round((scraped.length / urlList.length) * 100))
       }
     } finally {
       abortCtrl.current = null
@@ -319,7 +341,7 @@ export default function BatchProcessor() {
 
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, height: '100%' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, height: '100%', overflowY: 'auto', pb: 2, pr: 0.5 }}>
 
       {/* ── Header ── */}
       <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2 }}>
@@ -587,33 +609,61 @@ export default function BatchProcessor() {
           </Box>
           {/* Variable chips */}
           <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 1 }}>
-            {[['{{nombre}}','#818cf8'],['{{ciudad}}','#38bdf8'],['{{industria}}','#fb923c'],['{{web}}','#a78bfa']].map(([v, color]) => (
-              <Box key={v} onClick={() => {
-                const el = msgRef.current; if (!el) return
-                el.setRangeText(v, el.selectionStart, el.selectionEnd, 'end')
-                el.dispatchEvent(new Event('input', { bubbles: true }))
-                el.focus()
-              }} sx={{
-                px: 1, py: 0.25, borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700,
-                cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace',
-                bgcolor: `${color}18`, color, border: `1px solid ${color}40`,
-                '&:hover': { bgcolor: `${color}30` },
-              }}>{v}</Box>
+            {[
+              ['{{nombre}}',   'nombre',    '#818cf8', t.single.varNombre],
+              ['{{ciudad}}',   'ciudad',    '#38bdf8', t.single.varCiudad],
+              ['{{industria}}','industria', '#fb923c', t.single.varIndustria],
+              ['{{web}}',      'web',       '#a78bfa', t.single.varWeb],
+            ].map(([v, display, color, tooltip]) => (
+              <Tooltip key={v} title={tooltip} placement="top" arrow>
+                <Box onClick={() => {
+                  const el = msgRef.current; if (!el) return
+                  el.setRangeText(v, el.selectionStart, el.selectionEnd, 'end')
+                  el.dispatchEvent(new Event('input', { bubbles: true }))
+                  el.focus()
+                }} sx={{
+                  px: 1, py: 0.25, borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700,
+                  cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace',
+                  bgcolor: `${color}22`, color, border: `1px solid ${color}40`,
+                  '&:hover': { bgcolor: `${color}38` },
+                }}>{display}</Box>
+              </Tooltip>
             ))}
             <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', alignSelf: 'center', ml: 0.5 }}>
               {t.batch.clickInsert}
             </Typography>
           </Box>
-          {/* Textarea editable — uncontrolled so native Ctrl+Z works */}
-          <Box component="textarea" ref={msgRef} defaultValue={msgText} onInput={e => setMsgText(e.target.value)}
-            sx={{
-              width: '100%', minHeight: 100, maxHeight: 200, resize: 'vertical',
-              bgcolor: 'var(--sidebar-bg, #0d1117)', color: '#e2e8f0',
-              border: '1px solid rgba(255,255,255,0.1)', borderRadius: 1.5,
-              p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit',
-              outline: 'none', mb: 0.5,
-              '&:focus': { borderColor: 'rgba(34,197,94,0.4)' },
-            }} />
+          {/* Textarea con highlight de variables */}
+          <Box sx={{
+            position: 'relative', mb: 0.5, borderRadius: 1.5,
+            border: '1px solid rgba(255,255,255,0.1)',
+            bgcolor: 'var(--sidebar-bg, #0d1117)',
+            '&:focus-within': { borderColor: 'rgba(34,197,94,0.4)' },
+          }}>
+            <Box
+              ref={highlightRef}
+              dangerouslySetInnerHTML={{ __html: highlightVars(msgText) + ' ' }}
+              sx={{
+                position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit',
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                overflowY: 'hidden', pointerEvents: 'none',
+                color: '#e2e8f0', borderRadius: 1.5,
+              }}
+            />
+            <Box component="textarea" ref={msgRef} defaultValue={msgText}
+              onInput={e => { setMsgText(e.target.value); syncScroll() }}
+              onScroll={syncScroll}
+              sx={{
+                position: 'relative', zIndex: 1, display: 'block',
+                width: '100%', minHeight: 100, maxHeight: 200, resize: 'vertical',
+                bgcolor: 'transparent', color: 'transparent', caretColor: '#e2e8f0',
+                border: 'none', outline: 'none', borderRadius: 1.5,
+                p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit',
+                boxSizing: 'border-box',
+              }}
+            />
+          </Box>
           <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
             <Typography sx={{ fontSize: '0.65rem', color: msgText.length > 4000 ? '#f87171' : 'rgba(255,255,255,0.2)' }}>
               {msgText.length} / 4096
@@ -701,7 +751,7 @@ export default function BatchProcessor() {
       {done && rows.length === 0 ? (
         <EmptyState t={t} />
       ) : rows.length > 0 ? (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, flexGrow: 1, minHeight: 0 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.75rem', fontWeight: 600, letterSpacing: 0.5 }}>
               {t.batch.results}
@@ -726,7 +776,7 @@ export default function BatchProcessor() {
           <TableContainer sx={{
             borderRadius: 2,
             border: '1px solid rgba(255,255,255,0.07)',
-            flexGrow: 1,
+            maxHeight: 'clamp(220px, 45vh, 560px)',
             overflow: 'auto',
             scrollbarWidth: 'thin',
             scrollbarColor: 'rgba(255,255,255,0.1) transparent',

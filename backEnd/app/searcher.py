@@ -148,9 +148,32 @@ EXCLUDED_PATH_PATTERNS = [
     '/informe/', '/reporte/', '/estudio/', '/investigacion/',
     '/franquicias/', '/franquicia/', '/sucursales/', '/sucursal/',
     '/encuentra-tu/', '/find-your/', '/localizador/', '/locator/',
+    # Catálogos y páginas de fichas comparativas
+    '/catalogo/', '/categorias/', '/subcategoria/', '/subcategorias/',
+    '/proveedores/', '/proveedor/', '/vendors/', '/vendor/',
+    '/encuentra/', '/encontrar/', '/cerca-de/', '/cerca/', '/nearby/',
+    '/comparar/', '/comparativa/', '/compare/',
+    '/mejores/', '/los-mejores/', '/las-mejores/', '/top-',
+    '/recomendados/', '/destacados/', '/populares/', '/favoritos/',
+    '/guia-de/', '/guia/', '/donde-encontrar/', '/donde-hay/',
+    '/ver-todos/', '/todos-los/', '/todas-las/',
+    '/perfil/', '/ficha/', '/ficha-de/', '/profile/',
 ]
 
 EXCLUDED_TLD_PATTERNS = ['.edu.mx', '.gob.mx', '.gov.mx', '.edu.']
+
+# Domains whose *name* reveals they are a catalog/aggregator of multiple businesses.
+# Checked against the full registered domain (www-stripped), so it catches
+# mejoresrestaurantes.com.mx, directoriodentistas.mx, guiagymcdmx.com, etc.
+_CATALOG_DOMAIN = re.compile(
+    r'(?:directorios?de|directoriode|guiiade?|guia[-_]?de|guiade'
+    r'|listado|ranking[-_]?de|losmejores|lasmejores|mejoresde'
+    r'|topde|top[-_]?\d|buscadorde|encuentraen|dondehay'
+    r'|catalogo|catalogode|paginas[-_]?amarillas|seccion[-_]?amarilla'
+    r'|hotfrog|kompass|cylex|infobel|foursquare|groupon'
+    r'|zomato|happycow|opentable|restorando)',
+    re.IGNORECASE,
+)
 
 # Matches article-style date slugs in paths: /2023/, /2024/01/, /2025/01/15/
 _DATE_IN_PATH = re.compile(r'/20\d{2}/(?:0[1-9]|1[0-2])?/?')
@@ -182,6 +205,9 @@ def _is_business_url(url: str) -> bool:
         if any(domain.endswith(tld) for tld in EXCLUDED_TLD_PATTERNS):
             return False
         if any(domain.startswith(pfx) for pfx in _NEWS_SUBDOMAIN_PREFIXES):
+            return False
+        # Reject domains whose *name* looks like a business catalog/aggregator
+        if _CATALOG_DOMAIN.search(domain):
             return False
         path = parsed.path.lower()
         if any(pat in path for pat in EXCLUDED_PATH_PATTERNS):
@@ -308,21 +334,26 @@ def _ai_filter_urls(urls: list[str], industry: str) -> list[str]:
             prompt = (
                 f'Eres un filtro ESTRICTO de URLs. Se buscan ÚNICAMENTE sitios web oficiales '
                 f'de negocios LOCALES e INDEPENDIENTES del sector "{industry}" en México.\n\n'
-                f'INCLUIR SOLO si es la página oficial de UN negocio específico con dirección física propia:\n'
-                f'  ✓ Gimnasio local, restaurante, clínica, tienda, taller, despacho, salón, etc.\n\n'
-                f'EXCLUIR SIN EXCEPCIÓN (devuelve lista vacía si ninguna aplica):\n'
+                f'INCLUIR SOLO si es la página oficial de UN negocio específico con nombre y dirección propios:\n'
+                f'  ✓ Un restaurante, clínica, gimnasio, taller, tienda, despacho, salón específico.\n\n'
+                f'EXCLUIR SIN EXCEPCIÓN (devuelve [] si ninguna aplica):\n'
+                f'  ✗ Catálogos o agregadores del sector: sitios que reúnen o listan VARIOS negocios '
+                f'del mismo tipo en una sola página (ej: "mejoresrestaurantes.com", "guiagymcdmx.com", '
+                f'"directoriodentistas.mx", cualquier sitio con fichas de múltiples negocios similares).\n'
+                f'  ✗ Listicles: "Los mejores X", "Top 10", "Guía de", "Dónde ir", "Lugares para", "Recomendados"\n'
                 f'  ✗ Artículos, noticias, reportajes, blogs, columnas de opinión\n'
-                f'  ✗ Listicles: "Los mejores X", "Top 10", "Guía de", "Dónde ir", "Lugares para"\n'
-                f'  ✗ Páginas que LISTAN o MENCIONAN negocios de terceros\n'
-                f'  ✗ Revistas, portales de contenido, medios digitales\n'
-                f'  ✗ Directorios (Yelp, Sección Amarilla, Hotfrog, Páginas Amarillas, Kompass)\n'
+                f'  ✗ Directorios conocidos (Yelp, Sección Amarilla, Hotfrog, Páginas Amarillas, Kompass, Foursquare, Zomato)\n'
                 f'  ✗ Redes sociales, YouTube, Wikipedia, Quora, Reddit\n'
-                f'  ✗ Marketplaces (MercadoLibre, Amazon, Uber Eats, Rappi)\n'
-                f'  ✗ Franquicias o cadenas NACIONALES con cientos de sucursales (SmartFit, OXXO, 7-Eleven, Starbucks, McDonald\'s, Domino\'s, etc.)\n'
+                f'  ✗ Marketplaces (MercadoLibre, Amazon, Uber Eats, Rappi, Didi Food)\n'
+                f'  ✗ Franquicias o cadenas NACIONALES con decenas de sucursales '
+                f'(SmartFit, OXXO, Starbucks, McDonald\'s, Domino\'s, Cinépolis, etc.)\n'
                 f'  ✗ Asociaciones gremiales, cámaras de comercio, federaciones del sector\n'
-                f'  ✗ Proveedores de software/SaaS para el sector (no son el negocio, son herramientas)\n'
+                f'  ✗ Proveedores de software/SaaS para el sector (herramientas, no el negocio mismo)\n'
                 f'  ✗ Páginas gubernamentales o educativas\n'
-                f'  ✗ URLs con /blog/, /noticias/, /articulo/, /post/ o año en la ruta\n\n'
+                f'  ✗ Revistas, portales de contenido, medios digitales\n'
+                f'  ✗ URLs con /blog/, /noticias/, /articulo/, /post/, /catalogo/, /directorio/ o año en la ruta\n\n'
+                f'REGLA CLAVE: si el sitio parece ser un portal que AGRUPA o COMPARA negocios '
+                f'del sector "{industry}", descártalo aunque el dominio sea desconocido.\n\n'
                 f'URLs a evaluar:\n' + '\n'.join(lines) + '\n\n'
                 f'Responde ÚNICAMENTE con un array JSON de enteros con los números de URLs aprobadas, '
                 f'ordenadas de mayor a menor relevancia. Si ninguna califica, responde []. '

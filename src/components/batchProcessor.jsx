@@ -30,7 +30,7 @@ import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import LinkIcon from '@mui/icons-material/Link'
 import InboxIcon from '@mui/icons-material/Inbox'
 import MessageIcon from '@mui/icons-material/Message'
-import { TEMPLATES } from './singleUrlProcessor'
+import { getTemplates } from './singleUrlProcessor'
 
 const EXAMPLES = [
   'https://pizzeria-mario.com.mx/\nhttps://ferreteria-sanchez.mx/\nhttps://spa-belleza-queretaro.com/\nhttps://taller-mecanico-hdz.mx/\nhttps://restaurante-oaxaca.com.mx/\nhttps://constructora-garcia.mx/',
@@ -150,6 +150,7 @@ function renderTemplate(text, scraped) {
 
 export default function BatchProcessor() {
   const { t, lang } = useLang()
+  const TEMPLATES = getTemplates(t)
   const [rawUrls,     setRawUrls]     = useState('')
   const [loading,     setLoading]     = useState(false)
   const [rows,        setRows]        = useState([])
@@ -515,7 +516,7 @@ export default function BatchProcessor() {
               <Typography sx={{ color: 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>
                 {progress}%
               </Typography>
-              <Tooltip title={lang === 'en' ? 'Cancel' : 'Cancelar'}>
+              <Tooltip title={t.batch.cancel}>
                 <IconButton size="small" onClick={handleCancelBatch}
                   sx={{ color: 'rgba(248,113,113,0.7)', p: 0.3, '&:hover': { color: '#f87171' } }}>
                   <HighlightOffIcon sx={{ fontSize: 15 }} />
@@ -571,16 +572,16 @@ export default function BatchProcessor() {
             {t.batch.baseTemplate}
           </Typography>
           <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.5 }}>
-            {TEMPLATES.map(t => (
-              <Chip key={t.id} label={t.label} size="small" onClick={() => {
-                setSelectedTpl(t.id)
+            {TEMPLATES.map(tpl => (
+              <Chip key={tpl.id} label={tpl.label} size="small" onClick={() => {
+                setSelectedTpl(tpl.id)
                 const el = msgRef.current
-                if (el) { el.value = t.text; el.dispatchEvent(new Event('input', { bubbles: true })) }
+                if (el) { el.value = tpl.text; el.dispatchEvent(new Event('input', { bubbles: true })) }
               }} sx={{
                 fontSize: '0.7rem', height: 24, cursor: 'pointer',
-                bgcolor: selectedTpl === t.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
-                color:   selectedTpl === t.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
-                border:  `1px solid ${selectedTpl === t.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                bgcolor: selectedTpl === tpl.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
+                color:   selectedTpl === tpl.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
+                border:  `1px solid ${selectedTpl === tpl.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
               }} />
             ))}
           </Box>
@@ -622,7 +623,7 @@ export default function BatchProcessor() {
           <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
             {sending && (
-              <Tooltip title={lang === 'en' ? 'Cancel sending' : 'Cancelar envío'}>
+              <Tooltip title={t.search.cancelSend}>
                 <IconButton size="small" onClick={handleCancelBatch}
                   sx={{ color: 'rgba(248,113,113,0.7)', '&:hover': { color: '#f87171' } }}>
                   <HighlightOffIcon sx={{ fontSize: 16 }} />

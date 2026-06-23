@@ -54,7 +54,7 @@ import SendIcon from '@mui/icons-material/Send'
 import MessageIcon from '@mui/icons-material/Message'
 import { visuallyHidden } from '@mui/utils'
 import ResultDisplay from './resultDisplay'
-import { MessageComposer, TEMPLATES } from './singleUrlProcessor'
+import { MessageComposer, getTemplates } from './singleUrlProcessor'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
 
@@ -197,7 +197,7 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
           </Typography>
           {total > 0 && (
             <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', lineHeight: 1, mt: 0.2 }}>
-              {total.toLocaleString()} {total === 1 ? t.db.companySingular : t.db.companySingular + 's'} registradas
+              {total.toLocaleString()} {total === 1 ? t.db.companySingular : t.db.companySingular + 's'} {t.db.registradas}
             </Typography>
           )}
         </Box>
@@ -214,7 +214,7 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
         {numSelected > 0 ? (
           <>
-            <Tooltip title={instanceStatus === 'disconnected' ? 'Instancia WhatsApp desconectada — ve a Configuración para reconectar' : selectedWithWA === 0 ? t.db.noWaSelected : `${t.db.sendMsgTo} ${selectedWithWA} ${t.db.withWA}`}>
+            <Tooltip title={instanceStatus === 'disconnected' ? t.db.instDisconnTip : selectedWithWA === 0 ? t.db.noWaSelected : `${t.db.sendMsgTo} ${selectedWithWA} ${t.db.withWA}`}>
               <span>
                 <Button size="small" onClick={onCampaign} disabled={selectedWithWA === 0 || instanceStatus === 'disconnected'}
                   startIcon={<MessageIcon sx={{ fontSize: '14px !important' }} />}
@@ -482,42 +482,42 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
       <DialogContent sx={{ px: 3, pt: 2.5, pb: 1, display: 'flex', flexDirection: 'column', gap: 0, bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
         {/* Sección: General */}
         <Typography variant="overline" sx={{ color: '#3b82f6', fontSize: '0.65rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
-          Información general
+          {t.db.generalInfo}
         </Typography>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, mb: 2.5 }}>
-          <TextField label="Nombre" size="small" fullWidth sx={FIELD_SX}
+          <TextField label={t.db.nameLabel} size="small" fullWidth sx={FIELD_SX}
             value={form.name || ''}
             onChange={(e) => set('name', e.target.value)}
             error={form.name !== undefined && !form.name?.trim()}
-            helperText={form.name !== undefined && !form.name?.trim() ? 'El nombre es requerido' : ''}
+            helperText={form.name !== undefined && !form.name?.trim() ? t.db.nameRequired : ''}
           />
           {(() => {
             const webErr = form.website?.trim() ? urlValidationMsg(form.website.trim()) : ''
             return (
-              <TextField label="Sitio web" size="small" fullWidth sx={FIELD_SX}
+              <TextField label={t.db.websiteLabel} size="small" fullWidth sx={FIELD_SX}
                 value={form.website || ''}
                 onChange={(e) => set('website', e.target.value)}
                 error={!!webErr}
-                helperText={webErr || 'Ej: https://empresa.com.mx'}
+                helperText={webErr || t.db.websiteEx}
               />
             )
           })()}
           <Box sx={{ display: 'flex', gap: 1.5 }}>
-            <TextField label="Industria" size="small" fullWidth sx={FIELD_SX} value={form.industry || ''} onChange={(e) => set('industry', e.target.value)} />
-            <TextField label="Ciudad"    size="small" fullWidth sx={FIELD_SX} value={form.city     || ''} onChange={(e) => set('city',     e.target.value)} />
+            <TextField label={t.db.industryLabel2} size="small" fullWidth sx={FIELD_SX} value={form.industry || ''} onChange={(e) => set('industry', e.target.value)} />
+            <TextField label={t.db.cityLabel2}     size="small" fullWidth sx={FIELD_SX} value={form.city     || ''} onChange={(e) => set('city',     e.target.value)} />
           </Box>
-          <TextField label="Estado / Región" size="small" fullWidth sx={FIELD_SX} value={form.state || ''} onChange={(e) => set('state', e.target.value)} />
+          <TextField label={t.db.stateLabel} size="small" fullWidth sx={FIELD_SX} value={form.state || ''} onChange={(e) => set('state', e.target.value)} />
         </Box>
 
         <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', mb: 2.5 }} />
 
         {/* Sección: Descripción */}
         <Typography variant="overline" sx={{ color: '#3b82f6', fontSize: '0.65rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
-          Descripción
+          {t.db.descLabel}
         </Typography>
         <TextField
           size="small" fullWidth multiline rows={2}
-          placeholder="Sin descripción…"
+          placeholder={t.db.descPh}
           sx={{ ...FIELD_SX, mb: 2.5 }}
           value={form.description || ''}
           onChange={(e) => set('description', e.target.value)}
@@ -547,10 +547,10 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
             </Box>
             <Box>
               <Typography sx={{ color: form.has_whatsapp ? '#4ade80' : 'rgba(255, 255, 255, 0.49)', fontSize: '0.85rem', fontWeight: 500 }}>
-                Tiene WhatsApp
+                {t.db.hasWhatsApp}
               </Typography>
               <Typography sx={{ color: 'rgba(255, 255, 255, 0.26)', fontSize: '0.72rem' }}>
-                {form.has_whatsapp ? 'Número registrado' : 'Sin número registrado'}
+                {form.has_whatsapp ? t.db.registeredNum : t.db.noRegisteredNum}
               </Typography>
             </Box>
           </Box>
@@ -566,11 +566,11 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
 
         <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', my: 2 }} />
         <Typography variant="overline" sx={{ color: '#3b82f6', fontSize: '0.65rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
-          Números de WhatsApp
+          {t.db.whatsappNums}
         </Typography>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.8, mb: 1.5 }}>
           {waNumbers.length === 0 && (
-            <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.78rem' }}>Sin números registrados</Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.78rem' }}>{t.db.noNumsReg}</Typography>
           )}
           {waNumbers.map((n, i) => (
             editingIdx === i ? (
@@ -600,7 +600,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
                 {i === 0 && (
                   <Typography sx={{ fontSize: '0.6rem', color: '#4ade80', fontWeight: 700,
                     bgcolor: 'rgba(34,197,94,0.15)', px: 0.6, borderRadius: 0.5, lineHeight: '16px' }}>
-                    PRINCIPAL
+                    {t.db.primaryNum}
                   </Typography>
                 )}
                 <Typography onClick={() => startEdit(i)}
@@ -614,7 +614,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
                     <EditIcon sx={{ fontSize: 13 }} />
                   </IconButton>
                 </Tooltip>
-                <Tooltip title="Eliminar">
+                <Tooltip title={t.db.delete}>
                   <IconButton size="small" onClick={() => removeNum(i)}
                     sx={{ color: 'rgba(255,255,255,0.2)', p: 0.3, '&:hover': { color: '#f87171' } }}>
                     <DeleteIcon sx={{ fontSize: 13 }} />
@@ -636,7 +636,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
               sx={{ borderColor: 'rgba(34,197,94,0.3)', color: '#4ade80', minWidth: 64,
                     '&:hover': { borderColor: '#4ade80', bgcolor: 'rgba(34,197,94,0.08)' },
                     '&.Mui-disabled': { borderColor: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.2)' } }}>
-              Agregar
+              {t.db.addNum}
             </Button>
           </Box>
           {newNumError && (
@@ -650,7 +650,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
           onClick={onClose}
           sx={{ color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, px: 2.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.7)' } }}
         >
-          Cancelar
+          {t.common.cancel}
         </Button>
         {(() => {
           const nameErr   = !form.name?.trim()
@@ -673,7 +673,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
                     '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.25)' },
                   }}
                 >
-                  {saving ? <CircularProgress size={16} sx={{ color: 'rgba(255,255,255,0.5)' }} /> : 'Guardar cambios'}
+                  {saving ? <CircularProgress size={16} sx={{ color: 'rgba(255,255,255,0.5)' }} /> : t.db.saveChanges}
                 </Button>
               </span>
             </Tooltip>
@@ -726,14 +726,16 @@ function SkeletonRows({ count }) {
 const MAX_CAMPAIGN_MSG = 4096
 
 function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus = 'unknown', isDisconnected = false }) {
-  const [msgText,      setMsgText]      = useState(TEMPLATES[0].text)
+  const { t } = useLang()
+  const TEMPLATES_DATA = getTemplates(t)
+  const [msgText,      setMsgText]      = useState(TEMPLATES_DATA[0].text)
   const [sending,      setSending]      = useState(false)
   const [sendError,    setSendError]    = useState('')
   const [progress,     setProgress]     = useState(0)
   const [results,      setResults]      = useState([])
   const [done,         setDone]         = useState(false)
   const sendingRef = useRef(false)
-  const [activeTpl,    setActiveTpl]    = useState(TEMPLATES[0].id)
+  const [activeTpl,    setActiveTpl]    = useState(TEMPLATES_DATA[0].id)
 
   useEffect(() => {
     if (!open) { setSending(false); setProgress(0); setResults([]); setDone(false) }
@@ -832,17 +834,17 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus 
       <DialogContent sx={{ px: 3, pt: 2.5, pb: 1, bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
         {/* Plantillas como punto de partida */}
         <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
-          Punto de partida
+          {t.batch.baseTemplate}
         </Typography>
         <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.8 }}>
-          {TEMPLATES.map(t => (
-            <Chip key={t.id} label={t.label} size="small"
-              onClick={() => !sending && applyTemplate(t)}
+          {TEMPLATES_DATA.map(tpl => (
+            <Chip key={tpl.id} label={tpl.label} size="small"
+              onClick={() => !sending && applyTemplate(tpl)}
               sx={{
                 fontSize: '0.72rem', height: 26, cursor: sending ? 'default' : 'pointer',
-                bgcolor: activeTpl === t.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
-                color:   activeTpl === t.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
-                border:  `1px solid ${activeTpl === t.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                bgcolor: activeTpl === tpl.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
+                color:   activeTpl === tpl.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
+                border:  `1px solid ${activeTpl === tpl.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
                 '&:hover': !sending ? { bgcolor: 'rgba(34,197,94,0.1)' } : {},
               }} />
           ))}
@@ -923,7 +925,7 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus 
       <DialogActions sx={{ px: 3, pb: 3, pt: 2, gap: 1, bgcolor: 'var(--sidebar-bg, #0d1117)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
         <Button onClick={onClose} disabled={sending}
           sx={{ color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, px: 2.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.7)' } }}>
-          {done ? 'Cerrar' : 'Cancelar'}
+          {done ? t.common.close : t.common.cancel}
         </Button>
         {!done && (
           <Button
@@ -1347,7 +1349,7 @@ export default function DatabaseViewer({ isActive }) {
               ) : sortedRows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={headCells.length + 2} align="center" sx={{ py: 6, color: 'rgba(255,255,255,0.3)', borderBottom: 'none' }}>
-                    Sin resultados
+                    {t.db.noResults}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -1398,10 +1400,10 @@ export default function DatabaseViewer({ isActive }) {
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>{display(row.city)}</TableCell>
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>
                         {row.has_whatsapp ? (
-                          <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label="Sí" size="small"
+                          <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={t.db.yes} size="small"
                             sx={{ bgcolor: 'rgba(34,197,94,0.16)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.4)', height: 22, fontSize: '0.7rem', fontWeight: 700, px: 0.3, boxShadow: '0 0 8px rgba(34,197,94,0.2)', '& .MuiChip-icon': { color: '#22c55e' } }} />
                         ) : (
-                          <Chip label="No" size="small"
+                          <Chip label={t.db.no} size="small"
                             sx={{ bgcolor: 'rgba(239,68,68,0.08)', color: 'rgba(248,113,113,0.55)', border: '1px solid rgba(239,68,68,0.18)', height: 22, fontSize: '0.7rem', fontWeight: 600, px: 0.3 }} />
                         )}
                       </TableCell>
@@ -1444,8 +1446,8 @@ export default function DatabaseViewer({ isActive }) {
           page={page}
           onPageChange={(_, p) => setPage(p)}
           onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0) }}
-          labelRowsPerPage="Filas por página:"
-          labelDisplayedRows={({ from, to, count }) => `${from}–${to} de ${count !== -1 ? count : `más de ${to}`}`}
+          labelRowsPerPage={t.db.rowsPerPage}
+          labelDisplayedRows={({ from, to, count }) => `${from}–${to} ${t.db.displayedRowsOf} ${count !== -1 ? count : `${t.db.displayedRowsMore} ${to}`}`}
           sx={{
             color: 'rgba(255,255,255,0.5)',
             borderTop: '1px solid rgba(255,255,255,0.07)',
@@ -1465,13 +1467,13 @@ export default function DatabaseViewer({ isActive }) {
           {viewLoading && (
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 6, gap: 2 }}>
               <CircularProgress size={36} sx={{ color: '#6366f1' }} />
-              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem' }}>Cargando información de la empresa…</Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem' }}>{t.db.loadingInfo}</Typography>
             </Box>
           )}
           {!viewLoading && viewData && <ResultDisplay result={viewData} />}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2, bgcolor: 'var(--bg, #080c14)' }}>
-          <Button onClick={() => setViewTarget(null)} sx={{ color: 'rgba(255,255,255,0.5)' }}>Cerrar</Button>
+          <Button onClick={() => setViewTarget(null)} sx={{ color: 'rgba(255,255,255,0.5)' }}>{t.db.close}</Button>
         </DialogActions>
       </Dialog>
 
@@ -1494,12 +1496,12 @@ export default function DatabaseViewer({ isActive }) {
           )}
           {!viewLoading && msgData && !msgData.primary_whatsapp_number && (
             <Alert severity="warning" sx={{ mt: 2, bgcolor: 'rgba(251,146,60,0.1)', color: '#fb923c', border: '1px solid rgba(251,146,60,0.2)' }}>
-              Esta empresa no tiene número de WhatsApp registrado.
+              {t.db.noWaCompany}
             </Alert>
           )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2, bgcolor: 'var(--bg, #080c14)' }}>
-          <Button onClick={() => setMsgTarget(null)} sx={{ color: 'rgba(255,255,255,0.5)' }}>Cancelar</Button>
+          <Button onClick={() => setMsgTarget(null)} sx={{ color: 'rgba(255,255,255,0.5)' }}>{t.common.cancel}</Button>
         </DialogActions>
       </Dialog>
 
@@ -1507,20 +1509,20 @@ export default function DatabaseViewer({ isActive }) {
       <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)} maxWidth="xs" fullWidth
         slotProps={{ paper: { sx: { bgcolor: 'var(--sidebar-bg, #0d1117)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 3 } } }}>
         <DialogTitle sx={{ color: 'white', fontWeight: 700, pb: 1 }}>
-          ¿Eliminar {selected.length} empresa{selected.length !== 1 ? 's' : ''}?
+          {t.db.deleteConfirmPrefix} {selected.length} {selected.length !== 1 ? t.db.companyPlural : t.db.companySingular}?
         </DialogTitle>
         <DialogContent>
           <Typography sx={{ color: 'rgba(255,255,255,0.55)', fontSize: '0.88rem' }}>
-            Esta acción es permanente y no se puede deshacer. Se eliminarán todos los datos asociados.
+            {t.db.deleteWarn}
           </Typography>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
           <Button onClick={() => setConfirmDelete(false)} sx={{ color: 'rgba(255,255,255,0.5)', borderRadius: 2 }}>
-            Cancelar
+            {t.common.cancel}
           </Button>
           <Button onClick={handleDeleteConfirmed} variant="contained"
             sx={{ bgcolor: '#ef4444', borderRadius: 2, fontWeight: 700, '&:hover': { bgcolor: '#dc2626' } }}>
-            Eliminar
+            {t.common.delete}
           </Button>
         </DialogActions>
       </Dialog>

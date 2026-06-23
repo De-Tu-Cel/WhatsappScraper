@@ -39,15 +39,15 @@ import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import { loadAndyConfig, saveAndyConfig } from './Settings'
 
 const CATEGORY_CONFIG = {
-  humano:     { label: 'Humano',     color: '#4ade80', bg: 'rgba(34,197,94,0.12)',   icon: '👤' },
-  automatico: { label: 'Automático', color: '#facc15', bg: 'rgba(250,204,21,0.12)',  icon: '⚡' },
-  bot:        { label: 'Bot',        color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', icon: '🤖' },
-  bot_ia:     { label: 'Bot IA',     color: '#c084fc', bg: 'rgba(192,132,252,0.15)', icon: '🧠' },
+  humano:     { tKey: 'human',     color: '#4ade80', bg: 'rgba(34,197,94,0.12)',   icon: '👤' },
+  automatico: { tKey: 'automatic', color: '#facc15', bg: 'rgba(250,204,21,0.12)',  icon: '⚡' },
+  bot:        { tKey: 'bot',       color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', icon: '🤖' },
+  bot_ia:     { tKey: 'botAi',     color: '#c084fc', bg: 'rgba(192,132,252,0.15)', icon: '🧠' },
 }
 
 function getCategoryConfig(row) {
   if (row.category === 'bot' && row.is_ai) return CATEGORY_CONFIG.bot_ia
-  return CATEGORY_CONFIG[row.category] || { label: 'Sin clasificar', color: '#94a3b8', bg: 'rgba(148,163,184,0.08)', icon: '⏳' }
+  return CATEGORY_CONFIG[row.category] || { tKey: 'noClass', color: '#94a3b8', bg: 'rgba(148,163,184,0.08)', icon: '⏳' }
 }
 
 function QualityDots({ score, color }) {
@@ -176,6 +176,10 @@ function ConversationCapture({ thread, captureRef, visible }) {
 
 export default function Analytics() {
   const [data, setData]               = useState([])
+  const [analyzeAttempts, setAnalyzeAttempts] = useState(0)
+  const requeueSessionRef = useRef(false) // true while auto-requeue batches are running
+  const remainingRef      = useRef(0)     // unqueued messages left after last batch
+  const prevAnalyzingRef  = useRef(false) // tracks analyzing→false transition
   const [loading, setLoading]         = useState(true)
   const [generating, setGenerating]         = useState(null)
   const [reportThread, setReportThread]     = useState([])
@@ -235,13 +239,56 @@ export default function Analytics() {
     } catch { /* ignore */ }
   }, [page])
 
-  // Auto-refetch while any company is being analyzed by Groq
+  // Queue the next batch of unanalyzed messages; returns the API response
+  const triggerRequeue = useCallback(async () => {
+    try {
+      const res  = await fetch('/api/admin/requeue-unanalyzed', { method: 'POST' })
+      const json = await res.json()
+      remainingRef.current = json.remaining ?? 0
+      return json
+    } catch { return { queued: 0, remaining: 0 } }
+  }, [])
+
+  // On mount: silently start auto-requeue if there are rezagados
+  useEffect(() => {
+    triggerRequeue().then(result => {
+      if ((result.queued || 0) > 0) {
+        requeueSessionRef.current = true
+        silentRefetch(1)
+      }
+    })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Polling while analyzing + chain the next batch when one finishes
+  const MAX_ANALYZE_ATTEMPTS = 20
   useEffect(() => {
     const hasAnalyzing = data.some(r => r.analyzing)
-    if (!hasAnalyzing) return
-    const id = setTimeout(() => silentRefetch(page), 8000)
+
+    // Detected analyzing → false transition while a session is active → queue next batch
+    if (!hasAnalyzing && prevAnalyzingRef.current && requeueSessionRef.current) {
+      if (remainingRef.current > 0) {
+        triggerRequeue().then(result => {
+          if ((result.queued || 0) > 0) {
+            setAnalyzeAttempts(0)
+            silentRefetch(page)
+          } else {
+            requeueSessionRef.current = false
+          }
+        })
+      } else {
+        requeueSessionRef.current = false
+      }
+    }
+    prevAnalyzingRef.current = hasAnalyzing
+
+    if (!hasAnalyzing) { if (analyzeAttempts > 0) setAnalyzeAttempts(0); return }
+    if (analyzeAttempts >= MAX_ANALYZE_ATTEMPTS) return
+    const id = setTimeout(() => {
+      setAnalyzeAttempts(a => a + 1)
+      silentRefetch(page)
+    }, 8000)
     return () => clearTimeout(id)
-  }, [data, page, silentRefetch])
+  }, [data, page, silentRefetch, analyzeAttempts, triggerRequeue])
 
   const handleGenerateReport = useCallback(async (row, filterNum = null) => {
     const genKey = filterNum ? `${row.company_id}_${filterNum}` : row.company_id
@@ -474,8 +521,18 @@ export default function Analytics() {
             </Typography>
           </Box>
         </Box>
-        <Tooltip title="Actualizar">
-          <IconButton size="small" onClick={() => fetchData(page)}
+        <Tooltip title={t.common.refresh}>
+          <IconButton size="small" onClick={() => {
+            setAnalyzeAttempts(0)
+            requeueSessionRef.current = false
+            remainingRef.current = 0
+            fetchData(page)
+            triggerRequeue().then(result => {
+              if ((result.queued || 0) > 0) {
+                requeueSessionRef.current = true
+              }
+            })
+          }}
             sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'white' } }}>
             <RefreshIcon fontSize="small" />
           </IconButton>
@@ -498,14 +555,14 @@ export default function Analytics() {
           bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2,
         }}>
           <PersonIcon sx={{ fontSize: 15, color: '#4ade80' }} />
-          <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>% Humano:</Typography>
+          <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>{t.analytics.pctHuman}:</Typography>
           <Typography sx={{ fontSize: '0.85rem', color: '#4ade80', fontWeight: 700 }}>{humanPct}%</Typography>
         </Box>
 
         {[
-          { icon: '⚡', color: '#facc15', label: 'Automático', value: autoPct },
-          { icon: '🤖', color: '#a78bfa', label: 'Bot',        value: botPct  },
-          { icon: '🧠', color: '#c084fc', label: 'Bot IA',     value: botIaPct},
+          { icon: '⚡', color: '#facc15', label: t.analytics.automatic, value: autoPct },
+          { icon: '🤖', color: '#a78bfa', label: t.analytics.bot,       value: botPct  },
+          { icon: '🧠', color: '#c084fc', label: t.analytics.botAi,     value: botIaPct},
         ].map(({ icon, color, label, value }) => (
           <Box key={label} sx={{
             display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
@@ -541,12 +598,12 @@ export default function Analytics() {
 
         {/* Chips de categoría */}
         {[
-          { value: 'all',           label: 'Todos',         color: 'rgba(255,255,255,0.6)',  bg: 'rgba(255,255,255,0.06)'  },
-          { value: 'humano',        label: '👤 Humano',     color: '#4ade80',                bg: 'rgba(74,222,128,0.1)'    },
-          { value: 'automatico',    label: '⚡ Automático', color: '#facc15',                bg: 'rgba(250,204,21,0.1)'    },
-          { value: 'bot',           label: '🤖 Bot',        color: '#a78bfa',                bg: 'rgba(167,139,250,0.1)'   },
-          { value: 'bot_ia',        label: '🧠 Bot IA',     color: '#c084fc',                bg: 'rgba(192,132,252,0.1)'   },
-          { value: 'sin_clasificar',label: '⏳ Sin clasificar', color: '#94a3b8',            bg: 'rgba(148,163,184,0.08)'  },
+          { value: 'all',           label: t.analytics.all,                          color: 'rgba(255,255,255,0.6)',  bg: 'rgba(255,255,255,0.06)'  },
+          { value: 'humano',        label: `👤 ${t.analytics.human}`,                color: '#4ade80',                bg: 'rgba(74,222,128,0.1)'    },
+          { value: 'automatico',    label: `⚡ ${t.analytics.automatic}`,            color: '#facc15',                bg: 'rgba(250,204,21,0.1)'    },
+          { value: 'bot',           label: `🤖 ${t.analytics.bot}`,                 color: '#a78bfa',                bg: 'rgba(167,139,250,0.1)'   },
+          { value: 'bot_ia',        label: `🧠 ${t.analytics.botAi}`,               color: '#c084fc',                bg: 'rgba(192,132,252,0.1)'   },
+          { value: 'sin_clasificar',label: `⏳ ${t.analytics.noClass}`,             color: '#94a3b8',                bg: 'rgba(148,163,184,0.08)'  },
         ].map(f => {
           const isActive = filterCat === f.value
           const count    = f.value === 'all' ? data.length
@@ -589,7 +646,7 @@ export default function Analytics() {
         {/* Contador de resultados cuando hay filtro activo */}
         {(filterCat !== 'all' || searchText) && (
           <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.25)', ml: 'auto' }}>
-            {sortedData.length} de {data.length} empresas
+            {sortedData.length} {t.analytics.of} {data.length} {t.analytics.companies}
           </Typography>
         )}
       </Box>
@@ -604,7 +661,10 @@ export default function Analytics() {
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, pt: 6, gap: 1.5 }}>
             <BarChartIcon sx={{ fontSize: 48, color: 'rgba(255,255,255,0.08)' }} />
             <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.85rem', textAlign: 'center', maxWidth: 360 }}>
-              Sin respuestas analizadas aún — las clasificaciones aparecerán aquí cuando las empresas respondan tus mensajes.
+              {t.analytics.noData}
+            </Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem', textAlign: 'center', maxWidth: 360 }}>
+              {t.analytics.noDataSub}
             </Typography>
           </Box>
         ) : (
@@ -630,7 +690,7 @@ export default function Analytics() {
                   {/* Número */}
                   <TableCell sx={{ ...HEADER_CELL_SX, whiteSpace: 'nowrap' }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                      <WhatsAppIcon sx={{ fontSize: 12 }} /> Número
+                      <WhatsAppIcon sx={{ fontSize: 12 }} /> {t.analytics.phoneNum}
                     </Box>
                   </TableCell>
                   {/* Industria + Categoría */}
@@ -638,7 +698,7 @@ export default function Analytics() {
                     { field: 'industry', label: t.analytics.industry },
                     { field: 'category', label: t.analytics.category },
                   ].map(({ field, label }) => (
-                    <TableCell key={field} sx={HEADER_CELL_SX}>
+                    <TableCell key={field} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
                       <TableSortLabel active={sortField === field} direction={sortField === field ? sortDir : 'asc'}
                         onClick={() => handleSort(field)}
                         sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
@@ -671,9 +731,9 @@ export default function Analytics() {
                       {t.analytics.lastResp}
                     </TableSortLabel>
                   </TableCell>
-                  <TableCell sx={HEADER_CELL_SX}>Notas</TableCell>
+                  <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>{t.analytics.notes}</TableCell>
                   <TableCell sx={HEADER_CELL_SX}>Andy</TableCell>
-                  <TableCell sx={HEADER_CELL_SX}>Reporte</TableCell>
+                  <TableCell sx={HEADER_CELL_SX}>{t.analytics.report}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -746,7 +806,7 @@ export default function Analytics() {
                       </TableCell>
 
                       {/* Industria */}
-                      <TableCell sx={CELL_SX}>
+                      <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
                         <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.78rem' }}>
                           {row.industry || '—'}
                         </Typography>
@@ -755,8 +815,8 @@ export default function Analytics() {
                       {/* Categoría */}
                       <TableCell sx={CELL_SX}>
                         {!hasMultiple && (row.category
-                          ? <Chip label={`${cat.icon} ${cat.label}`} size="small" sx={{ height: 20, fontSize: '0.7rem', bgcolor: cat.bg, color: cat.color, border: `1px solid ${cat.color}44` }} />
-                          : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>)}
+                          ? <Chip label={`${cat.icon} ${t.analytics[cat.tKey]}`} size="small" sx={{ height: 20, fontSize: '0.7rem', bgcolor: cat.bg, color: cat.color, border: `1px solid ${cat.color}44` }} />
+                          : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>{t.analytics.noCategory}</Typography>)}
                       </TableCell>
 
                       {/* Calidad */}
@@ -786,7 +846,7 @@ export default function Analytics() {
                       </TableCell>
 
                       {/* Notas */}
-                      <TableCell sx={{ ...CELL_SX, maxWidth: 200 }}>
+                      <TableCell sx={{ ...CELL_SX, maxWidth: 200, textAlign: 'center' }}>
                         {!hasMultiple && (notesText
                           ? <Tooltip title={notesText} placement="top"><Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.75rem', cursor: 'default' }}>{notesTruncated}</Typography></Tooltip>
                           : <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.75rem' }}>—</Typography>)}
@@ -797,8 +857,8 @@ export default function Analytics() {
                         {(() => {
                           const st = andyStatus[row.company_id]
                           const tip = hasMultiple
-                            ? (st === 'success' ? 'Todos enviados a Andy' : st === 'loading' ? 'Enviando…' : 'Enviar todos los números a Andy')
-                            : (st === 'success' ? 'Enviado a Andy' : st === 'error' ? 'Error — reintentar' : st === 'loading' ? 'Enviando…' : 'Enviar a Andy')
+                            ? (st === 'success' ? t.analytics.sentAllToAndy : st === 'loading' ? t.analytics.sendingToAndy : t.analytics.sendAllToAndy)
+                            : (st === 'success' ? t.analytics.sentToAndy : st === 'error' ? t.analytics.andyError : st === 'loading' ? t.analytics.sendingToAndy : t.analytics.sendToAndy)
                           return (
                             <Tooltip title={tip}>
                               <span>
@@ -816,7 +876,7 @@ export default function Analytics() {
                       <TableCell sx={CELL_SX}>
                         {!hasMultiple && (() => {
                           const noContact = !row.total_responses
-                          const tip = isGenerating ? 'Generando…' : generating ? 'Espera…' : noContact ? 'Sin conversación registrada' : 'Reporte PDF'
+                          const tip = isGenerating ? t.analytics.generating : generating ? t.analytics.pleaseWait : noContact ? t.analytics.noConvRecord : t.analytics.reportPdf
                           return (
                             <Tooltip title={tip}>
                               <span>
@@ -882,7 +942,7 @@ export default function Analytics() {
                               ? <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>
                               : hasAnalysis
                                 ? <Chip
-                                    label={`${nCat.icon} ${nCat.label}`}
+                                    label={`${nCat.icon} ${t.analytics[nCat.tKey]}`}
                                     size="small"
                                     sx={{ height: 18, fontSize: '0.65rem', bgcolor: nCat.bg, color: nCat.color,
                                           border: `1px solid ${nCat.color}44`,
@@ -922,7 +982,7 @@ export default function Analytics() {
                           </TableCell>
                           {/* Andy por número — deshabilitado si no respondió */}
                           <TableCell sx={NSUB}>
-                            <Tooltip title={!replied ? 'Sin respuesta' : andySt === 'success' ? 'Enviado' : andySt === 'error' ? 'Error — reintentar' : andySt === 'loading' ? 'Enviando…' : `Enviar ${shortNum} a Andy`}>
+                            <Tooltip title={!replied ? t.analytics.noReply : andySt === 'success' ? t.analytics.sentToAndy : andySt === 'error' ? t.analytics.andyError : andySt === 'loading' ? t.analytics.sendingToAndy : t.analytics.sendToAndy}>
                               <span>
                                 <IconButton size="small" disabled={!replied || andySt === 'loading'} onClick={() => handleSendToAndy(row, n.number)}
                                   sx={{ color: andySt === 'success' ? '#4ade80' : andySt === 'error' ? '#f87171' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>
@@ -933,7 +993,7 @@ export default function Analytics() {
                           </TableCell>
                           {/* PDF por número */}
                           <TableCell sx={NSUB}>
-                            <Tooltip title={isGenNum ? 'Generando…' : generating ? 'Espera…' : !replied ? 'Sin respuesta' : `PDF de ${shortNum}`}>
+                            <Tooltip title={isGenNum ? t.analytics.generating : generating ? t.analytics.pleaseWait : !replied ? t.analytics.noReply : `${t.analytics.reportPdf} ${shortNum}`}>
                               <span>
                                 <IconButton size="small" disabled={!!generating || !replied} onClick={() => handleGenerateReport(row, n.number)}
                                   sx={{ color: isGenNum ? 'var(--accent,#6366f1)' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>
@@ -958,7 +1018,7 @@ export default function Analytics() {
       {totalPages > 1 && (
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2, py: 1, borderTop: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
           <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.3)' }}>
-            {totalItems} empresas · página {page} de {totalPages}
+            {totalItems} {t.analytics.companies} · {t.analytics.page} {page} {t.analytics.of} {totalPages}
           </Typography>
           <Box sx={{ display: 'flex', gap: 0.5 }}>
             <Box onClick={() => setPage(p => Math.max(1, p - 1))} sx={{

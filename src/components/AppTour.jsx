@@ -19,6 +19,7 @@ const TOUR_STEPS = [
   step('#tour-nav-database', '🗄️ Base de datos',                'Aquí vive toda tu base de prospectos. Puedes filtrar por industria, ciudad o WhatsApp, seleccionar empresas y enviarles mensajes directamente.'),
   step('#tour-nav-search',   '🔍 Buscar prospectos',            'Busca empresas por industria o tipo de negocio (restaurantes, talleres, dentistas…). La app las encuentra y las agrega a tu base de datos.'),
   step('#tour-nav-convs',    '💬 Conversaciones',               'Ve y responde todos los mensajes de WhatsApp en un solo lugar. Las empresas que te contesten aparecerán aquí organizadas por chat.'),
+  step('#tour-nav-schedule', '📅 Envíos Programados',           'Programa campañas para que se envíen automáticamente en la fecha y hora que elijas. Puedes ver el calendario por mes, semana o lista, y editar o cancelar envíos en cualquier momento.'),
   step('#tour-nav-analytics','📊 Análisis',                     'Métricas de las respuestas recibidas: cuántas son humanas, cuántas son bots, calidad promedio y tiempo de reacción.'),
 ]
 

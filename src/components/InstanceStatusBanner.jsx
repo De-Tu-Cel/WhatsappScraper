@@ -6,6 +6,7 @@ import Tooltip from '@mui/material/Tooltip'
 import WifiOffIcon from '@mui/icons-material/WifiOff'
 import SettingsIcon from '@mui/icons-material/Settings'
 import { useUser } from '../context/UserContext'
+import { useLang } from '../context/LangContext'
 
 function goToSettings() {
   window.dispatchEvent(new CustomEvent('nav:settings'))
@@ -13,14 +14,15 @@ function goToSettings() {
 
 /** Red banner shown when Evolution instance is disconnected */
 export function InstanceDisconnectedBanner({ status, sx }) {
+  const { t } = useLang()
   if (status !== 'disconnected') return null
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.9, borderRadius: 2, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', ...sx }}>
       <WifiOffIcon sx={{ fontSize: 15, color: '#ef4444', flexShrink: 0 }} />
       <Typography sx={{ color: '#ef4444', fontSize: '0.75rem', flex: 1 }}>
-        Instancia WhatsApp desconectada — los mensajes no se enviarán
+        {t.instance.disconnected}
       </Typography>
-      <Tooltip title="Ir a Configuración para reconectar">
+      <Tooltip title={t.instance.goSettings}>
         <IconButton size="small" onClick={goToSettings} sx={{ color: 'rgba(239,68,68,0.6)', p: 0.3, '&:hover': { color: '#ef4444' } }}>
           <SettingsIcon sx={{ fontSize: 14 }} />
         </IconButton>
@@ -47,14 +49,15 @@ export function SendErrorBanner({ error, onDismiss, sx }) {
 
 /** Small status dot shown near send buttons */
 export function InstanceStatusDot({ status, sx }) {
+  const { t } = useLang()
   const { user } = useUser()
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, ...sx }}>
       <Box sx={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, bgcolor: status === 'connected' ? '#22c55e' : status === 'disconnected' ? '#ef4444' : 'rgba(255,255,255,0.2)' }} />
       <Typography sx={{ fontSize: '0.62rem', color: status === 'connected' ? 'rgba(34,197,94,0.7)' : status === 'disconnected' ? 'rgba(239,68,68,0.7)' : 'rgba(255,255,255,0.2)' }}>
         {status === 'connected'
-          ? `${user?.evolution_instance || 'WhatsApp'} conectado`
-          : status === 'disconnected' ? 'Desconectado' : 'Verificando...'}
+          ? `${user?.evolution_instance || 'WhatsApp'} ${t.instance.connectedLbl}`
+          : status === 'disconnected' ? t.instance.disconnectedLbl : t.instance.verifying}
       </Typography>
     </Box>
   )

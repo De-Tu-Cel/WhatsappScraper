@@ -409,7 +409,9 @@ export default function Settings() {
   const [phoneInput,   setPhoneInput]   = useState('')
   const [connStatus,   setConnStatus]   = useState('checking') // checking | connected | disconnected
   const [connPhone,    setConnPhone]    = useState('')
-  const pollRef = useRef(null)
+  const [qrWaitSecs,   setQrWaitSecs]   = useState(0)   // seconds waiting for QR image
+  const pollRef    = useRef(null)
+  const qrTimerRef = useRef(null)
 
   // Verificar estado real de conexión al cargar
   useEffect(() => {
@@ -435,13 +437,22 @@ export default function Settings() {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
   }, [])
 
-  const fetchQr = useCallback(async (name) => {
-    try {
-      const r = await fetch(`/api/evolution/instance/${name}?type=qr`)
-      const d = await r.json()
-      const b64 = d.base64 || d.qrcode?.base64 || d.qr?.base64
-      if (b64) setQrImage(b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`)
-    } catch {}
+  const fetchQr = useCallback(async (name, retries = 4) => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        const r = await fetch(`/api/evolution/instance/${name}?type=qr`)
+        const d = await r.json()
+        const b64 = d.base64 || d.qrcode?.base64 || d.qr?.base64
+        if (b64) {
+          setQrImage(b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`)
+          // QR loaded — stop the wait timer
+          if (qrTimerRef.current) { clearInterval(qrTimerRef.current); qrTimerRef.current = null; setQrWaitSecs(0) }
+          return
+        }
+      } catch {}
+      // QR not ready yet — wait before retry (instance may be reconnecting)
+      if (i < retries - 1) await new Promise(r => setTimeout(r, 1500))
+    }
   }, [])
 
   const checkStatus = useCallback(async (name) => {
@@ -480,10 +491,12 @@ export default function Settings() {
   }
 
   async function handleStartConnection() {
-    // Reutilizar siempre la misma instancia por usuario — sin timestamps
     const instanceName = `${user?.username || 'user'}-wa`
     saveEvo({ instance: instanceName })
     setQrStatus('creating')
+
+    // Step 1: try to create instance (idempotent — safe to call even if it already exists).
+    // Errors here are non-fatal: the instance may already exist with a valid QR being generated.
     try {
       const res = await fetch('/api/evolution/instance', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -492,29 +505,33 @@ export default function Settings() {
       const data = await res.json()
       const instanceKey = data?.hash?.apikey || data?.apikey
       if (instanceKey) saveEvo({ apiKey: instanceKey })
-
-      // Auto-register webhook for the new instance
+      // Register webhook for fresh instances
       await fetch('/api/evolution/instance/webhook', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ instanceName }),
       }).catch(() => {})
+    } catch {}
 
-      setQrStatus('waiting')
+    // Step 2: fetch QR — always runs, even if create failed (instance may already exist).
+    // Small delay to let the instance settle after create/reconnect.
+    setQrStatus('waiting')
+    await new Promise(r => setTimeout(r, 800))
+    setQrWaitSecs(0)
+    qrTimerRef.current = setInterval(() => setQrWaitSecs(s => s + 1), 1000)
+    await fetchQr(instanceName)
+    pollRef.current = setInterval(async () => {
+      await checkStatus(instanceName)
       await fetchQr(instanceName)
-      pollRef.current = setInterval(async () => {
-        await checkStatus(instanceName)
-        await fetchQr(instanceName)
-      }, 3000)
-    } catch {
-      setQrStatus('error')
-    }
+    }, 3000)
   }
 
   function handleCloseQr() {
     stopPolling()
+    if (qrTimerRef.current) { clearInterval(qrTimerRef.current); qrTimerRef.current = null }
     setQrOpen(false)
     setQrStatus('idle')
     setQrImage(null)
+    setQrWaitSecs(0)
   }
 
   const currentAccent = ACCENTS.find(a => a.value === settings.accent) || ACCENTS[0]
@@ -890,8 +907,23 @@ export default function Settings() {
                 ) : (
                   <Box sx={{ width: 220, height: 220, mx: 'auto', borderRadius: 2,
                     bgcolor: 'var(--surface,#111827)', border: '1px solid rgba(255,255,255,0.07)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1.5 }}>
                     <CircularProgress size={32} sx={{ color: '#25d366' }} />
+                    {qrWaitSecs >= 12 && (
+                      <Box onClick={() => {
+                        const instanceName = `${user?.username || 'user'}-wa`
+                        setQrWaitSecs(0)
+                        fetchQr(instanceName)
+                      }} sx={{
+                        px: 1.5, py: 0.5, borderRadius: 1.5, cursor: 'pointer',
+                        bgcolor: 'rgba(37,211,102,0.1)', border: '1px solid rgba(37,211,102,0.3)',
+                        '&:hover': { bgcolor: 'rgba(37,211,102,0.2)' },
+                      }}>
+                        <Typography sx={{ fontSize: '0.7rem', color: '#4ade80', fontWeight: 600 }}>
+                          Reintentar
+                        </Typography>
+                      </Box>
+                    )}
                   </Box>
                 )}
 

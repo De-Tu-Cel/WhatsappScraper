@@ -153,6 +153,7 @@ export const T = {
       sentAllToAndy:   'Todos enviados a Andy',
       sendingToAndy:   'Enviando…',
       andyError:       'Error — reintentar',
+      cancelPending:   'Detener análisis — marcar pendientes como en espera de cuota',
     },
     convs: {
       title:        'Conversaciones',
@@ -829,6 +830,7 @@ export const T = {
       sentAllToAndy:   'All sent to Andy',
       sendingToAndy:   'Sending…',
       andyError:       'Error — retry',
+      cancelPending:   'Stop analysis — mark pending as quota-waiting',
     },
     convs: {
       title:        'Conversations',

@@ -14,6 +14,10 @@ from app.database import MongoDBManager
 
 log = logging.getLogger(__name__)
 
+
+class GroqQuotaExceeded(Exception):
+    """Raised when Groq daily token quota (TPD) is exhausted. Do not retry."""
+
 _PROMPT_TEMPLATE = """\
 Eres un director comercial con 15 años de experiencia en ventas B2B por WhatsApp en Latinoamérica. \
 Evalúas respuestas de prospectos con criterio brutalmente honesto — tu análisis define si un agente invierte tiempo en este lead o no.
@@ -104,7 +108,12 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
                     )
                     break
                 except Exception as _e:
-                    _is_429 = "429" in str(_e) or "rate_limit" in str(_e).lower()
+                    _err_str = str(_e).lower()
+                    _is_daily_quota = "tokens per day" in _err_str or ("tpd" in _err_str and "429" in _err_str)
+                    _is_429 = "429" in str(_e) or "rate_limit" in _err_str
+                    if _is_daily_quota:
+                        log.warning("Groq cuota diaria agotada — no se reintentará hasta mañana")
+                        raise GroqQuotaExceeded(str(_e))
                     if _is_429 and _attempt < 3:
                         _wait = 5 * (2 ** _attempt)  # 5s, 10s, 20s
                         log.warning("Groq 429 — reintentando en %ds (intento %d/4)", _wait, _attempt + 1)
@@ -127,6 +136,8 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
             "bot_quality": result.get("bot_quality"),
             "notes": result.get("notes", ""),
         }
+    except GroqQuotaExceeded:
+        raise  # let classify_and_save handle it specifically
     except Exception as e:
         import traceback
         log.error("classify_response failed: %s\n%s", e, traceback.format_exc())
@@ -211,12 +222,21 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
             analysis["pending_human_check"] = False
 
         db.save_message_analysis(log_id, analysis)
+    except GroqQuotaExceeded:
+        log.warning("classify_and_save: cuota diaria agotada para log_id=%s — marcado como quota_exceeded", log_id)
+        try:
+            from bson import ObjectId
+            db.db.message_logs.update_one(
+                {"_id": ObjectId(log_id)},
+                {"$set": {"analysis_status": "quota_exceeded"}, "$unset": {"analysis": ""}},
+            )
+        except Exception:
+            pass
     except Exception as _exc:
         import traceback
         log.error("classify_and_save failed for log_id=%s: %s\n%s", log_id, _exc, traceback.format_exc())
         try:
             from bson import ObjectId
-            db = MongoDBManager()
             db.db.message_logs.update_one(
                 {"_id": ObjectId(log_id)},
                 {"$set": {"analysis_status": "error"}},

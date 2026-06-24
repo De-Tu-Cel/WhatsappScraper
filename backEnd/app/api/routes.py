@@ -977,6 +977,18 @@ def api_evo_delete_instance(name: str):
         return r.json()
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/evolution/instance/logout/{name}")
+def api_evo_logout_instance(name: str):
+    """Clear stored session credentials so the instance generates a fresh QR on next connect.
+    Use when the instance is stuck in 'connecting' with expired auth (statusReason 428)."""
+    try:
+        import requests as _req
+        from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
+        r = _req.delete(f"{EVOLUTION_API_URL}/instance/logout/{name}",
+            headers={"apikey": EVOLUTION_API_KEY}, timeout=10)
+        return {"ok": r.status_code in (200, 201), "status": r.status_code, "data": r.json()}
+    except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+
 # ── Analytics ─────────────────────────────────────────────────────────────────
 
 @router.get("/analytics")

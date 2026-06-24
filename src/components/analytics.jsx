@@ -177,9 +177,10 @@ function ConversationCapture({ thread, captureRef, visible }) {
 export default function Analytics() {
   const [data, setData]               = useState([])
   const [analyzeAttempts, setAnalyzeAttempts] = useState(0)
-  const requeueSessionRef = useRef(false) // true while auto-requeue batches are running
-  const remainingRef      = useRef(0)     // unqueued messages left after last batch
-  const prevAnalyzingRef  = useRef(false) // tracks analyzing→false transition
+  const requeueSessionRef  = useRef(false) // true while auto-requeue batches are running
+  const requeueInFlight    = useRef(false) // prevents concurrent requeue calls
+  const remainingRef       = useRef(0)     // unqueued messages left after last batch
+  const prevAnalyzingRef   = useRef(false) // tracks analyzing→false transition
   const [loading, setLoading]         = useState(true)
   const [generating, setGenerating]         = useState(null)
   const [reportThread, setReportThread]     = useState([])
@@ -241,12 +242,15 @@ export default function Analytics() {
 
   // Queue the next batch of unanalyzed messages; returns the API response
   const triggerRequeue = useCallback(async () => {
+    if (requeueInFlight.current) return { queued: 0, remaining: remainingRef.current }
+    requeueInFlight.current = true
     try {
       const res  = await fetch('/api/admin/requeue-unanalyzed', { method: 'POST' })
       const json = await res.json()
       remainingRef.current = json.remaining ?? 0
       return json
     } catch { return { queued: 0, remaining: 0 } }
+    finally { requeueInFlight.current = false }
   }, [])
 
   // On mount: silently start auto-requeue if there are rezagados
@@ -521,22 +525,38 @@ export default function Analytics() {
             </Typography>
           </Box>
         </Box>
-        <Tooltip title={t.common.refresh}>
-          <IconButton size="small" onClick={() => {
-            setAnalyzeAttempts(0)
-            requeueSessionRef.current = false
-            remainingRef.current = 0
-            fetchData(page)
-            triggerRequeue().then(result => {
-              if ((result.queued || 0) > 0) {
-                requeueSessionRef.current = true
-              }
-            })
-          }}
-            sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'white' } }}>
-            <RefreshIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          {data.some(r => r.analyzing) && (
+            <Tooltip title={t.analytics.cancelPending || 'Detener análisis pendientes'}>
+              <IconButton size="small" onClick={async () => {
+                requeueSessionRef.current = false
+                remainingRef.current = 0
+                setAnalyzeAttempts(0)
+                await fetch('/api/admin/cancel-pending', { method: 'POST' })
+                fetchData(page)
+              }}
+                sx={{ color: '#f87171', '&:hover': { color: '#fca5a5' } }}>
+                <ErrorOutlineIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+          <Tooltip title={t.common.refresh}>
+            <IconButton size="small" onClick={() => {
+              setAnalyzeAttempts(0)
+              requeueSessionRef.current = false
+              remainingRef.current = 0
+              fetchData(page)
+              triggerRequeue().then(result => {
+                if ((result.queued || 0) > 0) {
+                  requeueSessionRef.current = true
+                }
+              })
+            }}
+              sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'white' } }}>
+              <RefreshIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
       </Box>
 
       {/* Summary chips */}

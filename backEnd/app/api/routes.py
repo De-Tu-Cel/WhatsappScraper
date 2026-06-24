@@ -1293,36 +1293,60 @@ def api_cancel_scheduled_send(job_id: str, x_user_token: Optional[str] = Header(
 
 # ─── Analytics backfill ───────────────────────────────────────────────────────
 
-_REQUEUE_FILTER = {
+_REQUEUE_BASE = {
     "direction": "inbound",
-    "analysis_status": {"$exists": False},
-    "analysis": {"$exists": False},
     "company_id": {"$exists": True, "$nin": [None, "unknown", "undefined", "manual"]},
     "message_body": {"$exists": True, "$ne": "[media]"},
 }
 
+def _build_requeue_filter():
+    from datetime import datetime, timedelta
+    stuck_threshold = datetime.utcnow() - timedelta(hours=1)
+    return {
+        **_REQUEUE_BASE,
+        "$or": [
+            # A: never touched
+            {"analysis": {"$exists": False}, "analysis_status": {"$exists": False}},
+            # B: stuck pending — queued but server died before processing (>1h ago)
+            {"analysis_status": "pending", "analysis": {"$exists": False},
+             "created_at": {"$lt": stuck_threshold}},
+            # C: classify_and_save threw an exception
+            {"analysis_status": "error"},
+            # D: Groq returned an error payload that was saved
+            {"analysis.error": True},
+        ],
+    }
+
 @router.post("/admin/requeue-unanalyzed")
 def api_requeue_unanalyzed(background_tasks: BackgroundTasks, limit: int = 20):
-    """Find old inbound messages with no analysis and run the classifier on each one.
-    Processes at most `limit` messages per call; returns `remaining` so the caller
-    knows whether to invoke again for the next batch."""
+    """Find inbound messages with no valid analysis and re-run the classifier.
+    Covers: never processed, stuck pending, classifier exception, Groq error payload.
+    Processes at most `limit` per call; use `remaining` to know if another call is needed."""
     from app.classifier import classify_and_save
     from datetime import datetime
     db = MongoDBManager()
-    total_unqueued = db.db.message_logs.count_documents(_REQUEUE_FILTER)
-    pending_docs = list(db.db.message_logs.find(
-        _REQUEUE_FILTER,
-        {"_id": 1, "company_id": 1, "message_body": 1, "created_at": 1},
-    ).limit(limit))
-    for doc in pending_docs:
+    requeue_filter = _build_requeue_filter()
+    # Claim messages atomically one-by-one to prevent duplicate processing
+    # from concurrent calls (e.g. React StrictMode double-mount).
+    claimed = []
+    for _ in range(limit):
+        doc = db.db.message_logs.find_one_and_update(
+            requeue_filter,
+            {"$set": {"analysis_status": "pending", "pending_since": datetime.utcnow()}, "$unset": {"analysis": ""}},
+            projection={"_id": 1, "company_id": 1, "message_body": 1, "created_at": 1},
+            sort=[("created_at", -1)],
+        )
+        if not doc:
+            break
+        claimed.append(doc)
+    for doc in claimed:
         log_id     = str(doc["_id"])
         company_id = str(doc["company_id"])
         body       = doc.get("message_body") or ""
         created    = doc.get("created_at") or datetime.now()
-        db.db.message_logs.update_one({"_id": doc["_id"]}, {"$set": {"analysis_status": "pending"}})
         background_tasks.add_task(classify_and_save, log_id, company_id, body, created)
-    remaining = max(0, total_unqueued - len(pending_docs))
-    return {"ok": True, "queued": len(pending_docs), "remaining": remaining}
+    remaining = db.db.message_logs.count_documents(requeue_filter)
+    return {"ok": True, "queued": len(claimed), "remaining": remaining}
 
 
 @router.get("/admin/all-pending")
@@ -1333,6 +1357,31 @@ def api_all_pending():
     for d in docs:
         d["_id"] = str(d["_id"])
     return {"count": len(docs), "docs": docs}
+
+
+@router.post("/admin/reset-quota-exceeded")
+def api_reset_quota_exceeded():
+    """Reset quota_exceeded messages back to unanalyzed so requeue picks them up.
+    Call this once Groq daily quota resets (midnight UTC)."""
+    db = MongoDBManager()
+    result = db.db.message_logs.update_many(
+        {"analysis_status": "quota_exceeded"},
+        {"$unset": {"analysis_status": "", "analysis": ""}},
+    )
+    return {"ok": True, "reset": result.modified_count}
+
+
+@router.post("/admin/cancel-pending")
+def api_cancel_pending():
+    """Mark all stuck 'pending' messages as 'quota_exceeded' to stop the analytics spinner.
+    Use when background tasks are frozen (e.g. Groq quota hit) without a server restart."""
+    from datetime import datetime, timedelta
+    db = MongoDBManager()
+    result = db.db.message_logs.update_many(
+        {"analysis_status": "pending"},
+        {"$set": {"analysis_status": "quota_exceeded"}, "$unset": {"analysis": "", "pending_since": ""}},
+    )
+    return {"ok": True, "cancelled": result.modified_count}
 
 
 @router.delete("/admin/all-pending")

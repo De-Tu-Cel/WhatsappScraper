@@ -177,7 +177,8 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
           const groupItems = group.keys
             .map(k => itemsByKey[k])
             .filter(Boolean)
-          if (groupItems.length === 0) return null
+          const hasSettings = group.labelKey === 'groupSistema'
+          if (groupItems.length === 0 && !hasSettings) return null
 
           const isLast = gi === GROUP_KEYS.length - 1
           return (

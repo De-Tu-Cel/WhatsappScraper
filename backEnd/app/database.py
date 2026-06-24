@@ -1,7 +1,7 @@
 # database.py
 import re
 from pymongo import MongoClient
-from datetime import datetime
+from datetime import datetime, timedelta
 from gridfs import GridFS
 from config import MONGODB_URI, DATABASE_NAME
 
@@ -373,6 +373,7 @@ class MongoDBManager:
             # Skip unknown company_id — classifier won't run for them anyway.
             if message_body and message_body != "[media]" and company_id not in (None, "unknown"):
                 doc["analysis_status"] = "pending"
+                doc["pending_since"] = datetime.utcnow()
         result = self.db.message_logs.insert_one(doc)
         return str(result.inserted_id)
 
@@ -725,10 +726,12 @@ class MongoDBManager:
                 cid_variants = [cid_str, _ObjId(cid_str)]
             except Exception:
                 cid_variants = [cid_str]
+            _fresh_threshold = datetime.utcnow() - timedelta(minutes=10)
             _cnt = self.db.message_logs.count_documents({
                 "company_id": {"$in": cid_variants},
                 "direction": "inbound",
                 "analysis_status": "pending",
+                "pending_since": {"$gte": _fresh_threshold},
             })
             analyzing = _cnt > 0
 

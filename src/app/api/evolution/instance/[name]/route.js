@@ -21,3 +21,16 @@ export async function DELETE(request, { params }) {
     return NextResponse.json(await res.json(), { status: res.status })
   } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }) }
 }
+
+export async function POST(request, { params }) {
+  const { name } = await params
+  const { searchParams } = new URL(request.url)
+  const action = searchParams.get('action')
+  if (action === 'logout') {
+    try {
+      const res = await fetch(`${B}/api/evolution/instance/logout/${name}`, { method: 'POST' })
+      return NextResponse.json(await res.json(), { status: res.status })
+    } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }) }
+  }
+  return NextResponse.json({ error: 'unknown action' }, { status: 400 })
+}

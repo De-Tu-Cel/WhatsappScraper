@@ -445,14 +445,13 @@ export default function Settings() {
         const b64 = d.base64 || d.qrcode?.base64 || d.qr?.base64
         if (b64) {
           setQrImage(b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`)
-          // QR loaded — stop the wait timer
           if (qrTimerRef.current) { clearInterval(qrTimerRef.current); qrTimerRef.current = null; setQrWaitSecs(0) }
-          return
+          return true  // QR received
         }
       } catch {}
-      // QR not ready yet — wait before retry (instance may be reconnecting)
       if (i < retries - 1) await new Promise(r => setTimeout(r, 1500))
     }
+    return false  // no QR after all retries
   }, [])
 
   const checkStatus = useCallback(async (name) => {
@@ -495,8 +494,7 @@ export default function Settings() {
     saveEvo({ instance: instanceName })
     setQrStatus('creating')
 
-    // Step 1: try to create instance (idempotent — safe to call even if it already exists).
-    // Errors here are non-fatal: the instance may already exist with a valid QR being generated.
+    // Step 1: try to create instance (idempotent — ok if it already exists)
     try {
       const res = await fetch('/api/evolution/instance', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -505,20 +503,28 @@ export default function Settings() {
       const data = await res.json()
       const instanceKey = data?.hash?.apikey || data?.apikey
       if (instanceKey) saveEvo({ apiKey: instanceKey })
-      // Register webhook for fresh instances
       await fetch('/api/evolution/instance/webhook', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ instanceName }),
       }).catch(() => {})
     } catch {}
 
-    // Step 2: fetch QR — always runs, even if create failed (instance may already exist).
-    // Small delay to let the instance settle after create/reconnect.
+    // Step 2: wait for QR. If none arrives after 6s, logout (clears stale session) and retry once.
     setQrStatus('waiting')
     await new Promise(r => setTimeout(r, 800))
     setQrWaitSecs(0)
     qrTimerRef.current = setInterval(() => setQrWaitSecs(s => s + 1), 1000)
-    await fetchQr(instanceName)
+    const gotQr = await fetchQr(instanceName)
+
+    // If still no QR, the instance has stale auth — logout to force fresh QR generation
+    if (!gotQr) {
+      setQrStatus('creating')
+      await fetch(`/api/evolution/instance/${instanceName}?action=logout`, { method: 'POST' }).catch(() => {})
+      await new Promise(r => setTimeout(r, 2000))
+      setQrStatus('waiting')
+      await fetchQr(instanceName)
+    }
+
     pollRef.current = setInterval(async () => {
       await checkStatus(instanceName)
       await fetchQr(instanceName)
@@ -910,9 +916,12 @@ export default function Settings() {
                     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1.5 }}>
                     <CircularProgress size={32} sx={{ color: '#25d366' }} />
                     {qrWaitSecs >= 12 && (
-                      <Box onClick={() => {
+                      <Box onClick={async () => {
                         const instanceName = `${user?.username || 'user'}-wa`
                         setQrWaitSecs(0)
+                        // Logout to clear stale session, then retry
+                        await fetch(`/api/evolution/instance/${instanceName}?action=logout`, { method: 'POST' }).catch(() => {})
+                        await new Promise(r => setTimeout(r, 2000))
                         fetchQr(instanceName)
                       }} sx={{
                         px: 1.5, py: 0.5, borderRadius: 1.5, cursor: 'pointer',

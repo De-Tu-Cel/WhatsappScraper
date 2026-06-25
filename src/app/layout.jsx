@@ -28,7 +28,7 @@ const THEME_SCRIPT = `(function(){
       '#f59e0b':'245,158,11','#faff00':'250,255,0','#f43f5e':'244,63,94',
       '#ec4899':'236,72,153','#ff0080':'255,0,128','#ef4444':'239,68,68',
     };
-    var THEMES = {
+    var DARK = {
       navy:{bg:'#080c14',sb:'#0d1117',sf:'#111827',cd:'#161d2e'},
       carbon:{bg:'#050505',sb:'#0d0d0d',sf:'#111111',cd:'#141414'},
       slate:{bg:'#0f172a',sb:'#1e293b',sf:'#293548',cd:'#334155'},
@@ -60,26 +60,41 @@ const THEME_SCRIPT = `(function(){
       detucel:{bg:'#071a10',sb:'#0a1628',sf:'#0d2216',cd:'#102a1e'},
       diurna:{bg:'#15100a',sb:'#1e170b',sf:'#25200d',cd:'#2d2610'},
     };
+    var VIVID = {
+      white:   {bg:'#5880a8',sb:'#6890b8',sf:'#487098',cd:'#7898c8'},
+      paper:   {bg:'#8a7260',sb:'#9a8270',sf:'#7a6250',cd:'#aa9280'},
+      sky:     {bg:'#3878d8',sb:'#4888e8',sf:'#2868c8',cd:'#60a0f0'},
+      menta:   {bg:'#3a9c6a',sb:'#4aac7a',sf:'#2a8c5a',cd:'#5abc8a'},
+      lavanda: {bg:'#6e52bc',sb:'#7e62cc',sf:'#5e42ac',cd:'#8e72dc'},
+      durazno: {bg:'#cc8040',sb:'#dc9050',sf:'#bc7030',cd:'#eca060'},
+      rosa:    {bg:'#c83c60',sb:'#d84c70',sf:'#b82c50',cd:'#e86c80'},
+      aqua:    {bg:'#1898b8',sb:'#28a8c8',sf:'#0888a8',cd:'#38b8d8'},
+      ambar:   {bg:'#a07228',sb:'#b08238',sf:'#906218',cd:'#c09248'},
+    };
 
     function hexToRgb(h){
       return [parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)].join(',');
     }
 
     var accentRgb = ACCENTS[accent] || hexToRgb(accent);
-    var t = THEMES[theme] || THEMES.navy;
+    var isVivid   = !!VIVID[theme];
+    var t = isVivid ? VIVID[theme] : (DARK[theme] || DARK.navy);
     var r = document.documentElement;
-    r.style.setProperty('--accent', accent);
-    r.style.setProperty('--accent-rgb', accentRgb);
+    r.style.setProperty('--accent',      accent);
+    r.style.setProperty('--accent-rgb',  accentRgb);
     r.style.setProperty('--accent-glow', 'rgba('+accentRgb+',0.3)');
-    r.style.setProperty('--bg', t.bg);
-    r.style.setProperty('--sidebar-bg', t.sb);
-    r.style.setProperty('--surface', t.sf);
-    r.style.setProperty('--card-bg', t.cd);
-    r.style.setProperty('--text', '#f1f5f9');
-    r.style.setProperty('--text-muted', 'rgba(255,255,255,0.38)');
-    r.style.setProperty('--border', 'rgba(255,255,255,0.07)');
-    r.style.setProperty('--item-hover', 'rgba(255,255,255,0.05)');
+    r.style.setProperty('--bg',          t.bg);
+    r.style.setProperty('--sidebar-bg',  t.sb);
+    r.style.setProperty('--surface',     t.sf);
+    r.style.setProperty('--card-bg',     t.cd);
+    r.style.setProperty('--text',        '#f1f5f9');
+    r.style.setProperty('--text-muted',  isVivid ? 'rgba(255,255,255,0.7)'  : 'rgba(255,255,255,0.45)');
+    r.style.setProperty('--border',      isVivid ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.07)');
+    r.style.setProperty('--item-hover',  isVivid ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.05)');
+    r.style.setProperty('--scrollbar-thumb',       isVivid ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.12)');
+    r.style.setProperty('--scrollbar-thumb-hover', isVivid ? 'rgba(255,255,255,0.48)' : 'rgba(255,255,255,0.28)');
     r.setAttribute('data-theme-mode', 'dark');
+    r.setAttribute('data-theme-cat',  isVivid ? 'vivid' : 'dark');
   } catch(e) {}
 })();`
 

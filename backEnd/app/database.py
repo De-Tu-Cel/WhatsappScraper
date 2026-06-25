@@ -5,11 +5,26 @@ from datetime import datetime, timedelta
 from gridfs import GridFS
 from config import MONGODB_URI, DATABASE_NAME
 
+# Single MongoClient shared across all requests — pymongo manages the connection pool internally.
+# Creating a new MongoClient per request exhausts TCP sockets on Windows (WinError 10055).
+_mongo_client: MongoClient | None = None
+
+def _get_client() -> MongoClient:
+    global _mongo_client
+    if _mongo_client is None:
+        _mongo_client = MongoClient(
+            MONGODB_URI,
+            serverSelectionTimeoutMS=5000,
+            maxPoolSize=50,
+            minPoolSize=2,
+        )
+        _mongo_client.admin.command("ping")
+    return _mongo_client
+
 
 class MongoDBManager:
     def __init__(self):
-        self.client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
-        self.client.admin.command("ping")
+        self.client = _get_client()
         self.db = self.client[DATABASE_NAME]
         self.fs = GridFS(self.db)
         try:
@@ -702,9 +717,10 @@ class MongoDBManager:
                     entry["notes"]             = first["analysis"].get("notes") or ""
                     entry["business_hours"]    = first["analysis"].get("business_hours")
                     qualities = [m["analysis"].get("response_quality") or 0 for m in analyzed]
-                    reactions = [m["analysis"].get("reaction_time_min") or 0 for m in analyzed]
+                    reactions = [m["analysis"]["reaction_time_min"] for m in analyzed
+                                 if m["analysis"].get("reaction_time_min") is not None]
                     entry["response_quality"]  = round(sum(qualities) / len(qualities), 1)
-                    entry["reaction_time_min"] = round(sum(reactions) / len(reactions), 1)
+                    entry["reaction_time_min"] = round(sum(reactions) / len(reactions), 1) if reactions else None
                 elif company_analyzed:
                     # No direct match — inherit company-level analysis (central WA Business number).
                     best = company_analyzed[0]
@@ -744,7 +760,7 @@ class MongoDBManager:
                 "domain": company.get("domain", ""),
                 "category": g["category"] if has_real_analysis else None,
                 "response_quality": round(g["response_quality"] or 0, 1) if has_real_analysis else None,
-                "reaction_time_min": round(g["reaction_time_min"] or 0, 1) if has_real_analysis else None,
+                "reaction_time_min": round(g["reaction_time_min"], 1) if (has_real_analysis and g.get("reaction_time_min") is not None) else None,
                 "business_hours": g.get("business_hours") if has_real_analysis else None,
                 "notes": g["notes"] or "" if has_real_analysis else "",
                 "total_responses": g["total_responses"],

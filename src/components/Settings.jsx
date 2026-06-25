@@ -13,8 +13,6 @@ import LanguageIcon from '@mui/icons-material/Language'
 import PaletteIcon from '@mui/icons-material/Palette'
 import DarkModeIcon from '@mui/icons-material/DarkMode'
 import CheckIcon from '@mui/icons-material/Check'
-import SmartToyIcon from '@mui/icons-material/SmartToy'
-import LinkIcon from '@mui/icons-material/Link'
 import QrCode2Icon from '@mui/icons-material/QrCode2'
 import VisibilityIcon from '@mui/icons-material/Visibility'
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
@@ -52,6 +50,15 @@ export const ACCENTS = [
   { tKey: 'accentPink',        value: '#ec4899', glow: 'rgba(236,72,153,0.3)'   },
   { tKey: 'accentHotPink',     value: '#ff0080', glow: 'rgba(255,0,128,0.3)'    },
   { tKey: 'accentRed',         value: '#ef4444', glow: 'rgba(239,68,68,0.3)'    },
+  // Extras
+  { tKey: 'accentGold',        value: '#eab308', glow: 'rgba(234,179,8,0.3)'    },
+  { tKey: 'accentRose',        value: '#fb7185', glow: 'rgba(251,113,133,0.3)'  },
+  { tKey: 'accentDeepTeal',    value: '#0d9488', glow: 'rgba(13,148,136,0.3)'   },
+  { tKey: 'accentBronze',      value: '#b45309', glow: 'rgba(180,83,9,0.3)'     },
+  { tKey: 'accentPeriwinkle',  value: '#818cf8', glow: 'rgba(129,140,248,0.3)'  },
+  { tKey: 'accentSpringGreen', value: '#00d084', glow: 'rgba(0,208,132,0.3)'    },
+  { tKey: 'accentIce',         value: '#a5f3fc', glow: 'rgba(165,243,252,0.35)' },
+  { tKey: 'accentSunrise',     value: '#fb923c', glow: 'rgba(251,146,60,0.3)'   },
 ]
 
 export const THEMES = [
@@ -91,6 +98,22 @@ export const THEMES = [
   { tKey: 'themeTwilight',  value: 'crepusculo',bg: '#0b0b1e', sidebar: '#121228', surface: '#181835', card: '#1e1e40', preview: ['#0b0b1e','#121228','#1e1e40'] },
   { tKey: 'themeCinnamon',  value: 'canela',    bg: '#130a04', sidebar: '#1f1207', surface: '#261609', card: '#2e1a0b', preview: ['#130a04','#1f1207','#2e1a0b'] },
   { tKey: 'themeDaytime',   value: 'diurna',    bg: '#15100a', sidebar: '#1e170b', surface: '#25200d', card: '#2d2610', preview: ['#15100a','#1e170b','#2d2610'] },
+  // ── Claros (tonos medios ~33-40% L, saturación ~22-35% — elegantes, no chillan) ──
+  { tKey: 'themeSlateBlue',  value: 'pizarra',  cat:'light', bg: '#445c6e', sidebar: '#526a7c', surface: '#3c5264', card: '#5a6e80', preview: ['#445c6e','#526a7c','#5a6e80'] },
+  { tKey: 'themePaper',      value: 'paper',    cat:'light', bg: '#58493a', sidebar: '#665748', surface: '#503f30', card: '#726050', preview: ['#58493a','#665748','#726050'] },
+  { tKey: 'themeSteelBlue',  value: 'acero',    cat:'light', bg: '#2e4e72', sidebar: '#3a5c80', surface: '#284468', card: '#40607e', preview: ['#2e4e72','#3a5c80','#40607e'] },
+  { tKey: 'themeMoss',       value: 'musgo',    cat:'light', bg: '#2c5840', sidebar: '#386848', surface: '#265038', card: '#3e6e52', preview: ['#2c5840','#386848','#3e6e52'] },
+  { tKey: 'themeLavender',   value: 'lavanda',  cat:'light', bg: '#3e3070', sidebar: '#4c3e7e', surface: '#382866', card: '#564880', preview: ['#3e3070','#4c3e7e','#564880'] },
+  { tKey: 'themeTerracotta', value: 'terracota',cat:'light', bg: '#6e4232', sidebar: '#7c5040', surface: '#623a28', card: '#886050', preview: ['#6e4232','#7c5040','#886050'] },
+  { tKey: 'themeDustyRose',  value: 'palo',     cat:'light', bg: '#5e3042', sidebar: '#6c3e50', surface: '#56283a', card: '#7a4858', preview: ['#5e3042','#6c3e50','#7a4858'] },
+  { tKey: 'themeDeepTeal',   value: 'teal',     cat:'light', bg: '#1e5e70', sidebar: '#2a6c7e', surface: '#185466', card: '#307080', preview: ['#1e5e70','#2a6c7e','#307080'] },
+  { tKey: 'themeLeather',    value: 'cuero',    cat:'light', bg: '#624a1e', sidebar: '#705828', surface: '#583e16', card: '#806030', preview: ['#624a1e','#705828','#806030'] },
+  { tKey: 'themeDenim',      value: 'denim',    cat:'light', bg: '#2a3c5e', sidebar: '#38506e', surface: '#243452', card: '#445270', preview: ['#2a3c5e','#38506e','#445270'] },
+  { tKey: 'themeWalnut',     value: 'nogal',    cat:'light', bg: '#4c3826', sidebar: '#5a4634', surface: '#44301e', card: '#624e38', preview: ['#4c3826','#5a4634','#624e38'] },
+  { tKey: 'themeSage',       value: 'salvia',   cat:'light', bg: '#2c4a38', sidebar: '#3a5846', surface: '#264230', card: '#3e5e48', preview: ['#2c4a38','#3a5846','#3e5e48'] },
+  { tKey: 'themeSteel',      value: 'steel',    cat:'light', bg: '#2e3e52', sidebar: '#3c4c60', surface: '#283648', card: '#445462', preview: ['#2e3e52','#3c4c60','#445462'] },
+  { tKey: 'themeWine',       value: 'vino',     cat:'light', bg: '#502030', sidebar: '#5e2e3e', surface: '#481828', card: '#6c3848', preview: ['#502030','#5e2e3e','#6c3848'] },
+  { tKey: 'themeInk',        value: 'tinta',    cat:'light', bg: '#1e2e48', sidebar: '#2a3c58', surface: '#182638', card: '#344460', preview: ['#1e2e48','#2a3c58','#344460'] },
 ]
 
 const LANGS = [
@@ -100,7 +123,7 @@ const LANGS = [
 
 const DEFAULT_SETTINGS = { accent: '#3b82f6', theme: 'navy', lang: 'es' }
 
-const DEFAULT_ANDY = { url: '', endpoint: '/api/pending', user: '', pass: '', token: '' }
+const DEFAULT_ANDY = { url: 'https://own-wa.detucel.mx', endpoint: '/api/pending', user: '', pass: '', token: '' }
 const DEFAULT_EVO  = { url: 'http://localhost:8080', apiKey: '', instance: '' }
 
 export function loadEvoConfig() {
@@ -147,19 +170,15 @@ export function applySettings(settings) {
   root.style.setProperty('--sidebar-bg',  themeObj.sidebar)
   root.style.setProperty('--surface',     themeObj.surface)
   root.style.setProperty('--card-bg',     themeObj.card)
-  if (themeObj.light) {
-    root.style.setProperty('--text',        themeObj.text       || '#0f172a')
-    root.style.setProperty('--text-muted',  themeObj.textMuted  || '#64748b')
-    root.style.setProperty('--border',      themeObj.border     || 'rgba(0,0,0,0.1)')
-    root.style.setProperty('--item-hover',  themeObj.itemHover  || 'rgba(0,0,0,0.05)')
-    root.setAttribute('data-theme-mode', 'light')
-  } else {
-    root.style.setProperty('--text',        '#f1f5f9')
-    root.style.setProperty('--text-muted',  'rgba(255,255,255,0.38)')
-    root.style.setProperty('--border',      'rgba(255,255,255,0.07)')
-    root.style.setProperty('--item-hover',  'rgba(255,255,255,0.05)')
-    root.setAttribute('data-theme-mode', 'dark')
-  }
+  const isVivid = themeObj.cat === 'light'
+  root.style.setProperty('--text',       '#f1f5f9')
+  root.style.setProperty('--text-muted', isVivid ? 'rgba(255,255,255,0.7)'  : 'rgba(255,255,255,0.45)')
+  root.style.setProperty('--border',     isVivid ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.07)')
+  root.style.setProperty('--item-hover', isVivid ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.05)')
+  root.style.setProperty('--scrollbar-thumb',       isVivid ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.12)')
+  root.style.setProperty('--scrollbar-thumb-hover', isVivid ? 'rgba(255,255,255,0.48)' : 'rgba(255,255,255,0.28)')
+  root.setAttribute('data-theme-mode', 'dark')
+  root.setAttribute('data-theme-cat',  isVivid ? 'vivid' : 'dark')
 }
 
 function Section({ icon, title, children }) {
@@ -309,74 +328,17 @@ function AccountSection({ user, connStatus, connPhone, evo }) {
   )
 }
 
-function EvoAdvanced({ evo, saveEvo }) {
-  const { t } = useLang()
-  const [open, setOpen] = useState(false)
-
-  async function handleSave() {
-    try {
-      await fetch('/api/config/evolution', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(evo),
-      })
-    } catch {}
-  }
-
-  return (
-    <Box>
-      <Box onClick={() => setOpen(o => !o)} sx={{
-        display: 'flex', alignItems: 'center', gap: 0.8, cursor: 'pointer',
-        color: 'rgba(255,255,255,0.25)', py: 0.3,
-        '&:hover': { color: 'rgba(255,255,255,0.45)' },
-      }}>
-        <Typography sx={{ fontSize: '0.68rem', letterSpacing: '0.04em', color: 'inherit' }}>
-          {open ? '▾' : '▸'} {t.settings.advancedSettings}
-        </Typography>
-      </Box>
-
-      {open && (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.2, mt: 1, pl: 1, borderLeft: '2px solid rgba(255,255,255,0.07)' }}>
-          <Box>
-            <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', mb: 0.4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{t.settings.serverUrl}</Typography>
-            <TextField fullWidth size="small" placeholder="http://localhost:8080"
-              value={evo.url} onChange={e => saveEvo({ url: e.target.value })} sx={INPUT_SX} />
-          </Box>
-          <Box>
-            <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', mb: 0.4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>API Key</Typography>
-            <TextField fullWidth size="small" type="password" placeholder="••••••••"
-              value={evo.apiKey} onChange={e => saveEvo({ apiKey: e.target.value })} sx={INPUT_SX} />
-          </Box>
-          <Box>
-            <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', mb: 0.4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{t.settings.instanceName}</Typography>
-            <TextField fullWidth size="small" placeholder="detucel"
-              value={evo.instance} onChange={e => saveEvo({ instance: e.target.value })} sx={INPUT_SX} />
-          </Box>
-          <Box onClick={handleSave} sx={{
-            alignSelf: 'flex-start', px: 1.5, py: 0.4, borderRadius: 1.5, cursor: 'pointer',
-            bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)',
-            border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)',
-            '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.25)' },
-          }}>
-            <Typography sx={{ fontSize: '0.72rem', color: 'var(--accent,#60a5fa)' }}>{t.settings.save}</Typography>
-          </Box>
-        </Box>
-      )}
-    </Box>
-  )
-}
 
 export default function Settings() {
   const { user }                = useUser()
   const { t, setLang }          = useLang()
   const [settings, setSettings] = useState(DEFAULT_SETTINGS)
-  const [andy, setAndy]         = useState(DEFAULT_ANDY)
   const [evo,  setEvo]          = useState(DEFAULT_EVO)
 
   useEffect(() => {
     const s = loadSettings()
     setSettings(s)
     applySettings(s)
-    setAndy(loadAndyConfig())
     setEvo(loadEvoConfig())
   }, [])
 
@@ -387,12 +349,6 @@ export default function Settings() {
     setSettings(next)
     localStorage.setItem('app_settings', JSON.stringify(next))
     applySettings(next)
-  }
-
-  function saveAndy(patch) {
-    const next = { ...andy, ...patch }
-    setAndy(next)
-    saveAndyConfig(next)
   }
 
   function saveEvo(patch) {
@@ -691,129 +647,64 @@ export default function Settings() {
             </Box>
           </Box>
 
-          {/* Theme grid */}
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 1 }}>
-            {THEMES.map(thm => {
+          {/* Theme grid — helper */}
+          {(() => {
+            const renderTheme = (thm) => {
               const active = settings.theme === thm.value
               return (
                 <Tooltip key={thm.value} title={t.settings[thm.tKey]} placement="top" arrow>
                   <Box onClick={() => save({ theme: thm.value })} sx={{
                     borderRadius: 1.5, overflow: 'hidden', cursor: 'pointer',
-                    border: active ? '1.5px solid var(--accent,#3b82f6)' : '1.5px solid rgba(255,255,255,0.07)',
+                    border: active ? '1.5px solid var(--accent,#3b82f6)' : '1.5px solid rgba(255,255,255,0.1)',
                     boxShadow: active ? '0 0 14px var(--accent-glow,rgba(59,130,246,0.35))' : 'none',
                     transition: 'all 0.15s',
-                    '&:hover': { borderColor: 'rgba(255,255,255,0.28)', transform: 'translateY(-2px)', boxShadow: '0 4px 12px rgba(0,0,0,0.5)' },
+                    '&:hover': { borderColor: 'rgba(255,255,255,0.32)', transform: 'translateY(-2px)', boxShadow: '0 4px 12px rgba(0,0,0,0.4)' },
                   }}>
-                    {/* 3-stripe preview */}
                     <Box sx={{ display: 'flex', height: 28, position: 'relative' }}>
                       {thm.preview.map((c, i) => (
                         <Box key={i} sx={{ flex: 1, bgcolor: c }} />
                       ))}
                       {thm.value === 'detucel' && !active && (
-                        <Box sx={{
-                          position: 'absolute', top: 2, right: 2,
-                          bgcolor: '#1557f5', borderRadius: 0.5,
-                          px: 0.4, py: 0.1,
-                        }}>
-                          <Typography sx={{ fontSize: '0.42rem', color: 'white', fontWeight: 800, lineHeight: 1.4, letterSpacing: '0.02em' }}>DTC</Typography>
+                        <Box sx={{ position: 'absolute', top: 2, right: 2, bgcolor: '#1557f5', borderRadius: 0.5, px: 0.4, py: 0.1 }}>
+                          <Typography sx={{ fontSize: '0.42rem', color: 'white', fontWeight: 800, lineHeight: 1.4 }}>DTC</Typography>
                         </Box>
                       )}
                       {active && (
-                        <Box sx={{
-                          position: 'absolute', inset: 0,
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          bgcolor: thm.light ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.3)',
-                        }}>
+                        <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'rgba(0,0,0,0.28)' }}>
                           <CheckIcon sx={{ fontSize: 13, color: 'var(--accent,#3b82f6)', filter: 'drop-shadow(0 0 4px var(--accent,#3b82f6))' }} />
                         </Box>
                       )}
                     </Box>
-                    {/* Label */}
-                    <Box sx={{
-                      px: 0.75, py: 0.5,
-                      bgcolor: thm.preview[1],
-                      borderTop: active ? '1px solid var(--accent,#3b82f6)44' : `1px solid ${thm.light ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.04)'}`,
-                    }}>
-                      <Typography sx={{
-                        fontSize: '0.6rem',
-                        fontWeight: active ? 700 : 400,
-                        color: active ? 'var(--accent,#3b82f6)' : (thm.light ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.4)'),
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}>
+                    <Box sx={{ px: 0.75, py: 0.5, bgcolor: thm.preview[1], borderTop: active ? '1px solid var(--accent,#3b82f6)44' : '1px solid rgba(255,255,255,0.06)' }}>
+                      <Typography sx={{ fontSize: '0.6rem', fontWeight: active ? 700 : 400, color: active ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {t.settings[thm.tKey]}
                       </Typography>
                     </Box>
                   </Box>
                 </Tooltip>
               )
-            })}
-          </Box>
+            }
+            const darkThemes  = THEMES.filter(t => t.cat !== 'light')
+            const lightThemes = THEMES.filter(t => t.cat === 'light')
+            return (
+              <>
+                <Typography sx={{ fontSize: '0.63rem', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, mb: 0.75 }}>
+                  Oscuros
+                </Typography>
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 1, mb: 2 }}>
+                  {darkThemes.map(renderTheme)}
+                </Box>
+                <Typography sx={{ fontSize: '0.63rem', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, mb: 0.75 }}>
+                  Claros
+                </Typography>
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 1 }}>
+                  {lightThemes.map(renderTheme)}
+                </Box>
+              </>
+            )
+          })()}
         </Section>
 
-        {/* ── Integración Bot (Andy) ── */}
-        <Section icon={<SmartToyIcon />} title={t.settings.andy}>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-            <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.35)', mb: 0.5 }}>
-              {t.settings.andyDesc}
-            </Typography>
-
-            {/* URL base */}
-            <Box>
-              <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{t.settings.serverUrl}</Typography>
-              <TextField fullWidth size="small" placeholder="https://own-wa.detucel.mx"
-                value={andy.url} onChange={e => saveAndy({ url: e.target.value })}
-                sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'rgba(255,255,255,0.04)', fontSize: '0.82rem', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' }, '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' } }, '& input': { color: 'white' } }} />
-            </Box>
-
-            {/* Endpoint */}
-            <Box>
-              <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{t.settings.andyEndpoint}</Typography>
-              <TextField fullWidth size="small" placeholder="/api/pending"
-                value={andy.endpoint} onChange={e => saveAndy({ endpoint: e.target.value })}
-                sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'rgba(255,255,255,0.04)', fontSize: '0.82rem', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' }, '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' } }, '& input': { color: 'white' } }} />
-            </Box>
-
-            {/* Usuario + Contraseña */}
-            <Box sx={{ display: 'flex', gap: 1 }}>
-              <Box sx={{ flex: 1 }}>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{t.settings.andyUser}</Typography>
-                <TextField fullWidth size="small" placeholder={t.settings.andyUserPh}
-                  value={andy.user} onChange={e => saveAndy({ user: e.target.value })}
-                  sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'rgba(255,255,255,0.04)', fontSize: '0.82rem', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' }, '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' } }, '& input': { color: 'white' } }} />
-              </Box>
-              <Box sx={{ flex: 1 }}>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{t.settings.andyPass}</Typography>
-                <TextField fullWidth size="small" type="password" placeholder="••••••••"
-                  value={andy.pass} onChange={e => saveAndy({ pass: e.target.value })}
-                  sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'rgba(255,255,255,0.04)', fontSize: '0.82rem', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' }, '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' } }, '& input': { color: 'white' } }} />
-              </Box>
-            </Box>
-
-            {/* Token (read-only) */}
-            {andy.token && (
-              <Box sx={{ p: 1.2, borderRadius: 1.5, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.06)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.18)' }}>
-                <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', mb: 0.3, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{t.settings.andyToken}</Typography>
-                <Typography sx={{ fontSize: '0.7rem', color: 'var(--accent,#60a5fa)', fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                  {andy.token.slice(0, 40)}…
-                </Typography>
-                <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.2)', mt: 0.5, cursor: 'pointer', '&:hover': { color: '#f87171' } }}
-                  onClick={() => saveAndy({ token: '' })}>
-                  {t.settings.andyClear}
-                </Typography>
-              </Box>
-            )}
-
-            {/* Status indicator */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: andy.url && andy.user && andy.pass ? '#4ade80' : 'rgba(255,255,255,0.2)' }} />
-              <Typography sx={{ fontSize: '0.7rem', color: andy.url && andy.user && andy.pass ? '#4ade80' : 'rgba(255,255,255,0.3)' }}>
-                {andy.url && andy.user && andy.pass ? 'Configurado — listo para usar desde Análisis' : 'Pendiente de configurar'}
-              </Typography>
-            </Box>
-          </Box>
-        </Section>
 
         {/* ── Modal QR ── */}
         <Dialog open={qrOpen} onClose={handleCloseQr} maxWidth="xs" fullWidth

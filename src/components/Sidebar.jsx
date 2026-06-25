@@ -32,7 +32,7 @@ const GROUP_KEYS = [
   { labelKey: 'groupProspeccion',  keys: ['single', 'batch', 'csv', 'database', 'search'] },
   { labelKey: 'groupComunicacion', keys: ['convs', 'schedule'] },
   { labelKey: 'groupAnalisis',     keys: ['analytics'] },
-  { labelKey: 'groupSistema',      keys: ['admin'] },
+  { labelKey: 'groupSistema',      keys: ['admin', 'instances'] },
 ]
 
 function NavItem({ item, index, isActive, open, onClick }) {

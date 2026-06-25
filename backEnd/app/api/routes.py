@@ -1334,8 +1334,11 @@ def api_requeue_unanalyzed(background_tasks: BackgroundTasks, limit: int = 20):
     """Find inbound messages with no valid analysis and re-run the classifier.
     Covers: never processed, stuck pending, classifier exception, Groq error payload.
     Processes at most `limit` per call; use `remaining` to know if another call is needed."""
-    from app.classifier import classify_and_save
+    from app.classifier import classify_and_save, all_quota_exhausted
     from datetime import datetime
+    if all_quota_exhausted():
+        return {"ok": True, "queued": 0, "remaining": 0, "paused": True,
+                "reason": "Todos los proveedores LLM sin cuota — reintenta en unos minutos."}
     db = MongoDBManager()
     requeue_filter = _build_requeue_filter()
     # Claim messages atomically one-by-one to prevent duplicate processing
@@ -1369,6 +1372,15 @@ def api_all_pending():
     for d in docs:
         d["_id"] = str(d["_id"])
     return {"count": len(docs), "docs": docs}
+
+
+@router.post("/admin/reset-quota-circuit")
+def api_reset_quota_circuit():
+    """Reset the LLM circuit breaker so classification resumes immediately.
+    Call this after adding DeepSeek credits or when Groq quota resets."""
+    from app.classifier import reset_quota_circuit
+    reset_quota_circuit()
+    return {"ok": True, "message": "Circuit breaker reiniciado — clasificación reanudada."}
 
 
 @router.post("/admin/reset-quota-exceeded")
@@ -1406,3 +1418,146 @@ def api_delete_all_pending():
         {"$set": {"analysis_status": "done"}}
     ).modified_count
     return {"ok": True, "deleted_test": deleted, "reset_pending": reset}
+
+
+# ── Instance Management ───────────────────────────────────────────────────────
+
+@router.get("/admin/instances")
+def api_list_instances(x_user_token: Optional[str] = Header(None)):
+    user = _require_user(x_user_token)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Solo admins")
+    import requests as _req
+    from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
+    from datetime import datetime
+    db = MongoDBManager()
+    instances = list(db.db.instances.find({}, {"_id": 0}))
+    for inst in instances:
+        try:
+            r = _req.get(
+                f"{EVOLUTION_API_URL}/instance/connectionState/{inst['name']}",
+                headers={"apikey": EVOLUTION_API_KEY}, timeout=5,
+            )
+            state = r.json().get("instance", {}).get("state", "unknown") if r.ok else "unknown"
+        except Exception:
+            state = "unknown"
+        inst["live_status"] = state
+    return instances
+
+
+@router.post("/admin/instances")
+def api_create_instance(body: dict, x_user_token: Optional[str] = Header(None)):
+    user = _require_user(x_user_token)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Solo admins")
+    name   = (body.get("name") or "").strip()
+    number = (body.get("number") or "").strip()
+    if not name:
+        raise HTTPException(400, "name requerido")
+    import requests as _req
+    from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
+    from datetime import datetime
+    r = _req.post(
+        f"{EVOLUTION_API_URL}/instance/create",
+        headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
+        json={"instanceName": name, "qrcode": True},
+        timeout=15,
+    )
+    if r.status_code not in (200, 201):
+        raise HTTPException(500, f"Error Evolution API: {r.text[:200]}")
+    db = MongoDBManager()
+    doc = {
+        "name": name,
+        "number": number,
+        "assigned_to": None,
+        "assigned_name": None,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    db.db.instances.update_one({"name": name}, {"$set": doc}, upsert=True)
+    return {"ok": True, "instance": doc}
+
+
+@router.delete("/admin/instances/{name}")
+def api_delete_instance(name: str, x_user_token: Optional[str] = Header(None)):
+    user = _require_user(x_user_token)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Solo admins")
+    import requests as _req
+    from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
+    try:
+        _req.delete(
+            f"{EVOLUTION_API_URL}/instance/delete/{name}",
+            headers={"apikey": EVOLUTION_API_KEY}, timeout=10,
+        )
+    except Exception:
+        pass
+    db = MongoDBManager()
+    db.db.instances.delete_one({"name": name})
+    return {"ok": True}
+
+
+@router.post("/admin/instances/{name}/assign")
+def api_assign_instance(name: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    user = _require_user(x_user_token)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Solo admins")
+    db = MongoDBManager()
+    db.db.instances.update_one(
+        {"name": name},
+        {"$set": {"assigned_to": body.get("user_id"), "assigned_name": body.get("user_name", "")}},
+    )
+    return {"ok": True}
+
+
+@router.post("/admin/instances/{name}/unassign")
+def api_unassign_instance(name: str, x_user_token: Optional[str] = Header(None)):
+    user = _require_user(x_user_token)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Solo admins")
+    db = MongoDBManager()
+    db.db.instances.update_one({"name": name}, {"$set": {"assigned_to": None, "assigned_name": None}})
+    return {"ok": True}
+
+
+@router.post("/admin/instances/sync")
+def api_sync_instances(x_user_token: Optional[str] = Header(None)):
+    """Import all existing Evolution instances into MongoDB (upsert — preserves assigned_to)."""
+    user = _require_user(x_user_token)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Solo admins")
+    import requests as _req
+    from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
+    from datetime import datetime
+    r = _req.get(
+        f"{EVOLUTION_API_URL}/instance/fetchInstances",
+        headers={"apikey": EVOLUTION_API_KEY}, timeout=10,
+    )
+    if not r.ok:
+        raise HTTPException(500, f"Evolution API error: {r.text[:200]}")
+    raw = r.json()
+    # Evolution returns either a list or {"instances": [...]}
+    evo_list = raw if isinstance(raw, list) else raw.get("instances", [])
+    db = MongoDBManager()
+    imported = 0
+    for item in evo_list:
+        inst_obj = item.get("instance", item)
+        name = inst_obj.get("instanceName") or item.get("instanceName") or item.get("name")
+        if not name:
+            continue
+        # Extract phone number from owner JID (e.g. "5214428000000@s.whatsapp.net")
+        owner = item.get("ownerJid") or item.get("owner") or inst_obj.get("ownerJid") or inst_obj.get("owner") or ""
+        number = owner.split("@")[0] if "@" in owner else owner
+        db.db.instances.update_one(
+            {"name": name},
+            {
+                "$set": {"name": name, **({"number": number} if number else {})},
+                "$setOnInsert": {
+                    "assigned_to": None,
+                    "assigned_name": None,
+                    "created_at": datetime.utcnow().isoformat(),
+                },
+            },
+            upsert=True,
+        )
+        imported += 1
+    return {"ok": True, "imported": imported}

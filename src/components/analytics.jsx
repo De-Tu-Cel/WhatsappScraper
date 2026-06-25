@@ -36,11 +36,12 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
-import { loadAndyConfig, saveAndyConfig } from './Settings'
+import AndyBotBuilder from './AndyBotBuilder'
 
 const CATEGORY_CONFIG = {
   humano:     { tKey: 'human',     color: '#4ade80', bg: 'rgba(34,197,94,0.12)',   icon: '👤' },
   automatico: { tKey: 'automatic', color: '#facc15', bg: 'rgba(250,204,21,0.12)',  icon: '⚡' },
+  hibrido:    { tKey: 'hybrid',    color: '#38bdf8', bg: 'rgba(56,189,248,0.12)',  icon: '🔀' },
   bot:        { tKey: 'bot',       color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', icon: '🤖' },
   bot_ia:     { tKey: 'botAi',     color: '#c084fc', bg: 'rgba(192,132,252,0.15)', icon: '🧠' },
 }
@@ -205,7 +206,8 @@ export default function Analytics() {
   const [totalPages, setTotalPages] = useState(1)
   const [totalItems, setTotalItems] = useState(0)
   const PAGE_SIZE = 20
-  const [andyStatus, setAndyStatus] = useState({}) // { [company_id]: 'loading'|'success'|'error' }
+  const [botBuilderOpen,  setBotBuilderOpen]  = useState(false)
+  const [botBuilderRow,   setBotBuilderRow]   = useState(null)
 
   const handleSort = (field) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -375,95 +377,16 @@ export default function Analytics() {
   }, [])
 
   // filterNum: si se pasa, filtra thread y contacto a ese número específico
-  const handleSendToAndy = useCallback(async (row, filterNum = null) => {
-    const cfg = loadAndyConfig()
-    if (!cfg.url || !cfg.user || !cfg.pass) {
-      notify('Configura URL, usuario y contraseña de Andy en ⚙ Configuración → Integración Bot', 'warning')
-      return
-    }
-    const key = filterNum ? `${row.company_id}_${filterNum}` : row.company_id
-    setAndyStatus(prev => ({ ...prev, [key]: 'loading' }))
-    try {
-      // 1. Fetch company + thread in parallel
-      const [companyRes, threadRes] = await Promise.all([
-        fetch(`/api/companies/${row.company_id}`),
-        fetch(`/api/conversations/${row.company_id}`),
-      ])
-      const company  = companyRes.ok  ? await companyRes.json()  : {}
-      const threadRaw = threadRes.ok  ? await threadRes.json()   : []
-      const thread   = Array.isArray(threadRaw) ? threadRaw : []
-
-      // 2. Check/refresh token
-      let token = cfg.token || ''
-      try {
-        const credRes = await fetch(`${cfg.url}/api/credential`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body: JSON.stringify({ user: cfg.user, pass: cfg.pass }),
-        })
-        if (credRes.ok) {
-          const cred = await credRes.json()
-          if (cred.lifetime === 'false' && cred.token) {
-            token = cred.token
-            saveAndyConfig({ ...cfg, token })
-          }
-        }
-      } catch { /* credential endpoint unreachable — proceed with stored token */ }
-
-      // 3. Build payload
-      const contacts = company.contacts || []
-      const norm     = n => (n || '').replace(/\D/g,'').slice(-10)
-      const allWa    = contacts.filter(c => c.type === 'whatsapp').map(c => c.value)
-      const targetNums = filterNum ? allWa.filter(n => norm(n) === norm(filterNum)) : allWa
-
-      // Build per-number whatsapp array with canal + messages
-      const whatsapp = targetNums.map((numero, i) => {
-        const numNorm   = norm(numero)
-        const numThread = thread.filter(m => norm(m.to_number || m.from_number || m.number) === numNorm)
-        const numData   = (row.numbers || []).find(n => norm(n.number) === numNorm) || {}
-        const canal     = numData.category ? {
-          categoria:            numData.category,
-          tiempo_respuesta_min: numData.reaction_time_min ?? null,
-          notas:                numData.notes || null,
-        } : null
-        return {
-          numero,
-          es_principal: i === 0,
-          canal,
-          mensajes: numThread.map(m => ({
-            de:     m.direction === 'outbound' ? 'nosotros' : 'empresa',
-            texto:  m.body || m.message_body || '',
-            hora:   m.created_at || '',
-            estado: m.status || '',
-          })),
-        }
-      })
-
-      const payload = {
-        pending: 'pending',
-        company: {
-          company_name: row.company_name || company.name || '',
-          industry:     row.industry     || company.industry || '',
-          whatsapp,
-        },
-      }
-
-      // 4. POST to Andy's endpoint
-      const endpoint = (cfg.endpoint || '/api/pending').startsWith('/') ? cfg.endpoint || '/api/pending' : `/${cfg.endpoint}`
-      const sendRes = await fetch(`${cfg.url}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(payload),
-      })
-      if (!sendRes.ok) throw new Error(`HTTP ${sendRes.status}`)
-
-      setAndyStatus(prev => ({ ...prev, [key]: 'success' }))
-      notify(`Datos${filterNum ? ` del número ${filterNum.slice(-4)}` : ''} enviados a Andy.`, 'success')
-    } catch (e) {
-      setAndyStatus(prev => ({ ...prev, [key]: 'error' }))
-      notify(`Error al enviar a Andy: ${e?.message || 'verifica la configuración'}`)
-    }
-  }, [])
+  function openBotBuilder(row) {
+    setBotBuilderRow({
+      company_id:    row.company_id    || '',
+      company_name:  row.company_name  || '',
+      industry:      row.industry      || '',
+      website:       row.domain        || '',
+      emails:        row.emails        || '',
+    })
+    setBotBuilderOpen(true)
+  }
 
   const filteredData = data.filter(row => {
     if (filterCat !== 'all') {
@@ -493,6 +416,7 @@ export default function Analytics() {
   const pct = cat  => total ? Math.round((data.filter(d => d.category === cat).length / total) * 100) : 0
   const humanPct   = pct('humano')
   const autoPct    = pct('automatico')
+  const hibridoPct = pct('hibrido')
   const botPct     = pct('bot')
   const botIaPct   = pct('bot_ia')
   const avgQuality = total
@@ -526,6 +450,12 @@ export default function Analytics() {
           </Box>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          <Tooltip title="Crear bot con Andy">
+            <IconButton size="small" onClick={() => setBotBuilderOpen(true)}
+              sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'var(--accent,#60a5fa)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' } }}>
+              <SmartToyIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
           {data.some(r => r.analyzing) && (
             <Tooltip title={t.analytics.cancelPending || 'Detener análisis pendientes'}>
               <IconButton size="small" onClick={async () => {
@@ -580,9 +510,10 @@ export default function Analytics() {
         </Box>
 
         {[
-          { icon: '⚡', color: '#facc15', label: t.analytics.automatic, value: autoPct },
-          { icon: '🤖', color: '#a78bfa', label: t.analytics.bot,       value: botPct  },
-          { icon: '🧠', color: '#c084fc', label: t.analytics.botAi,     value: botIaPct},
+          { icon: '⚡', color: '#facc15', label: t.analytics.automatic, value: autoPct    },
+          { icon: '🔀', color: '#38bdf8', label: t.analytics.hybrid,    value: hibridoPct },
+          { icon: '🤖', color: '#a78bfa', label: t.analytics.bot,       value: botPct     },
+          { icon: '🧠', color: '#c084fc', label: t.analytics.botAi,     value: botIaPct   },
         ].map(({ icon, color, label, value }) => (
           <Box key={label} sx={{
             display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
@@ -621,6 +552,7 @@ export default function Analytics() {
           { value: 'all',           label: t.analytics.all,                          color: 'rgba(255,255,255,0.6)',  bg: 'rgba(255,255,255,0.06)'  },
           { value: 'humano',        label: `👤 ${t.analytics.human}`,                color: '#4ade80',                bg: 'rgba(74,222,128,0.1)'    },
           { value: 'automatico',    label: `⚡ ${t.analytics.automatic}`,            color: '#facc15',                bg: 'rgba(250,204,21,0.1)'    },
+          { value: 'hibrido',       label: `🔀 ${t.analytics.hybrid}`,              color: '#38bdf8',                bg: 'rgba(56,189,248,0.1)'    },
           { value: 'bot',           label: `🤖 ${t.analytics.bot}`,                 color: '#a78bfa',                bg: 'rgba(167,139,250,0.1)'   },
           { value: 'bot_ia',        label: `🧠 ${t.analytics.botAi}`,               color: '#c084fc',                bg: 'rgba(192,132,252,0.1)'   },
           { value: 'sin_clasificar',label: `⏳ ${t.analytics.noClass}`,             color: '#94a3b8',                bg: 'rgba(148,163,184,0.08)'  },
@@ -872,24 +804,14 @@ export default function Analytics() {
                           : <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.75rem' }}>—</Typography>)}
                       </TableCell>
 
-                      {/* Andy — si multi: envía TODOS los números */}
+                      {/* Andy */}
                       <TableCell sx={CELL_SX}>
-                        {(() => {
-                          const st = andyStatus[row.company_id]
-                          const tip = hasMultiple
-                            ? (st === 'success' ? t.analytics.sentAllToAndy : st === 'loading' ? t.analytics.sendingToAndy : t.analytics.sendAllToAndy)
-                            : (st === 'success' ? t.analytics.sentToAndy : st === 'error' ? t.analytics.andyError : st === 'loading' ? t.analytics.sendingToAndy : t.analytics.sendToAndy)
-                          return (
-                            <Tooltip title={tip}>
-                              <span>
-                                <IconButton size="small" disabled={st === 'loading'} onClick={() => handleSendToAndy(row)}
-                                  sx={{ color: st === 'success' ? '#4ade80' : st === 'error' ? '#f87171' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.15)' } }}>
-                                  {st === 'loading' ? <CircularProgress size={14} sx={{ color: 'var(--accent,#6366f1)' }} /> : st === 'success' ? <CheckCircleIcon sx={{ fontSize: 16 }} /> : st === 'error' ? <ErrorOutlineIcon sx={{ fontSize: 16 }} /> : <SendIcon sx={{ fontSize: 16 }} />}
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                          )
-                        })()}
+                        <Tooltip title={hasMultiple ? t.analytics.sendAllToAndy : t.analytics.sendToAndy}>
+                          <IconButton size="small" onClick={() => openBotBuilder(row)}
+                            sx={{ color: 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' } }}>
+                            <SendIcon sx={{ fontSize: 16 }} />
+                          </IconButton>
+                        </Tooltip>
                       </TableCell>
 
                       {/* Reporte */}
@@ -920,7 +842,6 @@ export default function Analytics() {
                       const shortNum = (n.number || '').replace(/\D/g,'').slice(-10)
                         .replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')
                       const numKey  = `${row.company_id}_${n.number}`
-                      const andySt  = andyStatus[numKey]
                       const genKey  = numKey
                       const isGenNum = generating === genKey
                       const NSUB = { ...CELL_SX, bgcolor: 'rgba(0,0,0,0.15)', borderBottom: '1px solid rgba(255,255,255,0.04)' }
@@ -1002,11 +923,11 @@ export default function Analytics() {
                           </TableCell>
                           {/* Andy por número — deshabilitado si no respondió */}
                           <TableCell sx={NSUB}>
-                            <Tooltip title={!replied ? t.analytics.noReply : andySt === 'success' ? t.analytics.sentToAndy : andySt === 'error' ? t.analytics.andyError : andySt === 'loading' ? t.analytics.sendingToAndy : t.analytics.sendToAndy}>
+                            <Tooltip title={!replied ? t.analytics.noReply : t.analytics.sendToAndy}>
                               <span>
-                                <IconButton size="small" disabled={!replied || andySt === 'loading'} onClick={() => handleSendToAndy(row, n.number)}
-                                  sx={{ color: andySt === 'success' ? '#4ade80' : andySt === 'error' ? '#f87171' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>
-                                  {andySt === 'loading' ? <CircularProgress size={14} sx={{ color: 'var(--accent,#6366f1)' }} /> : andySt === 'success' ? <CheckCircleIcon sx={{ fontSize: 16 }} /> : andySt === 'error' ? <ErrorOutlineIcon sx={{ fontSize: 16 }} /> : <SendIcon sx={{ fontSize: 16 }} />}
+                                <IconButton size="small" disabled={!replied} onClick={() => openBotBuilder(row)}
+                                  sx={{ color: 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>
+                                  <SendIcon sx={{ fontSize: 16 }} />
                                 </IconButton>
                               </span>
                             </Tooltip>
@@ -1082,6 +1003,8 @@ export default function Analytics() {
           </Box>
         </Box>
       )}
+
+      <AndyBotBuilder open={botBuilderOpen} initialData={botBuilderRow} onClose={() => { setBotBuilderOpen(false); setBotBuilderRow(null) }} />
 
       <Snackbar
         open={snack.open}

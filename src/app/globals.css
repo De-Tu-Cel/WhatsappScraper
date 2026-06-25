@@ -12,3 +12,117 @@
   background-color: rgba(21, 87, 245, 0.3) !important;
   background: rgba(21, 87, 245, 0.3) !important;
 }
+
+/* ─── Vivid medium-tone themes: boost element contrast ─────────────────── */
+
+/* Raise opacity of all borders drawn with very-low-alpha white */
+[data-theme-cat="vivid"] .MuiOutlinedInput-notchedOutline {
+  border-color: rgba(255,255,255,0.28) !important;
+}
+[data-theme-cat="vivid"] .MuiOutlinedInput-root:hover .MuiOutlinedInput-notchedOutline {
+  border-color: rgba(255,255,255,0.55) !important;
+}
+[data-theme-cat="vivid"] .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline {
+  border-color: var(--accent, #3b82f6) !important;
+}
+
+/* Input text & label */
+[data-theme-cat="vivid"] .MuiInputBase-input,
+[data-theme-cat="vivid"] .MuiInputBase-input::placeholder,
+[data-theme-cat="vivid"] .MuiInputLabel-root {
+  color: #ffffff !important;
+  opacity: 1;
+}
+[data-theme-cat="vivid"] .MuiInputBase-input::placeholder {
+  opacity: 0.55;
+}
+
+/* Select */
+[data-theme-cat="vivid"] .MuiSelect-icon {
+  color: rgba(255,255,255,0.7) !important;
+}
+
+/* Dividers */
+[data-theme-cat="vivid"] .MuiDivider-root {
+  border-color: rgba(255,255,255,0.22) !important;
+}
+
+/* Table */
+[data-theme-cat="vivid"] .MuiTableCell-root {
+  border-bottom-color: rgba(255,255,255,0.2) !important;
+  color: #ffffff !important;
+}
+[data-theme-cat="vivid"] .MuiTableCell-head {
+  color: rgba(255,255,255,0.75) !important;
+}
+[data-theme-cat="vivid"] .MuiTableRow-root:hover {
+  background-color: rgba(255,255,255,0.1) !important;
+}
+
+/* Cards / Paper */
+[data-theme-cat="vivid"] .MuiPaper-root {
+  border-color: rgba(255,255,255,0.2) !important;
+}
+
+/* Chips */
+[data-theme-cat="vivid"] .MuiChip-outlined {
+  border-color: rgba(255,255,255,0.35) !important;
+  color: #ffffff !important;
+}
+[data-theme-cat="vivid"] .MuiChip-filled {
+  color: #ffffff !important;
+}
+
+/* Menu / MenuItem */
+[data-theme-cat="vivid"] .MuiMenuItem-root:hover {
+  background-color: rgba(255,255,255,0.14) !important;
+}
+[data-theme-cat="vivid"] .MuiListItemButton-root:hover {
+  background-color: rgba(255,255,255,0.14) !important;
+}
+
+/* Typography helpers */
+[data-theme-cat="vivid"] .MuiTypography-root {
+  color: inherit;
+}
+
+/* Linear progress track */
+[data-theme-cat="vivid"] .MuiLinearProgress-root {
+  background-color: rgba(255,255,255,0.2) !important;
+}
+
+/* Slider rail */
+[data-theme-cat="vivid"] .MuiSlider-rail {
+  background-color: rgba(255,255,255,0.3) !important;
+}
+
+/* Switch track */
+[data-theme-cat="vivid"] .MuiSwitch-track {
+  background-color: rgba(255,255,255,0.35) !important;
+}
+
+/* Dialog */
+[data-theme-cat="vivid"] .MuiDialog-paper {
+  border-color: rgba(255,255,255,0.25) !important;
+}
+
+/* Accordion */
+[data-theme-cat="vivid"] .MuiAccordion-root {
+  border-color: rgba(255,255,255,0.22) !important;
+}
+
+/* Tabs */
+[data-theme-cat="vivid"] .MuiTab-root {
+  color: rgba(255,255,255,0.65) !important;
+}
+[data-theme-cat="vivid"] .MuiTab-root.Mui-selected {
+  color: #ffffff !important;
+}
+
+/* Scrollbars */
+[data-theme-cat="vivid"] *::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.3) !important;
+}
+[data-theme-cat="vivid"] *::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.5) !important;
+}

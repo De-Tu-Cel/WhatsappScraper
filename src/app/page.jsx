@@ -26,19 +26,22 @@ import Analytics from '../components/analytics'
 import ScheduledSends from '../components/scheduledSends'
 import AdminPanel from '../components/AdminPanel'
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
+import InstancesPanel from '../components/InstancesPanel'
+import RouterIcon from '@mui/icons-material/Router'
 import Settings, { loadSettings, applySettings } from '../components/Settings'
 import { useLang } from '../context/LangContext'
 
 const NAV_KEYS = [
-  { key: 'single',   icon: <LinkIcon />,              component: <SingleUrlProcessor /> },
-  { key: 'batch',    icon: <ListAltIcon />,            component: <BatchProcessor /> },
-  { key: 'csv',      icon: <UploadFileIcon />,         component: <CsvImporter /> },
-  { key: 'database', icon: <StorageIcon />,            component: <DatabaseViewer /> },
-  { key: 'search',   icon: <SearchIcon />,             component: <SearchProspects /> },
-  { key: 'convs',    icon: <ForumIcon />,              component: <Conversations /> },
-  { key: 'analytics',icon: <AnalyticsIcon />,          component: <Analytics /> },
-  { key: 'schedule', icon: <ScheduleSendIcon />,       component: <ScheduledSends /> },
-  { key: 'admin',    icon: <AdminPanelSettingsIcon />, component: <AdminPanel />, adminOnly: true },
+  { key: 'single',    icon: <LinkIcon />,              component: <SingleUrlProcessor /> },
+  { key: 'batch',     icon: <ListAltIcon />,            component: <BatchProcessor /> },
+  { key: 'csv',       icon: <UploadFileIcon />,         component: <CsvImporter /> },
+  { key: 'database',  icon: <StorageIcon />,            component: <DatabaseViewer /> },
+  { key: 'search',    icon: <SearchIcon />,             component: <SearchProspects /> },
+  { key: 'convs',     icon: <ForumIcon />,              component: <Conversations /> },
+  { key: 'analytics', icon: <AnalyticsIcon />,          component: <Analytics /> },
+  { key: 'schedule',  icon: <ScheduleSendIcon />,       component: <ScheduledSends /> },
+  { key: 'admin',     icon: <AdminPanelSettingsIcon />, component: <AdminPanel />,     adminOnly: true },
+  { key: 'instances', icon: <RouterIcon />,             component: <InstancesPanel />, adminOnly: true },
 ]
 
 export default function DashboardPage() {

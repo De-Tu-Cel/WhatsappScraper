@@ -43,6 +43,7 @@ C = {
 CATEGORY_INFO = {
     "humano":        ("Humano",       C["humano"]),
     "automatico":    ("Automatico",   C["automatico"]),
+    "hibrido":       ("Auto+Humano",  C["primary"]),
     "bot":           ("Bot",          C["bot"]),
     "bot_ia":        ("Bot IA",       C["bot_ia"]),
     "sin_respuesta": ("Sin respuesta",C["muted"]),
@@ -133,15 +134,39 @@ def _speed_label(reaction_min):
     return "Lento", C["red"]
 
 
-def _composite_score(category: str, quality: float, reaction_min, business_hours: bool) -> int:
+_SVC_DIMS = [
+    ("svc_prof",   "Profesionalismo"),
+    ("svc_comp",   "Completitud"),
+    ("svc_empa",   "Empatia"),
+    ("svc_solu",   "Solucion ofrecida"),
+    ("svc_next",   "Siguiente paso"),
+    ("svc_proact", "Proactividad"),
+]
+
+_SVC_COLORS = {
+    1: HexColor("#dc2626"),
+    2: HexColor("#f59e0b"),
+    3: HexColor("#2563eb"),
+    4: HexColor("#0891b2"),
+    5: HexColor("#16a34a"),
+}
+
+
+def _svc_score_color(v):
+    v = max(1, min(5, int(round(float(v or 1)))))
+    return _SVC_COLORS.get(v, C["muted"])
+
+
+def _composite_score(analytics: dict, category: str, quality: float, reaction_min, business_hours: bool) -> int:
     """
-    Weighted score 0-100:
-      Tipo de atencion  30%
-      Calidad comercial 50%
-      Velocidad         20%
+    Weighted score 0-100.
+    When service quality dimensions present (svc_*):
+      Calidad de servicio 45%  Señal comercial 20%  Tipo de atención 15%  Velocidad 20%
+    Legacy (no svc_* fields):
+      Tipo de atención 30%  Calidad comercial 50%  Velocidad 20%
     """
     cat_scores = {
-        "humano": 100, "automatico": 35, "bot_ia": 25,
+        "humano": 100, "hibrido": 55, "automatico": 35, "bot_ia": 25,
         "bot": 15, "sin_respuesta": 0,
     }
     cat_s  = cat_scores.get(category, 50)
@@ -157,7 +182,14 @@ def _composite_score(category: str, quality: float, reaction_min, business_hours
         elif m < 480:spd_s = 30
         else:        spd_s = 10
 
-    score = cat_s * 0.30 + qual_s * 0.50 + spd_s * 0.20
+    svc_vals = [float(analytics.get(k)) for k, _ in _SVC_DIMS if analytics.get(k) is not None]
+    if svc_vals:
+        svc_avg = sum(svc_vals) / len(svc_vals)
+        svc_s = (svc_avg - 1) / 4 * 100
+        score = svc_s * 0.45 + qual_s * 0.20 + cat_s * 0.15 + spd_s * 0.20
+    else:
+        score = cat_s * 0.30 + qual_s * 0.50 + spd_s * 0.20
+
     if business_hours:
         score = min(100, score + 3)
     return round(score)
@@ -297,6 +329,69 @@ class ScoreBar(Flowable):
         self.canv.drawRightString(self._w, 4, _safe(self._label))
 
 
+class ServiceQualityTable(Flowable):
+    """Compact 2-column table showing the 6 service quality dimensions."""
+    def __init__(self, analytics: dict, width, row_h=14):
+        super().__init__()
+        self._dims = [(label, analytics.get(key)) for key, label in _SVC_DIMS]
+        self._w = width
+        self._row_h = row_h
+
+    def wrap(self, *_):
+        rows = (len(self._dims) + 1) // 2
+        return (self._w, rows * self._row_h + 2)
+
+    def draw(self):
+        rh = self._row_h
+        cw = self._w / 2
+        rows_total = (len(self._dims) + 1) // 2
+        for idx, (label, val) in enumerate(self._dims):
+            col = idx % 2
+            row = idx // 2
+            x = col * cw
+            y = (rows_total - 1 - row) * rh
+
+            # Row background
+            self.canv.setFillColor(C["paper"])
+            self.canv.rect(x, y, cw - 3, rh, fill=1, stroke=0)
+
+            if val is None:
+                # No data
+                self.canv.setFillColor(C["muted"])
+                self.canv.setFont("Helvetica", 6.5)
+                self.canv.drawString(x + 6, y + rh * 0.28, _safe(label))
+                self.canv.setFillColor(C["border"])
+                self.canv.setFont("Helvetica", 6.5)
+                self.canv.drawString(x + cw * 0.6, y + rh * 0.28, "—")
+                continue
+
+            v = max(1, min(5, int(round(float(val)))))
+            color = _svc_score_color(v)
+
+            # Label
+            self.canv.setFillColor(C["muted"])
+            self.canv.setFont("Helvetica", 6.5)
+            self.canv.drawString(x + 6, y + rh * 0.28, _safe(label))
+
+            # Score value
+            self.canv.setFillColor(color)
+            self.canv.setFont("Helvetica-Bold", 7.5)
+            self.canv.drawString(x + cw * 0.57, y + rh * 0.28, f"{v}/5")
+
+            # Mini dots
+            dot_r = 3; dot_gap = 2
+            dot_x = x + cw * 0.71
+            dot_y = y + rh * 0.42
+            for i in range(5):
+                cx = dot_x + i * (dot_r * 2 + dot_gap)
+                if i < v:
+                    self.canv.setFillColor(color)
+                    self.canv.circle(cx, dot_y, dot_r, fill=1, stroke=0)
+                else:
+                    self.canv.setFillColor(C["border"])
+                    self.canv.circle(cx, dot_y, dot_r, fill=1, stroke=0)
+
+
 class SummaryBar(Flowable):
     def __init__(self, sent, recv, read_, width, h=22*mm):
         super().__init__()
@@ -353,24 +448,43 @@ def _suggestions(analytics: dict, industry: str) -> list[str]:
             return []
         from groq import Groq
         client = Groq(api_key=key)
+
+        dim_lines = []
+        for field, label in _SVC_DIMS:
+            v = analytics.get(field)
+            if v is not None:
+                dim_lines.append(f"  {label}: {v}/5")
+        dims_block = "\n".join(dim_lines) if dim_lines else "  (sin datos de dimensiones)"
+
+        reaction = analytics.get("reaction_time_min")
+        reaction_str = f"{reaction} min" if reaction is not None else "sin datos"
+
         prompt = (
-            f"Eres un consultor de ventas B2B especializado en canales WhatsApp en Mexico.\n"
-            f"Empresa del sector '{industry}'. Metricas de su canal WhatsApp:\n"
-            f"- Tipo de atencion: {analytics.get('category','?')}\n"
-            f"- Calidad de respuesta (1-5): {analytics.get('response_quality', 0)}\n"
-            f"- Tiempo de reaccion: {analytics.get('reaction_time_min', 0)} minutos\n"
-            f"- Notas: {analytics.get('notes') or 'Sin notas'}\n\n"
-            f"Genera exactamente 4 sugerencias de mejora concretas para su canal WhatsApp. "
-            f"Una por linea, sin numeracion ni vinetas, maximo 110 caracteres cada una, en espanol."
+            f"Eres consultor senior de ventas y experiencia de cliente B2B en Mexico.\n"
+            f"Empresa del sector '{industry}'. Analisis de su canal WhatsApp:\n"
+            f"- Tipo de atencion: {analytics.get('category', '?')}\n"
+            f"- Tiempo de respuesta: {reaction_str}\n"
+            f"- Senial comercial (1-5): {analytics.get('response_quality', 0)}\n"
+            f"- Calidad de servicio por dimension (1-5):\n{dims_block}\n"
+            f"- Diagnostico del auditor: {analytics.get('notes') or 'Sin notas'}\n\n"
+            f"Genera 4 recomendaciones de mejora CONCRETAS e INNOVADORAS para el canal WhatsApp.\n"
+            f"REGLAS:\n"
+            f"- Prioriza las dimensiones con puntuacion 1-2 (las mas deficientes)\n"
+            f"- Propone acciones especificas y medibles, no consejos genericos\n"
+            f"- Adapta cada sugerencia al sector '{industry}'\n"
+            f"- Maximo 120 caracteres por sugerencia\n"
+            f"- Sin numeracion, sin bullets, sin guiones. Una sugerencia por linea.\n"
+            f"- Sé innovador: incluye tacticas como mensajes de voz, videos cortos, "
+            f"automatizacion inteligente, segmentacion por urgencia, o tecnicas de venta consultiva."
         )
         resp = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
-            temperature=0.3,
+            max_tokens=500,
+            temperature=0.4,
         )
-        lines = [l.strip("•-– 1234567890.") for l in resp.choices[0].message.content.strip().split("\n") if l.strip()]
-        return [l for l in lines if l][:4]
+        lines = [l.strip("•-– 1234567890.)") for l in resp.choices[0].message.content.strip().split("\n") if l.strip()]
+        return [l for l in lines if len(l) > 10][:4]
     except Exception:
         return []
 
@@ -423,7 +537,7 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
 
     qual_level, qual_color = QUALITY_LEVELS.get(round(quality), ("Desconocido", C["muted"]))
     speed_label, speed_color = _speed_label(reaction_min)
-    composite = _composite_score(cat_key, quality, reaction_min, business_hours)
+    composite = _composite_score(analytics, cat_key, quality, reaction_min, business_hours)
     score_label, score_color = _score_label(composite)
 
     sent_c = sum(1 for m in thread if m.get("direction") == "outbound")
@@ -530,11 +644,25 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     story.append(ScoreBar(composite, score_label, score_color, PW, h=14 * mm))
     story.append(Spacer(1, 3 * mm))
 
-    # Criteria breakdown note
-    story.append(Paragraph(
-        "Ponderacion: Tipo de atencion 30% · Calidad comercial 50% · Velocidad de respuesta 20%",
-        _st("crit", fontSize=7, textColor=C["muted"], leading=10),
-    ))
+    # Check if new svc dims are present
+    has_svc = any(analytics.get(k) is not None for k, _ in _SVC_DIMS)
+
+    if has_svc:
+        story.append(Paragraph(
+            "Ponderacion: Calidad de servicio 45% · Senial comercial 20% · Tipo de atencion 15% · Velocidad 20%",
+            _st("crit", fontSize=7, textColor=C["muted"], leading=10),
+        ))
+        story.append(Spacer(1, 3 * mm))
+        story.append(Paragraph("Desglose de Calidad de Servicio", _st("sqh",
+            fontSize=9, fontName="Helvetica-Bold", textColor=C["primary"],
+            leading=12, spaceAfter=2)))
+        story.append(ServiceQualityTable(analytics, PW, row_h=14))
+    else:
+        story.append(Paragraph(
+            "Ponderacion: Tipo de atencion 30% · Calidad comercial 50% · Velocidad de respuesta 20%",
+            _st("crit", fontSize=7, textColor=C["muted"], leading=10),
+        ))
+
     story.append(Spacer(1, 3 * mm))
     story.append(HRFlowable(width="100%", thickness=0.5, color=C["border"], spaceAfter=4))
 
@@ -546,12 +674,53 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     # ══════════════════════════════════════════════════════════════════════════
     story.append(PageBreak())
 
-    story.append(Paragraph("Escala de Calidad Comercial", _st("h5",
+    story.append(Paragraph("Metodologia de Evaluacion", _st("h5",
         fontSize=11, fontName="Helvetica-Bold", textColor=C["primary"],
-        leading=15, spaceAfter=5)))
+        leading=15, spaceAfter=3)))
     story.append(Paragraph(
-        "Criterio utilizado para evaluar la intension de compra en la respuesta recibida:",
+        "Dos ejes independientes: calidad del servicio entregado y señal comercial del prospecto.",
         _st("sub", fontSize=8, textColor=C["muted"], leading=11, spaceAfter=5),
+    ))
+
+    # Service quality dimensions legend
+    story.append(Paragraph("Dimensiones de Calidad de Servicio (1-5 cada una)", _st("sqtitle",
+        fontSize=9, fontName="Helvetica-Bold", textColor=C["text"],
+        leading=12, spaceAfter=3)))
+    svc_legend = [
+        ("Profesionalismo", "Ortografia, tono apropiado, coherencia y claridad del mensaje"),
+        ("Completitud",     "¿Respondio lo que se pregunto o solicito?"),
+        ("Empatia",         "Calidez, personalizacion, reconoce y valida la necesidad"),
+        ("Solucion ofrecida","¿Ofrecio algo concreto? (precio, producto, alternativa, cita)"),
+        ("Siguiente paso",  "¿Quedo claro que sigue? (CTA explicito: llamada, reunion, link)"),
+        ("Proactividad",    "Anticipo necesidades, hizo preguntas de calificacion, ofrecio info extra"),
+    ]
+    for dim_name, dim_desc in svc_legend:
+        dim_row = Table(
+            [[Paragraph(dim_name, _st(f"dn_{dim_name}",
+                  fontSize=8, fontName="Helvetica-Bold", textColor=C["primary"])),
+              Paragraph(dim_desc, _st(f"dd_{dim_name}",
+                  fontSize=8, textColor=C["muted"], leading=11))]],
+            colWidths=[38 * mm, PW - 38 * mm - 4],
+        )
+        dim_row.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
+            ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
+            ("TOPPADDING",    (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        story.append(dim_row)
+        story.append(Spacer(1, 1.5 * mm))
+
+    story.append(Spacer(1, 4 * mm))
+    story.append(Paragraph("Escala de Señal Comercial (1-5)", _st("sqtitle2",
+        fontSize=9, fontName="Helvetica-Bold", textColor=C["text"],
+        leading=12, spaceAfter=3)))
+    story.append(Paragraph(
+        "¿Que tan caliente quedo el lead con esta interaccion?",
+        _st("sub3", fontSize=8, textColor=C["muted"], leading=11, spaceAfter=3),
     ))
 
     for score_val, level_name, description, lv_color in QUALITY_LEGEND:

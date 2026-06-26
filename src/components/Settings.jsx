@@ -98,6 +98,9 @@ export const THEMES = [
   { tKey: 'themeTwilight',  value: 'crepusculo',bg: '#0b0b1e', sidebar: '#121228', surface: '#181835', card: '#1e1e40', preview: ['#0b0b1e','#121228','#1e1e40'] },
   { tKey: 'themeCinnamon',  value: 'canela',    bg: '#130a04', sidebar: '#1f1207', surface: '#261609', card: '#2e1a0b', preview: ['#130a04','#1f1207','#2e1a0b'] },
   { tKey: 'themeDaytime',   value: 'diurna',    bg: '#15100a', sidebar: '#1e170b', surface: '#25200d', card: '#2d2610', preview: ['#15100a','#1e170b','#2d2610'] },
+  // ── Monocromático (fondo blanco, texto negro) ──
+  { tKey: 'themeMonochrome', value: 'mono', cat:'mono', bg: '#f0f2f5', sidebar: '#e4e8ef', surface: '#eaecf2', card: '#d8dde8', preview: ['#f0f2f5','#e4e8ef','#d8dde8'] },
+
   // ── Claros (tonos medios ~33-40% L, saturación ~22-35% — elegantes, no chillan) ──
   { tKey: 'themeSlateBlue',  value: 'pizarra',  cat:'light', bg: '#445c6e', sidebar: '#526a7c', surface: '#3c5264', card: '#5a6e80', preview: ['#445c6e','#526a7c','#5a6e80'] },
   { tKey: 'themePaper',      value: 'paper',    cat:'light', bg: '#58493a', sidebar: '#665748', surface: '#503f30', card: '#726050', preview: ['#58493a','#665748','#726050'] },
@@ -170,15 +173,27 @@ export function applySettings(settings) {
   root.style.setProperty('--sidebar-bg',  themeObj.sidebar)
   root.style.setProperty('--surface',     themeObj.surface)
   root.style.setProperty('--card-bg',     themeObj.card)
+  const isMono  = themeObj.cat === 'mono'
   const isVivid = themeObj.cat === 'light'
-  root.style.setProperty('--text',       '#f1f5f9')
-  root.style.setProperty('--text-muted', isVivid ? 'rgba(255,255,255,0.7)'  : 'rgba(255,255,255,0.45)')
-  root.style.setProperty('--border',     isVivid ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.07)')
-  root.style.setProperty('--item-hover', isVivid ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.05)')
-  root.style.setProperty('--scrollbar-thumb',       isVivid ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.12)')
-  root.style.setProperty('--scrollbar-thumb-hover', isVivid ? 'rgba(255,255,255,0.48)' : 'rgba(255,255,255,0.28)')
-  root.setAttribute('data-theme-mode', 'dark')
-  root.setAttribute('data-theme-cat',  isVivid ? 'vivid' : 'dark')
+  root.style.setProperty('--text',
+    isMono ? '#1e293b' : '#f1f5f9')
+  root.style.setProperty('--text-muted',
+    isMono  ? 'rgba(15,23,42,0.52)'    :
+    isVivid ? 'rgba(255,255,255,0.70)' : 'rgba(255,255,255,0.45)')
+  root.style.setProperty('--border',
+    isMono  ? 'rgba(0,0,0,0.12)'       :
+    isVivid ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.07)')
+  root.style.setProperty('--item-hover',
+    isMono  ? 'rgba(0,0,0,0.05)'       :
+    isVivid ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.05)')
+  root.style.setProperty('--scrollbar-thumb',
+    isMono  ? 'rgba(0,0,0,0.16)'       :
+    isVivid ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.12)')
+  root.style.setProperty('--scrollbar-thumb-hover',
+    isMono  ? 'rgba(0,0,0,0.30)'       :
+    isVivid ? 'rgba(255,255,255,0.48)' : 'rgba(255,255,255,0.28)')
+  root.setAttribute('data-theme-mode', isMono ? 'light' : 'dark')
+  root.setAttribute('data-theme-cat',  isMono ? 'mono' : isVivid ? 'vivid' : 'dark')
 }
 
 function Section({ icon, title, children }) {

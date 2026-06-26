@@ -20,12 +20,12 @@ const SIDEBAR_FULL = 248
 const SIDEBAR_MINI = 64
 
 const C = {
-  sidebarBorder: 'rgba(255,255,255,0.10)',
+  sidebarBorder: 'var(--border, rgba(255,255,255,0.10))',
   accent:        'var(--accent, #3b82f6)',
   accentGlow:    'var(--accent-glow, rgba(59,130,246,0.18))',
   accentText:    'var(--accent, #60a5fa)',
-  dimText:       'rgba(255,255,255,0.45)',
-  text:          'rgba(255,255,255,0.92)',
+  dimText:       'var(--text-muted, rgba(255,255,255,0.45))',
+  text:          'var(--text, rgba(255,255,255,0.92))',
 }
 
 const GROUP_KEYS = [
@@ -49,7 +49,7 @@ function NavItem({ item, index, isActive, open, onClick }) {
           justifyContent: open ? 'flex-start' : 'center',
           px: open ? 1.5 : 1,
           transition: 'padding 0.28s cubic-bezier(0.4,0,0.2,1)',
-          '&:hover': { bgcolor: 'rgba(255,255,255,0.08)', color: C.text },
+          '&:hover': { bgcolor: 'var(--item-hover)', color: C.text },
         }}
       >
         <ListItemIcon sx={{
@@ -89,7 +89,7 @@ function GroupLabel({ label, open }) {
     }}>
       <Typography sx={{
         fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.08em',
-        textTransform: 'uppercase', color: 'rgba(255,255,255,0.22)',
+        textTransform: 'uppercase', color: 'var(--text-muted)',
         userSelect: 'none',
       }}>
         {label}
@@ -161,7 +161,7 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
           sx={{
             ml: open ? 'auto' : 0, flexShrink: 0,
             color: C.dimText,
-            '&:hover': { color: 'white', bgcolor: 'rgba(255,255,255,0.06)' },
+            '&:hover': { color: C.text, bgcolor: 'var(--item-hover)' },
           }}
         >
           {open ? <ChevronLeftIcon fontSize="small" /> : <MenuIcon fontSize="small" />}
@@ -207,7 +207,7 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
                       justifyContent: open ? 'flex-start' : 'center',
                       px: open ? 1.5 : 1,
                       transition: 'padding 0.28s cubic-bezier(0.4,0,0.2,1)',
-                      '&:hover': { bgcolor: 'rgba(255,255,255,0.08)', color: C.text },
+                      '&:hover': { bgcolor: 'var(--item-hover)', color: C.text },
                     }}
                   >
                     <ListItemIcon sx={{
@@ -235,7 +235,7 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
                 </Tooltip>
               )}
               {!isLast && (
-                <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', mt: 1 }} />
+                <Divider sx={{ borderColor: 'var(--border)', mt: 1 }} />
               )}
             </Box>
           )
@@ -274,18 +274,18 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
             transition: 'opacity 0.2s ease, max-width 0.28s cubic-bezier(0.4,0,0.2,1)',
             whiteSpace: 'nowrap', ml: open ? 1 : 0,
           }}>
-            <Typography sx={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.78rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <Typography sx={{ color: 'var(--text)', fontSize: '0.78rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {user?.display_name || user?.username || ''}
             </Typography>
             {/* Estado de instancia debajo del nombre */}
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.2 }}>
               <Box sx={{
                 width: 5, height: 5, borderRadius: '50%', flexShrink: 0,
-                bgcolor: instanceStatus === 'connected' ? '#22c55e' : instanceStatus === 'disconnected' ? '#ef4444' : 'rgba(255,255,255,0.2)',
+                bgcolor: instanceStatus === 'connected' ? '#22c55e' : instanceStatus === 'disconnected' ? '#ef4444' : 'var(--border)',
               }} />
               <Typography sx={{
                 fontSize: '0.6rem',
-                color: instanceStatus === 'connected' ? 'rgba(34,197,94,0.6)' : instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.7)' : 'rgba(255,255,255,0.2)',
+                color: instanceStatus === 'connected' ? 'rgba(34,197,94,0.7)' : instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.8)' : 'var(--text-muted)',
               }}>
                 {instanceStatus === 'connected'
                   ? `WhatsApp ${t.instance.connectedLbl}`

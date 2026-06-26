@@ -126,3 +126,178 @@
 [data-theme-cat="vivid"] *::-webkit-scrollbar-thumb:hover {
   background: rgba(255,255,255,0.5) !important;
 }
+
+/* ══ LIGHT MODE (tema Blanco / Negro) ══════════════════════════════════════ */
+
+[data-theme-mode="light"] {
+  color-scheme: light;
+}
+
+/* ── Texto / tipografía ── */
+[data-theme-mode="light"] .MuiTypography-root,
+[data-theme-mode="light"] .MuiInputBase-input,
+[data-theme-mode="light"] .MuiInputLabel-root,
+[data-theme-mode="light"] .MuiFormLabel-root,
+[data-theme-mode="light"] .MuiFormHelperText-root,
+[data-theme-mode="light"] .MuiMenuItem-root,
+[data-theme-mode="light"] .MuiListItemText-primary,
+[data-theme-mode="light"] .MuiListItemText-secondary,
+[data-theme-mode="light"] .MuiTableCell-root,
+[data-theme-mode="light"] .MuiSelect-select,
+[data-theme-mode="light"] .MuiAutocomplete-input,
+[data-theme-mode="light"] .MuiAutocomplete-option,
+[data-theme-mode="light"] .MuiAutocomplete-noOptions,
+[data-theme-mode="light"] .MuiAutocomplete-loading,
+[data-theme-mode="light"] .MuiAutocomplete-groupLabel,
+[data-theme-mode="light"] .MuiChip-label,
+[data-theme-mode="light"] .MuiTab-root,
+[data-theme-mode="light"] .MuiButton-text,
+[data-theme-mode="light"] .MuiButton-outlined,
+[data-theme-mode="light"] .MuiAccordionSummary-content,
+[data-theme-mode="light"] .MuiAccordionDetails-root,
+[data-theme-mode="light"] .MuiStepLabel-label,
+[data-theme-mode="light"] .MuiAlert-message,
+[data-theme-mode="light"] .MuiSnackbarContent-message,
+[data-theme-mode="light"] .MuiListItem-root,
+[data-theme-mode="light"] .MuiListItemButton-root,
+[data-theme-mode="light"] .MuiRadio-root + span,
+[data-theme-mode="light"] .MuiCheckbox-root + span,
+[data-theme-mode="light"] .MuiToggleButton-root,
+[data-theme-mode="light"] .MuiTreeItem-label,
+[data-theme-mode="light"] .MuiDataGrid-cell,
+[data-theme-mode="light"] .MuiDataGrid-columnHeaderTitle {
+  color: #1e293b !important;
+}
+
+/* Autocomplete lista dropdown */
+[data-theme-mode="light"] .MuiAutocomplete-listbox {
+  background-color: #ffffff !important;
+}
+[data-theme-mode="light"] .MuiAutocomplete-option:hover,
+[data-theme-mode="light"] .MuiAutocomplete-option[aria-selected="true"] {
+  background-color: rgba(var(--accent-rgb,59,130,246),0.08) !important;
+  color: #1e293b !important;
+}
+
+[data-theme-mode="light"] .MuiTableCell-head {
+  color: rgba(0,0,0,0.55) !important;
+}
+
+[data-theme-mode="light"] .MuiInputBase-input::placeholder {
+  color: rgba(0,0,0,0.32) !important;
+  opacity: 1;
+}
+
+/* ── Iconos ── */
+[data-theme-mode="light"] .MuiSvgIcon-root {
+  color: #334155 !important;
+}
+[data-theme-mode="light"] .MuiSelect-icon,
+[data-theme-mode="light"] .MuiAutocomplete-popupIndicator,
+[data-theme-mode="light"] .MuiAutocomplete-clearIndicator {
+  color: rgba(0,0,0,0.42) !important;
+}
+
+/* ── Bordes / outlines ── */
+[data-theme-mode="light"] .MuiOutlinedInput-notchedOutline {
+  border-color: rgba(0,0,0,0.23) !important;
+}
+[data-theme-mode="light"] .MuiOutlinedInput-root:hover .MuiOutlinedInput-notchedOutline {
+  border-color: rgba(0,0,0,0.5) !important;
+}
+[data-theme-mode="light"] .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline {
+  border-color: var(--accent, #3b82f6) !important;
+}
+[data-theme-mode="light"] .MuiDivider-root {
+  border-color: rgba(0,0,0,0.1) !important;
+}
+
+/* ── Tablas ── */
+[data-theme-mode="light"] .MuiTableCell-root {
+  border-bottom-color: rgba(0,0,0,0.08) !important;
+}
+[data-theme-mode="light"] .MuiTableRow-root:hover {
+  background-color: rgba(0,0,0,0.03) !important;
+}
+
+/* ── Chips ── */
+[data-theme-mode="light"] .MuiChip-outlined {
+  border-color: rgba(0,0,0,0.2) !important;
+}
+
+/* ── Menús / hover ── */
+[data-theme-mode="light"] .MuiMenuItem-root:hover,
+[data-theme-mode="light"] .MuiListItemButton-root:hover {
+  background-color: rgba(0,0,0,0.05) !important;
+}
+[data-theme-mode="light"] .MuiMenuItem-root.Mui-selected {
+  background-color: rgba(var(--accent-rgb,59,130,246),0.1) !important;
+}
+
+/* ── Paper / Cards ── */
+[data-theme-mode="light"] .MuiPaper-root {
+  border-color: rgba(0,0,0,0.09) !important;
+  color: #1e293b !important;
+}
+[data-theme-mode="light"] .MuiPaper-elevation,
+[data-theme-mode="light"] .MuiDialog-paper,
+[data-theme-mode="light"] .MuiMenu-paper,
+[data-theme-mode="light"] .MuiPopover-paper {
+  background-color: var(--surface, #eaecf2) !important;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.1) !important;
+}
+/* Dropdowns y autocomplete usan surface más claro */
+[data-theme-mode="light"] .MuiMenu-paper,
+[data-theme-mode="light"] .MuiPopover-paper,
+[data-theme-mode="light"] .MuiAutocomplete-paper {
+  background-color: #f4f6f9 !important;
+}
+
+/* ── Tabs ── */
+[data-theme-mode="light"] .MuiTab-root {
+  color: rgba(0,0,0,0.48) !important;
+}
+[data-theme-mode="light"] .MuiTab-root.Mui-selected {
+  color: var(--accent, #3b82f6) !important;
+}
+[data-theme-mode="light"] .MuiTabs-indicator {
+  background-color: var(--accent, #3b82f6) !important;
+}
+
+/* ── Progreso / Switch / Slider ── */
+[data-theme-mode="light"] .MuiLinearProgress-root {
+  background-color: rgba(0,0,0,0.1) !important;
+}
+[data-theme-mode="light"] .MuiSlider-rail {
+  background-color: rgba(0,0,0,0.2) !important;
+}
+[data-theme-mode="light"] .MuiSwitch-track {
+  background-color: rgba(0,0,0,0.25) !important;
+}
+
+/* ── Accordion ── */
+[data-theme-mode="light"] .MuiAccordion-root {
+  border-color: rgba(0,0,0,0.1) !important;
+}
+
+/* ── Tooltip ── */
+[data-theme-mode="light"] .MuiTooltip-tooltip {
+  background-color: #1e293b !important;
+  color: #ffffff !important;
+}
+
+/* ── Scrollbars ── */
+[data-theme-mode="light"] *::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.16) !important;
+}
+[data-theme-mode="light"] *::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,0,0,0.3) !important;
+}
+[data-theme-mode="light"] *::-webkit-scrollbar-track {
+  background: rgba(0,0,0,0.04) !important;
+}
+
+/* ── Sidebar sombra ── */
+[data-theme-mode="light"] #tour-sidebar {
+  box-shadow: 0 2px 16px rgba(0,0,0,0.1) !important;
+}

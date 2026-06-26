@@ -301,3 +301,66 @@
 [data-theme-mode="light"] #tour-sidebar {
   box-shadow: 0 2px 16px rgba(0,0,0,0.1) !important;
 }
+
+/* ── IconButton ── */
+[data-theme-mode="light"] .MuiIconButton-root {
+  color: #475569 !important;
+}
+[data-theme-mode="light"] .MuiIconButton-root:hover {
+  background-color: rgba(0,0,0,0.06) !important;
+  color: #1e293b !important;
+}
+
+/* ── TableSortLabel (tiene !important en sx, necesitamos más especificidad) ── */
+[data-theme-mode="light"] .MuiTableSortLabel-root {
+  color: rgba(0,0,0,0.52) !important;
+}
+[data-theme-mode="light"] .MuiTableSortLabel-root:hover,
+[data-theme-mode="light"] .MuiTableSortLabel-root.Mui-active {
+  color: #1e293b !important;
+}
+[data-theme-mode="light"] .MuiTableSortLabel-icon {
+  color: rgba(0,0,0,0.35) !important;
+}
+
+/* ── Inputs y textareas nativos ── */
+[data-theme-mode="light"] input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]) {
+  color: #1e293b !important;
+}
+[data-theme-mode="light"] textarea {
+  color: #1e293b !important;
+}
+
+/* ── Fondo de inputs (convierte rgba(255,255,255,0.04) → gris muy suave) ── */
+[data-theme-mode="light"] .MuiOutlinedInput-root {
+  background-color: rgba(0,0,0,0.03) !important;
+}
+[data-theme-mode="light"] .MuiOutlinedInput-root:hover {
+  background-color: rgba(0,0,0,0.05) !important;
+}
+
+/* ── Selects ── */
+[data-theme-mode="light"] .MuiSelect-nativeInput {
+  color: #1e293b !important;
+}
+
+/* ── Chips filled sin color explícito ── */
+[data-theme-mode="light"] .MuiChip-filled {
+  background-color: rgba(0,0,0,0.08) !important;
+}
+
+/* ── Disabled states ── */
+[data-theme-mode="light"] .Mui-disabled {
+  color: rgba(0,0,0,0.3) !important;
+  -webkit-text-fill-color: rgba(0,0,0,0.3) !important;
+}
+
+/* ── CircularProgress ── */
+[data-theme-mode="light"] .MuiCircularProgress-root:not([style*="color"]) {
+  color: var(--accent, #3b82f6) !important;
+}
+
+/* ── Scrollbars dentro de TableContainer (sx scrollbarColor no es overrideable, pero webkit sí) ── */
+[data-theme-mode="light"] .MuiTableContainer-root *::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.16) !important;
+}

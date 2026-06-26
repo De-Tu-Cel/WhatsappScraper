@@ -26,14 +26,14 @@ const token = () => typeof window !== 'undefined' ? localStorage.getItem('user_t
 
 const FIELD_SX = {
   '& .MuiOutlinedInput-root': {
-    bgcolor: 'rgba(255,255,255,0.04)',
+    bgcolor: 'var(--item-hover)',
     fontSize: '0.88rem',
     borderRadius: 2,
-    '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' },
-    '&:hover fieldset': { borderColor: 'rgba(255,255,255,0.2)' },
+    '& fieldset': { borderColor: 'var(--border)' },
+    '&:hover fieldset': { borderColor: 'var(--text-muted)' },
     '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' },
   },
-  '& input': { color: 'white' },
+  '& input': { color: 'var(--text)' },
 }
 
 function StatChip({ icon, label, value, color }) {
@@ -192,7 +192,7 @@ export default function AdminPanel() {
           </Tooltip>
           <Tooltip title={t.admin.refreshTip}>
             <IconButton size="small" onClick={fetchUsers}
-              sx={{ color: 'rgba(255,255,255,0.3)', '&:hover': { color: 'white', bgcolor: 'rgba(255,255,255,0.06)' } }}>
+              sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)', bgcolor: 'var(--item-hover)' } }}>
               <RefreshIcon sx={{ fontSize: 18 }} />
             </IconButton>
           </Tooltip>

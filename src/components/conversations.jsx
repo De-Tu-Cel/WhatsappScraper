@@ -526,12 +526,12 @@ export default function Conversations() {
   }, [thread, activeNum, waNumbers])
 
   return (
-    <Box sx={{ display: 'flex', height: '100%', minHeight: 0, gap: 0, borderRadius: 2, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.07)' }}>
+    <Box sx={{ display: 'flex', height: '100%', minHeight: 0, gap: 0, borderRadius: 2, overflow: 'hidden', border: '1px solid var(--border)' }}>
 
       {/* ── Lista de conversaciones ── */}
-      <Box sx={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid rgba(255,255,255,0.07)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
+      <Box sx={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
         {/* Header */}
-        <Box sx={{ px: 2, pt: 2, pb: 1.5, borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+        <Box sx={{ px: 2, pt: 2, pb: 1.5, borderBottom: '1px solid var(--border)' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <WhatsAppIcon sx={{ color: '#4ade80', fontSize: 20 }} />
@@ -539,18 +539,18 @@ export default function Conversations() {
             </Box>
             <Tooltip title={t.common.refresh}>
               <IconButton size="small" onClick={() => { setLoading(true); fetchConvs() }}
-                sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'white' } }}>
+                sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
                 <RefreshIcon fontSize="small" />
               </IconButton>
             </Tooltip>
           </Box>
           <TextField fullWidth size="small" placeholder={t.convs.search} value={search}
             onChange={e => setSearch(e.target.value)}
-            slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 16, color: 'rgba(255,255,255,0.3)' }} /></InputAdornment> } }}
-            sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.8rem', bgcolor: 'rgba(255,255,255,0.04)', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' } }, '& input': { color: 'white', py: 0.8 } }} />
+            slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 16, color: 'var(--text-muted)' }} /></InputAdornment> } }}
+            sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.8rem', bgcolor: 'var(--item-hover)', '& fieldset': { borderColor: 'var(--border)' }, '&:hover fieldset': { borderColor: 'var(--text-muted)' } }, '& input': { color: 'var(--text)', py: 0.8 } }} />
 
           {/* Toggle mis conversaciones / todas */}
-          <Box sx={{ display: 'flex', mt: 1.5, bgcolor: 'rgba(255,255,255,0.04)', borderRadius: 2, p: 0.4, gap: 0.4 }}>
+          <Box sx={{ display: 'flex', mt: 1.5, bgcolor: 'var(--item-hover)', borderRadius: 2, p: 0.4, gap: 0.4 }}>
             {[
               { label: t.convs.allConvs, value: false },
               { label: t.convs.myConvs,  value: true },
@@ -560,8 +560,8 @@ export default function Conversations() {
                   flex: 1, textAlign: 'center', py: 0.55, borderRadius: 1.5, cursor: 'pointer',
                   fontSize: '0.72rem', fontWeight: 600, transition: 'all 0.15s',
                   bgcolor: myConvsOnly === opt.value ? 'var(--accent, #3b82f6)' : 'transparent',
-                  color: myConvsOnly === opt.value ? 'white' : 'rgba(255,255,255,0.4)',
-                  '&:hover': { color: myConvsOnly === opt.value ? 'white' : 'rgba(255,255,255,0.7)' },
+                  color: myConvsOnly === opt.value ? '#ffffff' : 'var(--text-muted)',
+                  '&:hover': { color: myConvsOnly === opt.value ? '#ffffff' : 'var(--text)' },
                 }}>
                 {opt.label}
               </Box>
@@ -778,8 +778,8 @@ export default function Conversations() {
                   onInput={e => setReply(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendReply() } }}
                   error={reply.length > MAX_WA_MSG}
-                  sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.85rem', bgcolor: 'rgba(255,255,255,0.04)',
-                    '& fieldset': { borderColor: reply.length > MAX_WA_MSG ? '#ef4444' : instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.1)' } }, '& textarea': { color: 'white' } }} />
+                  sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.85rem', bgcolor: 'var(--item-hover)',
+                    '& fieldset': { borderColor: reply.length > MAX_WA_MSG ? '#ef4444' : instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.3)' : 'var(--border)' } }, '& textarea': { color: 'var(--text)' } }} />
                 <Tooltip title={
                   instanceStatus === 'disconnected' ? 'Instancia WhatsApp desconectada' :
                   reply.length > MAX_WA_MSG ? `Demasiado largo (máx. ${MAX_WA_MSG})` :

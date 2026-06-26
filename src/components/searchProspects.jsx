@@ -470,7 +470,7 @@ export default function SearchProspects() {
           }}
           placeholder={placeholder || 'Ej: Restaurantes, Ferreterías…'}
           slotProps={{ input: { disableUnderline: true } }}
-          sx={{ '& input': { fontSize: compact ? '0.92rem' : '1rem', py: 0.9, color: '#f1f5f9', '&::placeholder': { color: 'rgba(255,255,255,0.28)', opacity: 1 } } }}
+          sx={{ '& input': { fontSize: compact ? '0.92rem' : '1rem', py: 0.9, color: 'var(--text, #f1f5f9)', '&::placeholder': { color: 'var(--text-muted, rgba(255,255,255,0.28))', opacity: 1 } } }}
         />
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mr: -1, flexShrink: 0 }}>
           <IconButton onClick={handleSearch} disabled={searching || !industry.trim()} sx={{ bgcolor: 'var(--accent, #3b82f6)', color: 'white', width: 38, height: 38, '&:hover': { bgcolor: 'var(--accent, #2563eb)' }, '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.25)', color: 'rgba(255,255,255,0.3)' } }}>
@@ -495,10 +495,10 @@ export default function SearchProspects() {
             <Box key={item} onMouseDown={() => { setIndustry(item); setAcOpen(false); handleSearch(item) }} onMouseEnter={() => setAcIdx(i)}
               sx={{ px: 2, py: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 1, bgcolor: i === acIdx ? 'rgba(var(--accent-rgb, 59,130,246), 0.1)' : 'transparent', transition: 'all 0.1s' }}>
               <Box component="span" sx={{ fontSize: '0.85rem' }}>
-                <Box component="span" sx={{ color: 'rgba(255,255,255,0.35)' }}>{industry}</Box>
-                <Box component="span" sx={{ color: i === acIdx ? color : 'rgba(255,255,255,0.8)', fontWeight: 600 }}>{item.slice(industry.length)}</Box>
+                <Box component="span" sx={{ color: 'var(--text-muted)' }}>{industry}</Box>
+                <Box component="span" sx={{ color: i === acIdx ? color : 'var(--text)', fontWeight: 600 }}>{item.slice(industry.length)}</Box>
               </Box>
-              {i === 0 && <Box sx={{ ml: 'auto', px: 0.8, py: 0.2, borderRadius: 0.8, bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.3)', fontSize: '0.65rem', fontFamily: 'monospace', flexShrink: 0 }}>Tab</Box>}
+              {i === 0 && <Box sx={{ ml: 'auto', px: 0.8, py: 0.2, borderRadius: 0.8, bgcolor: 'var(--item-hover)', color: 'var(--text-muted)', fontSize: '0.65rem', fontFamily: 'monospace', flexShrink: 0 }}>Tab</Box>}
             </Box>
           ))}
         </Box>
@@ -546,8 +546,8 @@ export default function SearchProspects() {
       {!hasResults && (
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 2.5, pb: 4, px: 2.5, width: '100%' }}>
           <Box sx={{ textAlign: 'center' }}>
-            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1.35rem', mb: 0.5 }}>{t.search.heading}</Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem' }}>{t.search.headingSub}</Typography>
+            <Typography sx={{ color: 'var(--text, white)', fontWeight: 700, fontSize: '1.35rem', mb: 0.5 }}>{t.search.heading}</Typography>
+            <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.35))', fontSize: '0.82rem' }}>{t.search.headingSub}</Typography>
           </Box>
 
           {SearchBar({ compact: false })}
@@ -556,11 +556,11 @@ export default function SearchProspects() {
           {/* Historial reciente */}
           {history.length > 0 && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', width: '100%' }}>
-              <HistoryIcon sx={{ fontSize: 13, color: 'rgba(255,255,255,0.2)' }} />
-              <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.68rem' }}>{t.search.recent}</Typography>
+              <HistoryIcon sx={{ fontSize: 13, color: 'var(--text-muted)' }} />
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>{t.search.recent}</Typography>
               {history.map(h => (
                 <Box key={h} onClick={() => { setIndustry(h); handleSearch(h) }}
-                  sx={{ px: 1.2, py: 0.3, borderRadius: 10, cursor: 'pointer', fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', transition: 'all 0.15s', '&:hover': { color: 'var(--accent, #60a5fa)', bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.1)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)' } }}>
+                  sx={{ px: 1.2, py: 0.3, borderRadius: 10, cursor: 'pointer', fontSize: '0.72rem', color: 'var(--text-muted)', bgcolor: 'var(--item-hover)', border: '1px solid var(--border)', transition: 'all 0.15s', '&:hover': { color: 'var(--accent, #60a5fa)', bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.1)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)' } }}>
                   {h}
                 </Box>
               ))}
@@ -575,7 +575,7 @@ export default function SearchProspects() {
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.8 }}>
                   {group.items.map(item => (
                     <Box key={item} onClick={() => { setIndustry(item); handleSearch(item) }}
-                      sx={{ px: 1.6, py: 0.55, borderRadius: '20px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 500, bgcolor: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.55)', border: '1px solid rgba(255,255,255,0.08)', transition: 'all 0.15s', '&:hover': { bgcolor: `${group.color}18`, color: group.color, border: `1px solid ${group.color}44` } }}>
+                      sx={{ px: 1.6, py: 0.55, borderRadius: '20px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 500, bgcolor: 'var(--item-hover)', color: 'var(--text-muted)', border: '1px solid var(--border)', transition: 'all 0.15s', '&:hover': { bgcolor: `${group.color}18`, color: group.color, border: `1px solid ${group.color}44` } }}>
                       {item}
                     </Box>
                   ))}
@@ -588,7 +588,7 @@ export default function SearchProspects() {
 
       {/* ── Barra compacta cuando hay resultados ── */}
       {hasResults && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', p: 1.5, borderRadius: 2, border: '1px solid rgba(255,255,255,0.07)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', p: 1.5, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
           {SearchBar({ compact: true })}
           {CountSelector({ size: 'sm' })}
         </Box>

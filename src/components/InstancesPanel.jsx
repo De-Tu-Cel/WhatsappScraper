@@ -46,7 +46,7 @@ const STATUS_LABEL = {
 
 const FIELD_SX = {
   '& .MuiOutlinedInput-root': {
-    bgcolor: 'rgba(255,255,255,0.04)',
+    bgcolor: 'var(--card-bg, rgba(255,255,255,0.04))',
     fontSize: '0.88rem',
     borderRadius: 2,
     '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' },
@@ -60,8 +60,8 @@ const FIELD_SX = {
 
 const DIALOG_SX = {
   '& .MuiDialog-paper': {
-    bgcolor: '#0d1117',
-    border: '1px solid rgba(255,255,255,0.1)',
+    bgcolor: 'var(--card-bg, #0d1117)',
+    border: '1px solid var(--border)',
     borderRadius: 3,
     minWidth: 360,
   },
@@ -84,16 +84,16 @@ function InstanceCard({ inst, onMenu }) {
 
   return (
     <Box sx={{
-      bgcolor: 'rgba(255,255,255,0.03)',
-      border: '1px solid rgba(255,255,255,0.08)',
+      bgcolor: 'var(--card-bg)',
+      border: '1px solid var(--border)',
       borderRadius: 3,
       p: 2.5,
       display: 'flex', flexDirection: 'column', gap: 1.5,
       position: 'relative',
       transition: 'border-color 0.2s, box-shadow 0.2s',
       '&:hover': {
-        borderColor: 'rgba(255,255,255,0.15)',
-        boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+        borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)',
+        boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
       },
     }}>
       {/* Top row: icon + name + menu */}
@@ -111,13 +111,13 @@ function InstanceCard({ inst, onMenu }) {
         {/* Name + number */}
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography sx={{
-            color: 'rgba(255,255,255,0.92)', fontWeight: 700,
+            color: 'var(--text)', fontWeight: 700,
             fontSize: '0.95rem', lineHeight: 1.3,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
             {inst.name}
           </Typography>
-          <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem', mt: 0.3 }}>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', mt: 0.3 }}>
             {inst.number || 'Sin número'}
           </Typography>
         </Box>
@@ -126,8 +126,8 @@ function InstanceCard({ inst, onMenu }) {
         <IconButton
           size="small"
           onClick={e => onMenu(e, inst)}
-          sx={{ color: 'rgba(255,255,255,0.3)', flexShrink: 0, mt: -0.5, mr: -0.5,
-            '&:hover': { color: 'rgba(255,255,255,0.7)', bgcolor: 'rgba(255,255,255,0.06)' } }}
+          sx={{ color: 'var(--text-muted)', flexShrink: 0, mt: -0.5, mr: -0.5,
+            '&:hover': { color: 'var(--text)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.08)' } }}
         >
           <MoreVertIcon fontSize="small" />
         </IconButton>
@@ -142,7 +142,7 @@ function InstanceCard({ inst, onMenu }) {
       </Box>
 
       {/* Divider */}
-      <Box sx={{ borderTop: '1px solid rgba(255,255,255,0.06)' }} />
+      <Box sx={{ borderTop: '1px solid var(--border)' }} />
 
       {/* Footer: assigned user + date */}
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
@@ -158,11 +158,11 @@ function InstanceCard({ inst, onMenu }) {
             }}
           />
         ) : (
-          <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.68rem', fontStyle: 'italic' }}>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.68rem', fontStyle: 'italic' }}>
             Sin asignar
           </Typography>
         )}
-        <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.64rem', flexShrink: 0 }}>
+        <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.64rem', flexShrink: 0 }}>
           {inst.created_at ? new Date(inst.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' }) : ''}
         </Typography>
       </Box>
@@ -188,7 +188,8 @@ export default function InstancesPanel() {
   const [qrOpen,       setQrOpen]       = useState(false)
   const [qrTarget,     setQrTarget]     = useState(null)
   const [qrImage,      setQrImage]      = useState(null)
-  const qrPollRef = useRef(null)
+  const qrPollRef   = useRef(null)
+  const connPollRef = useRef(null)
 
   // ── Assign dialog ──
   const [assignOpen,     setAssignOpen]     = useState(false)
@@ -268,9 +269,28 @@ export default function InstancesPanel() {
   }, [fetchQrOnce])
 
   function closeQr() {
-    if (qrPollRef.current) clearTimeout(qrPollRef.current)
+    if (qrPollRef.current)   clearTimeout(qrPollRef.current)
+    if (connPollRef.current) clearInterval(connPollRef.current)
     setQrOpen(false); setQrTarget(null); setQrImage(null); setQrStatus('loading')
   }
+
+  const startConnPoll = useCallback((name) => {
+    if (connPollRef.current) clearInterval(connPollRef.current)
+    connPollRef.current = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/evolution/instance/${name}`)
+        if (!r.ok) return
+        const d = await r.json()
+        const state = d?.instance?.state || d?.state || ''
+        if (['open', 'connected'].includes(state)) {
+          if (connPollRef.current) clearInterval(connPollRef.current)
+          if (qrPollRef.current)   clearTimeout(qrPollRef.current)
+          setQrOpen(false); setQrTarget(null); setQrImage(null); setQrStatus('loading')
+          fetchInstances()
+        }
+      } catch {}
+    }, 3000)
+  }, [fetchInstances])
 
   // ── Handlers ────────────────────────────────────────────────────────────────
   function openMenu(e, inst) { setMenuAnchor(e.currentTarget); setMenuInst(inst) }
@@ -280,6 +300,7 @@ export default function InstancesPanel() {
     const inst = menuInst; closeMenu()
     setQrTarget(inst); setQrOpen(true)
     startQrPoll(inst.name)
+    startConnPoll(inst.name)
   }
 
   function handleAssignClick() {
@@ -298,7 +319,10 @@ export default function InstancesPanel() {
   }
 
   async function handleCreate() {
-    if (!newName.trim()) { setCreateErr('El nombre es requerido'); return }
+    if (!newName.trim()) { setCreateErr(t.inst.errRequired); return }
+    if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(newName.trim()) && newName.trim().length > 1) {
+      setCreateErr(t.inst.errInvalidName); return
+    }
     setCreating(true); setCreateErr('')
     try {
       const r = await fetch('/api/instances', {
@@ -361,16 +385,16 @@ export default function InstancesPanel() {
       {/* ── Header ── */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
         <Box>
-          <Typography sx={{ color: 'rgba(255,255,255,0.92)', fontWeight: 800, fontSize: '1.3rem', lineHeight: 1.2 }}>
-            Instancias
+          <Typography sx={{ color: 'var(--text,rgba(255,255,255,0.92))', fontWeight: 800, fontSize: '1.3rem', lineHeight: 1.2 }}>
+            {t.inst.title}
           </Typography>
-          <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem', mt: 0.3 }}>
-            {instances.length} total · {connected} conectadas · {unassigned} sin asignar
+          <Typography sx={{ color: 'var(--text-muted,rgba(255,255,255,0.35))', fontSize: '0.75rem', mt: 0.3 }}>
+            {instances.length} {t.inst.subtitle.replace('{connected}', connected).replace('{unassigned}', unassigned)}
           </Typography>
         </Box>
 
         <Box sx={{ display: 'flex', gap: 1, ml: 'auto', alignItems: 'center' }}>
-          <Tooltip title="Actualizar">
+          <Tooltip title={t.inst.refresh}>
             <IconButton size="small" onClick={handleSync} disabled={syncing}
               sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'white' } }}>
               {syncing
@@ -389,7 +413,7 @@ export default function InstancesPanel() {
               textTransform: 'none', px: 2,
             }}
           >
-            Nueva instancia
+            {t.inst.newBtn}
           </Button>
         </Box>
       </Box>
@@ -397,7 +421,7 @@ export default function InstancesPanel() {
       {/* ── Search + filters ── */}
       <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
         <TextField
-          placeholder="Buscar instancia…"
+          placeholder={t.inst.search}
           size="small"
           value={search}
           onChange={e => setSearch(e.target.value)}
@@ -416,7 +440,7 @@ export default function InstancesPanel() {
           <Box sx={{ textAlign: 'center', pt: 8, color: 'rgba(255,255,255,0.2)' }}>
             <PhoneAndroidIcon sx={{ fontSize: 48, mb: 1, opacity: 0.3 }} />
             <Typography sx={{ fontSize: '0.85rem' }}>
-              {instances.length === 0 ? 'Aún no hay instancias. Crea la primera.' : 'Sin resultados'}
+              {instances.length === 0 ? t.inst.empty : t.inst.noResults}
             </Typography>
           </Box>
         ) : (
@@ -446,9 +470,9 @@ export default function InstancesPanel() {
               boxShadow: '0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(var(--accent-rgb,59,130,246),0.08)',
               backdropFilter: 'blur(12px)',
               '& .MuiMenuItem-root': {
-                fontSize: '0.82rem', gap: 1.2, py: 1, color: 'rgba(255,255,255,0.8)',
+                fontSize: '0.82rem', gap: 1.2, py: 1, color: 'var(--text)',
                 borderRadius: 1, mx: 0.5,
-                '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', color: 'white' },
+                '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', color: 'var(--text)' },
               },
             },
           },
@@ -456,57 +480,99 @@ export default function InstancesPanel() {
       >
         <MenuItem onClick={handleQrClick}>
           <QrCodeIcon sx={{ fontSize: 17, color: 'var(--accent,#60a5fa)' }} />
-          Conectar (QR)
+          {t.inst.connectQr}
         </MenuItem>
         <MenuItem onClick={handleAssignClick}>
           <PersonAddIcon sx={{ fontSize: 17, color: '#a78bfa' }} />
-          Asignar usuario
+          {t.inst.assignUser}
         </MenuItem>
         <MenuItem onClick={handleDeleteClick} sx={{ color: '#f87171 !important' }}>
           <DeleteForeverIcon sx={{ fontSize: 17, color: '#f87171' }} />
-          Eliminar
+          {t.inst.delete}
         </MenuItem>
       </Menu>
 
       {/* ── Create dialog ── */}
-      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} sx={DIALOG_SX}>
-        <DialogTitle sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', pb: 1 }}>
-          Nueva instancia
+      <Dialog open={createOpen} onClose={() => !creating && setCreateOpen(false)} sx={{
+        '& .MuiDialog-paper': {
+          background: 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.1) 0%, var(--card-bg,#161d2e) 55%)',
+          border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)',
+          borderRadius: 3, minWidth: 380,
+          boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+        },
+      }}>
+        <DialogTitle sx={{ pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+            <Box sx={{
+              width: 34, height: 34, borderRadius: 2, flexShrink: 0,
+              bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)',
+              border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <PhoneAndroidIcon sx={{ fontSize: 18, color: 'var(--accent,#60a5fa)' }} />
+            </Box>
+            <Box>
+              <Typography sx={{ color: 'var(--text,white)', fontWeight: 700, fontSize: '0.97rem', lineHeight: 1.2 }}>
+                {t.inst.createTitle}
+              </Typography>
+              <Typography sx={{ color: 'var(--text-muted,rgba(255,255,255,0.4))', fontSize: '0.72rem', mt: 0.2 }}>
+                {t.inst.createSubtitle}
+              </Typography>
+            </Box>
+          </Box>
         </DialogTitle>
-        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
+
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '4px !important', px: 3 }}>
           <TextField
-            label="Nombre de instancia"
-            placeholder="ej. tania-wa-01"
+            label={t.inst.nameLabel}
+            placeholder={t.inst.namePlaceholder}
             size="small"
             value={newName}
-            onChange={e => setNewName(e.target.value.replace(/\s/g, '-').toLowerCase())}
+            onChange={e => setNewName(e.target.value.replace(/[^a-z0-9-]/g, '').toLowerCase())}
             sx={FIELD_SX}
-            onKeyDown={e => e.key === 'Enter' && handleCreate()}
+            onKeyDown={e => e.key === 'Enter' && !newNumber && handleCreate()}
             autoFocus
+            helperText={<span style={{ color: 'var(--text-muted,rgba(255,255,255,0.3))', fontSize: '0.68rem' }}>{t.inst.nameHint}</span>}
           />
           <TextField
-            label="Número (opcional)"
-            placeholder="ej. 524428000000"
+            label={t.inst.numberLabel}
+            placeholder={t.inst.numberPlaceholder}
             size="small"
             value={newNumber}
-            onChange={e => setNewNumber(e.target.value)}
+            onChange={e => setNewNumber(e.target.value.replace(/\D/g, ''))}
             sx={FIELD_SX}
-            helperText={<span style={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.7rem' }}>Se puede añadir después de conectar</span>}
+            onKeyDown={e => e.key === 'Enter' && handleCreate()}
+            helperText={<span style={{ color: 'var(--text-muted,rgba(255,255,255,0.3))', fontSize: '0.68rem' }}>{t.inst.numberHint}</span>}
+            slotProps={{ input: {
+              startAdornment: <Typography sx={{ color: 'var(--text-muted,rgba(255,255,255,0.3))', fontSize: '0.85rem', mr: 0.5, fontFamily: 'monospace' }}>+</Typography>
+            }}}
           />
-          {createErr && <Typography sx={{ color: '#f87171', fontSize: '0.78rem' }}>{createErr}</Typography>}
+          {createErr && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1.5, py: 1, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+              <Typography sx={{ color: '#f87171', fontSize: '0.78rem' }}>{createErr}</Typography>
+            </Box>
+          )}
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
-          <Button onClick={() => setCreateOpen(false)}
-            sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.82rem' }}>
-            Cancelar
+
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
+          <Button onClick={() => setCreateOpen(false)} disabled={creating}
+            sx={{ color: 'var(--text-muted,rgba(255,255,255,0.4))', textTransform: 'none', fontSize: '0.82rem', borderRadius: 2 }}>
+            {t.inst.cancel}
           </Button>
           <Button
             onClick={handleCreate}
-            disabled={creating}
+            disabled={creating || !newName.trim()}
             variant="contained"
-            sx={{ bgcolor: 'var(--accent,#3b82f6)', textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2 }}
+            sx={{
+              bgcolor: 'var(--accent,#3b82f6)', textTransform: 'none', fontWeight: 700,
+              fontSize: '0.82rem', borderRadius: 2, minWidth: 130,
+              '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.85)' },
+              '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.2)' },
+            }}
           >
-            {creating ? <CircularProgress size={16} sx={{ color: 'white' }} /> : 'Crear'}
+            {creating
+              ? <><CircularProgress size={14} sx={{ color: 'white', mr: 1 }} />{t.inst.creating}</>
+              : t.inst.create}
           </Button>
         </DialogActions>
       </Dialog>

@@ -63,8 +63,8 @@ function Section({ icon, title, color, children }) {
       borderLeft: `3px solid ${color}`,
       overflow: 'hidden',
       position: 'relative',
-      background: `linear-gradient(135deg, ${color}0f 0%, rgba(15,23,42,0.6) 60%)`,
-      border: '1px solid rgba(255,255,255,0.07)',
+      background: `linear-gradient(135deg, ${color}0f 0%, transparent 60%)`,
+      border: '1px solid var(--border)',
       borderLeft: `3px solid ${color}`,
     }}>
       {/* brillo radial en esquina */}
@@ -95,7 +95,7 @@ function InfoRow({ label, value }) {
   if (!v) return null
   value = v
   return (
-    <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start', py: 0.7, borderBottom: '1px solid rgba(255,255,255,0.05)', '&:last-of-type': { borderBottom: 'none' } }}>
+    <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start', py: 0.7, borderBottom: '1px solid var(--border)', '&:last-of-type': { borderBottom: 'none' } }}>
       <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.3)', minWidth: 90, flexShrink: 0, fontSize: '0.78rem' }}>
         {label}
       </Typography>
@@ -118,7 +118,7 @@ function MetricCard({ icon, title, value, color }) {
       borderTop: `3px solid ${color}`,
       overflow: 'hidden',
       position: 'relative',
-      background: `linear-gradient(135deg, ${color}12 0%, rgba(15,23,42,0.6) 65%)`,
+      background: `linear-gradient(135deg, ${color}12 0%, transparent 65%)`,
     }}>
       <Box sx={{
         position: 'absolute', top: -25, left: -25,
@@ -128,7 +128,7 @@ function MetricCard({ icon, title, value, color }) {
       }} />
       <Box sx={{ color, display: 'flex', mb: 0.5, position: 'relative' }}>{icon}</Box>
       <Typography sx={{ color, fontWeight: 700, fontSize: '1.15rem', lineHeight: 1, position: 'relative' }}>{value}</Typography>
-      <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.68rem', textAlign: 'center', position: 'relative' }}>{title}</Typography>
+      <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.35))', fontSize: '0.68rem', textAlign: 'center', position: 'relative' }}>{title}</Typography>
     </Box>
   )
 }
@@ -142,8 +142,8 @@ function ContactColumn({ icon, title, items, color, emptyMsg }) {
         <Typography fontWeight={700} fontSize="0.82rem" sx={{ color: 'rgba(255,255,255,0.75)' }}>{title}</Typography>
       </Box>
       {items?.length > 0
-        ? items.map(n => (
-            <Typography key={n} variant="body2" sx={{ py: 0.3, color, fontWeight: 500, textAlign: 'center', fontSize: '0.82rem', wordBreak: 'break-all', overflowWrap: 'anywhere' }}>
+        ? items.map((n, i) => (
+            <Typography key={`${n}-${i}`} variant="body2" sx={{ py: 0.3, color, fontWeight: 500, textAlign: 'center', fontSize: '0.82rem', wordBreak: 'break-all', overflowWrap: 'anywhere' }}>
               {n}
             </Typography>
           ))
@@ -170,13 +170,13 @@ export default function ResultDisplay({ result }) {
       {/* ── BANNER ── */}
       <Box sx={{
         mb: 3, borderRadius: 3, overflow: 'hidden',
-        border: '1px solid rgba(255,255,255,0.08)',
+        border: '1px solid var(--border)',
         position: 'relative',
       }}>
         {/* fondo degradado */}
         <Box sx={{
           position: 'absolute', inset: 0,
-          background: 'linear-gradient(135deg, rgba(59,130,246,0.12) 0%, rgba(139,92,246,0.1) 50%, rgba(15,23,42,0.95) 100%)',
+          background: 'linear-gradient(135deg, rgba(59,130,246,0.12) 0%, rgba(139,92,246,0.1) 50%, transparent 100%)',
           zIndex: 0,
         }} />
         {/* brillo superior izquierdo */}
@@ -250,8 +250,8 @@ export default function ResultDisplay({ result }) {
             flexShrink: 0,
             display: 'flex', alignItems: 'center', gap: 1.2,
             px: 2, py: 1.2, borderRadius: 2,
-            bgcolor: result.primary_whatsapp_number ? 'rgba(37,211,102,0.12)' : 'rgba(255,255,255,0.04)',
-            border: `1px solid ${result.primary_whatsapp_number ? 'rgba(37,211,102,0.3)' : 'rgba(255,255,255,0.08)'}`,
+            bgcolor: result.primary_whatsapp_number ? 'rgba(37,211,102,0.12)' : 'var(--item-hover)',
+            border: `1px solid ${result.primary_whatsapp_number ? 'rgba(37,211,102,0.3)' : 'var(--border)'}`,
             boxShadow: result.primary_whatsapp_number ? '0 0 16px rgba(37,211,102,0.12)' : 'none',
           }}>
             <WhatsAppIcon sx={{ fontSize: 22, color: result.primary_whatsapp_number ? '#25D366' : 'rgba(255,255,255,0.18)' }} />

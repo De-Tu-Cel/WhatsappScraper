@@ -479,6 +479,22 @@ class MongoDBManager:
                 if (r["unread"] > deduped[idx]["unread"] or
                         (r["last_at"] or "") > (deduped[idx]["last_at"] or "")):
                     deduped[idx] = r
+
+        # Annotate with AI follow-up session status
+        if deduped:
+            active_cids = [r["company_id"] for r in deduped]
+            ai_sessions = {
+                s["company_id"]: s
+                for s in self.db.ai_followup_sessions.find(
+                    {"company_id": {"$in": active_cids}, "status": {"$in": ["active", "waiting"]}},
+                    {"company_id": 1, "ai_typing": 1},
+                )
+            }
+            for r in deduped:
+                sess = ai_sessions.get(r["company_id"])
+                r["ai_active"] = bool(sess)
+                r["ai_typing"] = bool(sess.get("ai_typing")) if sess else False
+
         return deduped
 
     def get_conversation_thread(self, company_id: str, number: str = None):

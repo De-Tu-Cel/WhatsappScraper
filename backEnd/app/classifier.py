@@ -1,49 +1,46 @@
 # classifier.py
-"""Groq-based classifier for inbound WhatsApp responses."""
+"""DeepSeek-based classifier for inbound WhatsApp responses."""
 import json
 import logging
 import threading
 import time
 from datetime import datetime, timedelta
 
-# Allow at most 2 concurrent Groq calls to stay within TPM limits
-_GROQ_SEMAPHORE = threading.Semaphore(2)
-
-from app.config import GROQ_API_KEY, DEEPSEEK_API_KEY
+from app.config import DEEPSEEK_API_KEY
 from app.database import MongoDBManager
 
 log = logging.getLogger(__name__)
 
-# ── Circuit breaker — all providers exhausted ─────────────────────────────────
-# When both DeepSeek and Groq are out of quota, pause classification for
-# _QUOTA_PAUSE_MINUTES to avoid hammering the APIs and spamming logs.
+_DEEPSEEK_SEMAPHORE = threading.Semaphore(2)
+
 _QUOTA_PAUSE_MINUTES = 60
-_quota_exhausted_until: float = 0.0  # epoch seconds
+_quota_exhausted_until: float = 0.0
+
 
 def all_quota_exhausted() -> bool:
     return time.time() < _quota_exhausted_until
 
+
 def _set_quota_circuit_open():
     global _quota_exhausted_until
     _quota_exhausted_until = time.time() + _QUOTA_PAUSE_MINUTES * 60
-    log.warning(
-        "Circuit breaker abierto — todos los proveedores LLM sin cuota. "
-        "Clasificación pausada por %d minutos.", _QUOTA_PAUSE_MINUTES
-    )
+    log.warning("Circuit breaker abierto — DeepSeek sin cuota. Clasificación pausada por %d minutos.", _QUOTA_PAUSE_MINUTES)
+
 
 def reset_quota_circuit():
-    """Call this after adding credits or when quotas reset."""
     global _quota_exhausted_until
     _quota_exhausted_until = 0.0
     log.info("Circuit breaker de cuota LLM reiniciado manualmente.")
 
 
-class GroqQuotaExceeded(Exception):
-    """Raised when Groq daily token quota (TPD) is exhausted. Do not retry."""
-
-
 class LLMQuotaExceeded(Exception):
-    """Raised when the LLM provider quota is exhausted. Do not retry."""
+    pass
+
+# Keep old name as alias so imports in other files don't break
+GroqQuotaExceeded = LLMQuotaExceeded
+
+
+# ── Single-message prompt (first reply / cold response) ───────────────────────
 
 _PROMPT_TEMPLATE = """\
 Eres un auditor experto en calidad de atención comercial vía WhatsApp en Latinoamérica. \
@@ -61,15 +58,21 @@ RESPUESTA DEL PROSPECTO: {inbound_body}
 "automatico" — plantilla fija sin lógica de conversación.
   Fuertes: folio/ticket (#00123), "en breve te atendemos", "mensaje generado automáticamente", horarios explícitos ("Lun-Vie 9-18h"), ignora completamente el contenido enviado.
 
+"menu" — sistema IVR o chatbot que presenta opciones numeradas y espera que el usuario responda con un número para navegar.
+  Fuertes: lista de opciones numeradas ("1. Ventas  2. Soporte  3. Información"), instrucción explícita de "responde con el número", flujo de árbol de decisión paso a paso.
+  Diferencia clave con "bot": no intenta conversar — solo guía mediante selección de números.
+  Diferencia clave con "automatico": sí espera interacción del usuario, no es un acuse de recibo.
+
 "hibrido" — auto + oferta/transferencia explícita a humano.
   Fuertes: "¿Deseas hablar con un asesor?", "Te paso con un agente", menú con opción de persona real.
   Regla: evidencia de AMBAS partes (auto + transferencia).
 
-"bot" — lógica propia, flujo guiado o IA conversacional.
-  is_ai=false: opciones numeradas, pide datos paso a paso, nombre artificial ("Soy Sofía"), ignora pregunta.
+"bot" — lógica propia, flujo guiado o IA conversacional SIN menú numerado.
+  is_ai=false: responde con frases propias pero ignora el contexto, nombre artificial ("Soy Sofía"), flujo predefinido sin números.
   is_ai=true: lenguaje natural fluido, entiende el contexto, sin menús, español perfecto, tono overly helpful.
 
 REGLA DE ORO: ante la duda → humano. Solo no-humano con evidencia CLARA.
+JERARQUÍA: si hay menú numerado → "menu" (aunque también tenga frases automáticas).
 
 ══ PASO 2: CALIDAD DE SERVICIO (1-5 por dimensión) ══
 Mide CÓMO atendieron al prospecto, independientemente de si hay interés de compra.
@@ -102,11 +105,47 @@ Hallazgo más importante: qué reveló sobre el servicio y/o la intención de co
 ✗ "Respuesta breve" / "Muestra interés" / "Sistema automático"
 
 is_ai: true SOLO si category="bot" Y es IA conversacional (no menú rígido)
-bot_quality: SOLO si category="bot": 1=menú básico · 3=flujo funcional · 5=IA avanzada
+bot_quality: SOLO si category="bot": 1=flujo básico · 3=flujo funcional · 5=IA avanzada
 ai_confidence: 0.0-1.0 (certeza de IA, solo si is_ai=true)
+Para category="menu": is_ai=false siempre, bot_quality=null siempre.
 
 Responde SOLO con JSON válido:
-{{"category":"humano|automatico|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"response_quality":1,"bot_quality":null,"notes":"diagnóstico"}}\
+{{"category":"humano|automatico|menu|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"response_quality":1,"bot_quality":null,"notes":"diagnóstico"}}\
+"""
+
+
+# ── Full-conversation prompt (used after AI session closes) ───────────────────
+
+_CONV_PROMPT_TEMPLATE = """\
+Eres un analista comercial experto. Acabas de leer la conversación completa de WhatsApp entre \
+un representante de ventas de Detucel y un prospecto de {company_name} ({industry}).
+
+CONVERSACIÓN COMPLETA (cronológica):
+{thread}
+
+Basándote en TODA la conversación (no solo el último mensaje), evalúa:
+
+══ ORIGEN DE LA RESPUESTA INICIAL ══
+Categoriza la primera respuesta del prospecto usando los mismos criterios de siempre:
+"humano" / "automatico" / "menu" / "hibrido" / "bot"
+
+══ CALIDAD DE SERVICIO (1-5) ══
+Evalúa el comportamiento del prospecto/empresa a lo largo de toda la conversación.
+svc_prof, svc_comp, svc_empa, svc_solu, svc_next, svc_proact
+
+══ SEÑAL COMERCIAL FINAL (1-5) ══
+¿En qué estado quedó el lead al cierre de la conversación?
+1 — Descartado / sin interés / bloqueó
+2 — Frío / no respondió más / cortesía vacía
+3 — Tibio / pidió info pero sin compromiso
+4 — Interesado / preguntó detalles, pidió que lo contacten
+5 — Caliente / pidió precio/cita/propuesta, mostró urgencia
+
+══ DIAGNÓSTICO FINAL (máximo 20 palabras) ══
+Conclusión del desenlace: qué pasó en la conversación y cuál es el siguiente paso recomendado.
+
+Responde SOLO con JSON válido:
+{{"category":"humano|automatico|menu|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"response_quality":3,"bot_quality":null,"notes":"diagnóstico","conversation_analysis":true}}\
 """
 
 _ERROR_RESULT = {
@@ -121,13 +160,12 @@ _ERROR_RESULT = {
     "svc_proact": None,
     "response_quality": 3,
     "bot_quality": None,
-    "notes": "Groq no configurado",
+    "notes": "DeepSeek no configurado",
     "error": True,
 }
 
 
 def is_business_hours(dt: datetime) -> bool:
-    """Returns True if dt falls within Monday–Friday 09:00–18:00."""
     return dt.weekday() < 5 and 9 <= dt.hour < 18
 
 
@@ -175,6 +213,7 @@ def _build_prompt(inbound_body: str, outbound_body: str, reaction_time_min: floa
 
 _VALID_CATEGORIES = {"humano", "automatico", "hibrido", "bot"}
 
+
 def _parse_llm_response(raw: str) -> dict:
     if raw.startswith("```"):
         raw = raw.split("```")[1].strip()
@@ -209,108 +248,111 @@ def _parse_llm_response(raw: str) -> dict:
         "response_quality": result.get("response_quality") or 2,
         "bot_quality": result.get("bot_quality"),
         "notes": result.get("notes", ""),
+        "conversation_analysis": bool(result.get("conversation_analysis", False)),
     }
 
 
+def _call_deepseek(messages: list, max_tokens: int = 280) -> str:
+    """Call DeepSeek and return the raw text response. Raises LLMQuotaExceeded on billing errors."""
+    from openai import OpenAI
+    client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+    with _DEEPSEEK_SEMAPHORE:
+        for attempt in range(4):
+            try:
+                resp = client.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=messages,
+                    temperature=0,
+                    max_tokens=max_tokens,
+                )
+                return resp.choices[0].message.content.strip()
+            except Exception as e:
+                err = str(e).lower()
+                if "402" in str(e) or "insufficient_balance" in err:
+                    raise LLMQuotaExceeded("DeepSeek saldo insuficiente")
+                if ("429" in str(e) or "rate_limit" in err) and attempt < 3:
+                    wait = 5 * (2 ** attempt)
+                    log.warning("DeepSeek 429 — reintentando en %ds (intento %d/4)", wait, attempt + 1)
+                    time.sleep(wait)
+                else:
+                    raise
+    raise LLMQuotaExceeded("DeepSeek no respondió tras 4 intentos")
+
+
 def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: float = None) -> dict:
-    """Classify an inbound response using DeepSeek (primary) → Groq (fallback).
-    Raises LLMQuotaExceeded only when ALL available providers are out of credits."""
-    if not DEEPSEEK_API_KEY and not GROQ_API_KEY:
+    """Classify a single inbound reply using the outbound message as context."""
+    if not DEEPSEEK_API_KEY:
         return dict(_ERROR_RESULT)
     if all_quota_exhausted():
-        raise LLMQuotaExceeded("Circuit breaker activo — todos los proveedores sin cuota, esperando reset.")
-
+        raise LLMQuotaExceeded("Circuit breaker activo — DeepSeek sin cuota.")
     prompt = _build_prompt(inbound_body, outbound_body, reaction_time_min)
-    messages = [{"role": "user", "content": prompt}]
-
-    deepseek_quota_hit = False
-
-    # ── DeepSeek (primary) ────────────────────────────────────────────────────
-    if DEEPSEEK_API_KEY:
-        try:
-            from openai import OpenAI
-            client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
-            with _GROQ_SEMAPHORE:
-                for _attempt in range(4):
-                    try:
-                        resp = client.chat.completions.create(
-                            model="deepseek-chat",
-                            messages=messages,
-                            temperature=0,
-                            max_tokens=280,
-                        )
-                        break
-                    except Exception as _e:
-                        _err_str = str(_e).lower()
-                        _is_quota = "402" in str(_e) or "insufficient_balance" in _err_str
-                        _is_429   = "429" in str(_e) or "rate_limit" in _err_str
-                        if _is_quota:
-                            log.warning("DeepSeek saldo insuficiente — intentando Groq como fallback")
-                            deepseek_quota_hit = True
-                            raise  # exit retry loop
-                        if _is_429 and _attempt < 3:
-                            _wait = 5 * (2 ** _attempt)
-                            log.warning("DeepSeek 429 — reintentando en %ds (intento %d/4)", _wait, _attempt + 1)
-                            time.sleep(_wait)
-                        else:
-                            raise
-            if not deepseek_quota_hit:
-                return _parse_llm_response(resp.choices[0].message.content.strip())
-        except Exception as e:
-            if not deepseek_quota_hit:
-                import traceback
-                log.error("DeepSeek classify_response failed: %s\n%s", e, traceback.format_exc())
-                # Non-quota DeepSeek error: fall through to Groq
-
-    # ── Groq (fallback) ───────────────────────────────────────────────────────
-    if not GROQ_API_KEY:
-        # No fallback available
-        raise LLMQuotaExceeded("DeepSeek sin saldo y Groq no configurado")
-
     try:
-        from groq import Groq
-        client = Groq(api_key=GROQ_API_KEY)
-        with _GROQ_SEMAPHORE:
-            for _attempt in range(4):
-                try:
-                    resp = client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
-                        messages=messages,
-                        temperature=0,
-                        max_tokens=280,
-                    )
-                    break
-                except Exception as _e:
-                    _err_str = str(_e).lower()
-                    _is_daily_quota = "tokens per day" in _err_str or ("tpd" in _err_str and "429" in _err_str)
-                    _is_429 = "429" in str(_e) or "rate_limit" in _err_str
-                    if _is_daily_quota:
-                        log.warning("Groq cuota diaria agotada")
-                        raise GroqQuotaExceeded(str(_e))
-                    if _is_429 and _attempt < 3:
-                        _wait = 5 * (2 ** _attempt)
-                        log.warning("Groq 429 — reintentando en %ds", _wait)
-                        time.sleep(_wait)
-                    else:
-                        raise
-        return _parse_llm_response(resp.choices[0].message.content.strip())
-    except GroqQuotaExceeded:
-        raise LLMQuotaExceeded("DeepSeek sin saldo y Groq cuota agotada")
+        raw = _call_deepseek([{"role": "user", "content": prompt}])
+        return _parse_llm_response(raw)
+    except LLMQuotaExceeded:
+        raise
     except Exception as e:
         import traceback
-        log.error("Groq classify_response failed: %s\n%s", e, traceback.format_exc())
+        log.error("classify_response failed: %s\n%s", e, traceback.format_exc())
         return {"category": "humano", "response_quality": 3, "bot_quality": None, "notes": "Error al clasificar", "error": True}
 
 
-_AUTO_FOLLOWUP_MINUTES = 5   # wait up to 5 min for human after auto-response
+def classify_conversation(company_id: str, company_name: str = "", industry: str = "") -> dict:
+    """Analyze the full message thread for a company after an AI session closes.
+    Fetches all messages from message_logs and builds a complete conversation view."""
+    if not DEEPSEEK_API_KEY:
+        return dict(_ERROR_RESULT)
+    if all_quota_exhausted():
+        raise LLMQuotaExceeded("Circuit breaker activo — DeepSeek sin cuota.")
+
+    db = MongoDBManager()
+    messages = list(db.db.message_logs.find(
+        {"company_id": company_id, "direction": {"$in": ["inbound", "outbound"]}},
+        {"direction": 1, "message_body": 1, "sent_by_name": 1, "created_at": 1},
+        sort=[("created_at", 1)],
+        limit=40,
+    ))
+    if not messages:
+        return dict(_ERROR_RESULT)
+
+    lines = []
+    for m in messages:
+        role = "Detucel" if m["direction"] == "outbound" else "Prospecto"
+        body = (m.get("message_body") or "").strip()
+        if body:
+            lines.append(f"[{role}]: {body}")
+    thread = "\n".join(lines)
+
+    prompt = _CONV_PROMPT_TEMPLATE.format(
+        company_name=company_name or company_id,
+        industry=industry or "desconocido",
+        thread=thread,
+    )
+    try:
+        raw = _call_deepseek([{"role": "user", "content": prompt}], max_tokens=350)
+        return _parse_llm_response(raw)
+    except LLMQuotaExceeded:
+        raise
+    except Exception as e:
+        import traceback
+        log.error("classify_conversation failed for %s: %s\n%s", company_id, e, traceback.format_exc())
+        return {"category": "humano", "response_quality": 3, "bot_quality": None, "notes": "Error al analizar conversación", "error": True}
 
 
 def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_at: datetime):
-    """Background task: classify inbound message. For auto-responses, waits for a possible
-    human follow-up message before finalising the classification."""
+    """Background task: classify a single inbound message and save the analysis."""
+    if all_quota_exhausted():
+        log.debug("classify_and_save: cuota agotada, skip log_id=%s", log_id)
+        return
     try:
         from bson import ObjectId
         db = MongoDBManager()
+        existing = db.db.message_logs.find_one(
+            {"_id": ObjectId(log_id)}, {"analysis_status": 1}
+        )
+        if (existing or {}).get("analysis_status") == "quota_exceeded":
+            log.debug("classify_and_save: ya marcado quota_exceeded, skip log_id=%s", log_id)
+            return
 
         # Check if this message resolves a pending human-followup for the same company
         pending = db.db.message_logs.find_one({
@@ -320,11 +362,9 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
             "analysis.followup_deadline": {"$gte": received_at},
         })
         if pending:
-            # A human message arrived within the wait window — upgrade the prior auto analysis
             prior_id = str(pending["_id"])
             prior_outbound = db.get_last_outbound_for_company(
-                company_id,
-                before_dt=pending.get("created_at", received_at),
+                company_id, before_dt=pending.get("created_at", received_at),
             )
             outbound_body = (prior_outbound or {}).get("message_body") or ""
             reaction_time_min = None
@@ -338,15 +378,11 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
             upgraded["pending_human_check"] = False
             upgraded["upgraded_from_auto"] = True
             db.save_message_analysis(prior_id, upgraded)
-            # Also classify the current message normally (it will link to the same company)
 
-        # Standard classification for this message
         inbound_doc = db.db.message_logs.find_one({"_id": ObjectId(log_id)}, {"from_number": 1, "number": 1})
         from_number = (inbound_doc or {}).get("from_number") or (inbound_doc or {}).get("number")
 
-        last_outbound = db.get_last_outbound_for_company(
-            company_id, before_dt=received_at, to_number=from_number
-        )
+        last_outbound = db.get_last_outbound_for_company(company_id, before_dt=received_at, to_number=from_number)
         if not last_outbound:
             last_outbound = db.get_last_outbound_for_company(company_id, before_dt=received_at)
 
@@ -366,17 +402,16 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
         analysis["business_hours"] = business_hours
         analysis["classified_at"] = datetime.now().isoformat()
 
-        # If auto-response: mark as pending human-followup for the next 5 minutes
         if analysis.get("category") in ("automatico", "bot"):
             analysis["pending_human_check"] = True
-            analysis["followup_deadline"] = received_at + timedelta(minutes=_AUTO_FOLLOWUP_MINUTES)
+            analysis["followup_deadline"] = received_at + timedelta(minutes=5)
         else:
             analysis["pending_human_check"] = False
 
         db.save_message_analysis(log_id, analysis)
-    except (GroqQuotaExceeded, LLMQuotaExceeded):
+    except LLMQuotaExceeded:
         _set_quota_circuit_open()
-        log.warning("classify_and_save: todos los proveedores sin cuota para log_id=%s — marcado como quota_exceeded", log_id)
+        log.warning("classify_and_save: DeepSeek sin cuota para log_id=%s — marcado como quota_exceeded", log_id)
         try:
             from bson import ObjectId
             db.db.message_logs.update_one(
@@ -398,26 +433,42 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
             pass
 
 
-_NO_REPLY_WAIT_MINUTES = 30   # classify outbound with no reply after this window
-_SWEEP_INTERVAL_SEC    = 300  # run sweep every 5 minutes
+def classify_conversation_and_save(company_id: str, log_id: str):
+    """Analyze the full conversation thread and save the result on the given log_id.
+    Called after an AI session closes — replaces any prior single-message analysis."""
+    try:
+        from bson import ObjectId
+        db = MongoDBManager()
+
+        try:
+            company = db.db.companies.find_one({"_id": ObjectId(company_id)}) or {}
+        except Exception:
+            company = {}
+        company_name = company.get("name", "")
+        industry = company.get("industry", "")
+
+        analysis = classify_conversation(company_id, company_name, industry)
+        analysis["classified_at"] = datetime.now().isoformat()
+        analysis["pending_human_check"] = False
+        db.save_message_analysis(log_id, analysis)
+        log.info("classify_conversation_and_save: saved for company=%s log=%s", company_id, log_id)
+    except LLMQuotaExceeded:
+        _set_quota_circuit_open()
+        log.warning("classify_conversation_and_save: DeepSeek sin cuota para company=%s", company_id)
+    except Exception as _exc:
+        import traceback
+        log.error("classify_conversation_and_save failed for %s: %s\n%s", company_id, _exc, traceback.format_exc())
+
+
+_NO_REPLY_WAIT_MINUTES = 30
+_SWEEP_INTERVAL_SEC    = 300
 
 
 def _sweep_pending():
-    """
-    Runs every 5 minutes. Two jobs:
-
-    1. Expire pending_human_check — auto/bot messages whose followup window
-       passed without a human reply: mark pending_human_check=False so the UI
-       stops waiting and shows the final auto/bot classification.
-
-    2. Mark no-reply — outbound messages sent more than 30 minutes ago with
-       no inbound response at all: save an analysis with category='sin_respuesta'.
-    """
     try:
         db = MongoDBManager()
         now = datetime.now()
 
-        # ── Job 1: expire stale pending_human_check ──────────────────────────
         db.db.message_logs.update_many(
             {
                 "direction": "inbound",
@@ -427,9 +478,7 @@ def _sweep_pending():
             {"$set": {"analysis.pending_human_check": False}},
         )
 
-        # ── Job 2: no-reply outbound → mark sin_respuesta ────────────────────
         cutoff = now - timedelta(minutes=_NO_REPLY_WAIT_MINUTES)
-        # Find outbound messages older than cutoff with no analysis yet
         outbounds = list(db.db.message_logs.find(
             {
                 "direction": "outbound",
@@ -442,7 +491,6 @@ def _sweep_pending():
         for ob in outbounds:
             company_id = str(ob.get("company_id", ""))
             sent_at    = ob.get("created_at")
-            # Check if ANY inbound arrived for this company after this outbound
             has_reply = db.db.message_logs.find_one({
                 "company_id": company_id,
                 "direction": "inbound",
@@ -462,7 +510,7 @@ def _sweep_pending():
                     "classified_at":    now.isoformat(),
                     "pending_human_check": False,
                 })
-        # ── Job 3: re-resolve inbound messages saved with company_id="unknown" ──
+
         unknowns = list(db.db.message_logs.find(
             {
                 "direction": "inbound",
@@ -482,7 +530,7 @@ def _sweep_pending():
                     {"$set": {"company_id": resolved}},
                 )
                 body = msg.get("message_body", "")
-                if body and GROQ_API_KEY:
+                if body and DEEPSEEK_API_KEY:
                     import threading as _t
                     _t.Thread(
                         target=classify_and_save,
@@ -495,7 +543,6 @@ def _sweep_pending():
 
 
 def start_classifier_background():
-    """Launch the periodic sweep as a daemon thread. Call once at app startup."""
     def _loop():
         while True:
             time.sleep(_SWEEP_INTERVAL_SEC)

@@ -450,12 +450,7 @@ export default function Analytics() {
           </Box>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-          <Tooltip title="Crear bot con Andy">
-            <IconButton size="small" onClick={() => setBotBuilderOpen(true)}
-              sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'var(--accent,#60a5fa)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' } }}>
-              <SmartToyIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
+
           {data.some(r => r.analyzing) && (
             <Tooltip title={t.analytics.cancelPending || 'Detener análisis pendientes'}>
               <IconButton size="small" onClick={async () => {
@@ -684,7 +679,7 @@ export default function Analytics() {
                     </TableSortLabel>
                   </TableCell>
                   <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>{t.analytics.notes}</TableCell>
-                  <TableCell sx={HEADER_CELL_SX}>Andy</TableCell>
+                  <TableCell sx={HEADER_CELL_SX}>Chat IA</TableCell>
                   <TableCell sx={HEADER_CELL_SX}>{t.analytics.report}</TableCell>
                 </TableRow>
               </TableHead>

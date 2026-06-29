@@ -406,7 +406,8 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
   const addNum = () => {
     const n = newNum.trim()
     if (!n) { setNewNumError(t.db.numEmpty); return }
-    const err = waNumberValidationMsg(n)
+    const waMsgs = { empty: t.db.numEmpty, invalid: t.db.numInvalidFmt }
+    const err = waNumberValidationMsg(n, waMsgs)
     if (err) { setNewNumError(err); return }
     if (waNumbers.includes(n)) { setNewNumError(t.db.numDuplicate); return }
     setWaNumbers(prev => [...prev, n])
@@ -419,7 +420,8 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
   const commitEdit = () => {
     const v = editingVal.trim()
     if (!v) { setEditingError(t.db.numEmpty); return }
-    const err = waNumberValidationMsg(v)
+    const waMsgs = { empty: t.db.numEmpty, invalid: t.db.numInvalidFmt }
+    const err = waNumberValidationMsg(v, waMsgs)
     if (err) { setEditingError(err); return }
     if (waNumbers.some((n, i) => n === v && i !== editingIdx)) { setEditingError(t.db.numDuplicate); return }
     setWaNumbers(prev => prev.map((n, i) => i === editingIdx ? v : n))
@@ -492,7 +494,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
             helperText={form.name !== undefined && !form.name?.trim() ? t.db.nameRequired : ''}
           />
           {(() => {
-            const webErr = form.website?.trim() ? urlValidationMsg(form.website.trim()) : ''
+            const webErr = form.website?.trim() ? urlValidationMsg(form.website.trim(), { badProtocol: t.common.urlBadProtocol, invalid: t.common.urlInvalid }) : ''
             return (
               <TextField label={t.db.websiteLabel} size="small" fullWidth sx={FIELD_SX}
                 value={form.website || ''}
@@ -654,7 +656,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
         </Button>
         {(() => {
           const nameErr   = !form.name?.trim()
-          const webErr    = !!(form.website?.trim() && urlValidationMsg(form.website.trim()))
+          const webErr    = !!(form.website?.trim() && urlValidationMsg(form.website.trim(), { badProtocol: t.common.urlBadProtocol, invalid: t.common.urlInvalid }))
           const waErr     = form.has_whatsapp && waNumbers.length === 0
           const isInvalid = nameErr || webErr || waErr
           const tooltip   = nameErr   ? 'El nombre de la empresa es requerido'

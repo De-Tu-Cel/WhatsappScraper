@@ -59,6 +59,13 @@ export const ACCENTS = [
   { tKey: 'accentSpringGreen', value: '#00d084', glow: 'rgba(0,208,132,0.3)'    },
   { tKey: 'accentIce',         value: '#a5f3fc', glow: 'rgba(165,243,252,0.35)' },
   { tKey: 'accentSunrise',     value: '#fb923c', glow: 'rgba(251,146,60,0.3)'   },
+  // Profundos (para temas claros y pasteles)
+  { tKey: 'accentOceanDeep',   value: '#0369a1', glow: 'rgba(3,105,161,0.35)'   },
+  { tKey: 'accentForestDeep',  value: '#16a34a', glow: 'rgba(22,163,74,0.35)'   },
+  { tKey: 'accentCrimson',     value: '#be123c', glow: 'rgba(190,18,60,0.35)'   },
+  { tKey: 'accentVioletDeep',  value: '#6d28d9', glow: 'rgba(109,40,217,0.35)'  },
+  { tKey: 'accentStone',       value: '#78716c', glow: 'rgba(120,113,108,0.3)'  },
+  { tKey: 'accentMagenta',     value: '#d946ef', glow: 'rgba(217,70,239,0.3)'   },
 ]
 
 export const THEMES = [
@@ -99,7 +106,15 @@ export const THEMES = [
   { tKey: 'themeCinnamon',  value: 'canela',    bg: '#130a04', sidebar: '#1f1207', surface: '#261609', card: '#2e1a0b', preview: ['#130a04','#1f1207','#2e1a0b'] },
   { tKey: 'themeDaytime',   value: 'diurna',    bg: '#15100a', sidebar: '#1e170b', surface: '#25200d', card: '#2d2610', preview: ['#15100a','#1e170b','#2d2610'] },
   // ── Monocromático (fondo blanco, texto negro) ──
-  { tKey: 'themeMonochrome', value: 'mono', cat:'mono', bg: '#f0f2f5', sidebar: '#e4e8ef', surface: '#eaecf2', card: '#d8dde8', preview: ['#f0f2f5','#e4e8ef','#d8dde8'] },
+  { tKey: 'themeMonochrome', value: 'mono', cat:'mono', bg: '#d8dce6', sidebar: '#ccd1dc', surface: '#d2d6e0', card: '#c3c8d4', preview: ['#d8dce6','#ccd1dc','#c3c8d4'] },
+
+  // ── Pasteles (fondos muy claros, texto oscuro) ──
+  { tKey: 'themeCloud',      value: 'nube',     cat:'mono', bg: '#c4d0dc', sidebar: '#b8c6d4', surface: '#ccd6e0', card: '#b0bece', preview: ['#c4d0dc','#b8c6d4','#b0bece'] },
+  { tKey: 'themeMintFresh',  value: 'menta',    cat:'mono', bg: '#c8ddd4', sidebar: '#bcd4ca', surface: '#d0e4da', card: '#b0ccC0', preview: ['#c8ddd4','#bcd4ca','#b0ccc0'] },
+  { tKey: 'themeBlush',      value: 'rubor',    cat:'mono', bg: '#ddd0d4', sidebar: '#d4c6cc', surface: '#e4d8da', card: '#ccb8be', preview: ['#ddd0d4','#d4c6cc','#ccb8be'] },
+  { tKey: 'themePowderBlue', value: 'polvos',   cat:'mono', bg: '#c8d4e8', sidebar: '#bccae0', surface: '#d0daf0', card: '#b8c8dc', preview: ['#c8d4e8','#bccae0','#b8c8dc'] },
+  { tKey: 'themeChampagne',  value: 'champan',  cat:'mono', bg: '#ddd8c4', sidebar: '#d4cebc', surface: '#e6e0cc', card: '#ccc8b0', preview: ['#ddd8c4','#d4cebc','#ccc8b0'] },
+  { tKey: 'themeLilacMist',  value: 'lila',     cat:'mono', bg: '#d4cce0', sidebar: '#cac0d8', surface: '#dcd4e8', card: '#c0b8d0', preview: ['#d4cce0','#cac0d8','#c0b8d0'] },
 
   // ── Claros (tonos medios ~33-40% L, saturación ~22-35% — elegantes, no chillan) ──
   { tKey: 'themeSlateBlue',  value: 'pizarra',  cat:'light', bg: '#445c6e', sidebar: '#526a7c', surface: '#3c5264', card: '#5a6e80', preview: ['#445c6e','#526a7c','#5a6e80'] },
@@ -117,6 +132,12 @@ export const THEMES = [
   { tKey: 'themeSteel',      value: 'steel',    cat:'light', bg: '#2e3e52', sidebar: '#3c4c60', surface: '#283648', card: '#445462', preview: ['#2e3e52','#3c4c60','#445462'] },
   { tKey: 'themeWine',       value: 'vino',     cat:'light', bg: '#502030', sidebar: '#5e2e3e', surface: '#481828', card: '#6c3848', preview: ['#502030','#5e2e3e','#6c3848'] },
   { tKey: 'themeInk',        value: 'tinta',    cat:'light', bg: '#1e2e48', sidebar: '#2a3c58', surface: '#182638', card: '#344460', preview: ['#1e2e48','#2a3c58','#344460'] },
+  { tKey: 'themeClay',       value: 'arcilla',  cat:'light', bg: '#6b4c3b', sidebar: '#795a48', surface: '#5e4030', card: '#886254', preview: ['#6b4c3b','#795a48','#886254'] },
+  { tKey: 'themeGunmetal',   value: 'grafito',  cat:'light', bg: '#3d5060', surface: '#35465a', sidebar: '#4a5e6e', card: '#546878', preview: ['#3d5060','#4a5e6e','#546878'] },
+  { tKey: 'themeKhaki',      value: 'caqui',    cat:'light', bg: '#6b6240', sidebar: '#79704e', surface: '#5e5636', card: '#847a56', preview: ['#6b6240','#79704e','#847a56'] },
+  { tKey: 'themeMauve',      value: 'malva',    cat:'light', bg: '#5e3d52', sidebar: '#6c4b60', surface: '#543444', card: '#7a5870', preview: ['#5e3d52','#6c4b60','#7a5870'] },
+  { tKey: 'themeJade',       value: 'jade',     cat:'light', bg: '#2d6b50', sidebar: '#387a5e', surface: '#276046', card: '#428868', preview: ['#2d6b50','#387a5e','#428868'] },
+  { tKey: 'themeAsh',        value: 'ceniza',   cat:'light', bg: '#4a5058', surface: '#424850', sidebar: '#585e66', card: '#626870', preview: ['#4a5058','#585e66','#626870'] },
 ]
 
 const LANGS = [
@@ -176,21 +197,21 @@ export function applySettings(settings) {
   const isMono  = themeObj.cat === 'mono'
   const isVivid = themeObj.cat === 'light'
   root.style.setProperty('--text',
-    isMono ? '#1e293b' : '#f1f5f9')
+    isMono ? '#1a2234' : '#f1f5f9')
   root.style.setProperty('--text-muted',
-    isMono  ? 'rgba(15,23,42,0.52)'    :
+    isMono  ? 'rgba(15,23,42,0.58)'    :
     isVivid ? 'rgba(255,255,255,0.70)' : 'rgba(255,255,255,0.45)')
   root.style.setProperty('--border',
-    isMono  ? 'rgba(0,0,0,0.12)'       :
+    isMono  ? 'rgba(0,0,0,0.16)'       :
     isVivid ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.07)')
   root.style.setProperty('--item-hover',
-    isMono  ? 'rgba(0,0,0,0.05)'       :
+    isMono  ? 'rgba(0,0,0,0.07)'       :
     isVivid ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.05)')
   root.style.setProperty('--scrollbar-thumb',
-    isMono  ? 'rgba(0,0,0,0.16)'       :
+    isMono  ? 'rgba(0,0,0,0.20)'       :
     isVivid ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.12)')
   root.style.setProperty('--scrollbar-thumb-hover',
-    isMono  ? 'rgba(0,0,0,0.30)'       :
+    isMono  ? 'rgba(0,0,0,0.36)'       :
     isVivid ? 'rgba(255,255,255,0.48)' : 'rgba(255,255,255,0.28)')
   root.setAttribute('data-theme-mode', isMono ? 'light' : 'dark')
   root.setAttribute('data-theme-cat',  isMono ? 'mono' : isVivid ? 'vivid' : 'dark')
@@ -513,6 +534,7 @@ export default function Settings() {
 
   const currentAccent = ACCENTS.find(a => a.value === settings.accent) || ACCENTS[0]
   const currentTheme  = THEMES.find(t => t.value === settings.theme)   || THEMES[0]
+  const isMono        = currentTheme.cat === 'mono'
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -670,10 +692,10 @@ export default function Settings() {
                 <Tooltip key={thm.value} title={t.settings[thm.tKey]} placement="top" arrow>
                   <Box onClick={() => save({ theme: thm.value })} sx={{
                     borderRadius: 1.5, overflow: 'hidden', cursor: 'pointer',
-                    border: active ? '1.5px solid var(--accent,#3b82f6)' : '1.5px solid rgba(255,255,255,0.1)',
+                    border: active ? '1.5px solid var(--accent,#3b82f6)' : `1.5px solid ${thm.cat === 'mono' ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.1)'}`,
                     boxShadow: active ? '0 0 14px var(--accent-glow,rgba(59,130,246,0.35))' : 'none',
                     transition: 'all 0.15s',
-                    '&:hover': { borderColor: 'rgba(255,255,255,0.32)', transform: 'translateY(-2px)', boxShadow: '0 4px 12px rgba(0,0,0,0.4)' },
+                    '&:hover': { borderColor: thm.cat === 'mono' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.32)', transform: 'translateY(-2px)', boxShadow: '0 4px 12px rgba(0,0,0,0.4)' },
                   }}>
                     <Box sx={{ display: 'flex', height: 28, position: 'relative' }}>
                       {thm.preview.map((c, i) => (
@@ -690,8 +712,8 @@ export default function Settings() {
                         </Box>
                       )}
                     </Box>
-                    <Box sx={{ px: 0.75, py: 0.5, bgcolor: thm.preview[1], borderTop: active ? '1px solid var(--accent,#3b82f6)44' : '1px solid rgba(255,255,255,0.06)' }}>
-                      <Typography sx={{ fontSize: '0.6rem', fontWeight: active ? 700 : 400, color: active ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <Box sx={{ px: 0.75, py: 0.5, bgcolor: thm.preview[1], borderTop: active ? '1px solid var(--accent,#3b82f6)44' : `1px solid ${thm.cat === 'mono' ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.06)'}` }}>
+                      <Typography sx={{ fontSize: '0.6rem', fontWeight: active ? 700 : 400, color: active ? 'var(--accent,#3b82f6)' : thm.cat === 'mono' ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {t.settings[thm.tKey]}
                       </Typography>
                     </Box>
@@ -699,19 +721,16 @@ export default function Settings() {
                 </Tooltip>
               )
             }
-            const darkThemes  = THEMES.filter(t => t.cat !== 'light')
-            const lightThemes = THEMES.filter(t => t.cat === 'light')
+            const darkThemes  = THEMES.filter(t => !t.cat || t.cat === 'dark')
+            const lightThemes = THEMES.filter(t => t.cat === 'light' || t.cat === 'mono')
+            const labelSx = { fontSize: '0.63rem', color: isMono ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, mb: 0.75 }
             return (
               <>
-                <Typography sx={{ fontSize: '0.63rem', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, mb: 0.75 }}>
-                  Oscuros
-                </Typography>
+                <Typography sx={labelSx}>{t.settings.themesDark}</Typography>
                 <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 1, mb: 2 }}>
                   {darkThemes.map(renderTheme)}
                 </Box>
-                <Typography sx={{ fontSize: '0.63rem', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, mb: 0.75 }}>
-                  Claros
-                </Typography>
+                <Typography sx={labelSx}>{t.settings.themesLight}</Typography>
                 <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 1 }}>
                   {lightThemes.map(renderTheme)}
                 </Box>
@@ -728,7 +747,7 @@ export default function Settings() {
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, mb: 2 }}>
               <PhoneAndroidIcon sx={{ color: '#25d366', fontSize: 22 }} />
               <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem' }}>
-                Conectar WhatsApp
+                {t.settings.qrTitle}
               </Typography>
             </Box>
 
@@ -736,7 +755,7 @@ export default function Settings() {
             {qrStatus === 'phone' && (
               <Box sx={{ py: 1, px: 0.5, bgcolor: 'var(--surface,#111827)', borderRadius: 2, p: 2, border: '1px solid rgba(255,255,255,0.07)' }}>
                 <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.8rem', mb: 2, lineHeight: 1.5 }}>
-                  Ingresa el número sin espacios ni símbolo +
+                  {t.settings.qrPhoneHint}
                 </Typography>
 
                 {/* Input estilo WhatsApp */}
@@ -781,11 +800,11 @@ export default function Settings() {
                   '&:hover': phoneInput.replace(/\D/g,'').length >= 12 ? { bgcolor: 'rgba(37,211,102,0.25)' } : {},
                 }}>
                   <Typography sx={{ color: phoneInput.replace(/\D/g,'').length >= 12 ? '#25d366' : 'rgba(255,255,255,0.2)', fontWeight: 700, fontSize: '0.88rem' }}>
-                    Continuar →
+                    {t.settings.qrContinue}
                   </Typography>
                 </Box>
                 <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.68rem', mt: 1.5, textAlign: 'center' }}>
-                  Debes tener WhatsApp activo en ese número
+                  {t.settings.qrFootnote}
                 </Typography>
               </Box>
             )}
@@ -794,7 +813,7 @@ export default function Settings() {
               <Box sx={{ py: 4, bgcolor: 'var(--surface,#111827)', borderRadius: 2, border: '1px solid rgba(255,255,255,0.07)' }}>
                 <CircularProgress size={40} sx={{ color: '#25d366' }} />
                 <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.82rem', mt: 2 }}>
-                  Preparando tu conexión…
+                  {t.settings.qrPreparing}
                 </Typography>
               </Box>
             )}
@@ -835,7 +854,7 @@ export default function Settings() {
                         '&:hover': { bgcolor: 'rgba(37,211,102,0.2)' },
                       }}>
                         <Typography sx={{ fontSize: '0.7rem', color: '#4ade80', fontWeight: 600 }}>
-                          Reintentar
+                          {t.settings.qrRetry}
                         </Typography>
                       </Box>
                     )}
@@ -845,15 +864,15 @@ export default function Settings() {
                 {/* Indicador de espera — separado del QR */}
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.5, justifyContent: 'center' }}>
                   <CircularProgress size={12} sx={{ color: '#25d366' }} />
-                  <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.7rem' }}>Esperando escaneo…</Typography>
+                  <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.7rem' }}>{t.settings.qrWaiting}</Typography>
                 </Box>
 
                 <Box sx={{ mt: 1.5, textAlign: 'left', width: '100%', maxWidth: 240 }}>
                   {[
-                    'Abre WhatsApp en tu celular',
-                    'Toca los 3 puntos (⋮) → Dispositivos vinculados',
-                    'Toca "Vincular un dispositivo"',
-                    'Apunta la cámara a este código QR',
+                    t.settings.qrStep1,
+                    t.settings.qrStep2,
+                    t.settings.qrStep3,
+                    t.settings.qrStep4,
                   ].map((step, i) => (
                     <Box key={i} sx={{ display: 'flex', gap: 1, mb: 0.8 }}>
                       <Box sx={{ width: 18, height: 18, borderRadius: '50%', bgcolor: 'rgba(37,211,102,0.2)', border: '1px solid rgba(37,211,102,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, mt: 0.1 }}>

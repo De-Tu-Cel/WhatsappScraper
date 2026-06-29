@@ -411,16 +411,16 @@ export default function SearchProspects() {
   /* ── Selector de cantidad (reutilizable) ── */
   const CountSelector = ({ size = 'md' }) => (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-      {size === 'md' && <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>{t.search.showCount}</Typography>}
-      {size === 'sm' && <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>{t.search.show}</Typography>}
+      {size === 'md' && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>{t.search.showCount}</Typography>}
+      {size === 'sm' && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>{t.search.show}</Typography>}
       <Box sx={{ display: 'flex', gap: size === 'md' ? 0.6 : 0.5 }}>
         {[5, 10, 20, 30].map(n => (
           <Box key={n} onClick={() => setNumResults(n)} sx={{
             px: size === 'md' ? 1.5 : 1.2, py: size === 'md' ? 0.4 : 0.3,
             borderRadius: 10, cursor: 'pointer', fontSize: size === 'md' ? '0.75rem' : '0.72rem', fontWeight: 700,
-            bgcolor: numResults === n ? 'rgba(var(--accent-rgb, 59,130,246), 0.2)' : 'rgba(255,255,255,0.04)',
-            color: numResults === n ? 'var(--accent, #60a5fa)' : 'rgba(255,255,255,0.28)',
-            border: `1px solid ${numResults === n ? 'rgba(var(--accent-rgb, 59,130,246), 0.4)' : 'rgba(255,255,255,0.07)'}`,
+            bgcolor: numResults === n ? 'rgba(var(--accent-rgb, 59,130,246), 0.2)' : 'var(--item-hover)',
+            color: numResults === n ? 'var(--accent, #60a5fa)' : 'var(--text-muted)',
+            border: `1px solid ${numResults === n ? 'rgba(var(--accent-rgb, 59,130,246), 0.4)' : 'var(--border)'}`,
             transition: 'all 0.15s',
             '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.12)', color: 'var(--accent, #93c5fd)' },
           }}>{n}</Box>
@@ -619,31 +619,31 @@ export default function SearchProspects() {
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, flexGrow: 1, minHeight: 0 }}>
 
           {/* Banner resumen */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, px: 2, py: 1, bgcolor: 'rgba(255,255,255,0.02)', borderRadius: 1.5, border: '1px solid rgba(255,255,255,0.06)', flexWrap: 'wrap' }}>
-            <Typography sx={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.45)' }}>
-              <Box component="span" sx={{ color: '#f1f5f9', fontWeight: 700 }}>{found.length}</Box> encontradas
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, px: 2, py: 1, bgcolor: 'var(--item-hover)', borderRadius: 1.5, border: '1px solid var(--border)', flexWrap: 'wrap' }}>
+            <Typography sx={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              <Box component="span" sx={{ color: 'var(--text)', fontWeight: 700 }}>{found.length}</Box> {t.search.foundCount}
             </Typography>
-            <Box sx={{ width: 1, height: 12, bgcolor: 'rgba(255,255,255,0.08)' }} />
+            <Box sx={{ width: 1, height: 12, bgcolor: 'var(--border)' }} />
             <Typography sx={{ fontSize: '0.75rem', color: '#4ade80' }}>
-              <Box component="span" sx={{ fontWeight: 700 }}>{newCount}</Box> nuevas
+              <Box component="span" sx={{ fontWeight: 700 }}>{newCount}</Box> {t.search.newCount}
             </Typography>
             <Typography sx={{ fontSize: '0.75rem', color: '#fbbf24' }}>
-              <Box component="span" sx={{ fontWeight: 700 }}>{scrapedCount}</Box> ya en BD
+              <Box component="span" sx={{ fontWeight: 700 }}>{scrapedCount}</Box> {t.search.inDbCount}
             </Typography>
             <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
-              <Tooltip title={selectedCount === 0 ? 'Selecciona al menos una empresa para exportar' : 'Exportar URLs seleccionadas como .txt'} placement="top">
+              <Tooltip title={selectedCount === 0 ? t.search.exportUrlsTip : t.search.exportUrlsTip2} placement="top">
                 <span>
                   <Button size="small" startIcon={<DownloadIcon sx={{ fontSize: 13 }} />} onClick={exportUrlsTxt} disabled={selectedCount === 0}
-                    sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.7rem', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 1.5, px: 1.2, py: 0.3, textTransform: 'none', minWidth: 0, '&:hover': { bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.7)' }, '&.Mui-disabled': { opacity: 0.35 } }}>
-                    Exportar URLs
+                    sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', border: '1px solid var(--border)', borderRadius: 1.5, px: 1.2, py: 0.3, textTransform: 'none', minWidth: 0, '&:hover': { bgcolor: 'var(--item-hover)', color: 'var(--text)' }, '&.Mui-disabled': { opacity: 0.35 } }}>
+                    {t.search.exportUrls}
                   </Button>
                 </span>
               </Tooltip>
               {results.length > 0 && (
-                <Tooltip title="Exportar empresa, teléfono y datos extraídos como .csv" placement="top">
+                <Tooltip title={t.search.exportCsvTip} placement="top">
                   <Button size="small" startIcon={<DownloadIcon sx={{ fontSize: 13 }} />} onClick={downloadCsv}
                     sx={{ color: '#4ade80', fontSize: '0.7rem', border: '1px solid rgba(74,222,128,0.3)', borderRadius: 1.5, px: 1.2, py: 0.3, textTransform: 'none', minWidth: 0, bgcolor: 'rgba(34,197,94,0.08)', '&:hover': { bgcolor: 'rgba(34,197,94,0.15)' } }}>
-                    Exportar resultados
+                    {t.search.exportResults}
                   </Button>
                 </Tooltip>
               )}
@@ -653,28 +653,28 @@ export default function SearchProspects() {
           {/* Barra de acciones */}
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-              <Tooltip title={newCount === 0 ? 'No hay empresas nuevas para seleccionar' : 'Seleccionar / deseleccionar todas las nuevas'} placement="top">
+              <Tooltip title={newCount === 0 ? t.search.noNewTip : t.search.toggleNewTip} placement="top">
                 <span>
                   <Checkbox size="small" checked={allSelected} indeterminate={processableCount > 0 && !allSelected}
                     disabled={newCount === 0}
                     onChange={e => toggleAll(e.target.checked)}
-                    sx={{ color: 'rgba(255,255,255,0.3)', '&.Mui-checked': { color: 'var(--accent, #3b82f6)' }, p: 0.5 }} />
+                    sx={{ color: 'var(--text-muted)', '&.Mui-checked': { color: 'var(--accent, #3b82f6)' }, p: 0.5 }} />
                 </span>
               </Tooltip>
-              <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.78rem' }}>
-                {processableCount > 0 ? `${processableCount} nuevas` : '0'} de {found.length}
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                {processableCount > 0 ? `${processableCount} ${t.search.newCount}` : '0'} {t.search.of} {found.length}
                 {skippedCount > 0 && (
-                  <Box component="span" sx={{ color: '#fbbf24', ml: 0.8 }}>· {skippedCount} ya en BD</Box>
+                  <Box component="span" sx={{ color: '#fbbf24', ml: 0.8 }}>· {skippedCount} {t.search.inDbCount}</Box>
                 )}
               </Typography>
 
               {/* Selección rápida */}
-              <Tooltip title="Marcar solo las empresas que aún no has visitado" placement="top">
+              <Tooltip title={t.search.selectNewTip} placement="top">
                 <Box onClick={selectOnlyNew} sx={{ display: 'flex', alignItems: 'center', gap: 0.4, px: 1, py: 0.35, borderRadius: 1.2, cursor: 'pointer', fontSize: '0.7rem', color: '#4ade80', bgcolor: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', transition: 'all 0.15s', '&:hover': { bgcolor: 'rgba(34,197,94,0.15)' } }}>
                   <CheckBoxIcon sx={{ fontSize: 12 }} /> {t.search.selectNew}
                 </Box>
               </Tooltip>
-              <Tooltip title="Desmarcar empresas que ya están en la base de datos" placement="top">
+              <Tooltip title={t.search.deselectDBTip} placement="top">
                 <Box onClick={deselectScraped} sx={{ display: 'flex', alignItems: 'center', gap: 0.4, px: 1, py: 0.35, borderRadius: 1.2, cursor: 'pointer', fontSize: '0.7rem', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)', transition: 'all 0.15s', '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' } }}>
                   <IndeterminateCheckBoxIcon sx={{ fontSize: 12 }} /> {t.search.deselectInDB}
                 </Box>
@@ -687,31 +687,31 @@ export default function SearchProspects() {
                 { key: 'scraped', label: `${t.search.filterInDB} (${scrapedCount})`,      color: '#fbbf24', bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.25)' },
               ].map(f => (
                 <Chip key={f.key} label={f.label} size="small" onClick={() => setFilterScraped(f.key)}
-                  sx={{ height: 22, fontSize: '0.68rem', cursor: 'pointer', bgcolor: filterScraped === f.key ? f.bg : 'rgba(255,255,255,0.04)', color: filterScraped === f.key ? f.color : 'rgba(255,255,255,0.35)', border: `1px solid ${filterScraped === f.key ? f.border : 'rgba(255,255,255,0.08)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
+                  sx={{ height: 22, fontSize: '0.68rem', cursor: 'pointer', bgcolor: filterScraped === f.key ? f.bg : 'var(--item-hover)', color: filterScraped === f.key ? f.color : 'var(--text-muted)', border: `1px solid ${filterScraped === f.key ? f.border : 'var(--border)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
               ))}
             </Box>
 
-            <Tooltip title={skippedCount > 0 ? `${skippedCount} ya en BD se saltarán automáticamente` : ''} placement="top">
+            <Tooltip title={skippedCount > 0 ? t.search.skippingTip.replace('{n}', skippedCount) : ''} placement="top">
               <span>
                 <Button variant="contained" onClick={handleProcess} disabled={processableCount === 0} startIcon={<PlayArrowIcon />}
                   sx={{ bgcolor: 'var(--accent, #3b82f6)', fontWeight: 600, textTransform: 'none', px: 2, py: 0.8, borderRadius: 1.5, fontSize: '0.85rem', '&:hover': { bgcolor: 'var(--accent, #2563eb)' }, '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.15)', color: 'rgba(255,255,255,0.3)' } }}>
-                  Procesar {processableCount > 0 ? processableCount : ''} nueva{processableCount !== 1 ? 's' : ''}
-                  {skippedCount > 0 && ` (omitiendo ${skippedCount})`}
+                  {t.search.processNew} {processableCount > 0 ? processableCount : ''} {processableCount !== 1 ? t.search.newPlural : t.search.newSingular}
+                  {skippedCount > 0 && ` (${t.search.omitting} ${skippedCount})`}
                 </Button>
               </span>
             </Tooltip>
           </Box>
 
           {/* Lista URL con favicon + dominio */}
-          <Box sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2 }}>
+          <Box sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 2 }}>
             {visibleFound.map((item) => {
               const realIdx = found.indexOf(item)
               const domain = getDomain(item.url)
               return (
                 <Box key={realIdx} onClick={() => toggleOne(realIdx)}
-                  sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.1, cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.05)', bgcolor: item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.05)' : 'transparent', '&:hover': { bgcolor: item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.08)' : 'rgba(255,255,255,0.02)' }, '&:last-of-type': { borderBottom: 'none' }, transition: 'background-color 0.15s', animation: `${fadeSlideIn} 0.22s ease both`, animationDelay: `${realIdx * 0.025}s` }}>
+                  sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.1, cursor: 'pointer', borderBottom: '1px solid var(--border)', bgcolor: item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.05)' : 'transparent', '&:hover': { bgcolor: item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.08)' : 'var(--item-hover)' }, '&:last-of-type': { borderBottom: 'none' }, transition: 'background-color 0.15s', animation: `${fadeSlideIn} 0.22s ease both`, animationDelay: `${realIdx * 0.025}s` }}>
                   <Checkbox size="small" checked={item.selected} onChange={() => toggleOne(realIdx)} onClick={e => e.stopPropagation()}
-                    sx={{ color: 'rgba(255,255,255,0.25)', '&.Mui-checked': { color: 'var(--accent, #3b82f6)' }, p: 0.5, flexShrink: 0 }} />
+                    sx={{ color: 'var(--text-muted)', '&.Mui-checked': { color: 'var(--accent, #3b82f6)' }, p: 0.5, flexShrink: 0 }} />
                   {/* Favicon */}
                   <Box component="img"
                     src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`}
@@ -722,22 +722,22 @@ export default function SearchProspects() {
                   {/* Dominio + URL completa al hover */}
                   <Tooltip title={item.url} placement="top" arrow>
                     <Typography component="a" href={item.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
-                      sx={{ fontSize: '0.82rem', fontWeight: item.scraped ? 400 : 500, color: item.scraped ? 'rgba(255,255,255,0.28)' : item.selected ? 'var(--accent, #60a5fa)' : 'rgba(255,255,255,0.55)', textDecoration: 'none', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', '&:hover': { textDecoration: 'underline' } }}>
+                      sx={{ fontSize: '0.82rem', fontWeight: item.scraped ? 400 : 500, color: item.scraped ? 'var(--text-muted)' : item.selected ? 'var(--accent, #60a5fa)' : 'var(--text)', textDecoration: 'none', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', '&:hover': { textDecoration: 'underline' } }}>
                       {domain}
                     </Typography>
                   </Tooltip>
                   {item.scraped
-                    ? <Chip label="Visitada" size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)', flexShrink: 0 }} />
-                    : <Chip label="Nuevo"    size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(34,197,94,0.1)',  color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)',  flexShrink: 0 }} />
+                    ? <Chip label={t.search.tagVisited} size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)', flexShrink: 0 }} />
+                    : <Chip label={t.search.tagNew}     size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(34,197,94,0.1)',  color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)',  flexShrink: 0 }} />
                   }
                 </Box>
               )
             })}
             {visibleCount < found.length && (
-              <Box sx={{ p: 1.5, display: 'flex', justifyContent: 'center', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+              <Box sx={{ p: 1.5, display: 'flex', justifyContent: 'center', borderTop: '1px solid var(--border)' }}>
                 <Button size="small" onClick={handleLoadMore}
                   sx={{ color: 'var(--accent, #60a5fa)', fontSize: '0.78rem', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.2)', borderRadius: 1.5, px: 2, textTransform: 'none', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)' } }}>
-                  Mostrar {Math.min(numResults, found.length - visibleCount)} más ({found.length - visibleCount} restantes)
+                  {t.search.showMoreBtn} {Math.min(numResults, found.length - visibleCount)} {t.search.showMore} ({found.length - visibleCount} {t.search.remaining})
                 </Button>
               </Box>
             )}

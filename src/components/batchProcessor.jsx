@@ -115,7 +115,7 @@ function EmptyState({ t }) {
     <Box sx={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       py: 6, gap: 1.5,
-      border: '1px dashed rgba(255,255,255,0.08)',
+      border: '1px dashed var(--border)',
       borderRadius: 3,
     }}>
       <Box sx={{
@@ -125,12 +125,12 @@ function EmptyState({ t }) {
         borderRadius: 3,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
-        <InboxIcon sx={{ color: 'rgba(var(--accent-rgb, 59,130,246), 0.5)', fontSize: 26 }} />
+        <InboxIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 26, opacity: 0.6 }} />
       </Box>
-      <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.85rem', fontWeight: 500 }}>
+      <Typography sx={{ color: 'var(--text)', fontSize: '0.85rem', fontWeight: 500 }}>
         {t.batch.emptyTitle}
       </Typography>
-      <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.75rem' }}>
+      <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
         {t.batch.emptyHint}
       </Typography>
     </Box>

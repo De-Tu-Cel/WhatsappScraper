@@ -391,7 +391,7 @@ export default function CsvImporter() {
           onClick={() => inputRef.current?.click()}
           sx={{
             width: '100%', flexGrow: 1, minHeight: 220,
-            border: `1.5px dashed ${dragging ? 'rgba(var(--accent-rgb, 59,130,246), 0.7)' : 'rgba(255,255,255,0.1)'}`,
+            border: `1.5px dashed ${dragging ? 'rgba(var(--accent-rgb, 59,130,246), 0.7)' : 'var(--border)'}`,
             borderRadius: 3,
             bgcolor: dragging ? 'rgba(var(--accent-rgb, 59,130,246), 0.08)' : 'rgba(var(--accent-rgb, 59,130,246), 0.03)',
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
@@ -412,17 +412,17 @@ export default function CsvImporter() {
             <UploadFileIcon sx={{ color: dragging ? 'var(--accent, #60a5fa)' : 'rgba(var(--accent-rgb, 59,130,246), 0.6)', fontSize: 28, transition: 'color 0.2s' }} />
           </Box>
           <Box sx={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
-            <Typography sx={{ color: 'rgba(255,255,255,0.75)', fontWeight: 600, fontSize: '0.9rem' }}>
+            <Typography sx={{ color: 'var(--text)', fontWeight: 600, fontSize: '0.9rem' }}>
               {dragging ? t.csv.dropHere : t.csv.drag}
             </Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.78rem' }}>
+            <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
               {t.csv.or}{' '}
               <Box component="span" sx={{ color: 'var(--accent, #60a5fa)', fontWeight: 500 }}>{t.csv.select}</Box>
             </Typography>
           </Box>
           <Box sx={{ display: 'flex', gap: 0.5 }}>
             {['.csv', '.xlsx', '.xls'].map(ext => (
-              <Chip key={ext} label={ext} size="small" sx={{ bgcolor: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.08)', fontSize: '0.7rem', height: 20 }} />
+              <Chip key={ext} label={ext} size="small" sx={{ bgcolor: 'var(--item-hover)', color: 'var(--text-muted)', border: '1px solid var(--border)', fontSize: '0.7rem', height: 20 }} />
             ))}
           </Box>
           <Button

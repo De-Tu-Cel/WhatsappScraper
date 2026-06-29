@@ -219,8 +219,9 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
             )
             print(f"[SendMsg] jid_learned={real_jid_num} → {req.company_id}")
 
-        evo_result = evo.send_text(req.to_number, req.message)
-        print(f"[SendMsg] to={req.to_number} status_code={evo_result.get('status_code')} raw={evo_result.get('raw_text','')[:300]}")
+        send_to = real_jid_num if real_jid_num else req.to_number
+        evo_result = evo.send_text(send_to, req.message)
+        print(f"[SendMsg] to={send_to} (req={req.to_number}) status_code={evo_result.get('status_code')} raw={evo_result.get('raw_text','')[:300]}")
         evo_json = evo_result.get("response_json", {})
         message_id = evo_json.get("key", {}).get("id") or evo_json.get("id")
         status = "sent" if evo_result.get("status_code") in (200, 201) else "failed"
@@ -389,7 +390,7 @@ def api_update_company(company_id: str, req: UpdateCompanyRequest):
 def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks):
     """Fetch missing messages from Evolution API and save them to message_logs."""
     try:
-        from app.config import EVOLUTION_API_KEY, EVOLUTION_API_URL, EVOLUTION_INSTANCE, GROQ_API_KEY
+        from app.config import EVOLUTION_API_KEY, EVOLUTION_API_URL, EVOLUTION_INSTANCE, DEEPSEEK_API_KEY
         from app.whatsapp_evolution import EvolutionClient
         from datetime import datetime
 
@@ -474,7 +475,7 @@ def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks):
                 )
 
                 # Auto-classify new inbound messages
-                if not from_me and body and body != "[media]" and GROQ_API_KEY:
+                if not from_me and body and body != "[media]" and DEEPSEEK_API_KEY:
                     from app.classifier import classify_and_save
                     background_tasks.add_task(classify_and_save, log_id, company_id, body, created)
 
@@ -508,6 +509,67 @@ def api_mark_read(company_id: str):
         db = MongoDBManager()
         db.mark_conversation_read(company_id)
         return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/conversations/{company_id}/ai-status")
+def api_get_ai_status(company_id: str):
+    try:
+        db = MongoDBManager()
+        prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
+        ai_enabled = bool(prefs.get("ai_enabled", False))
+        session = db.db.ai_followup_sessions.find_one(
+            {"company_id": company_id, "status": {"$in": ["active", "waiting"]}},
+            sort=[("created_at", -1)],
+        )
+        pref_max = int(prefs.get("max_turns", 3))
+        return {
+            "ai_enabled": ai_enabled,
+            "ai_active": bool(session),
+            "ai_typing": bool(session.get("ai_typing")) if session else False,
+            "turn_count": session.get("turn_count", 0) if session else 0,
+            "max_turns": session.get("max_turns", pref_max) if session else pref_max,
+        }
+    except Exception:
+        return {"ai_enabled": False, "ai_active": False, "ai_typing": False, "turn_count": 0, "max_turns": 3}
+
+@router.post("/conversations/{company_id}/ai-toggle")
+def api_ai_toggle(company_id: str, body: dict):
+    try:
+        from datetime import datetime as _dt
+        db = MongoDBManager()
+        enabled = bool(body.get("enabled", False))
+        update = {"ai_enabled": enabled, "updated_at": _dt.now()}
+        if "max_turns" in body:
+            update["max_turns"] = max(1, int(body["max_turns"]))
+        db.db.conversation_ai_prefs.update_one(
+            {"company_id": company_id},
+            {"$set": update},
+            upsert=True,
+        )
+        # When enabling: if there's a recent unanswered inbound, kick off Andy immediately.
+        # This lets the user activate AI mid-conversation without waiting for a new message.
+        kicked = False
+        if enabled:
+            try:
+                from app.config import DEEPSEEK_API_KEY as _DS
+                if _DS:
+                    last_in = db.db.message_logs.find_one(
+                        {"company_id": company_id, "direction": "inbound",
+                         "message_body": {"$exists": True, "$ne": ""}},
+                        sort=[("created_at", -1)],
+                    )
+                    if last_in:
+                        number  = last_in.get("from_number") or last_in.get("number", "")
+                        body_   = last_in.get("message_body", "")
+                        log_id_ = str(last_in["_id"])
+                        if number and body_:
+                            from app.followup_queue import enqueue as _ai_enqueue
+                            _ai_enqueue(number, company_id, body_, log_id_)
+                            kicked = True
+            except Exception as _ke:
+                print(f"[AIToggle] kick-off error: {_ke}")
+        return {"ok": True, "ai_enabled": enabled, "kicked": kicked}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -633,7 +695,7 @@ def _extract_body_and_interactive(message_obj: dict) -> tuple:
 @router.post("/evolution/webhook")
 def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: BackgroundTasks):
     try:
-        from app.config import GROQ_API_KEY
+        from app.config import DEEPSEEK_API_KEY
         from datetime import datetime
         db = MongoDBManager()
         event = req.event
@@ -680,9 +742,38 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
                         message_id=message_id, message_type=message_type,
                         status="received", raw_data=msg, interactive=interactive_data,
                     )
-                    if GROQ_API_KEY and message_body and company_id != "unknown":
+                    # Skip Groq analysis mid-AI-session — only the first reply and the final
+                    # message after Andy closes are meaningful; intermediate turns are not.
+                    _ai_session_active = bool(db.db.ai_followup_sessions.find_one(
+                        {"company_id": company_id, "status": {"$in": ["active", "waiting"]}}
+                    )) if company_id != "unknown" else False
+                    if DEEPSEEK_API_KEY and message_body and company_id != "unknown" and not _ai_session_active:
                         from app.classifier import classify_and_save
                         background_tasks.add_task(classify_and_save, log_id, company_id, message_body, datetime.now())
+                    # AI follow-up: enqueue when ai_enabled is ON, or auto-activate on first reply
+                    if message_body and message_body != "[media]" and company_id != "unknown":
+                        try:
+                            from app.config import DEEPSEEK_API_KEY as _DS_KEY
+                            if _DS_KEY:
+                                _prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
+                                _should_enqueue = _prefs.get("ai_enabled", False)
+                                # Auto-activate: if no active session and no manual toggle,
+                                # check if we ever sent an outbound to this company (prospect replied to us)
+                                if not _should_enqueue and not _ai_session_active:
+                                    from datetime import timedelta
+                                    _cutoff = datetime.now() - timedelta(days=7)
+                                    _had_outbound = db.db.message_logs.find_one(
+                                        {"company_id": company_id, "direction": "outbound",
+                                         "created_at": {"$gte": _cutoff}},
+                                        projection={"_id": 1},
+                                    )
+                                    if _had_outbound:
+                                        _should_enqueue = True
+                                if _should_enqueue:
+                                    from app.followup_queue import enqueue as _ai_enqueue
+                                    _ai_enqueue(number, company_id, message_body, log_id)
+                        except Exception as _fe:
+                            print(f"[Webhook] followup_queue error: {_fe}")
                     results.append(f"inbound_saved:{company_id}")
             return {"ok": True, "action": results}
 
@@ -736,6 +827,27 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
                         )
                         print(f"[JID] learned from send.message: {jid_num} → {log['company_id']}")
             return {"ok": True, "action": "send_logged"}
+
+        elif event == "connection.update":
+            # Fired when a QR is scanned and the instance connects.
+            # Evolution sends ownerJid with the registered phone number.
+            instance_name = (req.instance or "").strip()
+            owner = ""
+            if isinstance(data, dict):
+                owner = (
+                    data.get("ownerJid") or
+                    data.get("instance", {}).get("ownerJid") or
+                    data.get("me", {}).get("id") or ""
+                )
+            if owner and instance_name:
+                number = owner.split("@")[0] if "@" in owner else owner
+                if number:
+                    db.db.instances.update_one(
+                        {"name": instance_name},
+                        {"$set": {"number": number}},
+                    )
+                    print(f"[Webhook] connection.update: instance={instance_name} number={number}")
+            return {"ok": True, "action": "connection_updated"}
 
         return {"ok": True, "action": "ignored", "event": event}
 
@@ -1460,7 +1572,7 @@ def api_create_instance(body: dict, x_user_token: Optional[str] = Header(None)):
     r = _req.post(
         f"{EVOLUTION_API_URL}/instance/create",
         headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
-        json={"instanceName": name, "qrcode": True},
+        json={"instanceName": name, "qrcode": True, "integration": "WHATSAPP-BAILEYS"},
         timeout=15,
     )
     if r.status_code not in (200, 201):
@@ -1501,10 +1613,37 @@ def api_assign_instance(name: str, body: dict, x_user_token: Optional[str] = Hea
     user = _require_user(x_user_token)
     if user.get("role") != "admin":
         raise HTTPException(403, "Solo admins")
+    from bson import ObjectId
     db = MongoDBManager()
+    user_id = body.get("user_id")
+    if user_id:
+        # One-user-one-instance: clear this user from all other instances first
+        db.db.instances.update_many(
+            {"assigned_to": user_id, "name": {"$ne": name}},
+            {"$set": {"assigned_to": None, "assigned_name": None}},
+        )
+        # Sync evolution_instance on the user document so the sidebar hook works
+        try:
+            db.db.users.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": {"evolution_instance": name}},
+            )
+        except Exception:
+            pass
+    else:
+        # Removing assignment — clear evolution_instance on whoever had this instance
+        old = db.db.instances.find_one({"name": name}, {"assigned_to": 1})
+        if old and old.get("assigned_to"):
+            try:
+                db.db.users.update_one(
+                    {"_id": ObjectId(old["assigned_to"])},
+                    {"$set": {"evolution_instance": ""}},
+                )
+            except Exception:
+                pass
     db.db.instances.update_one(
         {"name": name},
-        {"$set": {"assigned_to": body.get("user_id"), "assigned_name": body.get("user_name", "")}},
+        {"$set": {"assigned_to": user_id, "assigned_name": body.get("user_name", "")}},
     )
     return {"ok": True}
 
@@ -1514,7 +1653,18 @@ def api_unassign_instance(name: str, x_user_token: Optional[str] = Header(None))
     user = _require_user(x_user_token)
     if user.get("role") != "admin":
         raise HTTPException(403, "Solo admins")
+    from bson import ObjectId
     db = MongoDBManager()
+    # Clear evolution_instance on the previously assigned user
+    old = db.db.instances.find_one({"name": name}, {"assigned_to": 1})
+    if old and old.get("assigned_to"):
+        try:
+            db.db.users.update_one(
+                {"_id": ObjectId(old["assigned_to"])},
+                {"$set": {"evolution_instance": ""}},
+            )
+        except Exception:
+            pass
     db.db.instances.update_one({"name": name}, {"$set": {"assigned_to": None, "assigned_name": None}})
     return {"ok": True}
 

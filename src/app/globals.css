@@ -364,3 +364,37 @@
 [data-theme-mode="light"] .MuiTableContainer-root *::-webkit-scrollbar-thumb {
   background: rgba(0,0,0,0.16) !important;
 }
+
+/* ── Login screen: siempre oscuro, inmune al light mode ────────────────────
+   Estas reglas van AL FINAL para ganar sobre las de [data-theme-mode="light"]
+   que tienen la misma especificidad (atributo + clase = 0,1,1,0).             */
+[data-login="true"] .MuiTypography-root {
+  color: inherit !important;
+}
+[data-login="true"] .MuiInputBase-input,
+[data-login="true"] input:not([type="checkbox"]):not([type="radio"]) {
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  caret-color: #ffffff !important;
+}
+[data-login="true"] .MuiInputBase-input::placeholder,
+[data-login="true"] input::placeholder {
+  color: rgba(255,255,255,0.42) !important;
+  -webkit-text-fill-color: rgba(255,255,255,0.42) !important;
+  opacity: 1 !important;
+}
+[data-login="true"] .MuiOutlinedInput-root {
+  background-color: rgba(255,255,255,0.13) !important;
+}
+[data-login="true"] .MuiOutlinedInput-root:hover {
+  background-color: rgba(255,255,255,0.17) !important;
+}
+[data-login="true"] .MuiOutlinedInput-notchedOutline {
+  border-color: rgba(255,255,255,0.28) !important;
+}
+[data-login="true"] .MuiSvgIcon-root {
+  color: rgba(255,255,255,0.6) !important;
+}
+[data-login="true"] .MuiIconButton-root {
+  color: rgba(255,255,255,0.5) !important;
+}

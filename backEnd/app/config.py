@@ -28,10 +28,7 @@ EVOLUTION_API_KEY      = os.getenv("EVOLUTION_API_KEY", "")
 EVOLUTION_INSTANCE     = os.getenv("EVOLUTION_INSTANCE", "")
 APP_PUBLIC_URL         = os.getenv("APP_PUBLIC_URL", "https://app.detucel.com")
 
-# Groq API (clasificación de respuestas) — legacy
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-
-# DeepSeek API (clasificación de respuestas — reemplaza a Groq)
+# DeepSeek API (IA: clasificación, sugerencias, scraping, Andy)
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 
 # Debug: Mostrar qué se cargó (solo para desarrollo)

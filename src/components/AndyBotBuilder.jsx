@@ -1,5 +1,6 @@
 'use client'
 import { useState, useCallback } from 'react'
+import { useLang } from '../context/LangContext'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Dialog from '@mui/material/Dialog'
@@ -35,6 +36,8 @@ const FIELD_SX = {
 }
 
 export default function AndyBotBuilder({ open, onClose, initialData = null }) {
+  const { t } = useLang()
+  const s = t.settings  // shorthand for bot builder keys
   const [loading,  setLoading]  = useState(false)
   const [userData, setUserData] = useState(null)
   const [fetchErr, setFetchErr] = useState('')
@@ -89,7 +92,7 @@ export default function AndyBotBuilder({ open, onClose, initialData = null }) {
         setSelectedNum(d.numbers[0].phone_number_id)
       }
     } catch (e) {
-      setFetchErr(`Error de red: ${e.message}`)
+      setFetchErr(s.andyBotErrNet.replace('{msg}', e.message))
     } finally {
       setLoading(false)
     }
@@ -102,9 +105,9 @@ export default function AndyBotBuilder({ open, onClose, initialData = null }) {
   }
 
   async function handleCreate() {
-    if (!selectedNum)                 { setCreateErr('Selecciona un número telefónico'); return }
-    if (!form.company_name.trim())    { setCreateErr('El nombre de la empresa es requerido'); return }
-    if (!form.prompt.trim())          { setCreateErr('El prompt es requerido'); return }
+    if (!selectedNum)                 { setCreateErr(s.andyBotErrNum); return }
+    if (!form.company_name.trim())    { setCreateErr(s.andyBotErrName); return }
+    if (!form.prompt.trim())          { setCreateErr(s.andyBotErrPrompt); return }
 
     const num         = userData.numbers.find(n => n.phone_number_id === selectedNum)
     const portfolioId = userData.portfolio_id || 'OwnWA'
@@ -130,7 +133,7 @@ export default function AndyBotBuilder({ open, onClose, initialData = null }) {
       if (!r.ok) { setCreateErr(d.detail || d.error || d.message || `Error ${r.status}`); return }
       setSuccess(true)
     } catch (e) {
-      setCreateErr(`Error de red: ${e.message}`)
+      setCreateErr(s.andyBotErrNet.replace('{msg}', e.message))
     } finally {
       setCreating(false)
     }
@@ -176,10 +179,10 @@ export default function AndyBotBuilder({ open, onClose, initialData = null }) {
           </Box>
           <Box>
             <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.2 }}>
-              Crear bot con Andy
+              {s.andyBotTitle}
             </Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem' }}>
-              Configura y despliega un bot de WhatsApp
+              {s.andyBotSub}
             </Typography>
           </Box>
         </Box>
@@ -190,7 +193,7 @@ export default function AndyBotBuilder({ open, onClose, initialData = null }) {
         {loading && (
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', py: 5, gap: 1.5 }}>
             <CircularProgress sx={{ color: 'var(--accent,#3b82f6)' }} size={36} />
-            <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.8rem' }}>Cargando…</Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.8rem' }}>{s.andyBotLoading}</Typography>
           </Box>
         )}
 
@@ -203,9 +206,9 @@ export default function AndyBotBuilder({ open, onClose, initialData = null }) {
         {success && (
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, py: 4 }}>
             <CheckCircleIcon sx={{ fontSize: 60, color: '#22c55e' }} />
-            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1.05rem' }}>¡Bot creado exitosamente!</Typography>
+            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1.05rem' }}>{s.andyBotSuccess}</Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.82rem', textAlign: 'center' }}>
-              Configurado en {selectedNumData?.display_number}.
+              {s.andyBotSuccessSub.replace('{num}', selectedNumData?.display_number || '')}
             </Typography>
           </Box>
         )}
@@ -238,16 +241,16 @@ export default function AndyBotBuilder({ open, onClose, initialData = null }) {
                   <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.75rem' }}>{userData.email}</Typography>
                 </Box>
               </Box>
-              <Chip label={`${userData.numbers?.length || 0} números`} size="small"
+              <Chip label={`${userData.numbers?.length || 0} ${s.andyBotNums}`} size="small"
                 sx={{ bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)', color: 'var(--accent,#60a5fa)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.22)', fontSize: '0.65rem' }} />
             </Box>
 
             {/* Phone select */}
             <FormControl fullWidth size="small" sx={FIELD_SX}>
-              <InputLabel>Número de teléfono</InputLabel>
-              <Select label="Número de teléfono" value={selectedNum} onChange={e => handleSelectNum(e.target.value)}
+              <InputLabel>{s.andyBotPhone}</InputLabel>
+              <Select label={s.andyBotPhone} value={selectedNum} onChange={e => handleSelectNum(e.target.value)}
                 slotProps={{ paper: { sx: { bgcolor: 'var(--surface,#1e2a3a)', border: '1px solid rgba(255,255,255,0.1)' } } }}>
-                <MenuItem value=""><em style={{ color: 'rgba(255,255,255,0.3)' }}>Selecciona un número</em></MenuItem>
+                <MenuItem value=""><em style={{ color: 'rgba(255,255,255,0.3)' }}>{s.andyBotSelNum}</em></MenuItem>
                 {userData.numbers?.map(n => (
                   <MenuItem key={n.phone_number_id} value={n.phone_number_id}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
@@ -267,52 +270,52 @@ export default function AndyBotBuilder({ open, onClose, initialData = null }) {
             {inUseWarn && (
               <Alert severity="warning" icon={<WarningAmberIcon fontSize="small" />}
                 sx={{ bgcolor: 'rgba(251,191,36,0.08)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.2)', '& .MuiAlert-icon': { color: '#fbbf24' }, fontSize: '0.8rem' }}>
-                El teléfono seleccionado ya tiene un bot activo (<strong>{selectedNumData?.bot_name}</strong>). Si continúas, se sobrescribirá.
+                {s.andyBotInUse}{selectedNumData?.bot_name ? <> (<strong>{selectedNumData.bot_name}</strong>)</> : ''}
               </Alert>
             )}
 
             {/* Bot type */}
             <FormControl fullWidth size="small" sx={FIELD_SX}>
-              <InputLabel>Tipo de bot</InputLabel>
-              <Select label="Tipo de bot" value={botType} onChange={e => setBotType(e.target.value)}
+              <InputLabel>{s.andyBotType}</InputLabel>
+              <Select label={s.andyBotType} value={botType} onChange={e => setBotType(e.target.value)}
                 slotProps={{ paper: { sx: { bgcolor: 'var(--surface,#1e2a3a)', border: '1px solid rgba(255,255,255,0.1)' } } }}>
-                <MenuItem value="flow">Bot Flujo</MenuItem>
-                <MenuItem value="ai">Bot IA Conversacional</MenuItem>
+                <MenuItem value="flow">{s.andyBotFlow}</MenuItem>
+                <MenuItem value="ai">{s.andyBotAI}</MenuItem>
               </Select>
             </FormControl>
 
             <Divider sx={{ borderColor: 'rgba(255,255,255,0.07)' }}>
               <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, px: 1 }}>
-                Datos del negocio
+                {s.andyBotSection}
               </Typography>
             </Divider>
 
             <Box sx={{ display: 'flex', gap: 1.5 }}>
-              <TextField label="Nombre de la empresa" size="small" fullWidth value={form.company_name}
+              <TextField label={s.andyBotCompany} size="small" fullWidth value={form.company_name}
                 onChange={e => setForm(p => ({ ...p, company_name: e.target.value }))} sx={FIELD_SX} />
-              <TextField label="Giro del negocio" size="small" fullWidth value={form.business_line}
+              <TextField label={s.andyBotBizLine} size="small" fullWidth value={form.business_line}
                 onChange={e => setForm(p => ({ ...p, business_line: e.target.value }))} sx={FIELD_SX} />
             </Box>
 
             <Box sx={{ display: 'flex', gap: 1.5 }}>
-              <TextField label="Industria" size="small" fullWidth value={form.industry}
+              <TextField label={s.andyBotIndustry} size="small" fullWidth value={form.industry}
                 onChange={e => setForm(p => ({ ...p, industry: e.target.value }))} sx={FIELD_SX} />
-              <TextField label="Correo(s)" size="small" fullWidth placeholder="a@b.com, c@d.com"
+              <TextField label={s.andyBotEmails} size="small" fullWidth placeholder="a@b.com, c@d.com"
                 value={form.emails} onChange={e => setForm(p => ({ ...p, emails: e.target.value }))}
-                helperText="Separa varios correos con coma" sx={FIELD_SX} />
+                helperText={s.andyBotEmailsHint} sx={FIELD_SX} />
             </Box>
 
-            <TextField label="Página web" size="small" fullWidth placeholder="https://tuempresa.com"
+            <TextField label={s.andyBotWebsite} size="small" fullWidth placeholder="https://tuempresa.com"
               value={form.website} onChange={e => setForm(p => ({ ...p, website: e.target.value }))} sx={FIELD_SX} />
 
             <Divider sx={{ borderColor: 'rgba(255,255,255,0.07)' }}>
               <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, px: 1 }}>
-                Instrucciones del bot
+                {s.andyBotSection2}
               </Typography>
             </Divider>
 
-            <TextField label="Prompt / Instrucciones" multiline rows={3} size="small" fullWidth
-              placeholder='Ej. "Crea un bot para atención a clientes, responde en español…"'
+            <TextField label={s.andyBotPrompt} multiline rows={3} size="small" fullWidth
+              placeholder={s.andyBotPromptPh}
               value={form.prompt} onChange={e => setForm(p => ({ ...p, prompt: e.target.value }))} sx={FIELD_SX} />
 
             {createErr && (
@@ -326,13 +329,13 @@ export default function AndyBotBuilder({ open, onClose, initialData = null }) {
 
       <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5, borderTop: '1px solid rgba(255,255,255,0.07)', gap: 1 }}>
         <Button onClick={handleClose} sx={{ color: 'rgba(255,255,255,0.45)', textTransform: 'none', fontSize: '0.82rem', borderRadius: 2, px: 2, transition: 'all 0.15s', '&:hover': { color: '#ffffff', bgcolor: 'rgba(255,255,255,0.1)', } }}>
-          {success ? 'Cerrar' : 'Cancelar'}
+          {success ? s.andyBotClose : s.andyBotCancel}
         </Button>
         {!success && !loading && !fetchErr && userData && (
           <Button onClick={handleCreate} disabled={creating} variant="contained"
             startIcon={creating ? null : <SmartToyIcon sx={{ fontSize: '17px !important' }} />}
             sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { filter: 'brightness(1.1)' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5 }}>
-            {creating ? <CircularProgress size={15} sx={{ color: 'white' }} /> : 'Crear bot'}
+            {creating ? <CircularProgress size={15} sx={{ color: 'white' }} /> : s.andyBotCreate}
           </Button>
         )}
       </DialogActions>

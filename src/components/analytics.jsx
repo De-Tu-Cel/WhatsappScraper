@@ -54,11 +54,11 @@ function getCategoryConfig(row) {
 function QualityDots({ score, color }) {
   const filled = Math.round(score || 0)
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.3 }}>
       {[1, 2, 3, 4, 5].map(i => (
         <Box key={i} sx={{
           fontSize: '0.75rem',
-          color: i <= filled ? color : 'rgba(255,255,255,0.15)',
+          color: i <= filled ? color : 'var(--border, rgba(255,255,255,0.15))',
           lineHeight: 1,
         }}>
           ●
@@ -653,7 +653,7 @@ export default function Analytics() {
                       </TableSortLabel>
                     </TableCell>
                   ))}
-                  <TableCell sx={HEADER_CELL_SX}>
+                  <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
                     <TableSortLabel active={sortField === 'response_quality'} direction={sortField === 'response_quality' ? sortDir : 'asc'}
                       onClick={() => handleSort('response_quality')}
                       sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
@@ -662,7 +662,7 @@ export default function Analytics() {
                       </Box>
                     </TableSortLabel>
                   </TableCell>
-                  <TableCell sx={{ ...HEADER_CELL_SX, whiteSpace: 'nowrap' }}>
+                  <TableCell sx={{ ...HEADER_CELL_SX, whiteSpace: 'nowrap', textAlign: 'center' }}>
                     <TableSortLabel active={sortField === 'reaction_time_min'} direction={sortField === 'reaction_time_min' ? sortDir : 'asc'}
                       onClick={() => handleSort('reaction_time_min')}
                       sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
@@ -671,7 +671,7 @@ export default function Analytics() {
                       </Box>
                     </TableSortLabel>
                   </TableCell>
-                  <TableCell sx={HEADER_CELL_SX}>
+                  <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
                     <TableSortLabel active={sortField === 'last_at'} direction={sortField === 'last_at' ? sortDir : 'asc'}
                       onClick={() => handleSort('last_at')}
                       sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
@@ -754,7 +754,7 @@ export default function Analytics() {
 
                       {/* Industria */}
                       <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
-                        <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.78rem' }}>
+                        <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.78rem', textAlign: 'center' }}>
                           {row.industry || '—'}
                         </Typography>
                       </TableCell>
@@ -767,16 +767,16 @@ export default function Analytics() {
                       </TableCell>
 
                       {/* Calidad */}
-                      <TableCell sx={CELL_SX}>
+                      <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
                         {!hasMultiple && (row.response_quality != null
                           ? <QualityDots score={row.response_quality} color={cat.color} />
                           : <QualityDots score={0} color="rgba(255,255,255,0.1)" />)}
                       </TableCell>
 
                       {/* T. Reacción */}
-                      <TableCell sx={CELL_SX}>
+                      <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
                         {!hasMultiple && (
-                          <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
+                          <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem', textAlign: 'center' }}>
                             {formatReactionTime(row.reaction_time_min)}
                           </Typography>
                         )}
@@ -784,9 +784,9 @@ export default function Analytics() {
 
 
                       {/* Última respuesta */}
-                      <TableCell sx={CELL_SX}>
+                      <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
                         {!hasMultiple && (
-                          <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.78rem' }}>
+                          <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.78rem', textAlign: 'center' }}>
                             {formatLastAt(row.last_at)}
                           </Typography>
                         )}
@@ -887,20 +887,20 @@ export default function Analytics() {
                                 : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>}
                           </TableCell>
                           {/* Calidad */}
-                          <TableCell sx={NSUB}>
+                          <TableCell sx={{ ...NSUB, textAlign: 'center' }}>
                             {replied && n.response_quality != null
                               ? <QualityDots score={n.response_quality} color={nCat.color} />
                               : <QualityDots score={0} color="rgba(255,255,255,0.1)" />}
                           </TableCell>
                           {/* T. Reacción */}
-                          <TableCell sx={NSUB}>
-                            <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.75rem' }}>
+                          <TableCell sx={{ ...NSUB, textAlign: 'center' }}>
+                            <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.75rem', textAlign: 'center' }}>
                               {n.reaction_time_min != null ? formatReactionTime(n.reaction_time_min) : '—'}
                             </Typography>
                           </TableCell>
                           {/* Última respuesta */}
-                          <TableCell sx={NSUB}>
-                            <Typography sx={{ fontSize: '0.75rem', color: replied ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.15)' }}>
+                          <TableCell sx={{ ...NSUB, textAlign: 'center' }}>
+                            <Typography sx={{ fontSize: '0.75rem', color: replied ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.15)', textAlign: 'center' }}>
                               {n.last_at ? formatLastAt(n.last_at) : '—'}
                             </Typography>
                           </TableCell>

@@ -657,15 +657,9 @@ class WebsiteScraper:
                 f"\n\nResponde SOLO con array JSON de números. Ejemplo: [3,7,1]"
             )
             try:
+                from app.llm import call_llm
                 with _DS_LOCK:
-                    resp = _req.post(
-                        "https://api.deepseek.com/chat/completions",
-                        headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
-                        json={"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}],
-                              "max_tokens": 80, "temperature": 0},
-                        timeout=10,
-                    )
-                content = resp.json()["choices"][0]["message"]["content"].strip()
+                    content = call_llm([{"role": "user", "content": prompt}], max_tokens=80, temperature=0)
                 m = _re.search(r'\[[\d,\s]+\]', content)
                 if m:
                     indices = _json.loads(m.group(0))
@@ -908,14 +902,8 @@ class WebsiteScraper:
                 f"- Si no encaja en ninguna \u2192 responde: No detectada\n"
                 f"- NO expliques nada, solo el nombre de la categor\u00EDa."
             )
-            resp = _req.post(
-                "https://api.deepseek.com/chat/completions",
-                headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
-                json={"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": 20, "temperature": 0},
-                timeout=8,
-            )
-            result = resp.json()["choices"][0]["message"]["content"].strip()
+            from app.llm import call_llm
+            result = call_llm([{"role": "user", "content": prompt}], max_tokens=20, temperature=0)
             if result in self.INDUSTRY_KEYWORDS or result == "No detectada":
                 return result
         except Exception:
@@ -954,14 +942,8 @@ class WebsiteScraper:
         )
 
         try:
-            resp = _req.post(
-                "https://api.deepseek.com/chat/completions",
-                headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
-                json={"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": 200, "temperature": 0},
-                timeout=10,
-            )
-            raw = resp.json()["choices"][0]["message"]["content"].strip()
+            from app.llm import call_llm
+            raw = call_llm([{"role": "user", "content": prompt}], max_tokens=200, temperature=0)
             start = raw.find("{")
             end   = raw.rfind("}") + 1
             if start >= 0 and end > start:

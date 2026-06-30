@@ -143,8 +143,8 @@ const FIELD_SX = {
 }
 
 const SKEL_SX = {
-  bgcolor: 'rgba(255,255,255,0.06)',
-  '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.04), transparent)' },
+  bgcolor: 'var(--border)',
+  '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.04), transparent)' },
 }
 
 function formatDate(iso) {
@@ -1451,13 +1451,13 @@ export default function DatabaseViewer({ isActive }) {
           labelRowsPerPage={t.db.rowsPerPage}
           labelDisplayedRows={({ from, to, count }) => `${from}–${to} ${t.db.displayedRowsOf} ${count !== -1 ? count : `${t.db.displayedRowsMore} ${to}`}`}
           sx={{
-            color: 'rgba(255,255,255,0.5)',
-            borderTop: '1px solid rgba(255,255,255,0.07)',
+            color: 'var(--text-muted)',
+            borderTop: '1px solid var(--border)',
             '& .MuiTablePagination-toolbar': { minHeight: 48 },
-            '& .MuiTablePagination-selectIcon': { color: 'rgba(255,255,255,0.4)' },
-            '& .MuiIconButton-root': { color: 'rgba(255,255,255,0.4)' },
+            '& .MuiTablePagination-selectIcon': { color: 'var(--text-muted)' },
+            '& .MuiIconButton-root': { color: 'var(--text-muted)' },
             '& .Mui-disabled': { opacity: 0.3 },
-            '& .MuiSelect-select': { color: 'rgba(255,255,255,0.6)' },
+            '& .MuiSelect-select': { color: 'var(--text)' },
           }}
         />
       </Paper>

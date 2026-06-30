@@ -86,9 +86,9 @@ def _cleanup_worker():
 
             # Trigger full-conversation analysis for each expired session
             try:
-                from app.config import DEEPSEEK_API_KEY as _DS
+                from app.llm import active_provider as _ap
                 from app.classifier import classify_conversation_and_save
-                if _DS:
+                if _ap() != "none":
                     for cid in company_ids:
                         last_in = db.db.message_logs.find_one(
                             {"company_id": cid, "direction": "inbound"},

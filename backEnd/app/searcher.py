@@ -10,8 +10,8 @@ from pathlib import Path
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
-SERPAPI_KEY  = os.getenv("SERPAPI_KEY", "")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+SERPAPI_KEY     = os.getenv("SERPAPI_KEY", "")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 
 EXCLUDED_DOMAINS = {
     # Enciclopedias
@@ -312,24 +312,21 @@ def _fetch_ddg(query: str, max_results: int = 80) -> list[str]:
 
 def _ai_filter_urls(urls: list[str], industry: str) -> list[str]:
     """
-    Use Groq to rank URLs as real business websites.
+    Use DeepSeek to rank URLs as real business websites.
     Processes in batches of 60, preserves ALL URLs (ranked first, unranked appended).
     Returns the full list — no cap applied here.
     """
-    if not GROQ_API_KEY or not urls:
+    if not DEEPSEEK_API_KEY or not urls:
         return urls
 
     ranked: list[str] = []
     remaining = list(urls)
 
-    # Process in batches so we rank ALL URLs, not just the first 50
     batch_size = 60
     while remaining:
         batch = remaining[:batch_size]
         remaining = remaining[batch_size:]
         try:
-            from groq import Groq
-            client = Groq(api_key=GROQ_API_KEY)
             lines = [f"{i+1}. {u}" for i, u in enumerate(batch)]
             prompt = (
                 f'Eres un filtro ESTRICTO de URLs. Se buscan ÚNICAMENTE sitios web oficiales '
@@ -359,23 +356,23 @@ def _ai_filter_urls(urls: list[str], industry: str) -> list[str]:
                 f'ordenadas de mayor a menor relevancia. Si ninguna califica, responde []. '
                 f'Ejemplo: [3, 1, 7] o []'
             )
-            resp = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=800,
-                temperature=0,
+            resp = requests.post(
+                "https://api.deepseek.com/chat/completions",
+                headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+                json={"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}],
+                      "max_tokens": 800, "temperature": 0},
+                timeout=20,
             )
-            content = resp.choices[0].message.content.strip()
+            content = resp.json()["choices"][0]["message"]["content"].strip()
             m = re.search(r'\[[\d,\s]*\]', content)
             if m:
                 indices = json.loads(m.group(0))
-                # Solo incluir las aprobadas por Groq — las rechazadas se descartan
                 batch_ranked = [batch[i - 1] for i in indices if 1 <= i <= len(batch)]
                 ranked.extend(batch_ranked)
                 continue
         except Exception:
             pass
-        # Fallback sin Groq: mantener el batch tal cual
+        # Fallback sin DeepSeek: mantener el batch tal cual
         ranked.extend(batch)
 
     return ranked

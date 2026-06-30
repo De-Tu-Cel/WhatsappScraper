@@ -85,31 +85,34 @@ function Particles() {
 /* ── Estilos del input ───────────────────────────────────────────────────── */
 const INPUT_SX = {
   '& .MuiOutlinedInput-root': {
-    bgcolor: 'rgba(255,255,255,0.04)',
+    backgroundColor: 'rgba(255,255,255,0.13) !important',
     fontSize: '0.92rem',
     borderRadius: '12px',
     transition: 'all 0.2s',
-    '& fieldset': { borderColor: 'rgba(255,255,255,0.1)', borderRadius: '12px', transition: 'all 0.2s' },
-    '&:hover fieldset': { borderColor: 'rgba(21,87,245,0.45)' },
+    '& fieldset': { borderColor: 'rgba(255,255,255,0.28) !important', borderRadius: '12px', transition: 'all 0.2s' },
+    '&:hover fieldset': { borderColor: 'rgba(21,87,245,0.7) !important' },
     '&.Mui-focused': {
-      bgcolor: 'rgba(21,87,245,0.06)',
-      '& fieldset': { borderColor: '#1557f5', borderWidth: 1.5 },
+      backgroundColor: 'rgba(21,87,245,0.2) !important',
+      '& fieldset': { borderColor: '#4f86f7 !important', borderWidth: 1.5 },
     },
   },
-  '& input': { color: 'white', py: 1.3 },
+  '& .MuiInputBase-input': { color: '#ffffff !important', WebkitTextFillColor: '#ffffff !important', caretColor: '#ffffff', py: 1.3 },
+  '& .MuiInputBase-input::placeholder': { color: 'rgba(255,255,255,0.42) !important', opacity: '1 !important' },
+  '& input': { color: '#ffffff !important', WebkitTextFillColor: '#ffffff !important' },
+  '& input::placeholder': { color: 'rgba(255,255,255,0.42) !important', opacity: '1 !important' },
   '& input::-ms-reveal': { display: 'none' },
   '& input::-ms-clear': { display: 'none' },
   '& input:-webkit-autofill, & input:-webkit-autofill:hover, & input:-webkit-autofill:focus': {
-    WebkitBoxShadow: '0 0 0px 1000px rgba(255,255,255,0.04) inset',
-    WebkitTextFillColor: 'white',
+    WebkitBoxShadow: '0 0 0px 1000px rgba(10,28,72,0.94) inset',
+    WebkitTextFillColor: '#ffffff',
     caretColor: 'white',
     transition: 'background-color 5000s ease-in-out 0s',
   },
   '& .MuiOutlinedInput-root:has(input:-webkit-autofill)': {
-    background: 'rgba(255,255,255,0.04) !important',
+    background: 'rgba(255,255,255,0.13) !important',
   },
   '& .MuiOutlinedInput-root:has(input:-webkit-autofill) .MuiInputAdornment-root': {
-    background: 'rgba(255,255,255,0.04) !important',
+    background: 'rgba(255,255,255,0.13) !important',
   },
 }
 
@@ -117,7 +120,7 @@ function PinField({ value, onChange, placeholder = '••••••', label, 
   const [show, setShow] = useState(false)
   return (
     <Box>
-      <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{label}</Typography>
+      <Typography sx={{ fontSize: '0.68rem', color: '#ffffff', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{label}</Typography>
       <TextField fullWidth size="small" type={show ? 'text' : 'password'}
         placeholder={placeholder} value={value} onChange={e => onChange(e.target.value)}
         slotProps={{ htmlInput: { maxLength: 8, inputMode: 'numeric' }, input: { endAdornment: (
@@ -306,7 +309,7 @@ export default function LoginScreen({ hasUsers }) {
   }
 
   return (
-    <Box sx={{
+    <Box data-login="true" sx={{
       minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
       position: 'relative', overflow: 'hidden',
       bgcolor: '#060f0c',
@@ -375,7 +378,7 @@ export default function LoginScreen({ hasUsers }) {
             <Typography sx={{ color: 'white', fontWeight: 800, fontSize: '1.5rem', letterSpacing: '-0.02em', lineHeight: 1.1 }}>
               Mystery Shopper
             </Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem', mt: 0.5 }}>
+            <Typography sx={{ color: '#ffffff', fontSize: '0.8rem', mt: 0.5 }}>
               {mode === 'login'     ? t.login.welcome
              : mode === 'register'  ? t.login.register
              : mode === 'recover'   ? t.login.recover
@@ -391,7 +394,7 @@ export default function LoginScreen({ hasUsers }) {
           {mode === 'login' && (
             <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, animation: `${fadeUp} 0.3s ease` }}>
               <Box>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{t.login.user}</Typography>
+                <Typography sx={{ fontSize: '0.68rem', color: '#ffffff', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{t.login.user}</Typography>
                 <TextField fullWidth size="small" placeholder="marco.dominguez" autoFocus
                   value={username} onChange={e => setUsername(e.target.value.toLowerCase())}
                   autoComplete="username" sx={INPUT_SX} />
@@ -414,23 +417,23 @@ export default function LoginScreen({ hasUsers }) {
           {mode === 'register' && (
             <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, animation: `${fadeUp} 0.3s ease` }}>
               <Box>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{t.login.email}</Typography>
+                <Typography sx={{ fontSize: '0.68rem', color: '#ffffff', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{t.login.email}</Typography>
                 <TextField fullWidth size="small" placeholder="nombre" autoFocus
                   value={email.replace('@detucel.mx', '')}
                   onChange={e => setEmail(e.target.value.toLowerCase().replace(/\s/g,'').replace('@detucel.mx','') + '@detucel.mx')}
                   autoComplete="email"
                   slotProps={{ input: { endAdornment: (
-                    <Box sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem', whiteSpace: 'nowrap', pr: 0.5 }}>@detucel.mx</Box>
+                    <Box sx={{ color: '#ffffff', fontSize: '0.82rem', whiteSpace: 'nowrap', pr: 0.5 }}>@detucel.mx</Box>
                   )}}}
                   sx={INPUT_SX} />
               </Box>
               <Box>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{t.login.fullName}</Typography>
+                <Typography sx={{ fontSize: '0.68rem', color: '#ffffff', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{t.login.fullName}</Typography>
                 <TextField fullWidth size="small" placeholder="Marco Domínguez"
                   value={displayName} onChange={e => setDisplayName(e.target.value)} sx={INPUT_SX} />
               </Box>
               <Box>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{t.login.user}</Typography>
+                <Typography sx={{ fontSize: '0.68rem', color: '#ffffff', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{t.login.user}</Typography>
                 <TextField fullWidth size="small" placeholder="marco"
                   value={username} onChange={e => setUsername(e.target.value.toLowerCase().replace(/\s/g,''))}
                   autoComplete="username" sx={INPUT_SX} />
@@ -452,7 +455,7 @@ export default function LoginScreen({ hasUsers }) {
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, animation: `${fadeUp} 0.3s ease` }}>
               <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'rgba(250,204,21,0.08)', border: '1px solid rgba(250,204,21,0.25)' }}>
                 <Typography sx={{ fontSize: '0.75rem', color: '#facc15', fontWeight: 700, mb: 0.5 }}>⚠️ Guarda este código ahora</Typography>
-                <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', lineHeight: 1.5 }}>
+                <Typography sx={{ fontSize: '0.72rem', color: '#ffffff', lineHeight: 1.5 }}>
                   Si olvidas tu PIN necesitarás este código. <strong>No se mostrará de nuevo.</strong>
                 </Typography>
               </Box>
@@ -485,11 +488,11 @@ export default function LoginScreen({ hasUsers }) {
           {mode === 'recover' && (
             <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, animation: `${fadeUp} 0.3s ease` }}>
               <Box>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Usuario</Typography>
+                <Typography sx={{ fontSize: '0.68rem', color: '#ffffff', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Usuario</Typography>
                 <TextField fullWidth size="small" placeholder="tu usuario" autoFocus value={username} onChange={e => setUsername(e.target.value.toLowerCase())} sx={INPUT_SX} />
               </Box>
               <Box>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Código de recuperación</Typography>
+                <Typography sx={{ fontSize: '0.68rem', color: '#ffffff', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Código de recuperación</Typography>
                 <TextField fullWidth size="small" placeholder="XXXXXXXXXXXX"
                   value={recoveryCode} onChange={e => setRecoveryCode(e.target.value.toUpperCase())}
                   slotProps={{ htmlInput: { style: { fontFamily: 'monospace', letterSpacing: '0.1em' } } }} sx={INPUT_SX} />
@@ -499,7 +502,7 @@ export default function LoginScreen({ hasUsers }) {
               <SubmitBtn loading={loading} label={t.login.changePin} />
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
                 <Typography onClick={() => reset('login')} sx={LINK_SX}>{t.login.back}</Typography>
-                <Typography onClick={() => reset('forgot')} sx={{ ...LINK_SX, color: 'rgba(96,165,250,0.5)' }}>
+                <Typography onClick={() => reset('forgot')} sx={{ ...LINK_SX, color: '#93c5fd' }}>
                   Recibir código por email
                 </Typography>
               </Box>
@@ -510,17 +513,17 @@ export default function LoginScreen({ hasUsers }) {
           {mode === 'forgot' && (
             <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, animation: `${fadeUp} 0.3s ease` }}>
               <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'rgba(96,165,250,0.07)', border: '1px solid rgba(96,165,250,0.2)' }}>
-                <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', lineHeight: 1.5 }}>
+                <Typography sx={{ fontSize: '0.72rem', color: '#ffffff', lineHeight: 1.5 }}>
                   Te enviaremos un código de 8 caracteres a tu correo <strong style={{ color: 'rgba(255,255,255,0.65)' }}>@detucel.mx</strong>. Expira en 15 minutos.
                 </Typography>
               </Box>
               <Box>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Correo</Typography>
+                <Typography sx={{ fontSize: '0.68rem', color: '#ffffff', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Correo</Typography>
                 <TextField fullWidth size="small" placeholder="nombre" autoFocus
                   value={resetEmail}
                   onChange={e => setResetEmail(e.target.value.toLowerCase().replace(/\s/g, '').replace('@detucel.mx', ''))}
                   slotProps={{ input: { endAdornment: (
-                    <Box sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem', whiteSpace: 'nowrap', pr: 0.5 }}>@detucel.mx</Box>
+                    <Box sx={{ color: '#ffffff', fontSize: '0.82rem', whiteSpace: 'nowrap', pr: 0.5 }}>@detucel.mx</Box>
                   )}}}
                   sx={INPUT_SX} />
               </Box>
@@ -536,12 +539,12 @@ export default function LoginScreen({ hasUsers }) {
           {mode === 'reset_pin' && (
             <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, animation: `${fadeUp} 0.3s ease` }}>
               <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'rgba(74,222,128,0.07)', border: '1px solid rgba(74,222,128,0.2)' }}>
-                <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', lineHeight: 1.5 }}>
+                <Typography sx={{ fontSize: '0.72rem', color: '#ffffff', lineHeight: 1.5 }}>
                   Revisa tu bandeja de entrada y pega el código de 8 caracteres que te enviamos.
                 </Typography>
               </Box>
               <Box>
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Código del correo</Typography>
+                <Typography sx={{ fontSize: '0.68rem', color: '#ffffff', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>Código del correo</Typography>
                 <TextField fullWidth size="small" placeholder="XXXXXXXX" autoFocus
                   value={resetToken} onChange={e => setResetToken(e.target.value.toUpperCase())}
                   slotProps={{ htmlInput: { style: { fontFamily: 'monospace', letterSpacing: '0.2em', textAlign: 'center' }, maxLength: 8 } }}
@@ -567,6 +570,6 @@ export default function LoginScreen({ hasUsers }) {
 }
 
 const LINK_SX = {
-  fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', cursor: 'pointer',
+  fontSize: '0.75rem', color: '#ffffff', cursor: 'pointer',
   '&:hover': { color: 'var(--accent,#60a5fa)' }, transition: 'color 0.15s',
 }

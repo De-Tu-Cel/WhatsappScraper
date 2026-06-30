@@ -439,54 +439,74 @@ def _page_bg(canv, doc):
     canv.restoreState()
 
 
-# ─── Groq suggestions ─────────────────────────────────────────────────────────
+# ─── AI suggestions ───────────────────────────────────────────────────────────
 
 def _suggestions(analytics: dict, industry: str) -> list[str]:
+    """Generate 5 specific, actionable improvement suggestions via AI."""
+    # Identify weak dimensions (score 1-2) to prioritize
+    weak_dims = []
+    strong_dims = []
+    for field, label in _SVC_DIMS:
+        v = analytics.get(field)
+        if v is not None:
+            score = float(v)
+            if score <= 2:
+                weak_dims.append(f"{label} ({int(score)}/5)")
+            elif score >= 4:
+                strong_dims.append(f"{label} ({int(score)}/5)")
+
+    reaction = analytics.get("reaction_time_min")
+    reaction_str = f"{reaction} min" if reaction is not None else "sin datos"
+    cat = analytics.get("category", "humano")
+    quality = analytics.get("response_quality", 0)
+    notes = analytics.get("notes") or "Sin notas"
+
+    weak_block = ", ".join(weak_dims) if weak_dims else "ninguna critica detectada"
+    strong_block = ", ".join(strong_dims) if strong_dims else "ninguna destacada"
+
+    prompt = (
+        f"Eres consultor senior de ventas B2B en Mexico especializado en canales digitales.\n"
+        f"Analiza el canal WhatsApp de una empresa del sector '{industry}':\n\n"
+        f"DATOS:\n"
+        f"- Tipo de atencion: {cat}\n"
+        f"- Tiempo de respuesta: {reaction_str}\n"
+        f"- Señal comercial del prospecto: {quality}/5\n"
+        f"- Dimensiones DEBILES (prioridad alta): {weak_block}\n"
+        f"- Dimensiones fuertes: {strong_block}\n"
+        f"- Diagnostico del auditor: {notes}\n\n"
+        f"TAREA: Genera exactamente 5 recomendaciones de mejora.\n"
+        f"FORMATO: Una recomendacion por linea. Sin numeracion, bullets ni guiones iniciales.\n"
+        f"REGLAS:\n"
+        f"1. Ataca primero las dimensiones debiles con acciones especificas y medibles\n"
+        f"2. Cada recomendacion debe ser implementable en menos de 30 dias\n"
+        f"3. Usa herramientas REALES: WhatsApp Business, catalogo, respuestas rapidas, etiquetas, "
+        f"mensajes de voz, estados, listas de difusion, chatbots, CRM\n"
+        f"4. Adapta el lenguaje y ejemplos al sector '{industry}'\n"
+        f"5. Cada sugerencia: maximo 160 caracteres, comienza con un VERBO imperativo\n"
+        f"6. Propón metricas de exito cuando sea posible (ej: 'reduce 50% el tiempo de respuesta')\n"
+        f"PROHIBIDO: consejos vagos como 'mejora la comunicacion' o 'se mas proactivo'"
+    )
+
     try:
-        key = os.getenv("GROQ_API_KEY", "")
-        if not key:
-            return []
-        from groq import Groq
-        client = Groq(api_key=key)
-
-        dim_lines = []
-        for field, label in _SVC_DIMS:
-            v = analytics.get(field)
-            if v is not None:
-                dim_lines.append(f"  {label}: {v}/5")
-        dims_block = "\n".join(dim_lines) if dim_lines else "  (sin datos de dimensiones)"
-
-        reaction = analytics.get("reaction_time_min")
-        reaction_str = f"{reaction} min" if reaction is not None else "sin datos"
-
-        prompt = (
-            f"Eres consultor senior de ventas y experiencia de cliente B2B en Mexico.\n"
-            f"Empresa del sector '{industry}'. Analisis de su canal WhatsApp:\n"
-            f"- Tipo de atencion: {analytics.get('category', '?')}\n"
-            f"- Tiempo de respuesta: {reaction_str}\n"
-            f"- Senial comercial (1-5): {analytics.get('response_quality', 0)}\n"
-            f"- Calidad de servicio por dimension (1-5):\n{dims_block}\n"
-            f"- Diagnostico del auditor: {analytics.get('notes') or 'Sin notas'}\n\n"
-            f"Genera 4 recomendaciones de mejora CONCRETAS e INNOVADORAS para el canal WhatsApp.\n"
-            f"REGLAS:\n"
-            f"- Prioriza las dimensiones con puntuacion 1-2 (las mas deficientes)\n"
-            f"- Propone acciones especificas y medibles, no consejos genericos\n"
-            f"- Adapta cada sugerencia al sector '{industry}'\n"
-            f"- Maximo 120 caracteres por sugerencia\n"
-            f"- Sin numeracion, sin bullets, sin guiones. Una sugerencia por linea.\n"
-            f"- Sé innovador: incluye tacticas como mensajes de voz, videos cortos, "
-            f"automatizacion inteligente, segmentacion por urgencia, o tecnicas de venta consultiva."
-        )
-        resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=500,
-            temperature=0.4,
-        )
-        lines = [l.strip("•-– 1234567890.)") for l in resp.choices[0].message.content.strip().split("\n") if l.strip()]
-        return [l for l in lines if len(l) > 10][:4]
+        ds_key = os.getenv("DEEPSEEK_API_KEY", "")
+        if ds_key:
+            import requests as _req
+            r = _req.post(
+                "https://api.deepseek.com/chat/completions",
+                headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
+                json={"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}],
+                      "max_tokens": 600, "temperature": 0.35},
+                timeout=20,
+            )
+            content = r.json()["choices"][0]["message"]["content"].strip()
+            lines = [l.strip("•-– \t") for l in content.split("\n") if l.strip()]
+            result = [l for l in lines if len(l) > 15][:5]
+            if result:
+                return result
     except Exception:
-        return []
+        pass
+
+    return []
 
 
 # ─── Main generator ───────────────────────────────────────────────────────────
@@ -537,43 +557,41 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
 
     qual_level, qual_color = QUALITY_LEVELS.get(round(quality), ("Desconocido", C["muted"]))
     speed_label, speed_color = _speed_label(reaction_min)
-    composite = _composite_score(analytics, cat_key, quality, reaction_min, business_hours)
-    score_label, score_color = _score_label(composite)
 
     sent_c = sum(1 for m in thread if m.get("direction") == "outbound")
     recv_c = sum(1 for m in thread if m.get("direction") == "inbound")
-    read_c = sum(1 for m in thread if m.get("status") == "read")
 
     suggestions = [_safe(s) for s in (_suggestions(analytics, industry) or [])] or [
-        "Activar respuestas automaticas fuera de horario para no perder prospectos.",
-        "Configurar un mensaje de bienvenida con precios y servicios principales.",
-        "Reducir el tiempo de respuesta a menos de 10 minutos durante horario habil.",
+        "Activar respuestas automaticas fuera de horario para no perder prospectos nocturnos.",
+        "Crear catalogo de productos en WhatsApp Business con precios y descripcion.",
+        "Reducir el tiempo de respuesta a menos de 10 minutos en horario habil.",
         "Usar etiquetas de WhatsApp Business para clasificar leads por nivel de interes.",
+        "Agregar un CTA claro al final de cada respuesta: cotizacion, llamada o demo.",
     ]
 
     story = []
 
     # ══════════════════════════════════════════════════════════════════════════
-    # PAGE 1 — Portada + Diagnóstico
+    # PAGE 1 — Diagnóstico + Calidad de Servicio + Sugerencias
     # ══════════════════════════════════════════════════════════════════════════
 
-    story.append(HGradient(PW, 16 * mm, "#3b82f6", "#8b5cf6"))
-    story.append(Spacer(1, 5 * mm))
+    story.append(HGradient(PW, 14 * mm, "#3b82f6", "#8b5cf6"))
+    story.append(Spacer(1, 4 * mm))
 
     # Company header
     meta_lines = []
     if wa_number:
         meta_lines.append(Paragraph(
             f'<font color="#25d366">&#9679;</font>  <font color="#1e293b"><b>{wa_number}</b></font>',
-            _st("wn", fontSize=10, leading=15)))
+            _st("wn", fontSize=10, leading=14)))
     if domain:
-        meta_lines.append(Paragraph(domain, _st("dm", fontSize=9, textColor=C["muted"], leading=13)))
-    meta_lines.append(Paragraph(now_str, _st("dt2", fontSize=8, textColor=C["muted"], leading=12)))
+        meta_lines.append(Paragraph(domain, _st("dm", fontSize=9, textColor=C["muted"], leading=12)))
+    meta_lines.append(Paragraph(now_str, _st("dt2", fontSize=8, textColor=C["muted"], leading=11)))
 
     header_table = Table(
-        [[Paragraph(company_name, _st("cn", fontSize=18, fontName="Helvetica-Bold",
-                                      textColor=C["white"], leading=22)),
-          [Paragraph(industry, _st("ci", fontSize=10, textColor=C["muted"], leading=14))] + meta_lines]],
+        [[Paragraph(company_name, _st("cn", fontSize=17, fontName="Helvetica-Bold",
+                                      textColor=C["white"], leading=21)),
+          [Paragraph(industry, _st("ci", fontSize=10, textColor=C["muted"], leading=13))] + meta_lines]],
         colWidths=[PW * 0.55, PW * 0.45],
     )
     header_table.setStyle(TableStyle([
@@ -584,45 +602,36 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
     story.append(header_table)
-    story.append(Spacer(1, 4 * mm))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=C["border"], spaceAfter=4))
+    story.append(Spacer(1, 3 * mm))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=C["border"], spaceAfter=3))
 
-    # ── Section: Diagnóstico del Canal ────────────────────────────────────────
+    # ── Diagnóstico del Canal ─────────────────────────────────────────────────
     story.append(Paragraph("Diagnostico del Canal", _st("h3",
-        fontSize=11, fontName="Helvetica-Bold", textColor=C["primary"],
-        leading=15, spaceAfter=4)))
+        fontSize=10, fontName="Helvetica-Bold", textColor=C["primary"],
+        leading=14, spaceAfter=3)))
 
-    # 4-card grid
     bh_label = "En horario habil" if business_hours else "Fuera de horario"
     bh_color = C["humano"] if business_hours else C["automatico"]
 
     story.append(CardGrid(
         cards=[
-            ("Tipo de atencion",    cat_label,               cat_color,   None),
-            ("Calidad comercial",   f"{round(quality)}/5",   qual_color,  QualityDots(quality, qual_color)),
+            ("Tipo de atencion",       cat_label,                cat_color,  None),
+            ("Calidad comercial",      f"{round(quality)}/5",    qual_color, QualityDots(quality, qual_color)),
             ("Velocidad de respuesta", _reaction_str(reaction_min), speed_color, None),
-            ("Horario de atencion", bh_label,                bh_color,    None),
+            ("Horario de atencion",    bh_label,                  bh_color,  None),
         ],
         width=PW,
-        card_h=26 * mm,
+        card_h=22 * mm,
         gap=4,
     ))
-    story.append(Spacer(1, 3 * mm))
+    story.append(Spacer(1, 2 * mm))
 
-    # Nivel de calidad label
-    story.append(Paragraph(
-        f'Nivel: <b><font color="#{qual_color.hexval()[-6:] if hasattr(qual_color,"hexval") else "1e293b"}">{qual_level}</font></b>'
-        f'&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;Respuesta: <b>{speed_label}</b>'
-        f'{"&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;Bot IA: Si" if is_ai else ""}',
-        _st("ql", fontSize=8, textColor=C["muted"], leading=11, spaceAfter=3),
-    ))
-
-    # Notas del clasificador (diagnóstico clínico)
+    # Notas del diagnóstico
     if notes:
         notes_data = [
             [Paragraph("Diagnostico:", _st("dlb", fontSize=8, fontName="Helvetica-Bold",
                                            textColor=C["muted"])),
-             Paragraph(notes, _st("dln", fontSize=9, textColor=C["text"], leading=13))],
+             Paragraph(notes, _st("dln", fontSize=8.5, textColor=C["text"], leading=12))],
         ]
         notes_tbl = Table(notes_data, colWidths=[24 * mm, PW - 24 * mm - 4])
         notes_tbl.setStyle(TableStyle([
@@ -630,134 +639,97 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
             ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
             ("LEFTPADDING",   (0, 0), (-1, -1), 8),
             ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
-            ("TOPPADDING",    (0, 0), (-1, -1), 7),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ("TOPPADDING",    (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
             ("VALIGN",        (0, 0), (-1, -1), "TOP"),
         ]))
         story.append(notes_tbl)
-        story.append(Spacer(1, 3 * mm))
+        story.append(Spacer(1, 2 * mm))
 
-    # Puntuación global
-    story.append(Paragraph("Puntuacion Global", _st("sg",
-        fontSize=9, fontName="Helvetica-Bold", textColor=C["muted"],
-        leading=12, spaceAfter=2)))
-    story.append(ScoreBar(composite, score_label, score_color, PW, h=14 * mm))
+    # ── Stats: enviados + recibidos ───────────────────────────────────────────
+    stats_data = [
+        [Paragraph(str(sent_c), _st("sv1", fontSize=16, fontName="Helvetica-Bold", textColor=C["primary"], leading=18)),
+         Paragraph(str(recv_c), _st("sv2", fontSize=16, fontName="Helvetica-Bold", textColor=C["humano"], leading=18))],
+        [Paragraph("Mensajes enviados", _st("sl1", fontSize=7, textColor=C["muted"], leading=10)),
+         Paragraph("Respuestas recibidas", _st("sl2", fontSize=7, textColor=C["muted"], leading=10))],
+    ]
+    stats_tbl = Table(stats_data, colWidths=[PW / 2 - 2, PW / 2 - 2])
+    stats_tbl.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
+        ("BOX",           (0, 0), (0, -1),  0.5, C["border"]),
+        ("BOX",           (1, 0), (1, -1),  0.5, C["border"]),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
+        ("TOPPADDING",    (0, 0), (-1, 0),  6),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
+        ("TOPPADDING",    (0, 1), (-1, -1), 0),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    story.append(stats_tbl)
     story.append(Spacer(1, 3 * mm))
 
-    # Check if new svc dims are present
+    # ── Calidad de Servicio (si hay datos) ────────────────────────────────────
     has_svc = any(analytics.get(k) is not None for k, _ in _SVC_DIMS)
-
     if has_svc:
-        story.append(Paragraph(
-            "Ponderacion: Calidad de servicio 45% · Senial comercial 20% · Tipo de atencion 15% · Velocidad 20%",
-            _st("crit", fontSize=7, textColor=C["muted"], leading=10),
-        ))
-        story.append(Spacer(1, 3 * mm))
-        story.append(Paragraph("Desglose de Calidad de Servicio", _st("sqh",
+        story.append(Paragraph("Calidad de Servicio por Dimension", _st("sqh",
             fontSize=9, fontName="Helvetica-Bold", textColor=C["primary"],
             leading=12, spaceAfter=2)))
-        story.append(ServiceQualityTable(analytics, PW, row_h=14))
-    else:
-        story.append(Paragraph(
-            "Ponderacion: Tipo de atencion 30% · Calidad comercial 50% · Velocidad de respuesta 20%",
-            _st("crit", fontSize=7, textColor=C["muted"], leading=10),
-        ))
+        story.append(ServiceQualityTable(analytics, PW, row_h=13))
+        story.append(Spacer(1, 3 * mm))
+
+    story.append(HRFlowable(width="100%", thickness=0.5, color=C["border"], spaceAfter=3))
+
+    # ── Sugerencias de Mejora ─────────────────────────────────────────────────
+    story.append(Paragraph("Sugerencias de Mejora", _st("h4",
+        fontSize=10, fontName="Helvetica-Bold", textColor=C["green"],
+        leading=13, spaceAfter=2)))
+    story.append(Paragraph(
+        f"Acciones especificas para el canal de {company_name} — sector {industry}.",
+        _st("sub2", fontSize=7.5, textColor=C["muted"], leading=10, spaceAfter=3),
+    ))
+
+    for i, text in enumerate(suggestions, 1):
+        sug_row = Table(
+            [[Paragraph(str(i), _st(f"bn{i}",
+                fontSize=11, fontName="Helvetica-Bold", textColor=C["green"])),
+              Paragraph(text, _st(f"bt{i}",
+                fontSize=8.5, textColor=C["text"], leading=12))]],
+            colWidths=[7 * mm, PW - 7 * mm - 4],
+        )
+        sug_row.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
+            ("LINEAFTER",     (0, 0), (0, -1),  2, C["green"]),
+            ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 7),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
+            ("TOPPADDING",    (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        story.append(sug_row)
+        story.append(Spacer(1, 2 * mm))
 
     story.append(Spacer(1, 3 * mm))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=C["border"], spaceAfter=4))
-
-    # Metrics bar
-    story.append(SummaryBar(sent_c, recv_c, read_c, PW, h=18 * mm))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=C["border"], spaceAfter=3))
+    story.append(Paragraph(
+        f'<font color="#64748b">Analisis de Canal WhatsApp · {now_str}</font>',
+        _st("bn", fontSize=7, alignment=TA_CENTER, leading=10),
+    ))
 
     # ══════════════════════════════════════════════════════════════════════════
-    # PAGE 2 — Leyenda + Evidencia
+    # PAGE 2 — Evidencia de Conversación
     # ══════════════════════════════════════════════════════════════════════════
     story.append(PageBreak())
 
-    story.append(Paragraph("Metodologia de Evaluacion", _st("h5",
-        fontSize=11, fontName="Helvetica-Bold", textColor=C["primary"],
-        leading=15, spaceAfter=3)))
-    story.append(Paragraph(
-        "Dos ejes independientes: calidad del servicio entregado y señal comercial del prospecto.",
-        _st("sub", fontSize=8, textColor=C["muted"], leading=11, spaceAfter=5),
-    ))
-
-    # Service quality dimensions legend
-    story.append(Paragraph("Dimensiones de Calidad de Servicio (1-5 cada una)", _st("sqtitle",
-        fontSize=9, fontName="Helvetica-Bold", textColor=C["text"],
-        leading=12, spaceAfter=3)))
-    svc_legend = [
-        ("Profesionalismo", "Ortografia, tono apropiado, coherencia y claridad del mensaje"),
-        ("Completitud",     "¿Respondio lo que se pregunto o solicito?"),
-        ("Empatia",         "Calidez, personalizacion, reconoce y valida la necesidad"),
-        ("Solucion ofrecida","¿Ofrecio algo concreto? (precio, producto, alternativa, cita)"),
-        ("Siguiente paso",  "¿Quedo claro que sigue? (CTA explicito: llamada, reunion, link)"),
-        ("Proactividad",    "Anticipo necesidades, hizo preguntas de calificacion, ofrecio info extra"),
-    ]
-    for dim_name, dim_desc in svc_legend:
-        dim_row = Table(
-            [[Paragraph(dim_name, _st(f"dn_{dim_name}",
-                  fontSize=8, fontName="Helvetica-Bold", textColor=C["primary"])),
-              Paragraph(dim_desc, _st(f"dd_{dim_name}",
-                  fontSize=8, textColor=C["muted"], leading=11))]],
-            colWidths=[38 * mm, PW - 38 * mm - 4],
-        )
-        dim_row.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
-            ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 8),
-            ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
-            ("TOPPADDING",    (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ]))
-        story.append(dim_row)
-        story.append(Spacer(1, 1.5 * mm))
-
-    story.append(Spacer(1, 4 * mm))
-    story.append(Paragraph("Escala de Señal Comercial (1-5)", _st("sqtitle2",
-        fontSize=9, fontName="Helvetica-Bold", textColor=C["text"],
-        leading=12, spaceAfter=3)))
-    story.append(Paragraph(
-        "¿Que tan caliente quedo el lead con esta interaccion?",
-        _st("sub3", fontSize=8, textColor=C["muted"], leading=11, spaceAfter=3),
-    ))
-
-    for score_val, level_name, description, lv_color in QUALITY_LEGEND:
-        row = Table(
-            [[Paragraph(str(score_val), _st(f"lv{score_val}",
-                  fontSize=14, fontName="Helvetica-Bold", textColor=lv_color)),
-              [Paragraph(level_name, _st(f"ln{score_val}",
-                   fontSize=9, fontName="Helvetica-Bold", textColor=lv_color, leading=13)),
-               Paragraph(description, _st(f"ld{score_val}",
-                   fontSize=8, textColor=C["muted"], leading=11))]]],
-            colWidths=[10 * mm, PW - 10 * mm - 4],
-        )
-        row.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
-            ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 8),
-            ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
-            ("TOPPADDING",    (0, 0), (-1, -1), 7),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ]))
-        story.append(row)
-        story.append(Spacer(1, 2 * mm))
-
-    story.append(Spacer(1, 4 * mm))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=C["border"], spaceAfter=5))
-
-    # Evidencia de conversación
     story.append(Paragraph("Evidencia de Conversacion", _st("h2",
-        fontSize=11, fontName="Helvetica-Bold", textColor=C["primary"],
-        leading=14, spaceAfter=4)))
+        fontSize=10, fontName="Helvetica-Bold", textColor=C["primary"],
+        leading=13, spaceAfter=4)))
 
     if screenshot_b64:
         try:
             raw     = screenshot_b64.split(",", 1)[-1] if "," in screenshot_b64 else screenshot_b64
             img_buf = io.BytesIO(base64.b64decode(raw))
-            img     = Image(img_buf, width=PW, height=90 * mm, kind="bound")
+            img     = Image(img_buf, width=PW, height=110 * mm, kind="bound")
             story.append(img)
         except Exception:
             story.append(Paragraph("(No se pudo procesar la imagen.)",
@@ -769,46 +741,6 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     caption_parts = [p for p in [company_name, wa_number, datetime.now().strftime("%d/%m/%Y")] if p]
     story.append(Paragraph(" · ".join(caption_parts),
         _st("cap", fontSize=7, textColor=C["muted"], alignment=TA_CENTER, spaceAfter=0)))
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # PAGE 3 — Sugerencias de Mejora
-    # ══════════════════════════════════════════════════════════════════════════
-    story.append(PageBreak())
-
-    story.append(Paragraph("Sugerencias de Mejora", _st("h4",
-        fontSize=11, fontName="Helvetica-Bold", textColor=C["green"],
-        leading=15, spaceAfter=5)))
-    story.append(Paragraph(
-        f"Basadas en el analisis del canal de {company_name} — sector {industry}.",
-        _st("sub2", fontSize=8, textColor=C["muted"], leading=11, spaceAfter=6),
-    ))
-
-    for i, text in enumerate(suggestions, 1):
-        sug_row = Table(
-            [[Paragraph(str(i), _st(f"bn{i}",
-                fontSize=12, fontName="Helvetica-Bold", textColor=C["green"])),
-              Paragraph(text, _st(f"bt{i}",
-                fontSize=9, textColor=C["text"], leading=13))]],
-            colWidths=[8 * mm, PW - 8 * mm - 4],
-        )
-        sug_row.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
-            ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 8),
-            ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
-            ("TOPPADDING",    (0, 0), (-1, -1), 7),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ]))
-        story.append(sug_row)
-        story.append(Spacer(1, 3 * mm))
-
-    story.append(Spacer(1, 4 * mm))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=C["border"], spaceAfter=4))
-    story.append(Paragraph(
-        f'<font color="#64748b">Analisis de Canal WhatsApp · {now_str}</font>',
-        _st("bn", fontSize=7, alignment=TA_CENTER, leading=11),
-    ))
 
     # ── Build ─────────────────────────────────────────────────────────────────
     _orig_build = doc.build

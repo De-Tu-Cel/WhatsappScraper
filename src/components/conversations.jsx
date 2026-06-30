@@ -15,6 +15,7 @@ import Tooltip from '@mui/material/Tooltip'
 import InputAdornment from '@mui/material/InputAdornment'
 import SendIcon from '@mui/icons-material/Send'
 import WifiOffIcon from '@mui/icons-material/WifiOff'
+import SmartToyIcon from '@mui/icons-material/SmartToy'
 import SearchIcon from '@mui/icons-material/Search'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import BusinessIcon from '@mui/icons-material/Business'
@@ -63,13 +64,33 @@ function StatusIcon({ status, direction }) {
   return <AccessTimeIcon sx={{ fontSize: 12, color: 'rgba(255,255,255,0.25)' }} />
 }
 
+function TypingDots() {
+  return (
+    <Box sx={{ display: 'flex', gap: '3px', alignItems: 'center', ml: 0.5 }}>
+      {[0, 1, 2].map(i => (
+        <Box key={i} sx={{
+          width: 5, height: 5, borderRadius: '50%',
+          bgcolor: 'var(--accent, #a5b4fc)',
+          opacity: 0.7,
+          animation: 'ai-bounce 1.2s ease-in-out infinite',
+          animationDelay: `${i * 0.18}s`,
+          '@keyframes ai-bounce': {
+            '0%, 60%, 100%': { transform: 'translateY(0)' },
+            '30%': { transform: 'translateY(-5px)' },
+          },
+        }} />
+      ))}
+    </Box>
+  )
+}
+
 function ConversationItem({ conv, active, onClick }) {
   const isInbound = conv.last_direction === 'inbound'
   const domain = conv.domain || conv.website?.replace(/https?:\/\/(www\.)?/, '').split('/')[0] || ''
   return (
     <Box onClick={onClick} sx={{
       display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.5,
-      cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.04)',
+      cursor: 'pointer', borderBottom: '1px solid var(--border)',
       bgcolor: active ? 'rgba(var(--accent-rgb, 99,102,241), 0.12)' : 'transparent',
       borderLeft: active ? '2px solid var(--accent, #6366f1)' : '2px solid transparent',
       transition: 'all 0.15s',
@@ -101,6 +122,23 @@ function ConversationItem({ conv, active, onClick }) {
             <Typography sx={{ color: conv.unread ? 'white' : 'rgba(255,255,255,0.8)', fontWeight: conv.unread ? 700 : 500, fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 130 }}>
               {conv.company_name || conv.company_id}
             </Typography>
+            {conv.ai_active && (
+              <Tooltip title={conv.ai_typing ? 'Chat IA está redactando...' : 'Chat IA en conversación'}>
+                <Box sx={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  width: 14, height: 14, borderRadius: '50%', flexShrink: 0, ml: 0.5,
+                  bgcolor: conv.ai_typing ? 'rgba(var(--accent-rgb,99,102,241),0.25)' : 'rgba(var(--accent-rgb,99,102,241),0.1)',
+                  border: '1px solid rgba(var(--accent-rgb,99,102,241),0.5)',
+                  animation: conv.ai_typing ? 'ai-pulse 1s ease-in-out infinite' : 'none',
+                  '@keyframes ai-pulse': {
+                    '0%, 100%': { boxShadow: '0 0 0 0 rgba(var(--accent-rgb,99,102,241),0.4)' },
+                    '50%': { boxShadow: '0 0 0 4px rgba(var(--accent-rgb,99,102,241),0)' },
+                  },
+                }}>
+                  <SmartToyIcon sx={{ fontSize: 8, color: 'var(--accent, #a5b4fc)' }} />
+                </Box>
+              </Tooltip>
+            )}
             {conv.last_analysis?.category && (() => {
               const cat = conv.last_analysis.category
               const isAI = cat === 'bot' && conv.last_analysis?.is_ai
@@ -262,6 +300,7 @@ function InteractiveMessage({ interactive, isOut, onReply }) {
 
 function MessageBubble({ msg, onReply }) {
   const isOut  = msg.direction === 'outbound'
+  const isAI   = Boolean(msg.ai_generated)
   const raw    = msg.body || msg.message_body || ''
   const media  = MEDIA_LABELS[raw.trim().toLowerCase()]
   const body   = raw || '—'
@@ -269,9 +308,15 @@ function MessageBubble({ msg, onReply }) {
   return (
     <Box sx={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start', mb: 0.8, px: 2 }}>
       <Box sx={{
-        maxWidth: '72%', px: 1.5, py: 1, borderRadius: isOut ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
-        bgcolor: isOut ? 'rgba(var(--accent-rgb, 99,102,241), 0.22)' : 'rgba(255,255,255,0.07)',
-        border: `1px solid ${isOut ? 'rgba(var(--accent-rgb, 99,102,241), 0.3)' : 'rgba(255,255,255,0.09)'}`,
+        position: 'relative',
+        maxWidth: '72%', px: 1.5, py: 1,
+        borderRadius: isOut ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
+        bgcolor: isOut
+          ? isAI ? 'rgba(var(--accent-rgb, 99,102,241), 0.15)' : 'rgba(var(--accent-rgb, 99,102,241), 0.22)'
+          : 'rgba(255,255,255,0.07)',
+        border: `1px solid ${isOut
+          ? isAI ? 'rgba(var(--accent-rgb, 99,102,241), 0.22)' : 'rgba(var(--accent-rgb, 99,102,241), 0.3)'
+          : 'rgba(255,255,255,0.09)'}`,
       }}>
         {interactive ? (
           <InteractiveMessage interactive={interactive} isOut={isOut} onReply={onReply} />
@@ -293,6 +338,20 @@ function MessageBubble({ msg, onReply }) {
           </Typography>
           <StatusIcon status={msg.status} direction={msg.direction} />
         </Box>
+        {/* AI badge — bottom-right corner of bubble */}
+        {isAI && (
+          <Tooltip title="Enviado por Chat IA">
+            <Box sx={{
+              position: 'absolute', bottom: -4, right: -4,
+              width: 16, height: 16, borderRadius: '50%',
+              bgcolor: 'var(--accent, #6366f1)',
+              border: '2px solid var(--sidebar-bg, #0d1117)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <SmartToyIcon sx={{ fontSize: 8, color: '#fff' }} />
+            </Box>
+          </Tooltip>
+        )}
       </Box>
     </Box>
   )
@@ -323,6 +382,10 @@ export default function Conversations() {
   const messagesBoxRef = useRef(null)
   const replyRef  = useRef(null)
   const [sendError, setSendError] = useState('')
+  const [aiTyping, setAiTyping]     = useState(false)
+  const [aiActive, setAiActive]     = useState(false)
+  const [aiEnabled, setAiEnabled]   = useState(false)
+  const [aiToggling, setAiToggling] = useState(false)
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
 
   const fetchConvs = useCallback(async () => {
@@ -407,6 +470,52 @@ export default function Conversations() {
     }, 20000)
     return () => clearInterval(id)
   }, [fetchConvs, fetchThread, selected, activeNum])
+
+  // Poll AI follow-up status when a conversation is open
+  useEffect(() => {
+    if (!selected) {
+      setAiTyping(false); setAiActive(false); setAiEnabled(false)
+      return
+    }
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/conversations/${selected.company_id}/ai-status`)
+        if (cancelled) return
+        const data = await res.json()
+        setAiEnabled(data.ai_enabled || false)
+        setAiActive(data.ai_active || false)
+        setAiTyping(prev => {
+          const next = data.ai_typing || false
+          if (!prev && next) {
+            setTimeout(() => {
+              messagesBoxRef.current?.scrollTo({ top: messagesBoxRef.current.scrollHeight, behavior: 'smooth' })
+            }, 50)
+          }
+          return next
+        })
+      } catch { /* ignore */ }
+    }
+    poll()
+    const id = setInterval(poll, 4000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [selected])
+
+  const handleAiToggle = useCallback(async () => {
+    if (!selected || aiToggling) return
+    setAiToggling(true)
+    const next = !aiEnabled
+    try {
+      await fetch(`/api/conversations/${selected.company_id}/ai-toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      })
+      setAiEnabled(next)
+    } catch { /* ignore */ } finally {
+      setAiToggling(false)
+    }
+  }, [selected, aiEnabled, aiToggling])
 
   // Sync reply target with active tab
   useEffect(() => {
@@ -526,12 +635,12 @@ export default function Conversations() {
   }, [thread, activeNum, waNumbers])
 
   return (
-    <Box sx={{ display: 'flex', height: '100%', minHeight: 0, gap: 0, borderRadius: 2, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.07)' }}>
+    <Box sx={{ display: 'flex', height: '100%', minHeight: 0, gap: 0, borderRadius: 2, overflow: 'hidden', border: '1px solid var(--border)' }}>
 
       {/* ── Lista de conversaciones ── */}
-      <Box sx={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid rgba(255,255,255,0.07)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
+      <Box sx={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
         {/* Header */}
-        <Box sx={{ px: 2, pt: 2, pb: 1.5, borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+        <Box sx={{ px: 2, pt: 2, pb: 1.5, borderBottom: '1px solid var(--border)' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <WhatsAppIcon sx={{ color: '#4ade80', fontSize: 20 }} />
@@ -539,18 +648,18 @@ export default function Conversations() {
             </Box>
             <Tooltip title={t.common.refresh}>
               <IconButton size="small" onClick={() => { setLoading(true); fetchConvs() }}
-                sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'white' } }}>
+                sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
                 <RefreshIcon fontSize="small" />
               </IconButton>
             </Tooltip>
           </Box>
           <TextField fullWidth size="small" placeholder={t.convs.search} value={search}
             onChange={e => setSearch(e.target.value)}
-            slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 16, color: 'rgba(255,255,255,0.3)' }} /></InputAdornment> } }}
-            sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.8rem', bgcolor: 'rgba(255,255,255,0.04)', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' } }, '& input': { color: 'white', py: 0.8 } }} />
+            slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 16, color: 'var(--text-muted)' }} /></InputAdornment> } }}
+            sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.8rem', bgcolor: 'var(--item-hover)', '& fieldset': { borderColor: 'var(--border)' }, '&:hover fieldset': { borderColor: 'var(--text-muted)' } }, '& input': { color: 'var(--text)', py: 0.8 } }} />
 
           {/* Toggle mis conversaciones / todas */}
-          <Box sx={{ display: 'flex', mt: 1.5, bgcolor: 'rgba(255,255,255,0.04)', borderRadius: 2, p: 0.4, gap: 0.4 }}>
+          <Box sx={{ display: 'flex', mt: 1.5, bgcolor: 'var(--item-hover)', borderRadius: 2, p: 0.4, gap: 0.4 }}>
             {[
               { label: t.convs.allConvs, value: false },
               { label: t.convs.myConvs,  value: true },
@@ -560,8 +669,8 @@ export default function Conversations() {
                   flex: 1, textAlign: 'center', py: 0.55, borderRadius: 1.5, cursor: 'pointer',
                   fontSize: '0.72rem', fontWeight: 600, transition: 'all 0.15s',
                   bgcolor: myConvsOnly === opt.value ? 'var(--accent, #3b82f6)' : 'transparent',
-                  color: myConvsOnly === opt.value ? 'white' : 'rgba(255,255,255,0.4)',
-                  '&:hover': { color: myConvsOnly === opt.value ? 'white' : 'rgba(255,255,255,0.7)' },
+                  color: myConvsOnly === opt.value ? '#ffffff' : 'var(--text-muted)',
+                  '&:hover': { color: myConvsOnly === opt.value ? '#ffffff' : 'var(--text)' },
                 }}>
                 {opt.label}
               </Box>
@@ -591,7 +700,7 @@ export default function Conversations() {
 
         {/* Total */}
         {!loading && convs.length > 0 && (
-          <Box sx={{ px: 2, py: 1, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+          <Box sx={{ px: 2, py: 1, borderTop: '1px solid var(--border)' }}>
             <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.7rem' }}>
               {convs.length} {convs.length !== 1 ? t.convs.conversations : t.convs.conversation} · {convs.reduce((a, c) => a + (c.unread || 0), 0)} {t.convs.unread}
             </Typography>
@@ -618,7 +727,7 @@ export default function Conversations() {
         ) : (
           <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
             {/* Header del hilo */}
-            <Box sx={{ px: 2.5, py: 1.5, borderBottom: '1px solid rgba(255,255,255,0.07)', flexShrink: 0 }}>
+            <Box sx={{ px: 2.5, py: 1.5, borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
               {/* Fila superior: nombre + link + refresh */}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: waNumbers.length > 0 ? 1 : 0 }}>
                 <BusinessIcon sx={{ fontSize: 18, color: 'rgba(255,255,255,0.4)', flexShrink: 0 }} />
@@ -638,6 +747,41 @@ export default function Conversations() {
               {syncing && (
                 <CircularProgress size={12} sx={{ color: 'rgba(255,255,255,0.2)', mr: 0.5 }} />
               )}
+                {/* AI toggle — pill switch with SmartToy ball */}
+                <Tooltip title={aiEnabled ? t.convs.andyOn : t.convs.andyOff}>
+                  <Box onClick={aiToggling ? undefined : handleAiToggle} sx={{
+                    position: 'relative', cursor: aiToggling ? 'default' : 'pointer',
+                    width: 42, height: 24, borderRadius: 99, flexShrink: 0,
+                    bgcolor: aiEnabled ? 'var(--accent,#6366f1)' : 'rgba(255,255,255,0.1)',
+                    border: `1.5px solid ${aiEnabled ? 'rgba(var(--accent-rgb,99,102,241),0.7)' : 'rgba(255,255,255,0.15)'}`,
+                    transition: 'background-color 0.22s, border-color 0.22s',
+                    '&:hover': { borderColor: aiEnabled ? 'rgba(var(--accent-rgb,99,102,241),1)' : 'rgba(255,255,255,0.3)' },
+                  }}>
+                    {/* sliding ball */}
+                    <Box sx={{
+                      position: 'absolute', top: '50%', transform: 'translateY(-50%)',
+                      left: aiEnabled ? 'calc(100% - 21px)' : '2px',
+                      width: 19, height: 19, borderRadius: '50%',
+                      bgcolor: '#fff',
+                      boxShadow: '0 1px 4px rgba(0,0,0,0.35)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      transition: 'left 0.22s cubic-bezier(0.4,0,0.2,1)',
+                    }}>
+                      {aiToggling
+                        ? <CircularProgress size={9} sx={{ color: aiEnabled ? 'var(--accent,#6366f1)' : 'rgba(0,0,0,0.3)' }} />
+                        : <SmartToyIcon sx={{ fontSize: 11, color: aiEnabled ? 'var(--accent,#6366f1)' : 'rgba(0,0,0,0.3)' }} />}
+                    </Box>
+                    {/* typing pulse dot */}
+                    {aiEnabled && aiTyping && (
+                      <Box sx={{
+                        position: 'absolute', top: -2, right: -2, width: 7, height: 7,
+                        borderRadius: '50%', bgcolor: '#4ade80',
+                        border: '1.5px solid var(--sidebar-bg,#0d1117)',
+                        animation: 'ai-pulse 1s ease-in-out infinite',
+                      }} />
+                    )}
+                  </Box>
+                </Tooltip>
                 <Tooltip title={t.common.refresh}>
                   <IconButton size="small" onClick={() => fetchThread(selected.company_id, true, false, activeNum !== 'all' ? activeNum : null)}
                     sx={{ color: 'rgba(255,255,255,0.3)', '&:hover': { color: 'white' } }}>
@@ -691,7 +835,7 @@ export default function Conversations() {
             </Box>
 
             {waNumbers.length > 1 && activeNum && activeNum !== 'all' && (
-              <Box sx={{ px: 2, py: 0.6, borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
+              <Box sx={{ px: 2, py: 0.6, borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
                 <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
                   Filtrando · {activeNum.replace(/\D/g,'').slice(-10).replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')}
                 </Typography>
@@ -719,9 +863,30 @@ export default function Conversations() {
                 <Box sx={{ textAlign: 'center', pt: 4 }}>
                   <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.8rem' }}>Sin mensajes</Typography>
                 </Box>
-              ) : visibleThread.map(m => (
-                <MessageBubble key={m._id} msg={m} onReply={opt => handleSendReply(opt)} />
-              ))}
+              ) : (
+                <>
+                  {visibleThread.map(m => (
+                    <MessageBubble key={m._id} msg={m} onReply={opt => handleSendReply(opt)} />
+                  ))}
+                  {aiTyping && (
+                    <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 0.8, px: 2 }}>
+                      <Box sx={{
+                        display: 'flex', alignItems: 'center', gap: 0.8,
+                        px: 1.5, py: 0.9,
+                        borderRadius: '14px 14px 4px 14px',
+                        bgcolor: 'rgba(var(--accent-rgb, 99,102,241), 0.1)',
+                        border: '1px solid rgba(var(--accent-rgb, 99,102,241), 0.2)',
+                      }}>
+                        <SmartToyIcon sx={{ fontSize: 12, color: 'var(--accent, #a5b4fc)', opacity: 0.7 }} />
+                        <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem', fontStyle: 'italic' }}>
+                          Chat IA está redactando
+                        </Typography>
+                        <TypingDots />
+                      </Box>
+                    </Box>
+                  )}
+                </>
+              )}
             </Box>
 
             {/* Emoji picker popover */}
@@ -732,7 +897,6 @@ export default function Conversations() {
               transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
               slotProps={{ paper: { sx: { bgcolor: 'var(--sidebar-bg,#0d1117)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, p: 1.5, width: 300 } } }}
             >
-              {/* Tabs de grupos */}
               <Box sx={{ display: 'flex', gap: 0.5, mb: 1 }}>
                 {EMOJI_GROUPS.map((g, i) => (
                   <Box key={g.label} onClick={() => setEmojiGroup(i)} sx={{
@@ -743,7 +907,6 @@ export default function Conversations() {
                   }}>{g.label}</Box>
                 ))}
               </Box>
-              {/* Grid de emojis */}
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.3 }}>
                 {EMOJI_GROUPS[emojiGroup].emojis.map(e => (
                   <Box key={e} onClick={() => {
@@ -758,12 +921,10 @@ export default function Conversations() {
               </Box>
             </Popover>
 
-            {/* Input de respuesta — siempre visible, fuera del scroll */}
-            <Box sx={{ px: 2, pt: 1.5, pb: 1, borderTop: '1px solid rgba(255,255,255,0.07)', flexShrink: 0, bgcolor: 'rgba(0,0,0,0.15)' }}>
-
+            {/* Input de respuesta */}
+            <Box sx={{ px: 2, pt: 1.5, pb: 1, borderTop: '1px solid var(--border)', flexShrink: 0, bgcolor: 'var(--card-bg)' }}>
               <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1.2 }} />
               <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1.2 }} />
-
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-end' }}>
                 <Tooltip title="Emojis">
                   <IconButton size="small" onClick={e => setEmojiAnchor(e.currentTarget)}
@@ -796,7 +957,6 @@ export default function Conversations() {
                   </span>
                 </Tooltip>
               </Box>
-
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 0.4 }}>
                 <InstanceStatusDot status={instanceStatus} />
                 <Typography sx={{ fontSize: '0.65rem', color: reply.length > MAX_WA_MSG ? '#f87171' : reply.length > MAX_WA_MSG * 0.9 ? '#fbbf24' : 'rgba(255,255,255,0.2)' }}>

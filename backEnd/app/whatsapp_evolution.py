@@ -111,6 +111,4 @@ def _clean_number(number: str) -> str:
     digits = "".join(filter(str.isdigit, number))
     if len(digits) == 10:
         digits = "52" + digits    # local 10-digit → Mexican
-    elif len(digits) == 13 and digits.startswith("521"):
-        digits = "52" + digits[3:]  # old +521 format → current +52
     return digits

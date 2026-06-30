@@ -115,7 +115,7 @@ function EmptyState({ t }) {
     <Box sx={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       py: 6, gap: 1.5,
-      border: '1px dashed rgba(255,255,255,0.08)',
+      border: '1px dashed var(--border)',
       borderRadius: 3,
     }}>
       <Box sx={{
@@ -125,12 +125,12 @@ function EmptyState({ t }) {
         borderRadius: 3,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
-        <InboxIcon sx={{ color: 'rgba(var(--accent-rgb, 59,130,246), 0.5)', fontSize: 26 }} />
+        <InboxIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 26, opacity: 0.6 }} />
       </Box>
-      <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.85rem', fontWeight: 500 }}>
+      <Typography sx={{ color: 'var(--text)', fontSize: '0.85rem', fontWeight: 500 }}>
         {t.batch.emptyTitle}
       </Typography>
-      <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.75rem' }}>
+      <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
         {t.batch.emptyHint}
       </Typography>
     </Box>
@@ -356,10 +356,10 @@ export default function BatchProcessor() {
             <ListAltIcon sx={{ color: 'var(--accent, #60a5fa)', fontSize: 20 }} />
           </Box>
           <Box>
-            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.3 }}>
+            <Typography sx={{ color: 'var(--text, white)', fontWeight: 700, fontSize: '1rem', lineHeight: 1.3 }}>
               {t.batch.heading}
             </Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem' }}>
+            <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.35))', fontSize: '0.75rem' }}>
               {t.batch.subtitle}
             </Typography>
           </Box>
@@ -423,7 +423,7 @@ export default function BatchProcessor() {
             resize: 'vertical',
             boxSizing: 'border-box',
             bgcolor: 'var(--sidebar-bg, #0d1117)',
-            color: '#f1f5f9',
+            color: 'var(--text, #f1f5f9)',
             border: '1.5px solid rgba(var(--accent-rgb, 59,130,246), 0.2)',
             borderRadius: '12px',
             p: 2,
@@ -435,7 +435,7 @@ export default function BatchProcessor() {
             fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif',
             outline: 'none',
             transition: 'border-color 0.2s, box-shadow 0.2s',
-            '&::placeholder': { color: 'rgba(255,255,255,0.22)' },
+            '&::placeholder': { color: 'var(--text-muted, rgba(255,255,255,0.22))' },
             '&:hover': {
               borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.55)',
               boxShadow: '0 0 0 3px rgba(var(--accent-rgb, 59,130,246), 0.08)',

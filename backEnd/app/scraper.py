@@ -9,9 +9,7 @@ import requests
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
 
-# Serializa llamadas a Groq para no exceder el límite de tokens por minuto
-# cuando múltiples scrapers corren en paralelo.
-_GROQ_LOCK = threading.Lock()
+_DS_LOCK = threading.Lock()  # serializa llamadas DeepSeek en scraping paralelo
 
 
 class WebsiteScraper:
@@ -491,7 +489,7 @@ class WebsiteScraper:
                 result["has_whatsapp"] = True
 
         # ── Enriquecimiento con IA: rellenar campos vacíos en una sola llamada ──
-        self._groq_enrich_result(result, text[:1000])
+        self._deepseek_enrich_result(result, text[:1000])
 
         # Deduplicación y guardado en MongoDB
         existing = self.companies_col.find_one({"domain": domain})
@@ -627,11 +625,11 @@ class WebsiteScraper:
 
     def _ai_rank_subpages(self, links: List[Dict], industry: str = "") -> List[str]:
         """
-        Ask Groq to rank internal links by probability of containing contact info.
-        Falls back to keyword scoring if Groq is not configured or fails.
+        Ask DeepSeek to rank internal links by probability of containing contact info.
+        Falls back to keyword scoring if DeepSeek is not configured or fails.
         """
-        import os, json as _json, re as _re
-        groq_key = os.getenv("GROQ_API_KEY", "")
+        import os, json as _json, re as _re, requests as _req
+        ds_key = os.getenv("DEEPSEEK_API_KEY", "")
 
         # Páginas de contacto garantizadas — siempre van primero sin importar el ranking
         _MUST_CRAWL = {
@@ -648,15 +646,9 @@ class WebsiteScraper:
         ]
         non_must  = [lk for lk in links if lk["url"] not in set(must_urls)]
 
-        if groq_key and links:
-            import time as _time
-            from groq import Groq
-            client = Groq(api_key=groq_key)
+        if ds_key and non_must:
             batch = non_must[:20]
-            lines = [
-                f"{i+1}. {lk['path']!r}"
-                for i, lk in enumerate(batch)
-            ]
+            lines = [f"{i+1}. {lk['path']!r}" for i, lk in enumerate(batch)]
             industry_hint = f" (industria del negocio: {industry})" if industry else ""
             prompt = (
                 f"Paths de páginas internas{industry_hint}. "
@@ -664,28 +656,16 @@ class WebsiteScraper:
                 + "\n".join(lines) +
                 f"\n\nResponde SOLO con array JSON de números. Ejemplo: [3,7,1]"
             )
-
-            def _call_groq():
-                with _GROQ_LOCK:
-                    return client.chat.completions.create(
-                        model="llama-3.1-8b-instant",
-                        messages=[{"role": "user", "content": prompt}],
-                        max_tokens=80,
-                        temperature=0,
-                    )
-
             try:
-                try:
-                    resp = _call_groq()
-                except Exception as exc:
-                    wait_m = _re.search(r'try again in (\d+\.?\d*)s', str(exc))
-                    if wait_m:
-                        _time.sleep(float(wait_m.group(1)) + 0.5)
-                        resp = _call_groq()
-                    else:
-                        raise
-
-                content = resp.choices[0].message.content.strip()
+                with _DS_LOCK:
+                    resp = _req.post(
+                        "https://api.deepseek.com/chat/completions",
+                        headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
+                        json={"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}],
+                              "max_tokens": 80, "temperature": 0},
+                        timeout=10,
+                    )
+                content = resp.json()["choices"][0]["message"]["content"].strip()
                 m = _re.search(r'\[[\d,\s]+\]', content)
                 if m:
                     indices = _json.loads(m.group(0))
@@ -695,7 +675,7 @@ class WebsiteScraper:
                     print(f"🤖 AI ranked {len(ranked)} subpages + {len(must_urls)} páginas de contacto garantizadas")
                     return must_urls + ranked + rest
             except Exception as exc:
-                print(f"⚠️  Groq subpage ranking failed ({exc}), using keyword fallback")
+                print(f"⚠️  DeepSeek subpage ranking failed ({exc}), using keyword fallback")
 
         keyword_ranked = self._keyword_score_links(non_must)
         return must_urls + keyword_ranked
@@ -885,9 +865,9 @@ class WebsiteScraper:
         return domain.split(".")[0].capitalize()
 
     def _detect_industry(self, text: str, soup: BeautifulSoup) -> str:
-        """Groq clasifica la industria; keywords como fallback si Groq falla."""
-        # 1. Intentar con Groq primero
-        groq_result = self._classify_industry_groq(text[:800])
+        """DeepSeek clasifica la industria; keywords como fallback si falla."""
+        # 1. Intentar con DeepSeek primero
+        groq_result = self._classify_industry_deepseek(text[:800])
         if groq_result:
             return groq_result
 
@@ -909,14 +889,13 @@ class WebsiteScraper:
 
         return max(scores, key=scores.get) if scores else "No detectada"
 
-    def _classify_industry_groq(self, text_snippet: str) -> str:
-        """Usa Groq para clasificar industria cuando keywords no son suficientes."""
-        import os, json
-        groq_key = os.getenv("GROQ_API_KEY", "")
-        if not groq_key or not text_snippet.strip():
+    def _classify_industry_deepseek(self, text_snippet: str) -> str:
+        """Usa DeepSeek para clasificar industria cuando keywords no son suficientes."""
+        import os, requests as _req
+        ds_key = os.getenv("DEEPSEEK_API_KEY", "")
+        if not ds_key or not text_snippet.strip():
             return ""
         try:
-            import requests
             categories = list(self.INDUSTRY_KEYWORDS.keys())
             prompt = (
                 f"Eres un clasificador de industrias. Analiza el texto de este sitio web y elige UNA categor\u00EDa.\n\n"
@@ -929,38 +908,37 @@ class WebsiteScraper:
                 f"- Si no encaja en ninguna \u2192 responde: No detectada\n"
                 f"- NO expliques nada, solo el nombre de la categor\u00EDa."
             )
-            resp = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                json={"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}], "max_tokens": 20, "temperature": 0},
+            resp = _req.post(
+                "https://api.deepseek.com/chat/completions",
+                headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
+                json={"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}],
+                      "max_tokens": 20, "temperature": 0},
                 timeout=8,
             )
             result = resp.json()["choices"][0]["message"]["content"].strip()
-            # Validar que sea una categor\u00EDa v\u00E1lida
             if result in self.INDUSTRY_KEYWORDS or result == "No detectada":
                 return result
         except Exception:
             pass
         return ""
 
-    def _groq_enrich_result(self, result: dict, text_snippet: str) -> None:
-        """Una sola llamada a Groq para rellenar campos vacíos: descripción, horarios, servicios, ciudad."""
+    def _deepseek_enrich_result(self, result: dict, text_snippet: str) -> None:
+        """Una sola llamada a DeepSeek para rellenar campos vacíos: descripción, horarios, servicios, ciudad."""
         import os, json, requests as _req
 
-        groq_key = os.getenv("GROQ_API_KEY", "")
-        if not groq_key or not text_snippet.strip():
+        ds_key = os.getenv("DEEPSEEK_API_KEY", "")
+        if not ds_key or not text_snippet.strip():
             return
 
         extra = result.get("_extra", {})
 
-        # Detectar qué campos faltan
         need_desc    = not result.get("description") or result["description"] == "Descripción no disponible"
         need_hours   = not extra.get("business_hours")
         need_services= not result.get("services") or len(result.get("services", [])) < 2
         need_city    = not extra.get("city")
 
         if not any([need_desc, need_hours, need_services, need_city]):
-            return  # Todo ya está, no llamar a Groq
+            return
 
         fields_needed = []
         if need_desc:     fields_needed.append('"descripcion": "2 oraciones sobre qué hace la empresa (null si no hay info)"')
@@ -977,14 +955,13 @@ class WebsiteScraper:
 
         try:
             resp = _req.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                json={"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": 150, "temperature": 0},
+                "https://api.deepseek.com/chat/completions",
+                headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
+                json={"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}],
+                      "max_tokens": 200, "temperature": 0},
                 timeout=10,
             )
             raw = resp.json()["choices"][0]["message"]["content"].strip()
-            # Extraer JSON de la respuesta
             start = raw.find("{")
             end   = raw.rfind("}") + 1
             if start >= 0 and end > start:
@@ -1004,7 +981,7 @@ class WebsiteScraper:
                 if need_city and _val(data.get("ciudad")):
                     result["_extra"]["city"] = data["ciudad"]
         except Exception:
-            pass  # Groq falló — no bloquear el scraping
+            pass  # DeepSeek falló — no bloquear el scraping
 
     def _extract_description(self, soup: BeautifulSoup, text: str) -> str:
         """Extrae descripción de la empresa"""

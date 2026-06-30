@@ -450,12 +450,7 @@ export default function Analytics() {
           </Box>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-          <Tooltip title="Crear bot con Andy">
-            <IconButton size="small" onClick={() => setBotBuilderOpen(true)}
-              sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'var(--accent,#60a5fa)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' } }}>
-              <SmartToyIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
+
           {data.some(r => r.analyzing) && (
             <Tooltip title={t.analytics.cancelPending || 'Detener análisis pendientes'}>
               <IconButton size="small" onClick={async () => {
@@ -493,19 +488,19 @@ export default function Analytics() {
       <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', flexShrink: 0 }}>
         <Box sx={{
           display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
-          bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2,
+          bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid var(--border)', borderRadius: 2,
         }}>
-          <StarIcon sx={{ fontSize: 15, color: 'rgba(255,255,255,0.4)' }} />
-          <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>{t.analytics.total}:</Typography>
-          <Typography sx={{ fontSize: '0.85rem', color: 'white', fontWeight: 700 }}>{total}</Typography>
+          <StarIcon sx={{ fontSize: 15, color: 'var(--text-muted)' }} />
+          <Typography sx={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{t.analytics.total}:</Typography>
+          <Typography sx={{ fontSize: '0.85rem', color: 'var(--text)', fontWeight: 700 }}>{total}</Typography>
         </Box>
 
         <Box sx={{
           display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
-          bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2,
+          bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid var(--border)', borderRadius: 2,
         }}>
           <PersonIcon sx={{ fontSize: 15, color: '#4ade80' }} />
-          <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>{t.analytics.pctHuman}:</Typography>
+          <Typography sx={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{t.analytics.pctHuman}:</Typography>
           <Typography sx={{ fontSize: '0.85rem', color: '#4ade80', fontWeight: 700 }}>{humanPct}%</Typography>
         </Box>
 
@@ -684,7 +679,7 @@ export default function Analytics() {
                     </TableSortLabel>
                   </TableCell>
                   <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>{t.analytics.notes}</TableCell>
-                  <TableCell sx={HEADER_CELL_SX}>Andy</TableCell>
+                  <TableCell sx={HEADER_CELL_SX}>Chat IA</TableCell>
                   <TableCell sx={HEADER_CELL_SX}>{t.analytics.report}</TableCell>
                 </TableRow>
               </TableHead>
@@ -957,18 +952,18 @@ export default function Analytics() {
 
       {/* Paginación */}
       {totalPages > 1 && (
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2, py: 1, borderTop: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
-          <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.3)' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2, py: 1, borderTop: '1px solid var(--border)', flexShrink: 0 }}>
+          <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
             {totalItems} {t.analytics.companies} · {t.analytics.page} {page} {t.analytics.of} {totalPages}
           </Typography>
           <Box sx={{ display: 'flex', gap: 0.5 }}>
             <Box onClick={() => setPage(p => Math.max(1, p - 1))} sx={{
               width: 30, height: 30, borderRadius: 1.5, cursor: page > 1 ? 'pointer' : 'default',
-              bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
-              color: page > 1 ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.15)',
+              bgcolor: 'var(--item-hover)', border: '1px solid var(--border)',
+              color: page > 1 ? 'var(--text-muted)' : 'var(--border)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               transition: 'all 0.15s',
-              '&:hover': page > 1 ? { bgcolor: 'rgba(255,255,255,0.08)' } : {},
+              '&:hover': page > 1 ? { bgcolor: 'var(--border)' } : {},
             }}>
               <ChevronLeftIcon sx={{ fontSize: 18 }} />
             </Box>
@@ -981,22 +976,22 @@ export default function Analytics() {
                 <Box key={pg} onClick={() => setPage(pg)} sx={{
                   width: 32, height: 30, borderRadius: 1.5, cursor: 'pointer',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  bgcolor: pg === page ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.04)',
-                  border: `1px solid ${pg === page ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.08)'}`,
-                  color: pg === page ? 'white' : 'rgba(255,255,255,0.5)',
+                  bgcolor: pg === page ? 'var(--accent,#3b82f6)' : 'var(--item-hover)',
+                  border: `1px solid ${pg === page ? 'var(--accent,#3b82f6)' : 'var(--border)'}`,
+                  color: pg === page ? '#ffffff' : 'var(--text-muted)',
                   fontSize: '0.78rem', fontWeight: pg === page ? 700 : 400,
                   transition: 'all 0.15s',
-                  '&:hover': pg !== page ? { bgcolor: 'rgba(255,255,255,0.08)' } : {},
+                  '&:hover': pg !== page ? { bgcolor: 'var(--border)' } : {},
                 }}>{pg}</Box>
               )
             })}
             <Box onClick={() => setPage(p => Math.min(totalPages, p + 1))} sx={{
               width: 30, height: 30, borderRadius: 1.5, cursor: page < totalPages ? 'pointer' : 'default',
-              bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
-              color: page < totalPages ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.15)',
+              bgcolor: 'var(--item-hover)', border: '1px solid var(--border)',
+              color: page < totalPages ? 'var(--text-muted)' : 'var(--border)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               transition: 'all 0.15s',
-              '&:hover': page < totalPages ? { bgcolor: 'rgba(255,255,255,0.08)' } : {},
+              '&:hover': page < totalPages ? { bgcolor: 'var(--border)' } : {},
             }}>
               <ChevronRightIcon sx={{ fontSize: 18 }} />
             </Box>

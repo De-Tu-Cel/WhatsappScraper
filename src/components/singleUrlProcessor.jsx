@@ -368,7 +368,7 @@ function useTypewriter(strings, active) {
 function SearchBar({ url, setUrl, onSearch, loading, compact, onCancel }) {
   const { t } = useLang()
   const placeholder = useTypewriter(EXAMPLES, !url && !compact)
-  const urlError = url.trim() && !isValidUrl(url.trim()) ? urlValidationMsg(url.trim()) : ''
+  const urlError = url.trim() && !isValidUrl(url.trim()) ? urlValidationMsg(url.trim(), { badProtocol: t.common.urlBadProtocol, invalid: t.common.urlInvalid }) : ''
   const canSearch = !loading && url.trim() && !urlError
 
   return (
@@ -566,9 +566,9 @@ export default function SingleUrlProcessor() {
               {sendSuccess && <Alert severity="success" sx={{ mt: 2 }}>Mensaje enviado correctamente</Alert>}
               {!sendSuccess && <MessageComposer result={result} onSend={handleSend} sending={sending} disabled={isDisconnected} />}
             </>
-          : <Box sx={{ mt: 3, p: 2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.07)', bgcolor: 'rgba(255,255,255,0.02)', textAlign: 'center' }}>
-              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.85rem' }}>
-                No se encontro el numero de WhatsApp, no es posible enviar mensaje
+          : <Box sx={{ mt: 3, p: 2, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--item-hover)', textAlign: 'center' }}>
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                {t.single.noWa}
               </Typography>
             </Box>
       )}

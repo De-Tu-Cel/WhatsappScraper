@@ -356,14 +356,8 @@ def _ai_filter_urls(urls: list[str], industry: str) -> list[str]:
                 f'ordenadas de mayor a menor relevancia. Si ninguna califica, responde []. '
                 f'Ejemplo: [3, 1, 7] o []'
             )
-            resp = requests.post(
-                "https://api.deepseek.com/chat/completions",
-                headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
-                json={"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": 800, "temperature": 0},
-                timeout=20,
-            )
-            content = resp.json()["choices"][0]["message"]["content"].strip()
+            from app.llm import call_llm
+            content = call_llm([{"role": "user", "content": prompt}], max_tokens=800, temperature=0)
             m = re.search(r'\[[\d,\s]*\]', content)
             if m:
                 indices = json.loads(m.group(0))

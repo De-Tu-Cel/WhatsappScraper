@@ -474,10 +474,12 @@ def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks):
                     raw_data   = m,
                 )
 
-                # Auto-classify new inbound messages
-                if not from_me and body and body != "[media]" and DEEPSEEK_API_KEY:
-                    from app.classifier import classify_and_save
-                    background_tasks.add_task(classify_and_save, log_id, company_id, body, created)
+                # Auto-classify new inbound messages (throttled — max once per 10 min per company)
+                if not from_me and body and body != "[media]":
+                    from app.llm import active_provider as _sync_cls_provider
+                    if _sync_cls_provider() != "none":
+                        from app.classifier import classify_and_save
+                        background_tasks.add_task(classify_and_save, log_id, company_id, body, created)
 
                 synced += 1
 
@@ -547,28 +549,66 @@ def api_ai_toggle(company_id: str, body: dict):
             {"$set": update},
             upsert=True,
         )
-        # When enabling: if there's a recent unanswered inbound, kick off Andy immediately.
+        # When enabling: if there's a recent unanswered inbound, kick off Chat IA immediately.
         # This lets the user activate AI mid-conversation without waiting for a new message.
+        # When disabling: close any active/waiting sessions so the icon clears immediately.
         kicked = False
-        if enabled:
+        from app.llm import active_provider as _llm_ap
+        if enabled and _llm_ap() != "none":
             try:
-                from app.config import DEEPSEEK_API_KEY as _DS
-                if _DS:
-                    last_in = db.db.message_logs.find_one(
-                        {"company_id": company_id, "direction": "inbound",
-                         "message_body": {"$exists": True, "$ne": ""}},
-                        sort=[("created_at", -1)],
-                    )
-                    if last_in:
-                        number  = last_in.get("from_number") or last_in.get("number", "")
-                        body_   = last_in.get("message_body", "")
-                        log_id_ = str(last_in["_id"])
-                        if number and body_:
-                            from app.followup_queue import enqueue as _ai_enqueue
-                            _ai_enqueue(number, company_id, body_, log_id_)
-                            kicked = True
+                last_in = db.db.message_logs.find_one(
+                    {"company_id": company_id, "direction": "inbound",
+                     "message_body": {"$exists": True, "$ne": ""}},
+                    sort=[("created_at", -1)],
+                )
+                if last_in:
+                    number  = last_in.get("from_number") or last_in.get("number", "")
+                    body_   = last_in.get("message_body", "")
+                    log_id_ = str(last_in["_id"])
+                    if number and body_:
+                        # Ensure a session exists — create one now so the outbound-required
+                        # check in _get_or_create_session is bypassed for manual activations.
+                        from app.ai_followup import _get_or_create_session, _build_context, MAX_TURNS
+                        existing = db.db.ai_followup_sessions.find_one(
+                            {"company_id": company_id, "status": {"$in": ["active", "waiting"]}},
+                        )
+                        if not existing:
+                            # Build context from the last outbound (or any outbound)
+                            any_out = db.db.message_logs.find_one(
+                                {"company_id": company_id, "direction": "outbound"},
+                                sort=[("created_at", -1)],
+                            )
+                            ctx = _build_context(db, company_id, any_out or last_in)
+                            if ctx:
+                                pref_max = int(update.get("max_turns", MAX_TURNS))
+                                db.db.ai_followup_sessions.insert_one({
+                                    "phone_number": number,
+                                    "company_id": company_id,
+                                    "status": "waiting",
+                                    "turns": [],
+                                    "turn_count": 0,
+                                    "max_turns": pref_max,
+                                    "context": ctx,
+                                    "ai_typing": False,
+                                    "created_at": _dt.utcnow(),
+                                    "last_activity": _dt.utcnow(),
+                                })
+                                print(f"[AIToggle] session pre-created for {number} (company={company_id})")
+                        from app.followup_queue import enqueue as _ai_enqueue
+                        _ai_enqueue(number, company_id, body_, log_id_)
+                        kicked = True
             except Exception as _ke:
                 print(f"[AIToggle] kick-off error: {_ke}")
+        else:
+            # Close any lingering sessions so the UI icon clears right away
+            try:
+                db.db.ai_followup_sessions.update_many(
+                    {"company_id": company_id, "status": {"$in": ["active", "waiting"]}},
+                    {"$set": {"status": "ended", "end_reason": "user_disabled",
+                              "last_activity": _dt.utcnow()}},
+                )
+            except Exception as _ce:
+                print(f"[AIToggle] session close error: {_ce}")
         return {"ok": True, "ai_enabled": enabled, "kicked": kicked}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -742,33 +782,51 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
                         message_id=message_id, message_type=message_type,
                         status="received", raw_data=msg, interactive=interactive_data,
                     )
-                    # Skip Groq analysis mid-AI-session — only the first reply and the final
-                    # message after Andy closes are meaningful; intermediate turns are not.
+                    # Skip analysis mid-AI-session and throttle: only classify if the last
+                    # classification for this company is >10 min old (or doesn't exist yet).
                     _ai_session_active = bool(db.db.ai_followup_sessions.find_one(
                         {"company_id": company_id, "status": {"$in": ["active", "waiting"]}}
                     )) if company_id != "unknown" else False
-                    if DEEPSEEK_API_KEY and message_body and company_id != "unknown" and not _ai_session_active:
-                        from app.classifier import classify_and_save
-                        background_tasks.add_task(classify_and_save, log_id, company_id, message_body, datetime.now())
+                    if message_body and company_id != "unknown" and not _ai_session_active:
+                        from app.llm import active_provider as _cls_provider
+                        if _cls_provider() != "none":
+                            from datetime import timedelta
+                            _throttle_cutoff = datetime.now() - timedelta(minutes=10)
+                            _recent_cls = db.db.message_logs.find_one(
+                                {"company_id": company_id, "direction": "inbound",
+                                 "analysis_status": "done",
+                                 "updated_at": {"$gte": _throttle_cutoff}},
+                                projection={"_id": 1},
+                            )
+                            if not _recent_cls:
+                                from app.classifier import classify_and_save
+                                background_tasks.add_task(classify_and_save, log_id, company_id, message_body, datetime.now())
                     # AI follow-up: enqueue when ai_enabled is ON, or auto-activate on first reply
                     if message_body and message_body != "[media]" and company_id != "unknown":
                         try:
-                            from app.config import DEEPSEEK_API_KEY as _DS_KEY
-                            if _DS_KEY:
+                            from app.llm import active_provider as _llm_provider
+                            if _llm_provider() != "none":
                                 _prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
                                 _should_enqueue = _prefs.get("ai_enabled", False)
                                 # Auto-activate: if no active session and no manual toggle,
-                                # check if we ever sent an outbound to this company (prospect replied to us)
+                                # check if we sent outbound within 7 days — but NOT if a session
+                                # just ended recently (prevents bot-to-bot re-activation loops)
                                 if not _should_enqueue and not _ai_session_active:
                                     from datetime import timedelta
-                                    _cutoff = datetime.now() - timedelta(days=7)
-                                    _had_outbound = db.db.message_logs.find_one(
-                                        {"company_id": company_id, "direction": "outbound",
-                                         "created_at": {"$gte": _cutoff}},
-                                        projection={"_id": 1},
-                                    )
-                                    if _had_outbound:
-                                        _should_enqueue = True
+                                    _recent_ended = db.db.ai_followup_sessions.find_one({
+                                        "company_id": company_id,
+                                        "status": "ended",
+                                        "last_activity": {"$gte": datetime.now() - timedelta(hours=2)},
+                                    }, projection={"_id": 1})
+                                    if not _recent_ended:
+                                        _cutoff = datetime.now() - timedelta(days=7)
+                                        _had_outbound = db.db.message_logs.find_one(
+                                            {"company_id": company_id, "direction": "outbound",
+                                             "created_at": {"$gte": _cutoff}},
+                                            projection={"_id": 1},
+                                        )
+                                        if _had_outbound:
+                                            _should_enqueue = True
                                 if _should_enqueue:
                                     from app.followup_queue import enqueue as _ai_enqueue
                                     _ai_enqueue(number, company_id, message_body, log_id)
@@ -829,24 +887,34 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
             return {"ok": True, "action": "send_logged"}
 
         elif event == "connection.update":
-            # Fired when a QR is scanned and the instance connects.
-            # Evolution sends ownerJid with the registered phone number.
+            # Fired on every connection state change (qr shown, connecting, open, close).
+            # We only write the phone number when state is "open" (QR actually scanned).
+            # Other states must NEVER overwrite an existing number — opening the QR dialog
+            # without scanning it should leave the stored number untouched.
             instance_name = (req.instance or "").strip()
             owner = ""
+            conn_state = ""
             if isinstance(data, dict):
                 owner = (
                     data.get("ownerJid") or
                     data.get("instance", {}).get("ownerJid") or
                     data.get("me", {}).get("id") or ""
                 )
-            if owner and instance_name:
+                conn_state = (
+                    data.get("state") or
+                    data.get("instance", {}).get("state") or ""
+                ).lower()
+            _connected_states = {"open", "connected"}
+            if owner and instance_name and conn_state in _connected_states:
                 number = owner.split("@")[0] if "@" in owner else owner
                 if number:
                     db.db.instances.update_one(
                         {"name": instance_name},
                         {"$set": {"number": number}},
                     )
-                    print(f"[Webhook] connection.update: instance={instance_name} number={number}")
+                    print(f"[Webhook] connection.update: instance={instance_name} number={number} state={conn_state}")
+            elif instance_name:
+                print(f"[Webhook] connection.update ignored (state={conn_state!r}, owner={'yes' if owner else 'no'}) — number preserved")
             return {"ok": True, "action": "connection_updated"}
 
         return {"ok": True, "action": "ignored", "event": event}

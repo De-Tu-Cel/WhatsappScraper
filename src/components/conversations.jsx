@@ -512,10 +512,12 @@ export default function Conversations() {
         body: JSON.stringify({ enabled: next }),
       })
       setAiEnabled(next)
+      if (!next) setAiActive(false)
+      fetchConvs()
     } catch { /* ignore */ } finally {
       setAiToggling(false)
     }
-  }, [selected, aiEnabled, aiToggling])
+  }, [selected, aiEnabled, aiToggling, fetchConvs])
 
   // Sync reply target with active tab
   useEffect(() => {
@@ -949,7 +951,7 @@ export default function Conversations() {
                   selectedNums.length === 0 ? 'Selecciona al menos un número' : 'Enviar (Enter)'
                 }>
                   <span>
-                    <IconButton onClick={handleSendReply}
+                    <IconButton onClick={() => handleSendReply()}
                       disabled={instanceStatus === 'disconnected' || !reply.trim() || sending || reply.length > MAX_WA_MSG || (waNumbers.length > 0 && selectedNums.length === 0) || (waNumbers.length > 1 && (!activeNum || activeNum === 'all'))}
                       sx={{ bgcolor: instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.12)' : 'rgba(var(--accent-rgb, 99,102,241), 0.2)', border: `1px solid ${instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.25)' : 'rgba(var(--accent-rgb, 99,102,241), 0.3)'}`, borderRadius: 2, color: instanceStatus === 'disconnected' ? '#ef4444' : 'var(--accent, #a5b4fc)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 99,102,241), 0.35)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.15)' } }}>
                       {sending ? <CircularProgress size={18} sx={{ color: 'var(--accent, #a5b4fc)' }} /> : instanceStatus === 'disconnected' ? <WifiOffIcon sx={{ fontSize: 18 }} /> : <SendIcon sx={{ fontSize: 18 }} />}

@@ -211,7 +211,7 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
                     }}
                   >
                     <ListItemIcon sx={{
-                      color: settingsOpen ? C.accent : C.dimText,
+                      color: settingsOpen ? C.accent : 'rgba(var(--accent-rgb,59,130,246),0.45)',
                       minWidth: 0,
                       mr: open ? 1.5 : 0,
                       transition: 'margin-right 0.28s cubic-bezier(0.4,0,0.2,1)',

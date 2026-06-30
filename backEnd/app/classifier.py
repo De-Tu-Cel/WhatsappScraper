@@ -11,7 +11,7 @@ from app.database import MongoDBManager
 
 log = logging.getLogger(__name__)
 
-_DEEPSEEK_SEMAPHORE = threading.Semaphore(2)
+_DEEPSEEK_SEMAPHORE = threading.Semaphore(1)
 
 _QUOTA_PAUSE_MINUTES = 60
 _quota_exhausted_until: float = 0.0
@@ -43,70 +43,113 @@ GroqQuotaExceeded = LLMQuotaExceeded
 # ── Single-message prompt (first reply / cold response) ───────────────────────
 
 _PROMPT_TEMPLATE = """\
-Eres un auditor experto en calidad de atención comercial vía WhatsApp en Latinoamérica. \
-Evalúas dos cosas independientes: (1) el origen de la respuesta y (2) la calidad del servicio entregado.
+Eres un auditor experto en calidad de atención comercial vía WhatsApp en Latinoamérica.
+Evalúas dos cosas: (1) el ORIGEN de la respuesta y (2) la CALIDAD del servicio entregado.
 
 MENSAJE ENVIADO: {outbound_body}
 RESPUESTA DEL PROSPECTO: {inbound_body}
 
-══ PASO 1: ORIGEN DE LA RESPUESTA (elige UNO) ══
+══ PASO 1: ORIGEN DE LA RESPUESTA ══
+Elige UNO: "humano" | "automatico" | "menu" | "hibrido" | "bot"
 
-"humano" — persona real en tiempo real.
-  Fuertes: typos, lenguaje coloquial, contracciones ("qué","sí","oye"), responde al tema, tono personal.
-  Débiles: respuesta corta (humano ocupado), errores de puntuación.
+"humano" — persona real respondiendo en tiempo real.
+  Señales FUERTES (cada una por sí sola es suficiente):
+    · Responde DIRECTAMENTE al contenido específico del mensaje enviado (no genérico)
+    · Menciona detalles propios de su empresa/situación ("nosotros manejamos...", "mi jefa...", "ahorita en reunión")
+    · Hace una pregunta espontánea propia sobre el tema
+    · Primera persona auténtica con opinión o contexto personal
+    · Menciona nombres de personas o departamentos reales
+    · Responde fuera de horario laboral con comentario personal ("disculpa la tardanza, estaba en campo")
+  Señales DÉBILES (solo apoyo, no determinantes):
+    · Errores tipográficos (un humano formal puede escribir perfecto)
+    · Respuesta muy corta (humano ocupado también responde con 1-2 palabras)
+    · Lenguaje coloquial (un bot también puede usarlo)
+  CLAVE: lo que importa es que RESPONDE AL TEMA, no que tenga errores ortográficos.
 
-"automatico" — plantilla fija sin lógica de conversación.
-  Fuertes: folio/ticket (#00123), "en breve te atendemos", "mensaje generado automáticamente", horarios explícitos ("Lun-Vie 9-18h"), ignora completamente el contenido enviado.
+"automatico" — plantilla fija activada por cualquier entrada, ignora el contenido enviado.
+  Señales FUERTES:
+    · Número de ticket, folio o referencia (#TKT-0023, Ref: 45678, Folio: ABC-123)
+    · Frases de plantilla reconocibles: "Tu mensaje es importante para nosotros",
+      "En breve un asesor te contactará", "Estimado cliente", "Mensaje generado automáticamente",
+      "Hemos recibido tu consulta", "Nos comunicaremos a la brevedad"
+    · Respuesta idéntica sin importar el mensaje recibido (ignora completamente el tema)
+    · Horarios de atención explícitos en el cuerpo ("Lun-Vie 8am-6pm", "Atención 24/7")
+    · Firma de empresa muy formal o URL corporativa al pie
+    · Responde en segundos a cualquier hora incluyendo madrugada, fines de semana o festivos
+    · Texto muy largo y formal para un simple saludo inicial
+  DIFERENCIA vs "menu": no espera respuesta del usuario, solo acusa recibo.
 
-"menu" — sistema IVR o chatbot que presenta opciones numeradas y espera que el usuario responda con un número para navegar.
-  Fuertes: lista de opciones numeradas ("1. Ventas  2. Soporte  3. Información"), instrucción explícita de "responde con el número", flujo de árbol de decisión paso a paso.
-  Diferencia clave con "bot": no intenta conversar — solo guía mediante selección de números.
-  Diferencia clave con "automatico": sí espera interacción del usuario, no es un acuse de recibo.
+"menu" — chatbot IVR que presenta opciones y ESPERA que el usuario seleccione una.
+  Señales FUERTES:
+    · Lista numerada de opciones de navegación (1. Ventas  2. Soporte  3. Información)
+    · Emojis de número como ícono de opción (1️⃣ Ventas  2️⃣ Soporte  3️⃣ Facturación)
+    · Opciones separadas por | o / (Ventas | Soporte | Admin)
+    · Instrucción explícita de selección ("Responde con el número", "Elige una opción", "Escribe 1, 2 o 3")
+    · Árbol de decisión paso a paso (cada respuesta lleva a un nuevo submenú)
+    · Pregunta binaria de navegación ("¿Eres cliente? Responde SÍ o NO")
+  DIFERENCIA vs "bot": no intenta entender el mensaje libre, solo presenta opciones fijas.
+  DIFERENCIA vs "automatico": SÍ espera input del usuario para continuar el flujo.
 
-"hibrido" — auto + oferta/transferencia explícita a humano.
-  Fuertes: "¿Deseas hablar con un asesor?", "Te paso con un agente", menú con opción de persona real.
-  Regla: evidencia de AMBAS partes (auto + transferencia).
+"hibrido" — combina contenido automático CON opción explícita y activa de hablar con humano.
+  REGLA ESTRICTA: debe tener AMBAS partes simultáneamente:
+    (1) contenido automático/plantilla (acuse de recibo, bienvenida, menú)
+    (2) opción ACTIVA de transferencia a persona real:
+        "¿Deseas hablar con un asesor? Responde SÍ", "Te conecto con un agente",
+        "Escribe HUMANO para hablar con alguien", botón "Hablar con asesor"
+  NO confundir con "automatico" que promete contacto futuro pero no ofrece opción activa ahora.
 
-"bot" — lógica propia, flujo guiado o IA conversacional SIN menú numerado.
-  is_ai=false: responde con frases propias pero ignora el contexto, nombre artificial ("Soy Sofía"), flujo predefinido sin números.
-  is_ai=true: lenguaje natural fluido, entiende el contexto, sin menús, español perfecto, tono overly helpful.
+"bot" — sistema con lógica propia o IA conversacional, SIN menú numerado.
+  is_ai=false (bot de flujo/reglas):
+    · Responde con frases propias pero sigue un flujo predefinido rígido
+    · Nombre artificial obvio ("Soy Sara", "Hola, soy Max tu asistente virtual")
+    · Ignora preguntas fuera de su flujo o repite el mismo mensaje ante entradas inesperadas
+    · Respuestas excesivamente largas con bullets y estructura para mensajes simples
+    · Tono corporativo perfecto sin personalidad real
+    · Si respondes algo inesperado, hace loop de vuelta al mismo punto
+  is_ai=true (IA conversacional avanzada):
+    · Entiende y responde al contenido específico del mensaje (no flujo rígido)
+    · Reformula o parafrasea lo que dijo el interlocutor
+    · Responde con naturalidad, sin bullets ni estructura excesiva
+    · Español perfecto, extremadamente servicial, nunca impaciente, siempre positivo
+    · Puede admitir que no sabe algo de forma natural
+    · Usa el nombre del usuario si lo conoce
+    · DIFERENCIA de humano: demasiado perfecto y consistente, sin personalidad única,
+      sin opiniones propias, sin referencia a situaciones personales reales
 
-REGLA DE ORO: ante la duda → humano. Solo no-humano con evidencia CLARA.
-JERARQUÍA: si hay menú numerado → "menu" (aunque también tenga frases automáticas).
+REGLA DE ORO: ante la duda → "humano". Solo no-humano con evidencia CLARA y específica.
+JERARQUÍA: si hay menú numerado → "menu" aunque también tenga frases automáticas.
 
-══ PASO 2: CALIDAD DE SERVICIO (1-5 por dimensión) ══
-Mide CÓMO atendieron al prospecto, independientemente de si hay interés de compra.
-Escala: 1=inexistente/pésimo · 2=deficiente · 3=aceptable · 4=bueno · 5=excelente
-Para automáticos/bots que ignoran la consulta: 1-2 en todas las dimensiones.
+══ PASO 2: CALIDAD DE SERVICIO (escala 1-5) ══
+Mide CÓMO atendió la empresa al prospecto. Independiente del interés de compra del lead.
+1=inexistente/pésimo · 2=deficiente · 3=aceptable · 4=bueno · 5=excelente
+Automáticos/bots que ignoran la consulta: 1-2 en TODAS las dimensiones sin excepción.
 
-svc_prof: Profesionalismo — ortografía, tono apropiado, coherencia y claridad del mensaje
-svc_comp: Completitud — ¿respondió lo que se preguntó o solicitó?
-svc_empa: Empatía — calidez, personalización, reconoce y valida la necesidad del prospecto
-svc_solu: Solución — ¿ofreció algo concreto? (precio, producto, alternativa, cita)
-svc_next: Siguiente paso — ¿quedó claro qué sigue? (CTA explícito: llamada, reunión, link, precio)
-svc_proact: Proactividad — ¿anticipó necesidades, hizo preguntas de calificación, ofreció info extra?
+svc_prof  (Profesionalismo): ortografía, tono apropiado, coherencia y claridad
+svc_comp  (Completitud): ¿respondió específicamente lo que se preguntó o solicitó?
+svc_empa  (Empatía): calidez, personalización, reconoce y valida la necesidad del prospecto
+svc_solu  (Solución): ¿ofreció algo concreto? (precio orientativo, producto específico, alternativa, cita)
+svc_next  (Siguiente paso): ¿quedó claro qué sigue? (CTA explícito: llamada, link, reunión, precio)
+svc_proact (Proactividad): ¿anticipó necesidades, hizo preguntas de calificación, ofreció info extra?
 
 ══ PASO 3: SEÑAL COMERCIAL (1-5) ══
-¿Qué tan caliente quedó el lead? ¿Esta respuesta acerca o aleja una venta?
-
-1 — Ruido total: "Ok","👍","Gracias", emoji, acuse de 1-2 palabras. Bots/automáticos usar 1-2.
+¿Qué tan "caliente" quedó el lead? ¿Esta respuesta acerca o aleja una venta?
+1 — Ruido: "Ok","👍","Gracias", emoji solo, acuse de 1-2 palabras. Automáticos/bots = 1 siempre.
 2 — Cortesía vacía: reconoce contacto pero evita el tema. "Ahorita te marco", template de bienvenida.
-3 — Apertura tibia: toca el tema sin compromiso. "Mándame info", "¿De qué se trata?".
-4 — Señal real: preguntas específicas, contexto de situación, menciona necesidad o timing.
-5 — Lead caliente: pide cotización, propone llamada/reunión, menciona presupuesto o urgencia.
-
-IMPORTANTE: 80% son 1-2. Un 3 requiere evidencia específica. 4-5 son excepcionales.
+3 — Apertura tibia: toca el tema sin compromiso. "Mándame info", "¿De qué se trata?", "¿Qué venden?"
+4 — Señal real: pregunta específica del producto/servicio, da contexto de su situación o menciona necesidad/timing.
+5 — Lead caliente: pide cotización/precio, propone llamada o reunión, menciona urgencia o presupuesto.
+ESTADÍSTICA: 75% son 1-2. Un 3 requiere evidencia explícita. 4-5 son genuinamente excepcionales.
 
 ══ PASO 4: DIAGNÓSTICO (máximo 15 palabras) ══
-Hallazgo más importante: qué reveló sobre el servicio y/o la intención de compra.
-✓ "Pidió precio urgente, pero respuesta tardó 3 horas sin disculpa ni solución"
-✓ "Bot menú rígido, ignoró pregunta, solo presenta opciones numeradas"
-✓ "Humano resolvió rápido y ofreció demo, excelente seguimiento"
-✗ "Respuesta breve" / "Muestra interés" / "Sistema automático"
+Hallazgo más importante: qué reveló sobre el servicio y/o la intención de compra real.
+✓ "Pidió precio urgente, respuesta tardó 3h sin solución ni disculpa"
+✓ "Bot con nombre artificial, ignora preguntas, solo sigue su flujo"
+✓ "Humano respondió rápido con propuesta concreta y próximo paso claro"
+✗ "Respuesta breve" / "Muestra interés" / "Sistema automático" (demasiado vago)
 
-is_ai: true SOLO si category="bot" Y es IA conversacional (no menú rígido)
+is_ai: true SOLO si category="bot" Y claramente es IA conversacional (no menú, no flujo rígido)
 bot_quality: SOLO si category="bot": 1=flujo básico · 3=flujo funcional · 5=IA avanzada
-ai_confidence: 0.0-1.0 (certeza de IA, solo si is_ai=true)
+ai_confidence: 0.0-1.0 solo si is_ai=true
 Para category="menu": is_ai=false siempre, bot_quality=null siempre.
 
 Responde SOLO con JSON válido:
@@ -118,7 +161,7 @@ Responde SOLO con JSON válido:
 
 _CONV_PROMPT_TEMPLATE = """\
 Eres un analista comercial experto. Acabas de leer la conversación completa de WhatsApp entre \
-un representante de ventas de Detucel y un prospecto de {company_name} ({industry}).
+un representante de una consultora de tecnología y un prospecto de {company_name} ({industry}).
 
 CONVERSACIÓN COMPLETA (cronológica):
 {thread}
@@ -211,7 +254,7 @@ def _build_prompt(inbound_body: str, outbound_body: str, reaction_time_min: floa
     ) + reaction_hint
 
 
-_VALID_CATEGORIES = {"humano", "automatico", "hibrido", "bot"}
+_VALID_CATEGORIES = {"humano", "automatico", "menu", "hibrido", "bot"}
 
 
 def _parse_llm_response(raw: str) -> dict:
@@ -253,35 +296,25 @@ def _parse_llm_response(raw: str) -> dict:
 
 
 def _call_deepseek(messages: list, max_tokens: int = 280) -> str:
-    """Call DeepSeek and return the raw text response. Raises LLMQuotaExceeded on billing errors."""
-    from openai import OpenAI
-    client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+    """Call active LLM provider (Groq locally, DeepSeek in prod). Raises LLMQuotaExceeded on billing errors."""
+    from app.llm import call_llm
     with _DEEPSEEK_SEMAPHORE:
-        for attempt in range(4):
-            try:
-                resp = client.chat.completions.create(
-                    model="deepseek-chat",
-                    messages=messages,
-                    temperature=0,
-                    max_tokens=max_tokens,
-                )
-                return resp.choices[0].message.content.strip()
-            except Exception as e:
-                err = str(e).lower()
-                if "402" in str(e) or "insufficient_balance" in err:
-                    raise LLMQuotaExceeded("DeepSeek saldo insuficiente")
-                if ("429" in str(e) or "rate_limit" in err) and attempt < 3:
-                    wait = 5 * (2 ** attempt)
-                    log.warning("DeepSeek 429 — reintentando en %ds (intento %d/4)", wait, attempt + 1)
-                    time.sleep(wait)
-                else:
-                    raise
-    raise LLMQuotaExceeded("DeepSeek no respondió tras 4 intentos")
+        try:
+            return call_llm(messages, max_tokens=max_tokens, temperature=0)
+        except Exception as e:
+            err = str(e).lower()
+            if "402" in str(e) or "insufficient_balance" in err:
+                raise LLMQuotaExceeded("DeepSeek saldo insuficiente")
+            # Circuit breaker open or daily rate limit hit — treat as quota exhaustion
+            if "circuit breaker" in err or "rate-limited" in err or "429" in err:
+                raise LLMQuotaExceeded(f"LLM cuota/rate-limit: {e}")
+            raise
 
 
 def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: float = None) -> dict:
     """Classify a single inbound reply using the outbound message as context."""
-    if not DEEPSEEK_API_KEY:
+    from app.llm import active_provider
+    if active_provider() == "none":
         return dict(_ERROR_RESULT)
     if all_quota_exhausted():
         raise LLMQuotaExceeded("Circuit breaker activo — DeepSeek sin cuota.")
@@ -300,7 +333,8 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
 def classify_conversation(company_id: str, company_name: str = "", industry: str = "") -> dict:
     """Analyze the full message thread for a company after an AI session closes.
     Fetches all messages from message_logs and builds a complete conversation view."""
-    if not DEEPSEEK_API_KEY:
+    from app.llm import active_provider
+    if active_provider() == "none":
         return dict(_ERROR_RESULT)
     if all_quota_exhausted():
         raise LLMQuotaExceeded("Circuit breaker activo — DeepSeek sin cuota.")
@@ -317,7 +351,7 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
 
     lines = []
     for m in messages:
-        role = "Detucel" if m["direction"] == "outbound" else "Prospecto"
+        role = "Representante" if m["direction"] == "outbound" else "Prospecto"
         body = (m.get("message_body") or "").strip()
         if body:
             lines.append(f"[{role}]: {body}")

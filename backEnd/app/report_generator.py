@@ -1,6 +1,7 @@
 # report_generator.py
 import base64
 import io
+import math
 import os
 from datetime import datetime
 
@@ -9,17 +10,17 @@ from reportlab.lib.units import mm
 from reportlab.lib.colors import HexColor, Color
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    Image, PageBreak, Flowable, HRFlowable,
+    Image, Flowable, HRFlowable,
 )
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 
 W, H = A4
-LM = 20 * mm
-RM = 20 * mm
-TM = 22 * mm
-BM = 22 * mm
-PW = W - LM - RM   # usable page width ≈ 555 pt
+LM = 12 * mm
+RM = 12 * mm
+TM = 18 * mm
+BM = 18 * mm
+PW = W - LM - RM   # usable page width ≈ 527 pt
 
 C = {
     "bg":         HexColor("#ffffff"),
@@ -43,6 +44,7 @@ C = {
 CATEGORY_INFO = {
     "humano":        ("Humano",       C["humano"]),
     "automatico":    ("Automatico",   C["automatico"]),
+    "menu":          ("Menu IVR",     C["automatico"]),
     "hibrido":       ("Auto+Humano",  C["primary"]),
     "bot":           ("Bot",          C["bot"]),
     "bot_ia":        ("Bot IA",       C["bot_ia"]),
@@ -97,6 +99,20 @@ _OrigParagraph = Paragraph
 
 def Paragraph(text, style, *args, **kwargs):  # noqa: N802
     return _OrigParagraph(_safe(text), style, *args, **kwargs)
+
+
+_MONTHS_ES = {
+    'January': 'enero', 'February': 'febrero', 'March': 'marzo',
+    'April': 'abril', 'May': 'mayo', 'June': 'junio',
+    'July': 'julio', 'August': 'agosto', 'September': 'septiembre',
+    'October': 'octubre', 'November': 'noviembre', 'December': 'diciembre',
+}
+
+def _date_es(dt=None) -> str:
+    from datetime import datetime as _dt
+    d = dt or _dt.now()
+    month_es = _MONTHS_ES.get(d.strftime('%B'), d.strftime('%B').lower())
+    return f"{d.day} de {month_es} de {d.year}, {d.strftime('%H:%M')}"
 
 
 def _st(name, **kw):
@@ -166,8 +182,8 @@ def _composite_score(analytics: dict, category: str, quality: float, reaction_mi
       Tipo de atención 30%  Calidad comercial 50%  Velocidad 20%
     """
     cat_scores = {
-        "humano": 100, "hibrido": 55, "automatico": 35, "bot_ia": 25,
-        "bot": 15, "sin_respuesta": 0,
+        "humano": 100, "hibrido": 55, "automatico": 35, "menu": 30,
+        "bot_ia": 25, "bot": 15, "sin_respuesta": 0,
     }
     cat_s  = cat_scores.get(category, 50)
     qual_s = (float(quality or 0) / 5) * 100
@@ -207,12 +223,13 @@ def _score_label(score: int) -> tuple:
 # ─── Flowables ────────────────────────────────────────────────────────────────
 
 class HGradient(Flowable):
-    def __init__(self, w, h, left_hex, right_hex):
+    def __init__(self, w, h, left_hex, right_hex, badge_text=""):
         super().__init__()
         self._w, self._h = w, h
         lc = HexColor(left_hex); rc = HexColor(right_hex)
         self._r0, self._g0, self._b0 = lc.red, lc.green, lc.blue
         self._r1, self._g1, self._b1 = rc.red, rc.green, rc.blue
+        self._badge = badge_text
 
     def wrap(self, *_):
         return (self._w, self._h)
@@ -228,9 +245,26 @@ class HGradient(Flowable):
                 self._b0 + (self._b1 - self._b0) * t,
             ))
             self.canv.rect(sw * i, 0, sw + 0.6, self._h, fill=1, stroke=0)
+        # Title
         self.canv.setFillColor(HexColor("#ffffff"))
-        self.canv.setFont("Helvetica-Bold", 14)
-        self.canv.drawString(12, self._h * 0.35, "Reporte de Canal WhatsApp")
+        self.canv.setFont("Helvetica-Bold", 13)
+        self.canv.drawString(12, self._h * 0.33, "Reporte de Canal WhatsApp")
+        # Industry badge (right side)
+        if self._badge:
+            badge = _safe(self._badge)
+            self.canv.setFont("Helvetica", 8)
+            bw = self.canv.stringWidth(badge, "Helvetica", 8)
+            pad_x, pad_y = 9, 4
+            bh = 14
+            bx = self._w - bw - pad_x * 2 - 10
+            by = (self._h - bh) / 2
+            self.canv.setFillColor(Color(1, 1, 1, 0.18))
+            self.canv.roundRect(bx, by, bw + pad_x * 2, bh, 3, fill=1, stroke=0)
+            self.canv.setStrokeColor(Color(1, 1, 1, 0.4))
+            self.canv.setLineWidth(0.5)
+            self.canv.roundRect(bx, by, bw + pad_x * 2, bh, 3, fill=0, stroke=1)
+            self.canv.setFillColor(HexColor("#ffffff"))
+            self.canv.drawString(bx + pad_x, by + pad_y - 1, badge)
 
 
 class QualityDots(Flowable):
@@ -279,20 +313,27 @@ class CardGrid(Flowable):
             rows_total = (len(self._cards) + 1) // 2
             x = col * (cw + gap)
             y = (rows_total - 1 - row) * (ch + gap)
+            # Card background
             self.canv.setFillColor(C["paper"])
             self.canv.roundRect(x, y, cw, ch, 4, fill=1, stroke=0)
+            # Card border
             self.canv.setStrokeColor(C["border"])
             self.canv.setLineWidth(0.5)
             self.canv.roundRect(x, y, cw, ch, 4, fill=0, stroke=1)
-            self.canv.setFillColor(C["muted"])
-            self.canv.setFont("Helvetica-Bold", 7)
-            self.canv.drawString(x + 10, y + ch - 16, _safe(title).upper())
+            # Accent left strip (3pt wide, matches value color)
             self.canv.setFillColor(color)
-            self.canv.setFont("Helvetica-Bold", 17)
-            self.canv.drawString(x + 10, y + ch - 36, _safe(str(value)))
+            self.canv.roundRect(x, y, 3, ch, 2, fill=1, stroke=0)
+            # Label
+            self.canv.setFillColor(C["muted"])
+            self.canv.setFont("Helvetica-Bold", 6.5)
+            self.canv.drawString(x + 11, y + ch - 15, _safe(title).upper())
+            # Value
+            self.canv.setFillColor(color)
+            self.canv.setFont("Helvetica-Bold", 16)
+            self.canv.drawString(x + 11, y + ch - 34, _safe(str(value)))
             if extra is not None:
                 extra.canv = self.canv
-                extra.drawOn(self.canv, x + 10, y + ch - 48)
+                extra.drawOn(self.canv, x + 11, y + max(ch - 46, 5))
 
 
 class ScoreBar(Flowable):
@@ -392,6 +433,60 @@ class ServiceQualityTable(Flowable):
                     self.canv.circle(cx, dot_y, dot_r, fill=1, stroke=0)
 
 
+class ScoreArc(Flowable):
+    """Circular arc gauge 0-100 drawn with thick rounded stroke path."""
+    def __init__(self, score: int, color, size=54):
+        super().__init__()
+        self._score = max(0, min(100, score))
+        self._color = color
+        self._size  = size
+
+    def wrap(self, *_):
+        return (self._size, self._size)
+
+    def draw(self):
+        sz = self._size
+        cx, cy = sz / 2, sz / 2
+        r  = sz * 0.34
+        sw = sz * 0.095
+
+        def _arc_stroke(color, start_deg, end_deg):
+            if abs(end_deg - start_deg) < 0.5:
+                return
+            self.canv.setStrokeColor(color)
+            self.canv.setLineWidth(sw)
+            self.canv.setLineCap(1)
+            steps = 72
+            s = math.radians(start_deg)
+            e = math.radians(end_deg)
+            p = self.canv.beginPath()
+            for i in range(steps + 1):
+                t = i / steps
+                a = s + (e - s) * t
+                px = cx + r * math.cos(a)
+                py = cy + r * math.sin(a)
+                if i == 0:
+                    p.moveTo(px, py)
+                else:
+                    p.lineTo(px, py)
+            self.canv.drawPath(p, stroke=1, fill=0)
+
+        # Background: 225° → -45° (CW sweep of 270°)
+        _arc_stroke(C["border"], 225, -45)
+        # Foreground
+        if self._score > 0:
+            _arc_stroke(self._color, 225, 225 - 270 * self._score / 100)
+
+        # Score number (center)
+        self.canv.setFillColor(self._color)
+        self.canv.setFont("Helvetica-Bold", max(9, int(sz * 0.215)))
+        self.canv.drawCentredString(cx, cy + sz * 0.06, str(self._score))
+        # "/100" sub-label
+        self.canv.setFillColor(C["muted"])
+        self.canv.setFont("Helvetica", max(6, int(sz * 0.125)))
+        self.canv.drawCentredString(cx, cy - sz * 0.13, "/100")
+
+
 class SummaryBar(Flowable):
     def __init__(self, sent, recv, read_, width, h=22*mm):
         super().__init__()
@@ -435,15 +530,39 @@ def _page_bg(canv, doc):
     canv.setFillColor(C["muted"])
     canv.setFont("Helvetica", 7)
     canv.drawRightString(W - RM, 10 * mm,
-                         f"Analisis de Canal WhatsApp · {datetime.now().strftime('%d/%m/%Y')}")
+                         f"Analisis de Canal WhatsApp · {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     canv.restoreState()
 
 
 # ─── AI suggestions ───────────────────────────────────────────────────────────
 
-def _suggestions(analytics: dict, industry: str) -> list[str]:
-    """Generate 5 specific, actionable improvement suggestions via AI."""
-    # Identify weak dimensions (score 1-2) to prioritize
+def _calc_avg_response_time(thread: list) -> float | None:
+    """Average minutes between each outbound message and the next inbound reply."""
+    pairs = []
+    pending_out = None
+    for msg in sorted(thread, key=lambda m: m.get("created_at") or ""):
+        if msg.get("direction") == "outbound":
+            pending_out = msg
+        elif msg.get("direction") == "inbound" and pending_out:
+            sent = pending_out.get("created_at")
+            recv = msg.get("created_at")
+            if sent and recv:
+                try:
+                    if isinstance(sent, str):
+                        sent = datetime.fromisoformat(sent.replace("Z", "+00:00"))
+                    if isinstance(recv, str):
+                        recv = datetime.fromisoformat(recv.replace("Z", "+00:00"))
+                    delta = (recv - sent).total_seconds() / 60
+                    if 0 < delta <= 1440:
+                        pairs.append(delta)
+                except Exception:
+                    pass
+            pending_out = None
+    return round(sum(pairs) / len(pairs), 1) if pairs else None
+
+
+def _suggestions(analytics: dict, industry: str, avg_response_min=None) -> list[str]:
+    """Generate 5 specific, innovative improvement suggestions via AI."""
     weak_dims = []
     strong_dims = []
     for field, label in _SVC_DIMS:
@@ -456,51 +575,62 @@ def _suggestions(analytics: dict, industry: str) -> list[str]:
                 strong_dims.append(f"{label} ({int(score)}/5)")
 
     reaction = analytics.get("reaction_time_min")
-    reaction_str = f"{reaction} min" if reaction is not None else "sin datos"
+    reaction_str = _reaction_str(reaction) if reaction is not None else "sin datos"
+    avg_str = _reaction_str(avg_response_min) if avg_response_min is not None else "sin datos"
     cat = analytics.get("category", "humano")
     quality = analytics.get("response_quality", 0)
     notes = analytics.get("notes") or "Sin notas"
 
-    weak_block = ", ".join(weak_dims) if weak_dims else "ninguna critica detectada"
+    # Benchmark context for Mexico B2B WhatsApp
+    benchmark_note = ""
+    if reaction is not None:
+        r = float(reaction)
+        if r < 5:
+            benchmark_note = "Tiempo de 1a respuesta EXCELENTE (top 10% del mercado mexicano)."
+        elif r < 30:
+            benchmark_note = "Tiempo de 1a respuesta bueno. Referencia: mejor practica <5 min."
+        elif r < 120:
+            benchmark_note = "Tiempo de 1a respuesta regular. La media MX PYME es 47 min; el objetivo ideal es <10 min."
+        else:
+            benchmark_note = "Tiempo de 1a respuesta lento. 68% de prospectos mexicanos abandona si no hay respuesta en 2 horas."
+
+    weak_block   = ", ".join(weak_dims)   if weak_dims   else "ninguna critica detectada"
     strong_block = ", ".join(strong_dims) if strong_dims else "ninguna destacada"
 
     prompt = (
-        f"Eres consultor senior de ventas B2B en Mexico especializado en canales digitales.\n"
-        f"Analiza el canal WhatsApp de una empresa del sector '{industry}':\n\n"
-        f"DATOS:\n"
-        f"- Tipo de atencion: {cat}\n"
-        f"- Tiempo de respuesta: {reaction_str}\n"
+        f"Eres un consultor senior de crecimiento comercial en Mexico, especialista en canales digitales B2B y PyME.\n"
+        f"Tu cliente tiene un canal WhatsApp en el sector '{industry}'. Analiza sus datos reales y entrega recomendaciones innovadoras.\n\n"
+        f"METRICAS REALES DEL CANAL:\n"
+        f"- Tipo de atencion recibida: {cat}\n"
+        f"- Tiempo de 1a respuesta: {reaction_str}\n"
+        f"- Tiempo PROMEDIO de respuesta (todos los turnos): {avg_str}\n"
         f"- Señal comercial del prospecto: {quality}/5\n"
-        f"- Dimensiones DEBILES (prioridad alta): {weak_block}\n"
-        f"- Dimensiones fuertes: {strong_block}\n"
-        f"- Diagnostico del auditor: {notes}\n\n"
-        f"TAREA: Genera exactamente 5 recomendaciones de mejora.\n"
-        f"FORMATO: Una recomendacion por linea. Sin numeracion, bullets ni guiones iniciales.\n"
-        f"REGLAS:\n"
-        f"1. Ataca primero las dimensiones debiles con acciones especificas y medibles\n"
-        f"2. Cada recomendacion debe ser implementable en menos de 30 dias\n"
-        f"3. Usa herramientas REALES: WhatsApp Business, catalogo, respuestas rapidas, etiquetas, "
-        f"mensajes de voz, estados, listas de difusion, chatbots, CRM\n"
-        f"4. Adapta el lenguaje y ejemplos al sector '{industry}'\n"
-        f"5. Cada sugerencia: maximo 160 caracteres, comienza con un VERBO imperativo\n"
-        f"6. Propón metricas de exito cuando sea posible (ej: 'reduce 50% el tiempo de respuesta')\n"
-        f"PROHIBIDO: consejos vagos como 'mejora la comunicacion' o 'se mas proactivo'"
+        f"- Dimensiones debiles (prioridad maxima): {weak_block}\n"
+        f"- Dimensiones solidas: {strong_block}\n"
+        f"- Diagnostico del auditor: {notes}\n"
+        f"- Contexto de mercado: {benchmark_note}\n\n"
+        f"TAREA: Genera exactamente 5 recomendaciones. Cada una debe:\n"
+        f"1. Atacar una brecha real del canal (no consejos genericos)\n"
+        f"2. Ser implementable en <30 dias con recursos de PyME\n"
+        f"3. Incluir una metrica de exito especifica (ej: 'reducir tiempo de respuesta de X a <5 min')\n"
+        f"4. Usar herramientas reales y actuales disponibles en Mexico:\n"
+        f"   - WhatsApp Business API, Catalogo, Mensajes rapidos, Etiquetas, Listas de difusion\n"
+        f"   - CRM con integracion WhatsApp (Kommo, HubSpot, Zoho, Pipedrive)\n"
+        f"   - Automatizacion: ManyChat, Wati, Treble.ai, n8n\n"
+        f"   - Notificaciones proactivas, seguimiento automatico, bots de calificacion\n"
+        f"5. Comenzar con un VERBO imperativo y tener maximo 170 caracteres\n\n"
+        f"INNOVACION REQUERIDA: al menos 2 de las 5 recomendaciones deben proponer algo que el canal\n"
+        f"claramente NO esta haciendo todavia (segun el diagnostico).\n\n"
+        f"FORMATO: Una recomendacion por linea. Sin numeracion, bullets ni guiones al inicio.\n"
+        f"PROHIBIDO: 'mejora la comunicacion', 'se mas proactivo', 'responde mas rapido' sin especificar como."
     )
 
     try:
-        ds_key = os.getenv("DEEPSEEK_API_KEY", "")
-        if ds_key:
-            import requests as _req
-            r = _req.post(
-                "https://api.deepseek.com/chat/completions",
-                headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
-                json={"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": 600, "temperature": 0.35},
-                timeout=20,
-            )
-            content = r.json()["choices"][0]["message"]["content"].strip()
+        from app.llm import call_llm, active_provider
+        if active_provider() != "none":
+            content = call_llm([{"role": "user", "content": prompt}], max_tokens=700, temperature=0.4)
             lines = [l.strip("•-– \t") for l in content.split("\n") if l.strip()]
-            result = [l for l in lines if len(l) > 15][:5]
+            result = [l for l in lines if len(l) > 20][:5]
             if result:
                 return result
     except Exception:
@@ -527,10 +657,7 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
                             leftMargin=LM, rightMargin=RM,
                             topMargin=TM, bottomMargin=BM)
 
-    try:
-        now_str = datetime.now().strftime("%-d de %B de %Y, %H:%M")
-    except ValueError:
-        now_str = datetime.now().strftime("%d de %B de %Y, %H:%M")
+    now_str = _date_es()
 
     company_name = _safe(company.get("name") or company.get("domain") or "Empresa")
     industry     = _safe(company.get("industry") or analytics.get("industry") or "-")
@@ -550,197 +677,237 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
         reaction_min = float(reaction_min) if reaction_min is not None else None
     except (TypeError, ValueError):
         reaction_min = None
-    business_hours       = bool(analytics.get("business_hours", False))
-    notes                = _safe(analytics.get("notes") or "")
-    is_ai                = bool(analytics.get("is_ai", False))
-    bot_quality          = analytics.get("bot_quality")
+    business_hours = bool(analytics.get("business_hours", False))
+    notes          = _safe(analytics.get("notes") or "")
 
-    qual_level, qual_color = QUALITY_LEVELS.get(round(quality), ("Desconocido", C["muted"]))
+    qual_level, qual_color   = QUALITY_LEVELS.get(round(quality), ("Desconocido", C["muted"]))
     speed_label, speed_color = _speed_label(reaction_min)
+    bh_label = "En horario habil" if business_hours else "Fuera de horario"
+    bh_color = C["humano"] if business_hours else C["automatico"]
 
     sent_c = sum(1 for m in thread if m.get("direction") == "outbound")
     recv_c = sum(1 for m in thread if m.get("direction") == "inbound")
 
-    suggestions = [_safe(s) for s in (_suggestions(analytics, industry) or [])] or [
+    avg_resp_min = _calc_avg_response_time(thread)
+    avg_speed_label, avg_speed_color = _speed_label(avg_resp_min)
+
+    suggestions = [_safe(s) for s in (_suggestions(analytics, industry, avg_resp_min) or [])] or [
         "Activar respuestas automaticas fuera de horario para no perder prospectos nocturnos.",
         "Crear catalogo de productos en WhatsApp Business con precios y descripcion.",
-        "Reducir el tiempo de respuesta a menos de 10 minutos en horario habil.",
+        "Configurar seguimiento automatico a los 2 dias sin respuesta via listas de difusion.",
         "Usar etiquetas de WhatsApp Business para clasificar leads por nivel de interes.",
         "Agregar un CTA claro al final de cada respuesta: cotizacion, llamada o demo.",
     ]
 
+    # ── Column widths for 2-column body layout ────────────────────────────────
+    LEFT_W  = PW * 0.40   # screenshot column ~211pt / ~74mm
+    RIGHT_W = PW * 0.57   # data column     ~301pt / ~106mm
+    COL_GAP = int(PW * 0.03)  # gap between columns ~16pt
+
     story = []
 
     # ══════════════════════════════════════════════════════════════════════════
-    # PAGE 1 — Diagnóstico + Calidad de Servicio + Sugerencias
+    # HEADER — full width, compact
     # ══════════════════════════════════════════════════════════════════════════
+    story.append(HGradient(PW, 12 * mm, "#3b82f6", "#8b5cf6", badge_text=industry))
+    story.append(Spacer(1, 3 * mm))
 
-    story.append(HGradient(PW, 14 * mm, "#3b82f6", "#8b5cf6"))
-    story.append(Spacer(1, 4 * mm))
-
-    # Company header
     meta_lines = []
     if wa_number:
         meta_lines.append(Paragraph(
             f'<font color="#25d366">&#9679;</font>  <font color="#1e293b"><b>{wa_number}</b></font>',
-            _st("wn", fontSize=10, leading=14)))
+            _st("wn", fontSize=9, leading=12, alignment=TA_RIGHT)))
     if domain:
-        meta_lines.append(Paragraph(domain, _st("dm", fontSize=9, textColor=C["muted"], leading=12)))
-    meta_lines.append(Paragraph(now_str, _st("dt2", fontSize=8, textColor=C["muted"], leading=11)))
+        meta_lines.append(Paragraph(domain, _st("dm", fontSize=8, textColor=C["muted"], leading=11, alignment=TA_RIGHT)))
+    meta_lines.append(Paragraph(now_str, _st("dt2", fontSize=7.5, textColor=C["muted"], leading=10, alignment=TA_RIGHT)))
 
-    header_table = Table(
-        [[Paragraph(company_name, _st("cn", fontSize=17, fontName="Helvetica-Bold",
-                                      textColor=C["white"], leading=21)),
-          [Paragraph(industry, _st("ci", fontSize=10, textColor=C["muted"], leading=13))] + meta_lines]],
+    header_tbl = Table(
+        [[Paragraph(company_name, _st("cn", fontSize=15, fontName="Helvetica-Bold",
+                                      textColor=C["white"], leading=19)),
+          meta_lines]],
         colWidths=[PW * 0.55, PW * 0.45],
     )
-    header_table.setStyle(TableStyle([
+    header_tbl.setStyle(TableStyle([
         ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+        ("ALIGN",         (1, 0), (1, -1),  "RIGHT"),
         ("LEFTPADDING",   (0, 0), (-1, -1), 0),
         ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
         ("TOPPADDING",    (0, 0), (-1, -1), 0),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
-    story.append(header_table)
-    story.append(Spacer(1, 3 * mm))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=C["border"], spaceAfter=3))
-
-    # ── Diagnóstico del Canal ─────────────────────────────────────────────────
-    story.append(Paragraph("Diagnostico del Canal", _st("h3",
-        fontSize=10, fontName="Helvetica-Bold", textColor=C["primary"],
-        leading=14, spaceAfter=3)))
-
-    bh_label = "En horario habil" if business_hours else "Fuera de horario"
-    bh_color = C["humano"] if business_hours else C["automatico"]
-
-    story.append(CardGrid(
-        cards=[
-            ("Tipo de atencion",       cat_label,                cat_color,  None),
-            ("Calidad comercial",      f"{round(quality)}/5",    qual_color, QualityDots(quality, qual_color)),
-            ("Velocidad de respuesta", _reaction_str(reaction_min), speed_color, None),
-            ("Horario de atencion",    bh_label,                  bh_color,  None),
-        ],
-        width=PW,
-        card_h=22 * mm,
-        gap=4,
-    ))
+    story.append(header_tbl)
     story.append(Spacer(1, 2 * mm))
-
-    # Notas del diagnóstico
-    if notes:
-        notes_data = [
-            [Paragraph("Diagnostico:", _st("dlb", fontSize=8, fontName="Helvetica-Bold",
-                                           textColor=C["muted"])),
-             Paragraph(notes, _st("dln", fontSize=8.5, textColor=C["text"], leading=12))],
-        ]
-        notes_tbl = Table(notes_data, colWidths=[24 * mm, PW - 24 * mm - 4])
-        notes_tbl.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
-            ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 8),
-            ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
-            ("TOPPADDING",    (0, 0), (-1, -1), 6),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-            ("VALIGN",        (0, 0), (-1, -1), "TOP"),
-        ]))
-        story.append(notes_tbl)
-        story.append(Spacer(1, 2 * mm))
-
-    # ── Stats: enviados + recibidos ───────────────────────────────────────────
-    stats_data = [
-        [Paragraph(str(sent_c), _st("sv1", fontSize=16, fontName="Helvetica-Bold", textColor=C["primary"], leading=18)),
-         Paragraph(str(recv_c), _st("sv2", fontSize=16, fontName="Helvetica-Bold", textColor=C["humano"], leading=18))],
-        [Paragraph("Mensajes enviados", _st("sl1", fontSize=7, textColor=C["muted"], leading=10)),
-         Paragraph("Respuestas recibidas", _st("sl2", fontSize=7, textColor=C["muted"], leading=10))],
-    ]
-    stats_tbl = Table(stats_data, colWidths=[PW / 2 - 2, PW / 2 - 2])
-    stats_tbl.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
-        ("BOX",           (0, 0), (0, -1),  0.5, C["border"]),
-        ("BOX",           (1, 0), (1, -1),  0.5, C["border"]),
-        ("LEFTPADDING",   (0, 0), (-1, -1), 10),
-        ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
-        ("TOPPADDING",    (0, 0), (-1, 0),  6),
-        ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
-        ("TOPPADDING",    (0, 1), (-1, -1), 0),
-        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-    ]))
-    story.append(stats_tbl)
-    story.append(Spacer(1, 3 * mm))
-
-    # ── Calidad de Servicio (si hay datos) ────────────────────────────────────
-    has_svc = any(analytics.get(k) is not None for k, _ in _SVC_DIMS)
-    if has_svc:
-        story.append(Paragraph("Calidad de Servicio por Dimension", _st("sqh",
-            fontSize=9, fontName="Helvetica-Bold", textColor=C["primary"],
-            leading=12, spaceAfter=2)))
-        story.append(ServiceQualityTable(analytics, PW, row_h=13))
-        story.append(Spacer(1, 3 * mm))
-
-    story.append(HRFlowable(width="100%", thickness=0.5, color=C["border"], spaceAfter=3))
-
-    # ── Sugerencias de Mejora ─────────────────────────────────────────────────
-    story.append(Paragraph("Sugerencias de Mejora", _st("h4",
-        fontSize=10, fontName="Helvetica-Bold", textColor=C["green"],
-        leading=13, spaceAfter=2)))
-    story.append(Paragraph(
-        f"Acciones especificas para el canal de {company_name} — sector {industry}.",
-        _st("sub2", fontSize=7.5, textColor=C["muted"], leading=10, spaceAfter=3),
-    ))
-
-    for i, text in enumerate(suggestions, 1):
-        sug_row = Table(
-            [[Paragraph(str(i), _st(f"bn{i}",
-                fontSize=11, fontName="Helvetica-Bold", textColor=C["green"])),
-              Paragraph(text, _st(f"bt{i}",
-                fontSize=8.5, textColor=C["text"], leading=12))]],
-            colWidths=[7 * mm, PW - 7 * mm - 4],
-        )
-        sug_row.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
-            ("LINEAFTER",     (0, 0), (0, -1),  2, C["green"]),
-            ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 7),
-            ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
-            ("TOPPADDING",    (0, 0), (-1, -1), 6),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ]))
-        story.append(sug_row)
-        story.append(Spacer(1, 2 * mm))
-
-    story.append(Spacer(1, 3 * mm))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=C["border"], spaceAfter=3))
-    story.append(Paragraph(
-        f'<font color="#64748b">Analisis de Canal WhatsApp · {now_str}</font>',
-        _st("bn", fontSize=7, alignment=TA_CENTER, leading=10),
-    ))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=C["border"], spaceAfter=4))
 
     # ══════════════════════════════════════════════════════════════════════════
-    # PAGE 2 — Evidencia de Conversación
+    # LEFT COLUMN — screenshot
     # ══════════════════════════════════════════════════════════════════════════
-    story.append(PageBreak())
-
-    story.append(Paragraph("Evidencia de Conversacion", _st("h2",
-        fontSize=10, fontName="Helvetica-Bold", textColor=C["primary"],
-        leading=13, spaceAfter=4)))
+    left_items = []
+    left_items.append(Paragraph("Evidencia de Conversacion", _st("evh",
+        fontSize=7.5, fontName="Helvetica-Bold", textColor=C["muted"],
+        leading=10, spaceAfter=3)))
 
     if screenshot_b64:
         try:
             raw     = screenshot_b64.split(",", 1)[-1] if "," in screenshot_b64 else screenshot_b64
             img_buf = io.BytesIO(base64.b64decode(raw))
-            img     = Image(img_buf, width=PW, height=110 * mm, kind="bound")
-            story.append(img)
+            img     = Image(img_buf, width=LEFT_W, height=162 * mm, kind="bound")
+            img.hAlign = "CENTER"
+            img_wrapper = Table([[img]], colWidths=[LEFT_W])
+            img_wrapper.setStyle(TableStyle([
+                ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+                ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+                ("TOPPADDING",    (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]))
+            left_items.append(img_wrapper)
         except Exception:
-            story.append(Paragraph("(No se pudo procesar la imagen.)",
-                _st("ni", textColor=C["muted"], fontSize=9)))
+            left_items.append(Paragraph("(No se pudo procesar la imagen.)",
+                _st("ni", textColor=C["muted"], fontSize=8)))
     else:
-        story.append(Paragraph("Sin captura de pantalla.",
-            _st("ni2", textColor=C["muted"], fontSize=9)))
+        left_items.append(Paragraph("Sin captura de pantalla adjunta.",
+            _st("ni2", textColor=C["muted"], fontSize=8)))
 
-    caption_parts = [p for p in [company_name, wa_number, datetime.now().strftime("%d/%m/%Y")] if p]
-    story.append(Paragraph(" · ".join(caption_parts),
-        _st("cap", fontSize=7, textColor=C["muted"], alignment=TA_CENTER, spaceAfter=0)))
+    caption_parts = [p for p in [wa_number, company_name, datetime.now().strftime("%d/%m/%Y")] if p]
+    left_items.append(Spacer(1, 2 * mm))
+    left_items.append(Paragraph(" · ".join(caption_parts),
+        _st("cap", fontSize=6, textColor=C["muted"], leading=8, alignment=TA_CENTER)))
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # RIGHT COLUMN — metrics + quality + suggestions
+    # ══════════════════════════════════════════════════════════════════════════
+    right_items = []
+
+    # — Score arc header —
+    comp_score = _composite_score(analytics, cat_key, quality, reaction_min, business_hours)
+    score_label_txt, score_color = _score_label(comp_score)
+    arc_size = 54
+    score_arc_tbl = Table(
+        [[ScoreArc(comp_score, score_color, size=arc_size),
+          [Paragraph(score_label_txt, _st("slb", fontSize=9, fontName="Helvetica-Bold",
+                                          textColor=score_color, leading=12)),
+           Spacer(1, 3),
+           Paragraph("Indice integral de calidad comercial",
+                     _st("ssub", fontSize=7, textColor=C["muted"], leading=9))]]],
+        colWidths=[arc_size + 8, RIGHT_W - arc_size - 8],
+    )
+    score_arc_tbl.setStyle(TableStyle([
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
+        ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
+        ("LINEBEFORE",    (0, 0), (0, -1),  3,   score_color),
+        ("LEFTPADDING",   (0, 0), (0, -1),  6),
+        ("RIGHTPADDING",  (0, 0), (0, -1),  4),
+        ("LEFTPADDING",   (1, 0), (1, -1),  8),
+        ("RIGHTPADDING",  (1, 0), (1, -1),  8),
+        ("TOPPADDING",    (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    right_items.append(score_arc_tbl)
+    right_items.append(Spacer(1, 3 * mm))
+
+    # — Diagnóstico —
+    right_items.append(Paragraph("Diagnostico del Canal", _st("rh1",
+        fontSize=9, fontName="Helvetica-Bold", textColor=C["primary"],
+        leading=12, spaceAfter=2)))
+
+    svc_vals = [float(analytics.get(k)) for k, _ in _SVC_DIMS if analytics.get(k) is not None]
+    svc_avg = round(sum(svc_vals) / len(svc_vals), 1) if svc_vals else None
+    svc_avg_color = _svc_score_color(svc_avg) if svc_avg is not None else C["muted"]
+
+    if notes:
+        notes_tbl = Table(
+            [[Paragraph("Hallazgo:", _st("dlb2", fontSize=7, fontName="Helvetica-Bold", textColor=C["muted"])),
+              Paragraph(notes, _st("dln2", fontSize=7.5, textColor=C["text"], leading=11))]],
+            colWidths=[17 * mm, RIGHT_W - 17 * mm - 4],
+        )
+        notes_tbl.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
+            ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
+            ("LINEBEFORE",    (0, 0), (0, -1),  2,   C["primary"]),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
+            ("TOPPADDING",    (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+        ]))
+        right_items.append(notes_tbl)
+        right_items.append(Spacer(1, 2 * mm))
+
+    right_items.append(CardGrid(
+        cards=[
+            ("Tipo de atencion",       cat_label,                                         cat_color,      None),
+            ("Calidad comercial",      f"{round(quality)}/5",                             qual_color,     QualityDots(quality, qual_color)),
+            ("Tiempo prom. respuesta", _reaction_str(avg_resp_min),                       avg_speed_color,None),
+            ("Prom. calidad servicio", f"{svc_avg}/5" if svc_avg else "-",               svc_avg_color,  QualityDots(svc_avg or 0, svc_avg_color) if svc_avg else None),
+            ("Horario",                bh_label,                                          bh_color,       None),
+            ("Enviados / Recibidos",   f"{sent_c} / {recv_c}",                            C["primary"],   None),
+        ],
+        width=RIGHT_W,
+        card_h=20 * mm,
+        gap=3,
+    ))
+    right_items.append(Spacer(1, 3 * mm))
+
+    # — Calidad de Servicio —
+    has_svc = any(analytics.get(k) is not None for k, _ in _SVC_DIMS)
+    if has_svc:
+        right_items.append(HRFlowable(width=RIGHT_W, thickness=0.5, color=C["border"], spaceAfter=2))
+        right_items.append(Paragraph("Calidad de Servicio por Dimension", _st("sqh2",
+            fontSize=8, fontName="Helvetica-Bold", textColor=C["primary"],
+            leading=11, spaceAfter=2)))
+        right_items.append(ServiceQualityTable(analytics, RIGHT_W, row_h=12))
+        right_items.append(Spacer(1, 2 * mm))
+
+    # — Sugerencias de Mejora —
+    right_items.append(HRFlowable(width=RIGHT_W, thickness=0.5, color=C["border"], spaceAfter=2))
+    right_items.append(Paragraph("Sugerencias de Mejora", _st("sh2",
+        fontSize=9, fontName="Helvetica-Bold", textColor=C["green"],
+        leading=12, spaceAfter=1)))
+    right_items.append(Paragraph(
+        f"Acciones especificas para {company_name} — {industry}.",
+        _st("sub3", fontSize=7, textColor=C["muted"], leading=9, spaceAfter=2),
+    ))
+
+    for i, text in enumerate(suggestions, 1):
+        sug_row = Table(
+            [[Paragraph(str(i), _st(f"bn2{i}",
+                fontSize=8, fontName="Helvetica-Bold", textColor=C["green"])),
+              Paragraph(text, _st(f"bt2{i}",
+                fontSize=7.5, textColor=C["text"], leading=10))]],
+            colWidths=[6 * mm, RIGHT_W - 6 * mm - 4],
+        )
+        sug_row.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
+            ("LINEAFTER",     (0, 0), (0, -1),  2, C["green"]),
+            ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 7),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        right_items.append(sug_row)
+        if i < len(suggestions):
+            right_items.append(Spacer(1, 1.5 * mm))
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # BODY — 2-column table: screenshot | data
+    # ══════════════════════════════════════════════════════════════════════════
+    body_tbl = Table(
+        [[left_items, right_items]],
+        colWidths=[LEFT_W, RIGHT_W],
+    )
+    body_tbl.setStyle(TableStyle([
+        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+        ("TOPPADDING",    (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING",  (0, 0), (0, -1),  COL_GAP),
+        ("RIGHTPADDING",  (1, 0), (-1, -1), 0),
+    ]))
+    story.append(body_tbl)
 
     # ── Build ─────────────────────────────────────────────────────────────────
     _orig_build = doc.build

@@ -8,45 +8,68 @@ import random
 import time
 from datetime import datetime, timezone, timedelta
 
-from app.config import DEEPSEEK_API_KEY, EVOLUTION_API_URL, EVOLUTION_API_KEY, EVOLUTION_INSTANCE
+from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY, EVOLUTION_INSTANCE
 from app.database import MongoDBManager
 
 log = logging.getLogger(__name__)
 
-MAX_TURNS = 10  # safety net — Andy should close naturally via prompt rules before this
-RESPONSE_DELAY_MIN = 20   # seconds before responding (simulates reading time)
-RESPONSE_DELAY_MAX = 90
-TYPING_DELAY_MIN = 3      # seconds of typing simulation
-TYPING_DELAY_MAX = 8
+MAX_TURNS = 10  # safety net — Chat IA should close naturally via prompt rules before this
+RESPONSE_DELAY_MIN = 8    # seconds before responding (simulates reading time)
+RESPONSE_DELAY_MAX = 30
+RESPONSE_DELAY_MENU_MIN = 2  # much shorter delay for menu/IVR replies
+RESPONSE_DELAY_MENU_MAX = 5
+TYPING_DELAY_MIN = 2      # seconds of typing simulation
+TYPING_DELAY_MAX = 5
 OUTBOUND_LOOKBACK_DAYS = 7  # only follow up if we messaged this number within N days
 
 _MEXICO_TZ = timezone(timedelta(hours=-6))  # CST — UTC-6 year-round (conservative)
 
 _SYSTEM_PROMPT = """\
-Eres un representante de ventas de Detucel. Estás chateando por WhatsApp con alguien \
+Eres Andrés Flores, ejecutivo de ventas. Estás chateando por WhatsApp con alguien \
 de {company_name}, empresa del giro {industry} en {city}.
 
 El mensaje que les mandamos originalmente fue: "{initial_message}"
 
-REGLAS — violarlas arruina la conversación:
-1. Responde MUY casual y breve, máximo 2 oraciones.
-2. NUNCA menciones precios, costos, tarifas ni hagas compromisos de ningún tipo.
-3. NUNCA ofrezcas citas, llamadas, reuniones, demos, ni nada que requiera agenda.
-4. NUNCA reveles que eres IA, bot o software. Si te preguntan, di algo como "nah jaja".
-5. Usa lenguaje coloquial mexicano: "oye", "la verdad", "qué onda", "está chido", etc.
-6. MENÚS Y BOTONES INTERACTIVOS: si el mensaje contiene opciones para elegir (formato "[Opciones: X | Y | Z]", "[Lista: X | Y | Z]", o lista numerada "1. X  2. Y"), elige la opción que lleve a ventas, atención comercial o contacto con un asesor humano y responde ÚNICAMENTE con ese texto exacto (o su número). Sin texto adicional.
-   Ejemplos: llega "[Opciones: Español | English]" → responde: Español
-             llega "[Opciones: Ventas | Soporte | Admin]" → responde: Ventas
-             llega "1. Ventas  2. Soporte  3. Info" → responde: 1
+IDENTIDAD (úsala con naturalidad, no la fuerces):
+- Tu nombre es Andrés Flores. Si preguntan cómo te llamas, responde "Andrés" o "Andrés Flores".
+- Si preguntan si eres IA o bot, dilo tranquilo y sin defensas: "No, soy yo, Andrés."
+- NUNCA menciones el nombre de tu empresa ni a quién representas.
 
-CUÁNDO CERRAR LA CONVERSACIÓN — cuando alguna de estas situaciones ocurra, responde normalmente Y agrega [FIN] al final de tu mensaje (sin espacio antes):
-- El contacto pregunta precio, costo o tarifa → di "eso ya te lo puede dar alguien del equipo, ahorita te contactan"[FIN]
-- El contacto pide una cita, llamada o reunión → di "con gusto, le aviso a quien lleva eso"[FIN]
-- El contacto dice que no le interesa, está ocupado o pide que no le escribas → cierra con respeto[FIN]
-- La plática llegó a un acuerdo o conclusión natural → cierra cálidamente[FIN]
-- El contacto no responde con sentido (spam, otro idioma) → di "ok, cualquier cosa aquí andamos"[FIN]
+TONO — semi-formal y humano:
+- Escribe como un ejecutivo de ventas joven que usa WhatsApp: directo, amable, sin ser corporativo.
+- No uses jerga de calle ni emojis en exceso. Está bien uno ocasional si encaja.
+- Frases naturales: "Con gusto", "Claro que sí", "Oye, una pregunta", "Te comento que…"
+- Máximo 2-3 oraciones por mensaje. Breve y enfocado.
 
-IMPORTANTE: [FIN] no se envía al contacto, es solo tu señal interna de que la conversación terminó. Ponlo pegado al final del texto sin espacio.
+OBJETIVO — escudriñar la conversación:
+- Tu meta es descubrir si {company_name} podría ser un cliente. No vendas directamente.
+- Muestra interés genuino: pregunta qué hacen, cuántos empleados tienen, cómo manejan sus clientes actualmente.
+- Haz UNA pregunta de calificación por turno. No ametrayes preguntas.
+- Ejemplos de preguntas útiles: "¿Qué tipo de clientes atienden?", "¿Cuántos en el equipo de ventas?",
+  "¿Actualmente cómo le dan seguimiento a sus prospectos?", "¿Han pensado en automatizar algún proceso?"
+
+REGLAS ESTRICTAS:
+1. NUNCA menciones precios, costos, tarifas ni hagas compromisos de ningún tipo.
+2. NUNCA ofrezcas citas, llamadas, reuniones ni demos directamente — solo di que alguien del equipo los contactará.
+3. Adapta tus respuestas al tono y contexto del chat: si el contacto es formal, tú también; si es informal, relájate un poco.
+4. MENÚS Y BOTONES INTERACTIVOS: si el mensaje es un menú con opciones numeradas (ej. "1. Ventas  2. Soporte  3. Info"),
+   elige la opción que lleve a ventas o a un humano y responde SOLO con ese texto o número.
+
+DETECCIÓN DE BOT AJENO (Regla 7):
+Si el contacto es claramente un sistema automatizado de OTRA empresa (banco, aseguradora, aerolínea, tienda, etc.),
+NO sigas su flujo. Cierra con [FIN].
+Señales: se presenta con nombre propio ("Soy Olivia", "Soy Sofía"), menciona una empresa ajena
+("Banco Azteca", "BBVA", "Aeromexico"), repite el mismo mensaje de bienvenida, o pide onboarding
+("¿Cómo te llamas?", "Escribe tu nombre"). Ante CUALQUIERA de estas señales: di algo corto y añade [FIN].
+
+CUÁNDO CERRAR — responde normalmente y añade [FIN] pegado al final:
+- Preguntan precio o costo → "Eso te lo da directamente alguien de nuestro equipo, en breve te contactan."[FIN]
+- Piden cita, llamada o reunión → "Con gusto, le aviso a quien lleva esa parte."[FIN]
+- No hay interés o piden que no les escribas → cierra con respeto[FIN]
+- La conversación llegó a una conclusión natural[FIN]
+- Bot ajeno o spam → "Entendido, cualquier cosa aquí estamos."[FIN]
+
+IMPORTANTE: [FIN] es tu señal interna — nunca llega al contacto. Ponlo pegado al texto, sin espacio.
 """
 
 
@@ -117,9 +140,8 @@ def _build_context(db: MongoDBManager, company_id: str, outbound_log: dict) -> d
     }
 
 
-def _call_deepseek(turns: list, context: dict) -> str | None:
-    if not DEEPSEEK_API_KEY:
-        return None
+def _call_llm_for_reply(turns: list, context: dict) -> str | None:
+    import re
     system = _SYSTEM_PROMPT.format(**context)
     messages = []
     for t in turns:
@@ -127,19 +149,32 @@ def _call_deepseek(turns: list, context: dict) -> str | None:
             "role": "user" if t["role"] == "user" else "assistant",
             "content": t["content"],
         })
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
-        resp = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[{"role": "system", "content": system}] + messages,
-            temperature=0.82,
-            max_tokens=120,
-        )
-        return resp.choices[0].message.content.strip()
-    except Exception as e:
-        log.error("[AIFollowup] DeepSeek error: %s", e)
-        return None
+    for attempt in range(1, 4):
+        try:
+            from app.llm import call_llm
+            return call_llm(
+                [{"role": "system", "content": system}] + messages,
+                max_tokens=120,
+                temperature=0.82,
+            )
+        except Exception as e:
+            err = str(e)
+            # Circuit breaker tripped by another thread — wait it out (fast-fail path)
+            m = re.search(r"circuit breaker open for (\d+)s more", err)
+            if m:
+                wait = int(m.group(1)) + 5
+                log.warning("[AIFollowup] circuit breaker activo, esperando %ds (intento %d/3)", wait, attempt)
+                print(f"[AIFollowup] circuit breaker activo — esperando {wait}s, intento {attempt}/3")
+                time.sleep(wait)
+                continue
+            # Direct 429 after internal retries exhausted — daily quota hit, no point waiting
+            if "429" in err:
+                log.error("[AIFollowup] Groq cuota diaria agotada (429 directo), abortando")
+                return None
+            log.error("[AIFollowup] LLM error: %s", e)
+            return None
+    log.error("[AIFollowup] LLM error: circuit breaker no cedió tras 3 intentos")
+    return None
 
 
 def _send_typing_presence(phone_number: str):
@@ -160,15 +195,25 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
     Entry point called from the follow-up queue worker.
     Applies anti-detection delays, generates an AI response, and sends it.
     """
-    if not DEEPSEEK_API_KEY:
+    from app.llm import active_provider
+    provider = active_provider()
+    print(f"[AIFollowup] process_inbound_reply START phone={phone_number} company={company_id} provider={provider}")
+    if provider == "none":
+        log.warning("[AIFollowup] no LLM provider configured, skipping")
+        print("[AIFollowup] EXIT: no LLM provider")
         return
-    if not _is_business_hours():
+    biz = _is_business_hours()
+    print(f"[AIFollowup] business_hours={biz}")
+    if not biz:
         log.info("[AIFollowup] outside business hours, skipping %s", phone_number)
+        print("[AIFollowup] EXIT: outside business hours")
         return
 
     db = MongoDBManager()
     session = _get_or_create_session(db, phone_number, company_id)
+    print(f"[AIFollowup] session={session is not None} id={session.get('_id') if session else None}")
     if not session:
+        print("[AIFollowup] EXIT: no session found/created")
         return
 
     sid = session["_id"]
@@ -197,9 +242,17 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
         },
     )
 
-    # Anti-detection: random reading delay before responding
-    read_delay = random.uniform(RESPONSE_DELAY_MIN, RESPONSE_DELAY_MAX)
-    log.info("[AIFollowup] reading delay %.0fs for %s", read_delay, phone_number)
+    # Anti-detection: shorter delay for menu/IVR messages (they expect fast button presses)
+    is_menu_msg = (
+        "[Opciones:" in inbound_body or "[Lista:" in inbound_body
+        or any(f"{i}." in inbound_body for i in range(1, 8))
+        or len(inbound_body.strip()) < 60
+    )
+    if is_menu_msg:
+        read_delay = random.uniform(RESPONSE_DELAY_MENU_MIN, RESPONSE_DELAY_MENU_MAX)
+    else:
+        read_delay = random.uniform(RESPONSE_DELAY_MIN, RESPONSE_DELAY_MAX)
+    log.info("[AIFollowup] reading delay %.0fs (menu=%s) for %s", read_delay, is_menu_msg, phone_number)
     time.sleep(read_delay)
 
     if not _is_business_hours():
@@ -210,8 +263,29 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
     if not session:
         return
 
-    ai_text_raw = _call_deepseek(session.get("turns", []), session.get("context", {}))
+    # Hard-coded bot detection: if the contact has sent the same message before,
+    # it's almost certainly a looping IVR/chatbot — close without spending LLM quota.
+    prior_user_msgs = [
+        t["content"] for t in session.get("turns", [])
+        if t.get("role") == "user" and t.get("content") != inbound_body
+    ]
+    repeated = sum(1 for m in prior_user_msgs if m.strip() == inbound_body.strip())
+    if repeated >= 1:
+        log.info("[AIFollowup] mensaje repetido detectado (bot loop) — cerrando sesión para %s", phone_number)
+        db.db.ai_followup_sessions.update_one(
+            {"_id": sid},
+            {"$set": {"status": "ended", "end_reason": "repeated_message", "ai_typing": False}},
+        )
+        db.db.conversation_ai_prefs.update_one(
+            {"company_id": company_id},
+            {"$set": {"ai_enabled": False}},
+        )
+        return
+
+    ai_text_raw = _call_llm_for_reply(session.get("turns", []), session.get("context", {}))
+    print(f"[AIFollowup] LLM response: {repr(ai_text_raw[:80]) if ai_text_raw else 'None'}")
     if not ai_text_raw:
+        print("[AIFollowup] EXIT: LLM returned None")
         return
 
     # Detect AI-initiated close signal and strip it before sending
@@ -286,8 +360,8 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
 
             # Trigger full-conversation analysis so analytics reflects the entire exchange
             try:
-                from app.config import DEEPSEEK_API_KEY as _DS
-                if _DS:
+                from app.llm import active_provider as _ap
+                if _ap() != "none":
                     last_inbound = db.db.message_logs.find_one(
                         {"company_id": company_id, "direction": "inbound"},
                         sort=[("created_at", -1)],

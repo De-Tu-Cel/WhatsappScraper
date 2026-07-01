@@ -253,9 +253,17 @@ export default function InstancesPanel() {
     return false
   }, [])
 
-  const startQrPoll = useCallback(async (name) => {
+  const startQrPoll = useCallback(async (name, withLogout = false) => {
     if (qrPollRef.current) clearTimeout(qrPollRef.current)
-    setQrImage(null); setQrStatus('loading')
+    setQrImage(null); setQrStatus(withLogout ? 'retrying' : 'loading')
+
+    if (withLogout) {
+      try {
+        await fetch(`/api/evolution/instance/${name}?action=logout`, { method: 'POST' })
+      } catch {}
+      await new Promise(r => setTimeout(r, 700))
+      setQrStatus('loading')
+    }
 
     let attempts = 0
     const poll = async () => {
@@ -276,13 +284,26 @@ export default function InstancesPanel() {
 
   const startConnPoll = useCallback((name) => {
     if (connPollRef.current) clearInterval(connPollRef.current)
+    let firstPoll = true
+    let prevState = ''
     connPollRef.current = setInterval(async () => {
       try {
         const r = await fetch(`/api/evolution/instance/${name}`)
         if (!r.ok) return
         const d = await r.json()
         const state = d?.instance?.state || d?.state || ''
-        if (['open', 'connected'].includes(state)) {
+        if (firstPoll) {
+          // Record initial state — don't act on it.
+          // If already open, we still need the QR scan to trigger the close.
+          firstPoll = false
+          prevState = state
+          return
+        }
+        const isConnected = ['open', 'connected'].includes(state)
+        const wasConnected = ['open', 'connected'].includes(prevState)
+        prevState = state
+        if (isConnected && !wasConnected) {
+          // State transitioned TO connected → QR was just scanned
           if (connPollRef.current) clearInterval(connPollRef.current)
           if (qrPollRef.current)   clearTimeout(qrPollRef.current)
           setQrOpen(false); setQrTarget(null); setQrImage(null); setQrStatus('loading')
@@ -580,10 +601,11 @@ export default function InstancesPanel() {
       {/* ── QR dialog ── */}
       <Dialog open={qrOpen} onClose={closeQr} sx={{
         '& .MuiDialog-paper': {
-          background: 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.1) 0%, var(--card-bg,#161d2e) 55%)',
-          border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)',
+          bgcolor: 'var(--card-bg, #161d2e)',
+          backgroundImage: 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.09) 0%, transparent 55%)',
+          border: '1px solid rgba(var(--accent-rgb,59,130,246),0.22)',
           borderRadius: 3, minWidth: 340,
-          boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.7)',
         },
       }}>
         <DialogTitle sx={{ pb: 0.5 }}>
@@ -642,12 +664,19 @@ export default function InstancesPanel() {
           </Box>
 
           {/* Retry button */}
-          <Button size="small" startIcon={<RefreshIcon sx={{ fontSize: '14px !important' }} />}
-            onClick={() => { if (qrTarget) startQrPoll(qrTarget.name) }}
-            sx={{ color: 'rgba(255,255,255,0.35)', textTransform: 'none', fontSize: '0.72rem',
-              '&:hover': { color: 'rgba(255,255,255,0.7)' } }}>
-            Reintentar
-          </Button>
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+            <Button size="small" startIcon={<RefreshIcon sx={{ fontSize: '14px !important' }} />}
+              onClick={() => { if (qrTarget) startQrPoll(qrTarget.name, qrStatus === 'error') }}
+              sx={{ color: 'rgba(255,255,255,0.35)', textTransform: 'none', fontSize: '0.72rem',
+                '&:hover': { color: 'rgba(255,255,255,0.7)' } }}>
+              {qrStatus === 'error' ? 'Forzar reconexión' : 'Reintentar'}
+            </Button>
+            {qrStatus === 'error' && (
+              <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,100,100,0.6)', textAlign: 'center', maxWidth: 220 }}>
+                Esto desconectará la sesión actual para generar un nuevo QR
+              </Typography>
+            )}
+          </Box>
         </DialogContent>
 
         <DialogActions sx={{ px: 3, pb: 3, pt: 2, justifyContent: 'center', borderTop: '1px solid rgba(255,255,255,0.06)' }}>

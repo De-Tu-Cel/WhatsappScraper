@@ -42,13 +42,13 @@ C = {
 }
 
 CATEGORY_INFO = {
-    "humano":        ("Humano",       C["humano"]),
-    "automatico":    ("Automatico",   C["automatico"]),
-    "menu":          ("Menu IVR",     C["automatico"]),
-    "hibrido":       ("Auto+Humano",  C["primary"]),
-    "bot":           ("Bot",          C["bot"]),
-    "bot_ia":        ("Bot IA",       C["bot_ia"]),
-    "sin_respuesta": ("Sin respuesta",C["muted"]),
+    "humano":        ("Persona real",        C["humano"]),
+    "automatico":    ("Resp. automatica",    C["automatico"]),
+    "menu":          ("Menu de opciones",    C["automatico"]),
+    "hibrido":       ("Bot + asesor",        C["primary"]),
+    "bot":           ("Chatbot",             C["bot"]),
+    "bot_ia":        ("Asistente IA",        C["bot_ia"]),
+    "sin_respuesta": ("Sin respuesta",       C["muted"]),
 }
 
 # Quality level names and colors (score 0-5)
@@ -152,11 +152,11 @@ def _speed_label(reaction_min):
 
 _SVC_DIMS = [
     ("svc_prof",   "Profesionalismo"),
-    ("svc_comp",   "Completitud"),
-    ("svc_empa",   "Empatia"),
+    ("svc_comp",   "Respuesta completa"),
+    ("svc_empa",   "Trato al cliente"),
     ("svc_solu",   "Solucion ofrecida"),
-    ("svc_next",   "Siguiente paso"),
-    ("svc_proact", "Proactividad"),
+    ("svc_next",   "Siguiente paso claro"),
+    ("svc_proact", "Iniciativa propia"),
 ]
 
 _SVC_COLORS = {
@@ -214,22 +214,23 @@ def _composite_score(analytics: dict, category: str, quality: float, reaction_mi
 def _score_label(score: int) -> tuple:
     """Returns (label, color) for a composite score."""
     if score >= 70:
-        return "Canal con potencial comercial", C["humano"]
+        return "Buen potencial de venta", C["humano"]
     if score >= 40:
-        return "Canal con respuesta limitada", C["automatico"]
-    return "Canal sin senal comercial", C["red"]
+        return "Atencion con areas de mejora", C["automatico"]
+    return "Canal sin respuesta comercial", C["red"]
 
 
 # ─── Flowables ────────────────────────────────────────────────────────────────
 
 class HGradient(Flowable):
-    def __init__(self, w, h, left_hex, right_hex, badge_text=""):
+    def __init__(self, w, h, left_hex, right_hex, badge_text="", company_name=""):
         super().__init__()
         self._w, self._h = w, h
         lc = HexColor(left_hex); rc = HexColor(right_hex)
         self._r0, self._g0, self._b0 = lc.red, lc.green, lc.blue
         self._r1, self._g1, self._b1 = rc.red, rc.green, rc.blue
         self._badge = badge_text
+        self._company = company_name
 
     def wrap(self, *_):
         return (self._w, self._h)
@@ -245,26 +246,40 @@ class HGradient(Flowable):
                 self._b0 + (self._b1 - self._b0) * t,
             ))
             self.canv.rect(sw * i, 0, sw + 0.6, self._h, fill=1, stroke=0)
-        # Title
+        # Title + company name — vertically centered as a two-line block
         self.canv.setFillColor(HexColor("#ffffff"))
-        self.canv.setFont("Helvetica-Bold", 13)
-        self.canv.drawString(12, self._h * 0.33, "Reporte de Canal WhatsApp")
+        if self._company:
+            label_size   = 7
+            company_size = 13
+            line_gap     = 3          # gap between the two lines
+            block_h      = label_size + line_gap + company_size
+            block_y      = (self._h - block_h) / 2   # bottom of block
+            self.canv.setFont("Helvetica", label_size)
+            self.canv.drawString(12, block_y + company_size + line_gap, "REPORTE DE CANAL WHATSAPP")
+            self.canv.setFont("Helvetica-Bold", company_size)
+            self.canv.drawString(12, block_y, _safe(self._company))
+        else:
+            self.canv.setFont("Helvetica-Bold", 13)
+            self.canv.drawString(12, (self._h - 13) / 2, "Reporte de Canal WhatsApp")
         # Industry badge (right side)
         if self._badge:
             badge = _safe(self._badge)
-            self.canv.setFont("Helvetica", 8)
-            bw = self.canv.stringWidth(badge, "Helvetica", 8)
-            pad_x, pad_y = 9, 4
-            bh = 14
+            font_size = 8
+            self.canv.setFont("Helvetica", font_size)
+            bw = self.canv.stringWidth(badge, "Helvetica", font_size)
+            pad_x = 9
+            bh = 16
             bx = self._w - bw - pad_x * 2 - 10
             by = (self._h - bh) / 2
             self.canv.setFillColor(Color(1, 1, 1, 0.18))
-            self.canv.roundRect(bx, by, bw + pad_x * 2, bh, 3, fill=1, stroke=0)
+            self.canv.roundRect(bx, by, bw + pad_x * 2, bh, 4, fill=1, stroke=0)
             self.canv.setStrokeColor(Color(1, 1, 1, 0.4))
             self.canv.setLineWidth(0.5)
-            self.canv.roundRect(bx, by, bw + pad_x * 2, bh, 3, fill=0, stroke=1)
+            self.canv.roundRect(bx, by, bw + pad_x * 2, bh, 4, fill=0, stroke=1)
             self.canv.setFillColor(HexColor("#ffffff"))
-            self.canv.drawString(bx + pad_x, by + pad_y - 1, badge)
+            # vertically center: baseline = by + (bh - ascent) / 2, ascent ≈ font_size * 0.72
+            text_y = by + (bh - font_size * 0.72) / 2
+            self.canv.drawString(bx + pad_x, text_y, badge)
 
 
 class QualityDots(Flowable):
@@ -520,6 +535,9 @@ class SummaryBar(Flowable):
 
 # ─── Page callbacks ───────────────────────────────────────────────────────────
 
+_report_company_name = ""  # set at generate time, used in footer
+
+
 def _page_bg(canv, doc):
     canv.saveState()
     canv.setFillColor(C["bg"])
@@ -529,6 +547,8 @@ def _page_bg(canv, doc):
     canv.line(LM, 14 * mm, W - RM, 14 * mm)
     canv.setFillColor(C["muted"])
     canv.setFont("Helvetica", 7)
+    left_text = _safe(_report_company_name) if _report_company_name else "De Tu Cel"
+    canv.drawString(LM, 10 * mm, left_text)
     canv.drawRightString(W - RM, 10 * mm,
                          f"Analisis de Canal WhatsApp · {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     canv.restoreState()
@@ -598,31 +618,26 @@ def _suggestions(analytics: dict, industry: str, avg_response_min=None) -> list[
     strong_block = ", ".join(strong_dims) if strong_dims else "ninguna destacada"
 
     prompt = (
-        f"Eres un consultor senior de crecimiento comercial en Mexico, especialista en canales digitales B2B y PyME.\n"
-        f"Tu cliente tiene un canal WhatsApp en el sector '{industry}'. Analiza sus datos reales y entrega recomendaciones innovadoras.\n\n"
-        f"METRICAS REALES DEL CANAL:\n"
-        f"- Tipo de atencion recibida: {cat}\n"
+        f"Eres un asesor de negocios que ayuda a duenos de empresas en Mexico a mejorar su atencion por WhatsApp.\n"
+        f"Tu cliente tiene un negocio en el sector '{industry}'. Escribe recomendaciones claras y practicas.\n\n"
+        f"DATOS DEL CANAL:\n"
+        f"- Como respondieron: {cat}\n"
         f"- Tiempo de 1a respuesta: {reaction_str}\n"
-        f"- Tiempo PROMEDIO de respuesta (todos los turnos): {avg_str}\n"
-        f"- Señal comercial del prospecto: {quality}/5\n"
-        f"- Dimensiones debiles (prioridad maxima): {weak_block}\n"
-        f"- Dimensiones solidas: {strong_block}\n"
-        f"- Diagnostico del auditor: {notes}\n"
-        f"- Contexto de mercado: {benchmark_note}\n\n"
-        f"TAREA: Genera exactamente 5 recomendaciones. Cada una debe:\n"
-        f"1. Atacar una brecha real del canal (no consejos genericos)\n"
-        f"2. Ser implementable en <30 dias con recursos de PyME\n"
-        f"3. Incluir una metrica de exito especifica (ej: 'reducir tiempo de respuesta de X a <5 min')\n"
-        f"4. Usar herramientas reales y actuales disponibles en Mexico:\n"
-        f"   - WhatsApp Business API, Catalogo, Mensajes rapidos, Etiquetas, Listas de difusion\n"
-        f"   - CRM con integracion WhatsApp (Kommo, HubSpot, Zoho, Pipedrive)\n"
-        f"   - Automatizacion: ManyChat, Wati, Treble.ai, n8n\n"
-        f"   - Notificaciones proactivas, seguimiento automatico, bots de calificacion\n"
-        f"5. Comenzar con un VERBO imperativo y tener maximo 170 caracteres\n\n"
-        f"INNOVACION REQUERIDA: al menos 2 de las 5 recomendaciones deben proponer algo que el canal\n"
-        f"claramente NO esta haciendo todavia (segun el diagnostico).\n\n"
-        f"FORMATO: Una recomendacion por linea. Sin numeracion, bullets ni guiones al inicio.\n"
-        f"PROHIBIDO: 'mejora la comunicacion', 'se mas proactivo', 'responde mas rapido' sin especificar como."
+        f"- Tiempo promedio de respuesta: {avg_str}\n"
+        f"- Interes del prospecto: {quality}/5\n"
+        f"- Aspectos a mejorar: {weak_block}\n"
+        f"- Aspectos positivos: {strong_block}\n"
+        f"- Diagnostico: {notes}\n"
+        f"- Referencia del mercado: {benchmark_note}\n\n"
+        f"TAREA: Genera exactamente 5 recomendaciones de mejora. Cada una debe:\n"
+        f"1. Estar escrita en lenguaje simple que cualquier dueno de negocio entienda sin conocimientos tecnicos\n"
+        f"2. Ser una accion concreta que puedan hacer esta semana (no proyectos largos)\n"
+        f"3. Explicar QUE hacer y POR QUE les va a ayudar a conseguir mas clientes o vender mas\n"
+        f"4. Usar ejemplos de acciones del dia a dia: guardar contactos, responder a tiempo, dar seguimiento, etc.\n"
+        f"5. Comenzar con un verbo en infinitivo y tener maximo 180 caracteres\n\n"
+        f"PROHIBIDO: terminos tecnicos como API, CRM, n8n, webhook, automatizacion avanzada.\n"
+        f"PROHIBIDO: consejos vagos como 'mejorar la comunicacion' sin decir exactamente como.\n"
+        f"FORMATO: Una recomendacion por linea. Sin numeracion, bullets ni guiones al inicio."
     )
 
     try:
@@ -642,6 +657,8 @@ def _suggestions(analytics: dict, industry: str, avg_response_min=None) -> list[
 # ─── Main generator ───────────────────────────────────────────────────────────
 
 def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64: str | None) -> io.BytesIO:
+    global _report_company_name
+
     def _safe_dict(d):
         if isinstance(d, dict):  return {k: _safe_dict(v) for k, v in d.items()}
         if isinstance(d, list):  return [_safe_dict(i) for i in d]
@@ -660,6 +677,7 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     now_str = _date_es()
 
     company_name = _safe(company.get("name") or company.get("domain") or "Empresa")
+    _report_company_name = company_name
     industry     = _safe(company.get("industry") or analytics.get("industry") or "-")
     domain       = _safe(company.get("domain") or "")
     wa_number    = ""
@@ -709,7 +727,7 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     # ══════════════════════════════════════════════════════════════════════════
     # HEADER — full width, compact
     # ══════════════════════════════════════════════════════════════════════════
-    story.append(HGradient(PW, 12 * mm, "#3b82f6", "#8b5cf6", badge_text=industry))
+    story.append(HGradient(PW, 16 * mm, "#3b82f6", "#8b5cf6", badge_text=industry, company_name=company_name))
     story.append(Spacer(1, 3 * mm))
 
     meta_lines = []
@@ -788,7 +806,7 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
           [Paragraph(score_label_txt, _st("slb", fontSize=9, fontName="Helvetica-Bold",
                                           textColor=score_color, leading=12)),
            Spacer(1, 3),
-           Paragraph("Indice integral de calidad comercial",
+           Paragraph("Evaluacion general del canal de atencion",
                      _st("ssub", fontSize=7, textColor=C["muted"], leading=9))]]],
         colWidths=[arc_size + 8, RIGHT_W - arc_size - 8],
     )
@@ -818,9 +836,12 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
 
     if notes:
         notes_tbl = Table(
-            [[Paragraph("Hallazgo:", _st("dlb2", fontSize=7, fontName="Helvetica-Bold", textColor=C["muted"])),
-              Paragraph(notes, _st("dln2", fontSize=7.5, textColor=C["text"], leading=11))]],
-            colWidths=[17 * mm, RIGHT_W - 17 * mm - 4],
+            [[Paragraph(
+                f'<font name="Helvetica-Bold" color="#64748b">Hallazgo: </font>'
+                f'<font color="#1e293b">{notes}</font>',
+                _st("dln2", fontSize=8, leading=12)
+            )]],
+            colWidths=[RIGHT_W - 4],
         )
         notes_tbl.setStyle(TableStyle([
             ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
@@ -828,8 +849,8 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
             ("LINEBEFORE",    (0, 0), (0, -1),  2,   C["primary"]),
             ("LEFTPADDING",   (0, 0), (-1, -1), 8),
             ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
-            ("TOPPADDING",    (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING",    (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
             ("VALIGN",        (0, 0), (-1, -1), "TOP"),
         ]))
         right_items.append(notes_tbl)
@@ -837,12 +858,12 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
 
     right_items.append(CardGrid(
         cards=[
-            ("Tipo de atencion",       cat_label,                                         cat_color,      None),
-            ("Calidad comercial",      f"{round(quality)}/5",                             qual_color,     QualityDots(quality, qual_color)),
-            ("Tiempo prom. respuesta", _reaction_str(avg_resp_min),                       avg_speed_color,None),
-            ("Prom. calidad servicio", f"{svc_avg}/5" if svc_avg else "-",               svc_avg_color,  QualityDots(svc_avg or 0, svc_avg_color) if svc_avg else None),
-            ("Horario",                bh_label,                                          bh_color,       None),
-            ("Enviados / Recibidos",   f"{sent_c} / {recv_c}",                            C["primary"],   None),
+            ("Tipo de atencion",       cat_label,                   cat_color,       None),
+            ("Calidad comercial",      f"{round(quality)}/5",       qual_color,      QualityDots(quality, qual_color)),
+            ("Tiempo prom. respuesta", _reaction_str(avg_resp_min), avg_speed_color, None),
+            ("Horario de respuesta",   bh_label,                    bh_color,        None),
+            ("Mensajes enviados",      str(sent_c),                 C["primary"],    None),
+            ("Mensajes recibidos",     str(recv_c),                 C["primary"],    None),
         ],
         width=RIGHT_W,
         card_h=20 * mm,

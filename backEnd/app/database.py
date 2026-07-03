@@ -374,7 +374,7 @@ class MongoDBManager:
             "message_type": message_type,
             "status": status,
             "raw_data": raw_data or {},
-            "created_at": datetime.now(),
+            "created_at": datetime.utcnow(),
         }
         if interactive:
             doc["interactive"] = interactive
@@ -386,9 +386,19 @@ class MongoDBManager:
                 doc["related_to_number"] = related_to_number
             # Mark for analysis so the analytics panel can show a loading indicator.
             # Skip unknown company_id — classifier won't run for them anyway.
+            # Skip personal-contact companies (.local domain) — they flood inbound messages
+            # from personal WhatsApp chats and would keep the spinner permanently active.
             if message_body and message_body != "[media]" and company_id not in (None, "unknown"):
-                doc["analysis_status"] = "pending"
-                doc["pending_since"] = datetime.utcnow()
+                _skip_analysis = False
+                try:
+                    from bson import ObjectId
+                    _co = self.db.companies.find_one({"_id": ObjectId(company_id)}, {"domain": 1})
+                    _skip_analysis = bool(_co and str(_co.get("domain", "")).endswith(".local"))
+                except Exception:
+                    pass
+                if not _skip_analysis:
+                    doc["analysis_status"] = "pending"
+                    doc["pending_since"] = datetime.utcnow()
         result = self.db.message_logs.insert_one(doc)
         return str(result.inserted_id)
 
@@ -490,10 +500,21 @@ class MongoDBManager:
                     {"company_id": 1, "ai_typing": 1},
                 )
             }
+            # Cross-reference with prefs: if user explicitly disabled AI, hide the icon
+            # even if a stale session still exists in the DB.
+            ai_prefs = {
+                p["company_id"]: p.get("ai_enabled", True)
+                for p in self.db.conversation_ai_prefs.find(
+                    {"company_id": {"$in": active_cids}},
+                    {"company_id": 1, "ai_enabled": 1},
+                )
+            }
             for r in deduped:
-                sess = ai_sessions.get(r["company_id"])
-                r["ai_active"] = bool(sess)
-                r["ai_typing"] = bool(sess.get("ai_typing")) if sess else False
+                cid = r["company_id"]
+                sess = ai_sessions.get(cid)
+                pref_enabled = ai_prefs.get(cid, True)  # no pref = never explicitly disabled
+                r["ai_active"] = bool(sess) and pref_enabled
+                r["ai_typing"] = bool(sess.get("ai_typing")) if (sess and pref_enabled) else False
 
         return deduped
 
@@ -518,7 +539,7 @@ class MongoDBManager:
             {"_id": 1, "direction": 1, "message_body": 1, "message_text": 1,
              "status": 1, "created_at": 1, "sent_at": 1, "platform": 1,
              "to_number": 1, "from_number": 1, "message_id": 1, "interactive": 1,
-             "related_to_number": 1}
+             "related_to_number": 1, "ai_generated": 1, "sent_by_name": 1}
         ).sort("created_at", 1))
 
         # Deduplicate: if same message_id exists as both outbound and inbound, keep outbound only
@@ -573,16 +594,20 @@ class MongoDBManager:
             g["_id"]: g
             for g in self.db.message_logs.aggregate([
                 {"$match": {"direction": "inbound", "analysis": {"$exists": True}}},
-                {"$sort": {"created_at": -1}},
+                # Conversation-level analyses (conversation_analysis=true) go first — they
+                # have the most complete view of category/quality/notes. Within each tier,
+                # most recent message wins. last_at uses $max to always reflect the actual
+                # latest activity, not the analysis document's timestamp.
+                {"$sort": {"analysis.conversation_analysis": -1, "created_at": -1}},
                 {"$group": {
                     "_id": "$company_id",
-                    "last_at": {"$first": "$created_at"},
-                    "category": {"$first": "$analysis.category"},
-                    "response_quality": {"$avg": "$analysis.response_quality"},
-                    "reaction_time_min": {"$avg": "$analysis.reaction_time_min"},
-                    "business_hours": {"$first": "$analysis.business_hours"},
-                    "notes": {"$first": "$analysis.notes"},
-                    "total_responses": {"$sum": 1},
+                    "last_at": {"$max": "$created_at"},
+                    "category":          {"$first": "$analysis.category"},
+                    "response_quality":  {"$first": "$analysis.response_quality"},
+                    "reaction_time_min": {"$avg":   "$analysis.reaction_time_min"},
+                    "business_hours":    {"$first": "$analysis.business_hours"},
+                    "notes":             {"$first": "$analysis.notes"},
+                    "total_responses":   {"$sum": 1},
                 }},
             ])
         }
@@ -728,18 +753,28 @@ class MongoDBManager:
                     "inherited_analysis": False,
                 }
                 if analyzed:
-                    first = analyzed[0]
-                    entry["category"]          = first["analysis"].get("category")
-                    entry["notes"]             = first["analysis"].get("notes") or ""
-                    entry["business_hours"]    = first["analysis"].get("business_hours")
-                    qualities = [m["analysis"].get("response_quality") or 0 for m in analyzed]
+                    # Prefer conversation-level analysis for category/notes/quality;
+                    # fall back to most recent individual message if none exists.
+                    _conv = next((m for m in analyzed
+                                  if m["analysis"].get("conversation_analysis")), None)
+                    best = _conv or analyzed[0]
+                    entry["category"]       = best["analysis"].get("category")
+                    entry["notes"]          = best["analysis"].get("notes") or ""
+                    entry["business_hours"] = best["analysis"].get("business_hours")
+                    if _conv:
+                        # Use holistic quality from conversation analysis
+                        entry["response_quality"] = best["analysis"].get("response_quality")
+                    else:
+                        qualities = [m["analysis"].get("response_quality") or 0 for m in analyzed]
+                        entry["response_quality"] = round(sum(qualities) / len(qualities), 1)
                     reactions = [m["analysis"]["reaction_time_min"] for m in analyzed
                                  if m["analysis"].get("reaction_time_min") is not None]
-                    entry["response_quality"]  = round(sum(qualities) / len(qualities), 1)
                     entry["reaction_time_min"] = round(sum(reactions) / len(reactions), 1) if reactions else None
                 elif company_analyzed:
                     # No direct match — inherit company-level analysis (central WA Business number).
-                    best = company_analyzed[0]
+                    _conv = next((m for m in company_analyzed
+                                  if m["analysis"].get("conversation_analysis")), None)
+                    best = _conv or company_analyzed[0]
                     entry["category"]          = best["analysis"].get("category")
                     entry["notes"]             = best["analysis"].get("notes") or ""
                     entry["business_hours"]    = best["analysis"].get("business_hours")

@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react'
+import useSWR from 'swr'
 import { useLang } from '../context/LangContext'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
@@ -70,6 +71,7 @@ function QualityDots({ score, color }) {
 
 function formatReactionTime(minutes) {
   if (minutes === null || minutes === undefined) return '—'
+  if (minutes < 0) return '—'
   if (minutes < 60) return `${Math.round(minutes)}m`
   const h = Math.floor(minutes / 60)
   const m = Math.round(minutes % 60)
@@ -95,15 +97,19 @@ function BusinessHoursChip({ value }) {
   )
 }
 
+const _TZ = 'America/Mexico_City'
+
 function formatLastAt(iso) {
   if (!iso) return '—'
   const d = new Date(iso.endsWith('Z') ? iso : iso + 'Z')
+  if (isNaN(d.getTime())) return '—'
   const now = new Date()
   const diff = now - d
+  if (diff < 0) return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', timeZone: _TZ })
   if (diff < 60000) return 'ahora'
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m`
-  if (diff < 86400000) return d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
-  return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })
+  if (diff < 86400000) return d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', timeZone: _TZ })
+  return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', timeZone: _TZ })
 }
 
 const CELL_SX = {
@@ -176,13 +182,25 @@ function ConversationCapture({ thread, captureRef, visible }) {
 }
 
 export default function Analytics() {
-  const [data, setData]               = useState([])
   const [analyzeAttempts, setAnalyzeAttempts] = useState(0)
-  const requeueSessionRef  = useRef(false) // true while auto-requeue batches are running
-  const requeueInFlight    = useRef(false) // prevents concurrent requeue calls
-  const remainingRef       = useRef(0)     // unqueued messages left after last batch
-  const prevAnalyzingRef   = useRef(false) // tracks analyzing→false transition
-  const [loading, setLoading]         = useState(true)
+  const requeueSessionRef  = useRef(false)
+  const requeueInFlight    = useRef(false)
+  const remainingRef       = useRef(0)
+  const prevAnalyzingRef   = useRef(false)
+  const esRef              = useRef(null)  // active EventSource for SSE
+
+  // ── SWR: caching + background revalidation ────────────────────────────────
+  const [page, setPage] = useState(1)
+  const PAGE_SIZE = 20
+  const _swrFetcher = url => fetch(url).then(r => r.json())
+  const { data: _analyticsData, isLoading: loading, mutate: mutateAnalytics } = useSWR(
+    `/api/analytics?page=${page}&page_size=${PAGE_SIZE}`,
+    _swrFetcher,
+    { revalidateOnFocus: false, dedupingInterval: 5000, keepPreviousData: true }
+  )
+  const data      = _analyticsData?.items      || []
+  const totalPages = _analyticsData?.pages     || 1
+  const totalItems = _analyticsData?.total     || 0
   const [generating, setGenerating]         = useState(null)
   const [reportThread, setReportThread]     = useState([])
   const [captureVisible, setCaptureVisible] = useState(false)
@@ -202,10 +220,6 @@ export default function Analytics() {
   const [filterCat, setFilterCat] = useState('all')
   const [searchText, setSearchText] = useState('')
   const [sortDir, setSortDir]     = useState('desc')
-  const [page, setPage]           = useState(1)
-  const [totalPages, setTotalPages] = useState(1)
-  const [totalItems, setTotalItems] = useState(0)
-  const PAGE_SIZE = 20
   const [botBuilderOpen,  setBotBuilderOpen]  = useState(false)
   const [botBuilderRow,   setBotBuilderRow]   = useState(null)
 
@@ -214,33 +228,6 @@ export default function Analytics() {
     else { setSortField(field); setSortDir('asc') }
   }
 
-  const fetchData = useCallback(async (pg = page) => {
-    setLoading(true)
-    try {
-      const res  = await fetch(`/api/analytics?page=${pg}&page_size=${PAGE_SIZE}`)
-      const json = await res.json()
-      setData(json.items || [])
-      setTotalPages(json.pages || 1)
-      setTotalItems(json.total || 0)
-    } catch {
-      setData([])
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { fetchData(page) }, [fetchData, page])
-
-  // Silent refetch — updates data without triggering the full loading spinner
-  const silentRefetch = useCallback(async (pg = page) => {
-    try {
-      const res  = await fetch(`/api/analytics?page=${pg}&page_size=${PAGE_SIZE}`)
-      const json = await res.json()
-      setData(json.items || [])
-      setTotalPages(json.pages || 1)
-      setTotalItems(json.total || 0)
-    } catch { /* ignore */ }
-  }, [page])
 
   // Queue the next batch of unanalyzed messages; returns the API response
   const triggerRequeue = useCallback(async () => {
@@ -260,23 +247,23 @@ export default function Analytics() {
     triggerRequeue().then(result => {
       if ((result.queued || 0) > 0) {
         requeueSessionRef.current = true
-        silentRefetch(1)
+        setPage(1)  // SWR auto-fetches page 1 when key changes
       }
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Polling while analyzing + chain the next batch when one finishes
+  // SSE: replace 8s polling — server pushes when pending count changes
   const MAX_ANALYZE_ATTEMPTS = 20
   useEffect(() => {
     const hasAnalyzing = data.some(r => r.analyzing)
 
-    // Detected analyzing → false transition while a session is active → queue next batch
+    // analyzing → false transition: queue next batch
     if (!hasAnalyzing && prevAnalyzingRef.current && requeueSessionRef.current) {
       if (remainingRef.current > 0) {
         triggerRequeue().then(result => {
           if ((result.queued || 0) > 0) {
             setAnalyzeAttempts(0)
-            silentRefetch(page)
+            mutateAnalytics()
           } else {
             requeueSessionRef.current = false
           }
@@ -287,24 +274,44 @@ export default function Analytics() {
     }
     prevAnalyzingRef.current = hasAnalyzing
 
-    if (!hasAnalyzing) { if (analyzeAttempts > 0) setAnalyzeAttempts(0); return }
+    if (!hasAnalyzing) {
+      if (esRef.current) { esRef.current.close(); esRef.current = null }
+      if (analyzeAttempts > 0) setAnalyzeAttempts(0)
+      return
+    }
     if (analyzeAttempts >= MAX_ANALYZE_ATTEMPTS) return
-    const id = setTimeout(() => {
-      setAnalyzeAttempts(a => a + 1)
-      silentRefetch(page)
-    }, 8000)
-    return () => clearTimeout(id)
-  }, [data, page, silentRefetch, analyzeAttempts, triggerRequeue])
+    if (esRef.current) return  // already listening
+
+    // Open SSE connection — server pushes when pending count drops to 0
+    const es = new EventSource('/api/analytics/stream')
+    esRef.current = es
+    es.onmessage = (e) => {
+      try {
+        const { pending } = JSON.parse(e.data)
+        if (pending === 0) {
+          setAnalyzeAttempts(a => a + 1)
+          mutateAnalytics()
+          es.close(); esRef.current = null
+        }
+      } catch {}
+    }
+    es.onerror = () => {
+      es.close(); esRef.current = null
+      // Fallback: 8s timeout if SSE fails
+      setTimeout(() => { setAnalyzeAttempts(a => a + 1); mutateAnalytics() }, 8000)
+    }
+    return () => { if (esRef.current === es) { es.close(); esRef.current = null } }
+  }, [data, mutateAnalytics, analyzeAttempts, triggerRequeue])
 
   const handleGenerateReport = useCallback(async (row, filterNum = null) => {
     const genKey = filterNum ? `${row.company_id}_${filterNum}` : row.company_id
     setGenerating(genKey)
     try {
-      // 1. Pre-load html2canvas so import doesn't block render
-      const html2canvasModule = import('html2canvas')
-
-      // 2. Fetch thread and show capture div
-      const threadRes = await fetch(`/api/conversations/${row.company_id}`)
+      // 1. Parallel: load html2canvas module + fetch thread simultaneously
+      const [html2canvasModule, threadRes] = await Promise.all([
+        import('html2canvas'),
+        fetch(`/api/conversations/${row.company_id}`),
+      ])
       const thread = threadRes.ok ? await threadRes.json() : []
       const normFn = n => (n || '').replace(/\D/g,'').slice(-10)
       const rawThread = Array.isArray(thread) ? thread : []
@@ -320,7 +327,7 @@ export default function Analytics() {
       // 4. Capture with html2canvas
       let screenshotB64 = null
       try {
-        const html2canvas = (await html2canvasModule).default
+        const html2canvas = html2canvasModule.default
         if (captureRef.current) {
           const canvas = await html2canvas(captureRef.current, {
             backgroundColor: '#f8fafc',
@@ -458,7 +465,7 @@ export default function Analytics() {
                 remainingRef.current = 0
                 setAnalyzeAttempts(0)
                 await fetch('/api/admin/cancel-pending', { method: 'POST' })
-                fetchData(page)
+                mutateAnalytics()
               }}
                 sx={{ color: '#f87171', '&:hover': { color: '#fca5a5' } }}>
                 <ErrorOutlineIcon fontSize="small" />
@@ -470,7 +477,7 @@ export default function Analytics() {
               setAnalyzeAttempts(0)
               requeueSessionRef.current = false
               remainingRef.current = 0
-              fetchData(page)
+              mutateAnalytics()
               triggerRequeue().then(result => {
                 if ((result.queued || 0) > 0) {
                   requeueSessionRef.current = true
@@ -648,7 +655,7 @@ export default function Analytics() {
                     <TableCell key={field} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
                       <TableSortLabel active={sortField === field} direction={sortField === field ? sortDir : 'asc'}
                         onClick={() => handleSort(field)}
-                        sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
+                        sx={{ justifyContent: 'center', color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
                         {label}
                       </TableSortLabel>
                     </TableCell>
@@ -656,7 +663,7 @@ export default function Analytics() {
                   <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
                     <TableSortLabel active={sortField === 'response_quality'} direction={sortField === 'response_quality' ? sortDir : 'asc'}
                       onClick={() => handleSort('response_quality')}
-                      sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
+                      sx={{ justifyContent: 'center', color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                         <StarIcon sx={{ fontSize: 12 }} /> {t.analytics.quality}
                       </Box>
@@ -717,12 +724,12 @@ export default function Analytics() {
                             {row.company_name || row.company_id}
                           </Typography>
                           {row.analyzing && (
-                            <Tooltip title="Analizando respuesta…">
+                            <Tooltip title={t.analytics.analyzingTooltip}>
                               <CircularProgress size={11} thickness={5} sx={{ color: 'var(--accent,#a5b4fc)', opacity: 0.8, flexShrink: 0 }} />
                             </Tooltip>
                           )}
                           {hasMultiple && (
-                            <Chip label={`${validNumbers.length} núms`} size="small" sx={{
+                            <Chip label={`${validNumbers.length} ${t.analytics.numsChip}`} size="small" sx={{
                               height: 16, fontSize: '0.6rem',
                               bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.15)',
                               color: 'var(--accent,#a5b4fc)',
@@ -760,7 +767,7 @@ export default function Analytics() {
                       </TableCell>
 
                       {/* Categoría */}
-                      <TableCell sx={CELL_SX}>
+                      <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
                         {!hasMultiple && (row.category
                           ? <Chip label={`${cat.icon} ${t.analytics[cat.tKey]}`} size="small" sx={{ height: 20, fontSize: '0.7rem', bgcolor: cat.bg, color: cat.color, border: `1px solid ${cat.color}44` }} />
                           : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>{t.analytics.noCategory}</Typography>)}
@@ -800,17 +807,25 @@ export default function Analytics() {
                       </TableCell>
 
                       {/* Andy */}
-                      <TableCell sx={CELL_SX}>
-                        <Tooltip title={hasMultiple ? t.analytics.sendAllToAndy : t.analytics.sendToAndy}>
-                          <IconButton size="small" onClick={() => openBotBuilder(row)}
-                            sx={{ color: 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' } }}>
-                            <SendIcon sx={{ fontSize: 16 }} />
-                          </IconButton>
-                        </Tooltip>
+                      <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
+                        {(() => {
+                          const noAnalysis = !row.category
+                          const andyTip = noAnalysis ? t.analytics.noAnalysis : hasMultiple ? t.analytics.sendAllToAndy : t.analytics.sendToAndy
+                          return (
+                            <Tooltip title={andyTip}>
+                              <span>
+                                <IconButton size="small" disabled={noAnalysis} onClick={() => openBotBuilder(row)}
+                                  sx={{ color: 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.65)' } }}>
+                                  <SendIcon sx={{ fontSize: 16 }} />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          )
+                        })()}
                       </TableCell>
 
                       {/* Reporte */}
-                      <TableCell sx={CELL_SX}>
+                      <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
                         {!hasMultiple && (() => {
                           const noContact = !row.total_responses
                           const tip = isGenerating ? t.analytics.generating : generating ? t.analytics.pleaseWait : noContact ? t.analytics.noConvRecord : t.analytics.reportPdf
@@ -818,7 +833,7 @@ export default function Analytics() {
                             <Tooltip title={tip}>
                               <span>
                                 <IconButton size="small" disabled={!!generating || noContact} onClick={() => handleGenerateReport(row)}
-                                  sx={{ color: isGenerating ? 'var(--accent,#6366f1)' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>
+                                  sx={{ color: isGenerating ? 'var(--accent,#6366f1)' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.65)' } }}>
                                   {isGenerating ? <CircularProgress size={14} sx={{ color: 'var(--accent,#6366f1)' }} /> : <PictureAsPdfIcon sx={{ fontSize: 16 }} />}
                                 </IconButton>
                               </span>
@@ -873,7 +888,7 @@ export default function Analytics() {
                           {/* Industria — vacía */}
                           <TableCell sx={NSUB} />
                           {/* Categoría */}
-                          <TableCell sx={NSUB}>
+                          <TableCell sx={{ ...NSUB, textAlign: 'center' }}>
                             {!replied
                               ? <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>
                               : hasAnalysis
@@ -916,12 +931,12 @@ export default function Analytics() {
                                   </Tooltip>
                                 : <Typography sx={{ color: 'rgba(255,255,255,0.15)', fontSize: '0.72rem' }}>—</Typography>}
                           </TableCell>
-                          {/* Andy por número — deshabilitado si no respondió */}
+                          {/* Andy por número — deshabilitado si no respondió o sin análisis */}
                           <TableCell sx={NSUB}>
-                            <Tooltip title={!replied ? t.analytics.noReply : t.analytics.sendToAndy}>
+                            <Tooltip title={!replied ? t.analytics.noReply : !hasAnalysis ? t.analytics.noAnalysis : t.analytics.sendToAndy}>
                               <span>
-                                <IconButton size="small" disabled={!replied} onClick={() => openBotBuilder(row)}
-                                  sx={{ color: 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>
+                                <IconButton size="small" disabled={!replied || !hasAnalysis} onClick={() => openBotBuilder(row)}
+                                  sx={{ color: 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.65)' } }}>
                                   <SendIcon sx={{ fontSize: 16 }} />
                                 </IconButton>
                               </span>
@@ -932,7 +947,7 @@ export default function Analytics() {
                             <Tooltip title={isGenNum ? t.analytics.generating : generating ? t.analytics.pleaseWait : !replied ? t.analytics.noReply : `${t.analytics.reportPdf} ${shortNum}`}>
                               <span>
                                 <IconButton size="small" disabled={!!generating || !replied} onClick={() => handleGenerateReport(row, n.number)}
-                                  sx={{ color: isGenNum ? 'var(--accent,#6366f1)' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>
+                                  sx={{ color: isGenNum ? 'var(--accent,#6366f1)' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.65)' } }}>
                                   {isGenNum ? <CircularProgress size={14} sx={{ color: 'var(--accent,#6366f1)' }} /> : <PictureAsPdfIcon sx={{ fontSize: 16 }} />}
                                 </IconButton>
                               </span>

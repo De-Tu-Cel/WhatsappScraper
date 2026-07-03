@@ -23,8 +23,8 @@ _MAX_INTER_CHAT_GAP = 90
 _last_send_ts: float = 0.0
 
 # Session idle timeout — if contact hasn't replied in this many hours, close and disable toggle
-SESSION_IDLE_TIMEOUT_HOURS = 24
-_CLEANUP_INTERVAL = 3600  # run cleanup every hour
+SESSION_IDLE_TIMEOUT_HOURS = 4
+_CLEANUP_INTERVAL = 1800  # run cleanup every 30 min
 
 
 def _worker():
@@ -47,6 +47,7 @@ def _worker():
                 company_id=item["company_id"],
                 inbound_body=item["inbound_body"],
                 inbound_log_id=item["inbound_log_id"],
+                manual_activation=item.get("manual_activation", False),
             )
             _last_send_ts = time.time()
         except Exception as e:
@@ -103,6 +104,22 @@ def _cleanup_worker():
                             ).start()
             except Exception as _ae:
                 log.warning("[FollowupQ] conversation analysis on expire failed: %s", _ae)
+            # Clear stale pending analysis records for personal-contact (.local) companies
+            # so their analytics spinner doesn't stay on indefinitely.
+            try:
+                local_companies = list(db.db.companies.find(
+                    {"domain": {"$regex": r"\.local$"}}, {"_id": 1}
+                ))
+                if local_companies:
+                    local_ids = [str(c["_id"]) for c in local_companies]
+                    cleared = db.db.message_logs.update_many(
+                        {"company_id": {"$in": local_ids}, "analysis_status": "pending"},
+                        {"$set": {"analysis_status": "skipped"}, "$unset": {"pending_since": ""}},
+                    ).modified_count
+                    if cleared:
+                        log.info("[FollowupQ] cleared %d stale pending records for .local companies", cleared)
+            except Exception as _pe:
+                log.warning("[FollowupQ] .local pending cleanup failed: %s", _pe)
         except Exception as e:
             log.error("[FollowupQ] cleanup error: %s", e)
 
@@ -124,13 +141,18 @@ def _ensure_worker():
             log.info("[FollowupQ] cleanup worker started")
 
 
-def enqueue(phone_number: str, company_id: str, inbound_body: str, inbound_log_id: str):
-    """Add an inbound message to the AI follow-up queue. Returns immediately."""
+def enqueue(phone_number: str, company_id: str, inbound_body: str, inbound_log_id: str,
+            manual_activation: bool = False):
+    """Add an inbound message to the AI follow-up queue. Returns immediately.
+    Pass manual_activation=True when triggered by the user enabling the AI toggle —
+    bypasses the stale-message age check so the AI sends a greeting immediately.
+    """
     _ensure_worker()
     _q.put({
         "phone_number": phone_number,
         "company_id": company_id,
         "inbound_body": inbound_body,
         "inbound_log_id": inbound_log_id,
+        "manual_activation": manual_activation,
     })
-    log.info("[FollowupQ] queued reply from %s (depth=%d)", phone_number, _q.qsize())
+    log.info("[FollowupQ] queued reply from %s (manual=%s, depth=%d)", phone_number, manual_activation, _q.qsize())

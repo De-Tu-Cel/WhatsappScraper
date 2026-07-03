@@ -19,6 +19,7 @@ import ShieldIcon from '@mui/icons-material/Shield'
 import PersonIcon from '@mui/icons-material/Person'
 import GroupIcon from '@mui/icons-material/Group'
 import SearchIcon from '@mui/icons-material/Search'
+import CloseIcon from '@mui/icons-material/Close'
 import { useUser } from '../context/UserContext'
 import { useLang } from '../context/LangContext'
 
@@ -347,10 +348,13 @@ export default function AdminPanel() {
             <Box sx={{ width: 36, height: 36, borderRadius: 2, bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <LockResetIcon sx={{ color: '#fbbf24', fontSize: 18 }} />
             </Box>
-            <Box>
+            <Box sx={{ flex: 1 }}>
               <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.95rem' }}>{t.admin.resetPin}</Typography>
               <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem' }}>@{resetTarget?.username}</Typography>
             </Box>
+            <IconButton size="small" onClick={() => setResetTarget(null)} sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: 'rgba(255,255,255,0.6)' } }}>
+              <CloseIcon sx={{ fontSize: 18 }} />
+            </IconButton>
           </Box>
           <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.78rem', mb: 2 }}>{t.admin.pinInfo}</Typography>
           <TextField fullWidth size="small" type="password" placeholder={t.admin.newPin}
@@ -377,14 +381,23 @@ export default function AdminPanel() {
             <Box sx={{ width: 36, height: 36, borderRadius: 2, bgcolor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <DeleteForeverIcon sx={{ color: '#f87171', fontSize: 18 }} />
             </Box>
-            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.95rem' }}>{t.admin.deleteTitle}</Typography>
+            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.95rem', flex: 1 }}>{t.admin.deleteTitle}</Typography>
+            <IconButton size="small" onClick={() => setDeleteTarget(null)} sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: 'rgba(255,255,255,0.6)' } }}>
+              <CloseIcon sx={{ fontSize: 18 }} />
+            </IconButton>
           </Box>
           <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.83rem', mb: 0.5 }}>
             {t.admin.deleteConfirm} <strong style={{ color: 'white' }}>{deleteTarget?.display_name}</strong> (@{deleteTarget?.username})?
           </Typography>
-          <Typography sx={{ color: 'rgba(239,68,68,0.6)', fontSize: '0.75rem', mb: 2 }}>
+          <Typography sx={{ color: 'rgba(239,68,68,0.6)', fontSize: '0.75rem' }}>
             {t.admin.deleteWarn}
           </Typography>
+          {deleteTarget?.connected_number && (
+            <Typography sx={{ color: 'rgba(239,68,68,0.5)', fontSize: '0.72rem', mb: 2 }}>
+              {t.admin.deleteWarnInst}
+            </Typography>
+          )}
+          {!deleteTarget?.connected_number && <Box sx={{ mb: 2 }} />}
           {deleteMsg && <Typography sx={{ fontSize: '0.75rem', color: '#f87171', mb: 1.5 }}>{deleteMsg}</Typography>}
           <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
             <Box onClick={() => setDeleteTarget(null)} sx={{ px: 2, py: 0.7, borderRadius: 2, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.1)', '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' } }}>
@@ -405,7 +418,10 @@ export default function AdminPanel() {
             <Box sx={{ width: 36, height: 36, borderRadius: 2, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <PersonAddIcon sx={{ color: 'var(--accent,#60a5fa)', fontSize: 18 }} />
             </Box>
-            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.95rem' }}>{t.admin.createTitle}</Typography>
+            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.95rem', flex: 1 }}>{t.admin.createTitle}</Typography>
+            <IconButton size="small" onClick={() => setCreateOpen(false)} sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: 'rgba(255,255,255,0.6)' } }}>
+              <CloseIcon sx={{ fontSize: 18 }} />
+            </IconButton>
           </Box>
           {[
             { label: t.admin.fullName,     key: 'display_name', ph: 'Ana García' },

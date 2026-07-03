@@ -14,6 +14,8 @@ import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
 import CircularProgress from '@mui/material/CircularProgress'
 import Chip from '@mui/material/Chip'
+import Snackbar from '@mui/material/Snackbar'
+import CloseIcon from '@mui/icons-material/Close'
 import AddIcon from '@mui/icons-material/Add'
 import SearchIcon from '@mui/icons-material/Search'
 import MoreVertIcon from '@mui/icons-material/MoreVert'
@@ -79,8 +81,17 @@ function StatusDot({ status, size = 10 }) {
 }
 
 function InstanceCard({ inst, onMenu }) {
+  const { t } = useLang()
   const status = inst.live_status || 'unknown'
   const color  = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
+  const STATUS_LABEL_T = {
+    open:         t.inst.statusConnected,
+    connected:    t.inst.statusConnected,
+    connecting:   t.inst.statusConnecting,
+    close:        t.inst.statusDisconnected,
+    disconnected: t.inst.statusDisconnected,
+    unknown:      t.inst.statusUnknown,
+  }
 
   return (
     <Box sx={{
@@ -118,7 +129,7 @@ function InstanceCard({ inst, onMenu }) {
             {inst.name}
           </Typography>
           <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', mt: 0.3 }}>
-            {inst.number || 'Sin número'}
+            {inst.number || t.inst.noNumber}
           </Typography>
         </Box>
 
@@ -137,7 +148,7 @@ function InstanceCard({ inst, onMenu }) {
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
         <StatusDot status={status} size={8} />
         <Typography sx={{ color, fontSize: '0.72rem', fontWeight: 600 }}>
-          {STATUS_LABEL[status] ?? 'Desconocido'}
+          {STATUS_LABEL_T[status] ?? t.inst.statusUnknown}
         </Typography>
       </Box>
 
@@ -159,7 +170,7 @@ function InstanceCard({ inst, onMenu }) {
           />
         ) : (
           <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.68rem', fontStyle: 'italic' }}>
-            Sin asignar
+            {t.inst.unassigned}
           </Typography>
         )}
         <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.64rem', flexShrink: 0 }}>
@@ -203,6 +214,7 @@ export default function InstancesPanel() {
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleting,     setDeleting]     = useState(false)
   const [syncing,      setSyncing]      = useState(false)
+  const [snack,        setSnack]        = useState({ open: false, msg: '' })
 
   // ── Card ⋮ menu ──
   const [menuAnchor,   setMenuAnchor]   = useState(null)
@@ -352,10 +364,10 @@ export default function InstancesPanel() {
         body: JSON.stringify({ name: newName.trim(), number: newNumber.trim() }),
       })
       const d = await r.json()
-      if (!r.ok) { setCreateErr(d.detail || 'Error al crear'); return }
+      if (!r.ok) { setCreateErr(d.detail || t.inst.createGenErr); return }
       setCreateOpen(false); setNewName(''); setNewNumber('')
       fetchInstances()
-    } catch { setCreateErr('Error de red') }
+    } catch { setCreateErr(t.inst.createNetErr) }
     finally { setCreating(false) }
   }
 
@@ -375,7 +387,12 @@ export default function InstancesPanel() {
         headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
         body: JSON.stringify(body),
       })
-      setAssignOpen(false); fetchInstances()
+      const msg = assignUserId
+        ? `${t.inst.assignSuccess} ${resolvedName}`
+        : t.inst.unassignSuccess
+      setAssignOpen(false)
+      fetchInstances()
+      setSnack({ open: true, msg })
     } catch {}
     finally { setAssigning(false) }
   }
@@ -609,18 +626,25 @@ export default function InstancesPanel() {
         },
       }}>
         <DialogTitle sx={{ pb: 0.5 }}>
-          <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 700, fontSize: '1rem' }}>
-            Conectar instancia
-          </Typography>
-          <Typography sx={{ color: 'var(--accent,#60a5fa)', fontSize: '0.73rem', mt: 0.2, fontWeight: 600 }}>
-            {qrTarget?.name}
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+            <Box>
+              <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 700, fontSize: '1rem' }}>
+                {t.inst.connectTitle}
+              </Typography>
+              <Typography sx={{ color: 'var(--accent,#60a5fa)', fontSize: '0.73rem', mt: 0.2, fontWeight: 600 }}>
+                {qrTarget?.name}
+              </Typography>
+            </Box>
+            <IconButton size="small" onClick={closeQr} sx={{ color: 'rgba(255,255,255,0.25)', mt: -0.5, mr: -1, '&:hover': { color: 'rgba(255,255,255,0.6)' } }}>
+              <CloseIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+          </Box>
         </DialogTitle>
 
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, pt: '8px !important', pb: 1 }}>
           {/* Steps */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', justifyContent: 'center' }}>
-            {['Abre WhatsApp', 'Dispositivos vinculados', 'Escanea el QR'].map((step, i) => (
+            {[t.inst.qrStep1, t.inst.qrStep2, t.inst.qrStep3].map((step, i) => (
               <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <Box sx={{
                   width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
@@ -653,10 +677,10 @@ export default function InstancesPanel() {
                   <CircularProgress size={32} sx={{ color: '#3b82f6' }} />
                   <Typography sx={{ color: '#666', fontSize: '0.72rem', textAlign: 'center', lineHeight: 1.4 }}>
                     {qrStatus === 'retrying'
-                      ? 'Reiniciando sesión…'
+                      ? t.inst.qrRetrying
                       : qrStatus === 'error'
-                        ? 'No se pudo generar el QR'
-                        : 'Generando código QR…'}
+                        ? t.inst.qrError
+                        : t.inst.qrGenerating}
                   </Typography>
                 </Box>
               )
@@ -669,11 +693,11 @@ export default function InstancesPanel() {
               onClick={() => { if (qrTarget) startQrPoll(qrTarget.name, qrStatus === 'error') }}
               sx={{ color: 'rgba(255,255,255,0.35)', textTransform: 'none', fontSize: '0.72rem',
                 '&:hover': { color: 'rgba(255,255,255,0.7)' } }}>
-              {qrStatus === 'error' ? 'Forzar reconexión' : 'Reintentar'}
+              {qrStatus === 'error' ? t.inst.qrForce : t.inst.qrRetryBtn}
             </Button>
             {qrStatus === 'error' && (
               <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,100,100,0.6)', textAlign: 'center', maxWidth: 220 }}>
-                Esto desconectará la sesión actual para generar un nuevo QR
+                {t.inst.qrForceWarn}
               </Typography>
             )}
           </Box>
@@ -683,7 +707,7 @@ export default function InstancesPanel() {
           <Button onClick={() => { closeQr(); fetchInstances() }} variant="contained"
             sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'var(--accent,#2563eb)' },
               textTransform: 'none', fontWeight: 700, fontSize: '0.85rem', borderRadius: 2, px: 5 }}>
-            Listo
+            {t.inst.done}
           </Button>
         </DialogActions>
       </Dialog>
@@ -697,19 +721,26 @@ export default function InstancesPanel() {
         },
       }}>
         <DialogTitle sx={{ pb: 1 }}>
-          <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 700, fontSize: '1rem' }}>
-            Asignar instancia
-          </Typography>
-          <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.73rem', mt: 0.2 }}>
-            {assignTarget?.name}
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+            <Box>
+              <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 700, fontSize: '1rem' }}>
+                {t.inst.assignTitle}
+              </Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.73rem', mt: 0.2 }}>
+                {assignTarget?.name}
+              </Typography>
+            </Box>
+            <IconButton size="small" onClick={() => setAssignOpen(false)} sx={{ color: 'rgba(255,255,255,0.25)', mt: -0.5, mr: -1, '&:hover': { color: 'rgba(255,255,255,0.6)' } }}>
+              <CloseIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+          </Box>
         </DialogTitle>
 
         <DialogContent sx={{ pt: '4px !important', pb: 1 }}>
           {/* Autocomplete search */}
           <TextField
             size="small"
-            placeholder="Buscar usuario…"
+            placeholder={t.inst.searchUser}
             value={assignSearch}
             onChange={e => setAssignSearch(e.target.value)}
             autoFocus
@@ -732,7 +763,7 @@ export default function InstancesPanel() {
             '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(255,255,255,0.1)', borderRadius: 2 },
           }}>
             {/* Sin asignar */}
-            {!'sin asignar'.includes(assignSearch.toLowerCase()) ? null : (
+            {!t.inst.unassigned.toLowerCase().includes(assignSearch.toLowerCase()) ? null : (
               <Box onClick={() => { setAssignUserId(''); setAssignUserName('') }} sx={{
                 display: 'flex', alignItems: 'center', gap: 1.5,
                 px: 1.5, py: 1.1, borderRadius: 2, cursor: 'pointer',
@@ -754,7 +785,7 @@ export default function InstancesPanel() {
                   <LinkOffIcon sx={{ fontSize: 14, color: 'rgba(255,255,255,0.25)' }} />
                 </Box>
                 <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem', fontStyle: 'italic', flex: 1 }}>
-                  Sin asignar
+                  {t.inst.unassigned}
                 </Typography>
                 {assignUserId === '' && <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: 'var(--accent,#3b82f6)', boxShadow: '0 0 5px var(--accent,#3b82f6)' }} />}
               </Box>
@@ -804,7 +835,7 @@ export default function InstancesPanel() {
                         {name}
                       </Typography>
                       <Typography sx={{ fontSize: '0.63rem', color: roleColor, opacity: 0.75 }}>
-                        {u.role === 'admin' ? 'Admin' : 'Agente'}
+                        {u.role === 'admin' ? t.admin?.admin || 'Admin' : t.admin?.user || 'Agente'}
                       </Typography>
                     </Box>
                     {selected && <Box sx={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, bgcolor: 'var(--accent,#3b82f6)', boxShadow: '0 0 5px var(--accent,#3b82f6)' }} />}
@@ -817,34 +848,58 @@ export default function InstancesPanel() {
         <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5, gap: 1, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
           <Button onClick={() => setAssignOpen(false)}
             sx={{ color: 'rgba(255,255,255,0.35)', textTransform: 'none', fontSize: '0.82rem' }}>
-            Cancelar
+            {t.inst.cancel}
           </Button>
           <Button onClick={handleAssign} disabled={assigning} variant="contained"
             sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'var(--accent,#2563eb)' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5 }}>
-            {assigning ? <CircularProgress size={15} sx={{ color: 'white' }} /> : 'Guardar'}
+            {assigning ? <CircularProgress size={15} sx={{ color: 'white' }} /> : t.inst.save}
           </Button>
         </DialogActions>
       </Dialog>
 
+      {/* ── Snackbar feedback ── */}
+      <Snackbar
+        open={snack.open}
+        autoHideDuration={3000}
+        onClose={() => setSnack(p => ({ ...p, open: false }))}
+        message={snack.msg}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        slotProps={{ content: { sx: {
+          bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.92)',
+          color: 'white', fontWeight: 600, fontSize: '0.82rem',
+          borderRadius: 2, boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+          backdropFilter: 'blur(8px)',
+        }}}}
+      />
+
       {/* ── Delete confirm ── */}
       <Dialog open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} sx={DIALOG_SX}>
-        <DialogTitle sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', pb: 1 }}>
-          Eliminar instancia
+        <DialogTitle sx={{ pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem' }}>
+              {t.inst.deleteTitle}
+            </Typography>
+            <IconButton size="small" onClick={() => setDeleteTarget(null)} sx={{ color: 'rgba(255,255,255,0.25)', mr: -1, '&:hover': { color: 'rgba(255,255,255,0.6)' } }}>
+              <CloseIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+          </Box>
         </DialogTitle>
         <DialogContent>
-          <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.85rem' }}>
-            ¿Eliminar <strong style={{ color: 'white' }}>{deleteTarget?.name}</strong>?
-            Esto desconectará y borrará la instancia permanentemente.
+          <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.85rem', mb: 0.5 }}>
+            {t.inst.deleteConfirm} <strong style={{ color: 'white' }}>{deleteTarget?.name}</strong>?
+          </Typography>
+          <Typography sx={{ color: 'rgba(239,68,68,0.65)', fontSize: '0.75rem' }}>
+            {t.inst.deleteWarnInst}
           </Typography>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
           <Button onClick={() => setDeleteTarget(null)}
             sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.82rem' }}>
-            Cancelar
+            {t.inst.cancel}
           </Button>
           <Button onClick={handleDelete} disabled={deleting} variant="contained"
             sx={{ bgcolor: '#ef4444', '&:hover': { bgcolor: '#dc2626' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2 }}>
-            {deleting ? <CircularProgress size={16} sx={{ color: 'white' }} /> : 'Eliminar'}
+            {deleting ? <CircularProgress size={16} sx={{ color: 'white' }} /> : t.inst.delete}
           </Button>
         </DialogActions>
       </Dialog>

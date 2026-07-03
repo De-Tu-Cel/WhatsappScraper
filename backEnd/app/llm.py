@@ -1,126 +1,80 @@
 """
-Shared LLM helper — routes to Groq (local/dev) or DeepSeek (production).
+Shared LLM helper — routes to OpenAI or DeepSeek.
 
 Priority:
-  1. GROQ_API_KEY set   → Groq  (llama-3.3-70b-versatile, free tier)
-  2. DEEPSEEK_API_KEY   → DeepSeek (deepseek-chat)
-  3. Neither            → raises RuntimeError
+  1. OPENAI_API_KEY   → OpenAI  (gpt-4o-mini)
+  2. DEEPSEEK_API_KEY → DeepSeek (deepseek-chat)
+  3. None             → raises RuntimeError
 
-Groq rate-limit handling:
-  - A threading.Semaphore(2) limits concurrent Groq requests to 2 at a time,
-    preventing burst 429s when multiple classifiers/AI tasks fire simultaneously.
-  - On 429, reads Retry-After header (or falls back to exponential backoff)
-    and retries up to 5 times before raising.
+All calls pass through llm_guard (concurrency semaphore, exponential-backoff
+retry, and circuit breaker). Import PRIORITY_LIVE / PRIORITY_BATCH from here
+and pass them as the `priority` keyword argument to call_llm().
 """
 import logging
 import os
-import random
-import threading
-import time
 
 import requests
 
+from app.llm_guard import (  # noqa: F401 — re-exported for callers
+    PRIORITY_BATCH,
+    PRIORITY_LIVE,
+    guarded_call,
+)
+
 log = logging.getLogger(__name__)
 
-GROQ_API_KEY     = os.getenv("GROQ_API_KEY", "")
+OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY", "")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 
-GROQ_MODEL     = "llama-3.3-70b-versatile"
+OPENAI_MODEL   = "gpt-4o-mini"
 DEEPSEEK_MODEL = "deepseek-chat"
-
-# Limit concurrent Groq calls — free tier is 30 req/min
-_groq_sem = threading.Semaphore(2)
-
-_GROQ_MAX_RETRIES  = 2
-_GROQ_BASE_BACKOFF = 5
-
-# Circuit breaker: after a 429, block ALL Groq calls for this many seconds.
-# Keep short (20s) so Chat IA fails fast on daily-limit 429s instead of
-# waiting 3+ minutes per retry cycle.
-_GROQ_CIRCUIT_BREAK_SECS = 20
-_groq_blocked_until: float = 0.0  # epoch seconds; 0 = not blocked
-_groq_circuit_lock = threading.Lock()
 
 
 def active_provider() -> str:
-    """Return which provider is active: 'groq', 'deepseek', or 'none'."""
-    if GROQ_API_KEY:
-        return "groq"
+    """Return which provider is active: 'openai', 'deepseek', or 'none'."""
+    if OPENAI_API_KEY:
+        return "openai"
     if DEEPSEEK_API_KEY:
         return "deepseek"
     return "none"
 
 
-def call_llm(messages: list, max_tokens: int = 300, temperature: float = 0) -> str:
+def call_llm(
+    messages: list,
+    max_tokens: int = 300,
+    temperature: float = 0,
+    priority: int = PRIORITY_BATCH,
+) -> str:
     """
     Send messages to the active LLM provider and return the response text.
+    All calls are routed through llm_guard (semaphore + retry + circuit breaker).
+    Pass priority=PRIORITY_LIVE for real-time Chat IA calls.
     Raises RuntimeError if no API key is configured.
     """
-    if GROQ_API_KEY:
-        return _call_groq(messages, max_tokens, temperature)
+    if OPENAI_API_KEY:
+        return guarded_call(_call_openai, messages, max_tokens, temperature, priority=priority)
     if DEEPSEEK_API_KEY:
-        return _call_deepseek(messages, max_tokens, temperature)
-    raise RuntimeError("No LLM API key configured (GROQ_API_KEY or DEEPSEEK_API_KEY)")
+        return guarded_call(_call_deepseek, messages, max_tokens, temperature, priority=priority)
+    raise RuntimeError("No LLM API key configured (OPENAI_API_KEY or DEEPSEEK_API_KEY)")
 
 
-def _groq_is_blocked() -> float:
-    """Return seconds remaining on circuit breaker, or 0 if open."""
-    global _groq_blocked_until
-    remaining = _groq_blocked_until - time.monotonic()
-    return max(0.0, remaining)
-
-
-def _groq_trip_circuit(seconds: float):
-    """Trip the circuit breaker for `seconds`."""
-    global _groq_blocked_until
-    with _groq_circuit_lock:
-        new_until = time.monotonic() + seconds
-        if new_until > _groq_blocked_until:
-            _groq_blocked_until = new_until
-            log.warning("[LLM] groq circuit breaker tripped — pausing all Groq calls for %.0fs", seconds)
-
-
-def _call_groq(messages: list, max_tokens: int, temperature: float) -> str:
-    # Fast-fail if circuit breaker is open
-    blocked = _groq_is_blocked()
-    if blocked > 0:
-        raise RuntimeError(f"Groq rate-limited — circuit breaker open for {blocked:.0f}s more")
-
-    last_resp = None
-    for attempt in range(1, _GROQ_MAX_RETRIES + 1):
-        with _groq_sem:
-            # Re-check after acquiring semaphore (another thread may have tripped it)
-            blocked = _groq_is_blocked()
-            if blocked > 0:
-                raise RuntimeError(f"Groq rate-limited — circuit breaker open for {blocked:.0f}s more")
-
-            resp = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}",
-                         "Content-Type": "application/json"},
-                json={"model": GROQ_MODEL, "messages": messages,
-                      "max_tokens": max_tokens, "temperature": temperature},
-                timeout=30,
-            )
-            if resp.status_code != 429:
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"].strip()
-            last_resp = resp
-
-        # 429 — trip circuit breaker and sleep OUTSIDE the semaphore
-        retry_after = last_resp.headers.get("retry-after") or last_resp.headers.get("x-ratelimit-reset-requests")
+def _call_openai(messages: list, max_tokens: int, temperature: float) -> str:
+    resp = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
+                 "Content-Type": "application/json"},
+        json={"model": OPENAI_MODEL, "messages": messages,
+              "max_tokens": max_tokens, "temperature": temperature},
+        timeout=30,
+    )
+    if not resp.ok:
         try:
-            wait = min(float(retry_after), _GROQ_CIRCUIT_BREAK_SECS) if retry_after else _GROQ_CIRCUIT_BREAK_SECS
-        except (TypeError, ValueError):
-            wait = _GROQ_CIRCUIT_BREAK_SECS
-        wait += random.uniform(1, 5)
-        _groq_trip_circuit(wait)
-
-        if attempt == _GROQ_MAX_RETRIES:
-            last_resp.raise_for_status()
-        log.warning("[LLM] groq 429 — retrying in %.0fs (attempt %d/%d)", wait, attempt, _GROQ_MAX_RETRIES)
-        time.sleep(wait)
-    raise RuntimeError("Groq retry loop exhausted")
+            detail = resp.json().get("error", {}).get("message", resp.text[:200])
+        except Exception:
+            detail = resp.text[:200]
+        log.error("[LLM] OpenAI %d: %s", resp.status_code, detail)
+        resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"].strip()
 
 
 def _call_deepseek(messages: list, max_tokens: int, temperature: float) -> str:

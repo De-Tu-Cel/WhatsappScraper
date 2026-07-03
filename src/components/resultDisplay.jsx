@@ -6,10 +6,6 @@ import Card from '@mui/material/Card'
 import CardContent from '@mui/material/CardContent'
 import Typography from '@mui/material/Typography'
 import Chip from '@mui/material/Chip'
-import Table from '@mui/material/Table'
-import TableBody from '@mui/material/TableBody'
-import TableCell from '@mui/material/TableCell'
-import TableRow from '@mui/material/TableRow'
 import Divider from '@mui/material/Divider'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import PhoneIcon from '@mui/icons-material/Phone'
@@ -22,7 +18,6 @@ import ContactsIcon from '@mui/icons-material/Contacts'
 import HandymanIcon from '@mui/icons-material/Handyman'
 import InventoryIcon from '@mui/icons-material/Inventory2'
 import SendIcon from '@mui/icons-material/Send'
-import FingerprintIcon from '@mui/icons-material/Fingerprint'
 import LocationOnIcon from '@mui/icons-material/LocationOn'
 import StoreIcon from '@mui/icons-material/Store'
 import PersonIcon from '@mui/icons-material/Person'
@@ -389,23 +384,6 @@ export default function ResultDisplay({ result }) {
           <JsonHighlight data={result.send_result} />
         </Section>
       )}
-
-      {/* ── IDs TÉCNICOS ── */}
-      <Section icon={<FingerprintIcon fontSize="small" />} title={r.techIds} color="#64748b">
-        <Table size="small">
-          <TableBody>
-            {[
-              ['company_id',     result.company_id],
-              ['message_log_id', result.message_log_id],
-            ].map(([k, v]) => (
-              <TableRow key={k} sx={{ '& td': { borderBottom: '1px solid rgba(255,255,255,0.04)', py: 0.8 } }}>
-                <TableCell sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem', width: 200, fontFamily: 'monospace' }}>{k}</TableCell>
-                <TableCell sx={{ color: 'rgba(255,255,255,0.55)', fontSize: '0.75rem', fontFamily: 'monospace' }}>{v || '—'}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Section>
 
     </Box>
   )

@@ -1,5 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Header
+from fastapi.responses import StreamingResponse
 from typing import Optional
+import asyncio, json as _json
 from app.schemas.company import (
     ProcessUrlRequest, SearchRequest, BatchRequest,
     CheckUrlsRequest, DeleteCompaniesRequest, UpdateCompanyRequest,
@@ -595,7 +597,7 @@ def api_ai_toggle(company_id: str, body: dict):
                                 })
                                 print(f"[AIToggle] session pre-created for {number} (company={company_id})")
                         from app.followup_queue import enqueue as _ai_enqueue
-                        _ai_enqueue(number, company_id, body_, log_id_)
+                        _ai_enqueue(number, company_id, body_, log_id_, manual_activation=True)
                         kicked = True
             except Exception as _ke:
                 print(f"[AIToggle] kick-off error: {_ke}")
@@ -703,8 +705,10 @@ def _extract_body_and_interactive(message_obj: dict) -> tuple:
         btns = [b.get("title","") or b.get("displayText","") for b in
                 im.get("nativeFlowMessage", {}).get("buttons", []) +
                 im.get("footer", {}).get("buttons", [])]
-        interactive = {"type": "buttons", "text": body, "options": [b for b in btns if b]} if btns else None
-        return body, interactive
+        btns = [b for b in btns if b]
+        interactive = {"type": "buttons", "text": body, "options": btns} if btns else None
+        opts = " | ".join(btns)
+        return (f"{body}\n[Opciones: {opts}]" if opts else body), interactive
 
     # Templates
     tm = message_obj.get("templateMessage", {})
@@ -716,7 +720,8 @@ def _extract_body_and_interactive(message_obj: dict) -> tuple:
                 for b in hydrated.get("hydratedButtons", [])]
         btns = [b for b in btns if b]
         interactive = {"type": "buttons", "text": text, "options": btns} if btns else None
-        return text, interactive
+        opts = " | ".join(btns)
+        return (f"{text}\n[Opciones: {opts}]" if opts else text), interactive
 
     # Encuestas
     pm = message_obj.get("pollCreationMessage", {})
@@ -806,12 +811,15 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
                         try:
                             from app.llm import active_provider as _llm_provider
                             if _llm_provider() != "none":
-                                _prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
+                                _prefs_doc = db.db.conversation_ai_prefs.find_one({"company_id": company_id})
+                                _prefs = _prefs_doc or {}
                                 _should_enqueue = _prefs.get("ai_enabled", False)
-                                # Auto-activate: if no active session and no manual toggle,
-                                # check if we sent outbound within 7 days — but NOT if a session
-                                # just ended recently (prevents bot-to-bot re-activation loops)
-                                if not _should_enqueue and not _ai_session_active:
+                                # Auto-activate ONLY when the user has NEVER explicitly set a preference
+                                # (no prefs document = virgin conversation, first reply to a batch send).
+                                # If the user manually disabled AI (_prefs_doc exists with ai_enabled=False),
+                                # respect that decision — never override it automatically.
+                                _user_explicitly_disabled = _prefs_doc is not None and not _prefs.get("ai_enabled", True)
+                                if not _should_enqueue and not _ai_session_active and not _user_explicitly_disabled:
                                     from datetime import timedelta
                                     _recent_ended = db.db.ai_followup_sessions.find_one({
                                         "company_id": company_id,
@@ -1171,6 +1179,33 @@ def api_evo_logout_instance(name: str):
 
 # ── Analytics ─────────────────────────────────────────────────────────────────
 
+@router.get("/analytics/stream")
+async def api_analytics_stream():
+    """SSE stream that pushes pending-analysis count every second.
+    Frontend subscribes once and gets notified immediately when analysis finishes."""
+    async def _generator():
+        db = MongoDBManager()
+        prev = -1
+        for _ in range(600):  # max 10 minutes
+            try:
+                count = db.db.message_logs.count_documents({"analysis_status": "pending"})
+            except Exception:
+                count = 0
+            if count != prev:
+                prev = count
+                yield f"data: {_json.dumps({'pending': count})}\n\n"
+            if count == 0:
+                break
+            await asyncio.sleep(1)
+        yield f"data: {_json.dumps({'pending': 0, 'closed': True})}\n\n"
+
+    return StreamingResponse(
+        _generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.get("/analytics")
 def api_get_analytics(
     page:      int = Query(1,  ge=1),
@@ -1504,7 +1539,7 @@ def _build_requeue_filter():
              "created_at": {"$lt": stuck_threshold}},
             # C: classify_and_save threw an exception
             {"analysis_status": "error"},
-            # D: Groq returned an error payload that was saved
+            # D: LLM returned an error payload that was saved
             {"analysis.error": True},
         ],
     }
@@ -1512,7 +1547,7 @@ def _build_requeue_filter():
 @router.post("/admin/requeue-unanalyzed")
 def api_requeue_unanalyzed(background_tasks: BackgroundTasks, limit: int = 20):
     """Find inbound messages with no valid analysis and re-run the classifier.
-    Covers: never processed, stuck pending, classifier exception, Groq error payload.
+    Covers: never processed, stuck pending, classifier exception, LLM error payload.
     Processes at most `limit` per call; use `remaining` to know if another call is needed."""
     from app.classifier import classify_and_save, all_quota_exhausted
     from datetime import datetime
@@ -1557,7 +1592,7 @@ def api_all_pending():
 @router.post("/admin/reset-quota-circuit")
 def api_reset_quota_circuit():
     """Reset the LLM circuit breaker so classification resumes immediately.
-    Call this after adding DeepSeek credits or when Groq quota resets."""
+    Call this after adding credits or when the daily quota resets."""
     from app.classifier import reset_quota_circuit
     reset_quota_circuit()
     return {"ok": True, "message": "Circuit breaker reiniciado — clasificación reanudada."}
@@ -1566,7 +1601,7 @@ def api_reset_quota_circuit():
 @router.post("/admin/reset-quota-exceeded")
 def api_reset_quota_exceeded():
     """Reset quota_exceeded messages back to unanalyzed so requeue picks them up.
-    Call this once Groq daily quota resets (midnight UTC)."""
+    Call this once the daily LLM quota resets (midnight UTC)."""
     db = MongoDBManager()
     result = db.db.message_logs.update_many(
         {"analysis_status": "quota_exceeded"},
@@ -1578,7 +1613,7 @@ def api_reset_quota_exceeded():
 @router.post("/admin/cancel-pending")
 def api_cancel_pending():
     """Mark all stuck 'pending' messages as 'quota_exceeded' to stop the analytics spinner.
-    Use when background tasks are frozen (e.g. Groq quota hit) without a server restart."""
+    Use when background tasks are frozen (e.g. LLM quota hit) without a server restart."""
     from datetime import datetime, timedelta
     db = MongoDBManager()
     result = db.db.message_logs.update_many(

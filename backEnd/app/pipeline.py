@@ -328,12 +328,13 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
         "evolution_result": evolution_result,
     }
     
-_BATCH_WORKERS = 4  # URLs procesadas en paralelo
+_BATCH_WORKERS = 10  # URLs procesadas en paralelo
+_SUB_WORKERS   = 4   # subpáginas en paralelo dentro de cada sitio
 
 
 def run_pipeline_batch(urls: list) -> dict:
     """
-    Procesa múltiples URLs en lote (4 workers en paralelo).
+    Procesa múltiples URLs en lote (10 workers en paralelo).
     """
     ordered: dict[str, dict] = {}  # url → result entry, preserves input order
 

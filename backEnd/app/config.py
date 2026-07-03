@@ -28,7 +28,8 @@ EVOLUTION_API_KEY      = os.getenv("EVOLUTION_API_KEY", "")
 EVOLUTION_INSTANCE     = os.getenv("EVOLUTION_INSTANCE", "")
 APP_PUBLIC_URL         = os.getenv("APP_PUBLIC_URL", "https://app.detucel.com")
 
-# DeepSeek API (IA: clasificación, sugerencias, scraping, Andy)
+# LLM API keys — priority: OPENAI > DEEPSEEK
+OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY", "")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 
 # Debug: Mostrar qué se cargó (solo para desarrollo)

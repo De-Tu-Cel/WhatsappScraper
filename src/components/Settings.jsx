@@ -370,6 +370,7 @@ export default function Settings() {
   const { t, setLang }          = useLang()
   const [settings, setSettings] = useState(DEFAULT_SETTINGS)
   const [evo,  setEvo]          = useState(DEFAULT_EVO)
+  const [activeTab,  setActiveTab]  = useState(0)
 
   useEffect(() => {
     const s = loadSettings()
@@ -536,441 +537,380 @@ export default function Settings() {
   const currentTheme  = THEMES.find(t => t.value === settings.theme)   || THEMES[0]
   const isMono        = currentTheme.cat === 'mono'
 
+  const TABS = [
+    { icon: <PaletteIcon sx={{ fontSize: 15 }} />, label: t.settings.tabAppearance  || 'Apariencia' },
+    { icon: <AccountCircleIcon sx={{ fontSize: 15 }} />, label: t.settings.tabAccount || 'Cuenta' },
+    { icon: <PhoneAndroidIcon sx={{ fontSize: 15 }} />, label: t.settings.tabWhatsApp || 'WhatsApp',
+      badge: connStatus === 'connected' },
+  ]
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
-      {/* Header */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3, flexShrink: 0 }}>
+
+      {/* ── Header ── */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2.5, flexShrink: 0 }}>
         <Box sx={{
-          width: 38, height: 38, borderRadius: 2,
-          bgcolor: 'rgba(255,255,255,0.05)',
-          border: '1px solid rgba(255,255,255,0.08)',
+          width: 36, height: 36, borderRadius: 2,
+          bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)',
+          border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
-          <SettingsIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 20 }} />
+          <SettingsIcon sx={{ color: 'var(--accent,#3b82f6)', fontSize: 19 }} />
         </Box>
         <Box>
-          <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1.05rem', lineHeight: 1.2 }}>{t.settings.title}</Typography>
-          <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.75rem' }}>{t.settings.subtitle}</Typography>
+          <Typography sx={{ color: 'var(--text,white)', fontWeight: 700, fontSize: '1rem', lineHeight: 1.2 }}>{t.settings.title}</Typography>
+          <Typography sx={{ color: 'var(--text-muted,rgba(255,255,255,0.3))', fontSize: '0.72rem' }}>{t.settings.subtitle}</Typography>
         </Box>
       </Box>
 
+      {/* ── Tab bar ── */}
+      <Box sx={{
+        display: 'flex', gap: 0.5, mb: 2.5, flexShrink: 0,
+        p: 0.5, borderRadius: 2.5,
+        bgcolor: 'rgba(255,255,255,0.03)',
+        border: '1px solid rgba(255,255,255,0.06)',
+      }}>
+        {TABS.map((tab, i) => {
+          const active = activeTab === i
+          return (
+            <Box key={i} onClick={() => setActiveTab(i)} sx={{
+              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.6,
+              py: 0.9, px: 0.5, borderRadius: 2, cursor: 'pointer', position: 'relative',
+              bgcolor: active ? 'rgba(var(--accent-rgb,59,130,246),0.14)' : 'transparent',
+              border: active ? '1px solid rgba(var(--accent-rgb,59,130,246),0.28)' : '1px solid transparent',
+              boxShadow: active ? '0 0 12px rgba(var(--accent-rgb,59,130,246),0.12)' : 'none',
+              transition: 'all 0.15s',
+              '&:hover': !active ? { bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' } : {},
+            }}>
+              <Box sx={{ color: active ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.35)', display: 'flex' }}>
+                {tab.icon}
+              </Box>
+              <Typography sx={{
+                fontSize: '0.72rem', fontWeight: active ? 700 : 400,
+                color: active ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.4)',
+                transition: 'color 0.15s',
+              }}>
+                {tab.label}
+              </Typography>
+              {tab.badge && (
+                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#25d366', boxShadow: '0 0 6px #25d366aa', flexShrink: 0 }} />
+              )}
+            </Box>
+          )
+        })}
+      </Box>
+
+      {/* ── Tab content ── */}
       <Box sx={{ flex: 1, overflowY: 'auto', px: 0.5, scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent' }}>
 
-        {/* ── Idioma ── */}
-        <Section icon={<LanguageIcon />} title={t.settings.language}>
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            {LANGS.map(l => {
-              const active = settings.lang === l.value
-              return (
-                <Box key={l.value} onClick={() => { save({ lang: l.value }); setLang(l.value) }} sx={{
-                  flex: 1, py: 1.2, px: 1.5, borderRadius: 2, cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 1,
-                  bgcolor: active ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.03)',
-                  border: active ? '1px solid var(--accent,#3b82f6)' : '1px solid rgba(255,255,255,0.08)',
-                  boxShadow: active ? '0 0 10px var(--accent-glow, rgba(59,130,246,0.2))' : 'none',
-                  transition: 'all 0.15s',
-                  '&:hover': { bgcolor: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.18)' },
-                }}>
-                  <Typography sx={{ fontSize: '1.1rem', lineHeight: 1, flexShrink: 0, top: -1.2, position: 'relative' }}>{l.flag}</Typography>
-                  <Typography sx={{
-                    fontSize: '0.82rem',
-                    fontWeight: active ? 700 : 400,
-                    color: active ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.5)',
-                    flexGrow: 1,
-                  }}>
-                    {l.label}
-                  </Typography>
-                  {/* Always rendered — opacity prevents layout shift */}
-                  <CheckIcon sx={{
-                    fontSize: 16,
-                    color: 'var(--accent,#3b82f6)',
-                    flexShrink: 0,
-                    opacity: active ? 1 : 0,
-                    transition: 'opacity 0.15s',
-                    position: 'relative',
-                    
-                  }} />
-                </Box>
-              )
-            })}
-          </Box>
-          <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.2)', mt: 0.8 }}>
-            {t.settings.langComingSoon}
-          </Typography>
-        </Section>
+        {/* ═══ TAB 0: Apariencia ═══ */}
+        {activeTab === 0 && <>
 
-        <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', mb: 3 }} />
-
-        {/* ── Color de acento ── */}
-        <Section icon={<PaletteIcon />} title={t.settings.accent}>
-          {/* Current accent preview bar */}
-          <Box sx={{
-            mb: 1.5, px: 1.5, py: 1, borderRadius: 2,
-            background: `linear-gradient(90deg, ${currentAccent.value}22 0%, transparent 100%)`,
-            border: `1px solid ${currentAccent.value}44`,
-            display: 'flex', alignItems: 'center', gap: 1.5,
-          }}>
-            <Box sx={{
-              width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
-              bgcolor: currentAccent.value,
-              boxShadow: `0 0 10px ${currentAccent.glow}, 0 0 20px ${currentAccent.glow}`,
-            }} />
-            <Box>
-              <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: currentAccent.value, lineHeight: 1.2 }}>
-                {t.settings[currentAccent.tKey]}
-              </Typography>
-              <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}>
-                {currentAccent.value}
-              </Typography>
-            </Box>
-          </Box>
-
-          {/* Swatch grid */}
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, pl: 0.5, pr: 0.5 }}>
-            {ACCENTS.map(a => {
-              const active = settings.accent === a.value
-              return (
-                <Tooltip key={a.value} title={t.settings[a.tKey]} placement="top" arrow>
-                  <Box onClick={() => save({ accent: a.value })} sx={{
-                    width: 34, height: 34, borderRadius: '50%', cursor: 'pointer',
-                    bgcolor: a.value, flexShrink: 0,
-                    border: active ? '2.5px solid white' : '2.5px solid transparent',
-                    outline: active ? `2px solid ${a.value}` : '2px solid transparent',
-                    outlineOffset: 2,
-                    boxShadow: active
-                      ? `0 0 18px ${a.glow}, 0 0 6px ${a.value}`
-                      : `0 0 6px ${a.glow}44`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+          {/* Idioma */}
+          <Section icon={<LanguageIcon />} title={t.settings.language}>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              {LANGS.map(l => {
+                const active = settings.lang === l.value
+                return (
+                  <Box key={l.value} onClick={() => { save({ lang: l.value }); setLang(l.value) }} sx={{
+                    flex: 1, py: 1.2, px: 1.5, borderRadius: 2, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 1,
+                    bgcolor: active ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.03)',
+                    border: active ? '1px solid var(--accent,#3b82f6)' : '1px solid rgba(255,255,255,0.08)',
+                    boxShadow: active ? '0 0 10px var(--accent-glow,rgba(59,130,246,0.2))' : 'none',
                     transition: 'all 0.15s',
-                    '&:hover': { transform: 'scale(1.2)', boxShadow: `0 0 14px ${a.glow}, 0 0 4px ${a.value}` },
+                    '&:hover': { bgcolor: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.18)' },
                   }}>
-                    <CheckIcon sx={{
-                      fontSize: 14, color: 'white',
-                      filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.9))',
-                      opacity: active ? 1 : 0,
-                      transition: 'opacity 0.12s',
-                    }} />
-                  </Box>
-                </Tooltip>
-              )
-            })}
-          </Box>
-        </Section>
-
-        <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', mb: 3 }} />
-
-        {/* ── Tema base ── */}
-        <Section icon={<DarkModeIcon />} title={t.settings.theme}>
-          {/* Current theme preview bar */}
-          <Box sx={{
-            mb: 1.5, px: 1.5, py: 1, borderRadius: 2,
-            bgcolor: currentTheme.card,
-            border: '1px solid rgba(255,255,255,0.08)',
-            display: 'flex', alignItems: 'center', gap: 1.5,
-          }}>
-            {/* Mini 3-stripe */}
-            <Box sx={{ display: 'flex', borderRadius: 1, overflow: 'hidden', width: 36, height: 20, flexShrink: 0, border: '1px solid rgba(255,255,255,0.1)' }}>
-              {currentTheme.preview.map((c, i) => (
-                <Box key={i} sx={{ flex: 1, bgcolor: c }} />
-              ))}
-            </Box>
-            <Box>
-              <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent,#3b82f6)', lineHeight: 1.2 }}>
-                {t.settings[currentTheme.tKey]}
-              </Typography>
-              <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}>
-                {currentTheme.bg} · {currentTheme.sidebar}
-              </Typography>
-            </Box>
-          </Box>
-
-          {/* Theme grid — helper */}
-          {(() => {
-            const renderTheme = (thm) => {
-              const active = settings.theme === thm.value
-              return (
-                <Tooltip key={thm.value} title={t.settings[thm.tKey]} placement="top" arrow>
-                  <Box onClick={() => save({ theme: thm.value })} sx={{
-                    borderRadius: 1.5, overflow: 'hidden', cursor: 'pointer',
-                    border: active ? '1.5px solid var(--accent,#3b82f6)' : `1.5px solid ${thm.cat === 'mono' ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.1)'}`,
-                    boxShadow: active ? '0 0 14px var(--accent-glow,rgba(59,130,246,0.35))' : 'none',
-                    transition: 'all 0.15s',
-                    '&:hover': { borderColor: thm.cat === 'mono' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.32)', transform: 'translateY(-2px)', boxShadow: '0 4px 12px rgba(0,0,0,0.4)' },
-                  }}>
-                    <Box sx={{ display: 'flex', height: 28, position: 'relative' }}>
-                      {thm.preview.map((c, i) => (
-                        <Box key={i} sx={{ flex: 1, bgcolor: c }} />
-                      ))}
-                      {thm.value === 'detucel' && !active && (
-                        <Box sx={{ position: 'absolute', top: 2, right: 2, bgcolor: '#1557f5', borderRadius: 0.5, px: 0.4, py: 0.1 }}>
-                          <Typography sx={{ fontSize: '0.42rem', color: 'white', fontWeight: 800, lineHeight: 1.4 }}>DTC</Typography>
-                        </Box>
-                      )}
-                      {active && (
-                        <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'rgba(0,0,0,0.28)' }}>
-                          <CheckIcon sx={{ fontSize: 13, color: 'var(--accent,#3b82f6)', filter: 'drop-shadow(0 0 4px var(--accent,#3b82f6))' }} />
-                        </Box>
-                      )}
-                    </Box>
-                    <Box sx={{ px: 0.75, py: 0.5, bgcolor: thm.preview[1], borderTop: active ? '1px solid var(--accent,#3b82f6)44' : `1px solid ${thm.cat === 'mono' ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.06)'}` }}>
-                      <Typography sx={{ fontSize: '0.6rem', fontWeight: active ? 700 : 400, color: active ? 'var(--accent,#3b82f6)' : thm.cat === 'mono' ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {t.settings[thm.tKey]}
-                      </Typography>
-                    </Box>
-                  </Box>
-                </Tooltip>
-              )
-            }
-            const darkThemes  = THEMES.filter(t => !t.cat || t.cat === 'dark')
-            const lightThemes = THEMES.filter(t => t.cat === 'light' || t.cat === 'mono')
-            const labelSx = { fontSize: '0.63rem', color: isMono ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, mb: 0.75 }
-            return (
-              <>
-                <Typography sx={labelSx}>{t.settings.themesDark}</Typography>
-                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 1, mb: 2 }}>
-                  {darkThemes.map(renderTheme)}
-                </Box>
-                <Typography sx={labelSx}>{t.settings.themesLight}</Typography>
-                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 1 }}>
-                  {lightThemes.map(renderTheme)}
-                </Box>
-              </>
-            )
-          })()}
-        </Section>
-
-
-        {/* ── Modal QR ── */}
-        <Dialog open={qrOpen} onClose={handleCloseQr} maxWidth="xs" fullWidth
-          slotProps={{ paper: { sx: { bgcolor: 'var(--card-bg,#161d2e)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 3, boxShadow: '0 24px 64px rgba(0,0,0,0.7)' } } }}>
-          <DialogContent sx={{ textAlign: 'center', py: 3, bgcolor: 'var(--card-bg,#161d2e)' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, mb: 2 }}>
-              <PhoneAndroidIcon sx={{ color: '#25d366', fontSize: 22 }} />
-              <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem' }}>
-                {t.settings.qrTitle}
-              </Typography>
-            </Box>
-
-            {/* Paso 1 — ingresar número */}
-            {qrStatus === 'phone' && (
-              <Box sx={{ py: 1, px: 0.5, bgcolor: 'var(--surface,#111827)', borderRadius: 2, p: 2, border: '1px solid rgba(255,255,255,0.07)' }}>
-                <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.8rem', mb: 2, lineHeight: 1.5 }}>
-                  {t.settings.qrPhoneHint}
-                </Typography>
-
-                {/* Input estilo WhatsApp */}
-                <Box sx={{
-                  display: 'flex', alignItems: 'center', gap: 0,
-                  bgcolor: 'var(--surface,#111827)', borderRadius: 2,
-                  border: '1.5px solid rgba(255,255,255,0.1)',
-                  overflow: 'hidden', mb: 2,
-                  '&:focus-within': { borderColor: '#25d366', boxShadow: '0 0 0 3px rgba(37,211,102,0.1)' },
-                  transition: 'all 0.15s',
-                }}>
-                  {/* Prefijo fijo */}
-                  <Box sx={{ px: 1.5, py: 1.2, bgcolor: 'rgba(37,211,102,0.08)', borderRight: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
-                    <Typography sx={{ color: '#4ade80', fontSize: '0.95rem', fontWeight: 600, fontFamily: 'monospace' }}>+52</Typography>
-                  </Box>
-                  {/* Input limpio */}
-                  <Box
-                    component="input"
-                    autoFocus
-                    type="tel"
-                    placeholder="5512345678"
-                    value={phoneInput.replace(/\D/g, '').replace(/^52/, '')}
-                    onChange={e => {
-                      const digits = e.target.value.replace(/\D/g, '').slice(0, 10)
-                      setPhoneInput('+52' + digits)
-                    }}
-                    onKeyDown={e => { if (e.key === 'Enter' && phoneInput.replace(/\D/g,'').length >= 12) handleStartConnection() }}
-                    sx={{
-                      flex: 1, border: 'none', outline: 'none', bgcolor: 'transparent',
-                      color: 'white', fontSize: '1.1rem', fontFamily: 'monospace',
-                      letterSpacing: '0.08em', px: 1.5, py: 1.2,
-                      '&::placeholder': { color: 'rgba(255,255,255,0.2)' },
-                    }}
-                  />
-                </Box>
-
-                <Box onClick={() => phoneInput.replace(/\D/g,'').length >= 12 && handleStartConnection()} sx={{
-                  py: 1.1, borderRadius: 2, cursor: phoneInput.replace(/\D/g,'').length >= 12 ? 'pointer' : 'default', textAlign: 'center',
-                  bgcolor: phoneInput.replace(/\D/g,'').length >= 12 ? 'rgba(37,211,102,0.15)' : 'rgba(255,255,255,0.04)',
-                  border: `1px solid ${phoneInput.replace(/\D/g,'').length >= 12 ? 'rgba(37,211,102,0.35)' : 'rgba(255,255,255,0.08)'}`,
-                  transition: 'all 0.15s',
-                  '&:hover': phoneInput.replace(/\D/g,'').length >= 12 ? { bgcolor: 'rgba(37,211,102,0.25)' } : {},
-                }}>
-                  <Typography sx={{ color: phoneInput.replace(/\D/g,'').length >= 12 ? '#25d366' : 'rgba(255,255,255,0.2)', fontWeight: 700, fontSize: '0.88rem' }}>
-                    {t.settings.qrContinue}
-                  </Typography>
-                </Box>
-                <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.68rem', mt: 1.5, textAlign: 'center' }}>
-                  {t.settings.qrFootnote}
-                </Typography>
-              </Box>
-            )}
-
-            {qrStatus === 'creating' && (
-              <Box sx={{ py: 4, bgcolor: 'var(--surface,#111827)', borderRadius: 2, border: '1px solid rgba(255,255,255,0.07)' }}>
-                <CircularProgress size={40} sx={{ color: '#25d366' }} />
-                <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.82rem', mt: 2 }}>
-                  {t.settings.qrPreparing}
-                </Typography>
-              </Box>
-            )}
-
-            {qrStatus === 'waiting' && (
-              <Box sx={{ bgcolor: 'var(--surface,#111827)', borderRadius: 2, p: 2, border: '1px solid rgba(255,255,255,0.07)' }}>
-                {/* Número que se está vinculando */}
-                {phoneInput && (
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, px: 1.5, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(37,211,102,0.08)', border: '1px solid rgba(37,211,102,0.2)' }}>
-                    <PhoneAndroidIcon sx={{ fontSize: 15, color: '#4ade80' }} />
-                    <Typography sx={{ color: '#4ade80', fontSize: '0.82rem', fontFamily: 'monospace', fontWeight: 600 }}>
-                      {phoneInput}
+                    <Typography sx={{ fontSize: '1.1rem', lineHeight: 1, flexShrink: 0, position: 'relative', top: -1 }}>{l.flag}</Typography>
+                    <Typography sx={{ fontSize: '0.82rem', fontWeight: active ? 700 : 400, color: active ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.5)', flexGrow: 1 }}>
+                      {l.label}
                     </Typography>
+                    <CheckIcon sx={{ fontSize: 16, color: 'var(--accent,#3b82f6)', flexShrink: 0, opacity: active ? 1 : 0, transition: 'opacity 0.15s' }} />
                   </Box>
-                )}
+                )
+              })}
+            </Box>
+            <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.2)', mt: 0.8 }}>
+              {t.settings.langComingSoon}
+            </Typography>
+          </Section>
 
-                {qrImage ? (
-                  <Box sx={{ display: 'inline-block' }}>
-                    <Box component="img" src={qrImage} alt="QR Code"
-                      sx={{ width: 220, height: 220, borderRadius: 2, border: '4px solid white', display: 'block' }} />
-                  </Box>
-                ) : (
-                  <Box sx={{ width: 220, height: 220, mx: 'auto', borderRadius: 2,
-                    bgcolor: 'var(--surface,#111827)', border: '1px solid rgba(255,255,255,0.07)',
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1.5 }}>
-                    <CircularProgress size={32} sx={{ color: '#25d366' }} />
-                    {qrWaitSecs >= 12 && (
-                      <Box onClick={async () => {
-                        const instanceName = `${user?.username || 'user'}-wa`
-                        setQrWaitSecs(0)
-                        // Logout to clear stale session, then retry
-                        await fetch(`/api/evolution/instance/${instanceName}?action=logout`, { method: 'POST' }).catch(() => {})
-                        await new Promise(r => setTimeout(r, 2000))
-                        fetchQr(instanceName)
-                      }} sx={{
-                        px: 1.5, py: 0.5, borderRadius: 1.5, cursor: 'pointer',
-                        bgcolor: 'rgba(37,211,102,0.1)', border: '1px solid rgba(37,211,102,0.3)',
-                        '&:hover': { bgcolor: 'rgba(37,211,102,0.2)' },
-                      }}>
-                        <Typography sx={{ fontSize: '0.7rem', color: '#4ade80', fontWeight: 600 }}>
-                          {t.settings.qrRetry}
+          <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', mb: 3 }} />
+
+          {/* Color de acento */}
+          <Section icon={<PaletteIcon />} title={t.settings.accent}>
+            <Box sx={{
+              mb: 1.5, px: 1.5, py: 1, borderRadius: 2,
+              background: `linear-gradient(90deg, ${currentAccent.value}22 0%, transparent 100%)`,
+              border: `1px solid ${currentAccent.value}44`,
+              display: 'flex', alignItems: 'center', gap: 1.5,
+            }}>
+              <Box sx={{ width: 22, height: 22, borderRadius: '50%', flexShrink: 0, bgcolor: currentAccent.value, boxShadow: `0 0 10px ${currentAccent.glow}, 0 0 20px ${currentAccent.glow}` }} />
+              <Box>
+                <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: currentAccent.value, lineHeight: 1.2 }}>{t.settings[currentAccent.tKey]}</Typography>
+                <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}>{currentAccent.value}</Typography>
+              </Box>
+            </Box>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, pl: 0.5, pr: 0.5 }}>
+              {ACCENTS.map(a => {
+                const active = settings.accent === a.value
+                return (
+                  <Tooltip key={a.value} title={t.settings[a.tKey]} placement="top" arrow>
+                    <Box onClick={() => save({ accent: a.value })} sx={{
+                      width: 34, height: 34, borderRadius: '50%', cursor: 'pointer', bgcolor: a.value, flexShrink: 0,
+                      border: active ? '2.5px solid white' : '2.5px solid transparent',
+                      outline: active ? `2px solid ${a.value}` : '2px solid transparent', outlineOffset: 2,
+                      boxShadow: active ? `0 0 18px ${a.glow}, 0 0 6px ${a.value}` : `0 0 6px ${a.glow}44`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      transition: 'all 0.15s',
+                      '&:hover': { transform: 'scale(1.2)', boxShadow: `0 0 14px ${a.glow}, 0 0 4px ${a.value}` },
+                    }}>
+                      <CheckIcon sx={{ fontSize: 14, color: 'white', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.9))', opacity: active ? 1 : 0, transition: 'opacity 0.12s' }} />
+                    </Box>
+                  </Tooltip>
+                )
+              })}
+            </Box>
+          </Section>
+
+          <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', mb: 3 }} />
+
+          {/* Tema */}
+          <Section icon={<DarkModeIcon />} title={t.settings.theme}>
+            <Box sx={{
+              mb: 1.5, px: 1.5, py: 1, borderRadius: 2,
+              bgcolor: currentTheme.card, border: '1px solid rgba(255,255,255,0.08)',
+              display: 'flex', alignItems: 'center', gap: 1.5,
+            }}>
+              <Box sx={{ display: 'flex', borderRadius: 1, overflow: 'hidden', width: 36, height: 20, flexShrink: 0, border: '1px solid rgba(255,255,255,0.1)' }}>
+                {currentTheme.preview.map((c, i) => <Box key={i} sx={{ flex: 1, bgcolor: c }} />)}
+              </Box>
+              <Box>
+                <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent,#3b82f6)', lineHeight: 1.2 }}>{t.settings[currentTheme.tKey]}</Typography>
+                <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}>{currentTheme.bg} · {currentTheme.sidebar}</Typography>
+              </Box>
+            </Box>
+            {(() => {
+              const renderTheme = (thm) => {
+                const active = settings.theme === thm.value
+                return (
+                  <Tooltip key={thm.value} title={t.settings[thm.tKey]} placement="top" arrow>
+                    <Box onClick={() => save({ theme: thm.value })} sx={{
+                      borderRadius: 1.5, overflow: 'hidden', cursor: 'pointer',
+                      border: active ? '1.5px solid var(--accent,#3b82f6)' : `1.5px solid ${thm.cat === 'mono' ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.1)'}`,
+                      boxShadow: active ? '0 0 14px var(--accent-glow,rgba(59,130,246,0.35))' : 'none',
+                      transition: 'all 0.15s',
+                      '&:hover': { borderColor: thm.cat === 'mono' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.32)', transform: 'translateY(-2px)', boxShadow: '0 4px 12px rgba(0,0,0,0.4)' },
+                    }}>
+                      <Box sx={{ display: 'flex', height: 28, position: 'relative' }}>
+                        {thm.preview.map((c, i) => <Box key={i} sx={{ flex: 1, bgcolor: c }} />)}
+                        {thm.value === 'detucel' && !active && (
+                          <Box sx={{ position: 'absolute', top: 2, right: 2, bgcolor: '#1557f5', borderRadius: 0.5, px: 0.4, py: 0.1 }}>
+                            <Typography sx={{ fontSize: '0.42rem', color: 'white', fontWeight: 800, lineHeight: 1.4 }}>DTC</Typography>
+                          </Box>
+                        )}
+                        {active && (
+                          <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'rgba(0,0,0,0.28)' }}>
+                            <CheckIcon sx={{ fontSize: 13, color: 'var(--accent,#3b82f6)', filter: 'drop-shadow(0 0 4px var(--accent,#3b82f6))' }} />
+                          </Box>
+                        )}
+                      </Box>
+                      <Box sx={{ px: 0.75, py: 0.5, bgcolor: thm.preview[1], borderTop: active ? '1px solid var(--accent,#3b82f6)44' : `1px solid ${thm.cat === 'mono' ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.06)'}` }}>
+                        <Typography sx={{ fontSize: '0.6rem', fontWeight: active ? 700 : 400, color: active ? 'var(--accent,#3b82f6)' : thm.cat === 'mono' ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {t.settings[thm.tKey]}
                         </Typography>
                       </Box>
-                    )}
-                  </Box>
-                )}
-
-                {/* Indicador de espera — separado del QR */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.5, justifyContent: 'center' }}>
-                  <CircularProgress size={12} sx={{ color: '#25d366' }} />
-                  <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.7rem' }}>{t.settings.qrWaiting}</Typography>
-                </Box>
-
-                <Box sx={{ mt: 1.5, textAlign: 'left', width: '100%', maxWidth: 240 }}>
-                  {[
-                    t.settings.qrStep1,
-                    t.settings.qrStep2,
-                    t.settings.qrStep3,
-                    t.settings.qrStep4,
-                  ].map((step, i) => (
-                    <Box key={i} sx={{ display: 'flex', gap: 1, mb: 0.8 }}>
-                      <Box sx={{ width: 18, height: 18, borderRadius: '50%', bgcolor: 'rgba(37,211,102,0.2)', border: '1px solid rgba(37,211,102,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, mt: 0.1 }}>
-                        <Typography sx={{ fontSize: '0.55rem', color: '#4ade80', fontWeight: 800 }}>{i+1}</Typography>
-                      </Box>
-                      <Typography sx={{ color: 'rgba(255,255,255,0.55)', fontSize: '0.75rem', lineHeight: 1.4 }}>{step}</Typography>
                     </Box>
-                  ))}
+                  </Tooltip>
+                )
+              }
+              const darkThemes  = THEMES.filter(t => !t.cat || t.cat === 'dark')
+              const lightThemes = THEMES.filter(t => t.cat === 'light' || t.cat === 'mono')
+              const labelSx = { fontSize: '0.63rem', color: isMono ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, mb: 0.75 }
+              return (
+                <>
+                  <Typography sx={labelSx}>{t.settings.themesDark}</Typography>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 1, mb: 2 }}>{darkThemes.map(renderTheme)}</Box>
+                  <Typography sx={labelSx}>{t.settings.themesLight}</Typography>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 1 }}>{lightThemes.map(renderTheme)}</Box>
+                </>
+              )
+            })()}
+          </Section>
+        </>}
+
+        {/* ═══ TAB 1: Cuenta ═══ */}
+        {activeTab === 1 && (
+          <AccountSection user={user} connStatus={connStatus} connPhone={connPhone} evo={evo} />
+        )}
+
+        {/* ═══ TAB 2: WhatsApp ═══ */}
+        {activeTab === 2 && <>
+          <Section icon={<PhoneAndroidIcon />} title={t.settings.whatsapp}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+              {connStatus === 'checking' ? (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 0.5 }}>
+                  <CircularProgress size={16} sx={{ color: 'rgba(255,255,255,0.25)' }} />
+                  <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem' }}>{t.settings.verifying}</Typography>
                 </Box>
-              </Box>
-            )}
-
-            {qrStatus === 'connected' && (
-              <Box sx={{ py: 2, bgcolor: 'rgba(37,211,102,0.06)', borderRadius: 2, border: '1px solid rgba(37,211,102,0.18)' }}>
-                <Box sx={{ width: 64, height: 64, borderRadius: '50%', bgcolor: 'rgba(37,211,102,0.15)',
-                  border: '2px solid #25d366', display: 'flex', alignItems: 'center', justifyContent: 'center', mx: 'auto', mb: 2 }}>
-                  <CheckIcon sx={{ color: '#25d366', fontSize: 32 }} />
-                </Box>
-                <Typography sx={{ color: '#25d366', fontWeight: 700, fontSize: '1rem' }}>
-                  ¡Número vinculado!
-                </Typography>
-                <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.85rem', mt: 0.5, fontFamily: 'monospace' }}>
-                  {phoneInput || qrPhone}
-                </Typography>
-                <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem', mt: 0.5 }}>
-                  Los mensajes saldrán desde este número
-                </Typography>
-                <Box onClick={handleCloseQr} sx={{
-                  mt: 2.5, px: 3, py: 0.8, borderRadius: 2, cursor: 'pointer', display: 'inline-block',
-                  bgcolor: 'rgba(37,211,102,0.15)', border: '1px solid rgba(37,211,102,0.3)',
-                  '&:hover': { bgcolor: 'rgba(37,211,102,0.25)' },
-                }}>
-                  <Typography sx={{ color: '#25d366', fontSize: '0.82rem', fontWeight: 600 }}>Listo</Typography>
-                </Box>
-              </Box>
-            )}
-
-            {qrStatus === 'error' && (
-              <Box sx={{ py: 1.5, px: 2, bgcolor: 'rgba(248,113,113,0.06)', borderRadius: 2, border: '1px solid rgba(248,113,113,0.2)' }}>
-                <Typography sx={{ color: '#f87171', fontSize: '0.85rem' }}>
-                  No se pudo crear la instancia. Verifica que Evolution API esté activo y la API Key sea correcta.
-                </Typography>
-              </Box>
-            )}
-          </DialogContent>
-        </Dialog>
-
-        {/* ── WhatsApp ── */}
-        <Section icon={<PhoneAndroidIcon />} title={t.settings.whatsapp}>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-
-            {connStatus === 'checking' ? (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 0.5 }}>
-                <CircularProgress size={16} sx={{ color: 'rgba(255,255,255,0.25)' }} />
-                <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem' }}>Verificando conexión…</Typography>
-              </Box>
-            ) : connStatus === 'connected' ? (
-              /* ── Conectado ── */
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: 1.5, borderRadius: 2, bgcolor: 'rgba(37,211,102,0.08)', border: '1px solid rgba(37,211,102,0.22)' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
-                  <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: '#25d366', boxShadow: '0 0 8px #25d366aa', flexShrink: 0 }} />
-                  <Box>
-                    <Typography sx={{ color: '#4ade80', fontWeight: 600, fontSize: '0.85rem' }}>Número conectado</Typography>
-                    <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem' }}>{connPhone || evo.instance}</Typography>
+              ) : connStatus === 'connected' ? (
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: 1.5, borderRadius: 2, bgcolor: 'rgba(37,211,102,0.08)', border: '1px solid rgba(37,211,102,0.22)' }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+                    <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: '#25d366', boxShadow: '0 0 8px #25d366aa', flexShrink: 0 }} />
+                    <Box>
+                      <Typography sx={{ color: '#4ade80', fontWeight: 600, fontSize: '0.85rem' }}>{t.settings.connected}</Typography>
+                      <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem' }}>{connPhone || evo.instance}</Typography>
+                    </Box>
+                  </Box>
+                  <Box onClick={handleConnect} sx={{ px: 1.2, py: 0.5, borderRadius: 1.5, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.1)', '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' } }}>
+                    <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.35)' }}>{t.settings.change}</Typography>
                   </Box>
                 </Box>
-                <Box onClick={handleConnect} sx={{ px: 1.2, py: 0.5, borderRadius: 1.5, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.1)', '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' } }}>
-                  <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.35)' }}>Cambiar</Typography>
-                </Box>
-              </Box>
-            ) : (
-              /* ── Sin conectar ── */
-              <Box>
-                <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)', mb: 1.5, lineHeight: 1.5 }}>
-                  Vincula tu número de WhatsApp para enviar mensajes directamente desde la app.
-                </Typography>
-                <Box onClick={handleConnect} sx={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1,
-                  py: 1.3, borderRadius: 2, cursor: 'pointer',
-                  bgcolor: 'rgba(37,211,102,0.12)', border: '1px solid rgba(37,211,102,0.3)',
-                  transition: 'all 0.15s',
-                  '&:hover': { bgcolor: 'rgba(37,211,102,0.2)', borderColor: 'rgba(37,211,102,0.5)' },
-                }}>
-                  <QrCode2Icon sx={{ fontSize: 18, color: '#25d366' }} />
-                  <Typography sx={{ fontWeight: 700, fontSize: '0.88rem', color: '#25d366' }}>
-                    Conectar mi número de WhatsApp
+              ) : (
+                <Box>
+                  <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)', mb: 1.5, lineHeight: 1.5 }}>
+                    {t.settings.waConnectHint}
                   </Typography>
+                  <Box onClick={handleConnect} sx={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1,
+                    py: 1.3, borderRadius: 2, cursor: 'pointer',
+                    bgcolor: 'rgba(37,211,102,0.12)', border: '1px solid rgba(37,211,102,0.3)',
+                    transition: 'all 0.15s',
+                    '&:hover': { bgcolor: 'rgba(37,211,102,0.2)', borderColor: 'rgba(37,211,102,0.5)' },
+                  }}>
+                    <QrCode2Icon sx={{ fontSize: 18, color: '#25d366' }} />
+                    <Typography sx={{ fontWeight: 700, fontSize: '0.88rem', color: '#25d366' }}>
+                      {t.settings.connect}
+                    </Typography>
+                  </Box>
                 </Box>
-              </Box>
-            )}
-
-          </Box>
-        </Section>
-
-        {/* ── Mi cuenta ── */}
-        <AccountSection user={user} connStatus={connStatus} connPhone={connPhone} evo={evo} />
+              )}
+            </Box>
+          </Section>
+        </>}
 
       </Box>
+
+      {/* ── QR Dialog — fuera del scroll ── */}
+      <Dialog open={qrOpen} onClose={handleCloseQr} maxWidth="xs" fullWidth
+        slotProps={{ paper: { sx: { bgcolor: 'var(--card-bg,#161d2e)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 3, boxShadow: '0 24px 64px rgba(0,0,0,0.7)' } } }}>
+        <DialogContent sx={{ textAlign: 'center', py: 3, bgcolor: 'var(--card-bg,#161d2e)' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, mb: 2 }}>
+            <PhoneAndroidIcon sx={{ color: '#25d366', fontSize: 22 }} />
+            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem' }}>{t.settings.qrTitle}</Typography>
+          </Box>
+
+          {qrStatus === 'phone' && (
+            <Box sx={{ bgcolor: 'var(--surface,#111827)', borderRadius: 2, p: 2, border: '1px solid rgba(255,255,255,0.07)' }}>
+              <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.8rem', mb: 2, lineHeight: 1.5 }}>{t.settings.qrPhoneHint}</Typography>
+              <Box sx={{
+                display: 'flex', alignItems: 'center', gap: 0,
+                bgcolor: 'var(--surface,#111827)', borderRadius: 2,
+                border: '1.5px solid rgba(255,255,255,0.1)', overflow: 'hidden', mb: 2,
+                '&:focus-within': { borderColor: '#25d366', boxShadow: '0 0 0 3px rgba(37,211,102,0.1)' },
+                transition: 'all 0.15s',
+              }}>
+                <Box sx={{ px: 1.5, py: 1.2, bgcolor: 'rgba(37,211,102,0.08)', borderRight: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
+                  <Typography sx={{ color: '#4ade80', fontSize: '0.95rem', fontWeight: 600, fontFamily: 'monospace' }}>+52</Typography>
+                </Box>
+                <Box component="input" autoFocus type="tel" placeholder="5512345678"
+                  value={phoneInput.replace(/\D/g, '').replace(/^52/, '')}
+                  onChange={e => { const digits = e.target.value.replace(/\D/g, '').slice(0, 10); setPhoneInput('+52' + digits) }}
+                  onKeyDown={e => { if (e.key === 'Enter' && phoneInput.replace(/\D/g,'').length >= 12) handleStartConnection() }}
+                  sx={{ flex: 1, border: 'none', outline: 'none', bgcolor: 'transparent', color: 'white', fontSize: '1.1rem', fontFamily: 'monospace', letterSpacing: '0.08em', px: 1.5, py: 1.2, '&::placeholder': { color: 'rgba(255,255,255,0.2)' } }}
+                />
+              </Box>
+              <Box onClick={() => phoneInput.replace(/\D/g,'').length >= 12 && handleStartConnection()} sx={{
+                py: 1.1, borderRadius: 2, cursor: phoneInput.replace(/\D/g,'').length >= 12 ? 'pointer' : 'default', textAlign: 'center',
+                bgcolor: phoneInput.replace(/\D/g,'').length >= 12 ? 'rgba(37,211,102,0.15)' : 'rgba(255,255,255,0.04)',
+                border: `1px solid ${phoneInput.replace(/\D/g,'').length >= 12 ? 'rgba(37,211,102,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                transition: 'all 0.15s',
+                '&:hover': phoneInput.replace(/\D/g,'').length >= 12 ? { bgcolor: 'rgba(37,211,102,0.25)' } : {},
+              }}>
+                <Typography sx={{ color: phoneInput.replace(/\D/g,'').length >= 12 ? '#25d366' : 'rgba(255,255,255,0.2)', fontWeight: 700, fontSize: '0.88rem' }}>
+                  {t.settings.qrContinue}
+                </Typography>
+              </Box>
+              <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.68rem', mt: 1.5, textAlign: 'center' }}>{t.settings.qrFootnote}</Typography>
+            </Box>
+          )}
+
+          {qrStatus === 'creating' && (
+            <Box sx={{ py: 4, bgcolor: 'var(--surface,#111827)', borderRadius: 2, border: '1px solid rgba(255,255,255,0.07)' }}>
+              <CircularProgress size={40} sx={{ color: '#25d366' }} />
+              <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.82rem', mt: 2 }}>{t.settings.qrPreparing}</Typography>
+            </Box>
+          )}
+
+          {qrStatus === 'waiting' && (
+            <Box sx={{ bgcolor: 'var(--surface,#111827)', borderRadius: 2, p: 2, border: '1px solid rgba(255,255,255,0.07)' }}>
+              {phoneInput && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, px: 1.5, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(37,211,102,0.08)', border: '1px solid rgba(37,211,102,0.2)' }}>
+                  <PhoneAndroidIcon sx={{ fontSize: 15, color: '#4ade80' }} />
+                  <Typography sx={{ color: '#4ade80', fontSize: '0.82rem', fontFamily: 'monospace', fontWeight: 600 }}>{phoneInput}</Typography>
+                </Box>
+              )}
+              {qrImage ? (
+                <Box sx={{ display: 'inline-block' }}>
+                  <Box component="img" src={qrImage} alt="QR Code" sx={{ width: 220, height: 220, borderRadius: 2, border: '4px solid white', display: 'block' }} />
+                </Box>
+              ) : (
+                <Box sx={{ width: 220, height: 220, mx: 'auto', borderRadius: 2, bgcolor: 'var(--surface,#111827)', border: '1px solid rgba(255,255,255,0.07)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1.5 }}>
+                  <CircularProgress size={32} sx={{ color: '#25d366' }} />
+                  {qrWaitSecs >= 12 && (
+                    <Box onClick={async () => {
+                      const instanceName = `${user?.username || 'user'}-wa`
+                      setQrWaitSecs(0)
+                      await fetch(`/api/evolution/instance/${instanceName}?action=logout`, { method: 'POST' }).catch(() => {})
+                      await new Promise(r => setTimeout(r, 2000))
+                      fetchQr(instanceName)
+                    }} sx={{ px: 1.5, py: 0.5, borderRadius: 1.5, cursor: 'pointer', bgcolor: 'rgba(37,211,102,0.1)', border: '1px solid rgba(37,211,102,0.3)', '&:hover': { bgcolor: 'rgba(37,211,102,0.2)' } }}>
+                      <Typography sx={{ fontSize: '0.7rem', color: '#4ade80', fontWeight: 600 }}>{t.settings.qrRetry}</Typography>
+                    </Box>
+                  )}
+                </Box>
+              )}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.5, justifyContent: 'center' }}>
+                <CircularProgress size={12} sx={{ color: '#25d366' }} />
+                <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.7rem' }}>{t.settings.qrWaiting}</Typography>
+              </Box>
+              <Box sx={{ mt: 1.5, textAlign: 'left', width: '100%', maxWidth: 240 }}>
+                {[t.settings.qrStep1, t.settings.qrStep2, t.settings.qrStep3, t.settings.qrStep4].map((step, i) => (
+                  <Box key={i} sx={{ display: 'flex', gap: 1, mb: 0.8 }}>
+                    <Box sx={{ width: 18, height: 18, borderRadius: '50%', bgcolor: 'rgba(37,211,102,0.2)', border: '1px solid rgba(37,211,102,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, mt: 0.1 }}>
+                      <Typography sx={{ fontSize: '0.55rem', color: '#4ade80', fontWeight: 800 }}>{i+1}</Typography>
+                    </Box>
+                    <Typography sx={{ color: 'rgba(255,255,255,0.55)', fontSize: '0.75rem', lineHeight: 1.4 }}>{step}</Typography>
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+          )}
+
+          {qrStatus === 'connected' && (
+            <Box sx={{ py: 2, bgcolor: 'rgba(37,211,102,0.06)', borderRadius: 2, border: '1px solid rgba(37,211,102,0.18)' }}>
+              <Box sx={{ width: 64, height: 64, borderRadius: '50%', bgcolor: 'rgba(37,211,102,0.15)', border: '2px solid #25d366', display: 'flex', alignItems: 'center', justifyContent: 'center', mx: 'auto', mb: 2 }}>
+                <CheckIcon sx={{ color: '#25d366', fontSize: 32 }} />
+              </Box>
+              <Typography sx={{ color: '#25d366', fontWeight: 700, fontSize: '1rem' }}>¡Número vinculado!</Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.85rem', mt: 0.5, fontFamily: 'monospace' }}>{phoneInput || qrPhone}</Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem', mt: 0.5 }}>Los mensajes saldrán desde este número</Typography>
+              <Box onClick={handleCloseQr} sx={{ mt: 2.5, px: 3, py: 0.8, borderRadius: 2, cursor: 'pointer', display: 'inline-block', bgcolor: 'rgba(37,211,102,0.15)', border: '1px solid rgba(37,211,102,0.3)', '&:hover': { bgcolor: 'rgba(37,211,102,0.25)' } }}>
+                <Typography sx={{ color: '#25d366', fontSize: '0.82rem', fontWeight: 600 }}>Listo</Typography>
+              </Box>
+            </Box>
+          )}
+
+          {qrStatus === 'error' && (
+            <Box sx={{ py: 1.5, px: 2, bgcolor: 'rgba(248,113,113,0.06)', borderRadius: 2, border: '1px solid rgba(248,113,113,0.2)' }}>
+              <Typography sx={{ color: '#f87171', fontSize: '0.85rem' }}>
+                No se pudo crear la instancia. Verifica que Evolution API esté activo y la API Key sea correcta.
+              </Typography>
+            </Box>
+          )}
+        </DialogContent>
+      </Dialog>
+
     </Box>
   )
 }

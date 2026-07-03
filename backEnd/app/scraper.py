@@ -1,6 +1,7 @@
 # scraper.py - VERSIÓN EXTENDIDA
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 from urllib.parse import urljoin, urlparse
@@ -397,40 +398,37 @@ class WebsiteScraper:
             all_links = [{"url": base + p, "text": p.strip("/"), "path": p} for p in _COMMON_PATHS]
             print(f"⚠️  Sitio JS/SPA detectado (0 links en HTML) — probando {len(all_links)} rutas comunes")
 
-        sub_urls  = self._ai_rank_subpages(all_links, result.get("industry", ""))
-        print(f"🔗 {len(all_links)} links encontrados → crawleando top {min(8, len(sub_urls))}")
-        for sub_url in sub_urls[:12]:
-            sub_soup, sub_text = self._scrape_subpage(sub_url)
-            if not sub_soup:
-                continue
-            sub_phones_s, sub_wa_s = self._extract_from_scripts(sub_soup)
-            _existing_wa_nums = {c["number"] for c in result["_contacts_raw"]["whatsapp_contacts"]}
-            for contact in self._extract_whatsapp_with_labels(sub_soup, sub_text):
-                if contact["number"] not in result["_contacts_raw"]["all_whatsapp_numbers"]:
-                    result["_contacts_raw"]["all_whatsapp_numbers"].append(contact["number"])
-                if contact["number"] not in _existing_wa_nums:
-                    result["_contacts_raw"]["whatsapp_contacts"].append(contact)
-                    _existing_wa_nums.add(contact["number"])
-            for num in sub_wa_s:
-                if num not in result["_contacts_raw"]["all_whatsapp_numbers"]:
-                    result["_contacts_raw"]["all_whatsapp_numbers"].append(num)
-                if num not in _existing_wa_nums:
-                    result["_contacts_raw"]["whatsapp_contacts"].append({"number": num, "label": ""})
-                    _existing_wa_nums.add(num)
-            for phone in self._extract_phone_numbers(sub_soup, sub_text) + sub_phones_s:
-                if phone not in result["_contacts_raw"]["phone_numbers"]:
-                    result["_contacts_raw"]["phone_numbers"].append(phone)
-            for email in self._extract_emails(sub_text):
-                if email not in result["_contacts_raw"]["emails"]:
-                    result["_contacts_raw"]["emails"].append(email)
-            if not result["_extra"]["business_hours"]:
-                bh = self._extract_business_hours(sub_text, sub_soup)
-                if bh:
-                    result["_extra"]["business_hours"] = bh
-            if not result["_extra"]["address"]:
-                addr = self._extract_address(sub_text, sub_soup)
-                if addr:
-                    result["_extra"]["address"] = addr
+        sub_urls = self._ai_rank_subpages(all_links, result.get("industry", ""))
+        print(f"🔗 {len(all_links)} links encontrados → crawleando top {min(12, len(sub_urls))} en paralelo")
+        _existing_wa = {c["number"] for c in result["_contacts_raw"]["whatsapp_contacts"]}
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {pool.submit(self._fetch_sub, u): u for u in sub_urls[:12]}
+            for future in as_completed(futures):
+                data = future.result()
+                if not data:
+                    continue
+                # Merge WhatsApp contacts
+                for contact in data["wa_contacts"]:
+                    if contact["number"] not in _existing_wa:
+                        result["_contacts_raw"]["whatsapp_contacts"].append(contact)
+                        result["_contacts_raw"]["all_whatsapp_numbers"].append(contact["number"])
+                        _existing_wa.add(contact["number"])
+                for num in data["wa_scripts"]:
+                    if num not in _existing_wa:
+                        result["_contacts_raw"]["whatsapp_contacts"].append({"number": num, "label": ""})
+                        result["_contacts_raw"]["all_whatsapp_numbers"].append(num)
+                        _existing_wa.add(num)
+                # Merge phones, emails, hours, address
+                for phone in data["phones"]:
+                    if phone not in result["_contacts_raw"]["phone_numbers"]:
+                        result["_contacts_raw"]["phone_numbers"].append(phone)
+                for email in data["emails"]:
+                    if email not in result["_contacts_raw"]["emails"]:
+                        result["_contacts_raw"]["emails"].append(email)
+                if not result["_extra"]["business_hours"] and data["hours"]:
+                    result["_extra"]["business_hours"] = data["hours"]
+                if not result["_extra"]["address"] and data["address"]:
+                    result["_extra"]["address"] = data["address"]
 
         if result["_contacts_raw"]["all_whatsapp_numbers"]:
             result["_contacts_raw"]["whatsapp_numbers"] = result["_contacts_raw"]["all_whatsapp_numbers"]
@@ -591,7 +589,7 @@ class WebsiteScraper:
     # MULTI-PAGE CRAWLING — AI-powered
     # ========================================================================
 
-    # Fallback keywords when Groq is unavailable
+    # Fallback keywords when LLM is unavailable
     _CONTACT_KEYWORDS = [
         "contact", "contacto", "contactanos", "contáctanos",
         "about", "nosotros", "quienes", "empresa", "about-us",
@@ -725,6 +723,21 @@ class WebsiteScraper:
         except Exception:
             pass
         return None, ""
+
+    def _fetch_sub(self, url: str) -> dict | None:
+        """Fetch one subpage and extract all data without touching shared state."""
+        sub_soup, sub_text = self._scrape_subpage(url)
+        if not sub_soup:
+            return None
+        phones_s, wa_s = self._extract_from_scripts(sub_soup)
+        return {
+            "wa_contacts": self._extract_whatsapp_with_labels(sub_soup, sub_text),
+            "wa_scripts":  wa_s,
+            "phones":      self._extract_phone_numbers(sub_soup, sub_text) + phones_s,
+            "emails":      self._extract_emails(sub_text),
+            "hours":       self._extract_business_hours(sub_text, sub_soup),
+            "address":     self._extract_address(sub_text, sub_soup),
+        }
 
     # ========================================================================
     # EXTRACCIÓN DESDE SCRIPTS (JSON-LD, __NEXT_DATA__, vars inline)
@@ -861,9 +874,9 @@ class WebsiteScraper:
     def _detect_industry(self, text: str, soup: BeautifulSoup) -> str:
         """DeepSeek clasifica la industria; keywords como fallback si falla."""
         # 1. Intentar con DeepSeek primero
-        groq_result = self._classify_industry_deepseek(text[:800])
-        if groq_result:
-            return groq_result
+        llm_result = self._classify_industry_deepseek(text[:800])
+        if llm_result:
+            return llm_result
 
         # 2. Fallback: keywords
         import re as _re

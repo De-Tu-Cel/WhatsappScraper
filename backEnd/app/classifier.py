@@ -1,43 +1,31 @@
 # classifier.py
-"""DeepSeek-based classifier for inbound WhatsApp responses."""
+"""LLM-based classifier for inbound WhatsApp responses."""
 import json
 import logging
 import threading
 import time
 from datetime import datetime, timedelta
 
-from app.config import DEEPSEEK_API_KEY
 from app.database import MongoDBManager
 
 log = logging.getLogger(__name__)
 
-_DEEPSEEK_SEMAPHORE = threading.Semaphore(1)
-
-_QUOTA_PAUSE_MINUTES = 60
-_quota_exhausted_until: float = 0.0
-
-
 def all_quota_exhausted() -> bool:
-    return time.time() < _quota_exhausted_until
+    """Return True if the LLM circuit breaker is open (delegates to llm_guard)."""
+    from app.llm_guard import circuit_is_open
+    return circuit_is_open()
 
 
-def _set_quota_circuit_open():
-    global _quota_exhausted_until
-    _quota_exhausted_until = time.time() + _QUOTA_PAUSE_MINUTES * 60
-    log.warning("Circuit breaker abierto — DeepSeek sin cuota. Clasificación pausada por %d minutos.", _QUOTA_PAUSE_MINUTES)
-
-
-def reset_quota_circuit():
-    global _quota_exhausted_until
-    _quota_exhausted_until = 0.0
-    log.info("Circuit breaker de cuota LLM reiniciado manualmente.")
+def reset_quota_circuit() -> None:
+    """Re-close the circuit breaker (delegates to llm_guard)."""
+    from app.llm_guard import reset_circuit
+    reset_circuit()
 
 
 class LLMQuotaExceeded(Exception):
     pass
 
-# Keep old name as alias so imports in other files don't break
-GroqQuotaExceeded = LLMQuotaExceeded
+GroqQuotaExceeded = LLMQuotaExceeded  # legacy alias
 
 
 # ── Single-message prompt (first reply / cold response) ───────────────────────
@@ -90,18 +78,29 @@ Elige UNO: "humano" | "automatico" | "menu" | "hibrido" | "bot"
   DIFERENCIA vs "bot": no intenta entender el mensaje libre, solo presenta opciones fijas.
   DIFERENCIA vs "automatico": SÍ espera input del usuario para continuar el flujo.
 
-"hibrido" — combina contenido automático CON opción explícita y activa de hablar con humano.
-  REGLA ESTRICTA: debe tener AMBAS partes simultáneamente:
-    (1) contenido automático/plantilla (acuse de recibo, bienvenida, menú)
-    (2) opción ACTIVA de transferencia a persona real:
+"hibrido" — combina contenido automático CON contenido humano en la misma respuesta o en el hilo inmediato.
+  CASOS que califican como "hibrido":
+    (1) Mensaje automático + opción ACTIVA de hablar con humano ahora mismo:
         "¿Deseas hablar con un asesor? Responde SÍ", "Te conecto con un agente",
-        "Escribe HUMANO para hablar con alguien", botón "Hablar con asesor"
-  NO confundir con "automatico" que promete contacto futuro pero no ofrece opción activa ahora.
+        "Escribe HUMANO", botón "Hablar con asesor"
+    (2) El mensaje ES el anuncio del handoff: "Hola, soy [nombre], reemplazaré a nuestro asistente virtual",
+        "Se está comunicando con un agente de [empresa] vía WhatsApp. Desde ahora reemplazaré al bot."
+        → aunque el mensaje parezca humano, el contexto indica que antes había un bot → "hibrido"
+  NO confundir con "automatico" que solo promete contacto futuro sin dar opción activa ahora.
 
 "bot" — sistema con lógica propia o IA conversacional, SIN menú numerado.
+  Señales FUERTES de bot (cada una por sí sola es suficiente):
+    · Mensaje bilingüe en el mismo bloque: español + inglés separados por "/" o "---"
+      (ej: "La sesión ha finalizado. / Session ended." → bot CERTEZA)
+    · Gestión de sesión explícita: "cerraré la sesión", "La sesión ha finalizado",
+      "Session ended", "podemos continuar cuando quieras", "Recuerda enviar X para chatear"
+    · Se identifica como IA o bot: "Soy [Nombre] tu asistente virtual", "soy un bot",
+      "Hola, soy Max", o el nombre del contacto/empresa contiene "Bot", "Chatbot", "IA",
+      "Asistente Virtual", "Robótico", "Virtual"
+    · Instrucciones de activación: "envía 'HOLA' para comenzar", "escribe X para chatear conmigo 🤖"
+    · Estructura de IA: responde en tercera persona sobre sí mismo describiendo sus capacidades
+      ("Estoy diseñado para...", "Mi enfoque es...", "Puedo ayudarte con...")
   is_ai=false (bot de flujo/reglas):
-    · Responde con frases propias pero sigue un flujo predefinido rígido
-    · Nombre artificial obvio ("Soy Sara", "Hola, soy Max tu asistente virtual")
     · Ignora preguntas fuera de su flujo o repite el mismo mensaje ante entradas inesperadas
     · Respuestas excesivamente largas con bullets y estructura para mensajes simples
     · Tono corporativo perfecto sin personalidad real
@@ -116,7 +115,8 @@ Elige UNO: "humano" | "automatico" | "menu" | "hibrido" | "bot"
     · DIFERENCIA de humano: demasiado perfecto y consistente, sin personalidad única,
       sin opiniones propias, sin referencia a situaciones personales reales
 
-REGLA DE ORO: ante la duda → "humano". Solo no-humano con evidencia CLARA y específica.
+REGLA DE ORO: ante la duda → "humano". EXCEPCIÓN: si hay señales FUERTES de bot (bilingüe,
+gestión de sesión, se autoidentifica como bot) → "bot" aunque también parezca natural.
 JERARQUÍA: si hay menú numerado → "menu" aunque también tenga frases automáticas.
 
 ══ PASO 2: CALIDAD DE SERVICIO (escala 1-5) ══
@@ -140,12 +140,13 @@ svc_proact (Proactividad): ¿anticipó necesidades, hizo preguntas de calificaci
 5 — Lead caliente: pide cotización/precio, propone llamada o reunión, menciona urgencia o presupuesto.
 ESTADÍSTICA: 75% son 1-2. Un 3 requiere evidencia explícita. 4-5 son genuinamente excepcionales.
 
-══ PASO 4: DIAGNÓSTICO (máximo 15 palabras) ══
-Hallazgo más importante: qué reveló sobre el servicio y/o la intención de compra real.
-✓ "Pidió precio urgente, respuesta tardó 3h sin solución ni disculpa"
-✓ "Bot con nombre artificial, ignora preguntas, solo sigue su flujo"
-✓ "Humano respondió rápido con propuesta concreta y próximo paso claro"
-✗ "Respuesta breve" / "Muestra interés" / "Sistema automático" (demasiado vago)
+══ PASO 4: CONCLUSIÓN PARA EL CLIENTE (máximo 30 palabras) ══
+Escribe en lenguaje simple (como si hablaras con un dueño de negocio, no un técnico):
+qué pasó con este contacto, cómo respondió la empresa y qué acción concreta conviene tomar.
+✓ "Respondieron rápido con un asesor real y ofrecieron una cita. Vale la pena dar seguimiento."
+✓ "El sistema solo manda mensajes automáticos. No hay persona disponible. Contactar por otro medio."
+✓ "Mostraron interés real y pidieron más información. Buen momento para enviar una propuesta."
+✗ "Respuesta breve" / "Muestra interés" / "Sistema automático" (demasiado vago, no ayuda al cliente)
 
 is_ai: true SOLO si category="bot" Y claramente es IA conversacional (no menú, no flujo rígido)
 bot_quality: SOLO si category="bot": 1=flujo básico · 3=flujo funcional · 5=IA avanzada
@@ -160,32 +161,87 @@ Responde SOLO con JSON válido:
 # ── Full-conversation prompt (used after AI session closes) ───────────────────
 
 _CONV_PROMPT_TEMPLATE = """\
-Eres un analista comercial experto. Acabas de leer la conversación completa de WhatsApp entre \
-un representante de una consultora de tecnología y un prospecto de {company_name} ({industry}).
+Eres un analista comercial experto en comportamiento de empresas en WhatsApp.
+Acabas de leer TODA la conversación con {company_name} ({industry}).
 
-CONVERSACIÓN COMPLETA (cronológica):
+⚠️ PISTA DE NOMBRE: si "{company_name}" contiene "Bot", "Chatbot", "IA", "Asistente", "Virtual",
+"Robótico" → casi certeza de sistema automatizado, clasifica como "bot" salvo evidencia clara de lo contrario.
+
+CONVERSACIÓN COMPLETA (cronológica — [Representante] = mensajes enviados, [Prospecto] = respuestas recibidas):
 {thread}
 
-Basándote en TODA la conversación (no solo el último mensaje), evalúa:
+══ PASO 1: DETECTA LAS FASES DE LA CONVERSACIÓN ══
 
-══ ORIGEN DE LA RESPUESTA INICIAL ══
-Categoriza la primera respuesta del prospecto usando los mismos criterios de siempre:
-"humano" / "automatico" / "menu" / "hibrido" / "bot"
+Lee el hilo completo e identifica si hubo CAMBIOS de comportamiento a lo largo del tiempo.
+NO te quedes solo con el primer o último mensaje — analiza el ARC completo.
 
-══ CALIDAD DE SERVICIO (1-5) ══
-Evalúa el comportamiento del prospecto/empresa a lo largo de toda la conversación.
-svc_prof, svc_comp, svc_empa, svc_solu, svc_next, svc_proact
+SEÑALES DE FASE AUTOMÁTICA / BOT (cualquiera de estas confirma fase automática):
+  · Menú con opciones letradas o numeradas (A/B/C, 1/2/3, *A* - Opción, 1️⃣ Ventas)
+  · Se auto-identifica: "Hola, soy el asistente virtual de X", "soy un bot", emoji 🤖 en su mensaje
+  · El mismo texto aparece REPETIDO ante entradas diferentes (loop de bot)
+  · Responde en segundos a cualquier hora incluyendo madrugada
+  · Frases de plantilla: "Antes de prestarle asistencia…", "Ahora está en la cola…",
+    "Hemos recibido tu consulta", "Un agente te contactará a la brevedad"
 
-══ SEÑAL COMERCIAL FINAL (1-5) ══
-¿En qué estado quedó el lead al cierre de la conversación?
-1 — Descartado / sin interés / bloqueó
-2 — Frío / no respondió más / cortesía vacía
-3 — Tibio / pidió info pero sin compromiso
+SEÑALES DE FASE HUMANA (cualquiera de estas confirma fase humana):
+  · Anuncia la transición: "Hola, soy [nombre], reemplazaré a nuestro asistente",
+    "Se está comunicando con un agente de [empresa]", "Ahora lo atenderá un asesor"
+  · Responde AL CONTENIDO ESPECÍFICO enviado, no a una plantilla
+  · Usa el nombre del interlocutor de forma natural ("Entiendo Andrés…")
+  · Lenguaje conversacional real: explica con contexto, hace preguntas propias, varía el tono
+  · Da información concreta (precios, políticas, procesos) que no es un menú
+  · Firma personal o despedida informal ("Saludos", "Quedamos atentos")
+
+══ PASO 2: CLASIFICA — ÁRBOL DE DECISIÓN OBLIGATORIO ══
+
+Aplica en orden. La PRIMERA regla que coincida es la categoría correcta:
+
+1. ¿La conversación tiene AMBAS: una fase claramente automática/bot/menú Y posteriormente
+   una fase claramente humana (agente real)? → "hibrido"
+   EJEMPLOS que son "hibrido":
+     · Bot de bienvenida → menú de opciones → agente humano toma la conversación
+     · Auto-respuesta de acuse → días después responde un vendedor real
+     · IVR de WhatsApp que transfiere a agente cuando el usuario pide ayuda
+   IMPORTANTE: si hay handoff bot→humano, siempre es "hibrido" sin excepción.
+
+2. ¿Toda la conversación del prospecto son menús/opciones sin que jamás aparezca un humano real?
+   → "menu"
+
+3. ¿Toda la conversación es un bot con IA o flujo automatizado sin menús y sin humano?
+   → "bot"
+
+4. ¿Toda la conversación del prospecto son plantillas automáticas (acuses, folios, horarios)
+   sin menús y sin humano? → "automatico"
+
+5. ¿Todo indica persona real respondiendo a lo largo de toda la conversación? → "humano"
+
+REGLA DE ORO: si tienes dudas entre "humano" y otro, elige "humano".
+EXCEPCIÓN ABSOLUTA: si detectaste señales FUERTES de bot/menú en alguna fase, NO puede ser solo "humano".
+
+══ PASO 3: CALIDAD DE SERVICIO (1-5) ══
+
+Si la categoría es "hibrido": evalúa PRINCIPALMENTE la fase humana (ignora la calidad del bot).
+Si es "menu" / "automatico" / "bot" puro: TODAS las dimensiones van en 1-2, sin excepción.
+
+svc_prof  (Profesionalismo): ortografía, tono, coherencia
+svc_comp  (Completitud): ¿respondió específicamente lo que se pidió?
+svc_empa  (Empatía): calidez, personalización, valida la necesidad
+svc_solu  (Solución): ¿ofreció algo concreto? (precio, producto, alternativa, cita)
+svc_next  (Siguiente paso): ¿quedó claro qué sigue? (CTA explícito)
+svc_proact (Proactividad): ¿anticipó necesidades o hizo preguntas de calificación?
+
+══ PASO 4: SEÑAL COMERCIAL FINAL (1-5) ══
+Estado del lead al cierre de la conversación:
+1 — Descartado / bloqueó / sin interés
+2 — Frío / dejó de responder / cortesía vacía
+3 — Tibio / pidió info sin compromiso claro
 4 — Interesado / preguntó detalles, pidió que lo contacten
-5 — Caliente / pidió precio/cita/propuesta, mostró urgencia
+5 — Caliente / pidió precio, cita, propuesta o mostró urgencia
 
-══ DIAGNÓSTICO FINAL (máximo 20 palabras) ══
-Conclusión del desenlace: qué pasó en la conversación y cuál es el siguiente paso recomendado.
+══ PASO 5: CONCLUSIÓN (máximo 35 palabras) ══
+Para un dueño de negocio sin tecnicismos. Si es "hibrido": menciona explícitamente
+que hubo un bot inicial y luego un agente real, y evalúa la calidad del agente.
+Indica la acción concreta más importante a tomar.
 
 Responde SOLO con JSON válido:
 {{"category":"humano|automatico|menu|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"response_quality":3,"bot_quality":null,"notes":"diagnóstico","conversation_analysis":true}}\
@@ -203,7 +259,7 @@ _ERROR_RESULT = {
     "svc_proact": None,
     "response_quality": 3,
     "bot_quality": None,
-    "notes": "DeepSeek no configurado",
+    "notes": "LLM no configurado",
     "error": True,
 }
 
@@ -296,19 +352,18 @@ def _parse_llm_response(raw: str) -> dict:
 
 
 def _call_deepseek(messages: list, max_tokens: int = 280) -> str:
-    """Call active LLM provider (Groq locally, DeepSeek in prod). Raises LLMQuotaExceeded on billing errors."""
-    from app.llm import call_llm
-    with _DEEPSEEK_SEMAPHORE:
-        try:
-            return call_llm(messages, max_tokens=max_tokens, temperature=0)
-        except Exception as e:
-            err = str(e).lower()
-            if "402" in str(e) or "insufficient_balance" in err:
-                raise LLMQuotaExceeded("DeepSeek saldo insuficiente")
-            # Circuit breaker open or daily rate limit hit — treat as quota exhaustion
-            if "circuit breaker" in err or "rate-limited" in err or "429" in err:
-                raise LLMQuotaExceeded(f"LLM cuota/rate-limit: {e}")
-            raise
+    """Call active LLM provider with BATCH priority. Raises LLMQuotaExceeded on billing errors."""
+    from app.llm import call_llm, PRIORITY_BATCH
+    try:
+        return call_llm(messages, max_tokens=max_tokens, temperature=0, priority=PRIORITY_BATCH)
+    except Exception as e:
+        err = str(e).lower()
+        if "402" in str(e) or "insufficient_balance" in err:
+            raise LLMQuotaExceeded("DeepSeek saldo insuficiente")
+        # Circuit breaker open or rate limit — surface as quota exhaustion for callers
+        if "circuit breaker" in err or "rate-limited" in err or "429" in err:
+            raise LLMQuotaExceeded(f"LLM cuota/rate-limit: {e}")
+        raise
 
 
 def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: float = None) -> dict:
@@ -444,8 +499,7 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
 
         db.save_message_analysis(log_id, analysis)
     except LLMQuotaExceeded:
-        _set_quota_circuit_open()
-        log.warning("classify_and_save: DeepSeek sin cuota para log_id=%s — marcado como quota_exceeded", log_id)
+        log.warning("classify_and_save: LLM sin cuota para log_id=%s — marcado como quota_exceeded", log_id)
         try:
             from bson import ObjectId
             db.db.message_logs.update_one(
@@ -487,8 +541,7 @@ def classify_conversation_and_save(company_id: str, log_id: str):
         db.save_message_analysis(log_id, analysis)
         log.info("classify_conversation_and_save: saved for company=%s log=%s", company_id, log_id)
     except LLMQuotaExceeded:
-        _set_quota_circuit_open()
-        log.warning("classify_conversation_and_save: DeepSeek sin cuota para company=%s", company_id)
+        log.warning("classify_conversation_and_save: LLM sin cuota para company=%s", company_id)
     except Exception as _exc:
         import traceback
         log.error("classify_conversation_and_save failed for %s: %s\n%s", company_id, _exc, traceback.format_exc())
@@ -564,7 +617,8 @@ def _sweep_pending():
                     {"$set": {"company_id": resolved}},
                 )
                 body = msg.get("message_body", "")
-                if body and DEEPSEEK_API_KEY:
+                from app.llm import active_provider as _ap
+                if body and _ap() != "none":
                     import threading as _t
                     _t.Thread(
                         target=classify_and_save,

@@ -45,15 +45,19 @@ function agentColor(name) {
   return AGENT_COLORS[Math.abs(hash) % AGENT_COLORS.length]
 }
 
+const _TZ = 'America/Mexico_City'
+
 function formatTime(iso) {
   if (!iso) return ''
   const d = new Date(iso.endsWith('Z') ? iso : iso + 'Z')
+  if (isNaN(d.getTime())) return ''
   const now = new Date()
   const diff = now - d
+  if (diff < 0) return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', timeZone: _TZ })
   if (diff < 60000) return 'ahora'
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m`
-  if (diff < 86400000) return d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
-  return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })
+  if (diff < 86400000) return d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', timeZone: _TZ })
+  return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', timeZone: _TZ })
 }
 
 function StatusIcon({ status, direction }) {

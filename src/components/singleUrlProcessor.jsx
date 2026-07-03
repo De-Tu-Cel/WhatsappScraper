@@ -18,7 +18,7 @@ import ResultDisplay from './resultDisplay'
 import { isValidUrl, urlValidationMsg, MAX_WA_MSG } from '@/lib/validators'
 import { useLang } from '../context/LangContext'
 
-const SKEL = { bgcolor: 'rgba(255,255,255,0.06)', '&::after': { background: 'linear-gradient(90deg,transparent,rgba(255,255,255,0.04),transparent)' } }
+const SKEL = { bgcolor: 'var(--skeleton-base,rgba(255,255,255,0.06))', '[data-theme-mode="light"] &': { bgcolor: 'rgba(0,0,0,0.08)' }, '&::after': { background: 'linear-gradient(90deg,transparent,rgba(255,255,255,0.04),transparent)', '[data-theme-mode="light"] &': { background: 'linear-gradient(90deg,transparent,rgba(0,0,0,0.04),transparent)' } } }
 
 function ResultSkeleton() {
   return (
@@ -233,7 +233,9 @@ export function MessageComposer({ result, onSend, sending, disabled }) {
                     bgcolor: activeTemplate === tpl.id ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
                     color:   activeTemplate === tpl.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
                     border:  `1px solid ${activeTemplate === tpl.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
-                    '&:hover': !disabled ? { bgcolor: 'rgba(34,197,94,0.1)' } : {},
+                    '&:hover': !disabled ? { bgcolor: 'rgba(34,197,94,0.22)', border: '1px solid rgba(34,197,94,0.5)' } : {},
+                    '[data-theme-mode="light"] &': { bgcolor: activeTemplate === tpl.id ? 'rgba(34,197,94,0.2)' : 'rgba(0,0,0,0.05)', color: activeTemplate === tpl.id ? '#16a34a' : 'rgba(0,0,0,0.5)', border: `1px solid ${activeTemplate === tpl.id ? 'rgba(34,197,94,0.5)' : 'rgba(0,0,0,0.12)'}` },
+                    '[data-theme-mode="light"] &:hover': !disabled ? { bgcolor: 'rgba(34,197,94,0.45)', color: '#15803d', border: '1px solid rgba(34,197,94,0.7)' } : {},
                   }} />
               </span>
             </Tooltip>
@@ -274,7 +276,9 @@ export function MessageComposer({ result, onSend, sending, disabled }) {
                     cursor: available ? 'pointer' : 'not-allowed',
                     opacity: available ? 1 : 0.3,
                     bgcolor: v.bg, color: v.color, border: `1px solid ${v.border}`,
-                    '&:hover': available ? { filter: 'brightness(1.2)' } : {},
+                    '&:hover': available ? { filter: 'brightness(1.15) saturate(1.3)' } : {},
+                    '[data-theme-mode="light"] &': { bgcolor: v.bg.replace(/[\d.]+\)$/, m => String(Math.min(1, parseFloat(m)*4) + ')')) },
+                    '[data-theme-mode="light"] &:hover': available ? { bgcolor: v.bg.replace(/[\d.]+\)$/, m => String(Math.min(1, parseFloat(m)*8) + ')')), filter: 'saturate(1.5)' } : {},
                   }} />
               </span>
             </Tooltip>

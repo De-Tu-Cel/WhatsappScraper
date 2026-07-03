@@ -22,6 +22,7 @@ import Dialog from '@mui/material/Dialog'
 import DialogTitle from '@mui/material/DialogTitle'
 import DialogContent from '@mui/material/DialogContent'
 import DialogActions from '@mui/material/DialogActions'
+import Divider from '@mui/material/Divider'
 import ScheduleSendIcon from '@mui/icons-material/ScheduleSend'
 import CancelIcon from '@mui/icons-material/Cancel'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
@@ -61,24 +62,57 @@ const STATUS_META = {
 
 const FIELD_SX = {
   '& .MuiOutlinedInput-root': {
-    color: 'var(--text,#f1f5f9)', bgcolor: 'rgba(255,255,255,0.04)', fontSize: '0.85rem',
-    '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' },
-    '&:hover fieldset': { borderColor: 'rgba(255,255,255,0.2)' },
+    color: 'var(--text,#f1f5f9)', bgcolor: 'var(--surface,rgba(255,255,255,0.04))', fontSize: '0.85rem',
+    '& fieldset': { borderColor: 'var(--border,rgba(255,255,255,0.1))' },
+    '&:hover fieldset': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.45)' },
     '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' },
+    '& .MuiInputBase-input': { color: 'var(--text,#f1f5f9)', WebkitTextFillColor: 'var(--text,#f1f5f9)' },
+    '& .MuiInputAdornment-root .MuiIconButton-root': { color: 'var(--text-muted,rgba(255,255,255,0.4))' },
   },
-  '& .MuiInputLabel-root': { color: 'rgba(255,255,255,0.4)', fontSize: '0.82rem' },
+  '& .MuiInputLabel-root': { color: 'var(--text-muted,rgba(255,255,255,0.4))', fontSize: '0.82rem' },
   '& .MuiInputLabel-root.Mui-focused': { color: 'var(--accent,#3b82f6)' },
+  // Light base theme: force dark text/border (overrides MUI X's internal palette-driven styles)
+  '[data-theme-mode="light"] & .MuiOutlinedInput-root': { color: '#1a2234' },
+  '[data-theme-mode="light"] & .MuiOutlinedInput-root .MuiInputBase-input': { color: '#1a2234', WebkitTextFillColor: '#1a2234' },
+  '[data-theme-mode="light"] & .MuiOutlinedInput-root fieldset': { borderColor: 'rgba(0,0,0,0.28)' },
+  '[data-theme-mode="light"] & .MuiOutlinedInput-root:hover fieldset': { borderColor: 'rgba(0,0,0,0.5)' },
+  '[data-theme-mode="light"] & .MuiOutlinedInput-root.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' },
+  '[data-theme-mode="light"] & .MuiOutlinedInput-root .MuiInputAdornment-root .MuiIconButton-root': { color: 'rgba(15,23,42,0.55)' },
+  '[data-theme-mode="light"] & .MuiInputLabel-root': { color: 'rgba(15,23,42,0.58)' },
+}
+
+// MUI X v9 date/time picker text-field: targets PickersTextField root
+// (different class hierarchy than regular TextField — visible text is in
+//  sectionContent contenteditable spans, border is on notchedOutline)
+const PICKER_FIELD_SX = {
+  '& .MuiPickersInputBase-root': { bgcolor: 'var(--surface,rgba(255,255,255,0.04))', fontSize: '0.85rem' },
+  '& .MuiPickersSectionList-sectionContent': { color: 'var(--text,#f1f5f9)' },
+  '& .MuiPickersInputBase-sectionAfter, & .MuiPickersInputBase-sectionBefore': { color: 'var(--text,#f1f5f9)' },
+  '& .MuiPickersOutlinedInput-notchedOutline': { borderColor: 'var(--border,rgba(255,255,255,0.1))' },
+  '& .MuiPickersInputBase-root:hover .MuiPickersOutlinedInput-notchedOutline': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.45)' },
+  '& .MuiPickersInputBase-root.Mui-focused .MuiPickersOutlinedInput-notchedOutline': { borderColor: 'var(--accent,#3b82f6)' },
+  '& .MuiInputAdornment-root .MuiIconButton-root': { color: 'var(--text-muted,rgba(255,255,255,0.4))' },
+  '& .MuiInputLabel-root': { color: 'var(--text-muted,rgba(255,255,255,0.4))', fontSize: '0.82rem' },
+  '& .MuiInputLabel-root.Mui-focused': { color: 'var(--accent,#3b82f6)' },
+  // Light mode: force dark text/border
+  '[data-theme-mode="light"] & .MuiPickersSectionList-sectionContent': { color: '#1a2234' },
+  '[data-theme-mode="light"] & .MuiPickersInputBase-sectionAfter, [data-theme-mode="light"] & .MuiPickersInputBase-sectionBefore': { color: '#1a2234' },
+  '[data-theme-mode="light"] & .MuiPickersOutlinedInput-notchedOutline': { borderColor: 'rgba(0,0,0,0.28)' },
+  '[data-theme-mode="light"] & .MuiPickersInputBase-root:hover .MuiPickersOutlinedInput-notchedOutline': { borderColor: 'rgba(0,0,0,0.55)' },
+  '[data-theme-mode="light"] & .MuiPickersInputBase-root.Mui-focused .MuiPickersOutlinedInput-notchedOutline': { borderColor: 'var(--accent,#3b82f6)' },
+  '[data-theme-mode="light"] & .MuiInputAdornment-root .MuiIconButton-root': { color: 'rgba(15,23,42,0.55)' },
+  '[data-theme-mode="light"] & .MuiInputLabel-root': { color: 'rgba(15,23,42,0.58)' },
 }
 
 const PICKER_POPPER_SX = {
-  '& .MuiPaper-root': { bgcolor: 'var(--card-bg,#1e293b)', color: 'var(--text,#f1f5f9)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, boxShadow: '0 8px 32px rgba(0,0,0,0.5)' },
-  '& .MuiPickersDay-root': { color: 'var(--text,#f1f5f9)', '&:hover': { bgcolor: 'rgba(255,255,255,0.07)' }, '&.Mui-selected': { bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'var(--accent,#3b82f6)' } } },
-  '& .MuiPickersDay-today:not(.Mui-selected)': { border: '1px solid rgba(var(--accent-rgb,59,130,246),0.5)' },
-  '& .MuiDayCalendar-weekDayLabel': { color: 'rgba(255,255,255,0.35)' },
+  '& .MuiPaper-root': { bgcolor: 'var(--card-bg,#1e293b)', color: 'var(--text,#f1f5f9)', border: '1px solid var(--border,rgba(255,255,255,0.1))', borderRadius: 2, boxShadow: '0 8px 32px rgba(0,0,0,0.5)' },
+  '& .MuiPickerDay-root': { color: 'var(--text,#f1f5f9)', '&:hover': { bgcolor: 'var(--item-hover,rgba(255,255,255,0.07))' }, '&.Mui-selected': { bgcolor: 'var(--accent,#3b82f6)', color: '#fff', '&:hover': { bgcolor: 'var(--accent,#3b82f6)' } } },
+  '& .MuiPickerDay-today:not(.Mui-selected)': { border: '1px solid rgba(var(--accent-rgb,59,130,246),0.5)' },
+  '& .MuiDayCalendar-weekDayLabel': { color: 'var(--text-muted,rgba(255,255,255,0.35))' },
   '& .MuiPickersCalendarHeader-label': { color: 'var(--text,#f1f5f9)', fontWeight: 700 },
-  '& .MuiPickersArrowSwitcher-button': { color: 'rgba(255,255,255,0.5)', '&:hover': { color: 'var(--text,#f1f5f9)' } },
+  '& .MuiPickersArrowSwitcher-button': { color: 'var(--text-muted,rgba(255,255,255,0.5))', '&:hover': { color: 'var(--text,#f1f5f9)' } },
   '& .MuiMultiSectionDigitalClock-root': { bgcolor: 'var(--card-bg,#1e293b)' },
-  '& .MuiMultiSectionDigitalClockSection-item': { color: 'var(--text,#f1f5f9)', '&:hover': { bgcolor: 'rgba(255,255,255,0.07)' }, '&.Mui-selected': { bgcolor: 'var(--accent,#3b82f6)', color: '#fff' } },
+  '& .MuiMultiSectionDigitalClockSection-item': { color: 'var(--text,#f1f5f9)', '&:hover': { bgcolor: 'var(--item-hover,rgba(255,255,255,0.07))' }, '&.Mui-selected': { bgcolor: 'var(--accent,#3b82f6)', color: '#fff' } },
   '& .MuiDialogActions-root button': { color: 'var(--accent,#3b82f6)' },
 }
 
@@ -129,13 +163,13 @@ function getWeekStart(date) {
 function ConfirmDialog({ open, title, body, confirmLabel, danger, onConfirm, onCancel }) {
   const { t } = useLang()
   return (
-    <Dialog open={open} onClose={onCancel} sx={{ '& .MuiDialog-paper': { bgcolor: 'var(--card-bg,#1e293b)', color: 'var(--text,#f1f5f9)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2.5, minWidth: 320 } }}>
+    <Dialog open={open} onClose={onCancel} sx={{ '& .MuiDialog-paper': { bgcolor: 'var(--card-bg,#1e293b)', color: 'var(--text,#f1f5f9)', border: '1px solid var(--border)', borderRadius: 2.5, minWidth: 320 } }}>
       <DialogTitle sx={{ fontSize: '0.95rem', fontWeight: 700, pb: 0.5 }}>{title}</DialogTitle>
       <DialogContent>
-        <Typography sx={{ color: 'rgba(255,255,255,0.55)', fontSize: '0.83rem', lineHeight: 1.5 }}>{body}</Typography>
+        <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.83rem', lineHeight: 1.5 }}>{body}</Typography>
       </DialogContent>
       <DialogActions sx={{ px: 2, pb: 2, gap: 1 }}>
-        <Button onClick={onCancel} sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.83rem' }}>{t.common.cancel}</Button>
+        <Button onClick={onCancel} sx={{ color: 'var(--text-muted)', textTransform: 'none', fontSize: '0.83rem' }}>{t.common.cancel}</Button>
         <Button onClick={onConfirm} variant="contained"
           sx={{ bgcolor: danger ? '#ef4444' : 'var(--accent,#3b82f6)', textTransform: 'none', fontSize: '0.83rem', fontWeight: 600, borderRadius: 2, '&:hover': { bgcolor: danger ? '#dc2626' : 'rgba(var(--accent-rgb,59,130,246),0.85)' } }}>
           {confirmLabel || t.sched.confirm}
@@ -227,25 +261,25 @@ function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
 
   const chipSx = active => ({
     fontSize: '0.68rem', height: 22, fontWeight: active ? 700 : 400,
-    bgcolor: active ? 'rgba(var(--accent-rgb,59,130,246),0.18)' : 'rgba(255,255,255,0.05)',
-    border: `1px solid ${active ? 'rgba(var(--accent-rgb,59,130,246),0.45)' : 'rgba(255,255,255,0.1)'}`,
-    color: active ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.5)', cursor: 'pointer',
-    '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' }, transition: 'background-color 0.15s, border-color 0.15s',
+    bgcolor: active ? 'rgba(var(--accent-rgb,59,130,246),0.18)' : 'var(--item-hover)',
+    border: `1px solid ${active ? 'rgba(var(--accent-rgb,59,130,246),0.45)' : 'var(--border)'}`,
+    color: active ? 'var(--accent,#3b82f6)' : 'var(--text-muted)', cursor: 'pointer',
+    '&:hover': { bgcolor: active ? 'rgba(var(--accent-rgb,59,130,246),0.25)' : 'var(--item-hover)', opacity: active ? 1 : 0.85 }, transition: 'background-color 0.15s, border-color 0.15s',
   })
 
   return (
-    <Box sx={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
-      <Box sx={{ px: 1.5, py: 1, bgcolor: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.07)', display: 'flex', alignItems: 'center', gap: 0.8 }}>
-        <BusinessIcon sx={{ fontSize: 14, color: 'rgba(255,255,255,0.3)' }} />
-        <Typography sx={{ color: 'rgba(255,255,255,0.55)', fontWeight: 700, fontSize: '0.75rem', flex: 1 }}>{t.sched.recipients}</Typography>
+    <Box sx={{ border: '1px solid var(--border)', borderRadius: 2, overflow: 'hidden' }}>
+      <Box sx={{ px: 1.5, py: 1, bgcolor: 'var(--surface)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 0.8 }}>
+        <BusinessIcon sx={{ fontSize: 14, color: 'var(--text-muted)' }} />
+        <Typography sx={{ color: 'var(--text-muted)', fontWeight: 700, fontSize: '0.75rem', flex: 1 }}>{t.sched.recipients}</Typography>
         {loadingCo && <CircularProgress size={11} sx={{ color: 'var(--accent,#3b82f6)' }} />}
       </Box>
 
-      <Box sx={{ px: 1.5, pt: 1.2, pb: 0.8, borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, bgcolor: 'rgba(255,255,255,0.04)', borderRadius: 1.5, border: '1px solid rgba(255,255,255,0.08)', px: 1, py: 0.4, mb: 1 }}>
-          <SearchIcon sx={{ fontSize: 13, color: 'rgba(255,255,255,0.25)' }} />
-          <Box component="input" value={search} onChange={e => setSearch(e.target.value)} placeholder={t.sched.searchCo} sx={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: 'var(--text,#f1f5f9)', fontSize: '0.78rem', '&::placeholder': { color: 'rgba(255,255,255,0.2)' } }} />
-          {search && <IconButton size="small" onClick={() => setSearch('')} sx={{ p: 0.2, color: 'rgba(255,255,255,0.3)' }}><CloseIcon sx={{ fontSize: 12 }} /></IconButton>}
+      <Box sx={{ px: 1.5, pt: 1.2, pb: 0.8, borderBottom: '1px solid var(--border)' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, bgcolor: 'var(--surface)', borderRadius: 1.5, border: '1px solid var(--border)', px: 1, py: 0.4, mb: 1 }}>
+          <SearchIcon sx={{ fontSize: 13, color: 'var(--text-muted)' }} />
+          <Box component="input" value={search} onChange={e => setSearch(e.target.value)} placeholder={t.sched.searchCo} sx={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: 'var(--text,#f1f5f9)', fontSize: '0.78rem', '&::placeholder': { color: 'var(--text-muted)' } }} />
+          {search && <IconButton size="small" onClick={() => setSearch('')} sx={{ p: 0.2, color: 'var(--text-muted)' }}><CloseIcon sx={{ fontSize: 12 }} /></IconButton>}
         </Box>
         {industries.length > 0 && (
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
@@ -263,9 +297,9 @@ function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
       </Box>
 
       {filtered.length > 0 && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 0.5, borderBottom: '1px solid rgba(255,255,255,0.04)', bgcolor: 'rgba(255,255,255,0.01)' }}>
-          <Checkbox size="small" checked={allSel} indeterminate={someSel} onChange={toggleAll} sx={{ p: 0.3, color: 'rgba(255,255,255,0.15)', '&.Mui-checked,&.MuiCheckbox-indeterminate': { color: 'var(--accent,#3b82f6)' } }} />
-          <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.7rem' }}>{t.sched.selectAll} ({allFilteredNums.length})</Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 0.5, borderBottom: '1px solid var(--border)', bgcolor: 'var(--surface)' }}>
+          <Checkbox size="small" checked={allSel} indeterminate={someSel} onChange={toggleAll} sx={{ p: 0.3, color: 'var(--border)', '&.Mui-checked,&.MuiCheckbox-indeterminate': { color: 'var(--accent,#3b82f6)' } }} />
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{t.sched.selectAll} ({allFilteredNums.length})</Typography>
         </Box>
       )}
 
@@ -273,28 +307,28 @@ function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
         {loadingCo ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}><CircularProgress size={20} sx={{ color: 'var(--accent,#3b82f6)' }} /></Box>
         ) : filtered.length === 0 ? (
-          <Box sx={{ textAlign: 'center', py: 3 }}><Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>Sin resultados</Typography></Box>
+          <Box sx={{ textAlign: 'center', py: 3 }}><Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>Sin resultados</Typography></Box>
         ) : filtered.map(company => {
           const sc = company.numbers.filter(n => selectedNums.has(n.number)).length
           return (
-            <Box key={company._id} sx={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 0.7, '&:hover': { bgcolor: 'rgba(255,255,255,0.02)' } }}>
-                <Checkbox size="small" checked={sc === company.numbers.length && company.numbers.length > 0} indeterminate={sc > 0 && sc < company.numbers.length} onChange={() => toggleCompany(company)} sx={{ p: 0.3, color: 'rgba(255,255,255,0.15)', '&.Mui-checked,&.MuiCheckbox-indeterminate': { color: 'var(--accent,#3b82f6)' } }} />
+            <Box key={company._id} sx={{ borderBottom: '1px solid var(--border)' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 0.7, '&:hover': { bgcolor: 'var(--item-hover)' } }}>
+                <Checkbox size="small" checked={sc === company.numbers.length && company.numbers.length > 0} indeterminate={sc > 0 && sc < company.numbers.length} onChange={() => toggleCompany(company)} sx={{ p: 0.3, color: 'var(--border)', '&.Mui-checked,&.MuiCheckbox-indeterminate': { color: 'var(--accent,#3b82f6)' } }} />
                 <Box sx={{ flex: 1, minWidth: 0 }}>
-                  <Typography sx={{ color: 'var(--text,#f1f5f9)', fontSize: '0.8rem', fontWeight: 600, lineHeight: 1.2 }}>{company.name}</Typography>
-                  {company.domain && <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.65rem' }}>{company.domain}</Typography>}
+                  <Typography sx={{ color: 'var(--text)', fontSize: '0.8rem', fontWeight: 600, lineHeight: 1.2 }}>{company.name}</Typography>
+                  {company.domain && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>{company.domain}</Typography>}
                 </Box>
-                <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.65rem', flexShrink: 0 }}>{sc}/{company.numbers.length}</Typography>
+                <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem', flexShrink: 0 }}>{sc}/{company.numbers.length}</Typography>
               </Box>
               {company.numbers.map(n => {
                 const isSel = selectedNums.has(n.number)
                 return (
                   <Box key={n.number} onClick={() => toggle(n.number, { number: n.number, company_id: company._id, company_name: company.name, label: n.label })}
-                    sx={{ display: 'flex', alignItems: 'center', gap: 0.5, pl: 3.5, pr: 1.5, py: 0.4, cursor: 'pointer', bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.04)' : 'transparent', '&:hover': { bgcolor: 'rgba(255,255,255,0.02)' } }}>
-                    <Checkbox size="small" checked={isSel} onChange={() => {}} sx={{ p: 0.25, color: 'rgba(255,255,255,0.12)', '&.Mui-checked': { color: 'var(--accent,#3b82f6)' } }} />
-                    <WhatsAppIcon sx={{ fontSize: 11, color: isSel ? '#25d366' : 'rgba(255,255,255,0.18)', flexShrink: 0 }} />
-                    <Typography sx={{ color: isSel ? 'var(--text,#f1f5f9)' : 'rgba(255,255,255,0.5)', fontSize: '0.74rem', fontFamily: 'monospace', flex: 1 }}>{fmtNumber(n.number)}</Typography>
-                    {n.label && <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.65rem' }}>{n.label}</Typography>}
+                    sx={{ display: 'flex', alignItems: 'center', gap: 0.5, pl: 3.5, pr: 1.5, py: 0.4, cursor: 'pointer', bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.06)' : 'transparent', '&:hover': { bgcolor: 'var(--item-hover)' } }}>
+                    <Checkbox size="small" checked={isSel} onChange={() => {}} sx={{ p: 0.25, color: 'var(--border)', '&.Mui-checked': { color: 'var(--accent,#3b82f6)' } }} />
+                    <WhatsAppIcon sx={{ fontSize: 11, color: isSel ? '#25d366' : 'var(--text-muted)', flexShrink: 0 }} />
+                    <Typography sx={{ color: isSel ? 'var(--text)' : 'var(--text-muted)', fontSize: '0.74rem', fontFamily: 'monospace', flex: 1 }}>{fmtNumber(n.number)}</Typography>
+                    {n.label && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>{n.label}</Typography>}
                     {n.active && (
                       <Tooltip title={t.sched.activeInCampaign}>
                         <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.2, bgcolor: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 1, px: 0.5, py: 0.1 }}>
@@ -340,7 +374,13 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
   const [selectedNums, setSelectedNums] = useState(() => new Set((src?.selected_numbers || []).map(n => n.number)))
   const [numInfoMap,   setNumInfoMap]   = useState(() => new Map((src?.selected_numbers || []).map(n => [n.number, n])))
   const [submitting, setSubmitting] = useState(false)
+  const [saved,      setSaved]      = useState(false)
   const [error,      setError]      = useState('')
+
+  // Diff mode: capture originals for edit mode
+  const origName    = isEdit ? (editJob?.name    || '') : null
+  const origMsg     = isEdit ? (editJob?.message || '') : null
+  const origSchedAt = isEdit ? (editJob?.scheduled_at || null) : null
 
   useEffect(() => {
     if (!isEdit && defaultDate) {
@@ -367,37 +407,77 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
       )
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || t.sched.saveError)
-      onDone(data, isEdit)
+      setSaved(true)
+      setTimeout(() => onDone(data, isEdit), 1500)
     } catch (err) { setError(err.message) }
     finally { setSubmitting(false) }
   }
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale={lang}>
-    <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, p: 2.5 }}>
-      <TextField label={t.sched.nameLabel} value={name} onChange={e => setName(e.target.value)} size="small" fullWidth sx={FIELD_SX} />
-      <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
-        <DatePicker label={t.sched.dateLabel} value={dateVal} onChange={v => setDateVal(v)} disablePast
-          slotProps={{ textField: { size: 'small', fullWidth: true, sx: FIELD_SX }, popper: { sx: PICKER_POPPER_SX } }} />
-        <TimePicker label={t.sched.timeLabel} value={timeVal} onChange={v => setTimeVal(v)} ampm
-          slotProps={{ textField: { size: 'small', fullWidth: true, sx: FIELD_SX }, popper: { sx: PICKER_POPPER_SX } }} />
-      </Box>
-      {USER_TZ && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: -0.8 }}>
-          <AccessTimeIcon sx={{ fontSize: 12, color: 'rgba(255,255,255,0.2)' }} />
-          <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.68rem' }}>{t.sched.tzLabel} {USER_TZ}</Typography>
+    <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, p: 2.5, position: 'relative' }}>
+      {saved && (
+        <Box sx={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', bgcolor: 'rgba(13,17,23,0.93)', zIndex: 10, borderRadius: 1, gap: 1.2 }}>
+          <CheckCircleIcon sx={{ fontSize: 50, color: '#4ade80' }} />
+          <Typography sx={{ color: 'rgba(255,255,255,0.75)', fontSize: '0.88rem', fontWeight: 600 }}>
+            {isEdit ? 'Cambios guardados' : (duplicateFrom ? 'Campaña duplicada' : 'Envío programado')}
+          </Typography>
         </Box>
       )}
-      <TextField label={t.sched.messageLabel} value={message} onChange={e => setMessage(e.target.value)} multiline rows={3} fullWidth size="small" sx={FIELD_SX} />
+      <Box>
+        <TextField label={t.sched.nameLabel} value={name} onChange={e => setName(e.target.value)} size="small" fullWidth sx={FIELD_SX} />
+        {origName !== null && name !== origName && (
+          <Typography sx={{ fontSize: '0.67rem', color: 'rgba(255,255,255,0.25)', mt: 0.4, px: 0.5 }}>
+            Original: <em>{origName}</em>
+          </Typography>
+        )}
+      </Box>
+      <Divider sx={{ borderColor: 'rgba(255,255,255,0.07)' }} />
+      <Box sx={{ bgcolor: 'var(--surface,rgba(255,255,255,0.04))', borderRadius: 2, p: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+          <DatePicker label={t.sched.dateLabel} value={dateVal} onChange={v => setDateVal(v)} disablePast
+            slotProps={{ textField: { size: 'small', fullWidth: true, sx: PICKER_FIELD_SX }, popper: { sx: PICKER_POPPER_SX } }} />
+          <TimePicker label={t.sched.timeLabel} value={timeVal} onChange={v => setTimeVal(v)} ampm
+            slotProps={{ textField: { size: 'small', fullWidth: true, sx: PICKER_FIELD_SX }, popper: { sx: PICKER_POPPER_SX } }} />
+        </Box>
+        {USER_TZ && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <AccessTimeIcon sx={{ fontSize: 12, color: 'var(--text-muted)' }} />
+            <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>{t.sched.tzLabel} {USER_TZ}</Typography>
+          </Box>
+        )}
+        {origSchedAt !== null && (() => {
+          const origStr = dayjs(origSchedAt).format('DD/MM/YYYY HH:mm')
+          const curStr  = dateVal && timeVal ? dateVal.hour(timeVal.hour()).minute(timeVal.minute()).format('DD/MM/YYYY HH:mm') : null
+          return curStr && origStr !== curStr ? (
+            <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', px: 0.5, opacity: 0.7 }}>
+              Original: <em>{origStr}</em>
+            </Typography>
+          ) : null
+        })()}
+      </Box>
+      <Box>
+        <Box sx={{ position: 'relative' }}>
+          <TextField label={t.sched.messageLabel} value={message} onChange={e => setMessage(e.target.value)} multiline rows={3} fullWidth size="small" sx={FIELD_SX} slotProps={{ htmlInput: { maxLength: 1000 } }} />
+          <Typography sx={{ position: 'absolute', bottom: 6, right: 10, fontSize: '0.68rem', color: message.length > 900 ? '#ef4444' : 'var(--text-muted)', opacity: message.length > 900 ? 1 : 0.6, pointerEvents: 'none' }}>
+            {message.length} / 1000
+          </Typography>
+        </Box>
+        {origMsg !== null && message !== origMsg && (
+          <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', mt: 0.4, px: 0.5, opacity: 0.7 }}>
+            Original: <em style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{origMsg.length > 90 ? origMsg.slice(0, 90) + '…' : origMsg}</em>
+          </Typography>
+        )}
+      </Box>
       <CompanyPicker selectedNums={selectedNums} numInfoMap={numInfoMap} onChange={(ns, nm) => { setSelectedNums(ns); setNumInfoMap(nm) }} />
       {error && <Box sx={{ px: 1.5, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}><Typography sx={{ color: '#ef4444', fontSize: '0.78rem' }}>{error}</Typography></Box>}
-      <Box sx={{ display: 'flex', gap: 1 }}>
+      <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
         <Button type="submit" variant="contained" disabled={submitting}
           startIcon={submitting ? <CircularProgress size={13} sx={{ color: 'inherit' }} /> : <SendIcon />}
-          sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.85)' }, '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.2)' }, textTransform: 'none', fontWeight: 600, fontSize: '0.82rem', borderRadius: 2, px: 2 }}>
+          sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.85)' }, '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.2)' }, textTransform: 'none', fontWeight: 600, fontSize: '0.82rem', borderRadius: 2, px: 2, minWidth: 140 }}>
           {submitting ? t.sched.saving : (isEdit ? t.sched.saveLbl : (duplicateFrom ? t.sched.duplicateLbl : t.sched.scheduleLbl))}
         </Button>
-        <Button variant="text" onClick={() => onDone(null, false)} sx={{ color: 'rgba(255,255,255,0.3)', textTransform: 'none', fontSize: '0.8rem' }}>{t.common.cancel}</Button>
+        <Button variant="outlined" onClick={() => onDone(null, false)} sx={{ color: '#ef4444', borderColor: 'rgba(239,68,68,0.4)', '&:hover': { borderColor: '#ef4444', bgcolor: 'rgba(239,68,68,0.08)' }, textTransform: 'none', fontSize: '0.8rem', borderRadius: 2 }}>{t.common.cancel}</Button>
       </Box>
     </Box>
     </LocalizationProvider>
@@ -481,8 +561,8 @@ function MonthView({ jobs, viewYear, viewMonth, selectedDate, onDayClick, onJobC
       {monthJobsCount === 0 && (
         <Box sx={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', gap: 1 }}>
           <ScheduleSendIcon sx={{ fontSize: 32, color: 'var(--border)' }} />
-          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>Sin envíos este mes</Typography>
-          <Typography sx={{ color: 'var(--border)', fontSize: '0.72rem' }}>Da clic en cualquier día para programar uno</Typography>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>{t.sched.noMonthSends}</Typography>
+          <Typography sx={{ color: 'var(--border)', fontSize: '0.72rem' }}>{t.sched.noMonthSendsHint}</Typography>
         </Box>
       )}
     </Box>
@@ -663,6 +743,8 @@ function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicat
   const isOpen = !!panel
   const isEdit = panel?.mode === 'edit'
   const isReadOnly = isEdit && panel?.job?.status !== 'pending'
+  const modeColor  = panel?.mode === 'duplicate' ? '#a78bfa' : (isEdit ? '#4ade80' : 'var(--accent,#3b82f6)')
+  const modeRgb    = panel?.mode === 'duplicate' ? '167,139,250' : (isEdit ? '74,222,128' : '59,130,246')
   const [industryMap, setIndustryMap] = useState({})
 
   useEffect(() => {
@@ -691,15 +773,15 @@ function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicat
       {isOpen && (
         <Box sx={{ width: 'min(390px, 55vw)', display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2.5, py: 1.8, borderBottom: '1px solid rgba(255,255,255,0.07)', bgcolor: 'rgba(255,255,255,0.02)', flexShrink: 0 }}>
-            <Box sx={{ width: 28, height: 28, borderRadius: 1.5, flexShrink: 0, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {panel.mode === 'duplicate' ? <ContentCopyIcon sx={{ fontSize: 14, color: '#a78bfa' }} /> : isEdit ? <EditIcon sx={{ fontSize: 14, color: 'var(--accent,#3b82f6)' }} /> : <ScheduleSendIcon sx={{ fontSize: 15, color: 'var(--accent,#3b82f6)' }} />}
+            <Box sx={{ width: 28, height: 28, borderRadius: 1.5, flexShrink: 0, bgcolor: `rgba(${modeRgb},0.12)`, border: `1px solid rgba(${modeRgb},0.25)`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {panel.mode === 'duplicate' ? <ContentCopyIcon sx={{ fontSize: 14, color: modeColor }} /> : isEdit ? <EditIcon sx={{ fontSize: 14, color: modeColor }} /> : <ScheduleSendIcon sx={{ fontSize: 15, color: modeColor }} />}
             </Box>
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 700, fontSize: '0.88rem', lineHeight: 1.2 }}>
                 {panel.mode === 'duplicate' ? t.sched.duplicatePanel : isEdit ? t.sched.editPanel : t.sched.createPanel}
               </Typography>
-              {(isEdit || panel.mode === 'duplicate') && (
-                <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.68rem' }}>{panel.job?.name}</Typography>
+              {(isEdit || panel.mode === 'duplicate') && panel.job?.name && (
+                <Chip label={panel.job.name} size="small" sx={{ height: 17, fontSize: '0.62rem', bgcolor: `rgba(${modeRgb},0.1)`, color: modeColor, border: `1px solid rgba(${modeRgb},0.2)`, '& .MuiChip-label': { px: 0.8 }, maxWidth: '100%', mt: 0.3 }} />
               )}
             </Box>
             <IconButton size="small" onClick={() => onDone(null, false)} sx={{ color: 'rgba(255,255,255,0.3)', '&:hover': { color: 'var(--text,#f1f5f9)' } }}>
@@ -723,36 +805,43 @@ function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicat
             }
             const groups = Object.values(groupMap)
 
-            const LABEL_SX = { color: 'rgba(255,255,255,0.28)', fontSize: '0.66rem', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.06em' }
+            const LABEL_SX = { color: 'var(--text-muted)', fontSize: '0.66rem', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.06em' }
 
             return (
               <Box sx={{ p: 2.5, display: 'flex', flexDirection: 'column', gap: 2, overflowY: 'auto' }}>
 
-                {/* Status + date */}
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                {/* Stats row */}
+                <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', alignItems: 'center' }}>
                   <StatusChip status={job.status} />
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    <AccessTimeIcon sx={{ fontSize: 12, color: 'rgba(255,255,255,0.25)' }} />
-                    <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.3)' }}>{fmtDate(job.scheduled_at)}</Typography>
-                  </Box>
+                  <Chip icon={<SendIcon sx={{ fontSize: '11px !important' }} />} label={`${sent} / ${total}`} size="small"
+                    sx={{ height: 20, fontSize: '0.68rem', bgcolor: 'var(--surface)', color: 'var(--text-muted)', border: '1px solid var(--border)', '& .MuiChip-icon': { color: 'var(--text-muted)', ml: 0.8 }, '& .MuiChip-label': { px: 0.7 } }} />
+                  <Chip icon={<WhatsAppIcon sx={{ fontSize: '11px !important' }} />} label={job.selected_numbers?.length || 0} size="small"
+                    sx={{ height: 20, fontSize: '0.68rem', bgcolor: 'var(--surface)', color: 'var(--text-muted)', border: '1px solid var(--border)', '& .MuiChip-icon': { color: '#4ade80', ml: 0.8 }, '& .MuiChip-label': { px: 0.7 } }} />
+                  <Chip icon={<AccessTimeIcon sx={{ fontSize: '11px !important' }} />} label={fmtDate(job.scheduled_at)} size="small"
+                    sx={{ height: 20, fontSize: '0.68rem', bgcolor: 'var(--surface)', color: 'var(--text-muted)', border: '1px solid var(--border)', '& .MuiChip-icon': { color: 'var(--text-muted)', ml: 0.8 }, '& .MuiChip-label': { px: 0.7 } }} />
                 </Box>
 
                 {/* Progress */}
-                <Box sx={{ bgcolor: 'rgba(255,255,255,0.03)', borderRadius: 2, p: 1.5, border: `1px solid ${meta.color}22` }}>
+                <Box sx={{ bgcolor: 'var(--surface)', borderRadius: 2, p: 1.5, border: `1px solid ${meta.color}22` }}>
                   <Typography sx={LABEL_SX}>{t.sched.panelProgress}</Typography>
-                  <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5, mb: 1 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
                     <Typography sx={{ color: meta.color, fontWeight: 700, fontSize: '1.5rem', lineHeight: 1 }}>{sent}</Typography>
-                    <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.78rem' }}>{t.sched.panelOf} {total} {t.sched.sent}</Typography>
+                    <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>{t.sched.panelOf} {total} {t.sched.sent}</Typography>
+                    {job.status === 'done' && total > 0 && sent >= total && (
+                      <CheckCircleIcon sx={{ fontSize: 15, color: '#4ade80', ml: 0.3 }} />
+                    )}
                   </Box>
-                  <LinearProgress variant="determinate" value={Math.min(pct, 100)} sx={{ height: 5, borderRadius: 3, bgcolor: 'rgba(255,255,255,0.07)', '& .MuiLinearProgress-bar': { bgcolor: meta.color, borderRadius: 3 } }} />
-                  <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.65rem', mt: 0.4, textAlign: 'right' }}>{pct}%</Typography>
+                  <LinearProgress variant="determinate" value={Math.min(pct, 100)}
+                    sx={{ height: job.status === 'done' ? 8 : 5, borderRadius: 3, bgcolor: 'var(--border)',
+                      '& .MuiLinearProgress-bar': { bgcolor: meta.color, borderRadius: 3, boxShadow: job.status === 'done' ? `0 0 8px ${meta.color}55` : 'none' } }} />
+                  <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem', mt: 0.4, textAlign: 'right', opacity: 0.7 }}>{pct}%</Typography>
                 </Box>
 
                 {/* Message */}
                 <Box>
                   <Typography sx={LABEL_SX}>{t.sched.panelMessage}</Typography>
-                  <Box sx={{ bgcolor: 'rgba(255,255,255,0.03)', borderRadius: 2, p: 1.5, border: '1px solid rgba(255,255,255,0.06)', borderLeft: '3px solid rgba(var(--accent-rgb,59,130,246),0.35)' }}>
-                    <Typography sx={{ color: 'rgba(255,255,255,0.62)', fontSize: '0.82rem', whiteSpace: 'pre-wrap', lineHeight: 1.65 }}>{job.message}</Typography>
+                  <Box sx={{ bgcolor: 'var(--surface)', borderRadius: 2, p: 1.5, border: '1px solid var(--border)', borderLeft: '3px solid rgba(var(--accent-rgb,59,130,246),0.35)' }}>
+                    <Typography sx={{ color: 'var(--text)', fontSize: '0.82rem', whiteSpace: 'pre-wrap', lineHeight: 1.65 }}>{job.message}</Typography>
                   </Box>
                 </Box>
 
@@ -764,18 +853,18 @@ function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicat
                       {groups.map(g => {
                         const industry = industryMap[String(g.company_id)] || ''
                         return (
-                          <Box key={g.company_id || g.company_name} sx={{ bgcolor: 'rgba(255,255,255,0.03)', borderRadius: 1.5, p: 1.2, border: '1px solid rgba(255,255,255,0.06)' }}>
+                          <Box key={g.company_id || g.company_name} sx={{ bgcolor: 'var(--surface)', borderRadius: 1.5, p: 1.2, border: '1px solid var(--border)' }}>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7, mb: 0.4, flexWrap: 'wrap' }}>
-                              <BusinessIcon sx={{ fontSize: 12, color: 'rgba(255,255,255,0.28)', flexShrink: 0 }} />
-                              <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 600, fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '55%' }}>{g.company_name}</Typography>
+                              <BusinessIcon sx={{ fontSize: 12, color: 'var(--text-muted)', flexShrink: 0 }} />
+                              <Typography sx={{ color: 'var(--text)', fontWeight: 600, fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '55%' }}>{g.company_name}</Typography>
                               {industry && (
-                                <Chip label={industry} size="small" sx={{ height: 15, fontSize: '0.58rem', color: 'rgba(255,255,255,0.38)', bgcolor: 'rgba(255,255,255,0.06)', border: 'none', '& .MuiChip-label': { px: 0.7 } }} />
+                                <Chip label={industry} size="small" sx={{ height: 15, fontSize: '0.58rem', color: 'var(--text-muted)', bgcolor: 'var(--item-hover)', border: 'none', '& .MuiChip-label': { px: 0.7 } }} />
                               )}
                             </Box>
                             {g.numbers.map(n => (
                               <Box key={n.number} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, ml: 2.4, mt: 0.25 }}>
                                 <WhatsAppIcon sx={{ fontSize: 11, color: '#4ade80', flexShrink: 0 }} />
-                                <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.74rem', fontFamily: 'monospace' }}>{n.number}</Typography>
+                                <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.74rem', fontFamily: 'monospace' }}>{n.number}</Typography>
                               </Box>
                             ))}
                           </Box>
@@ -785,21 +874,21 @@ function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicat
                   </Box>
                 )}
 
-                {/* Actions */}
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center', pt: 1.5, mt: 0.5, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                {/* Actions — sticky to bottom of scroll container */}
+                <Box sx={{ position: 'sticky', bottom: 0, display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center', py: 1.5, mt: 0.5, borderTop: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)', backdropFilter: 'blur(4px)' }}>
                   <Button size="small" startIcon={<ContentCopyIcon />} onClick={() => onDuplicate(job)}
-                    sx={{ color: '#a78bfa', borderColor: 'rgba(167,139,250,0.3)', border: '1px solid', textTransform: 'none', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(167,139,250,0.08)' } }}>
+                    sx={{ color: 'var(--accent,#3b82f6)', borderColor: 'rgba(var(--accent-rgb,59,130,246),0.3)', border: '1px solid', textTransform: 'none', borderRadius: 1.5, transition: 'all 0.18s ease', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', borderColor: 'rgba(var(--accent-rgb,59,130,246),0.6)' } }}>
                     {t.sched.dupBtn}
                   </Button>
                   {job.status === 'running' && (
                     <Button size="small" startIcon={<CancelIcon />} onClick={() => onRequestCancel(job)}
-                      sx={{ color: '#f59e0b', borderColor: 'rgba(245,158,11,0.3)', border: '1px solid', textTransform: 'none', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(245,158,11,0.08)' } }}>
+                      sx={{ color: '#f59e0b', borderColor: 'rgba(245,158,11,0.3)', border: '1px solid', textTransform: 'none', borderRadius: 1.5, transition: 'all 0.18s ease', '&:hover': { bgcolor: 'rgba(245,158,11,0.1)', borderColor: 'rgba(245,158,11,0.6)' } }}>
                       {t.sched.cancelSendBtn}
                     </Button>
                   )}
                   {(job.status === 'done' || job.status === 'cancelled' || job.status === 'error') && (
                     <Button size="small" startIcon={<DeleteIcon />} onClick={() => onRequestDelete(job)}
-                      sx={{ color: '#ef4444', borderColor: 'rgba(239,68,68,0.3)', border: '1px solid', textTransform: 'none', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.08)' } }}>
+                      sx={{ color: '#ef4444', borderColor: 'rgba(239,68,68,0.3)', border: '1px solid', textTransform: 'none', borderRadius: 1.5, transition: 'all 0.18s ease', '&:hover': { bgcolor: 'rgba(239,68,68,0.1)', borderColor: 'rgba(239,68,68,0.6)' } }}>
                       {t.sched.deleteBtn}
                     </Button>
                   )}

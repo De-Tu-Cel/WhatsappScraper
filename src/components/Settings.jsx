@@ -224,7 +224,7 @@ function Section({ icon, title, children }) {
         display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5,
         pl: 1.5, py: 0.5,
         borderLeft: '2px solid var(--accent, #3b82f6)',
-        bgcolor: 'rgba(255,255,255,0.02)',
+        bgcolor: 'var(--surface, rgba(255,255,255,0.02))',
         borderRadius: '0 6px 6px 0',
       }}>
         <Box sx={{
@@ -239,7 +239,7 @@ function Section({ icon, title, children }) {
           {icon}
         </Box>
         <Typography sx={{
-          color: 'rgba(255,255,255,0.8)',
+          color: 'var(--text, rgba(255,255,255,0.8))',
           fontWeight: 700,
           fontSize: '0.8rem',
           textTransform: 'uppercase',
@@ -567,8 +567,8 @@ export default function Settings() {
       <Box sx={{
         display: 'flex', gap: 0.5, mb: 2.5, flexShrink: 0,
         p: 0.5, borderRadius: 2.5,
-        bgcolor: 'rgba(255,255,255,0.03)',
-        border: '1px solid rgba(255,255,255,0.06)',
+        bgcolor: 'var(--surface, rgba(255,255,255,0.03))',
+        border: '1px solid var(--border, rgba(255,255,255,0.06))',
       }}>
         {TABS.map((tab, i) => {
           const active = activeTab === i
@@ -580,14 +580,15 @@ export default function Settings() {
               border: active ? '1px solid rgba(var(--accent-rgb,59,130,246),0.28)' : '1px solid transparent',
               boxShadow: active ? '0 0 12px rgba(var(--accent-rgb,59,130,246),0.12)' : 'none',
               transition: 'all 0.15s',
-              '&:hover': !active ? { bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' } : {},
+              '&:hover': !active ? { bgcolor: 'var(--item-hover, rgba(255,255,255,0.06))', border: '1px solid var(--border, rgba(255,255,255,0.1))' } : {},
+              '[data-theme-mode="light"] &:hover': !active ? { bgcolor: 'rgba(0,0,0,0.07)', border: '1px solid rgba(0,0,0,0.14)' } : {},
             }}>
-              <Box sx={{ color: active ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.35)', display: 'flex' }}>
+              <Box sx={{ color: active ? 'var(--accent,#3b82f6)' : 'var(--text-muted, rgba(255,255,255,0.4))', display: 'flex' }}>
                 {tab.icon}
               </Box>
               <Typography sx={{
                 fontSize: '0.72rem', fontWeight: active ? 700 : 400,
-                color: active ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.4)',
+                color: active ? 'var(--accent,#3b82f6)' : 'var(--text-muted, rgba(255,255,255,0.4))',
                 transition: 'color 0.15s',
               }}>
                 {tab.label}
@@ -615,14 +616,15 @@ export default function Settings() {
                   <Box key={l.value} onClick={() => { save({ lang: l.value }); setLang(l.value) }} sx={{
                     flex: 1, py: 1.2, px: 1.5, borderRadius: 2, cursor: 'pointer',
                     display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 1,
-                    bgcolor: active ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.03)',
-                    border: active ? '1px solid var(--accent,#3b82f6)' : '1px solid rgba(255,255,255,0.08)',
+                    bgcolor: active ? 'rgba(var(--accent-rgb,59,130,246),0.1)' : 'var(--surface, rgba(255,255,255,0.03))',
+                    border: active ? '1px solid var(--accent,#3b82f6)' : '1px solid var(--border, rgba(255,255,255,0.08))',
                     boxShadow: active ? '0 0 10px var(--accent-glow,rgba(59,130,246,0.2))' : 'none',
                     transition: 'all 0.15s',
-                    '&:hover': { bgcolor: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.18)' },
+                    '&:hover': { bgcolor: 'var(--item-hover, rgba(255,255,255,0.06))', borderColor: 'var(--text-muted, rgba(255,255,255,0.18))' },
+                    '[data-theme-mode="light"] &:hover': { bgcolor: 'rgba(0,0,0,0.06)', borderColor: 'rgba(0,0,0,0.25)' },
                   }}>
                     <Typography sx={{ fontSize: '1.1rem', lineHeight: 1, flexShrink: 0, position: 'relative', top: -1 }}>{l.flag}</Typography>
-                    <Typography sx={{ fontSize: '0.82rem', fontWeight: active ? 700 : 400, color: active ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.5)', flexGrow: 1 }}>
+                    <Typography sx={{ fontSize: '0.82rem', fontWeight: active ? 700 : 400, color: active ? 'var(--accent,#3b82f6)' : 'var(--text-muted, rgba(255,255,255,0.5))', flexGrow: 1 }}>
                       {l.label}
                     </Typography>
                     <CheckIcon sx={{ fontSize: 16, color: 'var(--accent,#3b82f6)', flexShrink: 0, opacity: active ? 1 : 0, transition: 'opacity 0.15s' }} />
@@ -630,7 +632,7 @@ export default function Settings() {
                 )
               })}
             </Box>
-            <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.2)', mt: 0.8 }}>
+            <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted, rgba(255,255,255,0.3))', mt: 0.8 }}>
               {t.settings.langComingSoon}
             </Typography>
           </Section>

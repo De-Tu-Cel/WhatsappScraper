@@ -702,7 +702,8 @@ export default function Analytics() {
                   return (
                     <Fragment key={row.company_id}>
                     <TableRow sx={{
-                      '&:hover': { bgcolor: 'rgba(255,255,255,0.025)' },
+                      '&:hover': { bgcolor: 'var(--item-hover, rgba(255,255,255,0.05))' },
+                      '[data-theme-mode="light"] &:hover': { bgcolor: 'rgba(0,0,0,0.04)' },
                       transition: 'background 0.15s',
                     }}>
                       {/* Expand button */}

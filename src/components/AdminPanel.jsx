@@ -239,37 +239,44 @@ export default function AdminPanel() {
               const isMe    = u.id === user?.id
               const isAdmin = u.role === 'admin'
               const initial = (u.display_name || u.username || '?')[0].toUpperCase()
-              // Border + glow color per role: admin = purple, me = cyan/teal, agent = slate
-              const glowColor = isAdmin ? '#a78bfa' : isMe ? '#22d3ee' : '#475569'
+              const glowColor = isAdmin ? '#a78bfa' : isMe ? '#22d3ee' : '#64748b'
               return (
                 <Box key={u.id} sx={{
                   borderRadius: 3, overflow: 'hidden',
-                  bgcolor: 'rgba(255,255,255,0.025)',
+                  bgcolor: 'var(--card-bg, rgba(255,255,255,0.025))',
                   border: `1px solid ${glowColor}44`,
-                  boxShadow: `0 0 0 0px ${glowColor}00`,
+                  boxShadow: `0 0 18px ${glowColor}18, 0 2px 10px rgba(0,0,0,0.15)`,
                   display: 'flex', flexDirection: 'column',
+                  position: 'relative',
                   transition: 'box-shadow 0.2s, border-color 0.2s',
                   '&:hover': {
-                    borderColor: `${glowColor}99`,
-                    boxShadow: `0 0 12px ${glowColor}33, 0 0 1px ${glowColor}55`,
+                    borderColor: `${glowColor}77`,
+                    boxShadow: `0 0 28px ${glowColor}30, 0 6px 20px rgba(0,0,0,0.2)`,
                   },
                 }}>
+                  {/* Radial glow de fondo */}
+                  <Box sx={{
+                    position: 'absolute', top: -20, left: '50%', transform: 'translateX(-50%)',
+                    width: 140, height: 100, pointerEvents: 'none',
+                    background: `radial-gradient(ellipse, ${glowColor}18 0%, transparent 70%)`,
+                  }} />
 
                   {/* Avatar + info */}
-                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', pt: 2.5, pb: 1.5, px: 1.5, gap: 0.3 }}>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', pt: 2.5, pb: 1.5, px: 1.5, gap: 0.3, position: 'relative' }}>
                     <Box sx={{
-                      width: 52, height: 52, borderRadius: '50%', mb: 0.8,
-                      bgcolor: `${glowColor}18`,
-                      border: `2px solid ${glowColor}55`,
+                      width: 56, height: 56, borderRadius: '50%', mb: 0.8,
+                      background: `linear-gradient(135deg, ${glowColor}30 0%, ${glowColor}10 100%)`,
+                      border: `2px solid ${glowColor}66`,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      boxShadow: `0 0 12px ${glowColor}33`,
                     }}>
-                      <Typography sx={{ fontWeight: 800, fontSize: '1.15rem', color: glowColor, textTransform: 'uppercase' }}>
+                      <Typography sx={{ fontWeight: 800, fontSize: '1.2rem', color: glowColor, textTransform: 'uppercase' }}>
                         {initial}
                       </Typography>
                     </Box>
 
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', justifyContent: 'center' }}>
-                      <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.87rem', textAlign: 'center', lineHeight: 1.3 }}>
+                      <Typography sx={{ color: 'var(--text, white)', fontWeight: 700, fontSize: '0.87rem', textAlign: 'center', lineHeight: 1.3 }}>
                         {u.display_name}
                       </Typography>
                       {isMe && (
@@ -277,11 +284,11 @@ export default function AdminPanel() {
                       )}
                     </Box>
 
-                    <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.68rem', textAlign: 'center' }}>
+                    <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.45))', fontSize: '0.68rem', textAlign: 'center' }}>
                       @{u.username}
                     </Typography>
                     {u.email && (
-                      <Typography sx={{ color: 'rgba(255,255,255,0.18)', fontSize: '0.63rem', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
+                      <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.3))', fontSize: '0.63rem', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
                         {u.email}
                       </Typography>
                     )}
@@ -317,17 +324,17 @@ export default function AdminPanel() {
                   </Box>
 
                   {/* Footer de acciones */}
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5, px: 1, py: 0.8, borderTop: '1px solid rgba(255,255,255,0.05)', mt: 'auto' }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5, px: 1, py: 0.8, borderTop: `1px solid ${glowColor}18`, mt: 'auto' }}>
                     <Tooltip title={t.admin.resetPinBtn}>
                       <IconButton size="small" onClick={() => { setResetTarget(u); setNewPin(''); setMsg('') }}
-                        sx={{ color: 'rgba(255,255,255,0.25)', borderRadius: 1.5, '&:hover': { color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)' } }}>
+                        sx={{ color: 'rgba(251,191,36,0.5)', borderRadius: 1.5, '&:hover': { color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.12)' } }}>
                         <LockResetIcon sx={{ fontSize: 16 }} />
                       </IconButton>
                     </Tooltip>
                     {!isMe && (
                       <Tooltip title={t.admin.deleteTitle}>
                         <IconButton size="small" onClick={() => { setDeleteTarget(u); setDeleteMsg('') }}
-                          sx={{ color: 'rgba(255,255,255,0.25)', borderRadius: 1.5, '&:hover': { color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)' } }}>
+                          sx={{ color: 'rgba(239,68,68,0.45)', borderRadius: 1.5, '&:hover': { color: '#f87171', bgcolor: 'rgba(239,68,68,0.12)' } }}>
                           <DeleteForeverIcon sx={{ fontSize: 16 }} />
                         </IconButton>
                       </Tooltip>

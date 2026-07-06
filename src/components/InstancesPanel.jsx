@@ -69,21 +69,12 @@ const DIALOG_SX = {
   },
 }
 
-function StatusDot({ status, size = 10 }) {
-  const color = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
-  return (
-    <Box sx={{
-      width: size, height: size, borderRadius: '50%', flexShrink: 0,
-      bgcolor: color,
-      boxShadow: color !== STATUS_COLOR.unknown ? `0 0 6px ${color}88` : 'none',
-    }} />
-  )
-}
-
 function InstanceCard({ inst, onMenu }) {
   const { t } = useLang()
-  const status = inst.live_status || 'unknown'
-  const color  = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
+  const status      = inst.live_status || 'unknown'
+  const color       = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
+  const isConnected = ['open', 'connected'].includes(status)
+  const isConnecting = status === 'connecting'
   const STATUS_LABEL_T = {
     open:         t.inst.statusConnected,
     connected:    t.inst.statusConnected,
@@ -96,40 +87,72 @@ function InstanceCard({ inst, onMenu }) {
   return (
     <Box sx={{
       bgcolor: 'var(--card-bg)',
-      border: '1px solid var(--border)',
+      border: `1px solid ${color}33`,
       borderRadius: 3,
       p: 2.5,
       display: 'flex', flexDirection: 'column', gap: 1.5,
       position: 'relative',
-      transition: 'border-color 0.2s, box-shadow 0.2s',
+      overflow: 'hidden',
+      transition: 'border-color 0.25s, box-shadow 0.25s',
+      boxShadow: isConnected
+        ? `0 0 22px ${color}22, 0 4px 16px rgba(0,0,0,0.18)`
+        : isConnecting
+          ? `0 0 18px ${color}1a, 0 4px 12px rgba(0,0,0,0.15)`
+          : '0 2px 10px rgba(0,0,0,0.12)',
       '&:hover': {
-        borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)',
-        boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+        borderColor: `${color}66`,
+        boxShadow: `0 0 32px ${color}30, 0 8px 24px rgba(0,0,0,0.22)`,
       },
     }}>
-      {/* Top row: icon + name + menu */}
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
-        {/* WA Avatar */}
-        <Box sx={{
-          width: 48, height: 48, borderRadius: 2, flexShrink: 0,
-          bgcolor: `${color}18`,
-          border: `1.5px solid ${color}44`,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <PhoneAndroidIcon sx={{ color, fontSize: 22 }} />
+      {/* Glow radial de fondo según status */}
+      <Box sx={{
+        position: 'absolute', top: -30, right: -30,
+        width: 120, height: 120, borderRadius: '50%', pointerEvents: 'none',
+        background: `radial-gradient(circle, ${color}18 0%, transparent 70%)`,
+      }} />
+
+      {/* Top row: avatar-con-badge + nombre + menú */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, position: 'relative' }}>
+
+        {/* Avatar + badge de status */}
+        <Box sx={{ position: 'relative', flexShrink: 0 }}>
+          <Box sx={{
+            width: 56, height: 56, borderRadius: 2.5,
+            bgcolor: `${color}18`,
+            border: `1.5px solid ${color}55`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <PhoneAndroidIcon sx={{ color, fontSize: 26 }} />
+          </Box>
+          {/* Badge de status sobre el avatar */}
+          <Box sx={{
+            position: 'absolute', bottom: -3, right: -3,
+            width: 14, height: 14, borderRadius: '50%',
+            bgcolor: color,
+            border: '2.5px solid var(--card-bg, #161d2e)',
+            boxShadow: `0 0 8px ${color}cc`,
+          }}>
+            {isConnecting && (
+              <CircularProgress size={14} thickness={6}
+                sx={{ color, position: 'absolute', top: -2.5, left: -2.5, opacity: 0.7 }} />
+            )}
+          </Box>
         </Box>
 
-        {/* Name + number */}
+        {/* Nombre + número + status text */}
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography sx={{
             color: 'var(--text)', fontWeight: 700,
-            fontSize: '0.95rem', lineHeight: 1.3,
+            fontSize: '0.95rem', lineHeight: 1.2,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
             {inst.name}
           </Typography>
-          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', mt: 0.3 }}>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', mt: 0.2, fontFamily: 'monospace' }}>
             {inst.number || t.inst.noNumber}
+          </Typography>
+          <Typography sx={{ color, fontSize: '0.68rem', fontWeight: 600, mt: 0.4, letterSpacing: '0.03em' }}>
+            {STATUS_LABEL_T[status] ?? t.inst.statusUnknown}
           </Typography>
         </Box>
 
@@ -137,25 +160,17 @@ function InstanceCard({ inst, onMenu }) {
         <IconButton
           size="small"
           onClick={e => onMenu(e, inst)}
-          sx={{ color: 'var(--text-muted)', flexShrink: 0, mt: -0.5, mr: -0.5,
+          sx={{ color: 'var(--text-muted)', flexShrink: 0, alignSelf: 'flex-start', mt: -0.5, mr: -0.5,
             '&:hover': { color: 'var(--text)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.08)' } }}
         >
           <MoreVertIcon fontSize="small" />
         </IconButton>
       </Box>
 
-      {/* Status chip */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
-        <StatusDot status={status} size={8} />
-        <Typography sx={{ color, fontSize: '0.72rem', fontWeight: 600 }}>
-          {STATUS_LABEL_T[status] ?? t.inst.statusUnknown}
-        </Typography>
-      </Box>
+      {/* Divider con tinte de color */}
+      <Box sx={{ borderTop: `1px solid ${color}22` }} />
 
-      {/* Divider */}
-      <Box sx={{ borderTop: '1px solid var(--border)' }} />
-
-      {/* Footer: assigned user + date */}
+      {/* Footer: usuario asignado + fecha */}
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
         {inst.assigned_name ? (
           <Chip

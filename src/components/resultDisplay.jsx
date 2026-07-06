@@ -40,12 +40,13 @@ function JsonHighlight({ data }) {
     .replace(/:\s*(null)/g, ': <span style="color:#d2a8ff">$1</span>')
   return (
     <Box component="pre" dangerouslySetInnerHTML={{ __html: html }} sx={{
-      bgcolor: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.07)',
+      bgcolor: 'var(--surface, rgba(0,0,0,0.35))',
+      border: '1px solid var(--border, rgba(255,255,255,0.07))',
       borderRadius: 2, p: 2, fontSize: '0.8rem',
       fontFamily: '"Roboto Mono", "Courier New", monospace',
-      color: 'rgba(255,255,255,0.75)', overflow: 'auto', m: 0,
+      color: 'var(--text, rgba(255,255,255,0.75))', overflow: 'auto', m: 0,
       whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-      scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent',
+      scrollbarWidth: 'thin', scrollbarColor: 'var(--border, rgba(255,255,255,0.1)) transparent',
     }} />
   )
 }
@@ -55,7 +56,6 @@ function Section({ icon, title, color, children }) {
   return (
     <Card sx={{
       mb: 2,
-      borderLeft: `3px solid ${color}`,
       overflow: 'hidden',
       position: 'relative',
       background: `linear-gradient(135deg, ${color}0f 0%, transparent 60%)`,
@@ -72,7 +72,7 @@ function Section({ icon, title, color, children }) {
       <CardContent sx={{ position: 'relative', zIndex: 1 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
           <Box sx={{ color, display: 'flex' }}>{icon}</Box>
-          <Typography variant="subtitle1" fontWeight={700} sx={{ color: 'rgba(255,255,255,0.85)', fontSize: '0.9rem' }}>
+          <Typography variant="subtitle1" fontWeight={700} sx={{ color: 'var(--text, rgba(255,255,255,0.85))', fontSize: '0.9rem' }}>
             {title}
           </Typography>
         </Box>
@@ -91,10 +91,10 @@ function InfoRow({ label, value }) {
   value = v
   return (
     <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start', py: 0.7, borderBottom: '1px solid var(--border)', '&:last-of-type': { borderBottom: 'none' } }}>
-      <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.3)', minWidth: 90, flexShrink: 0, fontSize: '0.78rem' }}>
+      <Typography variant="body2" sx={{ color: 'var(--text-muted, rgba(255,255,255,0.35))', minWidth: 90, flexShrink: 0, fontSize: '0.78rem' }}>
         {label}
       </Typography>
-      <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.78)', fontSize: '0.82rem' }}>
+      <Typography variant="body2" sx={{ color: 'var(--text, rgba(255,255,255,0.78))', fontSize: '0.82rem' }}>
         {value}
       </Typography>
     </Box>
@@ -134,7 +134,7 @@ function ContactColumn({ icon, title, items, color, emptyMsg }) {
     <Box sx={{ flex: 1, minWidth: 0 }}>
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5, mb: 1.5 }}>
         <Box sx={{ color }}>{icon}</Box>
-        <Typography fontWeight={700} fontSize="0.82rem" sx={{ color: 'rgba(255,255,255,0.75)' }}>{title}</Typography>
+        <Typography fontWeight={700} fontSize="0.82rem" sx={{ color: 'var(--text, rgba(255,255,255,0.75))' }}>{title}</Typography>
       </Box>
       {items?.length > 0
         ? items.map((n, i) => (
@@ -142,7 +142,7 @@ function ContactColumn({ icon, title, items, color, emptyMsg }) {
               {n}
             </Typography>
           ))
-        : <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.2)', textAlign: 'center', fontSize: '0.78rem' }}>{emptyMsg}</Typography>
+        : <Typography variant="body2" sx={{ color: 'var(--text-muted, rgba(255,255,255,0.25))', textAlign: 'center', fontSize: '0.78rem' }}>{emptyMsg}</Typography>
       }
     </Box>
   )
@@ -215,7 +215,7 @@ export default function ResultDisplay({ result }) {
 
           {/* Info principal */}
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography sx={{ color: 'white', fontWeight: 800, fontSize: '1.25rem', lineHeight: 1.2, mb: 0.8 }}>
+            <Typography sx={{ color: 'var(--text, white)', fontWeight: 800, fontSize: '1.25rem', lineHeight: 1.2, mb: 0.8 }}>
               {s.name || domain || '—'}
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flexWrap: 'wrap' }}>
@@ -228,7 +228,7 @@ export default function ResultDisplay({ result }) {
               )}
               {domain && (
                 <Chip icon={<LinkIcon sx={{ fontSize: '11px !important' }} />} label={domain} size="small" component="a" href={s.website} target="_blank" clickable
-                  sx={{ bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.1)', fontSize: '0.7rem', height: 20, '& .MuiChip-icon': { color: 'rgba(255,255,255,0.3)' }, '&:hover': { bgcolor: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.7)' } }} />
+                  sx={{ bgcolor: 'var(--surface, rgba(255,255,255,0.06))', color: 'var(--text-muted, rgba(255,255,255,0.4))', border: '1px solid var(--border, rgba(255,255,255,0.1))', fontSize: '0.7rem', height: 20, '& .MuiChip-icon': { color: 'var(--text-muted, rgba(255,255,255,0.3))' }, '&:hover': { bgcolor: 'var(--item-hover, rgba(255,255,255,0.1))', color: 'var(--text, rgba(255,255,255,0.7))' } }} />
               )}
               {contacted?.contacted && (
                 <Chip
@@ -249,13 +249,13 @@ export default function ResultDisplay({ result }) {
             border: `1px solid ${result.primary_whatsapp_number ? 'rgba(37,211,102,0.3)' : 'var(--border)'}`,
             boxShadow: result.primary_whatsapp_number ? '0 0 16px rgba(37,211,102,0.12)' : 'none',
           }}>
-            <WhatsAppIcon sx={{ fontSize: 22, color: result.primary_whatsapp_number ? '#25D366' : 'rgba(255,255,255,0.18)' }} />
+            <WhatsAppIcon sx={{ fontSize: 22, color: result.primary_whatsapp_number ? '#25D366' : 'var(--text-muted, rgba(255,255,255,0.18))' }} />
             <Box>
-              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: result.primary_whatsapp_number ? '#4ade80' : 'rgba(255,255,255,0.2)', textTransform: 'uppercase', letterSpacing: 0.8, lineHeight: 1 }}>
+              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: result.primary_whatsapp_number ? '#4ade80' : 'var(--text-muted, rgba(255,255,255,0.2))', textTransform: 'uppercase', letterSpacing: 0.8, lineHeight: 1 }}>
                 {result.primary_whatsapp_number ? r.whatsapp : r.noWa}
               </Typography>
               {result.primary_whatsapp_number && (
-                <Typography sx={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.6)', mt: 0.2 }}>
+                <Typography sx={{ fontSize: '0.75rem', color: 'var(--text, rgba(255,255,255,0.6))', mt: 0.2 }}>
                   {result.primary_whatsapp_number}
                 </Typography>
               )}
@@ -275,7 +275,7 @@ export default function ResultDisplay({ result }) {
       {/* ── DESCRIPCIÓN ── */}
       {s.description && s.description !== r.descNA && (
         <Section icon={<NotesIcon fontSize="small" />} title={r.description} color="#a78bfa">
-          <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.85rem', lineHeight: 1.7 }}>
+          <Typography sx={{ color: 'var(--text, rgba(255,255,255,0.6))', fontSize: '0.85rem', lineHeight: 1.7 }}>
             {s.description}
           </Typography>
         </Section>
@@ -324,11 +324,11 @@ export default function ResultDisplay({ result }) {
                   <Chip key={label} size="small"
                     icon={val ? <CheckIcon sx={{ fontSize: '13px !important' }} /> : <CloseIcon sx={{ fontSize: '13px !important' }} />}
                     label={label}
-                    sx={{ bgcolor: val ? 'rgba(34,197,94,0.1)' : 'rgba(255,255,255,0.04)', color: val ? '#4ade80' : 'rgba(255,255,255,0.3)', border: `1px solid ${val ? 'rgba(34,197,94,0.2)' : 'rgba(255,255,255,0.08)'}`, '& .MuiChip-icon': { color: 'inherit' } }}
+                    sx={{ bgcolor: val ? 'rgba(34,197,94,0.1)' : 'var(--surface, rgba(255,255,255,0.04))', color: val ? '#4ade80' : 'var(--text-muted, rgba(255,255,255,0.35))', border: `1px solid ${val ? 'rgba(34,197,94,0.2)' : 'var(--border, rgba(255,255,255,0.08))'}`, '& .MuiChip-icon': { color: 'inherit' } }}
                   />
                 ))}
                 {s.metadata.language && (
-                  <Chip size="small" label={`${r.language}: ${s.metadata.language}`} sx={{ bgcolor: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.08)' }} />
+                  <Chip size="small" label={`${r.language}: ${s.metadata.language}`} sx={{ bgcolor: 'var(--surface, rgba(255,255,255,0.04))', color: 'var(--text-muted, rgba(255,255,255,0.35))', border: '1px solid var(--border, rgba(255,255,255,0.08))' }} />
                 )}
               </Box>
             )}
@@ -344,7 +344,7 @@ export default function ResultDisplay({ result }) {
               <Box key={i} sx={{ p: 1.5, bgcolor: 'rgba(192,132,252,0.05)', border: '1px solid rgba(192,132,252,0.12)', borderRadius: 1.5, display: 'flex', flexDirection: 'column', gap: 0.3 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <PersonIcon sx={{ fontSize: 15, color: '#c084fc' }} />
-                  <Typography variant="body2" fontWeight={700} sx={{ color: 'rgba(255,255,255,0.85)' }}>{p.name}</Typography>
+                  <Typography variant="body2" fontWeight={700} sx={{ color: 'var(--text, rgba(255,255,255,0.85))' }}>{p.name}</Typography>
                 </Box>
                 {p.email && <Typography variant="caption" sx={{ color: '#f87171', ml: 3 }}>{p.email}</Typography>}
                 {p.phone && <Typography variant="caption" sx={{ color: '#60a5fa', ml: 3 }}>{p.phone}</Typography>}
@@ -361,7 +361,7 @@ export default function ResultDisplay({ result }) {
             <Box sx={{ flex: 1 }}>
               <Section icon={<HandymanIcon fontSize="small" />} title={r.services} color="#fb923c">
                 {sx.services.map((item, i) => (
-                  <Typography key={i} variant="body2" sx={{ py: 0.5, color: 'rgba(255,255,255,0.6)', fontSize: '0.82rem', borderBottom: '1px solid rgba(255,255,255,0.05)', '&:last-of-type': { borderBottom: 'none' } }}>• {item}</Typography>
+                  <Typography key={i} variant="body2" sx={{ py: 0.5, color: 'var(--text, rgba(255,255,255,0.6))', fontSize: '0.82rem', borderBottom: '1px solid var(--border, rgba(255,255,255,0.05))', '&:last-of-type': { borderBottom: 'none' } }}>• {item}</Typography>
                 ))}
               </Section>
             </Box>
@@ -370,7 +370,7 @@ export default function ResultDisplay({ result }) {
             <Box sx={{ flex: 1 }}>
               <Section icon={<InventoryIcon fontSize="small" />} title={r.products} color="#f472b6">
                 {sx.products.map((item, i) => (
-                  <Typography key={i} variant="body2" sx={{ py: 0.5, color: 'rgba(255,255,255,0.6)', fontSize: '0.82rem', borderBottom: '1px solid rgba(255,255,255,0.05)', '&:last-of-type': { borderBottom: 'none' } }}>• {item}</Typography>
+                  <Typography key={i} variant="body2" sx={{ py: 0.5, color: 'var(--text, rgba(255,255,255,0.6))', fontSize: '0.82rem', borderBottom: '1px solid var(--border, rgba(255,255,255,0.05))', '&:last-of-type': { borderBottom: 'none' } }}>• {item}</Typography>
                 ))}
               </Section>
             </Box>

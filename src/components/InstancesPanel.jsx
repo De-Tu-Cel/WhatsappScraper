@@ -24,6 +24,8 @@ import PersonAddIcon from '@mui/icons-material/PersonAdd'
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
+import CallIcon from '@mui/icons-material/Call'
+import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import LinkOffIcon from '@mui/icons-material/LinkOff'
 import { useLang } from '../context/LangContext'
 
@@ -210,6 +212,13 @@ export default function InstancesPanel() {
   const [creating,     setCreating]     = useState(false)
   const [createErr,    setCreateErr]    = useState('')
 
+  // ── Pairing code dialog ──
+  const [pairOpen,     setPairOpen]     = useState(false)
+  const [pairPhone,    setPairPhone]    = useState('')
+  const [pairCode,     setPairCode]     = useState(null)
+  const [pairLoading,  setPairLoading]  = useState(false)
+  const [pairErr,      setPairErr]      = useState('')
+
   // ── QR dialog ──
   const [qrOpen,       setQrOpen]       = useState(false)
   const [qrTarget,     setQrTarget]     = useState(null)
@@ -364,6 +373,91 @@ export default function InstancesPanel() {
   function handleDeleteClick() {
     const inst = menuInst; closeMenu()
     setDeleteTarget(inst)
+  }
+
+  const [pairTarget, setPairTarget] = useState(null)
+
+  // ── OTP registration dialog ──
+  const [otpOpen,    setOtpOpen]    = useState(false)
+  const [otpTarget,  setOtpTarget]  = useState(null)
+  const [otpPhone,   setOtpPhone]   = useState('')
+  const [otpStep,    setOtpStep]    = useState('phone') // 'phone' | 'code' | 'success'
+  const [otpCode,    setOtpCode]    = useState('')
+  const [otpLoading, setOtpLoading] = useState(false)
+  const [otpErr,     setOtpErr]     = useState('')
+
+  function handlePairClick() {
+    const inst = menuInst; closeMenu()
+    setPairPhone(''); setPairCode(null); setPairErr('')
+    setPairTarget(inst)
+    setPairOpen(true)
+  }
+
+  async function handleRequestPairCode() {
+    if (!pairPhone.trim()) { setPairErr('Ingresa el número de teléfono'); return }
+    setPairLoading(true); setPairErr(''); setPairCode(null)
+    try {
+      const r = await fetch(`/api/evolution/instance/${pairTarget?.name}?action=pairing-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: pairPhone.replace(/\D/g, '') }),
+      })
+      const d = await r.json()
+      const code = d.code || d.pairingCode || d.pairing_code
+      if (!r.ok || !code) { setPairErr(d.detail || d.error || 'No se pudo generar el código'); return }
+      setPairCode(code)
+    } catch (e) {
+      setPairErr(e.message)
+    } finally {
+      setPairLoading(false)
+    }
+  }
+
+  function handleOtpClick() {
+    const inst = menuInst; closeMenu()
+    setOtpPhone(''); setOtpCode(''); setOtpStep('phone'); setOtpErr('')
+    setOtpTarget(inst)
+    setOtpOpen(true)
+  }
+
+  async function handleRequestOtpCall() {
+    if (!otpPhone.trim()) { setOtpErr(t.inst.otpErrPhone); return }
+    setOtpLoading(true); setOtpErr('')
+    try {
+      const r = await fetch(`/api/evolution/instance/${otpTarget?.name}?action=request-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: otpPhone.replace(/\D/g, '') }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setOtpErr(d.detail || d.error || t.inst.otpErrRequest); return }
+      setOtpStep('code')
+    } catch (e) {
+      setOtpErr(e.message)
+    } finally {
+      setOtpLoading(false)
+    }
+  }
+
+  async function handleVerifyOtp() {
+    const clean = otpCode.replace(/\D/g, '')
+    if (clean.length < 6) { setOtpErr(t.inst.otpErrCode); return }
+    setOtpLoading(true); setOtpErr('')
+    try {
+      const r = await fetch(`/api/evolution/instance/${otpTarget?.name}?action=verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: clean }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setOtpErr(d.detail || d.error || t.inst.otpErrVerify); return }
+      setOtpStep('success')
+      setTimeout(() => { setOtpOpen(false); fetchInstances() }, 2000)
+    } catch (e) {
+      setOtpErr(e.message)
+    } finally {
+      setOtpLoading(false)
+    }
   }
 
   async function handleCreate() {
@@ -535,6 +629,14 @@ export default function InstancesPanel() {
           <QrCodeIcon sx={{ fontSize: 17, color: 'var(--accent,#60a5fa)' }} />
           {t.inst.connectQr}
         </MenuItem>
+        <MenuItem onClick={handlePairClick}>
+          <PhoneAndroidIcon sx={{ fontSize: 17, color: '#4ade80' }} />
+          Conectar por número
+        </MenuItem>
+        <MenuItem onClick={handleOtpClick}>
+          <CallIcon sx={{ fontSize: 17, color: '#fb923c' }} />
+          {t.inst.otpMenuLabel}
+        </MenuItem>
         <MenuItem onClick={handleAssignClick}>
           <PersonAddIcon sx={{ fontSize: 17, color: '#a78bfa' }} />
           {t.inst.assignUser}
@@ -627,6 +729,195 @@ export default function InstancesPanel() {
               ? <><CircularProgress size={14} sx={{ color: 'white', mr: 1 }} />{t.inst.creating}</>
               : t.inst.create}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Pairing code dialog ── */}
+      <Dialog open={pairOpen} onClose={() => { setPairOpen(false); setPairCode(null); setPairErr('') }} sx={{
+        '& .MuiDialog-paper': {
+          bgcolor: 'var(--card-bg, #161d2e)',
+          backgroundImage: 'linear-gradient(160deg, rgba(34,197,94,0.08) 0%, transparent 55%)',
+          border: '1px solid rgba(34,197,94,0.2)',
+          borderRadius: 3, minWidth: 360,
+          boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+        },
+      }}>
+        <DialogTitle sx={{ pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+            <Box sx={{ width: 34, height: 34, borderRadius: 2, flexShrink: 0, bgcolor: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <PhoneAndroidIcon sx={{ fontSize: 18, color: '#4ade80' }} />
+            </Box>
+            <Box>
+              <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.97rem', lineHeight: 1.2 }}>
+                Conectar por número de teléfono
+              </Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem' }}>
+                {pairTarget?.name}
+              </Typography>
+            </Box>
+          </Box>
+        </DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '4px !important', pb: 1 }}>
+          {!pairCode ? (
+            <>
+              <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', lineHeight: 1.5 }}>
+                Ingresa el número que quieres registrar. WhatsApp generará un código de 8 caracteres que deberás ingresar en la app.
+              </Typography>
+              <TextField
+                label="Número de teléfono"
+                placeholder="525595054461"
+                size="small"
+                value={pairPhone}
+                onChange={e => setPairPhone(e.target.value)}
+                helperText={<span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.68rem' }}>Con código de país, sin + ni espacios</span>}
+                onKeyDown={e => e.key === 'Enter' && handleRequestPairCode()}
+                autoFocus
+                sx={FIELD_SX}
+              />
+              {pairErr && (
+                <Typography sx={{ color: '#f87171', fontSize: '0.78rem' }}>{pairErr}</Typography>
+              )}
+            </>
+          ) : (
+            <>
+              <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', lineHeight: 1.5 }}>
+                Ingresa este código en WhatsApp → Dispositivos vinculados → Vincular con número de teléfono:
+              </Typography>
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 1 }}>
+                <Box sx={{
+                  px: 3, py: 2, borderRadius: 2,
+                  bgcolor: 'rgba(34,197,94,0.1)',
+                  border: '1px solid rgba(34,197,94,0.3)',
+                }}>
+                  <Typography sx={{ color: '#4ade80', fontWeight: 800, fontSize: '1.8rem', letterSpacing: '0.18em', fontFamily: 'monospace' }}>
+                    {pairCode}
+                  </Typography>
+                </Box>
+              </Box>
+              <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem', textAlign: 'center' }}>
+                El código expira en pocos minutos
+              </Typography>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5, borderTop: '1px solid rgba(255,255,255,0.07)', gap: 1 }}>
+          <Button onClick={() => { setPairOpen(false); setPairCode(null) }} sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.82rem', borderRadius: 2, px: 2, '&:hover': { color: '#fff', bgcolor: 'rgba(255,255,255,0.08)' } }}>
+            Cerrar
+          </Button>
+          {!pairCode && (
+            <Button onClick={handleRequestPairCode} disabled={pairLoading} variant="contained"
+              startIcon={pairLoading ? null : <PhoneAndroidIcon sx={{ fontSize: '17px !important' }} />}
+              sx={{ bgcolor: '#22c55e', '&:hover': { bgcolor: '#16a34a' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5 }}>
+              {pairLoading ? <CircularProgress size={15} sx={{ color: 'white' }} /> : 'Generar código'}
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
+
+      {/* ── OTP registration dialog ── */}
+      <Dialog open={otpOpen} onClose={() => otpStep !== 'success' && setOtpOpen(false)} sx={{
+        '& .MuiDialog-paper': {
+          bgcolor: 'var(--card-bg, #161d2e)',
+          backgroundImage: 'linear-gradient(160deg, rgba(251,146,60,0.08) 0%, transparent 55%)',
+          border: '1px solid rgba(251,146,60,0.2)',
+          borderRadius: 3, minWidth: 360,
+          boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+        },
+      }}>
+        <DialogTitle sx={{ pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+            <Box sx={{ width: 34, height: 34, borderRadius: 2, flexShrink: 0, bgcolor: 'rgba(251,146,60,0.12)', border: '1px solid rgba(251,146,60,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {otpStep === 'success'
+                ? <CheckCircleIcon sx={{ fontSize: 18, color: '#4ade80' }} />
+                : <CallIcon sx={{ fontSize: 18, color: '#fb923c' }} />}
+            </Box>
+            <Box>
+              <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.97rem', lineHeight: 1.2 }}>
+                {otpStep === 'success' ? t.inst.otpSuccessTitle : t.inst.otpTitle}
+              </Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem' }}>
+                {otpTarget?.name}
+              </Typography>
+            </Box>
+          </Box>
+        </DialogTitle>
+
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '4px !important', pb: 1 }}>
+          {otpStep === 'phone' && (
+            <>
+              <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', lineHeight: 1.5 }}>
+                {t.inst.otpPhoneDesc}
+              </Typography>
+              <TextField
+                label={t.inst.otpPhoneLabel}
+                placeholder={t.inst.otpPhonePlaceholder}
+                size="small"
+                value={otpPhone}
+                onChange={e => setOtpPhone(e.target.value)}
+                helperText={<span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.68rem' }}>{t.inst.otpPhoneHint}</span>}
+                onKeyDown={e => e.key === 'Enter' && handleRequestOtpCall()}
+                autoFocus
+                sx={FIELD_SX}
+              />
+              {otpErr && <Typography sx={{ color: '#f87171', fontSize: '0.78rem' }}>{otpErr}</Typography>}
+            </>
+          )}
+          {otpStep === 'code' && (
+            <>
+              <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', lineHeight: 1.5 }}>
+                {t.inst.otpCodeDesc.replace('{phone}', `+${otpPhone.replace(/\D/g, '')}`)}
+              </Typography>
+              <TextField
+                label={t.inst.otpCodeLabel}
+                placeholder={t.inst.otpCodePlaceholder}
+                size="small"
+                value={otpCode}
+                onChange={e => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                onKeyDown={e => e.key === 'Enter' && handleVerifyOtp()}
+                autoFocus
+                slotProps={{ htmlInput: { maxLength: 6, style: { textAlign: 'center', fontSize: '1.5rem', fontFamily: 'monospace', letterSpacing: '0.3em', color: '#fb923c', fontWeight: 800 } } }}
+                sx={{
+                  ...FIELD_SX,
+                  '& .MuiOutlinedInput-root': {
+                    ...FIELD_SX['& .MuiOutlinedInput-root'],
+                    '&.Mui-focused fieldset': { borderColor: '#fb923c' },
+                  },
+                  '& .MuiInputLabel-root.Mui-focused': { color: '#fb923c' },
+                }}
+              />
+              {otpErr && <Typography sx={{ color: '#f87171', fontSize: '0.78rem' }}>{otpErr}</Typography>}
+            </>
+          )}
+          {otpStep === 'success' && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', py: 2, gap: 1.5 }}>
+              <CheckCircleIcon sx={{ fontSize: 52, color: '#4ade80' }} />
+              <Typography sx={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.85rem', textAlign: 'center' }}>
+                {t.inst.otpSuccessMsg}
+              </Typography>
+            </Box>
+          )}
+        </DialogContent>
+
+        <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5, borderTop: '1px solid rgba(255,255,255,0.07)', gap: 1 }}>
+          {otpStep !== 'success' && (
+            <Button onClick={() => setOtpOpen(false)} sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.82rem', borderRadius: 2, px: 2, '&:hover': { color: '#fff', bgcolor: 'rgba(255,255,255,0.08)' } }}>
+              {t.inst.otpClose}
+            </Button>
+          )}
+          {otpStep === 'phone' && (
+            <Button onClick={handleRequestOtpCall} disabled={otpLoading} variant="contained"
+              startIcon={otpLoading ? null : <CallIcon sx={{ fontSize: '17px !important' }} />}
+              sx={{ bgcolor: '#ea580c', '&:hover': { bgcolor: '#c2410c' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5 }}>
+              {otpLoading ? <CircularProgress size={15} sx={{ color: 'white' }} /> : t.inst.otpRequestBtn}
+            </Button>
+          )}
+          {otpStep === 'code' && (
+            <Button onClick={handleVerifyOtp} disabled={otpLoading || otpCode.replace(/\D/g,'').length < 6} variant="contained"
+              sx={{ bgcolor: '#ea580c', '&:hover': { bgcolor: '#c2410c' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5,
+                '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.2)' } }}>
+              {otpLoading ? <CircularProgress size={15} sx={{ color: 'white' }} /> : t.inst.otpVerifyBtn}
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
 

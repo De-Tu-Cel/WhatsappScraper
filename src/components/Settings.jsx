@@ -141,8 +141,8 @@ export const THEMES = [
 ]
 
 const LANGS = [
-  { label: 'Español', value: 'es', flag: '🇲🇽' },
-  { label: 'English', value: 'en', flag: '🇺🇸' },
+  { value: 'es', flag: '🇲🇽', labels: { es: 'Español', en: 'Spanish' } },
+  { value: 'en', flag: '🇺🇸', labels: { es: 'Inglés',  en: 'English' } },
 ]
 
 const DEFAULT_SETTINGS = { accent: '#3b82f6', theme: 'navy', lang: 'es' }
@@ -625,7 +625,7 @@ export default function Settings() {
                   }}>
                     <Typography sx={{ fontSize: '1.1rem', lineHeight: 1, flexShrink: 0, position: 'relative', top: -1 }}>{l.flag}</Typography>
                     <Typography sx={{ fontSize: '0.82rem', fontWeight: active ? 700 : 400, color: active ? 'var(--accent,#3b82f6)' : 'var(--text-muted, rgba(255,255,255,0.5))', flexGrow: 1 }}>
-                      {l.label}
+                      {l.labels[settings.lang] ?? l.labels.en}
                     </Typography>
                     <CheckIcon sx={{ fontSize: 16, color: 'var(--accent,#3b82f6)', flexShrink: 0, opacity: active ? 1 : 0, transition: 'opacity 0.15s' }} />
                   </Box>

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Header
 from fastapi.responses import StreamingResponse
 from typing import Optional
-import asyncio, json as _json
+import asyncio, json as _json, re
 from app.schemas.company import (
     ProcessUrlRequest, SearchRequest, BatchRequest,
     CheckUrlsRequest, DeleteCompaniesRequest, UpdateCompanyRequest,
@@ -615,6 +615,37 @@ def api_ai_toggle(company_id: str, body: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/conversations/{company_id}/ai-config")
+def api_get_ai_config(company_id: str):
+    try:
+        db = MongoDBManager()
+        prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
+        return {
+            "max_turns":          int(prefs.get("max_turns", 3)),
+            "extra_instructions": prefs.get("extra_instructions", ""),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/conversations/{company_id}/ai-config")
+def api_put_ai_config(company_id: str, body: dict):
+    try:
+        from datetime import datetime as _dt
+        db = MongoDBManager()
+        update = {"updated_at": _dt.now()}
+        if "max_turns" in body:
+            update["max_turns"] = max(1, min(20, int(body["max_turns"])))
+        if "extra_instructions" in body:
+            update["extra_instructions"] = str(body["extra_instructions"])[:600]
+        db.db.conversation_ai_prefs.update_one(
+            {"company_id": company_id},
+            {"$set": update},
+            upsert=True,
+        )
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ── N8N callbacks ─────────────────────────────────────────────────────────────
 
 @router.post("/n8n/message-sent")
@@ -1027,6 +1058,14 @@ def api_generate_report(company_id: str, req: ReportRequest):
 
         thread = db.get_conversation_thread(company_id)
 
+        if req.filter_number:
+            norm = lambda n: re.sub(r'\D', '', n or '')[-10:]
+            fn   = norm(req.filter_number)
+            thread = [
+                m for m in thread
+                if norm(m.get('to_number') or m.get('from_number') or m.get('number') or '') == fn
+            ]
+
         pdf_buf = generate_report(
             company=serialize(company),
             analytics=analytics,
@@ -1122,6 +1161,62 @@ def api_evo_get_qr(name: str):
         r = _req.get(f"{EVOLUTION_API_URL}/instance/connect/{name}",
             headers={"apikey": EVOLUTION_API_KEY}, timeout=10)
         return r.json()
+    except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/evolution/instance/pairing-code/{name}")
+def api_evo_pairing_code(name: str, body: dict):
+    try:
+        import requests as _req
+        from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
+        phone = str(body.get("phone", "")).strip().replace("+", "").replace(" ", "")
+        if not phone:
+            raise HTTPException(status_code=400, detail="phone requerido")
+        r = _req.post(
+            f"{EVOLUTION_API_URL}/instance/connect/{name}",
+            headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
+            json={"number": phone},
+            timeout=15,
+        )
+        return r.json()
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/evolution/instance/request-otp/{name}")
+def api_evo_request_otp(name: str, body: dict):
+    """Evolution API v2: request OTP via voice call for new number registration."""
+    try:
+        import requests as _req
+        from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
+        phone = str(body.get("phone", "")).strip().replace("+", "").replace(" ", "")
+        if not phone:
+            raise HTTPException(status_code=400, detail="phone requerido")
+        r = _req.post(
+            f"{EVOLUTION_API_URL}/instance/register/{name}",
+            headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
+            json={"number": phone, "method": "voice_call"},
+            timeout=15,
+        )
+        return r.json()
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/evolution/instance/verify-otp/{name}")
+def api_evo_verify_otp(name: str, body: dict):
+    """Evolution API v2: submit OTP code to complete number registration."""
+    try:
+        import requests as _req
+        from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
+        code = str(body.get("code", "")).strip()
+        if not code:
+            raise HTTPException(status_code=400, detail="code requerido")
+        r = _req.post(
+            f"{EVOLUTION_API_URL}/instance/code/{name}",
+            headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
+            json={"code": code},
+            timeout=15,
+        )
+        return r.json()
+    except HTTPException: raise
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/evolution/instance/status/{name}")
@@ -1770,6 +1865,49 @@ def api_unassign_instance(name: str, x_user_token: Optional[str] = Header(None))
             pass
     db.db.instances.update_one({"name": name}, {"$set": {"assigned_to": None, "assigned_name": None}})
     return {"ok": True}
+
+
+@router.post("/otp/webhook")
+def otp_webhook(body: dict):
+    """
+    Telcel (or any carrier) calls this endpoint when an SMS arrives.
+    Expected body: { "to": "+521234567890", "text": "Your WhatsApp code is 123456" }
+    """
+    from app.otp_manager import handle_incoming_sms
+    phone = body.get("to", "").replace("+", "").strip()
+    text  = body.get("text", "")
+    if not phone or not text:
+        raise HTTPException(400, "to and text required")
+    result = handle_incoming_sms(phone, text)
+    return result
+
+
+@router.post("/otp/start")
+def otp_start(body: dict, x_user_token: Optional[str] = Header(None)):
+    """
+    Called from InstancesPanel when user wants to register a number via SMS.
+    body: { "phone_number": "521234567890", "adb_port": 5554, "container_name": "android-1" }
+    """
+    _require_user(x_user_token)
+    from app.otp_manager import start_registration
+    phone     = body.get("phone_number", "").strip()
+    adb_port  = int(body.get("adb_port", 5554))
+    container = body.get("container_name", f"android-{adb_port}")
+    if not phone:
+        raise HTTPException(400, "phone_number required")
+    start_registration(phone, adb_port, container)
+    return {"ok": True, "phone_number": phone, "adb_port": adb_port}
+
+
+@router.get("/otp/status/{phone_number}")
+def otp_status(phone_number: str, x_user_token: Optional[str] = Header(None)):
+    """Poll registration status for a phone number."""
+    _require_user(x_user_token)
+    from app.otp_manager import get_status
+    status = get_status(phone_number)
+    if not status:
+        raise HTTPException(404, "No pending registration for this number")
+    return status
 
 
 @router.post("/admin/instances/sync")

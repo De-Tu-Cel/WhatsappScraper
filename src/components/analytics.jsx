@@ -354,7 +354,7 @@ export default function Analytics() {
       const reportRes = await fetch(`/api/reports/${row.company_id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ screenshot_b64: screenshotB64 }),
+        body: JSON.stringify({ screenshot_b64: screenshotB64, filter_number: filterNum || null }),
       })
 
       if (!reportRes.ok) {
@@ -828,8 +828,8 @@ export default function Analytics() {
                       {/* Reporte */}
                       <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
                         {!hasMultiple && (() => {
-                          const noContact = !row.total_responses
-                          const tip = isGenerating ? t.analytics.generating : generating ? t.analytics.pleaseWait : noContact ? t.analytics.noConvRecord : t.analytics.reportPdf
+                          const noContact = !row.total_responses || !row.category || row.category === 'sin_respuesta'
+                          const tip = isGenerating ? t.analytics.generating : generating ? t.analytics.pleaseWait : (!row.category || row.category === 'sin_respuesta') ? t.analytics.noReply : !row.total_responses ? t.analytics.noConvRecord : t.analytics.reportPdf
                           return (
                             <Tooltip title={tip}>
                               <span>

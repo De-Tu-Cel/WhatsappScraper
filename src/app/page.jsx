@@ -30,6 +30,7 @@ import InstancesPanel from '../components/InstancesPanel'
 import RouterIcon from '@mui/icons-material/Router'
 import Settings, { loadSettings, applySettings } from '../components/Settings'
 import { useLang } from '../context/LangContext'
+import AppTour from '../components/AppTour'
 
 const NAV_KEYS = [
   { key: 'single',    icon: <LinkIcon />,              component: <SingleUrlProcessor /> },
@@ -133,6 +134,7 @@ export default function DashboardPage() {
           </Box>
         </Box>
       )}
+      <AppTour username={user?.username} />
       <Sidebar
         open={open} setOpen={setOpen}
         active={mounted ? active : -1} setActive={handleNavClick}

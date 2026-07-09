@@ -32,5 +32,38 @@ export async function POST(request, { params }) {
       return NextResponse.json(await res.json(), { status: res.status })
     } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }) }
   }
+  if (action === 'pairing-code') {
+    try {
+      const body = await request.json()
+      const res = await fetch(`${B}/api/evolution/instance/pairing-code/${name}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      return NextResponse.json(await res.json(), { status: res.status })
+    } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }) }
+  }
+  if (action === 'request-otp') {
+    try {
+      const body = await request.json()
+      const res = await fetch(`${B}/api/evolution/instance/request-otp/${name}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      return NextResponse.json(await res.json(), { status: res.status })
+    } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }) }
+  }
+  if (action === 'verify-otp') {
+    try {
+      const body = await request.json()
+      const res = await fetch(`${B}/api/evolution/instance/verify-otp/${name}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      return NextResponse.json(await res.json(), { status: res.status })
+    } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }) }
+  }
   return NextResponse.json({ error: 'unknown action' }, { status: 400 })
 }

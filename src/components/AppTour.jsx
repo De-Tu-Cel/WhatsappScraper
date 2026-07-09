@@ -1,26 +1,24 @@
 'use client'
 import { useState, useEffect } from 'react'
 import dynamic from 'next/dynamic'
+import { useLang } from '../context/LangContext'
 
 const Joyride = dynamic(
   () => import('react-joyride').then(mod => ({ default: mod.Joyride })),
   { ssr: false }
 )
 
-const step = (target, title, content) => ({
-  target, title, content, placement: 'right', disableBeacon: true,
-})
-
-const TOUR_STEPS = [
-  step('#tour-sidebar',      '👋 Bienvenido a Mystery Shopper', 'Este es el panel de navegación. Desde aquí accedes a todas las secciones de la app. Puedes colapsarlo para ganar espacio.'),
-  step('#tour-nav-single',   '🔗 URL Individual',               'Pega la URL de una empresa para extraer automáticamente su nombre, industria, ciudad y número de WhatsApp.'),
-  step('#tour-nav-batch',    '📋 Lote de URLs',                 'Procesa hasta 50 URLs a la vez. Ideal para prospectar varias empresas de una sola vez y enviarles mensajes en bulk.'),
-  step('#tour-nav-csv',      '📂 Importar CSV',                 'Sube un archivo CSV con URLs para procesarlas todas automáticamente. Útil cuando tienes listas grandes de prospectos.'),
-  step('#tour-nav-database', '🗄️ Base de datos',                'Aquí vive toda tu base de prospectos. Puedes filtrar por industria, ciudad o WhatsApp, seleccionar empresas y enviarles mensajes directamente.'),
-  step('#tour-nav-search',   '🔍 Buscar prospectos',            'Busca empresas por industria o tipo de negocio (restaurantes, talleres, dentistas…). La app las encuentra y las agrega a tu base de datos.'),
-  step('#tour-nav-convs',    '💬 Conversaciones',               'Ve y responde todos los mensajes de WhatsApp en un solo lugar. Las empresas que te contesten aparecerán aquí organizadas por chat.'),
-  step('#tour-nav-schedule', '📅 Envíos Programados',           'Programa campañas para que se envíen automáticamente en la fecha y hora que elijas. Puedes ver el calendario por mes, semana o lista, y editar o cancelar envíos en cualquier momento.'),
-  step('#tour-nav-analytics','📊 Análisis',                     'Métricas de las respuestas recibidas: cuántas son humanas, cuántas son bots, calidad promedio y tiempo de reacción.'),
+const TOUR_TARGETS = [
+  '#tour-sidebar',
+  '#tour-nav-instances',
+  '#tour-nav-single',
+  '#tour-nav-batch',
+  '#tour-nav-csv',
+  '#tour-nav-database',
+  '#tour-nav-search',
+  '#tour-nav-convs',
+  '#tour-nav-schedule',
+  '#tour-nav-analytics',
 ]
 
 const JOYRIDE_OPTIONS = {
@@ -35,7 +33,7 @@ const JOYRIDE_STYLES = {
   beaconOuter: { backgroundColor: 'rgba(21,87,245,0.25)', border: '2px solid #1557f5' },
 }
 
-function TourTooltip({ step, tooltipProps, primaryProps, backProps, skipProps, isLastStep, index, size }) {
+function TourTooltip({ step, tooltipProps, primaryProps, backProps, skipProps, isLastStep, index, size, tl }) {
   return (
     <div {...tooltipProps} style={{
       backgroundColor: '#ffffff',
@@ -59,7 +57,7 @@ function TourTooltip({ step, tooltipProps, primaryProps, backProps, skipProps, i
           background: 'none', border: 'none', cursor: 'pointer',
           color: '#94a3b8', fontSize: '0.75rem', padding: '4px 0',
         }}>
-          Saltar tour
+          {tl.skip}
         </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ color: '#cbd5e1', fontSize: '0.72rem' }}>
@@ -70,7 +68,7 @@ function TourTooltip({ step, tooltipProps, primaryProps, backProps, skipProps, i
               background: 'none', border: 'none', cursor: 'pointer',
               color: '#64748b', fontSize: '0.82rem', padding: '6px 10px',
             }}>
-              ← Atrás
+              {tl.back}
             </button>
           )}
           <button {...primaryProps} style={{
@@ -79,7 +77,7 @@ function TourTooltip({ step, tooltipProps, primaryProps, backProps, skipProps, i
             padding: '8px 18px', borderRadius: 10,
             boxShadow: '0 4px 14px rgba(21,87,245,0.4)',
           }}>
-            {isLastStep ? '¡Listo! ✓' : 'Siguiente →'}
+            {isLastStep ? tl.finish : tl.next}
           </button>
         </div>
       </div>
@@ -90,16 +88,26 @@ function TourTooltip({ step, tooltipProps, primaryProps, backProps, skipProps, i
 
 export default function AppTour({ username }) {
   const [run, setRun] = useState(false)
+  const { t } = useLang()
+  const tl = t.tour
+
+  const tourSteps = TOUR_TARGETS.map((target, i) => ({
+    target,
+    title:        tl.steps[i]?.title,
+    content:      tl.steps[i]?.content,
+    placement:    'right',
+    disableBeacon: true,
+  }))
 
   useEffect(() => {
     if (!username) return
     const key = `tour_done_${username}`
     if (!localStorage.getItem(key)) {
-      const t = setTimeout(() => {
+      const timer = setTimeout(() => {
         localStorage.setItem(key, '1')
         setRun(true)
       }, 800)
-      return () => clearTimeout(t)
+      return () => clearTimeout(timer)
     }
   }, [username])
 
@@ -114,7 +122,7 @@ export default function AppTour({ username }) {
 
   return (
     <Joyride
-      steps={TOUR_STEPS}
+      steps={tourSteps}
       run={run}
       continuous
       showSkipButton
@@ -122,7 +130,7 @@ export default function AppTour({ username }) {
       spotlightClicks={false}
       disableScrolling
       callback={handleCallback}
-      tooltipComponent={TourTooltip}
+      tooltipComponent={(props) => <TourTooltip {...props} tl={tl} />}
       options={JOYRIDE_OPTIONS}
       styles={JOYRIDE_STYLES}
     />

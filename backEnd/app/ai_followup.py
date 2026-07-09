@@ -125,7 +125,7 @@ CUÁNDO CERRAR — responde normal y añade [FIN] pegado:
 - Conversación llegó a cierre natural[FIN]
 
 IMPORTANTE: [FIN] es señal interna, nunca llega al contacto. Ponlo pegado al texto sin espacio.
-"""
+{extra_block}"""
 
 
 def _is_business_hours() -> bool:
@@ -226,7 +226,7 @@ def _build_context(db: MongoDBManager, company_id: str, outbound_log: dict) -> d
     }
 
 
-def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False) -> str | None:
+def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False, prefs: dict = None) -> str | None:
     ctx = dict(context)
     parts = []
     if ctx.get("description"):
@@ -236,6 +236,8 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False)
     if ctx.get("website"):
         parts.append(f"Web: {ctx['website']}")
     ctx["company_context"] = "\n".join(parts) if parts else "(sin datos adicionales)"
+    extra = ((prefs or {}).get("extra_instructions") or "").strip()
+    ctx["extra_block"] = f"\n\nINSTRUCCIONES ADICIONALES:\n{extra}" if extra else ""
     system = _SYSTEM_PROMPT.format(**ctx)
     if is_cold_start:
         system += (
@@ -394,7 +396,8 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
         return
 
     is_cold_start = session.get("turn_count", 0) == 0
-    ai_text_raw = _call_llm_for_reply(session.get("turns", []), session.get("context", {}), is_cold_start=is_cold_start)
+    _prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
+    ai_text_raw = _call_llm_for_reply(session.get("turns", []), session.get("context", {}), is_cold_start=is_cold_start, prefs=_prefs)
     print(f"[AIFollowup] LLM response: {repr(ai_text_raw[:80]) if ai_text_raw else 'None'}")
     if not ai_text_raw:
         print("[AIFollowup] EXIT: LLM returned None")

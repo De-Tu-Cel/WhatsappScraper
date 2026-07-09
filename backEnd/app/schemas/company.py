@@ -121,6 +121,7 @@ class EvolutionStatusUpdate(BaseModel):
 
 class ReportRequest(BaseModel):
     screenshot_b64: Optional[str] = None
+    filter_number:  Optional[str] = None
 
 class UpdateContactsRequest(BaseModel):
     whatsapp_numbers: List[str] = []

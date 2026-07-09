@@ -25,8 +25,10 @@ import DoneIcon from '@mui/icons-material/Done'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import Popover from '@mui/material/Popover'
 import EmojiEmotionsIcon from '@mui/icons-material/EmojiEmotions'
+import TuneIcon from '@mui/icons-material/Tune'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner, InstanceStatusDot } from './InstanceStatusBanner'
+import ChatAIConfig from './ChatAIConfig'
 
 const EMOJI_GROUPS = [
   { label: 'Frecuentes', emojis: ['😀','😂','🥹','😊','😍','🤩','😎','🥳','😅','😭','😤','🤔','👍','👎','👋','🙌','🤝','❤️','🔥','✅','⭐','🎉','💯','🚀'] },
@@ -386,10 +388,11 @@ export default function Conversations() {
   const messagesBoxRef = useRef(null)
   const replyRef  = useRef(null)
   const [sendError, setSendError] = useState('')
-  const [aiTyping, setAiTyping]     = useState(false)
-  const [aiActive, setAiActive]     = useState(false)
-  const [aiEnabled, setAiEnabled]   = useState(false)
-  const [aiToggling, setAiToggling] = useState(false)
+  const [aiTyping, setAiTyping]         = useState(false)
+  const [aiActive, setAiActive]         = useState(false)
+  const [aiEnabled, setAiEnabled]       = useState(false)
+  const [aiToggling, setAiToggling]     = useState(false)
+  const [aiConfigOpen, setAiConfigOpen] = useState(false)
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
 
   const fetchConvs = useCallback(async () => {
@@ -507,8 +510,17 @@ export default function Conversations() {
 
   const handleAiToggle = useCallback(async () => {
     if (!selected || aiToggling) return
-    setAiToggling(true)
     const next = !aiEnabled
+    // On first enable: check if config exists — if not, open config dialog first
+    if (next) {
+      try {
+        const r = await fetch(`/api/conversations/${selected.company_id}/ai-config`)
+        const d = await r.json()
+        const hasConfig = r.ok && (d.extra_instructions || d.max_turns !== 3)
+        if (!hasConfig) { setAiConfigOpen(true); return }
+      } catch { /* proceed normally */ }
+    }
+    setAiToggling(true)
     try {
       await fetch(`/api/conversations/${selected.company_id}/ai-toggle`, {
         method: 'POST',
@@ -641,6 +653,7 @@ export default function Conversations() {
   }, [thread, activeNum, waNumbers])
 
   return (
+    <>
     <Box sx={{ display: 'flex', height: '100%', minHeight: 0, gap: 0, borderRadius: 2, overflow: 'hidden', border: '1px solid var(--border)' }}>
 
       {/* ── Lista de conversaciones ── */}
@@ -787,6 +800,15 @@ export default function Conversations() {
                       }} />
                     )}
                   </Box>
+                </Tooltip>
+                <Tooltip title={t.settings.aiCfgBtn}>
+                  <IconButton size="small" onClick={() => setAiConfigOpen(true)} sx={{
+                    color: aiEnabled ? 'rgba(var(--accent-rgb,99,102,241),0.7)' : 'rgba(255,255,255,0.2)',
+                    '&:hover': { color: 'var(--accent,#a5b4fc)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' },
+                    transition: 'all 0.15s',
+                  }}>
+                    <TuneIcon sx={{ fontSize: 15 }} />
+                  </IconButton>
                 </Tooltip>
                 <Tooltip title={t.common.refresh}>
                   <IconButton size="small" onClick={() => fetchThread(selected.company_id, true, false, activeNum !== 'all' ? activeNum : null)}
@@ -974,5 +996,17 @@ export default function Conversations() {
         )}
       </Box>
     </Box>
+
+    <ChatAIConfig
+      open={aiConfigOpen}
+      onClose={() => setAiConfigOpen(false)}
+      companyId={selected?.company_id}
+      companyName={selected?.company_name}
+      onSaved={() => {
+        setAiConfigOpen(false)
+        if (!aiEnabled) handleAiToggle()
+      }}
+    />
+    </>
   )
 }

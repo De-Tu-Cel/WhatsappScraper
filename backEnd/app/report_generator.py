@@ -108,9 +108,16 @@ _MONTHS_ES = {
     'October': 'octubre', 'November': 'noviembre', 'December': 'diciembre',
 }
 
-def _date_es(dt=None) -> str:
+def _mx_now():
     from datetime import datetime as _dt
-    d = dt or _dt.now()
+    try:
+        from zoneinfo import ZoneInfo
+        return _dt.now(ZoneInfo("America/Mexico_City"))
+    except Exception:
+        return _dt.now()
+
+def _date_es(dt=None) -> str:
+    d = dt or _mx_now()
     month_es = _MONTHS_ES.get(d.strftime('%B'), d.strftime('%B').lower())
     return f"{d.day} de {month_es} de {d.year}, {d.strftime('%H:%M')}"
 
@@ -550,7 +557,7 @@ def _page_bg(canv, doc):
     left_text = _safe(_report_company_name) if _report_company_name else "De Tu Cel"
     canv.drawString(LM, 10 * mm, left_text)
     canv.drawRightString(W - RM, 10 * mm,
-                         f"Analisis de Canal WhatsApp · {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+                         f"Analisis de Canal WhatsApp · {_mx_now().strftime('%d/%m/%Y %H:%M')}")
     canv.restoreState()
 
 
@@ -787,7 +794,7 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
         left_items.append(Paragraph("Sin captura de pantalla adjunta.",
             _st("ni2", textColor=C["muted"], fontSize=8)))
 
-    caption_parts = [p for p in [wa_number, company_name, datetime.now().strftime("%d/%m/%Y")] if p]
+    caption_parts = [p for p in [wa_number, company_name, _mx_now().strftime("%d/%m/%Y")] if p]
     left_items.append(Spacer(1, 2 * mm))
     left_items.append(Paragraph(" · ".join(caption_parts),
         _st("cap", fontSize=6, textColor=C["muted"], leading=8, alignment=TA_CENTER)))

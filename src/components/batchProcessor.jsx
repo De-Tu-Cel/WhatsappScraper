@@ -31,6 +31,8 @@ import LinkIcon from '@mui/icons-material/Link'
 import InboxIcon from '@mui/icons-material/Inbox'
 import MessageIcon from '@mui/icons-material/Message'
 import { getTemplates } from './singleUrlProcessor'
+import { TemplateLibraryPicker } from './messageTemplateLibrary'
+import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
 
 const EXAMPLES = [
   'https://pizzeria-mario.com.mx/\nhttps://ferreteria-sanchez.mx/\nhttps://spa-belleza-queretaro.com/\nhttps://taller-mecanico-hdz.mx/\nhttps://restaurante-oaxaca.com.mx/\nhttps://constructora-garcia.mx/',
@@ -165,11 +167,13 @@ export default function BatchProcessor() {
   const [loading,     setLoading]     = useState(false)
   const [rows,        setRows]        = useState([])
   const [progress,    setProgress]    = useState(0)
+  const [doneCount,   setDoneCount]   = useState(0)
   const [currentUrl,  setCurrentUrl]  = useState('')
   const [phase,       setPhase]       = useState('')
   const [done,        setDone]        = useState(false)
   const [selectedTpl, setSelectedTpl] = useState(TEMPLATES[0].id)
   const [msgText,     setMsgText]     = useState(TEMPLATES[0].text)
+  const [extraVariants, setExtraVariants] = useState([])
   const [sending,     setSending]     = useState(false)
   const [sendError,   setSendError]   = useState('')
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
@@ -198,6 +202,15 @@ export default function BatchProcessor() {
 
   const waRows      = rows.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
   const alreadySent = rows.some(r => r.msg_status === 'sent' || r.msg_status === 'failed')
+  const totalNumbers = waRows.reduce((sum, r) => sum + (r.all_whatsapp?.length > 0 ? r.all_whatsapp.length : (r.whatsapp ? 1 : 0)), 0)
+  // Sending to 2+ numbers needs varied text (see MIN_TEMPLATES_FOR_BULK) — editing
+  // one base message stops making sense there, so it switches to picking 3+ saved templates.
+  const isBulk = totalNumbers > 1
+  const allVariants = useMemo(
+    () => (isBulk ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean),
+    [isBulk, msgText, extraVariants]
+  )
+  const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
   function handleCancelBatch() {
     cancelRef.current = true
@@ -210,7 +223,7 @@ export default function BatchProcessor() {
   async function handleBatch() {
     if (!urlList.length) return
     cancelRef.current = false
-    setRows([]); setProgress(0); setLoading(true); setDone(false)
+    setRows([]); setProgress(0); setDoneCount(0); setLoading(true); setDone(false)
 
     const scraped = []
     const CONCURRENCY = 4
@@ -244,12 +257,14 @@ export default function BatchProcessor() {
             }
             completed++
             setProgress(Math.round(completed / total * 100))
+            setDoneCount(completed)
             setCurrentUrl(url)
             return row
           } catch (e) {
             if (e.name === 'AbortError') return null
             completed++
             setProgress(Math.round(completed / total * 100))
+            setDoneCount(completed)
             return { url, empresa: '—', industria: '—', whatsapp: '', company_id: '', scraped_data: null, ok: false, msg_status: null }
           }
         }))
@@ -267,11 +282,12 @@ export default function BatchProcessor() {
 
   async function handleSendAll() {
     const targets = rows.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
-    if (!targets.length || sendingRef.current) return
+    if (!targets.length || sendingRef.current || belowMinTemplates) return
     cancelRef.current = false
     sendingRef.current = true
     setSending(true); setPhase('sending')
     const updated = [...rows]
+    let lastVariant = null
     for (let i = 0; i < targets.length; i++) {
       if (cancelRef.current) break
       const row = targets[i]
@@ -279,10 +295,12 @@ export default function BatchProcessor() {
       setProgress(Math.round(((i + 1) / targets.length) * 100))
       const idx = rows.findIndex(r => r.url === row.url)
       try {
-        const message = renderTemplate(msgText, row.scraped_data)
         const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
         let lastStatus = 'failed'
         for (const num of numbers) {
+          const variant = pickMessageVariant(allVariants, lastVariant)
+          lastVariant = variant
+          const message = renderTemplate(variant, row.scraped_data)
           const res = await authFetch('/api/send-message', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -530,8 +548,8 @@ export default function BatchProcessor() {
                     ? `Sending messages — ${rows.filter(r => r.msg_status === 'sent').length} sent`
                     : `Enviando mensajes — ${rows.filter(r => r.msg_status === 'sent').length} enviados`
                   : lang === 'en'
-                    ? `Scraping — ${rows.length} of ${urlList.length}`
-                    : `Scrapeando — ${rows.length} de ${urlList.length}`}
+                    ? `Scraping — ${doneCount} of ${urlList.length}`
+                    : `Scrapeando — ${doneCount} de ${urlList.length}`}
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -590,6 +608,7 @@ export default function BatchProcessor() {
               />
             )}
           </Box>
+          {!isBulk && <>
           <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
             {t.batch.baseTemplate}
           </Typography>
@@ -669,6 +688,12 @@ export default function BatchProcessor() {
               {msgText.length} / 4096
             </Typography>
           </Box>
+          </>}
+          {isBulk && (
+            <Box sx={{ mt: 1.5, mb: 0.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
+              <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalNumbers} baseCount={0} />
+            </Box>
+          )}
           <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />
           <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
@@ -682,7 +707,7 @@ export default function BatchProcessor() {
             )}
             <Button
               onClick={handleSendAll}
-              disabled={waRows.length === 0 || alreadySent || sending || isDisconnected}
+              disabled={waRows.length === 0 || alreadySent || sending || isDisconnected || belowMinTemplates}
               startIcon={sending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
               size="small"
               sx={{
@@ -757,15 +782,14 @@ export default function BatchProcessor() {
               {t.batch.results}
             </Typography>
             {!loading && (
-              <Button
+              <Button variant="contained"
                 size="small"
                 startIcon={<DownloadIcon sx={{ fontSize: 14 }} />}
                 onClick={downloadCsv}
                 sx={{
-                  color: 'var(--accent, #60a5fa)', fontSize: '0.75rem',
-                  border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)',
-                  borderRadius: 1.5, px: 1.5, py: 0.4,
-                  '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)' },
+                  bgcolor: 'var(--accent,#3b82f6)', color: '#fff', fontSize: '0.75rem',
+                  borderRadius: 1.5, px: 1.5, py: 0.4, boxShadow: 'none', textTransform: 'none',
+                  '&:hover': { bgcolor: 'var(--accent,#3b82f6)', filter: 'brightness(0.88)', boxShadow: 'none' },
                 }}
               >
                 {t.batch.download}

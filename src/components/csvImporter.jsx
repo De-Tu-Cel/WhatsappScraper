@@ -35,6 +35,8 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import MessageIcon from '@mui/icons-material/Message'
 import SendIcon from '@mui/icons-material/Send'
 import { getTemplates } from './singleUrlProcessor'
+import { TemplateLibraryPicker } from './messageTemplateLibrary'
+import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
 import { useLang } from '../context/LangContext'
 
 const URL_REGEX = /^https?:\/\//i
@@ -137,6 +139,7 @@ export default function CsvImporter() {
   const [rowsPerPage,setRowsPerPage]= useState(25)
   const [selectedTpl,setSelectedTpl]= useState(TEMPLATES[0].id)
   const [msgText,    setMsgText]    = useState(TEMPLATES[0].text)
+  const [extraVariants, setExtraVariants] = useState([])
   const [sendingAll, setSendingAll] = useState(false)
   const [sendError,  setSendError]  = useState('')
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
@@ -291,20 +294,29 @@ export default function CsvImporter() {
   const waRows      = results.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
   const alreadySent = results.some(r => r.msg_status === 'sent' || r.msg_status === 'failed')
   const sentCount   = results.filter(r => r.msg_status === 'sent').length
+  const totalNumbers = waRows.reduce((sum, r) => sum + (r.all_whatsapp?.length > 0 ? r.all_whatsapp.length : (r.whatsapp ? 1 : 0)), 0)
+  // Sending to 2+ numbers needs varied text (see MIN_TEMPLATES_FOR_BULK) — editing
+  // one base message stops making sense there, so it switches to picking 3+ saved templates.
+  const isBulk = totalNumbers > 1
+  const allVariants = (isBulk ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean)
+  const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
   async function handleSendAll() {
     const targets = waRows
-    if (!targets.length) return
+    if (!targets.length || belowMinTemplates) return
     setSendingAll(true)
     const updated = [...results]
+    let lastVariant = null
     for (let i = 0; i < targets.length; i++) {
       const row = targets[i]
       const idx = results.findIndex(r => r.url === row.url)
       try {
-        const message = renderTemplate(msgText, row.scraped_data)
         const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
         let lastStatus = 'failed'
         for (const num of numbers) {
+          const variant = pickMessageVariant(allVariants, lastVariant)
+          lastVariant = variant
+          const message = renderTemplate(variant, row.scraped_data)
           const res = await authFetch('/api/send-message', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -579,6 +591,7 @@ export default function CsvImporter() {
                 sx={{ fontSize: '0.7rem', height: 22, bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', '& .MuiChip-icon': { color: '#4ade80' } }} />
             )}
           </Box>
+          {!isBulk && <>
           <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>{t.csv.baseTemplate}</Typography>
           <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.5 }}>
             {TEMPLATES.map(tpl => (
@@ -656,12 +669,18 @@ export default function CsvImporter() {
               {msgText.length} / 4096
             </Typography>
           </Box>
+          </>}
+          {isBulk && (
+            <Box sx={{ mt: 1.5, mb: 0.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
+              <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalNumbers} baseCount={0} />
+            </Box>
+          )}
           <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />
           <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
             <Button
               onClick={handleSendAll}
-              disabled={waRows.length === 0 || alreadySent || sendingAll || isDisconnected}
+              disabled={waRows.length === 0 || alreadySent || sendingAll || isDisconnected || belowMinTemplates}
               startIcon={sendingAll ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
               size="small"
               sx={{

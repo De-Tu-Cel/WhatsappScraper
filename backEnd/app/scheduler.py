@@ -11,6 +11,35 @@ log = logging.getLogger(__name__)
 _POLL_INTERVAL_SEC = 60  # check for due jobs every minute
 
 
+def _render_message(text: str, name: str = "", industry: str = "", city: str = "", website: str = "") -> str:
+    """Fill in placeholders with whatever data is available, leaving no raw
+    tokens in the text that gets sent. `{empresa}` is the original Scheduled
+    Sends placeholder; `{{nombre}}/{{industria}}/{{ciudad}}/{{web}}` are the
+    ones used by the shared message_templates library (and every other
+    outreach surface in the app), so both must be supported here.
+    """
+    return (text
+            .replace("{empresa}", name)
+            .replace("{{nombre}}", name)
+            .replace("{{industria}}", industry)
+            .replace("{{ciudad}}", city)
+            .replace("{{web}}", website))
+
+
+def _pick_message(messages, last_text=None):
+    """Pick a message variant at random, avoiding repeating the immediately
+    previous one when there's more than one to choose from. Sending the exact
+    same text to many numbers in a row is a common WhatsApp bot-detection
+    signal, so campaigns with 2+ templates rotate between them per recipient.
+    """
+    if not messages:
+        return ""
+    if len(messages) == 1:
+        return messages[0]
+    choices = [m for m in messages if m != last_text]
+    return random.choice(choices or messages)
+
+
 def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_id: str):
     """Send a single WhatsApp message via Evolution API and log it.
 
@@ -95,7 +124,7 @@ def _execute_send_job(job_id: str):
         industry = job.get("industry", "")
         company_ids = job.get("company_ids") or []
         selected_numbers = job.get("selected_numbers") or []
-        message_template = job.get("message", "")
+        messages = job.get("messages") or ([job["message"]] if job.get("message") else [])
 
         def _antispam_delay(send_index: int):
             """Delay BEFORE the send_index-th message (0-based, skip for first)."""
@@ -134,7 +163,9 @@ def _execute_send_job(job_id: str):
             )
             sent_count = 0
             error_count = 0
-            log.warning("[Scheduler] job=%s 🚀 starting Branch A — %d numbers", job_id, len(selected_numbers))
+            last_text = None
+            log.warning("[Scheduler] job=%s 🚀 starting Branch A — %d numbers, %d template variant(s)",
+                        job_id, len(selected_numbers), len(messages))
 
             for idx, num_info in enumerate(selected_numbers):
                 current = db.db.scheduled_sends.find_one({"_id": ObjectId(job_id)}, {"status": 1})
@@ -153,7 +184,12 @@ def _execute_send_job(job_id: str):
 
                 log.warning("[Scheduler] job=%s 📤 sending msg %d/%d to %s",
                             job_id, idx + 1, len(selected_numbers), to_number[-4:])
-                message = message_template.replace("{empresa}", company_name)
+                message_variant = _pick_message(messages, last_text)
+                last_text = message_variant
+                message = _render_message(
+                    message_variant, company_name,
+                    num_info.get("industry", ""), num_info.get("city", ""), num_info.get("web", ""),
+                )
                 ok = _send_via_evolution(db, cid, to_number, message, job_id)
                 if ok:
                     sent_count += 1
@@ -179,13 +215,16 @@ def _execute_send_job(job_id: str):
                     pass
             companies = list(db.db.companies.find(
                 {"_id": {"$in": safe_ids}},
-                {"_id": 1, "name": 1, "business_name": 1},
+                {"_id": 1, "name": 1, "business_name": 1, "industry": 1, "city": 1, "website": 1, "domain": 1},
             ))
         else:
             filter_q = {}
             if industry:
                 filter_q["industry"] = {"$regex": industry, "$options": "i"}
-            companies = list(db.db.companies.find(filter_q, {"_id": 1, "name": 1, "business_name": 1}))
+            companies = list(db.db.companies.find(
+                filter_q,
+                {"_id": 1, "name": 1, "business_name": 1, "industry": 1, "city": 1, "website": 1, "domain": 1},
+            ))
 
         total = 0
         for comp in companies:
@@ -200,8 +239,9 @@ def _execute_send_job(job_id: str):
         sent_count = 0
         error_count = 0
         send_index = 0
-        log.warning("[Scheduler] job=%s 🚀 starting Branch B — %d companies, ~%d contacts",
-                    job_id, len(companies), total)
+        last_text = None
+        log.warning("[Scheduler] job=%s 🚀 starting Branch B — %d companies, ~%d contacts, %d template variant(s)",
+                    job_id, len(companies), total, len(messages))
 
         for comp in companies:
             current = db.db.scheduled_sends.find_one({"_id": ObjectId(job_id)}, {"status": 1})
@@ -211,7 +251,9 @@ def _execute_send_job(job_id: str):
 
             cid = str(comp["_id"])
             company_name = comp.get("name") or comp.get("business_name") or cid
-            message = message_template.replace("{empresa}", company_name)
+            company_industry = comp.get("industry", "")
+            company_city = comp.get("city", "")
+            company_web = comp.get("website") or comp.get("domain") or ""
 
             contacts = list(db.db.contacts.find(
                 {"company_id": cid, "type": "whatsapp"},
@@ -226,6 +268,9 @@ def _execute_send_job(job_id: str):
                 # Delay BEFORE sending (skipped for the very first message)
                 _antispam_delay(send_index)
 
+                message_variant = _pick_message(messages, last_text)
+                last_text = message_variant
+                message = _render_message(message_variant, company_name, company_industry, company_city, company_web)
                 ok = _send_via_evolution(db, cid, to_number, message, job_id)
                 send_index += 1
                 if ok:

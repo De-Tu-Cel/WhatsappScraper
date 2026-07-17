@@ -835,39 +835,60 @@ class WebsiteScraper:
     # EXTRACCIÓN DE DATOS DE EMPRESA
     # ========================================================================
 
+    # Palabras genéricas que no sirven como nombre de empresa
+    _GENERIC_NAME = re.compile(
+        r"^(corporate\s+website|official\s+(site|website)|home\s*page?|bienvenidos?|"
+        r"verifica\s+tu\s+identidad|verify\s+your\s+identity|access\s+denied|"
+        r"just\s+a\s+moment|attention\s+required|error\s+\d+|403|404|503|"
+        r"página\s+de\s+inicio|sitio\s+web\s+oficial|inicio)$",
+        re.IGNORECASE,
+    )
+
     def _extract_company_name(self, soup: BeautifulSoup, url: str) -> str:
         """Extrae nombre de la empresa"""
-        # 1. Meta tag og:site_name
+        domain_hint = urlparse(url).netloc.replace("www.", "").split(".")[0].lower()
+
+        # 1. og:site_name — diseñado específicamente para el nombre del sitio
         og_site = soup.find("meta", property="og:site_name")
         if og_site and og_site.get("content"):
-            return og_site["content"].strip()
-        
-        # 2. Title tag (limpiando separadores)
+            name = og_site["content"].strip()
+            if name and len(name) <= 60 and not self._GENERIC_NAME.match(name):
+                return name
+
+        # 2. Title tag — buscar la parte que contiene el nombre real
         if soup.title and soup.title.string:
             title = soup.title.string.strip()
-            domain_hint = urlparse(url).netloc.replace("www.", "").split(".")[0].lower()
-            for sep in ["|", "-", "–", "—", ":", "•"]:
+            for sep in ["|", "–", "—", " - ", ":", "•", ","]:
                 if sep in title:
                     parts = [p.strip() for p in title.split(sep) if p.strip()]
-                    # Prefer the part that matches the domain (brand name)
+                    # Preferir la parte que contiene el nombre del dominio
                     for p in parts:
-                        if domain_hint in p.lower():
+                        if domain_hint in p.lower() and len(p) <= 60 and not self._GENERIC_NAME.match(p):
                             return p
-                    # Otherwise take the longest part (more descriptive)
-                    return max(parts, key=len)
-            return title
-        
-        # 3. H1 principal
-        h1 = soup.find("h1")
-        if h1:
-            return h1.get_text(strip=True)
-        
-        # 4. Logo alt text
+                    # Primera parte no genérica
+                    for p in parts:
+                        if len(p) <= 60 and not self._GENERIC_NAME.match(p):
+                            return p
+                    break
+            # Sin separadores: usar título si es corto y no genérico
+            if len(title) <= 60 and not self._GENERIC_NAME.match(title):
+                return title
+
+        # 3. Logo alt text — más fiable que H1 para el nombre de marca
         logo = soup.find("img", alt=re.compile(r"logo", re.IGNORECASE))
         if logo and logo.get("alt"):
-            return logo["alt"].strip()
-        
-        # 5. Dominio
+            alt = logo["alt"].strip()
+            if alt and len(alt) <= 60:
+                return alt
+
+        # 4. H1 principal
+        h1 = soup.find("h1")
+        if h1:
+            text = h1.get_text(strip=True)
+            if text and len(text) <= 60:
+                return text
+
+        # 5. Dominio como fallback
         domain = urlparse(url).netloc.replace("www.", "")
         return domain.split(".")[0].capitalize()
 

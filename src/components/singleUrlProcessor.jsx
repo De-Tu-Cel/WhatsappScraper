@@ -17,6 +17,8 @@ import Tooltip from '@mui/material/Tooltip'
 import ResultDisplay from './resultDisplay'
 import { isValidUrl, urlValidationMsg, MAX_WA_MSG } from '@/lib/validators'
 import { useLang } from '../context/LangContext'
+import { TemplateLibraryPicker } from './messageTemplateLibrary'
+import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
 
 const SKEL = { bgcolor: 'var(--skeleton-base,rgba(255,255,255,0.06))', '[data-theme-mode="light"] &': { bgcolor: 'rgba(0,0,0,0.08)' }, '&::after': { background: 'linear-gradient(90deg,transparent,rgba(255,255,255,0.04),transparent)', '[data-theme-mode="light"] &': { background: 'linear-gradient(90deg,transparent,rgba(0,0,0,0.04),transparent)' } } }
 
@@ -141,6 +143,7 @@ export function MessageComposer({ result, onSend, sending, disabled }) {
   const numbers    = allNumbers.length > 0 ? allNumbers : (primary ? [primary] : [])
   const [selectedNums, setSelectedNums] = useState(numbers)
   const toggleNum = (n) => setSelectedNums(prev => prev.includes(n) ? prev.filter(x => x !== n) : [...prev, n])
+  const [extraVariants, setExtraVariants] = useState([])
 
   // Auto-select first available template
   const firstAvailable = TEMPLATES_I18N.find(tpl => tpl.needs.every(n => vals[n]))
@@ -172,6 +175,34 @@ export function MessageComposer({ result, onSend, sending, disabled }) {
 
   function getCurrentText() {
     return inputRef.current?.value ?? defaultText
+  }
+
+  // Sending to 2+ numbers at once is exactly the case that needs varied text
+  // (see MIN_TEMPLATES_FOR_BULK) — editing a single message stops making
+  // sense there, so the free-edit template flow only applies to a single
+  // recipient; picking 2+ numbers switches to picking 3+ saved templates.
+  const isBulk = selectedNums.length > 1
+
+  // The library holds generic templates (with {{nombre}}/{{industria}}/etc
+  // placeholders); resolve them against this company's real scraped values
+  // before treating them as send candidates, same as the starting-point chips do.
+  const allVariants = isBulk
+    ? extraVariants.map(v => renderWithValues(v, vals).trim()).filter(Boolean)
+    : [getCurrentText().trim()].filter(Boolean)
+  const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
+  const overLength = !isBulk && charCount > MAX_WA_MSG
+  const sendBlocked = sending || disabled || selectedNums.length === 0 || overLength || belowMinTemplates
+    || (isBulk && allVariants.some(v => v.length > MAX_WA_MSG))
+
+  function handleSendClick() {
+    if (sendBlocked) return
+    let lastVariant = null
+    const messages = selectedNums.map(() => {
+      const v = pickMessageVariant(allVariants, lastVariant)
+      lastVariant = v
+      return v
+    })
+    onSend(messages, selectedNums)
   }
 
   return (
@@ -213,7 +244,8 @@ export function MessageComposer({ result, onSend, sending, disabled }) {
         </Box>
       )}
 
-      {/* Plantillas */}
+      {/* Plantillas — solo tiene sentido editar UN mensaje cuando se manda a un solo número */}
+      {!isBulk && <>
       <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.35)', mb: 0.8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
         {t.single.startingPoint}
       </Typography>
@@ -285,6 +317,14 @@ export function MessageComposer({ result, onSend, sending, disabled }) {
           )
         })}
       </Box>
+      </>}
+
+      {/* Plantillas — con 2+ números se manda texto rotado entre 3+ plantillas en vez de editar uno solo */}
+      {isBulk && (
+        <Box sx={{ mb: 2, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
+          <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={selectedNums.length} baseCount={0} />
+        </Box>
+      )}
 
       {/* Botón enviar */}
       {selectedNums.length === 0 && numbers.length > 1 && (
@@ -292,16 +332,16 @@ export function MessageComposer({ result, onSend, sending, disabled }) {
           {t.single.selectNum}
         </Typography>
       )}
-      <Box onClick={() => { const txt = getCurrentText(); if (!sending && !disabled && txt.trim() && selectedNums.length > 0 && txt.length <= MAX_WA_MSG) onSend(txt, selectedNums) }}
+      <Box onClick={handleSendClick}
         sx={{
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1,
           py: 1.2, borderRadius: 1.5,
-          cursor: (sending || disabled || selectedNums.length === 0 || charCount > MAX_WA_MSG) ? 'default' : 'pointer',
-          bgcolor: (sending || disabled || selectedNums.length === 0 || charCount > MAX_WA_MSG) ? 'rgba(34,197,94,0.1)' : 'rgba(34,197,94,0.18)',
+          cursor: sendBlocked ? 'default' : 'pointer',
+          bgcolor: sendBlocked ? 'rgba(34,197,94,0.1)' : 'rgba(34,197,94,0.18)',
           border: '1px solid rgba(34,197,94,0.35)',
-          opacity: (sending || disabled || selectedNums.length === 0 || charCount > MAX_WA_MSG) ? 0.5 : 1,
+          opacity: sendBlocked ? 0.5 : 1,
           transition: 'all 0.15s',
-          '&:hover': !(sending || selectedNums.length === 0) ? { bgcolor: 'rgba(34,197,94,0.28)', borderColor: 'rgba(34,197,94,0.6)' } : {},
+          '&:hover': !sendBlocked ? { bgcolor: 'rgba(34,197,94,0.28)', borderColor: 'rgba(34,197,94,0.6)' } : {},
         }}>
         {sending
           ? <CircularProgress size={16} sx={{ color: '#4ade80' }} />
@@ -492,15 +532,20 @@ export default function SingleUrlProcessor() {
     }
   }
 
-  // Step 2: send message with composed text
-  async function handleSend(messageText, toNumbers) {
+  // Step 2: send message with composed text.
+  // `messagesOrText` is either one string (sent as-is to every number) or an
+  // array parallel to `toNumbers` — MessageComposer passes an array with a
+  // different rotated variant per number once there's more than one recipient.
+  async function handleSend(messagesOrText, toNumbers) {
     setSending(true)
     setSendSuccess(false)
     const nums = Array.isArray(toNumbers) ? toNumbers : [toNumbers]
     let successCount = 0
     let lastErr = null
     try {
-      for (const toNumber of nums) {
+      for (let i = 0; i < nums.length; i++) {
+        const toNumber = nums[i]
+        const messageText = Array.isArray(messagesOrText) ? messagesOrText[i] : messagesOrText
         try {
           const res = await authFetch('/api/send-message', {
             method: 'POST',

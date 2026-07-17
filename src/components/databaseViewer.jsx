@@ -55,6 +55,9 @@ import MessageIcon from '@mui/icons-material/Message'
 import { visuallyHidden } from '@mui/utils'
 import ResultDisplay from './resultDisplay'
 import { MessageComposer, getTemplates } from './singleUrlProcessor'
+import { TemplateLibraryPicker } from './messageTemplateLibrary'
+import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
+import { HighlightedMessageInput } from './highlightedMessageInput'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
 
@@ -728,9 +731,10 @@ function SkeletonRows({ count }) {
 const MAX_CAMPAIGN_MSG = 4096
 
 function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus = 'unknown', isDisconnected = false }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const TEMPLATES_DATA = getTemplates(t)
   const [msgText,      setMsgText]      = useState(TEMPLATES_DATA[0].text)
+  const [extraVariants, setExtraVariants] = useState([])
   const [sending,      setSending]      = useState(false)
   const [sendError,    setSendError]    = useState('')
   const [progress,     setProgress]     = useState(0)
@@ -754,12 +758,15 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus 
   const noWaCount   = results.filter(r => r.status === 'no_wa').length
   const charCount   = msgText.length
   const msgInvalid  = !msgText.trim() || charCount > MAX_CAMPAIGN_MSG
+  const allVariants   = [msgText, ...extraVariants].map(v => v.trim()).filter(Boolean)
+  const belowMinTemplates = waRows.length > 1 && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
   async function handleSend() {
-    if (msgInvalid || sendingRef.current) return
+    if (msgInvalid || sendingRef.current || belowMinTemplates) return
     sendingRef.current = true
     setSending(true); setProgress(0); setResults([]); setDone(false)
     const res = []
+    let lastVariant = null
     for (let i = 0; i < waRows.length; i++) {
       const row = waRows[i]
       setProgress(Math.round(((i + 1) / waRows.length) * 100))
@@ -770,13 +777,15 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus 
         if (contacts.length === 0) {
           res.push({ name: row.name, status: 'no_wa' }); setResults([...res]); continue
         }
-        const message = msgText
-          .replace(/\{\{nombre\}\}/g,    row.name     || '')
-          .replace(/\{\{ciudad\}\}/g,    row.city     || '')
-          .replace(/\{\{industria\}\}/g, row.industry || '')
-          .replace(/\{\{web\}\}/g,       row.website  || row.domain || '')
         let lastStatus = 'failed'
         for (const num of contacts) {
+          const variant = pickMessageVariant(allVariants, lastVariant)
+          lastVariant = variant
+          const message = variant
+            .replace(/\{\{nombre\}\}/g,    row.name     || '')
+            .replace(/\{\{ciudad\}\}/g,    row.city     || '')
+            .replace(/\{\{industria\}\}/g, row.industry || '')
+            .replace(/\{\{web\}\}/g,       row.website  || row.domain || '')
           const r = await authFetch('/api/send-message', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -856,26 +865,7 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus 
         <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
           Mensaje
         </Typography>
-        <Box
-          component="textarea"
-          value={msgText}
-          onChange={e => setMsgText(e.target.value)}
-          disabled={sending}
-          rows={5}
-          sx={{
-            width: '100%', boxSizing: 'border-box', resize: 'vertical',
-            bgcolor: 'var(--bg, #080c14)', color: '#f1f5f9',
-            border: `1.5px solid ${charCount > MAX_CAMPAIGN_MSG ? 'rgba(239,68,68,0.6)' : 'rgba(255,255,255,0.1)'}`,
-            borderRadius: '10px', p: 1.5, fontSize: '0.85rem', lineHeight: 1.7,
-            fontFamily: '"Roboto","Helvetica","Arial",sans-serif',
-            outline: 'none', transition: 'border-color 0.2s',
-            '&:hover':  { borderColor: charCount > MAX_CAMPAIGN_MSG ? 'rgba(239,68,68,0.8)' : 'rgba(255,255,255,0.22)' },
-            '&:focus':  { borderColor: charCount > MAX_CAMPAIGN_MSG ? '#ef4444' : 'rgba(59,130,246,0.6)', boxShadow: `0 0 0 3px ${charCount > MAX_CAMPAIGN_MSG ? 'rgba(239,68,68,0.08)' : 'rgba(59,130,246,0.1)'}` },
-            '&:disabled': { opacity: 0.5, cursor: 'not-allowed' },
-            '&::placeholder': { color: 'rgba(255,255,255,0.2)' },
-            scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.12) transparent',
-          }}
-        />
+        <HighlightedMessageInput value={msgText} onChange={setMsgText} disabled={sending} rows={5} maxLength={MAX_CAMPAIGN_MSG + 1} lang={lang} />
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 0.6, mb: 1.5 }}>
           <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.25)' }}>
             Variables: <Box component="span" sx={{ color: '#4ade80', fontFamily: 'monospace' }}>{'{{nombre}}'}</Box>{' '}
@@ -886,6 +876,10 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus 
           <Typography sx={{ fontSize: '0.68rem', color: charCount > MAX_CAMPAIGN_MSG ? '#f87171' : charCount > MAX_CAMPAIGN_MSG * 0.9 ? '#fbbf24' : 'rgba(255,255,255,0.25)', fontVariantNumeric: 'tabular-nums' }}>
             {charCount} / {MAX_CAMPAIGN_MSG}
           </Typography>
+        </Box>
+
+        <Box sx={{ mb: 1.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
+          <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={waRows.length} baseCount={1} />
         </Box>
 
         <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1.5 }} />
@@ -932,7 +926,7 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus 
         {!done && (
           <Button
             onClick={handleSend}
-            disabled={sending || waRows.length === 0 || msgInvalid || isDisconnected}
+            disabled={sending || waRows.length === 0 || msgInvalid || isDisconnected || belowMinTemplates}
             startIcon={sending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 16 }} />}
             sx={{
               bgcolor: !sending && waRows.length > 0 && !msgInvalid ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.05)',
@@ -1176,14 +1170,19 @@ export default function DatabaseViewer({ isActive }) {
     }
   }
 
-  const handleSendFromDB = async (messageText, numbers) => {
+  // `messagesOrText` is either one string or an array parallel to `numbers` —
+  // MessageComposer sends an array with a different rotated variant per
+  // number once a company has more than one WhatsApp contact selected.
+  const handleSendFromDB = async (messagesOrText, numbers) => {
     if (!msgData) return
     const nums = Array.isArray(numbers) ? numbers : [numbers]
     if (nums.length === 0) return
     setMsgSending(true)
     let successCount = 0
     let lastErr = null
-    for (const toNumber of nums) {
+    for (let i = 0; i < nums.length; i++) {
+      const toNumber = nums[i]
+      const messageText = Array.isArray(messagesOrText) ? messagesOrText[i] : messagesOrText
       try {
         const res = await authFetch('/api/send-message', {
           method: 'POST',
@@ -1413,21 +1412,27 @@ export default function DatabaseViewer({ isActive }) {
                       <TableCell align="right" sx={{ pr: 1 }}>
                         <Tooltip title={t.db.viewInfo}>
                           <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenView(row) }}
-                            sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: '#a78bfa', bgcolor: 'rgba(167,139,250,0.1)' } }}>
+                            sx={{ color: 'rgba(255,255,255,0.35)', '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.45)' }, '&:hover': { color: '#a78bfa', bgcolor: 'rgba(167,139,250,0.1)' } }}>
                             <VisibilityIcon sx={{ fontSize: 15 }} />
                           </IconButton>
                         </Tooltip>
                         <Tooltip title={row.has_whatsapp ? t.db.sendMsg : t.db.noWaReg}>
                           <span>
                             <IconButton size="small" disabled={!row.has_whatsapp} onClick={(e) => { e.stopPropagation(); handleOpenMsg(row) }}
-                              sx={{ color: row.contacted ? '#4ade80' : row.has_whatsapp ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.1)', '&:hover': { color: '#4ade80', bgcolor: 'rgba(74,222,128,0.1)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.1)' } }}>
+                              sx={{
+                                color: row.contacted ? '#4ade80' : 'rgba(255,255,255,0.35)',
+                                '&.Mui-disabled': { opacity: 0.25 },
+                                '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: row.contacted ? '#16a34a' : 'rgba(15,23,42,0.45)' },
+                                '&:hover': { color: '#4ade80', bgcolor: 'rgba(74,222,128,0.1)' },
+                                '[data-theme-mode="light"] &:hover': { color: '#16a34a', bgcolor: 'rgba(22,163,74,0.1)' },
+                              }}>
                               <SendIcon sx={{ fontSize: 15 }} />
                             </IconButton>
                           </span>
                         </Tooltip>
                         <Tooltip title={t.db.editBtn}>
                           <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenEdit(row) }}
-                            sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: '#3b82f6', bgcolor: 'rgba(59,130,246,0.1)' } }}>
+                            sx={{ color: 'rgba(255,255,255,0.35)', '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.45)' }, '&:hover': { color: '#3b82f6', bgcolor: 'rgba(59,130,246,0.1)' } }}>
                             <EditIcon sx={{ fontSize: 15 }} />
                           </IconButton>
                         </Tooltip>

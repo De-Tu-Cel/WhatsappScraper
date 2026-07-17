@@ -44,6 +44,9 @@ import CalendarMonthIcon from '@mui/icons-material/CalendarMonth'
 import ViewWeekIcon from '@mui/icons-material/ViewWeek'
 import ViewListIcon from '@mui/icons-material/ViewList'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
+import { TemplateManagerDialog } from './messageTemplateLibrary'
+import { MIN_TEMPLATES_FOR_BULK } from '@/lib/messageVariants'
+import { HighlightedMessageInput } from './highlightedMessageInput'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -242,11 +245,11 @@ function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
   function toggleCompany(c) {
     const ns = new Set(selectedNums); const nm = new Map(numInfoMap)
     const allSel = c.numbers.every(n => ns.has(n.number))
-    c.numbers.forEach(n => { if (allSel) { ns.delete(n.number); nm.delete(n.number) } else { ns.add(n.number); nm.set(n.number, { number: n.number, company_id: c._id, company_name: c.name, label: n.label }) } })
+    c.numbers.forEach(n => { if (allSel) { ns.delete(n.number); nm.delete(n.number) } else { ns.add(n.number); nm.set(n.number, { number: n.number, company_id: c._id, company_name: c.name, label: n.label, industry: c.industry, city: c.city, web: c.website }) } })
     onChange(ns, nm)
   }
   function toggleAll() {
-    const allNums = filtered.flatMap(c => c.numbers.map(n => ({ number: n.number, company_id: c._id, company_name: c.name, label: n.label })))
+    const allNums = filtered.flatMap(c => c.numbers.map(n => ({ number: n.number, company_id: c._id, company_name: c.name, label: n.label, industry: c.industry, city: c.city, web: c.website })))
     const allSel = allNums.every(n => selectedNums.has(n.number))
     const ns = new Set(selectedNums); const nm = new Map(numInfoMap)
     allNums.forEach(n => { if (allSel) { ns.delete(n.number); nm.delete(n.number) } else { ns.add(n.number); nm.set(n.number, n) } })
@@ -323,7 +326,7 @@ function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
               {company.numbers.map(n => {
                 const isSel = selectedNums.has(n.number)
                 return (
-                  <Box key={n.number} onClick={() => toggle(n.number, { number: n.number, company_id: company._id, company_name: company.name, label: n.label })}
+                  <Box key={n.number} onClick={() => toggle(n.number, { number: n.number, company_id: company._id, company_name: company.name, label: n.label, industry: company.industry, city: company.city, web: company.website })}
                     sx={{ display: 'flex', alignItems: 'center', gap: 0.5, pl: 3.5, pr: 1.5, py: 0.4, cursor: 'pointer', bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.06)' : 'transparent', '&:hover': { bgcolor: 'var(--item-hover)' } }}>
                     <Checkbox size="small" checked={isSel} onChange={() => {}} sx={{ p: 0.25, color: 'var(--border)', '&.Mui-checked': { color: 'var(--accent,#3b82f6)' } }} />
                     <WhatsAppIcon sx={{ fontSize: 11, color: isSel ? '#25d366' : 'var(--text-muted)', flexShrink: 0 }} />
@@ -358,6 +361,104 @@ function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
   )
 }
 
+// ─── Message variants editor ───────────────────────────────────────────────────
+// Lets the user keep several worded variants of the same campaign message.
+// The scheduler picks one at random per recipient (see scheduler.py
+// _pick_message) so a bulk send doesn't repeat identical text — the pattern
+// WhatsApp flags as bot-like and that can get a number banned.
+
+function MessageVariantsEditor({ messages, setMessages, recipientCount = 0, hasCityData = true }) {
+  const { t, lang } = useLang()
+  const [savedTemplates, setSavedTemplates] = useState([])
+  const [managerOpen,    setManagerOpen]    = useState(false)
+
+  const loadSaved = useCallback(() => {
+    authFetch(`/api/admin/message-templates?lang=${lang}`)
+      .then(r => r.json()).then(d => setSavedTemplates(Array.isArray(d) ? d : []))
+      .catch(() => {})
+  }, [lang])
+  useEffect(() => { loadSaved() }, [loadSaved])
+
+  function updateAt(i, val) { setMessages(prev => prev.map((m, idx) => idx === i ? val : m)) }
+  function removeAt(i) { setMessages(prev => prev.filter((_, idx) => idx !== i)) }
+  function addBlank() { setMessages(prev => [...prev, '']) }
+  function addFromTemplate(tpl) { setMessages(prev => (prev.length === 1 && !prev[0].trim()) ? [tpl.text] : [...prev, tpl.text]) }
+
+  const cleanCount = messages.map(m => m.trim()).filter(Boolean).length
+  const needsMin = recipientCount > 1
+  const okMin = cleanCount >= MIN_TEMPLATES_FOR_BULK
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem', fontWeight: 600, flex: 1 }}>{t.sched.messagesLabel}</Typography>
+        <Button variant="contained" size="small" onClick={() => setManagerOpen(true)} sx={{ bgcolor: 'var(--accent,#3b82f6)', color: '#fff', textTransform: 'none', fontSize: '0.72rem', fontWeight: 600, borderRadius: 1.5, px: 1.5, boxShadow: 'none', '&:hover': { bgcolor: 'var(--accent,#3b82f6)', filter: 'brightness(0.88)', boxShadow: 'none' } }}>
+          {t.sched.manageTemplates}
+        </Button>
+      </Box>
+
+      {needsMin && (
+        <Box sx={{ display: 'flex', gap: 0.6, alignItems: 'flex-start', borderRadius: 1.5, px: 1, py: 0.7,
+          bgcolor: okMin ? 'rgba(34,197,94,0.08)' : 'rgba(245,158,11,0.08)',
+          border: `1px solid ${okMin ? 'rgba(34,197,94,0.25)' : 'rgba(245,158,11,0.25)'}` }}>
+          <WarningAmberIcon sx={{ fontSize: 13, color: okMin ? '#4ade80' : '#f59e0b', mt: 0.2, flexShrink: 0 }} />
+          <Typography sx={{ color: okMin ? '#4ade80' : '#f59e0b', fontSize: '0.7rem', lineHeight: 1.4 }}>
+            {okMin ? t.tplLib.minRequiredOk(cleanCount) : t.tplLib.minRequiredBlock(MIN_TEMPLATES_FOR_BULK, cleanCount)}
+          </Typography>
+        </Box>
+      )}
+
+      {savedTemplates.length > 0 && (
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+          {savedTemplates.map(tpl => {
+            const needsCity = /\{\{ciudad\}\}/.test(tpl.text)
+            const blocked   = needsCity && !hasCityData
+            return (
+              <Tooltip key={tpl._id} title={blocked ? (lang === 'en' ? 'No city data for selected contacts' : 'Los contactos seleccionados no tienen ciudad') : ''} placement="top">
+                <span>
+                  <Chip label={tpl.name} size="small"
+                    onClick={blocked ? undefined : () => addFromTemplate(tpl)}
+                    sx={{ fontSize: '0.68rem', height: 22, cursor: blocked ? 'not-allowed' : 'pointer',
+                      bgcolor: 'var(--item-hover)', border: `1px solid ${blocked ? 'rgba(239,68,68,0.3)' : 'var(--border)'}`,
+                      color: blocked ? 'rgba(239,68,68,0.5)' : 'var(--text-muted)', opacity: blocked ? 0.6 : 1,
+                      '&:hover': blocked ? {} : { borderColor: 'var(--accent,#3b82f6)', color: 'var(--accent,#3b82f6)' },
+                    }} />
+                </span>
+              </Tooltip>
+            )
+          })}
+        </Box>
+      )}
+
+      {messages.map((m, i) => (
+        <Box key={i}>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', mb: 0.4 }}>{t.sched.variantLabel} {i + 1}</Typography>
+          <Box sx={{ position: 'relative' }}>
+            <HighlightedMessageInput value={m} onChange={v => updateAt(i, v)} rows={3} maxLength={1000} lang={lang} />
+            <Typography sx={{ position: 'absolute', bottom: 6, right: 10, fontSize: '0.65rem', color: m.length > 900 ? '#ef4444' : 'var(--text-muted)', opacity: 0.6, pointerEvents: 'none' }}>
+              {m.length} / 1000
+            </Typography>
+            {messages.length > 1 && (
+              <IconButton size="small" onClick={() => removeAt(i)}
+                sx={{ position: 'absolute', top: 6, right: 6, zIndex: 2, p: 0.3, color: 'rgba(239,68,68,0.45)', bgcolor: 'rgba(239,68,68,0.06)', borderRadius: 1,
+                  '&:hover': { color: '#ef4444', bgcolor: 'rgba(239,68,68,0.14)' } }}>
+                <DeleteIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            )}
+          </Box>
+        </Box>
+      ))}
+
+      <Button variant="contained" size="small" onClick={addBlank}
+        sx={{ alignSelf: 'flex-start', bgcolor: 'var(--accent,#3b82f6)', color: '#fff', textTransform: 'none', fontSize: '0.75rem', fontWeight: 600, borderRadius: 1.5, px: 1.5, boxShadow: 'none', '&:hover': { bgcolor: 'var(--accent,#3b82f6)', filter: 'brightness(0.88)', boxShadow: 'none' } }}>
+        {t.sched.addVariant}
+      </Button>
+
+      <TemplateManagerDialog open={managerOpen} onClose={() => setManagerOpen(false)} onChange={loadSaved} />
+    </Box>
+  )
+}
+
 // ─── Campaign form (create / edit / duplicate) ────────────────────────────────
 
 function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
@@ -368,7 +469,7 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
   const _initDt = isEdit ? (editJob.scheduled_at || defaultDate || '') : (defaultDate || '')
 
   const [name,      setName]    = useState(editJob?.name || (duplicateFrom ? `${duplicateFrom.name} (copia)` : ''))
-  const [message,   setMessage] = useState(src?.message || '')
+  const [messages,  setMessages] = useState(() => (src?.messages?.length ? src.messages : [src?.message || '']))
   const [dateVal,   setDateVal] = useState(() => _initDt ? dayjs(_initDt) : dayjs().add(1, 'hour').startOf('hour'))
   const [timeVal,   setTimeVal] = useState(() => _initDt ? dayjs(_initDt) : dayjs().add(1, 'hour').startOf('hour'))
   const [selectedNums, setSelectedNums] = useState(() => new Set((src?.selected_numbers || []).map(n => n.number)))
@@ -379,7 +480,7 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
 
   // Diff mode: capture originals for edit mode
   const origName    = isEdit ? (editJob?.name    || '') : null
-  const origMsg     = isEdit ? (editJob?.message || '') : null
+  const origMessages = isEdit ? (editJob?.messages?.length ? editJob.messages : [editJob?.message || '']) : null
   const origSchedAt = isEdit ? (editJob?.scheduled_at || null) : null
 
   useEffect(() => {
@@ -389,15 +490,19 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
     }
   }, [defaultDate]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const cleanMessages = useMemo(() => messages.map(m => m.trim()).filter(Boolean), [messages])
+  const belowMinTemplates = selectedNums.size > 1 && cleanMessages.length < MIN_TEMPLATES_FOR_BULK
+
   async function handleSubmit(e) {
     e.preventDefault(); setError('')
-    if (!name.trim() || !message.trim() || !dateVal || !timeVal) { setError(t.sched.fillAll); return }
+    if (!name.trim() || cleanMessages.length === 0 || !dateVal || !timeVal) { setError(t.sched.fillAll); return }
     if (selectedNums.size === 0) { setError(t.sched.selectNum); return }
+    if (belowMinTemplates) { setError(t.tplLib.minRequiredBlock(MIN_TEMPLATES_FOR_BULK, cleanMessages.length)); return }
     setSubmitting(true)
     try {
       const combined = dateVal.hour(timeVal.hour()).minute(timeVal.minute()).second(0)
       const body = {
-        name: name.trim(), message: message.trim(),
+        name: name.trim(), messages: cleanMessages,
         scheduled_at: combined.format('YYYY-MM-DDTHH:mm:ss'),
         selected_numbers: [...selectedNums].map(n => numInfoMap.get(n)).filter(Boolean),
       }
@@ -457,22 +562,18 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
         })()}
       </Box>
       <Box>
-        <Box sx={{ position: 'relative' }}>
-          <TextField label={t.sched.messageLabel} value={message} onChange={e => setMessage(e.target.value)} multiline rows={3} fullWidth size="small" sx={FIELD_SX} slotProps={{ htmlInput: { maxLength: 1000 } }} />
-          <Typography sx={{ position: 'absolute', bottom: 6, right: 10, fontSize: '0.68rem', color: message.length > 900 ? '#ef4444' : 'var(--text-muted)', opacity: message.length > 900 ? 1 : 0.6, pointerEvents: 'none' }}>
-            {message.length} / 1000
-          </Typography>
-        </Box>
-        {origMsg !== null && message !== origMsg && (
-          <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', mt: 0.4, px: 0.5, opacity: 0.7 }}>
-            Original: <em style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{origMsg.length > 90 ? origMsg.slice(0, 90) + '…' : origMsg}</em>
+        <MessageVariantsEditor messages={messages} setMessages={setMessages} recipientCount={selectedNums.size}
+          hasCityData={selectedNums.size > 0 && [...numInfoMap.values()].some(c => c.city)} />
+        {origMessages !== null && JSON.stringify(messages) !== JSON.stringify(origMessages) && (
+          <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', mt: 0.6, px: 0.5, opacity: 0.7 }}>
+            {t.sched.originalModified} ({origMessages.length})
           </Typography>
         )}
       </Box>
       <CompanyPicker selectedNums={selectedNums} numInfoMap={numInfoMap} onChange={(ns, nm) => { setSelectedNums(ns); setNumInfoMap(nm) }} />
       {error && <Box sx={{ px: 1.5, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}><Typography sx={{ color: '#ef4444', fontSize: '0.78rem' }}>{error}</Typography></Box>}
       <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
-        <Button type="submit" variant="contained" disabled={submitting}
+        <Button type="submit" variant="contained" disabled={submitting || belowMinTemplates}
           startIcon={submitting ? <CircularProgress size={13} sx={{ color: 'inherit' }} /> : <SendIcon />}
           sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.85)' }, '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.2)' }, textTransform: 'none', fontWeight: 600, fontSize: '0.82rem', borderRadius: 2, px: 2, minWidth: 140 }}>
           {submitting ? t.sched.saving : (isEdit ? t.sched.saveLbl : (duplicateFrom ? t.sched.duplicateLbl : t.sched.scheduleLbl))}
@@ -708,9 +809,15 @@ function ListView({ jobs, onJobClick, onRequestCancel, onRequestDelete, onDuplic
                     {job.total_count > 0 ? ` · ${job.sent_count||0}/${job.total_count} ${t.sched.sent}` : ''}
                   </Typography>
                   {job.message && (
-                    <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.68rem', mt: 0.1, opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
-                      {job.message}
-                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, minWidth: 0 }}>
+                      <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.68rem', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                        {job.message}
+                      </Typography>
+                      {job.messages?.length > 1 && (
+                        <Chip label={`+${job.messages.length - 1} ${t.sched.variantsSuffix}`} size="small"
+                          sx={{ height: 15, fontSize: '0.58rem', flexShrink: 0, color: 'var(--accent,#3b82f6)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', border: 'none', '& .MuiChip-label': { px: 0.6 } }} />
+                      )}
+                    </Box>
                   )}
                   {pct !== null && (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
@@ -837,11 +944,17 @@ function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicat
                   <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem', mt: 0.4, textAlign: 'right', opacity: 0.7 }}>{pct}%</Typography>
                 </Box>
 
-                {/* Message */}
+                {/* Message(s) */}
                 <Box>
-                  <Typography sx={LABEL_SX}>{t.sched.panelMessage}</Typography>
-                  <Box sx={{ bgcolor: 'var(--surface)', borderRadius: 2, p: 1.5, border: '1px solid var(--border)', borderLeft: '3px solid rgba(var(--accent-rgb,59,130,246),0.35)' }}>
-                    <Typography sx={{ color: 'var(--text)', fontSize: '0.82rem', whiteSpace: 'pre-wrap', lineHeight: 1.65 }}>{job.message}</Typography>
+                  <Typography sx={LABEL_SX}>
+                    {job.messages?.length > 1 ? `${t.sched.panelMessage} (${job.messages.length} ${t.sched.variantsSuffix})` : t.sched.panelMessage}
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.8 }}>
+                    {(job.messages?.length ? job.messages : [job.message]).filter(Boolean).map((msg, i) => (
+                      <Box key={i} sx={{ bgcolor: 'var(--surface)', borderRadius: 2, p: 1.5, border: '1px solid var(--border)', borderLeft: '3px solid rgba(var(--accent-rgb,59,130,246),0.35)' }}>
+                        <Typography sx={{ color: 'var(--text)', fontSize: '0.82rem', whiteSpace: 'pre-wrap', lineHeight: 1.65 }}>{msg}</Typography>
+                      </Box>
+                    ))}
                   </Box>
                 </Box>
 

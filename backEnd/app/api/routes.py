@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Header
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Header, Request
 from fastapi.responses import StreamingResponse
 from typing import Optional
 import asyncio, json as _json, re
@@ -1382,6 +1382,165 @@ def api_cleanup_contacts():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Message Templates ─────────────────────────────────────────────────────────
+# User-authored, reusable message variants. When a campaign selects 2+ of
+# these, the scheduler sends a random variant per recipient instead of the
+# same literal text to everyone — this is what keeps bulk sends from looking
+# like a bot to WhatsApp (identical text to many numbers is a common ban
+# trigger).
+
+_DEFAULT_TEMPLATES = {
+    "es": [
+        {
+            "name": "Industria + ciudad",
+            "text": "Hola {{nombre}}, encontré tu negocio de {{industria}} en {{ciudad}} y me gustaría presentarte algo que puede ayudarte. ¿Tienes un momento? 😊",
+        },
+        {
+            "name": "Con giro del negocio",
+            "text": "Hola {{nombre}}, vi que tienes un negocio de {{industria}} y tengo algo que podría interesarte. ¿Tienes disponibilidad para platicar? 🙌",
+        },
+        {
+            "name": "Solo con nombre",
+            "text": "Hola {{nombre}}, encontré tu negocio en línea y me gustaría presentarte una propuesta. ¿Tienes un momento? 😊",
+        },
+    ],
+    "en": [
+        {
+            "name": "Industry + city",
+            "text": "Hi {{nombre}}, I found your {{industria}} business in {{ciudad}} and I'd love to show you something that could help. Do you have a moment? 😊",
+        },
+        {
+            "name": "With business type",
+            "text": "Hi {{nombre}}, I saw you run a {{industria}} business and I have something that might interest you. Do you have time to chat? 🙌",
+        },
+        {
+            "name": "Name only",
+            "text": "Hi {{nombre}}, I found your business online and I'd love to show you a proposal. Do you have a moment? 😊",
+        },
+    ],
+}
+
+
+def _seed_default_message_templates(db, lang: str = "es"):
+    from datetime import datetime
+    now = datetime.now()
+    templates = _DEFAULT_TEMPLATES.get(lang, _DEFAULT_TEMPLATES["es"])
+    db.db.message_templates.insert_many([
+        {**tpl, "created_at": now, "created_by_username": "", "created_by_name": ""}
+        for tpl in templates
+    ])
+
+
+def _all_are_unmodified_defaults(docs: list) -> bool:
+    """True if every doc in the collection exactly matches one of the default
+    templates in any language — meaning the user hasn't edited them yet."""
+    all_default_texts = {tpl["text"] for lang_tpls in _DEFAULT_TEMPLATES.values() for tpl in lang_tpls}
+    return all(doc.get("text", "") in all_default_texts for doc in docs)
+
+
+@router.get("/admin/message-templates")
+def api_list_message_templates(lang: str = "es", x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    try:
+        db = MongoDBManager()
+        docs = list(db.db.message_templates.find({}, sort=[("created_at", -1)]))
+        if not docs:
+            _seed_default_message_templates(db, lang)
+            docs = list(db.db.message_templates.find({}, sort=[("created_at", -1)]))
+        elif _all_are_unmodified_defaults(docs):
+            current_default_texts = {tpl["text"] for tpl in _DEFAULT_TEMPLATES.get(lang, _DEFAULT_TEMPLATES["es"])}
+            already_correct = all(doc.get("text", "") in current_default_texts for doc in docs)
+            if not already_correct:
+                db.db.message_templates.delete_many({})
+                _seed_default_message_templates(db, lang)
+                docs = list(db.db.message_templates.find({}, sort=[("created_at", -1)]))
+        return serialize(docs)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/admin/message-templates")
+def api_create_message_template(body: dict, x_user_token: Optional[str] = Header(None)):
+    user = _require_user(x_user_token)
+    try:
+        from datetime import datetime
+        db = MongoDBManager()
+
+        name = (body.get("name") or "").strip()
+        text = (body.get("text") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="El campo 'name' es requerido")
+        if not text:
+            raise HTTPException(status_code=400, detail="El campo 'text' es requerido")
+
+        doc = {
+            "name": name,
+            "text": text,
+            "created_at": datetime.now(),
+            "created_by_username": user.get("username", ""),
+            "created_by_name": user.get("display_name", ""),
+        }
+        result = db.db.message_templates.insert_one(doc)
+        doc["_id"] = str(result.inserted_id)
+        return serialize(doc)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/admin/message-templates/{template_id}")
+def api_update_message_template(template_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    try:
+        from bson import ObjectId
+        from datetime import datetime
+        db = MongoDBManager()
+
+        doc = db.db.message_templates.find_one({"_id": ObjectId(template_id)})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Plantilla no encontrada")
+
+        update: dict = {}
+        if "name" in body:
+            name = str(body["name"]).strip()
+            if not name:
+                raise HTTPException(status_code=400, detail="El campo 'name' es requerido")
+            update["name"] = name
+        if "text" in body:
+            text = str(body["text"]).strip()
+            if not text:
+                raise HTTPException(status_code=400, detail="El campo 'text' es requerido")
+            update["text"] = text
+        if not update:
+            raise HTTPException(status_code=400, detail="No hay campos para actualizar")
+        update["updated_at"] = datetime.now()
+
+        db.db.message_templates.update_one({"_id": ObjectId(template_id)}, {"$set": update})
+        updated = db.db.message_templates.find_one({"_id": ObjectId(template_id)})
+        return serialize(updated)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/admin/message-templates/{template_id}")
+def api_delete_message_template(template_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    try:
+        from bson import ObjectId
+        db = MongoDBManager()
+        result = db.db.message_templates.delete_one({"_id": ObjectId(template_id)})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Plantilla no encontrada")
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Scheduled Sends ───────────────────────────────────────────────────────────
 
 @router.get("/admin/companies-with-numbers")
@@ -1421,7 +1580,7 @@ def api_companies_with_numbers(x_user_token: Optional[str] = Header(None)):
                 },
             },
             {"$match": {"wa_contacts.0": {"$exists": True}}},
-            {"$project": {"name": 1, "business_name": 1, "industry": 1, "domain": 1, "wa_contacts": 1}},
+            {"$project": {"name": 1, "business_name": 1, "industry": 1, "domain": 1, "website": 1, "city": 1, "wa_contacts": 1}},
             {"$sort": {"name": 1}},
         ]
         companies = list(db.db.companies.aggregate(pipeline))
@@ -1442,6 +1601,8 @@ def api_companies_with_numbers(x_user_token: Optional[str] = Header(None)):
                 "name": c.get("name") or c.get("business_name") or "",
                 "industry": c.get("industry", ""),
                 "domain": c.get("domain", ""),
+                "website": c.get("website") or c.get("domain") or "",
+                "city": c.get("city", ""),
                 "numbers": numbers,
             })
         return result
@@ -1474,15 +1635,24 @@ def api_create_scheduled_send(body: dict, x_user_token: Optional[str] = Header(N
 
         name = body.get("name", "").strip()
         industry = body.get("industry", "").strip()
-        message = body.get("message", "").strip()
         scheduled_at_str = body.get("scheduled_at", "")
         company_ids = body.get("company_ids") or []
         selected_numbers = body.get("selected_numbers") or []
 
+        # `messages`: one or more text variants. When 2+, the scheduler
+        # rotates between them at random so not every recipient gets the
+        # exact same text. `message` (singular) is kept accepted for
+        # backwards compatibility with older frontend builds.
+        raw_messages = body.get("messages")
+        if raw_messages is None:
+            single = (body.get("message") or "").strip()
+            raw_messages = [single] if single else []
+        messages = [m.strip() for m in raw_messages if isinstance(m, str) and m.strip()]
+
         if not name:
             raise HTTPException(status_code=400, detail="El campo 'name' es requerido")
-        if not message:
-            raise HTTPException(status_code=400, detail="El campo 'message' es requerido")
+        if not messages:
+            raise HTTPException(status_code=400, detail="Agrega al menos un mensaje")
         if not scheduled_at_str:
             raise HTTPException(status_code=400, detail="El campo 'scheduled_at' es requerido")
 
@@ -1501,7 +1671,8 @@ def api_create_scheduled_send(body: dict, x_user_token: Optional[str] = Header(N
             "industry": industry,
             "company_ids": company_ids,
             "selected_numbers": selected_numbers,
-            "message": message,
+            "messages": messages,
+            "message": messages[0],  # kept for older UI/reporting code that reads a single preview text
             "scheduled_at": scheduled_at,
             "status": "pending",
             "sent_count": 0,
@@ -1555,8 +1726,18 @@ def api_update_scheduled_send(job_id: str, body: dict, x_user_token: Optional[st
         update: dict = {}
         if "name" in body:
             update["name"] = str(body["name"]).strip()
-        if "message" in body:
-            update["message"] = str(body["message"]).strip()
+        if "messages" in body:
+            messages = [m.strip() for m in (body["messages"] or []) if isinstance(m, str) and m.strip()]
+            if not messages:
+                raise HTTPException(status_code=400, detail="Agrega al menos un mensaje")
+            update["messages"] = messages
+            update["message"] = messages[0]
+        elif "message" in body:
+            single = str(body["message"]).strip()
+            if not single:
+                raise HTTPException(status_code=400, detail="Agrega al menos un mensaje")
+            update["messages"] = [single]
+            update["message"] = single
         if "selected_numbers" in body:
             update["selected_numbers"] = body["selected_numbers"]
         if "scheduled_at" in body:
@@ -1952,3 +2133,31 @@ def api_sync_instances(x_user_token: Optional[str] = Header(None)):
         )
         imported += 1
     return {"ok": True, "imported": imported}
+
+
+# ─── Telnyx OTP webhook (temporal — registro WhatsApp) ────────────────────────
+# Guarda en memoria el último OTP recibido de Telnyx para que el script de
+# registro en Hostinger pueda leerlo sin necesitar acceso SSH directo.
+_telnyx_otp_store: dict = {}  # {"otp": "123456", "ts": "..."}
+
+@router.post("/telnyx/inbound")
+async def telnyx_inbound_webhook(request: Request):
+    """Recibe el webhook de Telnyx con el SMS entrante y extrae el OTP."""
+    import re as _re, datetime as _dt
+    try:
+        body = await request.json()
+        # Telnyx envuelve el payload en data.payload
+        payload = body.get("data", {}).get("payload", body)
+        text = payload.get("text", "") or ""
+        match = _re.search(r"\b(\d{6})\b", text)
+        if match:
+            _telnyx_otp_store["otp"] = match.group(1)
+            _telnyx_otp_store["ts"]  = _dt.datetime.utcnow().isoformat()
+    except Exception:
+        pass
+    return {"ok": True}
+
+@router.get("/telnyx/otp")
+def telnyx_get_otp():
+    """Devuelve el último OTP recibido (el script de registro lo pollea)."""
+    return _telnyx_otp_store or {"otp": None}

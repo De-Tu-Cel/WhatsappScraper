@@ -27,6 +27,7 @@ import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
 import CallIcon from '@mui/icons-material/Call'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import LinkOffIcon from '@mui/icons-material/LinkOff'
+import SmartphoneIcon from '@mui/icons-material/Smartphone'
 import { useLang } from '../context/LangContext'
 
 const token = () => typeof window !== 'undefined' ? localStorage.getItem('user_token') : ''
@@ -378,13 +379,75 @@ export default function InstancesPanel() {
   const [pairTarget, setPairTarget] = useState(null)
 
   // ── OTP registration dialog ──
-  const [otpOpen,    setOtpOpen]    = useState(false)
-  const [otpTarget,  setOtpTarget]  = useState(null)
-  const [otpPhone,   setOtpPhone]   = useState('')
-  const [otpStep,    setOtpStep]    = useState('phone') // 'phone' | 'code' | 'success'
-  const [otpCode,    setOtpCode]    = useState('')
-  const [otpLoading, setOtpLoading] = useState(false)
-  const [otpErr,     setOtpErr]     = useState('')
+  const [otpOpen,       setOtpOpen]       = useState(false)
+  const [otpTarget,     setOtpTarget]     = useState(null)
+  const [otpPhone,      setOtpPhone]      = useState('')
+  const [otpStep,       setOtpStep]       = useState('phone') // 'phone' | 'code' | 'success'
+  const [otpCode,       setOtpCode]       = useState('')
+  const [otpLoading,    setOtpLoading]    = useState(false)
+  const [otpErr,        setOtpErr]        = useState('')
+  const [otpAutoWait,   setOtpAutoWait]   = useState(false)
+  const otpPollRef      = useRef(null)
+  const otpRequestedAt  = useRef(null)
+
+  function stopOtpPolling() {
+    if (otpPollRef.current) { clearInterval(otpPollRef.current); otpPollRef.current = null }
+  }
+
+  function startOtpPolling(verifyFn) {
+    stopOtpPolling()
+    setOtpAutoWait(true)
+    otpPollRef.current = setInterval(async () => {
+      try {
+        const r = await fetch('/api/telnyx/otp')
+        if (!r.ok) return
+        const d = await r.json()
+        if (!d.otp || !d.ts) return
+        // Solo aceptar OTPs que llegaron DESPUÉS de que enviamos el request
+        if (otpRequestedAt.current && new Date(d.ts) < otpRequestedAt.current) return
+        stopOtpPolling()
+        setOtpAutoWait(false)
+        setOtpCode(d.otp)
+        verifyFn(d.otp)
+      } catch { /* silencioso, reintenta en el próximo tick */ }
+    }, 3000)
+  }
+
+  // ── Emulator registration dialog ──
+  const [emuOpen,   setEmuOpen]   = useState(false)
+  const [emuPhone,  setEmuPhone]  = useState('+14794000127')
+  const [emuInst,   setEmuInst]   = useState('telnyx-01')
+  const [emuLogs,   setEmuLogs]   = useState([])
+  const [emuStep,   setEmuStep]   = useState('idle') // idle | running | success | error
+  const emuEsRef = useRef(null)
+
+  function handleEmuClick() {
+    const inst = menuInst; closeMenu()
+    setEmuInst(inst?.name || 'telnyx-01')
+    setEmuLogs([]); setEmuStep('idle')
+    setEmuOpen(true)
+  }
+
+  function startEmuRegistration() {
+    if (emuEsRef.current) emuEsRef.current.close()
+    setEmuLogs([]); setEmuStep('running')
+    const url = `/api/register/emulator-stream?phone=${encodeURIComponent(emuPhone)}&instance=${encodeURIComponent(emuInst)}`
+    const es = new EventSource(url)
+    emuEsRef.current = es
+    es.onmessage = (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        setEmuLogs(prev => [...prev, d])
+        if (d.step === 'success' || d.step === 'done') { setEmuStep('success'); es.close() }
+        if (d.step === 'error') { setEmuStep('error'); es.close() }
+      } catch {}
+    }
+    es.onerror = () => {
+      setEmuLogs(prev => [...prev, { msg: 'Conexión SSE cerrada', step: 'done' }])
+      setEmuStep(prev => prev === 'running' ? 'done' : prev)
+      es.close()
+    }
+  }
 
   function handlePairClick() {
     const inst = menuInst; closeMenu()
@@ -415,7 +478,8 @@ export default function InstancesPanel() {
 
   function handleOtpClick() {
     const inst = menuInst; closeMenu()
-    setOtpPhone(''); setOtpCode(''); setOtpStep('phone'); setOtpErr('')
+    stopOtpPolling()
+    setOtpPhone(''); setOtpCode(''); setOtpStep('phone'); setOtpErr(''); setOtpAutoWait(false)
     setOtpTarget(inst)
     setOtpOpen(true)
   }
@@ -431,7 +495,9 @@ export default function InstancesPanel() {
       })
       const d = await r.json()
       if (!r.ok) { setOtpErr(d.detail || d.error || t.inst.otpErrRequest); return }
+      otpRequestedAt.current = new Date()
       setOtpStep('code')
+      startOtpPolling((code) => handleVerifyOtp(code))
     } catch (e) {
       setOtpErr(e.message)
     } finally {
@@ -439,8 +505,8 @@ export default function InstancesPanel() {
     }
   }
 
-  async function handleVerifyOtp() {
-    const clean = otpCode.replace(/\D/g, '')
+  async function handleVerifyOtp(autoCode) {
+    const clean = (autoCode || otpCode).replace(/\D/g, '')
     if (clean.length < 6) { setOtpErr(t.inst.otpErrCode); return }
     setOtpLoading(true); setOtpErr('')
     try {
@@ -637,6 +703,10 @@ export default function InstancesPanel() {
           <CallIcon sx={{ fontSize: 17, color: '#fb923c' }} />
           {t.inst.otpMenuLabel}
         </MenuItem>
+        <MenuItem onClick={handleEmuClick}>
+          <SmartphoneIcon sx={{ fontSize: 17, color: '#a78bfa' }} />
+          Registrar vía emulador
+        </MenuItem>
         <MenuItem onClick={handleAssignClick}>
           <PersonAddIcon sx={{ fontSize: 17, color: '#a78bfa' }} />
           {t.inst.assignUser}
@@ -815,7 +885,7 @@ export default function InstancesPanel() {
       </Dialog>
 
       {/* ── OTP registration dialog ── */}
-      <Dialog open={otpOpen} onClose={() => otpStep !== 'success' && setOtpOpen(false)} sx={{
+      <Dialog open={otpOpen} onClose={() => { if (otpStep !== 'success') { stopOtpPolling(); setOtpOpen(false) } }} sx={{
         '& .MuiDialog-paper': {
           bgcolor: 'var(--card-bg, #161d2e)',
           backgroundImage: 'linear-gradient(160deg, rgba(251,146,60,0.08) 0%, transparent 55%)',
@@ -867,12 +937,20 @@ export default function InstancesPanel() {
               <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', lineHeight: 1.5 }}>
                 {t.inst.otpCodeDesc.replace('{phone}', `+${otpPhone.replace(/\D/g, '')}`)}
               </Typography>
+              {otpAutoWait && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, bgcolor: 'rgba(251,146,60,0.08)', border: '1px solid rgba(251,146,60,0.2)', borderRadius: 1.5, px: 1.5, py: 1 }}>
+                  <CircularProgress size={13} sx={{ color: '#fb923c', flexShrink: 0 }} />
+                  <Typography sx={{ color: '#fb923c', fontSize: '0.76rem' }}>
+                    Esperando SMS de WhatsApp… se ingresará automáticamente
+                  </Typography>
+                </Box>
+              )}
               <TextField
                 label={t.inst.otpCodeLabel}
                 placeholder={t.inst.otpCodePlaceholder}
                 size="small"
                 value={otpCode}
-                onChange={e => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                onChange={e => { stopOtpPolling(); setOtpAutoWait(false); setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6)) }}
                 onKeyDown={e => e.key === 'Enter' && handleVerifyOtp()}
                 autoFocus
                 slotProps={{ htmlInput: { maxLength: 6, style: { textAlign: 'center', fontSize: '1.5rem', fontFamily: 'monospace', letterSpacing: '0.3em', color: '#fb923c', fontWeight: 800 } } }}
@@ -900,7 +978,7 @@ export default function InstancesPanel() {
 
         <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5, borderTop: '1px solid rgba(255,255,255,0.07)', gap: 1 }}>
           {otpStep !== 'success' && (
-            <Button onClick={() => setOtpOpen(false)} sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.82rem', borderRadius: 2, px: 2, '&:hover': { color: '#fff', bgcolor: 'rgba(255,255,255,0.08)' } }}>
+            <Button onClick={() => { stopOtpPolling(); setOtpOpen(false) }} sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.82rem', borderRadius: 2, px: 2, '&:hover': { color: '#fff', bgcolor: 'rgba(255,255,255,0.08)' } }}>
               {t.inst.otpClose}
             </Button>
           )}
@@ -916,6 +994,98 @@ export default function InstancesPanel() {
               sx={{ bgcolor: '#ea580c', '&:hover': { bgcolor: '#c2410c' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5,
                 '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.2)' } }}>
               {otpLoading ? <CircularProgress size={15} sx={{ color: 'white' }} /> : t.inst.otpVerifyBtn}
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Emulator registration dialog ── */}
+      <Dialog open={emuOpen} onClose={() => { if (emuStep !== 'running') { emuEsRef.current?.close(); setEmuOpen(false) } }} sx={{
+        '& .MuiDialog-paper': {
+          bgcolor: 'var(--card-bg,#161d2e)', backgroundImage: 'none',
+          border: '1px solid rgba(167,139,250,0.2)', borderRadius: 3, minWidth: 420, maxWidth: 520,
+        },
+      }}>
+        <DialogTitle sx={{ pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+            <Box sx={{ width: 34, height: 34, borderRadius: 2, flexShrink: 0, bgcolor: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <SmartphoneIcon sx={{ fontSize: 18, color: '#a78bfa' }} />
+            </Box>
+            <Box>
+              <Typography sx={{ color: 'var(--text,#e2e8f0)', fontWeight: 700, fontSize: '0.97rem', lineHeight: 1.2 }}>
+                Registrar vía emulador
+              </Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem' }}>
+                Redroid + Telnyx OTP automático
+              </Typography>
+            </Box>
+          </Box>
+        </DialogTitle>
+
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: '4px !important', pb: 1 }}>
+          {emuStep === 'idle' && (
+            <>
+              <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', lineHeight: 1.5 }}>
+                Registra el número en WhatsApp dentro del emulador Redroid. El OTP se captura automáticamente vía Telnyx y se ingresa solo.
+              </Typography>
+              <TextField label="Número Telnyx" size="small" value={emuPhone}
+                onChange={e => setEmuPhone(e.target.value)} sx={FIELD_SX} />
+              <TextField label="Nombre de instancia (Evolution API)" size="small" value={emuInst}
+                onChange={e => setEmuInst(e.target.value)} sx={FIELD_SX} />
+            </>
+          )}
+
+          {(emuStep === 'running' || emuStep === 'success' || emuStep === 'error' || emuStep === 'done') && (
+            <Box sx={{ bgcolor: 'rgba(0,0,0,0.3)', borderRadius: 1.5, p: 1.2, maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 0.6 }}>
+              {emuLogs.map((log, i) => (
+                <Box key={i} sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.8 }}>
+                  <Typography sx={{ fontSize: '0.7rem', color:
+                    log.step === 'error'   ? '#f87171' :
+                    log.step === 'success' ? '#4ade80' :
+                    log.step === 'warn'    ? '#fbbf24' :
+                    log.msg?.startsWith('✅') ? '#4ade80' :
+                    log.msg?.startsWith('❌') ? '#f87171' :
+                    log.msg?.startsWith('⚠️') ? '#fbbf24' :
+                    'rgba(255,255,255,0.65)',
+                    lineHeight: 1.5, fontFamily: 'monospace',
+                  }}>
+                    {log.msg}
+                  </Typography>
+                </Box>
+              ))}
+              {emuStep === 'running' && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mt: 0.5 }}>
+                  <CircularProgress size={11} sx={{ color: '#a78bfa' }} />
+                  <Typography sx={{ fontSize: '0.7rem', color: '#a78bfa', fontFamily: 'monospace' }}>en progreso...</Typography>
+                </Box>
+              )}
+            </Box>
+          )}
+        </DialogContent>
+
+        <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5, borderTop: '1px solid rgba(255,255,255,0.07)', gap: 1 }}>
+          {emuStep !== 'running' && (
+            <Button onClick={() => { emuEsRef.current?.close(); setEmuOpen(false) }}
+              sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.82rem', borderRadius: 2, px: 2, '&:hover': { color: '#fff', bgcolor: 'rgba(255,255,255,0.08)' } }}>
+              Cerrar
+            </Button>
+          )}
+          {emuStep === 'idle' && (
+            <Button variant="contained" onClick={startEmuRegistration} disabled={!emuPhone.trim()}
+              sx={{ bgcolor: '#7c3aed', '&:hover': { bgcolor: '#6d28d9' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5, boxShadow: 'none' }}>
+              Iniciar registro automático
+            </Button>
+          )}
+          {(emuStep === 'success' || emuStep === 'done') && (
+            <Button variant="contained" onClick={() => { setEmuOpen(false); fetchInstances() }}
+              sx={{ bgcolor: '#16a34a', '&:hover': { bgcolor: '#15803d' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5, boxShadow: 'none' }}>
+              Listo ✓
+            </Button>
+          )}
+          {emuStep === 'error' && (
+            <Button variant="contained" onClick={() => setEmuStep('idle')}
+              sx={{ bgcolor: '#7c3aed', '&:hover': { bgcolor: '#6d28d9' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5, boxShadow: 'none' }}>
+              Reintentar
             </Button>
           )}
         </DialogActions>

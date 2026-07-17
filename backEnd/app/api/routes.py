@@ -1191,9 +1191,9 @@ def api_evo_request_otp(name: str, body: dict):
         if not phone:
             raise HTTPException(status_code=400, detail="phone requerido")
         r = _req.post(
-            f"{EVOLUTION_API_URL}/instance/register/{name}",
+            f"{EVOLUTION_API_URL}/instance/requestRegistrationCode/{name}",
             headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
-            json={"number": phone, "method": "voice_call"},
+            json={"phoneNumber": phone, "method": "sms"},
             timeout=15,
         )
         return r.json()
@@ -1210,7 +1210,7 @@ def api_evo_verify_otp(name: str, body: dict):
         if not code:
             raise HTTPException(status_code=400, detail="code requerido")
         r = _req.post(
-            f"{EVOLUTION_API_URL}/instance/code/{name}",
+            f"{EVOLUTION_API_URL}/instance/confirmRegistrationCode/{name}",
             headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
             json={"code": code},
             timeout=15,
@@ -1218,6 +1218,43 @@ def api_evo_verify_otp(name: str, body: dict):
         return r.json()
     except HTTPException: raise
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+
+ADB_AGENT_URL = "http://172.17.0.1:9876"
+
+@router.get("/register/emulator-stream")
+async def register_emulator_stream(phone: str, instance: str = "telnyx-01"):
+    """Proxy SSE from ADB agent on host to the UI."""
+    import httpx
+    from fastapi.responses import StreamingResponse
+
+    async def event_gen():
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(
+                    "POST", f"{ADB_AGENT_URL}/register",
+                    json={"phone": phone, "instance": instance},
+                    timeout=httpx.Timeout(connect=10, read=180, write=10, pool=10),
+                ) as r:
+                    async for chunk in r.aiter_bytes():
+                        yield chunk
+        except Exception as e:
+            yield f"data: {json.dumps({'msg': f'Error de conexión al agente ADB: {e}', 'step': 'error'})}\n\n".encode()
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+@router.get("/register/agent-health")
+def register_agent_health():
+    """Check if ADB agent is running on the host."""
+    import requests as _req
+    try:
+        r = _req.get(f"{ADB_AGENT_URL}/health", timeout=5)
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"ADB agent not reachable: {e}")
 
 @router.get("/evolution/instance/status/{name}")
 def api_evo_get_status(name: str):

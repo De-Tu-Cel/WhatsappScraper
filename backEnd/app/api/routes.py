@@ -1219,7 +1219,7 @@ def api_evo_verify_otp(name: str, body: dict):
     except HTTPException: raise
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
-ADB_AGENT_URL = "http://172.17.0.1:9876"
+ADB_AGENT_URL = "http://10.0.1.1:9876"
 
 @router.get("/register/emulator-stream")
 async def register_emulator_stream(phone: str, instance: str = "telnyx-01"):

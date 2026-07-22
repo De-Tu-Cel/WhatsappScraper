@@ -617,10 +617,10 @@ export default function Settings() {
   const isMono        = currentTheme.cat === 'mono'
 
   const TABS = [
-    { icon: <PaletteIcon sx={{ fontSize: 15 }} />, label: t.settings.tabAppearance  || 'Apariencia' },
-    { icon: <AccountCircleIcon sx={{ fontSize: 15 }} />, label: t.settings.tabAccount || 'Cuenta' },
-    { icon: <PhoneAndroidIcon sx={{ fontSize: 15 }} />, label: t.settings.tabWhatsApp || 'WhatsApp',
-      badge: connStatus === 'connected' },
+    { icon: <PaletteIcon sx={{ fontSize: 15 }} />,       label: t.settings.tabAppearance || 'Apariencia' },
+    { icon: <AccountCircleIcon sx={{ fontSize: 15 }} />, label: t.settings.tabAccount    || 'Cuenta' },
+    { icon: <PhoneAndroidIcon sx={{ fontSize: 15 }} />,  label: t.settings.tabWhatsApp   || 'WhatsApp', badge: connStatus === 'connected' },
+    { icon: <TimerIcon sx={{ fontSize: 15 }} />,         label: t.settings.tabSendTiming || 'Envíos' },
   ]
 
   return (
@@ -819,9 +819,6 @@ export default function Settings() {
             })()}
           </Section>
 
-          {/* ── Send timing defaults ── */}
-          <SendTimingSection />
-
         </>}
 
         {/* ═══ TAB 1: Cuenta ═══ */}
@@ -995,6 +992,9 @@ export default function Settings() {
           )}
         </DialogContent>
       </Dialog>
+
+        {/* ═══ TAB 3: Envíos ═══ */}
+        {activeTab === 3 && <SendTimingSection />}
 
     </Box>
   )

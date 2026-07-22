@@ -13,12 +13,12 @@ import { useLang } from '../context/LangContext'
 const SLIDER_SX = {
   color: 'var(--accent, #3b82f6)',
   height: 4,
-  mt: 0.5,
-  mb: 0,
+  px: 1,        // prevents thumb clipping at min/max edges
+  py: 1.5,      // enough vertical hit-area for the thumb to be draggable
   '& .MuiSlider-thumb': {
-    width: 14, height: 14,
+    width: 16, height: 16,
     boxShadow: '0 0 0 3px rgba(var(--accent-rgb,59,130,246),0.18)',
-    '&:hover, &.Mui-focusVisible': { boxShadow: '0 0 0 5px rgba(var(--accent-rgb,59,130,246),0.25)' },
+    '&:hover, &.Mui-focusVisible': { boxShadow: '0 0 0 6px rgba(var(--accent-rgb,59,130,246),0.25)' },
   },
   '& .MuiSlider-track': { border: 'none', height: 4 },
   '& .MuiSlider-rail': { opacity: 0.15, height: 4 },
@@ -32,7 +32,7 @@ const SLIDER_SX = {
 }
 
 /* ── Range slider with minimum distance enforcement ── */
-function RangeRow({ label, value, onChange, min, max, step = 1, unit, minDist = 1 }) {
+function RangeRow({ label, value, onChange, min, max, step = 1, unit, minDist = 1, marks = true }) {
   function handleChange(_, newVal, activeThumb) {
     if (newVal[1] - newVal[0] < minDist) {
       if (activeThumb === 0) {
@@ -48,7 +48,7 @@ function RangeRow({ label, value, onChange, min, max, step = 1, unit, minDist = 
   }
 
   return (
-    <Box sx={{ mb: 2 }}>
+    <Box sx={{ mb: 2.5 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.2 }}>
         <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-muted, rgba(255,255,255,0.5))', fontWeight: 600 }}>
           {label}
@@ -67,7 +67,7 @@ function RangeRow({ label, value, onChange, min, max, step = 1, unit, minDist = 
         value={value}
         onChange={handleChange}
         min={min} max={max} step={step}
-        marks disableSwap
+        marks={marks} disableSwap
         valueLabelDisplay="auto"
         valueLabelFormat={v => `${v}${unit}`}
         sx={SLIDER_SX}
@@ -93,7 +93,6 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
       borderRadius: 2,
       border: `1px solid ${open ? 'rgba(var(--accent-rgb,59,130,246),0.25)' : 'rgba(255,255,255,0.07)'}`,
       bgcolor: open ? 'rgba(var(--accent-rgb,59,130,246),0.03)' : 'rgba(255,255,255,0.02)',
-      overflow: 'hidden',
       transition: 'border-color 0.2s, background-color 0.2s',
     }}>
       {/* Header */}
@@ -148,6 +147,7 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
             onChange={v => update('msgDelay', v)}
             min={5} max={300} step={5}
             unit={sc.seconds} minDist={5}
+            marks={[5,30,60,120,180,240,300].map(v => ({ value: v, label: v >= 60 ? `${v/60}m` : `${v}s` }))}
           />
           <RangeRow
             label={sc.batchSize}
@@ -155,6 +155,7 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
             onChange={v => update('batchSize', v)}
             min={1} max={20} step={1}
             unit={sc.msgs} minDist={1}
+            marks={[1,5,10,15,20].map(v => ({ value: v, label: String(v) }))}
           />
           <RangeRow
             label={sc.batchDelay}
@@ -162,6 +163,7 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
             onChange={v => update('batchDelay', v)}
             min={1} max={30} step={1}
             unit={sc.minutes} minDist={1}
+            marks={[1,5,10,15,20,30].map(v => ({ value: v, label: `${v}m` }))}
           />
           <Box sx={{
             px: 1.2, py: 0.8, borderRadius: 1.5,

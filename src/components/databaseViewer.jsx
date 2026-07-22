@@ -60,6 +60,8 @@ import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariant
 import { HighlightedMessageInput } from './highlightedMessageInput'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
+import { SendConfigPanel, CountdownBar } from './SendConfigPanel'
+import { loadSendConfig, randMsgDelayMs, randBatchBreakMs, randBatchSize } from '@/lib/sendConfig'
 
 function getHeadCells(t) {
   return [
@@ -740,11 +742,17 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus 
   const [progress,     setProgress]     = useState(0)
   const [results,      setResults]      = useState([])
   const [done,         setDone]         = useState(false)
-  const sendingRef = useRef(false)
+  const sendingRef  = useRef(false)
+  const cancelRef   = useRef(false)
   const [activeTpl,    setActiveTpl]    = useState(TEMPLATES_DATA[0].id)
+  const [sendCfg,      setSendCfg]      = useState(() => loadSendConfig())
+  const [countdown,    setCountdown]    = useState(null)
+  const [cdTotal,      setCdTotal]      = useState(null)
+  const [cdLabel,      setCdLabel]      = useState('msg')
+  const [batchNum,     setBatchNum]     = useState(1)
 
   useEffect(() => {
-    if (!open) { setSending(false); setProgress(0); setResults([]); setDone(false) }
+    if (!open) { setSending(false); setProgress(0); setResults([]); setDone(false); setCountdown(null); cancelRef.current = false }
   }, [open])
 
   function applyTemplate(tpl) {
@@ -761,13 +769,36 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus 
   const allVariants   = [msgText, ...extraVariants].map(v => v.trim()).filter(Boolean)
   const belowMinTemplates = waRows.length > 1 && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
+  async function waitWithTimer(ms, label) {
+    const totalSecs = Math.ceil(ms / 1000)
+    setCdTotal(totalSecs); setCountdown(totalSecs); setCdLabel(label)
+    const end = Date.now() + ms
+    await new Promise(resolve => {
+      const tick = () => {
+        if (cancelRef.current) { resolve(); return }
+        const remaining = end - Date.now()
+        if (remaining <= 0) { setCountdown(0); resolve(); return }
+        setCountdown(Math.ceil(remaining / 1000))
+        setTimeout(tick, 200)
+      }
+      tick()
+    })
+    setCountdown(null); setCdTotal(null)
+  }
+
   async function handleSend() {
     if (msgInvalid || sendingRef.current || belowMinTemplates) return
+    cancelRef.current = false
     sendingRef.current = true
     setSending(true); setProgress(0); setResults([]); setDone(false)
     const res = []
     let lastVariant = null
+    let msgsInBatch = 0
+    let nextBreakAt = randBatchSize(sendCfg)
+    let currentBatch = 1
+    setBatchNum(1)
     for (let i = 0; i < waRows.length; i++) {
+      if (cancelRef.current) break
       const row = waRows[i]
       setProgress(Math.round(((i + 1) / waRows.length) * 100))
       try {
@@ -806,18 +837,21 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus 
         res.push({ name: row.name, status: 'failed' })
       }
       setResults([...res])
+      msgsInBatch++
       if (i < waRows.length - 1) {
-        const sentSoFar = i + 1
-        if (sentSoFar % 5 === 0) {
-          const longBreak = Math.floor(Math.random() * 300000 + 180000) // 3–8 min
-          await new Promise(r => setTimeout(r, longBreak))
+        if (msgsInBatch >= nextBreakAt) {
+          msgsInBatch = 0
+          nextBreakAt = randBatchSize(sendCfg)
+          currentBatch++
+          setBatchNum(currentBatch)
+          await waitWithTimer(randBatchBreakMs(sendCfg), 'batch')
         } else {
-          const delay = Math.floor(Math.random() * 30000 + 25000) // 25–55 seg
-          await new Promise(r => setTimeout(r, delay))
+          await waitWithTimer(randMsgDelayMs(sendCfg), 'msg')
         }
       }
     }
     setSending(false); setDone(true); sendingRef.current = false
+    setCountdown(null); setBatchNum(1)
     const sent = res.filter(r => r.status === 'sent').length
     onNotify(
       `${sent} mensaje${sent !== 1 ? 's' : ''} enviado${sent !== 1 ? 's' : ''}`,
@@ -881,6 +915,21 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus 
         <Box sx={{ mb: 1.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
           <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={waRows.length} baseCount={1} />
         </Box>
+
+        {/* Send config */}
+        <Box sx={{ mb: 1.5 }}>
+          <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={sending} />
+        </Box>
+
+        {/* Countdown timer */}
+        {sending && countdown !== null && (
+          <Box sx={{ mb: 1.5 }}>
+            <CountdownBar
+              countdown={countdown} total={cdTotal} label={cdLabel}
+              batchNum={batchNum} msgNum={results.length} msgTotal={waRows.length}
+            />
+          </Box>
+        )}
 
         <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1.5 }} />
         <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1.5 }} />

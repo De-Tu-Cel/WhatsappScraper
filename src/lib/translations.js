@@ -910,6 +910,18 @@ export const T = {
       daysLong:        ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'],
     },
 
+    sendConfig: {
+      title:      'Timing de envío',
+      msgDelay:   'Delay entre mensajes',
+      batchSize:  'Mensajes por lote',
+      batchDelay: 'Pausa entre lotes',
+      seconds:    's',
+      minutes:    'min',
+      msgs:       'msgs',
+      batchOf:    'lotes de',
+      hint:       'El sistema elige valores exactos al azar dentro del rango — mantiene el patrón impredecible para evitar bloqueos.',
+    },
+
     // Shared "message template library" picker + manager, reused by Batch URLs,
     // CSV Import, Database and Scheduled Sends wherever a message can go to
     // more than one recipient.
@@ -1848,6 +1860,17 @@ export const T = {
       daysLong:        ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'],
     },
 
+    sendConfig: {
+      title:      'Send timing',
+      msgDelay:   'Delay between messages',
+      batchSize:  'Messages per batch',
+      batchDelay: 'Break between batches',
+      seconds:    's',
+      minutes:    'min',
+      msgs:       'msgs',
+      batchOf:    'batches of',
+      hint:       'The system picks exact values at random within your range — keeps the anti-block pattern unpredictable.',
+    },
     tplLib: {
       title:            'Message templates',
       manageBtn:        'Manage templates',

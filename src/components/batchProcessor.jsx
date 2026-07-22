@@ -33,6 +33,8 @@ import MessageIcon from '@mui/icons-material/Message'
 import { getTemplates } from './singleUrlProcessor'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
+import { SendConfigPanel, CountdownBar } from './SendConfigPanel'
+import { loadSendConfig, randMsgDelayMs, randBatchBreakMs, randBatchSize } from '@/lib/sendConfig'
 
 const EXAMPLES = [
   'https://pizzeria-mario.com.mx/\nhttps://ferreteria-sanchez.mx/\nhttps://spa-belleza-queretaro.com/\nhttps://taller-mecanico-hdz.mx/\nhttps://restaurante-oaxaca.com.mx/\nhttps://constructora-garcia.mx/',
@@ -177,6 +179,11 @@ export default function BatchProcessor() {
   const [sending,     setSending]     = useState(false)
   const [sendError,   setSendError]   = useState('')
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
+  const [sendCfg,     setSendCfg]     = useState(() => loadSendConfig())
+  const [countdown,   setCountdown]   = useState(null)
+  const [cdTotal,     setCdTotal]     = useState(null)
+  const [cdLabel,     setCdLabel]     = useState('msg')
+  const [batchNum,    setBatchNum]    = useState(1)
   const msgRef       = useRef(null)
   const highlightRef = useRef(null)
   function syncScroll() {
@@ -280,6 +287,23 @@ export default function BatchProcessor() {
     }
   }
 
+  async function waitWithTimer(ms, label) {
+    const totalSecs = Math.ceil(ms / 1000)
+    setCdTotal(totalSecs); setCountdown(totalSecs); setCdLabel(label)
+    const end = Date.now() + ms
+    await new Promise(resolve => {
+      const tick = () => {
+        if (cancelRef.current) { resolve(); return }
+        const remaining = end - Date.now()
+        if (remaining <= 0) { setCountdown(0); resolve(); return }
+        setCountdown(Math.ceil(remaining / 1000))
+        setTimeout(tick, 200)
+      }
+      tick()
+    })
+    setCountdown(null); setCdTotal(null)
+  }
+
   async function handleSendAll() {
     const targets = rows.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
     if (!targets.length || sendingRef.current || belowMinTemplates) return
@@ -288,6 +312,10 @@ export default function BatchProcessor() {
     setSending(true); setPhase('sending')
     const updated = [...rows]
     let lastVariant = null
+    let msgsInBatch = 0
+    let nextBreakAt = randBatchSize(sendCfg)
+    let currentBatch = 1
+    setBatchNum(1)
     for (let i = 0; i < targets.length; i++) {
       if (cancelRef.current) break
       const row = targets[i]
@@ -321,20 +349,22 @@ export default function BatchProcessor() {
         updated[idx] = { ...updated[idx], msg_status: 'failed' }
       }
       setRows([...updated])
+      msgsInBatch++
       if (i < targets.length - 1) {
-        // Pausa larga cada 5 mensajes enviados (simula descanso humano)
-        const sentSoFar = i + 1
-        if (sentSoFar % 5 === 0) {
-          const longBreak = Math.floor(Math.random() * 300000 + 180000) // 3–8 min
-          setPhase(`Pausa (${Math.round(longBreak / 60000)}min)…`)
-          await new Promise(r => setTimeout(r, longBreak))
+        if (msgsInBatch >= nextBreakAt) {
+          msgsInBatch = 0
+          nextBreakAt = randBatchSize(sendCfg)
+          currentBatch++
+          setBatchNum(currentBatch)
+          setPhase('batch_break')
+          await waitWithTimer(randBatchBreakMs(sendCfg), 'batch')
         } else {
-          const delay = Math.floor(Math.random() * 30000 + 25000) // 25–55 seg
-          await new Promise(r => setTimeout(r, delay))
+          await waitWithTimer(randMsgDelayMs(sendCfg), 'msg')
         }
       }
     }
     setProgress(100); setCurrentUrl(''); setPhase(''); setSending(false); sendingRef.current = false
+    setCountdown(null); setBatchNum(1)
   }
 
   const sentCount  = rows.filter(r => r.msg_status === 'sent').length
@@ -692,6 +722,18 @@ export default function BatchProcessor() {
           {isBulk && (
             <Box sx={{ mt: 1.5, mb: 0.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
               <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalNumbers} baseCount={0} />
+            </Box>
+          )}
+          {/* Send config + countdown */}
+          <Box sx={{ mb: 1 }}>
+            <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={sending} />
+          </Box>
+          {sending && countdown !== null && (
+            <Box sx={{ mb: 1 }}>
+              <CountdownBar
+                countdown={countdown} total={cdTotal} label={cdLabel}
+                batchNum={batchNum} msgNum={rows.filter(r => r.msg_status === 'sent' || r.msg_status === 'failed').length} msgTotal={waRows.length}
+              />
             </Box>
           )}
           <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />

@@ -19,8 +19,11 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
 import AccountCircleIcon from '@mui/icons-material/AccountCircle'
+import Slider from '@mui/material/Slider'
+import TimerIcon from '@mui/icons-material/Timer'
 import { useUser } from '../context/UserContext'
 import { useLang } from '../context/LangContext'
+import { loadSendConfig, saveSendConfig, DEFAULT_SEND_CONFIG } from '@/lib/sendConfig'
 
 export const ACCENTS = [
   // Marca
@@ -364,6 +367,44 @@ function AccountSection({ user, connStatus, connPhone, evo }) {
   )
 }
 
+
+function SendTimingSection() {
+  const { t } = useLang()
+  const sc = t.sendConfig
+  const [cfg, setCfg] = useState(() => loadSendConfig())
+
+  function update(key, val) {
+    const next = { ...cfg, [key]: val }
+    setCfg(next)
+    saveSendConfig(next)
+  }
+
+  function SliderRow({ label, value, onChange, min, max, step, unit }) {
+    return (
+      <Box sx={{ mb: 1 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.3 }}>
+          <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted, rgba(255,255,255,0.5))' }}>{label}</Typography>
+          <Typography sx={{ fontSize: '0.72rem', color: 'var(--accent, #3b82f6)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+            {value[0]}–{value[1]} {unit}
+          </Typography>
+        </Box>
+        <Slider value={value} onChange={(_, v) => onChange(v)} min={min} max={max} step={step} disableSwap size="small"
+          sx={{ color: 'var(--accent, #3b82f6)', height: 3, '& .MuiSlider-thumb': { width: 12, height: 12 }, '& .MuiSlider-rail': { opacity: 0.2 }, py: 0.5 }} />
+      </Box>
+    )
+  }
+
+  return (
+    <Section icon={<TimerIcon />} title={sc.title}>
+      <SliderRow label={sc.msgDelay}   value={cfg.msgDelay}   onChange={v => update('msgDelay', v)}   min={5}  max={300} step={5}  unit={sc.seconds} />
+      <SliderRow label={sc.batchSize}  value={cfg.batchSize}  onChange={v => update('batchSize', v)}  min={1}  max={20}  step={1}  unit={sc.msgs}    />
+      <SliderRow label={sc.batchDelay} value={cfg.batchDelay} onChange={v => update('batchDelay', v)} min={1}  max={30}  step={1}  unit={sc.minutes} />
+      <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', mt: 0.5, lineHeight: 1.4 }}>
+        {sc.hint}
+      </Typography>
+    </Section>
+  )
+}
 
 export default function Settings() {
   const { user }                = useUser()
@@ -739,6 +780,10 @@ export default function Settings() {
               )
             })()}
           </Section>
+
+          {/* ── Send timing defaults ── */}
+          <SendTimingSection />
+
         </>}
 
         {/* ═══ TAB 1: Cuenta ═══ */}

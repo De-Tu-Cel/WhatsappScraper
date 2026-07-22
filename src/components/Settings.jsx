@@ -368,6 +368,22 @@ function AccountSection({ user, connStatus, connPhone, evo }) {
 }
 
 
+const SETTINGS_SLIDER_SX = {
+  color: 'var(--accent, #3b82f6)',
+  height: 4,
+  mt: 0.5,
+  '& .MuiSlider-thumb': {
+    width: 14, height: 14,
+    boxShadow: '0 0 0 3px rgba(var(--accent-rgb,59,130,246),0.18)',
+    '&:hover, &.Mui-focusVisible': { boxShadow: '0 0 0 5px rgba(var(--accent-rgb,59,130,246),0.25)' },
+  },
+  '& .MuiSlider-track': { border: 'none', height: 4 },
+  '& .MuiSlider-rail': { opacity: 0.15, height: 4 },
+  '& .MuiSlider-mark': { width: 2, height: 2, borderRadius: '50%', bgcolor: 'rgba(255,255,255,0.2)', transform: 'translate(-50%,-50%)' },
+  '& .MuiSlider-markActive': { bgcolor: 'var(--accent, #3b82f6)', opacity: 0.5 },
+  '& .MuiSlider-valueLabel': { fontSize: '0.65rem', fontWeight: 700, py: 0.3, px: 0.8, bgcolor: 'var(--accent, #3b82f6)', borderRadius: 1 },
+}
+
 function SendTimingSection() {
   const { t } = useLang()
   const sc = t.sendConfig
@@ -379,29 +395,47 @@ function SendTimingSection() {
     saveSendConfig(next)
   }
 
-  function SliderRow({ label, value, onChange, min, max, step, unit }) {
+  function handleRange(key, minDist) {
+    return (_, newVal, activeThumb) => {
+      let v = [...newVal]
+      if (v[1] - v[0] < minDist) {
+        if (activeThumb === 0) { const c = Math.min(v[0], cfg[key][1] - minDist); v = [c, c + minDist] }
+        else { const c = Math.max(v[1], cfg[key][0] + minDist); v = [c - minDist, c] }
+      }
+      update(key, v)
+    }
+  }
+
+  function SliderRow({ label, cfgKey, min, max, step, unit, minDist = 1 }) {
+    const value = cfg[cfgKey]
     return (
-      <Box sx={{ mb: 1 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.3 }}>
-          <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted, rgba(255,255,255,0.5))' }}>{label}</Typography>
-          <Typography sx={{ fontSize: '0.72rem', color: 'var(--accent, #3b82f6)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
-            {value[0]}–{value[1]} {unit}
-          </Typography>
+      <Box sx={{ mb: 2.5 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.3 }}>
+          <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted, rgba(255,255,255,0.5))', fontWeight: 600 }}>{label}</Typography>
+          <Box sx={{ px: 1, py: 0.15, borderRadius: 1, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)' }}>
+            <Typography sx={{ fontSize: '0.68rem', color: 'var(--accent, #3b82f6)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+              {value[0]}–{value[1]} {unit}
+            </Typography>
+          </Box>
         </Box>
-        <Slider value={value} onChange={(_, v) => onChange(v)} min={min} max={max} step={step} disableSwap size="small"
-          sx={{ color: 'var(--accent, #3b82f6)', height: 3, '& .MuiSlider-thumb': { width: 12, height: 12 }, '& .MuiSlider-rail': { opacity: 0.2 }, py: 0.5 }} />
+        <Slider value={value} onChange={handleRange(cfgKey, minDist)}
+          min={min} max={max} step={step} marks disableSwap
+          valueLabelDisplay="auto" valueLabelFormat={v => `${v}${unit}`}
+          sx={SETTINGS_SLIDER_SX} />
       </Box>
     )
   }
 
   return (
     <Section icon={<TimerIcon />} title={sc.title}>
-      <SliderRow label={sc.msgDelay}   value={cfg.msgDelay}   onChange={v => update('msgDelay', v)}   min={5}  max={300} step={5}  unit={sc.seconds} />
-      <SliderRow label={sc.batchSize}  value={cfg.batchSize}  onChange={v => update('batchSize', v)}  min={1}  max={20}  step={1}  unit={sc.msgs}    />
-      <SliderRow label={sc.batchDelay} value={cfg.batchDelay} onChange={v => update('batchDelay', v)} min={1}  max={30}  step={1}  unit={sc.minutes} />
-      <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', mt: 0.5, lineHeight: 1.4 }}>
-        {sc.hint}
-      </Typography>
+      <SliderRow cfgKey="msgDelay"   label={sc.msgDelay}   min={5}  max={300} step={5}  unit={sc.seconds} minDist={5} />
+      <SliderRow cfgKey="batchSize"  label={sc.batchSize}  min={1}  max={20}  step={1}  unit={sc.msgs}    minDist={1} />
+      <SliderRow cfgKey="batchDelay" label={sc.batchDelay} min={1}  max={30}  step={1}  unit={sc.minutes} minDist={1} />
+      <Box sx={{ px: 1.2, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
+        <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.25)', lineHeight: 1.5 }}>
+          🎲 {sc.hint}
+        </Typography>
+      </Box>
     </Section>
   )
 }

@@ -81,7 +81,7 @@ def send_reset_email(to_email: str, display_name: str, token: str) -> bool:
     <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-top:1px solid rgba(255,255,255,0.06)">
       <tr>
         <td style="padding:16px 32px;font-size:11px;color:rgba(255,255,255,0.2)">DeTuCel &copy; 2026</td>
-        <td style="padding:16px 32px;font-size:11px;color:rgba(255,255,255,0.2);text-align:right">noreply@detucel.com</td>
+        <td style="padding:16px 32px;font-size:11px;color:rgba(255,255,255,0.2);text-align:right">notificaciones@detucel.mx</td>
       </tr>
     </table>
 

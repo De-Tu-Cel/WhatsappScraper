@@ -263,6 +263,9 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
 @router.post("/search")
 def api_search(req: SearchRequest):
     try:
+        from urllib.parse import urlparse
+        from app.pipeline import _check_blacklist
+
         db = MongoDBManager()
         known = db.get_all_scraped_domains()
         urls  = search_prospects(
@@ -270,7 +273,22 @@ def api_search(req: SearchRequest):
             req.num_results, req.offset or 0,
             exclude_domains=known,
         )
-        return {"urls": urls}
+
+        # Flag domain-blacklisted results here (industry isn't known until the
+        # site is actually scraped, so only the domain rule can apply pre-scrape)
+        # instead of letting the user pick one and have it silently fail later.
+        results = []
+        for url in urls:
+            domain = urlparse(url).netloc.lower().replace("www.", "")
+            hit = _check_blacklist(domain, "")
+            results.append({
+                "url": url,
+                "domain": domain,
+                "blocked": bool(hit),
+                "block_reason": hit["matched"] if hit else None,
+            })
+
+        return {"urls": urls, "results": results}  # "urls" kept for now, not read by the frontend anymore
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -977,8 +995,20 @@ def api_rescrape_company(company_id: str):
             raise HTTPException(status_code=400, detail="La empresa no tiene URL registrada")
         if not website.startswith("http"):
             website = f"https://{website}"
+        # Blacklist check before re-scraping
+        from urllib.parse import urlparse as _urlparse
+        from app.pipeline import _check_blacklist
+        _domain = _urlparse(website).netloc.lower().replace("www.", "")
+        _bl = _check_blacklist(_domain, "")
+        if _bl:
+            raise HTTPException(status_code=403, detail=f"Domain is blacklisted: {_bl['matched']}")
         scraper = WebsiteScraper()
         result  = scraper.scrape_site(website, force=True)
+        # Industry check after scraping
+        _industry = result.get("industry", "") or ""
+        _bl_ind = _check_blacklist("", _industry)
+        if _bl_ind:
+            raise HTTPException(status_code=403, detail=f"Industry is blacklisted: {_bl_ind['matched']}")
 
         # Update the correct DB (scraper uses 'comercial', app uses 'commercial')
         update_fields = {"updated_at": datetime.now()}
@@ -1003,6 +1033,101 @@ def api_rescrape_company(company_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ── Blacklist ─────────────────────────────────────────────────────────────────
+
+def _normalize_blacklist_value(t: str, value: str) -> str:
+    value = value.strip().lower()
+    if t == "domain":
+        import re as _re
+        value = _re.sub(r'^https?://', '', value)
+        value = _re.sub(r'^www\.', '', value)
+        value = value.rstrip('/')
+    return value
+
+
+@router.get("/blacklist")
+def api_get_blacklist(
+    type: Optional[str] = None,
+    search: str = "",
+    page: int = 1,
+    limit: int = 10,
+    x_user_token: Optional[str] = Header(None),
+):
+    _require_user(x_user_token)
+    db = MongoDBManager()
+    query: dict = {}
+    if type in ("domain", "industry"):
+        query["type"] = type
+    search = search.strip()
+    if search:
+        import re as _re
+        query["value"] = {"$regex": _re.escape(search), "$options": "i"}
+
+    page = max(1, page)
+    limit = max(1, min(limit, 100))
+    total = db.db.blacklist.count_documents(query)
+    entries = list(db.db.blacklist.find(
+        query, {"_id": 1, "type": 1, "value": 1, "created_at": 1},
+        sort=[("created_at", -1)],
+        skip=(page - 1) * limit,
+        limit=limit,
+    ))
+    return {"items": serialize(entries), "total": total, "page": page, "limit": limit}
+
+
+@router.post("/blacklist")
+def api_add_blacklist(body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    t = body.get("type", "").strip()
+    if t not in ("domain", "industry") or not body.get("value", "").strip():
+        raise HTTPException(status_code=400, detail="type must be 'domain' or 'industry', value required")
+    value = _normalize_blacklist_value(t, body.get("value", ""))
+    if not value:
+        raise HTTPException(status_code=400, detail="value required")
+    db = MongoDBManager()
+    # Prevent duplicates
+    existing = db.db.blacklist.find_one({"type": t, "value": value})
+    if existing:
+        raise HTTPException(status_code=409, detail="Entry already exists")
+    from datetime import datetime
+    result = db.db.blacklist.insert_one({"type": t, "value": value, "created_at": datetime.now()})
+    return serialize({"_id": result.inserted_id, "type": t, "value": value})
+
+
+@router.put("/blacklist/{entry_id}")
+def api_update_blacklist(entry_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    from bson import ObjectId
+    db = MongoDBManager()
+    existing = db.db.blacklist.find_one({"_id": ObjectId(entry_id)})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    value = _normalize_blacklist_value(existing["type"], body.get("value", ""))
+    if not value:
+        raise HTTPException(status_code=400, detail="value required")
+
+    duplicate = db.db.blacklist.find_one({
+        "type": existing["type"], "value": value, "_id": {"$ne": ObjectId(entry_id)},
+    })
+    if duplicate:
+        raise HTTPException(status_code=409, detail="Entry already exists")
+
+    db.db.blacklist.update_one({"_id": ObjectId(entry_id)}, {"$set": {"value": value}})
+    updated = db.db.blacklist.find_one({"_id": ObjectId(entry_id)})
+    return serialize(updated)
+
+
+@router.delete("/blacklist/{entry_id}")
+def api_delete_blacklist(entry_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    from bson import ObjectId
+    db = MongoDBManager()
+    result = db.db.blacklist.delete_one({"_id": ObjectId(entry_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return {"ok": True}
 
 @router.put("/companies/{company_id}/contacts")
 def api_update_contacts(company_id: str, req: UpdateContactsRequest):
@@ -1574,6 +1699,75 @@ def api_delete_message_template(template_id: str, x_user_token: Optional[str] = 
         return {"ok": True}
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Notifications ─────────────────────────────────────────────────────────────
+# Simple count of recent inbound replies for the notification bell — companies
+# that responded after we reached out. No read/unread persistence yet; this is
+# a first pass (recent-activity count) ahead of building the full panel.
+
+_NOTIFICATIONS_WINDOW_HOURS = 24
+
+
+@router.get("/notifications/count")
+def api_notifications_count(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    try:
+        from datetime import datetime, timedelta
+        db = MongoDBManager()
+        cutoff = datetime.utcnow() - timedelta(hours=_NOTIFICATIONS_WINDOW_HOURS)
+        count = db.db.message_logs.count_documents({
+            "direction": "inbound",
+            "created_at": {"$gte": cutoff},
+        })
+        return {"count": count}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/notifications")
+def api_notifications_list(x_user_token: Optional[str] = Header(None)):
+    """List recent inbound replies (last _NOTIFICATIONS_WINDOW_HOURS) for the
+    notification panel, newest first."""
+    _require_user(x_user_token)
+    try:
+        from datetime import datetime, timedelta
+        from bson import ObjectId
+        db = MongoDBManager()
+        cutoff = datetime.utcnow() - timedelta(hours=_NOTIFICATIONS_WINDOW_HOURS)
+        msgs = list(db.db.message_logs.find(
+            {"direction": "inbound", "created_at": {"$gte": cutoff}},
+            {"company_id": 1, "message_body": 1, "message_text": 1, "from_number": 1, "created_at": 1},
+            sort=[("created_at", -1)],
+            limit=50,
+        ))
+
+        safe_ids = []
+        for m in msgs:
+            try:
+                safe_ids.append(ObjectId(m.get("company_id", "")))
+            except Exception:
+                pass
+        companies = {
+            str(c["_id"]): (c.get("name") or c.get("business_name") or "")
+            for c in db.db.companies.find({"_id": {"$in": safe_ids}}, {"name": 1, "business_name": 1})
+        }
+
+        result = []
+        for m in msgs:
+            cid = str(m.get("company_id", ""))
+            created_at = m.get("created_at")
+            result.append({
+                "_id": str(m["_id"]),
+                "company_id": cid,
+                "company_name": companies.get(cid) or "Contacto",
+                "message": (m.get("message_body") or m.get("message_text") or "")[:200],
+                "from_number": m.get("from_number", ""),
+                "created_at": created_at.isoformat() if created_at else None,
+            })
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

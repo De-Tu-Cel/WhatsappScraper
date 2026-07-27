@@ -129,21 +129,38 @@ function MetricCard({ icon, title, value, color }) {
 }
 
 // ─── Contact column ────────────────────────────────────────────────────────────
+const CONTACT_MAX = 8
 function ContactColumn({ icon, title, items, color, emptyMsg }) {
+  const shown  = items?.slice(0, CONTACT_MAX) ?? []
+  const extra  = (items?.length ?? 0) - CONTACT_MAX
   return (
     <Box sx={{ flex: 1, minWidth: 0 }}>
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5, mb: 1.5 }}>
         <Box sx={{ color }}>{icon}</Box>
         <Typography fontWeight={700} fontSize="0.82rem" sx={{ color: 'var(--text, rgba(255,255,255,0.75))' }}>{title}</Typography>
       </Box>
-      {items?.length > 0
-        ? items.map((n, i) => (
+      {shown.length > 0 ? (
+        <Box sx={{ maxHeight: 160, overflowY: 'auto', pr: 0.5,
+          '&::-webkit-scrollbar': { width: 0 },
+          '&::-webkit-scrollbar-thumb': { borderRadius: 4 },
+          '&:hover::-webkit-scrollbar': { width: 4 },
+          '&:hover::-webkit-scrollbar-track': { background: 'transparent' },
+          '&:hover::-webkit-scrollbar-thumb': { background: `${color}55` },
+        }}>
+          {shown.map((n, i) => (
             <Typography key={`${n}-${i}`} variant="body2" sx={{ py: 0.3, color, fontWeight: 500, textAlign: 'center', fontSize: '0.82rem', wordBreak: 'break-all', overflowWrap: 'anywhere' }}>
               {n}
             </Typography>
-          ))
-        : <Typography variant="body2" sx={{ color: 'var(--text-muted, rgba(255,255,255,0.25))', textAlign: 'center', fontSize: '0.78rem' }}>{emptyMsg}</Typography>
-      }
+          ))}
+          {extra > 0 && (
+            <Typography variant="body2" sx={{ pt: 0.5, color: 'var(--text-muted, rgba(255,255,255,0.3))', textAlign: 'center', fontSize: '0.72rem', fontStyle: 'italic' }}>
+              +{extra} más
+            </Typography>
+          )}
+        </Box>
+      ) : (
+        <Typography variant="body2" sx={{ color: 'var(--text-muted, rgba(255,255,255,0.25))', textAlign: 'center', fontSize: '0.78rem' }}>{emptyMsg}</Typography>
+      )}
     </Box>
   )
 }
@@ -275,9 +292,17 @@ export default function ResultDisplay({ result }) {
       {/* ── DESCRIPCIÓN ── */}
       {s.description && s.description !== r.descNA && (
         <Section icon={<NotesIcon fontSize="small" />} title={r.description} color="#a78bfa">
-          <Typography sx={{ color: 'var(--text, rgba(255,255,255,0.6))', fontSize: '0.85rem', lineHeight: 1.7 }}>
-            {s.description}
-          </Typography>
+          <Box sx={{ maxHeight: 120, overflowY: 'auto', pr: 0.5,
+            '&::-webkit-scrollbar': { width: 0 },
+            '&::-webkit-scrollbar-thumb': { borderRadius: 4 },
+            '&:hover::-webkit-scrollbar': { width: 4 },
+            '&:hover::-webkit-scrollbar-track': { background: 'transparent' },
+            '&:hover::-webkit-scrollbar-thumb': { background: 'rgba(167,139,250,0.4)' },
+          }}>
+            <Typography sx={{ color: 'var(--text, rgba(255,255,255,0.6))', fontSize: '0.85rem', lineHeight: 1.7 }}>
+              {s.description}
+            </Typography>
+          </Box>
         </Section>
       )}
 
@@ -288,10 +313,10 @@ export default function ResultDisplay({ result }) {
             <ContactColumn icon={<WhatsAppIcon />} title={r.whatsapp} items={cr.all_whatsapp_numbers} color="#4ade80" emptyMsg={r.notFound} />
           </Box>
           <Box sx={{ flex: 1, minWidth: 140, p: 1.5, bgcolor: 'rgba(59,130,246,0.06)', borderRadius: 2, border: '1px solid rgba(59,130,246,0.12)' }}>
-            <ContactColumn icon={<PhoneIcon />} title="Teléfonos" items={cr.phone_numbers?.slice(0, 8)} color="#60a5fa" emptyMsg={r.notFoundPl} />
+            <ContactColumn icon={<PhoneIcon />} title="Teléfonos" items={cr.phone_numbers} color="#60a5fa" emptyMsg={r.notFoundPl} />
           </Box>
           <Box sx={{ flex: 1, minWidth: 140, p: 1.5, bgcolor: 'rgba(239,68,68,0.06)', borderRadius: 2, border: '1px solid rgba(239,68,68,0.12)' }}>
-            <ContactColumn icon={<EmailIcon />} title="Emails" items={cr.emails?.slice(0, 8)} color="#f87171" emptyMsg={r.notFoundPl} />
+            <ContactColumn icon={<EmailIcon />} title="Emails" items={cr.emails} color="#f87171" emptyMsg={r.notFoundPl} />
           </Box>
         </Box>
       </Section>
@@ -360,18 +385,34 @@ export default function ResultDisplay({ result }) {
           {sx.services?.length > 0 && (
             <Box sx={{ flex: 1 }}>
               <Section icon={<HandymanIcon fontSize="small" />} title={r.services} color="#fb923c">
-                {sx.services.map((item, i) => (
-                  <Typography key={i} variant="body2" sx={{ py: 0.5, color: 'var(--text, rgba(255,255,255,0.6))', fontSize: '0.82rem', borderBottom: '1px solid var(--border, rgba(255,255,255,0.05))', '&:last-of-type': { borderBottom: 'none' } }}>• {item}</Typography>
-                ))}
+                <Box sx={{ maxHeight: 200, overflowY: 'auto', pr: 0.5,
+                  '&::-webkit-scrollbar': { width: 0 },
+                  '&::-webkit-scrollbar-thumb': { borderRadius: 4 },
+                  '&:hover::-webkit-scrollbar': { width: 4 },
+                  '&:hover::-webkit-scrollbar-track': { background: 'transparent' },
+                  '&:hover::-webkit-scrollbar-thumb': { background: 'rgba(251,146,60,0.4)' },
+                }}>
+                  {sx.services.map((item, i) => (
+                    <Typography key={i} variant="body2" sx={{ py: 0.5, color: 'var(--text, rgba(255,255,255,0.6))', fontSize: '0.82rem', borderBottom: '1px solid var(--border, rgba(255,255,255,0.05))', '&:last-of-type': { borderBottom: 'none' } }}>• {item}</Typography>
+                  ))}
+                </Box>
               </Section>
             </Box>
           )}
           {sx.products?.length > 0 && (
             <Box sx={{ flex: 1 }}>
               <Section icon={<InventoryIcon fontSize="small" />} title={r.products} color="#f472b6">
-                {sx.products.map((item, i) => (
-                  <Typography key={i} variant="body2" sx={{ py: 0.5, color: 'var(--text, rgba(255,255,255,0.6))', fontSize: '0.82rem', borderBottom: '1px solid var(--border, rgba(255,255,255,0.05))', '&:last-of-type': { borderBottom: 'none' } }}>• {item}</Typography>
-                ))}
+                <Box sx={{ maxHeight: 200, overflowY: 'auto', pr: 0.5,
+                  '&::-webkit-scrollbar': { width: 0 },
+                  '&::-webkit-scrollbar-thumb': { borderRadius: 4 },
+                  '&:hover::-webkit-scrollbar': { width: 4 },
+                  '&:hover::-webkit-scrollbar-track': { background: 'transparent' },
+                  '&:hover::-webkit-scrollbar-thumb': { background: 'rgba(244,114,182,0.4)' },
+                }}>
+                  {sx.products.map((item, i) => (
+                    <Typography key={i} variant="body2" sx={{ py: 0.5, color: 'var(--text, rgba(255,255,255,0.6))', fontSize: '0.82rem', borderBottom: '1px solid var(--border, rgba(255,255,255,0.05))', '&:last-of-type': { borderBottom: 'none' } }}>• {item}</Typography>
+                  ))}
+                </Box>
               </Section>
             </Box>
           )}

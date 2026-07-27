@@ -51,6 +51,16 @@ CATEGORY_INFO = {
     "sin_respuesta": ("Sin respuesta",       C["muted"]),
 }
 
+CATEGORY_DESCRIPTIONS = {
+    "humano":        "El canal es atendido por una persona real que responde manualmente a cada mensaje.",
+    "automatico":    "El canal responde de forma automatica sin intervencion humana detectada.",
+    "menu":          "El canal presenta un menu de opciones numeradas o por palabras clave.",
+    "hibrido":       "El canal combina respuestas automaticas iniciales con atencion humana posterior.",
+    "bot":           "El canal usa un chatbot basado en reglas para gestionar las conversaciones.",
+    "bot_ia":        "El canal usa un asistente de inteligencia artificial conversacional.",
+    "sin_respuesta": "El canal no respondio al contacto realizado durante el periodo analizado.",
+}
+
 # Quality level names and colors (score 0-5)
 QUALITY_LEVELS = {
     0: ("Sin respuesta",       C["muted"]),
@@ -713,16 +723,10 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     sent_c = sum(1 for m in thread if m.get("direction") == "outbound")
     recv_c = sum(1 for m in thread if m.get("direction") == "inbound")
 
-    avg_resp_min = _calc_avg_response_time(thread)
-    avg_speed_label, avg_speed_color = _speed_label(avg_resp_min)
-
-    suggestions = [_safe(s) for s in (_suggestions(analytics, industry, avg_resp_min) or [])] or [
-        "Activar respuestas automaticas fuera de horario para no perder prospectos nocturnos.",
-        "Crear catalogo de productos en WhatsApp Business con precios y descripcion.",
-        "Configurar seguimiento automatico a los 2 dias sin respuesta via listas de difusion.",
-        "Usar etiquetas de WhatsApp Business para clasificar leads por nivel de interes.",
-        "Agregar un CTA claro al final de cada respuesta: cotizacion, llamada o demo.",
-    ]
+    # NOTE: avg response time, score, svc dims and suggestions are kept for future use
+    # avg_resp_min = _calc_avg_response_time(thread)
+    # suggestions  = _suggestions(analytics, industry, avg_resp_min)
+    # comp_score   = _composite_score(analytics, cat_key, quality, reaction_min, business_hours)
 
     # ── Column widths for 2-column body layout ────────────────────────────────
     LEFT_W  = PW * 0.40   # screenshot column ~211pt / ~74mm
@@ -800,125 +804,93 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
         _st("cap", fontSize=6, textColor=C["muted"], leading=8, alignment=TA_CENTER)))
 
     # ══════════════════════════════════════════════════════════════════════════
-    # RIGHT COLUMN — metrics + quality + suggestions
+    # RIGHT COLUMN — chat type classification
     # ══════════════════════════════════════════════════════════════════════════
     right_items = []
 
-    # — Score arc header —
-    comp_score = _composite_score(analytics, cat_key, quality, reaction_min, business_hours)
-    score_label_txt, score_color = _score_label(comp_score)
-    arc_size = 54
-    score_arc_tbl = Table(
-        [[ScoreArc(comp_score, score_color, size=arc_size),
-          [Paragraph(score_label_txt, _st("slb", fontSize=9, fontName="Helvetica-Bold",
-                                          textColor=score_color, leading=12)),
-           Spacer(1, 3),
-           Paragraph("Evaluacion general del canal de atencion",
-                     _st("ssub", fontSize=7, textColor=C["muted"], leading=9))]]],
-        colWidths=[arc_size + 8, RIGHT_W - arc_size - 8],
+    cat_description = CATEGORY_DESCRIPTIONS.get(cat_key, "")
+
+    # — Section label —
+    right_items.append(Paragraph("CLASIFICACION DEL CANAL", _st("clabel",
+        fontSize=7, fontName="Helvetica-Bold", textColor=C["muted"],
+        leading=9, spaceAfter=3)))
+
+    # — Large classification card —
+    cat_tbl = Table(
+        [[Paragraph(cat_label,
+                    _st("cval", fontSize=26, fontName="Helvetica-Bold",
+                        textColor=cat_color, leading=30))]],
+        colWidths=[RIGHT_W],
     )
-    score_arc_tbl.setStyle(TableStyle([
-        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+    cat_tbl.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
         ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
-        ("LINEBEFORE",    (0, 0), (0, -1),  3,   score_color),
-        ("LEFTPADDING",   (0, 0), (0, -1),  6),
-        ("RIGHTPADDING",  (0, 0), (0, -1),  4),
-        ("LEFTPADDING",   (1, 0), (1, -1),  8),
-        ("RIGHTPADDING",  (1, 0), (1, -1),  8),
-        ("TOPPADDING",    (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LINEBEFORE",    (0, 0), (0, -1),  4,   cat_color),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 14),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 14),
+        ("TOPPADDING",    (0, 0), (-1, -1), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
     ]))
-    right_items.append(score_arc_tbl)
+    right_items.append(cat_tbl)
     right_items.append(Spacer(1, 3 * mm))
 
-    # — Diagnóstico —
-    right_items.append(Paragraph("Diagnostico del Canal", _st("rh1",
-        fontSize=9, fontName="Helvetica-Bold", textColor=C["primary"],
-        leading=12, spaceAfter=2)))
-
-    svc_vals = [float(analytics.get(k)) for k, _ in _SVC_DIMS if analytics.get(k) is not None]
-    svc_avg = round(sum(svc_vals) / len(svc_vals), 1) if svc_vals else None
-    svc_avg_color = _svc_score_color(svc_avg) if svc_avg is not None else C["muted"]
-
-    if notes:
-        notes_tbl = Table(
-            [[Paragraph(
-                f'<font name="Helvetica-Bold" color="#64748b">Hallazgo: </font>'
-                f'<font color="#1e293b">{notes}</font>',
-                _st("dln2", fontSize=8, leading=12)
-            )]],
-            colWidths=[RIGHT_W - 4],
+    # — Description of this category —
+    if cat_description:
+        desc_tbl = Table(
+            [[Paragraph(cat_description, _st("cdesc", fontSize=9, textColor=C["text"], leading=13))]],
+            colWidths=[RIGHT_W],
         )
-        notes_tbl.setStyle(TableStyle([
+        desc_tbl.setStyle(TableStyle([
             ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
             ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
-            ("LINEBEFORE",    (0, 0), (0, -1),  2,   C["primary"]),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 8),
-            ("RIGHTPADDING",  (0, 0), (-1, -1), 8),
-            ("TOPPADDING",    (0, 0), (-1, -1), 6),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-            ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
+            ("TOPPADDING",    (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
         ]))
-        right_items.append(notes_tbl)
-        right_items.append(Spacer(1, 2 * mm))
+        right_items.append(desc_tbl)
+        right_items.append(Spacer(1, 4 * mm))
 
-    right_items.append(CardGrid(
-        cards=[
-            ("Tipo de atencion",       cat_label,                   cat_color,       None),
-            ("Calidad comercial",      f"{round(quality)}/5",       qual_color,      QualityDots(quality, qual_color)),
-            ("Tiempo prom. respuesta", _reaction_str(avg_resp_min), avg_speed_color, None),
-            ("Horario de respuesta",   bh_label,                    bh_color,        None),
-            ("Mensajes enviados",      str(sent_c),                 C["primary"],    None),
-            ("Mensajes recibidos",     str(recv_c),                 C["primary"],    None),
-        ],
-        width=RIGHT_W,
-        card_h=20 * mm,
-        gap=3,
-    ))
-    right_items.append(Spacer(1, 3 * mm))
+    # — Supporting context: reaction time + message counts —
+    right_items.append(HRFlowable(width=RIGHT_W, thickness=0.5, color=C["border"], spaceAfter=4))
+    right_items.append(Paragraph("Datos del contacto", _st("dh",
+        fontSize=7.5, fontName="Helvetica-Bold", textColor=C["muted"],
+        leading=10, spaceAfter=3)))
 
-    # — Calidad de Servicio —
-    has_svc = any(analytics.get(k) is not None for k, _ in _SVC_DIMS)
-    if has_svc:
-        right_items.append(HRFlowable(width=RIGHT_W, thickness=0.5, color=C["border"], spaceAfter=2))
-        right_items.append(Paragraph("Calidad de Servicio por Dimension", _st("sqh2",
-            fontSize=8, fontName="Helvetica-Bold", textColor=C["primary"],
-            leading=11, spaceAfter=2)))
-        right_items.append(ServiceQualityTable(analytics, RIGHT_W, row_h=12))
-        right_items.append(Spacer(1, 2 * mm))
-
-    # — Sugerencias de Mejora —
-    right_items.append(HRFlowable(width=RIGHT_W, thickness=0.5, color=C["border"], spaceAfter=2))
-    right_items.append(Paragraph("Sugerencias de Mejora", _st("sh2",
-        fontSize=9, fontName="Helvetica-Bold", textColor=C["green"],
-        leading=12, spaceAfter=1)))
-    right_items.append(Paragraph(
-        f"Acciones especificas para {company_name} — {industry}.",
-        _st("sub3", fontSize=7, textColor=C["muted"], leading=9, spaceAfter=2),
-    ))
-
-    for i, text in enumerate(suggestions, 1):
-        sug_row = Table(
-            [[Paragraph(str(i), _st(f"bn2{i}",
-                fontSize=8, fontName="Helvetica-Bold", textColor=C["green"])),
-              Paragraph(text, _st(f"bt2{i}",
-                fontSize=7.5, textColor=C["text"], leading=10))]],
-            colWidths=[6 * mm, RIGHT_W - 6 * mm - 4],
+    def _info_row(label, value, color):
+        t = Table(
+            [[Paragraph(label, _st(f"il_{label}", fontSize=7.5, textColor=C["muted"], leading=10)),
+              Paragraph(value, _st(f"iv_{label}", fontSize=7.5, fontName="Helvetica-Bold",
+                                   textColor=color, leading=10, alignment=TA_RIGHT))]],
+            colWidths=[RIGHT_W * 0.6, RIGHT_W * 0.4],
         )
-        sug_row.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, -1), C["paper"]),
-            ("LINEAFTER",     (0, 0), (0, -1),  2, C["green"]),
-            ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 5),
-            ("RIGHTPADDING",  (0, 0), (-1, -1), 7),
-            ("TOPPADDING",    (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        t.setStyle(TableStyle([
+            ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+            ("TOPPADDING",    (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
         ]))
-        right_items.append(sug_row)
-        if i < len(suggestions):
-            right_items.append(Spacer(1, 1.5 * mm))
+        return t
+
+    reaction_str = _reaction_str(reaction_min) if reaction_min is not None else "Sin datos"
+    react_color  = _speed_label(reaction_min)[1] if reaction_min is not None else C["muted"]
+    bh_label     = "En horario habil" if business_hours else "Fuera de horario"
+    bh_color     = C["humano"] if business_hours else C["automatico"]
+
+    right_items.append(_info_row("Tiempo de primera respuesta", reaction_str, react_color))
+    right_items.append(_info_row("Horario de respuesta",        bh_label,     bh_color))
+    right_items.append(_info_row("Mensajes enviados",           str(sent_c),  C["primary"]))
+    right_items.append(_info_row("Mensajes recibidos",          str(recv_c),  C["primary"]))
+
+    # ── PRESERVED FOR FUTURE USE (not rendered) ───────────────────────────────
+    # The following sections exist in this file and can be re-enabled:
+    #   _composite_score()  — weighted 0-100 score with ScoreArc gauge
+    #   _suggestions()      — 5 AI-generated improvement tips via LLM
+    #   ServiceQualityTable — 6 service dimension bars (svc_prof, svc_comp, …)
+    #   CardGrid            — 6 metric cards (quality, speed, hours, msg counts)
+    #   QualityDots         — 1-5 dot indicator for commercial lead score
+    #   ScoreArc / ScoreBar — circular / bar gauge flowables
+    # ─────────────────────────────────────────────────────────────────────────
 
     # ══════════════════════════════════════════════════════════════════════════
     # BODY — 2-column table: screenshot | data

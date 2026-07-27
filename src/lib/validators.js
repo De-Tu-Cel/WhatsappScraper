@@ -1,9 +1,12 @@
 export const MAX_WA_MSG = 4096
+export const MAX_URL_LENGTH = 2048  // generous — most browsers/servers cap around here anyway
 
 export function isValidUrl(str) {
   if (!str || !str.trim()) return false
+  const trimmed = str.trim()
+  if (trimmed.length > MAX_URL_LENGTH) return false
   try {
-    const u = new URL(str.trim())
+    const u = new URL(trimmed)
     return u.protocol === 'http:' || u.protocol === 'https:'
   } catch {
     return false
@@ -20,6 +23,7 @@ export function isValidWhatsAppNumber(str) {
 const _URL_MSGS_ES = {
   badProtocol: 'La URL debe empezar con https:// o http://',
   invalid:     'URL inválida. Ej: https://empresa.com.mx',
+  tooLong:     `La URL es demasiado larga (máximo ${MAX_URL_LENGTH} caracteres)`,
 }
 const _WA_MSGS_ES = {
   empty:   'El número no puede estar vacío',
@@ -28,6 +32,7 @@ const _WA_MSGS_ES = {
 
 export function urlValidationMsg(url, msgs = _URL_MSGS_ES) {
   if (!url || !url.trim()) return ''
+  if (url.trim().length > MAX_URL_LENGTH) return msgs.tooLong || msgs.invalid
   if (!url.startsWith('http://') && !url.startsWith('https://'))
     return msgs.badProtocol
   if (!isValidUrl(url)) return msgs.invalid

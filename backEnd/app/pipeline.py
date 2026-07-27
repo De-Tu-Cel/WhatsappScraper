@@ -21,6 +21,23 @@ from whatsapp_evolution import EvolutionClient
 
 DEFAULT_MESSAGE = "Hola, encontré tu negocio en línea y me gustaría presentarte algo que puede ayudarte. ¿Tienes un momento? 😊"
 
+def _check_blacklist(domain: str, industry: str) -> dict:
+    """Returns {reason, matched} if blacklisted, else None."""
+    try:
+        db = MongoDBManager()
+        entries = list(db.db.blacklist.find({}))
+        for e in entries:
+            val = e.get("value", "").lower().strip()
+            if not val:
+                continue
+            if e.get("type") == "domain" and val in domain.lower():
+                return {"reason": "domain", "matched": val}
+            if e.get("type") == "industry" and industry and val in industry.lower():
+                return {"reason": "industry", "matched": val}
+    except Exception:
+        pass
+    return None
+
 def _render_message(template: str, scraped: dict, website: str) -> str:
     if not template:
         return DEFAULT_MESSAGE
@@ -46,14 +63,32 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
     # screenshot_path = capture_screenshot(website)
     screenshot_path = None
 
+    # Domain blacklist check — before scraping to avoid unnecessary work
+    from urllib.parse import urlparse as _urlparse
+    _domain = _urlparse(website).netloc.lower().replace("www.", "")
+    _bl_domain = _check_blacklist(_domain, "")
+    if _bl_domain:
+        print(f"🚫 Blacklisted domain: {_domain}")
+        return {"blacklisted": True, "reason": "domain", "matched": _bl_domain["matched"]}
+
     print(f"🔍 Scrapeando datos de {website}...")
     scraped = scraper.scrape_site(website)
     _extra = scraped.get("_extra", {})
     _cr = scraped.get("_contacts_raw", {})
 
+    # Industry blacklist check — after scraping, undo scraper's DB write if needed
+    _industry = scraped.get("industry", "") or ""
+    _bl_industry = _check_blacklist("", _industry)
+    if _bl_industry:
+        print(f"🚫 Blacklisted industry: {_industry}")
+        _scraped_id = scraped.get("_company_id")
+        _db_action  = scraped.get("_db_action")
+        if _scraped_id and _db_action == "created":
+            from bson import ObjectId
+            db.db.companies.delete_one({"_id": ObjectId(str(_scraped_id))})
+        return {"blacklisted": True, "reason": "industry", "matched": _bl_industry["matched"]}
+
     print(f"💾 Guardando empresa en base de datos...")
-    from urllib.parse import urlparse as _urlparse
-    _domain = _urlparse(website).netloc.lower().replace("www.", "")
 
     has_whatsapp = bool(_cr.get("whatsapp_numbers"))
 
@@ -115,10 +150,12 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
             })
 
     # ========================================================================
-    # GUARDAR TELÉFONOS
+    # GUARDAR TELÉFONOS (cap: 20 por empresa)
     # ========================================================================
+    MAX_PHONES = 20
+    MAX_EMAILS = 10
     all_wa = _cr.get("all_whatsapp_numbers", [])
-    for phone in _cr.get("phone_numbers", []):
+    for phone in _cr.get("phone_numbers", [])[:MAX_PHONES]:
         if phone not in all_wa:
             db.insert_contact({
                 "company_id": company_id,
@@ -128,9 +165,9 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
             })
 
     # ========================================================================
-    # GUARDAR EMAILS
+    # GUARDAR EMAILS (cap: 10 por empresa)
     # ========================================================================
-    for email in _cr.get("emails", []):
+    for email in _cr.get("emails", [])[:MAX_EMAILS]:
         db.insert_contact({
             "company_id": company_id,
             "type": "email",

@@ -1,4 +1,5 @@
 'use client'
+import React from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import List from '@mui/material/List'
@@ -29,7 +30,7 @@ const C = {
 }
 
 const GROUP_KEYS = [
-  { labelKey: 'groupProspeccion',  keys: ['single', 'batch', 'csv', 'database', 'search'] },
+  { labelKey: 'groupProspeccion',  keys: ['single', 'batch', 'csv', 'database', 'search', 'blacklist'] },
   { labelKey: 'groupComunicacion', keys: ['convs', 'schedule'] },
   { labelKey: 'groupAnalisis',     keys: ['analytics'] },
   { labelKey: 'groupSistema',      keys: ['admin', 'instances'] },
@@ -98,7 +99,7 @@ function GroupLabel({ label, open }) {
   )
 }
 
-export default function Sidebar({ open, setOpen, active, setActive, navItems, settingsOpen, onSettingsClick }) {
+export default React.memo(function Sidebar({ open, setOpen, active, setActive, navItems, settingsOpen, onSettingsClick }) {
   const { user, logout } = useUser()
   const { t } = useLang()
   const { status: instanceStatus } = useInstanceStatus()
@@ -198,6 +199,7 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
               {group.labelKey === 'groupSistema' && (
                 <Tooltip title={open ? '' : t.settings.title} placement="right" arrow>
                   <ListItemButton
+                    id="tour-settings"
                     onClick={onSettingsClick}
                     sx={{
                       borderRadius: 2, mb: 0.5, minHeight: 42,
@@ -306,4 +308,4 @@ export default function Sidebar({ open, setOpen, active, setActive, navItems, se
       </Box>
     </Box>
   )
-}
+})

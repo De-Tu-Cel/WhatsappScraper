@@ -39,22 +39,43 @@ class MongoDBManager:
 
     def insert_contact(self, contact_data):
         contact_data["created_at"] = contact_data.get("created_at", datetime.now())
-        if contact_data.get("type") == "whatsapp":
-            value = contact_data.get("value", "")
+        ctype = contact_data.get("type")
+        cid   = contact_data["company_id"]
+
+        if ctype == "whatsapp":
+            value   = contact_data.get("value", "")
             clean10 = "".join(filter(str.isdigit, value))[-10:]
             existing = self.db.contacts.find_one({
-                "company_id": contact_data["company_id"],
-                "type": "whatsapp",
+                "company_id": cid, "type": "whatsapp",
                 "value": {"$regex": clean10, "$options": "i"},
             })
             if existing:
                 new_label = contact_data.get("label", "")
                 if new_label and not existing.get("label"):
-                    self.db.contacts.update_one(
-                        {"_id": existing["_id"]},
-                        {"$set": {"label": new_label}},
-                    )
+                    self.db.contacts.update_one({"_id": existing["_id"]}, {"$set": {"label": new_label}})
                 return str(existing["_id"])
+
+        elif ctype == "phone":
+            value   = contact_data.get("value", "")
+            clean10 = "".join(filter(str.isdigit, value))[-10:]
+            if clean10:
+                existing = self.db.contacts.find_one({
+                    "company_id": cid, "type": "phone",
+                    "value": {"$regex": clean10, "$options": "i"},
+                })
+                if existing:
+                    return str(existing["_id"])
+
+        elif ctype == "email":
+            norm = contact_data.get("value", "").strip().lower()
+            if norm:
+                existing = self.db.contacts.find_one({
+                    "company_id": cid, "type": "email",
+                    "value": {"$regex": f"^{re.escape(norm)}$", "$options": "i"},
+                })
+                if existing:
+                    return str(existing["_id"])
+
         result = self.db.contacts.insert_one(contact_data)
         return str(result.inserted_id)
 

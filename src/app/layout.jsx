@@ -3,6 +3,7 @@ import '@fontsource/roboto/300.css'
 import '@fontsource/roboto/400.css'
 import '@fontsource/roboto/500.css'
 import '@fontsource/roboto/700.css'
+import Script from 'next/script'
 import ThemeRegistry from '../components/themeRegistry'
 import { UserProvider } from '../context/UserContext'
 import { LangProvider } from '../context/LangContext'
@@ -102,8 +103,7 @@ export default function RootLayout({ children }) {
   return (
     <html lang="es" suppressHydrationWarning>
       <head>
-        {/* eslint-disable-next-line @next/next/no-sync-scripts */}
-        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+        <Script id="theme-init" strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
       <body suppressHydrationWarning>
         <ThemeRegistry><UserProvider><LangProvider>{children}</LangProvider></UserProvider></ThemeRegistry>

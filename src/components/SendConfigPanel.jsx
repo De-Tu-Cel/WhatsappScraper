@@ -21,8 +21,8 @@ const SLIDER_SX = {
     '&:hover, &.Mui-focusVisible': { boxShadow: '0 0 0 6px rgba(var(--accent-rgb,59,130,246),0.25)' },
   },
   '& .MuiSlider-track': { border: 'none', height: 4 },
-  '& .MuiSlider-rail': { opacity: 0.15, height: 4 },
-  '& .MuiSlider-mark': { width: 2, height: 2, borderRadius: '50%', bgcolor: 'rgba(255,255,255,0.25)', transform: 'translate(-50%,-50%)' },
+  '& .MuiSlider-rail': { opacity: 0.35, height: 4, bgcolor: 'var(--border)' },
+  '& .MuiSlider-mark': { width: 2, height: 2, borderRadius: '50%', bgcolor: 'var(--border)', transform: 'translate(-50%,-50%)' },
   '& .MuiSlider-markActive': { bgcolor: 'var(--accent, #3b82f6)', opacity: 0.6 },
   '& .MuiSlider-valueLabel': {
     fontSize: '0.65rem', fontWeight: 700, py: 0.3, px: 0.8,
@@ -76,6 +76,45 @@ function RangeRow({ label, value, onChange, min, max, step = 1, unit, minDist = 
   )
 }
 
+/* ── Risk indicator ── */
+export function RiskBadge({ config }) {
+  const { t } = useLang()
+  const sc = t.sendConfig
+  const minDelay = config.msgDelay[0]
+  const maxBatch = config.batchSize[1]
+  const minBreak = config.batchDelay[0]
+
+  const warnings = []
+  if (minDelay < 15)      warnings.push(sc.warnDelayDanger)
+  else if (minDelay < 25) warnings.push(sc.warnDelaySlight)
+  if (maxBatch > 15)      warnings.push(sc.warnBatchLarge)
+  else if (maxBatch > 10) warnings.push(sc.warnBatchSlight)
+  if (minBreak < 2)       warnings.push(sc.warnBreakDanger)
+  else if (minBreak < 4)  warnings.push(sc.warnBreakSlight)
+
+  const isHigh = minDelay < 15 || maxBatch > 15 || minBreak < 2
+  const isMed  = minDelay < 25 || maxBatch > 10 || minBreak < 4
+  const level  = isHigh ? 'high' : isMed ? 'medium' : 'low'
+  const C = {
+    low:    { color: '#4ade80', bg: 'rgba(34,197,94,0.07)',   border: 'rgba(34,197,94,0.22)',   icon: '✓', label: sc.riskLow },
+    medium: { color: '#fbbf24', bg: 'rgba(251,191,36,0.07)', border: 'rgba(251,191,36,0.25)', icon: '⚠', label: sc.riskMedium },
+    high:   { color: '#f87171', bg: 'rgba(239,68,68,0.07)',  border: 'rgba(239,68,68,0.25)',  icon: '⚠', label: sc.riskHigh },
+  }[level]
+
+  return (
+    <Box sx={{ px: 1.2, py: 0.8, borderRadius: 1.5, bgcolor: C.bg, border: `1px solid ${C.border}` }}>
+      <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, color: C.color, mb: warnings.length ? 0.4 : 0 }}>
+        {C.icon} {C.label}
+      </Typography>
+      {warnings.map((w, i) => (
+        <Typography key={i} sx={{ fontSize: '0.63rem', color: C.color, opacity: 0.82, lineHeight: 1.5 }}>
+          • {w}
+        </Typography>
+      ))}
+    </Box>
+  )
+}
+
 /* ── Main collapsible panel ── */
 export function SendConfigPanel({ config, onChange, disabled = false }) {
   const { t } = useLang()
@@ -91,8 +130,8 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
   return (
     <Box sx={{
       borderRadius: 2,
-      border: `1px solid ${open ? 'rgba(var(--accent-rgb,59,130,246),0.25)' : 'rgba(255,255,255,0.07)'}`,
-      bgcolor: open ? 'rgba(var(--accent-rgb,59,130,246),0.03)' : 'rgba(255,255,255,0.02)',
+      border: open ? '1px solid rgba(var(--accent-rgb,59,130,246),0.25)' : '1px solid var(--border)',
+      bgcolor: open ? 'rgba(var(--accent-rgb,59,130,246),0.03)' : 'var(--item-hover)',
       transition: 'border-color 0.2s, background-color 0.2s',
     }}>
       {/* Header */}
@@ -106,7 +145,7 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <TimerIcon sx={{ fontSize: 14, color: 'var(--accent, #3b82f6)' }} />
-          <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted, rgba(255,255,255,0.5))', fontWeight: 600 }}>
+          <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>
             {sc.title}
           </Typography>
           {/* Inline summary chips */}
@@ -118,10 +157,10 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
             ].map((chip, i) => (
               <Box key={i} sx={{
                 px: 0.7, py: 0.05, borderRadius: 0.8,
-                bgcolor: 'rgba(255,255,255,0.06)',
-                border: '1px solid rgba(255,255,255,0.1)',
+                bgcolor: 'var(--item-hover)',
+                border: '1px solid var(--border)',
               }}>
-                <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.35)', fontFamily: 'monospace' }}>
+                <Typography sx={{ fontSize: '0.62rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
                   {chip}
                 </Typography>
               </Box>
@@ -129,17 +168,17 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
           </Box>
         </Box>
         <ExpandMoreIcon sx={{
-          fontSize: 15, color: 'rgba(255,255,255,0.25)',
+          fontSize: 15, color: 'var(--text-muted)',
           transform: open ? 'rotate(180deg)' : 'none',
           transition: 'transform 0.2s',
           flexShrink: 0,
         }} />
       </Box>
 
-      <Collapse in={open}>
+      <Collapse in={open} sx={{ '&.MuiCollapse-entered': { overflow: 'visible' } }}>
         <Box sx={{
-          px: 2, pb: 1.5, pt: 0.5,
-          borderTop: '1px solid rgba(255,255,255,0.05)',
+          pl: 2.5, pr: 2.5, pb: 1.5, pt: 0.5,
+          borderTop: '1px solid var(--border)',
         }}>
           <RangeRow
             label={sc.msgDelay}
@@ -165,15 +204,7 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
             unit={sc.minutes} minDist={1}
             marks={[1,5,10,15,20,30].map(v => ({ value: v, label: `${v}m` }))}
           />
-          <Box sx={{
-            px: 1.2, py: 0.8, borderRadius: 1.5,
-            bgcolor: 'rgba(255,255,255,0.03)',
-            border: '1px solid rgba(255,255,255,0.05)',
-          }}>
-            <Typography sx={{ fontSize: '0.63rem', color: 'rgba(255,255,255,0.25)', lineHeight: 1.5 }}>
-              🎲 {sc.hint}
-            </Typography>
-          </Box>
+          <RiskBadge config={config} />
         </Box>
       </Collapse>
     </Box>

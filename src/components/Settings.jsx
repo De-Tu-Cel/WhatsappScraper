@@ -9,9 +9,6 @@ import Dialog from '@mui/material/Dialog'
 import DialogContent from '@mui/material/DialogContent'
 import CircularProgress from '@mui/material/CircularProgress'
 import SettingsIcon from '@mui/icons-material/Settings'
-import LanguageIcon from '@mui/icons-material/Language'
-import PaletteIcon from '@mui/icons-material/Palette'
-import DarkModeIcon from '@mui/icons-material/DarkMode'
 import CheckIcon from '@mui/icons-material/Check'
 import QrCode2Icon from '@mui/icons-material/QrCode2'
 import VisibilityIcon from '@mui/icons-material/Visibility'
@@ -21,9 +18,13 @@ import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
 import AccountCircleIcon from '@mui/icons-material/AccountCircle'
 import Slider from '@mui/material/Slider'
 import TimerIcon from '@mui/icons-material/Timer'
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
+import Chip from '@mui/material/Chip'
+import IconButton from '@mui/material/IconButton'
 import { useUser } from '../context/UserContext'
 import { useLang } from '../context/LangContext'
 import { loadSendConfig, saveSendConfig, DEFAULT_SEND_CONFIG } from '@/lib/sendConfig'
+import { RiskBadge } from './SendConfigPanel'
 
 export const ACCENTS = [
   // Marca
@@ -143,7 +144,7 @@ export const THEMES = [
   { tKey: 'themeAsh',        value: 'ceniza',   cat:'light', bg: '#4a5058', surface: '#424850', sidebar: '#585e66', card: '#626870', preview: ['#4a5058','#585e66','#626870'] },
 ]
 
-const LANGS = [
+export const LANGS = [
   { value: 'es', flag: '🇲🇽', labels: { es: 'Español', en: 'Spanish' } },
   { value: 'en', flag: '🇺🇸', labels: { es: 'Inglés',  en: 'English' } },
 ]
@@ -379,10 +380,46 @@ const SETTINGS_SLIDER_SX = {
     '&:hover, &.Mui-focusVisible': { boxShadow: '0 0 0 6px rgba(var(--accent-rgb,59,130,246),0.25)' },
   },
   '& .MuiSlider-track': { border: 'none', height: 4 },
-  '& .MuiSlider-rail': { opacity: 0.15, height: 4 },
-  '& .MuiSlider-mark': { width: 2, height: 2, borderRadius: '50%', bgcolor: 'rgba(255,255,255,0.2)', transform: 'translate(-50%,-50%)' },
-  '& .MuiSlider-markActive': { bgcolor: 'var(--accent, #3b82f6)', opacity: 0.5 },
+  '& .MuiSlider-rail': { opacity: 0.35, height: 4, bgcolor: 'var(--border)' },
+  '& .MuiSlider-mark': { width: 2, height: 2, borderRadius: '50%', bgcolor: 'var(--border)', transform: 'translate(-50%,-50%)' },
+  '& .MuiSlider-markActive': { bgcolor: 'var(--accent, #3b82f6)', opacity: 0.6 },
+  '& .MuiSlider-markLabel': { fontSize: '0.6rem', color: 'var(--text-muted)', pointerEvents: 'none', mt: 0.3 },
+  '& .MuiSlider-markLabelActive': { color: 'var(--text-muted)', opacity: 0.85 },
   '& .MuiSlider-valueLabel': { fontSize: '0.65rem', fontWeight: 700, py: 0.3, px: 0.8, bgcolor: 'var(--accent, #3b82f6)', borderRadius: 1 },
+}
+
+function TimingSliderRow({ label, tooltip, value, onChange, min, max, step, unit, minDist = 1, marks = true }) {
+  function handleChange(_, newVal, activeThumb) {
+    let v = [...newVal]
+    if (v[1] - v[0] < minDist) {
+      if (activeThumb === 0) { const c = Math.min(v[0], value[1] - minDist); v = [c, c + minDist] }
+      else { const c = Math.max(v[1], value[0] + minDist); v = [c - minDist, c] }
+    }
+    onChange(v)
+  }
+  return (
+    <Box sx={{ mb: 3.5 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.4 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>{label}</Typography>
+          {tooltip && (
+            <Tooltip title={tooltip} placement="top" arrow>
+              <InfoOutlinedIcon sx={{ fontSize: 13, color: 'var(--border)', cursor: 'help', '&:hover': { color: 'var(--accent,#3b82f6)' } }} />
+            </Tooltip>
+          )}
+        </Box>
+        <Box sx={{ px: 1, py: 0.15, borderRadius: 1, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)' }}>
+          <Typography sx={{ fontSize: '0.68rem', color: 'var(--accent, #3b82f6)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+            {value[0]}–{value[1]} {unit}
+          </Typography>
+        </Box>
+      </Box>
+      <Slider value={value} onChange={handleChange}
+        min={min} max={max} step={step} marks={marks} disableSwap
+        valueLabelDisplay="auto" valueLabelFormat={v => `${v}${unit}`}
+        sx={SETTINGS_SLIDER_SX} />
+    </Box>
+  )
 }
 
 function SendTimingSection() {
@@ -396,57 +433,24 @@ function SendTimingSection() {
     saveSendConfig(next)
   }
 
-  function handleRange(key, minDist) {
-    return (_, newVal, activeThumb) => {
-      let v = [...newVal]
-      if (v[1] - v[0] < minDist) {
-        if (activeThumb === 0) { const c = Math.min(v[0], cfg[key][1] - minDist); v = [c, c + minDist] }
-        else { const c = Math.max(v[1], cfg[key][0] + minDist); v = [c - minDist, c] }
-      }
-      update(key, v)
-    }
-  }
-
-  function SliderRow({ label, cfgKey, min, max, step, unit, minDist = 1, marks = true }) {
-    const value = cfg[cfgKey]
-    return (
-      <Box sx={{ mb: 3 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.3 }}>
-          <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted, rgba(255,255,255,0.5))', fontWeight: 600 }}>{label}</Typography>
-          <Box sx={{ px: 1, py: 0.15, borderRadius: 1, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)' }}>
-            <Typography sx={{ fontSize: '0.68rem', color: 'var(--accent, #3b82f6)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
-              {value[0]}–{value[1]} {unit}
-            </Typography>
-          </Box>
-        </Box>
-        <Slider value={value} onChange={handleRange(cfgKey, minDist)}
-          min={min} max={max} step={step} marks={marks} disableSwap
-          valueLabelDisplay="auto" valueLabelFormat={v => `${v}${unit}`}
-          sx={SETTINGS_SLIDER_SX} />
-      </Box>
-    )
-  }
-
   return (
     <Section icon={<TimerIcon />} title={sc.title}>
-      <SliderRow cfgKey="msgDelay"   label={sc.msgDelay}   min={5}  max={300} step={5}  unit={sc.seconds} minDist={5}
+      <TimingSliderRow label={sc.msgDelay}   tooltip={sc.tipMsgDelay}   value={cfg.msgDelay}   onChange={v => update('msgDelay', v)}   min={5}  max={300} step={5}  unit={sc.seconds} minDist={5}
         marks={[5,30,60,120,180,240,300].map(v => ({ value: v, label: v >= 60 ? `${v/60}m` : `${v}s` }))} />
-      <SliderRow cfgKey="batchSize"  label={sc.batchSize}  min={1}  max={20}  step={1}  unit={sc.msgs}    minDist={1}
+      <TimingSliderRow label={sc.batchSize}  tooltip={sc.tipBatchSize}  value={cfg.batchSize}  onChange={v => update('batchSize', v)}  min={1}  max={20}  step={1}  unit={sc.msgs}    minDist={1}
         marks={[1,5,10,15,20].map(v => ({ value: v, label: String(v) }))} />
-      <SliderRow cfgKey="batchDelay" label={sc.batchDelay} min={1}  max={30}  step={1}  unit={sc.minutes} minDist={1}
+      <TimingSliderRow label={sc.batchDelay} tooltip={sc.tipBatchDelay} value={cfg.batchDelay} onChange={v => update('batchDelay', v)} min={1}  max={30}  step={1}  unit={sc.minutes} minDist={1}
         marks={[1,5,10,15,20,30].map(v => ({ value: v, label: `${v}m` }))} />
-      <Box sx={{ px: 1.2, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
-        <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.25)', lineHeight: 1.5 }}>
-          🎲 {sc.hint}
-        </Typography>
-      </Box>
+      <RiskBadge config={cfg} />
     </Section>
   )
 }
 
+// Blacklist moved out to its own sidebar page — src/components/BlacklistPanel.jsx
+
 export default function Settings() {
   const { user }                = useUser()
-  const { t, setLang }          = useLang()
+  const { t }                    = useLang()
   const [settings, setSettings] = useState(DEFAULT_SETTINGS)
   const [evo,  setEvo]          = useState(DEFAULT_EVO)
   const [activeTab,  setActiveTab]  = useState(0)
@@ -612,12 +616,7 @@ export default function Settings() {
     setQrWaitSecs(0)
   }
 
-  const currentAccent = ACCENTS.find(a => a.value === settings.accent) || ACCENTS[0]
-  const currentTheme  = THEMES.find(t => t.value === settings.theme)   || THEMES[0]
-  const isMono        = currentTheme.cat === 'mono'
-
   const TABS = [
-    { icon: <PaletteIcon sx={{ fontSize: 15 }} />,       label: t.settings.tabAppearance || 'Apariencia' },
     { icon: <AccountCircleIcon sx={{ fontSize: 15 }} />, label: t.settings.tabAccount    || 'Cuenta' },
     { icon: <PhoneAndroidIcon sx={{ fontSize: 15 }} />,  label: t.settings.tabWhatsApp   || 'WhatsApp', badge: connStatus === 'connected' },
     { icon: <TimerIcon sx={{ fontSize: 15 }} />,         label: t.settings.tabSendTiming || 'Envíos' },
@@ -681,153 +680,15 @@ export default function Settings() {
       </Box>
 
       {/* ── Tab content ── */}
-      <Box sx={{ flex: 1, overflowY: 'auto', px: 0.5, scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent' }}>
+      <Box sx={{ flex: 1, overflowY: 'auto', pl: 1, pr: 4, scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent' }}>
 
-        {/* ═══ TAB 0: Apariencia ═══ */}
-        {activeTab === 0 && <>
-
-          {/* Idioma */}
-          <Section icon={<LanguageIcon />} title={t.settings.language}>
-            <Box sx={{ display: 'flex', gap: 1 }}>
-              {LANGS.map(l => {
-                const active = settings.lang === l.value
-                return (
-                  <Box key={l.value} onClick={() => { save({ lang: l.value }); setLang(l.value) }} sx={{
-                    flex: 1, py: 1.2, px: 1.5, borderRadius: 2, cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 1,
-                    bgcolor: active ? 'rgba(var(--accent-rgb,59,130,246),0.1)' : 'var(--surface, rgba(255,255,255,0.03))',
-                    border: active ? '1px solid var(--accent,#3b82f6)' : '1px solid var(--border, rgba(255,255,255,0.08))',
-                    boxShadow: active ? '0 0 10px var(--accent-glow,rgba(59,130,246,0.2))' : 'none',
-                    transition: 'all 0.15s',
-                    '&:hover': { bgcolor: 'var(--item-hover, rgba(255,255,255,0.06))', borderColor: 'var(--text-muted, rgba(255,255,255,0.18))' },
-                    '[data-theme-mode="light"] &:hover': { bgcolor: 'rgba(0,0,0,0.06)', borderColor: 'rgba(0,0,0,0.25)' },
-                  }}>
-                    <Typography sx={{ fontSize: '1.1rem', lineHeight: 1, flexShrink: 0, position: 'relative', top: -1 }}>{l.flag}</Typography>
-                    <Typography sx={{ fontSize: '0.82rem', fontWeight: active ? 700 : 400, color: active ? 'var(--accent,#3b82f6)' : 'var(--text-muted, rgba(255,255,255,0.5))', flexGrow: 1 }}>
-                      {l.labels[settings.lang] ?? l.labels.en}
-                    </Typography>
-                    <CheckIcon sx={{ fontSize: 16, color: 'var(--accent,#3b82f6)', flexShrink: 0, opacity: active ? 1 : 0, transition: 'opacity 0.15s' }} />
-                  </Box>
-                )
-              })}
-            </Box>
-            <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted, rgba(255,255,255,0.3))', mt: 0.8 }}>
-              {t.settings.langComingSoon}
-            </Typography>
-          </Section>
-
-          <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', mb: 3 }} />
-
-          {/* Color de acento */}
-          <Section icon={<PaletteIcon />} title={t.settings.accent}>
-            <Box sx={{
-              mb: 1.5, px: 1.5, py: 1, borderRadius: 2,
-              background: `linear-gradient(90deg, ${currentAccent.value}22 0%, transparent 100%)`,
-              border: `1px solid ${currentAccent.value}44`,
-              display: 'flex', alignItems: 'center', gap: 1.5,
-            }}>
-              <Box sx={{ width: 22, height: 22, borderRadius: '50%', flexShrink: 0, bgcolor: currentAccent.value, boxShadow: `0 0 10px ${currentAccent.glow}, 0 0 20px ${currentAccent.glow}` }} />
-              <Box>
-                <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: currentAccent.value, lineHeight: 1.2 }}>{t.settings[currentAccent.tKey]}</Typography>
-                <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}>{currentAccent.value}</Typography>
-              </Box>
-            </Box>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, pl: 0.5, pr: 0.5 }}>
-              {ACCENTS.map(a => {
-                const active = settings.accent === a.value
-                return (
-                  <Tooltip key={a.value} title={t.settings[a.tKey]} placement="top" arrow>
-                    <Box onClick={() => save({ accent: a.value })} sx={{
-                      width: 34, height: 34, borderRadius: '50%', cursor: 'pointer', bgcolor: a.value, flexShrink: 0,
-                      border: active ? '2.5px solid white' : '2.5px solid transparent',
-                      outline: active ? `2px solid ${a.value}` : '2px solid transparent', outlineOffset: 2,
-                      boxShadow: active ? `0 0 18px ${a.glow}, 0 0 6px ${a.value}` : `0 0 6px ${a.glow}44`,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      transition: 'all 0.15s',
-                      '&:hover': { transform: 'scale(1.2)', boxShadow: `0 0 14px ${a.glow}, 0 0 4px ${a.value}` },
-                    }}>
-                      <CheckIcon sx={{ fontSize: 14, color: 'white', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.9))', opacity: active ? 1 : 0, transition: 'opacity 0.12s' }} />
-                    </Box>
-                  </Tooltip>
-                )
-              })}
-            </Box>
-          </Section>
-
-          <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', mb: 3 }} />
-
-          {/* Tema */}
-          <Section icon={<DarkModeIcon />} title={t.settings.theme}>
-            <Box sx={{
-              mb: 1.5, px: 1.5, py: 1, borderRadius: 2,
-              bgcolor: currentTheme.card, border: '1px solid rgba(255,255,255,0.08)',
-              display: 'flex', alignItems: 'center', gap: 1.5,
-            }}>
-              <Box sx={{ display: 'flex', borderRadius: 1, overflow: 'hidden', width: 36, height: 20, flexShrink: 0, border: '1px solid rgba(255,255,255,0.1)' }}>
-                {currentTheme.preview.map((c, i) => <Box key={i} sx={{ flex: 1, bgcolor: c }} />)}
-              </Box>
-              <Box>
-                <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent,#3b82f6)', lineHeight: 1.2 }}>{t.settings[currentTheme.tKey]}</Typography>
-                <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}>{currentTheme.bg} · {currentTheme.sidebar}</Typography>
-              </Box>
-            </Box>
-            {(() => {
-              const renderTheme = (thm) => {
-                const active = settings.theme === thm.value
-                return (
-                  <Tooltip key={thm.value} title={t.settings[thm.tKey]} placement="top" arrow>
-                    <Box onClick={() => save({ theme: thm.value })} sx={{
-                      borderRadius: 1.5, overflow: 'hidden', cursor: 'pointer',
-                      border: active ? '1.5px solid var(--accent,#3b82f6)' : `1.5px solid ${thm.cat === 'mono' ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.1)'}`,
-                      boxShadow: active ? '0 0 14px var(--accent-glow,rgba(59,130,246,0.35))' : 'none',
-                      transition: 'all 0.15s',
-                      '&:hover': { borderColor: thm.cat === 'mono' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.32)', transform: 'translateY(-2px)', boxShadow: '0 4px 12px rgba(0,0,0,0.4)' },
-                    }}>
-                      <Box sx={{ display: 'flex', height: 28, position: 'relative' }}>
-                        {thm.preview.map((c, i) => <Box key={i} sx={{ flex: 1, bgcolor: c }} />)}
-                        {thm.value === 'detucel' && !active && (
-                          <Box sx={{ position: 'absolute', top: 2, right: 2, bgcolor: '#1557f5', borderRadius: 0.5, px: 0.4, py: 0.1 }}>
-                            <Typography sx={{ fontSize: '0.42rem', color: 'white', fontWeight: 800, lineHeight: 1.4 }}>DTC</Typography>
-                          </Box>
-                        )}
-                        {active && (
-                          <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'rgba(0,0,0,0.28)' }}>
-                            <CheckIcon sx={{ fontSize: 13, color: 'var(--accent,#3b82f6)', filter: 'drop-shadow(0 0 4px var(--accent,#3b82f6))' }} />
-                          </Box>
-                        )}
-                      </Box>
-                      <Box sx={{ px: 0.75, py: 0.5, bgcolor: thm.preview[1], borderTop: active ? '1px solid var(--accent,#3b82f6)44' : `1px solid ${thm.cat === 'mono' ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.06)'}` }}>
-                        <Typography sx={{ fontSize: '0.6rem', fontWeight: active ? 700 : 400, color: active ? 'var(--accent,#3b82f6)' : thm.cat === 'mono' ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {t.settings[thm.tKey]}
-                        </Typography>
-                      </Box>
-                    </Box>
-                  </Tooltip>
-                )
-              }
-              const darkThemes  = THEMES.filter(t => !t.cat || t.cat === 'dark')
-              const lightThemes = THEMES.filter(t => t.cat === 'light' || t.cat === 'mono')
-              const labelSx = { fontSize: '0.63rem', color: isMono ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, mb: 0.75 }
-              return (
-                <>
-                  <Typography sx={labelSx}>{t.settings.themesDark}</Typography>
-                  <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 1, mb: 2 }}>{darkThemes.map(renderTheme)}</Box>
-                  <Typography sx={labelSx}>{t.settings.themesLight}</Typography>
-                  <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 1 }}>{lightThemes.map(renderTheme)}</Box>
-                </>
-              )
-            })()}
-          </Section>
-
-        </>}
-
-        {/* ═══ TAB 1: Cuenta ═══ */}
-        {activeTab === 1 && (
+        {/* ═══ TAB 0: Cuenta ═══ */}
+        {activeTab === 0 && (
           <AccountSection user={user} connStatus={connStatus} connPhone={connPhone} evo={evo} />
         )}
 
-        {/* ═══ TAB 2: WhatsApp ═══ */}
-        {activeTab === 2 && <>
+        {/* ═══ TAB 1: WhatsApp ═══ */}
+        {activeTab === 1 && <>
           <Section icon={<PhoneAndroidIcon />} title={t.settings.whatsapp}>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
               {connStatus === 'checking' ? (
@@ -870,6 +731,9 @@ export default function Settings() {
             </Box>
           </Section>
         </>}
+
+        {/* ═══ TAB 2: Envíos ═══ */}
+        {activeTab === 2 && <SendTimingSection />}
 
       </Box>
 
@@ -992,9 +856,6 @@ export default function Settings() {
           )}
         </DialogContent>
       </Dialog>
-
-        {/* ═══ TAB 3: Envíos ═══ */}
-        {activeTab === 3 && <SendTimingSection />}
 
     </Box>
   )

@@ -662,8 +662,8 @@ function MonthView({ jobs, viewYear, viewMonth, selectedDate, onDayClick, onJobC
       {monthJobsCount === 0 && (
         <Box sx={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', gap: 1 }}>
           <ScheduleSendIcon sx={{ fontSize: 32, color: 'var(--border)' }} />
-          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>{t.sched.noMonthSends}</Typography>
-          <Typography sx={{ color: 'var(--border)', fontSize: '0.72rem' }}>{t.sched.noMonthSendsHint}</Typography>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.82rem', opacity: 0.85 }}>{t.sched.noMonthSends}</Typography>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', opacity: 0.55 }}>{t.sched.noMonthSendsHint}</Typography>
         </Box>
       )}
     </Box>

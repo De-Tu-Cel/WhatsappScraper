@@ -123,7 +123,12 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
       </DialogTitle>
 
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 3, pt: '4px !important', pb: 1 }}>
-        <Box sx={{ opacity: loading ? 0.45 : 1, pointerEvents: loading ? 'none' : 'auto', transition: 'opacity 0.2s', display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {loading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 5 }}>
+            <CircularProgress size={22} sx={{ color: 'var(--accent,#6366f1)' }} />
+          </Box>
+        ) : (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
 
           <Divider sx={{ borderColor: 'rgba(255,255,255,0.07)' }}>
             <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, px: 1 }}>
@@ -186,6 +191,7 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
             </Alert>
           )}
         </Box>
+        )}
       </DialogContent>
 
       <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5, borderTop: '1px solid rgba(255,255,255,0.07)', gap: 1 }}>

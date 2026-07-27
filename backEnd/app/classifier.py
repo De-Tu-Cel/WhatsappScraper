@@ -2,6 +2,7 @@
 """LLM-based classifier for inbound WhatsApp responses."""
 import json
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timedelta
@@ -366,8 +367,84 @@ def _call_deepseek(messages: list, max_tokens: int = 280) -> str:
         raise
 
 
+# ── Cheap pre-filter — resolves the unambiguous cases without spending an LLM call ──
+# Only the two signals that are deterministic enough to trust blindly: a structured
+# menu (category="menu" is always is_ai=False, bot_quality=None per the prompt rules
+# above) and an explicit auto-reply template arriving near-instantly. Everything else
+# (human vs bot vs conversational-AI vs hibrido) needs real judgment and still goes to
+# the LLM — this is not an attempt to replace that, only to skip it when it's redundant.
+
+_MENU_MARKERS = re.compile(
+    r'\[Opciones:|\[Lista:|responde con el n[uú]mero|elige una opci[oó]n|'
+    r'escribe (?:el )?(?:1|2|3|un n[uú]mero)|selecciona una opci[oó]n',
+    re.IGNORECASE,
+)
+_MENU_LIST_ITEM = re.compile(
+    r'(?:^|\n)\s*(?:[0-9]{1,2}[.\)]|[*_]?[A-H][*_]?\s*[.\)-])\s+\S',
+    re.MULTILINE,
+)
+
+_AUTO_REPLY_MARKERS = re.compile(
+    r'folio|tkt-|ticket\s*#|ref(?:erencia)?\s*[:#]|tu mensaje es importante|'
+    r'en breve (?:un asesor|te contactar)|hemos recibido tu (?:consulta|mensaje)|'
+    r'nos comunicaremos a la brevedad|mensaje generado autom[aá]ticamente|'
+    r'estimado cliente|horario de atenci[oó]n',
+    re.IGNORECASE,
+)
+
+
+def _looks_like_menu(text: str) -> bool:
+    if _MENU_MARKERS.search(text):
+        return True
+    return len(_MENU_LIST_ITEM.findall(text)) >= 2
+
+
+def _looks_like_auto_reply(text: str) -> bool:
+    return bool(_AUTO_REPLY_MARKERS.search(text))
+
+
+def _quick_result(category: str, notes: str) -> dict:
+    """Same shape as _parse_llm_response's output — low/None across the board,
+    matching the prompt's own rule: menu/automatico/bot(non-AI) always score 1-2."""
+    return {
+        "category": category,
+        "is_ai": False,
+        "ai_confidence": 0.0,
+        "svc_prof": 1, "svc_comp": 1, "svc_empa": 1,
+        "svc_solu": 1, "svc_next": 1, "svc_proact": 1,
+        "response_quality": 1,
+        "bot_quality": None,
+        "notes": notes,
+        "conversation_analysis": False,
+        "quick_classified": True,  # marks that this skipped the LLM, for auditing
+    }
+
+
+def _quick_classify(inbound_body: str, reaction_time_min: float = None) -> dict | None:
+    """Resolve the obvious cases with cheap rules. Returns None when the text needs
+    real judgment — that residual is what actually reaches the LLM."""
+    text = (inbound_body or "").strip()
+    if not text:
+        return None
+
+    if _looks_like_menu(text):
+        return _quick_result("menu", "Menú de opciones detectado por reglas — sin IA")
+
+    responded_instantly = reaction_time_min is not None and reaction_time_min * 60 < 10
+    if responded_instantly and _looks_like_auto_reply(text):
+        return _quick_result("automatico", "Plantilla de auto-respuesta + respuesta instantánea — sin IA")
+
+    return None
+
+
 def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: float = None) -> dict:
-    """Classify a single inbound reply using the outbound message as context."""
+    """Classify a single inbound reply using the outbound message as context.
+    Cheap rules resolve the obvious cases first (see _quick_classify) — only
+    genuine ambiguity spends an LLM call."""
+    quick = _quick_classify(inbound_body, reaction_time_min)
+    if quick is not None:
+        return quick
+
     from app.llm import active_provider
     if active_provider() == "none":
         return dict(_ERROR_RESULT)

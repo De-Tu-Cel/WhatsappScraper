@@ -1,5 +1,6 @@
 'use client'
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import React from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback, useDeferredValue } from 'react'
 import { useLang } from '../context/LangContext'
 import Dialog from '@mui/material/Dialog'
 import DialogContent from '@mui/material/DialogContent'
@@ -27,6 +28,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import ErrorIcon from '@mui/icons-material/Error'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import TravelExploreIcon from '@mui/icons-material/TravelExplore'
+import LocationOnIcon from '@mui/icons-material/LocationOn'
 import DownloadIcon from '@mui/icons-material/Download'
 import ReplayIcon from '@mui/icons-material/Replay'
 import CheckBoxIcon from '@mui/icons-material/CheckBox'
@@ -38,10 +40,60 @@ import { getTemplates } from './singleUrlProcessor'
 
 // INDUSTRY_GROUPS and INDUSTRY_EXAMPLES are built inside the component from translations
 
+const MX_CITIES = [...new Set([
+  // — 32 estados —
+  'Aguascalientes', 'Baja California', 'Baja California Sur',
+  'Campeche', 'Chiapas', 'Chihuahua', 'Ciudad de México',
+  'Coahuila', 'Colima', 'Durango', 'Estado de México',
+  'Guanajuato', 'Guerrero', 'Hidalgo', 'Jalisco',
+  'Michoacán', 'Morelos', 'Nayarit', 'Nuevo León',
+  'Oaxaca', 'Puebla', 'Querétaro', 'Quintana Roo',
+  'San Luis Potosí', 'Sinaloa', 'Sonora', 'Tabasco',
+  'Tamaulipas', 'Tlaxcala', 'Veracruz', 'Yucatán', 'Zacatecas',
+  // — Ciudades principales —
+  'Guadalajara', 'Monterrey', 'León', 'Mérida', 'Tijuana',
+  'Cancún', 'Morelia', 'Hermosillo', 'Chihuahua', 'Saltillo',
+  'Culiacán', 'Toluca', 'Mexicali', 'Torreón', 'Ciudad Juárez',
+  'Tuxtla Gutiérrez', 'Villahermosa', 'Pachuca', 'Chilpancingo',
+  'Zacatecas', 'Tepic', 'Colima', 'Chetumal', 'La Paz',
+  'Cuernavaca', 'Xalapa', 'Ciudad Victoria', 'Manzanillo',
+  'Mazatlán', 'Ensenada', 'Celaya', 'Irapuato', 'Salamanca',
+  'San Miguel de Allende', 'Playa del Carmen', 'Los Cabos',
+  'Puerto Vallarta', 'Acapulco', 'Tampico', 'Matamoros',
+  'Reynosa', 'Nuevo Laredo', 'Monclova', 'Piedras Negras',
+  'Gómez Palacio', 'Bahía de Banderas', 'Oaxaca de Juárez',
+  'Tuxtepec', 'Coatzacoalcos', 'Poza Rica', 'Orizaba', 'Córdoba',
+  'Uruapan', 'Zamora', 'Lázaro Cárdenas', 'San Cristóbal de las Casas',
+  'Tapachula', 'Valladolid', 'Progreso', 'Ciudad del Carmen',
+  'Cozumel', 'Tulum',
+])]
+
 const fadeSlideIn = keyframes`
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 `
+
+function CountSelector({ numResults, setNumResults, showCount, show, size = 'md' }) {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+      {size === 'md' && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>{showCount}</Typography>}
+      {size === 'sm' && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>{show}</Typography>}
+      <Box sx={{ display: 'flex', gap: size === 'md' ? 0.6 : 0.5 }}>
+        {[5, 10, 20, 30].map(n => (
+          <Box key={n} onClick={() => setNumResults(n)} sx={{
+            px: size === 'md' ? 1.5 : 1.2, py: size === 'md' ? 0.4 : 0.3,
+            borderRadius: 10, cursor: 'pointer', fontSize: size === 'md' ? '0.75rem' : '0.72rem', fontWeight: 700,
+            bgcolor: numResults === n ? 'rgba(var(--accent-rgb, 59,130,246), 0.2)' : 'var(--item-hover)',
+            color: numResults === n ? 'var(--accent, #60a5fa)' : 'var(--text-muted)',
+            border: `1px solid ${numResults === n ? 'rgba(var(--accent-rgb, 59,130,246), 0.4)' : 'var(--border)'}`,
+            transition: 'all 0.15s',
+            '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.12)', color: 'var(--accent, #93c5fd)' },
+          }}>{n}</Box>
+        ))}
+      </Box>
+    </Box>
+  )
+}
 
 function getDomain(url) {
   try { return new URL(url).hostname.replace('www.', '') }
@@ -95,6 +147,194 @@ function renderTemplate(text, scraped) {
     .replace(/\{\{web\}\}/g,       scraped?.website || '')
 }
 
+const SearchBarForm = React.memo(function SearchBarForm({
+  allIndustries, searching, typewriterActive, labels, onSearch, onCancel,
+  compact,
+}) {
+  const [industry,   setIndustry]   = useState('')
+  const [city,       setCity]       = useState('')
+  const [acOpen,     setAcOpen]     = useState(false)
+  const [acIdx,      setAcIdx]      = useState(0)
+  const [cityAcOpen, setCityAcOpen] = useState(false)
+  const [cityAcIdx,  setCityAcIdx]  = useState(0)
+
+  const deferredIndustry = useDeferredValue(industry)
+  const deferredCity     = useDeferredValue(city)
+
+  const acMatches = useMemo(() =>
+    deferredIndustry.trim().length > 0
+      ? allIndustries.filter(({ item }) =>
+          item.toLowerCase().startsWith(deferredIndustry.toLowerCase()) &&
+          item.toLowerCase() !== deferredIndustry.toLowerCase()
+        )
+      : [],
+    [deferredIndustry, allIndustries]
+  )
+
+  const cityAcMatches = useMemo(() =>
+    deferredCity.trim().length > 0
+      ? MX_CITIES.filter(c =>
+          c.toLowerCase().includes(deferredCity.toLowerCase()) &&
+          c.toLowerCase() !== deferredCity.toLowerCase()
+        ).slice(0, 12)
+      : MX_CITIES.slice(0, 15),
+    [deferredCity]
+  )
+
+  const placeholder = useTypewriter(labels.examples, typewriterActive && !industry)
+
+  function triggerSearch(overrideIndustry) {
+    const q = typeof overrideIndustry === 'string' ? overrideIndustry : industry
+    if (!q.trim()) return
+    setAcOpen(false); setCityAcOpen(false)
+    onSearch(q.trim(), city.trim())
+  }
+
+  return (
+    <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1 }}>
+      {/* ── Pill principal: industria ── */}
+      <Box sx={{ position: 'relative', width: '100%' }}>
+        <Box sx={{
+          display: 'flex', alignItems: 'center',
+          bgcolor: 'var(--sidebar-bg, #0d1117)', borderRadius: '50px',
+          boxShadow: compact ? '0 2px 8px rgba(0,0,0,0.3)' : '0 4px 28px rgba(0,0,0,0.55)',
+          border: '1.5px solid rgba(var(--accent-rgb, 59,130,246), 0.22)',
+          px: 2.5, py: 0.4,
+          transition: 'box-shadow 0.2s, border-color 0.2s',
+          '&:focus-within': { boxShadow: '0 6px 30px rgba(var(--accent-rgb, 59,130,246), 0.25)', borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.5)' },
+          '&:hover': { borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.38)' },
+        }}>
+          <TravelExploreIcon sx={{ color: 'rgba(255,255,255,0.2)', fontSize: 18, mr: 1, flexShrink: 0 }} />
+          <TextField
+            fullWidth variant="standard"
+            value={industry}
+            onChange={e => { setIndustry(e.target.value); setAcOpen(true); setAcIdx(0) }}
+            onBlur={() => setTimeout(() => setAcOpen(false), 150)}
+            onFocus={() => setAcOpen(true)}
+            onKeyDown={e => {
+              if (e.key === 'Tab' && acMatches.length > 0) {
+                e.preventDefault()
+                const chosen = acMatches[acIdx]?.item
+                if (chosen) { setIndustry(chosen); setAcOpen(false) }
+              } else if (e.key === 'ArrowDown') {
+                e.preventDefault(); setAcIdx(i => Math.min(i + 1, acMatches.length - 1))
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault(); setAcIdx(i => Math.max(i - 1, 0))
+              } else if (e.key === 'Enter') {
+                if (acOpen && acMatches.length > 0) {
+                  const chosen = acMatches[acIdx]?.item
+                  if (chosen) { setIndustry(chosen); setAcOpen(false); triggerSearch(chosen); return }
+                }
+                setAcOpen(false); triggerSearch()
+              } else if (e.key === 'Escape') {
+                setAcOpen(false)
+              }
+            }}
+            placeholder={placeholder || labels.examplePh}
+            slotProps={{ input: { disableUnderline: true } }}
+            sx={{ '& input': { fontSize: compact ? '0.92rem' : '1rem', py: 0.9, color: 'var(--text, #f1f5f9)', '&::placeholder': { color: 'var(--text-muted, rgba(255,255,255,0.28))', opacity: 1 } } }}
+          />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mr: -1, ml: 1, flexShrink: 0 }}>
+            <IconButton onClick={() => triggerSearch()} disabled={searching || !industry.trim()} sx={{ bgcolor: 'var(--accent, #3b82f6)', color: 'white', width: 38, height: 38, '&:hover': { bgcolor: 'var(--accent, #2563eb)' }, '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.25)', color: 'rgba(255,255,255,0.3)' } }}>
+              {searching ? <CircularProgress size={18} sx={{ color: 'white' }} /> : <SearchIcon fontSize="small" />}
+            </IconButton>
+            {searching && (
+              <Tooltip title={labels.cancelSearch}>
+                <IconButton onClick={onCancel} sx={{
+                  bgcolor: 'rgba(239,68,68,0.12)', color: 'rgba(248,113,113,0.8)', width: 38, height: 38,
+                  border: '1px solid rgba(239,68,68,0.2)',
+                  '&:hover': { bgcolor: 'rgba(239,68,68,0.25)', color: '#f87171' },
+                }}>
+                  <HighlightOffIcon sx={{ fontSize: 20 }} />
+                </IconButton>
+              </Tooltip>
+            )}
+          </Box>
+        </Box>
+
+        {/* Industry autocomplete */}
+        {acOpen && acMatches.length > 0 && (
+          <Box sx={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 30, bgcolor: 'var(--sidebar-bg, #0d1117)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.28)', borderRadius: 2, overflow: 'hidden', boxShadow: '0 8px 28px rgba(0,0,0,0.6)' }}>
+            {acMatches.slice(0, 6).map(({ item, color }, i) => (
+              <Box key={item} onMouseDown={() => { setIndustry(item); setAcOpen(false); triggerSearch(item) }} onMouseEnter={() => setAcIdx(i)}
+                sx={{ px: 2, py: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 1, bgcolor: i === acIdx ? 'rgba(var(--accent-rgb, 59,130,246), 0.1)' : 'transparent', transition: 'all 0.1s' }}>
+                <Box component="span" sx={{ fontSize: '0.85rem' }}>
+                  <Box component="span" sx={{ color: 'var(--text-muted)' }}>{industry}</Box>
+                  <Box component="span" sx={{ color: i === acIdx ? color : 'var(--text)', fontWeight: 600 }}>{item.slice(industry.length)}</Box>
+                </Box>
+                {i === 0 && <Box sx={{ ml: 'auto', px: 0.8, py: 0.2, borderRadius: 0.8, bgcolor: 'var(--item-hover)', color: 'var(--text-muted)', fontSize: '0.65rem', fontFamily: 'monospace', flexShrink: 0 }}>Tab</Box>}
+              </Box>
+            ))}
+          </Box>
+        )}
+      </Box>
+
+      {/* ── Filtro de ciudad ── */}
+      <Box sx={{ position: 'relative', display: 'flex', justifyContent: 'center' }}>
+        <Box sx={{
+          display: 'inline-flex', alignItems: 'center', gap: 0.8,
+          px: 1.5, py: 0.4, borderRadius: '50px',
+          border: `1px solid ${city ? 'rgba(var(--accent-rgb,59,130,246),0.4)' : 'var(--border, rgba(255,255,255,0.08))'}`,
+          bgcolor: city ? 'rgba(var(--accent-rgb,59,130,246),0.06)' : 'transparent',
+          transition: 'all 0.15s',
+          '&:focus-within': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.5)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.08)' },
+        }}>
+          <LocationOnIcon sx={{ fontSize: 13, color: city ? 'var(--accent, #3b82f6)' : 'var(--text-muted)', flexShrink: 0, transition: 'color 0.15s' }} />
+          <TextField
+            variant="standard"
+            value={city}
+            onChange={e => { setCity(e.target.value); setCityAcOpen(true); setCityAcIdx(0) }}
+            onBlur={() => setTimeout(() => setCityAcOpen(false), 150)}
+            onFocus={() => setCityAcOpen(true)}
+            onKeyDown={e => {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setCityAcIdx(i => Math.min(i + 1, cityAcMatches.length - 1)) }
+              else if (e.key === 'ArrowUp') { e.preventDefault(); setCityAcIdx(i => Math.max(i - 1, 0)) }
+              else if (e.key === 'Enter') {
+                if (cityAcOpen && cityAcMatches.length > 0) { setCity(cityAcMatches[cityAcIdx]); setCityAcOpen(false) }
+                else { setCityAcOpen(false); triggerSearch() }
+              } else if (e.key === 'Escape') { setCityAcOpen(false) }
+              else if (e.key === 'Tab' && cityAcMatches.length > 0) {
+                e.preventDefault(); setCity(cityAcMatches[cityAcIdx]); setCityAcOpen(false)
+              }
+            }}
+            placeholder={labels.cityPlaceholder}
+            slotProps={{ input: { disableUnderline: true } }}
+            sx={{ width: 190, '& input': { fontSize: '0.78rem', py: 0.4, color: 'var(--text, #f1f5f9)', textAlign: 'left', '&::placeholder': { color: 'var(--text-muted, rgba(255,255,255,0.28))', opacity: 1 } } }}
+          />
+          {city && (
+            <Box onClick={() => setCity('')} sx={{ cursor: 'pointer', color: 'var(--text-muted)', fontSize: 14, lineHeight: 1, '&:hover': { color: 'var(--text)' }, flexShrink: 0 }}>×</Box>
+          )}
+        </Box>
+
+        {/* City autocomplete */}
+        {cityAcOpen && cityAcMatches.length > 0 && (
+          <Box sx={{ position: 'absolute', top: 'calc(100% + 4px)', left: '50%', transform: 'translateX(-50%)', width: 230, zIndex: 30, bgcolor: 'var(--sidebar-bg, #0d1117)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.28)', borderRadius: 2, boxShadow: '0 8px 28px rgba(0,0,0,0.6)', overflow: 'hidden' }}>
+            {city.trim() === '' && (
+              <Box sx={{ px: 2, pt: 1, pb: 0.5, borderBottom: '1px solid var(--border)' }}>
+                <Typography sx={{ fontSize: '0.62rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>{labels.popularCities}</Typography>
+              </Box>
+            )}
+            <Box sx={{
+              maxHeight: 240, overflowY: 'auto',
+              '&::-webkit-scrollbar': { width: 4 },
+              '&::-webkit-scrollbar-track': { background: 'transparent' },
+              '&::-webkit-scrollbar-thumb': { background: 'rgba(var(--accent-rgb,59,130,246),0.35)', borderRadius: 4 },
+            }}>
+              {cityAcMatches.map((c, i) => (
+                <Box key={`${c}-${i}`} onMouseDown={() => { setCity(c); setCityAcOpen(false) }} onMouseEnter={() => setCityAcIdx(i)}
+                  sx={{ px: 2, py: 0.85, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 1, bgcolor: i === cityAcIdx ? 'rgba(var(--accent-rgb, 59,130,246), 0.1)' : 'transparent', transition: 'all 0.1s' }}>
+                  <LocationOnIcon sx={{ fontSize: 13, color: i === cityAcIdx ? 'var(--accent, #3b82f6)' : 'var(--text-muted)', flexShrink: 0 }} />
+                  <Typography sx={{ fontSize: '0.82rem', color: i === cityAcIdx ? 'var(--text)' : 'var(--text-muted)', fontWeight: i === cityAcIdx ? 600 : 400 }}>{c}</Typography>
+                </Box>
+              ))}
+            </Box>
+          </Box>
+        )}
+      </Box>
+    </Box>
+  )
+})
+
 export default function SearchProspects() {
   const { t } = useLang()
   const TEMPLATES = getTemplates(t)
@@ -102,7 +342,7 @@ export default function SearchProspects() {
   const cancelRef      = useRef(false)
   const abortSearchRef = useRef(null)
 
-  const [industry,    setIndustry]    = useState('')
+  const [lastIndustry, setLastIndustry] = useState('')
   const [numResults,  setNumResults]  = useState(10)
   const [searching,    setSearching]    = useState(false)
   const [visibleCount, setVisibleCount] = useState(10)
@@ -115,8 +355,6 @@ export default function SearchProspects() {
   const [done,        setDone]        = useState(false)
   const [filterScraped, setFilterScraped] = useState('all')
   const [history,     setHistory]     = useState([])
-  const [acOpen,      setAcOpen]      = useState(false)
-  const [acIdx,       setAcIdx]       = useState(0)
   const [selectedTpl, setSelectedTpl] = useState(TEMPLATES[0].id)
   const [msgText,     setMsgText]     = useState(TEMPLATES[0].text)
   const [sendingAll,  setSendingAll]  = useState(false)
@@ -164,24 +402,29 @@ export default function SearchProspects() {
     return [i.ex1, i.ex2, i.ex3, i.ex4, i.ex5, i.ex6]
   }, [t])
 
-  const placeholder = useTypewriter(INDUSTRY_EXAMPLES, !industry && found.length === 0 && !processing && !searching)
-  const ALL_INDUSTRIES = INDUSTRY_GROUPS.flatMap(g => g.items.map(item => ({ item, color: g.color })))
-  const acMatches = industry.trim().length > 0
-    ? ALL_INDUSTRIES.filter(({ item }) =>
-        item.toLowerCase().startsWith(industry.toLowerCase()) &&
-        item.toLowerCase() !== industry.toLowerCase()
-      )
-    : []
+  const allIndustries = useMemo(
+    () => INDUSTRY_GROUPS.flatMap(g => g.items.map(item => ({ item, color: g.color }))),
+    [INDUSTRY_GROUPS]
+  )
+
+  const searchLabels = useMemo(() => ({
+    cancelSearch: t.search.cancelSearch,
+    cityPlaceholder: t.search.cityPlaceholder,
+    popularCities: t.search.popularCities,
+    examplePh: 'Ej: Restaurantes, Ferreterías…',
+    examples: INDUSTRY_EXAMPLES,
+  }), [t, INDUSTRY_EXAMPLES])
 
   const visibleFound = found
     .slice(0, visibleCount)
     .filter(r => filterScraped === 'all' ? true : filterScraped === 'new' ? !r.scraped : r.scraped)
   const selectedCount    = found.filter(r => r.selected).length
-  const processableCount = found.filter(r => r.selected && !r.scraped).length
+  const processableCount = found.filter(r => r.selected && !r.scraped && !r.blocked).length
   const skippedCount     = found.filter(r => r.selected && r.scraped).length
-  const allSelected      = found.length > 0 && found.filter(r => !r.scraped).every(r => r.selected) && found.some(r => !r.scraped)
-  const newCount      = found.filter(r => !r.scraped).length
+  const allSelected      = found.length > 0 && found.filter(r => !r.scraped && !r.blocked).every(r => r.selected) && found.some(r => !r.scraped && !r.blocked)
+  const newCount      = found.filter(r => !r.scraped && !r.blocked).length
   const scrapedCount  = found.filter(r => r.scraped).length
+  const blockedCount  = found.filter(r => r.blocked).length
   const okCount       = results.filter(r => r.ok).length
   const errCount      = results.filter(r => !r.ok).length
   const waCount       = results.filter(r => r.whatsapp).length
@@ -193,23 +436,27 @@ export default function SearchProspects() {
     localStorage.setItem('searchHistory', JSON.stringify(next))
   }
 
-  async function fetchAndMark(urls) {
+  async function fetchAndMark(urls, blockedMap) {
     try {
       const r = await fetch('/api/companies/check-urls', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ urls }),
       })
-      if (!r.ok) return urls.map(url => ({ url, selected: false, scraped: false }))
-      const map = await r.json()
-      return urls.map(url => ({ url, selected: false, scraped: !!map[url] }))
+      const map = r.ok ? await r.json() : {}
+      return urls.map(url => ({
+        url, selected: false, scraped: !!map[url],
+        blocked: !!blockedMap[url]?.blocked, blockReason: blockedMap[url]?.block_reason || null,
+      }))
     } catch {
-      return urls.map(url => ({ url, selected: false, scraped: false }))
+      return urls.map(url => ({ url, selected: false, scraped: false, blocked: !!blockedMap[url]?.blocked, blockReason: blockedMap[url]?.block_reason || null }))
     }
   }
 
-  async function handleSearch(overrideIndustry) {
-    const query = (typeof overrideIndustry === 'string' ? overrideIndustry : industry).trim()
+  async function handleSearch(industry, city) {
+    const query = industry.trim()
     if (!query) return
+    setLastIndustry(query)
+    saveHistory(query)
     abortSearchRef.current?.abort()
     const ctrl = new AbortController()
     abortSearchRef.current = ctrl
@@ -217,14 +464,14 @@ export default function SearchProspects() {
     try {
       const res = await fetch('/api/search', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ industry: query, city: '', num_results: numResults, offset: 0 }),
+        body: JSON.stringify({ industry: query, city: city?.trim() || '', num_results: numResults, offset: 0 }),
         signal: ctrl.signal,
       })
       if (!res.ok) throw new Error()
-      const { urls } = await res.json()
-      const marked = await fetchAndMark(urls)
+      const { urls, results: searchResults } = await res.json()
+      const blockedMap = Object.fromEntries((searchResults || []).map(r => [r.url, r]))
+      const marked = await fetchAndMark(urls, blockedMap)
       setFound(marked)
-      saveHistory(query)
     } catch (err) {
       if (err?.name !== 'AbortError') setFound([])
     } finally {
@@ -236,12 +483,12 @@ export default function SearchProspects() {
     setVisibleCount(c => Math.min(c + numResults, found.length))
   }
 
-  // "Select all" only selects new ones — scraped ones are never auto-selected
+  // "Select all" only selects new ones — scraped/blocked ones are never auto-selected
   function toggleAll(val) {
-    setFound(f => f.map(r => ({ ...r, selected: val ? !r.scraped : false })))
+    setFound(f => f.map(r => ({ ...r, selected: val ? (!r.scraped && !r.blocked) : false })))
   }
-  function toggleOne(i)   { setFound(f => f.map((r, idx) => idx === i ? { ...r, selected: !r.selected } : r)) }
-  function selectOnlyNew()   { setFound(f => f.map(r => ({ ...r, selected: !r.scraped }))) }
+  function toggleOne(i)   { setFound(f => f.map((r, idx) => idx === i && !r.blocked ? { ...r, selected: !r.selected } : r)) }
+  function selectOnlyNew()   { setFound(f => f.map(r => ({ ...r, selected: !r.scraped && !r.blocked }))) }
   function deselectScraped() { setFound(f => f.map(r => ({ ...r, selected: r.scraped ? false : r.selected }))) }
 
   async function runProcessLoop(urls, baseResults) {
@@ -405,106 +652,8 @@ export default function SearchProspects() {
     const text = found.filter(r => r.selected).map(r => r.url).join('\n')
     const blob = new Blob([text], { type: 'text/plain' })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
-    a.download = `urls-${industry || 'prospectos'}.txt`; a.click()
+    a.download = `urls-${lastIndustry || 'prospectos'}.txt`; a.click()
   }
-
-  /* ── Selector de cantidad (reutilizable) ── */
-  const CountSelector = ({ size = 'md' }) => (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-      {size === 'md' && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>{t.search.showCount}</Typography>}
-      {size === 'sm' && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>{t.search.show}</Typography>}
-      <Box sx={{ display: 'flex', gap: size === 'md' ? 0.6 : 0.5 }}>
-        {[5, 10, 20, 30].map(n => (
-          <Box key={n} onClick={() => setNumResults(n)} sx={{
-            px: size === 'md' ? 1.5 : 1.2, py: size === 'md' ? 0.4 : 0.3,
-            borderRadius: 10, cursor: 'pointer', fontSize: size === 'md' ? '0.75rem' : '0.72rem', fontWeight: 700,
-            bgcolor: numResults === n ? 'rgba(var(--accent-rgb, 59,130,246), 0.2)' : 'var(--item-hover)',
-            color: numResults === n ? 'var(--accent, #60a5fa)' : 'var(--text-muted)',
-            border: `1px solid ${numResults === n ? 'rgba(var(--accent-rgb, 59,130,246), 0.4)' : 'var(--border)'}`,
-            transition: 'all 0.15s',
-            '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.12)', color: 'var(--accent, #93c5fd)' },
-          }}>{n}</Box>
-        ))}
-      </Box>
-    </Box>
-  )
-
-  /* ── Barra de búsqueda pill ── */
-  const SearchBar = ({ compact }) => (
-    <Box sx={{ position: 'relative', width: '100%' }}>
-      <Box sx={{
-        display: 'flex', alignItems: 'center',
-        bgcolor: 'var(--sidebar-bg, #0d1117)', borderRadius: '50px',
-        boxShadow: compact ? '0 2px 8px rgba(0,0,0,0.3)' : '0 4px 28px rgba(0,0,0,0.55)',
-        border: '1.5px solid rgba(var(--accent-rgb, 59,130,246), 0.22)',
-        px: 2.5, py: 0.4,
-        transition: 'box-shadow 0.2s, border-color 0.2s',
-        '&:focus-within': { boxShadow: '0 6px 30px rgba(var(--accent-rgb, 59,130,246), 0.25)', borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.5)' },
-        '&:hover': { borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.38)' },
-      }}>
-        <TravelExploreIcon sx={{ color: 'rgba(255,255,255,0.2)', fontSize: 18, mr: 1, flexShrink: 0 }} />
-        <TextField
-          fullWidth variant="standard"
-          value={industry}
-          onChange={e => { setIndustry(e.target.value); setAcOpen(true); setAcIdx(0) }}
-          onBlur={() => setTimeout(() => setAcOpen(false), 150)}
-          onFocus={() => acMatches.length > 0 && setAcOpen(true)}
-          onKeyDown={e => {
-            if (e.key === 'Tab' && acMatches.length > 0) {
-              e.preventDefault()
-              const chosen = acMatches[acIdx]?.item
-              if (chosen) { setIndustry(chosen); setAcOpen(false) }
-            } else if (e.key === 'ArrowDown') {
-              e.preventDefault(); setAcIdx(i => Math.min(i + 1, acMatches.length - 1))
-            } else if (e.key === 'ArrowUp') {
-              e.preventDefault(); setAcIdx(i => Math.max(i - 1, 0))
-            } else if (e.key === 'Enter') {
-              if (acOpen && acMatches.length > 0) {
-                const chosen = acMatches[acIdx]?.item
-                if (chosen) { setIndustry(chosen); setAcOpen(false); handleSearch(chosen); return }
-              }
-              setAcOpen(false); handleSearch()
-            } else if (e.key === 'Escape') {
-              setAcOpen(false)
-            }
-          }}
-          placeholder={placeholder || 'Ej: Restaurantes, Ferreterías…'}
-          slotProps={{ input: { disableUnderline: true } }}
-          sx={{ '& input': { fontSize: compact ? '0.92rem' : '1rem', py: 0.9, color: 'var(--text, #f1f5f9)', '&::placeholder': { color: 'var(--text-muted, rgba(255,255,255,0.28))', opacity: 1 } } }}
-        />
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mr: -1, flexShrink: 0 }}>
-          <IconButton onClick={handleSearch} disabled={searching || !industry.trim()} sx={{ bgcolor: 'var(--accent, #3b82f6)', color: 'white', width: 38, height: 38, '&:hover': { bgcolor: 'var(--accent, #2563eb)' }, '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.25)', color: 'rgba(255,255,255,0.3)' } }}>
-            {searching ? <CircularProgress size={18} sx={{ color: 'white' }} /> : <SearchIcon fontSize="small" />}
-          </IconButton>
-          {searching && (
-            <Tooltip title={t.search.cancelSearch}>
-              <IconButton onClick={handleCancel} sx={{
-                bgcolor: 'rgba(239,68,68,0.12)', color: 'rgba(248,113,113,0.8)', width: 38, height: 38,
-                border: '1px solid rgba(239,68,68,0.2)',
-                '&:hover': { bgcolor: 'rgba(239,68,68,0.25)', color: '#f87171' },
-              }}>
-                <HighlightOffIcon sx={{ fontSize: 20 }} />
-              </IconButton>
-            </Tooltip>
-          )}
-        </Box>
-      </Box>
-      {acOpen && acMatches.length > 0 && (
-        <Box sx={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 30, bgcolor: 'var(--sidebar-bg, #0d1117)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.28)', borderRadius: 2, overflow: 'hidden', boxShadow: '0 8px 28px rgba(0,0,0,0.6)' }}>
-          {acMatches.slice(0, 6).map(({ item, color }, i) => (
-            <Box key={item} onMouseDown={() => { setIndustry(item); setAcOpen(false); handleSearch(item) }} onMouseEnter={() => setAcIdx(i)}
-              sx={{ px: 2, py: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 1, bgcolor: i === acIdx ? 'rgba(var(--accent-rgb, 59,130,246), 0.1)' : 'transparent', transition: 'all 0.1s' }}>
-              <Box component="span" sx={{ fontSize: '0.85rem' }}>
-                <Box component="span" sx={{ color: 'var(--text-muted)' }}>{industry}</Box>
-                <Box component="span" sx={{ color: i === acIdx ? color : 'var(--text)', fontWeight: 600 }}>{item.slice(industry.length)}</Box>
-              </Box>
-              {i === 0 && <Box sx={{ ml: 'auto', px: 0.8, py: 0.2, borderRadius: 0.8, bgcolor: 'var(--item-hover)', color: 'var(--text-muted)', fontSize: '0.65rem', fontFamily: 'monospace', flexShrink: 0 }}>Tab</Box>}
-            </Box>
-          ))}
-        </Box>
-      )}
-    </Box>
-  )
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, height: '100%' }}>
@@ -550,8 +699,8 @@ export default function SearchProspects() {
             <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.35))', fontSize: '0.82rem' }}>{t.search.headingSub}</Typography>
           </Box>
 
-          {SearchBar({ compact: false })}
-          {CountSelector({ size: 'md' })}
+          <SearchBarForm compact={false} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancel} />
+          <CountSelector size="md" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} />
 
           {/* Historial reciente */}
           {history.length > 0 && (
@@ -559,7 +708,7 @@ export default function SearchProspects() {
               <HistoryIcon sx={{ fontSize: 13, color: 'var(--text-muted)' }} />
               <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>{t.search.recent}</Typography>
               {history.map(h => (
-                <Box key={h} onClick={() => { setIndustry(h); handleSearch(h) }}
+                <Box key={h} onClick={() => handleSearch(h, '')}
                   sx={{ px: 1.2, py: 0.3, borderRadius: 10, cursor: 'pointer', fontSize: '0.72rem', color: 'var(--text-muted)', bgcolor: 'var(--item-hover)', border: '1px solid var(--border)', transition: 'all 0.15s', '&:hover': { color: 'var(--accent, #60a5fa)', bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.1)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)' } }}>
                   {h}
                 </Box>
@@ -574,7 +723,7 @@ export default function SearchProspects() {
                 <Typography sx={{ color: group.color, fontSize: '0.65rem', fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', mb: 0.7, opacity: 0.7 }}>{group.label}</Typography>
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.8 }}>
                   {group.items.map(item => (
-                    <Box key={item} onClick={() => { setIndustry(item); handleSearch(item) }}
+                    <Box key={item} onClick={() => handleSearch(item, '')}
                       sx={{ px: 1.6, py: 0.55, borderRadius: '20px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 500, bgcolor: 'var(--item-hover)', color: 'var(--text-muted)', border: '1px solid var(--border)', transition: 'all 0.15s', '&:hover': { bgcolor: `${group.color}18`, color: group.color, border: `1px solid ${group.color}44` } }}>
                       {item}
                     </Box>
@@ -589,8 +738,8 @@ export default function SearchProspects() {
       {/* ── Barra compacta cuando hay resultados ── */}
       {hasResults && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', p: 1.5, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
-          {SearchBar({ compact: true })}
-          {CountSelector({ size: 'sm' })}
+          <SearchBarForm compact={true} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancel} />
+          <CountSelector size="sm" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} />
         </Box>
       )}
 
@@ -630,6 +779,11 @@ export default function SearchProspects() {
             <Typography sx={{ fontSize: '0.75rem', color: '#fbbf24' }}>
               <Box component="span" sx={{ fontWeight: 700 }}>{scrapedCount}</Box> {t.search.inDbCount}
             </Typography>
+            {blockedCount > 0 && (
+              <Typography sx={{ fontSize: '0.75rem', color: '#f87171' }}>
+                <Box component="span" sx={{ fontWeight: 700 }}>{blockedCount}</Box> {t.search.blockedCount}
+              </Typography>
+            )}
             <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
               <Tooltip title={selectedCount === 0 ? t.search.exportUrlsTip : t.search.exportUrlsTip2} placement="top">
                 <span>
@@ -708,25 +862,27 @@ export default function SearchProspects() {
               const realIdx = found.indexOf(item)
               const domain = getDomain(item.url)
               return (
-                <Box key={realIdx} onClick={() => toggleOne(realIdx)}
-                  sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.1, cursor: 'pointer', borderBottom: '1px solid var(--border)', bgcolor: item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.05)' : 'transparent', '&:hover': { bgcolor: item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.08)' : 'var(--item-hover)' }, '&:last-of-type': { borderBottom: 'none' }, transition: 'background-color 0.15s', animation: `${fadeSlideIn} 0.22s ease both`, animationDelay: `${realIdx * 0.025}s` }}>
-                  <Checkbox size="small" checked={item.selected} onChange={() => toggleOne(realIdx)} onClick={e => e.stopPropagation()}
+                <Box key={realIdx} onClick={() => !item.blocked && toggleOne(realIdx)}
+                  sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.1, cursor: item.blocked ? 'not-allowed' : 'pointer', borderBottom: '1px solid var(--border)', opacity: item.blocked ? 0.6 : 1, bgcolor: item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.05)' : 'transparent', '&:hover': { bgcolor: item.blocked ? 'transparent' : item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.08)' : 'var(--item-hover)' }, '&:last-of-type': { borderBottom: 'none' }, transition: 'background-color 0.15s', animation: `${fadeSlideIn} 0.22s ease both`, animationDelay: `${realIdx * 0.025}s` }}>
+                  <Checkbox size="small" checked={item.selected} disabled={item.blocked} onChange={() => toggleOne(realIdx)} onClick={e => e.stopPropagation()}
                     sx={{ color: 'var(--text-muted)', '&.Mui-checked': { color: 'var(--accent, #3b82f6)' }, p: 0.5, flexShrink: 0 }} />
                   {/* Favicon */}
                   <Box component="img"
                     src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`}
                     width={16} height={16}
-                    sx={{ borderRadius: 0.5, flexShrink: 0, opacity: item.scraped ? 0.4 : 0.8 }}
+                    sx={{ borderRadius: 0.5, flexShrink: 0, opacity: item.scraped || item.blocked ? 0.4 : 0.8 }}
                     onError={e => { e.target.style.display = 'none' }}
                   />
                   {/* Dominio + URL completa al hover */}
-                  <Tooltip title={item.url} placement="top" arrow>
+                  <Tooltip title={item.blocked ? `${item.url} — ${t.search.tagBlockedTip} "${item.blockReason}"` : item.url} placement="top" arrow>
                     <Typography component="a" href={item.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
-                      sx={{ fontSize: '0.82rem', fontWeight: item.scraped ? 400 : 500, color: item.scraped ? 'var(--text-muted)' : item.selected ? 'var(--accent, #60a5fa)' : 'var(--text)', textDecoration: 'none', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', '&:hover': { textDecoration: 'underline' } }}>
+                      sx={{ fontSize: '0.82rem', fontWeight: item.scraped ? 400 : 500, color: item.blocked ? 'var(--text-muted)' : item.scraped ? 'var(--text-muted)' : item.selected ? 'var(--accent, #60a5fa)' : 'var(--text)', textDecoration: 'none', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', '&:hover': { textDecoration: 'underline' } }}>
                       {domain}
                     </Typography>
                   </Tooltip>
-                  {item.scraped
+                  {item.blocked
+                    ? <Chip label={t.search.tagBlocked} size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(239,68,68,0.12)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)', flexShrink: 0 }} />
+                    : item.scraped
                     ? <Chip label={t.search.tagVisited} size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)', flexShrink: 0 }} />
                     : <Chip label={t.search.tagNew}     size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(34,197,94,0.1)',  color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)',  flexShrink: 0 }} />
                   }

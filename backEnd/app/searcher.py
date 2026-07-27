@@ -117,6 +117,41 @@ EXCLUDED_DOMAINS = {
     'canirac.org.mx', 'coparmex.org.mx', 'concamin.org.mx', 'canacintra.org.mx',
     'amfac.com.mx', 'conacero.org.mx', 'canaco.org.mx', 'amvo.org.mx',
     'anade.org.mx', 'anpact.com.mx', 'cmic.org.mx',
+    # Marketplaces y comparadores de autos
+    'kavak.com', 'kavak.com.mx', 'seminuevos.com', 'autos.com.mx',
+    'autocosmos.com', 'autofact.com.mx', 'autofact.mx',
+    'autoline.com.mx', 'cargurus.com', 'neoauto.com',
+    'olxautos.com.mx', 'olx.com.mx', 'soloautos.mx', 'soloautos.com.mx',
+    'edrive.com.mx', 'motorpasion.com.mx', 'motorpasion.com',
+    'autoblog.com', 'cardealerpage.com', 'autobytel.com',
+    'car.guru', 'coches.net', 'infocoche.com',
+    'segundamano.com.mx',
+    # Cadenas nacionales de gasolineras
+    'g500.com.mx', 'oxxogas.com', 'bpmexico.com.mx',
+    'totalenergies.mx', 'totalenergies.com',
+    'exxon.com.mx', 'mobil.com.mx', 'shell.com.mx',
+    'hidrosina.com.mx', 'redgas.com.mx', 'energygas.com.mx',
+    'petro7.com.mx', 'lupe.com.mx', 'orsan.com.mx',
+    # Precios de gasolina / regulación energética
+    'energia.gob.mx', 'cre.gob.mx', 'cnh.gob.mx',
+    'gasolinamx.com', 'precio-gasolina.mx', 'gasolina.com.mx',
+    'gasnatural.mx', 'gas-natural.com.mx',
+    'combustibles.com.mx', 'preciosgasolina.mx',
+    # Marcas automotrices (corporativos, no negocios locales)
+    'toyota.com.mx', 'honda.com.mx', 'nissan.com.mx', 'chevrolet.com.mx',
+    'ford.com.mx', 'volkswagen.com.mx', 'kia.com.mx', 'mazda.com.mx',
+    'hyundai.com.mx', 'bmw.com.mx', 'mercedesbenz.com.mx', 'audi.com.mx',
+    'subaru.com.mx', 'jeep.com.mx', 'ram.com.mx', 'dodge.com.mx',
+    'mitsubishi.com.mx', 'suzuki.com.mx', 'renault.com.mx', 'peugeot.com.mx',
+    'seat.com.mx', 'acura.com.mx', 'lexus.com.mx', 'infiniti.com.mx',
+    'volvo.com.mx', 'fiat.com.mx', 'citroen.com.mx',
+    # Refacciones / autopartes (e-commerce, no talleres locales)
+    'autozone.com.mx', 'refaccionariamoclis.com', 'oreillyauto.com',
+    'napa.com.mx', 'advance-auto.com', 'rockauto.com',
+    # Seguros de auto
+    'gnp.com.mx', 'axa.com.mx', 'zurich.com.mx', 'qualitas.com.mx',
+    'hdi.com.mx', 'mapfre.com.mx', 'ana.com.mx', 'chubb.com',
+    'comparaseguros.mx', 'rastreator.mx', 'seguros.com.mx',
 }
 
 
@@ -142,6 +177,19 @@ EXCLUDED_PATH_PATTERNS = [
     '/salones-peluqueria', '/hair-salon/', '/peluquerias/',
     # Páginas de mapa/región genérica
     '/in/mx-', '/lp/en/', '/mp/mx/',
+    # Automotriz: páginas de catálogo de modelos / comparadores
+    '/modelos/', '/modelo/', '/marca/', '/marcas/',
+    '/autos-nuevos/', '/autos-usados/', '/seminuevos/', '/usados/',
+    '/ficha-tecnica/', '/especificaciones/', '/specs/',
+    '/cotiza/', '/cotizacion/', '/cotizador/', '/cotizaciones/',
+    '/precio-del/', '/precios-de/', '/precio-nuevo/', '/precio-usado/',
+    '/dealer/', '/concesionarios/', '/agencias/',
+    '/comparar-autos/', '/versus/', '/comparativa-de/',
+    '/review/', '/reviews/', '/prueba-de-manejo/', '/test-drive/',
+    # Gasolineras: páginas de precios / regulación
+    '/precio-gasolina/', '/precio-combustible/', '/precios-gasolina/',
+    '/gasolineras-cercanas/', '/gasolineras-en/', '/estaciones-de-servicio/',
+    '/estacion/', '/estaciones/',
     # Páginas de asociaciones / contenido sectorial genérico
     '/sector/', '/industria/', '/gremio/', '/asociacion/', '/camara/',
     '/tendencias/', '/estadisticas/', '/mercado/', '/analisis-de-mercado/',
@@ -171,7 +219,16 @@ _CATALOG_DOMAIN = re.compile(
     r'|topde|top[-_]?\d|buscadorde|encuentraen|dondehay'
     r'|catalogo|catalogode|paginas[-_]?amarillas|seccion[-_]?amarilla'
     r'|hotfrog|kompass|cylex|infobel|foursquare|groupon'
-    r'|zomato|happycow|opentable|restorando)',
+    r'|zomato|happycow|opentable|restorando'
+    # Automotriz / gasolineras
+    r'|gasolineras[-_]?en|gasolineras[-_]?cerca|precio[-_]?gasolina'
+    r'|directorio[-_]?auto|autos[-_]?en|autos[-_]?usados[-_]?en'
+    r'|seminuevos[-_]?en|concesionarios[-_]?en|agencias[-_]?en'
+    r'|comparador[-_]?auto|cotizador[-_]?auto|precioauto'
+    # Genéricos adicionales
+    r'|encuentratu|buscanegocio|directoriolocal|negociosenlinea'
+    r'|empresasmx|empresas[-_]?en|negocios[-_]?en|servicios[-_]?en'
+    r'|profesionales[-_]?en|especialistas[-_]?en)',
     re.IGNORECASE,
 )
 
@@ -216,6 +273,10 @@ def _is_business_url(url: str) -> bool:
             return False
         if _LISTICLE_SLUG.search(path):
             return False
+        # Query strings with search/filter params are directory result pages, not business sites
+        qs = parsed.query.lower()
+        if any(k in qs for k in ('q=', 'query=', 'search=', 'keyword=', 'ciudad=', 'categoria=')):
+            return False
         return True
     except Exception:
         return False
@@ -255,42 +316,69 @@ INDUSTRY_SYNONYMS: dict[str, list[str]] = {
     "ferreteria":    ["ferretería", "materiales", "construcción"],
     "panaderia":     ["panadería", "bakery", "pastelería"],
     "cafeteria":     ["café", "coffee shop", "cafetería"],
-    "taller":        ["mecánico", "taller automotriz", "refacciones"],
+    "taller":        ["mecánico", "taller automotriz", "servicio automotriz"],
+    "automotriz":    ["taller mecánico", "servicio automotriz", "refacciones", "concesionario"],
+    "concesionario": ["agencia de autos", "distribuidor automotriz", "automotriz"],
+    "agencia":       ["concesionario", "distribuidor", "automotriz"],
+    "refaccionaria": ["refacciones", "autopartes", "taller mecánico"],
+    "gasera":        ["gasolinera", "estación de servicio", "combustible"],
+    "gasolinera":    ["gasera", "estación de servicio", "combustible"],
+    "clinica":       ["clínica", "médico", "consultorio", "hospital"],
+    "medico":        ["médico", "clínica", "consultorio", "doctor"],
+    "constructor":   ["constructora", "construcción", "obra", "contratista"],
+    "inmobiliaria":  ["bienes raíces", "propiedades", "realty"],
+    "seguridad":     ["vigilancia", "guardias", "alarmas", "cámaras"],
+    "lavanderia":    ["lavandería", "tintorería", "dry cleaning"],
+    "optometria":    ["óptica", "optometrista", "lentes", "anteojos"],
+    "psicologia":    ["psicólogo", "terapeuta", "salud mental"],
 }
+
+
+_NOISE = '-directorio -guia -guía -blog -listado -noticias -revista -articulo'
 
 
 def _build_variations(industry: str, city: str = "") -> list[str]:
     """
     Build DDG query variations designed to return actual business WEBSITES,
-    not directories. Key insight: avoid 'contacto teléfono dirección' — those
-    terms make DDG return Sección Amarilla / Yelp / Hotfrog.
+    not directories. Uses advanced DDG operators:
+      - Exact phrase quotes for the industry term
+      - site:.mx and site:com.mx to favour Mexican domains
+      - intitle: to find pages that are about the business, not listicles
+      - -term exclusions to suppress directories/blogs at query level
+    Avoid 'contacto teléfono dirección' — those attract Sección Amarilla / Hotfrog.
     """
     ind = industry.strip()
+    ind_q = f'"{ind}"'
     synonyms = INDUSTRY_SYNONYMS.get(ind.lower(), [])
+    is_fitness = "gym" in synonyms or ind.lower() in ("gimnasio", "fitness")
 
     if city.strip():
         loc = city.strip()
         queries = [
-            f"{ind} {loc}",
-            f"{ind} {loc} sitio web",
+            f"{ind_q} {loc}",
             f"site:.mx {ind} {loc}",
+            f"site:com.mx {ind} {loc}",
+            f"intitle:{ind_q} {loc}",
+            f"{ind} {loc} {_NOISE}",
             f"{ind} {loc} whatsapp",
-            f"{ind} {loc} membresía" if "gym" in synonyms or ind.lower() in ("gimnasio", "fitness") else f"{ind} {loc} servicio",
+            f"{ind} {loc} {'membresía' if is_fitness else 'servicio'}",
         ]
-        for syn in synonyms[:3]:
-            queries.append(f"{syn} {loc}")
+        for syn in synonyms[:2]:
+            queries.append(f'"{syn}" {loc}')
         return queries
 
     # Sin ciudad: queries base + por cada ciudad grande + sinónimos
     base = [
-        f"{ind} México",
+        f"{ind_q} México",
         f"site:.mx {ind}",
-        f"{ind} México sitio web",
+        f"site:com.mx {ind}",
+        f"intitle:{ind_q} México",
+        f"{ind} México {_NOISE}",
         f"{ind} México whatsapp",
-        f"{ind} México inscripción" if ind.lower() in ("gimnasio", "gym", "fitness") else f"{ind} México servicio",
+        f"{ind} México {'inscripción' if is_fitness else 'servicio'}",
     ]
-    city_queries = [f"{ind} {c}" for c in MAJOR_CITIES]
-    synonym_queries = [f"{syn} México" for syn in synonyms[:4]]
+    city_queries = [f"{ind_q} {c}" for c in MAJOR_CITIES]
+    synonym_queries = [f'"{syn}" México' for syn in synonyms[:4]]
     return base + city_queries + synonym_queries
 
 

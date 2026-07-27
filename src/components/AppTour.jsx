@@ -10,15 +10,18 @@ const Joyride = dynamic(
 
 const TOUR_TARGETS = [
   '#tour-sidebar',
+  '#tour-top-controls',
   '#tour-nav-instances',
   '#tour-nav-single',
   '#tour-nav-batch',
   '#tour-nav-csv',
   '#tour-nav-database',
   '#tour-nav-search',
+  '#tour-nav-blacklist',
   '#tour-nav-convs',
   '#tour-nav-schedule',
   '#tour-nav-analytics',
+  '#tour-settings',
 ]
 
 const JOYRIDE_OPTIONS = {
@@ -49,18 +52,22 @@ function TourTooltip({ step, tooltipProps, primaryProps, backProps, skipProps, i
           {step.title}
         </div>
       )}
-      <div style={{ color: '#475569', fontSize: '0.84rem', lineHeight: 1.65 }}>
+      <div style={{ color: '#1e293b', fontSize: '0.84rem', lineHeight: 1.65 }}>
         {step.content}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 18 }}>
         <button {...skipProps} style={{
-          background: 'none', border: 'none', cursor: 'pointer',
-          color: '#94a3b8', fontSize: '0.75rem', padding: '4px 0',
-        }}>
+          background: 'none', border: '1px solid #cbd5e1', borderRadius: 8, cursor: 'pointer',
+          color: '#64748b', fontSize: '0.75rem', padding: '4px 10px',
+          transition: 'all 0.15s',
+        }}
+          onMouseEnter={e => { e.currentTarget.style.background = '#f1f5f9'; e.currentTarget.style.color = '#0f172a'; e.currentTarget.style.borderColor = '#94a3b8' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#64748b'; e.currentTarget.style.borderColor = '#cbd5e1' }}
+        >
           {tl.skip}
         </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ color: '#cbd5e1', fontSize: '0.72rem' }}>
+          <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}>
             {index + 1}/{size}
           </span>
           {index > 0 && (
@@ -86,7 +93,8 @@ function TourTooltip({ step, tooltipProps, primaryProps, backProps, skipProps, i
 }
 
 
-export default function AppTour({ username }) {
+// navigate(key) switches the active tab by nav key (e.g. 'search', 'blacklist')
+export default function AppTour({ username, navigate, navKeys }) {
   const [run, setRun] = useState(false)
   const { t } = useLang()
   const tl = t.tour
@@ -111,10 +119,19 @@ export default function AppTour({ username }) {
     }
   }, [username])
 
-  function handleCallback({ status }) {
+  function handleCallback({ status, type, index }) {
     if (status === 'finished' || status === 'skipped') {
       localStorage.setItem(`tour_done_${username}`, '1')
       setRun(false)
+      return
+    }
+    if (type === 'step:before') {
+      const target = TOUR_TARGETS[index]
+      if (target?.startsWith('#tour-nav-') && navigate && navKeys) {
+        const key = target.replace('#tour-nav-', '')
+        const navIndex = navKeys.indexOf(key)
+        if (navIndex !== -1) navigate(navIndex)
+      }
     }
   }
 

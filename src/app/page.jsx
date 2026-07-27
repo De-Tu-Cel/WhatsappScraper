@@ -1,5 +1,5 @@
 'use client'
-import React, { useState, useEffect, useLayoutEffect } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react'
 import { useUser } from '../context/UserContext'
 import LoginScreen from '../components/LoginScreen'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -31,6 +31,33 @@ import RouterIcon from '@mui/icons-material/Router'
 import Settings, { loadSettings, applySettings } from '../components/Settings'
 import { useLang } from '../context/LangContext'
 import AppTour from '../components/AppTour'
+import TopControls from '../components/TopControls'
+import AppearancePanel from '../components/AppearancePanel'
+import NotificationsPanel from '../components/NotificationsPanel'
+import BlacklistPanel from '../components/BlacklistPanel'
+import BlockIcon from '@mui/icons-material/Block'
+
+// Lazy-mount + memo: each tab mounts only on first visit, then stays mounted
+// (hidden via display:none) so returning to it is instant. This prevents all
+// 11 nav components from mounting simultaneously on page load.
+const NavContent = React.memo(function NavContent({ items, active, settingsOpen, mounted }) {
+  const visitedRef = useRef(new Set())
+  if (mounted && !settingsOpen) visitedRef.current.add(active)
+
+  return (
+    <>
+      {items.map((item, i) => {
+        if (!visitedRef.current.has(i)) return null
+        const isActive = mounted && !settingsOpen && active === i
+        return (
+          <Box key={i} sx={{ display: isActive ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+            {React.cloneElement(item.component, { isActive })}
+          </Box>
+        )
+      })}
+    </>
+  )
+})
 
 const NAV_KEYS = [
   { key: 'single',    icon: <LinkIcon />,              component: <SingleUrlProcessor /> },
@@ -38,6 +65,7 @@ const NAV_KEYS = [
   { key: 'csv',       icon: <UploadFileIcon />,         component: <CsvImporter /> },
   { key: 'database',  icon: <StorageIcon />,            component: <DatabaseViewer /> },
   { key: 'search',    icon: <SearchIcon />,             component: <SearchProspects /> },
+  { key: 'blacklist', icon: <BlockIcon />,              component: <BlacklistPanel /> },
   { key: 'convs',     icon: <ForumIcon />,              component: <Conversations /> },
   { key: 'analytics', icon: <AnalyticsIcon />,          component: <Analytics /> },
   { key: 'schedule',  icon: <ScheduleSendIcon />,       component: <ScheduledSends /> },
@@ -52,9 +80,16 @@ export default function DashboardPage() {
   const [open,         setOpen]         = useState(true)
   const [mounted,      setMounted]      = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Appearance and notifications share the right-side dock — only one open at a time.
+  const [rightPanel, setRightPanel] = useState(null) // 'appearance' | 'notifications' | null
+  const appearanceOpen = rightPanel === 'appearance'
+  const notifOpen = rightPanel === 'notifications'
 
   const { t } = useLang()
-  const NAV_ITEMS = NAV_KEYS.map(item => ({ ...item, label: t.nav[item.key] || item.key }))
+  const NAV_ITEMS = useMemo(
+    () => NAV_KEYS.map(item => ({ ...item, label: t.nav[item.key] || item.key })),
+    [t]
+  )
 
   // Verificar si hay usuarios registrados (para mostrar form de registro)
   useEffect(() => {
@@ -79,7 +114,16 @@ export default function DashboardPage() {
     if (mounted) localStorage.setItem('activeTab', active)
   }, [active, mounted])
 
-  const visibleNavItems = NAV_ITEMS.filter(item => !item.adminOnly || user?.role === 'admin')
+  const visibleNavItems = useMemo(
+    () => NAV_ITEMS.filter(item => !item.adminOnly || user?.role === 'admin'),
+    [NAV_ITEMS, user?.role]
+  )
+
+  const handleNavClick      = useCallback((i) => { setActive(i); setSettingsOpen(false) }, [])
+  const handleSettingsClick = useCallback(() => setSettingsOpen(s => !s), [])
+  const toggleAppearance    = useCallback(() => setRightPanel(p => p === 'appearance' ? null : 'appearance'), [])
+  const toggleNotifications = useCallback(() => setRightPanel(p => p === 'notifications' ? null : 'notifications'), [])
+  const closeRightPanel     = useCallback(() => setRightPanel(null), [])
 
   // ── Returns condicionales al final, tras todos los hooks ──
   if (authLoading) return (
@@ -89,11 +133,6 @@ export default function DashboardPage() {
   )
 
   if (!user) return <LoginScreen hasUsers={hasUsers} />
-
-  function handleNavClick(i) {
-    setActive(i)
-    setSettingsOpen(false)
-  }
 
   return (
     <Box sx={{ display: 'flex', height: '100vh', bgcolor: 'var(--bg, #080c14)', p: 1.5, gap: 1.5, boxSizing: 'border-box', position: 'relative' }}>
@@ -134,13 +173,17 @@ export default function DashboardPage() {
           </Box>
         </Box>
       )}
-      <AppTour username={user?.username} />
+      <AppTour
+        username={user?.username}
+        navigate={handleNavClick}
+        navKeys={visibleNavItems.map(i => i.key)}
+      />
       <Sidebar
         open={open} setOpen={setOpen}
         active={mounted ? active : -1} setActive={handleNavClick}
         navItems={visibleNavItems}
         settingsOpen={settingsOpen}
-        onSettingsClick={() => setSettingsOpen(s => !s)}
+        onSettingsClick={handleSettingsClick}
       />
 
       <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
@@ -163,18 +206,30 @@ export default function DashboardPage() {
             background: 'radial-gradient(circle, rgba(var(--accent-rgb, 99,102,241), 0.07) 0%, transparent 70%)',
             pointerEvents: 'none', zIndex: 0,
           }} />
+          {/* TopControls pegado a la esquina superior derecha del card, sin consumir espacio vertical */}
+          <Box sx={{ position: 'absolute', top: 10, right: 14, zIndex: 6 }}>
+            <TopControls
+              appearanceOpen={appearanceOpen} onToggleAppearance={toggleAppearance}
+              notifOpen={notifOpen} onToggleNotifications={toggleNotifications}
+            />
+          </Box>
           <Box sx={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
             {/* Settings panel */}
             <Box sx={{ display: settingsOpen ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
               <Settings />
             </Box>
-            {/* Nav items */}
-            {visibleNavItems.map((item, i) => (
-              <Box key={i} sx={{ display: mounted && !settingsOpen && active === i ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-                {React.cloneElement(item.component, { isActive: mounted && !settingsOpen && active === i })}
-              </Box>
-            ))}
+            {/* Nav items — memo-wrapped so rightPanel state changes don't re-render the stack */}
+            <NavContent items={visibleNavItems} active={active} settingsOpen={settingsOpen} mounted={mounted} />
           </Box>
+          {/* Invisible click-catcher — closes whichever right panel is open when
+              clicking anywhere outside it. Nothing inside those panels is lost on
+              close: appearance saves per-click, and there's nothing else to persist. */}
+          {rightPanel && (
+            <Box onClick={() => setRightPanel(null)}
+              sx={{ position: 'absolute', inset: 0, zIndex: 4 }} />
+          )}
+          <AppearancePanel open={appearanceOpen} onClose={closeRightPanel} />
+          <NotificationsPanel open={notifOpen} onClose={closeRightPanel} />
         </Box>
       </Box>
     </Box>

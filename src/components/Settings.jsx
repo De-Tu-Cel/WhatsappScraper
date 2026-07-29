@@ -259,12 +259,27 @@ function Section({ icon, title, children }) {
 
 const INPUT_SX = { '& .MuiOutlinedInput-root': { bgcolor: 'rgba(255,255,255,0.04)', fontSize: '0.82rem', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' }, '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' } }, '& input': { color: 'white' } }
 
-function AccountSection({ user, connStatus, connPhone, evo }) {
-  const { t } = useLang()
+function AccountSection({ user }) {
+  const { t, lang } = useLang()
   const [code,      setCode]      = useState(null)  // null=no cargado, ''=no tiene, 'XXXX'=código
   const [revealed,  setRevealed]  = useState(false)
   const [copied,    setCopied]    = useState(false)
   const [loading,   setLoading]   = useState(false)
+  const [myInst,    setMyInst]    = useState([])
+
+  useEffect(() => {
+    const tok = localStorage.getItem('user_token')
+    if (!tok) return
+    fetch('/api/instances', { headers: { 'x-user-token': tok } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return
+        const all = Array.isArray(d) ? d : (d.instances || [])
+        const uid = user?._id || user?.id
+        setMyInst(uid ? all.filter(i => i.assigned_to === uid) : [])
+      })
+      .catch(() => {})
+  }, [user?._id])
 
   async function loadCode() {
     setLoading(true)
@@ -303,16 +318,60 @@ function AccountSection({ user, connStatus, connPhone, evo }) {
           </Box>
         </Box>
 
-        {/* WhatsApp vinculado */}
-        {(connStatus === 'connected' || connPhone) && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1.2, borderRadius: 2, bgcolor: 'rgba(37,211,102,0.06)', border: '1px solid rgba(37,211,102,0.15)' }}>
-            <PhoneAndroidIcon sx={{ fontSize: 15, color: '#4ade80', flexShrink: 0 }} />
-            <Box>
-              <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{t.settings.waLinked}</Typography>
-              <Typography sx={{ color: '#4ade80', fontSize: '0.82rem', fontWeight: 600, fontFamily: 'monospace' }}>{connPhone || evo.instance}</Typography>
+        {/* WhatsApp instances */}
+        {myInst.length > 0 && (() => {
+          const connCount = myInst.filter(i => ['open','connected'].includes(i.live_status)).length
+          const hasRotation = connCount >= 2
+          return (
+            <Box sx={{ p: 1.2, borderRadius: 2, bgcolor: 'rgba(37,211,102,0.04)', border: '1px solid rgba(37,211,102,0.12)' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.8 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                  <PhoneAndroidIcon sx={{ fontSize: 13, color: '#4ade80' }} />
+                  <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    {lang === 'en' ? 'WhatsApp Instances' : 'Instancias WhatsApp'}
+                  </Typography>
+                </Box>
+                {hasRotation && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, px: 0.8, py: 0.2, borderRadius: 1,
+                    bgcolor: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)' }}>
+                    <Box sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: '#4ade80' }} />
+                    <Typography sx={{ fontSize: '0.58rem', color: '#4ade80', fontWeight: 700 }}>
+                      {lang === 'en' ? 'rotation active' : 'rotación activa'}
+                    </Typography>
+                  </Box>
+                )}
+              </Box>
+              {myInst.map(inst => {
+                const s = inst.live_status || 'unknown'
+                const isConn = ['open','connected'].includes(s)
+                const isConnecting = s === 'connecting'
+                const dot = isConn ? '#22c55e' : isConnecting ? '#f59e0b' : 'rgba(255,255,255,0.2)'
+                const label = isConn
+                  ? (lang === 'en' ? 'Connected' : 'Conectada')
+                  : isConnecting
+                    ? (lang === 'en' ? 'Connecting' : 'Conectando')
+                    : (lang === 'en' ? 'Disconnected' : 'Desconectada')
+                return (
+                  <Box key={inst.name} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.35 }}>
+                    <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: dot, flexShrink: 0,
+                      boxShadow: isConn ? `0 0 4px ${dot}88` : 'none' }} />
+                    <Typography sx={{ fontSize: '0.77rem', fontWeight: 600, color: '#4ade80', fontFamily: 'monospace',
+                      flex: '0 0 auto', minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {inst.name}
+                    </Typography>
+                    <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', fontFamily: 'monospace', flex: 1,
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {inst.number ? `+${inst.number}` : (lang === 'en' ? 'No number' : 'Sin número')}
+                    </Typography>
+                    <Typography sx={{ fontSize: '0.64rem', fontWeight: 600, color: dot, flexShrink: 0 }}>
+                      {label}
+                    </Typography>
+                  </Box>
+                )
+              })}
             </Box>
-          </Box>
-        )}
+          )
+        })()}
 
         {/* Código de recuperación */}
         <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'rgba(250,204,21,0.05)', border: '1px solid rgba(250,204,21,0.15)' }}>
@@ -489,25 +548,30 @@ export default function Settings() {
   const pollRef    = useRef(null)
   const qrTimerRef = useRef(null)
 
-  // Verificar estado real de conexión al cargar
+  // Verificar estado real de conexión — lee instancias asignadas al usuario desde la API
   useEffect(() => {
+    const uid = user?._id
+    if (!uid) { setConnStatus('disconnected'); return }
     async function checkConn() {
-      const cfg = loadEvoConfig()
-      if (!cfg.instance) { setConnStatus('disconnected'); return }
+      const tok = localStorage.getItem('user_token')
+      if (!tok) { setConnStatus('disconnected'); return }
       try {
-        const r = await fetch(`/api/evolution/instance/${cfg.instance}?type=status`)
+        const r = await fetch('/api/instances', { headers: { 'x-user-token': tok } })
+        if (!r.ok) { setConnStatus('disconnected'); return }
         const d = await r.json()
-        const state = d.instance?.state || d.state || ''
-        if (state === 'open') {
+        const all = Array.isArray(d) ? d : (d.instances || [])
+        const mine = all.filter(i => i.assigned_to === uid)
+        const connected = mine.filter(i => ['open','connected'].includes(i.live_status))
+        if (connected.length > 0) {
           setConnStatus('connected')
-          setConnPhone(d.instance?.profileName || d.instance?.wid?.user || cfg.instance)
+          setConnPhone(connected[0].number ? `+${connected[0].number}` : connected[0].name)
         } else {
-          setConnStatus('disconnected')
+          setConnStatus(mine.length > 0 ? 'disconnected' : 'disconnected')
         }
       } catch { setConnStatus('disconnected') }
     }
     checkConn()
-  }, [])
+  }, [user])
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }

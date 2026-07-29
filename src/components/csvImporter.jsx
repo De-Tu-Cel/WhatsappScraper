@@ -1,6 +1,5 @@
 'use client'
 import { useState, useRef } from 'react'
-import { authFetch } from '@/lib/api'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
 import * as XLSX from 'xlsx'
@@ -30,7 +29,6 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import ErrorIcon from '@mui/icons-material/Error'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import TableChartIcon from '@mui/icons-material/TableChart'
-import LinkIcon from '@mui/icons-material/Link'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import MessageIcon from '@mui/icons-material/Message'
 import SendIcon from '@mui/icons-material/Send'
@@ -39,8 +37,9 @@ import Collapse from '@mui/material/Collapse'
 import { getTemplates } from './singleUrlProcessor'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
-import { SendConfigPanel, CountdownBar } from './SendConfigPanel'
-import { loadSendConfig, randMsgDelayMs, randBatchBreakMs, randBatchSize } from '@/lib/sendConfig'
+import { SendConfigPanel } from './SendConfigPanel'
+import { loadSendConfig } from '@/lib/sendConfig'
+import { useSendQueue } from '../context/SendQueueContext'
 import { useLang } from '../context/LangContext'
 import { isValidUrl } from '@/lib/validators'
 
@@ -124,7 +123,7 @@ function downloadTemplate() {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function CsvImporter() {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const TEMPLATES = getTemplates(t)
   const inputRef   = useRef(null)
   const pauseRef   = useRef(false)
@@ -148,15 +147,11 @@ export default function CsvImporter() {
   const [selectedTpl,setSelectedTpl]= useState(TEMPLATES[0].id)
   const [msgText,    setMsgText]    = useState(TEMPLATES[0].text)
   const [extraVariants, setExtraVariants] = useState([])
-  const [sendingAll, setSendingAll] = useState(false)
   const [sendError,  setSendError]  = useState('')
   const [showSend,   setShowSend]   = useState(false)
   const [showTiming, setShowTiming] = useState(false)
   const [sendCfg,    setSendCfg]    = useState(() => loadSendConfig())
-  const [countdown,  setCountdown]  = useState(null)
-  const [cdTotal,    setCdTotal]    = useState(0)
-  const [cdLabel,    setCdLabel]    = useState('msg')
-  const [batchNum,   setBatchNum]   = useState(1)
+  const { addBatch, cancel: cancelQueue, active: queueActive } = useSendQueue()
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
   const msgRef       = useRef(null)
   const highlightRef = useRef(null)
@@ -255,6 +250,13 @@ export default function CsvImporter() {
           })
           if (!r.ok) throw new Error(`HTTP ${r.status}`)
           const d = await r.json()
+          if (d.blacklisted) {
+            completed++
+            setProgress(Math.round(completed / total * 100))
+            setCompletedCount(completed)
+            setCurrentUrl(url)
+            return { url, empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, status_wa: '—', msg_status: null, ok: false, blacklisted: true, blockReason: d.matched, duplicate: false }
+          }
           const duplicate = d.duplicate === true
           const row = {
             url,
@@ -267,6 +269,8 @@ export default function CsvImporter() {
             status_wa:   d.send_result?.status_code || '—',
             msg_status:  null,
             ok:          true,
+            blacklisted: false,
+            blockReason: null,
             duplicate,
           }
           completed++
@@ -321,8 +325,9 @@ export default function CsvImporter() {
 
 
   const waRows      = results.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
-  const alreadySent = results.some(r => r.msg_status === 'sent' || r.msg_status === 'failed')
-  const sentCount   = results.filter(r => r.msg_status === 'sent').length
+  const alreadySent = results.some(r => r.msg_status === 'sent' || r.msg_status === 'failed' || r.msg_status === 'queued')
+  const isSending   = queueActive !== null && alreadySent
+  const sentCount   = results.filter(r => r.msg_status === 'sent' || r.msg_status === 'queued').length
   const totalNumbers = waRows.reduce((sum, r) => sum + (r.all_whatsapp?.length > 0 ? r.all_whatsapp.length : (r.whatsapp ? 1 : 0)), 0)
   // Sending to 2+ numbers needs varied text (see MIN_TEMPLATES_FOR_BULK) — editing
   // one base message stops making sense there, so it switches to picking 3+ saved templates.
@@ -330,73 +335,26 @@ export default function CsvImporter() {
   const allVariants = (isBulk ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean)
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
-  async function waitWithTimer(ms, label) {
-    const totalSecs = Math.ceil(ms / 1000)
-    setCdTotal(totalSecs)
-    setCdLabel(label)
-    for (let remaining = totalSecs; remaining >= 0; remaining--) {
-      setCountdown(remaining)
-      if (remaining === 0) break
-      await new Promise(r => setTimeout(r, 1000))
-    }
-    setCountdown(null)
-  }
-
-  async function handleSendAll() {
+  function handleSendAll() {
     const targets = waRows
     if (!targets.length || belowMinTemplates) return
-    setSendingAll(true)
-    const updated = [...results]
     let lastVariant = null
-    let msgsInBatch = 0
-    let nextBreakAt = randBatchSize(sendCfg)
-    let currentBatch = 1
-    setBatchNum(1)
-    for (let i = 0; i < targets.length; i++) {
-      const row = targets[i]
-      const idx = results.findIndex(r => r.url === row.url)
-      try {
-        const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
-        let lastStatus = 'failed'
-        for (const num of numbers) {
-          const variant = pickMessageVariant(allVariants, lastVariant)
-          lastVariant = variant
-          const message = renderTemplate(variant, row.scraped_data)
-          const res = await authFetch('/api/send-message', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ company_id: row.company_id, to_number: num, message: message || msgText, website: row.url }),
-          })
-          if (!res.ok) {
-            const errJson = await res.json().catch(() => ({}))
-            const detail = errJson.detail || `Error ${res.status}`
-            setSendError(detail)
-            setTimeout(() => setSendError(''), 10_000)
-            throw new Error(detail)
-          }
-          const json = await res.json()
-          if (json.status === 'sent') lastStatus = 'sent'
-        }
-        updated[idx] = { ...updated[idx], msg_status: lastStatus }
-      } catch {
-        updated[idx] = { ...updated[idx], msg_status: 'failed' }
-      }
-      setResults([...updated])
-      if (i < targets.length - 1) {
-        msgsInBatch++
-        if (msgsInBatch >= nextBreakAt) {
-          msgsInBatch = 0
-          nextBreakAt = randBatchSize(sendCfg)
-          currentBatch++
-          setBatchNum(currentBatch)
-          await waitWithTimer(randBatchBreakMs(sendCfg), 'batch')
-        } else {
-          await waitWithTimer(randMsgDelayMs(sendCfg), 'msg')
-        }
-      }
+    const updated = results.map(r => ({ ...r }))
+    const jobs = []
+    for (const row of targets) {
+      const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
+      if (!numbers.length) continue
+      const messages = numbers.map(() => {
+        const v = pickMessageVariant(allVariants, lastVariant)
+        lastVariant = v
+        return renderTemplate(v, row.scraped_data)
+      })
+      jobs.push({ numbers, messages, companyId: row.company_id, website: row.url })
+      const idx = updated.findIndex(r => r.url === row.url)
+      if (idx >= 0) updated[idx] = { ...updated[idx], msg_status: 'queued' }
     }
-    setCountdown(null)
-    setSendingAll(false)
+    addBatch(jobs, lang === 'en' ? 'CSV import' : 'Importación CSV')
+    setResults(updated)
   }
 
   const hasFile    = allUrls.length > 0
@@ -662,15 +620,25 @@ export default function CsvImporter() {
               </Box>
               <Collapse in={showTiming}>
                 <Box sx={{ mb: 1.5 }}>
-                  <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={sendingAll} />
+                  <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
                 </Box>
               </Collapse>
 
-              {/* Countdown */}
-              {sendingAll && countdown !== null && (
-                <Box sx={{ mb: 1.5 }}>
-                  <CountdownBar countdown={countdown} total={cdTotal} label={cdLabel} batchNum={batchNum} msgNum={results.filter(r => r.msg_status).length} msgTotal={waRows.length} />
-                </Box>
+              {/* Countdown + cancel during send */}
+              {isSending && (
+                <Button
+                  fullWidth
+                  onClick={cancelQueue}
+                  startIcon={<HighlightOffIcon />}
+                  sx={{
+                    mb: 1.5, py: 0.8, textTransform: 'none', fontWeight: 600, fontSize: '0.82rem',
+                    color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)',
+                    border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5,
+                    '&:hover': { bgcolor: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.45)' },
+                  }}
+                >
+                  {t.csv.cancel}
+                </Button>
               )}
 
               {!isBulk && <>
@@ -731,15 +699,15 @@ export default function CsvImporter() {
               <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
 
               <Button fullWidth onClick={handleSendAll}
-                disabled={waRows.length === 0 || alreadySent || sendingAll || isDisconnected || belowMinTemplates}
-                startIcon={sendingAll ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
+                disabled={waRows.length === 0 || alreadySent || isDisconnected || belowMinTemplates}
+                startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
                 sx={{
                   fontSize: '0.82rem', fontWeight: 700, py: 1, textTransform: 'none', borderRadius: 1.5,
                   bgcolor: 'rgba(34,197,94,0.15)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.35)',
                   '&:hover': { bgcolor: 'rgba(34,197,94,0.25)' },
                   '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
                 }}>
-                {alreadySent ? `${sentCount} ${t.csv.msgSent}` : sendingAll ? t.csv.sending : `${t.csv.sendTo} ${waRows.length} ${waRows.length !== 1 ? t.csv.companies : t.csv.company} ${t.csv.withWhatsApp}`}
+                {alreadySent ? `${sentCount} ${t.csv.msgSent}` : `${t.csv.sendTo} ${waRows.length} ${waRows.length !== 1 ? t.csv.companies : t.csv.company} ${t.csv.withWhatsApp}`}
               </Button>
             </Box>
           </Collapse>
@@ -806,7 +774,12 @@ export default function CsvImporter() {
                       </TableCell>
                       <TableCell sx={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{r.status_wa}</TableCell>
                       <TableCell>
-                        {r.duplicate ? (
+                        {r.blacklisted ? (
+                          <Tooltip title={`🚫 Blacklist · "${r.blockReason}"`} placement="top" arrow>
+                            <Chip label={t.csv.statusBlocked} size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
+                              sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' }, cursor: 'help' }} />
+                          </Tooltip>
+                        ) : r.duplicate ? (
                           <Chip label={t.csv.statusDup} size="small" icon={<WarningAmberIcon sx={{ fontSize: '12px !important' }} />}
                             sx={{ bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#fbbf24' } }} />
                         ) : r.ok ? (

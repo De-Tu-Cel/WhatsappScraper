@@ -178,34 +178,53 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         db = MongoDBManager()
         if not EVOLUTION_API_KEY:
             raise HTTPException(status_code=400, detail="Evolution API no configurada")
-        # Usar instancia del usuario logueado si existe, sino la global
+        # ── Rotación de instancias: elige aleatoriamente entre las conectadas del usuario ──
+        import random, requests as _req
+        from concurrent.futures import ThreadPoolExecutor
+
         instance = EVOLUTION_INSTANCE
+        _all_disconnected = False
+
         if x_user_token:
             user = get_user_by_token(x_user_token)
-            if user and user.get("evolution_instance"):
-                instance = user["evolution_instance"]
+            if user:
+                user_id = str(user.get("_id", ""))
+                assigned = list(db.db.instances.find(
+                    {"assigned_to": user_id}, {"_id": 0, "name": 1}
+                )) if user_id else []
+
+                if assigned:
+                    names = [i["name"] for i in assigned]
+
+                    def _check_state(name):
+                        try:
+                            r = _req.get(
+                                f"{EVOLUTION_API_URL}/instance/connectionState/{name}",
+                                headers={"apikey": EVOLUTION_API_KEY}, timeout=2,
+                            )
+                            state = (r.json().get("instance") or {}).get("state") or r.json().get("state", "")
+                            return name if state == "open" else None
+                        except Exception:
+                            return None
+
+                    with ThreadPoolExecutor(max_workers=len(names)) as ex:
+                        connected = [n for n in ex.map(_check_state, names) if n]
+
+                    if connected:
+                        instance = random.choice(connected)
+                        print(f"[SendMsg] rotación → {instance} ({len(connected)}/{len(names)} conectadas)")
+                    else:
+                        _all_disconnected = True
+                elif user.get("evolution_instance"):
+                    instance = user["evolution_instance"]
+
+        if _all_disconnected:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Ninguna de tus instancias está conectada. Ve a Instancias para reconectar.",
+            )
         if not instance:
             raise HTTPException(status_code=400, detail="Sin instancia de WhatsApp configurada")
-
-        # ── Pre-flight: verify instance is connected before attempting send ──
-        try:
-            import requests as _req
-            _sr = _req.get(
-                f"{EVOLUTION_API_URL}/instance/connectionState/{instance}",
-                headers={"apikey": EVOLUTION_API_KEY},
-                timeout=4,
-            )
-            _data = _sr.json()
-            _state = (_data.get("instance") or {}).get("state") or _data.get("state", "")
-            if _state and _state != "open":
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"Instancia '{instance}' desconectada (estado: {_state}). Ve a Configuración → WhatsApp para reconectar.",
-                )
-        except HTTPException:
-            raise
-        except Exception:
-            pass  # Si el chequeo falla (timeout, etc.) intentamos enviar de todas formas
 
         evo = EvolutionClient(EVOLUTION_API_URL, EVOLUTION_API_KEY, instance)
 
@@ -1046,6 +1065,13 @@ def _normalize_blacklist_value(t: str, value: str) -> str:
     return value
 
 
+@router.get("/blacklist/system")
+def api_get_system_blacklist():
+    from app.searcher import EXCLUDED_DOMAINS
+    domains = sorted(list(EXCLUDED_DOMAINS))
+    return {"domains": domains, "total": len(domains)}
+
+
 @router.get("/blacklist")
 def api_get_blacklist(
     type: Optional[str] = None,
@@ -1347,7 +1373,7 @@ def api_evo_verify_otp(name: str, body: dict):
 ADB_AGENT_URL = os.environ.get("ADB_AGENT_URL", "http://10.0.1.1:9876")
 
 @router.get("/register/emulator-stream")
-async def register_emulator_stream(phone: str, instance: str = "telnyx-01"):
+async def register_emulator_stream(phone: str, instance: str = "wa-01", country: int = 54):
     """Proxy SSE from ADB agent on host to the UI."""
     import httpx
     from fastapi.responses import StreamingResponse
@@ -1357,7 +1383,7 @@ async def register_emulator_stream(phone: str, instance: str = "telnyx-01"):
             async with httpx.AsyncClient(timeout=None) as client:
                 async with client.stream(
                     "POST", f"{ADB_AGENT_URL}/register",
-                    json={"phone": phone, "instance": instance},
+                    json={"phone": phone, "instance": instance, "country": country},
                     timeout=httpx.Timeout(connect=10, read=180, write=10, pool=10),
                 ) as r:
                     async for chunk in r.aiter_bytes():
@@ -1370,6 +1396,17 @@ async def register_emulator_stream(phone: str, instance: str = "telnyx-01"):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+@router.post("/register/preview")
+async def register_preview(body: dict = {}):
+    """Get SMSFast balance and session info before starting registration."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(f"{ADB_AGENT_URL}/register/preview", json=body)
+            return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"ADB agent not reachable: {e}")
 
 @router.get("/register/agent-health")
 def register_agent_health():
@@ -1712,25 +1749,39 @@ _NOTIFICATIONS_WINDOW_HOURS = 24
 
 
 @router.get("/notifications/count")
-def api_notifications_count(x_user_token: Optional[str] = Header(None)):
+def api_notifications_count(
+    x_user_token: Optional[str] = Header(None),
+    since: Optional[str] = None,
+):
     _require_user(x_user_token)
     try:
         from datetime import datetime, timedelta
         db = MongoDBManager()
-        cutoff = datetime.utcnow() - timedelta(hours=_NOTIFICATIONS_WINDOW_HOURS)
-        count = db.db.message_logs.count_documents({
+        window_cutoff = datetime.utcnow() - timedelta(hours=_NOTIFICATIONS_WINDOW_HOURS)
+        cutoff = window_cutoff
+        if since:
+            try:
+                since_dt = datetime.fromisoformat(since.rstrip("Z"))
+                if since_dt > window_cutoff:
+                    cutoff = since_dt
+            except Exception:
+                pass
+        reply_count = db.db.message_logs.count_documents({
             "direction": "inbound",
             "created_at": {"$gte": cutoff},
         })
-        return {"count": count}
+        event_count = db.db.app_notifications.count_documents({
+            "created_at": {"$gte": cutoff},
+        })
+        return {"count": reply_count + event_count}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/notifications")
 def api_notifications_list(x_user_token: Optional[str] = Header(None)):
-    """List recent inbound replies (last _NOTIFICATIONS_WINDOW_HOURS) for the
-    notification panel, newest first."""
+    """List recent inbound replies + synthetic events (batch-complete, schedule
+    reminders) from the last _NOTIFICATIONS_WINDOW_HOURS, newest first."""
     _require_user(x_user_token)
     try:
         from datetime import datetime, timedelta
@@ -1761,13 +1812,56 @@ def api_notifications_list(x_user_token: Optional[str] = Header(None)):
             created_at = m.get("created_at")
             result.append({
                 "_id": str(m["_id"]),
+                "type": "reply",
                 "company_id": cid,
                 "company_name": companies.get(cid) or "Contacto",
                 "message": (m.get("message_body") or m.get("message_text") or "")[:200],
                 "from_number": m.get("from_number", ""),
                 "created_at": created_at.isoformat() if created_at else None,
             })
-        return result
+
+        events = list(db.db.app_notifications.find(
+            {"created_at": {"$gte": cutoff}},
+            sort=[("created_at", -1)],
+            limit=50,
+        ))
+        for e in events:
+            created_at = e.get("created_at")
+            scheduled_at = e.get("scheduled_at")
+            result.append({
+                "_id": str(e["_id"]),
+                "type": e.get("type", "event"),
+                "sent": e.get("sent", 0),
+                "failed": e.get("failed", 0),
+                "label": e.get("label", ""),
+                "name": e.get("name", ""),
+                "scheduled_send_id": e.get("scheduled_send_id", ""),
+                "scheduled_at": scheduled_at.isoformat() if scheduled_at else None,
+                "created_at": created_at.isoformat() if created_at else None,
+            })
+
+        result.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+        return result[:50]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/notifications/batch-complete")
+def api_notifications_batch_complete(body: dict, x_user_token: Optional[str] = Header(None)):
+    """Called by the frontend send queue once every job in a bulk-send batch
+    (Lote de URLs / Importar CSV / Buscar prospectos) has finished."""
+    _require_user(x_user_token)
+    try:
+        from datetime import datetime
+        db = MongoDBManager()
+        db.db.app_notifications.insert_one({
+            "type": "batch_complete",
+            "sent": int(body.get("sent") or 0),
+            "failed": int(body.get("failed") or 0),
+            "label": (body.get("label") or "")[:80],
+            "created_at": datetime.utcnow(),
+        })
+        return {"ok": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -2227,17 +2321,25 @@ def api_assign_instance(name: str, body: dict, x_user_token: Optional[str] = Hea
     db = MongoDBManager()
     user_id = body.get("user_id")
     if user_id:
-        # One-user-one-instance: clear this user from all other instances first
-        db.db.instances.update_many(
-            {"assigned_to": user_id, "name": {"$ne": name}},
-            {"$set": {"assigned_to": None, "assigned_name": None}},
+        # Guard: max 5 instances per user
+        already = db.db.instances.count_documents(
+            {"assigned_to": user_id, "name": {"$ne": name}}
         )
-        # Sync evolution_instance on the user document so the sidebar hook works
-        try:
-            db.db.users.update_one(
-                {"_id": ObjectId(user_id)},
-                {"$set": {"evolution_instance": name}},
+        if already >= 5:
+            raise HTTPException(
+                status_code=409,
+                detail="Este usuario ya tiene 5 instancias asignadas (máximo permitido).",
             )
+        # Sync the primary evolution_instance on the user document for legacy sidebar hook
+        try:
+            primary = db.db.instances.find_one(
+                {"assigned_to": user_id}, {"name": 1}, sort=[("created_at", 1)]
+            )
+            if not primary:
+                db.db.users.update_one(
+                    {"_id": ObjectId(user_id)},
+                    {"$set": {"evolution_instance": name}},
+                )
         except Exception:
             pass
     else:

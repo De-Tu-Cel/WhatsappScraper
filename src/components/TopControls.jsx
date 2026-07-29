@@ -13,7 +13,7 @@ import { authFetch } from '@/lib/api'
 import { LANGS } from './Settings'
 
 const ICON_BTN_SX = (active) => ({
-  width: 34, height: 34, borderRadius: '50%', p: 0,
+  width: 28, height: 28, borderRadius: '50%', p: 0,
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   color: active ? 'var(--accent, #3b82f6)' : 'var(--text-muted, rgba(255,255,255,0.55))',
   bgcolor: active ? 'var(--item-hover, rgba(255,255,255,0.08))' : 'transparent',
@@ -34,7 +34,9 @@ export default function TopControls({ appearanceOpen, onToggleAppearance, notifO
   const current = LANGS.find(l => l.value === lang) || LANGS[0]
 
   const fetchNotifCount = useCallback(() => {
-    authFetch('/api/notifications/count')
+    const since = typeof window !== 'undefined' ? (localStorage.getItem('notif_last_read') || '') : ''
+    const url = since ? `/api/notifications/count?since=${encodeURIComponent(since)}` : '/api/notifications/count'
+    authFetch(url)
       .then(r => r.json())
       .then(d => setNotifCount(Number(d?.count) || 0))
       .catch(() => {})
@@ -46,8 +48,16 @@ export default function TopControls({ appearanceOpen, onToggleAppearance, notifO
     return () => clearInterval(id)
   }, [fetchNotifCount])
 
+  useEffect(() => {
+    if (notifOpen) {
+      const now = new Date().toISOString()
+      localStorage.setItem('notif_last_read', now)
+      setNotifCount(0)
+    }
+  }, [notifOpen])
+
   return (
-    <Box id="tour-top-controls" sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
+    <Box id="tour-top-controls" sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
       <Tooltip title={t.settings.language}>
         <IconButton size="small" onClick={e => setAnchorEl(e.currentTarget)}
           sx={{ ...ICON_BTN_SX(!!anchorEl), fontSize: '1.15rem' }}>
@@ -96,14 +106,14 @@ export default function TopControls({ appearanceOpen, onToggleAppearance, notifO
                 minWidth: 16, height: 16, top: 2, right: 2,
               },
             }}>
-            <NotificationsNoneIcon sx={{ fontSize: 19 }} />
+            <NotificationsNoneIcon sx={{ fontSize: 17 }} />
           </Badge>
         </IconButton>
       </Tooltip>
 
       <Tooltip title={t.settings.tabAppearance || 'Apariencia'}>
         <IconButton size="small" onClick={onToggleAppearance} sx={ICON_BTN_SX(appearanceOpen)}>
-          <PaletteIcon sx={{ fontSize: 18 }} />
+          <PaletteIcon sx={{ fontSize: 16 }} />
         </IconButton>
       </Tooltip>
     </Box>

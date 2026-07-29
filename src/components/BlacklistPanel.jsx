@@ -9,6 +9,7 @@ import InputAdornment from '@mui/material/InputAdornment'
 import CircularProgress from '@mui/material/CircularProgress'
 import GppBadIcon from '@mui/icons-material/GppBad'
 import BlockIcon from '@mui/icons-material/Block'
+import LockIcon from '@mui/icons-material/Lock'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined'
 import EditIcon from '@mui/icons-material/Edit'
@@ -281,6 +282,143 @@ function BlacklistList({ type, icon, label, placeholder, tip, bl }) {
   )
 }
 
+const SYS_COLOR  = 'rgba(255,255,255,0.45)'
+const SYS_SOFT   = 'rgba(255,255,255,0.03)'
+const SYS_BORDER = 'rgba(255,255,255,0.1)'
+
+function SystemBlacklist({ bl }) {
+  const [expanded, setExpanded] = useState(false)
+  const [all,      setAll]      = useState([])
+  const [loading,  setLoading]  = useState(true)
+  const [search,   setSearch]   = useState('')
+  const [page,     setPage]     = useState(1)
+
+  useEffect(() => {
+    fetch('/api/blacklist/system')
+      .then(r => r.json())
+      .then(d => setAll(d.domains || []))
+      .catch(() => setAll([]))
+      .finally(() => setLoading(false))
+  }, [])
+
+  const filtered = search.trim()
+    ? all.filter(d => d.includes(search.toLowerCase().trim()))
+    : all
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const pageItems  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+
+  function handleSearch(v) { setSearch(v); setPage(1) }
+  function goPage(p) { setPage(Math.max(1, Math.min(p, totalPages))) }
+
+  return (
+    <Box sx={{
+      position: 'relative', mt: 1.6,
+      border: `1px solid ${SYS_BORDER}`, borderRadius: 3,
+      pt: 2.4, pb: 2, px: 2, bgcolor: SYS_SOFT,
+    }}>
+      {/* Floating label */}
+      <Box sx={{
+        position: 'absolute', top: -13, left: 14,
+        display: 'inline-flex', alignItems: 'center', gap: 0.6,
+        bgcolor: 'var(--card-bg, #161d2e)', border: `1px solid ${SYS_BORDER}`,
+        borderRadius: 999, px: 1.3, py: 0.4,
+      }}>
+        <LockIcon sx={{ fontSize: 12, color: SYS_COLOR }} />
+        <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: SYS_COLOR, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          {bl.systemLabel}
+        </Typography>
+      </Box>
+
+      {/* Description + toggle */}
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
+        <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.38)', lineHeight: 1.6, flex: 1 }}>
+          {bl.systemDesc}
+        </Typography>
+        <Box
+          onClick={() => setExpanded(e => !e)}
+          sx={{
+            display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', flexShrink: 0,
+            px: 1.2, py: 0.4, borderRadius: 1.5, border: `1px solid ${SYS_BORDER}`,
+            bgcolor: 'rgba(255,255,255,0.03)', transition: 'all 0.15s',
+            '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' },
+          }}
+        >
+          <Typography sx={{ fontSize: '0.72rem', color: SYS_COLOR, whiteSpace: 'nowrap' }}>
+            {loading ? '…' : `${all.length} ${bl.systemCount}`}
+          </Typography>
+          <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', ml: 0.5 }}>
+            {expanded ? '▲' : '▼'}
+          </Typography>
+        </Box>
+      </Box>
+
+      {expanded && (
+        <>
+          <Divider sx={{ borderColor: SYS_BORDER, my: 1.8 }} />
+
+          <TextField
+            size="small" fullWidth value={search} onChange={e => handleSearch(e.target.value)}
+            placeholder={bl.systemSearchPh}
+            slotProps={{ input: { startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon sx={{ fontSize: 16, color: 'rgba(255,255,255,0.3)' }} />
+              </InputAdornment>
+            ) } }}
+            sx={{ ...FIELD_SX, mb: 1.4 }}
+          />
+
+          {loading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+              <CircularProgress size={16} sx={{ color: 'rgba(255,255,255,0.3)' }} />
+            </Box>
+          ) : pageItems.length === 0 ? (
+            <Typography sx={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', fontStyle: 'italic', textAlign: 'center', py: 1 }}>
+              {search ? (bl.noResults) : bl.systemEmpty}
+            </Typography>
+          ) : (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+              {pageItems.map(domain => (
+                <Box key={domain} sx={{
+                  display: 'flex', alignItems: 'center', gap: 0.8, px: 1.2, py: 0.65, borderRadius: 1.5,
+                  bgcolor: 'rgba(255,255,255,0.015)', border: '1px solid rgba(255,255,255,0.05)',
+                }}>
+                  <LockIcon sx={{ fontSize: 11, color: 'rgba(255,255,255,0.22)', flexShrink: 0 }} />
+                  <Typography sx={{
+                    fontSize: '0.78rem', color: 'rgba(255,255,255,0.48)', fontFamily: 'monospace',
+                    flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>
+                    {domain}
+                  </Typography>
+                  <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic', flexShrink: 0 }}>
+                    {bl.systemReadOnly}
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
+          )}
+
+          {filtered.length > PAGE_SIZE && (
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, mt: 1.4 }}>
+              <IconButton size="small" disabled={page <= 1} onClick={() => goPage(page - 1)}
+                sx={{ color: SYS_COLOR, '&.Mui-disabled': { opacity: 0.25 } }}>
+                <ChevronLeftIcon sx={{ fontSize: 18 }} />
+              </IconButton>
+              <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)' }}>
+                {page} / {totalPages} · {filtered.length}
+              </Typography>
+              <IconButton size="small" disabled={page >= totalPages} onClick={() => goPage(page + 1)}
+                sx={{ color: SYS_COLOR, '&.Mui-disabled': { opacity: 0.25 } }}>
+                <ChevronRightIcon sx={{ fontSize: 18 }} />
+              </IconButton>
+            </Box>
+          )}
+        </>
+      )}
+    </Box>
+  )
+}
+
 export default function BlacklistPanel({ isActive }) {
   const { t } = useLang()
   const bl = t.blacklist
@@ -311,6 +449,7 @@ export default function BlacklistPanel({ isActive }) {
           label={bl.domains} placeholder={bl.domainPh} tip={bl.domainTip} bl={bl} />
         <BlacklistList type="industry" icon={<CategoryIcon sx={{ fontSize: 13, color: DANGER }} />}
           label={bl.industries} placeholder={bl.industryPh} tip={bl.industryTip} bl={bl} />
+        <SystemBlacklist bl={bl} />
       </Box>
     </Box>
   )

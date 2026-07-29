@@ -33,8 +33,9 @@ import MessageIcon from '@mui/icons-material/Message'
 import { getTemplates } from './singleUrlProcessor'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
-import { SendConfigPanel, CountdownBar } from './SendConfigPanel'
-import { loadSendConfig, randMsgDelayMs, randBatchBreakMs, randBatchSize } from '@/lib/sendConfig'
+import { SendConfigPanel } from './SendConfigPanel'
+import { loadSendConfig } from '@/lib/sendConfig'
+import { useSendQueue } from '../context/SendQueueContext'
 
 const EXAMPLES = [
   'https://pizzeria-mario.com.mx/\nhttps://ferreteria-sanchez.mx/\nhttps://spa-belleza-queretaro.com/\nhttps://taller-mecanico-hdz.mx/\nhttps://restaurante-oaxaca.com.mx/\nhttps://constructora-garcia.mx/',
@@ -176,14 +177,10 @@ export default function BatchProcessor() {
   const [selectedTpl, setSelectedTpl] = useState(TEMPLATES[0].id)
   const [msgText,     setMsgText]     = useState(TEMPLATES[0].text)
   const [extraVariants, setExtraVariants] = useState([])
-  const [sending,     setSending]     = useState(false)
   const [sendError,   setSendError]   = useState('')
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
   const [sendCfg,     setSendCfg]     = useState(() => loadSendConfig())
-  const [countdown,   setCountdown]   = useState(null)
-  const [cdTotal,     setCdTotal]     = useState(null)
-  const [cdLabel,     setCdLabel]     = useState('msg')
-  const [batchNum,    setBatchNum]    = useState(1)
+  const { addBatch, cancel: cancelQueue, active: queueActive } = useSendQueue()
   const msgRef       = useRef(null)
   const highlightRef = useRef(null)
   function syncScroll() {
@@ -191,7 +188,6 @@ export default function BatchProcessor() {
       highlightRef.current.scrollTop = msgRef.current.scrollTop
   }
   const urlsRef     = useRef(null)
-  const sendingRef  = useRef(false)
   const cancelRef   = useRef(false)
   const abortCtrl   = useRef(null)
 
@@ -208,7 +204,8 @@ export default function BatchProcessor() {
 
 
   const waRows      = rows.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
-  const alreadySent = rows.some(r => r.msg_status === 'sent' || r.msg_status === 'failed')
+  const alreadySent = rows.some(r => r.msg_status === 'sent' || r.msg_status === 'failed' || r.msg_status === 'queued')
+  const isSending   = queueActive !== null && alreadySent
   const totalNumbers = waRows.reduce((sum, r) => sum + (r.all_whatsapp?.length > 0 ? r.all_whatsapp.length : (r.whatsapp ? 1 : 0)), 0)
   // Sending to 2+ numbers needs varied text (see MIN_TEMPLATES_FOR_BULK) — editing
   // one base message stops making sense there, so it switches to picking 3+ saved templates.
@@ -222,9 +219,8 @@ export default function BatchProcessor() {
   function handleCancelBatch() {
     cancelRef.current = true
     if (abortCtrl.current) abortCtrl.current.abort()
-    setLoading(false); setSending(false)
+    setLoading(false)
     setPhase(''); setCurrentUrl('')
-    sendingRef.current = false
   }
 
   async function handleBatch() {
@@ -253,15 +249,9 @@ export default function BatchProcessor() {
             })
             if (!res.ok) throw new Error(`HTTP ${res.status}`)
             const d = await res.json()
-            const row = {
-              url, empresa: d.scraped?.name || '—',
-              industria: d.scraped?.industry || '—',
-              whatsapp: d.primary_whatsapp_number || '',
-              all_whatsapp: d.all_whatsapp_numbers || (d.primary_whatsapp_number ? [d.primary_whatsapp_number] : []),
-              company_id: d.company_id || '',
-              scraped_data: d.scraped,
-              ok: true, msg_status: null,
-            }
+            const row = d.blacklisted
+              ? { url, empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, ok: false, blacklisted: true, blockReason: d.matched, msg_status: null }
+              : { url, empresa: d.scraped?.name || '—', industria: d.scraped?.industry || '—', whatsapp: d.primary_whatsapp_number || '', all_whatsapp: d.all_whatsapp_numbers || (d.primary_whatsapp_number ? [d.primary_whatsapp_number] : []), company_id: d.company_id || '', scraped_data: d.scraped, ok: true, blacklisted: false, blockReason: null, msg_status: null }
             completed++
             setProgress(Math.round(completed / total * 100))
             setDoneCount(completed)
@@ -287,84 +277,26 @@ export default function BatchProcessor() {
     }
   }
 
-  async function waitWithTimer(ms, label) {
-    const totalSecs = Math.ceil(ms / 1000)
-    setCdTotal(totalSecs); setCountdown(totalSecs); setCdLabel(label)
-    const end = Date.now() + ms
-    await new Promise(resolve => {
-      const tick = () => {
-        if (cancelRef.current) { resolve(); return }
-        const remaining = end - Date.now()
-        if (remaining <= 0) { setCountdown(0); resolve(); return }
-        setCountdown(Math.ceil(remaining / 1000))
-        setTimeout(tick, 200)
-      }
-      tick()
-    })
-    setCountdown(null); setCdTotal(null)
-  }
-
-  async function handleSendAll() {
+  function handleSendAll() {
     const targets = rows.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
-    if (!targets.length || sendingRef.current || belowMinTemplates) return
-    cancelRef.current = false
-    sendingRef.current = true
-    setSending(true); setPhase('sending')
-    const updated = [...rows]
+    if (!targets.length || belowMinTemplates) return
     let lastVariant = null
-    let msgsInBatch = 0
-    let nextBreakAt = randBatchSize(sendCfg)
-    let currentBatch = 1
-    setBatchNum(1)
-    for (let i = 0; i < targets.length; i++) {
-      if (cancelRef.current) break
-      const row = targets[i]
-      setCurrentUrl(row.url)
-      setProgress(Math.round(((i + 1) / targets.length) * 100))
-      const idx = rows.findIndex(r => r.url === row.url)
-      try {
-        const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
-        let lastStatus = 'failed'
-        for (const num of numbers) {
-          const variant = pickMessageVariant(allVariants, lastVariant)
-          lastVariant = variant
-          const message = renderTemplate(variant, row.scraped_data)
-          const res = await authFetch('/api/send-message', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ company_id: row.company_id, to_number: num, message: message || msgText, website: row.url }),
-          })
-          if (!res.ok) {
-            const errJson = await res.json().catch(() => ({}))
-            const detail = errJson.detail || `Error ${res.status}`
-            setSendError(detail)
-            setTimeout(() => setSendError(''), 10_000)
-            throw new Error(detail)
-          }
-          const json = await res.json()
-          if (json.status === 'sent') lastStatus = 'sent'
-        }
-        updated[idx] = { ...updated[idx], msg_status: lastStatus }
-      } catch {
-        updated[idx] = { ...updated[idx], msg_status: 'failed' }
-      }
-      setRows([...updated])
-      msgsInBatch++
-      if (i < targets.length - 1) {
-        if (msgsInBatch >= nextBreakAt) {
-          msgsInBatch = 0
-          nextBreakAt = randBatchSize(sendCfg)
-          currentBatch++
-          setBatchNum(currentBatch)
-          setPhase('batch_break')
-          await waitWithTimer(randBatchBreakMs(sendCfg), 'batch')
-        } else {
-          await waitWithTimer(randMsgDelayMs(sendCfg), 'msg')
-        }
-      }
+    const updated = rows.map(r => ({ ...r }))
+    const jobs = []
+    for (const row of targets) {
+      const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
+      if (!numbers.length) continue
+      const messages = numbers.map(() => {
+        const v = pickMessageVariant(allVariants, lastVariant)
+        lastVariant = v
+        return renderTemplate(v, row.scraped_data)
+      })
+      jobs.push({ numbers, messages, companyId: row.company_id, website: row.url })
+      const idx = updated.findIndex(r => r.url === row.url)
+      if (idx >= 0) updated[idx] = { ...updated[idx], msg_status: 'queued' }
     }
-    setProgress(100); setCurrentUrl(''); setPhase(''); setSending(false); sendingRef.current = false
-    setCountdown(null); setBatchNum(1)
+    addBatch(jobs, lang === 'en' ? 'URL batch' : 'Lote de URLs')
+    setRows(updated)
   }
 
   const sentCount  = rows.filter(r => r.msg_status === 'sent').length
@@ -573,13 +505,9 @@ export default function BatchProcessor() {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />
               <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
-                {phase === 'sending'
-                  ? lang === 'en'
-                    ? `Sending messages — ${rows.filter(r => r.msg_status === 'sent').length} sent`
-                    : `Enviando mensajes — ${rows.filter(r => r.msg_status === 'sent').length} enviados`
-                  : lang === 'en'
-                    ? `Scraping — ${doneCount} of ${urlList.length}`
-                    : `Scrapeando — ${doneCount} de ${urlList.length}`}
+                {lang === 'en'
+                  ? `Scraping — ${doneCount} of ${urlList.length}`
+                  : `Scrapeando — ${doneCount} de ${urlList.length}`}
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -724,24 +652,16 @@ export default function BatchProcessor() {
               <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalNumbers} baseCount={0} />
             </Box>
           )}
-          {/* Send config + countdown */}
+          {/* Send config */}
           <Box sx={{ mb: 1 }}>
-            <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={sending} />
+            <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
           </Box>
-          {sending && countdown !== null && (
-            <Box sx={{ mb: 1 }}>
-              <CountdownBar
-                countdown={countdown} total={cdTotal} label={cdLabel}
-                batchNum={batchNum} msgNum={rows.filter(r => r.msg_status === 'sent' || r.msg_status === 'failed').length} msgTotal={waRows.length}
-              />
-            </Box>
-          )}
           <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />
           <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
-            {sending && (
+            {isSending && (
               <Tooltip title={t.search.cancelSend}>
-                <IconButton size="small" onClick={handleCancelBatch}
+                <IconButton size="small" onClick={cancelQueue}
                   sx={{ color: 'rgba(248,113,113,0.7)', '&:hover': { color: '#f87171' } }}>
                   <HighlightOffIcon sx={{ fontSize: 16 }} />
                 </IconButton>
@@ -749,26 +669,24 @@ export default function BatchProcessor() {
             )}
             <Button
               onClick={handleSendAll}
-              disabled={waRows.length === 0 || alreadySent || sending || isDisconnected || belowMinTemplates}
-              startIcon={sending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
+              disabled={waRows.length === 0 || alreadySent || isDisconnected || belowMinTemplates}
+              startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
               size="small"
               sx={{
                 fontSize: '0.78rem', fontWeight: 700, flexShrink: 0,
-                bgcolor: waRows.length > 0 && !alreadySent && !sending ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
-                color:   waRows.length > 0 && !alreadySent && !sending ? '#4ade80' : 'rgba(255,255,255,0.3)',
-                border:  `1px solid ${waRows.length > 0 && !alreadySent && !sending ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
+                bgcolor: waRows.length > 0 && !alreadySent ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
+                color:   waRows.length > 0 && !alreadySent ? '#4ade80' : 'rgba(255,255,255,0.3)',
+                border:  `1px solid ${waRows.length > 0 && !alreadySent ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
                 borderRadius: 1.5, px: 2, py: 0.6,
-                '&:hover': { bgcolor: waRows.length > 0 && !alreadySent && !sending ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
+                '&:hover': { bgcolor: waRows.length > 0 && !alreadySent ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
                 '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
               }}
             >
               {alreadySent
                 ? t.batch.msgSent
-                : sending
-                  ? t.batch.sending
-                  : lang === 'en'
-                    ? `Send to ${waRows.length} ${waRows.length !== 1 ? 'companies' : 'company'} with WhatsApp`
-                    : `Enviar a ${waRows.length} empresa${waRows.length !== 1 ? 's' : ''} con WhatsApp`}
+                : lang === 'en'
+                  ? `Send to ${waRows.length} ${waRows.length !== 1 ? 'companies' : 'company'} with WhatsApp`
+                  : `Enviar a ${waRows.length} empresa${waRows.length !== 1 ? 's' : ''} con WhatsApp`}
             </Button>
           </Box>
         </Box>
@@ -855,7 +773,7 @@ export default function BatchProcessor() {
             <Table size="small" stickyHeader>
               <TableHead>
                 <TableRow>
-                  {['URL', t.batch.colCompany, t.batch.colIndustry, 'WhatsApp', alreadySent ? t.batch.colMessage : null, t.batch.colStatus].filter(Boolean).map(h => (
+                  {['URL', t.batch.colCompany, t.batch.colIndustry, 'WhatsApp', alreadySent ? t.batch.colMessage : null, alreadySent ? t.batch.colTemplate : null, t.batch.colStatus].filter(Boolean).map(h => (
                     <TableCell key={h} sx={{
                       bgcolor: 'var(--card-bg, #161d2e)',
                       color: 'rgba(255,255,255,0.5)',
@@ -911,8 +829,26 @@ export default function BatchProcessor() {
                         {!r.msg_status && <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>}
                       </TableCell>
                     )}
+                    {alreadySent && (
+                      <TableCell sx={{ maxWidth: 200 }}>
+                        {r.msgSent ? (
+                          <Tooltip title={r.msgSent} placement="top" arrow componentsProps={{ tooltip: { sx: { maxWidth: 320, fontSize: '0.72rem', whiteSpace: 'pre-wrap' } } }}>
+                            <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', cursor: 'help', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
+                              {r.msgSent.length > 45 ? r.msgSent.slice(0, 45) + '…' : r.msgSent}
+                            </Typography>
+                          </Tooltip>
+                        ) : (
+                          <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>
+                        )}
+                      </TableCell>
+                    )}
                     <TableCell>
-                      {r.ok ? (
+                      {r.blacklisted ? (
+                        <Tooltip title={`🚫 Blacklist · "${r.blockReason}"`} placement="top" arrow>
+                            <Chip label={t.batch.chipBlocked} size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
+                            sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' }, cursor: 'help' }} />
+                        </Tooltip>
+                      ) : r.ok ? (
                         <Chip label="OK" size="small" icon={<CheckCircleIcon sx={{ fontSize: '12px !important' }} />}
                           sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#4ade80' } }} />
                       ) : (

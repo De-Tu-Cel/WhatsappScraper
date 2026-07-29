@@ -1096,7 +1096,7 @@ export default function InstancesPanel() {
             placeholder={t.inst.namePlaceholder}
             size="small"
             value={newName}
-            onChange={e => setNewName(e.target.value.replace(/[^a-z0-9-]/g, '').toLowerCase())}
+            onChange={e => setNewName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
             sx={FIELD_SX}
             onKeyDown={e => e.key === 'Enter' && !newNumber && handleCreate()}
             autoFocus

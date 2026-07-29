@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { andyFetch } from '@/lib/andyFetch'
 
 const ANDY_BASE = 'https://dashboard-wa.detucel.com'
-const BOT_TOKEN = 'tok_878bbaf38f2a508c0ae9dbea2b84b7b35d6ec5d0b136ef5096dab4645d93be23'
+const BOT_TOKEN = 'tok_725db09b301a585834af56e85eca5d079dfccd0a5af7ab451f5a5cbaf0491084'
 const BOT_MAIL  = 'comercial@detucel.mx'
 
 export async function GET() {

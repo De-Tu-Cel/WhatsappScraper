@@ -4,6 +4,7 @@ import { MAX_WA_MSG } from '@/lib/validators'
 import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
 import { useUser } from '../context/UserContext'
+import { useNavigation } from '../context/NavigationContext'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -384,8 +385,9 @@ export default function Conversations() {
   const { t } = useLang()
   const { user } = useUser()
   const [myConvsOnly, setMyConvsOnly] = useState(false)
-  const threadLenRef = useRef(0)
-  const messagesBoxRef = useRef(null)
+  const threadLenRef    = useRef(0)
+  const messagesBoxRef  = useRef(null)
+  const pendingScrollRef = useRef(false)
   const replyRef  = useRef(null)
   const [sendError, setSendError] = useState('')
   const [aiTyping, setAiTyping]         = useState(false)
@@ -394,6 +396,30 @@ export default function Conversations() {
   const [aiToggling, setAiToggling]     = useState(false)
   const [aiConfigOpen, setAiConfigOpen] = useState(false)
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
+  const { pendingConvId, pendingConvNumber, clearPendingConv } = useNavigation()
+  const pendingNumRef = useRef(null)
+
+  // When a notification card is clicked, auto-select the matching conversation
+  useEffect(() => {
+    if (!pendingConvId || !convs.length) return
+    const match = convs.find(c => c.company_id === pendingConvId)
+    if (match) {
+      pendingNumRef.current = pendingConvNumber || null
+      setSelected(match)
+      clearPendingConv()
+    }
+  }, [pendingConvId, convs, pendingConvNumber, clearPendingConv])
+
+  // Once the company's numbers load, jump straight to the one that sent the notification
+  // instead of leaving activeNum on 'all' (which shows the "select a number" placeholder)
+  useEffect(() => {
+    if (!pendingNumRef.current || waNumbers.length === 0) return
+    const norm = v => (v || '').replace(/\D/g, '').slice(-10)
+    const target = norm(pendingNumRef.current)
+    const match = waNumbers.find(n => norm(n) === target)
+    if (match) setActiveNum(match)
+    pendingNumRef.current = null
+  }, [waNumbers])
 
   const fetchConvs = useCallback(async () => {
     try {
@@ -432,9 +458,7 @@ export default function Conversations() {
       }
       if (scrollToBottom || msgs.length > threadLenRef.current) {
         threadLenRef.current = msgs.length
-        setTimeout(() => {
-          messagesBoxRef.current?.scrollTo({ top: messagesBoxRef.current.scrollHeight, behavior: 'smooth' })
-        }, 50)
+        pendingScrollRef.current = scrollToBottom ? 'instant' : 'smooth'
       }
       threadLenRef.current = msgs.length
       if (!silent) {
@@ -477,6 +501,16 @@ export default function Conversations() {
     }, 20000)
     return () => clearInterval(id)
   }, [fetchConvs, fetchThread, selected, activeNum])
+
+  // Scroll to bottom after thread renders — fires after DOM paint so scrollHeight is accurate
+  useEffect(() => {
+    const behavior = pendingScrollRef.current
+    if (!behavior) return
+    pendingScrollRef.current = false
+    requestAnimationFrame(() => {
+      messagesBoxRef.current?.scrollTo({ top: messagesBoxRef.current.scrollHeight, behavior })
+    })
+  }, [thread])
 
   // Poll AI follow-up status when a conversation is open
   useEffect(() => {

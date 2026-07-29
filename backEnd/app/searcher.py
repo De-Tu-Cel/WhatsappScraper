@@ -12,6 +12,7 @@ load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
 SERPAPI_KEY     = os.getenv("SERPAPI_KEY", "")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY", "")
 
 EXCLUDED_DOMAINS = {
     # Enciclopedias
@@ -67,6 +68,7 @@ EXCLUDED_DOMAINS = {
     'travelmania.mx', 'wayak.mx', 'booking.com', 'airbnb.com',
     'timeout.com', 'eltenedor.es', 'thefork.com',
     # Noticias y medios nacionales
+    'oem.com.mx',  # Organización Editorial Mexicana — red de El Sol de X, La Voz de la Frontera, etc.
     'eluniversal.com.mx', 'milenio.com', 'excelsior.com.mx',
     'reforma.com', 'jornada.com.mx', 'proceso.com.mx',
     'infobae.com', 'expansion.mx', 'forbes.com.mx', 'forbes.com',
@@ -164,12 +166,11 @@ EXCLUDED_PATH_PATTERNS = [
     '/nota/', '/notas/', '/reportaje/', '/reportajes/', '/tendencias/',
     '/actualidad/', '/mundo/', '/economia/', '/finanzas/', '/salud/',
     '/lifestyle/', '/entrevista/', '/entrevistas/',
+    '/informacion_general/', '/informacion-general/', '/estatal/',
     # Páginas de resultados / listados de directorios
     '/resultados/', '/busqueda/', '/buscar/', '/search/',
     '/directorio/', '/listado/', '/listing/', '/listings/',
-    '/salones-de-belleza/', '/salones/', '/negocios/',
-    '/ciudades/', '/ciudad/', '/estados/', '/estado/',
-    '/nuevo-leon/', '/monterrey/', '/cdmx/',
+    '/salones-de-belleza/', '/negocios/',
     # Páginas de empleo en directorios
     '/empleos/', '/empleo/', '/jobs/', '/vacantes/',
     # Páginas de proveedores/distribuidores de marcas
@@ -194,18 +195,15 @@ EXCLUDED_PATH_PATTERNS = [
     '/sector/', '/industria/', '/gremio/', '/asociacion/', '/camara/',
     '/tendencias/', '/estadisticas/', '/mercado/', '/analisis-de-mercado/',
     '/informe/', '/reporte/', '/estudio/', '/investigacion/',
-    '/franquicias/', '/franquicia/', '/sucursales/', '/sucursal/',
-    '/encuentra-tu/', '/find-your/', '/localizador/', '/locator/',
+    '/franquicias/', '/franquicia/',
+    '/find-your/', '/localizador/', '/locator/',
     # Catálogos y páginas de fichas comparativas
     '/catalogo/', '/categorias/', '/subcategoria/', '/subcategorias/',
-    '/proveedores/', '/proveedor/', '/vendors/', '/vendor/',
-    '/encuentra/', '/encontrar/', '/cerca-de/', '/cerca/', '/nearby/',
     '/comparar/', '/comparativa/', '/compare/',
     '/mejores/', '/los-mejores/', '/las-mejores/', '/top-',
     '/recomendados/', '/destacados/', '/populares/', '/favoritos/',
     '/guia-de/', '/guia/', '/donde-encontrar/', '/donde-hay/',
     '/ver-todos/', '/todos-los/', '/todas-las/',
-    '/perfil/', '/ficha/', '/ficha-de/', '/profile/',
 ]
 
 EXCLUDED_TLD_PATTERNS = ['.edu.mx', '.gob.mx', '.gov.mx', '.edu.']
@@ -250,11 +248,24 @@ _LISTICLE_SLUG = re.compile(
 # Domains that are only news/media (checked via substring for subdomains like 'noticias.example.com')
 _NEWS_SUBDOMAIN_PREFIXES = ('noticias.', 'blog.', 'news.', 'revista.', 'magazine.')
 
+# Mexico has hundreds of small local news outlets with "noticias"/"diario"/"vanguardia"
+# baked into the domain itself (24-7noticias.com.mx, laplazadiario.com.mx,
+# vanguardiaveracruz.mx…) — impossible to enumerate individually, match by substring.
+_NEWS_DOMAIN_NAME = re.compile(r'notici|informate|vocero|diario|vanguardia', re.IGNORECASE)
+
+# News headlines rendered as URL slugs read like full sentences — many
+# hyphen/underscore-joined words, sometimes ending in a long CMS-generated numeric
+# article id ("deberan-reubicar-20-gaseras-en-mexicali-17361106") or a .html/.php
+# extension. A real business's own page slug is virtually never this long.
+# 5+ separators (6+ words) is the cutoff.
+_HEADLINE_SLUG = re.compile(r'(?:[a-z0-9]+[-_]){5,}[a-z0-9]+(?:\.\w+)?/?$', re.IGNORECASE)
+_TRAILING_ARTICLE_ID = re.compile(r'-\d{6,}(?:\.\w+)?/?$')
+
 
 def _is_business_url(url: str) -> bool:
     try:
         parsed = urlparse(url)
-        domain = parsed.netloc.lower().lstrip('www.')
+        domain = parsed.netloc.lower().replace('www.', '', 1)
         if not domain:
             return False
         if any(domain == ex or domain.endswith('.' + ex) for ex in EXCLUDED_DOMAINS):
@@ -262,6 +273,8 @@ def _is_business_url(url: str) -> bool:
         if any(domain.endswith(tld) for tld in EXCLUDED_TLD_PATTERNS):
             return False
         if any(domain.startswith(pfx) for pfx in _NEWS_SUBDOMAIN_PREFIXES):
+            return False
+        if _NEWS_DOMAIN_NAME.search(domain):
             return False
         # Reject domains whose *name* looks like a business catalog/aggregator
         if _CATALOG_DOMAIN.search(domain):
@@ -272,6 +285,8 @@ def _is_business_url(url: str) -> bool:
         if _DATE_IN_PATH.search(path):
             return False
         if _LISTICLE_SLUG.search(path):
+            return False
+        if _HEADLINE_SLUG.search(path) or _TRAILING_ARTICLE_ID.search(path):
             return False
         # Query strings with search/filter params are directory result pages, not business sites
         qs = parsed.query.lower()
@@ -284,16 +299,25 @@ def _is_business_url(url: str) -> bool:
 
 def _get_domain(url: str) -> str:
     try:
-        return urlparse(url).netloc.lower().lstrip('www.')
+        return urlparse(url).netloc.lower().replace('www.', '', 1)
     except Exception:
         return url
 
 
 MAJOR_CITIES = [
-    "Ciudad de México", "Guadalajara", "Monterrey", "Puebla", "Querétaro",
-    "León", "Mérida", "Tijuana", "San Luis Potosí", "Aguascalientes",
-    "Cancún", "Morelia", "Hermosillo", "Chihuahua", "Veracruz",
-    "Saltillo", "Culiacán", "Toluca", "Mexicali", "Torreón",
+    # Las 32 capitales estatales — garantiza cobertura de cada estado de la república
+    "Ciudad de México", "Mexicali", "La Paz", "Campeche", "Saltillo",
+    "Colima", "Tuxtla Gutiérrez", "Chihuahua", "Durango", "Guanajuato",
+    "Chilpancingo", "Pachuca", "Guadalajara", "Toluca", "Morelia",
+    "Cuernavaca", "Tepic", "Monterrey", "Oaxaca", "Puebla",
+    "Querétaro", "Chetumal", "San Luis Potosí", "Culiacán", "Hermosillo",
+    "Villahermosa", "Ciudad Victoria", "Tlaxcala", "Xalapa", "Mérida", "Zacatecas",
+    # Metrópolis y ciudades grandes que no son capital pero concentran mucho negocio
+    "Tijuana", "Ciudad Juárez", "León", "Zapopan", "Ecatepec",
+    "Nezahualcóyotl", "Cancún", "Naucalpan", "Torreón", "Reynosa",
+    "Matamoros", "Nuevo Laredo", "Acapulco", "Irapuato", "Celaya",
+    "Mazatlán", "Coatzacoalcos", "Poza Rica", "Uruapan", "Veracruz",
+    "Tampico", "Ciudad Obregón", "Los Mochis", "Ensenada", "Playa del Carmen",
 ]
 
 # Sinónimos y términos relacionados por industria para ampliar la búsqueda
@@ -337,6 +361,40 @@ INDUSTRY_SYNONYMS: dict[str, list[str]] = {
 _NOISE = '-directorio -guia -guía -blog -listado -noticias -revista -articulo'
 
 
+_SYNONYM_CACHE: dict[str, list[str]] = {}
+
+
+def _ai_expand_synonyms(industry: str) -> list[str]:
+    """
+    Ask the active LLM (OpenAI if configured, else DeepSeek — see app.llm) for extra
+    Spanish search terms for this industry, since INDUSTRY_SYNONYMS only covers a
+    fixed set of ~30 hardcoded trades. Any industry typed outside that list got zero
+    synonym queries before this; this fills the gap for arbitrary/unlisted industries.
+    Cached per-process by industry so repeat searches don't re-spend a call.
+    """
+    key = industry.lower().strip()
+    if key in _SYNONYM_CACHE:
+        return _SYNONYM_CACHE[key]
+    syns: list[str] = []
+    try:
+        from app.llm import call_llm
+        prompt = (
+            f'Da de 4 a 6 términos o sinónimos en español de México que la gente usa para buscar '
+            f'negocios del giro "{industry}" (nombres alternativos, jerga local, variantes regionales). '
+            f'Responde ÚNICAMENTE con un array JSON de strings cortos, sin explicación. '
+            f'Ejemplo: ["taller mecánico", "servicio automotriz"]'
+        )
+        content = call_llm([{"role": "user", "content": prompt}], max_tokens=150, temperature=0.3)
+        m = re.search(r'\[.*\]', content, re.DOTALL)
+        if m:
+            parsed = json.loads(m.group(0))
+            syns = [s.strip() for s in parsed if isinstance(s, str) and s.strip()][:6]
+    except Exception:
+        syns = []
+    _SYNONYM_CACHE[key] = syns
+    return syns
+
+
 def _build_variations(industry: str, city: str = "") -> list[str]:
     """
     Build DDG query variations designed to return actual business WEBSITES,
@@ -349,7 +407,9 @@ def _build_variations(industry: str, city: str = "") -> list[str]:
     """
     ind = industry.strip()
     ind_q = f'"{ind}"'
-    synonyms = INDUSTRY_SYNONYMS.get(ind.lower(), [])
+    static_synonyms = INDUSTRY_SYNONYMS.get(ind.lower(), [])
+    ai_synonyms = _ai_expand_synonyms(ind) if (OPENAI_API_KEY or DEEPSEEK_API_KEY) else []
+    synonyms = list(dict.fromkeys(static_synonyms + ai_synonyms))  # merge, dedup, keep order
     is_fitness = "gym" in synonyms or ind.lower() in ("gimnasio", "fitness")
 
     if city.strip():
@@ -363,7 +423,7 @@ def _build_variations(industry: str, city: str = "") -> list[str]:
             f"{ind} {loc} whatsapp",
             f"{ind} {loc} {'membresía' if is_fitness else 'servicio'}",
         ]
-        for syn in synonyms[:2]:
+        for syn in synonyms[:4]:
             queries.append(f'"{syn}" {loc}')
         return queries
 
@@ -378,34 +438,43 @@ def _build_variations(industry: str, city: str = "") -> list[str]:
         f"{ind} México {'inscripción' if is_fitness else 'servicio'}",
     ]
     city_queries = [f"{ind_q} {c}" for c in MAJOR_CITIES]
-    synonym_queries = [f'"{syn}" México' for syn in synonyms[:4]]
+    synonym_queries = [f'"{syn}" México' for syn in synonyms[:6]]
     return base + city_queries + synonym_queries
 
 
-def _fetch_ddg(query: str, max_results: int = 80) -> list[str]:
+def _fetch_ddg(query: str, max_results: int = 80) -> list[dict]:
+    import time
+    import random
     from ddgs import DDGS
-    urls = []
-    try:
-        with DDGS() as ddgs:
-            # wt-wt = worldwide, evita sesgo por IP del servidor
-            # safesearch=off da más resultados de negocios reales
-            for r in ddgs.text(query, region="wt-wt", safesearch="off", max_results=max_results):
-                href = r.get("href")
-                if href and _is_business_url(href):
-                    urls.append(href)
-    except Exception:
-        pass
-    return urls
+    results = []
+    # DDG throttles/blocks aggressively under bursty concurrent traffic — retry once
+    # after a short backoff instead of just losing that query's results silently.
+    for attempt in range(2):
+        try:
+            with DDGS() as ddgs:
+                # wt-wt = worldwide, evita sesgo por IP del servidor
+                # safesearch=off da más resultados de negocios reales
+                for r in ddgs.text(query, region="wt-wt", safesearch="off", max_results=max_results):
+                    href = r.get("href")
+                    if href and _is_business_url(href):
+                        results.append({"href": href, "title": r.get("title", ""), "body": r.get("body", "")})
+            return results
+        except Exception:
+            if attempt == 0:
+                time.sleep(1.5 + random.random() * 1.5)
+            continue
+    return results
 
 
-def _ai_filter_urls(urls: list[str], industry: str) -> list[str]:
+def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None) -> list[str]:
     """
-    Use DeepSeek to rank URLs as real business websites.
-    Processes in batches of 60, preserves ALL URLs (ranked first, unranked appended).
-    Returns the full list — no cap applied here.
+    Use the active LLM (OpenAI if configured, else DeepSeek) to rank URLs as real
+    business websites. Processes in batches of 60, preserves ALL URLs (ranked first,
+    unranked appended). Returns the full list — no cap applied here.
     """
-    if not DEEPSEEK_API_KEY or not urls:
+    if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not urls:
         return urls
+    snippets = snippets or {}
 
     ranked: list[str] = []
     remaining = list(urls)
@@ -415,7 +484,17 @@ def _ai_filter_urls(urls: list[str], industry: str) -> list[str]:
         batch = remaining[:batch_size]
         remaining = remaining[batch_size:]
         try:
-            lines = [f"{i+1}. {u}" for i, u in enumerate(batch)]
+            lines = []
+            for i, u in enumerate(batch):
+                s = snippets.get(u, {})
+                title = (s.get("title") or "").strip()
+                body = (s.get("body") or "").strip()[:150]
+                line = f"{i+1}. {u}"
+                if title:
+                    line += f"\n   Título: {title}"
+                if body:
+                    line += f"\n   Resumen: {body}"
+                lines.append(line)
             prompt = (
                 f'Eres un filtro ESTRICTO de URLs. Se buscan ÚNICAMENTE sitios web oficiales '
                 f'de negocios LOCALES e INDEPENDIENTES del sector "{industry}" en México.\n\n'
@@ -449,8 +528,13 @@ def _ai_filter_urls(urls: list[str], industry: str) -> list[str]:
             m = re.search(r'\[[\d,\s]*\]', content)
             if m:
                 indices = json.loads(m.group(0))
-                batch_ranked = [batch[i - 1] for i in indices if 1 <= i <= len(batch)]
+                approved_idx = {i for i in indices if 1 <= i <= len(batch)}
+                batch_ranked = [batch[i - 1] for i in indices if i in approved_idx]
+                # Anything DeepSeek didn't approve isn't discarded — just deprioritized,
+                # per this function's contract of never dropping a candidate URL outright.
+                batch_unranked = [u for i, u in enumerate(batch, start=1) if i not in approved_idx]
                 ranked.extend(batch_ranked)
+                ranked.extend(batch_unranked)
                 continue
         except Exception:
             pass
@@ -472,35 +556,40 @@ def search_prospects(
         query = f"{industry.strip()} empresa en {city.strip() or 'México'}"
         if keywords.strip():
             query = f"{keywords.strip()} {query}"
-        urls = _search_via_serpapi(query, num_results, offset)
+        urls, snippets = _search_via_serpapi(query, num_results, offset)
     else:
-        urls = _search_via_duckduckgo(industry, city, exclude_domains or set())
+        urls, snippets = _search_via_duckduckgo(industry, city, exclude_domains or set())
 
     # For SerpAPI path, apply domain exclusion after fetching
     if SERPAPI_KEY and exclude_domains:
         urls = [u for u in urls if _get_domain(u) not in exclude_domains]
 
-    return _ai_filter_urls(urls, industry)  # no cap — caller decides how many to show
+    return _ai_filter_urls(urls, industry, snippets)  # no cap — caller decides how many to show
 
 
-def _search_via_serpapi(query: str, num_results: int, offset: int = 0) -> list:
+def _search_via_serpapi(query: str, num_results: int, offset: int = 0) -> tuple[list, dict]:
     params = {"q": query, "api_key": SERPAPI_KEY, "num": num_results, "start": offset, "hl": "es", "gl": "mx"}
     resp = requests.get("https://serpapi.com/search", params=params, timeout=30)
     resp.raise_for_status()
     urls = []
+    snippets = {}
     for item in resp.json().get("organic_results", []):
         link = item.get("link")
         if link and link not in urls and _is_business_url(link):
             urls.append(link)
-    return urls
+            snippets[link] = {"title": item.get("title", ""), "body": item.get("snippet", "")}
+    return urls, snippets
 
 
-def _search_via_duckduckgo(industry: str, city: str = "", exclude_domains: set | None = None) -> list:
+def _search_via_duckduckgo(industry: str, city: str = "", exclude_domains: set | None = None) -> tuple[list, dict]:
     variations = _build_variations(industry, city)
     skip = exclude_domains or set()
 
-    all_raw: list[str] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(variations), 25)) as executor:
+    all_raw: list[dict] = []
+    # Kept below the point where DDG starts throttling/blocking (~10-15 simultaneous
+    # requests), but higher than before since MAJOR_CITIES now covers all 32 state
+    # capitals + big metros, nearly doubling the variation count per search.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(variations), 12)) as executor:
         futures = {executor.submit(_fetch_ddg, v): v for v in variations}
         for future in concurrent.futures.as_completed(futures):
             try:
@@ -512,16 +601,19 @@ def _search_via_duckduckgo(industry: str, city: str = "", exclude_domains: set |
     seen_domains: set[str] = set()
     new_urls: list[str] = []
     known_urls: list[str] = []       # already scraped but still returned (lower priority)
+    snippets: dict[str, dict] = {}
 
-    for url in all_raw:
+    for item in all_raw:
+        url = item["href"]
         domain = _get_domain(url)
         if not domain or domain in seen_domains:
             continue
         seen_domains.add(domain)
+        snippets[url] = {"title": item.get("title", ""), "body": item.get("body", "")}
         if domain in skip:
             known_urls.append(url)   # keep, but push to the end
         else:
             new_urls.append(url)
 
     # New domains first, already-scraped appended at the end
-    return new_urls + known_urls
+    return new_urls + known_urls, snippets

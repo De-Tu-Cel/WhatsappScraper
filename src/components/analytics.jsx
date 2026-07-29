@@ -37,7 +37,20 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
+import LocalGasStationIcon from '@mui/icons-material/LocalGasStation'
+import HelpOutlineIcon from '@mui/icons-material/HelpOutlined'
 import AndyBotBuilder from './AndyBotBuilder'
+import GasBotModal from './GasBotModal'
+
+const GAS_INDUSTRY_KEYWORDS = ['gas', 'lp', 'gasera', 'gaseras', 'energia']
+
+function isGasIndustry(industry) {
+  const norm = (industry || '')
+    .toLowerCase()
+    .normalize('NFD').replace(new RegExp('[̀-ͯ]', 'g'), '') // strip accents
+  if (!norm) return false
+  return GAS_INDUSTRY_KEYWORDS.some(kw => new RegExp(`\\b${kw}\\b`).test(norm))
+}
 
 const CATEGORY_CONFIG = {
   humano:     { tKey: 'human',     color: '#4ade80', bg: 'rgba(34,197,94,0.12)',   icon: '👤' },
@@ -118,6 +131,20 @@ const CELL_SX = {
   fontSize: '0.8rem',
   py: 1.2,
   px: 1.5,
+}
+
+const SORT_LABEL_CENTER_SX = {
+  width: '100%',
+  position: 'relative',
+  justifyContent: 'center',
+  color: 'rgba(255,255,255,0.5) !important',
+  '& .MuiTableSortLabel-icon': {
+    position: 'absolute',
+    right: 0,
+    margin: 0,
+    color: 'rgba(255,255,255,0.3) !important',
+  },
+  '&.Mui-active': { color: 'white !important' },
 }
 
 const HEADER_CELL_SX = {
@@ -222,6 +249,8 @@ export default function Analytics() {
   const [sortDir, setSortDir]     = useState('desc')
   const [botBuilderOpen,  setBotBuilderOpen]  = useState(false)
   const [botBuilderRow,   setBotBuilderRow]   = useState(null)
+  const [gasBotOpen,      setGasBotOpen]      = useState(false)
+  const [gasBotRow,       setGasBotRow]       = useState(null)
 
   const handleSort = (field) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -393,6 +422,15 @@ export default function Analytics() {
       emails:        row.emails        || '',
     })
     setBotBuilderOpen(true)
+  }
+
+  function openGasBot(row, number) {
+    const validNumbers = (row.numbers || []).filter(n => (n.number || '').replace(/\D/g,'').length >= 10)
+    setGasBotRow({
+      company_name: row.company_name || '',
+      phone:        number || validNumbers[0]?.number || '',
+    })
+    setGasBotOpen(true)
   }
 
   const filteredData = data.filter(row => {
@@ -655,7 +693,7 @@ export default function Analytics() {
                     <TableCell key={field} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
                       <TableSortLabel active={sortField === field} direction={sortField === field ? sortDir : 'asc'}
                         onClick={() => handleSort(field)}
-                        sx={{ justifyContent: 'center', color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
+                        sx={SORT_LABEL_CENTER_SX}>
                         {label}
                       </TableSortLabel>
                     </TableCell>
@@ -663,7 +701,7 @@ export default function Analytics() {
                   <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
                     <TableSortLabel active={sortField === 'response_quality'} direction={sortField === 'response_quality' ? sortDir : 'asc'}
                       onClick={() => handleSort('response_quality')}
-                      sx={{ justifyContent: 'center', color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
+                      sx={SORT_LABEL_CENTER_SX}>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                         <StarIcon sx={{ fontSize: 12 }} /> {t.analytics.quality}
                       </Box>
@@ -672,7 +710,7 @@ export default function Analytics() {
                   <TableCell sx={{ ...HEADER_CELL_SX, whiteSpace: 'nowrap', textAlign: 'center' }}>
                     <TableSortLabel active={sortField === 'reaction_time_min'} direction={sortField === 'reaction_time_min' ? sortDir : 'asc'}
                       onClick={() => handleSort('reaction_time_min')}
-                      sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
+                      sx={SORT_LABEL_CENTER_SX}>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                         <AccessTimeIcon sx={{ fontSize: 12 }} /> {t.analytics.reaction}
                       </Box>
@@ -686,8 +724,23 @@ export default function Analytics() {
                     </TableSortLabel>
                   </TableCell>
                   <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>{t.analytics.notes}</TableCell>
-                  <TableCell sx={HEADER_CELL_SX}>Chat IA</TableCell>
-                  <TableCell sx={HEADER_CELL_SX}>{t.analytics.report}</TableCell>
+                  <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
+                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4 }}>
+                      Chat IA
+                      <Tooltip title={t.analytics.chatIaHelp}>
+                        <HelpOutlineIcon sx={{ fontSize: 13, color: 'rgba(255,255,255,0.3)', cursor: 'help', position: 'relative', top: -1 }} />
+                      </Tooltip>
+                    </Box>
+                  </TableCell>
+                  <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
+                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4 }}>
+                      {t.analytics.modifyBot}
+                      <Tooltip title={t.analytics.modifyBotHelp}>
+                        <HelpOutlineIcon sx={{ fontSize: 13, color: 'rgba(255,255,255,0.3)', cursor: 'help', position: 'relative', top: -1 }} />
+                      </Tooltip>
+                    </Box>
+                  </TableCell>
+                  <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>{t.analytics.report}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -825,6 +878,23 @@ export default function Analytics() {
                         })()}
                       </TableCell>
 
+                      {/* Modificar Bot — solo industrias de gas */}
+                      <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
+                        {(() => {
+                          const isGas = isGasIndustry(row.industry)
+                          return (
+                            <Tooltip title={!isGas ? t.analytics.notGasIndustry : t.analytics.modifyBotTooltip}>
+                              <span>
+                                <IconButton size="small" disabled={!isGas} onClick={() => openGasBot(row)}
+                                  sx={{ color: 'rgba(255,255,255,0.35)', '&:hover': { color: '#fb923c', bgcolor: 'rgba(251,146,60,0.1)' }, '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.65)' } }}>
+                                  <LocalGasStationIcon sx={{ fontSize: 16 }} />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          )
+                        })()}
+                      </TableCell>
+
                       {/* Reporte */}
                       <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
                         {!hasMultiple && (() => {
@@ -943,6 +1013,22 @@ export default function Analytics() {
                               </span>
                             </Tooltip>
                           </TableCell>
+                          {/* Modificar Bot por número — solo industrias de gas */}
+                          <TableCell sx={NSUB}>
+                            {(() => {
+                              const isGas = isGasIndustry(row.industry)
+                              return (
+                                <Tooltip title={!isGas ? t.analytics.notGasIndustry : t.analytics.modifyBotTooltip}>
+                                  <span>
+                                    <IconButton size="small" disabled={!isGas} onClick={() => openGasBot(row, n.number)}
+                                      sx={{ color: 'rgba(255,255,255,0.35)', '&:hover': { color: '#fb923c', bgcolor: 'rgba(251,146,60,0.1)' }, '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.65)' } }}>
+                                      <LocalGasStationIcon sx={{ fontSize: 16 }} />
+                                    </IconButton>
+                                  </span>
+                                </Tooltip>
+                              )
+                            })()}
+                          </TableCell>
                           {/* PDF por número */}
                           <TableCell sx={NSUB}>
                             <Tooltip title={isGenNum ? t.analytics.generating : generating ? t.analytics.pleaseWait : !replied ? t.analytics.noReply : `${t.analytics.reportPdf} ${shortNum}`}>
@@ -1016,6 +1102,8 @@ export default function Analytics() {
       )}
 
       <AndyBotBuilder open={botBuilderOpen} initialData={botBuilderRow} onClose={() => { setBotBuilderOpen(false); setBotBuilderRow(null) }} />
+
+      <GasBotModal open={gasBotOpen} initialData={gasBotRow} onClose={() => { setGasBotOpen(false); setGasBotRow(null) }} />
 
       <Snackbar
         open={snack.open}

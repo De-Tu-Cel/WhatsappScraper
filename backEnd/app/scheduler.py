@@ -9,6 +9,7 @@ from datetime import datetime
 log = logging.getLogger(__name__)
 
 _POLL_INTERVAL_SEC = 60  # check for due jobs every minute
+_REMINDER_LEAD_MIN = 60  # notify ~1h before a scheduled campaign fires
 
 
 def _render_message(text: str, name: str = "", industry: str = "", city: str = "", website: str = "") -> str:
@@ -338,11 +339,56 @@ def _poll_and_dispatch():
         log.exception("[Scheduler] _poll_and_dispatch failed")
 
 
+def _check_reminders():
+    """Notify the user ~_REMINDER_LEAD_MIN minutes before a pending campaign
+    fires. Guarded by `reminder_sent_at` so each campaign only reminds once,
+    even though this runs every _POLL_INTERVAL_SEC."""
+    from datetime import timedelta
+    from app.database import MongoDBManager
+
+    try:
+        db = MongoDBManager()
+        now = datetime.now()
+        # Window sized to the poll interval so a campaign is caught exactly once
+        # as it crosses the ~1h-away mark.
+        window_start = now + timedelta(minutes=_REMINDER_LEAD_MIN) - timedelta(seconds=_POLL_INTERVAL_SEC)
+        window_end   = now + timedelta(minutes=_REMINDER_LEAD_MIN)
+
+        due = list(db.db.scheduled_sends.find(
+            {
+                "status": "pending",
+                "reminder_sent_at": {"$exists": False},
+                "scheduled_at": {"$gte": window_start, "$lte": window_end},
+            },
+            {"_id": 1, "name": 1, "scheduled_at": 1},
+        ))
+
+        for job in due:
+            result = db.db.scheduled_sends.update_one(
+                {"_id": job["_id"], "reminder_sent_at": {"$exists": False}},
+                {"$set": {"reminder_sent_at": now}},
+            )
+            if result.modified_count == 0:
+                continue  # another poll tick already claimed it
+            db.db.app_notifications.insert_one({
+                "type": "schedule_reminder",
+                "scheduled_send_id": str(job["_id"]),
+                "name": job.get("name", ""),
+                "scheduled_at": job.get("scheduled_at"),
+                "created_at": now,
+            })
+            log.info("[Scheduler] Reminder queued for job %s", job["_id"])
+
+    except Exception:
+        log.exception("[Scheduler] _check_reminders failed")
+
+
 def start_scheduler():
     """Launch the scheduled-sends polling loop as a daemon thread. Call once at startup."""
     def _loop():
         while True:
             _poll_and_dispatch()
+            _check_reminders()
             time.sleep(_POLL_INTERVAL_SEC)
 
     t = threading.Thread(target=_loop, daemon=True, name="scheduler-poll")

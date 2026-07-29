@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import { authFetch } from '@/lib/api'
+import { useSendQueue } from '../context/SendQueueContext'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner } from './InstanceStatusBanner'
 import Box from '@mui/material/Box'
@@ -491,15 +492,17 @@ function SearchBar({ url, setUrl, onSearch, loading, compact, onCancel }) {
 
 export default function SingleUrlProcessor() {
   const { t } = useLang()
+  const { addJob } = useSendQueue()
   const [url, setUrl] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [sending, setSending] = useState(false)
-  const [result, setResult] = useState(null)
-  const [error, setError] = useState('')
+  const [loading,     setLoading]     = useState(false)
+  const [sending,     setSending]     = useState(false)
+  const [result,      setResult]      = useState(null)
+  const [error,       setError]       = useState('')
+  const [blockedData, setBlockedData] = useState(null)   // { url, matched }
   const [sendSuccess, setSendSuccess] = useState(false)
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
 
-  const hasResult = result || error
+  const hasResult = result || error || blockedData
   const hasWhatsapp = !!result?.primary_whatsapp_number
   const abortRef = useRef(null)
 
@@ -512,6 +515,7 @@ export default function SingleUrlProcessor() {
     if (!url) return
     setError('')
     setResult(null)
+    setBlockedData(null)
     setSendSuccess(false)
     setLoading(true)
     abortRef.current = new AbortController()
@@ -523,7 +527,12 @@ export default function SingleUrlProcessor() {
         signal: abortRef.current.signal,
       })
       if (!res.ok) throw new Error(`Error ${res.status}`)
-      setResult(await res.json())
+      const data = await res.json()
+      if (data.blacklisted) {
+        setBlockedData({ url, matched: data.matched })
+      } else {
+        setResult(data)
+      }
     } catch (e) {
       if (e.name !== 'AbortError') setError(`Error al analizar la URL: ${e.message}`)
     } finally {
@@ -536,46 +545,17 @@ export default function SingleUrlProcessor() {
   // `messagesOrText` is either one string (sent as-is to every number) or an
   // array parallel to `toNumbers` — MessageComposer passes an array with a
   // different rotated variant per number once there's more than one recipient.
-  async function handleSend(messagesOrText, toNumbers) {
-    setSending(true)
-    setSendSuccess(false)
+  function handleSend(messagesOrText, toNumbers) {
     const nums = Array.isArray(toNumbers) ? toNumbers : [toNumbers]
-    let successCount = 0
-    let lastErr = null
-    try {
-      for (let i = 0; i < nums.length; i++) {
-        const toNumber = nums[i]
-        const messageText = Array.isArray(messagesOrText) ? messagesOrText[i] : messagesOrText
-        try {
-          const res = await authFetch('/api/send-message', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              company_id: result.company_id,
-              to_number: toNumber || result.primary_whatsapp_number,
-              message: messageText,
-              website: result.website,
-            }),
-          })
-          if (!res.ok) {
-            const errJson = await res.json().catch(() => ({}))
-            throw new Error(errJson.detail || `Error ${res.status}`)
-          }
-          successCount++
-        } catch (e) {
-          lastErr = e
-        }
-      }
-      if (successCount > 0) {
-        setSendSuccess(true)
-      } else {
-        throw lastErr || new Error('No se pudo enviar')
-      }
-    } catch (e) {
-      setError(`Error al enviar: ${e.message}`)
-    } finally {
-      setSending(false)
-    }
+    if (!nums.length || !result) return
+    addJob({
+      numbers:   nums,
+      messages:  messagesOrText,
+      companyId: result.company_id,
+      website:   result.website,
+    })
+    setSendSuccess(true)
+    setTimeout(() => setSendSuccess(false), 2500)
   }
 
   /* ── ESTADO INICIAL: barra centrada ── */
@@ -604,6 +584,56 @@ export default function SingleUrlProcessor() {
       <Box sx={{ borderRadius: 3, p: 1 }}>
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
         {loading && <ResultSkeleton />}
+        {blockedData && !loading && (
+          <Box sx={{
+            borderRadius: 3, overflow: 'hidden',
+            border: '1px solid rgba(239,68,68,0.25)',
+            background: 'linear-gradient(160deg, rgba(239,68,68,0.08) 0%, rgba(239,68,68,0.03) 40%, var(--card-bg,#161d2e) 70%)',
+          }}>
+            {/* Franja roja superior */}
+            <Box sx={{ height: 3, background: 'linear-gradient(90deg, #ef4444, #f87171, transparent)' }} />
+            <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, textAlign: 'center' }}>
+              {/* Icono */}
+              <Box sx={{
+                width: 56, height: 56, borderRadius: '50%',
+                bgcolor: 'rgba(239,68,68,0.1)', border: '1.5px solid rgba(239,68,68,0.3)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.6rem',
+              }}>
+                🚫
+              </Box>
+              {/* Título */}
+              <Box>
+                <Typography sx={{ color: '#f87171', fontWeight: 700, fontSize: '1rem', mb: 0.4 }}>
+                  {t.single.blockedBy || 'Dominio bloqueado'}
+                </Typography>
+                <Typography sx={{
+                  color: 'var(--text, #f1f5f9)', fontFamily: 'monospace', fontSize: '0.88rem',
+                  bgcolor: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: 1.5, px: 1.5, py: 0.4, display: 'inline-block', mt: 0.5,
+                }}>
+                  {blockedData.url}
+                </Typography>
+              </Box>
+              {/* Coincidencia */}
+              <Box sx={{
+                display: 'flex', alignItems: 'center', gap: 1,
+                bgcolor: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.18)',
+                borderRadius: 2, px: 2, py: 1,
+              }}>
+                <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.78rem' }}>
+                  {t.search?.tagBlockedTip || 'En tu blacklist — coincide con:'}
+                </Typography>
+                <Typography sx={{ color: '#f87171', fontFamily: 'monospace', fontWeight: 700, fontSize: '0.82rem' }}>
+                  "{blockedData.matched}"
+                </Typography>
+              </Box>
+              {/* Hint */}
+              <Typography sx={{ color: 'rgba(255,255,255,0.22)', fontSize: '0.72rem', maxWidth: 340, lineHeight: 1.6 }}>
+                {t.single.blockedHint || 'Puedes gestionar los dominios bloqueados desde la sección Blacklist.'}
+              </Typography>
+            </Box>
+          </Box>
+        )}
         {result && !loading && <ResultDisplay result={result} />}
       </Box>
 

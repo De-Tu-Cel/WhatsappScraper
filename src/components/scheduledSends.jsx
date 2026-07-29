@@ -44,6 +44,7 @@ import CalendarMonthIcon from '@mui/icons-material/CalendarMonth'
 import ViewWeekIcon from '@mui/icons-material/ViewWeek'
 import ViewListIcon from '@mui/icons-material/ViewList'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
+import HelpOutlineIcon from '@mui/icons-material/HelpOutlined'
 import { TemplateManagerDialog } from './messageTemplateLibrary'
 import { MIN_TEMPLATES_FOR_BULK } from '@/lib/messageVariants'
 import { HighlightedMessageInput } from './highlightedMessageInput'
@@ -391,7 +392,12 @@ function MessageVariantsEditor({ messages, setMessages, recipientCount = 0, hasC
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem', fontWeight: 600, flex: 1 }}>{t.sched.messagesLabel}</Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, flex: 1 }}>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem', fontWeight: 600 }}>{t.sched.messagesLabel}</Typography>
+          <Tooltip title={t.sched.messagesLabelHelp}>
+            <HelpOutlineIcon sx={{ fontSize: 13, color: 'var(--text-muted)', opacity: 0.6, cursor: 'help' }} />
+          </Tooltip>
+        </Box>
         <Button variant="contained" size="small" onClick={() => setManagerOpen(true)} sx={{ bgcolor: 'var(--accent,#3b82f6)', color: '#fff', textTransform: 'none', fontSize: '0.72rem', fontWeight: 600, borderRadius: 1.5, px: 1.5, boxShadow: 'none', '&:hover': { bgcolor: 'var(--accent,#3b82f6)', filter: 'brightness(0.88)', boxShadow: 'none' } }}>
           {t.sched.manageTemplates}
         </Button>
@@ -450,7 +456,7 @@ function MessageVariantsEditor({ messages, setMessages, recipientCount = 0, hasC
       ))}
 
       <Button variant="contained" size="small" onClick={addBlank}
-        sx={{ alignSelf: 'flex-start', bgcolor: 'var(--accent,#3b82f6)', color: '#fff', textTransform: 'none', fontSize: '0.75rem', fontWeight: 600, borderRadius: 1.5, px: 1.5, boxShadow: 'none', '&:hover': { bgcolor: 'var(--accent,#3b82f6)', filter: 'brightness(0.88)', boxShadow: 'none' } }}>
+        sx={{ alignSelf: 'flex-end', bgcolor: 'var(--accent,#3b82f6)', color: '#fff', textTransform: 'none', fontSize: '0.75rem', fontWeight: 600, borderRadius: 1.5, px: 1.5, boxShadow: 'none', '&:hover': { bgcolor: 'var(--accent,#3b82f6)', filter: 'brightness(0.88)', boxShadow: 'none' } }}>
         {t.sched.addVariant}
       </Button>
 

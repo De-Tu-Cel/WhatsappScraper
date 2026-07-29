@@ -6,6 +6,7 @@ import Dialog from '@mui/material/Dialog'
 import DialogContent from '@mui/material/DialogContent'
 import DialogActions from '@mui/material/DialogActions'
 import { authFetch } from '@/lib/api'
+import { useSendQueue } from '../context/SendQueueContext'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
 import { keyframes } from '@mui/system'
@@ -149,10 +150,10 @@ function renderTemplate(text, scraped) {
 
 const SearchBarForm = React.memo(function SearchBarForm({
   allIndustries, searching, typewriterActive, labels, onSearch, onCancel,
-  compact,
+  compact, defaultIndustry = '', defaultCity = '',
 }) {
-  const [industry,   setIndustry]   = useState('')
-  const [city,       setCity]       = useState('')
+  const [industry,   setIndustry]   = useState(defaultIndustry)
+  const [city,       setCity]       = useState(defaultCity)
   const [acOpen,     setAcOpen]     = useState(false)
   const [acIdx,      setAcIdx]      = useState(0)
   const [cityAcOpen, setCityAcOpen] = useState(false)
@@ -336,15 +337,17 @@ const SearchBarForm = React.memo(function SearchBarForm({
 })
 
 export default function SearchProspects() {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const TEMPLATES = getTemplates(t)
   const pauseRef       = useRef(false)
   const cancelRef      = useRef(false)
   const abortSearchRef = useRef(null)
 
   const [lastIndustry, setLastIndustry] = useState('')
+  const [lastCity,     setLastCity]     = useState('')
   const [numResults,  setNumResults]  = useState(10)
   const [searching,    setSearching]    = useState(false)
+  const [searchError,  setSearchError]  = useState(false)
   const [visibleCount, setVisibleCount] = useState(10)
   const [found,         setFound]         = useState([])
   const [processing,  setProcessing]  = useState(false)
@@ -357,8 +360,8 @@ export default function SearchProspects() {
   const [history,     setHistory]     = useState([])
   const [selectedTpl, setSelectedTpl] = useState(TEMPLATES[0].id)
   const [msgText,     setMsgText]     = useState(TEMPLATES[0].text)
-  const [sendingAll,  setSendingAll]  = useState(false)
   const [sendError,   setSendError]   = useState('')
+  const { addBatch, cancel: cancelQueue, active: queueActive } = useSendQueue()
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
   const [waDeselected, setWaDeselected] = useState(new Set())
   const [confirmDialog, setConfirmDialog] = useState({ open: false, names: '', resolve: null }) // números que el usuario quitó manualmente
@@ -428,7 +431,7 @@ export default function SearchProspects() {
   const okCount       = results.filter(r => r.ok).length
   const errCount      = results.filter(r => !r.ok).length
   const waCount       = results.filter(r => r.whatsapp).length
-  const hasResults    = found.length > 0 || processing || done || searching
+  const hasResults    = found.length > 0 || processing || done || searching || searchError
 
   function saveHistory(query) {
     const next = [query, ...history.filter(h => h !== query)].slice(0, 6)
@@ -456,11 +459,12 @@ export default function SearchProspects() {
     const query = industry.trim()
     if (!query) return
     setLastIndustry(query)
+    setLastCity(city?.trim() || '')
     saveHistory(query)
     abortSearchRef.current?.abort()
     const ctrl = new AbortController()
     abortSearchRef.current = ctrl
-    setSearching(true); setFound([]); setResults([]); setDone(false); setVisibleCount(numResults); setFilterScraped('all')
+    setSearching(true); setFound([]); setResults([]); setDone(false); setVisibleCount(numResults); setFilterScraped('all'); setSearchError(false)
     try {
       const res = await fetch('/api/search', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -472,8 +476,9 @@ export default function SearchProspects() {
       const blockedMap = Object.fromEntries((searchResults || []).map(r => [r.url, r]))
       const marked = await fetchAndMark(urls, blockedMap)
       setFound(marked)
+      if (marked.length === 0) setSearchError(true)
     } catch (err) {
-      if (err?.name !== 'AbortError') setFound([])
+      if (err?.name !== 'AbortError') setSearchError(true)
     } finally {
       setSearching(false)
     }
@@ -576,6 +581,7 @@ export default function SearchProspects() {
     setPaused(false)
     abortSearchRef.current?.abort()
     setSearching(false)
+    setSearchError(false)
   }
 
   function downloadCsv() {
@@ -585,8 +591,9 @@ export default function SearchProspects() {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'prospectos.csv'; a.click()
   }
 
-  const alreadySent  = results.some(r => r.msg_status === 'sent' || r.msg_status === 'failed')
-  const sentCount    = results.filter(r => r.msg_status === 'sent').length
+  const alreadySent  = results.some(r => r.msg_status === 'sent' || r.msg_status === 'failed' || r.msg_status === 'queued')
+  const sentCount    = results.filter(r => r.msg_status === 'sent' || r.msg_status === 'queued').length
+  const isSending    = queueActive !== null && alreadySent
 
   async function handleSendAll() {
     const targets = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id))
@@ -602,50 +609,18 @@ export default function SearchProspects() {
       if (!confirmed) return
     }
 
-    cancelRef.current = false
-    setSendingAll(true)
-    const updated = [...results]
-    for (let i = 0; i < targets.length; i++) {
-      if (cancelRef.current) break
-      const row = targets[i]
-      const idx = results.findIndex(r => r.url === row.url)
-      try {
-        const message = renderTemplate(msgText, row.scraped_data)
-        const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
-        let lastStatus = 'failed'
-        for (const num of numbers) {
-          const res = await authFetch('/api/send-message', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ company_id: row.company_id, to_number: num, message: message || msgText, website: row.url }),
-          })
-          if (!res.ok) {
-            const errJson = await res.json().catch(() => ({}))
-            const detail = errJson.detail || `Error ${res.status}`
-            setSendError(detail)
-            setTimeout(() => setSendError(''), 10_000)
-            throw new Error(detail)
-          }
-          const json = await res.json()
-          if (json.status === 'sent') lastStatus = 'sent'
-        }
-        updated[idx] = { ...updated[idx], msg_status: lastStatus }
-      } catch {
-        updated[idx] = { ...updated[idx], msg_status: 'failed' }
-      }
-      setResults([...updated])
-      if (i < targets.length - 1 && !cancelRef.current) {
-        const sentSoFar = i + 1
-        if (sentSoFar % 5 === 0) {
-          const longBreak = Math.floor(Math.random() * 300000 + 180000) // 3–8 min
-          await new Promise(r => setTimeout(r, longBreak))
-        } else {
-          const delay = Math.floor(Math.random() * 30000 + 25000) // 25–55 seg
-          await new Promise(r => setTimeout(r, delay))
-        }
-      }
+    const updated = results.map(r => ({ ...r }))
+    const jobs = []
+    for (const row of targets) {
+      const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
+      if (!numbers.length) continue
+      const message = renderTemplate(msgText, row.scraped_data) || msgText
+      jobs.push({ numbers, messages: message, companyId: row.company_id, website: row.url })
+      const idx = updated.findIndex(r => r.url === row.url)
+      if (idx >= 0) updated[idx] = { ...updated[idx], msg_status: 'queued' }
     }
-    setSendingAll(false)
+    addBatch(jobs, lang === 'en' ? 'Prospect search' : 'Búsqueda de prospectos')
+    setResults(updated)
   }
 
   function exportUrlsTxt() {
@@ -699,7 +674,7 @@ export default function SearchProspects() {
             <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.35))', fontSize: '0.82rem' }}>{t.search.headingSub}</Typography>
           </Box>
 
-          <SearchBarForm compact={false} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancel} />
+          <SearchBarForm compact={false} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancel} defaultIndustry={lastIndustry} defaultCity={lastCity} />
           <CountSelector size="md" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} />
 
           {/* Historial reciente */}
@@ -738,8 +713,23 @@ export default function SearchProspects() {
       {/* ── Barra compacta cuando hay resultados ── */}
       {hasResults && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', p: 1.5, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
-          <SearchBarForm compact={true} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancel} />
+          <SearchBarForm compact={true} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancel} defaultIndustry={lastIndustry} defaultCity={lastCity} />
           <CountSelector size="sm" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} />
+        </Box>
+      )}
+
+      {/* ── Sin resultados / error ── */}
+      {searchError && !searching && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 1.5, py: 4, px: 2 }}>
+          <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.45))', fontSize: '0.9rem', textAlign: 'center' }}>
+            {t.search.noResultsFor} <strong style={{ color: 'var(--text, #f1f5f9)' }}>{lastIndustry}</strong>{lastCity ? ` · ${lastCity}` : ''}
+          </Typography>
+          <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.28))', fontSize: '0.78rem', textAlign: 'center', maxWidth: 420, lineHeight: 1.6 }}>
+            {t.search.tryOther}
+          </Typography>
+          <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.18))', fontSize: '0.72rem', textAlign: 'center', maxWidth: 460, lineHeight: 1.6, mt: 0.5 }}>
+            {t.search.noResultsHint}
+          </Typography>
         </Box>
       )}
 
@@ -874,7 +864,7 @@ export default function SearchProspects() {
                     onError={e => { e.target.style.display = 'none' }}
                   />
                   {/* Dominio + URL completa al hover */}
-                  <Tooltip title={item.blocked ? `${item.url} — ${t.search.tagBlockedTip} "${item.blockReason}"` : item.url} placement="top" arrow>
+                  <Tooltip title={item.blocked ? `🚫 ${t.search.tagBlockedTip} "${item.blockReason}" · ${item.url}` : item.url} placement="top" arrow>
                     <Typography component="a" href={item.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
                       sx={{ fontSize: '0.82rem', fontWeight: item.scraped ? 400 : 500, color: item.blocked ? 'var(--text-muted)' : item.scraped ? 'var(--text-muted)' : item.selected ? 'var(--accent, #60a5fa)' : 'var(--text)', textDecoration: 'none', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', '&:hover': { textDecoration: 'underline' } }}>
                       {domain}
@@ -1058,9 +1048,9 @@ export default function SearchProspects() {
           <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />
           <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
-            {sendingAll && (
+            {isSending && (
               <Tooltip title={t.search.cancelSend}>
-                <IconButton size="small" onClick={handleCancel}
+                <IconButton size="small" onClick={cancelQueue}
                   sx={{ color: 'rgba(248,113,113,0.7)', '&:hover': { color: '#f87171' } }}>
                   <HighlightOffIcon sx={{ fontSize: 16 }} />
                 </IconButton>
@@ -1068,20 +1058,20 @@ export default function SearchProspects() {
             )}
             <Button
               onClick={handleSendAll}
-              disabled={effectiveWaSelected.size === 0 || alreadySent || sendingAll || isDisconnected}
-              startIcon={sendingAll ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
+              disabled={effectiveWaSelected.size === 0 || alreadySent || isDisconnected}
+              startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
               size="small"
               sx={{
                 fontSize: '0.78rem', fontWeight: 700, flexShrink: 0,
-                bgcolor: waRowsUnique.length > 0 && !alreadySent && !sendingAll ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
-                color:   waRowsUnique.length > 0 && !alreadySent && !sendingAll ? '#4ade80' : 'rgba(255,255,255,0.3)',
-                border:  `1px solid ${waRowsUnique.length > 0 && !alreadySent && !sendingAll ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
+                bgcolor: waRowsUnique.length > 0 && !alreadySent ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
+                color:   waRowsUnique.length > 0 && !alreadySent ? '#4ade80' : 'rgba(255,255,255,0.3)',
+                border:  `1px solid ${waRowsUnique.length > 0 && !alreadySent ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
                 borderRadius: 1.5, px: 2, py: 0.6,
-                '&:hover': { bgcolor: waRowsUnique.length > 0 && !alreadySent && !sendingAll ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
+                '&:hover': { bgcolor: waRowsUnique.length > 0 && !alreadySent ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
                 '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
               }}
             >
-              {alreadySent ? `${sentCount} ${t.search.sentCount}` : sendingAll ? t.single.sending : `${t.search.sendButton} ${effectiveWaSelected.size} ${t.search.companies}`}
+              {alreadySent ? `${sentCount} ${t.search.sentCount}` : `${t.search.sendButton} ${effectiveWaSelected.size} ${t.search.companies}`}
             </Button>
           </Box>
         </Box>

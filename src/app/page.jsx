@@ -36,6 +36,9 @@ import AppearancePanel from '../components/AppearancePanel'
 import NotificationsPanel from '../components/NotificationsPanel'
 import BlacklistPanel from '../components/BlacklistPanel'
 import BlockIcon from '@mui/icons-material/Block'
+import { SendQueueProvider } from '../context/SendQueueContext'
+import SendBubble from '../components/SendBubble'
+import { NavigationProvider, useNavigation } from '../context/NavigationContext'
 
 // Lazy-mount + memo: each tab mounts only on first visit, then stays mounted
 // (hidden via display:none) so returning to it is instant. This prevents all
@@ -74,6 +77,16 @@ const NAV_KEYS = [
 ]
 
 export default function DashboardPage() {
+  return (
+    <NavigationProvider>
+      <SendQueueProvider>
+        <DashboardInner />
+      </SendQueueProvider>
+    </NavigationProvider>
+  )
+}
+
+function DashboardInner() {
   const { user, loading: authLoading, showWarning, countdown, stayLoggedIn, logout } = useUser()
   const [hasUsers, setHasUsers]   = useState(true)
   const [active,       setActive]       = useState(0)
@@ -119,11 +132,31 @@ export default function DashboardPage() {
     [NAV_ITEMS, user?.role]
   )
 
+  const { setPendingConvId, setPendingConvNumber } = useNavigation()
+
   const handleNavClick      = useCallback((i) => { setActive(i); setSettingsOpen(false) }, [])
   const handleSettingsClick = useCallback(() => setSettingsOpen(s => !s), [])
   const toggleAppearance    = useCallback(() => setRightPanel(p => p === 'appearance' ? null : 'appearance'), [])
   const toggleNotifications = useCallback(() => setRightPanel(p => p === 'notifications' ? null : 'notifications'), [])
   const closeRightPanel     = useCallback(() => setRightPanel(null), [])
+
+  const handleNavigateToConv = useCallback((companyId, number) => {
+    const convIdx = visibleNavItems.findIndex(i => i.key === 'convs')
+    if (convIdx === -1) return
+    setPendingConvId(companyId)
+    setPendingConvNumber(number || null)
+    setActive(convIdx)
+    setSettingsOpen(false)
+    setRightPanel(null)
+  }, [visibleNavItems, setPendingConvId, setPendingConvNumber])
+
+  const handleNavigateToSchedule = useCallback(() => {
+    const schedIdx = visibleNavItems.findIndex(i => i.key === 'schedule')
+    if (schedIdx === -1) return
+    setActive(schedIdx)
+    setSettingsOpen(false)
+    setRightPanel(null)
+  }, [visibleNavItems])
 
   // ── Returns condicionales al final, tras todos los hooks ──
   if (authLoading) return (
@@ -206,8 +239,13 @@ export default function DashboardPage() {
             background: 'radial-gradient(circle, rgba(var(--accent-rgb, 99,102,241), 0.07) 0%, transparent 70%)',
             pointerEvents: 'none', zIndex: 0,
           }} />
-          {/* TopControls pegado a la esquina superior derecha del card, sin consumir espacio vertical */}
-          <Box sx={{ position: 'absolute', top: 10, right: 14, zIndex: 6 }}>
+          {/* TopControls: se desliza a la izquierda cuando un panel derecho está abierto */}
+          <Box sx={{
+            position: 'absolute', top: 3.2, zIndex: 6,
+            right: rightPanel ? 354 : 16,
+            transition: 'right 0.25s cubic-bezier(0.4,0,0.2,1)',
+            whiteSpace: 'nowrap',
+          }}>
             <TopControls
               appearanceOpen={appearanceOpen} onToggleAppearance={toggleAppearance}
               notifOpen={notifOpen} onToggleNotifications={toggleNotifications}
@@ -229,9 +267,10 @@ export default function DashboardPage() {
               sx={{ position: 'absolute', inset: 0, zIndex: 4 }} />
           )}
           <AppearancePanel open={appearanceOpen} onClose={closeRightPanel} />
-          <NotificationsPanel open={notifOpen} onClose={closeRightPanel} />
+          <NotificationsPanel open={notifOpen} onClose={closeRightPanel} onNavigateToConv={handleNavigateToConv} onNavigateToSchedule={handleNavigateToSchedule} />
         </Box>
       </Box>
+      <SendBubble />
     </Box>
   )
 }

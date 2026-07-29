@@ -1,6 +1,5 @@
 # scraper.py - VERSIÓN EXTENDIDA
 import re
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
@@ -9,8 +8,6 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
-
-_DS_LOCK = threading.Lock()  # serializa llamadas DeepSeek en scraping paralelo
 
 
 class WebsiteScraper:
@@ -448,40 +445,58 @@ class WebsiteScraper:
                 url.rstrip("/") + "/contact",
                 url,
             ]
-            for pw_url in contact_candidates:
-                js_html = self._get_page_js(pw_url)
-                if not js_html:
-                    break  # Playwright no disponible
-                js_soup = BeautifulSoup(js_html, "html.parser")
-                js_text = js_soup.get_text(" ", strip=True)
-                js_phones_s, js_wa_s = self._extract_from_scripts(js_soup)
-                _pw_contacts = self._extract_whatsapp_with_labels(js_soup, js_text)
-                found_wa  = [c["number"] for c in _pw_contacts] + js_wa_s
-                found_tel = self._extract_phone_numbers(js_soup, js_text) + js_phones_s
-                _existing_pw = {c["number"] for c in result["_contacts_raw"]["whatsapp_contacts"]}
-                for c in _pw_contacts:
-                    if c["number"] not in result["_contacts_raw"]["all_whatsapp_numbers"]:
-                        result["_contacts_raw"]["all_whatsapp_numbers"].append(c["number"])
-                    if c["number"] not in _existing_pw:
-                        result["_contacts_raw"]["whatsapp_contacts"].append(c)
-                        _existing_pw.add(c["number"])
-                for n in js_wa_s:
-                    if n not in result["_contacts_raw"]["all_whatsapp_numbers"]:
-                        result["_contacts_raw"]["all_whatsapp_numbers"].append(n)
-                    if n not in _existing_pw:
-                        result["_contacts_raw"]["whatsapp_contacts"].append({"number": n, "label": ""})
-                for n in found_tel:
-                    if n not in result["_contacts_raw"]["phone_numbers"]:
-                        result["_contacts_raw"]["phone_numbers"].append(n)
-                if found_wa or found_tel:
-                    print(f"🎭 Playwright encontró contactos en {pw_url}")
-                    # Re-detectar industria con el texto completo renderizado
-                    if result.get("industry") in ("No detectada", "", None):
-                        detected = self._detect_industry(js_text, js_soup)
-                        if detected != "No detectada":
-                            result["industry"] = detected
-                            print(f"🏷️  Industria detectada desde Playwright: {detected}")
-                    break
+            try:
+                from playwright.sync_api import sync_playwright
+            except ImportError:
+                sync_playwright = None
+
+            if sync_playwright is not None:
+                # Un solo navegador reutilizado para las 4 URLs candidatas — lanzar
+                # Chromium desde cero (~1-2s) en cada intento era el principal costo,
+                # no la carga de la página en sí.
+                with sync_playwright() as pw:
+                    browser = pw.chromium.launch(headless=True)
+                    ctx = browser.new_context(
+                        user_agent=self.headers["User-Agent"],
+                        locale="es-MX",
+                        viewport={"width": 1280, "height": 800},
+                    )
+                    pw_page = ctx.new_page()
+                    for pw_url in contact_candidates:
+                        js_html = self._get_page_js(pw_url, page=pw_page)
+                        if not js_html:
+                            continue  # esta URL falló — probar la siguiente candidata igual
+                        js_soup = BeautifulSoup(js_html, "html.parser")
+                        js_text = js_soup.get_text(" ", strip=True)
+                        js_phones_s, js_wa_s = self._extract_from_scripts(js_soup)
+                        _pw_contacts = self._extract_whatsapp_with_labels(js_soup, js_text)
+                        found_wa  = [c["number"] for c in _pw_contacts] + js_wa_s
+                        found_tel = self._extract_phone_numbers(js_soup, js_text) + js_phones_s
+                        _existing_pw = {c["number"] for c in result["_contacts_raw"]["whatsapp_contacts"]}
+                        for c in _pw_contacts:
+                            if c["number"] not in result["_contacts_raw"]["all_whatsapp_numbers"]:
+                                result["_contacts_raw"]["all_whatsapp_numbers"].append(c["number"])
+                            if c["number"] not in _existing_pw:
+                                result["_contacts_raw"]["whatsapp_contacts"].append(c)
+                                _existing_pw.add(c["number"])
+                        for n in js_wa_s:
+                            if n not in result["_contacts_raw"]["all_whatsapp_numbers"]:
+                                result["_contacts_raw"]["all_whatsapp_numbers"].append(n)
+                            if n not in _existing_pw:
+                                result["_contacts_raw"]["whatsapp_contacts"].append({"number": n, "label": ""})
+                        for n in found_tel:
+                            if n not in result["_contacts_raw"]["phone_numbers"]:
+                                result["_contacts_raw"]["phone_numbers"].append(n)
+                        if found_wa or found_tel:
+                            print(f"🎭 Playwright encontró contactos en {pw_url}")
+                            # Re-detectar industria con el texto completo renderizado
+                            if result.get("industry") in ("No detectada", "", None):
+                                detected = self._detect_industry(js_text, js_soup)
+                                if detected != "No detectada":
+                                    result["industry"] = detected
+                                    print(f"🏷️  Industria detectada desde Playwright: {detected}")
+                            break
+                    browser.close()
             if result["_contacts_raw"]["all_whatsapp_numbers"]:
                 result["_contacts_raw"]["whatsapp_numbers"] = result["_contacts_raw"]["all_whatsapp_numbers"]
                 result["has_whatsapp"] = True
@@ -656,8 +671,7 @@ class WebsiteScraper:
             )
             try:
                 from app.llm import call_llm
-                with _DS_LOCK:
-                    content = call_llm([{"role": "user", "content": prompt}], max_tokens=80, temperature=0)
+                content = call_llm([{"role": "user", "content": prompt}], max_tokens=80, temperature=0)
                 m = _re.search(r'\[[\d,\s]+\]', content)
                 if m:
                     indices = _json.loads(m.group(0))
@@ -684,12 +698,25 @@ class WebsiteScraper:
         scored.sort(key=lambda x: -x[0])
         return [url for _, url in scored]
 
-    def _get_page_js(self, url: str, timeout: int = 20) -> Optional[str]:
+    def _get_page_js(self, url: str, timeout: int = 20, page=None) -> Optional[str]:
         """
         Renderiza la página con Playwright (Chromium headless) y devuelve el HTML
         completo tras ejecutar JS. Solo se usa cuando los métodos estáticos fallan.
+        Si se pasa `page` (de un browser/context ya abiertos por el caller), lo
+        reutiliza en vez de lanzar un Chromium nuevo — evita pagar el arranque del
+        navegador otra vez cuando se prueban varias URLs candidatas seguidas.
         Devuelve el HTML como string o None si Playwright no está disponible/falla.
         """
+        if page is not None:
+            try:
+                page.goto(url, wait_until="networkidle", timeout=timeout * 1000)
+                html = page.content()
+                print(f"🎭 Playwright renderizó {url} ({len(html)} chars)")
+                return html
+            except Exception as e:
+                print(f"⚠️  Playwright falló en {url}: {e}")
+                return None
+
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:

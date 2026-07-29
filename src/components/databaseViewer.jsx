@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { authFetch } from '@/lib/api'
+import { useSendQueue } from '../context/SendQueueContext'
 const display = v => (!v || ['null','none','undefined','n/a'].includes(String(v).trim().toLowerCase())) ? '—' : v
 import { useLang } from '../context/LangContext'
 import { isValidUrl, urlValidationMsg, isValidWhatsAppNumber, waNumberValidationMsg } from '@/lib/validators'
@@ -1003,7 +1004,7 @@ export default function DatabaseViewer({ isActive }) {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(0)
-  const [rowsPerPage, setRowsPerPage] = useState(10)
+  const [rowsPerPage, setRowsPerPage] = useState(15)
   const [order, setOrder] = useState('desc')
   const [orderBy, setOrderBy] = useState('created_at')
   const [selected, setSelected] = useState([])
@@ -1025,6 +1026,7 @@ export default function DatabaseViewer({ isActive }) {
   const [industries, setIndustries] = useState([])
   const [cities, setCities] = useState([])
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
+  const { addJob } = useSendQueue()
 
   const notify = (msg, severity = 'success') => setSnack({ open: true, msg, severity })
 
@@ -1222,41 +1224,17 @@ export default function DatabaseViewer({ isActive }) {
   // `messagesOrText` is either one string or an array parallel to `numbers` —
   // MessageComposer sends an array with a different rotated variant per
   // number once a company has more than one WhatsApp contact selected.
-  const handleSendFromDB = async (messagesOrText, numbers) => {
+  const handleSendFromDB = (messagesOrText, numbers) => {
     if (!msgData) return
     const nums = Array.isArray(numbers) ? numbers : [numbers]
     if (nums.length === 0) return
-    setMsgSending(true)
-    let successCount = 0
-    let lastErr = null
-    for (let i = 0; i < nums.length; i++) {
-      const toNumber = nums[i]
-      const messageText = Array.isArray(messagesOrText) ? messagesOrText[i] : messagesOrText
-      try {
-        const res = await authFetch('/api/send-message', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            company_id: msgData.company_id,
-            to_number: toNumber,
-            message: messageText,
-            website: msgData.website,
-          }),
-        })
-        const json = await res.json()
-        if (!res.ok) throw new Error(json.detail || 'Error')
-        successCount++
-      } catch (err) {
-        lastErr = err
-      }
-    }
-    setMsgSending(false)
-    if (successCount > 0) {
-      notify(`Mensaje enviado a ${successCount} número${successCount > 1 ? 's' : ''}`, 'success')
-      setMsgTarget(null)
-    } else {
-      notify(lastErr?.message || 'No se pudo enviar el mensaje', 'error')
-    }
+    addJob({
+      numbers:   nums,
+      messages:  messagesOrText,
+      companyId: msgData.company_id,
+      website:   msgData.website,
+    })
+    setMsgTarget(null)
   }
 
   const handleSaveEdit = async (id, fields, waNumbers) => {
@@ -1495,7 +1473,7 @@ export default function DatabaseViewer({ isActive }) {
         </TableContainer>
 
         <TablePagination
-          rowsPerPageOptions={[10, 25, 50]}
+          rowsPerPageOptions={[15, 25, 50]}
           component="div"
           count={total}
           rowsPerPage={rowsPerPage}
@@ -1537,7 +1515,7 @@ export default function DatabaseViewer({ isActive }) {
       <Dialog open={!!msgTarget} onClose={() => setMsgTarget(null)} maxWidth="sm" fullWidth
         slotProps={{ paper: { sx: { bgcolor: 'var(--bg, #080c14)', backgroundImage: 'none', background: 'var(--bg, #080c14)', borderRadius: 3, border: '1px solid rgba(255,255,255,0.08)' } } }}>
         <DialogTitle sx={{ color: 'white', fontWeight: 700, pb: 1, bgcolor: 'var(--bg, #080c14)' }}>
-          Enviar mensaje a {msgTarget?.name || msgTarget?.domain || '—'}
+          {t.db.sendMsgTo} {msgTarget?.name || msgTarget?.domain || '—'}
         </DialogTitle>
         <DialogContent sx={{ pt: 0, bgcolor: 'var(--bg, #080c14)' }}>
           <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1.5 }} />

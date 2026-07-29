@@ -10,15 +10,14 @@ import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
 import DialogActions from '@mui/material/DialogActions'
 import Button from '@mui/material/Button'
-import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
 import CircularProgress from '@mui/material/CircularProgress'
 import Chip from '@mui/material/Chip'
 import Snackbar from '@mui/material/Snackbar'
+import Divider from '@mui/material/Divider'
 import CloseIcon from '@mui/icons-material/Close'
 import AddIcon from '@mui/icons-material/Add'
 import SearchIcon from '@mui/icons-material/Search'
-import MoreVertIcon from '@mui/icons-material/MoreVert'
 import QrCodeIcon from '@mui/icons-material/QrCode'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever'
@@ -28,6 +27,7 @@ import CallIcon from '@mui/icons-material/Call'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import LinkOffIcon from '@mui/icons-material/LinkOff'
 import SmartphoneIcon from '@mui/icons-material/Smartphone'
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
 import { useLang } from '../context/LangContext'
 
 const token = () => typeof window !== 'undefined' ? localStorage.getItem('user_token') : ''
@@ -40,14 +40,6 @@ const STATUS_COLOR = {
   disconnected: '#ef4444',
   unknown:      'rgba(255,255,255,0.2)',
 }
-const STATUS_LABEL = {
-  open:         'Conectado',
-  connected:    'Conectado',
-  connecting:   'Conectando',
-  close:        'Desconectado',
-  disconnected: 'Desconectado',
-  unknown:      'Desconocido',
-}
 
 const FIELD_SX = {
   '& .MuiOutlinedInput-root': {
@@ -58,8 +50,8 @@ const FIELD_SX = {
     '&:hover fieldset': { borderColor: 'rgba(255,255,255,0.2)' },
     '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' },
   },
-  '& input': { color: 'white' },
-  '& label': { color: 'rgba(255,255,255,0.4)' },
+  '& input': { color: 'var(--text, #f1f5f9)' },
+  '& label': { color: 'var(--text-muted, rgba(255,255,255,0.4))' },
   '& label.Mui-focused': { color: 'var(--accent,#3b82f6)' },
 }
 
@@ -72,138 +64,301 @@ const DIALOG_SX = {
   },
 }
 
-function InstanceCard({ inst, onMenu }) {
-  const { t } = useLang()
-  const status      = inst.live_status || 'unknown'
-  const color       = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
-  const isConnected = ['open', 'connected'].includes(status)
-  const isConnecting = status === 'connecting'
-  const STATUS_LABEL_T = {
-    open:         t.inst.statusConnected,
-    connected:    t.inst.statusConnected,
-    connecting:   t.inst.statusConnecting,
-    close:        t.inst.statusDisconnected,
-    disconnected: t.inst.statusDisconnected,
-    unknown:      t.inst.statusUnknown,
-  }
+const STAT_CHIP_SX = {
+  bgcolor: 'var(--item-hover, rgba(255,255,255,0.06))',
+  color: 'var(--text-muted, rgba(255,255,255,0.5))',
+  border: '1px solid var(--border, rgba(255,255,255,0.1))',
+  fontSize: '0.68rem', fontWeight: 600, height: 22,
+}
 
+const STATUS_LABEL_ES = { open: 'Conectada', connected: 'Conectada', connecting: 'Conectando', close: 'Desconectada', disconnected: 'Desconectada', unknown: 'Desconocida' }
+const STATUS_LABEL_EN = { open: 'Connected', connected: 'Connected', connecting: 'Connecting', close: 'Disconnected', disconnected: 'Disconnected', unknown: 'Unknown' }
+
+// ── InstanceRow ──────────────────────────────────────────────────────────────
+function InstanceRow({ inst, onQr, onEmu, onRemove }) {
+  const { t, lang } = useLang()
+  const [hover, setHover] = useState(false)
+  const status = inst.live_status || 'unknown'
+  const color = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
+  const isConnected = ['open', 'connected'].includes(status)
+  const statusLabel = (lang === 'en' ? STATUS_LABEL_EN : STATUS_LABEL_ES)[status] ?? (lang === 'en' ? 'Unknown' : 'Desconocida')
+  return (
+    <Box
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      sx={{
+        display: 'flex', alignItems: 'center', gap: 1,
+        px: 1.2, py: 0.9, borderRadius: 1.5,
+        bgcolor: hover ? 'var(--item-hover, rgba(255,255,255,0.04))' : 'transparent',
+        border: '1px solid transparent',
+        transition: 'all 0.15s',
+        ...(hover && { borderColor: 'var(--border, rgba(255,255,255,0.08))' }),
+      }}
+    >
+      {/* Status dot */}
+      <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color, flexShrink: 0,
+        boxShadow: isConnected ? `0 0 6px ${color}aa` : 'none' }} />
+      {/* Name + number */}
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text)', lineHeight: 1.2,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inst.name}</Typography>
+        <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', fontFamily: 'monospace', lineHeight: 1.2 }}>
+          {inst.number ? `+${inst.number}` : t.inst.noNumber}
+        </Typography>
+      </Box>
+      {/* Right side: status label (resting) or action icons (hover) */}
+      {hover ? (
+        <Box sx={{ display: 'flex', gap: 0.2, flexShrink: 0 }}>
+          <Tooltip title={t.inst.connectQr} placement="top">
+            <IconButton size="small" onClick={() => onQr(inst)}
+              sx={{ color: 'var(--accent,#60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(59,130,246,0.15)' } }}>
+              <QrCodeIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title={t.inst.emuMenuLabel} placement="top">
+            <IconButton size="small" onClick={() => onEmu(inst)}
+              sx={{ color: '#a78bfa', p: 0.4, '&:hover': { bgcolor: 'rgba(167,139,250,0.15)' } }}>
+              <SmartphoneIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title={lang === 'en' ? 'Remove from user' : 'Quitar de este usuario'} placement="top">
+            <IconButton size="small" onClick={() => onRemove(inst)}
+              sx={{ color: 'var(--text-muted)', p: 0.4, '&:hover': { color: '#f87171', bgcolor: 'rgba(248,113,113,0.1)' } }}>
+              <LinkOffIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+        </Box>
+      ) : (
+        <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color, flexShrink: 0, letterSpacing: '0.01em' }}>
+          {statusLabel}
+        </Typography>
+      )}
+    </Box>
+  )
+}
+
+// ── UserCard ─────────────────────────────────────────────────────────────────
+function UserCard({ user, instances, onAddSlot, onQr, onEmu, onRemove }) {
+  const { t, lang } = useLang()
+  const connectedCount = instances.filter(i => ['open', 'connected'].includes(i.live_status)).length
+  const isAdmin = user.role === 'admin'
+  const roleColor   = isAdmin ? '#a78bfa' : '#60a5fa'
+  const avatarBg    = isAdmin ? 'rgba(167,139,250,0.18)' : 'rgba(59,130,246,0.18)'
+  const avatarBorder= isAdmin ? 'rgba(167,139,250,0.55)' : 'rgba(59,130,246,0.5)'
+  const initials = (user.display_name || user.username || '?').slice(0, 2).toUpperCase()
+  const slots = 5
+  const emptySlots = Math.max(0, slots - instances.length)
+  const hasRotation = connectedCount >= 2
+  const roleLabel = isAdmin ? 'Admin' : (lang === 'en' ? 'Agent' : 'Agente')
+  const connectedWord = connectedCount === 1 ? t.inst.connectedSingular : t.inst.connectedPlural
   return (
     <Box sx={{
-      bgcolor: 'var(--card-bg)',
-      border: `1px solid ${color}33`,
-      borderRadius: 3,
-      p: 2.5,
-      display: 'flex', flexDirection: 'column', gap: 1.5,
-      position: 'relative',
-      overflow: 'hidden',
-      transition: 'border-color 0.25s, box-shadow 0.25s',
-      boxShadow: isConnected
-        ? `0 0 22px ${color}22, 0 4px 16px rgba(0,0,0,0.18)`
-        : isConnecting
-          ? `0 0 18px ${color}1a, 0 4px 12px rgba(0,0,0,0.15)`
-          : '0 2px 10px rgba(0,0,0,0.12)',
-      '&:hover': {
-        borderColor: `${color}66`,
-        boxShadow: `0 0 32px ${color}30, 0 8px 24px rgba(0,0,0,0.22)`,
-      },
+      bgcolor: 'var(--card-bg)', borderRadius: 3, p: 2,
+      display: 'flex', flexDirection: 'column', gap: 0,
+      border: '1px solid var(--border)',
+      transition: 'border-color 0.2s',
+      '&:hover': { borderColor: 'var(--text-muted)' },
     }}>
-      {/* Glow radial de fondo según status */}
-      <Box sx={{
-        position: 'absolute', top: -30, right: -30,
-        width: 120, height: 120, borderRadius: '50%', pointerEvents: 'none',
-        background: `radial-gradient(circle, ${color}18 0%, transparent 70%)`,
-      }} />
-
-      {/* Top row: avatar-con-badge + nombre + menú */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, position: 'relative' }}>
-
-        {/* Avatar + badge de status */}
-        <Box sx={{ position: 'relative', flexShrink: 0 }}>
-          <Box sx={{
-            width: 56, height: 56, borderRadius: 2.5,
-            bgcolor: `${color}18`,
-            border: `1.5px solid ${color}55`,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <PhoneAndroidIcon sx={{ color, fontSize: 26 }} />
-          </Box>
-          {/* Badge de status sobre el avatar */}
-          <Box sx={{
-            position: 'absolute', bottom: -3, right: -3,
-            width: 14, height: 14, borderRadius: '50%',
-            bgcolor: color,
-            border: '2.5px solid var(--card-bg, #161d2e)',
-            boxShadow: `0 0 8px ${color}cc`,
-          }}>
-            {isConnecting && (
-              <CircularProgress size={14} thickness={6}
-                sx={{ color, position: 'absolute', top: -2.5, left: -2.5, opacity: 0.7 }} />
-            )}
-          </Box>
+      {/* User header */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, mb: 1.5 }}>
+        <Box sx={{ width: 38, height: 38, borderRadius: 2, flexShrink: 0,
+          bgcolor: avatarBg, border: `1.5px solid ${avatarBorder}`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Typography sx={{ fontSize: '0.75rem', fontWeight: 800, color: roleColor }}>{initials}</Typography>
         </Box>
-
-        {/* Nombre + número + status text */}
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography sx={{
-            color: 'var(--text)', fontWeight: 700,
-            fontSize: '0.95rem', lineHeight: 1.2,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
-            {inst.name}
+          <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.9rem', lineHeight: 1.2,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {user.display_name || user.username}
           </Typography>
-          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', mt: 0.2, fontFamily: 'monospace' }}>
-            {inst.number || t.inst.noNumber}
-          </Typography>
-          <Typography sx={{ color, fontSize: '0.68rem', fontWeight: 600, mt: 0.4, letterSpacing: '0.03em' }}>
-            {STATUS_LABEL_T[status] ?? t.inst.statusUnknown}
+          <Typography sx={{ fontSize: '0.65rem', color: roleColor, fontWeight: 600, mt: 0.1 }}>
+            {roleLabel}
           </Typography>
         </Box>
-
-        {/* ⋮ menu */}
-        <IconButton
+        <Chip
+          label={`${instances.length}/${slots}`}
           size="small"
-          onClick={e => onMenu(e, inst)}
-          sx={{ color: 'var(--text-muted)', flexShrink: 0, alignSelf: 'flex-start', mt: -0.5, mr: -0.5,
-            '&:hover': { color: 'var(--text)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.08)' } }}
-        >
-          <MoreVertIcon fontSize="small" />
-        </IconButton>
+          sx={{ fontSize: '0.65rem', fontWeight: 700, height: 20,
+            bgcolor: 'var(--item-hover)',
+            color: 'var(--text-muted)', border: '1px solid var(--border)' }}
+        />
       </Box>
 
-      {/* Divider con tinte de color */}
-      <Box sx={{ borderTop: `1px solid ${color}22` }} />
+      <Divider sx={{ borderColor: 'var(--border)', mb: 1.2 }} />
 
-      {/* Footer: usuario asignado + fecha */}
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
-        {inst.assigned_name ? (
-          <Chip
-            label={inst.assigned_name}
-            size="small"
-            sx={{
-              bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)',
-              border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)',
-              color: 'var(--accent,#60a5fa)',
-              fontSize: '0.68rem', fontWeight: 600, height: 22,
-            }}
-          />
-        ) : (
-          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.68rem', fontStyle: 'italic' }}>
-            {t.inst.unassigned}
+      {/* Instance rows (only when populated) */}
+      {instances.length > 0 && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.2, mb: 1.2 }}>
+          {instances.map(inst => (
+            <InstanceRow key={inst.name} inst={inst} onQr={onQr} onEmu={onEmu} onRemove={onRemove} />
+          ))}
+        </Box>
+      )}
+
+      {/* Capacity bar — 5 slot dots + add button */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1,
+        pt: instances.length > 0 ? 1 : 0,
+        borderTop: instances.length > 0 ? '1px solid var(--border)' : 'none',
+        mt: instances.length === 0 ? 0.5 : 0,
+      }}>
+        {/* 5 dots: filled = instance status color, empty = dashed circle */}
+        <Box sx={{ display: 'flex', gap: 0.7, alignItems: 'center', flex: 1 }}>
+          {Array.from({ length: 5 }).map((_, i) => {
+            const inst = instances[i]
+            if (inst) {
+              const status = inst.live_status || 'unknown'
+              const color = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
+              const isConn = ['open', 'connected'].includes(status)
+              return (
+                <Tooltip key={i} title={inst.name} placement="top">
+                  <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: color, flexShrink: 0,
+                    boxShadow: isConn ? `0 0 5px ${color}99` : 'none',
+                    cursor: 'default',
+                  }} />
+                </Tooltip>
+              )
+            }
+            return (
+              <Tooltip key={i} title={t.inst.addSlot} placement="top">
+                <Box onClick={onAddSlot} sx={{ width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
+                  border: '1.5px dashed var(--text-muted)', cursor: 'pointer',
+                  transition: 'border-color 0.15s',
+                  '&:hover': { borderColor: roleColor, bgcolor: avatarBg },
+                }} />
+              </Tooltip>
+            )
+          })}
+        </Box>
+
+        {/* Right side: rotation chip OR add button */}
+        {hasRotation ? (
+          <Chip label={t.inst.rotationActive} size="small"
+            sx={{ fontSize: '0.58rem', height: 17, bgcolor: 'rgba(34,197,94,0.1)',
+              color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', fontWeight: 600 }} />
+        ) : emptySlots > 0 ? (
+          <Box onClick={onAddSlot}
+            sx={{ display: 'flex', alignItems: 'center', gap: 0.4, cursor: 'pointer',
+              color: 'var(--text-muted)', fontSize: '0.7rem', flexShrink: 0,
+              transition: 'color 0.15s', '&:hover': { color: roleColor } }}>
+            <AddIcon sx={{ fontSize: 12 }} />
+            {t.inst.addSlot}
+          </Box>
+        ) : null}
+      </Box>
+
+      {/* Stats line (only when instances exist) */}
+      {instances.length > 0 && (
+        <Typography sx={{ fontSize: '0.62rem', color: 'var(--text-muted)', mt: 1 }}>
+          {connectedCount} {t.inst.connectedOf} {instances.length} {connectedWord}
+        </Typography>
+      )}
+    </Box>
+  )
+}
+
+// ── InlineUserPicker ─────────────────────────────────────────────────────────
+function InlineUserPicker({ instanceName, users, instances, onAssign, t, lang }) {
+  const [search, setSearch] = useState('')
+  const filtered = users.filter(u =>
+    (u.display_name || u.username || '').toLowerCase().includes(search.toLowerCase())
+  )
+  return (
+    <Box sx={{ px: 1.5, pb: 1.5, pt: 1.5,
+      borderTop: '1px solid rgba(59,130,246,0.15)',
+      bgcolor: 'rgba(59,130,246,0.04)' }}>
+
+      <Typography sx={{ fontSize: '0.63rem', color: 'var(--text-muted)',
+        mb: 1.2, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+        {lang === 'en' ? 'Assign to' : 'Asignar a'}
+      </Typography>
+
+      {/* Search — only shown when > 4 users */}
+      {users.length > 4 && (
+        <Box component="input"
+          placeholder={t.inst.searchUser}
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          sx={{ display: 'block', width: '100%', boxSizing: 'border-box', mb: 1.2,
+            bgcolor: 'var(--item-hover)', border: '1px solid var(--border)',
+            borderRadius: 1.5, py: 0.5, px: 1.2, color: 'var(--text)', fontSize: '0.75rem',
+            outline: 'none', fontFamily: 'inherit',
+            '&:focus': { borderColor: 'rgba(59,130,246,0.5)' },
+          }}
+        />
+      )}
+
+      {/* User avatars — scrollable if tall */}
+      <Box sx={{ display: 'flex', gap: 1.2, flexWrap: 'wrap',
+        maxHeight: 154, overflowY: 'auto', pt: '4px',
+        '&::-webkit-scrollbar': { width: 3 },
+        '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(255,255,255,0.1)', borderRadius: 4 },
+      }}>
+        {filtered.map(u => {
+          const uid    = u._id || u.id || u.username
+          const uAdmin = u.role === 'admin'
+          const uColor  = uAdmin ? '#a78bfa' : '#60a5fa'
+          const uBg     = uAdmin ? 'rgba(167,139,250,0.18)' : 'rgba(59,130,246,0.18)'
+          const uBorder = uAdmin ? 'rgba(167,139,250,0.55)' : 'rgba(59,130,246,0.5)'
+          const uInitials = (u.display_name || u.username || '?').slice(0, 2).toUpperCase()
+          const uSlots = instances.filter(i => i.assigned_to === uid).length
+          const isFull = uSlots >= 5
+          return (
+            <Tooltip key={uid}
+              title={isFull
+                ? (lang === 'en' ? 'Full — 5/5 slots used' : 'Lleno — 5/5 slots usados')
+                : `${u.display_name || u.username} · ${uSlots}/5`}
+              placement="top">
+              <Box onClick={() => !isFull && onAssign(instanceName, u)}
+                sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5,
+                  cursor: isFull ? 'not-allowed' : 'pointer',
+                  opacity: isFull ? 0.4 : 1, transition: 'transform 0.15s',
+                  '&:hover': isFull ? {} : { transform: 'translateY(-2px)' } }}>
+                <Box sx={{ position: 'relative' }}>
+                  <Box sx={{ width: 36, height: 36, borderRadius: 1.5,
+                    bgcolor: uBg, border: `1.5px solid ${uBorder}`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'border-color 0.15s',
+                    '&:hover': isFull ? {} : { borderColor: uColor, boxShadow: `0 0 0 2px ${uBg}` } }}>
+                    <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, color: uColor }}>
+                      {uInitials}
+                    </Typography>
+                  </Box>
+                  {/* "Full" badge */}
+                  {isFull && (
+                    <Box sx={{ position: 'absolute', top: -5, right: -5, borderRadius: 1,
+                      bgcolor: '#ef4444', px: 0.4, py: 0.1,
+                      border: '1.5px solid var(--card-bg,#0d1117)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <Typography sx={{ fontSize: '0.42rem', fontWeight: 900, color: 'white', lineHeight: 1 }}>
+                        5/5
+                      </Typography>
+                    </Box>
+                  )}
+                </Box>
+                <Typography sx={{ fontSize: '0.6rem', color: 'var(--text-muted)',
+                  maxWidth: 52, textAlign: 'center', lineHeight: 1.2,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {u.display_name || u.username}
+                </Typography>
+              </Box>
+            </Tooltip>
+          )
+        })}
+        {filtered.length === 0 && (
+          <Typography sx={{ fontSize: '0.75rem', color: 'var(--text-muted)', py: 0.5 }}>
+            {t.inst.noResults}
           </Typography>
         )}
-        <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.64rem', flexShrink: 0 }}>
-          {inst.created_at ? new Date(inst.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' }) : ''}
-        </Typography>
       </Box>
     </Box>
   )
 }
 
+// ── Main panel ───────────────────────────────────────────────────────────────
 export default function InstancesPanel() {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const [instances,    setInstances]    = useState([])
   const [loading,      setLoading]      = useState(true)
-  const [search,       setSearch]       = useState('')
   const [users,        setUsers]        = useState([])
 
   // ── Create dialog ──
@@ -241,9 +396,15 @@ export default function InstancesPanel() {
   const [syncing,      setSyncing]      = useState(false)
   const [snack,        setSnack]        = useState({ open: false, msg: '' })
 
-  // ── Card ⋮ menu ──
+  // ── Card menu (kept for assign dialog compatibility) ──
   const [menuAnchor,   setMenuAnchor]   = useState(null)
   const [menuInst,     setMenuInst]     = useState(null)
+
+  // ── Pick instance dialog ──
+  const [pickOpen,        setPickOpen]        = useState(false)
+  const [pickTargetUser,  setPickTargetUser]  = useState(null)
+  const [unassignedOpen,  setUnassignedOpen]  = useState(true)
+  const [expandedAssign,  setExpandedAssign]  = useState(null)
 
   const fetchInstances = useCallback(async () => {
     setLoading(true)
@@ -330,8 +491,6 @@ export default function InstancesPanel() {
         const d = await r.json()
         const state = d?.instance?.state || d?.state || ''
         if (firstPoll) {
-          // Record initial state — don't act on it.
-          // If already open, we still need the QR scan to trigger the close.
           firstPoll = false
           prevState = state
           return
@@ -340,7 +499,6 @@ export default function InstancesPanel() {
         const wasConnected = ['open', 'connected'].includes(prevState)
         prevState = state
         if (isConnected && !wasConnected) {
-          // State transitioned TO connected → QR was just scanned
           if (connPollRef.current) clearInterval(connPollRef.current)
           if (qrPollRef.current)   clearTimeout(qrPollRef.current)
           setQrOpen(false); setQrTarget(null); setQrImage(null); setQrStatus('loading')
@@ -351,18 +509,18 @@ export default function InstancesPanel() {
   }, [fetchInstances])
 
   // ── Handlers ────────────────────────────────────────────────────────────────
-  function openMenu(e, inst) { setMenuAnchor(e.currentTarget); setMenuInst(inst) }
   function closeMenu() { setMenuAnchor(null); setMenuInst(null) }
 
-  function handleQrClick() {
-    const inst = menuInst; closeMenu()
+  function handleQrClick(directInst) {
+    const inst = directInst || menuInst
+    closeMenu()
     setQrTarget(inst); setQrOpen(true)
     startQrPoll(inst.name)
     startConnPoll(inst.name)
   }
 
-  function handleAssignClick() {
-    const inst = menuInst; closeMenu()
+  function handleAssignClick(directInst) {
+    const inst = directInst || menuInst; closeMenu()
     setAssignTarget(inst)
     setAssignUserId(inst.assigned_to ?? '')
     const storedName = inst.assigned_name ?? ''
@@ -371,8 +529,9 @@ export default function InstancesPanel() {
     setAssignOpen(true)
   }
 
-  function handleDeleteClick() {
-    const inst = menuInst; closeMenu()
+  function handleDeleteClick(directInst) {
+    const inst = directInst || menuInst
+    closeMenu()
     setDeleteTarget(inst)
   }
 
@@ -403,35 +562,61 @@ export default function InstancesPanel() {
         if (!r.ok) return
         const d = await r.json()
         if (!d.otp || !d.ts) return
-        // Solo aceptar OTPs que llegaron DESPUÉS de que enviamos el request
         if (otpRequestedAt.current && new Date(d.ts) < otpRequestedAt.current) return
         stopOtpPolling()
         setOtpAutoWait(false)
         setOtpCode(d.otp)
         verifyFn(d.otp)
-      } catch { /* silencioso, reintenta en el próximo tick */ }
+      } catch {}
     }, 3000)
   }
 
   // ── Emulator registration dialog ──
-  const [emuOpen,   setEmuOpen]   = useState(false)
-  const [emuPhone,  setEmuPhone]  = useState('+14794000127')
-  const [emuInst,   setEmuInst]   = useState('telnyx-01')
-  const [emuLogs,   setEmuLogs]   = useState([])
-  const [emuStep,   setEmuStep]   = useState('idle') // idle | running | success | error
+  const [emuOpen,    setEmuOpen]    = useState(false)
+  const [emuInst,    setEmuInst]    = useState('telnyx-01')
+  const [emuCountry, setEmuCountry] = useState(54)
+  const [emuLogs,    setEmuLogs]    = useState([])
+  const [emuStep,    setEmuStep]    = useState('idle') // idle | confirming | running | success | error | done
+  const [emuPreview, setEmuPreview] = useState(null)
+  const [emuPreviewLoading, setEmuPreviewLoading] = useState(false)
   const emuEsRef = useRef(null)
 
-  function handleEmuClick() {
-    const inst = menuInst; closeMenu()
-    setEmuInst(inst?.name || 'telnyx-01')
+  const SMSFAST_COUNTRIES = [
+    { value: 54,  label: '🇲🇽 México' },
+    { value: 0,   label: '🌐 Cualquier país' },
+  ]
+
+  function handleEmuClick(directInst) {
+    const inst = directInst || menuInst
+    closeMenu()
+    setEmuInst(inst?.name || 'wa-01')
     setEmuLogs([]); setEmuStep('idle')
     setEmuOpen(true)
+  }
+
+  async function handleEmuPreview() {
+    setEmuPreviewLoading(true)
+    try {
+      const r = await fetch('/api/register/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instance: emuInst, country: emuCountry }),
+      })
+      const data = await r.json()
+      setEmuPreview(data)
+      setEmuStep('confirming')
+    } catch (e) {
+      setEmuPreview({ error: e.message, can_proceed: false, warnings: [e.message] })
+      setEmuStep('confirming')
+    } finally {
+      setEmuPreviewLoading(false)
+    }
   }
 
   function startEmuRegistration() {
     if (emuEsRef.current) emuEsRef.current.close()
     setEmuLogs([]); setEmuStep('running')
-    const url = `/api/register/emulator-stream?phone=${encodeURIComponent(emuPhone)}&instance=${encodeURIComponent(emuInst)}`
+    const url = `/api/register/emulator-stream?phone=&instance=${encodeURIComponent(emuInst)}&country=${emuCountry}`
     const es = new EventSource(url)
     emuEsRef.current = es
     es.onmessage = (e) => {
@@ -583,139 +768,297 @@ export default function InstancesPanel() {
     finally { setDeleting(false) }
   }
 
-  const filtered = instances.filter(i =>
-    i.name.toLowerCase().includes(search.toLowerCase()) ||
-    (i.number || '').includes(search) ||
-    (i.assigned_name || '').toLowerCase().includes(search.toLowerCase())
-  )
+  // ── New helpers ──────────────────────────────────────────────────────────────
+  function openPickForUser(user) {
+    setPickTargetUser(user)
+    setPickOpen(true)
+  }
 
-  const connected    = instances.filter(i => ['open','connected'].includes(i.live_status)).length
-  const unassigned   = instances.filter(i => !i.assigned_to).length
+  async function handlePickAssign(instanceName) {
+    if (!pickTargetUser) return
+    const userId = pickTargetUser._id || pickTargetUser.id || pickTargetUser.username
+    const userName = pickTargetUser.display_name || pickTargetUser.username || ''
+    await fetch(`/api/instances/${instanceName}?action=assign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
+      body: JSON.stringify({ user_id: userId, user_name: userName }),
+    })
+    setPickOpen(false)
+    fetchInstances()
+  }
+
+  async function handleInlineAssign(instanceName, user) {
+    const userId   = user._id || user.id || user.username
+    const userName = user.display_name || user.username || ''
+    const r = await fetch(`/api/instances/${instanceName}?action=assign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
+      body: JSON.stringify({ user_id: userId, user_name: userName }),
+    })
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}))
+      setSnack({ open: true, msg: d.detail || (lang === 'en' ? 'Could not assign instance' : 'No se pudo asignar la instancia') })
+      return
+    }
+    setExpandedAssign(null)
+    fetchInstances()
+    setSnack({ open: true, msg: `${instanceName} → ${userName}` })
+  }
+
+  async function handleQuickUnassign(inst) {
+    await fetch(`/api/instances/${inst.name}?action=unassign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
+      body: JSON.stringify({}),
+    })
+    fetchInstances()
+    setSnack({ open: true, msg: `${inst.name} ${t.inst.quickUnassignDone}` })
+  }
+
+  const connected = instances.filter(i => ['open', 'connected'].includes(i.live_status)).length
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 2 }}>
 
-      {/* ── Header ── */}
+      {/* Header */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
         <Box>
-          <Typography sx={{ color: 'var(--text,rgba(255,255,255,0.92))', fontWeight: 800, fontSize: '1.3rem', lineHeight: 1.2 }}>
+          <Typography sx={{ color: 'var(--text)', fontWeight: 800, fontSize: '1.3rem', lineHeight: 1.2 }}>
             {t.inst.title}
           </Typography>
-          <Typography sx={{ color: 'var(--text-muted,rgba(255,255,255,0.35))', fontSize: '0.75rem', mt: 0.3 }}>
-            {instances.length} {t.inst.subtitle.replace('{connected}', connected).replace('{unassigned}', unassigned)}
-          </Typography>
+          <Box sx={{ display: 'flex', gap: 1, mt: 0.5 }}>
+            <Chip label={`${instances.length} ${t.inst.statInstances}`} size="small" sx={STAT_CHIP_SX} />
+            <Chip label={`${connected} ${t.inst.statConnected}`} size="small"
+              sx={{ ...STAT_CHIP_SX, bgcolor: connected > 0 ? 'rgba(34,197,94,0.1)' : 'var(--item-hover)',
+                color: connected > 0 ? '#4ade80' : 'var(--text-muted)',
+                border: `1px solid ${connected > 0 ? 'rgba(34,197,94,0.25)' : 'var(--border)'}` }} />
+            <Chip label={`${users.length} ${t.inst.statUsers}`} size="small" sx={STAT_CHIP_SX} />
+          </Box>
         </Box>
-
         <Box sx={{ display: 'flex', gap: 1, ml: 'auto', alignItems: 'center' }}>
           <Tooltip title={t.inst.refresh}>
             <IconButton size="small" onClick={handleSync} disabled={syncing}
-              sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'white' } }}>
-              {syncing
-                ? <CircularProgress size={16} sx={{ color: 'rgba(255,255,255,0.4)' }} />
+              sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
+              {syncing ? <CircularProgress size={16} sx={{ color: 'var(--text-muted)' }} />
                 : <RefreshIcon fontSize="small" />}
             </IconButton>
           </Tooltip>
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
+          <Button variant="contained" startIcon={<AddIcon />}
             onClick={() => { setCreateErr(''); setNewName(''); setNewNumber(''); setCreateOpen(true) }}
-            sx={{
-              bgcolor: 'var(--accent,#3b82f6)',
-              '&:hover': { bgcolor: 'var(--accent,#2563eb)' },
-              fontWeight: 700, fontSize: '0.82rem', borderRadius: 2,
-              textTransform: 'none', px: 2,
-            }}
-          >
+            sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'var(--accent,#2563eb)' },
+              fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, textTransform: 'none', px: 2 }}>
             {t.inst.newBtn}
           </Button>
         </Box>
       </Box>
 
-      {/* ── Search + filters ── */}
-      <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
-        <TextField
-          placeholder={t.inst.search}
-          size="small"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          sx={{ ...FIELD_SX, width: 260 }}
-          slotProps={{ input: { startAdornment: <SearchIcon sx={{ color: 'rgba(255,255,255,0.25)', fontSize: 18, mr: 0.5 }} /> } }}
-        />
-      </Box>
-
-      {/* ── Grid ── */}
+      {/* User cards grid + unassigned accordion */}
       <Box sx={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', pr: 0.5 }}>
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', pt: 8 }}>
             <CircularProgress sx={{ color: 'var(--accent,#3b82f6)' }} />
           </Box>
-        ) : filtered.length === 0 ? (
-          <Box sx={{ textAlign: 'center', pt: 8, color: 'rgba(255,255,255,0.2)' }}>
-            <PhoneAndroidIcon sx={{ fontSize: 48, mb: 1, opacity: 0.3 }} />
-            <Typography sx={{ fontSize: '0.85rem' }}>
-              {instances.length === 0 ? t.inst.empty : t.inst.noResults}
-            </Typography>
-          </Box>
         ) : (
-          <Box sx={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-            gap: 2,
-          }}>
-            {filtered.map(inst => (
-              <InstanceCard key={inst.name} inst={inst} onMenu={openMenu} />
-            ))}
-          </Box>
+          <>
+            {/* User grid */}
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 2, mb: 3 }}>
+              {users.map(user => {
+                const uid = user._id || user.id || user.username
+                const userInsts = instances.filter(i => i.assigned_to === uid)
+                return (
+                  <UserCard
+                    key={uid}
+                    user={user}
+                    instances={userInsts}
+                    onAddSlot={() => openPickForUser(user)}
+                    onQr={inst => handleQrClick(inst)}
+                    onEmu={inst => handleEmuClick(inst)}
+                    onRemove={handleQuickUnassign}
+                  />
+                )
+              })}
+            </Box>
+
+            {/* Unassigned section */}
+            {(() => {
+              const unassigned = instances.filter(i => !i.assigned_to)
+              if (unassigned.length === 0) return null
+              return (
+                <Box sx={{ border: '1px solid rgba(245,158,11,0.2)', borderRadius: 2.5, overflow: 'hidden',
+                  bgcolor: 'rgba(245,158,11,0.03)' }}>
+                  {/* Header */}
+                  <Box onClick={() => setUnassignedOpen(p => !p)}
+                    sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.4, cursor: 'pointer',
+                      '&:hover': { bgcolor: 'var(--item-hover)' } }}>
+                    <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#f59e0b', flexShrink: 0,
+                      boxShadow: '0 0 6px #f59e0b88' }} />
+                    <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.82rem', fontWeight: 600, flex: 1 }}>
+                      {t.inst.unassigned}
+                    </Typography>
+                    <Typography sx={{ fontSize: '0.67rem', color: 'rgba(245,158,11,0.6)', mr: 0.5 }}>
+                      {unassigned.length === 1
+                        ? (lang === 'en' ? '1 instance needs a user' : '1 instancia sin usuario')
+                        : (lang === 'en' ? `${unassigned.length} instances need a user` : `${unassigned.length} instancias sin usuario`)}
+                    </Typography>
+                    <KeyboardArrowDownIcon sx={{ fontSize: 18, color: 'var(--text-muted)',
+                      transform: unassignedOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+                  </Box>
+
+                  {/* Instance list */}
+                  {unassignedOpen && (
+                    <Box sx={{ px: 1.5, pt: 1.5, pb: 1.5,
+                      display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 0.8,
+                      borderTop: '1px solid rgba(245,158,11,0.12)' }}>
+                      {unassigned.map(inst => {
+                        const isExp = expandedAssign === inst.name
+                        const status = inst.live_status || 'unknown'
+                        const color  = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
+                        const isConn = ['open','connected'].includes(status)
+                        return (
+                          <Box key={inst.name} sx={{ border: '1px solid var(--border)',
+                            borderRadius: 2, overflow: 'hidden', bgcolor: 'var(--card-bg)',
+                            transition: 'border-color 0.15s',
+                            ...(isExp && { borderColor: 'rgba(59,130,246,0.3)' }) }}>
+
+                            {/* Instance row */}
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 1.5, py: 1.1 }}>
+                              <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color, flexShrink: 0,
+                                boxShadow: isConn ? `0 0 5px ${color}88` : 'none' }} />
+                              <Box sx={{ flex: 1, minWidth: 0 }}>
+                                <Typography sx={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text)',
+                                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {inst.name}
+                                </Typography>
+                                <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                                  {inst.number ? `+${inst.number}` : t.inst.noNumber}
+                                </Typography>
+                              </Box>
+                              {/* Actions */}
+                              <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', flexShrink: 0 }}>
+                                {!isExp ? (
+                                  <Button size="small" onClick={e => { e.stopPropagation(); setExpandedAssign(inst.name) }}
+                                    endIcon={<KeyboardArrowDownIcon sx={{ fontSize: '14px !important' }} />}
+                                    sx={{ fontSize: '0.72rem', textTransform: 'none', py: 0.35, px: 1, borderRadius: 1.5,
+                                      color: '#60a5fa', border: '1px solid rgba(59,130,246,0.25)',
+                                      '&:hover': { bgcolor: 'rgba(59,130,246,0.08)', borderColor: 'rgba(59,130,246,0.5)' } }}>
+                                    {t.inst.assignUser}
+                                  </Button>
+                                ) : (
+                                  <IconButton size="small" onClick={e => { e.stopPropagation(); setExpandedAssign(null) }}
+                                    sx={{ color: 'var(--text-muted)', p: 0.4, '&:hover': { color: 'var(--text)' } }}>
+                                    <CloseIcon sx={{ fontSize: 14 }} />
+                                  </IconButton>
+                                )}
+                                <Tooltip title={t.inst.emuMenuLabel}>
+                                  <IconButton size="small" onClick={() => handleEmuClick(inst)}
+                                    sx={{ color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)', borderRadius: 1.5, p: 0.5,
+                                      '&:hover': { bgcolor: 'rgba(167,139,250,0.1)' } }}>
+                                    <SmartphoneIcon sx={{ fontSize: 13 }} />
+                                  </IconButton>
+                                </Tooltip>
+                                <Tooltip title={t.inst.delete}>
+                                  <IconButton size="small" onClick={() => handleDeleteClick(inst)}
+                                    sx={{ color: '#f87171', border: '1px solid rgba(248,113,133,0.2)', borderRadius: 1.5, p: 0.5,
+                                      '&:hover': { bgcolor: 'rgba(248,113,133,0.1)' } }}>
+                                    <DeleteForeverIcon sx={{ fontSize: 13 }} />
+                                  </IconButton>
+                                </Tooltip>
+                              </Box>
+                            </Box>
+
+                            {/* Inline user picker */}
+                            {isExp && (
+                              <InlineUserPicker
+                                instanceName={inst.name}
+                                users={users}
+                                instances={instances}
+                                onAssign={handleInlineAssign}
+                                t={t}
+                                lang={lang}
+                              />
+                            )}
+                          </Box>
+                        )
+                      })}
+                    </Box>
+                  )}
+                </Box>
+              )
+            })()}
+          </>
         )}
       </Box>
 
-      {/* ── ⋮ Context menu ── */}
-      <Menu
-        anchorEl={menuAnchor}
-        open={Boolean(menuAnchor)}
-        onClose={closeMenu}
-        slotProps={{
-          paper: {
-            sx: {
-              background: 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.12) 0%, var(--card-bg,#161d2e) 60%)',
-              border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)',
-              borderRadius: 2, minWidth: 170,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(var(--accent-rgb,59,130,246),0.08)',
-              backdropFilter: 'blur(12px)',
-              '& .MuiMenuItem-root': {
-                fontSize: '0.82rem', gap: 1.2, py: 1, color: 'var(--text)',
-                borderRadius: 1, mx: 0.5,
-                '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', color: 'var(--text)' },
-              },
-            },
-          },
-        }}
-      >
-        <MenuItem onClick={handleQrClick}>
-          <QrCodeIcon sx={{ fontSize: 17, color: 'var(--accent,#60a5fa)' }} />
-          {t.inst.connectQr}
-        </MenuItem>
-        <MenuItem onClick={handlePairClick}>
-          <PhoneAndroidIcon sx={{ fontSize: 17, color: '#4ade80' }} />
-          Conectar por número
-        </MenuItem>
-        <MenuItem onClick={handleOtpClick}>
-          <CallIcon sx={{ fontSize: 17, color: '#fb923c' }} />
-          {t.inst.otpMenuLabel}
-        </MenuItem>
-        <MenuItem onClick={handleEmuClick}>
-          <SmartphoneIcon sx={{ fontSize: 17, color: '#a78bfa' }} />
-          Registrar vía emulador
-        </MenuItem>
-        <MenuItem onClick={handleAssignClick}>
-          <PersonAddIcon sx={{ fontSize: 17, color: '#a78bfa' }} />
-          {t.inst.assignUser}
-        </MenuItem>
-        <MenuItem onClick={handleDeleteClick} sx={{ color: '#f87171 !important' }}>
-          <DeleteForeverIcon sx={{ fontSize: 17, color: '#f87171' }} />
-          {t.inst.delete}
-        </MenuItem>
-      </Menu>
+      {/* ── Pick instance dialog ── */}
+      <Dialog open={pickOpen} onClose={() => setPickOpen(false)} sx={{
+        '& .MuiDialog-paper': {
+          bgcolor: 'var(--card-bg,#161d2e)',
+          background: 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.08) 0%, var(--card-bg,#161d2e) 55%)',
+          border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)',
+          borderRadius: 3, minWidth: 360, maxWidth: 440,
+        },
+      }}>
+        <DialogTitle sx={{ pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Box>
+              <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.97rem' }}>
+                {t.inst.assignTitle}
+              </Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem', mt: 0.2 }}>
+                {pickTargetUser?.display_name || pickTargetUser?.username}
+              </Typography>
+            </Box>
+            <IconButton size="small" onClick={() => setPickOpen(false)}
+              sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: 'white' } }}>
+              <CloseIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+          </Box>
+        </DialogTitle>
+        <DialogContent sx={{ pt: '4px !important', pb: 1 }}>
+          {(() => {
+            const unassigned = instances.filter(i => !i.assigned_to)
+            if (unassigned.length === 0)
+              return (
+                <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem', py: 2, textAlign: 'center' }}>
+                  {t.inst.noUnassigned}
+                </Typography>
+              )
+            return (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6, maxHeight: 320, overflowY: 'auto' }}>
+                {unassigned.map(inst => {
+                  const status = inst.live_status || 'unknown'
+                  const color = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
+                  return (
+                    <Box key={inst.name} onClick={() => handlePickAssign(inst.name)}
+                      sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 1.5, py: 1.1,
+                        borderRadius: 2, cursor: 'pointer', border: '1px solid transparent',
+                        bgcolor: 'rgba(255,255,255,0.03)',
+                        '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.08)',
+                          borderColor: 'rgba(var(--accent-rgb,59,130,246),0.25)' } }}>
+                      <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography sx={{ color: 'var(--text)', fontSize: '0.83rem', fontWeight: 600 }}>{inst.name}</Typography>
+                        <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.67rem', fontFamily: 'monospace' }}>
+                          {inst.number ? `+${inst.number}` : 'Sin número'}
+                        </Typography>
+                      </Box>
+                      <Typography sx={{ fontSize: '0.65rem', color, fontWeight: 600, flexShrink: 0 }}>
+                        {['open', 'connected'].includes(status) ? t.inst.statusConnected : status === 'close' ? t.inst.statusDisconnected : t.inst.statusUnknown}
+                      </Typography>
+                    </Box>
+                  )
+                })}
+              </Box>
+            )
+          })()}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+          <Button onClick={() => setPickOpen(false)}
+            sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.82rem' }}>
+            Cancelar
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* ── Create dialog ── */}
       <Dialog open={createOpen} onClose={() => !creating && setCreateOpen(false)} sx={{
@@ -990,7 +1333,7 @@ export default function InstancesPanel() {
             </Button>
           )}
           {otpStep === 'code' && (
-            <Button onClick={handleVerifyOtp} disabled={otpLoading || otpCode.replace(/\D/g,'').length < 6} variant="contained"
+            <Button onClick={handleVerifyOtp} disabled={otpLoading || otpCode.replace(/\D/g, '').length < 6} variant="contained"
               sx={{ bgcolor: '#ea580c', '&:hover': { bgcolor: '#c2410c' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5,
                 '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.2)' } }}>
               {otpLoading ? <CircularProgress size={15} sx={{ color: 'white' }} /> : t.inst.otpVerifyBtn}
@@ -1008,15 +1351,15 @@ export default function InstancesPanel() {
       }}>
         <DialogTitle sx={{ pb: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
-            <Box sx={{ width: 34, height: 34, borderRadius: 2, flexShrink: 0, bgcolor: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <SmartphoneIcon sx={{ fontSize: 18, color: '#a78bfa' }} />
+            <Box sx={{ width: 34, height: 34, borderRadius: 2, flexShrink: 0, bgcolor: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <SmartphoneIcon sx={{ fontSize: 18, color: '#3b82f6' }} />
             </Box>
             <Box>
               <Typography sx={{ color: 'var(--text,#e2e8f0)', fontWeight: 700, fontSize: '0.97rem', lineHeight: 1.2 }}>
-                Registrar vía emulador
+                {t.inst.emuMenuLabel}
               </Typography>
-              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem' }}>
-                Redroid + Telnyx OTP automático
+              <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.35))', fontSize: '0.72rem' }}>
+                {t.inst.emuSubtitle}
               </Typography>
             </Box>
           </Box>
@@ -1025,14 +1368,95 @@ export default function InstancesPanel() {
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: '4px !important', pb: 1 }}>
           {emuStep === 'idle' && (
             <>
-              <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', lineHeight: 1.5 }}>
-                Registra el número en WhatsApp dentro del emulador Redroid. El OTP se captura automáticamente vía Telnyx y se ingresa solo.
+              <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.5))', fontSize: '0.8rem', lineHeight: 1.5 }}>
+                {t.inst.emuIdleDesc}
               </Typography>
-              <TextField label="Número Telnyx" size="small" value={emuPhone}
-                onChange={e => setEmuPhone(e.target.value)} sx={FIELD_SX} />
-              <TextField label="Nombre de instancia (Evolution API)" size="small" value={emuInst}
-                onChange={e => setEmuInst(e.target.value)} sx={FIELD_SX} />
+              <TextField label={t.inst.emuInstanceNameLabel} size="small" value={emuInst}
+                onChange={e => setEmuInst(e.target.value)} sx={{ ...FIELD_SX, mt: 0.5 }} />
+              <TextField
+                select
+                label={t.inst.emuCountryLabel}
+                size="small"
+                value={emuCountry}
+                onChange={e => setEmuCountry(Number(e.target.value))}
+                sx={{ ...FIELD_SX, mt: 0.5 }}
+                helperText={<span style={{ color: 'var(--text-muted, rgba(255,255,255,0.4))', fontSize: '0.68rem' }}>{t.inst.emuCountryHelper}</span>}
+              >
+                {SMSFAST_COUNTRIES.map(c => (
+                  <MenuItem key={c.value} value={c.value} sx={{ fontSize: '0.85rem' }}>
+                    {c.label}
+                  </MenuItem>
+                ))}
+              </TextField>
             </>
+          )}
+
+          {emuStep === 'confirming' && emuPreview && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+              {/* Session activa */}
+              {emuPreview.has_active_session && (
+                <Box sx={{ bgcolor: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', borderRadius: 1.5, p: 1.5, display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+                  <Typography sx={{ fontSize: '0.78rem', color: '#60a5fa', lineHeight: 1.5 }}>
+                    <strong>Sesión activa detectada</strong> — se retomará el número {emuPreview.session_phone} desde el paso "{emuPreview.session_step}" sin comprar uno nuevo.
+                  </Typography>
+                </Box>
+              )}
+
+              {/* País seleccionado */}
+              <Box sx={{ bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 1.5, px: 1.5, py: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>País</Typography>
+                <Typography sx={{ fontSize: '0.85rem', color: 'var(--text,#e2e8f0)', fontWeight: 600, ml: 'auto' }}>
+                  {SMSFAST_COUNTRIES.find(c => c.value === emuCountry)?.label || `Código ${emuCountry}`}
+                </Typography>
+              </Box>
+
+              {/* Balance y costo */}
+              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
+                <Box sx={{ bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 1.5, p: 1.5 }}>
+                  <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em', mb: 0.5 }}>Saldo SMSFast</Typography>
+                  <Typography sx={{ fontSize: '1.1rem', fontWeight: 700, color: emuPreview.balance < 0.50 ? '#f87171' : '#34d399' }}>
+                    ${emuPreview.balance?.toFixed(2)} USD
+                  </Typography>
+                </Box>
+                <Box sx={{ bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 1.5, p: 1.5 }}>
+                  <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.1em', mb: 0.5 }}>Costo estimado</Typography>
+                  <Typography sx={{ fontSize: '1.1rem', fontWeight: 700, color: '#e2e8f0' }}>
+                    ~${emuPreview.estimated_cost?.toFixed(2)} USD
+                  </Typography>
+                </Box>
+              </Box>
+
+              {/* Warnings */}
+              {emuPreview.warnings?.length > 0 && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6 }}>
+                  {emuPreview.warnings.map((w, i) => (
+                    <Box key={i} sx={{ bgcolor: 'rgba(251,113,133,0.08)', border: '1px solid rgba(251,113,133,0.2)', borderRadius: 1.2, px: 1.5, py: 0.8, display: 'flex', gap: 0.8, alignItems: 'center' }}>
+                      <Typography sx={{ fontSize: '0.75rem', color: '#fb7185' }}>⚠ {w}</Typography>
+                    </Box>
+                  ))}
+                </Box>
+              )}
+
+              {/* Posibles resultados */}
+              {!emuPreview.has_active_session && (
+                <Box sx={{ bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 1.5, p: 1.5 }}>
+                  <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.1em', mb: 0.8 }}>A tener en cuenta</Typography>
+                  {[
+                    'El número es virtual — Meta puede rechazarlo (~30% de probabilidad)',
+                    'Si no llega el OTP en 10 min, se cancela y reembolsa automáticamente',
+                    'Si WhatsApp registra pero el número ya tiene cuenta, no hay reembolso',
+                  ].map((item, i) => (
+                    <Typography key={i} sx={{ fontSize: '0.73rem', color: 'rgba(255,255,255,0.45)', lineHeight: 1.6, display: 'flex', gap: 0.8 }}>
+                      · {item}
+                    </Typography>
+                  ))}
+                </Box>
+              )}
+
+              {emuPreview.error && (
+                <Typography sx={{ fontSize: '0.75rem', color: '#f87171' }}>Error: {emuPreview.error}</Typography>
+              )}
+            </Box>
           )}
 
           {(emuStep === 'running' || emuStep === 'success' || emuStep === 'error' || emuStep === 'done') && (
@@ -1071,10 +1495,22 @@ export default function InstancesPanel() {
             </Button>
           )}
           {emuStep === 'idle' && (
-            <Button variant="contained" onClick={startEmuRegistration} disabled={!emuPhone.trim()}
-              sx={{ bgcolor: '#7c3aed', '&:hover': { bgcolor: '#6d28d9' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5, boxShadow: 'none' }}>
-              Iniciar registro automático
+            <Button variant="contained" onClick={handleEmuPreview} disabled={!emuInst.trim() || emuPreviewLoading}
+              sx={{ bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#1e40af' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5, boxShadow: 'none' }}>
+              {emuPreviewLoading ? t.inst.emuVerifying : t.inst.emuContinue}
             </Button>
+          )}
+          {emuStep === 'confirming' && (
+            <>
+              <Button onClick={() => setEmuStep('idle')}
+                sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.82rem', borderRadius: 2, px: 2, '&:hover': { color: '#fff', bgcolor: 'rgba(255,255,255,0.08)' } }}>
+                Cancelar
+              </Button>
+              <Button variant="contained" onClick={startEmuRegistration} disabled={!emuPreview?.can_proceed}
+                sx={{ bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#1e40af' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5, boxShadow: 'none' }}>
+                {emuPreview?.has_active_session ? 'Retomar registro' : 'Confirmar y registrar'}
+              </Button>
+            </>
           )}
           {(emuStep === 'success' || emuStep === 'done') && (
             <Button variant="contained" onClick={() => { setEmuOpen(false); fetchInstances() }}
@@ -1084,7 +1520,7 @@ export default function InstancesPanel() {
           )}
           {emuStep === 'error' && (
             <Button variant="contained" onClick={() => setEmuStep('idle')}
-              sx={{ bgcolor: '#7c3aed', '&:hover': { bgcolor: '#6d28d9' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5, boxShadow: 'none' }}>
+              sx={{ bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#1e40af' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5, boxShadow: 'none' }}>
               Reintentar
             </Button>
           )}

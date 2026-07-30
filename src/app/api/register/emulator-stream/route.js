@@ -6,10 +6,11 @@ export async function GET(request) {
   const { searchParams } = new URL(request.url)
   const phone    = searchParams.get('phone') || ''
   const instance = searchParams.get('instance') || 'telnyx-01'
+  const country  = searchParams.get('country') || '54'
 
   try {
     const upstream = await fetch(
-      `${B}/api/register/emulator-stream?phone=${encodeURIComponent(phone)}&instance=${encodeURIComponent(instance)}`,
+      `${B}/api/register/emulator-stream?phone=${encodeURIComponent(phone)}&instance=${encodeURIComponent(instance)}&country=${encodeURIComponent(country)}`,
       { headers: { 'Accept': 'text/event-stream' } }
     )
     return new Response(upstream.body, {

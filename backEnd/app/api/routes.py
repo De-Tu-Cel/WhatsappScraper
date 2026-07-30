@@ -178,9 +178,10 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         db = MongoDBManager()
         if not EVOLUTION_API_KEY:
             raise HTTPException(status_code=400, detail="Evolution API no configurada")
-        # ── Rotación de instancias: elige aleatoriamente entre las conectadas del usuario ──
-        import random, requests as _req
+        # ── Rotación de instancias: round-robin + routing preferencial por compañía ──
+        import requests as _req
         from concurrent.futures import ThreadPoolExecutor
+        from bson import ObjectId
 
         instance = EVOLUTION_INSTANCE
         _all_disconnected = False
@@ -208,11 +209,42 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                             return None
 
                     with ThreadPoolExecutor(max_workers=len(names)) as ex:
-                        connected = [n for n in ex.map(_check_state, names) if n]
+                        connected = sorted([n for n in ex.map(_check_state, names) if n])
 
                     if connected:
-                        instance = random.choice(connected)
-                        print(f"[SendMsg] rotación → {instance} ({len(connected)}/{len(names)} conectadas)")
+                        # Routing preferencial: usar instancia asignada a esta compañía si sigue conectada
+                        preferred = None
+                        if req.company_id:
+                            co = db.db.companies.find_one(
+                                {"_id": ObjectId(req.company_id)},
+                                {"assigned_instance": 1}
+                            ) if len(req.company_id) == 24 else None
+                            if co and co.get("assigned_instance") in connected:
+                                preferred = co["assigned_instance"]
+
+                        if preferred:
+                            instance = preferred
+                            print(f"[SendMsg] preferencial → {instance} (compañía {req.company_id})")
+                        else:
+                            # Round-robin: incrementa contador atómico por usuario
+                            result = db.db.users.find_one_and_update(
+                                {"_id": ObjectId(user_id)},
+                                {"$inc": {"rr_index": 1}},
+                                return_document=True,
+                                projection={"rr_index": 1},
+                            )
+                            idx = (result.get("rr_index", 0)) % len(connected)
+                            instance = connected[idx]
+                            # Guardar asignación en la compañía para futuros mensajes
+                            if req.company_id and len(req.company_id) == 24:
+                                try:
+                                    db.db.companies.update_one(
+                                        {"_id": ObjectId(req.company_id)},
+                                        {"$set": {"assigned_instance": instance}},
+                                    )
+                                except Exception:
+                                    pass
+                            print(f"[SendMsg] round-robin → {instance} (idx={idx}/{len(connected)}, compañía={req.company_id})")
                     else:
                         _all_disconnected = True
                 elif user.get("evolution_instance"):

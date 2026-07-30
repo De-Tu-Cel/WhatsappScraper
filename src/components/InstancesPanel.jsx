@@ -583,6 +583,7 @@ export default function InstancesPanel() {
 
   const SMSFAST_COUNTRIES = [
     { value: 54,  label: '🇲🇽 México' },
+    { value: 36,  label: '🇨🇦 Canadá' },
     { value: 0,   label: '🌐 Cualquier país' },
   ]
 

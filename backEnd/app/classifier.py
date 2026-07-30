@@ -433,6 +433,8 @@ def _quick_classify(inbound_body: str, reaction_time_min: float = None) -> dict 
     responded_instantly = reaction_time_min is not None and reaction_time_min * 60 < 10
     if responded_instantly and _looks_like_auto_reply(text):
         return _quick_result("automatico", "Plantilla de auto-respuesta + respuesta instantánea — sin IA")
+    if responded_instantly:
+        return _quick_result("bot", f"Respuesta en {reaction_time_min * 60:.0f}s — imposible para humano; bot o sistema automático")
 
     return None
 
@@ -447,7 +449,11 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
 
     from app.llm import active_provider
     if active_provider() == "none":
-        return dict(_ERROR_RESULT)
+        result = dict(_ERROR_RESULT)
+        if reaction_time_min is not None and reaction_time_min * 60 < 30:
+            result["category"] = "bot"
+            result["notes"] = "LLM no configurado — bot inferido por tiempo de respuesta < 30s"
+        return result
     if all_quota_exhausted():
         raise LLMQuotaExceeded("Circuit breaker activo — DeepSeek sin cuota.")
     prompt = _build_prompt(inbound_body, outbound_body, reaction_time_min)
@@ -459,7 +465,8 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
     except Exception as e:
         import traceback
         log.error("classify_response failed: %s\n%s", e, traceback.format_exc())
-        return {"category": "humano", "response_quality": 3, "bot_quality": None, "notes": "Error al clasificar", "error": True}
+        category = "bot" if (reaction_time_min is not None and reaction_time_min * 60 < 30) else "humano"
+        return {"category": category, "response_quality": 3, "bot_quality": None, "notes": "Error al clasificar", "error": True}
 
 
 def classify_conversation(company_id: str, company_name: str = "", industry: str = "") -> dict:

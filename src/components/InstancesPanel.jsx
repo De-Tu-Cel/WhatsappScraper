@@ -783,7 +783,7 @@ export default function InstancesPanel() {
       const r = await fetch('/api/smsfast/buy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ country: sfCountry }),
+        body: JSON.stringify({ country: sfCountry, maxPrice: sfInfo?.price }),
       })
       const d = await r.json()
       if (!r.ok || !d.ok) throw new Error(d.detail || d.error || 'Error al comprar número')
@@ -1484,20 +1484,24 @@ export default function InstancesPanel() {
                       {lang === 'en' ? 'Country' : 'País'}:
                     </Typography>
                     {[
-                      { value: 54, label: '🇲🇽 México' },
-                      { value: 36, label: '🇨🇦 Canadá' },
+                      { value: 54, code: 'MX', name: 'México' },
+                      { value: 36, code: 'CA', name: 'Canadá' },
                     ].map(opt => (
                       <Box key={opt.value}
                         onClick={() => { if (!sfBoughtNumber) { setSfCountry(opt.value); fetchSfInfo(opt.value) } }}
                         sx={{
-                          px: 1.5, py: 0.5, borderRadius: 1.5, cursor: sfBoughtNumber ? 'default' : 'pointer',
-                          fontSize: '0.78rem', fontWeight: sfCountry === opt.value ? 700 : 400,
+                          display: 'flex', alignItems: 'center', gap: 0.7,
+                          px: 1.2, py: 0.45, borderRadius: 1.5, cursor: sfBoughtNumber ? 'default' : 'pointer',
                           color: sfCountry === opt.value ? '#fff' : 'rgba(255,255,255,0.35)',
                           bgcolor: sfCountry === opt.value ? 'rgba(99,102,241,0.2)' : 'transparent',
                           border: `1px solid ${sfCountry === opt.value ? 'rgba(99,102,241,0.4)' : 'rgba(255,255,255,0.08)'}`,
                           transition: 'all 0.15s',
                           '&:hover': { bgcolor: sfBoughtNumber ? undefined : 'rgba(255,255,255,0.05)' },
                         }}>
+                        <Box sx={{ px: 0.6, py: 0.1, borderRadius: 0.8, bgcolor: sfCountry === opt.value ? 'rgba(99,102,241,0.35)' : 'rgba(255,255,255,0.08)', lineHeight: 1, display: 'flex', alignItems: 'center' }}>
+                          <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.04em', color: sfCountry === opt.value ? '#c7d2fe' : 'rgba(255,255,255,0.3)', lineHeight: 1 }}>{opt.code}</Typography>
+                        </Box>
+                        <Typography sx={{ fontSize: '0.78rem', fontWeight: sfCountry === opt.value ? 700 : 400, lineHeight: 1, color: 'inherit' }}>{opt.name}</Typography>
                         {opt.label}
                       </Box>
                     ))}
@@ -1514,8 +1518,8 @@ export default function InstancesPanel() {
                   ) : sfInfo && (
                     <Box sx={{ display: 'flex', gap: 1.2 }}>
                       {[
-                        { label: lang === 'en' ? 'Balance' : 'Saldo', value: sfInfo.balance != null ? `$${Number(sfInfo.balance).toFixed(2)} USD` : '—', color: '#4ade80' },
-                        { label: lang === 'en' ? 'Number price' : 'Precio número', value: sfInfo.price != null ? `$${Number(sfInfo.price).toFixed(2)} USD` : '—', color: '#a78bfa' },
+                        { label: lang === 'en' ? 'Balance' : 'Saldo', value: sfInfo.balance != null ? `$${Number(sfInfo.balance).toFixed(2)} USD` : '—', color: '#4ade80', sub: null },
+                        { label: lang === 'en' ? 'Price' : 'Precio', value: sfInfo.price != null ? `$${Number(sfInfo.price).toFixed(2)} USD` : '—', color: '#a78bfa', sub: sfInfo.qty > 0 ? `${(sfInfo.qty).toLocaleString()} ${lang === 'en' ? 'available' : 'disponibles'}` : null },
                       ].map(tile => (
                         <Box key={tile.label} sx={{ flex: 1, p: 1.2, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', textAlign: 'center' }}>
                           <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.05em', mb: 0.3 }}>
@@ -1524,6 +1528,9 @@ export default function InstancesPanel() {
                           <Typography sx={{ color: tile.color, fontWeight: 800, fontSize: '0.95rem', fontFamily: 'monospace' }}>
                             {tile.value}
                           </Typography>
+                          {tile.sub && (
+                            <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.6rem', mt: 0.3 }}>{tile.sub}</Typography>
+                          )}
                         </Box>
                       ))}
                     </Box>

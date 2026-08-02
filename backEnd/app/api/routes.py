@@ -1489,28 +1489,24 @@ def api_smsfast_info(country: int = 54):
             "service": SMSFAST_SERVICE, "country": country,
         }, timeout=10)
         price = None
+        qty   = None
         try:
             pr_data = pr_r.json()
-            # Response varies: {country: {price: qty}} or {service: {country: {cost, count}}}
-            def _extract(obj):
-                if not isinstance(obj, dict): return None
-                for v in obj.values():
-                    if isinstance(v, (int, float)): return float(v)
-                    if isinstance(v, dict):
-                        res = _extract(v)
-                        if res is not None: return res
-                return None
-            # Try to get first numeric key at top level
-            for v in pr_data.values():
-                if isinstance(v, (int, float)): price = float(v); break
-                if isinstance(v, dict):
-                    for vv in v.values():
-                        if isinstance(vv, (int, float)): price = float(vv); break
+            # Format: {"country_id": {"service_id": {"cost": price, "count": qty}}}
+            for country_val in pr_data.values():
+                if not isinstance(country_val, dict): continue
+                for service_val in country_val.values():
+                    if isinstance(service_val, dict):
+                        price = float(service_val["cost"]) if "cost" in service_val else None
+                        qty   = int(service_val["count"]) if "count" in service_val else None
+                    elif isinstance(service_val, (int, float)):
+                        price = float(service_val)
                     if price is not None: break
-        except Exception:
-            pass
+                if price is not None: break
+        except Exception as pe:
+            print(f"[SMSFast] price parse error: {pe} raw={pr_r.text[:200]}")
 
-        return {"balance": balance, "price": price}
+        return {"balance": balance, "price": price, "qty": qty or 0}
     except HTTPException: raise
     except Exception as e: raise HTTPException(500, str(e))
 
@@ -1524,11 +1520,18 @@ def api_smsfast_buy(body: dict):
         raise HTTPException(400, "SMSFAST_API_KEY no configurada")
     country = body.get("country", 54)
     try:
-        r = _req.get(SMSFAST_BASE, params={
+        print(f"[SMSFast] buy country={country} service={SMSFAST_SERVICE}")
+        params = {
             "api_key": SMSFAST_API_KEY, "action": "getNumber",
             "service": SMSFAST_SERVICE, "country": country,
-        }, timeout=20)
+        }
+        # Optional price ceiling sent from frontend (prevents surprise charges)
+        max_price = body.get("maxPrice")
+        if max_price:
+            params["maxprice"] = max_price
+        r = _req.get(SMSFAST_BASE, params=params, timeout=20)
         text = r.text.strip()
+        print(f"[SMSFast] buy response={text[:120]}")
         if text.startswith("ACCESS_NUMBER:"):
             parts = text.split(":")
             return {"ok": True, "id": parts[1], "number": parts[2]}

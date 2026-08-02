@@ -21,6 +21,7 @@ import SearchIcon from '@mui/icons-material/Search'
 import QrCodeIcon from '@mui/icons-material/QrCode'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever'
+import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
 import CallIcon from '@mui/icons-material/Call'
@@ -115,12 +116,14 @@ function InstanceRow({ inst, onQr, onEmu, onRemove }) {
               <QrCodeIcon sx={{ fontSize: 14 }} />
             </IconButton>
           </Tooltip>
+          {/* SMSFast button hidden temporarily
           <Tooltip title={t.inst.emuMenuLabel} placement="top">
             <IconButton size="small" onClick={() => onEmu(inst)}
               sx={{ color: '#a78bfa', p: 0.4, '&:hover': { bgcolor: 'rgba(167,139,250,0.15)' } }}>
               <SmartphoneIcon sx={{ fontSize: 14 }} />
             </IconButton>
           </Tooltip>
+          */}
           <Tooltip title={lang === 'en' ? 'Remove from user' : 'Quitar de este usuario'} placement="top">
             <IconButton size="small" onClick={() => onRemove(inst)}
               sx={{ color: 'var(--text-muted)', p: 0.4, '&:hover': { color: '#f87171', bgcolor: 'rgba(248,113,113,0.1)' } }}>
@@ -375,6 +378,20 @@ export default function InstancesPanel() {
   const [pairLoading,  setPairLoading]  = useState(false)
   const [pairErr,      setPairErr]      = useState('')
 
+  // ── Add number wizard ──
+  const [wizardOpen,    setWizardOpen]    = useState(false)
+  const [wizardStep,    setWizardStep]    = useState(1)
+  const [wizardPhone,   setWizardPhone]   = useState('')
+  const [wizardName,    setWizardName]    = useState('')
+  const [wizardCode,      setWizardCode]      = useState(null)
+  const [wizardLoading,   setWizardLoading]   = useState(false)
+  const [wizardErr,       setWizardErr]       = useState('')
+  const [wizardConnected, setWizardConnected] = useState(false)
+  const [wizardInstName,  setWizardInstName]  = useState('')
+  const [wizardCountdown, setWizardCountdown] = useState(null)
+  const wizardPollRef    = useRef(null)
+  const wizardCountRef   = useRef(null)
+
   // ── QR dialog ──
   const [qrOpen,       setQrOpen]       = useState(false)
   const [qrTarget,     setQrTarget]     = useState(null)
@@ -409,7 +426,7 @@ export default function InstancesPanel() {
   const fetchInstances = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await fetch('/api/instances', { headers: { 'x-user-token': token() } })
+      const r = await fetch('/api/instances', { headers: { 'x-user-token': token() }, cache: 'no-store' })
       if (r.ok) setInstances(await r.json())
     } catch {}
     finally { setLoading(false) }
@@ -432,6 +449,27 @@ export default function InstancesPanel() {
   }, [])
 
   useEffect(() => { fetchInstances(); fetchUsers() }, [fetchInstances, fetchUsers])
+
+  // Auto-refresh pairing code when countdown expires
+  const wizardInstNameRef = useRef('')
+  const wizardPhoneRef    = useRef('')
+  useEffect(() => { wizardInstNameRef.current = wizardInstName }, [wizardInstName])
+  useEffect(() => { wizardPhoneRef.current    = wizardPhone    }, [wizardPhone])
+  useEffect(() => {
+    if (wizardCountdown !== 0 || !wizardInstNameRef.current) return
+    ;(async () => {
+      try {
+        const phone = wizardPhoneRef.current.replace(/\D/g, '')
+        const r = await fetch(`/api/evolution/instance/${wizardInstNameRef.current}?action=pairing-code`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone }),
+        })
+        const d = await r.json()
+        const code = d.code || d.pairingCode || d.pairing_code
+        if (code) { setWizardCode(code); startWizardCountdown() }
+      } catch {}
+    })()
+  }, [wizardCountdown])
 
   const [qrStatus, setQrStatus] = useState('loading') // loading | retrying | ready | error
 
@@ -642,6 +680,104 @@ export default function InstancesPanel() {
     setPairOpen(true)
   }
 
+  function stopWizardPoll() {
+    if (wizardPollRef.current) { clearInterval(wizardPollRef.current); wizardPollRef.current = null }
+  }
+
+  function startWizardCountdown() {
+    if (wizardCountRef.current) clearInterval(wizardCountRef.current)
+    setWizardCountdown(60)
+    wizardCountRef.current = setInterval(() => {
+      setWizardCountdown(prev => {
+        if (prev <= 1) { clearInterval(wizardCountRef.current); wizardCountRef.current = null; return 0 }
+        return prev - 1
+      })
+    }, 1000)
+  }
+
+  async function handleRefreshCode() {
+    setWizardLoading(true); setWizardErr('')
+    try {
+      const phone = wizardPhone.replace(/\D/g, '')
+      const r = await fetch(`/api/evolution/instance/${wizardInstName}?action=pairing-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone }),
+      })
+      const d = await r.json()
+      const code = d.code || d.pairingCode || d.pairing_code
+      if (!r.ok || !code) { setWizardErr(d.detail || d.error || t.inst.wizardErrCode) }
+      else { setWizardCode(code); startWizardCountdown() }
+    } catch (e) { setWizardErr(e.message) }
+    finally { setWizardLoading(false) }
+  }
+
+  function startWizardPoll(instName) {
+    stopWizardPoll()
+    wizardPollRef.current = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/evolution/instance/${instName}?type=status`)
+        if (!r.ok) return
+        const d = await r.json()
+        const state = (d.instance?.state || d.state || '').toLowerCase()
+        if (state === 'open' || state === 'connected') {
+          stopWizardPoll()
+          setWizardConnected(true)
+          fetchInstances()
+        }
+      } catch {}
+    }, 3000)
+  }
+
+  function openWizard() {
+    stopWizardPoll()
+    if (wizardCountRef.current) { clearInterval(wizardCountRef.current); wizardCountRef.current = null }
+    setWizardStep(2); setWizardPhone(''); setWizardName(''); setWizardCode(null)
+    setWizardErr(''); setWizardConnected(false); setWizardInstName(''); setWizardCountdown(null)
+    setWizardOpen(true)
+  }
+
+  async function handleWizardCreate() {
+    if (!wizardName.trim()) { setWizardErr(t.inst.errRequired); return }
+    const phone = wizardPhone.replace(/\D/g, '')
+    if (!phone) { setWizardErr(lang === 'en' ? 'Phone number is required' : 'El número de teléfono es requerido'); return }
+    const instName = wizardName.trim()
+    setWizardLoading(true); setWizardErr('')
+    try {
+      const r = await fetch('/api/instances', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
+        body: JSON.stringify({ name: instName, number: phone || undefined }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setWizardErr(d.detail || t.inst.createGenErr); setWizardLoading(false); return }
+
+      // If no phone provided — just create and close (like old dialog)
+      if (!phone) { fetchInstances(); setWizardOpen(false); setWizardLoading(false); return }
+
+      // With phone — request pairing code
+      const r2 = await fetch(`/api/evolution/instance/${instName}?action=pairing-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone }),
+      })
+      const d2 = await r2.json()
+      const code = d2.code || d2.pairingCode || d2.pairing_code
+      if (!r2.ok || !code) { setWizardErr(d2.detail || d2.error || t.inst.wizardErrCode); setWizardLoading(false); return }
+      setWizardInstName(instName)
+      setWizardCode(code)
+      setWizardStep(3)
+      setWizardConnected(false)
+      startWizardPoll(instName)
+      startWizardCountdown()
+      fetchInstances()
+    } catch (e) {
+      setWizardErr(e.message)
+    } finally {
+      setWizardLoading(false)
+    }
+  }
+
   async function handleRequestPairCode() {
     if (!pairPhone.trim()) { setPairErr('Ingresa el número de teléfono'); return }
     setPairLoading(true); setPairErr(''); setPairCode(null)
@@ -845,7 +981,7 @@ export default function InstancesPanel() {
             </IconButton>
           </Tooltip>
           <Button variant="contained" startIcon={<AddIcon />}
-            onClick={() => { setCreateErr(''); setNewName(''); setNewNumber(''); setCreateOpen(true) }}
+            onClick={openWizard}
             sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'var(--accent,#2563eb)' },
               fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, textTransform: 'none', px: 2 }}>
             {t.inst.newBtn}
@@ -950,13 +1086,7 @@ export default function InstancesPanel() {
                                     <CloseIcon sx={{ fontSize: 14 }} />
                                   </IconButton>
                                 )}
-                                <Tooltip title={t.inst.emuMenuLabel}>
-                                  <IconButton size="small" onClick={() => handleEmuClick(inst)}
-                                    sx={{ color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)', borderRadius: 1.5, p: 0.5,
-                                      '&:hover': { bgcolor: 'rgba(167,139,250,0.1)' } }}>
-                                    <SmartphoneIcon sx={{ fontSize: 13 }} />
-                                  </IconButton>
-                                </Tooltip>
+                                {/* SMSFast button hidden temporarily */}
                                 <Tooltip title={t.inst.delete}>
                                   <IconButton size="small" onClick={() => handleDeleteClick(inst)}
                                     sx={{ color: '#f87171', border: '1px solid rgba(248,113,133,0.2)', borderRadius: 1.5, p: 0.5,
@@ -1143,6 +1273,181 @@ export default function InstancesPanel() {
               ? <><CircularProgress size={14} sx={{ color: 'white', mr: 1 }} />{t.inst.creating}</>
               : t.inst.create}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Add number wizard ── */}
+      <Dialog open={wizardOpen} onClose={() => { if (!wizardLoading) { stopWizardPoll(); setWizardOpen(false) } }} sx={{
+        '& .MuiDialog-paper': {
+          bgcolor: 'var(--card-bg, #161d2e)',
+          backgroundImage: 'linear-gradient(160deg, rgba(34,197,94,0.08) 0%, transparent 55%)',
+          border: '1px solid rgba(34,197,94,0.2)',
+          borderRadius: 3, minWidth: 420, maxWidth: 460,
+          boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+        },
+      }}>
+        <DialogTitle sx={{ pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+            <Box sx={{ width: 34, height: 34, borderRadius: 2, flexShrink: 0, bgcolor: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <AddIcon sx={{ fontSize: 18, color: '#4ade80' }} />
+            </Box>
+            <Box sx={{ flex: 1 }}>
+              <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.97rem', lineHeight: 1.2 }}>
+                {t.inst.wizardTitle}
+              </Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem' }}>
+                {wizardStep === 2
+                ? (lang === 'en' ? 'New instance' : 'Nueva instancia')
+                : (lang === 'en' ? 'Linking code' : 'Código de vinculación')}
+              </Typography>
+            </Box>
+          </Box>
+        </DialogTitle>
+
+        <DialogContent sx={{ pt: '4px !important', pb: 1, px: 3 }}>
+          {wizardStep === 1 && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.2 }}>
+              <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.8rem', lineHeight: 1.6, mb: 0.5 }}>
+                {t.inst.wizardStep1Intro}
+              </Typography>
+              {[
+                [t.inst.wizardStep1a, t.inst.wizardStep1aSub],
+                [t.inst.wizardStep1b, t.inst.wizardStep1bSub],
+                [t.inst.wizardStep1c, t.inst.wizardStep1cSub],
+                [t.inst.wizardStep1d, t.inst.wizardStep1dSub],
+              ].map(([title, sub], i) => (
+                <Box key={i} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, p: 1.2, borderRadius: 1.5, bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                  <Box sx={{ width: 22, height: 22, borderRadius: '50%', bgcolor: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, mt: 0.3 }}>
+                    <Typography sx={{ color: '#4ade80', fontSize: '0.65rem', fontWeight: 800 }}>{i + 1}</Typography>
+                  </Box>
+                  <Box>
+                    <Typography sx={{ color: 'rgba(255,255,255,0.8)', fontSize: '0.8rem', lineHeight: 1.4 }}>{title}</Typography>
+                    <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem', mt: 0.2 }}>{sub}</Typography>
+                  </Box>
+                </Box>
+              ))}
+            </Box>
+          )}
+
+          {wizardStep === 2 && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <TextField
+                label={t.inst.nameLabel}
+                placeholder={t.inst.namePlaceholder}
+                size="small"
+                value={wizardName}
+                onChange={e => setWizardName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                helperText={<span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.68rem' }}>{t.inst.nameHint}</span>}
+                autoFocus
+                sx={FIELD_SX}
+                onKeyDown={e => e.key === 'Enter' && !wizardLoading && handleWizardCreate()}
+              />
+              <TextField
+                label={t.inst.wizardPhoneLabel}
+                placeholder={t.inst.wizardPhonePlaceholder}
+                size="small"
+                value={wizardPhone}
+                onChange={e => {
+                  const v = e.target.value.replace(/\D/g, '')
+                  setWizardPhone(v)
+                  if (!wizardName) setWizardName('wa-' + v.slice(-8))
+                }}
+                helperText={<span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.68rem' }}>{t.inst.wizardPhoneHint}</span>}
+                sx={FIELD_SX}
+                onKeyDown={e => e.key === 'Enter' && !wizardLoading && handleWizardCreate()}
+              />
+              {wizardErr && (
+                <Box sx={{ px: 1.5, py: 1, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                  <Typography sx={{ color: '#f87171', fontSize: '0.78rem' }}>{wizardErr}</Typography>
+                </Box>
+              )}
+            </Box>
+          )}
+
+          {wizardStep === 3 && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {wizardConnected ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5, py: 2 }}>
+                  <CheckCircleIcon sx={{ fontSize: 52, color: '#4ade80' }} />
+                  <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '1rem' }}>
+                    {t.inst.wizardConnectedTitle}
+                  </Typography>
+                  <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.78rem', textAlign: 'center' }}>
+                    {t.inst.wizardConnectedDesc.replace('{name}', wizardInstName)}
+                  </Typography>
+                </Box>
+              ) : (
+                <>
+                  <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.8rem', lineHeight: 1.5 }}>
+                    {t.inst.wizardStep3Intro}
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, py: 1 }}>
+                    <Box sx={{ px: 3, py: 2, borderRadius: 2, bgcolor: wizardCountdown === 0 ? 'rgba(239,68,68,0.08)' : 'rgba(34,197,94,0.1)', border: `1px solid ${wizardCountdown === 0 ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.3)'}`, transition: 'all 0.3s' }}>
+                      <Typography sx={{ color: wizardCountdown === 0 ? '#f87171' : '#4ade80', fontWeight: 800, fontSize: '2rem', letterSpacing: '0.25em', fontFamily: 'monospace', transition: 'color 0.3s' }}>
+                        {wizardCode ? wizardCode.slice(0,4) + '-' + wizardCode.slice(4) : ''}
+                      </Typography>
+                    </Box>
+                    {wizardCountdown !== null && (
+                      <Typography sx={{ color: wizardCountdown <= 10 ? '#f87171' : 'rgba(255,255,255,0.3)', fontSize: '0.72rem', fontFamily: 'monospace' }}>
+                        {wizardCountdown === 0
+                          ? (lang === 'en' ? 'Refreshing…' : 'Actualizando…')
+                          : (lang === 'en' ? `Expires in ${wizardCountdown}s` : `Expira en ${wizardCountdown}s`)}
+                      </Typography>
+                    )}
+                  </Box>
+                  <Box sx={{ p: 1.5, borderRadius: 1.5, bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                    <Typography sx={{ color: 'rgba(255,255,255,0.55)', fontSize: '0.75rem', fontWeight: 600, mb: 0.5 }}>
+                      {t.inst.wizardWaLabel}
+                    </Typography>
+                    {[t.inst.wizardWaStep1, t.inst.wizardWaStep2, t.inst.wizardWaStep3, t.inst.wizardWaStep4].map((s, i) => (
+                      <Typography key={i} sx={{ color: i === 3 ? '#4ade80' : 'rgba(255,255,255,0.45)', fontSize: '0.78rem', lineHeight: 1.8, pl: i > 0 ? 1 : 0 }}>
+                        {s}
+                      </Typography>
+                    ))}
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'center' }}>
+                    <CircularProgress size={12} sx={{ color: 'rgba(255,255,255,0.3)' }} />
+                    <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.7rem' }}>
+                      {t.inst.wizardWaiting}
+                    </Typography>
+                  </Box>
+                </>
+              )}
+            </Box>
+          )}
+        </DialogContent>
+
+        <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5, borderTop: '1px solid rgba(255,255,255,0.07)', gap: 1 }}>
+          {wizardStep === 3 && !wizardConnected && (
+            <Button onClick={async () => {
+              stopWizardPoll()
+              try { await fetch(`/api/evolution/instance/${wizardInstName}`, { method: 'DELETE' }) } catch {}
+              fetchInstances()
+              setWizardOpen(false)
+            }}
+              sx={{ color: '#f87171', textTransform: 'none', fontSize: '0.82rem', borderRadius: 2, px: 2, '&:hover': { color: '#ef4444', bgcolor: 'rgba(239,68,68,0.08)' } }}>
+              {t.inst.wizardCancelReg}
+            </Button>
+          )}
+          <Button onClick={() => { stopWizardPoll(); setWizardOpen(false) }} disabled={wizardLoading}
+            sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.82rem', borderRadius: 2, px: 2, '&:hover': { color: '#fff', bgcolor: 'rgba(255,255,255,0.08)' } }}>
+            {wizardStep === 3 ? t.inst.wizardClose : t.inst.wizardCancel}
+          </Button>
+          {wizardStep === 1 && (
+            <Button onClick={() => setWizardStep(2)} variant="contained"
+              sx={{ bgcolor: '#22c55e', '&:hover': { bgcolor: '#16a34a' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5 }}>
+              {t.inst.wizardNextBtn}
+            </Button>
+          )}
+          {wizardStep === 2 && (
+            <Button onClick={handleWizardCreate} disabled={wizardLoading || !wizardName.trim()} variant="contained"
+              startIcon={wizardLoading ? null : (wizardPhone.trim() ? <PhoneAndroidIcon sx={{ fontSize: '17px !important' }} /> : <AddIcon sx={{ fontSize: '17px !important' }} />)}
+              sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'var(--accent,#2563eb)' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5, '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.2)' } }}>
+              {wizardLoading
+                ? <><CircularProgress size={14} sx={{ color: 'white', mr: 1 }} />{t.inst.wizardCreating}</>
+                : wizardPhone.trim() ? t.inst.wizardCreateBtn : t.inst.create}
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
 
@@ -1775,46 +2080,83 @@ export default function InstancesPanel() {
         open={snack.open}
         autoHideDuration={3000}
         onClose={() => setSnack(p => ({ ...p, open: false }))}
-        message={snack.msg}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
         slotProps={{ content: { sx: {
-          bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.92)',
-          color: 'white', fontWeight: 600, fontSize: '0.82rem',
-          borderRadius: 2, boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
-          backdropFilter: 'blur(8px)',
+          bgcolor: 'rgba(22,24,30,0.97)',
+          color: 'rgba(255,255,255,0.9)',
+          fontWeight: 500,
+          fontSize: '0.82rem',
+          borderRadius: 2.5,
+          border: '1px solid rgba(255,255,255,0.1)',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+          backdropFilter: 'blur(12px)',
+          px: 2.5, py: 1.2,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          gap: 1, minWidth: 220, textAlign: 'center',
         }}}}
+        message={
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'center', width: '100%' }}>
+            <CheckCircleIcon sx={{ fontSize: 16, color: '#4ade80', flexShrink: 0 }} />
+            <span>{snack.msg}</span>
+          </Box>
+        }
       />
 
       {/* ── Delete confirm ── */}
-      <Dialog open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} sx={DIALOG_SX}>
-        <DialogTitle sx={{ pb: 1 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem' }}>
-              {t.inst.deleteTitle}
-            </Typography>
-            <IconButton size="small" onClick={() => setDeleteTarget(null)} sx={{ color: 'rgba(255,255,255,0.25)', mr: -1, '&:hover': { color: 'rgba(255,255,255,0.6)' } }}>
-              <CloseIcon sx={{ fontSize: 18 }} />
+      <Dialog open={Boolean(deleteTarget)} onClose={() => !deleting && setDeleteTarget(null)}
+        slotProps={{ paper: { sx: {
+          width: 360, maxWidth: '90vw', borderRadius: 3,
+          background: 'var(--card-bg, #161d2e)',
+          border: '1px solid rgba(239,68,68,0.22)',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.7)',
+        }}}}>
+        <Box sx={{ p: 2.5 }}>
+          {/* Header */}
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+              <Box sx={{ width: 36, height: 36, borderRadius: 2, bgcolor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <WarningAmberIcon sx={{ fontSize: 18, color: '#ef4444' }} />
+              </Box>
+              <Typography sx={{ color: '#fff', fontWeight: 700, fontSize: '0.95rem' }}>
+                {t.inst.deleteTitle}
+              </Typography>
+            </Box>
+            <IconButton size="small" onClick={() => setDeleteTarget(null)} disabled={deleting}
+              sx={{ color: 'rgba(255,255,255,0.2)', '&:hover': { color: 'rgba(255,255,255,0.5)', bgcolor: 'rgba(255,255,255,0.05)' } }}>
+              <CloseIcon sx={{ fontSize: 16 }} />
             </IconButton>
           </Box>
-        </DialogTitle>
-        <DialogContent>
-          <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.85rem', mb: 0.5 }}>
-            {t.inst.deleteConfirm} <strong style={{ color: 'white' }}>{deleteTarget?.name}</strong>?
-          </Typography>
-          <Typography sx={{ color: 'rgba(239,68,68,0.65)', fontSize: '0.75rem' }}>
+
+          {/* Instance row */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 1.5, py: 1.2, mb: 1.5, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
+            <SmartphoneIcon sx={{ fontSize: 15, color: 'rgba(255,255,255,0.3)', flexShrink: 0 }} />
+            <Typography sx={{ color: '#fff', fontWeight: 600, fontSize: '0.88rem', flex: 1 }}>
+              {deleteTarget?.name}
+            </Typography>
+            {deleteTarget?.number && (
+              <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.75rem', fontFamily: 'monospace' }}>
+                +{deleteTarget.number}
+              </Typography>
+            )}
+          </Box>
+
+          {/* Warning */}
+          <Typography sx={{ color: 'rgba(239,68,68,0.65)', fontSize: '0.75rem', mb: 2.5 }}>
             {t.inst.deleteWarnInst}
           </Typography>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
-          <Button onClick={() => setDeleteTarget(null)}
-            sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.82rem' }}>
-            {t.inst.cancel}
-          </Button>
-          <Button onClick={handleDelete} disabled={deleting} variant="contained"
-            sx={{ bgcolor: '#ef4444', '&:hover': { bgcolor: '#dc2626' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2 }}>
-            {deleting ? <CircularProgress size={16} sx={{ color: 'white' }} /> : t.inst.delete}
-          </Button>
-        </DialogActions>
+
+          {/* Actions */}
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button fullWidth onClick={() => setDeleteTarget(null)} disabled={deleting}
+              sx={{ textTransform: 'none', fontSize: '0.82rem', fontWeight: 500, color: 'rgba(255,255,255,0.45)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, py: 0.9, '&:hover': { bgcolor: 'rgba(255,255,255,0.05)', borderColor: 'rgba(255,255,255,0.18)' } }}>
+              {t.inst.cancel}
+            </Button>
+            <Button fullWidth onClick={handleDelete} disabled={deleting}
+              sx={{ textTransform: 'none', fontSize: '0.82rem', fontWeight: 700, color: '#fff', bgcolor: '#ef4444', borderRadius: 2, py: 0.9, gap: 0.5, '&:hover': { bgcolor: '#dc2626' }, '&:disabled': { bgcolor: 'rgba(239,68,68,0.4)', color: 'rgba(255,255,255,0.5)' } }}>
+              {deleting ? <CircularProgress size={14} sx={{ color: 'white' }} /> : <><DeleteForeverIcon sx={{ fontSize: 15 }} />{t.inst.delete}</>}
+            </Button>
+          </Box>
+        </Box>
       </Dialog>
     </Box>
   )

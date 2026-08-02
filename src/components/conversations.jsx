@@ -601,6 +601,7 @@ export default function Conversations() {
   useEffect(() => {
     if (selected) {
       threadLenRef.current = 0
+      setThread([])
       setActiveNum('all')
       fetchThread(selected.company_id, true)
       fetchCompanyNumbers(selected.company_id)
@@ -631,11 +632,28 @@ export default function Conversations() {
           throw new Error(err.detail || `Error ${res.status}`)
         }
       }
+      // Optimistic update — show message immediately without waiting for the backend re-fetch
+      const now = new Date().toISOString()
+      setThread(prev => [
+        ...prev,
+        ...toSend.map(num => ({
+          _id: `opt-${Date.now()}-${num}`,
+          direction: 'outbound',
+          message_body: text.trim(),
+          body: text.trim(),
+          to_number: num,
+          status: 'pending',
+          created_at: now,
+          sent_at: now,
+          platform: 'evolution',
+          _optimistic: true,
+        })),
+      ])
       setReply('')
       if (replyRef._textarea) replyRef._textarea.value = ''
       const cid = selected.company_id
-      setTimeout(() => fetchThread(cid, true), 800)
-      ;[3000, 6000, 10000].forEach(ms => setTimeout(() => fetchThread(cid, false, true), ms))
+      setTimeout(() => fetchThread(cid, true), 1500)
+      ;[4000, 8000].forEach(ms => setTimeout(() => fetchThread(cid, false, true), ms))
     } catch (err) {
       const msg = err.message || 'No se pudo enviar el mensaje'
       setSendError(msg)

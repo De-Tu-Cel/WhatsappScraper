@@ -496,20 +496,7 @@ class MongoDBManager:
                 "sent_by_username":   g.get("first_sent_by_user") or "",
                 "last_analysis":      last_inbound_analyzed.get("analysis") if last_inbound_analyzed else None,
             })
-        # Deduplicate by company_name — keep the entry with the most recent message
-        seen_names = {}
-        deduped = []
-        for r in results:
-            name = r["company_name"]
-            if name not in seen_names:
-                seen_names[name] = len(deduped)
-                deduped.append(r)
-            else:
-                # keep the one with more unread or more recent last_at
-                idx = seen_names[name]
-                if (r["unread"] > deduped[idx]["unread"] or
-                        (r["last_at"] or "") > (deduped[idx]["last_at"] or "")):
-                    deduped[idx] = r
+        deduped = results
 
         # Annotate with AI follow-up session status
         if deduped:

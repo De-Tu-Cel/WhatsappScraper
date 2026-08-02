@@ -189,10 +189,11 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         if x_user_token:
             user = get_user_by_token(x_user_token)
             if user:
-                user_id = str(user.get("_id", ""))
+                user_id = user.get("id") or str(user.get("_id", ""))
                 assigned = list(db.db.instances.find(
                     {"assigned_to": user_id}, {"_id": 0, "name": 1}
                 )) if user_id else []
+                print(f"[Rotation] user_id={user_id!r} assigned={[i['name'] for i in assigned]}")
 
                 if assigned:
                     names = [i["name"] for i in assigned]
@@ -1325,12 +1326,12 @@ def api_evo_create_instance(body: dict):
     try:
         import requests as _req
         from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
-        name = body.get("instanceName", "").strip()
+        name = (body.get("name") or body.get("instanceName") or "").strip()
         if not name:
-            raise HTTPException(status_code=400, detail="instanceName requerido")
+            raise HTTPException(status_code=400, detail="name requerido")
         r = _req.post(f"{EVOLUTION_API_URL}/instance/create",
             headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
-            json={"instanceName": name, "qrcode": True, "integration": "WHATSAPP-BAILEYS"},
+            json={"name": name},
             timeout=15)
         return r.json()
     except HTTPException: raise
@@ -1354,13 +1355,32 @@ def api_evo_pairing_code(name: str, body: dict):
         phone = str(body.get("phone", "")).strip().replace("+", "").replace(" ", "")
         if not phone:
             raise HTTPException(status_code=400, detail="phone requerido")
-        r = _req.post(
+
+        # Lookup instance token from DB for instance-specific auth
+        db = MongoDBManager()
+        inst_doc = db.db.instances.find_one({"name": name}) or {}
+        instance_token = inst_doc.get("instance_token") or EVOLUTION_API_KEY
+        api_key = instance_token or EVOLUTION_API_KEY
+
+        print(f"[DEBUG] pairing-code name={name!r} phone={phone!r} token={api_key!r}")
+
+        # GET /instance/connect/{name}?number={phone} returns pairingCode when number provided
+        r = _req.get(
             f"{EVOLUTION_API_URL}/instance/connect/{name}",
-            headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
-            json={"number": phone},
+            headers={"apikey": api_key, "Content-Type": "application/json"},
+            params={"number": phone},
             timeout=15,
         )
-        return r.json()
+        print(f"[DEBUG] connect response: {r.status_code} {r.text[:400]}")
+
+        data = r.json()
+        code = data.get("pairingCode") or data.get("code") \
+            or (data.get("data") or {}).get("PairingCode") or data.get("pairing_code")
+        if code:
+            return {"code": code}
+        if not r.ok:
+            raise HTTPException(r.status_code, f"Evolution connect error: {r.text[:200]}")
+        return data
     except HTTPException: raise
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
@@ -1452,11 +1472,15 @@ def register_agent_health():
 
 @router.get("/evolution/instance/status/{name}")
 def api_evo_get_status(name: str):
+    """GET /instance/connectionState/{name} → {"instance": {"instanceName": "...", "state": "open"|"close"}}"""
     try:
         import requests as _req
         from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
-        r = _req.get(f"{EVOLUTION_API_URL}/instance/connectionState/{name}",
-            headers={"apikey": EVOLUTION_API_KEY}, timeout=10)
+        r = _req.get(
+            f"{EVOLUTION_API_URL}/instance/connectionState/{name}",
+            headers={"apikey": EVOLUTION_API_KEY},
+            timeout=10,
+        )
         return r.json()
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
@@ -2305,24 +2329,30 @@ def api_create_instance(body: dict, x_user_token: Optional[str] = Header(None)):
     import requests as _req
     from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
     from datetime import datetime
+    print(f"[DEBUG] create_instance body={body} name={name!r} url={EVOLUTION_API_URL} key={EVOLUTION_API_KEY!r}")
+    # Create instance in Evolution API
     r = _req.post(
         f"{EVOLUTION_API_URL}/instance/create",
         headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
-        json={"instanceName": name, "qrcode": True, "integration": "WHATSAPP-BAILEYS"},
+        json={"instanceName": name, "integration": "WHATSAPP-BAILEYS", "qrcode": False},
         timeout=15,
     )
+    print(f"[DEBUG] Evolution response: {r.status_code} {r.text[:300]}")
     if r.status_code not in (200, 201):
         raise HTTPException(500, f"Error Evolution API: {r.text[:200]}")
+    evo_data = r.json()
+    instance_token = evo_data.get("hash") or ""
     db = MongoDBManager()
     doc = {
         "name": name,
         "number": number,
+        "instance_token": instance_token,
         "assigned_to": None,
         "assigned_name": None,
         "created_at": datetime.utcnow().isoformat(),
     }
     db.db.instances.update_one({"name": name}, {"$set": doc}, upsert=True)
-    return {"ok": True, "instance": doc}
+    return {"ok": True, "instance": doc, "instance_token": instance_token}
 
 
 @router.delete("/admin/instances/{name}")

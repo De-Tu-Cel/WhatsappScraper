@@ -97,24 +97,24 @@ const MENU_PROPS = {
     paper: {
       sx: {
         bgcolor: 'var(--sidebar-bg, #0d1117)',
-        border: '1px solid rgba(255,255,255,0.1)',
+        border: '1px solid var(--border, rgba(255,255,255,0.1))',
         borderRadius: 2,
         mt: 0.5,
         '& .MuiMenuItem-root': {
           fontSize: '0.82rem',
-          color: 'rgba(255,255,255,0.75)',
-          '&:hover': { bgcolor: 'rgba(59,130,246,0.12)' },
-          '&.Mui-selected': { bgcolor: 'rgba(59,130,246,0.18)', color: 'white' },
-          '&.Mui-selected:hover': { bgcolor: 'rgba(59,130,246,0.25)' },
+          color: 'var(--text-muted, rgba(255,255,255,0.75))',
+          '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.12)' },
+          '&.Mui-selected': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.18)', color: 'var(--text, white)' },
+          '&.Mui-selected:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.25)' },
         },
         '& ul': {
           scrollbarWidth: 'thin',
-          scrollbarColor: 'rgba(255,255,255,0.15) transparent',
+          scrollbarColor: 'var(--scrollbar-thumb, rgba(255,255,255,0.15)) transparent',
           '&::-webkit-scrollbar': { width: 4 },
           '&::-webkit-scrollbar-button': { display: 'none' },
           '&::-webkit-scrollbar-track': { background: 'transparent' },
-          '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.15)', borderRadius: 2 },
-          '&::-webkit-scrollbar-thumb:hover': { background: 'rgba(255,255,255,0.3)' },
+          '&::-webkit-scrollbar-thumb': { background: 'var(--scrollbar-thumb, rgba(255,255,255,0.15))', borderRadius: 2 },
+          '&::-webkit-scrollbar-thumb:hover': { background: 'var(--scrollbar-thumb-hover, rgba(255,255,255,0.3))' },
         },
       },
     },
@@ -122,17 +122,18 @@ const MENU_PROPS = {
 }
 
 const SELECT_SX = {
-  color: 'rgba(255,255,255,0.85)',
-  '& .MuiSelect-icon': { color: 'rgba(255,255,255,0.4)' },
-  '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.12)' },
-  '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.25)' },
-  '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#3b82f6' },
+  bgcolor: 'var(--surface, #0d1117)',
+  color: 'var(--text, rgba(255,255,255,0.85))',
+  '& .MuiSelect-icon': { color: 'var(--text-muted, rgba(255,255,255,0.4))' },
+  '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--border, rgba(255,255,255,0.12))' },
+  '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.35)' },
+  '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--accent, #3b82f6)' },
 }
 
 const LABEL_SX = {
-  color: 'rgba(255,255,255,0.4)',
-  '&.Mui-focused': { color: '#3b82f6' },
-  '&.MuiFormLabel-filled': { color: 'rgba(255,255,255,0.55)' },
+  color: 'var(--text-muted, rgba(255,255,255,0.4))',
+  '&.Mui-focused': { color: 'var(--accent, #3b82f6)' },
+  '&.MuiFormLabel-filled': { color: 'var(--text-muted, rgba(255,255,255,0.55))' },
 }
 
 const FIELD_SX = {
@@ -300,16 +301,16 @@ function FilterBar({ filters, onChange, industries, cities }) {
         onChange={(e) => onChange('search', e.target.value)}
         sx={{
           minWidth: 220, flexGrow: 1,
-          '& .MuiInputBase-root': { color: 'rgba(255,255,255,0.85)' },
-          '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.12)' },
-          '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.25)' },
-          '& .MuiInputBase-root.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#3b82f6' },
+          '& .MuiInputBase-root': { bgcolor: 'var(--surface, #0d1117)', color: 'var(--text, rgba(255,255,255,0.85))' },
+          '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--border, rgba(255,255,255,0.12))' },
+          '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.35)' },
+          '& .MuiInputBase-root.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--accent, #3b82f6)' },
         }}
         slotProps={{
           input: {
             startAdornment: (
               <InputAdornment position="start">
-                <SearchIcon sx={{ fontSize: 18, color: 'rgba(255,255,255,0.35)' }} />
+                <SearchIcon sx={{ fontSize: 18, color: 'var(--text-muted, rgba(255,255,255,0.35))' }} />
               </InputAdornment>
             ),
           },

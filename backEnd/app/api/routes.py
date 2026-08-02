@@ -1470,6 +1470,99 @@ def register_agent_health():
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"ADB agent not reachable: {e}")
 
+SMSFAST_BASE = "https://api.smsfast.com/stubs/handler_api.php"
+
+@router.get("/smsfast/info")
+def api_smsfast_info(country: int = 54):
+    """Return SMSFast account balance and price for WhatsApp number in a country."""
+    import requests as _req
+    from app.config import SMSFAST_API_KEY, SMSFAST_SERVICE
+    if not SMSFAST_API_KEY:
+        raise HTTPException(400, "SMSFAST_API_KEY no configurada")
+    try:
+        bal_r = _req.get(SMSFAST_BASE, params={"api_key": SMSFAST_API_KEY, "action": "getBalance"}, timeout=10)
+        bal_text = bal_r.text.strip()
+        balance = float(bal_text.split(":")[-1]) if ":" in bal_text else None
+
+        pr_r = _req.get(SMSFAST_BASE, params={
+            "api_key": SMSFAST_API_KEY, "action": "getPrices",
+            "service": SMSFAST_SERVICE, "country": country,
+        }, timeout=10)
+        price = None
+        try:
+            pr_data = pr_r.json()
+            # Response varies: {country: {price: qty}} or {service: {country: {cost, count}}}
+            def _extract(obj):
+                if not isinstance(obj, dict): return None
+                for v in obj.values():
+                    if isinstance(v, (int, float)): return float(v)
+                    if isinstance(v, dict):
+                        res = _extract(v)
+                        if res is not None: return res
+                return None
+            # Try to get first numeric key at top level
+            for v in pr_data.values():
+                if isinstance(v, (int, float)): price = float(v); break
+                if isinstance(v, dict):
+                    for vv in v.values():
+                        if isinstance(vv, (int, float)): price = float(vv); break
+                    if price is not None: break
+        except Exception:
+            pass
+
+        return {"balance": balance, "price": price}
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(500, str(e))
+
+
+@router.post("/smsfast/buy")
+def api_smsfast_buy(body: dict):
+    """Buy a WhatsApp virtual number from SMSFast. Returns {ok, id, number}."""
+    import requests as _req
+    from app.config import SMSFAST_API_KEY, SMSFAST_SERVICE
+    if not SMSFAST_API_KEY:
+        raise HTTPException(400, "SMSFAST_API_KEY no configurada")
+    country = body.get("country", 54)
+    try:
+        r = _req.get(SMSFAST_BASE, params={
+            "api_key": SMSFAST_API_KEY, "action": "getNumber",
+            "service": SMSFAST_SERVICE, "country": country,
+        }, timeout=20)
+        text = r.text.strip()
+        if text.startswith("ACCESS_NUMBER:"):
+            parts = text.split(":")
+            return {"ok": True, "id": parts[1], "number": parts[2]}
+        # Map known error codes to human-readable messages
+        errs = {
+            "NO_NUMBERS": "Sin números disponibles para ese país. Intenta más tarde o cambia el país.",
+            "NO_BALANCE": "Saldo insuficiente en SMSFast.",
+            "BAD_KEY": "API key de SMSFast inválida.",
+        }
+        raise HTTPException(400, errs.get(text, f"SMSFast: {text}"))
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(500, str(e))
+
+
+@router.post("/smsfast/cancel")
+def api_smsfast_cancel(body: dict):
+    """Cancel a SMSFast activation (status=8 = cancel + refund)."""
+    import requests as _req
+    from app.config import SMSFAST_API_KEY
+    if not SMSFAST_API_KEY:
+        raise HTTPException(400, "SMSFAST_API_KEY no configurada")
+    activation_id = body.get("id")
+    if not activation_id:
+        raise HTTPException(400, "id requerido")
+    try:
+        r = _req.get(SMSFAST_BASE, params={
+            "api_key": SMSFAST_API_KEY, "action": "setStatus",
+            "status": 8, "id": activation_id,
+        }, timeout=10)
+        text = r.text.strip()
+        return {"ok": text == "ACCESS_CANCEL", "response": text}
+    except Exception as e: raise HTTPException(500, str(e))
+
+
 @router.get("/evolution/instance/status/{name}")
 def api_evo_get_status(name: str):
     """GET /instance/connectionState/{name} → {"instance": {"instanceName": "...", "state": "open"|"close"}}"""

@@ -22,6 +22,10 @@ FALLBACK_TO_NUMBER = os.getenv("TO_NUMBER", "")
 # N8N Integration
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "")
 
+# SMSFast (virtual phone numbers for WhatsApp registration)
+SMSFAST_API_KEY = os.getenv("SMSFAST_API_KEY", "")
+SMSFAST_SERVICE = os.getenv("SMSFAST_SERVICE", "wa")
+
 # Evolution API (WhatsApp personal number)
 EVOLUTION_API_URL      = os.getenv("EVOLUTION_API_URL", "http://localhost:8080")
 EVOLUTION_API_KEY      = os.getenv("EVOLUTION_API_KEY", "")

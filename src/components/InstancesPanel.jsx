@@ -116,14 +116,12 @@ function InstanceRow({ inst, onQr, onEmu, onRemove }) {
               <QrCodeIcon sx={{ fontSize: 14 }} />
             </IconButton>
           </Tooltip>
-          {/* SMSFast button hidden temporarily
-          <Tooltip title={t.inst.emuMenuLabel} placement="top">
+          <Tooltip title={lang === 'en' ? 'Buy number with SMSFast' : 'Comprar número con SMSFast'} placement="top">
             <IconButton size="small" onClick={() => onEmu(inst)}
               sx={{ color: '#a78bfa', p: 0.4, '&:hover': { bgcolor: 'rgba(167,139,250,0.15)' } }}>
               <SmartphoneIcon sx={{ fontSize: 14 }} />
             </IconButton>
           </Tooltip>
-          */}
           <Tooltip title={lang === 'en' ? 'Remove from user' : 'Quitar de este usuario'} placement="top">
             <IconButton size="small" onClick={() => onRemove(inst)}
               sx={{ color: 'var(--text-muted)', p: 0.4, '&:hover': { color: '#f87171', bgcolor: 'rgba(248,113,113,0.1)' } }}>
@@ -391,6 +389,18 @@ export default function InstancesPanel() {
   const [wizardCountdown, setWizardCountdown] = useState(null)
   const wizardPollRef    = useRef(null)
   const wizardCountRef   = useRef(null)
+
+  // ── SMSFast inside wizard ──
+  const [wizardPhoneMode,  setWizardPhoneMode]  = useState('manual') // 'manual' | 'smsfast'
+  const [sfCountry,        setSfCountry]        = useState(54)
+  const [sfInfo,           setSfInfo]           = useState(null)
+  const [sfInfoLoading,    setSfInfoLoading]    = useState(false)
+  const [sfBuying,         setSfBuying]         = useState(false)
+  const [sfActivationId,   setSfActivationId]   = useState(null)
+  const [sfBoughtNumber,   setSfBoughtNumber]   = useState(null)
+  const [sfCancelSecs,     setSfCancelSecs]     = useState(120)
+  const [sfCancelling,     setSfCancelling]     = useState(false)
+  const sfCancelRef        = useRef(null)
 
   // ── QR dialog ──
   const [qrOpen,       setQrOpen]       = useState(false)
@@ -729,12 +739,79 @@ export default function InstancesPanel() {
     }, 3000)
   }
 
+  function resetSfState() {
+    if (sfCancelRef.current) { clearInterval(sfCancelRef.current); sfCancelRef.current = null }
+    setWizardPhoneMode('manual')
+    setSfInfo(null); setSfBuying(false); setSfActivationId(null)
+    setSfBoughtNumber(null); setSfCancelSecs(120); setSfCancelling(false)
+  }
+
   function openWizard() {
     stopWizardPoll()
     if (wizardCountRef.current) { clearInterval(wizardCountRef.current); wizardCountRef.current = null }
+    resetSfState()
     setWizardStep(2); setWizardPhone(''); setWizardName(''); setWizardCode(null)
     setWizardErr(''); setWizardConnected(false); setWizardInstName(''); setWizardCountdown(null)
+    setSfCountry(54)
     setWizardOpen(true)
+  }
+
+  async function fetchSfInfo(country) {
+    setSfInfoLoading(true); setSfInfo(null)
+    try {
+      const r = await fetch(`/api/smsfast/info?country=${country}`, { cache: 'no-store' })
+      const d = await r.json()
+      setSfInfo(d)
+    } catch {}
+    finally { setSfInfoLoading(false) }
+  }
+
+  function startSfCancelCountdown() {
+    if (sfCancelRef.current) clearInterval(sfCancelRef.current)
+    setSfCancelSecs(120)
+    sfCancelRef.current = setInterval(() => {
+      setSfCancelSecs(prev => {
+        if (prev <= 1) { clearInterval(sfCancelRef.current); sfCancelRef.current = null; return 0 }
+        return prev - 1
+      })
+    }, 1000)
+  }
+
+  async function handleSfBuy() {
+    setSfBuying(true); setWizardErr('')
+    try {
+      const r = await fetch('/api/smsfast/buy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ country: sfCountry }),
+      })
+      const d = await r.json()
+      if (!r.ok || !d.ok) throw new Error(d.detail || d.error || 'Error al comprar número')
+      setSfActivationId(d.id)
+      setSfBoughtNumber(d.number)
+      setWizardPhone(d.number)
+      if (!wizardName) setWizardName('wa-' + String(d.number).slice(-8))
+      startSfCancelCountdown()
+    } catch (e) {
+      setWizardErr(e.message)
+    } finally {
+      setSfBuying(false)
+    }
+  }
+
+  async function handleSfCancel() {
+    if (!sfActivationId) return
+    setSfCancelling(true)
+    try {
+      await fetch('/api/smsfast/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: sfActivationId }),
+      })
+    } catch {}
+    if (sfCancelRef.current) { clearInterval(sfCancelRef.current); sfCancelRef.current = null }
+    setSfActivationId(null); setSfBoughtNumber(null); setWizardPhone(''); setSfCancelSecs(120)
+    setSfCancelling(false)
   }
 
   async function handleWizardCreate() {
@@ -1086,7 +1163,13 @@ export default function InstancesPanel() {
                                     <CloseIcon sx={{ fontSize: 14 }} />
                                   </IconButton>
                                 )}
-                                {/* SMSFast button hidden temporarily */}
+                                <Tooltip title={lang === 'en' ? 'Buy number with SMSFast' : 'Comprar número con SMSFast'}>
+                                  <IconButton size="small" onClick={() => handleEmuClick(inst)}
+                                    sx={{ color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)', borderRadius: 1.5, p: 0.5,
+                                      '&:hover': { bgcolor: 'rgba(167,139,250,0.1)' } }}>
+                                    <SmartphoneIcon sx={{ fontSize: 13 }} />
+                                  </IconButton>
+                                </Tooltip>
                                 <Tooltip title={t.inst.delete}>
                                   <IconButton size="small" onClick={() => handleDeleteClick(inst)}
                                     sx={{ color: '#f87171', border: '1px solid rgba(248,113,133,0.2)', borderRadius: 1.5, p: 0.5,
@@ -1342,20 +1425,166 @@ export default function InstancesPanel() {
                 sx={FIELD_SX}
                 onKeyDown={e => e.key === 'Enter' && !wizardLoading && handleWizardCreate()}
               />
-              <TextField
-                label={t.inst.wizardPhoneLabel}
-                placeholder={t.inst.wizardPhonePlaceholder}
-                size="small"
-                value={wizardPhone}
-                onChange={e => {
-                  const v = e.target.value.replace(/\D/g, '')
-                  setWizardPhone(v)
-                  if (!wizardName) setWizardName('wa-' + v.slice(-8))
-                }}
-                helperText={<span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.68rem' }}>{t.inst.wizardPhoneHint}</span>}
-                sx={FIELD_SX}
-                onKeyDown={e => e.key === 'Enter' && !wizardLoading && handleWizardCreate()}
-              />
+
+              {/* ── Phone mode toggle ── */}
+              <Box>
+                <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.72rem', mb: 0.8, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                  {lang === 'en' ? 'Phone number' : 'Número de teléfono'}
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 0, borderRadius: 2, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)', width: '100%' }}>
+                  {[
+                    ['manual',  lang === 'en' ? '✏ My number'        : '✏ Mi número'],
+                    ['smsfast', lang === 'en' ? '🛒 Buy with SMSFast' : '🛒 Comprar con SMSFast'],
+                  ].map(([mode, label]) => (
+                    <Box key={mode} onClick={() => {
+                      setWizardPhoneMode(mode)
+                      setWizardErr('')
+                      if (mode === 'smsfast' && !sfInfo && !sfInfoLoading) fetchSfInfo(sfCountry)
+                    }}
+                      sx={{
+                        flex: 1, py: 0.9, px: 1, textAlign: 'center', cursor: 'pointer', fontSize: '0.78rem',
+                        fontWeight: wizardPhoneMode === mode ? 700 : 400,
+                        color: wizardPhoneMode === mode ? '#fff' : 'rgba(255,255,255,0.35)',
+                        bgcolor: wizardPhoneMode === mode ? 'rgba(99,102,241,0.22)' : 'transparent',
+                        borderRight: mode === 'manual' ? '1px solid rgba(255,255,255,0.1)' : 'none',
+                        transition: 'all 0.15s',
+                        userSelect: 'none',
+                        '&:hover': { bgcolor: wizardPhoneMode === mode ? 'rgba(99,102,241,0.22)' : 'rgba(255,255,255,0.04)' },
+                      }}>
+                      {label}
+                    </Box>
+                  ))}
+                </Box>
+              </Box>
+
+              {/* ── Manual phone field ── */}
+              {wizardPhoneMode === 'manual' && (
+                <TextField
+                  label={t.inst.wizardPhoneLabel}
+                  placeholder={t.inst.wizardPhonePlaceholder}
+                  size="small"
+                  value={wizardPhone}
+                  onChange={e => {
+                    const v = e.target.value.replace(/\D/g, '')
+                    setWizardPhone(v)
+                    if (!wizardName) setWizardName('wa-' + v.slice(-8))
+                  }}
+                  helperText={<span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.68rem' }}>{t.inst.wizardPhoneHint}</span>}
+                  sx={FIELD_SX}
+                  onKeyDown={e => e.key === 'Enter' && !wizardLoading && handleWizardCreate()}
+                />
+              )}
+
+              {/* ── SMSFast panel ── */}
+              {wizardPhoneMode === 'smsfast' && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                  {/* Country selector */}
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem', flexShrink: 0 }}>
+                      {lang === 'en' ? 'Country' : 'País'}:
+                    </Typography>
+                    {[
+                      { value: 54, label: '🇲🇽 México' },
+                      { value: 36, label: '🇨🇦 Canadá' },
+                    ].map(opt => (
+                      <Box key={opt.value}
+                        onClick={() => { if (!sfBoughtNumber) { setSfCountry(opt.value); fetchSfInfo(opt.value) } }}
+                        sx={{
+                          px: 1.5, py: 0.5, borderRadius: 1.5, cursor: sfBoughtNumber ? 'default' : 'pointer',
+                          fontSize: '0.78rem', fontWeight: sfCountry === opt.value ? 700 : 400,
+                          color: sfCountry === opt.value ? '#fff' : 'rgba(255,255,255,0.35)',
+                          bgcolor: sfCountry === opt.value ? 'rgba(99,102,241,0.2)' : 'transparent',
+                          border: `1px solid ${sfCountry === opt.value ? 'rgba(99,102,241,0.4)' : 'rgba(255,255,255,0.08)'}`,
+                          transition: 'all 0.15s',
+                          '&:hover': { bgcolor: sfBoughtNumber ? undefined : 'rgba(255,255,255,0.05)' },
+                        }}>
+                        {opt.label}
+                      </Box>
+                    ))}
+                  </Box>
+
+                  {/* Balance + Price tiles */}
+                  {sfInfoLoading ? (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <CircularProgress size={12} sx={{ color: 'rgba(255,255,255,0.3)' }} />
+                      <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem' }}>
+                        {lang === 'en' ? 'Loading rates…' : 'Cargando tarifas…'}
+                      </Typography>
+                    </Box>
+                  ) : sfInfo && (
+                    <Box sx={{ display: 'flex', gap: 1.2 }}>
+                      {[
+                        { label: lang === 'en' ? 'Balance' : 'Saldo', value: sfInfo.balance != null ? `$${Number(sfInfo.balance).toFixed(2)} USD` : '—', color: '#4ade80' },
+                        { label: lang === 'en' ? 'Number price' : 'Precio número', value: sfInfo.price != null ? `$${Number(sfInfo.price).toFixed(2)} USD` : '—', color: '#a78bfa' },
+                      ].map(tile => (
+                        <Box key={tile.label} sx={{ flex: 1, p: 1.2, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', textAlign: 'center' }}>
+                          <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.05em', mb: 0.3 }}>
+                            {tile.label}
+                          </Typography>
+                          <Typography sx={{ color: tile.color, fontWeight: 800, fontSize: '0.95rem', fontFamily: 'monospace' }}>
+                            {tile.value}
+                          </Typography>
+                        </Box>
+                      ))}
+                    </Box>
+                  )}
+
+                  {/* Buy button or purchased number */}
+                  {!sfBoughtNumber ? (
+                    <Button
+                      onClick={handleSfBuy}
+                      disabled={sfBuying || sfInfoLoading || !sfInfo}
+                      variant="contained"
+                      startIcon={sfBuying ? null : <SmartphoneIcon sx={{ fontSize: '16px !important' }} />}
+                      sx={{ bgcolor: 'rgba(167,139,250,0.2)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.35)', textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, py: 0.9, boxShadow: 'none', '&:hover': { bgcolor: 'rgba(167,139,250,0.3)', boxShadow: 'none' }, '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.2)', border: '1px solid rgba(255,255,255,0.07)' } }}>
+                      {sfBuying
+                        ? <><CircularProgress size={13} sx={{ color: '#a78bfa', mr: 1 }} />{lang === 'en' ? 'Buying…' : 'Comprando…'}</>
+                        : (lang === 'en' ? 'Buy number automatically' : 'Comprar número automáticamente')}
+                    </Button>
+                  ) : (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      {/* Purchased number display */}
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, p: 1.2, borderRadius: 2, bgcolor: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.25)' }}>
+                        <CheckCircleIcon sx={{ fontSize: 18, color: '#4ade80', flexShrink: 0 }} />
+                        <Box sx={{ flex: 1 }}>
+                          <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                            {lang === 'en' ? 'Number purchased' : 'Número comprado'}
+                          </Typography>
+                          <Typography sx={{ color: '#4ade80', fontWeight: 800, fontSize: '1rem', fontFamily: 'monospace', letterSpacing: '0.05em' }}>
+                            +{sfBoughtNumber}
+                          </Typography>
+                        </Box>
+                        <Box sx={{ px: 1, py: 0.3, borderRadius: 1, bgcolor: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)' }}>
+                          <Typography sx={{ color: '#4ade80', fontSize: '0.65rem', fontWeight: 700 }}>SMSFast</Typography>
+                        </Box>
+                      </Box>
+
+                      {/* Cancel button with countdown */}
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Button
+                          onClick={handleSfCancel}
+                          disabled={sfCancelSecs > 0 || sfCancelling}
+                          size="small"
+                          sx={{ color: sfCancelSecs > 0 ? 'rgba(255,255,255,0.2)' : '#f87171', border: `1px solid ${sfCancelSecs > 0 ? 'rgba(255,255,255,0.08)' : 'rgba(248,113,113,0.3)'}`, borderRadius: 1.5, textTransform: 'none', fontSize: '0.72rem', px: 1.5, py: 0.5, transition: 'all 0.3s', '&:hover': { bgcolor: sfCancelSecs > 0 ? 'transparent' : 'rgba(239,68,68,0.08)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', border: '1px solid rgba(255,255,255,0.08)' } }}>
+                          {sfCancelling
+                            ? <><CircularProgress size={10} sx={{ mr: 0.5 }} />{lang === 'en' ? 'Cancelling…' : 'Cancelando…'}</>
+                            : sfCancelSecs > 0
+                              ? (lang === 'en'
+                                  ? `Cancel available in ${Math.floor(sfCancelSecs/60)}:${String(sfCancelSecs%60).padStart(2,'0')}`
+                                  : `Cancelar disponible en ${Math.floor(sfCancelSecs/60)}:${String(sfCancelSecs%60).padStart(2,'0')}`)
+                              : (lang === 'en' ? 'Cancel purchase (refund)' : 'Cancelar compra (reembolso)')}
+                        </Button>
+                        {sfCancelSecs > 0 && (
+                          <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.65rem' }}>
+                            {lang === 'en' ? 'SMSFast allows cancel within 20 min' : 'SMSFast permite cancelar hasta 20 min después'}
+                          </Typography>
+                        )}
+                      </Box>
+                    </Box>
+                  )}
+                </Box>
+              )}
+
               {wizardErr && (
                 <Box sx={{ px: 1.5, py: 1, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
                   <Typography sx={{ color: '#f87171', fontSize: '0.78rem' }}>{wizardErr}</Typography>

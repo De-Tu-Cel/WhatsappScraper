@@ -632,6 +632,7 @@ export default function InstancesPanel() {
   const SMSFAST_COUNTRIES = [
     { value: 54,  label: '🇲🇽 México' },
     { value: 36,  label: '🇨🇦 Canadá' },
+    { value: 12,  label: '🇺🇸 USA (virtual)' },
     { value: 0,   label: '🌐 Cualquier país' },
   ]
 
@@ -1486,6 +1487,7 @@ export default function InstancesPanel() {
                     {[
                       { value: 54, code: 'MX', name: 'México' },
                       { value: 36, code: 'CA', name: 'Canadá' },
+                      { value: 12, code: 'US', name: 'USA (virtual)' },
                     ].map(opt => (
                       <Box key={opt.value}
                         onClick={() => { if (!sfBoughtNumber) { setSfCountry(opt.value); fetchSfInfo(opt.value) } }}

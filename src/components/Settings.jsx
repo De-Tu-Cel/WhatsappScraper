@@ -635,22 +635,54 @@ export default function Settings() {
     saveEvo({ instance: instanceName })
     setQrStatus('creating')
 
-    // Step 1: try to create instance (idempotent — ok if it already exists)
+    // Step 1: check if instance already exists and is connected
+    try {
+      const statusRes = await fetch(`/api/evolution/instance/${instanceName}?type=status`)
+      if (statusRes.ok) {
+        const statusData = await statusRes.json()
+        const state = statusData?.instance?.state || statusData?.state || ''
+        if (state === 'open') {
+          // Already connected — no QR needed
+          stopPolling()
+          setQrStatus('connected')
+          const phone = statusData?.instance?.profileName || statusData?.instance?.wid?.user || instanceName
+          setQrPhone(phone)
+          saveEvoConfig({ ...loadEvoConfig(), instance: instanceName })
+          setEvo(prev => ({ ...prev, instance: instanceName }))
+          setConnStatus('connected')
+          setConnPhone(phoneInput || phone)
+          if (qrTimerRef.current) { clearInterval(qrTimerRef.current); qrTimerRef.current = null }
+          return
+        }
+        // Instance exists but not connected — delete so we can recreate with fresh QR
+        await fetch(`/api/evolution/instance/${instanceName}`, { method: 'DELETE' }).catch(() => {})
+        await new Promise(r => setTimeout(r, 1500))
+      }
+    } catch {}
+
+    // Step 2: create instance — QR comes back directly in response (qrcode: true)
+    setQrStatus('waiting')
+    setQrWaitSecs(0)
+    qrTimerRef.current = setInterval(() => setQrWaitSecs(s => s + 1), 1000)
     try {
       const res = await fetch('/api/evolution/instance', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ instanceName }),
       })
       const data = await res.json()
-      const alreadyExists = !res.ok && (data?.detail || '').toString().toLowerCase().includes('already in use')
-      if (!res.ok && !alreadyExists) {
+      if (!res.ok) {
         setQrStatus('error')
         setQrImage(null)
         console.error('[QR] instance create error:', data.detail)
+        if (qrTimerRef.current) { clearInterval(qrTimerRef.current); qrTimerRef.current = null }
         return
       }
-      const instanceKey = data?.hash?.apikey || data?.apikey
-      if (instanceKey) saveEvo({ apiKey: instanceKey })
+      if (data?.hash) saveEvo({ apiKey: data.hash })
+      const b64 = data?.qrcode?.base64
+      if (b64) {
+        setQrImage(b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`)
+        if (qrTimerRef.current) { clearInterval(qrTimerRef.current); qrTimerRef.current = null; setQrWaitSecs(0) }
+      }
       await fetch('/api/evolution/instance/webhook', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ instanceName }),
@@ -659,25 +691,8 @@ export default function Settings() {
       console.error('[QR] instance create exception:', e)
     }
 
-    // Step 2: wait for QR. If none arrives after 6s, logout (clears stale session) and retry once.
-    setQrStatus('waiting')
-    await new Promise(r => setTimeout(r, 800))
-    setQrWaitSecs(0)
-    qrTimerRef.current = setInterval(() => setQrWaitSecs(s => s + 1), 1000)
-    const gotQr = await fetchQr(instanceName)
-
-    // If still no QR, the instance has stale auth — logout to force fresh QR generation
-    if (!gotQr) {
-      setQrStatus('creating')
-      await fetch(`/api/evolution/instance/${instanceName}?action=logout`, { method: 'POST' }).catch(() => {})
-      await new Promise(r => setTimeout(r, 2000))
-      setQrStatus('waiting')
-      await fetchQr(instanceName)
-    }
-
     pollRef.current = setInterval(async () => {
       await checkStatus(instanceName)
-      await fetchQr(instanceName)
     }, 3000)
   }
 
@@ -878,14 +893,7 @@ export default function Settings() {
                 <Box sx={{ width: 220, height: 220, mx: 'auto', borderRadius: 2, bgcolor: 'var(--surface,#111827)', border: '1px solid rgba(255,255,255,0.07)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1.5 }}>
                   <CircularProgress size={32} sx={{ color: '#25d366' }} />
                   {qrWaitSecs >= 12 && (
-                    <Box onClick={async () => {
-                      const safeUser = (user?.username && user.username !== 'undefined') ? user.username : (user?.id || user?._id || 'user')
-                      const instanceName = `${safeUser}-wa`
-                      setQrWaitSecs(0)
-                      await fetch(`/api/evolution/instance/${instanceName}?action=logout`, { method: 'POST' }).catch(() => {})
-                      await new Promise(r => setTimeout(r, 2000))
-                      fetchQr(instanceName)
-                    }} sx={{ px: 1.5, py: 0.5, borderRadius: 1.5, cursor: 'pointer', bgcolor: 'rgba(37,211,102,0.1)', border: '1px solid rgba(37,211,102,0.3)', '&:hover': { bgcolor: 'rgba(37,211,102,0.2)' } }}>
+                    <Box onClick={() => { stopPolling(); handleStartConnection() }} sx={{ px: 1.5, py: 0.5, borderRadius: 1.5, cursor: 'pointer', bgcolor: 'rgba(37,211,102,0.1)', border: '1px solid rgba(37,211,102,0.3)', '&:hover': { bgcolor: 'rgba(37,211,102,0.2)' } }}>
                       <Typography sx={{ fontSize: '0.7rem', color: '#4ade80', fontWeight: 600 }}>{t.settings.qrRetry}</Typography>
                     </Box>
                   )}

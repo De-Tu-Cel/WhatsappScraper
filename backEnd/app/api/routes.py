@@ -1331,13 +1331,13 @@ def api_evo_create_instance(body: dict):
             raise HTTPException(status_code=400, detail="name requerido")
         r = _req.post(f"{EVOLUTION_API_URL}/instance/create",
             headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
-            json={"name": name},
+            json={"instanceName": name, "integration": "WHATSAPP-BAILEYS", "qrcode": True},
             timeout=15)
         print(f"[DEBUG] evo create {name!r} → {r.status_code} {r.text[:300]}")
         if r.status_code not in (200, 201):
             raise HTTPException(status_code=500, detail=f"Evolution error: {r.text[:200]}")
         evo_data = r.json()
-        instance_token = (evo_data.get("instance", {}) or {}).get("token") or evo_data.get("hash") or ""
+        instance_token = evo_data.get("hash") or ""
         if instance_token:
             db = MongoDBManager()
             db.db.instances.update_one({"name": name}, {"$set": {"name": name, "instance_token": instance_token}}, upsert=True)
@@ -1353,10 +1353,17 @@ def api_evo_get_qr(name: str):
         db = MongoDBManager()
         inst_doc = db.db.instances.find_one({"name": name}) or {}
         instance_token = inst_doc.get("instance_token") or EVOLUTION_API_KEY
-        r = _req.get(f"{EVOLUTION_API_URL}/instance/qr",
-            headers={"apikey": instance_token}, timeout=10)
-        print(f"[DEBUG] evo qr {name!r} → {r.status_code} {r.text[:300]}")
-        return r.json()
+        # Use POST /instance/connect with instance-specific apikey
+        r = _req.post(f"{EVOLUTION_API_URL}/instance/connect",
+            headers={"apikey": instance_token, "Content-Type": "application/json"},
+            json={}, timeout=10)
+        print(f"[DEBUG] evo connect {name!r} → {r.status_code} {r.text[:300]}")
+        resp = r.json()
+        # Normalize QR field for frontend
+        qr_b64 = resp.get("base64") or resp.get("qrcode", {}).get("base64") or resp.get("qr", {}).get("base64")
+        if qr_b64:
+            return {"base64": qr_b64}
+        return resp
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/evolution/instance/pairing-code/{name}")
@@ -2442,9 +2449,9 @@ def api_create_instance(body: dict, x_user_token: Optional[str] = Header(None)):
     r = _req.post(
         f"{EVOLUTION_API_URL}/instance/create",
         headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
-        json={"name": name},
+        json={"instanceName": name, "integration": "WHATSAPP-BAILEYS", "qrcode": False},
         timeout=15,
-    )
+    )  # qrcode:False porque usamos pairing code, no QR
     print(f"[DEBUG] Evolution response: {r.status_code} {r.text[:300]}")
     if r.status_code not in (200, 201):
         raise HTTPException(500, f"Error Evolution API: {r.text[:200]}")

@@ -972,11 +972,11 @@ class WebsiteScraper:
         return ""
 
     def _deepseek_enrich_result(self, result: dict, text_snippet: str) -> None:
-        """Una sola llamada a DeepSeek para rellenar campos vacíos: descripción, horarios, servicios, ciudad."""
-        import os, json, requests as _req
+        """Una sola llamada al LLM activo (OpenAI o DeepSeek) para rellenar campos vacíos: descripción, horarios, servicios, ciudad."""
+        import json
 
-        ds_key = os.getenv("DEEPSEEK_API_KEY", "")
-        if not ds_key or not text_snippet.strip():
+        from app.llm import OPENAI_API_KEY, DEEPSEEK_API_KEY
+        if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not text_snippet.strip():
             return
 
         extra = result.get("_extra", {})

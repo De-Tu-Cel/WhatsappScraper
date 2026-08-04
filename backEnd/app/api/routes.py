@@ -2530,6 +2530,8 @@ def api_patch_instance(name: str, body: dict, x_user_token: Optional[str] = Head
     update = {}
     if "number" in body:
         update["number"] = str(body["number"]).strip().replace("+", "").replace(" ", "")
+    if "label" in body:
+        update["label"] = str(body["label"]).strip()
     if not update:
         raise HTTPException(400, "Nada que actualizar")
     db = MongoDBManager()

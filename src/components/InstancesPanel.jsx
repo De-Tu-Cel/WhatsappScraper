@@ -103,7 +103,7 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove }) {
       {/* Name + number */}
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text)', lineHeight: 1.2,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inst.name}</Typography>
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inst.label || inst.name}</Typography>
         <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', fontFamily: 'monospace', lineHeight: 1.2 }}>
           {inst.number ? `+${inst.number}` : t.inst.noNumber}
         </Typography>
@@ -622,14 +622,16 @@ export default function InstancesPanel() {
 
   // ── Edit number dialog ──
   const [editNumberOpen,  setEditNumberOpen]  = useState(false)
-  const [editNumberInst,  setEditNumberInst]  = useState(null)
-  const [editNumberValue, setEditNumberValue] = useState('')
+  const [editNumberInst,   setEditNumberInst]   = useState(null)
+  const [editNumberValue,  setEditNumberValue]  = useState('')
+  const [editLabelValue,   setEditLabelValue]   = useState('')
   const [editNumberSaving, setEditNumberSaving] = useState(false)
-  const [editNumberErr,   setEditNumberErr]   = useState('')
+  const [editNumberErr,    setEditNumberErr]    = useState('')
 
   function handleEditNumberClick(inst) {
     setEditNumberInst(inst)
     setEditNumberValue(inst?.number || '')
+    setEditLabelValue(inst?.label || '')
     setEditNumberErr('')
     setEditNumberOpen(true)
   }
@@ -637,19 +639,23 @@ export default function InstancesPanel() {
   async function handleEditNumberSave() {
     if (!editNumberInst) return
     const num = editNumberValue.replace(/\D/g, '')
-    if (num.length < 8) {
+    if (num && num.length < 8) {
       setEditNumberErr(lang === 'en' ? 'Number too short' : 'Número demasiado corto')
       return
     }
     setEditNumberSaving(true); setEditNumberErr('')
+    const payload = {}
+    if (num) payload.number = num
+    if (editLabelValue.trim() !== (editNumberInst?.label || '')) payload.label = editLabelValue.trim()
+    if (!Object.keys(payload).length) { setEditNumberOpen(false); setEditNumberSaving(false); return }
     try {
       const res = await fetch(`/api/instances?name=${encodeURIComponent(editNumberInst.name)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
-        body: JSON.stringify({ number: num }),
+        body: JSON.stringify(payload),
       })
       if (!res.ok) { setEditNumberErr(lang === 'en' ? 'Error saving' : 'Error al guardar'); setEditNumberSaving(false); return }
-      setInstances(prev => prev.map(i => i.name === editNumberInst.name ? { ...i, number: num } : i))
+      setInstances(prev => prev.map(i => i.name === editNumberInst.name ? { ...i, ...payload } : i))
       setEditNumberOpen(false)
     } catch { setEditNumberErr(lang === 'en' ? 'Network error' : 'Error de red') }
     setEditNumberSaving(false)
@@ -1178,7 +1184,7 @@ export default function InstancesPanel() {
                               <Box sx={{ flex: 1, minWidth: 0 }}>
                                 <Typography sx={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text)',
                                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                  {inst.name}
+                                  {inst.label || inst.name}
                                 </Typography>
                                 <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
                                   {inst.number ? `+${inst.number}` : t.inst.noNumber}
@@ -1275,25 +1281,28 @@ export default function InstancesPanel() {
           </Box>
         </DialogTitle>
 
-        <DialogContent sx={{ pt: '8px !important', pb: 0 }}>
-          {/* Current number chip */}
-          {editNumberInst?.number && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, px: 1, py: 0.8,
-              borderRadius: 1.5, bgcolor: 'var(--surface,#1e293b)', border: '1px solid var(--border,rgba(255,255,255,0.1))' }}>
-              <PhoneAndroidIcon sx={{ fontSize: 14, color: 'var(--text-muted,rgba(255,255,255,0.35))' }} />
-              <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted,rgba(255,255,255,0.4))', mr: 0.5 }}>
-                {lang === 'en' ? 'Current:' : 'Actual:'}
-              </Typography>
-              <Typography sx={{ fontSize: '0.78rem', fontFamily: 'monospace', color: 'var(--text,#e2e8f0)', fontWeight: 600 }}>
-                +{editNumberInst.number}
-              </Typography>
-            </Box>
-          )}
-
+        <DialogContent sx={{ pt: '8px !important', pb: 0, display: 'flex', flexDirection: 'column', gap: 1.8 }}>
+          {/* Label / display name */}
           <TextField
-            label={lang === 'en' ? 'New number (with country code)' : 'Nuevo número (con código de país)'}
-            placeholder="5214428079840"
+            label={lang === 'en' ? 'Display name' : 'Nombre visible'}
+            placeholder={lang === 'en' ? 'e.g. Mexico 1' : 'ej. México 1'}
             size="small" fullWidth autoFocus
+            value={editLabelValue}
+            onChange={e => setEditLabelValue(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && !editNumberSaving && handleEditNumberSave()}
+            sx={FIELD_SX}
+            helperText={
+              <span style={{ color: 'var(--text-muted,rgba(255,255,255,0.28))', fontSize: '0.67rem' }}>
+                {lang === 'en' ? 'Friendly name shown in the UI' : 'Nombre amigable que se muestra en la UI'}
+              </span>
+            }
+          />
+
+          {/* Phone number */}
+          <TextField
+            label={lang === 'en' ? 'Phone number (with country code)' : 'Número de teléfono (con código de país)'}
+            placeholder="5214428079840"
+            size="small" fullWidth
             value={editNumberValue}
             onChange={e => setEditNumberValue(e.target.value.replace(/[^\d]/g, ''))}
             onKeyDown={e => e.key === 'Enter' && !editNumberSaving && handleEditNumberSave()}
@@ -1378,7 +1387,7 @@ export default function InstancesPanel() {
                           borderColor: 'rgba(var(--accent-rgb,59,130,246),0.25)' } }}>
                       <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
                       <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography sx={{ color: 'var(--text)', fontSize: '0.83rem', fontWeight: 600 }}>{inst.name}</Typography>
+                        <Typography sx={{ color: 'var(--text)', fontSize: '0.83rem', fontWeight: 600 }}>{inst.label || inst.name}</Typography>
                         <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.67rem', fontFamily: 'monospace' }}>
                           {inst.number ? `+${inst.number}` : 'Sin número'}
                         </Typography>

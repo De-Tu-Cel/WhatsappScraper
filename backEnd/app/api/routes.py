@@ -1331,8 +1331,11 @@ def api_evo_create_instance(body: dict):
             raise HTTPException(status_code=400, detail="name requerido")
         r = _req.post(f"{EVOLUTION_API_URL}/instance/create",
             headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
-            json={"name": name},
+            json={"instanceName": name, "name": name, "integration": "WHATSAPP-BAILEYS", "qrcode": False},
             timeout=15)
+        print(f"[DEBUG] evo create {name!r} → {r.status_code} {r.text[:300]}")
+        if r.status_code not in (200, 201):
+            raise HTTPException(status_code=500, detail=f"Evolution error: {r.text[:200]}")
         return r.json()
     except HTTPException: raise
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))

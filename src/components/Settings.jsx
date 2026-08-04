@@ -641,13 +641,21 @@ export default function Settings() {
         body: JSON.stringify({ instanceName }),
       })
       const data = await res.json()
+      if (!res.ok && data?.detail) {
+        setQrStatus('error')
+        setQrImage(null)
+        console.error('[QR] instance create error:', data.detail)
+        return
+      }
       const instanceKey = data?.hash?.apikey || data?.apikey
       if (instanceKey) saveEvo({ apiKey: instanceKey })
       await fetch('/api/evolution/instance/webhook', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ instanceName }),
       }).catch(() => {})
-    } catch {}
+    } catch (e) {
+      console.error('[QR] instance create exception:', e)
+    }
 
     // Step 2: wait for QR. If none arrives after 6s, logout (clears stale session) and retry once.
     setQrStatus('waiting')

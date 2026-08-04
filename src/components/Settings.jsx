@@ -630,7 +630,8 @@ export default function Settings() {
   }
 
   async function handleStartConnection() {
-    const instanceName = `${user?.username || 'user'}-wa`
+    const safeUsername = (user?.username && user.username !== 'undefined' && user.username !== 'null') ? user.username : (user?.id || user?._id || 'user')
+    const instanceName = `${safeUsername}-wa`
     saveEvo({ instance: instanceName })
     setQrStatus('creating')
 
@@ -641,7 +642,8 @@ export default function Settings() {
         body: JSON.stringify({ instanceName }),
       })
       const data = await res.json()
-      if (!res.ok && data?.detail) {
+      const alreadyExists = !res.ok && (data?.detail || '').toString().toLowerCase().includes('already in use')
+      if (!res.ok && !alreadyExists) {
         setQrStatus('error')
         setQrImage(null)
         console.error('[QR] instance create error:', data.detail)
@@ -877,7 +879,8 @@ export default function Settings() {
                   <CircularProgress size={32} sx={{ color: '#25d366' }} />
                   {qrWaitSecs >= 12 && (
                     <Box onClick={async () => {
-                      const instanceName = `${user?.username || 'user'}-wa`
+                      const safeUser = (user?.username && user.username !== 'undefined') ? user.username : (user?.id || user?._id || 'user')
+                      const instanceName = `${safeUser}-wa`
                       setQrWaitSecs(0)
                       await fetch(`/api/evolution/instance/${instanceName}?action=logout`, { method: 'POST' }).catch(() => {})
                       await new Promise(r => setTimeout(r, 2000))

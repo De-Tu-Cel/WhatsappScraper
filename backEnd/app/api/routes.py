@@ -2430,7 +2430,7 @@ def api_create_instance(body: dict, x_user_token: Optional[str] = Header(None)):
     r = _req.post(
         f"{EVOLUTION_API_URL}/instance/create",
         headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
-        json={"instanceName": name, "integration": "WHATSAPP-BAILEYS", "qrcode": False},
+        json={"instanceName": name, "name": name, "integration": "WHATSAPP-BAILEYS", "qrcode": False},
         timeout=15,
     )
     print(f"[DEBUG] Evolution response: {r.status_code} {r.text[:300]}")

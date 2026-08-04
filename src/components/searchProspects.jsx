@@ -38,6 +38,11 @@ import HistoryIcon from '@mui/icons-material/History'
 import MessageIcon from '@mui/icons-material/Message'
 import SendIcon from '@mui/icons-material/Send'
 import { getTemplates } from './singleUrlProcessor'
+import { HighlightedMessageInput } from './highlightedMessageInput'
+import { TemplateLibraryPicker } from './messageTemplateLibrary'
+import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
+import { SendConfigPanel } from './SendConfigPanel'
+import { loadSendConfig } from '@/lib/sendConfig'
 
 // INDUSTRY_GROUPS and INDUSTRY_EXAMPLES are built inside the component from translations
 
@@ -360,6 +365,8 @@ export default function SearchProspects() {
   const [history,     setHistory]     = useState([])
   const [selectedTpl, setSelectedTpl] = useState(TEMPLATES[0].id)
   const [msgText,     setMsgText]     = useState(TEMPLATES[0].text)
+  const [extraVariants, setExtraVariants] = useState([])
+  const [sendCfg,     setSendCfg]     = useState(() => loadSendConfig())
   const [sendError,   setSendError]   = useState('')
   const { addBatch, cancel: cancelQueue, active: queueActive } = useSendQueue()
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
@@ -595,9 +602,20 @@ export default function SearchProspects() {
   const sentCount    = results.filter(r => r.msg_status === 'sent' || r.msg_status === 'queued').length
   const isSending    = queueActive !== null && alreadySent
 
+  const totalRecipients = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id))
+    .reduce((sum, r) => sum + (r.all_whatsapp?.length > 0 ? r.all_whatsapp.length : (r.whatsapp ? 1 : 0)), 0)
+  // Sending to 2+ numbers needs varied text (see MIN_TEMPLATES_FOR_BULK) — editing
+  // one base message stops making sense there, so it switches to picking 3+ saved templates.
+  const isBulk = totalRecipients > 1
+  const allVariants = useMemo(
+    () => (isBulk ? [msgText, ...extraVariants] : [msgText]).map(v => v.trim()).filter(Boolean),
+    [isBulk, msgText, extraVariants]
+  )
+  const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
+
   async function handleSendAll() {
     const targets = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id))
-    if (!targets.length) return
+    if (!targets.length || belowMinTemplates) return
 
     // Warn about already-contacted companies — MUI dialog
     const alreadyContacted = targets.filter(r => r.already_contacted?.contacted)
@@ -609,13 +627,18 @@ export default function SearchProspects() {
       if (!confirmed) return
     }
 
+    let lastVariant = null
     const updated = results.map(r => ({ ...r }))
     const jobs = []
     for (const row of targets) {
       const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
       if (!numbers.length) continue
-      const message = renderTemplate(msgText, row.scraped_data) || msgText
-      jobs.push({ numbers, messages: message, companyId: row.company_id, website: row.url })
+      const messages = numbers.map(() => {
+        const v = pickMessageVariant(allVariants, lastVariant)
+        lastVariant = v
+        return renderTemplate(v, row.scraped_data) || v
+      })
+      jobs.push({ numbers, messages, companyId: row.company_id, website: row.url })
       const idx = updated.findIndex(r => r.url === row.url)
       if (idx >= 0) updated[idx] = { ...updated[idx], msg_status: 'queued' }
     }
@@ -631,7 +654,7 @@ export default function SearchProspects() {
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, height: '100%' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, height: '100%', minHeight: 0, overflowY: 'auto' }}>
 
       {/* Modal de confirmación — empresas ya contactadas */}
       <Dialog open={confirmDialog.open} maxWidth="xs" fullWidth
@@ -927,9 +950,9 @@ export default function SearchProspects() {
       {results.length > 0 && (
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
           {[
-            { icon: <CheckCircleIcon sx={{ fontSize: 16, color: '#4ade80' }} />, label: 'Procesadas',    value: okCount,  color: '#4ade80', bg: 'rgba(34,197,94,0.06)',   border: 'rgba(34,197,94,0.18)'  },
-            { icon: <WhatsAppIcon    sx={{ fontSize: 16, color: '#60a5fa' }} />, label: 'Con WhatsApp', value: waCount,  color: '#60a5fa', bg: 'rgba(59,130,246,0.06)',  border: 'rgba(59,130,246,0.18)' },
-            { icon: <ErrorIcon       sx={{ fontSize: 16, color: '#f87171' }} />, label: 'Errores',      value: errCount, color: '#f87171', bg: 'rgba(239,68,68,0.06)',   border: 'rgba(239,68,68,0.18)'  },
+            { icon: <CheckCircleIcon sx={{ fontSize: 16, color: '#4ade80' }} />, label: t.batch.processed, value: okCount,  color: '#4ade80', bg: 'rgba(34,197,94,0.06)',   border: 'rgba(34,197,94,0.18)'  },
+            { icon: <WhatsAppIcon    sx={{ fontSize: 16, color: '#60a5fa' }} />, label: t.batch.withWa,    value: waCount,  color: '#60a5fa', bg: 'rgba(59,130,246,0.06)',  border: 'rgba(59,130,246,0.18)' },
+            { icon: <ErrorIcon       sx={{ fontSize: 16, color: '#f87171' }} />, label: t.batch.errors,    value: errCount, color: '#f87171', bg: 'rgba(239,68,68,0.06)',   border: 'rgba(239,68,68,0.18)'  },
           ].map(c => (
             <Box key={c.label} sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.5, bgcolor: c.bg, border: `1px solid ${c.border}`, borderRadius: 2 }}>
               <Box sx={{ width: 32, height: 32, flexShrink: 0, bgcolor: `${c.color}22`, border: `1px solid ${c.color}44`, borderRadius: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{c.icon}</Box>
@@ -948,10 +971,10 @@ export default function SearchProspects() {
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.2 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <MessageIcon sx={{ fontSize: 16, color: '#4ade80' }} />
-              <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>Enviar mensajes</Typography>
+              <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>{t.batch.sendMessages}</Typography>
             </Box>
             {waRowsUnique.length > 0 && (
-              <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={`${waRowsUnique.length} con WhatsApp`} size="small"
+              <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={`${waRowsUnique.length} ${t.search.withWa}`} size="small"
                 sx={{ fontSize: '0.7rem', height: 22, bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', '& .MuiChip-icon': { color: '#4ade80' } }} />
             )}
           </Box>
@@ -1027,23 +1050,24 @@ export default function SearchProspects() {
               }}>{v}</Box>
             ))}
             <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', alignSelf: 'center', ml: 0.5 }}>
-              clic para insertar
+              {t.search.clickInsert}
             </Typography>
           </Box>
-          {/* Textarea editable — uncontrolled so native Ctrl+Z works */}
-          <Box component="textarea" ref={msgRef} defaultValue={msgText} onInput={e => setMsgText(e.target.value)}
-            sx={{
-              width: '100%', minHeight: 100, maxHeight: 200, resize: 'vertical',
-              bgcolor: 'var(--sidebar-bg, #0d1117)', color: '#e2e8f0',
-              border: '1px solid rgba(255,255,255,0.1)', borderRadius: 1.5,
-              p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit',
-              outline: 'none', mb: 0.5,
-              '&:focus': { borderColor: 'rgba(34,197,94,0.4)' },
-            }} />
+          <Box sx={{ mb: 0.5 }}>
+            <HighlightedMessageInput value={msgText} onChange={setMsgText} inputRef={msgRef} rows={4} maxLength={4096} lang={lang} />
+          </Box>
           <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
             <Typography sx={{ fontSize: '0.65rem', color: msgText.length > 4000 ? '#f87171' : 'rgba(255,255,255,0.2)' }}>
               {msgText.length} / 4096
             </Typography>
+          </Box>
+          {isBulk && (
+            <Box sx={{ mb: 1.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
+              <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalRecipients} baseCount={1} />
+            </Box>
+          )}
+          <Box sx={{ mb: 1.5 }}>
+            <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
           </Box>
           <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />
           <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
@@ -1058,7 +1082,7 @@ export default function SearchProspects() {
             )}
             <Button
               onClick={handleSendAll}
-              disabled={effectiveWaSelected.size === 0 || alreadySent || isDisconnected}
+              disabled={effectiveWaSelected.size === 0 || alreadySent || isDisconnected || belowMinTemplates}
               startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
               size="small"
               sx={{
@@ -1079,9 +1103,9 @@ export default function SearchProspects() {
 
       {/* ── Tarjetas de resultados ── */}
       {results.length > 0 && (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, flexGrow: 1, minHeight: 0 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem', fontWeight: 600, letterSpacing: 0.5 }}>RESULTADOS</Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem', fontWeight: 600, letterSpacing: 0.5 }}>{t.search.results.toUpperCase()}</Typography>
             <Box sx={{ display: 'flex', gap: 1 }}>
               {done && errCount > 0 && (
                 <Button size="small" startIcon={<ReplayIcon sx={{ fontSize: 14 }} />} onClick={handleRetryFailed}
@@ -1098,7 +1122,7 @@ export default function SearchProspects() {
             </Box>
           </Box>
 
-          <Box sx={{ overflowY: 'auto', flexGrow: 1, minHeight: 0 }}>
+          <Box>
             <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 1.5, pb: 1 }}>
               {results.map((r, i) => {
                 const domain = getDomain(r.url)

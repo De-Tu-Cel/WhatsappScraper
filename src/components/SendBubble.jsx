@@ -49,7 +49,7 @@ function getSavedPos() {
 
 // 'hidden' | 'entering' | 'visible' | 'success' | 'exiting'
 export default function SendBubble() {
-  const { active, queueLen, cancel, debugBubble, completedCount, clearCompleted } = useSendQueue()
+  const { active, queueLen, cancel, debugBubble, completedCount, clearCompleted, queueError, clearQueueError } = useSendQueue()
   const { lang } = useLang()
 
   const bubbleRef  = useRef(null)
@@ -106,13 +106,23 @@ export default function SendBubble() {
     }
   }, [active?.sent])
 
-  // Toast auto-dismiss
+  const [errorToastOut, setErrorToastOut] = useState(false)
+
+  // Success toast auto-dismiss
   useEffect(() => {
     if (completedCount === null) { setToastOut(false); return }
     const t1 = setTimeout(() => setToastOut(true),  3200)
     const t2 = setTimeout(() => { clearCompleted(); setToastOut(false) }, 3700)
     return () => { clearTimeout(t1); clearTimeout(t2) }
   }, [completedCount, clearCompleted])
+
+  // Error toast auto-dismiss
+  useEffect(() => {
+    if (!queueError) { setErrorToastOut(false); return }
+    const t1 = setTimeout(() => setErrorToastOut(true),  6000)
+    const t2 = setTimeout(() => { clearQueueError(); setErrorToastOut(false) }, 6500)
+    return () => { clearTimeout(t1); clearTimeout(t2) }
+  }, [queueError, clearQueueError])
 
   // Drag — GPU-composited transform, no layout reflow
   useEffect(() => {
@@ -162,11 +172,12 @@ export default function SendBubble() {
   }
 
   const d = displayRef.current || { total: 1, sent: 0, phase: 'sending', countdown: null }
-  const isSuccess  = bubblePhase === 'success' || d.phase === 'success'
-  const isWaiting  = d.phase === 'waiting' && d.countdown > 0
+  const isSuccess     = bubblePhase === 'success' || d.phase === 'success'
+  const isWaiting      = d.phase === 'waiting' && d.countdown > 0
+  const isBatchWaiting = isWaiting && d.batch
   const progress   = d.total > 0 ? d.sent / d.total : 0
   const dashOffset = CIRC * (1 - progress)
-  const ringColor  = isSuccess ? '#22c55e' : 'var(--accent, #3b82f6)'
+  const ringColor  = isSuccess ? '#22c55e' : isBatchWaiting ? '#fbbf24' : 'var(--accent, #3b82f6)'
 
   const animStyle = {
     entering: { animation: 'sb-in 0.3s cubic-bezier(0.34,1.56,0.64,1) forwards' },
@@ -298,9 +309,9 @@ export default function SendBubble() {
               <>
                 <span style={{
                   fontSize: 8, fontWeight: 800, letterSpacing: '0.12em',
-                  color: 'var(--accent, #3b82f6)', lineHeight: 1, textTransform: 'uppercase',
+                  color: isBatchWaiting ? '#fbbf24' : 'var(--accent, #3b82f6)', lineHeight: 1, textTransform: 'uppercase',
                 }}>
-                  MSG
+                  {isBatchWaiting ? (lang === 'en' ? 'BREAK' : 'PAUSA') : 'MSG'}
                 </span>
 
                 {isWaiting ? (
@@ -345,14 +356,13 @@ export default function SendBubble() {
         </div>
       </div>
 
-      {/* Toast — appears after bubble exits */}
+      {/* Success toast */}
       {toastMsg && (
         <div style={{
           position: 'fixed', bottom: 28, left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 10000,
           display: 'flex', alignItems: 'center', gap: 8,
-          px: 0,
           padding: '9px 18px',
           borderRadius: 10,
           background: 'var(--card-bg, #161d2e)',
@@ -368,6 +378,31 @@ export default function SendBubble() {
         }}>
           <span style={{ color: '#22c55e', fontSize: 15 }}>✓</span>
           {toastMsg}
+        </div>
+      )}
+
+      {/* Error toast — shown when queue stops due to disconnected/no-number instances */}
+      {queueError && (
+        <div style={{
+          position: 'fixed', bottom: toastMsg ? 72 : 28, left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 10000,
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '9px 18px',
+          borderRadius: 10,
+          background: 'var(--card-bg, #161d2e)',
+          border: '1px solid rgba(239,68,68,0.4)',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.5), 0 0 0 1px rgba(239,68,68,0.1)',
+          color: '#f1f5f9',
+          fontSize: '0.82rem', fontWeight: 600,
+          maxWidth: 380,
+          animation: errorToastOut
+            ? 'sb-toast-out 0.45s ease forwards'
+            : 'sb-toast-in 0.3s ease forwards',
+          pointerEvents: 'none',
+        }}>
+          <span style={{ color: '#f87171', fontSize: 15, flexShrink: 0 }}>⚠</span>
+          {queueError}
         </div>
       )}
     </>

@@ -1,7 +1,7 @@
 'use client'
 import { createContext, useContext, useState, useRef, useCallback, startTransition } from 'react'
 import { authFetch } from '@/lib/api'
-import { loadSendConfig, randMsgDelayMs } from '@/lib/sendConfig'
+import { loadSendConfig, randMsgDelayMs, randBatchBreakMs, randBatchSize } from '@/lib/sendConfig'
 
 const SendQueueCtx = createContext(null)
 export const useSendQueue = () => useContext(SendQueueCtx)
@@ -14,8 +14,10 @@ export function SendQueueProvider({ children }) {
   const [active,         setActive]         = useState(null)
   const [queueLen,       setQueueLen]       = useState(0)
   const [completedCount, setCompletedCount] = useState(null) // null = no toast
+  const [queueError,     setQueueError]     = useState(null) // null = no error
 
-  const clearCompleted = useCallback(() => setCompletedCount(null), [])
+  const clearCompleted  = useCallback(() => setCompletedCount(null), [])
+  const clearQueueError = useCallback(() => setQueueError(null), [])
 
   const reportBatchComplete = useCallback((sent, failed, label) => {
     authFetch('/api/notifications/batch-complete', {
@@ -36,6 +38,35 @@ export function SendQueueProvider({ children }) {
     }
 
     let allSent = 0
+    // Batch-break tracking spans the whole queue (not just one job/company) so
+    // a long anti-detection pause lands every N messages regardless of how
+    // they're grouped into jobs — mirrors databaseViewer.jsx's send loop.
+    let msgsInBatch = 0
+    let nextBreakAt = randBatchSize(loadSendConfig())
+
+    async function waitBetweenMessages(total, sentSoFar) {
+      if (cancelRef.current) return
+      const cfg = loadSendConfig()
+      const isBatchBreak = msgsInBatch >= nextBreakAt
+      if (isBatchBreak) {
+        msgsInBatch = 0
+        nextBreakAt = randBatchSize(cfg)
+      }
+      const delayMs = isBatchBreak ? randBatchBreakMs(cfg) : randMsgDelayMs(cfg)
+      const end = Date.now() + delayMs
+      await new Promise(resolve => {
+        const tick = () => {
+          if (cancelRef.current) { resolve(); return }
+          const rem = end - Date.now()
+          if (rem <= 0) { resolve(); return }
+          startTransition(() => {
+            setActive({ total, sent: sentSoFar, phase: 'waiting', countdown: Math.ceil(rem / 1000), batch: isBatchBreak })
+          })
+          setTimeout(tick, 200)
+        }
+        tick()
+      })
+    }
 
     while (queueRef.current.length > 0) {
       const job = queueRef.current.shift()
@@ -43,13 +74,14 @@ export function SendQueueProvider({ children }) {
       const { numbers, messages, companyId, website, batchId } = job
       const total = numbers.length
       let jobSent = 0
+      let jobFailed = 0
 
       for (let i = 0; i < total; i++) {
         if (cancelRef.current) break
         setActive({ total, sent: i, phase: 'sending', countdown: null })
 
         try {
-          await authFetch('/api/send-message', {
+          const res = await authFetch('/api/send-message', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -59,25 +91,25 @@ export function SendQueueProvider({ children }) {
               website,
             }),
           })
-          allSent++
-          jobSent++
+          if (res.ok) {
+            allSent++
+            jobSent++
+          } else {
+            jobFailed++
+            if (res.status === 503 || res.status === 400) {
+              // Fatal: all instances disconnected or no instance configured — stop queue
+              const errData = await res.json().catch(() => ({}))
+              setQueueError(errData.detail || (res.status === 503 ? 'Instancias desconectadas' : 'Sin instancia configurada'))
+              cancelRef.current = true
+              break
+            }
+          }
         } catch {}
 
-        if (i < total - 1 && !cancelRef.current) {
-          const delayMs = randMsgDelayMs(loadSendConfig())
-          const end = Date.now() + delayMs
-          await new Promise(resolve => {
-            const tick = () => {
-              if (cancelRef.current) { resolve(); return }
-              const rem = end - Date.now()
-              if (rem <= 0) { resolve(); return }
-              startTransition(() => {
-                setActive({ total, sent: i + 1, phase: 'waiting', countdown: Math.ceil(rem / 1000) })
-              })
-              setTimeout(tick, 200)
-            }
-            tick()
-          })
+        msgsInBatch++
+        const isLastMessageOverall = i === total - 1 && queueRef.current.length === 0
+        if (!isLastMessageOverall && !cancelRef.current) {
+          await waitBetweenMessages(total, i + 1)
         }
       }
 
@@ -85,7 +117,7 @@ export function SendQueueProvider({ children }) {
         const meta = batchMetaRef.current.get(batchId)
         if (meta) {
           meta.sent   += jobSent
-          meta.failed += (total - jobSent)
+          meta.failed += jobFailed + (total - jobSent - jobFailed) // unprocessed due to cancel
           meta.remaining -= 1
           if (meta.remaining <= 0) {
             batchMetaRef.current.delete(batchId)
@@ -95,24 +127,6 @@ export function SendQueueProvider({ children }) {
       }
 
       if (cancelRef.current) break
-
-      // Delay between jobs (between companies) — same range as between messages
-      if (queueRef.current.length > 0 && !cancelRef.current) {
-        const delayMs = randMsgDelayMs(loadSendConfig())
-        const end = Date.now() + delayMs
-        await new Promise(resolve => {
-          const tick = () => {
-            if (cancelRef.current) { resolve(); return }
-            const rem = end - Date.now()
-            if (rem <= 0) { resolve(); return }
-            startTransition(() => {
-              setActive({ total: 1, sent: 0, phase: 'waiting', countdown: Math.ceil(rem / 1000) })
-            })
-            setTimeout(tick, 200)
-          }
-          tick()
-        })
-      }
     }
 
     // Success flash — bubble shows green checkmark
@@ -200,7 +214,7 @@ export function SendQueueProvider({ children }) {
   }, [])
 
   return (
-    <SendQueueCtx.Provider value={{ addJob, addBatch, cancel, active, queueLen, debugBubble, completedCount, clearCompleted }}>
+    <SendQueueCtx.Provider value={{ addJob, addBatch, cancel, active, queueLen, debugBubble, completedCount, clearCompleted, queueError, clearQueueError }}>
       {children}
     </SendQueueCtx.Provider>
   )

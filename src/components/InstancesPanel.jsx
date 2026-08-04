@@ -28,6 +28,7 @@ import CallIcon from '@mui/icons-material/Call'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import LinkOffIcon from '@mui/icons-material/LinkOff'
 import SmartphoneIcon from '@mui/icons-material/Smartphone'
+import EditIcon from '@mui/icons-material/Edit'
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
 import { useLang } from '../context/LangContext'
 
@@ -76,7 +77,7 @@ const STATUS_LABEL_ES = { open: 'Conectada', connected: 'Conectada', connecting:
 const STATUS_LABEL_EN = { open: 'Connected', connected: 'Connected', connecting: 'Connecting', close: 'Disconnected', disconnected: 'Disconnected', unknown: 'Unknown' }
 
 // ── InstanceRow ──────────────────────────────────────────────────────────────
-function InstanceRow({ inst, onQr, onEmu, onRemove }) {
+function InstanceRow({ inst, onQr, onEditNumber, onRemove }) {
   const { t, lang } = useLang()
   const [hover, setHover] = useState(false)
   const status = inst.live_status || 'unknown'
@@ -116,10 +117,10 @@ function InstanceRow({ inst, onQr, onEmu, onRemove }) {
               <QrCodeIcon sx={{ fontSize: 14 }} />
             </IconButton>
           </Tooltip>
-          <Tooltip title={lang === 'en' ? 'Buy number with SMSFast' : 'Comprar número con SMSFast'} placement="top">
-            <IconButton size="small" onClick={() => onEmu(inst)}
+          <Tooltip title={lang === 'en' ? 'Edit phone number' : 'Editar número'} placement="top">
+            <IconButton size="small" onClick={() => onEditNumber(inst)}
               sx={{ color: '#a78bfa', p: 0.4, '&:hover': { bgcolor: 'rgba(167,139,250,0.15)' } }}>
-              <SmartphoneIcon sx={{ fontSize: 14 }} />
+              <EditIcon sx={{ fontSize: 14 }} />
             </IconButton>
           </Tooltip>
           <Tooltip title={lang === 'en' ? 'Remove from user' : 'Quitar de este usuario'} placement="top">
@@ -139,7 +140,7 @@ function InstanceRow({ inst, onQr, onEmu, onRemove }) {
 }
 
 // ── UserCard ─────────────────────────────────────────────────────────────────
-function UserCard({ user, instances, onAddSlot, onQr, onEmu, onRemove }) {
+function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove }) {
   const { t, lang } = useLang()
   const connectedCount = instances.filter(i => ['open', 'connected'].includes(i.live_status)).length
   const isAdmin = user.role === 'admin'
@@ -191,7 +192,7 @@ function UserCard({ user, instances, onAddSlot, onQr, onEmu, onRemove }) {
       {instances.length > 0 && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.2, mb: 1.2 }}>
           {instances.map(inst => (
-            <InstanceRow key={inst.name} inst={inst} onQr={onQr} onEmu={onEmu} onRemove={onRemove} />
+            <InstanceRow key={inst.name} inst={inst} onQr={onQr} onEditNumber={onEditNumber} onRemove={onRemove} />
           ))}
         </Box>
       )}
@@ -617,6 +618,41 @@ export default function InstancesPanel() {
         verifyFn(d.otp)
       } catch {}
     }, 3000)
+  }
+
+  // ── Edit number dialog ──
+  const [editNumberOpen,  setEditNumberOpen]  = useState(false)
+  const [editNumberInst,  setEditNumberInst]  = useState(null)
+  const [editNumberValue, setEditNumberValue] = useState('')
+  const [editNumberSaving, setEditNumberSaving] = useState(false)
+  const [editNumberErr,   setEditNumberErr]   = useState('')
+
+  function handleEditNumberClick(inst) {
+    setEditNumberInst(inst)
+    setEditNumberValue(inst?.number || '')
+    setEditNumberErr('')
+    setEditNumberOpen(true)
+  }
+
+  async function handleEditNumberSave() {
+    if (!editNumberInst) return
+    const num = editNumberValue.replace(/\D/g, '')
+    if (num.length < 8) {
+      setEditNumberErr(lang === 'en' ? 'Number too short' : 'Número demasiado corto')
+      return
+    }
+    setEditNumberSaving(true); setEditNumberErr('')
+    try {
+      const res = await fetch(`/api/instances?name=${encodeURIComponent(editNumberInst.name)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
+        body: JSON.stringify({ number: num }),
+      })
+      if (!res.ok) { setEditNumberErr(lang === 'en' ? 'Error saving' : 'Error al guardar'); setEditNumberSaving(false); return }
+      setInstances(prev => prev.map(i => i.name === editNumberInst.name ? { ...i, number: num } : i))
+      setEditNumberOpen(false)
+    } catch { setEditNumberErr(lang === 'en' ? 'Network error' : 'Error de red') }
+    setEditNumberSaving(false)
   }
 
   // ── Emulator registration dialog ──
@@ -1087,7 +1123,7 @@ export default function InstancesPanel() {
                     instances={userInsts}
                     onAddSlot={() => openPickForUser(user)}
                     onQr={inst => handleQrClick(inst)}
-                    onEmu={inst => handleEmuClick(inst)}
+                    onEditNumber={inst => handleEditNumberClick(inst)}
                     onRemove={handleQuickUnassign}
                   />
                 )
@@ -1164,11 +1200,11 @@ export default function InstancesPanel() {
                                     <CloseIcon sx={{ fontSize: 14 }} />
                                   </IconButton>
                                 )}
-                                <Tooltip title={lang === 'en' ? 'Buy number with SMSFast' : 'Comprar número con SMSFast'}>
-                                  <IconButton size="small" onClick={() => handleEmuClick(inst)}
+                                <Tooltip title={lang === 'en' ? 'Edit phone number' : 'Editar número'}>
+                                  <IconButton size="small" onClick={() => handleEditNumberClick(inst)}
                                     sx={{ color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)', borderRadius: 1.5, p: 0.5,
                                       '&:hover': { bgcolor: 'rgba(167,139,250,0.1)' } }}>
-                                    <SmartphoneIcon sx={{ fontSize: 13 }} />
+                                    <EditIcon sx={{ fontSize: 13 }} />
                                   </IconButton>
                                 </Tooltip>
                                 <Tooltip title={t.inst.delete}>
@@ -1203,6 +1239,96 @@ export default function InstancesPanel() {
           </>
         )}
       </Box>
+
+      {/* ── Edit number dialog ── */}
+      <Dialog open={editNumberOpen} onClose={() => setEditNumberOpen(false)} sx={{
+        '& .MuiDialog-paper': {
+          bgcolor: 'var(--card-bg,#161d2e)',
+          border: '1px solid rgba(167,139,250,0.3)',
+          borderRadius: 3, minWidth: 360, maxWidth: 420,
+          boxShadow: '0 24px 64px rgba(0,0,0,0.7)',
+        },
+      }}>
+        <DialogTitle sx={{ pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+            <Box sx={{
+              width: 34, height: 34, borderRadius: 2, flexShrink: 0,
+              bgcolor: 'rgba(167,139,250,0.15)',
+              border: '1px solid rgba(167,139,250,0.28)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <EditIcon sx={{ fontSize: 17, color: '#a78bfa' }} />
+            </Box>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2 }}>
+                {lang === 'en' ? 'Edit phone number' : 'Editar número'}
+              </Typography>
+              <Typography sx={{ color: 'var(--text-muted,rgba(255,255,255,0.38))', fontSize: '0.7rem', fontFamily: 'monospace', mt: 0.2,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {editNumberInst?.name}
+              </Typography>
+            </Box>
+            <IconButton size="small" onClick={() => setEditNumberOpen(false)}
+              sx={{ color: 'var(--text-muted,rgba(255,255,255,0.25))', '&:hover': { color: 'var(--text,white)', bgcolor: 'rgba(255,255,255,0.06)' }, flexShrink: 0 }}>
+              <CloseIcon sx={{ fontSize: 17 }} />
+            </IconButton>
+          </Box>
+        </DialogTitle>
+
+        <DialogContent sx={{ pt: '8px !important', pb: 0 }}>
+          {/* Current number chip */}
+          {editNumberInst?.number && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, px: 1, py: 0.8,
+              borderRadius: 1.5, bgcolor: 'var(--surface,#1e293b)', border: '1px solid var(--border,rgba(255,255,255,0.1))' }}>
+              <PhoneAndroidIcon sx={{ fontSize: 14, color: 'var(--text-muted,rgba(255,255,255,0.35))' }} />
+              <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted,rgba(255,255,255,0.4))', mr: 0.5 }}>
+                {lang === 'en' ? 'Current:' : 'Actual:'}
+              </Typography>
+              <Typography sx={{ fontSize: '0.78rem', fontFamily: 'monospace', color: 'var(--text,#e2e8f0)', fontWeight: 600 }}>
+                +{editNumberInst.number}
+              </Typography>
+            </Box>
+          )}
+
+          <TextField
+            label={lang === 'en' ? 'New number (with country code)' : 'Nuevo número (con código de país)'}
+            placeholder="5214428079840"
+            size="small" fullWidth autoFocus
+            value={editNumberValue}
+            onChange={e => setEditNumberValue(e.target.value.replace(/[^\d]/g, ''))}
+            onKeyDown={e => e.key === 'Enter' && !editNumberSaving && handleEditNumberSave()}
+            sx={FIELD_SX}
+            InputProps={{
+              startAdornment: (
+                <Typography sx={{ color: 'var(--text-muted,rgba(255,255,255,0.3))', fontSize: '0.88rem', mr: 0.5, userSelect: 'none' }}>+</Typography>
+              ),
+            }}
+            helperText={editNumberErr
+              ? <span style={{ color: '#f87171' }}>{editNumberErr}</span>
+              : <span style={{ color: 'var(--text-muted,rgba(255,255,255,0.28))', fontSize: '0.67rem' }}>
+                  {lang === 'en' ? 'Digits only, no spaces or +' : 'Solo dígitos, sin espacios ni +'}
+                </span>}
+          />
+        </DialogContent>
+
+        <DialogActions sx={{ px: 2.5, pb: 2.5, pt: 1.5, gap: 1, borderTop: '1px solid rgba(255,255,255,0.05)', mt: 1 }}>
+          <Button size="small" onClick={() => setEditNumberOpen(false)}
+            sx={{ textTransform: 'none', color: 'var(--text-muted,rgba(255,255,255,0.4))', fontSize: '0.82rem',
+              '&:hover': { color: 'var(--text,white)', bgcolor: 'rgba(255,255,255,0.05)' } }}>
+            {lang === 'en' ? 'Cancel' : 'Cancelar'}
+          </Button>
+          <Button size="small" variant="contained" onClick={handleEditNumberSave}
+            disabled={editNumberSaving || !editNumberValue.trim()}
+            startIcon={editNumberSaving ? null : <CheckCircleIcon sx={{ fontSize: '15px !important' }} />}
+            sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2,
+              bgcolor: '#7c3aed', '&:hover': { bgcolor: '#6d28d9' },
+              '&.Mui-disabled': { bgcolor: 'rgba(124,58,237,0.25)', color: 'rgba(255,255,255,0.3)' } }}>
+            {editNumberSaving
+              ? <><CircularProgress size={13} sx={{ color: 'white', mr: 1 }} />{lang === 'en' ? 'Saving…' : 'Guardando…'}</>
+              : lang === 'en' ? 'Save' : 'Guardar'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* ── Pick instance dialog ── */}
       <Dialog open={pickOpen} onClose={() => setPickOpen(false)} sx={{

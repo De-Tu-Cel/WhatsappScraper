@@ -21,16 +21,22 @@ from whatsapp_evolution import EvolutionClient
 
 DEFAULT_MESSAGE = "Hola, encontré tu negocio en línea y me gustaría presentarte algo que puede ayudarte. ¿Tienes un momento? 😊"
 
+def _domain_matches(domain: str, val: str) -> bool:
+    """True if `domain` is exactly `val` or a subdomain of it (not just a substring —
+    e.g. 'gaserasmx.com' must NOT match blacklisted value 'x.com')."""
+    return domain == val or domain.endswith("." + val)
+
 def _check_blacklist(domain: str, industry: str) -> dict:
     """Returns {reason, matched} if blacklisted, else None."""
     try:
         db = MongoDBManager()
         entries = list(db.db.blacklist.find({}))
+        domain = (domain or "").lower().strip()
         for e in entries:
             val = e.get("value", "").lower().strip()
             if not val:
                 continue
-            if e.get("type") == "domain" and val in domain.lower():
+            if e.get("type") == "domain" and domain and _domain_matches(domain, val):
                 return {"reason": "domain", "matched": val}
             if e.get("type") == "industry" and industry and val in industry.lower():
                 return {"reason": "industry", "matched": val}

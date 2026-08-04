@@ -612,13 +612,31 @@ class MongoDBManager:
                     "last_at": {"$max": "$created_at"},
                     "category":          {"$first": "$analysis.category"},
                     "response_quality":  {"$first": "$analysis.response_quality"},
-                    "reaction_time_min": {"$avg":   "$analysis.reaction_time_min"},
                     "business_hours":    {"$first": "$analysis.business_hours"},
                     "notes":             {"$first": "$analysis.notes"},
                     "total_responses":   {"$sum": 1},
                 }},
             ])
         }
+        # "Tiempo de primera respuesta" = reaction_time_min of the chronologically FIRST
+        # analyzed inbound per company — NOT an average across the whole conversation,
+        # which would blend later (possibly much slower/faster) replies into the number.
+        first_response_groups = {
+            g["_id"]: g["reaction_time_min"]
+            for g in self.db.message_logs.aggregate([
+                {"$match": {
+                    "direction": "inbound",
+                    "analysis.reaction_time_min": {"$ne": None},
+                }},
+                {"$sort": {"created_at": 1}},
+                {"$group": {
+                    "_id": "$company_id",
+                    "reaction_time_min": {"$first": "$analysis.reaction_time_min"},
+                }},
+            ])
+        }
+        for cid, g in inbound_groups.items():
+            g["reaction_time_min"] = first_response_groups.get(cid)
         # Companies with outbound messages only (no analyzed inbound yet)
         outbound_groups = {
             g["_id"]: g

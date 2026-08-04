@@ -11,6 +11,22 @@ export async function GET(request) {
   } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }) }
 }
 
+export async function PATCH(request) {
+  const token = request.headers.get('x-user-token') || ''
+  const { searchParams } = new URL(request.url)
+  const name = searchParams.get('name')
+  if (!name) return NextResponse.json({ error: 'name required' }, { status: 400 })
+  const body = await request.json()
+  try {
+    const res = await fetch(`${B}/api/admin/instances/${encodeURIComponent(name)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'x-user-token': token },
+      body: JSON.stringify(body),
+    })
+    return NextResponse.json(await res.json(), { status: res.status })
+  } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }) }
+}
+
 export async function POST(request) {
   const token = request.headers.get('x-user-token') || ''
   const { searchParams } = new URL(request.url)

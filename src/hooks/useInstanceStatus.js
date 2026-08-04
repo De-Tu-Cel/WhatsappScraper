@@ -30,7 +30,9 @@ function _startPolling(instanceName) {
       } else {
         const d = await res.json()
         const state = d.instance?.state || d.state || ''
-        _status = state === 'open' ? 'connected' : 'disconnected'
+        const hasNumber = !!d.number
+        // Connected only if Evolution reports open AND instance has a phone number
+        _status = (state === 'open' && hasNumber) ? 'connected' : 'disconnected'
       }
     } catch {
       _status = 'disconnected'

@@ -10,7 +10,7 @@ from app.schemas.company import (
     UpdateContactsRequest,
 )
 from app.utils import serialize
-from app.pipeline import process_url, run_pipeline_batch   # ← app.pipeline
+from app.pipeline import process_url, run_pipeline_batch, _check_blacklist   # ← app.pipeline
 from app.searcher import search_prospects                   # ← app.searcher
 from app.database import MongoDBManager
 
@@ -178,6 +178,26 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         db = MongoDBManager()
         if not EVOLUTION_API_KEY:
             raise HTTPException(status_code=400, detail="Evolution API no configurada")
+
+        # ── Bloqueo por blacklist / chat bloqueado ──────────────────────────────────
+        from bson import ObjectId
+        if req.company_id and len(req.company_id) == 24:
+            company = db.db.companies.find_one(
+                {"_id": ObjectId(req.company_id)},
+                {"domain": 1, "industry": 1, "blocked": 1},
+            )
+            if company:
+                if company.get("blocked"):
+                    raise HTTPException(status_code=403, detail="No se puede enviar: este chat está bloqueado")
+                domain = company.get("domain") or ""
+                industry = company.get("industry") or ""
+                bl = _check_blacklist(domain, industry) if domain else None
+                if bl:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"No se puede enviar: dominio en lista negra ({bl['matched']})",
+                    )
+
         # ── Rotación de instancias: round-robin + routing preferencial por compañía ──
         import requests as _req
         from concurrent.futures import ThreadPoolExecutor
@@ -190,10 +210,17 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
             user = get_user_by_token(x_user_token)
             if user:
                 user_id = user.get("id") or str(user.get("_id", ""))
-                assigned = list(db.db.instances.find(
-                    {"assigned_to": user_id}, {"_id": 0, "name": 1}
+                all_assigned = list(db.db.instances.find(
+                    {"assigned_to": user_id}, {"_id": 0, "name": 1, "number": 1}
                 )) if user_id else []
-                print(f"[Rotation] user_id={user_id!r} assigned={[i['name'] for i in assigned]}")
+                # Only route through instances that have a number registered
+                assigned = [i for i in all_assigned if i.get("number")]
+                print(f"[Rotation] user_id={user_id!r} all={[i['name'] for i in all_assigned]} with_number={[i['name'] for i in assigned]}")
+                if all_assigned and not assigned:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Ninguna de tus instancias tiene número asignado. Ve a Instancias y edita el número.",
+                    )
 
                 if assigned:
                     names = [i["name"] for i in assigned]
@@ -1587,7 +1614,7 @@ def api_smsfast_cancel(body: dict):
 
 @router.get("/evolution/instance/status/{name}")
 def api_evo_get_status(name: str):
-    """GET /instance/connectionState/{name} → {"instance": {"instanceName": "...", "state": "open"|"close"}}"""
+    """GET /instance/connectionState/{name} → {"instance": {"instanceName": "...", "state": "open"|"close"}, "number": "..."}"""
     try:
         import requests as _req
         from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
@@ -1596,7 +1623,13 @@ def api_evo_get_status(name: str):
             headers={"apikey": EVOLUTION_API_KEY},
             timeout=10,
         )
-        return r.json()
+        data = r.json()
+        # Enrich with number from MongoDB so frontend can validate
+        db = MongoDBManager()
+        inst_doc = db.db.instances.find_one({"name": name}, {"_id": 0, "number": 1}) or {}
+        if inst_doc.get("number"):
+            data["number"] = inst_doc["number"]
+        return data
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/evolution/instance/webhook")
@@ -2486,6 +2519,21 @@ def api_delete_instance(name: str, x_user_token: Optional[str] = Header(None)):
         pass
     db = MongoDBManager()
     db.db.instances.delete_one({"name": name})
+    return {"ok": True}
+
+
+@router.patch("/admin/instances/{name}")
+def api_patch_instance(name: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    user = _require_user(x_user_token)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Solo admins")
+    update = {}
+    if "number" in body:
+        update["number"] = str(body["number"]).strip().replace("+", "").replace(" ", "")
+    if not update:
+        raise HTTPException(400, "Nada que actualizar")
+    db = MongoDBManager()
+    db.db.instances.update_one({"name": name}, {"$set": update})
     return {"ok": True}
 
 

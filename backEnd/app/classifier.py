@@ -5,11 +5,13 @@ import logging
 import re
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.database import MongoDBManager
 
 log = logging.getLogger(__name__)
+
+_MEXICO_TZ = timezone(timedelta(hours=-6))  # CST — UTC-6 year-round, matches ai_followup.py
 
 def all_quota_exhausted() -> bool:
     """Return True if the LLM circuit breaker is open (delegates to llm_guard)."""
@@ -266,7 +268,12 @@ _ERROR_RESULT = {
 
 
 def is_business_hours(dt: datetime) -> bool:
-    return dt.weekday() < 5 and 9 <= dt.hour < 18
+    """dt is the naive server-clock timestamp stored as created_at/received_at
+    (server runs on UTC) — must convert to Mexico local time before comparing hours."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    mx = dt.astimezone(_MEXICO_TZ)
+    return mx.weekday() < 5 and 9 <= mx.hour < 18
 
 
 def _build_prompt(inbound_body: str, outbound_body: str, reaction_time_min: float = None) -> str:
@@ -535,22 +542,19 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
             "analysis.followup_deadline": {"$gte": received_at},
         })
         if pending:
-            prior_id = str(pending["_id"])
-            prior_outbound = db.get_last_outbound_for_company(
-                company_id, before_dt=pending.get("created_at", received_at),
+            # A human took over within the follow-up window. The prior message's
+            # analysis (category + reaction_time_min) reflected its OWN instant
+            # bot/automatico response and must stay intact — this new message gets
+            # classified on its own below via the normal flow. We only clear the
+            # pending flag on the prior entry and flag the handoff so it can surface
+            # as "hibrido" behavior without overwriting the original, correct timing.
+            db.db.message_logs.update_one(
+                {"_id": pending["_id"]},
+                {"$set": {
+                    "analysis.pending_human_check": False,
+                    "analysis.handoff_to_human_at": received_at.isoformat(),
+                }},
             )
-            outbound_body = (prior_outbound or {}).get("message_body") or ""
-            reaction_time_min = None
-            if prior_outbound and prior_outbound.get("created_at"):
-                delta = received_at - prior_outbound["created_at"]
-                reaction_time_min = round(delta.total_seconds() / 60, 1)
-            upgraded = classify_response(inbound_body, outbound_body, reaction_time_min)
-            upgraded["reaction_time_min"] = reaction_time_min
-            upgraded["business_hours"] = is_business_hours(received_at)
-            upgraded["classified_at"] = datetime.now().isoformat()
-            upgraded["pending_human_check"] = False
-            upgraded["upgraded_from_auto"] = True
-            db.save_message_analysis(prior_id, upgraded)
 
         inbound_doc = db.db.message_logs.find_one({"_id": ObjectId(log_id)}, {"from_number": 1, "number": 1})
         from_number = (inbound_doc or {}).get("from_number") or (inbound_doc or {}).get("number")

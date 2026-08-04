@@ -128,10 +128,19 @@ def logout(token: str):
 
 
 def update_evolution(token: str, instance: str, number: str = ""):
-    _db().users.update_one(
+    db = _db()
+    user = db.users.find_one({"session_token": token})
+    db.users.update_one(
         {"session_token": token},
         {"$set": {"evolution_instance": instance, "connected_number": number}},
     )
+    # Keep instances collection in sync so round-robin includes self-registered instances
+    if user and instance:
+        user_id = str(user["_id"])
+        set_fields = {"name": instance, "assigned_to": user_id}
+        if number:
+            set_fields["number"] = number
+        db.instances.update_one({"name": instance}, {"$set": set_fields}, upsert=True)
 
 
 def list_users() -> list:

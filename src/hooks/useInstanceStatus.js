@@ -2,40 +2,48 @@
 import { useState, useEffect } from 'react'
 import { useUser } from '../context/UserContext'
 
-const POLL_DISCONNECTED = 8_000   // 8s when disconnected
-const POLL_CONNECTED    = 45_000  // 45s when connected — no need to hammer the server
+const POLL_DISCONNECTED = 10_000  // 10s when disconnected
+const POLL_CONNECTED    = 45_000  // 45s when connected
 
 // ─── Module-level singleton ───────────────────────────────────────────────────
-// Only ONE fetch timer runs regardless of how many components mount this hook.
-// All subscribers receive the same status update.
+// One timer for all subscribers — polls aggregate status across ALL user instances.
 
-let _status       = 'unknown'
-let _timerId      = null
-let _instanceName = null
-const _subscribers = new Set()
+let _status           = 'unknown'
+let _disconnectReason = null  // { key, label, code } | null
+let _connectedCount   = 0
+let _totalCount       = 0
+let _timerId          = null
+let _userToken        = null
+const _subscribers    = new Set()
 
 function _notify() {
-  _subscribers.forEach(fn => fn(_status))
+  _subscribers.forEach(fn => fn(_status, _disconnectReason, _connectedCount, _totalCount))
 }
 
-function _startPolling(instanceName) {
+function _startPolling(token) {
   if (_timerId) { clearTimeout(_timerId); _timerId = null }
-  _instanceName = instanceName
+  _userToken = token
 
   async function _tick() {
     try {
-      const res = await fetch(`/api/evolution/instance/${_instanceName}?type=status`)
+      const res = await fetch('/api/evolution/instances/user-status', {
+        headers: { 'x-user-token': _userToken },
+      })
       if (!res.ok) {
         _status = 'disconnected'
+        _disconnectReason = null
       } else {
         const d = await res.json()
-        const state = d.instance?.state || d.state || ''
-        const hasNumber = !!d.number
-        // Connected only if Evolution reports open AND instance has a phone number
-        _status = (state === 'open' && hasNumber) ? 'connected' : 'disconnected'
+        _connectedCount = d.connected_count ?? 0
+        _totalCount     = d.total ?? 0
+        _status = d.connected ? 'connected' : 'disconnected'
+        _disconnectReason = (!d.connected && d.disconnect_reason)
+          ? { key: d.disconnect_reason, label: d.disconnect_reason_label || 'Desconectada', code: d.disconnect_code ?? null }
+          : null
       }
     } catch {
       _status = 'disconnected'
+      _disconnectReason = null
     }
     _notify()
     if (_subscribers.size > 0) {
@@ -49,43 +57,59 @@ function _startPolling(instanceName) {
 
 function _stopPolling() {
   if (_timerId) { clearTimeout(_timerId); _timerId = null }
-  _instanceName = null
+  _userToken = null
   _status = 'unknown'
+  _disconnectReason = null
+  _connectedCount = 0
+  _totalCount = 0
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useInstanceStatus() {
   const { user } = useUser()
-  const [status, setStatus] = useState(_status)
+  const [status,           setStatus]           = useState(_status)
+  const [disconnectReason, setDisconnectReason] = useState(_disconnectReason)
+  const [connectedCount,   setConnectedCount]   = useState(_connectedCount)
+  const [totalCount,       setTotalCount]       = useState(_totalCount)
 
   useEffect(() => {
-    const instanceName = user?.evolution_instance
-    if (!instanceName) {
+    const token = user?.session_token
+    if (!token) {
       setStatus('disconnected')
+      setDisconnectReason(null)
       return
     }
 
-    // Subscribe
-    _subscribers.add(setStatus)
+    const notify = (s, r, cc, tc) => {
+      setStatus(s)
+      setDisconnectReason(r)
+      setConnectedCount(cc)
+      setTotalCount(tc)
+    }
+    _subscribers.add(notify)
 
-    if (instanceName !== _instanceName) {
-      // New instance or first subscriber — start/restart the singleton poll
-      _startPolling(instanceName)
+    if (token !== _userToken) {
+      _startPolling(token)
     } else {
-      // Already polling — just sync current known status
       setStatus(_status)
+      setDisconnectReason(_disconnectReason)
+      setConnectedCount(_connectedCount)
+      setTotalCount(_totalCount)
     }
 
     return () => {
-      _subscribers.delete(setStatus)
+      _subscribers.delete(notify)
       if (_subscribers.size === 0) _stopPolling()
     }
-  }, [user?.evolution_instance])
+  }, [user?.session_token])
 
   return {
     status,
-    isConnected:    status === 'connected',
-    isDisconnected: status === 'disconnected',
+    isConnected:      status === 'connected',
+    isDisconnected:   status === 'disconnected',
+    disconnectReason,
+    connectedCount,
+    totalCount,
   }
 }

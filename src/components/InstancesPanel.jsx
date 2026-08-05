@@ -24,7 +24,6 @@ import DeleteForeverIcon from '@mui/icons-material/DeleteForever'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
-import CallIcon from '@mui/icons-material/Call'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import LinkOffIcon from '@mui/icons-material/LinkOff'
 import SmartphoneIcon from '@mui/icons-material/Smartphone'
@@ -76,14 +75,24 @@ const STAT_CHIP_SX = {
 const STATUS_LABEL_ES = { open: 'Conectada', connected: 'Conectada', connecting: 'Conectando', close: 'Desconectada', disconnected: 'Desconectada', unknown: 'Desconocida' }
 const STATUS_LABEL_EN = { open: 'Connected', connected: 'Connected', connecting: 'Connecting', close: 'Disconnected', disconnected: 'Disconnected', unknown: 'Unknown' }
 
+const DISCONNECT_LABEL_ES = { banned: 'Baneado por WhatsApp', logged_out: 'Cerró sesión', conflict: 'Conflicto de dispositivo', multidevice: 'Conflicto multi-dispositivo', server_error: 'Error interno', restart: 'Requiere reinicio', replaced: 'Sesión reemplazada', timeout: 'Timeout de conexión', closed: 'Conexión cerrada', disconnected: 'Desconectada' }
+const DISCONNECT_LABEL_EN = { banned: 'Banned by WhatsApp', logged_out: 'Logged out', conflict: 'Device conflict', multidevice: 'Multi-device conflict', server_error: 'Internal error', restart: 'Restart required', replaced: 'Session replaced', timeout: 'Connection timeout', closed: 'Connection closed', disconnected: 'Disconnected' }
+
 // ── InstanceRow ──────────────────────────────────────────────────────────────
-function InstanceRow({ inst, onQr, onEditNumber, onRemove }) {
+function InstanceRow({ inst, health, onQr, onEditNumber, onRemove }) {
   const { t, lang } = useLang()
   const [hover, setHover] = useState(false)
   const status = inst.live_status || 'unknown'
   const color = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
   const isConnected = ['open', 'connected'].includes(status)
   const statusLabel = (lang === 'en' ? STATUS_LABEL_EN : STATUS_LABEL_ES)[status] ?? (lang === 'en' ? 'Unknown' : 'Desconocida')
+  const REASON_COLOR = { banned: '#f87171', logged_out: '#fbbf24', conflict: '#fbbf24', multidevice: '#fbbf24', server_error: '#f87171', restart: '#fb923c', timeout: '#94a3b8', closed: '#94a3b8', replaced: '#fb923c' }
+  const disconnectColor = inst.disconnect_reason ? (REASON_COLOR[inst.disconnect_reason] ?? '#94a3b8') : color
+  const displayColor = isConnected ? color : disconnectColor
+  const reasonLabel = inst.disconnect_reason ? ((lang === 'en' ? DISCONNECT_LABEL_EN : DISCONNECT_LABEL_ES)[inst.disconnect_reason] ?? inst.disconnect_reason_label) : null
+  const displayLabel = !isConnected && reasonLabel ? reasonLabel : statusLabel
+  const uptime = health?.uptime_pct ?? null
+  const uptimeColor = uptime === null ? '#64748b' : uptime >= 90 ? '#4ade80' : uptime >= 60 ? '#fbbf24' : '#f87171'
   return (
     <Box
       onMouseEnter={() => setHover(true)}
@@ -98,12 +107,20 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove }) {
       }}
     >
       {/* Status dot */}
-      <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color, flexShrink: 0,
-        boxShadow: isConnected ? `0 0 6px ${color}aa` : 'none' }} />
+      <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: displayColor, flexShrink: 0,
+        boxShadow: isConnected ? `0 0 6px ${displayColor}aa` : 'none' }} />
       {/* Name + number */}
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text)', lineHeight: 1.2,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inst.label || inst.name}</Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+          <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text)', lineHeight: 1.2,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inst.label || inst.name}</Typography>
+          {uptime !== null && (
+            <Typography sx={{ fontSize: '0.58rem', fontWeight: 700, color: uptimeColor,
+              bgcolor: `${uptimeColor}18`, px: 0.5, borderRadius: 0.8, lineHeight: 1.6, flexShrink: 0 }}>
+              {uptime}%
+            </Typography>
+          )}
+        </Box>
         <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', fontFamily: 'monospace', lineHeight: 1.2 }}>
           {inst.number ? `+${inst.number}` : t.inst.noNumber}
         </Typography>
@@ -131,8 +148,8 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove }) {
           </Tooltip>
         </Box>
       ) : (
-        <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color, flexShrink: 0, letterSpacing: '0.01em' }}>
-          {statusLabel}
+        <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color: displayColor, flexShrink: 0, letterSpacing: '0.01em', maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {displayLabel}
         </Typography>
       )}
     </Box>
@@ -140,7 +157,7 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove }) {
 }
 
 // ── UserCard ─────────────────────────────────────────────────────────────────
-function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove }) {
+function UserCard({ user, instances, health, onAddSlot, onQr, onEditNumber, onRemove }) {
   const { t, lang } = useLang()
   const connectedCount = instances.filter(i => ['open', 'connected'].includes(i.live_status)).length
   const isAdmin = user.role === 'admin'
@@ -192,7 +209,7 @@ function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove }) 
       {instances.length > 0 && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.2, mb: 1.2 }}>
           {instances.map(inst => (
-            <InstanceRow key={inst.name} inst={inst} onQr={onQr} onEditNumber={onEditNumber} onRemove={onRemove} />
+            <InstanceRow key={inst.name} inst={inst} health={health[inst.name]} onQr={onQr} onEditNumber={onEditNumber} onRemove={onRemove} />
           ))}
         </Box>
       )}
@@ -362,6 +379,7 @@ export default function InstancesPanel() {
   const [instances,    setInstances]    = useState([])
   const [loading,      setLoading]      = useState(true)
   const [users,        setUsers]        = useState([])
+  const [health,       setHealth]       = useState({})  // { [instanceName]: { uptime_pct, last_event, last_ts, last_reason } }
 
   // ── Create dialog ──
   const [createOpen,   setCreateOpen]   = useState(false)
@@ -443,6 +461,13 @@ export default function InstancesPanel() {
     finally { setLoading(false) }
   }, [])
 
+  const fetchHealth = useCallback(async () => {
+    try {
+      const r = await fetch('/api/evolution/instances/health', { headers: { 'x-user-token': token() } })
+      if (r.ok) setHealth(await r.json())
+    } catch {}
+  }, [])
+
   const handleSync = useCallback(async () => {
     setSyncing(true)
     try {
@@ -459,7 +484,7 @@ export default function InstancesPanel() {
     } catch {}
   }, [])
 
-  useEffect(() => { fetchInstances(); fetchUsers() }, [fetchInstances, fetchUsers])
+  useEffect(() => { fetchInstances(); fetchUsers(); fetchHealth() }, [fetchInstances, fetchUsers, fetchHealth])
 
   // Auto-refresh pairing code when countdown expires
   const wizardInstNameRef = useRef('')
@@ -585,40 +610,6 @@ export default function InstancesPanel() {
   }
 
   const [pairTarget, setPairTarget] = useState(null)
-
-  // ── OTP registration dialog ──
-  const [otpOpen,       setOtpOpen]       = useState(false)
-  const [otpTarget,     setOtpTarget]     = useState(null)
-  const [otpPhone,      setOtpPhone]      = useState('')
-  const [otpStep,       setOtpStep]       = useState('phone') // 'phone' | 'code' | 'success'
-  const [otpCode,       setOtpCode]       = useState('')
-  const [otpLoading,    setOtpLoading]    = useState(false)
-  const [otpErr,        setOtpErr]        = useState('')
-  const [otpAutoWait,   setOtpAutoWait]   = useState(false)
-  const otpPollRef      = useRef(null)
-  const otpRequestedAt  = useRef(null)
-
-  function stopOtpPolling() {
-    if (otpPollRef.current) { clearInterval(otpPollRef.current); otpPollRef.current = null }
-  }
-
-  function startOtpPolling(verifyFn) {
-    stopOtpPolling()
-    setOtpAutoWait(true)
-    otpPollRef.current = setInterval(async () => {
-      try {
-        const r = await fetch('/api/telnyx/otp')
-        if (!r.ok) return
-        const d = await r.json()
-        if (!d.otp || !d.ts) return
-        if (otpRequestedAt.current && new Date(d.ts) < otpRequestedAt.current) return
-        stopOtpPolling()
-        setOtpAutoWait(false)
-        setOtpCode(d.otp)
-        verifyFn(d.otp)
-      } catch {}
-    }, 3000)
-  }
 
   // ── Edit number dialog ──
   const [editNumberOpen,  setEditNumberOpen]  = useState(false)
@@ -872,7 +863,7 @@ export default function InstancesPanel() {
       const d = await r.json()
       if (!r.ok) { setWizardErr(d.detail || t.inst.createGenErr); setWizardLoading(false); return }
 
-      // If no phone provided — just create and close (like old dialog)
+      // If no phone provided — just create and close
       if (!phone) { fetchInstances(); setWizardOpen(false); setWizardLoading(false); return }
 
       // With phone — request pairing code
@@ -915,56 +906,6 @@ export default function InstancesPanel() {
       setPairErr(e.message)
     } finally {
       setPairLoading(false)
-    }
-  }
-
-  function handleOtpClick() {
-    const inst = menuInst; closeMenu()
-    stopOtpPolling()
-    setOtpPhone(''); setOtpCode(''); setOtpStep('phone'); setOtpErr(''); setOtpAutoWait(false)
-    setOtpTarget(inst)
-    setOtpOpen(true)
-  }
-
-  async function handleRequestOtpCall() {
-    if (!otpPhone.trim()) { setOtpErr(t.inst.otpErrPhone); return }
-    setOtpLoading(true); setOtpErr('')
-    try {
-      const r = await fetch(`/api/evolution/instance/${otpTarget?.name}?action=request-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: otpPhone.replace(/\D/g, '') }),
-      })
-      const d = await r.json()
-      if (!r.ok) { setOtpErr(d.detail || d.error || t.inst.otpErrRequest); return }
-      otpRequestedAt.current = new Date()
-      setOtpStep('code')
-      startOtpPolling((code) => handleVerifyOtp(code))
-    } catch (e) {
-      setOtpErr(e.message)
-    } finally {
-      setOtpLoading(false)
-    }
-  }
-
-  async function handleVerifyOtp(autoCode) {
-    const clean = (autoCode || otpCode).replace(/\D/g, '')
-    if (clean.length < 6) { setOtpErr(t.inst.otpErrCode); return }
-    setOtpLoading(true); setOtpErr('')
-    try {
-      const r = await fetch(`/api/evolution/instance/${otpTarget?.name}?action=verify-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: clean }),
-      })
-      const d = await r.json()
-      if (!r.ok) { setOtpErr(d.detail || d.error || t.inst.otpErrVerify); return }
-      setOtpStep('success')
-      setTimeout(() => { setOtpOpen(false); fetchInstances() }, 2000)
-    } catch (e) {
-      setOtpErr(e.message)
-    } finally {
-      setOtpLoading(false)
     }
   }
 
@@ -1127,6 +1068,7 @@ export default function InstancesPanel() {
                     key={uid}
                     user={user}
                     instances={userInsts}
+                    health={health}
                     onAddSlot={() => openPickForUser(user)}
                     onQr={inst => handleQrClick(inst)}
                     onEditNumber={inst => handleEditNumberClick(inst)}
@@ -1171,6 +1113,12 @@ export default function InstancesPanel() {
                         const status = inst.live_status || 'unknown'
                         const color  = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
                         const isConn = ['open','connected'].includes(status)
+                        const _REASON_COLOR = { banned: '#f87171', logged_out: '#fbbf24', conflict: '#fbbf24', multidevice: '#fbbf24', server_error: '#f87171', restart: '#fb923c', timeout: '#94a3b8', closed: '#94a3b8', replaced: '#fb923c' }
+                        const instDotColor = !isConn && inst.disconnect_reason ? (_REASON_COLOR[inst.disconnect_reason] ?? '#94a3b8') : color
+                        const instReasonLabel = inst.disconnect_reason ? ((lang === 'en' ? DISCONNECT_LABEL_EN : DISCONNECT_LABEL_ES)[inst.disconnect_reason] ?? inst.disconnect_reason_label) : null
+                        const instHealth = health[inst.name]
+                        const instUptime = instHealth?.uptime_pct ?? null
+                        const instUptimeColor = instUptime === null ? '#64748b' : instUptime >= 90 ? '#4ade80' : instUptime >= 60 ? '#fbbf24' : '#f87171'
                         return (
                           <Box key={inst.name} sx={{ border: '1px solid var(--border)',
                             borderRadius: 2, overflow: 'hidden', bgcolor: 'var(--card-bg)',
@@ -1179,16 +1127,29 @@ export default function InstancesPanel() {
 
                             {/* Instance row */}
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 1.5, py: 1.1 }}>
-                              <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color, flexShrink: 0,
-                                boxShadow: isConn ? `0 0 5px ${color}88` : 'none' }} />
+                              <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: instDotColor, flexShrink: 0,
+                                boxShadow: isConn ? `0 0 5px ${instDotColor}88` : 'none' }} />
                               <Box sx={{ flex: 1, minWidth: 0 }}>
-                                <Typography sx={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text)',
-                                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                  {inst.label || inst.name}
-                                </Typography>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                                  <Typography sx={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text)',
+                                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {inst.label || inst.name}
+                                  </Typography>
+                                  {instUptime !== null && (
+                                    <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: instUptimeColor,
+                                      bgcolor: `${instUptimeColor}18`, px: 0.5, borderRadius: 0.8, lineHeight: 1.6, flexShrink: 0 }}>
+                                      {instUptime}%
+                                    </Typography>
+                                  )}
+                                </Box>
                                 <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
                                   {inst.number ? `+${inst.number}` : t.inst.noNumber}
                                 </Typography>
+                                {!isConn && instReasonLabel && (
+                                  <Typography sx={{ fontSize: '0.62rem', color: instDotColor, lineHeight: 1.2, mt: 0.2 }}>
+                                    {instReasonLabel}
+                                  </Typography>
+                                )}
                               </Box>
                               {/* Actions */}
                               <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', flexShrink: 0 }}>
@@ -1756,121 +1717,6 @@ export default function InstancesPanel() {
         </DialogActions>
       </Dialog>
 
-      {/* ── OTP registration dialog ── */}
-      <Dialog open={otpOpen} onClose={() => { if (otpStep !== 'success') { stopOtpPolling(); setOtpOpen(false) } }} sx={{
-        '& .MuiDialog-paper': {
-          bgcolor: 'var(--card-bg, #161d2e)',
-          backgroundImage: 'linear-gradient(160deg, rgba(251,146,60,0.08) 0%, transparent 55%)',
-          border: '1px solid rgba(251,146,60,0.2)',
-          borderRadius: 3, minWidth: 360,
-          boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
-        },
-      }}>
-        <DialogTitle sx={{ pb: 1 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
-            <Box sx={{ width: 34, height: 34, borderRadius: 2, flexShrink: 0, bgcolor: 'rgba(251,146,60,0.12)', border: '1px solid rgba(251,146,60,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {otpStep === 'success'
-                ? <CheckCircleIcon sx={{ fontSize: 18, color: '#4ade80' }} />
-                : <CallIcon sx={{ fontSize: 18, color: '#fb923c' }} />}
-            </Box>
-            <Box>
-              <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.97rem', lineHeight: 1.2 }}>
-                {otpStep === 'success' ? t.inst.otpSuccessTitle : t.inst.otpTitle}
-              </Typography>
-              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem' }}>
-                {otpTarget?.name}
-              </Typography>
-            </Box>
-          </Box>
-        </DialogTitle>
-
-        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '4px !important', pb: 1 }}>
-          {otpStep === 'phone' && (
-            <>
-              <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', lineHeight: 1.5 }}>
-                {t.inst.otpPhoneDesc}
-              </Typography>
-              <TextField
-                label={t.inst.otpPhoneLabel}
-                placeholder={t.inst.otpPhonePlaceholder}
-                size="small"
-                value={otpPhone}
-                onChange={e => setOtpPhone(e.target.value)}
-                helperText={<span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.68rem' }}>{t.inst.otpPhoneHint}</span>}
-                onKeyDown={e => e.key === 'Enter' && handleRequestOtpCall()}
-                autoFocus
-                sx={FIELD_SX}
-              />
-              {otpErr && <Typography sx={{ color: '#f87171', fontSize: '0.78rem' }}>{otpErr}</Typography>}
-            </>
-          )}
-          {otpStep === 'code' && (
-            <>
-              <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', lineHeight: 1.5 }}>
-                {t.inst.otpCodeDesc.replace('{phone}', `+${otpPhone.replace(/\D/g, '')}`)}
-              </Typography>
-              {otpAutoWait && (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, bgcolor: 'rgba(251,146,60,0.08)', border: '1px solid rgba(251,146,60,0.2)', borderRadius: 1.5, px: 1.5, py: 1 }}>
-                  <CircularProgress size={13} sx={{ color: '#fb923c', flexShrink: 0 }} />
-                  <Typography sx={{ color: '#fb923c', fontSize: '0.76rem' }}>
-                    Esperando SMS de WhatsApp… se ingresará automáticamente
-                  </Typography>
-                </Box>
-              )}
-              <TextField
-                label={t.inst.otpCodeLabel}
-                placeholder={t.inst.otpCodePlaceholder}
-                size="small"
-                value={otpCode}
-                onChange={e => { stopOtpPolling(); setOtpAutoWait(false); setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6)) }}
-                onKeyDown={e => e.key === 'Enter' && handleVerifyOtp()}
-                autoFocus
-                slotProps={{ htmlInput: { maxLength: 6, style: { textAlign: 'center', fontSize: '1.5rem', fontFamily: 'monospace', letterSpacing: '0.3em', color: '#fb923c', fontWeight: 800 } } }}
-                sx={{
-                  ...FIELD_SX,
-                  '& .MuiOutlinedInput-root': {
-                    ...FIELD_SX['& .MuiOutlinedInput-root'],
-                    '&.Mui-focused fieldset': { borderColor: '#fb923c' },
-                  },
-                  '& .MuiInputLabel-root.Mui-focused': { color: '#fb923c' },
-                }}
-              />
-              {otpErr && <Typography sx={{ color: '#f87171', fontSize: '0.78rem' }}>{otpErr}</Typography>}
-            </>
-          )}
-          {otpStep === 'success' && (
-            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', py: 2, gap: 1.5 }}>
-              <CheckCircleIcon sx={{ fontSize: 52, color: '#4ade80' }} />
-              <Typography sx={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.85rem', textAlign: 'center' }}>
-                {t.inst.otpSuccessMsg}
-              </Typography>
-            </Box>
-          )}
-        </DialogContent>
-
-        <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5, borderTop: '1px solid rgba(255,255,255,0.07)', gap: 1 }}>
-          {otpStep !== 'success' && (
-            <Button onClick={() => { stopOtpPolling(); setOtpOpen(false) }} sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.82rem', borderRadius: 2, px: 2, '&:hover': { color: '#fff', bgcolor: 'rgba(255,255,255,0.08)' } }}>
-              {t.inst.otpClose}
-            </Button>
-          )}
-          {otpStep === 'phone' && (
-            <Button onClick={handleRequestOtpCall} disabled={otpLoading} variant="contained"
-              startIcon={otpLoading ? null : <CallIcon sx={{ fontSize: '17px !important' }} />}
-              sx={{ bgcolor: '#ea580c', '&:hover': { bgcolor: '#c2410c' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5 }}>
-              {otpLoading ? <CircularProgress size={15} sx={{ color: 'white' }} /> : t.inst.otpRequestBtn}
-            </Button>
-          )}
-          {otpStep === 'code' && (
-            <Button onClick={handleVerifyOtp} disabled={otpLoading || otpCode.replace(/\D/g, '').length < 6} variant="contained"
-              sx={{ bgcolor: '#ea580c', '&:hover': { bgcolor: '#c2410c' }, textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2.5,
-                '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.2)' } }}>
-              {otpLoading ? <CircularProgress size={15} sx={{ color: 'white' }} /> : t.inst.otpVerifyBtn}
-            </Button>
-          )}
-        </DialogActions>
-      </Dialog>
-
       {/* ── Emulator registration dialog ── */}
       <Dialog open={emuOpen} onClose={() => { if (emuStep !== 'running') { emuEsRef.current?.close(); setEmuOpen(false) } }} sx={{
         '& .MuiDialog-paper': {
@@ -2381,6 +2227,7 @@ export default function InstancesPanel() {
           </Box>
         </Box>
       </Dialog>
+
     </Box>
   )
 }

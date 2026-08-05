@@ -372,7 +372,8 @@ class MongoDBManager:
                            message_type: str = "conversation",
                            status: str = "received", raw_data: dict = None,
                            interactive: dict = None,
-                           related_to_number: str = None):
+                           related_to_number: str = None,
+                           instance_name: str = None):
         # Dedup: if this message_id already exists, avoid duplicate entries.
         # If the existing record has company_id="unknown" and we now know the real
         # company, upgrade it in place (handles the race: inbound before JID learned).
@@ -405,6 +406,8 @@ class MongoDBManager:
             doc["from_number"] = number
             if related_to_number:
                 doc["related_to_number"] = related_to_number
+            if instance_name:
+                doc["received_on_instance"] = instance_name
             # Mark for analysis so the analytics panel can show a loading indicator.
             # Skip unknown company_id — classifier won't run for them anyway.
             # Skip personal-contact companies (.local domain) — they flood inbound messages
@@ -422,6 +425,69 @@ class MongoDBManager:
                     doc["pending_since"] = datetime.utcnow()
         result = self.db.message_logs.insert_one(doc)
         return str(result.inserted_id)
+
+    def save_instance_health_log(self, instance_name: str, event: str,
+                                  reason: str = None, reason_label: str = None,
+                                  reason_code: int = None):
+        """Record a state-change event (connected/disconnected) for an instance.
+        Only called on actual transitions — not on every poll — to keep the collection small."""
+        self.db.instance_health_logs.insert_one({
+            "instance_name": instance_name,
+            "event":         event,           # "connected" | "disconnected"
+            "reason":        reason,          # disconnect_reason key or None
+            "reason_label":  reason_label,
+            "reason_code":   reason_code,
+            "ts":            datetime.utcnow(),
+        })
+
+    def get_instance_uptime(self, instance_names: list, hours: int = 24) -> dict:
+        """Calculate uptime % per instance over the last N hours.
+        Returns {instance_name: {"uptime_pct": float, "last_event": str, "last_ts": datetime, "last_reason": str}}"""
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        result = {}
+
+        for name in instance_names:
+            logs = list(self.db.instance_health_logs.find(
+                {"instance_name": name, "ts": {"$gte": cutoff}},
+                {"_id": 0, "event": 1, "ts": 1, "reason": 1, "reason_label": 1},
+            ).sort("ts", 1))
+
+            # Get the state just BEFORE the window to know the starting state
+            before = self.db.instance_health_logs.find_one(
+                {"instance_name": name, "ts": {"$lt": cutoff}},
+                {"_id": 0, "event": 1},
+                sort=[("ts", -1)],
+            )
+            current_state = (before["event"] if before else "unknown")
+
+            window_secs = hours * 3600
+            connected_secs = 0.0
+            prev_ts = cutoff
+
+            for log in logs:
+                seg = (log["ts"] - prev_ts).total_seconds()
+                if current_state == "connected":
+                    connected_secs += seg
+                current_state = log["event"]
+                prev_ts = log["ts"]
+
+            # Remaining time up to now
+            now = datetime.utcnow()
+            seg = (now - prev_ts).total_seconds()
+            if current_state == "connected":
+                connected_secs += seg
+
+            uptime_pct = round((connected_secs / window_secs) * 100, 1) if window_secs > 0 else 0.0
+
+            last_log = logs[-1] if logs else before
+            result[name] = {
+                "uptime_pct":  uptime_pct,
+                "last_event":  last_log["event"] if last_log else None,
+                "last_ts":     last_log["ts"].isoformat() if last_log else None,
+                "last_reason": last_log.get("reason_label") if last_log else None,
+            }
+
+        return result
 
     def update_evolution_message_status(self, message_id: str, status: str):
         result = self.db.message_logs.update_one(

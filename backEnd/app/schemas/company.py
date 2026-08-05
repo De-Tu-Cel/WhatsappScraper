@@ -11,6 +11,7 @@ class SendMessageRequest(BaseModel):
     to_number: str
     message: str
     website: Optional[str] = ""
+    instance: Optional[str] = None  # explicit instance bypass (e.g. for conversation replies)
 
 class SearchRequest(BaseModel):
     industry: str

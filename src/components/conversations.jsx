@@ -615,17 +615,22 @@ export default function Conversations() {
     if (!text.trim() || !selected || toSend.length === 0) return
     setSendError('')
     setSending(true)
+    // Route reply through the same instance that received the last inbound message
+    const lastInbound = [...thread].reverse().find(m => m.direction === 'inbound')
+    const replyInstance = lastInbound?.received_on_instance || null
     try {
       for (const num of toSend) {
+        const payload = {
+          company_id: selected.company_id,
+          to_number: num,
+          message: text.trim(),
+          website: selected.website || '',
+        }
+        if (replyInstance) payload.instance = replyInstance
         const res = await authFetch('/api/send-message', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            company_id: selected.company_id,
-            to_number: num,
-            message: text.trim(),
-            website: selected.website || '',
-          }),
+          body: JSON.stringify(payload),
         })
         if (!res.ok) {
           const err = await res.json().catch(() => ({}))

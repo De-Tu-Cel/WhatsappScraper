@@ -206,7 +206,11 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         instance = EVOLUTION_INSTANCE
         _all_disconnected = False
 
-        if x_user_token:
+        # If caller provides an explicit instance (e.g. conversation reply), use it directly
+        if req.instance:
+            instance = req.instance
+            print(f"[SendMsg] explicit instance override → {instance}")
+        elif x_user_token:
             user = get_user_by_token(x_user_token)
             if user:
                 user_id = user.get("id") or str(user.get("_id", ""))
@@ -914,6 +918,7 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
                         number=number, message_body=message_body,
                         message_id=message_id, message_type=message_type,
                         status="received", raw_data=msg, interactive=interactive_data,
+                        instance_name=req.instance,
                     )
                     # Skip analysis mid-AI-session and throttle: only classify if the last
                     # classification for this company is >10 min old (or doesn't exist yet).
@@ -1027,9 +1032,21 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
             # We only write the phone number when state is "open" (QR actually scanned).
             # Other states must NEVER overwrite an existing number — opening the QR dialog
             # without scanning it should leave the stored number untouched.
+            _DISCONNECT_REASONS = {
+                401: ("logged_out",    "Cerró sesión"),
+                403: ("banned",        "Baneado por WhatsApp"),
+                405: ("conflict",      "Conflicto de dispositivo"),
+                408: ("timeout",       "Timeout de conexión"),
+                411: ("multidevice",   "Conflicto multi-dispositivo"),
+                428: ("closed",        "Conexión cerrada"),
+                440: ("replaced",      "Sesión reemplazada"),
+                500: ("server_error",  "Error interno"),
+                515: ("restart",       "Requiere reinicio"),
+            }
             instance_name = (req.instance or "").strip()
             owner = ""
             conn_state = ""
+            status_reason = None
             if isinstance(data, dict):
                 owner = (
                     data.get("ownerJid") or
@@ -1040,17 +1057,40 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
                     data.get("state") or
                     data.get("instance", {}).get("state") or ""
                 ).lower()
+                # Baileys statusReason code — present on disconnects
+                status_reason = (
+                    data.get("statusReason") or
+                    data.get("lastDisconnect", {}).get("error", {}).get("output", {}).get("statusCode")
+                )
+                if isinstance(status_reason, str) and status_reason.isdigit():
+                    status_reason = int(status_reason)
             _connected_states = {"open", "connected"}
             if owner and instance_name and conn_state in _connected_states:
                 number = owner.split("@")[0] if "@" in owner else owner
                 if number:
                     db.db.instances.update_one(
                         {"name": instance_name},
-                        {"$set": {"number": number}},
+                        {"$set": {"number": number}, "$unset": {"disconnect_reason": "", "disconnect_reason_label": "", "disconnect_code": ""}},
                     )
+                    db.save_instance_health_log(instance_name, "connected")
                     print(f"[Webhook] connection.update: instance={instance_name} number={number} state={conn_state}")
-            elif instance_name:
-                print(f"[Webhook] connection.update ignored (state={conn_state!r}, owner={'yes' if owner else 'no'}) — number preserved")
+            elif instance_name and conn_state in {"close", "disconnected"}:
+                reason_key, reason_label = _DISCONNECT_REASONS.get(status_reason, ("disconnected", "Desconectada"))
+                db.db.instances.update_one(
+                    {"name": instance_name},
+                    {"$set": {
+                        "disconnect_reason":       reason_key,
+                        "disconnect_reason_label": reason_label,
+                        "disconnect_code":         status_reason,
+                        "last_disconnect_at":      datetime.now(),
+                    }},
+                )
+                db.save_instance_health_log(instance_name, "disconnected",
+                                            reason=reason_key, reason_label=reason_label,
+                                            reason_code=status_reason)
+                print(f"[Webhook] connection.update: instance={instance_name} state={conn_state} reason={reason_key}({status_reason}) → {reason_label}")
+            else:
+                print(f"[Webhook] connection.update ignored (state={conn_state!r}, owner={'yes' if owner else 'no'}) — no changes")
             return {"ok": True, "action": "connection_updated"}
 
         return {"ok": True, "action": "ignored", "event": event}
@@ -1432,10 +1472,11 @@ def api_evo_pairing_code(name: str, body: dict):
 
 @router.post("/evolution/instance/request-otp/{name}")
 def api_evo_request_otp(name: str, body: dict):
-    """Evolution API v2: request OTP via voice call for new number registration."""
+    """Evolution API v2: request OTP SMS for new number registration (primary device)."""
     try:
         import requests as _req
         from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
+        from fastapi.responses import JSONResponse as _JSONResponse
         phone = str(body.get("phone", "")).strip().replace("+", "").replace(" ", "")
         if not phone:
             raise HTTPException(status_code=400, detail="phone requerido")
@@ -1445,7 +1486,13 @@ def api_evo_request_otp(name: str, body: dict):
             json={"phoneNumber": phone, "method": "sms"},
             timeout=15,
         )
-        return r.json()
+        try:
+            data = r.json()
+        except Exception:
+            data = {"detail": r.text or "Evolution API error"}
+        if not r.ok:
+            return _JSONResponse(content=data, status_code=r.status_code)
+        return data
     except HTTPException: raise
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
@@ -1455,6 +1502,7 @@ def api_evo_verify_otp(name: str, body: dict):
     try:
         import requests as _req
         from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
+        from fastapi.responses import JSONResponse as _JSONResponse
         code = str(body.get("code", "")).strip()
         if not code:
             raise HTTPException(status_code=400, detail="code requerido")
@@ -1464,7 +1512,13 @@ def api_evo_verify_otp(name: str, body: dict):
             json={"code": code},
             timeout=15,
         )
-        return r.json()
+        try:
+            data = r.json()
+        except Exception:
+            data = {"detail": r.text or "Evolution API error"}
+        if not r.ok:
+            return _JSONResponse(content=data, status_code=r.status_code)
+        return data
     except HTTPException: raise
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
@@ -1612,6 +1666,68 @@ def api_smsfast_cancel(body: dict):
     except Exception as e: raise HTTPException(500, str(e))
 
 
+@router.get("/evolution/instances/user-status")
+def api_evo_user_status(x_user_token: Optional[str] = Header(None)):
+    """Returns aggregate connection status for all instances assigned to the current user.
+    connected=true if ANY instance is state=open AND has a phone number registered."""
+    from app.auth import get_user_by_token
+    from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
+    import requests as _req
+    from concurrent.futures import ThreadPoolExecutor
+    from bson import ObjectId
+
+    if not x_user_token:
+        return {"connected": False, "connected_count": 0, "total": 0}
+
+    user = get_user_by_token(x_user_token)
+    if not user:
+        return {"connected": False, "connected_count": 0, "total": 0}
+
+    db = MongoDBManager()
+    user_id = user.get("id") or str(user.get("_id", ""))
+    all_instances = list(db.db.instances.find(
+        {"assigned_to": user_id},
+        {"_id": 0, "name": 1, "number": 1, "disconnect_reason": 1, "disconnect_reason_label": 1, "disconnect_code": 1},
+    )) if user_id else []
+
+    if not all_instances:
+        # Fallback: check user's personal evolution_instance
+        inst_name = user.get("evolution_instance", "")
+        if not inst_name:
+            return {"connected": False, "connected_count": 0, "total": 0}
+        all_instances = [{"name": inst_name, "number": user.get("connected_number", "")}]
+
+    def _check(inst):
+        try:
+            r = _req.get(
+                f"{EVOLUTION_API_URL}/instance/connectionState/{inst['name']}",
+                headers={"apikey": EVOLUTION_API_KEY}, timeout=3,
+            )
+            state = (r.json().get("instance") or {}).get("state") or r.json().get("state", "")
+            return state == "open" and bool(inst.get("number"))
+        except Exception:
+            return False
+
+    with ThreadPoolExecutor(max_workers=max(1, len(all_instances))) as ex:
+        results = list(ex.map(_check, all_instances))
+
+    connected_count = sum(results)
+    # Also return disconnect_reason of the first disconnected instance (for UI hint)
+    first_disconnected = next(
+        (i for i, ok in zip(all_instances, results) if not ok and i.get("disconnect_reason")), None
+    )
+    resp = {
+        "connected": connected_count > 0,
+        "connected_count": connected_count,
+        "total": len(all_instances),
+    }
+    if first_disconnected:
+        resp["disconnect_reason"]       = first_disconnected["disconnect_reason"]
+        resp["disconnect_reason_label"] = first_disconnected.get("disconnect_reason_label", "")
+        resp["disconnect_code"]         = first_disconnected.get("disconnect_code")
+    return resp
+
+
 @router.get("/evolution/instance/status/{name}")
 def api_evo_get_status(name: str):
     """GET /instance/connectionState/{name} → {"instance": {"instanceName": "...", "state": "open"|"close"}, "number": "..."}"""
@@ -1624,11 +1740,18 @@ def api_evo_get_status(name: str):
             timeout=10,
         )
         data = r.json()
-        # Enrich with number from MongoDB so frontend can validate
+        # Enrich with number + disconnect_reason from MongoDB
         db = MongoDBManager()
-        inst_doc = db.db.instances.find_one({"name": name}, {"_id": 0, "number": 1}) or {}
+        inst_doc = db.db.instances.find_one(
+            {"name": name},
+            {"_id": 0, "number": 1, "disconnect_reason": 1, "disconnect_reason_label": 1, "disconnect_code": 1},
+        ) or {}
         if inst_doc.get("number"):
             data["number"] = inst_doc["number"]
+        if inst_doc.get("disconnect_reason"):
+            data["disconnect_reason"]       = inst_doc["disconnect_reason"]
+            data["disconnect_reason_label"] = inst_doc.get("disconnect_reason_label", "Desconectada")
+            data["disconnect_code"]         = inst_doc.get("disconnect_code")
         return data
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
@@ -2441,6 +2564,16 @@ def api_delete_all_pending():
 
 
 # ── Instance Management ───────────────────────────────────────────────────────
+
+@router.get("/admin/instances/health")
+def api_instances_health(x_user_token: Optional[str] = Header(None),
+                         hours: int = 24):
+    """Returns uptime % and last event for each instance over the last N hours."""
+    _require_user(x_user_token)
+    db = MongoDBManager()
+    names = [i["name"] for i in db.db.instances.find({}, {"_id": 0, "name": 1})]
+    return db.get_instance_uptime(names, hours=hours)
+
 
 @router.get("/admin/instances")
 def api_list_instances(x_user_token: Optional[str] = Header(None)):

@@ -1036,7 +1036,12 @@ export default function SearchProspects() {
           </Box>
           {/* Variable chips */}
           <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 1 }}>
-            {[['{{nombre}}','#818cf8'],['{{ciudad}}','#38bdf8'],['{{industria}}','#fb923c'],['{{web}}','#a78bfa']].map(([v, color]) => (
+            {[
+              ['{{nombre}}', t.search.varName, '#818cf8'],
+              ['{{ciudad}}', t.search.varCity, '#38bdf8'],
+              ['{{industria}}', t.search.varIndustry, '#fb923c'],
+              ['{{web}}', t.search.varWebsite, '#a78bfa'],
+            ].map(([v, label, color]) => (
               <Box key={v} onClick={() => {
                 const el = msgRef.current; if (!el) return
                 el.setRangeText(v, el.selectionStart, el.selectionEnd, 'end')
@@ -1047,7 +1052,7 @@ export default function SearchProspects() {
                 cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace',
                 bgcolor: `${color}18`, color, border: `1px solid ${color}40`,
                 '&:hover': { bgcolor: `${color}30` },
-              }}>{v}</Box>
+              }}>{label}</Box>
             ))}
             <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', alignSelf: 'center', ml: 0.5 }}>
               {t.search.clickInsert}
@@ -1110,13 +1115,13 @@ export default function SearchProspects() {
               {done && errCount > 0 && (
                 <Button size="small" startIcon={<ReplayIcon sx={{ fontSize: 14 }} />} onClick={handleRetryFailed}
                   sx={{ color: '#f87171', fontSize: '0.75rem', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, px: 1.5, py: 0.4, textTransform: 'none', '&:hover': { bgcolor: 'rgba(239,68,68,0.08)' } }}>
-                  Reintentar {errCount} fallidas
+                  {t.search.retryFailed} {errCount} {t.search.failedLabel}
                 </Button>
               )}
               {done && (
                 <Button size="small" startIcon={<DownloadIcon sx={{ fontSize: 14 }} />} onClick={downloadCsv}
                   sx={{ color: 'var(--accent, #60a5fa)', fontSize: '0.75rem', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)', borderRadius: 1.5, px: 1.5, py: 0.4, textTransform: 'none', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)' } }}>
-                  Descargar CSV
+                  {t.search.download}
                 </Button>
               )}
             </Box>

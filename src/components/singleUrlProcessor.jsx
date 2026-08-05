@@ -553,7 +553,7 @@ export default function SingleUrlProcessor() {
       messages:  messagesOrText,
       companyId: result.company_id,
       website:   result.website,
-    })
+    }, result.name || result.website || '')
     setSendSuccess(true)
     setTimeout(() => setSendSuccess(false), 2500)
   }

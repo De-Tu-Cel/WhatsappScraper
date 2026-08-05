@@ -1234,7 +1234,7 @@ export default function DatabaseViewer({ isActive }) {
       messages:  messagesOrText,
       companyId: msgData.company_id,
       website:   msgData.website,
-    })
+    }, msgData.scraped?.name || msgData.website || '')
     setMsgTarget(null)
   }
 

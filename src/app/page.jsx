@@ -242,7 +242,11 @@ function DashboardInner() {
           {/* TopControls: se desliza a la izquierda cuando un panel derecho está abierto */}
           <Box sx={{
             position: 'absolute', top: 3.2, zIndex: 6,
-            right: rightPanel ? 354 : 16,
+            // Panels have different widths (Appearance 340px, Notifications 360px) —
+            // offset per panel so there's a consistent ~16px gap to its left edge
+            // instead of reusing one value that left the icons pressed against
+            // (or overlapping into) the wider Notifications panel.
+            right: notifOpen ? 376 : appearanceOpen ? 356 : 16,
             transition: 'right 0.25s cubic-bezier(0.4,0,0.2,1)',
             whiteSpace: 'nowrap',
           }}>

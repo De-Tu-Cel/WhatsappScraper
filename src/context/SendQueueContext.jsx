@@ -154,8 +154,15 @@ export function SendQueueProvider({ children }) {
     }, 1800)
   }, [])
 
-  const addJob = useCallback((job) => {
-    queueRef.current.push(job)
+  // Single job (e.g. "Enviar" a una sola empresa/URL, posiblemente a varios
+  // números). Se le asigna su propio batchId para que también dispare
+  // reportBatchComplete al terminar — antes solo los jobs de addBatch
+  // generaban notificación, dejando sin aviso los envíos individuales que
+  // pasan por la burbuja de timing con varios números/pausas.
+  const addJob = useCallback((job, label = '') => {
+    const batchId = `j${Date.now()}${Math.random().toString(36).slice(2, 8)}`
+    batchMetaRef.current.set(batchId, { remaining: 1, sent: 0, failed: 0, label })
+    queueRef.current.push({ ...job, batchId })
     setQueueLen(queueRef.current.length)
     processNext()
   }, [processNext])

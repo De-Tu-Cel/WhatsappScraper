@@ -105,7 +105,7 @@ export default function NotificationsPanel({ open, onClose, onNavigateToConv, on
               <NotificationsNoneIcon sx={{ fontSize: 15, color: 'var(--accent, #3b82f6)' }} />
             </Box>
             <Typography sx={{ color: 'var(--text, #f1f5f9)', fontWeight: 700, fontSize: '0.88rem', flex: 1 }}>
-              {t.notifications?.title || (lang === 'en' ? 'Notifications' : 'Notificaciones')}
+              {t.notifications.title}
             </Typography>
             {/* Clear all — double-checkmark style like WhatsApp */}
             {visibleItems?.length > 0 && (

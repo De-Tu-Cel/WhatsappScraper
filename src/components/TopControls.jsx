@@ -95,7 +95,7 @@ export default function TopControls({ appearanceOpen, onToggleAppearance, notifO
         ))}
       </Menu>
 
-      <Tooltip title={t.notifications?.title || 'Notificaciones'}>
+      <Tooltip title={t.notifications.title}>
         <IconButton size="small" onClick={onToggleNotifications} sx={ICON_BTN_SX(notifOpen)}>
           <Badge
             badgeContent={notifCount}

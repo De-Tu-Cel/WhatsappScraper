@@ -668,11 +668,13 @@ class WebsiteScraper:
 
     def _ai_rank_subpages(self, links: List[Dict], industry: str = "") -> List[str]:
         """
-        Ask DeepSeek to rank internal links by probability of containing contact info.
-        Falls back to keyword scoring if DeepSeek is not configured or fails.
+        Ask the active LLM (OpenAI or DeepSeek) to rank internal links by probability
+        of containing contact info. Falls back to keyword scoring if no LLM is
+        configured or the call fails.
         """
-        import os, json as _json, re as _re, requests as _req
-        ds_key = os.getenv("DEEPSEEK_API_KEY", "")
+        import json as _json, re as _re
+        from app.llm import active_provider
+        has_llm = active_provider() != "none"
 
         # Páginas de contacto garantizadas — siempre van primero sin importar el ranking
         _MUST_CRAWL = {
@@ -689,7 +691,7 @@ class WebsiteScraper:
         ]
         non_must  = [lk for lk in links if lk["url"] not in set(must_urls)]
 
-        if ds_key and non_must:
+        if has_llm and non_must:
             batch = non_must[:20]
             lines = [f"{i+1}. {lk['path']!r}" for i, lk in enumerate(batch)]
             industry_hint = f" (industria del negocio: {industry})" if industry else ""
@@ -711,7 +713,7 @@ class WebsiteScraper:
                     print(f"🤖 AI ranked {len(ranked)} subpages + {len(must_urls)} páginas de contacto garantizadas")
                     return must_urls + ranked + rest
             except Exception as exc:
-                print(f"⚠️  DeepSeek subpage ranking failed ({exc}), using keyword fallback")
+                print(f"⚠️  LLM subpage ranking failed ({exc}), using keyword fallback")
 
         keyword_ranked = self._keyword_score_links(non_must)
         return must_urls + keyword_ranked

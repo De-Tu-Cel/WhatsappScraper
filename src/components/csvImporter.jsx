@@ -248,7 +248,10 @@ export default function CsvImporter() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url, skip_send: true }),
           })
-          if (!r.ok) throw new Error(`HTTP ${r.status}`)
+          if (!r.ok) {
+            const body = await r.json().catch(() => null)
+            throw new Error(body?.detail || `HTTP ${r.status}`)
+          }
           const d = await r.json()
           if (d.blacklisted) {
             completed++
@@ -278,11 +281,11 @@ export default function CsvImporter() {
           setCompletedCount(completed)
           setCurrentUrl(url)
           return row
-        } catch {
+        } catch (e) {
           completed++
           setProgress(Math.round(completed / total * 100))
           setCompletedCount(completed)
-          return { url, empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, status_wa: '—', msg_status: null, ok: false, duplicate: false }
+          return { url, empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, status_wa: '—', msg_status: null, ok: false, duplicate: false, errorReason: e.message }
         }
       }))
       res.push(...chunkResults)
@@ -782,12 +785,17 @@ export default function CsvImporter() {
                         ) : r.duplicate ? (
                           <Chip label={t.csv.statusDup} size="small" icon={<WarningAmberIcon sx={{ fontSize: '12px !important' }} />}
                             sx={{ bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#fbbf24' } }} />
+                        ) : r.ok && !r.whatsapp ? (
+                          <Chip label={t.csv.statusEmpty} size="small" icon={<HighlightOffIcon sx={{ fontSize: '12px !important' }} />}
+                            sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.12)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: 'rgba(255,255,255,0.4)' } }} />
                         ) : r.ok ? (
                           <Chip label={t.csv.statusOk} size="small" icon={<CheckCircleIcon sx={{ fontSize: '12px !important' }} />}
                             sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#4ade80' } }} />
                         ) : (
-                          <Chip label={t.csv.statusError} size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
-                            sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' } }} />
+                          <Tooltip title={r.errorReason || 'Error desconocido'} placement="top" arrow>
+                            <Chip label={t.csv.statusError} size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
+                              sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' }, cursor: 'help' }} />
+                          </Tooltip>
                         )}
                       </TableCell>
                     </TableRow>

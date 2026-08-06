@@ -526,7 +526,10 @@ export default function SingleUrlProcessor() {
         body: JSON.stringify({ url, skip_send: true }),
         signal: abortRef.current.signal,
       })
-      if (!res.ok) throw new Error(`Error ${res.status}`)
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        throw new Error(body?.detail || `Error ${res.status}`)
+      }
       const data = await res.json()
       if (data.blacklisted) {
         setBlockedData({ url, matched: data.matched })

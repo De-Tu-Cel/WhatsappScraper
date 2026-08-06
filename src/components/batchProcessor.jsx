@@ -247,7 +247,10 @@ export default function BatchProcessor() {
               body: JSON.stringify({ url, skip_send: true }),
               signal: abortCtrl.current.signal,
             })
-            if (!res.ok) throw new Error(`HTTP ${res.status}`)
+            if (!res.ok) {
+              const body = await res.json().catch(() => null)
+              throw new Error(body?.detail || `HTTP ${res.status}`)
+            }
             const d = await res.json()
             const row = d.blacklisted
               ? { url, empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, ok: false, blacklisted: true, blockReason: d.matched, msg_status: null }
@@ -262,7 +265,7 @@ export default function BatchProcessor() {
             completed++
             setProgress(Math.round(completed / total * 100))
             setDoneCount(completed)
-            return { url, empresa: '—', industria: '—', whatsapp: '', company_id: '', scraped_data: null, ok: false, msg_status: null }
+            return { url, empresa: '—', industria: '—', whatsapp: '', company_id: '', scraped_data: null, ok: false, msg_status: null, errorReason: e.message }
           }
         }))
         const valid = chunkResults.filter(Boolean)
@@ -848,12 +851,17 @@ export default function BatchProcessor() {
                             <Chip label={t.batch.chipBlocked} size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
                             sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' }, cursor: 'help' }} />
                         </Tooltip>
+                      ) : r.ok && !r.whatsapp ? (
+                        <Chip label={t.batch.chipEmpty} size="small" icon={<HighlightOffIcon sx={{ fontSize: '12px !important' }} />}
+                          sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.12)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: 'rgba(255,255,255,0.4)' } }} />
                       ) : r.ok ? (
                         <Chip label="OK" size="small" icon={<CheckCircleIcon sx={{ fontSize: '12px !important' }} />}
                           sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#4ade80' } }} />
                       ) : (
-                        <Chip label="Error" size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
-                          sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' } }} />
+                        <Tooltip title={r.errorReason || 'Error desconocido'} placement="top" arrow>
+                          <Chip label="Error" size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
+                            sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' }, cursor: 'help' }} />
+                        </Tooltip>
                       )}
                     </TableCell>
                   </TableRow>

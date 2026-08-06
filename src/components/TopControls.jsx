@@ -102,8 +102,8 @@ export default function TopControls({ appearanceOpen, onToggleAppearance, notifO
             max={99}
             sx={{
               '& .MuiBadge-badge': {
-                bgcolor: '#ef4444', color: '#fff', fontSize: '0.62rem', fontWeight: 700,
-                minWidth: 16, height: 16, top: 2, right: 2,
+                bgcolor: '#ef4444', color: '#fff', fontSize: '0.52rem', fontWeight: 700,
+                minWidth: 13, height: 13, top: 4, right: 4,
               },
             }}>
             <NotificationsNoneIcon sx={{ fontSize: 17 }} />

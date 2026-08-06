@@ -164,6 +164,9 @@ def api_process_url(req: ProcessUrlRequest, x_user_token: Optional[str] = Header
     try:
         return serialize(process_url(req.url, message_template=req.message_template, skip_send=req.skip_send, user_token=x_user_token))
     except Exception as e:
+        import traceback
+        print(f"[process-url] {req.url} → {type(e).__name__}: {e}")
+        traceback.print_exc()
         msg = str(e)
         status = 422 if any(k in msg.lower() for k in ("no response", "http error", "timeout", "connection", "name or service")) else 500
         raise HTTPException(status_code=status, detail=msg)
@@ -1420,11 +1423,10 @@ def api_evo_get_qr(name: str):
         db = MongoDBManager()
         inst_doc = db.db.instances.find_one({"name": name}) or {}
         instance_token = inst_doc.get("instance_token") or EVOLUTION_API_KEY
-        # Use POST /instance/connect with instance-specific apikey
-        r = _req.post(f"{EVOLUTION_API_URL}/instance/connect",
-            headers={"apikey": instance_token, "Content-Type": "application/json"},
-            json={}, timeout=10)
-        print(f"[DEBUG] evo connect {name!r} → {r.status_code} {r.text[:300]}")
+        # GET /instance/connect/{name} returns QR code for Evolution API
+        r = _req.get(f"{EVOLUTION_API_URL}/instance/connect/{name}",
+            headers={"apikey": instance_token}, timeout=10)
+        print(f"[DEBUG] evo qr {name!r} → {r.status_code} {r.text[:300]}")
         resp = r.json()
         # Normalize QR field for frontend
         qr_b64 = resp.get("base64") or resp.get("qrcode", {}).get("base64") or resp.get("qr", {}).get("base64")

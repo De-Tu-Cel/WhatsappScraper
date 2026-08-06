@@ -370,6 +370,7 @@ export default function ResultDisplay({ result }) {
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <PersonIcon sx={{ fontSize: 15, color: '#c084fc' }} />
                   <Typography variant="body2" fontWeight={700} sx={{ color: 'var(--text, rgba(255,255,255,0.85))' }}>{p.name}</Typography>
+                  {p.role && <Typography variant="caption" sx={{ color: 'var(--text-secondary, rgba(255,255,255,0.5))' }}>· {p.role}</Typography>}
                 </Box>
                 {p.email && <Typography variant="caption" sx={{ color: '#f87171', ml: 3 }}>{p.email}</Typography>}
                 {p.phone && <Typography variant="caption" sx={{ color: '#60a5fa', ml: 3 }}>{p.phone}</Typography>}

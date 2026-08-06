@@ -677,6 +677,7 @@ class MongoDBManager:
                     "_id": "$company_id",
                     "last_at": {"$max": "$created_at"},
                     "category":          {"$first": "$analysis.category"},
+                    "is_ai":             {"$first": "$analysis.is_ai"},
                     "response_quality":  {"$first": "$analysis.response_quality"},
                     "business_hours":    {"$first": "$analysis.business_hours"},
                     "notes":             {"$first": "$analysis.notes"},
@@ -719,7 +720,7 @@ class MongoDBManager:
                 merged[cid] = {
                     "_id": cid,
                     "last_at": og["last_at"],
-                    "category": None, "response_quality": None,
+                    "category": None, "is_ai": None, "response_quality": None,
                     "reaction_time_min": None, "business_hours": None,
                     "notes": None, "total_responses": 0,
                 }
@@ -839,7 +840,7 @@ class MongoDBManager:
                     "source": re.sub(r"^https?://(www\.)?", "", _src).rstrip("/") if _src else "",
                     "sent": data["sent"],
                     "responses": len(data["inbound"]),
-                    "category": None, "response_quality": None,
+                    "category": None, "is_ai": None, "response_quality": None,
                     "reaction_time_min": None, "business_hours": None,
                     "notes": "Sin respuesta",
                     "inherited_analysis": False,
@@ -851,6 +852,7 @@ class MongoDBManager:
                                   if m["analysis"].get("conversation_analysis")), None)
                     best = _conv or analyzed[0]
                     entry["category"]       = best["analysis"].get("category")
+                    entry["is_ai"]          = best["analysis"].get("is_ai")
                     entry["notes"]          = best["analysis"].get("notes") or ""
                     entry["business_hours"] = best["analysis"].get("business_hours")
                     if _conv:
@@ -868,6 +870,7 @@ class MongoDBManager:
                                   if m["analysis"].get("conversation_analysis")), None)
                     best = _conv or company_analyzed[0]
                     entry["category"]          = best["analysis"].get("category")
+                    entry["is_ai"]             = best["analysis"].get("is_ai")
                     entry["notes"]             = best["analysis"].get("notes") or ""
                     entry["business_hours"]    = best["analysis"].get("business_hours")
                     entry["response_quality"]  = best["analysis"].get("response_quality")
@@ -902,6 +905,7 @@ class MongoDBManager:
                 "industry": company.get("industry", ""),
                 "domain": company.get("domain", ""),
                 "category": g["category"] if has_real_analysis else None,
+                "is_ai": g.get("is_ai") if has_real_analysis else None,
                 "response_quality": round(g["response_quality"] or 0, 1) if has_real_analysis else None,
                 "reaction_time_min": round(g["reaction_time_min"], 1) if (has_real_analysis and g.get("reaction_time_min") is not None) else None,
                 "business_hours": g.get("business_hours") if has_real_analysis else None,

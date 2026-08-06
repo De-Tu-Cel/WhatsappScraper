@@ -534,6 +534,7 @@ export const T = {
       chipFailed:     'Falló',
       chipNoWa:       'Sin WA',
       chipBlocked:    'Bloqueada',
+      chipEmpty:      'Vacío',
     },
     csv: {
       title:        'Importar CSV',
@@ -585,6 +586,7 @@ export const T = {
       statusDup:     'Duplicado',
       statusError:   'Error',
       statusBlocked: 'Bloqueada',
+      statusEmpty:   'Vacío',
     },
     search: {
       title:           'Buscar Prospectos',
@@ -1648,6 +1650,7 @@ export const T = {
       chipFailed:     'Failed',
       chipNoWa:       'No WA',
       chipBlocked:    'Blocked',
+      chipEmpty:      'Empty',
     },
     csv: {
       title:        'Import CSV',
@@ -1699,6 +1702,7 @@ export const T = {
       statusDup:     'Duplicate',
       statusError:   'Error',
       statusBlocked: 'Blocked',
+      statusEmpty:   'Empty',
     },
     search: {
       title:           'Search Prospects',

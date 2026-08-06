@@ -189,13 +189,14 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
         person_id = db.insert_person_contact({
             "company_id": company_id,
             "name": contact["name"],
+            "role": contact.get("role", ""),
             "email": contact.get("email", ""),
             "phone": contact.get("phone", ""),
             "whatsapp": contact.get("whatsapp", ""),
             "source": website,
         })
         person_contact_ids.append(person_id)
-        print(f"👤 Contacto guardado: {contact['name']} - {contact['role']}")
+        print(f"👤 Contacto guardado: {contact['name']} - {contact.get('role', '')}")
 
     # ========================================================================
     # GUARDAR REDES SOCIALES

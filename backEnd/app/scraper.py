@@ -6,8 +6,11 @@ from typing import Dict, List, Optional
 from urllib.parse import urljoin, urlparse
 
 import requests
+import urllib3
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 class WebsiteScraper:
@@ -573,30 +576,57 @@ class WebsiteScraper:
         """
         Intenta requests primero. Si Cloudflare bloquea (403 / 503 / 999),
         reintenta con cloudscraper que resuelve el desafío JS automáticamente.
-        Devuelve el objeto Response o None si ambos fallan.
+        Si todo falla por un problema de SSL (certificado incompleto, hostname
+        mismatch, handshake rechazado), reintenta ignorando la verificación del
+        certificado y, como último recurso, por HTTP plano — muchos de estos
+        sitios solo tienen mal configurado el HTTPS pero responden bien sin él.
+        Devuelve el objeto Response o None si todo falla.
         """
         _CF_CODES = {403, 503, 999}
+        ssl_failed = False
         try:
             resp = requests.get(url, headers=self.headers, timeout=timeout)
             if resp.status_code not in _CF_CODES:
                 return resp
             print(f"🛡️  Cloudflare detectado ({resp.status_code}) en {url} — reintentando con cloudscraper…")
+        except requests.exceptions.SSLError:
+            ssl_failed = True
         except Exception:
             pass
 
-        try:
-            import cloudscraper
-            if self._cs is None:
-                self._cs = cloudscraper.create_scraper(
-                    browser={"browser": "chrome", "platform": "windows", "mobile": False}
-                )
-            resp = self._cs.get(url, timeout=timeout)
-            if resp.status_code == 200:
-                print(f"✅ cloudscraper superó el desafío: {url}")
+        if not ssl_failed:
+            try:
+                import cloudscraper
+                if self._cs is None:
+                    self._cs = cloudscraper.create_scraper(
+                        browser={"browser": "chrome", "platform": "windows", "mobile": False}
+                    )
+                resp = self._cs.get(url, timeout=timeout)
+                if resp.status_code == 200:
+                    print(f"✅ cloudscraper superó el desafío: {url}")
+                    return resp
+                print(f"⚠️  cloudscraper recibió {resp.status_code} en {url}")
+            except requests.exceptions.SSLError:
+                ssl_failed = True
+            except Exception as e:
+                print(f"⚠️  cloudscraper falló en {url}: {e}")
+
+        if ssl_failed:
+            try:
+                resp = requests.get(url, headers=self.headers, timeout=timeout, verify=False)
+                print(f"🔓 SSL roto en {url} — funcionó ignorando verificación de certificado")
                 return resp
-            print(f"⚠️  cloudscraper recibió {resp.status_code} en {url}")
-        except Exception as e:
-            print(f"⚠️  cloudscraper falló en {url}: {e}")
+            except Exception as e:
+                print(f"⚠️  verify=False falló en {url}: {e}")
+
+            if url.startswith("https://"):
+                http_url = "http://" + url[len("https://"):]
+                try:
+                    resp = requests.get(http_url, headers=self.headers, timeout=timeout)
+                    print(f"🔓 HTTPS irrecuperable en {url} — funcionó por HTTP plano ({http_url})")
+                    return resp
+                except Exception as e:
+                    print(f"⚠️  Fallback HTTP falló en {http_url}: {e}")
 
         return None
 
@@ -936,19 +966,22 @@ class WebsiteScraper:
                 return t.count(kw)
             return 1 if kw in _words else 0
 
+        # Normalizado por tamaño de lista: sin esto, categorías con más keywords (ej.
+        # Manufactura, ~24 palabras) le ganan a categorías con listas cortas (ej.
+        # Gas LP / Energía, ~9 palabras) solo por tener más oportunidades de matchear
+        # palabras genéricas como "industrial", aunque el sitio sea claramente lo otro.
         scores = {}
         for industry, keywords in self.INDUSTRY_KEYWORDS.items():
-            score = sum(_count(kw, text_lower) for kw in keywords)
-            if score > 0:
-                scores[industry] = score
+            raw = sum(_count(kw, text_lower) for kw in keywords)
+            if raw > 0:
+                scores[industry] = raw / len(keywords)
 
         return max(scores, key=scores.get) if scores else "No detectada"
 
     def _classify_industry_deepseek(self, text_snippet: str) -> str:
-        """Usa DeepSeek para clasificar industria cuando keywords no son suficientes."""
-        import os, requests as _req
-        ds_key = os.getenv("DEEPSEEK_API_KEY", "")
-        if not ds_key or not text_snippet.strip():
+        """Usa el LLM activo (OpenAI o DeepSeek) para clasificar industria cuando keywords no son suficientes."""
+        from app.llm import active_provider
+        if active_provider() == "none" or not text_snippet.strip():
             return ""
         try:
             categories = list(self.INDUSTRY_KEYWORDS.keys())
@@ -1356,20 +1389,96 @@ class WebsiteScraper:
         
         return list(dict.fromkeys(emails))
 
+    # Palabras de menú/navegación y vocabulario de negocio que NUNCA son nombres de persona.
+    # Si cualquier palabra del candidato aparece aquí, se descarta (evita capturar ítems de menú).
+    NAME_STOPWORDS = {
+        "facturacion", "facturación", "contacto", "seleccionar", "solicitar", "gas",
+        "facebook", "instagram", "twitter", "linkedin", "youtube", "tiktok", "whatsapp",
+        "somos", "empresa", "certificada", "contratos", "individuales", "servicio",
+        "programado", "medidor", "leer", "condominios", "parque", "industrial",
+        "inicio", "nosotros", "productos", "servicios", "sucursales", "sucursal",
+        "ubicacion", "ubicación", "ubicaciones", "cotiza", "cotizar", "cotización",
+        "menu", "menú", "buscar", "carrito", "iniciar", "sesion", "sesión", "registro",
+        "politica", "política", "privacidad", "aviso", "legal", "terminos", "términos",
+        "condiciones", "preguntas", "frecuentes", "blog", "noticias", "galeria", "galería",
+        "clientes", "proveedores", "trabaja", "nosotros", "quienes", "quiénes", "somos",
+        "avenida", "calle", "colonia", "municipio", "estado", "codigo", "código", "postal",
+        "num", "numero", "número", "telefono", "teléfono", "email", "correo",
+    }
+
+    def _is_probable_person_name(self, name: str) -> bool:
+        words = re.findall(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]+", name.lower())
+        return bool(words) and not any(w in self.NAME_STOPWORDS for w in words)
+
     def _extract_person_contacts(self, soup: BeautifulSoup, text: str) -> List[Dict]:
         """Extrae nombres asociados a teléfonos (sucursales, personas, ubicaciones).
         Nota: los resultados van a person_contacts y se usan como labels de números en analytics,
         pero NO se muestran en la UI como 'Personas de contacto'."""
+        # Quitar nav/header/footer/menú antes de buscar — ahí viven los falsos positivos
+        # (ítems de menú en mayúscula inicial que el regex de nombres confunde con personas).
+        clean_soup = BeautifulSoup(str(soup), "html.parser")
+        for tag in clean_soup.find_all(["nav", "header", "footer", "script", "style"]):
+            tag.decompose()
+        for tag in clean_soup.find_all(class_=re.compile(r"(menu|nav|footer|header)", re.IGNORECASE)):
+            tag.decompose()
+
         contacts = []
-        team_sections = soup.find_all(["div", "section"], class_=re.compile(
-            r"(team|equipo|contact|contacto|staff|about|nosotros|sucursal|ubicacion|location|branch)",
+        team_sections = clean_soup.find_all(["div", "section"], class_=re.compile(
+            r"(team|equipo|staff)",
             re.IGNORECASE
         ))
         for section in team_sections:
             contacts.extend(self._parse_contacts_from_text(section.get_text(" ", strip=True)))
         if not contacts:
-            contacts = self._parse_contacts_from_text(text[:5000])
-        return contacts
+            clean_text = clean_soup.get_text(" ", strip=True)
+            contacts = self._parse_contacts_from_text(clean_text[:5000])
+        return self._llm_filter_persons(contacts)
+
+    def _llm_filter_persons(self, candidates: List[Dict]) -> List[Dict]:
+        """El regex de arriba solo hace un primer filtro barato (stopwords). Para decidir
+        cuáles candidatos son personas reales (vs. ítems de menú, direcciones, nombres de
+        servicios que el regex no pudo descartar) y para inferirles un rol, delegamos el
+        juicio semántico a un LLM — mucho más confiable que seguir creciendo la lista de
+        stopwords a mano. Si no hay LLM configurado o la llamada falla, se usan los
+        candidatos del regex tal cual (no bloquea el scraping)."""
+        if not candidates:
+            return []
+
+        from app.llm import OPENAI_API_KEY, DEEPSEEK_API_KEY
+        if not (OPENAI_API_KEY or DEEPSEEK_API_KEY):
+            return candidates
+
+        import json
+        items = [
+            {"name": c["name"], "email": c.get("email", ""), "phone": c.get("phone", "")}
+            for c in candidates[:15]
+        ]
+        prompt = (
+            "Te doy una lista de posibles nombres de personas extraídos de un sitio web mexicano "
+            "por un regex ingenuo, junto con un teléfono/email cercano en el texto original. "
+            "Algunos NO son personas reales: pueden ser ítems de menú de navegación, nombres de "
+            "calles/colonias/ciudades, nombres de servicios o productos, o el nombre de la empresa.\n\n"
+            f"Candidatos:\n{json.dumps(items, ensure_ascii=False)}\n\n"
+            "Responde ÚNICAMENTE con un JSON array, un objeto por candidato, en el MISMO ORDEN:\n"
+            '[{"is_person": true/false, "role": "puesto o rol si se puede inferir, si no cadena vacía"}]'
+        )
+        try:
+            from app.llm import call_llm
+            raw = call_llm([{"role": "user", "content": prompt}], max_tokens=500, temperature=0)
+            start = raw.find("[")
+            end = raw.rfind("]") + 1
+            if start < 0 or end <= start:
+                return candidates
+            verdicts = json.loads(raw[start:end])
+            if not isinstance(verdicts, list) or len(verdicts) != len(items):
+                return candidates
+            filtered = []
+            for cand, verdict in zip(candidates[:15], verdicts):
+                if isinstance(verdict, dict) and verdict.get("is_person"):
+                    filtered.append({**cand, "role": verdict.get("role") or ""})
+            return filtered
+        except Exception:
+            return candidates
 
     def _parse_contacts_from_text(self, text: str) -> List[Dict]:
         """Parsea contactos desde texto"""
@@ -1380,6 +1489,9 @@ class WebsiteScraper:
         names = re.findall(name_pattern, text)
         
         for name in names:
+            if not self._is_probable_person_name(name):
+                continue
+
             # Buscar contexto alrededor del nombre
             name_pos = text.find(name)
             if name_pos == -1:

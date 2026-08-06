@@ -41,7 +41,7 @@ MENSAJE ENVIADO: {outbound_body}
 RESPUESTA DEL PROSPECTO: {inbound_body}
 
 ══ PASO 1: ORIGEN DE LA RESPUESTA ══
-Elige UNO: "humano" | "automatico" | "menu" | "hibrido" | "bot"
+Elige UNO: "humano" | "hibrido" | "bot"
 
 "humano" — persona real respondiendo en tiempo real.
   Señales FUERTES (cada una por sí sola es suficiente):
@@ -57,42 +57,26 @@ Elige UNO: "humano" | "automatico" | "menu" | "hibrido" | "bot"
     · Lenguaje coloquial (un bot también puede usarlo)
   CLAVE: lo que importa es que RESPONDE AL TEMA, no que tenga errores ortográficos.
 
-"automatico" — plantilla fija activada por cualquier entrada, ignora el contenido enviado.
-  Señales FUERTES:
+"hibrido" — combina contenido automático/bot CON contenido humano en la misma respuesta o en el hilo inmediato.
+  CASOS que califican como "hibrido":
+    (1) Mensaje automático/bot + opción ACTIVA de hablar con humano ahora mismo:
+        "¿Deseas hablar con un asesor? Responde SÍ", "Te conecto con un agente",
+        "Escribe HUMANO", botón "Hablar con asesor"
+    (2) El mensaje ES el anuncio del handoff: "Hola, soy [nombre], reemplazaré a nuestro asistente virtual",
+        "Se está comunicando con un agente de [empresa] vía WhatsApp. Desde ahora reemplazaré al bot."
+        → aunque el mensaje parezca humano, el contexto indica que antes había un bot → "hibrido"
+  NO confundir con "bot" que solo promete contacto futuro sin dar opción activa ahora.
+
+"bot" — cualquier respuesta generada por sistema, SIN menú numerado: desde una plantilla fija
+que ignora el contenido enviado hasta una IA conversacional avanzada.
+  Señales FUERTES de bot (cada una por sí sola es suficiente):
     · Número de ticket, folio o referencia (#TKT-0023, Ref: 45678, Folio: ABC-123)
     · Frases de plantilla reconocibles: "Tu mensaje es importante para nosotros",
       "En breve un asesor te contactará", "Estimado cliente", "Mensaje generado automáticamente",
       "Hemos recibido tu consulta", "Nos comunicaremos a la brevedad"
     · Respuesta idéntica sin importar el mensaje recibido (ignora completamente el tema)
     · Horarios de atención explícitos en el cuerpo ("Lun-Vie 8am-6pm", "Atención 24/7")
-    · Firma de empresa muy formal o URL corporativa al pie
     · Responde en segundos a cualquier hora incluyendo madrugada, fines de semana o festivos
-    · Texto muy largo y formal para un simple saludo inicial
-  DIFERENCIA vs "menu": no espera respuesta del usuario, solo acusa recibo.
-
-"menu" — chatbot IVR que presenta opciones y ESPERA que el usuario seleccione una.
-  Señales FUERTES:
-    · Lista numerada de opciones de navegación (1. Ventas  2. Soporte  3. Información)
-    · Emojis de número como ícono de opción (1️⃣ Ventas  2️⃣ Soporte  3️⃣ Facturación)
-    · Opciones separadas por | o / (Ventas | Soporte | Admin)
-    · Instrucción explícita de selección ("Responde con el número", "Elige una opción", "Escribe 1, 2 o 3")
-    · Árbol de decisión paso a paso (cada respuesta lleva a un nuevo submenú)
-    · Pregunta binaria de navegación ("¿Eres cliente? Responde SÍ o NO")
-  DIFERENCIA vs "bot": no intenta entender el mensaje libre, solo presenta opciones fijas.
-  DIFERENCIA vs "automatico": SÍ espera input del usuario para continuar el flujo.
-
-"hibrido" — combina contenido automático CON contenido humano en la misma respuesta o en el hilo inmediato.
-  CASOS que califican como "hibrido":
-    (1) Mensaje automático + opción ACTIVA de hablar con humano ahora mismo:
-        "¿Deseas hablar con un asesor? Responde SÍ", "Te conecto con un agente",
-        "Escribe HUMANO", botón "Hablar con asesor"
-    (2) El mensaje ES el anuncio del handoff: "Hola, soy [nombre], reemplazaré a nuestro asistente virtual",
-        "Se está comunicando con un agente de [empresa] vía WhatsApp. Desde ahora reemplazaré al bot."
-        → aunque el mensaje parezca humano, el contexto indica que antes había un bot → "hibrido"
-  NO confundir con "automatico" que solo promete contacto futuro sin dar opción activa ahora.
-
-"bot" — sistema con lógica propia o IA conversacional, SIN menú numerado.
-  Señales FUERTES de bot (cada una por sí sola es suficiente):
     · Mensaje bilingüe en el mismo bloque: español + inglés separados por "/" o "---"
       (ej: "La sesión ha finalizado. / Session ended." → bot CERTEZA)
     · Gestión de sesión explícita: "cerraré la sesión", "La sesión ha finalizado",
@@ -103,11 +87,13 @@ Elige UNO: "humano" | "automatico" | "menu" | "hibrido" | "bot"
     · Instrucciones de activación: "envía 'HOLA' para comenzar", "escribe X para chatear conmigo 🤖"
     · Estructura de IA: responde en tercera persona sobre sí mismo describiendo sus capacidades
       ("Estoy diseñado para...", "Mi enfoque es...", "Puedo ayudarte con...")
-  is_ai=false (bot de flujo/reglas):
-    · Ignora preguntas fuera de su flujo o repite el mismo mensaje ante entradas inesperadas
+  is_ai=false (plantilla fija, menú/IVR, o bot de flujo/reglas):
+    · Presenta un menú de opciones numeradas o con letra y ESPERA que el usuario seleccione una
+      (1. Ventas 2. Soporte, 1️⃣/2️⃣, "Responde con el número", "Elige una opción")
+    · Respuesta idéntica sin importar el mensaje recibido, o ignora preguntas fuera de su flujo
     · Respuestas excesivamente largas con bullets y estructura para mensajes simples
     · Tono corporativo perfecto sin personalidad real
-    · Si respondes algo inesperado, hace loop de vuelta al mismo punto
+    · Si respondes algo inesperado, hace loop de vuelta al mismo punto (o no responde nada más)
   is_ai=true (IA conversacional avanzada):
     · Entiende y responde al contenido específico del mensaje (no flujo rígido)
     · Reformula o parafrasea lo que dijo el interlocutor
@@ -119,8 +105,7 @@ Elige UNO: "humano" | "automatico" | "menu" | "hibrido" | "bot"
       sin opiniones propias, sin referencia a situaciones personales reales
 
 REGLA DE ORO: ante la duda → "humano". EXCEPCIÓN: si hay señales FUERTES de bot (bilingüe,
-gestión de sesión, se autoidentifica como bot) → "bot" aunque también parezca natural.
-JERARQUÍA: si hay menú numerado → "menu" aunque también tenga frases automáticas.
+gestión de sesión, se autoidentifica como bot, menú numerado) → "bot" aunque también parezca natural.
 
 ══ PASO 2: CALIDAD DE SERVICIO (escala 1-5) ══
 Mide CÓMO atendió la empresa al prospecto. Independiente del interés de compra del lead.
@@ -154,10 +139,10 @@ qué pasó con este contacto, cómo respondió la empresa y qué acción concret
 is_ai: true SOLO si category="bot" Y claramente es IA conversacional (no menú, no flujo rígido)
 bot_quality: SOLO si category="bot": 1=flujo básico · 3=flujo funcional · 5=IA avanzada
 ai_confidence: 0.0-1.0 solo si is_ai=true
-Para category="menu": is_ai=false siempre, bot_quality=null siempre.
+Si hay menú numerado: category="bot", is_ai=false siempre, bot_quality=null siempre.
 
 Responde SOLO con JSON válido:
-{{"category":"humano|automatico|menu|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"response_quality":1,"bot_quality":null,"notes":"diagnóstico"}}\
+{{"category":"humano|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"response_quality":1,"bot_quality":null,"notes":"diagnóstico"}}\
 """
 
 
@@ -207,16 +192,10 @@ Aplica en orden. La PRIMERA regla que coincida es la categoría correcta:
      · IVR de WhatsApp que transfiere a agente cuando el usuario pide ayuda
    IMPORTANTE: si hay handoff bot→humano, siempre es "hibrido" sin excepción.
 
-2. ¿Toda la conversación del prospecto son menús/opciones sin que jamás aparezca un humano real?
-   → "menu"
+2. ¿Toda la conversación es un bot (menús/opciones, plantilla fija, flujo automatizado, o IA
+   conversacional) sin que jamás aparezca un humano real? → "bot"
 
-3. ¿Toda la conversación es un bot con IA o flujo automatizado sin menús y sin humano?
-   → "bot"
-
-4. ¿Toda la conversación del prospecto son plantillas automáticas (acuses, folios, horarios)
-   sin menús y sin humano? → "automatico"
-
-5. ¿Todo indica persona real respondiendo a lo largo de toda la conversación? → "humano"
+3. ¿Todo indica persona real respondiendo a lo largo de toda la conversación? → "humano"
 
 REGLA DE ORO: si tienes dudas entre "humano" y otro, elige "humano".
 EXCEPCIÓN ABSOLUTA: si detectaste señales FUERTES de bot/menú en alguna fase, NO puede ser solo "humano".
@@ -224,7 +203,7 @@ EXCEPCIÓN ABSOLUTA: si detectaste señales FUERTES de bot/menú en alguna fase,
 ══ PASO 3: CALIDAD DE SERVICIO (1-5) ══
 
 Si la categoría es "hibrido": evalúa PRINCIPALMENTE la fase humana (ignora la calidad del bot).
-Si es "menu" / "automatico" / "bot" puro: TODAS las dimensiones van en 1-2, sin excepción.
+Si es "bot" puro (incluye menú/IVR): TODAS las dimensiones van en 1-2, sin excepción.
 
 svc_prof  (Profesionalismo): ortografía, tono, coherencia
 svc_comp  (Completitud): ¿respondió específicamente lo que se pidió?
@@ -247,7 +226,7 @@ que hubo un bot inicial y luego un agente real, y evalúa la calidad del agente.
 Indica la acción concreta más importante a tomar.
 
 Responde SOLO con JSON válido:
-{{"category":"humano|automatico|menu|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"response_quality":3,"bot_quality":null,"notes":"diagnóstico","conversation_analysis":true}}\
+{{"category":"humano|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"response_quality":3,"bot_quality":null,"notes":"diagnóstico","conversation_analysis":true}}\
 """
 
 _ERROR_RESULT = {
@@ -282,12 +261,12 @@ def _build_prompt(inbound_body: str, outbound_body: str, reaction_time_min: floa
         secs = reaction_time_min * 60
         if secs < 10:
             reaction_hint = (
-                f"\n🚨 SEÑAL CRÍTICA DE TIEMPO: respuesta en {secs:.0f} segundos — CERTEZA de bot/automatico. "
+                f"\n🚨 SEÑAL CRÍTICA DE TIEMPO: respuesta en {secs:.0f} segundos — CERTEZA de bot. "
                 "Un humano no puede leer y responder en menos de 10 segundos."
             )
         elif secs < 30:
             reaction_hint = (
-                f"\n⚠️ SEÑAL FUERTE DE TIEMPO: respuesta en {secs:.0f} segundos — casi con certeza bot/automatico. "
+                f"\n⚠️ SEÑAL FUERTE DE TIEMPO: respuesta en {secs:.0f} segundos — casi con certeza bot. "
                 "Solo un sistema puede responder tan rápido."
             )
         elif secs < 120:
@@ -318,7 +297,7 @@ def _build_prompt(inbound_body: str, outbound_body: str, reaction_time_min: floa
     ) + reaction_hint
 
 
-_VALID_CATEGORIES = {"humano", "automatico", "menu", "hibrido", "bot"}
+_VALID_CATEGORIES = {"humano", "hibrido", "bot"}
 
 
 def _parse_llm_response(raw: str) -> dict:
@@ -328,6 +307,8 @@ def _parse_llm_response(raw: str) -> dict:
             raw = raw[4:].strip()
     result = json.loads(raw)
     category = result.get("category", "humano")
+    if category in ("automatico", "menu"):  # el prompt ya no las ofrece, pero por si el LLM alucina
+        category = "bot"
     if category not in _VALID_CATEGORIES:
         category = "humano"
     is_ai = bool(result.get("is_ai", False)) if category == "bot" else False
@@ -376,8 +357,8 @@ def _call_deepseek(messages: list, max_tokens: int = 280) -> str:
 
 # ── Cheap pre-filter — resolves the unambiguous cases without spending an LLM call ──
 # Only the two signals that are deterministic enough to trust blindly: a structured
-# menu (category="menu" is always is_ai=False, bot_quality=None per the prompt rules
-# above) and an explicit auto-reply template arriving near-instantly. Everything else
+# menu (category="bot", is_ai=False, bot_quality=None per the prompt rules above) and
+# an explicit auto-reply template arriving near-instantly. Everything else
 # (human vs bot vs conversational-AI vs hibrido) needs real judgment and still goes to
 # the LLM — this is not an attempt to replace that, only to skip it when it's redundant.
 
@@ -412,7 +393,7 @@ def _looks_like_auto_reply(text: str) -> bool:
 
 def _quick_result(category: str, notes: str) -> dict:
     """Same shape as _parse_llm_response's output — low/None across the board,
-    matching the prompt's own rule: menu/automatico/bot(non-AI) always score 1-2."""
+    matching the prompt's own rule: menu/bot(non-AI) always score 1-2."""
     return {
         "category": category,
         "is_ai": False,
@@ -435,11 +416,11 @@ def _quick_classify(inbound_body: str, reaction_time_min: float = None) -> dict 
         return None
 
     if _looks_like_menu(text):
-        return _quick_result("menu", "Menú de opciones detectado por reglas — sin IA")
+        return _quick_result("bot", "Menú de opciones detectado por reglas — sin IA")
 
     responded_instantly = reaction_time_min is not None and reaction_time_min * 60 < 10
     if responded_instantly and _looks_like_auto_reply(text):
-        return _quick_result("automatico", "Plantilla de auto-respuesta + respuesta instantánea — sin IA")
+        return _quick_result("bot", "Plantilla de auto-respuesta + respuesta instantánea — sin IA")
     if responded_instantly:
         return _quick_result("bot", f"Respuesta en {reaction_time_min * 60:.0f}s — imposible para humano; bot o sistema automático")
 
@@ -519,6 +500,222 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
         return {"category": "humano", "response_quality": 3, "bot_quality": None, "notes": "Error al analizar conversación", "error": True}
 
 
+# ── Flujo determinista T1/T2 ────────────────────────────────────────────────
+# La decisión de origen (humano/bot/agente IA/automatico) se basa en tiempos de
+# respuesta, NO en que el LLM lea el contenido. El LLM solo entra como fallback si
+# no hay dato de tiempo, y en classify_conversation (detección de "hibrido" tras
+# cierre de sesión de Andy) — eso no cambia.
+T1_THRESHOLD_SECONDS = 10   # igual al umbral que ya usaba _quick_classify
+T2_THRESHOLD_SECONDS = 5
+PROBE_WAIT_HOURS      = 1
+
+
+def _quick_result_unrated(category: str, notes: str) -> dict:
+    """Como _quick_result pero SIN forzar calidad de servicio a 1. Se usa cuando la
+    categoría se decide 100% por tiempo, sin leer contenido — no hay base para
+    calificar profesionalismo/empatía/solución/etc., así que quedan sin evaluar
+    (None) en vez de mentir con un puntaje inventado."""
+    return {
+        "category": category,
+        "is_ai": False,
+        "ai_confidence": 0.0,
+        "svc_prof": None, "svc_comp": None, "svc_empa": None,
+        "svc_solu": None, "svc_next": None, "svc_proact": None,
+        "response_quality": None,
+        "bot_quality": None,
+        "notes": notes,
+        "conversation_analysis": False,
+        "quick_classified": True,
+    }
+
+
+_QUALITY_ONLY_PROMPT_TEMPLATE = """\
+Eres un auditor experto en calidad de atención comercial vía WhatsApp en Latinoamérica.
+Ya se determinó que esta respuesta la escribió una PERSONA REAL (no bot, no automático) —
+tu ÚNICA tarea es calificar la CALIDAD del servicio entregado. NO opines sobre el origen.
+
+MENSAJE ENVIADO: {outbound_body}
+RESPUESTA DEL PROSPECTO: {inbound_body}
+
+══ CALIDAD DE SERVICIO (escala 1-5) ══
+svc_prof   (Profesionalismo): ortografía, tono apropiado, coherencia y claridad
+svc_comp   (Completitud): ¿respondió específicamente lo que se preguntó o solicitó?
+svc_empa   (Empatía): calidez, personalización, reconoce y valida la necesidad del prospecto
+svc_solu   (Solución): ¿ofreció algo concreto? (precio orientativo, producto específico, alternativa, cita)
+svc_next   (Siguiente paso): ¿quedó claro qué sigue? (CTA explícito: llamada, link, reunión, precio)
+svc_proact (Proactividad): ¿anticipó necesidades, hizo preguntas de calificación, ofreció info extra?
+
+══ SEÑAL COMERCIAL (1-5) ══
+¿Qué tan "caliente" quedó el lead?
+1 — Ruido: "Ok","👍","Gracias", emoji solo, acuse de 1-2 palabras.
+2 — Cortesía vacía: reconoce contacto pero evita el tema.
+3 — Apertura tibia: toca el tema sin compromiso.
+4 — Señal real: pregunta específica del producto/servicio, da contexto o menciona necesidad/timing.
+5 — Lead caliente: pide cotización/precio, propone llamada o reunión, menciona urgencia o presupuesto.
+
+══ CONCLUSIÓN PARA EL CLIENTE (máximo 30 palabras) ══
+Lenguaje simple, como si hablaras con el dueño del negocio, no un técnico.
+
+Responde SOLO con JSON válido:
+{{"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"response_quality":3,"notes":"diagnóstico"}}\
+"""
+
+
+def _grade_quality_only(inbound_body: str, outbound_body: str) -> dict | None:
+    """Para respuestas ya clasificadas como 'humano' por tiempo (T1 > umbral): el origen
+    NO se decide aquí (ya es determinista), solo se intenta calificar la calidad del
+    servicio leyendo el contenido — el matiz que se pierde al no mandar estos casos al
+    LLM completo. Falla silenciosamente (devuelve None) ante cualquier problema — nunca
+    debe bloquear ni tumbar la clasificación determinista que ya se guardó."""
+    if all_quota_exhausted():
+        return None
+    try:
+        from app.llm import active_provider
+        if active_provider() == "none":
+            return None
+        prompt = _QUALITY_ONLY_PROMPT_TEMPLATE.format(
+            outbound_body=outbound_body or "(sin texto)",
+            inbound_body=inbound_body or "(sin texto)",
+        )
+        raw = _call_deepseek([{"role": "user", "content": prompt}], max_tokens=200)
+        if raw.startswith("```"):
+            raw = raw.split("```")[1].strip()
+            if raw.startswith("json"):
+                raw = raw[4:].strip()
+        result = json.loads(raw)
+
+        def _svc(key):
+            v = result.get(key)
+            if v is None:
+                return None
+            try:
+                return max(1, min(5, int(round(float(v)))))
+            except (TypeError, ValueError):
+                return None
+
+        return {
+            "svc_prof":   _svc("svc_prof"),
+            "svc_comp":   _svc("svc_comp"),
+            "svc_empa":   _svc("svc_empa"),
+            "svc_solu":   _svc("svc_solu"),
+            "svc_next":   _svc("svc_next"),
+            "svc_proact": _svc("svc_proact"),
+            "response_quality": _svc("response_quality") or 3,
+            "notes": result.get("notes", "") or "",
+        }
+    except LLMQuotaExceeded:
+        return None
+    except Exception:
+        log.warning("_grade_quality_only failed — se deja sin calificar", exc_info=True)
+        return None
+
+
+_IS_AI_CONFIRM_PROMPT = """\
+Este mensaje llegó muy rápido (≤{t2}s) como respuesta a un 2do mensaje que también se
+respondió muy rápido. Ya se descartó que sea un menú de opciones — el ORIGEN ya se decidió
+como sistema automatizado ("bot"), NO opines sobre eso. Tu ÚNICA tarea es distinguir el TIPO:
+¿suena a una IA conversacional (Agente IA), o podría ser una persona real escribiendo muy
+rápido (alguien muy atento al celular, esperando el mensaje)?
+
+TEXTO: {text}
+
+Responde SOLO con JSON: {{"is_ai": true/false, "reason": "breve justificación"}}\
+"""
+
+
+def _confirm_is_ai(text: str) -> bool:
+    """T2 rápido + sin menú ya decidió category="bot" de forma determinista — esta
+    llamada NO decide bot/no-bot, solo confirma el matiz is_ai (Agente IA vs. posible
+    humano muy rápido) leyendo el contenido. Si no hay LLM o falla, se mantiene el
+    default determinista que ya teníamos: is_ai=True (rápido+rápido+sin-menú = Agente IA)."""
+    if all_quota_exhausted():
+        return True
+    try:
+        from app.llm import active_provider
+        if active_provider() == "none":
+            return True
+        prompt = _IS_AI_CONFIRM_PROMPT.format(t2=T2_THRESHOLD_SECONDS, text=text or "(sin texto)")
+        raw = _call_deepseek([{"role": "user", "content": prompt}], max_tokens=60)
+        if raw.startswith("```"):
+            raw = raw.split("```")[1].strip()
+            if raw.startswith("json"):
+                raw = raw[4:].strip()
+        result = json.loads(raw)
+        return bool(result.get("is_ai", True))
+    except LLMQuotaExceeded:
+        return True
+    except Exception:
+        log.warning("_confirm_is_ai failed — se asume is_ai=True (default determinista)", exc_info=True)
+        return True
+
+
+def _find_open_probe(db, company_id: str, before_dt: datetime):
+    """Busca un probe T1→T2 abierto (mandado, aún no resuelto ni vencido) para esta compañía."""
+    return db.db.message_logs.find_one({
+        "company_id": company_id,
+        "direction": "inbound",
+        "probe.stage": "awaiting_t2",
+        "probe.deadline": {"$gte": before_dt},
+    })
+
+
+def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: datetime,
+                    timed_out: bool = False) -> dict:
+    """Resuelve un probe abierto — con la respuesta T2 recién llegada, o por timeout
+    (timed_out=True, llamado desde el sweep en background cuando pasó 1hr sin 2da
+    respuesta). Determinista, sin LLM."""
+    probe = probe_doc.get("probe", {}) or {}
+    t2_seconds = None
+    if not timed_out:
+        # El "2do mensaje" lo manda Andy (ai_followup.py), activado automáticamente por
+        # el webhook — no tenemos su log_id de antemano, así que lo identificamos como
+        # el primer outbound generado por IA después de que arrancó este probe.
+        started_at = probe.get("started_at")
+        if started_at:
+            msg2 = db.db.message_logs.find_one(
+                {
+                    "company_id": probe_doc.get("company_id"),
+                    "direction": "outbound",
+                    "ai_generated": True,
+                    "created_at": {"$gt": started_at},
+                },
+                sort=[("created_at", 1)],
+            )
+            sent_at = (msg2 or {}).get("created_at")
+            if sent_at and isinstance(sent_at, datetime):
+                t2_seconds = (received_at - sent_at).total_seconds()
+
+    if not timed_out and t2_seconds is not None and t2_seconds <= T2_THRESHOLD_SECONDS:
+        if _looks_like_menu(reply_body or ""):
+            analysis = _quick_result("bot", f"Menú detectado en 2do mensaje (T2={t2_seconds:.0f}s) — determinista, sin IA")
+            analysis["is_ai"] = False
+        else:
+            # category="bot" ya es determinista (T2 rápido, sin menú) — is_ai se
+            # confirma aparte con una llamada de IA ligera que NO puede cambiar la
+            # categoría, solo el matiz Agente IA vs. humano muy rápido.
+            is_ai = _confirm_is_ai(reply_body)
+            analysis = _quick_result(
+                "bot",
+                f"Respuesta rápida sin menú en 2do mensaje (T2={t2_seconds:.0f}s) — "
+                f"{'Agente IA' if is_ai else 'posible humano muy rápido'} (confirmado por IA)"
+            )
+            analysis["is_ai"] = is_ai
+    else:
+        notes = (f"Sin 2da respuesta tras {PROBE_WAIT_HOURS}h — determinista" if timed_out
+                 else f"2do mensaje respondido en {t2_seconds:.0f}s (> {T2_THRESHOLD_SECONDS}s) — determinista")
+        analysis = _quick_result("automatico", notes)
+
+    # reaction_time_min reportado = T1 (velocidad de la PRIMERA respuesta), no T2 —
+    # es la métrica que ya existía y que usa el resto del sistema.
+    analysis["reaction_time_min"] = probe.get("t1_reaction_min")
+    analysis["business_hours"] = is_business_hours(received_at)
+    analysis["classified_at"] = datetime.now().isoformat()
+    analysis["pending_human_check"] = analysis.get("category") == "bot"
+    if analysis["pending_human_check"]:
+        analysis["followup_deadline"] = received_at + timedelta(minutes=5)
+    return analysis
+
+
 def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_at: datetime):
     """Background task: classify a single inbound message and save the analysis."""
     if all_quota_exhausted():
@@ -534,6 +731,18 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
             log.debug("classify_and_save: ya marcado quota_exceeded, skip log_id=%s", log_id)
             return
 
+        # ── ¿Esta respuesta resuelve un probe T1→T2 abierto? ──────────────────
+        open_probe = _find_open_probe(db, company_id, received_at)
+        if open_probe:
+            analysis = _resolve_probe(db, open_probe, inbound_body, received_at)
+            db.save_message_analysis(str(open_probe["_id"]), analysis)
+            if str(open_probe["_id"]) != log_id:
+                db.save_message_analysis(log_id, analysis)
+            db.db.message_logs.update_one(
+                {"_id": open_probe["_id"]}, {"$set": {"probe.stage": "resolved"}}
+            )
+            return
+
         # Check if this message resolves a pending human-followup for the same company
         pending = db.db.message_logs.find_one({
             "company_id": company_id,
@@ -544,7 +753,7 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
         if pending:
             # A human took over within the follow-up window. The prior message's
             # analysis (category + reaction_time_min) reflected its OWN instant
-            # bot/automatico response and must stay intact — this new message gets
+            # bot response and must stay intact — this new message gets
             # classified on its own below via the normal flow. We only clear the
             # pending flag on the prior entry and flag the handoff so it can surface
             # as "hibrido" behavior without overwriting the original, correct timing.
@@ -565,21 +774,63 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
 
         outbound_body = ""
         reaction_time_min = None
+        raw_seconds = None  # segundos exactos, sin redondear — el umbral de T1 (10s)
+        # necesita esto: reaction_time_min está redondeado a 0.1 min (6s) para mostrar
+        # en UI, y ese redondeo por sí solo puede mover una respuesta de 9.6s a "12s"
+        # y hacerla cruzar el umbral incorrectamente.
         if last_outbound:
             outbound_body = last_outbound.get("message_body") or last_outbound.get("message_text") or ""
             last_sent_at = last_outbound.get("created_at")
             if last_sent_at and isinstance(last_sent_at, datetime):
                 delta = received_at - last_sent_at
-                minutes = round(delta.total_seconds() / 60, 1)
+                raw_seconds = delta.total_seconds()
+                minutes = round(raw_seconds / 60, 1)
                 reaction_time_min = minutes if minutes >= 0 else None
+                if raw_seconds < 0:
+                    raw_seconds = None
 
         business_hours = is_business_hours(received_at)
-        analysis = classify_response(inbound_body, outbound_body, reaction_time_min)
+
+        # ── T1 determinista — sin dato de tiempo, único caso que cae al LLM ───
+        if raw_seconds is None:
+            analysis = classify_response(inbound_body, outbound_body, reaction_time_min)
+        elif raw_seconds <= T1_THRESHOLD_SECONDS:
+            # Respuesta rápida — podría ser bot/agente IA/automatico. NO mandamos
+            # nosotros un 2do mensaje aquí: el webhook (routes.py) ya activa a Andy
+            # automáticamente en la primera respuesta de cualquier prospecto (salvo que
+            # el usuario lo haya desactivado) — solo marcamos el probe y esperamos a
+            # ver si Andy contesta de forma natural. Si no contesta (fuera de horario,
+            # detectó acuse automático, IA desactivada) el probe expira solo en 1h
+            # (ver _sweep_pending) y cae a "automatico".
+            db.db.message_logs.update_one(
+                {"_id": ObjectId(log_id)},
+                {"$set": {
+                    "analysis_status": "awaiting_t2",
+                    "probe": {
+                        "stage": "awaiting_t2",
+                        "started_at": received_at,
+                        "deadline": received_at + timedelta(hours=PROBE_WAIT_HOURS),
+                        "t1_reaction_min": reaction_time_min,
+                    },
+                }},
+            )
+            return
+        else:
+            # T1 > umbral — el ORIGEN es determinista: "humano", sin IA, sin excepción.
+            # La CALIDAD sí se intenta calificar aparte (llamada de IA separada, no
+            # decide categoría) — si falla o no hay LLM disponible, queda sin calificar.
+            analysis = _quick_result_unrated(
+                "humano", f"T1={raw_seconds:.0f}s > {T1_THRESHOLD_SECONDS}s — origen determinista, sin IA"
+            )
+            quality = _grade_quality_only(inbound_body, outbound_body)
+            if quality:
+                analysis.update(quality)
+
         analysis["reaction_time_min"] = reaction_time_min
         analysis["business_hours"] = business_hours
         analysis["classified_at"] = datetime.now().isoformat()
 
-        if analysis.get("category") in ("automatico", "bot"):
+        if analysis.get("category") == "bot":
             analysis["pending_human_check"] = True
             analysis["followup_deadline"] = received_at + timedelta(minutes=5)
         else:
@@ -635,7 +886,7 @@ def classify_conversation_and_save(company_id: str, log_id: str):
         log.error("classify_conversation_and_save failed for %s: %s\n%s", company_id, _exc, traceback.format_exc())
 
 
-_NO_REPLY_WAIT_MINUTES = 30
+_NO_REPLY_WAIT_MINUTES = 60  # coincide con "Hasta 1 hr" del flujo determinista para T1
 _SWEEP_INTERVAL_SEC    = 300
 
 
@@ -652,6 +903,24 @@ def _sweep_pending():
             },
             {"$set": {"analysis.pending_human_check": False}},
         )
+
+        # ── Probes T1→T2 vencidos: no respondió el 2do mensaje en PROBE_WAIT_HOURS ──
+        expired_probes = list(db.db.message_logs.find(
+            {
+                "direction": "inbound",
+                "probe.stage": "awaiting_t2",
+                "probe.deadline": {"$lt": now},
+            },
+            {"_id": 1},
+        ))
+        for probe_doc in expired_probes:
+            log_id = str(probe_doc["_id"])
+            full_doc = db.db.message_logs.find_one({"_id": probe_doc["_id"]})
+            analysis = _resolve_probe(db, full_doc, None, now, timed_out=True)
+            db.save_message_analysis(log_id, analysis)
+            db.db.message_logs.update_one(
+                {"_id": probe_doc["_id"]}, {"$set": {"probe.stage": "resolved"}}
+            )
 
         cutoff = now - timedelta(minutes=_NO_REPLY_WAIT_MINUTES)
         outbounds = list(db.db.message_logs.find(

@@ -57,7 +57,23 @@ const CATEGORY_CONFIG = {
   automatico: { tKey: 'automatic', color: '#facc15', bg: 'rgba(250,204,21,0.12)',  icon: '⚡' },
   hibrido:    { tKey: 'hybrid',    color: '#38bdf8', bg: 'rgba(56,189,248,0.12)',  icon: '🔀' },
   bot:        { tKey: 'bot',       color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', icon: '🤖' },
+  // "menu" ya no la produce el clasificador (se fusionó con "bot") — se mantiene aquí
+  // solo para que análisis viejos guardados con esa categoría se muestren igual que "bot".
+  menu:       { tKey: 'bot',       color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', icon: '🤖' },
   bot_ia:     { tKey: 'botAi',     color: '#c084fc', bg: 'rgba(192,132,252,0.15)', icon: '🧠' },
+}
+
+// Normaliza la categoría legado "menu" a la vigente "bot" para filtros/conteos — la
+// Categoría mostrada en la tabla ya se resuelve vía CATEGORY_CONFIG.
+const normCategory = cat => (cat === 'menu' ? 'bot' : cat)
+
+// Mismo criterio que getCategoryConfig: "bot" y "bot_ia" son mutuamente excluyentes
+// según el flag is_ai, no dos categorías independientes — se usa para que los stats
+// y filtros cuenten igual que lo que se ve en la columna Categoría de la tabla.
+const matchesCategory = (row, cat) => {
+  const nc = normCategory(row.category)
+  if (nc !== 'bot') return nc === cat
+  return cat === 'bot_ia' ? !!row.is_ai : cat === 'bot' ? !row.is_ai : false
 }
 
 function getCategoryConfig(row) {
@@ -85,6 +101,7 @@ function QualityDots({ score, color }) {
 function formatReactionTime(minutes) {
   if (minutes === null || minutes === undefined) return '—'
   if (minutes < 0) return '—'
+  if (minutes < 1) return `${Math.round(minutes * 60)}s`
   if (minutes < 60) return `${Math.round(minutes)}m`
   const h = Math.floor(minutes / 60)
   const m = Math.round(minutes % 60)
@@ -437,7 +454,7 @@ export default function Analytics() {
     if (filterCat !== 'all') {
       if (filterCat === 'sin_clasificar') {
         if (row.category && row.category !== 'sin_clasificar') return false
-      } else if (row.category !== filterCat) return false
+      } else if (!matchesCategory(row, filterCat)) return false
     }
     if (searchText.trim()) {
       const q = searchText.toLowerCase()
@@ -458,7 +475,7 @@ export default function Analytics() {
   })
 
   const total       = data.length
-  const pct = cat  => total ? Math.round((data.filter(d => d.category === cat).length / total) * 100) : 0
+  const pct = cat  => total ? Math.round((data.filter(d => matchesCategory(d, cat)).length / total) * 100) : 0
   const humanPct   = pct('humano')
   const autoPct    = pct('automatico')
   const hibridoPct = pct('hibrido')
@@ -600,7 +617,7 @@ export default function Analytics() {
           const isActive = filterCat === f.value
           const count    = f.value === 'all' ? data.length
                          : f.value === 'sin_clasificar' ? data.filter(d => !d.category || d.category === 'sin_clasificar').length
-                         : data.filter(d => d.category === f.value).length
+                         : data.filter(d => matchesCategory(d, f.value)).length
           return (
             <Box key={f.value} onClick={() => { setFilterCat(f.value); setPage(1) }} sx={{
               display: 'flex', alignItems: 'center', gap: 0.5,
@@ -916,7 +933,7 @@ export default function Analytics() {
 
                     {/* Filas expandibles — una por número, alineadas con columnas */}
                     {hasMultiple && isExpanded && row.numbers.filter(n => (n.number || '').replace(/\D/g,'').length >= 10).map(n => {
-                      const nCat     = getCategoryConfig({ category: n.category })
+                      const nCat     = getCategoryConfig({ category: n.category, is_ai: n.is_ai })
                       const replied  = n.responses > 0
                       const inherited = n.inherited_analysis === true
                       const hasAnalysis = !!n.category

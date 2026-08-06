@@ -31,7 +31,7 @@ C = {
     "text":       HexColor("#1e293b"),
     "muted":      HexColor("#64748b"),
     "humano":     HexColor("#16a34a"),
-    "automatico": HexColor("#d97706"),
+    "amber":      HexColor("#d97706"),
     "bot":        HexColor("#7c3aed"),
     "bot_ia":     HexColor("#9333ea"),
     "green":      HexColor("#16a34a"),
@@ -42,30 +42,33 @@ C = {
 }
 
 CATEGORY_INFO = {
-    "humano":        ("Persona real",        C["humano"]),
-    "automatico":    ("Resp. automatica",    C["automatico"]),
-    "menu":          ("Menu de opciones",    C["automatico"]),
-    "hibrido":       ("Bot + asesor",        C["primary"]),
-    "bot":           ("Chatbot",             C["bot"]),
-    "bot_ia":        ("Asistente IA",        C["bot_ia"]),
-    "sin_respuesta": ("Sin respuesta",       C["muted"]),
+    "humano":         ("Persona real",        C["humano"]),
+    "automatico":     ("Resp. automatica",    C["amber"]),
+    "hibrido":        ("Bot + asesor",        C["primary"]),
+    "bot":            ("Chatbot",             C["bot"]),
+    # "menu" ya no es categoría propia en el reporte — un IVR numérico se fusionó con
+    # "bot" (mismo label/color), así los reportes viejos con esa categoría no quedan
+    # como "Desconocido".
+    "menu":           ("Chatbot",             C["bot"]),
+    "bot_ia":         ("Asistente IA",        C["bot_ia"]),
+    "sin_respuesta":  ("Sin respuesta",       C["muted"]),
 }
 
 CATEGORY_DESCRIPTIONS = {
-    "humano":        "El canal es atendido por una persona real que responde manualmente a cada mensaje.",
-    "automatico":    "El canal responde de forma automatica sin intervencion humana detectada.",
-    "menu":          "El canal presenta un menu de opciones numeradas o por palabras clave.",
-    "hibrido":       "El canal combina respuestas automaticas iniciales con atencion humana posterior.",
-    "bot":           "El canal usa un chatbot basado en reglas para gestionar las conversaciones.",
-    "bot_ia":        "El canal usa un asistente de inteligencia artificial conversacional.",
-    "sin_respuesta": "El canal no respondio al contacto realizado durante el periodo analizado.",
+    "humano":         "El canal es atendido por una persona real que responde manualmente a cada mensaje.",
+    "automatico":     "El canal responde de forma automatica sin intervencion humana detectada.",
+    "hibrido":        "El canal combina respuestas automaticas iniciales con atencion humana posterior.",
+    "bot":            "El canal usa un chatbot o sistema automatizado (con o sin IA conversacional) para gestionar las conversaciones.",
+    "menu":           "El canal usa un chatbot o sistema automatizado (con o sin IA conversacional) para gestionar las conversaciones.",
+    "bot_ia":         "El canal usa un asistente de inteligencia artificial conversacional.",
+    "sin_respuesta":  "El canal no respondio al contacto realizado durante el periodo analizado.",
 }
 
 # Quality level names and colors (score 0-5)
 QUALITY_LEVELS = {
     0: ("Sin respuesta",       C["muted"]),
     1: ("Sin valor comercial", C["red"]),
-    2: ("Cortesia vacia",      C["automatico"]),
+    2: ("Cortesia vacia",      C["amber"]),
     3: ("Apertura tibia",      C["primary"]),
     4: ("Interes concreto",    C["cyan"]),
     5: ("Lead caliente",       C["humano"]),
@@ -78,7 +81,7 @@ QUALITY_LEGEND = [
      C["red"]),
     (2, "Cortesia vacia",
      '"Ahorita te marco", "Luego hablamos" — reconoce el contacto pero evita el tema',
-     C["automatico"]),
+     C["amber"]),
     (3, "Apertura tibia",
      '"Mandame info", "De que se trata?" — toca el tema sin compromiso real',
      C["primary"]),
@@ -146,7 +149,7 @@ def _reaction_str(m) -> str:
         return "—"
     m = float(m)
     if m < 1:
-        return "< 1 min"
+        return f"{round(m * 60)} seg"
     if m < 60:
         return f"{round(m)} min"
     h = int(m // 60); mn = round(m % 60)
@@ -163,7 +166,7 @@ def _speed_label(reaction_min):
     if m < 30:
         return "Bueno", C["primary"]
     if m < 120:
-        return "Regular", C["automatico"]
+        return "Regular", C["amber"]
     return "Lento", C["red"]
 
 
@@ -199,8 +202,8 @@ def _composite_score(analytics: dict, category: str, quality: float, reaction_mi
       Tipo de atención 30%  Calidad comercial 50%  Velocidad 20%
     """
     cat_scores = {
-        "humano": 100, "hibrido": 55, "automatico": 35, "menu": 30,
-        "bot_ia": 25, "bot": 15, "sin_respuesta": 0,
+        "humano": 100, "hibrido": 55, "automatico": 35,
+        "bot_ia": 25, "bot": 15, "menu": 15, "sin_respuesta": 0,
     }
     cat_s  = cat_scores.get(category, 50)
     qual_s = (float(quality or 0) / 5) * 100
@@ -233,7 +236,7 @@ def _score_label(score: int) -> tuple:
     if score >= 70:
         return "Buen potencial de venta", C["humano"]
     if score >= 40:
-        return "Atencion con areas de mejora", C["automatico"]
+        return "Atencion con areas de mejora", C["amber"]
     return "Canal sin respuesta comercial", C["red"]
 
 
@@ -718,7 +721,7 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     qual_level, qual_color   = QUALITY_LEVELS.get(round(quality), ("Desconocido", C["muted"]))
     speed_label, speed_color = _speed_label(reaction_min)
     bh_label = "En horario habil" if business_hours else "Fuera de horario"
-    bh_color = C["humano"] if business_hours else C["automatico"]
+    bh_color = C["humano"] if business_hours else C["amber"]
 
     sent_c = sum(1 for m in thread if m.get("direction") == "outbound")
     recv_c = sum(1 for m in thread if m.get("direction") == "inbound")
@@ -875,7 +878,7 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     reaction_str = _reaction_str(reaction_min) if reaction_min is not None else "Sin datos"
     react_color  = _speed_label(reaction_min)[1] if reaction_min is not None else C["muted"]
     bh_label     = "En horario habil" if business_hours else "Fuera de horario"
-    bh_color     = C["humano"] if business_hours else C["automatico"]
+    bh_color     = C["humano"] if business_hours else C["amber"]
 
     right_items.append(_info_row("Tiempo de primera respuesta", reaction_str, react_color))
     right_items.append(_info_row("Horario de respuesta",        bh_label,     bh_color))

@@ -2,10 +2,12 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react'
 import useSWR from 'swr'
 import { useLang } from '../context/LangContext'
+import { useUser } from '../context/UserContext'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Chip from '@mui/material/Chip'
 import CircularProgress from '@mui/material/CircularProgress'
+import Skeleton from '@mui/material/Skeleton'
 import Table from '@mui/material/Table'
 import TableHead from '@mui/material/TableHead'
 import TableBody from '@mui/material/TableBody'
@@ -39,8 +41,10 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import LocalGasStationIcon from '@mui/icons-material/LocalGasStation'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlined'
+import TuneIcon from '@mui/icons-material/Tune'
 import AndyBotBuilder from './AndyBotBuilder'
 import GasBotModal from './GasBotModal'
+import ClassificationSettingsModal from './ClassificationSettingsModal'
 
 const GAS_INDUSTRY_KEYWORDS = ['gas', 'lp', 'gasera', 'gaseras', 'energia']
 
@@ -268,6 +272,9 @@ export default function Analytics() {
   const [botBuilderRow,   setBotBuilderRow]   = useState(null)
   const [gasBotOpen,      setGasBotOpen]      = useState(false)
   const [gasBotRow,       setGasBotRow]       = useState(null)
+  const [classificationSettingsOpen, setClassificationSettingsOpen] = useState(false)
+  const { user } = useUser()
+  const isAdmin = user?.role === 'admin'
 
   const handleSort = (field) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -543,6 +550,14 @@ export default function Analytics() {
               <RefreshIcon fontSize="small" />
             </IconButton>
           </Tooltip>
+          {isAdmin && (
+            <Tooltip title={t.classification.tab}>
+              <IconButton size="small" onClick={() => setClassificationSettingsOpen(true)}
+                sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'var(--accent, #818cf8)' } }}>
+                <TuneIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
         </Box>
       </Box>
 
@@ -663,9 +678,30 @@ export default function Analytics() {
       {/* Table / states */}
       <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flex: 1, pt: 6 }}>
-            <CircularProgress size={32} sx={{ color: 'var(--accent, #6366f1)' }} />
-          </Box>
+          <TableContainer sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            <Table size="small" stickyHeader sx={{ minWidth: 800 }}>
+              <TableHead>
+                <TableRow>
+                  {Array.from({ length: 12 }).map((_, i) => (
+                    <TableCell key={i} sx={HEADER_CELL_SX}>
+                      <Skeleton variant="text" width={i === 0 ? 16 : '70%'} sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
+                    </TableCell>
+                  ))}
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {Array.from({ length: 8 }).map((_, row) => (
+                  <TableRow key={row}>
+                    {Array.from({ length: 12 }).map((_, col) => (
+                      <TableCell key={col} sx={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                        <Skeleton variant="text" width={col === 0 ? 16 : '80%'} sx={{ bgcolor: 'rgba(255,255,255,0.06)' }} />
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
         ) : data.length === 0 ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, pt: 6, gap: 1.5 }}>
             <BarChartIcon sx={{ fontSize: 48, color: 'rgba(255,255,255,0.08)' }} />
@@ -1010,7 +1046,7 @@ export default function Analytics() {
                           {/* Notas */}
                           <TableCell sx={{ ...NSUB, maxWidth: 200 }}>
                             {!replied
-                              ? <Typography sx={{ color: 'rgba(248,113,113,0.5)', fontSize: '0.72rem', fontStyle: 'italic' }}>No hubo respuesta</Typography>
+                              ? <Typography sx={{ color: 'rgba(248,113,113,0.5)', fontSize: '0.72rem', fontStyle: 'italic' }}>{t.analytics.noReply}</Typography>
                               : n.notes
                                 ? <Tooltip title={n.notes} placement="top">
                                     <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem', cursor: 'default', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
@@ -1121,6 +1157,10 @@ export default function Analytics() {
       <AndyBotBuilder open={botBuilderOpen} initialData={botBuilderRow} onClose={() => { setBotBuilderOpen(false); setBotBuilderRow(null) }} />
 
       <GasBotModal open={gasBotOpen} initialData={gasBotRow} onClose={() => { setGasBotOpen(false); setGasBotRow(null) }} />
+
+      {isAdmin && (
+        <ClassificationSettingsModal open={classificationSettingsOpen} onClose={() => setClassificationSettingsOpen(false)} />
+      )}
 
       <Snackbar
         open={snack.open}

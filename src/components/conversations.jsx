@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from 'react'
 import { MAX_WA_MSG } from '@/lib/validators'
 import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
@@ -8,6 +8,7 @@ import { useNavigation } from '../context/NavigationContext'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import CircularProgress from '@mui/material/CircularProgress'
+import Skeleton from '@mui/material/Skeleton'
 import Chip from '@mui/material/Chip'
 import TextField from '@mui/material/TextField'
 import IconButton from '@mui/material/IconButton'
@@ -63,6 +64,60 @@ function formatTime(iso) {
   return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', timeZone: _TZ })
 }
 
+function localeFor(lang) { return lang === 'en' ? 'en-US' : 'es-MX' }
+
+// Hora del mensaje dentro del hilo — siempre HH:MM, nunca la fecha
+// (el día se muestra aparte con el divisor sticky, igual que WhatsApp).
+function formatMsgTime(iso, lang) {
+  if (!iso) return ''
+  const d = new Date(iso.endsWith('Z') ? iso : iso + 'Z')
+  if (isNaN(d.getTime())) return ''
+  return d.toLocaleTimeString(localeFor(lang), { hour: '2-digit', minute: '2-digit', timeZone: _TZ })
+}
+
+// Clave de día estable (YYYY-MM-DD en la zona horaria del negocio) para agrupar mensajes.
+function dayKey(iso) {
+  if (!iso) return ''
+  const d = new Date(iso.endsWith('Z') ? iso : iso + 'Z')
+  if (isNaN(d.getTime())) return ''
+  return d.toLocaleDateString('en-CA', { timeZone: _TZ })
+}
+
+function isToday(iso) {
+  return dayKey(iso) === dayKey(new Date().toISOString())
+}
+
+function capitalizeFirst(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s
+}
+
+// No devuelve nada para "hoy" — esos mensajes no llevan divisor, solo los días anteriores.
+function formatDateLabel(iso, lang, t) {
+  if (!iso) return ''
+  const d = new Date(iso.endsWith('Z') ? iso : iso + 'Z')
+  if (isNaN(d.getTime())) return ''
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (dayKey(iso) === dayKey(yesterday.toISOString())) return t.convs.yesterday
+  return capitalizeFirst(d.toLocaleDateString(localeFor(lang), { day: 'numeric', month: 'long', year: 'numeric', timeZone: _TZ }))
+}
+
+function DateDivider({ label }) {
+  return (
+    <Box sx={{ position: 'sticky', top: 0, zIndex: 2, display: 'flex', justifyContent: 'center', py: 0.8, mb: 0.4, pointerEvents: 'none' }}>
+      <Box sx={{
+        bgcolor: 'var(--card-bg, rgba(20,24,38,0.92))', backdropFilter: 'blur(4px)',
+        border: '1px solid rgba(255,255,255,0.08)',
+        borderRadius: 99, px: 1.4, py: 0.35, boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
+      }}>
+        <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.55)', fontWeight: 600 }}>
+          {label}
+        </Typography>
+      </Box>
+    </Box>
+  )
+}
+
 function StatusIcon({ status, direction }) {
   if (direction === 'inbound') return null
   if (status === 'read')      return <DoneAllIcon sx={{ fontSize: 13, color: 'var(--accent, #60a5fa)' }} />
@@ -87,6 +142,21 @@ function TypingDots() {
           },
         }} />
       ))}
+    </Box>
+  )
+}
+
+function ConversationItemSkeleton() {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.5, borderBottom: '1px solid var(--border)' }}>
+      <Skeleton variant="rounded" width={40} height={40} sx={{ borderRadius: 2, flexShrink: 0, bgcolor: 'rgba(255,255,255,0.06)' }} />
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.6 }}>
+          <Skeleton variant="text" width="45%" sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
+          <Skeleton variant="text" width={30} sx={{ bgcolor: 'rgba(255,255,255,0.06)' }} />
+        </Box>
+        <Skeleton variant="text" width="75%" sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
+      </Box>
     </Box>
   )
 }
@@ -126,7 +196,7 @@ function ConversationItem({ conv, active, onClick }) {
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.3 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0, flex: 1 }}>
-            <Typography sx={{ color: conv.unread ? 'white' : 'rgba(255,255,255,0.8)', fontWeight: conv.unread ? 700 : 500, fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 130 }}>
+            <Typography sx={{ color: conv.unread ? 'white' : 'rgba(255,255,255,0.8)', fontWeight: conv.unread ? 700 : 500, fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
               {conv.company_name || conv.company_id}
             </Typography>
             {conv.ai_active && (
@@ -161,7 +231,7 @@ function ConversationItem({ conv, active, onClick }) {
               )
             })()}
           </Box>
-          <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.68rem', flexShrink: 0 }}>
+          <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.68rem', flexShrink: 0, ml: 0.75 }}>
             {formatTime(conv.last_at)}
           </Typography>
         </Box>
@@ -306,6 +376,7 @@ function InteractiveMessage({ interactive, isOut, onReply }) {
 }
 
 function MessageBubble({ msg, onReply }) {
+  const { lang } = useLang()
   const isOut  = msg.direction === 'outbound'
   const isAI   = Boolean(msg.ai_generated)
   const raw    = msg.body || msg.message_body || ''
@@ -341,7 +412,7 @@ function MessageBubble({ msg, onReply }) {
         )}
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 0.5, mt: 0.4 }}>
           <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.65rem' }}>
-            {formatTime(msg.created_at)}
+            {formatMsgTime(msg.created_at, lang)}
           </Typography>
           <StatusIcon status={msg.status} direction={msg.direction} />
         </Box>
@@ -382,11 +453,13 @@ export default function Conversations() {
   const syncingRef                      = useRef(false)
   const lastSyncedRef                   = useRef(null)  // evita re-sync al mismo company
   const currentCompanyRef               = useRef(null)  // evita race condition en fetchCompanyNumbers
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const { user } = useUser()
   const [myConvsOnly, setMyConvsOnly] = useState(false)
   const threadLenRef    = useRef(0)
   const messagesBoxRef  = useRef(null)
+  const listBoxRef      = useRef(null)
+  const [skeletonCount, setSkeletonCount] = useState(7)
   const pendingScrollRef = useRef(false)
   const replyRef  = useRef(null)
   const [sendError, setSendError] = useState('')
@@ -493,6 +566,19 @@ export default function Conversations() {
   }, [])
 
   useEffect(() => { fetchConvs() }, [fetchConvs])
+
+  // Ajusta cuántas filas de skeleton mostrar según el alto real del panel,
+  // para que el placeholder llene el espacio en vez de dejar un hueco vacío.
+  useEffect(() => {
+    const el = listBoxRef.current
+    if (!el) return
+    const ROW_HEIGHT = 73
+    const update = () => setSkeletonCount(Math.max(1, Math.ceil(el.clientHeight / ROW_HEIGHT) + 1))
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -755,11 +841,9 @@ export default function Conversations() {
         </Box>
 
         {/* Lista */}
-        <Box sx={{ flex: 1, overflowY: 'auto' }}>
+        <Box ref={listBoxRef} sx={{ flex: 1, overflowY: 'auto' }}>
           {loading ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4 }}>
-              <CircularProgress size={28} sx={{ color: 'var(--accent, #6366f1)' }} />
-            </Box>
+            Array.from({ length: skeletonCount }).map((_, i) => <ConversationItemSkeleton key={i} />)
           ) : filtered.length === 0 ? (
             <Box sx={{ px: 2, pt: 4, textAlign: 'center' }}>
               <WhatsAppIcon sx={{ fontSize: 36, color: 'rgba(255,255,255,0.1)', mb: 1 }} />
@@ -950,9 +1034,20 @@ export default function Conversations() {
                 </Box>
               ) : (
                 <>
-                  {visibleThread.map(m => (
-                    <MessageBubble key={m._id} msg={m} onReply={opt => handleSendReply(opt)} />
-                  ))}
+                  {(() => {
+                    let lastDay = null
+                    return visibleThread.map(m => {
+                      const day = dayKey(m.created_at)
+                      const showDivider = day && day !== lastDay && !isToday(m.created_at)
+                      lastDay = day
+                      return (
+                        <Fragment key={m._id}>
+                          {showDivider && <DateDivider label={formatDateLabel(m.created_at, lang, t)} />}
+                          <MessageBubble msg={m} onReply={opt => handleSendReply(opt)} />
+                        </Fragment>
+                      )
+                    })
+                  })()}
                   {aiTyping && (
                     <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 0.8, px: 2 }}>
                       <Box sx={{

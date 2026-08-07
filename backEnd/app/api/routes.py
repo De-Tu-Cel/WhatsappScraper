@@ -942,8 +942,14 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
                             if not _recent_cls:
                                 from app.classifier import classify_and_save
                                 background_tasks.add_task(classify_and_save, log_id, company_id, message_body, datetime.now())
-                    # AI follow-up: enqueue when ai_enabled is ON, or auto-activate on first reply
-                    if message_body and message_body != "[media]" and company_id != "unknown":
+                    # AI follow-up: enqueue when ai_enabled is ON, or auto-activate on first reply.
+                    # message_body can be a literal placeholder ("[audio]", "[sticker]", etc. —
+                    # see _extract_body_and_interactive) when the reply has no real text — Andy
+                    # must never be asked to "respond" to that marker as if it were the prospect's
+                    # actual words, so it's excluded here the same way classifier.py excludes it
+                    # from content-sensitive decisions (menu/is_ai detection).
+                    from app.classifier import NON_TEXT_PLACEHOLDERS
+                    if message_body and message_body not in NON_TEXT_PLACEHOLDERS and company_id != "unknown":
                         try:
                             from app.llm import active_provider as _llm_provider
                             if _llm_provider() != "none":
@@ -2065,6 +2071,44 @@ def api_delete_message_template(template_id: str, x_user_token: Optional[str] = 
         return {"ok": True}
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Classifier settings (umbrales T1/T2 configurables — Settings > Clasificación) ──
+
+@router.get("/admin/classifier-settings")
+def api_get_classifier_settings(x_user_token: Optional[str] = Header(None)):
+    """Cualquier usuario logueado puede VER los umbrales vigentes (útil para entender
+    por qué se clasificó algo así); solo un admin puede cambiarlos (ver POST abajo)."""
+    _require_user(x_user_token)
+    try:
+        return MongoDBManager().get_classifier_settings()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/admin/classifier-settings")
+def api_save_classifier_settings(body: dict, x_user_token: Optional[str] = Header(None)):
+    user = _require_user(x_user_token)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Solo admins")
+    try:
+        # Clamp server-side — nunca confiar solo en los límites del slider del frontend,
+        # ya que estos números deciden si algo se clasifica como humano o bot.
+        values = {
+            "t1_threshold_seconds":  max(3, min(60, int(body.get("t1_threshold_seconds", 10)))),
+            "t2_threshold_seconds":  max(3, min(30, int(body.get("t2_threshold_seconds", 5)))),
+            "probe_wait_hours":      max(0.5, min(24, float(body.get("probe_wait_hours", 1)))),
+            "no_reply_wait_minutes": max(15, min(1440, int(body.get("no_reply_wait_minutes", 60)))),
+        }
+        db = MongoDBManager()
+        db.save_classifier_settings(values)
+        return values
+    except HTTPException:
+        raise
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"Valor inválido: {e}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

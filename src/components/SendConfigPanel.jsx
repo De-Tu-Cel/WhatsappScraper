@@ -7,32 +7,42 @@ import Collapse from '@mui/material/Collapse'
 import LinearProgress from '@mui/material/LinearProgress'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import TimerIcon from '@mui/icons-material/Timer'
+import DynamicFeedIcon from '@mui/icons-material/DynamicFeed'
+import LocalCafeIcon from '@mui/icons-material/LocalCafe'
 import { saveSendConfig } from '@/lib/sendConfig'
 import { useLang } from '../context/LangContext'
 
-const SLIDER_SX = {
-  color: 'var(--accent, #3b82f6)',
-  height: 4,
-  px: 1,        // prevents thumb clipping at min/max edges
-  py: 1.5,      // enough vertical hit-area for the thumb to be draggable
-  '& .MuiSlider-thumb': {
-    width: 16, height: 16,
-    boxShadow: '0 0 0 3px rgba(var(--accent-rgb,59,130,246),0.18)',
-    '&:hover, &.Mui-focusVisible': { boxShadow: '0 0 0 6px rgba(var(--accent-rgb,59,130,246),0.25)' },
-  },
-  '& .MuiSlider-track': { border: 'none', height: 4 },
-  '& .MuiSlider-rail': { opacity: 0.35, height: 4, bgcolor: 'var(--border)' },
-  '& .MuiSlider-mark': { width: 2, height: 2, borderRadius: '50%', bgcolor: 'var(--border)', transform: 'translate(-50%,-50%)' },
-  '& .MuiSlider-markActive': { bgcolor: 'var(--accent, #3b82f6)', opacity: 0.6 },
-  '& .MuiSlider-valueLabel': {
-    fontSize: '0.65rem', fontWeight: 700, py: 0.3, px: 0.8,
-    bgcolor: 'var(--accent, #3b82f6)',
-    borderRadius: 1,
-  },
+function sliderSx(color = '#3b82f6') {
+  return {
+    color,
+    height: 4,
+    px: 1,        // prevents thumb clipping at min/max edges
+    py: 1.5,      // enough vertical hit-area for the thumb to be draggable
+    '& .MuiSlider-thumb': {
+      width: 16, height: 16,
+      boxShadow: `0 0 0 3px ${color}30`,
+      '&:hover, &.Mui-focusVisible': { boxShadow: `0 0 0 6px ${color}40` },
+    },
+    '& .MuiSlider-track': { border: 'none', height: 4 },
+    '& .MuiSlider-rail': { opacity: 0.35, height: 4, bgcolor: 'var(--border)' },
+    '& .MuiSlider-mark': { width: 2, height: 2, borderRadius: '50%', bgcolor: 'var(--border)', transform: 'translate(-50%,-50%)' },
+    '& .MuiSlider-markActive': { bgcolor: color, opacity: 0.6 },
+    '& .MuiSlider-valueLabel': {
+      fontSize: '0.65rem', fontWeight: 700, py: 0.3, px: 0.8,
+      bgcolor: color,
+      borderRadius: 1,
+    },
+  }
 }
 
-/* ── Range slider with minimum distance enforcement ── */
-function RangeRow({ label, value, onChange, min, max, step = 1, unit, minDist = 1, marks = true }) {
+const CARD_SX = {
+  mb: 1.5, p: 1.5, borderRadius: 2,
+  bgcolor: 'rgba(255,255,255,0.025)',
+  border: '1px solid rgba(255,255,255,0.07)',
+}
+
+/* ── Range slider with minimum distance enforcement, wrapped in its own card ── */
+function RangeRow({ icon, color, bg, label, value, onChange, min, max, step = 1, unit, minDist = 1, marks = true }) {
   function handleChange(_, newVal, activeThumb) {
     if (newVal[1] - newVal[0] < minDist) {
       if (activeThumb === 0) {
@@ -48,30 +58,37 @@ function RangeRow({ label, value, onChange, min, max, step = 1, unit, minDist = 
   }
 
   return (
-    <Box sx={{ mb: 2.5 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.2 }}>
-        <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-muted, rgba(255,255,255,0.5))', fontWeight: 600 }}>
-          {label}
-        </Typography>
-        <Box sx={{
-          px: 1, py: 0.15, borderRadius: 1,
-          bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)',
-          border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)',
-        }}>
-          <Typography sx={{ fontSize: '0.68rem', color: 'var(--accent, #3b82f6)', fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>
+    <Box sx={CARD_SX}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.6 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{
+            width: 24, height: 24, borderRadius: 1.2, flexShrink: 0,
+            bgcolor: bg, border: `1px solid ${color}55`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            {icon}
+          </Box>
+          <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted, rgba(255,255,255,0.5))', fontWeight: 600 }}>
+            {label}
+          </Typography>
+        </Box>
+        <Box sx={{ px: 1, py: 0.15, borderRadius: 1, bgcolor: bg, border: `1px solid ${color}55` }}>
+          <Typography sx={{ fontSize: '0.68rem', color, fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>
             {value[0]}–{value[1]} {unit}
           </Typography>
         </Box>
       </Box>
-      <Slider
-        value={value}
-        onChange={handleChange}
-        min={min} max={max} step={step}
-        marks={marks} disableSwap
-        valueLabelDisplay="auto"
-        valueLabelFormat={v => `${v}${unit}`}
-        sx={SLIDER_SX}
-      />
+      <Box sx={{ width: '90%', mx: 'auto' }}>
+        <Slider
+          value={value}
+          onChange={handleChange}
+          min={min} max={max} step={step}
+          marks={marks} disableSwap
+          valueLabelDisplay="auto"
+          valueLabelFormat={v => `${v}${unit}`}
+          sx={sliderSx(color)}
+        />
+      </Box>
     </Box>
   )
 }
@@ -181,6 +198,8 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
           borderTop: '1px solid var(--border)',
         }}>
           <RangeRow
+            icon={<TimerIcon sx={{ fontSize: 14, color: '#60a5fa' }} />}
+            color="#60a5fa" bg="rgba(96,165,250,0.12)"
             label={sc.msgDelay}
             value={config.msgDelay}
             onChange={v => update('msgDelay', v)}
@@ -189,6 +208,8 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
             marks={[5,30,60,120,180,240,300].map(v => ({ value: v, label: v >= 60 ? `${v/60}m` : `${v}s` }))}
           />
           <RangeRow
+            icon={<DynamicFeedIcon sx={{ fontSize: 14, color: '#a78bfa' }} />}
+            color="#a78bfa" bg="rgba(167,139,250,0.12)"
             label={sc.batchSize}
             value={config.batchSize}
             onChange={v => update('batchSize', v)}
@@ -197,6 +218,8 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
             marks={[1,5,10,15,20].map(v => ({ value: v, label: String(v) }))}
           />
           <RangeRow
+            icon={<LocalCafeIcon sx={{ fontSize: 14, color: '#fbbf24' }} />}
+            color="#fbbf24" bg="rgba(251,191,36,0.12)"
             label={sc.batchDelay}
             value={config.batchDelay}
             onChange={v => update('batchDelay', v)}

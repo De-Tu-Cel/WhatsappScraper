@@ -20,10 +20,16 @@ import PersonIcon from '@mui/icons-material/Person'
 import GroupIcon from '@mui/icons-material/Group'
 import SearchIcon from '@mui/icons-material/Search'
 import CloseIcon from '@mui/icons-material/Close'
+import AlternateEmailIcon from '@mui/icons-material/AlternateEmail'
+import MailOutlineIcon from '@mui/icons-material/MailOutline'
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
+import CheckCircleIcon from '@mui/icons-material/CheckCircle'
+import HighlightOffIcon from '@mui/icons-material/HighlightOff'
 import { useUser } from '../context/UserContext'
 import { useLang } from '../context/LangContext'
 
 const token = () => typeof window !== 'undefined' ? localStorage.getItem('user_token') : ''
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 const FIELD_SX = {
   '& .MuiOutlinedInput-root': {
@@ -35,6 +41,15 @@ const FIELD_SX = {
     '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' },
   },
   '& input': { color: 'var(--text)' },
+}
+
+const SECTION_LABEL_SX = {
+  fontSize: '0.63rem', color: 'rgba(255,255,255,0.3)', mb: 1, mt: 0.5,
+  textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 600,
+}
+
+function FieldIcon({ children }) {
+  return <Box sx={{ display: 'flex', mr: 0.8, color: 'rgba(255,255,255,0.3)' }}>{children}</Box>
 }
 
 function StatChip({ icon, label, value, color }) {
@@ -76,11 +91,21 @@ export default function AdminPanel() {
 
   useEffect(() => { fetchUsers() }, [fetchUsers])
 
+  const emailTouched = newUser.email.length > 0
+  const emailValid   = !emailTouched || EMAIL_RE.test(newUser.email)
+  const pin2Touched  = newUser.pin2.length > 0
+  const pinsMatch    = !pin2Touched || newUser.pin === newUser.pin2
+  const canSubmit    = newUser.display_name.trim() && newUser.username.trim() &&
+    EMAIL_RE.test(newUser.email) && newUser.pin.length >= 4 && newUser.pin === newUser.pin2
+
+  function handleCloseCreate() {
+    setCreateOpen(false)
+    setCreateMsg('')
+    setNewUser({ display_name: '', username: '', email: '', pin: '', pin2: '' })
+  }
+
   async function handleCreateUser() {
-    if (!newUser.display_name.trim() || !newUser.username.trim() || !newUser.email.includes('@') || newUser.pin.length < 4) {
-      setCreateMsg(t.admin.fillAll); return
-    }
-    if (newUser.pin !== newUser.pin2) { setCreateMsg(t.admin.pinMismatch); return }
+    if (!canSubmit) { setCreateMsg(t.admin.fillAll); return }
     setCreating(true); setCreateMsg('')
     try {
       const r = await fetch('/api/auth/register', {
@@ -418,7 +443,7 @@ export default function AdminPanel() {
       </Dialog>
 
       {/* ── Modal crear usuario ── */}
-      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="xs" fullWidth
+      <Dialog open={createOpen} onClose={handleCloseCreate} maxWidth="xs" fullWidth
         slotProps={{ paper: { sx: { bgcolor: 'var(--sidebar-bg,#0d1117)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.15)', borderRadius: 3 } } }}>
         <DialogContent sx={{ py: 3 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, mb: 2.5 }}>
@@ -426,40 +451,81 @@ export default function AdminPanel() {
               <PersonAddIcon sx={{ color: 'var(--accent,#60a5fa)', fontSize: 18 }} />
             </Box>
             <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.95rem', flex: 1 }}>{t.admin.createTitle}</Typography>
-            <IconButton size="small" onClick={() => setCreateOpen(false)} sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: 'rgba(255,255,255,0.6)' } }}>
+            <IconButton size="small" onClick={handleCloseCreate} sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: 'rgba(255,255,255,0.6)' } }}>
               <CloseIcon sx={{ fontSize: 18 }} />
             </IconButton>
           </Box>
-          {[
-            { label: t.admin.fullName,     key: 'display_name', ph: 'Ana García' },
-            { label: t.admin.usernameLabel,key: 'username',     ph: 'ana.garcia' },
-            { label: t.admin.emailLabel,   key: 'email',        ph: 'ana@detucel.mx' },
-          ].map(f => (
-            <Box key={f.key} sx={{ mb: 1.5 }}>
-              <Typography sx={{ fontSize: '0.63rem', color: 'rgba(255,255,255,0.3)', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 600 }}>{f.label}</Typography>
-              <TextField fullWidth size="small" placeholder={f.ph}
-                value={newUser[f.key]} onChange={e => setNewUser(p => ({ ...p, [f.key]: e.target.value }))}
-                sx={FIELD_SX} />
+
+          {/* Sección: datos personales */}
+          <Typography sx={SECTION_LABEL_SX}>{t.admin.sectionPersonal}</Typography>
+          <Box sx={{ mb: 1.2 }}>
+            <TextField fullWidth size="small" autoFocus placeholder={t.admin.fullName}
+              value={newUser.display_name} onChange={e => setNewUser(p => ({ ...p, display_name: e.target.value }))}
+              slotProps={{ input: { startAdornment: <FieldIcon><PersonIcon sx={{ fontSize: 16 }} /></FieldIcon> } }}
+              sx={FIELD_SX} />
+          </Box>
+          <Box sx={{ mb: 1.2 }}>
+            <TextField fullWidth size="small" placeholder={t.admin.usernameLabel}
+              value={newUser.username} onChange={e => setNewUser(p => ({ ...p, username: e.target.value }))}
+              slotProps={{ input: { startAdornment: <FieldIcon><AlternateEmailIcon sx={{ fontSize: 16 }} /></FieldIcon> } }}
+              sx={FIELD_SX} />
+          </Box>
+          <Box sx={{ mb: 2 }}>
+            <TextField fullWidth size="small" type="email" placeholder={t.admin.emailLabel}
+              value={newUser.email} onChange={e => setNewUser(p => ({ ...p, email: e.target.value }))}
+              error={!emailValid}
+              helperText={!emailValid ? t.admin.emailInvalid : ' '}
+              slotProps={{ input: { startAdornment: <FieldIcon><MailOutlineIcon sx={{ fontSize: 16 }} /></FieldIcon> } }}
+              sx={{ ...FIELD_SX, '& .MuiFormHelperText-root': { fontSize: '0.68rem', ml: 0.5, mt: 0.2, color: '#f87171' } }} />
+          </Box>
+
+          {/* Sección: seguridad */}
+          <Typography sx={SECTION_LABEL_SX}>{t.admin.sectionSecurity}</Typography>
+          <Box sx={{ display: 'flex', gap: 1, mb: 0.6 }}>
+            <TextField fullWidth size="small" type="password" placeholder={t.admin.pinLabel}
+              value={newUser.pin} onChange={e => setNewUser(p => ({ ...p, pin: e.target.value.replace(/\D/g, '').slice(0, 8) }))}
+              slotProps={{
+                input: { startAdornment: <FieldIcon><LockOutlinedIcon sx={{ fontSize: 16 }} /></FieldIcon> },
+                htmlInput: { inputMode: 'numeric', maxLength: 8 },
+              }}
+              sx={FIELD_SX} />
+            <TextField fullWidth size="small" type="password" placeholder={t.admin.pinConfirm}
+              value={newUser.pin2} onChange={e => setNewUser(p => ({ ...p, pin2: e.target.value.replace(/\D/g, '').slice(0, 8) }))}
+              error={!pinsMatch}
+              slotProps={{
+                input: {
+                  startAdornment: <FieldIcon><LockOutlinedIcon sx={{ fontSize: 16 }} /></FieldIcon>,
+                  endAdornment: pin2Touched ? (
+                    pinsMatch
+                      ? <CheckCircleIcon sx={{ fontSize: 15, color: '#4ade80' }} />
+                      : <HighlightOffIcon sx={{ fontSize: 15, color: '#f87171' }} />
+                  ) : null,
+                },
+                htmlInput: { inputMode: 'numeric', maxLength: 8 },
+              }}
+              sx={FIELD_SX} />
+          </Box>
+          <Typography sx={{ fontSize: '0.68rem', color: pin2Touched && !pinsMatch ? '#f87171' : 'rgba(255,255,255,0.25)', mb: 2 }}>
+            {pin2Touched && !pinsMatch ? t.admin.pinMismatch : t.admin.pinHint}
+          </Typography>
+
+          {createMsg && (
+            <Box sx={{ mb: 1.5, px: 1.2, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+              <Typography sx={{ fontSize: '0.75rem', color: '#f87171' }}>{createMsg}</Typography>
             </Box>
-          ))}
-          {[
-            { label: t.admin.pinLabel,   key: 'pin' },
-            { label: t.admin.pinConfirm, key: 'pin2' },
-          ].map(f => (
-            <Box key={f.key} sx={{ mb: 1.5 }}>
-              <Typography sx={{ fontSize: '0.63rem', color: 'rgba(255,255,255,0.3)', mb: 0.5, textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 600 }}>{f.label}</Typography>
-              <TextField fullWidth size="small" type="password" placeholder="••••••"
-                value={newUser[f.key]} onChange={e => setNewUser(p => ({ ...p, [f.key]: e.target.value }))}
-                inputProps={{ maxLength: 8 }}
-                sx={FIELD_SX} />
-            </Box>
-          ))}
-          {createMsg && <Typography sx={{ fontSize: '0.75rem', color: '#f87171', mb: 1.5 }}>{createMsg}</Typography>}
+          )}
           <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', mt: 1 }}>
-            <Box onClick={() => setCreateOpen(false)} sx={{ px: 2, py: 0.7, borderRadius: 2, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.1)', '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' } }}>
+            <Box onClick={handleCloseCreate} sx={{ px: 2, py: 0.7, borderRadius: 2, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.1)', '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' } }}>
               <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.82rem' }}>{t.admin.cancelBtn}</Typography>
             </Box>
-            <Box onClick={handleCreateUser} sx={{ px: 2, py: 0.7, borderRadius: 2, cursor: 'pointer', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.25)' } }}>
+            <Box onClick={creating || !canSubmit ? undefined : handleCreateUser} sx={{
+              px: 2, py: 0.7, borderRadius: 2,
+              cursor: canSubmit && !creating ? 'pointer' : 'not-allowed',
+              opacity: canSubmit ? 1 : 0.4,
+              bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)',
+              transition: 'opacity 0.15s',
+              '&:hover': canSubmit && !creating ? { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.25)' } : undefined,
+            }}>
               {creating ? <CircularProgress size={14} sx={{ color: 'var(--accent,#60a5fa)' }} /> : <Typography sx={{ color: 'var(--accent,#60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>{t.admin.createBtn}</Typography>}
             </Box>
           </Box>

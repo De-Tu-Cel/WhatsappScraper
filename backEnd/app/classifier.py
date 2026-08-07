@@ -391,6 +391,17 @@ def _looks_like_auto_reply(text: str) -> bool:
     return bool(_AUTO_REPLY_MARKERS.search(text))
 
 
+# El webhook (routes.py: _extract_body_and_interactive) guarda estos marcadores
+# literales cuando la respuesta es un audio/sticker/ubicación/contacto/plantilla sin
+# texto — nunca son el contenido real que escribió el prospecto. Sin este chequeo, se
+# le mandaba "[audio]" tal cual al regex de menú o al LLM como si fuera texto real.
+NON_TEXT_PLACEHOLDERS = {"[audio]", "[sticker]", "[location]", "[contact]", "[media]", "[template]"}
+
+
+def _has_real_text(body: str | None) -> bool:
+    return bool(body) and body.strip() not in NON_TEXT_PLACEHOLDERS
+
+
 def _quick_result(category: str, notes: str) -> dict:
     """Same shape as _parse_llm_response's output — low/None across the board,
     matching the prompt's own rule: menu/bot(non-AI) always score 1-2."""
@@ -431,6 +442,13 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
     """Classify a single inbound reply using the outbound message as context.
     Cheap rules resolve the obvious cases first (see _quick_classify) — only
     genuine ambiguity spends an LLM call."""
+    if not _has_real_text(inbound_body):
+        # Audio/sticker/ubicación/contacto sin texto — no hay contenido que juzgar.
+        # No es "humano" con certeza, pero sin base para nada más determinista aquí
+        # (este es ya el fallback sin dato de tiempo) — no se manda al LLM un
+        # marcador literal como si fuera lo que escribió el prospecto.
+        return _quick_result_unrated("humano", "Respuesta multimedia sin texto — sin base para juzgar contenido")
+
     quick = _quick_classify(inbound_body, reaction_time_min)
     if quick is not None:
         return quick
@@ -505,9 +523,17 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
 # respuesta, NO en que el LLM lea el contenido. El LLM solo entra como fallback si
 # no hay dato de tiempo, y en classify_conversation (detección de "hibrido" tras
 # cierre de sesión de Andy) — eso no cambia.
-T1_THRESHOLD_SECONDS = 10   # igual al umbral que ya usaba _quick_classify
-T2_THRESHOLD_SECONDS = 5
-PROBE_WAIT_HOURS      = 1
+#
+# Los umbrales son configurables desde Settings > Clasificación (admin) — se leen en
+# caliente de Mongo en cada punto donde se usan, sin caché, para que un cambio en la
+# UI aplique al siguiente mensaje sin redeploy. Los defaults viven en database.py
+# (CLASSIFIER_DEFAULTS) junto con la lectura/escritura real.
+def _get_thresholds(db):
+    s = db.get_classifier_settings()
+    return (
+        s["t1_threshold_seconds"], s["t2_threshold_seconds"],
+        s["probe_wait_hours"], s["no_reply_wait_minutes"],
+    )
 
 
 def _quick_result_unrated(category: str, notes: str) -> dict:
@@ -623,7 +649,7 @@ Responde SOLO con JSON: {{"is_ai": true/false, "reason": "breve justificación"}
 """
 
 
-def _confirm_is_ai(text: str) -> bool:
+def _confirm_is_ai(text: str, t2_threshold_seconds: int) -> bool:
     """T2 rápido + sin menú ya decidió category="bot" de forma determinista — esta
     llamada NO decide bot/no-bot, solo confirma el matiz is_ai (Agente IA vs. posible
     humano muy rápido) leyendo el contenido. Si no hay LLM o falla, se mantiene el
@@ -634,7 +660,7 @@ def _confirm_is_ai(text: str) -> bool:
         from app.llm import active_provider
         if active_provider() == "none":
             return True
-        prompt = _IS_AI_CONFIRM_PROMPT.format(t2=T2_THRESHOLD_SECONDS, text=text or "(sin texto)")
+        prompt = _IS_AI_CONFIRM_PROMPT.format(t2=t2_threshold_seconds, text=text or "(sin texto)")
         raw = _call_deepseek([{"role": "user", "content": prompt}], max_tokens=60)
         if raw.startswith("```"):
             raw = raw.split("```")[1].strip()
@@ -664,6 +690,7 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
     """Resuelve un probe abierto — con la respuesta T2 recién llegada, o por timeout
     (timed_out=True, llamado desde el sweep en background cuando pasó 1hr sin 2da
     respuesta). Determinista, sin LLM."""
+    _, t2_threshold, probe_wait_hours, _ = _get_thresholds(db)
     probe = probe_doc.get("probe", {}) or {}
     t2_seconds = None
     if not timed_out:
@@ -685,15 +712,22 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
             if sent_at and isinstance(sent_at, datetime):
                 t2_seconds = (received_at - sent_at).total_seconds()
 
-    if not timed_out and t2_seconds is not None and t2_seconds <= T2_THRESHOLD_SECONDS:
-        if _looks_like_menu(reply_body or ""):
+    if not timed_out and t2_seconds is not None and t2_seconds <= t2_threshold:
+        if not _has_real_text(reply_body):
+            # Audio/sticker/ubicación/contacto — el ORIGEN sigue siendo determinista
+            # (T2 rápido = "bot"), pero no hay texto real que mandarle al LLM para
+            # confirmar is_ai, así que se deja en el default seguro (True) sin gastar
+            # una llamada con un marcador literal como "[audio]" de contenido.
+            analysis = _quick_result("bot", f"Respuesta multimedia sin texto en 2do mensaje (T2={t2_seconds:.0f}s) — is_ai sin confirmar")
+            analysis["is_ai"] = True
+        elif _looks_like_menu(reply_body or ""):
             analysis = _quick_result("bot", f"Menú detectado en 2do mensaje (T2={t2_seconds:.0f}s) — determinista, sin IA")
             analysis["is_ai"] = False
         else:
             # category="bot" ya es determinista (T2 rápido, sin menú) — is_ai se
             # confirma aparte con una llamada de IA ligera que NO puede cambiar la
             # categoría, solo el matiz Agente IA vs. humano muy rápido.
-            is_ai = _confirm_is_ai(reply_body)
+            is_ai = _confirm_is_ai(reply_body, t2_threshold)
             analysis = _quick_result(
                 "bot",
                 f"Respuesta rápida sin menú en 2do mensaje (T2={t2_seconds:.0f}s) — "
@@ -701,8 +735,8 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
             )
             analysis["is_ai"] = is_ai
     else:
-        notes = (f"Sin 2da respuesta tras {PROBE_WAIT_HOURS}h — determinista" if timed_out
-                 else f"2do mensaje respondido en {t2_seconds:.0f}s (> {T2_THRESHOLD_SECONDS}s) — determinista")
+        notes = (f"Sin 2da respuesta tras {probe_wait_hours}h — determinista" if timed_out
+                 else f"2do mensaje respondido en {t2_seconds:.0f}s (> {t2_threshold}s) — determinista")
         analysis = _quick_result("automatico", notes)
 
     # reaction_time_min reportado = T1 (velocidad de la PRIMERA respuesta), no T2 —
@@ -730,6 +764,8 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
         if (existing or {}).get("analysis_status") == "quota_exceeded":
             log.debug("classify_and_save: ya marcado quota_exceeded, skip log_id=%s", log_id)
             return
+
+        t1_threshold, _, probe_wait_hours, _ = _get_thresholds(db)
 
         # ── ¿Esta respuesta resuelve un probe T1→T2 abierto? ──────────────────
         open_probe = _find_open_probe(db, company_id, received_at)
@@ -794,7 +830,7 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
         # ── T1 determinista — sin dato de tiempo, único caso que cae al LLM ───
         if raw_seconds is None:
             analysis = classify_response(inbound_body, outbound_body, reaction_time_min)
-        elif raw_seconds <= T1_THRESHOLD_SECONDS:
+        elif raw_seconds <= t1_threshold:
             # Respuesta rápida — podría ser bot/agente IA/automatico. NO mandamos
             # nosotros un 2do mensaje aquí: el webhook (routes.py) ya activa a Andy
             # automáticamente en la primera respuesta de cualquier prospecto (salvo que
@@ -809,7 +845,7 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
                     "probe": {
                         "stage": "awaiting_t2",
                         "started_at": received_at,
-                        "deadline": received_at + timedelta(hours=PROBE_WAIT_HOURS),
+                        "deadline": received_at + timedelta(hours=probe_wait_hours),
                         "t1_reaction_min": reaction_time_min,
                     },
                 }},
@@ -820,7 +856,7 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
             # La CALIDAD sí se intenta calificar aparte (llamada de IA separada, no
             # decide categoría) — si falla o no hay LLM disponible, queda sin calificar.
             analysis = _quick_result_unrated(
-                "humano", f"T1={raw_seconds:.0f}s > {T1_THRESHOLD_SECONDS}s — origen determinista, sin IA"
+                "humano", f"T1={raw_seconds:.0f}s > {t1_threshold}s — origen determinista, sin IA"
             )
             quality = _grade_quality_only(inbound_body, outbound_body)
             if quality:
@@ -886,14 +922,14 @@ def classify_conversation_and_save(company_id: str, log_id: str):
         log.error("classify_conversation_and_save failed for %s: %s\n%s", company_id, _exc, traceback.format_exc())
 
 
-_NO_REPLY_WAIT_MINUTES = 60  # coincide con "Hasta 1 hr" del flujo determinista para T1
-_SWEEP_INTERVAL_SEC    = 300
+_SWEEP_INTERVAL_SEC = 300
 
 
 def _sweep_pending():
     try:
         db = MongoDBManager()
         now = datetime.now()
+        _, _, _, no_reply_wait_minutes = _get_thresholds(db)
 
         db.db.message_logs.update_many(
             {
@@ -922,7 +958,7 @@ def _sweep_pending():
                 {"_id": probe_doc["_id"]}, {"$set": {"probe.stage": "resolved"}}
             )
 
-        cutoff = now - timedelta(minutes=_NO_REPLY_WAIT_MINUTES)
+        cutoff = now - timedelta(minutes=no_reply_wait_minutes)
         outbounds = list(db.db.message_logs.find(
             {
                 "direction": "outbound",
@@ -950,7 +986,7 @@ def _sweep_pending():
                     "svc_next":         None,
                     "svc_proact":       None,
                     "response_quality": 0,
-                    "notes":            f"Sin respuesta tras {_NO_REPLY_WAIT_MINUTES} min",
+                    "notes":            f"Sin respuesta tras {no_reply_wait_minutes} min",
                     "classified_at":    now.isoformat(),
                     "pending_human_check": False,
                 })

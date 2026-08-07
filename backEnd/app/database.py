@@ -9,6 +9,16 @@ from config import MONGODB_URI, DATABASE_NAME
 # Creating a new MongoClient per request exhausts TCP sockets on Windows (WinError 10055).
 _mongo_client: MongoClient | None = None
 
+# Umbrales de tiempo que decide el flujo determinista de classifier.py — configurables
+# desde Settings > Clasificación (admin). Estos valores son los defaults cuando nunca
+# se ha guardado nada en la colección `settings`.
+CLASSIFIER_DEFAULTS = {
+    "t1_threshold_seconds": 10,
+    "t2_threshold_seconds": 5,
+    "probe_wait_hours": 1,
+    "no_reply_wait_minutes": 60,
+}
+
 def _get_client() -> MongoClient:
     global _mongo_client
     if _mongo_client is None:
@@ -31,6 +41,16 @@ class MongoDBManager:
             self.db.companies.create_index("domain", unique=True, sparse=True)
         except Exception:
             pass  # duplicates exist — index will be created after cleanup
+
+    def get_classifier_settings(self) -> dict:
+        """Umbrales configurables del flujo T1/T2 (Settings > Clasificación). Sin
+        caché: es una lectura liviana, se llama una vez por mensaje entrante — así un
+        cambio en la UI aplica al siguiente mensaje sin necesitar redeploy."""
+        doc = self.db.settings.find_one({"_id": "classifier"}) or {}
+        return {**CLASSIFIER_DEFAULTS, **{k: v for k, v in doc.items() if k in CLASSIFIER_DEFAULTS}}
+
+    def save_classifier_settings(self, values: dict) -> None:
+        self.db.settings.update_one({"_id": "classifier"}, {"$set": values}, upsert=True)
 
     def insert_company(self, company_data):
         company_data["created_at"] = company_data.get("created_at", datetime.now())
@@ -861,9 +881,15 @@ class MongoDBManager:
                     else:
                         qualities = [m["analysis"].get("response_quality") or 0 for m in analyzed]
                         entry["response_quality"] = round(sum(qualities) / len(qualities), 1)
-                    reactions = [m["analysis"]["reaction_time_min"] for m in analyzed
-                                 if m["analysis"].get("reaction_time_min") is not None]
-                    entry["reaction_time_min"] = round(sum(reactions) / len(reactions), 1) if reactions else None
+                    # "Tiempo de reacción" = reaction_time_min del mensaje analizado
+                    # cronológicamente PRIMERO, no un promedio — mismo criterio que el
+                    # nivel de compañía (ver first_response_groups arriba). Promediar
+                    # mezclaría la velocidad de la primera respuesta con la de réplicas
+                    # posteriores, que pueden ser mucho más lentas o rápidas y no dicen
+                    # nada sobre qué tan rápido contestaron la primera vez.
+                    with_reaction = [m for m in analyzed if m["analysis"].get("reaction_time_min") is not None]
+                    first_analyzed = min(with_reaction, key=lambda m: m.get("created_at") or datetime.max) if with_reaction else None
+                    entry["reaction_time_min"] = first_analyzed["analysis"]["reaction_time_min"] if first_analyzed else None
                 elif company_analyzed:
                     # No direct match — inherit company-level analysis (central WA Business number).
                     _conv = next((m for m in company_analyzed
@@ -874,7 +900,11 @@ class MongoDBManager:
                     entry["notes"]             = best["analysis"].get("notes") or ""
                     entry["business_hours"]    = best["analysis"].get("business_hours")
                     entry["response_quality"]  = best["analysis"].get("response_quality")
-                    entry["reaction_time_min"] = best["analysis"].get("reaction_time_min")
+                    # Mismo criterio que arriba: primera respuesta cronológica, no la
+                    # que haya quedado primera en el orden natural de Mongo.
+                    with_reaction = [m for m in company_analyzed if m["analysis"].get("reaction_time_min") is not None]
+                    first_analyzed = min(with_reaction, key=lambda m: m.get("created_at") or datetime.max) if with_reaction else None
+                    entry["reaction_time_min"] = first_analyzed["analysis"]["reaction_time_min"] if first_analyzed else None
                     entry["inherited_analysis"] = True
                 inbound_dates = [m.get("created_at") for m in data["inbound"] if m.get("created_at")]
                 entry["last_at"] = max(inbound_dates).isoformat() if inbound_dates else None

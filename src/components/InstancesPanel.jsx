@@ -12,6 +12,7 @@ import DialogActions from '@mui/material/DialogActions'
 import Button from '@mui/material/Button'
 import MenuItem from '@mui/material/MenuItem'
 import CircularProgress from '@mui/material/CircularProgress'
+import Skeleton from '@mui/material/Skeleton'
 import Chip from '@mui/material/Chip'
 import Snackbar from '@mui/material/Snackbar'
 import Divider from '@mui/material/Divider'
@@ -380,6 +381,7 @@ export default function InstancesPanel() {
   const [loading,      setLoading]      = useState(true)
   const [users,        setUsers]        = useState([])
   const [health,       setHealth]       = useState({})  // { [instanceName]: { uptime_pct, last_event, last_ts, last_reason } }
+  const skeletonCounts = useRef({ users: [], unassigned: 3 })
 
   // ── Create dialog ──
   const [createOpen,   setCreateOpen]   = useState(false)
@@ -485,6 +487,18 @@ export default function InstancesPanel() {
   }, [])
 
   useEffect(() => { fetchInstances(); fetchUsers(); fetchHealth() }, [fetchInstances, fetchUsers, fetchHealth])
+
+  // Actualizar conteos para skeleton cada vez que llegan datos reales
+  useEffect(() => {
+    if (loading || (!users.length && !instances.length)) return
+    skeletonCounts.current = {
+      users: users.map(u => {
+        const uid = u._id || u.id || u.username
+        return instances.filter(i => i.assigned_to === uid).length
+      }),
+      unassigned: instances.filter(i => !i.assigned_to).length,
+    }
+  }, [loading, users, instances])
 
   // Auto-refresh pairing code when countdown expires
   const wizardInstNameRef = useRef('')
@@ -1053,8 +1067,83 @@ export default function InstancesPanel() {
       {/* User cards grid + unassigned accordion */}
       <Box sx={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', pr: 0.5 }}>
         {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', pt: 8 }}>
-            <CircularProgress sx={{ color: 'var(--accent,#3b82f6)' }} />
+          <Box>
+            {/* ── User cards grid ── */}
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 2, mb: 3 }}>
+              {(skeletonCounts.current.users.length ? skeletonCounts.current.users : [2, 0, 0]).map((rowCount, i) => (
+                <Box key={i} sx={{
+                  bgcolor: 'var(--card-bg)', borderRadius: 3, p: 2,
+                  border: '1px solid var(--border)',
+                  display: 'flex', flexDirection: 'column', gap: 0,
+                }}>
+                  {/* Header: avatar + name/role + slot counter */}
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
+                    <Skeleton variant="rounded" width={38} height={38} sx={{ borderRadius: 2, bgcolor: 'var(--border)', flexShrink: 0 }} />
+                    <Box sx={{ flex: 1 }}>
+                      <Skeleton variant="text" width="50%" height={15} sx={{ bgcolor: 'var(--border)', mb: 0.4 }} />
+                      <Skeleton variant="text" width="30%" height={12} sx={{ bgcolor: 'var(--border)' }} />
+                    </Box>
+                    <Skeleton variant="rounded" width={28} height={18} sx={{ borderRadius: 1, bgcolor: 'var(--border)' }} />
+                  </Box>
+                  {/* Instance rows */}
+                  {rowCount > 0 ? [...Array(rowCount)].map((_, r) => (
+                    <Box key={r} sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.2, py: 0.85,
+                      borderRadius: 1.5, mb: 0.5,
+                      bgcolor: 'rgba(255,255,255,0.02)', border: '1px solid transparent' }}>
+                      <Skeleton variant="circular" width={8} height={8} sx={{ bgcolor: 'var(--border)', flexShrink: 0 }} />
+                      <Box sx={{ flex: 1 }}>
+                        <Skeleton variant="text" width="45%" height={13} sx={{ bgcolor: 'var(--border)', mb: 0.2 }} />
+                        <Skeleton variant="text" width="60%" height={11} sx={{ bgcolor: 'var(--border)' }} />
+                      </Box>
+                      <Skeleton variant="rounded" width={70} height={20} sx={{ borderRadius: 1, bgcolor: 'var(--border)' }} />
+                    </Box>
+                  )) : (
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', py: 2 }}>
+                      <Skeleton variant="text" width="40%" height={13} sx={{ bgcolor: 'var(--border)' }} />
+                    </Box>
+                  )}
+                  {/* Slot dots footer */}
+                  <Box sx={{ display: 'flex', gap: 0.6, mt: 1.5, pt: 1, borderTop: '1px solid var(--border)' }}>
+                    {[...Array(5)].map((_, d) => (
+                      <Skeleton key={d} variant="circular" width={10} height={10}
+                        sx={{ bgcolor: d < rowCount ? 'rgba(34,197,94,0.25)' : 'var(--border)' }} />
+                    ))}
+                  </Box>
+                </Box>
+              ))}
+            </Box>
+
+            {/* ── Unassigned accordion ── */}
+            <Box sx={{
+              border: '1px solid rgba(245,158,11,0.2)', borderRadius: 3,
+              bgcolor: 'rgba(245,158,11,0.03)', overflow: 'hidden',
+            }}>
+              {/* Accordion header */}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.4 }}>
+                <Skeleton variant="circular" width={10} height={10} sx={{ bgcolor: 'rgba(245,158,11,0.3)' }} />
+                <Skeleton variant="text" width={90} height={16} sx={{ bgcolor: 'var(--border)' }} />
+                <Box sx={{ flex: 1 }} />
+                <Skeleton variant="rounded" width={140} height={20} sx={{ borderRadius: 1, bgcolor: 'var(--border)' }} />
+                <Skeleton variant="circular" width={18} height={18} sx={{ bgcolor: 'var(--border)' }} />
+              </Box>
+              {/* Unassigned cards grid */}
+              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 1.5, p: 2, pt: 0.5 }}>
+                {[...Array(skeletonCounts.current.unassigned || 6)].map((_, i) => (
+                  <Box key={i} sx={{
+                    display: 'flex', alignItems: 'center', gap: 1, px: 1.2, py: 0.9,
+                    borderRadius: 1.5, bgcolor: 'var(--card-bg)',
+                    border: '1px solid var(--border)',
+                  }}>
+                    <Skeleton variant="circular" width={8} height={8} sx={{ bgcolor: 'var(--border)', flexShrink: 0 }} />
+                    <Box sx={{ flex: 1 }}>
+                      <Skeleton variant="text" width="70%" height={12} sx={{ bgcolor: 'var(--border)', mb: 0.2 }} />
+                      <Skeleton variant="text" width="55%" height={10} sx={{ bgcolor: 'var(--border)' }} />
+                    </Box>
+                    <Skeleton variant="rounded" width={72} height={22} sx={{ borderRadius: 1, bgcolor: 'var(--border)' }} />
+                  </Box>
+                ))}
+              </Box>
+            </Box>
           </Box>
         ) : (
           <>

@@ -43,6 +43,7 @@ import LocalGasStationIcon from '@mui/icons-material/LocalGasStation'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlined'
 import TuneIcon from '@mui/icons-material/Tune'
 import AndyBotBuilder from './AndyBotBuilder'
+import { isPlausibleLabel } from './scheduledSends'
 import GasBotModal from './GasBotModal'
 import ClassificationSettingsModal from './ClassificationSettingsModal'
 
@@ -975,6 +976,7 @@ export default function Analytics() {
                       const hasAnalysis = !!n.category
                       const shortNum = (n.number || '').replace(/\D/g,'').slice(-10)
                         .replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')
+                      const showLabel = isPlausibleLabel(n.label)
                       const numKey  = `${row.company_id}_${n.number}`
                       const genKey  = numKey
                       const isGenNum = generating === genKey
@@ -985,8 +987,8 @@ export default function Analytics() {
                           {/* Empresa — nombre de sucursal o número como fallback */}
                           <TableCell sx={{ ...NSUB, pl: 3 }}>
                             <Box>
-                              <Typography sx={{ fontSize: '0.75rem', fontWeight: n.label ? 600 : 400, color: replied ? (n.label ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.55)') : 'rgba(255,255,255,0.3)', lineHeight: 1.3, fontFamily: n.label ? 'inherit' : 'monospace' }}>
-                                {n.label || shortNum}
+                              <Typography sx={{ fontSize: '0.75rem', fontWeight: showLabel ? 600 : 400, color: replied ? (showLabel ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.55)') : 'rgba(255,255,255,0.3)', lineHeight: 1.3, fontFamily: showLabel ? 'inherit' : 'monospace' }}>
+                                {showLabel ? n.label : shortNum}
                               </Typography>
                               {n.source && (
                                 <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.22)', lineHeight: 1.2 }}>

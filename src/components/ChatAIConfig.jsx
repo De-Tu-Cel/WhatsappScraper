@@ -12,10 +12,14 @@ import TextField from '@mui/material/TextField'
 import CircularProgress from '@mui/material/CircularProgress'
 import Alert from '@mui/material/Alert'
 import Slider from '@mui/material/Slider'
+import IconButton from '@mui/material/IconButton'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
 import TuneIcon from '@mui/icons-material/Tune'
 import Divider from '@mui/material/Divider'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
+import LockIcon from '@mui/icons-material/Lock'
+import LockOpenIcon from '@mui/icons-material/LockOpen'
+import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 
 const FIELD_SX = {
   '& .MuiOutlinedInput-root': {
@@ -41,6 +45,16 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
   const [saved,   setSaved]   = useState(false)
   const [form,    setForm]    = useState(DEFAULTS)
 
+  // Instrucción base global — bloqueada por default, con candado + advertencia.
+  const [globalPrompt,   setGlobalPrompt]   = useState('')
+  const [globalDefault,  setGlobalDefault]  = useState('')
+  const [globalLoading,  setGlobalLoading]  = useState(false)
+  const [globalSaving,   setGlobalSaving]   = useState(false)
+  const [globalSaved,    setGlobalSaved]    = useState(false)
+  const [globalError,    setGlobalError]    = useState('')
+  const [locked,         setLocked]         = useState(true)
+  const [unlockWarnOpen, setUnlockWarnOpen] = useState(false)
+
   const loadConfig = useCallback(async () => {
     if (!companyId) return
     setLoading(true); setError(''); setSaved(false)
@@ -57,7 +71,46 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
     } finally {
       setLoading(false)
     }
+
+    setLocked(true); setGlobalSaved(false); setGlobalError('')
+    setGlobalLoading(true)
+    try {
+      const r = await fetch('/api/conversations/ai-global-config')
+      const d = await r.json()
+      if (r.ok) {
+        setGlobalDefault(d.default_system_prompt || '')
+        setGlobalPrompt(d.system_prompt?.trim() ? d.system_prompt : (d.default_system_prompt || ''))
+      }
+    } catch {
+      // silencioso — la instrucción base es "avanzado", no bloquea el resto del diálogo
+    } finally {
+      setGlobalLoading(false)
+    }
   }, [companyId])
+
+  async function handleSaveGlobalPrompt() {
+    setGlobalSaving(true); setGlobalError('')
+    try {
+      const r = await fetch('/api/conversations/ai-global-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ system_prompt: globalPrompt.trim() === globalDefault.trim() ? '' : globalPrompt }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setGlobalError(d.detail || `Error ${r.status}`); return }
+      setGlobalSaved(true)
+      setTimeout(() => setGlobalSaved(false), 2500)
+    } catch (e) {
+      setGlobalError(e.message)
+    } finally {
+      setGlobalSaving(false)
+    }
+  }
+
+  function handleUnlockClick() {
+    if (locked) setUnlockWarnOpen(true)
+    else setLocked(true)
+  }
 
   async function handleSave() {
     setSaving(true); setError('')
@@ -190,9 +243,88 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
               {error}
             </Alert>
           )}
+
+          <Divider sx={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+            <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, px: 1 }}>
+              {s.aiCfgGlobalTitle}
+            </Typography>
+          </Divider>
+
+          <Box>
+            <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1.2 }}>
+              <WarningAmberIcon sx={{ fontSize: 15, color: '#f59e0b', mt: 0.1, flexShrink: 0 }} />
+              <Typography sx={{ color: 'rgba(245,158,11,0.85)', fontSize: '0.72rem', lineHeight: 1.5 }}>
+                {s.aiCfgGlobalHint}
+              </Typography>
+              <IconButton size="small" onClick={handleUnlockClick} sx={{ ml: 'auto', flexShrink: 0, color: locked ? 'rgba(255,255,255,0.35)' : '#4ade80' }}>
+                {locked ? <LockIcon sx={{ fontSize: 17 }} /> : <LockOpenIcon sx={{ fontSize: 17 }} />}
+              </IconButton>
+            </Box>
+
+            {globalLoading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+                <CircularProgress size={18} sx={{ color: 'var(--accent,#6366f1)' }} />
+              </Box>
+            ) : (
+              <>
+                <TextField
+                  multiline rows={8} size="small" fullWidth
+                  value={globalPrompt}
+                  disabled={locked}
+                  onChange={e => setGlobalPrompt(e.target.value)}
+                  sx={{ ...FIELD_SX, '& .MuiInputBase-input': { color: 'white', fontFamily: 'monospace', fontSize: '0.78rem' } }}
+                />
+                {!locked && (
+                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 1 }}>
+                    <Button size="small" onClick={() => setGlobalPrompt(globalDefault)}
+                      sx={{ color: 'rgba(255,255,255,0.45)', textTransform: 'none', fontSize: '0.75rem' }}>
+                      {s.aiCfgGlobalReset}
+                    </Button>
+                    <Button
+                      size="small" variant="contained" onClick={handleSaveGlobalPrompt} disabled={globalSaving}
+                      startIcon={globalSaved ? <CheckCircleIcon sx={{ fontSize: '15px !important' }} /> : null}
+                      sx={{
+                        bgcolor: globalSaved ? '#22c55e' : 'var(--accent,#6366f1)',
+                        textTransform: 'none', fontWeight: 700, fontSize: '0.75rem', borderRadius: 2,
+                        '&:hover': { filter: 'brightness(1.1)' },
+                      }}>
+                      {globalSaving ? <CircularProgress size={14} sx={{ color: 'white' }} /> : globalSaved ? s.aiCfgGlobalSaved : s.aiCfgGlobalSave}
+                    </Button>
+                  </Box>
+                )}
+                {globalError && (
+                  <Alert severity="error" sx={{ mt: 1, bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', '& .MuiAlert-icon': { color: '#f87171' }, fontSize: '0.8rem' }}>
+                    {globalError}
+                  </Alert>
+                )}
+              </>
+            )}
+          </Box>
         </Box>
         )}
       </DialogContent>
+
+      <Dialog open={unlockWarnOpen} onClose={() => setUnlockWarnOpen(false)} maxWidth="xs" fullWidth
+        sx={{ '& .MuiDialog-paper': { bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 3 } }}>
+        <DialogContent sx={{ pt: 3 }}>
+          <Box sx={{ display: 'flex', gap: 1.5, mb: 1 }}>
+            <WarningAmberIcon sx={{ color: '#f59e0b', fontSize: 22, flexShrink: 0 }} />
+            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.92rem' }}>{s.aiCfgGlobalWarnTitle}</Typography>
+          </Box>
+          <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', lineHeight: 1.6 }}>
+            {s.aiCfgGlobalWarnBody}
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
+          <Button onClick={() => setUnlockWarnOpen(false)} sx={{ color: 'rgba(255,255,255,0.45)', textTransform: 'none', fontSize: '0.82rem' }}>
+            {s.aiCfgGlobalWarnCancel}
+          </Button>
+          <Button onClick={() => { setLocked(false); setUnlockWarnOpen(false) }} variant="contained"
+            sx={{ bgcolor: '#f59e0b', color: '#000', textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', '&:hover': { bgcolor: '#fbbf24' } }}>
+            {s.aiCfgGlobalWarnConfirm}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5, borderTop: '1px solid rgba(255,255,255,0.07)', gap: 1 }}>
         <Button onClick={onClose} sx={{ color: 'rgba(255,255,255,0.45)', textTransform: 'none', fontSize: '0.82rem', borderRadius: 2, px: 2, '&:hover': { color: '#fff', bgcolor: 'rgba(255,255,255,0.08)' } }}>

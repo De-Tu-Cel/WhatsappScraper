@@ -30,6 +30,8 @@ import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import LinkIcon from '@mui/icons-material/Link'
 import InboxIcon from '@mui/icons-material/Inbox'
 import MessageIcon from '@mui/icons-material/Message'
+import PauseIcon from '@mui/icons-material/Pause'
+import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import { getTemplates } from './singleUrlProcessor'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
@@ -188,8 +190,9 @@ export default function BatchProcessor() {
       highlightRef.current.scrollTop = msgRef.current.scrollTop
   }
   const urlsRef     = useRef(null)
+  const pauseRef    = useRef(false)
   const cancelRef   = useRef(false)
-  const abortCtrl   = useRef(null)
+  const [paused, setPaused] = useState(false)
 
   const placeholder = useTypewriter(EXAMPLES, !rawUrls && !loading)
 
@@ -216,17 +219,21 @@ export default function BatchProcessor() {
   )
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
+  function handlePause() {
+    pauseRef.current = !pauseRef.current
+    setPaused(pauseRef.current)
+  }
+
   function handleCancelBatch() {
     cancelRef.current = true
-    if (abortCtrl.current) abortCtrl.current.abort()
-    setLoading(false)
-    setPhase(''); setCurrentUrl('')
+    pauseRef.current  = false
+    setPaused(false)
   }
 
   async function handleBatch() {
     if (!urlList.length) return
-    cancelRef.current = false
-    setRows([]); setProgress(0); setDoneCount(0); setLoading(true); setDone(false)
+    pauseRef.current = false; cancelRef.current = false
+    setRows([]); setProgress(0); setDoneCount(0); setLoading(true); setDone(false); setPaused(false)
 
     const scraped = []
     const CONCURRENCY = 4
@@ -235,8 +242,8 @@ export default function BatchProcessor() {
     setPhase('scraping')
     try {
       for (let i = 0; i < total; i += CONCURRENCY) {
+        while (pauseRef.current && !cancelRef.current) await new Promise(r => setTimeout(r, 200))
         if (cancelRef.current) break
-        abortCtrl.current = new AbortController()
         const chunk = urlList.slice(i, i + CONCURRENCY)
         setCurrentUrl(chunk[0])
         const chunkResults = await Promise.all(chunk.map(async (url) => {
@@ -245,7 +252,6 @@ export default function BatchProcessor() {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ url, skip_send: true }),
-              signal: abortCtrl.current.signal,
             })
             if (!res.ok) {
               const body = await res.json().catch(() => null)
@@ -261,22 +267,18 @@ export default function BatchProcessor() {
             setCurrentUrl(url)
             return row
           } catch (e) {
-            if (e.name === 'AbortError') return null
             completed++
             setProgress(Math.round(completed / total * 100))
             setDoneCount(completed)
             return { url, empresa: '—', industria: '—', whatsapp: '', company_id: '', scraped_data: null, ok: false, msg_status: null, errorReason: e.message }
           }
         }))
-        const valid = chunkResults.filter(Boolean)
-        scraped.push(...valid)
+        scraped.push(...chunkResults)
         setRows([...scraped])
       }
     } finally {
-      abortCtrl.current = null
-      if (!cancelRef.current) setDone(true)
-      setProgress(cancelRef.current ? 0 : 100)
-      setCurrentUrl(''); setPhase(''); setLoading(false)
+      setProgress(100)
+      setCurrentUrl(''); setPhase(''); setLoading(false); setPaused(false); setDone(true)
     }
   }
 
@@ -498,57 +500,73 @@ export default function BatchProcessor() {
 
       {/* ── Progress ── */}
       {loading && (
-        <Box sx={{
-          px: 2.5, py: 2,
-          bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.05)',
-          border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.15)',
-          borderRadius: 2,
-        }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />
-              <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
-                {lang === 'en'
-                  ? `Scraping — ${doneCount} of ${urlList.length}`
-                  : `Scrapeando — ${doneCount} de ${urlList.length}`}
-              </Typography>
-            </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography sx={{ color: 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <Box sx={{
+            px: 2.5, py: 2,
+            bgcolor: paused ? 'rgba(251,191,36,0.05)' : 'rgba(var(--accent-rgb, 59,130,246), 0.05)',
+            border: `1px solid ${paused ? 'rgba(251,191,36,0.2)' : 'rgba(var(--accent-rgb, 59,130,246), 0.15)'}`,
+            borderRadius: 2, transition: 'all 0.3s',
+          }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                {paused ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} /> : <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />}
+                <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
+                  {paused
+                    ? (lang === 'en' ? `Paused — ${doneCount} of ${urlList.length}` : `Pausado — ${doneCount} de ${urlList.length}`)
+                    : (lang === 'en' ? `Scraping — ${doneCount} of ${urlList.length}` : `Scrapeando — ${doneCount} de ${urlList.length}`)}
+                </Typography>
+              </Box>
+              <Typography sx={{ color: paused ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>
                 {progress}%
               </Typography>
-              <Tooltip title={t.batch.cancel}>
-                <IconButton size="small" onClick={handleCancelBatch}
-                  sx={{ color: 'rgba(248,113,113,0.7)', p: 0.3, '&:hover': { color: '#f87171' } }}>
-                  <HighlightOffIcon sx={{ fontSize: 15 }} />
-                </IconButton>
-              </Tooltip>
             </Box>
+            <LinearProgress
+              variant="determinate"
+              value={progress}
+              sx={{
+                borderRadius: 4, height: 6,
+                bgcolor: paused ? 'rgba(251,191,36,0.1)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)',
+                '& .MuiLinearProgress-bar': {
+                  background: paused
+                    ? 'linear-gradient(90deg,#f59e0b,#fbbf24)'
+                    : 'linear-gradient(90deg, var(--accent, #3b82f6), var(--accent, #60a5fa))',
+                  borderRadius: 4,
+                },
+              }}
+            />
+            {currentUrl && !paused && (
+              <Typography sx={{
+                mt: 1, color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {currentUrl}
+              </Typography>
+            )}
           </Box>
-          <LinearProgress
-            variant="determinate"
-            value={progress}
-            sx={{
-              borderRadius: 4, height: 6, bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.1)',
-              '& .MuiLinearProgress-bar': {
-                background: 'linear-gradient(90deg, var(--accent, #3b82f6), var(--accent, #60a5fa))',
-                borderRadius: 4,
-              },
-            }}
-          />
-          {currentUrl && (
-            <Typography sx={{
-              mt: 1, color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>
-              {currentUrl}
-            </Typography>
-          )}
+          <Box sx={{ display: 'flex', gap: 1.5 }}>
+            <Button fullWidth onClick={handlePause} startIcon={paused ? <PlayArrowIcon /> : <PauseIcon />}
+              sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' } }}>
+              {paused ? t.batch.resume : t.batch.pause}
+            </Button>
+            <Button fullWidth onClick={handleCancelBatch} startIcon={<HighlightOffIcon />}
+              sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>
+              {t.batch.cancel}
+            </Button>
+            {rows.some(r => r.ok) && (
+              <Tooltip title={t.batch.stopAndSendTip}>
+                <Button fullWidth onClick={handleCancelBatch} startIcon={<SendIcon />}
+                  sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#4ade80', bgcolor: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(34,197,94,0.15)' } }}>
+                  {t.batch.stopAndSend}
+                </Button>
+              </Tooltip>
+            )}
+          </Box>
         </Box>
       )}
 
-      {/* ── Post-scraping: template + send ── */}
-      {done && (
+      {/* ── Post-scraping: template + send — visible también durante el
+           scraping, para poder empezar a enviar a lo ya encontrado ── */}
+      {(done || loading) && rows.length > 0 && (
         <Box sx={{ p: 2, borderRadius: 2, border: '1px solid rgba(34,197,94,0.15)', bgcolor: 'rgba(34,197,94,0.03)' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.2 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

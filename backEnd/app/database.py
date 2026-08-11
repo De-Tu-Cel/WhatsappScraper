@@ -633,7 +633,8 @@ class MongoDBManager:
             {"_id": 1, "direction": 1, "message_body": 1, "message_text": 1,
              "status": 1, "created_at": 1, "sent_at": 1, "platform": 1,
              "to_number": 1, "from_number": 1, "message_id": 1, "interactive": 1,
-             "related_to_number": 1, "ai_generated": 1, "sent_by_name": 1}
+             "related_to_number": 1, "ai_generated": 1, "sent_by_name": 1,
+             "instance_name": 1, "instance_number": 1}
         ).sort("created_at", 1))
 
         # Deduplicate: if same message_id exists as both outbound and inbound, keep outbound only

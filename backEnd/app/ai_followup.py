@@ -24,7 +24,7 @@ OUTBOUND_LOOKBACK_DAYS = 7  # only follow up if we messaged this number within N
 
 _MEXICO_TZ = timezone(timedelta(hours=-6))  # CST — UTC-6 year-round (conservative)
 
-_SYSTEM_PROMPT = """\
+_DEFAULT_SYSTEM_PROMPT = """\
 Eres Andrés, una persona real chateando por WhatsApp. Escribiste a {company_name}, \
 negocio del giro {industry} en {city}, y alguien te respondió.
 
@@ -128,6 +128,22 @@ IMPORTANTE: [FIN] es señal interna, nunca llega al contacto. Ponlo pegado al te
 {extra_block}"""
 
 
+def _get_system_prompt(db) -> str:
+    """
+    Instrucción base del sistema — normalmente el prompt hardcodeado de arriba,
+    pero puede sobrescribirse globalmente desde Conversaciones (candado en
+    ChatAIConfig) y queda guardada en ai_global_config. Vacío/ausente → default.
+    """
+    try:
+        cfg = db.db.ai_global_config.find_one({"_id": "global"})
+        override = (cfg or {}).get("system_prompt", "") or ""
+        if override.strip():
+            return override
+    except Exception as e:
+        log.error("[AIFollowup] error leyendo ai_global_config, usando default: %s", e)
+    return _DEFAULT_SYSTEM_PROMPT
+
+
 def _is_business_hours() -> bool:
     now = datetime.now(_MEXICO_TZ)
     return 8 <= now.hour < 21
@@ -226,7 +242,7 @@ def _build_context(db: MongoDBManager, company_id: str, outbound_log: dict) -> d
     }
 
 
-def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False, prefs: dict = None) -> str | None:
+def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False, prefs: dict = None, db=None) -> str | None:
     ctx = dict(context)
     parts = []
     if ctx.get("description"):
@@ -238,7 +254,14 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
     ctx["company_context"] = "\n".join(parts) if parts else "(sin datos adicionales)"
     extra = ((prefs or {}).get("extra_instructions") or "").strip()
     ctx["extra_block"] = f"\n\nINSTRUCCIONES ADICIONALES:\n{extra}" if extra else ""
-    system = _SYSTEM_PROMPT.format(**ctx)
+    base_prompt = _get_system_prompt(db or MongoDBManager())
+    try:
+        system = base_prompt.format(**ctx)
+    except (KeyError, ValueError) as e:
+        # Instrucción base personalizada con llaves { } sueltas rompe .format() —
+        # cae al prompt default en vez de tumbar la respuesta por completo.
+        log.error("[AIFollowup] instrucción base con formato inválido, usando default: %s", e)
+        system = _DEFAULT_SYSTEM_PROMPT.format(**ctx)
     if is_cold_start:
         system += (
             "\n\n⚠️ PRIMER MENSAJE DE ESTA SESIÓN: empieza TU respuesta con un saludo "
@@ -270,12 +293,12 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
         return None
 
 
-def _send_typing_presence(phone_number: str):
+def _send_typing_presence(phone_number: str, instance: str):
     """Signal WhatsApp that the contact is typing via Evolution API."""
     try:
         import requests as _req
         clean = "".join(filter(str.isdigit, phone_number))
-        url = f"{EVOLUTION_API_URL}/chat/sendPresence/{EVOLUTION_INSTANCE}"
+        url = f"{EVOLUTION_API_URL}/chat/sendPresence/{instance}"
         payload = {"number": clean, "options": {"presence": "composing"}}
         headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
         _req.post(url, json=payload, headers=headers, timeout=5)
@@ -397,7 +420,7 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
 
     is_cold_start = session.get("turn_count", 0) == 0
     _prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
-    ai_text_raw = _call_llm_for_reply(session.get("turns", []), session.get("context", {}), is_cold_start=is_cold_start, prefs=_prefs)
+    ai_text_raw = _call_llm_for_reply(session.get("turns", []), session.get("context", {}), is_cold_start=is_cold_start, prefs=_prefs, db=db)
     print(f"[AIFollowup] LLM response: {repr(ai_text_raw[:80]) if ai_text_raw else 'None'}")
     if not ai_text_raw:
         print("[AIFollowup] EXIT: LLM returned None")
@@ -410,15 +433,39 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
     # Mark AI as typing (frontend polls this)
     db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": True}})
 
+    # Pick a CONNECTED instance to send from — same rotation/preferred-instance
+    # concept as routes.py's /send-message, instead of always the single
+    # hardcoded EVOLUTION_INSTANCE. Without this, Andy goes permanently silent
+    # the moment that one specific instance disconnects, even if others are healthy.
+    from app.whatsapp_evolution import EvolutionClient, pick_connected_instance
+    preferred_instance = None
+    try:
+        from bson import ObjectId
+        if company_id and len(company_id) == 24:
+            co = db.db.companies.find_one({"_id": ObjectId(company_id)}, {"assigned_instance": 1})
+            preferred_instance = (co or {}).get("assigned_instance")
+    except Exception:
+        pass
+    instance = pick_connected_instance(db, EVOLUTION_API_URL, EVOLUTION_API_KEY, preferred_instance)
+    if not instance:
+        log.warning("[AIFollowup] no hay ninguna instancia conectada — Andy no puede enviar a %s", phone_number)
+        print(f"[AIFollowup] EXIT: sin instancias conectadas (phone={phone_number})")
+        db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": False}})
+        return
+    if instance != preferred_instance and company_id and len(company_id) == 24:
+        try:
+            db.db.companies.update_one({"_id": ObjectId(company_id)}, {"$set": {"assigned_instance": instance}})
+        except Exception:
+            pass
+
     try:
         # Simulate typing on WhatsApp
-        _send_typing_presence(phone_number)
+        _send_typing_presence(phone_number, instance)
         typing_delay = random.uniform(TYPING_DELAY_MIN, TYPING_DELAY_MAX)
         time.sleep(typing_delay)
 
         # Send message
-        from app.whatsapp_evolution import EvolutionClient
-        evo = EvolutionClient(EVOLUTION_API_URL, EVOLUTION_API_KEY, EVOLUTION_INSTANCE)
+        evo = EvolutionClient(EVOLUTION_API_URL, EVOLUTION_API_KEY, instance)
         send_result = evo.send_text(phone_number, ai_text)
         evo_json = send_result.get("response_json", {})
         message_id = evo_json.get("key", {}).get("id") or evo_json.get("id")

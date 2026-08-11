@@ -41,7 +41,7 @@ def _pick_message(messages, last_text=None):
     return random.choice(choices or messages)
 
 
-def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_id: str):
+def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_id: str, delay_ms: int = 0):
     """Send a single WhatsApp message via Evolution API and log it.
 
     Mirrors the logic in routes.py POST /api/send-message, but runs in a
@@ -66,7 +66,7 @@ def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_i
                 upsert=True,
             )
 
-        evo_result = evo.send_text(to_number, message)
+        evo_result = evo.send_text(to_number, message, delay_ms=delay_ms)
         evo_json = evo_result.get("response_json", {})
         message_id = evo_json.get("key", {}).get("id") or evo_json.get("id")
         status = "sent" if evo_result.get("status_code") in (200, 201) else "failed"
@@ -127,19 +127,39 @@ def _execute_send_job(job_id: str):
         selected_numbers = job.get("selected_numbers") or []
         messages = job.get("messages") or ([job["message"]] if job.get("message") else [])
 
+        # ── Send timing config (saved from UI — same shape as sendConfig.js) ──
+        _sc = job.get("send_config") or {}
+        _msg_d   = _sc.get("msgDelay",   [25, 55])
+        _batch_s = _sc.get("batchSize",  [3,  8])
+        _batch_d = _sc.get("batchDelay", [3,  8])
+        msg_delay_min,  msg_delay_max  = int(_msg_d[0]),   int(_msg_d[1])
+        batch_size_min, batch_size_max = int(_batch_s[0]), int(_batch_s[1])
+        batch_delay_min = int(_batch_d[0]) * 60  # minutes → seconds
+        batch_delay_max = int(_batch_d[1]) * 60
+        # Typing indicator sent to Evolution API (per-message, separate from inter-message spacing)
+        typing_ms = random.randint(800, 1800)
+
+        # State for batch-break tracking (mirrors SendQueueContext.jsx logic)
+        _msgs_in_batch = 0
+        _next_break_at = random.randint(batch_size_min, batch_size_max)
+
         def _antispam_delay(send_index: int):
             """Delay BEFORE the send_index-th message (0-based, skip for first)."""
+            nonlocal _msgs_in_batch, _next_break_at
             if send_index == 0:
                 return
-            if send_index % 5 == 0:
-                pause_sec = random.uniform(3 * 60, 8 * 60)
-                log.warning("[Scheduler] job=%s ⏸  long anti-spam pause %.0fs before msg #%d",
-                            job_id, pause_sec, send_index + 1)
+            _msgs_in_batch += 1
+            if _msgs_in_batch >= _next_break_at:
+                pause_sec = random.uniform(batch_delay_min, batch_delay_max)
+                _msgs_in_batch = 0
+                _next_break_at = random.randint(batch_size_min, batch_size_max)
+                log.warning("[Scheduler] job=%s ⏸  batch break %.0fs (cfg %d–%dmin) before msg #%d",
+                            job_id, pause_sec, batch_delay_min // 60, batch_delay_max // 60, send_index + 1)
                 time.sleep(pause_sec)
             else:
-                delay_sec = random.uniform(25, 55)
-                log.warning("[Scheduler] job=%s ⏳ %.0fs delay before msg #%d",
-                            job_id, delay_sec, send_index + 1)
+                delay_sec = random.uniform(msg_delay_min, msg_delay_max)
+                log.warning("[Scheduler] job=%s ⏳ %.0fs (cfg %d–%ds) before msg #%d",
+                            job_id, delay_sec, msg_delay_min, msg_delay_max, send_index + 1)
                 time.sleep(delay_sec)
 
         def _finish(sent: int, errors: int):
@@ -191,7 +211,7 @@ def _execute_send_job(job_id: str):
                     message_variant, company_name,
                     num_info.get("industry", ""), num_info.get("city", ""), num_info.get("web", ""),
                 )
-                ok = _send_via_evolution(db, cid, to_number, message, job_id)
+                ok = _send_via_evolution(db, cid, to_number, message, job_id, delay_ms=typing_ms)
                 if ok:
                     sent_count += 1
                 else:
@@ -272,7 +292,7 @@ def _execute_send_job(job_id: str):
                 message_variant = _pick_message(messages, last_text)
                 last_text = message_variant
                 message = _render_message(message_variant, company_name, company_industry, company_city, company_web)
-                ok = _send_via_evolution(db, cid, to_number, message, job_id)
+                ok = _send_via_evolution(db, cid, to_number, message, job_id, delay_ms=typing_ms)
                 send_index += 1
                 if ok:
                     sent_count += 1

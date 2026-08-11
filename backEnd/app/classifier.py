@@ -697,6 +697,11 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
         # El "2do mensaje" lo manda Andy (ai_followup.py), activado automáticamente por
         # el webhook — no tenemos su log_id de antemano, así que lo identificamos como
         # el primer outbound generado por IA después de que arrancó este probe.
+        # Acotado también por `received_at` (upper bound): sin este límite, si el
+        # prospecto manda dos respuestas rápidas ANTES de que Andy termine de generar
+        # y enviar su seguimiento (llamada a LLM con latencia real), la consulta
+        # igual encuentra el mensaje de Andy — pero con created_at POSTERIOR a este
+        # inbound — y el resultado (received_at - sent_at) sale negativo.
         started_at = probe.get("started_at")
         if started_at:
             msg2 = db.db.message_logs.find_one(
@@ -704,7 +709,11 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
                     "company_id": probe_doc.get("company_id"),
                     "direction": "outbound",
                     "ai_generated": True,
-                    "created_at": {"$gt": started_at},
+                    # status != "failed": ai_followup.py loguea el intento aunque el envío
+                    # falle (p. ej. instancia desconectada) — un mensaje que nunca llegó al
+                    # prospecto no puede ser la referencia de tiempo para T2.
+                    "status": {"$ne": "failed"},
+                    "created_at": {"$gt": started_at, "$lt": received_at},
                 },
                 sort=[("created_at", 1)],
             )
@@ -712,7 +721,7 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
             if sent_at and isinstance(sent_at, datetime):
                 t2_seconds = (received_at - sent_at).total_seconds()
 
-    if not timed_out and t2_seconds is not None and t2_seconds <= t2_threshold:
+    if not timed_out and t2_seconds is not None and 0 <= t2_seconds <= t2_threshold:
         if not _has_real_text(reply_body):
             # Audio/sticker/ubicación/contacto — el ORIGEN sigue siendo determinista
             # (T2 rápido = "bot"), pero no hay texto real que mandarle al LLM para
@@ -735,8 +744,16 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
             )
             analysis["is_ai"] = is_ai
     else:
-        notes = (f"Sin 2da respuesta tras {probe_wait_hours}h — determinista" if timed_out
-                 else f"2do mensaje respondido en {t2_seconds:.0f}s (> {t2_threshold}s) — determinista")
+        if timed_out:
+            notes = f"Sin 2da respuesta tras {probe_wait_hours}h — determinista"
+        elif t2_seconds is None:
+            # Andy (el 2do mensaje) aún no se había enviado cuando llegó esta
+            # respuesta — no hay con qué medir T2. Antes esto caía al f-string de
+            # abajo con t2_seconds=None y tronaba con TypeError (silenciado por el
+            # try/except de classify_and_save, dejando el mensaje sin clasificar).
+            notes = "2do mensaje (seguimiento automático) aún no enviado cuando llegó esta respuesta — determinista"
+        else:
+            notes = f"2do mensaje respondido en {t2_seconds:.0f}s (> {t2_threshold}s) — determinista"
         analysis = _quick_result("automatico", notes)
 
     # reaction_time_min reportado = T1 (velocidad de la PRIMERA respuesta), no T2 —

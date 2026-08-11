@@ -21,10 +21,12 @@ import TimerIcon from '@mui/icons-material/Timer'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import Chip from '@mui/material/Chip'
 import IconButton from '@mui/material/IconButton'
+import DescriptionIcon from '@mui/icons-material/Description'
 import { useUser } from '../context/UserContext'
 import { useLang } from '../context/LangContext'
 import { loadSendConfig, saveSendConfig, DEFAULT_SEND_CONFIG } from '@/lib/sendConfig'
 import { RiskBadge } from './SendConfigPanel'
+import { TemplateManagerDialog } from './messageTemplateLibrary'
 
 export const ACCENTS = [
   // Marca
@@ -485,6 +487,7 @@ function SendTimingSection() {
   const { t } = useLang()
   const sc = t.sendConfig
   const [cfg, setCfg] = useState(() => loadSendConfig())
+  const [tplOpen, setTplOpen] = useState(false)
 
   function update(key, val) {
     const next = { ...cfg, [key]: val }
@@ -501,6 +504,16 @@ function SendTimingSection() {
       <TimingSliderRow label={sc.batchDelay} tooltip={sc.tipBatchDelay} value={cfg.batchDelay} onChange={v => update('batchDelay', v)} min={1}  max={30}  step={1}  unit={sc.minutes} minDist={1}
         marks={[1,5,10,15,20,30].map(v => ({ value: v, label: `${v}m` }))} />
       <RiskBadge config={cfg} />
+
+      <Box onClick={() => setTplOpen(true)} sx={{
+        mt: 2.5, display: 'flex', alignItems: 'center', gap: 1, py: 1, px: 1.2, borderRadius: 2, cursor: 'pointer',
+        bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.06)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.18)',
+        '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)' },
+      }}>
+        <DescriptionIcon sx={{ fontSize: 16, color: 'var(--accent,#60a5fa)' }} />
+        <Typography sx={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--accent,#60a5fa)' }}>{t.tplLib.manageBtn}</Typography>
+      </Box>
+      <TemplateManagerDialog open={tplOpen} onClose={() => setTplOpen(false)} />
     </Section>
   )
 }

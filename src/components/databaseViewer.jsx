@@ -50,6 +50,7 @@ import SearchIcon from '@mui/icons-material/Search'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import StorageIcon from '@mui/icons-material/Storage'
+import AddIcon from '@mui/icons-material/Add'
 import VisibilityIcon from '@mui/icons-material/Visibility'
 import SendIcon from '@mui/icons-material/Send'
 import MessageIcon from '@mui/icons-material/Message'
@@ -72,6 +73,7 @@ function getHeadCells(t) {
     { id: 'city',         label: t.db.colCity,       align: 'center', sortable: true  },
     { id: 'has_whatsapp', label: t.db.whatsapp,      align: 'center', sortable: true  },
     { id: 'created_at',   label: t.db.colRegistered, align: 'center', sortable: true  },
+    { id: 'last_scraped_at', label: t.db.colLastScraped, align: 'center', sortable: true },
   ]
 }
 
@@ -138,6 +140,7 @@ const LABEL_SX = {
 
 const FIELD_SX = {
   '& .MuiInputBase-root': { color: 'rgba(255,255,255,0.85)' },
+  '& .MuiOutlinedInput-input': { paddingTop: '16.5px', paddingBottom: '8.5px' },
   '& .MuiInputLabel-root': { color: 'rgba(255,255,255,0.35)' },
   '& .MuiInputLabel-root.Mui-focused': { color: '#3b82f6' },
   '& .MuiInputLabel-root.Mui-error': { color: '#f87171' },
@@ -174,7 +177,7 @@ function renderTemplate(template, row) {
 }
 
 // ─── Toolbar ──────────────────────────────────────────────────────────────────
-function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescraping, selectedWithWA, onRefresh, onToggleFilter, filterOpen, total, instanceStatus }) {
+function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescraping, selectedWithWA, onRefresh, onToggleFilter, filterOpen, total, instanceStatus, onAddCompany }) {
   const { t } = useLang()
   return (
     <Toolbar sx={{
@@ -266,6 +269,18 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
           </>
         ) : (
           <>
+            <Tooltip title={t.db.addCompanyTip}>
+              <Button size="small" onClick={onAddCompany} startIcon={<AddIcon sx={{ fontSize: '15px !important' }} />}
+                sx={{
+                  fontSize: '0.75rem', fontWeight: 600, textTransform: 'none',
+                  color: 'var(--accent, #60a5fa)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)',
+                  border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)', borderRadius: 1.5,
+                  px: 1.5, py: 0.5, mr: 0.5,
+                  '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.18)', borderColor: 'rgba(var(--accent-rgb,59,130,246),0.45)' },
+                }}>
+                {t.db.addCompany}
+              </Button>
+            </Tooltip>
             <Tooltip title={t.db.refresh}>
               <IconButton onClick={onRefresh} size="small" sx={{ color: 'var(--text-muted, rgba(255,255,255,0.5))', '&:hover': { color: 'var(--text, white)' } }}>
                 <RefreshIcon fontSize="small" />
@@ -374,6 +389,96 @@ function FilterBar({ filters, onChange, industries, cities }) {
         </Select>
       </FormControl>
     </Box>
+  )
+}
+
+// ─── Add company dialog (manual entry, no scraping) ────────────────────────────
+const ADD_COMPANY_DEFAULTS = { name: '', industry: '', city: '', state: '', website: '', whatsapp_number: '', description: '' }
+
+function AddCompanyDialog({ open, onClose, onCreated, onNotify }) {
+  const { t } = useLang()
+  const [form, setForm] = useState(ADD_COMPANY_DEFAULTS)
+  const [saving, setSaving] = useState(false)
+  const [touched, setTouched] = useState(false)
+
+  useEffect(() => { if (open) { setForm(ADD_COMPANY_DEFAULTS); setTouched(false) } }, [open])
+
+  const set = (field, value) => setForm(prev => ({ ...prev, [field]: value }))
+
+  // The backend auto-prepends https:// to a bare domain (see api_create_company),
+  // so validate the same normalized form it will actually store — otherwise typing
+  // "empresa.com" without the protocol gets rejected here even though it'd work fine.
+  const websiteTrimmed = form.website.trim()
+  const websiteNormalized = websiteTrimmed && !websiteTrimmed.startsWith('http') ? `https://${websiteTrimmed}` : websiteTrimmed
+  const webErr = websiteTrimmed ? urlValidationMsg(websiteNormalized, { badProtocol: t.common.urlBadProtocol, invalid: t.common.urlInvalid }) : ''
+  const waErr  = form.whatsapp_number.trim() ? waNumberValidationMsg(form.whatsapp_number.trim(), { empty: t.db.numEmpty, invalid: t.db.numInvalidFmt }) : ''
+  const nameErr = touched && !form.name.trim()
+
+  async function handleCreate() {
+    setTouched(true)
+    if (!form.name.trim() || webErr || waErr) return
+    setSaving(true)
+    try {
+      const res = await fetch('/api/companies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, name: form.name.trim() }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || t.db.addCompanyError)
+      onCreated?.()
+    } catch (err) {
+      onNotify?.(err.message || t.db.addCompanyError, 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onClose={saving ? undefined : onClose} maxWidth="sm" fullWidth
+      slotProps={{ paper: { sx: {
+        background: 'var(--sidebar-bg, #0d1117)', border: '1px solid rgba(255,255,255,0.1)',
+        borderRadius: 3, boxShadow: '0 24px 64px rgba(0,0,0,0.85)', overflow: 'hidden',
+      } } }}>
+      <DialogTitle sx={{ p: 0, bgcolor: 'var(--surface, #111827)', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+        <Box sx={{ px: 3, pt: 3, pb: 2.5, display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Box sx={{ width: 44, height: 44, borderRadius: 2, flexShrink: 0, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <AddIcon sx={{ color: 'var(--accent, #60a5fa)', fontSize: 22 }} />
+          </Box>
+          <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem' }}>{t.db.addCompanyTitle}</Typography>
+        </Box>
+      </DialogTitle>
+
+      <DialogContent sx={{ px: 3, pt: 2.5, pb: 1, display: 'flex', flexDirection: 'column', gap: 1.8, bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
+        <TextField label={t.db.nameLabel} size="small" fullWidth sx={{ ...FIELD_SX, mt: 1 }}
+          value={form.name} onChange={e => set('name', e.target.value)}
+          error={nameErr} helperText={nameErr ? t.db.nameRequired : ''} />
+        <TextField label={t.db.websiteLabel} size="small" fullWidth sx={FIELD_SX}
+          value={form.website} onChange={e => set('website', e.target.value)}
+          error={!!webErr} helperText={webErr || t.db.websiteEx} />
+        <Box sx={{ display: 'flex', gap: 1.5 }}>
+          <TextField label={t.db.industryLabel2} size="small" fullWidth sx={FIELD_SX} value={form.industry} onChange={e => set('industry', e.target.value)} />
+          <TextField label={t.db.cityLabel2} size="small" fullWidth sx={FIELD_SX} value={form.city} onChange={e => set('city', e.target.value)} />
+        </Box>
+        <TextField label={t.db.stateLabel} size="small" fullWidth sx={FIELD_SX} value={form.state} onChange={e => set('state', e.target.value)} />
+        <TextField label={t.db.whatsappNumLabel} size="small" fullWidth sx={FIELD_SX}
+          placeholder="+52 55 1234 5678" value={form.whatsapp_number} onChange={e => set('whatsapp_number', e.target.value)}
+          error={!!waErr} helperText={waErr || t.db.whatsappNumHint} />
+        <TextField label={t.db.descLabel} size="small" fullWidth multiline rows={2} sx={FIELD_SX}
+          placeholder={t.db.descPh} value={form.description} onChange={e => set('description', e.target.value)} />
+      </DialogContent>
+
+      <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5, gap: 1 }}>
+        <Button onClick={onClose} disabled={saving} sx={{ color: 'rgba(255,255,255,0.5)', borderRadius: 2, textTransform: 'none' }}>
+          {t.common.cancel}
+        </Button>
+        <Button onClick={handleCreate} disabled={saving} variant="contained"
+          startIcon={saving ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <AddIcon sx={{ fontSize: '16px !important' }} />}
+          sx={{ bgcolor: 'var(--accent,#3b82f6)', borderRadius: 2, fontWeight: 700, textTransform: 'none', '&:hover': { bgcolor: 'var(--accent,#3b82f6)', filter: 'brightness(0.9)' } }}>
+          {t.db.addCompany}
+        </Button>
+      </DialogActions>
+    </Dialog>
   )
 }
 
@@ -732,9 +837,9 @@ function SkeletonRows({ count }) {
 }
 
 // ─── Campaign dialog ──────────────────────────────────────────────────────────
-const MAX_CAMPAIGN_MSG = 4096
+export const MAX_CAMPAIGN_MSG = 4096
 
-function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus = 'unknown', isDisconnected = false }) {
+export function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus = 'unknown', isDisconnected = false }) {
   const { t, lang } = useLang()
   const TEMPLATES_DATA = getTemplates(t)
   const [msgText,      setMsgText]      = useState(TEMPLATES_DATA[0].text)
@@ -767,9 +872,12 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus 
   const failedCount = results.filter(r => r.status === 'failed').length
   const noWaCount   = results.filter(r => r.status === 'no_wa').length
   const charCount   = msgText.length
-  const msgInvalid  = !msgText.trim() || charCount > MAX_CAMPAIGN_MSG
-  const allVariants   = [msgText, ...extraVariants].map(v => v.trim()).filter(Boolean)
-  const belowMinTemplates = waRows.length > 1 && allVariants.length < MIN_TEMPLATES_FOR_BULK
+  const isBulk      = waRows.length > 1
+  // En bulk, el mensaje base deja de usarse — solo se envían las plantillas
+  // marcadas en la Biblioteca, para que lo enviado sea exactamente lo seleccionado.
+  const msgInvalid  = !isBulk && (!msgText.trim() || charCount > MAX_CAMPAIGN_MSG)
+  const allVariants   = (isBulk ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean)
+  const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
   async function waitWithTimer(ms, label) {
     const totalSecs = Math.ceil(ms / 1000)
@@ -879,6 +987,7 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus 
       </DialogTitle>
 
       <DialogContent sx={{ px: 3, pt: 2.5, pb: 1, bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
+        {!isBulk && <>
         {/* Plantillas como punto de partida */}
         <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
           {t.batch.baseTemplate}
@@ -913,9 +1022,10 @@ function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus 
             {charCount} / {MAX_CAMPAIGN_MSG}
           </Typography>
         </Box>
+        </>}
 
         <Box sx={{ mb: 1.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
-          <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={waRows.length} baseCount={1} />
+          <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={waRows.length} baseCount={0} />
         </Box>
 
         {/* Send config */}
@@ -1023,6 +1133,7 @@ export default function DatabaseViewer({ isActive }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [rescraping, setRescraping]       = useState('')   // label del progreso
   const [campaignOpen, setCampaignOpen]   = useState(false)
+  const [addCompanyOpen, setAddCompanyOpen] = useState(false)
   const [snack, setSnack] = useState({ open: false, msg: '', severity: 'success' })
   const [industries, setIndustries] = useState([])
   const [cities, setCities] = useState([])
@@ -1301,6 +1412,7 @@ export default function DatabaseViewer({ isActive }) {
           filterOpen={filterOpen}
           total={total}
           instanceStatus={instanceStatus}
+          onAddCompany={() => setAddCompanyOpen(true)}
         />
 
         <Box sx={{ borderTop: '1px solid rgba(255,255,255,0.07)', position: 'relative', zIndex: 1 }} />
@@ -1437,6 +1549,7 @@ export default function DatabaseViewer({ isActive }) {
                         )}
                       </TableCell>
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>{formatDate(row.created_at)}</TableCell>
+                      <TableCell align="center" onClick={() => handleSelectRow(row._id)}>{formatDate(row.last_scraped_at)}</TableCell>
                       <TableCell align="right" sx={{ pr: 1 }}>
                         <Tooltip title={t.db.viewInfo}>
                           <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenView(row) }}
@@ -1569,6 +1682,13 @@ export default function DatabaseViewer({ isActive }) {
         onNotify={notify}
         instanceStatus={instanceStatus}
         isDisconnected={isDisconnected}
+      />
+
+      <AddCompanyDialog
+        open={addCompanyOpen}
+        onClose={() => setAddCompanyOpen(false)}
+        onCreated={() => { setAddCompanyOpen(false); fetchData(); notify(t.db.addCompanyOk, 'success') }}
+        onNotify={notify}
       />
 
       <EditDialog

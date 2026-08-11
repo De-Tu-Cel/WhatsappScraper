@@ -4,15 +4,18 @@ import re
 import json
 import requests
 import concurrent.futures
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote_plus
 from dotenv import load_dotenv
 from pathlib import Path
 
-load_dotenv(dotenv_path=Path(__file__).parent / ".env")
+load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
 
-SERPAPI_KEY     = os.getenv("SERPAPI_KEY", "")
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY", "")
+SERPAPI_KEY        = os.getenv("SERPAPI_KEY", "")
+DEEPSEEK_API_KEY   = os.getenv("DEEPSEEK_API_KEY", "")
+OPENAI_API_KEY     = os.getenv("OPENAI_API_KEY", "")
+
+def _brightdata_key() -> str:
+    return os.getenv("BRIGHTDATA_SERP_KEY", "")
 
 EXCLUDED_DOMAINS = {
     # Enciclopedias
@@ -320,6 +323,217 @@ MAJOR_CITIES = [
     "Tampico", "Ciudad Obregón", "Los Mochis", "Ensenada", "Playa del Carmen",
 ]
 
+# Países soportados por el buscador — cada uno define el código de teléfono
+# default (usado al normalizar números sin lada explícita), los TLDs a
+# favorecer con site: en las queries, y una lista de ciudades para el fan-out
+# cuando el usuario no especifica ciudad (vacía = solo queries base, sin
+# fan-out por ciudad — evita generar decenas de queries irrelevantes para
+# países donde no tenemos un listado curado de ciudades).
+COUNTRY_CONFIG: dict[str, dict] = {
+    # ── Norteamérica ──────────────────────────────────────────────────────────
+    "México":         {"phone_code": "+52", "local_digits": 10, "tlds": [".mx", "com.mx"], "gl": "mx", "hl": "es", "bd_country": "mx", "cities": MAJOR_CITIES},
+    "Estados Unidos": {"phone_code": "+1",  "local_digits": 10, "tlds": [".com"], "gl": "us", "hl": "en", "bd_country": "us", "cities": [
+        "New York", "Los Angeles", "Chicago", "Houston", "Phoenix",
+        "Philadelphia", "San Antonio", "San Diego", "Dallas", "Miami",
+        "Atlanta", "Seattle", "Denver", "Boston", "Las Vegas",
+        "Portland", "Minneapolis", "Nashville", "Charlotte", "Jacksonville",
+        "Columbus", "Indianapolis", "San Francisco", "San Jose", "Austin",
+        "Fort Worth", "Baltimore", "Memphis", "Louisville", "Milwaukee",
+        "Albuquerque", "Tucson", "Sacramento", "Kansas City", "Cleveland",
+        "Raleigh", "Tampa", "New Orleans", "Orlando", "Arlington",
+        "Omaha", "Oakland", "Fresno", "Long Beach", "Virginia Beach",
+    ]},
+    "Canadá":         {"phone_code": "+1",  "local_digits": 10, "tlds": [".ca"], "gl": "ca", "hl": "en", "bd_country": "ca", "cities": [
+        "Toronto", "Montreal", "Vancouver", "Calgary", "Edmonton",
+        "Ottawa", "Winnipeg", "Québec", "Hamilton", "Kitchener",
+        "Halifax", "Victoria", "Saskatoon", "Regina", "St. John's",
+        "Kelowna", "Abbotsford", "Windsor", "London", "Oshawa",
+        "Barrie", "Burlington", "Sudbury", "Thunder Bay", "Lethbridge",
+        "Red Deer", "Moncton", "Fredericton",
+    ]},
+    # ── Centroamérica y Caribe ────────────────────────────────────────────────
+    "Guatemala":      {"phone_code": "+502", "local_digits": 8, "tlds": ["com.gt"], "gl": "gt", "hl": "es", "bd_country": "gt", "cities": [
+        "Ciudad de Guatemala", "Mixco", "Villa Nueva", "San Juan Sacatepéquez",
+        "Quetzaltenango", "Escuintla", "Huehuetenango", "Cobán",
+        "Chiquimula", "Jalapa", "Zacapa", "Antigua Guatemala",
+        "Mazatenango", "Retalhuleu", "San Marcos", "Totonicapán",
+        "Petén", "Jutiapa", "Coatepeque", "Salama",
+    ]},
+    "Honduras":       {"phone_code": "+504", "local_digits": 8, "tlds": ["com.hn"], "gl": "hn", "hl": "es", "bd_country": "hn", "cities": [
+        "Tegucigalpa", "San Pedro Sula", "La Ceiba", "Choloma",
+        "El Progreso", "Choluteca", "Comayagua", "Juticalpa", "Santa Rosa de Copán",
+        "Puerto Cortés", "Siguatepeque", "Danlí", "La Lima", "Villanueva",
+        "Tela", "Roatán", "Copán", "Nacaome", "Trujillo",
+    ]},
+    "El Salvador":    {"phone_code": "+503", "local_digits": 8, "tlds": ["com.sv"], "gl": "sv", "hl": "es", "bd_country": "sv", "cities": [
+        "San Salvador", "Soyapango", "Santa Ana", "San Miguel",
+        "Mejicanos", "Apopa", "Santa Tecla", "Delgado", "Usulután",
+        "Ahuachapán", "Zacatecoluca", "Chalatenango", "Sonsonate",
+        "Cojutepeque", "Sensuntepeque", "San Vicente", "La Unión",
+    ]},
+    "Nicaragua":      {"phone_code": "+505", "local_digits": 8, "tlds": ["com.ni"], "gl": "ni", "hl": "es", "bd_country": "ni", "cities": [
+        "Managua", "León", "Masaya", "Matagalpa",
+        "Chinandega", "Estelí", "Granada", "Tipitapa", "Juigalpa",
+        "Jinotega", "Rivas", "Ocotal", "Somoto", "Boaco",
+        "Nueva Segovia", "Bluefields", "Puerto Cabezas",
+    ]},
+    "Costa Rica":     {"phone_code": "+506", "local_digits": 8, "tlds": ["com.cr"], "gl": "cr", "hl": "es", "bd_country": "cr", "cities": [
+        "San José", "Alajuela", "Desamparados", "San Carlos",
+        "Pérez Zeledón", "Liberia", "Heredia", "Cartago", "Puntarenas", "Limón",
+        "Grecia", "Guápiles", "Nicoya", "Santa Cruz", "Ciudad Quesada",
+        "Quepos", "Turrialba", "Cañas", "Palmares", "San Ramón",
+    ]},
+    "Panamá":         {"phone_code": "+507", "local_digits": 8, "tlds": ["com.pa"], "gl": "pa", "hl": "es", "bd_country": "pa", "cities": [
+        "Ciudad de Panamá", "San Miguelito", "Tocumen", "David",
+        "La Chorrera", "Colón", "Chitré", "Santiago", "Arraiján",
+        "Penonomé", "Las Tablas", "Bocas del Toro", "Paso Canoas",
+        "La Palma", "Changuinola", "Aguadulce",
+    ]},
+    "República Dominicana": {"phone_code": "+1", "local_digits": 10, "tlds": ["com.do"], "gl": "do", "hl": "es", "bd_country": "do", "cities": [
+        "Santo Domingo", "Santiago", "La Romana", "San Pedro de Macorís",
+        "La Vega", "Puerto Plata", "San Francisco de Macorís", "San Cristóbal", "Higüey",
+        "Bonao", "Barahona", "Moca", "Cotuí", "Nagua",
+        "Baní", "Jarabacoa", "Azua", "Monte Cristi", "Mao",
+    ]},
+    # ── Sudamérica ────────────────────────────────────────────────────────────
+    "Colombia":       {"phone_code": "+57", "local_digits": 10, "tlds": ["com.co"], "gl": "co", "hl": "es", "bd_country": "co", "cities": [
+        "Bogotá", "Medellín", "Cali", "Barranquilla", "Cartagena",
+        "Cúcuta", "Bucaramanga", "Pereira", "Manizales", "Santa Marta",
+        "Ibagué", "Pasto", "Montería", "Villavicencio", "Neiva",
+        "Armenia", "Popayán", "Tunja", "Valledupar", "Sincelejo",
+        "Florencia", "Yopal", "Riohacha", "Arauca", "Quibdó",
+        "Bello", "Itagüí", "Envigado", "Soledad", "Soacha",
+        "Palmira", "Floridablanca", "Buenaventura", "Barrancabermeja",
+    ]},
+    "Venezuela":      {"phone_code": "+58",  "local_digits": 10, "tlds": ["com.ve"], "gl": "ve", "hl": "es", "bd_country": "ve", "cities": [
+        "Caracas", "Maracaibo", "Valencia", "Barquisimeto", "Maracay",
+        "Maturín", "Barcelona", "Cumaná", "Barinas", "Ciudad Bolívar",
+        "Mérida", "San Cristóbal", "Cabimas", "Coro", "Punto Fijo",
+        "Puerto La Cruz", "Ciudad Guayana", "Los Teques", "Guanare",
+        "Acarigua", "Carúpano", "El Tigre", "Porlamar", "Calabozo",
+        "Valle de la Pascua", "Tucupita", "San Fernando de Apure",
+    ]},
+    "Ecuador":        {"phone_code": "+593", "local_digits": 9,  "tlds": ["com.ec"], "gl": "ec", "hl": "es", "bd_country": "ec", "cities": [
+        "Guayaquil", "Quito", "Cuenca", "Santo Domingo", "Machala",
+        "Manta", "Portoviejo", "Ambato", "Riobamba", "Esmeraldas",
+        "Ibarra", "Loja", "Milagro", "Quevedo", "Latacunga",
+        "Durán", "Salinas", "Babahoyo", "Tulcán", "Nueva Loja",
+        "Tena", "Guaranda", "Azogues", "Zamora", "Macas",
+    ]},
+    "Perú":           {"phone_code": "+51",  "local_digits": 9,  "tlds": ["com.pe"], "gl": "pe", "hl": "es", "bd_country": "pe", "cities": [
+        "Lima", "Arequipa", "Trujillo", "Chiclayo", "Piura",
+        "Iquitos", "Cusco", "Chimbote", "Huancayo", "Tacna",
+        "Juliaca", "Ica", "Pucallpa", "Cajamarca", "Sullana",
+        "Ayacucho", "Huánuco", "Tumbes", "Puno", "Tarapoto",
+        "Huaraz", "Jaén", "Moquegua", "Abancay", "Moyobamba",
+        "Puerto Maldonado", "Pasco", "Tingo María", "Yurimaguas",
+    ]},
+    "Bolivia":        {"phone_code": "+591", "local_digits": 8,  "tlds": ["com.bo"], "gl": "bo", "hl": "es", "bd_country": "bo", "cities": [
+        "Santa Cruz de la Sierra", "La Paz", "Cochabamba", "Sucre",
+        "Oruro", "Potosí", "Tarija", "Trinidad", "Montero", "Riberalta",
+        "El Alto", "Quillacollo", "Warnes", "Yacuiba", "Cobija",
+        "Villamontes", "Camiri", "Llallagua", "Sacaba", "Punata",
+    ]},
+    "Argentina":      {"phone_code": "+54",  "local_digits": 10, "tlds": ["com.ar"], "gl": "ar", "hl": "es", "bd_country": "ar", "cities": [
+        "Buenos Aires", "Córdoba", "Rosario", "Mendoza", "Tucumán",
+        "La Plata", "Mar del Plata", "Salta", "Santa Fe", "San Juan",
+        "Resistencia", "Santiago del Estero", "Corrientes", "Bahía Blanca", "Posadas",
+        "Neuquén", "Formosa", "La Rioja", "Catamarca", "San Luis",
+        "Santa Rosa", "Viedma", "Rawson", "Río Gallegos", "Ushuaia",
+        "Paraná", "Concordia", "San Rafael", "Río Cuarto", "Tandil",
+        "Quilmes", "Lanús", "Lomas de Zamora", "General San Martín",
+    ]},
+    "Chile":          {"phone_code": "+56",  "local_digits": 9,  "tlds": [".cl"],    "gl": "cl", "hl": "es", "bd_country": "cl", "cities": [
+        "Santiago", "Valparaíso", "Concepción", "La Serena", "Antofagasta",
+        "Temuco", "Rancagua", "Arica", "Iquique", "Puerto Montt",
+        "Viña del Mar", "Calama", "Talca", "Osorno", "Coquimbo",
+        "Chillán", "Talcahuano", "San Bernardo", "Maipú", "Pudahuel",
+        "Quilicura", "Curicó", "Linares", "Los Ángeles", "Valdivia",
+        "Punta Arenas", "Ovalle", "Puerto Varas", "Copiapó", "Quillota",
+    ]},
+    "Paraguay":       {"phone_code": "+595", "local_digits": 9,  "tlds": ["com.py"], "gl": "py", "hl": "es", "bd_country": "py", "cities": [
+        "Asunción", "Ciudad del Este", "San Lorenzo", "Luque",
+        "Capiatá", "Lambaré", "Fernando de la Mora",
+        "Concepción", "Encarnación", "Pedro Juan Caballero",
+        "Caaguazú", "Coronel Oviedo", "Villeta", "San Ignacio",
+        "Pilar", "Presidente Franco", "Caazapá", "Curuguaty",
+    ]},
+    "Uruguay":        {"phone_code": "+598", "local_digits": 8,  "tlds": ["com.uy"], "gl": "uy", "hl": "es", "bd_country": "uy", "cities": [
+        "Montevideo", "Salto", "Paysandú", "Las Piedras", "Rivera",
+        "Maldonado", "Tacuarembó", "Melo", "Mercedes", "Artigas",
+        "San José", "Minas", "Colonia del Sacramento", "Canelones",
+        "Florida", "Treinta y Tres", "Rocha", "Fray Bentos", "Young",
+        "Durazno", "Trinidad", "Paso de los Toros",
+    ]},
+    "Brasil":         {"phone_code": "+55",  "local_digits": 11, "tlds": ["com.br"], "gl": "br", "hl": "pt", "bd_country": "br", "cities": [
+        "São Paulo", "Rio de Janeiro", "Brasília", "Salvador", "Fortaleza",
+        "Belo Horizonte", "Manaus", "Curitiba", "Recife", "Porto Alegre",
+        "Belém", "Goiânia", "Campinas", "São Luís", "Maceió",
+        "Natal", "Teresina", "Campo Grande", "João Pessoa", "Aracaju",
+        "Cuiabá", "Macapá", "Porto Velho", "Rio Branco", "Palmas",
+        "Boa Vista", "Florianópolis", "Vitória", "Santos", "Ribeirão Preto",
+        "Uberlândia", "Sorocaba", "Contagem", "Joinville", "Londrina",
+        "Niterói", "São Bernardo do Campo", "Nova Iguaçu", "Duque de Caxias",
+        "São Gonçalo", "Guarulhos", "São José dos Campos", "Osasco",
+    ]},
+    # ── Europa ────────────────────────────────────────────────────────────────
+    "España":         {"phone_code": "+34", "local_digits": 9,  "tlds": [".es"], "gl": "es", "hl": "es", "bd_country": "es", "cities": [
+        "Madrid", "Barcelona", "Valencia", "Sevilla", "Zaragoza",
+        "Málaga", "Murcia", "Palma", "Las Palmas", "Bilbao",
+        "Alicante", "Córdoba", "Valladolid", "Vigo", "Gijón",
+        "Granada", "Oviedo", "Badalona", "Hospitalet de Llobregat", "Vitoria",
+        "Santa Cruz de Tenerife", "Pamplona", "Almería", "Jerez de la Frontera", "Burgos",
+        "Santander", "Castellón", "Albacete", "Logroño", "Salamanca",
+        "Huelva", "Badajoz", "Lleida", "Tarragona", "León",
+    ]},
+    "Portugal":       {"phone_code": "+351", "local_digits": 9, "tlds": [".pt"], "gl": "pt", "hl": "pt", "bd_country": "pt", "cities": [
+        "Lisboa", "Porto", "Braga", "Coimbra", "Funchal",
+        "Setúbal", "Viseu", "Leiria", "Évora", "Faro",
+        "Aveiro", "Almada", "Guimarães", "Vila Nova de Gaia", "Amadora",
+        "Matosinhos", "Loures", "Cascais", "Sintra", "Vila Franca de Xira",
+        "Barcelos", "Viana do Castelo", "Caldas da Rainha", "Santarém", "Covilhã",
+        "Beja", "Portimão", "Lagos", "Torres Vedras",
+    ]},
+    "Francia":        {"phone_code": "+33", "local_digits": 9,  "tlds": [".fr"], "gl": "fr", "hl": "fr", "bd_country": "fr", "cities": [
+        "París", "Marsella", "Lyon", "Toulouse", "Niza",
+        "Nantes", "Estrasburgo", "Montpellier", "Bordeaux", "Lille",
+        "Rennes", "Reims", "Saint-Étienne", "Le Havre", "Grenoble",
+        "Dijon", "Angers", "Tours", "Metz", "Clermont-Ferrand",
+        "Aix-en-Provence", "Pau", "Brest", "Limoges", "Perpignan",
+        "Amiens", "Orléans", "Besançon", "Mulhouse", "Nîmes",
+        "Villeurbanne", "Caen", "Rouen", "Toulon", "Saint-Denis",
+    ]},
+    "Italia":         {"phone_code": "+39", "local_digits": 10, "tlds": [".it"], "gl": "it", "hl": "it", "bd_country": "it", "cities": [
+        "Roma", "Milán", "Nápoles", "Turín", "Palermo",
+        "Génova", "Bolonia", "Florencia", "Bari", "Catania",
+        "Venecia", "Verona", "Messina", "Padua", "Trieste",
+        "Reggio Calabria", "Perugia", "Cagliari", "Brescia", "Prato",
+        "Modena", "Reggio Emilia", "Parma", "Livorno", "Foggia",
+        "Salerno", "Ferrara", "Sassari", "Ancona", "Siracusa",
+        "Bergamo", "Pescara", "Taranto", "Ravenna", "Trento",
+    ]},
+    "Alemania":       {"phone_code": "+49", "local_digits": 11, "tlds": [".de"], "gl": "de", "hl": "de", "bd_country": "de", "cities": [
+        "Berlín", "Hamburgo", "Múnich", "Colonia", "Frankfurt",
+        "Stuttgart", "Düsseldorf", "Dortmund", "Essen", "Leipzig",
+        "Bremen", "Dresden", "Hanóver", "Núremberg", "Duisburg",
+        "Bochum", "Wuppertal", "Bielefeld", "Bonn", "Münster",
+        "Karlsruhe", "Mannheim", "Augsburg", "Wiesbaden", "Gelsenkirchen",
+        "Braunschweig", "Chemnitz", "Kiel", "Aachen", "Halle",
+        "Magdeburg", "Freiburg", "Krefeld", "Erfurt", "Mainz",
+        "Lübeck", "Rostock", "Oberhausen", "Kassel", "Saarbrücken",
+    ]},
+    "Reino Unido":    {"phone_code": "+44", "local_digits": 10, "tlds": [".co.uk"], "gl": "uk", "hl": "en", "bd_country": "gb", "cities": [
+        "Londres", "Birmingham", "Manchester", "Leeds", "Liverpool",
+        "Sheffield", "Bristol", "Edinburgh", "Leicester", "Coventry",
+        "Bradford", "Cardiff", "Nottingham", "Glasgow", "Southampton",
+        "Portsmouth", "Plymouth", "Wolverhampton", "Derby", "Stoke-on-Trent",
+        "Sunderland", "Middlesbrough", "Huddersfield", "Reading", "Milton Keynes",
+        "Northampton", "Luton", "Bolton", "Aberdeen", "Swansea",
+        "Belfast", "Dundee", "Brighton", "Hull", "York",
+    ]},
+}
+DEFAULT_COUNTRY = "México"
+
 # Sinónimos y términos relacionados por industria para ampliar la búsqueda
 INDUSTRY_SYNONYMS: dict[str, list[str]] = {
     "gimnasio":      ["gym", "fitness center", "crossfit", "club deportivo", "smartfit", "iron gym"],
@@ -340,13 +554,31 @@ INDUSTRY_SYNONYMS: dict[str, list[str]] = {
     "ferreteria":    ["ferretería", "materiales", "construcción"],
     "panaderia":     ["panadería", "bakery", "pastelería"],
     "cafeteria":     ["café", "coffee shop", "cafetería"],
-    "taller":        ["mecánico", "taller automotriz", "servicio automotriz"],
-    "automotriz":    ["taller mecánico", "servicio automotriz", "refacciones", "concesionario"],
-    "concesionario": ["agencia de autos", "distribuidor automotriz", "automotriz"],
-    "agencia":       ["concesionario", "distribuidor", "automotriz"],
-    "refaccionaria": ["refacciones", "autopartes", "taller mecánico"],
-    "gasera":        ["gasolinera", "estación de servicio", "combustible"],
+    # Automotriz — concesionarias / agencias / talleres / refacciones
+    "concesionaria":   ["agencia de autos", "distribuidor autorizado", "agencia automotriz", "ventas de autos"],
+    "concesionarias":  ["agencia de autos", "distribuidor autorizado", "agencia automotriz", "ventas de autos"],
+    "concesionario":   ["agencia de autos", "distribuidor autorizado", "agencia automotriz", "ventas de autos"],
+    "concesionarios":  ["agencia de autos", "distribuidor autorizado", "agencia automotriz", "ventas de autos"],
+    "agencia de autos":       ["concesionaria", "distribuidor autorizado", "automotriz"],
+    "agencias de autos":      ["concesionaria", "distribuidor autorizado", "automotriz"],
+    "distribuidor autorizado": ["concesionaria", "agencia de autos", "automotriz"],
+    "agencia":         ["concesionaria", "agencia de autos", "distribuidor autorizado"],
+    "agencias":        ["concesionaria", "agencia de autos", "distribuidor autorizado"],
+    "automotriz":      ["concesionaria", "agencia de autos", "taller mecánico", "refaccionaria"],
+    "automotrices":    ["concesionaria", "agencia de autos", "taller mecánico", "refaccionaria"],
+    "taller":          ["taller mecánico", "servicio automotriz", "hojalatería", "pintura automotriz"],
+    "talleres":        ["taller mecánico", "servicio automotriz", "hojalatería", "pintura automotriz"],
+    "taller mecanico": ["taller automotriz", "servicio mecánico", "mecánico", "hojalatería"],
+    "mecanico":        ["taller mecánico", "taller automotriz", "servicio automotriz"],
+    "refaccionaria":   ["refacciones", "autopartes", "taller mecánico", "accesorios automotrices"],
+    "refaccionarias":  ["refacciones", "autopartes", "taller mecánico", "accesorios automotrices"],
+    "refacciones":     ["refaccionaria", "autopartes", "accesorios automotrices"],
+    "autopartes":      ["refaccionaria", "refacciones", "accesorios automotrices"],
+    "gasera":        ["gas lp", "distribuidora de gas", "gas licuado", "gas butano"],
+    "gaseras":       ["gas lp", "distribuidora de gas", "gas licuado", "gas butano"],
     "gasolinera":    ["gasera", "estación de servicio", "combustible"],
+    "gas lp":        ["gasera", "distribuidora de gas", "gas licuado"],
+    "distribuidora de gas": ["gasera", "gas lp", "gas licuado"],
     "clinica":       ["clínica", "médico", "consultorio", "hospital"],
     "medico":        ["médico", "clínica", "consultorio", "doctor"],
     "constructor":   ["constructora", "construcción", "obra", "contratista"],
@@ -395,15 +627,27 @@ def _ai_expand_synonyms(industry: str) -> list[str]:
     return syns
 
 
-def _build_variations(industry: str, city: str = "") -> list[str]:
+def _build_variations(industry: str, city: str = "", country: str = None, num_results: int = 10) -> list[str]:
     """
     Build DDG query variations designed to return actual business WEBSITES,
     not directories. Uses advanced DDG operators:
       - Exact phrase quotes for the industry term
-      - site:.mx and site:com.mx to favour Mexican domains
+      - site:<tld> to favour domains of the selected country (only when one was given)
       - intitle: to find pages that are about the business, not listicles
       - -term exclusions to suppress directories/blogs at query level
     Avoid 'contacto teléfono dirección' — those attract Sección Amarilla / Hotfrog.
+
+    `country` is optional — there's no country/city picker in the UI anymore,
+    the user just types the location (a city, "Latinoamérica", nothing at all…)
+    directly into the industry box. When `country` isn't given, this builds
+    location-agnostic variations and trusts whatever location text the user
+    already typed into `industry`/`city`, relying on ddgs's worldwide
+    (region="wt-wt") search rather than biasing to one country's domains.
+
+    `num_results` scales how many city/synonym variations get fanned out when a
+    known country (with a curated city list) is given but no specific city —
+    a small ask (e.g. 5-10) doesn't need to sweep all 55 curated cities, only a
+    thorough one (30-50) does.
     """
     ind = industry.strip()
     ind_q = f'"{ind}"'
@@ -411,13 +655,14 @@ def _build_variations(industry: str, city: str = "") -> list[str]:
     ai_synonyms = _ai_expand_synonyms(ind) if (OPENAI_API_KEY or DEEPSEEK_API_KEY) else []
     synonyms = list(dict.fromkeys(static_synonyms + ai_synonyms))  # merge, dedup, keep order
     is_fitness = "gym" in synonyms or ind.lower() in ("gimnasio", "fitness")
+    cfg = COUNTRY_CONFIG.get(country) if country else None
 
     if city.strip():
         loc = city.strip()
-        queries = [
-            f"{ind_q} {loc}",
-            f"site:.mx {ind} {loc}",
-            f"site:com.mx {ind} {loc}",
+        queries = [f"{ind_q} {loc}"]
+        if cfg:
+            queries += [f"site:{tld} {ind} {loc}" for tld in cfg["tlds"]]
+        queries += [
             f"intitle:{ind_q} {loc}",
             f"{ind} {loc} {_NOISE}",
             f"{ind} {loc} whatsapp",
@@ -427,18 +672,38 @@ def _build_variations(industry: str, city: str = "") -> list[str]:
             queries.append(f'"{syn}" {loc}')
         return queries
 
-    # Sin ciudad: queries base + por cada ciudad grande + sinónimos
-    base = [
-        f"{ind_q} México",
-        f"site:.mx {ind}",
-        f"site:com.mx {ind}",
-        f"intitle:{ind_q} México",
-        f"{ind} México {_NOISE}",
-        f"{ind} México whatsapp",
-        f"{ind} México {'inscripción' if is_fitness else 'servicio'}",
+    if not cfg:
+        # Sin ciudad ni país conocido — variaciones genéricas, sin sesgo geográfico.
+        # El propio texto de `industry` puede ya incluir la ubicación
+        # ("... en Bogotá", "... en Latinoamérica") escrita libremente por el usuario.
+        queries = [
+            ind_q,
+            f"intitle:{ind_q}",
+            f"{ind} {_NOISE}",
+            f"{ind} whatsapp",
+            f"{ind} {'membresía' if is_fitness else 'servicio'}",
+        ]
+        queries += [f'"{syn}"' for syn in synonyms[:6]]
+        return queries
+
+    # País conocido, sin ciudad: queries base + fan-out por sus ciudades
+    # curadas + sinónimos. El número de ciudades fanned-out escala con
+    # num_results para que pedir pocos resultados sea rápido y pedir muchos
+    # sea exhaustivo.
+    country_name = country
+    tlds = cfg["tlds"]
+    cities = cfg["cities"]
+    base = [f"{ind_q} {country_name}"]
+    base += [f"site:{tld} {ind}" for tld in tlds]
+    base += [
+        f"intitle:{ind_q} {country_name}",
+        f"{ind} {country_name} {_NOISE}",
+        f"{ind} {country_name} whatsapp",
+        f"{ind} {country_name} {'inscripción' if is_fitness else 'servicio'}",
     ]
-    city_queries = [f"{ind_q} {c}" for c in MAJOR_CITIES]
-    synonym_queries = [f'"{syn}" México' for syn in synonyms[:6]]
+    max_cities = max(6, min(len(cities), num_results * 2))
+    city_queries = [f"{ind_q} {c}" for c in cities[:max_cities]]
+    synonym_queries = [f'"{syn}" {country_name}' for syn in synonyms[:6]]
     return base + city_queries + synonym_queries
 
 
@@ -544,6 +809,338 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     return ranked
 
 
+# ---------------------------------------------------------------------------
+# Sección Amarilla scraper
+# ---------------------------------------------------------------------------
+_SA_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept-Language": "es-MX,es;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+# Dominios de directorios/redes que no son sitios de empresa
+_SA_EXCLUDE = re.compile(
+    r"(seccionamarilla|paginasamarillas|paginas-amarillas|hotfrog|yelp|facebook|instagram"
+    r"|twitter|linkedin|youtube|tiktok|google\.|maps\.google|whatsapp\.com|wa\.me"
+    r"|wikipedia|tripadvisor|foursquare|trulia|zillow)\.com",
+    re.IGNORECASE,
+)
+
+
+def _slugify(text: str) -> str:
+    text = text.lower().strip()
+    text = re.sub(r"[áàä]", "a", text)
+    text = re.sub(r"[éèë]", "e", text)
+    text = re.sub(r"[íìï]", "i", text)
+    text = re.sub(r"[óòö]", "o", text)
+    text = re.sub(r"[úùü]", "u", text)
+    text = re.sub(r"ñ", "n", text)
+    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    return text
+
+
+def _sa_extract_urls(html: str) -> tuple[list, dict]:
+    """Extraer URLs de negocios de una página de Sección Amarilla."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    urls: list[str] = []
+    snippets: dict = {}
+
+    def _add(href: str, name: str = "") -> None:
+        href = href.strip()
+        if not href.startswith("http"):
+            return
+        if _SA_EXCLUDE.search(href):
+            return
+        if not _is_business_url(href):
+            return
+        if href not in urls:
+            urls.append(href)
+            snippets[href] = {"title": name, "body": "Sección Amarilla"}
+
+    # 1. External <a href> links
+    for a in soup.find_all("a", href=True):
+        name = ""
+        parent = a.find_parent()
+        for selector in ["h2", "h3", "h4"]:
+            container = parent.find_previous(selector) if parent else None
+            if container:
+                name = container.get_text(strip=True)
+                break
+        _add(a["href"], name)
+
+    # 2. data-website / data-site / data-url attributes (SA uses these on listing cards)
+    for tag in soup.find_all(True):
+        for attr in ("data-website", "data-site", "data-url", "data-href"):
+            val = tag.get(attr, "")
+            if val:
+                _add(val)
+
+    # 3. JSON-LD structured data (SA embeds Schema.org LocalBusiness)
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(script.string or "")
+            entries = data if isinstance(data, list) else [data]
+            for entry in entries:
+                url = entry.get("url") or entry.get("website") or entry.get("sameAs")
+                if isinstance(url, str):
+                    _add(url, entry.get("name", ""))
+                if isinstance(entry.get("sameAs"), list):
+                    for u in entry["sameAs"]:
+                        if isinstance(u, str):
+                            _add(u, entry.get("name", ""))
+        except Exception:
+            pass
+
+    return urls, snippets
+
+
+def _sa_fetch_city_bd(industry_slug: str, city_slug: str, max_pages: int = 3) -> tuple[list, dict]:
+    """Obtener resultados de Sección Amarilla via Bright Data (rendering JS incluido)."""
+    urls: list[str] = []
+    snippets: dict = {}
+    bd_key = _brightdata_key()
+
+    for page in range(1, max_pages + 1):
+        page_url = (
+            f"https://www.seccionamarilla.com.mx/buscar"
+            f"?q={quote_plus(industry_slug.replace('-', ' '))}"
+            f"&l={quote_plus(city_slug.replace('-', ' '))}"
+            + (f"&pag={page}" if page > 1 else "")
+        )
+        try:
+            resp = requests.post(
+                "https://api.brightdata.com/request",
+                headers={"Authorization": f"Bearer {bd_key}", "Content-Type": "application/json"},
+                json={"zone": "serp_api1", "url": page_url, "format": "raw", "country": "mx"},
+                timeout=35,
+            )
+            html = resp.text
+            if not html or len(html) < 500:
+                break
+        except Exception:
+            break
+
+        page_urls, page_snips = _sa_extract_urls(html)
+        if not page_urls:
+            break
+
+        for u in page_urls:
+            if u not in urls:
+                urls.append(u)
+                snippets[u] = page_snips[u]
+
+    return urls, snippets
+
+
+def _sa_fetch_city(industry_slug: str, city_slug: str, max_pages: int = 3) -> tuple[list, dict]:
+    """
+    Scraper para una combinación industria+ciudad en Sección Amarilla.
+    Usa Bright Data si está disponible (resuelve JS rendering); fallback a requests/Playwright.
+    """
+    if _brightdata_key():
+        bd_urls, bd_snips = _sa_fetch_city_bd(industry_slug, city_slug, max_pages)
+        if bd_urls:
+            return bd_urls, bd_snips
+        # BD returned nothing (zone may not support non-SERP URLs) — fall through to requests
+
+    urls: list[str] = []
+    snippets: dict = {}
+
+    for page in range(1, max_pages + 1):
+        page_url = (
+            f"https://www.seccionamarilla.com.mx/buscar"
+            f"?q={industry_slug.replace('-', '+')}&l={city_slug.replace('-', '+')}"
+            + (f"&pag={page}" if page > 1 else "")
+        )
+        html = None
+
+        try:
+            resp = requests.get(page_url, headers=_SA_HEADERS, timeout=15, allow_redirects=True)
+            if resp.status_code == 200 and len(resp.text) > 3000:
+                html = resp.text
+        except Exception:
+            pass
+
+        if not html or html.count("class=") < 10:
+            try:
+                from playwright.sync_api import sync_playwright
+                with sync_playwright() as pw:
+                    browser = pw.chromium.launch(headless=True)
+                    page_obj = browser.new_page()
+                    page_obj.set_extra_http_headers({"Accept-Language": "es-MX,es;q=0.9"})
+                    page_obj.goto(page_url, wait_until="networkidle", timeout=20000)
+                    html = page_obj.content()
+                    browser.close()
+            except Exception:
+                break
+
+        if not html:
+            break
+
+        page_urls, page_snips = _sa_extract_urls(html)
+        if not page_urls:
+            break
+
+        for u in page_urls:
+            if u not in urls:
+                urls.append(u)
+                snippets[u] = page_snips[u]
+
+    return urls, snippets
+
+
+def _search_via_seccion_amarilla(
+    industry: str, city: str = "", country: str = None,
+    num_results: int = 10,
+) -> tuple[list, dict]:
+    """Fan-out por ciudades en Sección Amarilla MX y mergear resultados."""
+    # SA solo cubre México — saltar si se detecta otro país
+    _eff = _detect_effective_country(country, f"{industry} {city}")
+    if _eff is not None and _eff != "México":
+        return [], {}
+
+    industry_clean = re.sub(
+        r"\b(en\s+)?(mexico|méxico|colombia|argentina|españa)\b", "", industry, flags=re.IGNORECASE
+    ).strip(" ,.-")
+    ind_slug = _slugify(industry_clean)
+
+    # Ciudades a barrer: si el usuario especificó ciudad solo esa; si no, las principales
+    if city.strip():
+        city_slugs = [_slugify(city.strip())]
+        pages_per_city = 8
+    else:
+        cfg = COUNTRY_CONFIG.get("México", {})
+        cities = cfg.get("cities", [])  # todas las ciudades (32)
+        city_slugs = [_slugify(c) for c in cities]
+        pages_per_city = 3
+
+    seen_domains: set[str] = set()
+    all_urls: list[str] = []
+    all_snippets: dict = {}
+
+    def _fetch_one(cslug: str) -> tuple[list, dict]:
+        try:
+            return _sa_fetch_city(ind_slug, cslug, max_pages=pages_per_city)
+        except Exception:
+            return [], {}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(city_slugs), 16)) as ex:
+        futures = [ex.submit(_fetch_one, cs) for cs in city_slugs]
+        for f in concurrent.futures.as_completed(futures):
+            city_urls, city_snips = f.result()
+            for u in city_urls:
+                d = _get_domain(u)
+                if d and d not in seen_domains:
+                    seen_domains.add(d)
+                    all_urls.append(u)
+                    all_snippets[u] = city_snips.get(u, {})
+
+    return all_urls, all_snippets
+
+
+def _search_via_google_maps(
+    industry: str, city: str = "", country: str = None,
+    keywords: str = "", num_results: int = 10,
+) -> tuple[list, dict]:
+    """Fan-out por ciudades en Google Maps via Bright Data — devuelve negocios locales con website."""
+    effective_country = _detect_effective_country(country, f"{industry} {city}")
+    cfg = COUNTRY_CONFIG.get(effective_country) if effective_country else None
+    gl = cfg.get("gl", "mx") if cfg else "mx"
+    hl = cfg.get("hl", "es") if cfg else "es"
+    bd_country = cfg.get("bd_country", "mx") if cfg else "mx"
+
+    _COUNTRY_NOISE = re.compile(
+        r"\b(en\s+)?(mexico|méxico|colombia|argentina|españa|estados\s+unidos|eeuu|usa)\b",
+        re.IGNORECASE,
+    )
+    ind_clean = _COUNTRY_NOISE.sub("", industry.strip()).strip(" ,.-")
+    kw = keywords.strip()
+    base = f"{kw} {ind_clean}".strip() if kw else ind_clean
+
+    cities = cfg["cities"] if cfg and cfg.get("cities") else []
+    # search_queries: list of (query_base, location) — allows synonyms with different query_base
+    if city.strip():
+        search_queries: list[tuple[str, str]] = [(base, city.strip())]
+    elif cities:
+        search_queries = [(base, c) for c in cities]
+        # Synonyms × top cities to discover businesses registered under alternate terms
+        # Try plural and singular forms for lookup
+        _ik = ind_clean.lower()
+        synonyms = (INDUSTRY_SYNONYMS.get(_ik) or INDUSTRY_SYNONYMS.get(_ik.rstrip("s")) or [])[:2]
+        top_cities = cities[:14]
+        for syn in synonyms:
+            search_queries.extend((syn, c) for c in top_cities)
+    else:
+        search_queries = [(base, "")]
+
+    seen_domains: set[str] = set()
+    urls: list[str] = []
+    snippets: dict = {}
+
+    _maps_logged = False
+
+    def _fetch_maps(qbase: str, location: str) -> tuple[list, dict]:
+        nonlocal _maps_logged
+        try:
+            q = f"{qbase} {location}".strip() if location else qbase
+            maps_url = (
+                f"https://www.google.com/maps/search/{quote_plus(q)}/"
+                f"?brd_json=1&gl={gl}&hl={hl}"
+            )
+            resp = requests.post(
+                "https://api.brightdata.com/request",
+                headers={"Authorization": f"Bearer {_brightdata_key()}", "Content-Type": "application/json"},
+                json={"zone": "serp_api1", "url": maps_url, "format": "raw", "country": bd_country},
+                timeout=30,
+            )
+            text = resp.text
+            if not _maps_logged:
+                _maps_logged = True
+                print(f"[maps-debug] status={resp.status_code} len={len(text)} snippet={text[:400]!r}")
+
+            body = json.loads(text)
+            if isinstance(body.get("body"), str):
+                body = json.loads(body["body"])
+
+            batch_urls, batch_snips = [], {}
+            results = (
+                body.get("local_results") or body.get("results") or
+                body.get("places") or body.get("organic") or []
+            )
+            for item in results:
+                website = (
+                    item.get("website") or item.get("url") or item.get("link") or
+                    item.get("website_url") or item.get("web")
+                )
+                if website and isinstance(website, str) and _is_business_url(website):
+                    if website not in batch_urls:
+                        batch_urls.append(website)
+                        batch_snips[website] = {
+                            "title": item.get("name") or item.get("title", ""),
+                            "body": item.get("address") or item.get("description", ""),
+                        }
+            return batch_urls, batch_snips
+        except Exception as e:
+            if not _maps_logged:
+                print(f"[maps-debug] exception: {e}")
+            return [], {}
+
+    n_syn = len(search_queries) - len(cities) if cities else 0
+    print(f"[maps] {len(search_queries)} queries ({len(cities)} cities + {n_syn} synonym variants)")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(search_queries), 16)) as ex:
+        futures = [ex.submit(_fetch_maps, qb, loc) for qb, loc in search_queries]
+        for f in concurrent.futures.as_completed(futures):
+            batch_urls, batch_snips = f.result()
+            for u in batch_urls:
+                d = _get_domain(u)
+                if d and d not in seen_domains:
+                    seen_domains.add(d)
+                    urls.append(u)
+                    snippets[u] = batch_snips.get(u, {})
+
+    return urls, snippets
+
+
 def search_prospects(
     industry: str,
     city: str = "",
@@ -551,17 +1148,45 @@ def search_prospects(
     num_results: int = 10,
     offset: int = 0,
     exclude_domains: set | None = None,
+    country: str = None,
 ) -> list:
-    if SERPAPI_KEY:
-        query = f"{industry.strip()} empresa en {city.strip() or 'México'}"
+    _bd_key = _brightdata_key()
+
+    if _bd_key:
+        # Correr 3 fuentes en paralelo: Bright Data + DuckDuckGo + Sección Amarilla
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            bd_future   = ex.submit(_search_via_brightdata_multi, industry, city, country, keywords, num_results, offset)
+            ddg_future  = ex.submit(_search_via_duckduckgo, industry, city, exclude_domains or set(), country, num_results)
+            sa_future   = ex.submit(_search_via_seccion_amarilla, industry, city, country, num_results)
+            maps_future = ex.submit(_search_via_google_maps, industry, city, country, keywords, num_results)
+            bd_urls,   bd_snips   = bd_future.result()
+            ddg_urls,  ddg_snips  = ddg_future.result()
+            sa_urls,   sa_snips   = sa_future.result()
+            maps_urls, maps_snips = maps_future.result()
+
+        print(f"[search] BD={len(bd_urls)} DDG={len(ddg_urls)} SA={len(sa_urls)} Maps={len(maps_urls)}")
+
+        # Mergear: Maps y BD primero (más calidad), luego DDG, luego SA
+        seen: set[str] = set()
+        urls: list[str] = []
+        snippets: dict = {}
+        for u in maps_urls + bd_urls + ddg_urls + sa_urls:
+            d = _get_domain(u)
+            if d and d not in seen:
+                seen.add(d)
+                urls.append(u)
+                snippets[u] = maps_snips.get(u) or bd_snips.get(u) or ddg_snips.get(u) or sa_snips.get(u, {})
+
+    elif SERPAPI_KEY:
+        query = f"{industry.strip()} empresa en {city.strip() or country or ''}".strip()
         if keywords.strip():
             query = f"{keywords.strip()} {query}"
         urls, snippets = _search_via_serpapi(query, num_results, offset)
     else:
-        urls, snippets = _search_via_duckduckgo(industry, city, exclude_domains or set())
+        urls, snippets = _search_via_duckduckgo(industry, city, exclude_domains or set(), country, num_results)
 
-    # For SerpAPI path, apply domain exclusion after fetching
-    if SERPAPI_KEY and exclude_domains:
+    # Apply domain exclusion
+    if exclude_domains:
         urls = [u for u in urls if _get_domain(u) not in exclude_domains]
 
     return _ai_filter_urls(urls, industry, snippets)  # no cap — caller decides how many to show
@@ -581,8 +1206,234 @@ def _search_via_serpapi(query: str, num_results: int, offset: int = 0) -> tuple[
     return urls, snippets
 
 
-def _search_via_duckduckgo(industry: str, city: str = "", exclude_domains: set | None = None) -> tuple[list, dict]:
-    variations = _build_variations(industry, city)
+_MX_KEYWORDS = {"mexico", "méxico", "mexicano", "mexicana", ".mx"}
+
+# Map of keywords found in query text → COUNTRY_CONFIG key
+# Ordered longest-first so "estados unidos" matches before "estados"
+_COUNTRY_KEYWORDS: list[tuple[str, str]] = [
+    # Frases multi-palabra primero
+    ("estados unidos",        "Estados Unidos"),
+    ("el salvador",           "El Salvador"),
+    ("costa rica",            "Costa Rica"),
+    ("republica dominicana",  "República Dominicana"),
+    ("república dominicana",  "República Dominicana"),
+    ("rep dominicana",        "República Dominicana"),
+    ("reino unido",           "Reino Unido"),
+    # Norteamérica
+    ("mexico",    "México"),
+    ("méxico",    "México"),
+    ("mexicano",  "México"),
+    ("mexicana",  "México"),
+    (".mx",       "México"),
+    ("eeuu",      "Estados Unidos"),
+    ("canada",    "Canadá"),
+    ("canadá",    "Canadá"),
+    # Centroamérica y Caribe
+    ("guatemala",    "Guatemala"),
+    ("hondura",      "Honduras"),   # cubre "honduras" y "hondureño"
+    ("salvador",     "El Salvador"),
+    ("salvadoreño",  "El Salvador"),
+    ("nicaragua",    "Nicaragua"),
+    ("costarric",    "Costa Rica"),  # "costarricense"
+    ("panama",       "Panamá"),
+    ("panamá",       "Panamá"),
+    ("dominicana",   "República Dominicana"),
+    ("dominicano",   "República Dominicana"),
+    # Sudamérica
+    ("colombia",    "Colombia"),
+    ("colombiano",  "Colombia"),
+    ("venezuela",   "Venezuela"),
+    ("venezolano",  "Venezuela"),
+    ("ecuador",     "Ecuador"),
+    ("ecuatoriano", "Ecuador"),
+    ("peru",        "Perú"),
+    ("perú",        "Perú"),
+    ("peruano",     "Perú"),
+    ("bolivia",     "Bolivia"),
+    ("boliviano",   "Bolivia"),
+    ("argentina",   "Argentina"),
+    ("argentino",   "Argentina"),
+    ("chile",       "Chile"),
+    ("chileno",     "Chile"),
+    ("paraguay",    "Paraguay"),
+    ("paraguayo",   "Paraguay"),
+    ("uruguay",     "Uruguay"),
+    ("uruguayo",    "Uruguay"),
+    ("brasil",      "Brasil"),
+    ("brazil",      "Brasil"),
+    ("brasileño",   "Brasil"),
+    # Europa
+    ("españa",    "España"),
+    ("espana",    "España"),
+    ("español",   "España"),
+    ("portugal",  "Portugal"),
+    ("portugues", "Portugal"),
+    ("portugal",  "Portugal"),
+    ("francia",   "Francia"),
+    ("frances",   "Francia"),
+    ("france",    "Francia"),
+    ("italia",    "Italia"),
+    ("italiano",  "Italia"),
+    ("alemania",  "Alemania"),
+    ("aleman",    "Alemania"),
+]
+
+
+def _detect_effective_country(country: str | None, text: str) -> str | None:
+    """Return explicit country or auto-detect from text. Returns None if ambiguous."""
+    if country:
+        return country
+    lower = text.lower()
+    for kw, name in _COUNTRY_KEYWORDS:
+        if kw in lower:
+            return name
+    return None
+
+
+def _bd_build_queries(industry: str, city: str, country: str | None, keywords: str, num_results: int) -> list[str]:
+    """Build Google-friendly query list for Bright Data (no DDG operators)."""
+    import re
+    ind = industry.strip()
+    kw = keywords.strip()
+
+    # Auto-detect país desde el texto del industria y configurar geo
+    effective_country = _detect_effective_country(country, f"{ind} {city}")
+    cfg = COUNTRY_CONFIG.get(effective_country) if effective_country else None
+
+    # Limpiar palabras de ubicación del texto de industria cuando vamos a hacer city fan-out.
+    # Ejemplo: "gaseras en mexico" → "gaseras" antes de agregar "Guadalajara"
+    _COUNTRY_NOISE = re.compile(
+        r"\b(en\s+)?(mexico|méxico|colombia|argentina|españa|estados\s+unidos|eeuu|usa|latinoam[eé]rica)\b",
+        re.IGNORECASE,
+    )
+    ind_clean = _COUNTRY_NOISE.sub("", ind).strip(" ,.-")
+    base_raw = f"{kw} {ind}".strip() if kw else ind          # query sin ciudad (usa texto original)
+    base_city = f"{kw} {ind_clean}".strip() if kw else ind_clean  # query CON ciudad (texto limpio)
+
+    if city.strip():
+        loc = city.strip()
+        return [
+            f"{base_city} {loc}",
+            f"{base_city} empresa {loc}",
+            f"{base_city} negocio {loc}",
+            f"{base_city} contacto {loc}",
+            f"{base_city} whatsapp {loc}",
+        ]
+
+    cities = cfg["cities"] if cfg and cfg.get("cities") else []
+
+    def _get_synonyms(key: str) -> list[str]:
+        k = key.lower()
+        return INDUSTRY_SYNONYMS.get(k) or INDUSTRY_SYNONYMS.get(k.rstrip("s")) or []
+
+    if cities:
+        # Obtener sinónimos del rubro para multiplicar queries con terminología diferente
+        synonyms = _get_synonyms(ind_clean)
+        # Fan-out primario: una query por ciudad
+        city_queries = [f"{base_city} {c}" for c in cities]
+        # Fan-out secundario: "empresa {city}" para todas las ciudades
+        extra_queries = [f"{base_city} empresa {c}" for c in cities]
+        # Fan-out terciario: sinónimos × ciudades top (max 3 sinónimos × top 16 ciudades)
+        top_cities = cities[:16]
+        syn_queries = [
+            f"{syn} {c}"
+            for syn in synonyms[:3]
+            for c in top_cities
+        ]
+        return city_queries + extra_queries + syn_queries
+
+    # Sin ciudad ni país — variaciones genéricas
+    synonyms = _get_synonyms(ind_clean)
+    base_queries = [base_raw, f"{base_raw} empresa", f"{base_raw} negocio", f"{base_raw} whatsapp", f"{base_raw} contacto"]
+    syn_queries = [f'"{syn}"' for syn in synonyms[:5]]
+    return base_queries + syn_queries
+
+
+def _search_via_brightdata_multi(
+    industry: str, city: str = "", country: str = None,
+    keywords: str = "", num_results: int = 10, offset: int = 0,
+) -> tuple[list, dict]:
+    """Fan-out múltiples queries a Bright Data en paralelo."""
+    # Escalar al máximo: el usuario dijo "explotar al límite aunque nos manchemos".
+    # Con 5000 créditos free: 150 queries/búsqueda → ~33 búsquedas del free tier.
+    MAX_QUERIES = min(max(30, num_results * 2), 150)
+    all_queries = _bd_build_queries(industry, city, country, keywords, num_results)
+    queries = all_queries[:MAX_QUERIES]
+
+    # Geo-location: usar el gl/hl del país si está configurado
+    effective_country = _detect_effective_country(country, f"{industry} {city}")
+    cfg = COUNTRY_CONFIG.get(effective_country) if effective_country else None
+    gl = cfg.get("gl", "mx") if cfg else "mx"
+    hl = cfg.get("hl", "es") if cfg else "es"
+    bd_country = cfg.get("bd_country", "mx") if cfg else "mx"
+
+    seen_domains: set[str] = set()
+    urls: list[str] = []
+    snippets: dict[str, dict] = {}
+
+    def _fetch_one(q: str) -> tuple[list, dict]:
+        try:
+            return _search_via_brightdata(q, num_results=10, offset=offset, gl=gl, hl=hl, bd_country=bd_country)
+        except Exception:
+            return [], {}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(queries)) as ex:
+        futures = [ex.submit(_fetch_one, q) for q in queries]
+        for f in concurrent.futures.as_completed(futures):
+            batch_urls, batch_snips = f.result()
+            for u in batch_urls:
+                d = _get_domain(u)
+                if d and d not in seen_domains:
+                    seen_domains.add(d)
+                    urls.append(u)
+                    snippets[u] = batch_snips.get(u, {})
+
+    return urls, snippets
+
+
+def _search_via_brightdata(
+    query: str, num_results: int = 10, offset: int = 0,
+    gl: str = "mx", hl: str = "es", bd_country: str = "mx",
+) -> tuple[list, dict]:
+    import urllib.parse
+    google_url = (
+        f"https://www.google.com/search?q={urllib.parse.quote(query)}&hl={hl}&gl={gl}"
+        + (f"&start={offset}" if offset else "")
+    )
+    payload = {
+        "zone": "serp_api1",
+        "url": google_url,
+        "format": "json",
+        "country": bd_country,  # proxy exit location — IP aparece desde ese país
+    }
+    resp = requests.post(
+        "https://api.brightdata.com/request",
+        headers={"Authorization": f"Bearer {_brightdata_key()}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    # Bright Data wraps the parsed page in {"status_code":200,"body":"<json string>"}
+    outer = resp.json()
+    body = json.loads(outer["body"]) if isinstance(outer.get("body"), str) else outer
+    organic = body.get("organic") or body.get("organic_results", [])
+    urls, snippets = [], {}
+    for item in organic:
+        link = item.get("link") or item.get("url")
+        if link and link not in urls and _is_business_url(link):
+            urls.append(link)
+            snippets[link] = {
+                "title": item.get("title", ""),
+                "body": item.get("description") or item.get("snippet", ""),
+            }
+    return urls, snippets
+
+
+def _search_via_duckduckgo(
+    industry: str, city: str = "", exclude_domains: set | None = None,
+    country: str = None, num_results: int = 10,
+) -> tuple[list, dict]:
+    variations = _build_variations(industry, city, country, num_results)
     skip = exclude_domains or set()
 
     all_raw: list[dict] = []

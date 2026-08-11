@@ -48,8 +48,8 @@ class WhatAppClient:
             "to": clean_to,
             "type": "template",
             "template": {
-                "name": "hello_world",
-                "language": {"code": "en_US"}
+                "name": template_name,
+                "language": {"code": lang}
             },
         }
 

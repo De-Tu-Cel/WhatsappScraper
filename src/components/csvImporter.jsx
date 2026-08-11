@@ -541,6 +541,23 @@ export default function CsvImporter() {
               >
                 {t.csv.cancel}
               </Button>
+              {results.some(r => r.ok) && (
+                <Tooltip title={t.csv.stopAndSendTip}>
+                  <Button
+                    fullWidth
+                    onClick={handleCancel}
+                    startIcon={<SendIcon />}
+                    sx={{
+                      flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem',
+                      color: '#4ade80', bgcolor: 'rgba(34,197,94,0.08)',
+                      border: '1px solid rgba(34,197,94,0.25)', borderRadius: 1.5,
+                      '&:hover': { bgcolor: 'rgba(34,197,94,0.15)' },
+                    }}
+                  >
+                    {t.csv.stopAndSend}
+                  </Button>
+                </Tooltip>
+              )}
             </Box>
           )}
         </Box>
@@ -595,8 +612,9 @@ export default function CsvImporter() {
         </Box>
       )}
 
-      {/* ── Toggle de envío masivo ── */}
-      {done && results.length > 0 && waRows.length > 0 && (
+      {/* ── Toggle de envío masivo — visible también durante el procesamiento,
+           para poder empezar a enviar a lo ya encontrado sin esperar ── */}
+      {(done || loading) && results.length > 0 && waRows.length > 0 && (
         <Box sx={{ borderRadius: 2, border: `1px solid ${showSend ? 'rgba(34,197,94,0.25)' : 'rgba(34,197,94,0.12)'}`, bgcolor: showSend ? 'rgba(34,197,94,0.04)' : 'transparent', transition: 'all 0.2s' }}>
           {/* Header toggle */}
           <Box onClick={() => setShowSend(o => !o)} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2, py: 1.2, cursor: 'pointer', borderRadius: showSend ? '8px 8px 0 0' : 2, '&:hover': { bgcolor: 'rgba(34,197,94,0.06)' } }}>

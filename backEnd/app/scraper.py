@@ -248,7 +248,7 @@ class WebsiteScraper:
         self.contacts_col = db["contacts"]
         self.scraping_runs_col = db["scraping_runs"]
 
-    def scrape_site(self, url: str, force: bool = False) -> Dict:
+    def scrape_site(self, url: str, force: bool = False, country: str = None) -> Dict:
         """
         Scraping completo de un sitio web
         
@@ -284,6 +284,11 @@ class WebsiteScraper:
                 "metadata": {...}
             }
         """
+        from app.searcher import COUNTRY_CONFIG, DEFAULT_COUNTRY
+        _country_cfg = COUNTRY_CONFIG.get(country or DEFAULT_COUNTRY, COUNTRY_CONFIG[DEFAULT_COUNTRY])
+        self._default_country_code = _country_cfg["phone_code"]
+        self._default_local_digits = _country_cfg["local_digits"]
+
         print(f"🔍 Scrapeando: {url}")
 
         try:
@@ -1356,27 +1361,46 @@ class WebsiteScraper:
         
         return normalized
 
-    def _normalize_phone(self, raw_number: str, default_country_code="+52") -> Optional[str]:
-        """Normaliza número telefónico mexicano. Descarta números con código país distinto a +52."""
+    def _normalize_phone(self, raw_number: str, default_country_code: str = None) -> Optional[str]:
+        """
+        Normaliza número telefónico al país configurado en scrape_site (default MX
+        si no se seteó — self._default_country_code/_default_local_digits). Descarta
+        números con código de país distinto al configurado para esta búsqueda.
+        """
+        code = default_country_code or getattr(self, "_default_country_code", "+52")
+        calling_code = code.lstrip("+")
+        local_digits = getattr(self, "_default_local_digits", 10)
         digits = re.sub(r"\D", "", raw_number)
 
-        # 10 dígitos → número local mexicano
-        if len(digits) == 10:
-            return f"{default_country_code}{digits}"
+        # N dígitos → número local del país configurado
+        if len(digits) == local_digits:
+            return f"{code}{digits}"
 
-        # 12 dígitos comenzando con 52 → +52XXXXXXXXXX
-        if len(digits) == 12 and digits.startswith("52"):
+        # local+código dígitos comenzando con el código de país → +<código><local>
+        if len(digits) == local_digits + len(calling_code) and digits.startswith(calling_code):
             return f"+{digits}"
 
-        # 13 dígitos comenzando con 521 → normalizar a +52XXXXXXXXXX (quitar el "1" antiguo)
-        if len(digits) == 13 and digits.startswith("521"):
+        # Formato viejo de WhatsApp MX con "1" extra tras el 52 → quitarlo
+        if calling_code == "52" and len(digits) == local_digits + len(calling_code) + 1 and digits.startswith("521"):
             return f"+52{digits[3:]}"
 
-        # Número explícito con + al inicio: solo aceptar si es código MX
+        # Número explícito con + al inicio: acepta el país configurado para esta
+        # búsqueda, o cualquier otro país conocido de COUNTRY_CONFIG — la búsqueda
+        # ya no fuerza un solo país (puede cubrir toda Latinoamérica a la vez), así
+        # que un número real con su propio código de país no debe descartarse solo
+        # porque no coincide con el default de esta corrida.
         if raw_number.strip().startswith("+"):
-            if digits.startswith("52") and len(digits) in (12, 13):
+            if digits.startswith(calling_code) and len(digits) in (
+                local_digits + len(calling_code), local_digits + len(calling_code) + 1,
+            ):
                 return f"+{digits}"
-            return None  # otro país — descartar
+            from app.searcher import COUNTRY_CONFIG as _cc
+            for _cfg in _cc.values():
+                _cc_code = _cfg["phone_code"].lstrip("+")
+                _cc_local = _cfg["local_digits"]
+                if digits.startswith(_cc_code) and len(digits) in (_cc_local + len(_cc_code), _cc_local + len(_cc_code) + 1):
+                    return f"+{digits}"
+            return None  # código de país no reconocido — descartar
 
         return None
 

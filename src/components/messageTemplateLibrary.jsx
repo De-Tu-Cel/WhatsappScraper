@@ -16,6 +16,7 @@ import TextField from '@mui/material/TextField'
 import Checkbox from '@mui/material/Checkbox'
 import IconButton from '@mui/material/IconButton'
 import CircularProgress from '@mui/material/CircularProgress'
+import Tooltip from '@mui/material/Tooltip'
 import Dialog from '@mui/material/Dialog'
 import DialogTitle from '@mui/material/DialogTitle'
 import DialogContent from '@mui/material/DialogContent'
@@ -92,7 +93,10 @@ const VAR_CHIPS = [
   { key: 'web',      labelEs: 'web',      labelEn: 'web'       },
 ]
 
-export function TemplateManagerDialog({ open, onClose, onChange }) {
+// Two-column CRUD body (list + editor), self-contained. Used standalone inside
+// the Settings "Plantillas" tab, and wrapped in a Dialog by TemplateManagerDialog
+// for the picker's "Administrar" button.
+export function TemplateManagerBody({ onChange, onCountChange }) {
   const { t, lang } = useLang()
   const [templates, setTemplates] = useState([])
   const [loading,   setLoading]   = useState(true)
@@ -126,7 +130,10 @@ export function TemplateManagerDialog({ open, onClose, onChange }) {
       .catch(() => {}).finally(() => setLoading(false))
   }, [lang])
 
-  useEffect(() => { if (open) load() }, [open, load])
+  useEffect(() => { load() }, [load])
+  const onCountChangeRef = useRef(onCountChange)
+  useEffect(() => { onCountChangeRef.current = onCountChange })
+  useEffect(() => { onCountChangeRef.current?.(templates.length) }, [templates])
 
   async function handleSave() {
     if (!editing?.name?.trim() || !editing?.text?.trim()) { setError(t.tplLib.fillAll); return }
@@ -159,31 +166,7 @@ export function TemplateManagerDialog({ open, onClose, onChange }) {
   const VAR_COLORS = { nombre: '#818cf8', industria: '#fb923c', ciudad: '#38bdf8', web: '#a78bfa' }
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth
-      sx={{ '& .MuiDialog-paper': {
-        bgcolor: 'var(--card-bg,#1e293b)', backgroundImage: 'none',
-        color: 'var(--text,#f1f5f9)',
-        border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)',
-        borderRadius: 3, boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
-        height: 520, display: 'flex', flexDirection: 'column',
-      } }}>
-
-      {/* ── Header ── */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 2.5, py: 1.5, borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-        <Box sx={{ width: 32, height: 32, borderRadius: 2, flexShrink: 0,
-          bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <DescriptionIcon sx={{ fontSize: 17, color: 'var(--accent,#60a5fa)' }} />
-        </Box>
-        <Box sx={{ flex: 1 }}>
-          <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.93rem', lineHeight: 1.2 }}>{t.tplLib.manageBtn}</Typography>
-          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{t.tplLib.libraryCount(templates.length)}</Typography>
-        </Box>
-        <IconButton size="small" onClick={onClose} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
-          <CloseIcon sx={{ fontSize: 17 }} />
-        </IconButton>
-      </Box>
-
+    <>
       {/* ── Two-column body ── */}
       <Box sx={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
 
@@ -292,6 +275,44 @@ export function TemplateManagerDialog({ open, onClose, onChange }) {
       <ConfirmDialog open={!!confirmDel} title={t.tplLib.deleteTplConfirmTitle}
         body={confirmDel ? `${t.tplLib.deleteTplConfirmBody} "${confirmDel.name}"` : ''}
         confirmLabel={t.tplLib.deleteBtn} onConfirm={() => handleDelete(confirmDel)} onCancel={() => setConfirmDel(null)} />
+    </>
+  )
+}
+
+// ─── Modal wrapper around the body, for surfaces that open it as a dialog
+// (the picker's "Administrar plantillas" button, Scheduled Sends) ─────────────
+
+export function TemplateManagerDialog({ open, onClose, onChange }) {
+  const { t } = useLang()
+  const [count, setCount] = useState(0)
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth
+      sx={{ '& .MuiDialog-paper': {
+        bgcolor: 'var(--card-bg,#1e293b)', backgroundImage: 'none',
+        color: 'var(--text,#f1f5f9)',
+        border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)',
+        borderRadius: 3, boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+        height: 520, display: 'flex', flexDirection: 'column',
+      } }}>
+
+      {/* ── Header ── */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 2.5, py: 1.5, borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+        <Box sx={{ width: 32, height: 32, borderRadius: 2, flexShrink: 0,
+          bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <DescriptionIcon sx={{ fontSize: 17, color: 'var(--accent,#60a5fa)' }} />
+        </Box>
+        <Box sx={{ flex: 1 }}>
+          <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.93rem', lineHeight: 1.2 }}>{t.tplLib.manageBtn}</Typography>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{t.tplLib.libraryCount(count)}</Typography>
+        </Box>
+        <IconButton size="small" onClick={onClose} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
+          <CloseIcon sx={{ fontSize: 17 }} />
+        </IconButton>
+      </Box>
+
+      <TemplateManagerBody onChange={onChange} onCountChange={setCount} />
     </Dialog>
   )
 }
@@ -308,7 +329,21 @@ export function TemplateManagerDialog({ open, onClose, onChange }) {
 // every surface keeps above this picker). The minimum-3 rule counts that
 // text too, so the hint here must add it in rather than requiring 3 more
 // from the library on top of it.
-export function TemplateLibraryPicker({ onChange, recipientCount = 0, baseCount = 0, label }) {
+// Maps each {{variable}} to the availability flag that governs it — a template
+// using a variable gets disabled when NONE of the currently selected recipients
+// have that data, since it would render with a blank gap for every one of them
+// (e.g. "te contactamos desde " with nothing after "desde" when city is missing).
+const VAR_CHECKS = [
+  { re: /\{\{nombre\}\}/,    flag: 'hasName',     labelKey: 'varName' },
+  { re: /\{\{ciudad\}\}/,    flag: 'hasCity',     labelKey: 'varCity' },
+  { re: /\{\{industria\}\}/, flag: 'hasIndustry', labelKey: 'varIndustry' },
+  { re: /\{\{web\}\}/,       flag: 'hasWeb',      labelKey: 'varWeb' },
+]
+
+export function TemplateLibraryPicker({
+  onChange, recipientCount = 0, baseCount = 0, label,
+  hasName = true, hasCity = true, hasIndustry = true, hasWeb = true,
+}) {
   const { t, lang } = useLang()
   const [templates,   setTemplates]   = useState([])
   const [loading,      setLoading]     = useState(true)
@@ -316,6 +351,10 @@ export function TemplateLibraryPicker({ onChange, recipientCount = 0, baseCount 
   const [managerOpen,  setManagerOpen] = useState(false)
   const onChangeRef = useRef(onChange)
   useEffect(() => { onChangeRef.current = onChange })
+
+  const availability = { hasName, hasCity, hasIndustry, hasWeb }
+  const missingVarsFor = useCallback((text) => VAR_CHECKS.filter(v => v.re.test(text) && !availability[v.flag]),
+    [hasName, hasCity, hasIndustry, hasWeb]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = useCallback(() => {
     setLoading(true)
@@ -330,7 +369,18 @@ export function TemplateLibraryPicker({ onChange, recipientCount = 0, baseCount 
     onChangeRef.current?.(texts)
   }, [templates, selectedIds])
 
-  function toggle(id) {
+  // Drop any selection that becomes blocked when the recipient set changes
+  // (e.g. user picks a template while city data is available, then adds a
+  // recipient list where nobody has a city) — never leave a broken pick behind.
+  useEffect(() => {
+    setSelectedIds(prev => prev.filter(id => {
+      const tpl = templates.find(x => x._id === id)
+      return !tpl || missingVarsFor(tpl.text).length === 0
+    }))
+  }, [templates, missingVarsFor])
+
+  function toggle(id, blocked) {
+    if (blocked) return
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }
 
@@ -379,15 +429,18 @@ export function TemplateLibraryPicker({ onChange, recipientCount = 0, baseCount 
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxHeight: 220, overflowY: 'auto' }}>
           {templates.map(tpl => {
             const isSel = selectedIds.includes(tpl._id)
-            return (
-              <Box key={tpl._id} onClick={() => toggle(tpl._id)} sx={{
-                display: 'flex', alignItems: 'flex-start', gap: 0.6, cursor: 'pointer',
-                border: `1px solid ${isSel ? 'rgba(var(--accent-rgb,59,130,246),0.4)' : 'var(--border)'}`, borderRadius: 1.5, p: 0.8,
-                bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.08)' : 'var(--card-bg)',
+            const missing = missingVarsFor(tpl.text)
+            const blocked = missing.length > 0
+            const row = (
+              <Box key={tpl._id} onClick={() => toggle(tpl._id, blocked)} sx={{
+                display: 'flex', alignItems: 'flex-start', gap: 0.6, cursor: blocked ? 'not-allowed' : 'pointer',
+                border: `1px solid ${blocked ? 'rgba(239,68,68,0.25)' : isSel ? 'rgba(var(--accent-rgb,59,130,246),0.4)' : 'var(--border)'}`, borderRadius: 1.5, p: 0.8,
+                bgcolor: blocked ? 'rgba(239,68,68,0.04)' : isSel ? 'rgba(var(--accent-rgb,59,130,246),0.08)' : 'var(--card-bg)',
+                opacity: blocked ? 0.6 : 1,
                 transition: 'border-color 0.15s, background-color 0.15s',
-                '&:hover': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' },
+                '&:hover': blocked ? {} : { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' },
               }}>
-                <Checkbox size="small" checked={isSel} onChange={() => toggle(tpl._id)} onClick={e => e.stopPropagation()}
+                <Checkbox size="small" checked={isSel} disabled={blocked} onChange={() => toggle(tpl._id, blocked)} onClick={e => e.stopPropagation()}
                   sx={{ p: 0.3, color: 'var(--border)', '&.Mui-checked': { color: 'var(--accent,#3b82f6)' } }} />
                 <Box sx={{ minWidth: 0, flex: 1 }}>
                   <Typography sx={{ color: 'var(--text)', fontWeight: 600, fontSize: '0.78rem' }}>{tpl.name}</Typography>
@@ -395,6 +448,9 @@ export function TemplateLibraryPicker({ onChange, recipientCount = 0, baseCount 
                 </Box>
               </Box>
             )
+            if (!blocked) return row
+            const varLabels = missing.map(v => t.tplLib[v.labelKey]).join(', ')
+            return <Tooltip key={tpl._id} title={t.tplLib.blockedMissingVar(varLabels)} placement="top"><span>{row}</span></Tooltip>
           })}
         </Box>
       )}

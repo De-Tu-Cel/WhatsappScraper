@@ -4,7 +4,9 @@ from typing import Optional, List, Dict, Any, Union
 class ProcessUrlRequest(BaseModel):
     url: str
     message_template: Optional[str] = None
-    skip_send: Optional[bool] = False
+    skip_send: Optional[bool] = True  # opt-in to send, not opt-out — see pipeline.py
+    country: Optional[str] = None
+    force: Optional[bool] = False
 
 class SendMessageRequest(BaseModel):
     company_id: str
@@ -19,6 +21,7 @@ class SearchRequest(BaseModel):
     keywords: Optional[str] = ""
     num_results: Optional[int] = 10
     offset: Optional[int] = 0
+    country: Optional[str] = None
 
 class CheckUrlsRequest(BaseModel):
     urls: List[str]
@@ -61,6 +64,15 @@ class SearchResponse(BaseModel):
 
 class DeleteCompaniesRequest(BaseModel):
     ids: List[str]
+
+class CreateCompanyRequest(BaseModel):
+    name: str
+    industry: Optional[str] = ""
+    city: Optional[str] = ""
+    state: Optional[str] = ""
+    website: Optional[str] = ""
+    description: Optional[str] = ""
+    whatsapp_number: Optional[str] = ""
 
 class UpdateCompanyRequest(BaseModel):
     name: Optional[str] = None

@@ -57,7 +57,7 @@ def _render_message(template: str, scraped: dict, website: str) -> str:
         .replace("{{industria}}", industry)
         .replace("{{web}}",       website))
 
-def process_url(website: str, message_template: str = None, skip_send: bool = False, user_token: str = None):
+def process_url(website: str, message_template: str = None, skip_send: bool = True, user_token: str = None, country: str = None, force: bool = False):
     """
     Pipeline completo con scraper extenso
     """
@@ -78,7 +78,7 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Fa
         return {"blacklisted": True, "reason": "domain", "matched": _bl_domain["matched"]}
 
     print(f"🔍 Scrapeando datos de {website}...")
-    scraped = scraper.scrape_site(website)
+    scraped = scraper.scrape_site(website, force=force, country=country)
     _extra = scraped.get("_extra", {})
     _cr = scraped.get("_contacts_raw", {})
 
@@ -376,15 +376,18 @@ _BATCH_WORKERS = 10  # URLs procesadas en paralelo
 _SUB_WORKERS   = 4   # subpáginas en paralelo dentro de cada sitio
 
 
-def run_pipeline_batch(urls: list) -> dict:
+def run_pipeline_batch(urls: list, skip_send: bool = True) -> dict:
     """
     Procesa múltiples URLs en lote (10 workers en paralelo).
+    skip_send defaults to True — this endpoint has no message_template input at
+    all, so a caller that forgets to opt out would otherwise silently blast
+    DEFAULT_MESSAGE (a generic sales pitch) to every WhatsApp number found.
     """
     ordered: dict[str, dict] = {}  # url → result entry, preserves input order
 
     def _process_one(url: str) -> tuple[str, dict]:
         try:
-            result = process_url(url)
+            result = process_url(url, skip_send=skip_send)
             return url, {"url": url, "status": "ok", "result": result}
         except Exception as e:
             return url, {"url": url, "status": "error", "error": str(e)}

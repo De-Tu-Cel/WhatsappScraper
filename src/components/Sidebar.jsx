@@ -31,7 +31,7 @@ const C = {
 
 const GROUP_KEYS = [
   { labelKey: 'groupProspeccion',  keys: ['single', 'batch', 'csv', 'database', 'search', 'blacklist'] },
-  { labelKey: 'groupComunicacion', keys: ['convs', 'schedule'] },
+  { labelKey: 'groupComunicacion', keys: ['convs', 'schedule', 'campaign'] },
   { labelKey: 'groupAnalisis',     keys: ['analytics'] },
   { labelKey: 'groupSistema',      keys: ['admin', 'instances'] },
 ]

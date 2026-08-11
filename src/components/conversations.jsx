@@ -25,6 +25,15 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import DoneAllIcon from '@mui/icons-material/DoneAll'
 import DoneIcon from '@mui/icons-material/Done'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
+import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
+import MicIcon from '@mui/icons-material/Mic'
+import ImageIcon from '@mui/icons-material/Image'
+import VideocamIcon from '@mui/icons-material/Videocam'
+import LocationOnIcon from '@mui/icons-material/LocationOn'
+import PersonIcon from '@mui/icons-material/Person'
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile'
+import AttachFileIcon from '@mui/icons-material/AttachFile'
+import ArticleIcon from '@mui/icons-material/Article'
 import Popover from '@mui/material/Popover'
 import EmojiEmotionsIcon from '@mui/icons-material/EmojiEmotions'
 import TuneIcon from '@mui/icons-material/Tune'
@@ -263,14 +272,16 @@ function ConversationItem({ conv, active, onClick }) {
 }
 
 const MEDIA_LABELS = {
-  '[sticker]':  { emoji: '🎭', label: 'Sticker' },
-  '[audio]':    { emoji: '🎵', label: 'Audio' },
-  '[imagen]':   { emoji: '🖼️', label: 'Imagen' },
-  '[image]':    { emoji: '🖼️', label: 'Imagen' },
-  '[video]':    { emoji: '🎬', label: 'Video' },
-  '[location]': { emoji: '📍', label: 'Ubicación' },
-  '[contact]':  { emoji: '👤', label: 'Contacto' },
-  '[document]': { emoji: '📄', label: 'Documento' },
+  '[sticker]':  { Icon: EmojiEmotionsIcon,   label: 'Sticker' },
+  '[audio]':    { Icon: MicIcon,             label: 'Audio' },
+  '[imagen]':   { Icon: ImageIcon,           label: 'Imagen' },
+  '[image]':    { Icon: ImageIcon,           label: 'Imagen' },
+  '[video]':    { Icon: VideocamIcon,        label: 'Video' },
+  '[location]': { Icon: LocationOnIcon,      label: 'Ubicación' },
+  '[contact]':  { Icon: PersonIcon,          label: 'Contacto' },
+  '[document]': { Icon: InsertDriveFileIcon, label: 'Documento' },
+  '[media]':    { Icon: AttachFileIcon,      label: 'Multimedia' },
+  '[template]': { Icon: ArticleIcon,         label: 'Plantilla' },
 }
 
 function InteractiveMessage({ interactive, isOut, onReply }) {
@@ -375,6 +386,14 @@ function InteractiveMessage({ interactive, isOut, onReply }) {
   )
 }
 
+function formatSenderNumber(raw) {
+  let d = String(raw).replace(/\D/g, '')
+  if (d.length === 13 && d.startsWith('521')) d = '52' + d.slice(3)  // strip mobile "1" marker
+  if (d.length === 12) return `+${d.slice(0,2)} ${d.slice(2,5)} ${d.slice(5,8)} ${d.slice(8,12)}`
+  if (d.length === 10) return `+52 ${d.slice(0,3)} ${d.slice(3,6)} ${d.slice(6,10)}`
+  return d ? `+${d}` : raw
+}
+
 function MessageBubble({ msg, onReply }) {
   const { lang } = useLang()
   const isOut  = msg.direction === 'outbound'
@@ -383,6 +402,7 @@ function MessageBubble({ msg, onReply }) {
   const media  = MEDIA_LABELS[raw.trim().toLowerCase()]
   const body   = raw || '—'
   const interactive = msg.interactive
+  const sentLabel = isOut ? (msg.instance_number ? formatSenderNumber(msg.instance_number) : msg.instance_name) : null
   return (
     <Box sx={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start', mb: 0.8, px: 2 }}>
       <Box sx={{
@@ -400,7 +420,7 @@ function MessageBubble({ msg, onReply }) {
           <InteractiveMessage interactive={interactive} isOut={isOut} onReply={onReply} />
         ) : media ? (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
-            <Typography sx={{ fontSize: '1.4rem', lineHeight: 1 }}>{media.emoji}</Typography>
+            <media.Icon sx={{ fontSize: 18, color: isOut ? 'rgba(var(--accent-rgb, 99,102,241), 0.9)' : 'rgba(255,255,255,0.5)' }} />
             <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.78rem', fontStyle: 'italic' }}>
               {media.label}
             </Typography>
@@ -410,7 +430,17 @@ function MessageBubble({ msg, onReply }) {
             {body}
           </Typography>
         )}
-        <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 0.5, mt: 0.4 }}>
+        {sentLabel && (
+          <Tooltip title={lang === 'en' ? 'Sent from this number' : 'Enviado desde este número'}>
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 0.3, mt: 0.5, opacity: 0.55 }}>
+              <PhoneAndroidIcon sx={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }} />
+              <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.62rem', fontFamily: 'monospace', letterSpacing: '0.01em' }}>
+                {sentLabel}
+              </Typography>
+            </Box>
+          </Tooltip>
+        )}
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 0.5, mt: 0.25 }}>
           <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.65rem' }}>
             {formatMsgTime(msg.created_at, lang)}
           </Typography>
@@ -471,6 +501,24 @@ export default function Conversations() {
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
   const { pendingConvId, pendingConvNumber, clearPendingConv } = useNavigation()
   const pendingNumRef = useRef(null)
+
+  // Diagnóstico de por qué el seguimiento automático de IA podría estar en
+  // pausa ahora mismo (circuit breaker del proveedor / fuera de horario) — se
+  // muestra como banner en vez de que el usuario tenga que revisar logs.
+  const [aiHealth, setAiHealth] = useState(null)
+  useEffect(() => {
+    let cancelled = false
+    async function poll() {
+      try {
+        const r = await fetch('/api/conversations/ai-health')
+        const d = await r.json()
+        if (!cancelled && r.ok) setAiHealth(d)
+      } catch {}
+    }
+    poll()
+    const id = setInterval(poll, 60_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
 
   // When a notification card is clicked, auto-select the matching conversation
   useEffect(() => {
@@ -815,6 +863,17 @@ export default function Conversations() {
               </IconButton>
             </Tooltip>
           </Box>
+          {(aiHealth?.circuit_open || aiHealth?.business_hours_active === false) && (
+            <Box sx={{
+              display: 'flex', alignItems: 'flex-start', gap: 0.8, mb: 1.2, px: 1, py: 0.7,
+              borderRadius: 1.5, bgcolor: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)',
+            }}>
+              <SmartToyIcon sx={{ fontSize: 14, color: '#f59e0b', mt: 0.15, flexShrink: 0 }} />
+              <Typography sx={{ color: '#f59e0b', fontSize: '0.7rem', lineHeight: 1.4 }}>
+                {aiHealth.circuit_open ? t.convs.aiPausedCircuit : t.convs.aiPausedHours}
+              </Typography>
+            </Box>
+          )}
           <TextField fullWidth size="small" placeholder={t.convs.search} value={search}
             onChange={e => setSearch(e.target.value)}
             slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 16, color: 'var(--text-muted)' }} /></InputAdornment> } }}

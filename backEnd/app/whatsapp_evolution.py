@@ -3,17 +3,64 @@ import requests
 from datetime import datetime
 
 
+def pick_connected_instance(db, api_url: str, api_key: str, preferred: str | None = None) -> str | None:
+    """Return an Evolution API instance name that's currently connected — checks
+    every instance in the `instances` collection that has a registered number,
+    prefers `preferred` if it's among the connected ones. Returns None if none
+    are connected (caller should skip sending rather than fire at a dead instance).
+
+    Mirrors the connection-check + preferred-instance logic in
+    routes.py's /send-message (round-robin + per-company routing) — used by
+    ai_followup.py so Andy's automatic replies don't get stuck on a single
+    hardcoded instance when it's the one that happens to be disconnected."""
+    names = [
+        i["name"] for i in db.db.instances.find(
+            {"number": {"$exists": True, "$ne": ""}}, {"name": 1}
+        )
+    ]
+    if not names:
+        return None
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _check_state(name):
+        try:
+            r = requests.get(
+                f"{api_url}/instance/connectionState/{name}",
+                headers={"apikey": api_key}, timeout=2,
+            )
+            state = (r.json().get("instance") or {}).get("state") or r.json().get("state", "")
+            return name if state == "open" else None
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=len(names)) as ex:
+        connected = [n for n in ex.map(_check_state, names) if n]
+
+    if not connected:
+        return None
+    if preferred and preferred in connected:
+        return preferred
+    return connected[0]
+
+
 class EvolutionClient:
     def __init__(self, api_url: str, api_key: str, instance: str):
         self.base_url = api_url.rstrip("/")
         self.instance = instance
         self.headers = {"apikey": api_key, "Content-Type": "application/json"}
 
-    def send_text(self, number: str, text: str) -> dict:
-        """Send a plain-text WhatsApp message via Evolution API."""
+    def send_text(self, number: str, text: str, delay_ms: int = 0) -> dict:
+        """Send a plain-text WhatsApp message via Evolution API.
+
+        delay_ms: typing-indicator duration in ms shown to the recipient before
+                  the message arrives (Evolution native feature, 0 = disabled).
+        """
         clean = _clean_number(number)
         url = f"{self.base_url}/message/sendText/{self.instance}"
         payload = {"number": clean, "text": text, "textMessage": {"text": text}}
+        if delay_ms > 0:
+            payload["delay"] = delay_ms
         try:
             resp = requests.post(url, json=payload, headers=self.headers, timeout=15)
             return {

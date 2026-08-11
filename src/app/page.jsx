@@ -24,6 +24,8 @@ import DatabaseViewer from '../components/databaseViewer'
 import Conversations from '../components/conversations'
 import Analytics from '../components/analytics'
 import ScheduledSends from '../components/scheduledSends'
+import SendCampaign from '../components/sendCampaign'
+import CampaignIcon from '@mui/icons-material/Campaign'
 import AdminPanel from '../components/AdminPanel'
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
 import InstancesPanel from '../components/InstancesPanel'
@@ -72,6 +74,7 @@ const NAV_KEYS = [
   { key: 'convs',     icon: <ForumIcon />,              component: <Conversations /> },
   { key: 'analytics', icon: <AnalyticsIcon />,          component: <Analytics /> },
   { key: 'schedule',  icon: <ScheduleSendIcon />,       component: <ScheduledSends /> },
+  { key: 'campaign',  icon: <CampaignIcon />,           component: <SendCampaign /> },
   { key: 'admin',     icon: <AdminPanelSettingsIcon />, component: <AdminPanel />,     adminOnly: true },
   { key: 'instances', icon: <RouterIcon />,             component: <InstancesPanel />, adminOnly: true },
 ]

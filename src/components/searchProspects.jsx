@@ -19,6 +19,7 @@ import Checkbox from '@mui/material/Checkbox'
 import Chip from '@mui/material/Chip'
 import Tooltip from '@mui/material/Tooltip'
 import LinearProgress from '@mui/material/LinearProgress'
+import Slider from '@mui/material/Slider'
 import CircularProgress from '@mui/material/CircularProgress'
 import Skeleton from '@mui/material/Skeleton'
 import SearchIcon from '@mui/icons-material/Search'
@@ -29,7 +30,6 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import ErrorIcon from '@mui/icons-material/Error'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import TravelExploreIcon from '@mui/icons-material/TravelExplore'
-import LocationOnIcon from '@mui/icons-material/LocationOn'
 import DownloadIcon from '@mui/icons-material/Download'
 import ReplayIcon from '@mui/icons-material/Replay'
 import CheckBoxIcon from '@mui/icons-material/CheckBox'
@@ -46,34 +46,6 @@ import { loadSendConfig } from '@/lib/sendConfig'
 
 // INDUSTRY_GROUPS and INDUSTRY_EXAMPLES are built inside the component from translations
 
-const MX_CITIES = [...new Set([
-  // — 32 estados —
-  'Aguascalientes', 'Baja California', 'Baja California Sur',
-  'Campeche', 'Chiapas', 'Chihuahua', 'Ciudad de México',
-  'Coahuila', 'Colima', 'Durango', 'Estado de México',
-  'Guanajuato', 'Guerrero', 'Hidalgo', 'Jalisco',
-  'Michoacán', 'Morelos', 'Nayarit', 'Nuevo León',
-  'Oaxaca', 'Puebla', 'Querétaro', 'Quintana Roo',
-  'San Luis Potosí', 'Sinaloa', 'Sonora', 'Tabasco',
-  'Tamaulipas', 'Tlaxcala', 'Veracruz', 'Yucatán', 'Zacatecas',
-  // — Ciudades principales —
-  'Guadalajara', 'Monterrey', 'León', 'Mérida', 'Tijuana',
-  'Cancún', 'Morelia', 'Hermosillo', 'Chihuahua', 'Saltillo',
-  'Culiacán', 'Toluca', 'Mexicali', 'Torreón', 'Ciudad Juárez',
-  'Tuxtla Gutiérrez', 'Villahermosa', 'Pachuca', 'Chilpancingo',
-  'Zacatecas', 'Tepic', 'Colima', 'Chetumal', 'La Paz',
-  'Cuernavaca', 'Xalapa', 'Ciudad Victoria', 'Manzanillo',
-  'Mazatlán', 'Ensenada', 'Celaya', 'Irapuato', 'Salamanca',
-  'San Miguel de Allende', 'Playa del Carmen', 'Los Cabos',
-  'Puerto Vallarta', 'Acapulco', 'Tampico', 'Matamoros',
-  'Reynosa', 'Nuevo Laredo', 'Monclova', 'Piedras Negras',
-  'Gómez Palacio', 'Bahía de Banderas', 'Oaxaca de Juárez',
-  'Tuxtepec', 'Coatzacoalcos', 'Poza Rica', 'Orizaba', 'Córdoba',
-  'Uruapan', 'Zamora', 'Lázaro Cárdenas', 'San Cristóbal de las Casas',
-  'Tapachula', 'Valladolid', 'Progreso', 'Ciudad del Carmen',
-  'Cozumel', 'Tulum',
-])]
-
 const fadeSlideIn = keyframes`
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -81,22 +53,26 @@ const fadeSlideIn = keyframes`
 
 function CountSelector({ numResults, setNumResults, showCount, show, size = 'md' }) {
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, width: size === 'md' ? 220 : 170 }}>
       {size === 'md' && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>{showCount}</Typography>}
       {size === 'sm' && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>{show}</Typography>}
-      <Box sx={{ display: 'flex', gap: size === 'md' ? 0.6 : 0.5 }}>
-        {[5, 10, 20, 30].map(n => (
-          <Box key={n} onClick={() => setNumResults(n)} sx={{
-            px: size === 'md' ? 1.5 : 1.2, py: size === 'md' ? 0.4 : 0.3,
-            borderRadius: 10, cursor: 'pointer', fontSize: size === 'md' ? '0.75rem' : '0.72rem', fontWeight: 700,
-            bgcolor: numResults === n ? 'rgba(var(--accent-rgb, 59,130,246), 0.2)' : 'var(--item-hover)',
-            color: numResults === n ? 'var(--accent, #60a5fa)' : 'var(--text-muted)',
-            border: `1px solid ${numResults === n ? 'rgba(var(--accent-rgb, 59,130,246), 0.4)' : 'var(--border)'}`,
-            transition: 'all 0.15s',
-            '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.12)', color: 'var(--accent, #93c5fd)' },
-          }}>{n}</Box>
-        ))}
-      </Box>
+      <Slider
+        value={numResults}
+        onChange={(_, v) => setNumResults(v)}
+        min={1} max={200} step={1}
+        size="small"
+        sx={{
+          color: 'var(--accent, #3b82f6)',
+          '& .MuiSlider-track': { border: 'none' },
+          '& .MuiSlider-thumb': { width: 14, height: 14, '&:hover, &.Mui-active': { boxShadow: '0 0 0 6px rgba(var(--accent-rgb,59,130,246),0.16)' } },
+        }}
+      />
+      <Box sx={{
+        px: size === 'md' ? 1.2 : 1, py: 0.3, borderRadius: 10, minWidth: size === 'md' ? 28 : 24, textAlign: 'center', flexShrink: 0,
+        bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.2)', color: 'var(--accent, #60a5fa)',
+        border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.4)',
+        fontSize: size === 'md' ? '0.75rem' : '0.72rem', fontWeight: 700,
+      }}>{numResults}</Box>
     </Box>
   )
 }
@@ -155,17 +131,13 @@ function renderTemplate(text, scraped) {
 
 const SearchBarForm = React.memo(function SearchBarForm({
   allIndustries, searching, typewriterActive, labels, onSearch, onCancel,
-  compact, defaultIndustry = '', defaultCity = '',
+  compact, defaultIndustry = '',
 }) {
   const [industry,   setIndustry]   = useState(defaultIndustry)
-  const [city,       setCity]       = useState(defaultCity)
   const [acOpen,     setAcOpen]     = useState(false)
   const [acIdx,      setAcIdx]      = useState(0)
-  const [cityAcOpen, setCityAcOpen] = useState(false)
-  const [cityAcIdx,  setCityAcIdx]  = useState(0)
 
   const deferredIndustry = useDeferredValue(industry)
-  const deferredCity     = useDeferredValue(city)
 
   const acMatches = useMemo(() =>
     deferredIndustry.trim().length > 0
@@ -177,23 +149,13 @@ const SearchBarForm = React.memo(function SearchBarForm({
     [deferredIndustry, allIndustries]
   )
 
-  const cityAcMatches = useMemo(() =>
-    deferredCity.trim().length > 0
-      ? MX_CITIES.filter(c =>
-          c.toLowerCase().includes(deferredCity.toLowerCase()) &&
-          c.toLowerCase() !== deferredCity.toLowerCase()
-        ).slice(0, 12)
-      : MX_CITIES.slice(0, 15),
-    [deferredCity]
-  )
-
   const placeholder = useTypewriter(labels.examples, typewriterActive && !industry)
 
   function triggerSearch(overrideIndustry) {
     const q = typeof overrideIndustry === 'string' ? overrideIndustry : industry
     if (!q.trim()) return
-    setAcOpen(false); setCityAcOpen(false)
-    onSearch(q.trim(), city.trim())
+    setAcOpen(false)
+    onSearch(q.trim())
   }
 
   return (
@@ -274,69 +236,6 @@ const SearchBarForm = React.memo(function SearchBarForm({
           </Box>
         )}
       </Box>
-
-      {/* ── Filtro de ciudad ── */}
-      <Box sx={{ position: 'relative', display: 'flex', justifyContent: 'center' }}>
-        <Box sx={{
-          display: 'inline-flex', alignItems: 'center', gap: 0.8,
-          px: 1.5, py: 0.4, borderRadius: '50px',
-          border: `1px solid ${city ? 'rgba(var(--accent-rgb,59,130,246),0.4)' : 'var(--border, rgba(255,255,255,0.08))'}`,
-          bgcolor: city ? 'rgba(var(--accent-rgb,59,130,246),0.06)' : 'transparent',
-          transition: 'all 0.15s',
-          '&:focus-within': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.5)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.08)' },
-        }}>
-          <LocationOnIcon sx={{ fontSize: 13, color: city ? 'var(--accent, #3b82f6)' : 'var(--text-muted)', flexShrink: 0, transition: 'color 0.15s' }} />
-          <TextField
-            variant="standard"
-            value={city}
-            onChange={e => { setCity(e.target.value); setCityAcOpen(true); setCityAcIdx(0) }}
-            onBlur={() => setTimeout(() => setCityAcOpen(false), 150)}
-            onFocus={() => setCityAcOpen(true)}
-            onKeyDown={e => {
-              if (e.key === 'ArrowDown') { e.preventDefault(); setCityAcIdx(i => Math.min(i + 1, cityAcMatches.length - 1)) }
-              else if (e.key === 'ArrowUp') { e.preventDefault(); setCityAcIdx(i => Math.max(i - 1, 0)) }
-              else if (e.key === 'Enter') {
-                if (cityAcOpen && cityAcMatches.length > 0) { setCity(cityAcMatches[cityAcIdx]); setCityAcOpen(false) }
-                else { setCityAcOpen(false); triggerSearch() }
-              } else if (e.key === 'Escape') { setCityAcOpen(false) }
-              else if (e.key === 'Tab' && cityAcMatches.length > 0) {
-                e.preventDefault(); setCity(cityAcMatches[cityAcIdx]); setCityAcOpen(false)
-              }
-            }}
-            placeholder={labels.cityPlaceholder}
-            slotProps={{ input: { disableUnderline: true } }}
-            sx={{ width: 190, '& input': { fontSize: '0.78rem', py: 0.4, color: 'var(--text, #f1f5f9)', textAlign: 'left', '&::placeholder': { color: 'var(--text-muted, rgba(255,255,255,0.28))', opacity: 1 } } }}
-          />
-          {city && (
-            <Box onClick={() => setCity('')} sx={{ cursor: 'pointer', color: 'var(--text-muted)', fontSize: 14, lineHeight: 1, '&:hover': { color: 'var(--text)' }, flexShrink: 0 }}>×</Box>
-          )}
-        </Box>
-
-        {/* City autocomplete */}
-        {cityAcOpen && cityAcMatches.length > 0 && (
-          <Box sx={{ position: 'absolute', top: 'calc(100% + 4px)', left: '50%', transform: 'translateX(-50%)', width: 230, zIndex: 30, bgcolor: 'var(--sidebar-bg, #0d1117)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.28)', borderRadius: 2, boxShadow: '0 8px 28px rgba(0,0,0,0.6)', overflow: 'hidden' }}>
-            {city.trim() === '' && (
-              <Box sx={{ px: 2, pt: 1, pb: 0.5, borderBottom: '1px solid var(--border)' }}>
-                <Typography sx={{ fontSize: '0.62rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 }}>{labels.popularCities}</Typography>
-              </Box>
-            )}
-            <Box sx={{
-              maxHeight: 240, overflowY: 'auto',
-              '&::-webkit-scrollbar': { width: 4 },
-              '&::-webkit-scrollbar-track': { background: 'transparent' },
-              '&::-webkit-scrollbar-thumb': { background: 'rgba(var(--accent-rgb,59,130,246),0.35)', borderRadius: 4 },
-            }}>
-              {cityAcMatches.map((c, i) => (
-                <Box key={`${c}-${i}`} onMouseDown={() => { setCity(c); setCityAcOpen(false) }} onMouseEnter={() => setCityAcIdx(i)}
-                  sx={{ px: 2, py: 0.85, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 1, bgcolor: i === cityAcIdx ? 'rgba(var(--accent-rgb, 59,130,246), 0.1)' : 'transparent', transition: 'all 0.1s' }}>
-                  <LocationOnIcon sx={{ fontSize: 13, color: i === cityAcIdx ? 'var(--accent, #3b82f6)' : 'var(--text-muted)', flexShrink: 0 }} />
-                  <Typography sx={{ fontSize: '0.82rem', color: i === cityAcIdx ? 'var(--text)' : 'var(--text-muted)', fontWeight: i === cityAcIdx ? 600 : 400 }}>{c}</Typography>
-                </Box>
-              ))}
-            </Box>
-          </Box>
-        )}
-      </Box>
     </Box>
   )
 })
@@ -349,8 +248,7 @@ export default function SearchProspects() {
   const abortSearchRef = useRef(null)
 
   const [lastIndustry, setLastIndustry] = useState('')
-  const [lastCity,     setLastCity]     = useState('')
-  const [numResults,  setNumResults]  = useState(10)
+  const [numResults,  setNumResults]  = useState(50)
   const [searching,    setSearching]    = useState(false)
   const [searchError,  setSearchError]  = useState(false)
   const [visibleCount, setVisibleCount] = useState(10)
@@ -419,9 +317,7 @@ export default function SearchProspects() {
 
   const searchLabels = useMemo(() => ({
     cancelSearch: t.search.cancelSearch,
-    cityPlaceholder: t.search.cityPlaceholder,
-    popularCities: t.search.popularCities,
-    examplePh: 'Ej: Restaurantes, Ferreterías…',
+    examplePh: t.search.examplePhLocation,
     examples: INDUSTRY_EXAMPLES,
   }), [t, INDUSTRY_EXAMPLES])
 
@@ -462,11 +358,10 @@ export default function SearchProspects() {
     }
   }
 
-  async function handleSearch(industry, city) {
+  async function handleSearch(industry) {
     const query = industry.trim()
     if (!query) return
     setLastIndustry(query)
-    setLastCity(city?.trim() || '')
     saveHistory(query)
     abortSearchRef.current?.abort()
     const ctrl = new AbortController()
@@ -475,7 +370,7 @@ export default function SearchProspects() {
     try {
       const res = await fetch('/api/search', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ industry: query, city: city?.trim() || '', num_results: numResults, offset: 0 }),
+        body: JSON.stringify({ industry: query, num_results: numResults, offset: 0 }),
         signal: ctrl.signal,
       })
       if (!res.ok) throw new Error()
@@ -607,8 +502,10 @@ export default function SearchProspects() {
   // Sending to 2+ numbers needs varied text (see MIN_TEMPLATES_FOR_BULK) — editing
   // one base message stops making sense there, so it switches to picking 3+ saved templates.
   const isBulk = totalRecipients > 1
+  // En bulk, el mensaje base deja de usarse — solo se envían las plantillas
+  // marcadas en la Biblioteca, para que lo enviado sea exactamente lo seleccionado.
   const allVariants = useMemo(
-    () => (isBulk ? [msgText, ...extraVariants] : [msgText]).map(v => v.trim()).filter(Boolean),
+    () => (isBulk ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean),
     [isBulk, msgText, extraVariants]
   )
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
@@ -697,7 +594,7 @@ export default function SearchProspects() {
             <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.35))', fontSize: '0.82rem' }}>{t.search.headingSub}</Typography>
           </Box>
 
-          <SearchBarForm compact={false} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancel} defaultIndustry={lastIndustry} defaultCity={lastCity} />
+          <SearchBarForm compact={false} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancel} defaultIndustry={lastIndustry} />
           <CountSelector size="md" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} />
 
           {/* Historial reciente */}
@@ -736,7 +633,7 @@ export default function SearchProspects() {
       {/* ── Barra compacta cuando hay resultados ── */}
       {hasResults && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', p: 1.5, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
-          <SearchBarForm compact={true} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancel} defaultIndustry={lastIndustry} defaultCity={lastCity} />
+          <SearchBarForm compact={true} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancel} defaultIndustry={lastIndustry} />
           <CountSelector size="sm" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} />
         </Box>
       )}
@@ -745,7 +642,7 @@ export default function SearchProspects() {
       {searchError && !searching && (
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 1.5, py: 4, px: 2 }}>
           <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.45))', fontSize: '0.9rem', textAlign: 'center' }}>
-            {t.search.noResultsFor} <strong style={{ color: 'var(--text, #f1f5f9)' }}>{lastIndustry}</strong>{lastCity ? ` · ${lastCity}` : ''}
+            {t.search.noResultsFor} <strong style={{ color: 'var(--text, #f1f5f9)' }}>{lastIndustry}</strong>
           </Typography>
           <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.28))', fontSize: '0.78rem', textAlign: 'center', maxWidth: 420, lineHeight: 1.6 }}>
             {t.search.tryOther}
@@ -942,6 +839,14 @@ export default function SearchProspects() {
               sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>
               {t.search.cancel}
             </Button>
+            {results.some(r => r.ok) && (
+              <Tooltip title={t.search.stopAndSendTip}>
+                <Button fullWidth onClick={handleCancel} startIcon={<SendIcon />}
+                  sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#4ade80', bgcolor: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(34,197,94,0.15)' } }}>
+                  {t.search.stopAndSend}
+                </Button>
+              </Tooltip>
+            )}
           </Box>
         </Box>
       )}
@@ -965,8 +870,9 @@ export default function SearchProspects() {
         </Box>
       )}
 
-      {/* ── Panel de envío masivo ── */}
-      {done && results.length > 0 && (
+      {/* ── Panel de envío masivo — visible también durante el scraping, para
+           poder empezar a enviar a lo ya encontrado sin esperar a que termine ── */}
+      {(done || processing) && results.length > 0 && (
         <Box sx={{ p: 2, borderRadius: 2, border: '1px solid rgba(34,197,94,0.15)', bgcolor: 'rgba(34,197,94,0.03)' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.2 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -1019,6 +925,7 @@ export default function SearchProspects() {
             </Box>
           )}
 
+          {!isBulk && <>
           <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>{t.batch.baseTemplate}</Typography>
           <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.5 }}>
             {TEMPLATES.map(tpl => (
@@ -1066,9 +973,10 @@ export default function SearchProspects() {
               {msgText.length} / 4096
             </Typography>
           </Box>
+          </>}
           {isBulk && (
             <Box sx={{ mb: 1.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
-              <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalRecipients} baseCount={1} />
+              <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalRecipients} baseCount={0} />
             </Box>
           )}
           <Box sx={{ mb: 1.5 }}>

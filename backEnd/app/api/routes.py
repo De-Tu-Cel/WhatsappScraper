@@ -4,7 +4,7 @@ from typing import Optional
 import asyncio, json as _json, re, os
 from app.schemas.company import (
     ProcessUrlRequest, SearchRequest, BatchRequest,
-    CheckUrlsRequest, DeleteCompaniesRequest, UpdateCompanyRequest,
+    CheckUrlsRequest, DeleteCompaniesRequest, UpdateCompanyRequest, CreateCompanyRequest,
     N8nMessageSentRequest, N8nMessageReceivedRequest,
     EvolutionWebhookRequest, SendMessageRequest, ReportRequest,
     UpdateContactsRequest,
@@ -162,7 +162,10 @@ def api_update_evolution(body: dict, x_user_token: Optional[str] = Header(None))
 @router.post("/process-url")
 def api_process_url(req: ProcessUrlRequest, x_user_token: Optional[str] = Header(None)):
     try:
-        return serialize(process_url(req.url, message_template=req.message_template, skip_send=req.skip_send, user_token=x_user_token))
+        return serialize(process_url(
+            req.url, message_template=req.message_template, skip_send=req.skip_send,
+            user_token=x_user_token, country=req.country, force=req.force,
+        ))
     except Exception as e:
         import traceback
         print(f"[process-url] {req.url} → {type(e).__name__}: {e}")
@@ -181,6 +184,11 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         db = MongoDBManager()
         if not EVOLUTION_API_KEY:
             raise HTTPException(status_code=400, detail="Evolution API no configurada")
+        if not (req.message or "").strip():
+            # Backend-level net for every send surface (batch, CSV, prospect search,
+            # single-URL, database viewer) — some of those don't block an emptied
+            # template client-side before calling this endpoint.
+            raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío")
 
         # ── Bloqueo por blacklist / chat bloqueado ──────────────────────────────────
         from bson import ObjectId
@@ -212,7 +220,7 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         # If caller provides an explicit instance (e.g. conversation reply), use it directly
         if req.instance:
             instance = req.instance
-            print(f"[SendMsg] explicit instance override → {instance}")
+            print(f"[SendMsg] instance=explicit:{instance}")
         elif x_user_token:
             user = get_user_by_token(x_user_token)
             if user:
@@ -259,7 +267,7 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
 
                         if preferred:
                             instance = preferred
-                            print(f"[SendMsg] preferencial → {instance} (compañía {req.company_id})")
+                            print(f"[SendMsg] instance=preferred:{instance} (company={req.company_id})")
                         else:
                             # Round-robin: incrementa contador atómico por usuario
                             result = db.db.users.find_one_and_update(
@@ -279,7 +287,7 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                                     )
                                 except Exception:
                                     pass
-                            print(f"[SendMsg] round-robin → {instance} (idx={idx}/{len(connected)}, compañía={req.company_id})")
+                            print(f"[SendMsg] instance=round-robin:{instance} (idx={idx}/{len(connected)}, company={req.company_id})")
                     else:
                         _all_disconnected = True
                 elif user.get("evolution_instance"):
@@ -309,7 +317,15 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
 
         send_to = real_jid_num if real_jid_num else req.to_number
         evo_result = evo.send_text(send_to, req.message)
-        print(f"[SendMsg] to={send_to} (req={req.to_number}) status_code={evo_result.get('status_code')} raw={evo_result.get('raw_text','')[:300]}")
+        # Resolve instance WhatsApp number for logging (if stored in DB)
+        _inst_doc = db.db.instances.find_one({"name": instance}, {"number": 1}) or {}
+        _inst_number = _inst_doc.get("number") or "?"
+        print(
+            f"[SendMsg] from={instance}({_inst_number})"
+            f" to={send_to} (req={req.to_number})"
+            f" status={evo_result.get('status_code')}"
+            f" raw={evo_result.get('raw_text','')[:300]}"
+        )
         evo_json = evo_result.get("response_json", {})
         message_id = evo_json.get("key", {}).get("id") or evo_json.get("id")
         status = "sent" if evo_result.get("status_code") in (200, 201) else "failed"
@@ -325,6 +341,8 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                     upsert=True,
                 )
 
+        sender_instance = db.db.instances.find_one({"name": instance}, {"_id": 0, "number": 1})
+
         log_doc = {
             "channel": "whatsapp", "platform": "evolution", "direction": "outbound",
             "company_id": req.company_id, "to_number": req.to_number,
@@ -332,6 +350,8 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
             "status_code": evo_result.get("status_code"),
             "api_response": evo_json, "status": status,
             "sent_at": evo_result.get("sent_at"),
+            "instance_name": instance,
+            "instance_number": (sender_instance or {}).get("number") or "",
         }
         if x_user_token:
             sender = get_user_by_token(x_user_token)
@@ -358,6 +378,7 @@ def api_search(req: SearchRequest):
             req.industry, req.city or "", req.keywords or "",
             req.num_results, req.offset or 0,
             exclude_domains=known,
+            country=req.country,
         )
 
         # Flag domain-blacklisted results here (industry isn't known until the
@@ -453,6 +474,57 @@ def api_list_companies(
         return serialize(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/companies")
+def api_create_company(req: CreateCompanyRequest):
+    """Alta manual de una empresa desde la vista de Base de Datos — sin pasar
+    por el scraper, para cuando ya se conoce a un prospecto por otro medio."""
+    try:
+        from urllib.parse import urlparse as _urlparse
+        db = MongoDBManager()
+
+        name = req.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="El nombre es requerido")
+
+        website = (req.website or "").strip()
+        domain = ""
+        if website:
+            if not website.startswith("http"):
+                website = f"https://{website}"
+            domain = _urlparse(website).netloc.lower().replace("www.", "")
+
+        whatsapp = (req.whatsapp_number or "").strip()
+        has_whatsapp = bool(whatsapp)
+
+        company_id = db.insert_company({
+            "name": name,
+            "industry": (req.industry or "").strip(),
+            "city": (req.city or "").strip(),
+            "state": (req.state or "").strip(),
+            "website": website,
+            "domain": domain,
+            "description": (req.description or "").strip(),
+            "has_whatsapp": has_whatsapp,
+            "status": "manual",
+        })
+
+        if whatsapp:
+            db.insert_contact({
+                "company_id": company_id,
+                "type": "whatsapp",
+                "value": whatsapp,
+                "source": "manual",
+                "is_primary": True,
+            })
+
+        created = db.get_company_full_data(company_id)
+        return serialize(created)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.delete("/companies")
 def api_delete_companies(req: DeleteCompaniesRequest):
@@ -744,6 +816,53 @@ def api_put_ai_config(company_id: str, body: dict):
         db.db.conversation_ai_prefs.update_one(
             {"company_id": company_id},
             {"$set": update},
+            upsert=True,
+        )
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/conversations/ai-health")
+def api_get_ai_health():
+    """
+    Diagnóstico de por qué el seguimiento automático de IA podría estar en pausa
+    ahora mismo — para mostrarlo en la UI en vez de que el usuario tenga que
+    revisar logs cuando "deja de responder" sin ningún error visible.
+    """
+    try:
+        from app.llm_guard import circuit_is_open
+        from app.ai_followup import _is_business_hours
+        return {
+            "circuit_open": circuit_is_open(),
+            "business_hours_active": _is_business_hours(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/conversations/ai-global-config")
+def api_get_ai_global_config():
+    """Instrucción base global del Chat IA — normalmente bloqueada tras un candado en la UI."""
+    try:
+        from app.ai_followup import _DEFAULT_SYSTEM_PROMPT
+        db = MongoDBManager()
+        cfg = db.db.ai_global_config.find_one({"_id": "global"}) or {}
+        return {
+            "system_prompt":         cfg.get("system_prompt") or "",
+            "default_system_prompt": _DEFAULT_SYSTEM_PROMPT,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/conversations/ai-global-config")
+def api_put_ai_global_config(body: dict):
+    """Guarda (o limpia, si viene vacío) el override de la instrucción base global."""
+    try:
+        from datetime import datetime as _dt
+        db = MongoDBManager()
+        system_prompt = str(body.get("system_prompt") or "").strip()
+        db.db.ai_global_config.update_one(
+            {"_id": "global"},
+            {"$set": {"system_prompt": system_prompt, "updated_at": _dt.now()}},
             upsert=True,
         )
         return {"ok": True}
@@ -1927,29 +2046,29 @@ _DEFAULT_TEMPLATES = {
     "es": [
         {
             "name": "Industria + ciudad",
-            "text": "Hola {{nombre}}, encontré tu negocio de {{industria}} en {{ciudad}} y me gustaría presentarte algo que puede ayudarte. ¿Tienes un momento? 😊",
+            "text": "Hola 👋 vi su negocio de {{industria}} en {{ciudad}} y quería preguntar si tienen disponibilidad esta semana. ¿Me pueden compartir información?",
         },
         {
             "name": "Con giro del negocio",
-            "text": "Hola {{nombre}}, vi que tienes un negocio de {{industria}} y tengo algo que podría interesarte. ¿Tienes disponibilidad para platicar? 🙌",
+            "text": "Buenas, encontré su página de {{industria}} y me interesa cotizar el servicio. ¿Podrían darme más información?",
         },
         {
             "name": "Solo con nombre",
-            "text": "Hola {{nombre}}, encontré tu negocio en línea y me gustaría presentarte una propuesta. ¿Tienes un momento? 😊",
+            "text": "Hola, me recomendaron su negocio de {{industria}} en {{ciudad}} 🙌 ¿Siguen atendiendo? Quisiera saber precios.",
         },
     ],
     "en": [
         {
             "name": "Industry + city",
-            "text": "Hi {{nombre}}, I found your {{industria}} business in {{ciudad}} and I'd love to show you something that could help. Do you have a moment? 😊",
+            "text": "Hi 👋 I saw your {{industria}} business in {{ciudad}} — do you have availability this week? Could you share more info?",
         },
         {
             "name": "With business type",
-            "text": "Hi {{nombre}}, I saw you run a {{industria}} business and I have something that might interest you. Do you have time to chat? 🙌",
+            "text": "Hello, I found your {{industria}} page and I'm interested in a quote. Could you send me more details?",
         },
         {
             "name": "Name only",
-            "text": "Hi {{nombre}}, I found your business online and I'd love to show you a proposal. Do you have a moment? 😊",
+            "text": "Hi, someone recommended your {{industria}} business in {{ciudad}} 🙌 Are you still taking clients? I'd like to know pricing.",
         },
     ],
 }
@@ -2142,6 +2261,10 @@ def api_notifications_count(
         reply_count = db.db.message_logs.count_documents({
             "direction": "inbound",
             "created_at": {"$gte": cutoff},
+            # Excluir remitentes no reconocidos (company_id="unknown") — no aparecen
+            # en Chats (ver get_conversations) porque no hay empresa a la cual
+            # asociarlos, así que tampoco deberían generar ruido en la campanita.
+            "company_id": {"$nin": [None, "unknown", "undefined"]},
         })
         event_count = db.db.app_notifications.count_documents({
             "created_at": {"$gte": cutoff},
@@ -2162,7 +2285,10 @@ def api_notifications_list(x_user_token: Optional[str] = Header(None)):
         db = MongoDBManager()
         cutoff = datetime.utcnow() - timedelta(hours=_NOTIFICATIONS_WINDOW_HOURS)
         msgs = list(db.db.message_logs.find(
-            {"direction": "inbound", "created_at": {"$gte": cutoff}},
+            {
+                "direction": "inbound", "created_at": {"$gte": cutoff},
+                "company_id": {"$nin": [None, "unknown", "undefined"]},
+            },
             {"company_id": 1, "message_body": 1, "message_text": 1, "from_number": 1, "created_at": 1},
             sort=[("created_at", -1)],
             limit=50,
@@ -2336,6 +2462,7 @@ def api_create_scheduled_send(body: dict, x_user_token: Optional[str] = Header(N
         scheduled_at_str = body.get("scheduled_at", "")
         company_ids = body.get("company_ids") or []
         selected_numbers = body.get("selected_numbers") or []
+        send_config = body.get("send_config") or {}
 
         # `messages`: one or more text variants. When 2+, the scheduler
         # rotates between them at random so not every recipient gets the
@@ -2379,6 +2506,7 @@ def api_create_scheduled_send(body: dict, x_user_token: Optional[str] = Header(N
             "created_at": datetime.now(),
             "created_by_username": user.get("username", ""),
             "created_by_name": user.get("display_name", ""),
+            "send_config": send_config,
         }
         result = db.db.scheduled_sends.insert_one(doc)
         doc["_id"] = str(result.inserted_id)

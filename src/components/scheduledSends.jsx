@@ -15,6 +15,7 @@ import TextField from '@mui/material/TextField'
 import Chip from '@mui/material/Chip'
 import LinearProgress from '@mui/material/LinearProgress'
 import CircularProgress from '@mui/material/CircularProgress'
+import Skeleton from '@mui/material/Skeleton'
 import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
 import Checkbox from '@mui/material/Checkbox'
@@ -48,6 +49,7 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutlined'
 import { TemplateManagerDialog } from './messageTemplateLibrary'
 import { MIN_TEMPLATES_FOR_BULK } from '@/lib/messageVariants'
 import { HighlightedMessageInput } from './highlightedMessageInput'
+import { loadSendConfig } from '@/lib/sendConfig'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -132,11 +134,39 @@ function fmtTime(iso) {
   try { return new Date(iso).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) }
   catch { return '' }
 }
-function fmtNumber(raw) {
-  const d = (raw || '').replace(/\D/g, '')
+// Some scraped WhatsApp contacts have gotten saved with surrounding page text
+// glued to the phone number (e.g. a click-to-chat button's label + pre-filled
+// message + the number all concatenated) — a bad scrape, not a display quirk.
+// Pull out just the digit run that looks like a phone number instead of either
+// concatenating every stray digit in the string or showing the raw blob.
+export function extractPhoneDigits(raw) {
+  if (!raw) return ''
+  const match = String(raw).match(/\+?\d[\d\s\-()]{8,18}\d/)
+  return (match ? match[0] : raw).replace(/\D/g, '')
+}
+
+// A legit label is a short branch/location name ("Sucursal Centro", "Celaya").
+// Some legacy scrapes saved the entire text of a floating WhatsApp widget as the
+// label instead (icon captions + pre-filled chat message + city all glued
+// together) — reject anything that's too long or reads like a sentence rather
+// than a short name, instead of dumping a paragraph next to the phone number.
+export function isPlausibleLabel(label) {
+  if (!label) return false
+  const trimmed = label.trim()
+  if (trimmed.length === 0 || trimmed.length > 40) return false
+  if (/[¡!¿?]/.test(trimmed)) return false
+  if (trimmed.split(/\s+/).length > 6) return false
+  return true
+}
+
+export function fmtNumber(raw) {
+  const d = extractPhoneDigits(raw)
   if (d.length === 12) return `+${d.slice(0,2)} ${d.slice(2,5)} ${d.slice(5,8)} ${d.slice(8)}`
   if (d.length === 11) return `+${d.slice(0,1)} ${d.slice(1,4)} ${d.slice(4,7)} ${d.slice(7)}`
-  return raw || ''
+  if (d.length === 10) return `+52 ${d.slice(0,3)} ${d.slice(3,6)} ${d.slice(6)}`
+  // Unusual length — still better to show the cleaned digits than the raw,
+  // possibly paragraph-long, contaminated string.
+  return d || raw || ''
 }
 function isSameDay(a, b) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
@@ -214,19 +244,63 @@ function SendProgress({ sent, total }) {
 
 // ─── Company picker ───────────────────────────────────────────────────────────
 
-function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
+function CompanyCardSkeleton() {
+  return (
+    <Box sx={{ borderRadius: 2, overflow: 'hidden', border: '1px solid var(--border)', bgcolor: 'var(--card-bg, rgba(255,255,255,0.015))' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1.2, py: 0.7, minHeight: 44, bgcolor: 'var(--surface)' }}>
+        <Skeleton variant="rounded" width={18} height={18} sx={{ borderRadius: 0.5, flexShrink: 0, bgcolor: 'rgba(255,255,255,0.08)' }} />
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Skeleton variant="text" width="45%" sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
+          <Skeleton variant="text" width="25%" sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
+        </Box>
+        <Skeleton variant="rounded" width={30} height={16} sx={{ borderRadius: 1, flexShrink: 0, bgcolor: 'rgba(255,255,255,0.06)' }} />
+      </Box>
+      <Box sx={{ bgcolor: 'rgba(0,0,0,0.14)' }}>
+        {[0, 1, 2].map(i => (
+          <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 0.8, pl: 2.2, pr: 1.2, py: 0.45, minHeight: 32, borderTop: i > 0 ? '1px solid var(--border)' : 'none' }}>
+            <Skeleton variant="rounded" width={14} height={14} sx={{ borderRadius: 0.5, flexShrink: 0, bgcolor: 'rgba(255,255,255,0.06)' }} />
+            <Skeleton variant="text" width="55%" sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+const PICKER_PAGE_SIZE = 25
+
+export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeight = 240 }) {
   const { t } = useLang()
   const [companies,          setCompanies]          = useState([])
   const [loadingCo,          setLoadingCo]          = useState(true)
   const [search,             setSearch]             = useState('')
   const [industryFilter,     setIndustryFilter]     = useState('')
   const [showAllIndustries,  setShowAllIndustries]  = useState(false)
+  const [page,               setPage]               = useState(0)
   const MAX_IND = 4
 
   useEffect(() => {
+    let cancelled = false
     authFetch('/api/admin/companies-with-numbers')
-      .then(r => r.json()).then(d => setCompanies(Array.isArray(d) ? d : []))
-      .catch(() => {}).finally(() => setLoadingCo(false))
+      .then(r => r.json())
+      .then(async (d) => {
+        const list = Array.isArray(d) ? d : []
+        if (cancelled) return
+        setCompanies(list)
+        if (!list.length) return
+        // Overlay "already contacted" status — best-effort, never blocks the picker
+        // from rendering if this second call fails or is slow.
+        try {
+          const cRes = await authFetch('/api/companies/check-contacted', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ company_ids: list.map(c => c._id) }),
+          })
+          const contactedMap = await cRes.json()
+          if (!cancelled) setCompanies(list.map(c => ({ ...c, contacted: !!contactedMap[c._id]?.contacted })))
+        } catch { /* badge just stays hidden */ }
+      })
+      .catch(() => {}).finally(() => { if (!cancelled) setLoadingCo(false) })
+    return () => { cancelled = true }
   }, [])
 
   const industries = useMemo(() => [...new Set(companies.map(c => c.industry).filter(Boolean))].sort(), [companies])
@@ -235,6 +309,15 @@ function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
     if (search) { const q = search.toLowerCase(); return c.name.toLowerCase().includes(q) || (c.domain||'').toLowerCase().includes(q) }
     return true
   }), [companies, industryFilter, search])
+
+  // Paginated — rendering all matching companies (350+) with every number at once
+  // is what was causing the borders/checkboxes to visually collapse into a mess of
+  // overlapping lines and the scrollbar to disappear: too many DOM nodes for the
+  // browser to lay out and paint reliably in one shot.
+  useEffect(() => { setPage(0) }, [industryFilter, search])
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PICKER_PAGE_SIZE))
+  const pageSafe   = Math.min(page, totalPages - 1)
+  const paged      = filtered.slice(pageSafe * PICKER_PAGE_SIZE, (pageSafe + 1) * PICKER_PAGE_SIZE)
 
   const activeSet = useMemo(() => { const s = new Set(); companies.forEach(c => c.numbers.forEach(n => { if (n.active) s.add(n.number) })); return s }, [companies])
 
@@ -307,32 +390,59 @@ function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
         </Box>
       )}
 
-      <Box sx={{ maxHeight: 240, overflowY: 'auto' }}>
+      <Box sx={{ maxHeight: listMaxHeight, overflowY: 'auto', p: 1, display: 'flex', flexDirection: 'column', gap: 0.8 }}>
         {loadingCo ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}><CircularProgress size={20} sx={{ color: 'var(--accent,#3b82f6)' }} /></Box>
+          Array.from({ length: 6 }).map((_, i) => <CompanyCardSkeleton key={i} />)
         ) : filtered.length === 0 ? (
           <Box sx={{ textAlign: 'center', py: 3 }}><Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>Sin resultados</Typography></Box>
-        ) : filtered.map(company => {
+        ) : paged.map(company => {
           const sc = company.numbers.filter(n => selectedNums.has(n.number)).length
+          const total = company.numbers.length
+          const allCompanySel = sc === total && total > 0
+          const countSx = allCompanySel
+            ? { bgcolor: 'rgba(34,197,94,0.15)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.35)' }
+            : sc > 0
+              ? { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', color: 'var(--accent,#60a5fa)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)' }
+              : { bgcolor: 'var(--item-hover)', color: 'var(--text-muted)', border: '1px solid var(--border)' }
           return (
-            <Box key={company._id} sx={{ borderBottom: '1px solid var(--border)' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 0.7, '&:hover': { bgcolor: 'var(--item-hover)' } }}>
-                <Checkbox size="small" checked={sc === company.numbers.length && company.numbers.length > 0} indeterminate={sc > 0 && sc < company.numbers.length} onChange={() => toggleCompany(company)} sx={{ p: 0.3, color: 'var(--border)', '&.Mui-checked,&.MuiCheckbox-indeterminate': { color: 'var(--accent,#3b82f6)' } }} />
+            <Box key={company._id} sx={{
+              flexShrink: 0,
+              borderRadius: 2, overflow: 'hidden',
+              border: `1px solid ${sc > 0 ? 'rgba(var(--accent-rgb,59,130,246),0.3)' : 'var(--border)'}`,
+              bgcolor: 'var(--card-bg, rgba(255,255,255,0.015))',
+              transition: 'border-color 0.15s',
+            }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.2, py: 0.7, minHeight: 44, bgcolor: sc > 0 ? 'rgba(var(--accent-rgb,59,130,246),0.05)' : 'var(--surface)', '&:hover': { bgcolor: 'var(--item-hover)' } }}>
+                <Checkbox size="small" checked={allCompanySel} indeterminate={sc > 0 && sc < total} onChange={() => toggleCompany(company)} sx={{ p: 0.3, color: 'var(--border)', '&.Mui-checked,&.MuiCheckbox-indeterminate': { color: 'var(--accent,#3b82f6)' } }} />
                 <Box sx={{ flex: 1, minWidth: 0 }}>
-                  <Typography sx={{ color: 'var(--text)', fontSize: '0.8rem', fontWeight: 600, lineHeight: 1.2 }}>{company.name}</Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                    <Typography sx={{ color: 'var(--text)', fontSize: '0.8rem', fontWeight: 600, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{company.name}</Typography>
+                    {company.contacted && (
+                      <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.3, flexShrink: 0, bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 1, px: 0.6, py: 0.15 }}>
+                        <CheckCircleIcon sx={{ fontSize: 9, color: '#fbbf24' }} />
+                        <Typography sx={{ fontSize: '0.6rem', color: '#fbbf24', fontWeight: 700, whiteSpace: 'nowrap' }}>{t.campaign.contacted}</Typography>
+                      </Box>
+                    )}
+                  </Box>
                   {company.domain && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>{company.domain}</Typography>}
                 </Box>
-                <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem', flexShrink: 0 }}>{sc}/{company.numbers.length}</Typography>
+                <Chip label={`${sc}/${total}`} size="small" sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700, flexShrink: 0, ...countSx }} />
               </Box>
-              {company.numbers.map(n => {
+              <Box sx={{ bgcolor: 'rgba(0,0,0,0.14)', '[data-theme-mode="light"] &': { bgcolor: 'rgba(0,0,0,0.03)' } }}>
+                {company.numbers.map((n, ni) => {
                 const isSel = selectedNums.has(n.number)
                 return (
                   <Box key={n.number} onClick={() => toggle(n.number, { number: n.number, company_id: company._id, company_name: company.name, label: n.label, industry: company.industry, city: company.city, web: company.website })}
-                    sx={{ display: 'flex', alignItems: 'center', gap: 0.5, pl: 3.5, pr: 1.5, py: 0.4, cursor: 'pointer', bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.06)' : 'transparent', '&:hover': { bgcolor: 'var(--item-hover)' } }}>
+                    sx={{
+                      display: 'flex', alignItems: 'center', gap: 0.5, pl: 2.2, pr: 1.2, py: 0.45, minHeight: 32, cursor: 'pointer',
+                      borderTop: ni > 0 ? '1px solid var(--border)' : 'none',
+                      borderLeft: `2px solid ${isSel ? 'var(--accent,#3b82f6)' : 'transparent'}`,
+                      bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.12)' : 'transparent',
+                      '&:hover': { bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.16)' : 'var(--item-hover)' },
+                    }}>
                     <Checkbox size="small" checked={isSel} onChange={() => {}} sx={{ p: 0.25, color: 'var(--border)', '&.Mui-checked': { color: 'var(--accent,#3b82f6)' } }} />
                     <WhatsAppIcon sx={{ fontSize: 11, color: isSel ? '#25d366' : 'var(--text-muted)', flexShrink: 0 }} />
                     <Typography sx={{ color: isSel ? 'var(--text)' : 'var(--text-muted)', fontSize: '0.74rem', fontFamily: 'monospace', flex: 1 }}>{fmtNumber(n.number)}</Typography>
-                    {n.label && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>{n.label}</Typography>}
                     {n.active && (
                       <Tooltip title={t.sched.activeInCampaign}>
                         <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.2, bgcolor: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 1, px: 0.5, py: 0.1 }}>
@@ -343,11 +453,26 @@ function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
                     )}
                   </Box>
                 )
-              })}
+                })}
+              </Box>
             </Box>
           )
         })}
       </Box>
+
+      {totalPages > 1 && (
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, px: 1.5, py: 0.6, borderTop: '1px solid var(--border)' }}>
+          <IconButton size="small" disabled={pageSafe === 0} onClick={() => setPage(p => Math.max(0, p - 1))} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
+            <ChevronLeftIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', fontVariantNumeric: 'tabular-nums' }}>
+            {t.campaign.pageOf(pageSafe + 1, totalPages)}
+          </Typography>
+          <IconButton size="small" disabled={pageSafe >= totalPages - 1} onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
+            <ChevronRightIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Box>
+      )}
 
       <Box sx={{ px: 1.5, py: 0.8, borderTop: '1px solid rgba(255,255,255,0.07)', bgcolor: 'rgba(255,255,255,0.02)', display: 'flex', alignItems: 'center', gap: 1 }}>
         {selCount === 0
@@ -368,7 +493,7 @@ function CompanyPicker({ selectedNums, numInfoMap, onChange }) {
 // _pick_message) so a bulk send doesn't repeat identical text — the pattern
 // WhatsApp flags as bot-like and that can get a number banned.
 
-function MessageVariantsEditor({ messages, setMessages, recipientCount = 0, hasCityData = true }) {
+export function MessageVariantsEditor({ messages, setMessages, recipientCount = 0, hasCityData = true }) {
   const { t, lang } = useLang()
   const [savedTemplates, setSavedTemplates] = useState([])
   const [managerOpen,    setManagerOpen]    = useState(false)
@@ -511,6 +636,7 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
         name: name.trim(), messages: cleanMessages,
         scheduled_at: combined.format('YYYY-MM-DDTHH:mm:ss'),
         selected_numbers: [...selectedNums].map(n => numInfoMap.get(n)).filter(Boolean),
+        send_config: loadSendConfig(),
       }
       const res = await authFetch(
         isEdit ? `/api/admin/scheduled-sends/${editJob._id}` : '/api/admin/scheduled-sends',

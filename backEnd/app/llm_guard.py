@@ -40,8 +40,21 @@ _cb_open_until  = 0.0      # epoch; 0.0 means closed
 
 
 def circuit_is_open() -> bool:
-    """Return True if the circuit breaker is currently tripped."""
-    return time.time() < _cb_open_until
+    """
+    Return True if the circuit breaker is currently tripped.
+
+    When the open window has expired, also resets _cb_consecutive to 0 —
+    otherwise a single stale failure long after the original trip re-opens
+    the breaker instantly (since the old counter was already >= threshold),
+    making it look permanently stuck instead of giving the LLM a fresh
+    3-strikes chance once the cooldown has actually passed.
+    """
+    global _cb_consecutive, _cb_open_until
+    with _cb_lock:
+        if _cb_open_until and time.time() >= _cb_open_until:
+            _cb_consecutive = 0
+            _cb_open_until = 0.0
+        return time.time() < _cb_open_until
 
 
 def _cb_record_success() -> None:

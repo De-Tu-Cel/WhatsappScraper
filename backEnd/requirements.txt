@@ -12,3 +12,6 @@ openai>=1.30
 reportlab>=4.0
 playwright>=1.44
 httpx>=0.27
+
+# dev / test only
+pytest>=8.0

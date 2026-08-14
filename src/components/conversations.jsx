@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment, memo } from 'react'
 import { MAX_WA_MSG } from '@/lib/validators'
 import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
@@ -170,7 +170,8 @@ function ConversationItemSkeleton() {
   )
 }
 
-function ConversationItem({ conv, active, onClick }) {
+// Comparator ignores onClick (it's always () => setSelected(conv), stable behavior)
+const ConversationItem = memo(function _ConversationItem({ conv, active, onClick }) {
   const isInbound = conv.last_direction === 'inbound'
   const domain = conv.domain || conv.website?.replace(/https?:\/\/(www\.)?/, '').split('/')[0] || ''
   return (
@@ -269,7 +270,7 @@ function ConversationItem({ conv, active, onClick }) {
       </Box>
     </Box>
   )
-}
+}, (prev, next) => prev.active === next.active && prev.conv === next.conv)
 
 const MEDIA_LABELS = {
   '[sticker]':  { Icon: EmojiEmotionsIcon,   label: 'Sticker' },
@@ -394,7 +395,7 @@ function formatSenderNumber(raw) {
   return d ? `+${d}` : raw
 }
 
-function MessageBubble({ msg, onReply }) {
+const MessageBubble = memo(function _MessageBubble({ msg, onReply }) {
   const { lang } = useLang()
   const isOut  = msg.direction === 'outbound'
   const isAI   = Boolean(msg.ai_generated)
@@ -463,7 +464,7 @@ function MessageBubble({ msg, onReply }) {
       </Box>
     </Box>
   )
-}
+})
 
 export default function Conversations() {
   const [convs, setConvs]           = useState([])
@@ -473,6 +474,8 @@ export default function Conversations() {
   const [threadLoad, setThreadLoad] = useState(false)
   const [search, setSearch]         = useState('')
   const [reply, setReply]           = useState('')
+  const replyValueRef = useRef('')
+  replyValueRef.current = reply
   const [sending, setSending]       = useState(false)
   const [waNumbers, setWaNumbers]       = useState([])
   const [selectedNums, setSelectedNums] = useState([])
@@ -743,8 +746,8 @@ export default function Conversations() {
     }
   }, [selected, fetchThread, fetchCompanyNumbers, handleSync])
 
-  async function handleSendReply(overrideText = null) {
-    const text   = overrideText ?? reply
+  const handleSendReply = useCallback(async function handleSendReply(overrideText = null) {
+    const text   = overrideText ?? replyValueRef.current
     const toSend = selectedNums.length > 0 ? selectedNums : waNumbers.slice(0, 1)
     if (!text.trim() || !selected || toSend.length === 0) return
     setSendError('')
@@ -799,14 +802,14 @@ export default function Conversations() {
       setTimeout(() => setSendError(''), 8000)
     }
     finally { setSending(false) }
-  }
+  }, [selectedNums, waNumbers, thread, selected, fetchThread])
 
-  const filtered = convs.filter(c => {
+  const filtered = useMemo(() => convs.filter(c => {
     if (myConvsOnly && c.sent_by_username !== user?.username) return false
     const q = search.toLowerCase()
     return (c.company_name || '').toLowerCase().includes(q) ||
            (c.industry     || '').toLowerCase().includes(q)
-  })
+  }), [convs, myConvsOnly, user?.username, search])
 
   // Normalize: keep last 10 digits only for comparison
   const norm = n => (n || '').replace(/\D/g, '').slice(-10)
@@ -1102,7 +1105,7 @@ export default function Conversations() {
                       return (
                         <Fragment key={m._id}>
                           {showDivider && <DateDivider label={formatDateLabel(m.created_at, lang, t)} />}
-                          <MessageBubble msg={m} onReply={opt => handleSendReply(opt)} />
+                          <MessageBubble msg={m} onReply={handleSendReply} />
                         </Fragment>
                       )
                     })

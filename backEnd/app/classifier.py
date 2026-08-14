@@ -364,11 +364,14 @@ def _call_deepseek(messages: list, max_tokens: int = 280) -> str:
 
 _MENU_MARKERS = re.compile(
     r'\[Opciones:|\[Lista:|responde con el n[uú]mero|elige una opci[oó]n|'
-    r'escribe (?:el )?(?:1|2|3|un n[uú]mero)|selecciona una opci[oó]n',
+    r'escribe (?:el )?(?:1|2|3|un n[uú]mero)|selecciona (?:una|la) opci[oó]n',
     re.IGNORECASE,
 )
+# El separador tras el número también viene como guión ("1 - Autos nuevos"), no solo
+# punto/paréntesis ("1. Autos nuevos") — caso real (Nissan Vallejo) que se colaba
+# como "humano" porque ningún ítem de la lista hacía match.
 _MENU_LIST_ITEM = re.compile(
-    r'(?:^|\n)\s*(?:[0-9]{1,2}[.\)]|[*_]?[A-H][*_]?\s*[.\)-])\s+\S',
+    r'(?:^|\n)\s*(?:[0-9]{1,2}[.\)-]|[*_]?[A-H][*_]?\s*[.\)-])\s+\S',
     re.MULTILINE,
 )
 
@@ -376,9 +379,93 @@ _AUTO_REPLY_MARKERS = re.compile(
     r'folio|tkt-|ticket\s*#|ref(?:erencia)?\s*[:#]|tu mensaje es importante|'
     r'en breve (?:un asesor|te contactar)|hemos recibido tu (?:consulta|mensaje)|'
     r'nos comunicaremos a la brevedad|mensaje generado autom[aá]ticamente|'
-    r'estimado cliente|horario de atenci[oó]n',
+    r'estimado cliente|apreciable cliente|horario de atenci[oó]n|'
+    # "¿Sigues ahí?" / "Aquí sigo…" (nudge de continuidad de sesión) y mensajes de
+    # cola/espera ("está en la cola", "buscando un agente disponible") — encontrados
+    # repetidos en producción en varias empresas distintas (HSBC "Leo", KLM, Nissan
+    # Vallejo) SIEMPRE clasificados "humano" pese a ser lenguaje típico de bot/IVR
+    # que gestiona la sesión o la espera — ninguna otra regla los cubría.
+    r'sigues ah[ií]|aqu[ií] sigo|est[aá] en la cola|buscando (?:un|una) agente|'
+    r'espera un momento por favor|volver cuando quieras|'
+    # Mensaje de "saludo automático" de WhatsApp Business — patrón real muy común
+    # ("Bienvenido/a a [negocio]... gracias por contactarnos/escribirnos... te
+    # responderemos/atenderemos en breve/pronto") que el regex anterior no cubría
+    # y se colaba como "humano" (encontrado en producción: ~15 variantes reales
+    # para una sola empresa, todas con reacción casi instantánea).
+    r'bienvenid[oa]s?\s+a\b|gracias por (?:contactarnos|escribirnos|comunicarte|comunicarse)|'
+    r'te (?:responderemos|atenderemos|contestaremos)\b',
     re.IGNORECASE,
 )
+
+# Autoidentificación como bot/IA — señal fuerte y barata (sin LLM) de que la
+# respuesta la mandó un sistema, sin importar qué tan rápido llegó. El patrón
+# "soy...virtual" (sin exigir la palabra exacta "asistente") cubre variantes
+# reales encontradas en producción como "Soy Bell, el reclutador virtual de
+# Smart Fit" — la redacción literal "asistente virtual" no las detectaba.
+_BOT_SELFID_MARKERS = re.compile(
+    r'asistente virtual|soy (?:un|una)?\s*bot\b|chatbot|soy\s+\w+[,.]?\s*tu\s+asistente|'
+    r'\bsoy\b[^.!?\n]{0,45}\bvirtual\b|'
+    r'inteligencia artificial|🤖|envía\s*["\']?hola["\']?\s*para\s+(?:comenzar|empezar)|'
+    r'la sesi[oó]n ha finalizado|session (?:has )?ended',
+    re.IGNORECASE,
+)
+
+# Anuncio de handoff bot→humano — el propio sistema documenta este patrón como
+# "hibrido" (ver _PROMPT_TEMPLATE), pero el mensaje suele MENCIONAR literalmente
+# "asistente virtual" al referirse a lo que está reemplazando ("reemplazaré a
+# nuestro asistente virtual"), lo que sin este chequeo activaba por error
+# _looks_like_bot_selfid — un caso real de producción (KLM) mostró exactamente
+# este texto. No hay atajo determinista a "hibrido" (solo el LLM decide esa
+# categoría) — lo único que hace este chequeo es evitar clasificar como "bot"
+# con falsa certeza algo que en realidad anuncia lo contrario.
+_HANDOFF_MARKERS = re.compile(
+    r'reemplazar[eé] a (?:nuestro|nuestra)|se est[aá] comunicando con (?:un|una) agente|'
+    r'te atender[aá] (?:un|una) (?:asesor|agente|persona)|lo atender[aá] (?:un|una) (?:asesor|agente)|'
+    r'la atender[aá] (?:un|una) (?:asesor|agente)|un agente (?:humano|real)',
+    re.IGNORECASE,
+)
+
+
+def _looks_like_handoff_announcement(text: str) -> bool:
+    return bool(_HANDOFF_MARKERS.search(text or ""))
+
+# Saludos cortos e informales tal como los escribe una persona real desde el
+# celular — sin mayúscula inicial, sin acentos, alguna falta de ortografía.
+# Sirve para NO dejar que "hola"/"buenas tardes" caiga siempre en "automatico"
+# solo por haber llegado rápido, cuando el estilo de escritura ya delata humano.
+_CASUAL_HUMAN_GREETING = re.compile(
+    r'^\s*(hola|buenas?(?:\s+(?:dias?|tardes?|noches?))?|q\s*tal|que\s+tal|hey|oye|'
+    r'gracias|ok(?:ay)?|va(?:le)?|si\b|s[ií]\b|no\b|claro|perfecto|entendido)\b',
+    re.IGNORECASE,
+)
+
+
+def _looks_like_bot_selfid(text: str) -> bool:
+    if _looks_like_handoff_announcement(text):
+        return False
+    return bool(_BOT_SELFID_MARKERS.search(text or ""))
+
+
+def _looks_human_casual(text: str) -> bool:
+    """Heurística barata: mensaje corto, informal, con pinta de escrito rápido
+    desde el celular (sin mayúscula inicial, sin firma corporativa, sin señales
+    de bot) — no PRUEBA que sea humano, pero es la mejor señal barata que
+    tenemos para no etiquetar como "automatico" algo que en realidad se ve
+    como un saludo humano normal.
+    Tope de 20 caracteres (no 60): frases de plantilla tipo "gracias por
+    contactarnos, un asesor te escribirá pronto" o "en breve te atendemos"
+    también empiezan en minúscula o con una palabra "casual" ("gracias", "ok"),
+    pero son mucho más largas que un saludo real tecleado rápido desde el
+    celular ("hola", "buenas tardes!", "digame") — probado con ambos grupos
+    de ejemplos reales antes de fijar este número."""
+    t = (text or "").strip()
+    if not t or len(t) > 20:
+        return False
+    if _looks_like_menu(t) or _looks_like_auto_reply(t) or _looks_like_bot_selfid(t):
+        return False
+    starts_lowercase = t[0].islower()
+    is_casual_greeting = bool(_CASUAL_HUMAN_GREETING.match(t))
+    return starts_lowercase or is_casual_greeting
 
 
 def _looks_like_menu(text: str) -> bool:
@@ -498,8 +585,18 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
     for m in messages:
         role = "Representante" if m["direction"] == "outbound" else "Prospecto"
         body = (m.get("message_body") or "").strip()
-        if body:
-            lines.append(f"[{role}]: {body}")
+        if not body:
+            continue
+        if body in NON_TEXT_PLACEHOLDERS:
+            # classify_response() ya evita mandarle al LLM un marcador literal
+            # como "[audio]" como si fuera texto real (ver _has_real_text) —
+            # classify_conversation() no tenía la misma protección: el LLM
+            # recibía "[Prospecto]: [audio]" tal cual y alucinaba un juicio
+            # sobre "el tono" o "la claridad" de un mensaje sin contenido real
+            # (visto en producción: "[audio]" evaluado como "informal").
+            lines.append(f"[{role}]: (mensaje sin texto — audio/sticker/ubicación/contacto)")
+            continue
+        lines.append(f"[{role}]: {body}")
     thread = "\n".join(lines)
 
     prompt = _CONV_PROMPT_TEMPLATE.format(
@@ -744,21 +841,49 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
             )
             analysis["is_ai"] = is_ai
     else:
+        # Sin T2 confirmado (bot o no) — antes esto SIEMPRE caía en "automatico"
+        # sin mirar el contenido del primer mensaje. Si ese texto ya se ve como
+        # un saludo humano informal ("hola", "buenas tardes", sin mayúscula
+        # inicial) y no tiene ninguna señal de bot, es mejor etiquetarlo
+        # "humano" que un genérico "automatico" que no calza con lo que se ve
+        # en el chat.
+        original_text = probe_doc.get("message_body") or ""
+        reply_text = reply_body or ""
         if timed_out:
-            notes = f"Sin 2da respuesta tras {probe_wait_hours}h — determinista"
+            base_notes = f"Sin 2da respuesta tras {probe_wait_hours}h"
         elif t2_seconds is None:
             # Andy (el 2do mensaje) aún no se había enviado cuando llegó esta
             # respuesta — no hay con qué medir T2. Antes esto caía al f-string de
             # abajo con t2_seconds=None y tronaba con TypeError (silenciado por el
             # try/except de classify_and_save, dejando el mensaje sin clasificar).
-            notes = "2do mensaje (seguimiento automático) aún no enviado cuando llegó esta respuesta — determinista"
+            base_notes = "2do mensaje (seguimiento automático) aún no enviado cuando llegó esta respuesta"
         else:
-            notes = f"2do mensaje respondido en {t2_seconds:.0f}s (> {t2_threshold}s) — determinista"
-        analysis = _quick_result("automatico", notes)
+            base_notes = f"2do mensaje respondido en {t2_seconds:.0f}s (> {t2_threshold}s)"
+
+        # El prospecto puede mandar más de un mensaje antes de que salga nuestro
+        # 2do mensaje (Andy) — en ese caso reply_text es la respuesta MÁS RECIENTE,
+        # con más información que original_text (la primera). Si esa última muestra
+        # una señal fuerte de bot (menú, auto-respuesta, se autoidentifica), pesa más
+        # que el estilo casual del primer mensaje — antes se ignoraba por completo.
+        reply_has_bot_signal = bool(reply_text) and reply_text != original_text and (
+            _looks_like_menu(reply_text) or _looks_like_bot_selfid(reply_text) or _looks_like_auto_reply(reply_text)
+        )
+        if reply_has_bot_signal:
+            analysis = _quick_result(
+                "bot", f"{base_notes} — el mensaje más reciente muestra señal de bot ('{reply_text[:30]}') — determinista"
+            )
+        elif _looks_human_casual(original_text) or (reply_text and reply_text != original_text and _looks_human_casual(reply_text)):
+            sample = original_text if _looks_human_casual(original_text) else reply_text
+            analysis = _quick_result_unrated(
+                "humano", f"{base_notes} — sin señal de bot, estilo humano informal ('{sample[:30]}')"
+            )
+        else:
+            analysis = _quick_result("automatico", f"{base_notes} — determinista")
 
     # reaction_time_min reportado = T1 (velocidad de la PRIMERA respuesta), no T2 —
     # es la métrica que ya existía y que usa el resto del sistema.
     analysis["reaction_time_min"] = probe.get("t1_reaction_min")
+    analysis["reaction_time_seconds"] = probe.get("t1_reaction_seconds")
     analysis["business_hours"] = is_business_hours(received_at)
     analysis["classified_at"] = datetime.now().isoformat()
     analysis["pending_human_check"] = analysis.get("category") == "bot"
@@ -847,6 +972,20 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
         # ── T1 determinista — sin dato de tiempo, único caso que cae al LLM ───
         if raw_seconds is None:
             analysis = classify_response(inbound_body, outbound_body, reaction_time_min)
+        elif raw_seconds <= t1_threshold and _looks_like_menu(inbound_body):
+            # Menú numerado/con letra en el PRIMER mensaje — señal determinista
+            # e instantánea, no tiene caso esperar 1h de probe para confirmarlo.
+            analysis = _quick_result("bot", "Menú de opciones detectado en el primer mensaje — determinista")
+        elif raw_seconds <= t1_threshold and _looks_like_bot_selfid(inbound_body):
+            # El propio texto se autoidentifica como bot/IA ("soy tu asistente
+            # virtual", 🤖, etc.) — señal más fuerte y barata que esperar 1h a ver
+            # si llega un T2. No tiene caso meterlo al probe: ya sabemos qué es.
+            analysis = _quick_result("bot", "Se autoidentifica como bot/asistente virtual en el propio mensaje — determinista")
+        elif raw_seconds <= t1_threshold and _looks_like_auto_reply(inbound_body):
+            # Plantilla reconocible (folio, "tu mensaje es importante", horario de
+            # atención, etc.) llegando casi al instante — mismo trato: determinista,
+            # sin esperar al probe.
+            analysis = _quick_result("bot", "Plantilla de auto-respuesta detectada en el primer mensaje — determinista")
         elif raw_seconds <= t1_threshold:
             # Respuesta rápida — podría ser bot/agente IA/automatico. NO mandamos
             # nosotros un 2do mensaje aquí: el webhook (routes.py) ya activa a Andy
@@ -854,7 +993,9 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
             # el usuario lo haya desactivado) — solo marcamos el probe y esperamos a
             # ver si Andy contesta de forma natural. Si no contesta (fuera de horario,
             # detectó acuse automático, IA desactivada) el probe expira solo en 1h
-            # (ver _sweep_pending) y cae a "automatico".
+            # (ver _sweep_pending) y cae a "automatico" — o a "humano" si el texto de
+            # este primer mensaje ya se ve como un saludo humano informal (ver
+            # _looks_human_casual en _resolve_probe).
             db.db.message_logs.update_one(
                 {"_id": ObjectId(log_id)},
                 {"$set": {
@@ -864,14 +1005,26 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
                         "started_at": received_at,
                         "deadline": received_at + timedelta(hours=probe_wait_hours),
                         "t1_reaction_min": reaction_time_min,
+                        "t1_reaction_seconds": round(raw_seconds, 1),
                     },
                 }},
             )
             return
+        elif _looks_like_menu(inbound_body) or _looks_like_bot_selfid(inbound_body) or _looks_like_auto_reply(inbound_body):
+            # T1 > umbral pero el CONTENIDO igual muestra una señal fuerte de bot
+            # (menú, autoidentificación, plantilla) — la regla "lento = humano sin
+            # excepción" de abajo asumía que ningún bot tarda más de t1_threshold en
+            # responder, pero varios casos reales de producción sí lo hacen (IVR de
+            # varios pasos, delays de "escribiendo…", menús que llegan en un segundo
+            # mensaje separado) y se colaban como "humano" pese a ser obviamente bot.
+            analysis = _quick_result(
+                "bot", f"Señal de bot en el contenido pese a T1={raw_seconds:.0f}s > {t1_threshold}s — determinista"
+            )
         else:
-            # T1 > umbral — el ORIGEN es determinista: "humano", sin IA, sin excepción.
-            # La CALIDAD sí se intenta calificar aparte (llamada de IA separada, no
-            # decide categoría) — si falla o no hay LLM disponible, queda sin calificar.
+            # T1 > umbral y sin señal de bot en el contenido — el ORIGEN es
+            # determinista: "humano", sin IA. La CALIDAD sí se intenta calificar
+            # aparte (llamada de IA separada, no decide categoría) — si falla o no
+            # hay LLM disponible, queda sin calificar.
             analysis = _quick_result_unrated(
                 "humano", f"T1={raw_seconds:.0f}s > {t1_threshold}s — origen determinista, sin IA"
             )
@@ -880,6 +1033,9 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
                 analysis.update(quality)
 
         analysis["reaction_time_min"] = reaction_time_min
+        # Segundos exactos, sin redondear a bloques de 6s (0.1 min) — para mostrar
+        # el tiempo real en el reporte en vez de la versión redondeada.
+        analysis["reaction_time_seconds"] = round(raw_seconds, 1) if raw_seconds is not None else None
         analysis["business_hours"] = business_hours
         analysis["classified_at"] = datetime.now().isoformat()
 
@@ -928,6 +1084,32 @@ def classify_conversation_and_save(company_id: str, log_id: str):
         industry = company.get("industry", "")
 
         analysis = classify_conversation(company_id, company_name, industry)
+
+        # classify_conversation() nunca corre los chequeos deterministas (menú,
+        # autoidentificación, plantilla) — depende 100% del juicio del LLM sobre
+        # el hilo completo. Caso real de producción (Laboratorio del Chopo): una
+        # sesión 100% automatizada (saludo bot → menú → "¿sigues ahí?" → menú de
+        # nuevo) terminó con el último mensaje — un menú numerado literal —
+        # etiquetado "humano" porque el LLM juzgó mal el hilo completo. Si el
+        # mensaje al que se le va a adjuntar este veredicto muestra por sí solo
+        # una señal determinista fuerte de bot, esa señal pesa más que un
+        # "humano" del LLM — determinista y barato de verificar, sin riesgo de
+        # pisar un "hibrido" legítimo (solo se corrige cuando el LLM dijo humano).
+        if analysis.get("category") == "humano":
+            try:
+                last_msg = db.db.message_logs.find_one({"_id": ObjectId(log_id)}, {"message_body": 1})
+                last_body = (last_msg or {}).get("message_body") or ""
+                if _looks_like_menu(last_body) or _looks_like_bot_selfid(last_body) or _looks_like_auto_reply(last_body):
+                    analysis["category"] = "bot"
+                    analysis["is_ai"] = False
+                    analysis["notes"] = (
+                        (analysis.get("notes") or "").strip()
+                        + " — corregido: el último mensaje muestra una señal determinista de bot "
+                          "(menú/plantilla/autoidentificación) que contradice el veredicto de la IA."
+                    ).strip(" —")
+            except Exception:
+                pass
+
         analysis["classified_at"] = datetime.now().isoformat()
         analysis["pending_human_check"] = False
         db.save_message_analysis(log_id, analysis)
@@ -945,7 +1127,13 @@ _SWEEP_INTERVAL_SEC = 300
 def _sweep_pending():
     try:
         db = MongoDBManager()
-        now = datetime.now()
+        # Naive-pero-UTC — se compara contra probe.deadline/created_at (guardados en
+        # UTC real) y se pasa a is_business_hours() más abajo, que asume UTC cuando
+        # no hay tzinfo. datetime.now() (hora local del servidor) desfasaba esto
+        # exactamente igual que el bug ya arreglado en el webhook — los probes
+        # tardaban horas de más (o de menos) en expirar según la hora local del
+        # servidor vs. UTC real.
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         _, _, _, no_reply_wait_minutes = _get_thresholds(db)
 
         db.db.message_logs.update_many(

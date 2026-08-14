@@ -22,6 +22,7 @@ class SearchRequest(BaseModel):
     num_results: Optional[int] = 10
     offset: Optional[int] = 0
     country: Optional[str] = None
+    already_shown_domains: Optional[List[str]] = []  # domains from earlier pages of this same search — excluded so "load more" doesn't repeat them
 
 class CheckUrlsRequest(BaseModel):
     urls: List[str]
@@ -135,6 +136,7 @@ class EvolutionStatusUpdate(BaseModel):
 class ReportRequest(BaseModel):
     screenshot_b64: Optional[str] = None
     filter_number:  Optional[str] = None
+    force:          Optional[bool] = False
 
 class UpdateContactsRequest(BaseModel):
     whatsapp_numbers: List[str] = []

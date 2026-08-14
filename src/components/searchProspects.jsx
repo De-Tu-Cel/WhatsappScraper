@@ -252,6 +252,9 @@ export default function SearchProspects() {
   const [searching,    setSearching]    = useState(false)
   const [searchError,  setSearchError]  = useState(false)
   const [visibleCount, setVisibleCount] = useState(10)
+  const [nextOffset,   setNextOffset]   = useState(0)
+  const [serverExhausted, setServerExhausted] = useState(false)
+  const [fetchingMore, setFetchingMore] = useState(false)
   const [found,         setFound]         = useState([])
   const [processing,  setProcessing]  = useState(false)
   const [paused,      setPaused]      = useState(false)
@@ -367,6 +370,7 @@ export default function SearchProspects() {
     const ctrl = new AbortController()
     abortSearchRef.current = ctrl
     setSearching(true); setFound([]); setResults([]); setDone(false); setVisibleCount(numResults); setFilterScraped('all'); setSearchError(false)
+    setServerExhausted(false); setNextOffset(0)
     try {
       const res = await fetch('/api/search', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -374,10 +378,11 @@ export default function SearchProspects() {
         signal: ctrl.signal,
       })
       if (!res.ok) throw new Error()
-      const { urls, results: searchResults } = await res.json()
+      const { urls, results: searchResults, next_offset } = await res.json()
       const blockedMap = Object.fromEntries((searchResults || []).map(r => [r.url, r]))
       const marked = await fetchAndMark(urls, blockedMap)
       setFound(marked)
+      setNextOffset(next_offset || 0)
       if (marked.length === 0) setSearchError(true)
     } catch (err) {
       if (err?.name !== 'AbortError') setSearchError(true)
@@ -386,8 +391,44 @@ export default function SearchProspects() {
     }
   }
 
-  function handleLoadMore() {
-    setVisibleCount(c => Math.min(c + numResults, found.length))
+  // "Cargar más": si ya hay resultados sin mostrar del lote traído, solo revela
+  // más localmente (gratis, sin llamada al servidor). Cuando ya se mostró todo
+  // el lote, sí vuelve a pedirle al backend la siguiente tanda (paginación real
+  // sobre Bright Data — ver next_offset en /search), en vez de quedarse ahí.
+  async function handleLoadMore() {
+    if (visibleCount < found.length) {
+      setVisibleCount(c => Math.min(c + numResults, found.length))
+      return
+    }
+    if (fetchingMore || serverExhausted || !lastIndustry) return
+    setFetchingMore(true)
+    try {
+      const alreadyShown = found.map(r => getDomain(r.url))
+      const res = await fetch('/api/search', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          industry: lastIndustry, num_results: numResults,
+          offset: nextOffset, already_shown_domains: alreadyShown,
+        }),
+      })
+      if (!res.ok) throw new Error()
+      const { urls, results: searchResults, next_offset } = await res.json()
+      setNextOffset(next_offset || nextOffset)
+      const blockedMap = Object.fromEntries((searchResults || []).map(r => [r.url, r]))
+      const marked = await fetchAndMark(urls, blockedMap)
+      const seen = new Set(alreadyShown)
+      const fresh = marked.filter(m => !seen.has(getDomain(m.url)))
+      if (fresh.length === 0) {
+        setServerExhausted(true)
+      } else {
+        setFound(prev => [...prev, ...fresh])
+        setVisibleCount(vc => vc + fresh.length)
+      }
+    } catch {
+      // silencioso — el botón sigue disponible para reintentar
+    } finally {
+      setFetchingMore(false)
+    }
   }
 
   // "Select all" only selects new ones — scraped/blocked ones are never auto-selected
@@ -799,11 +840,15 @@ export default function SearchProspects() {
                 </Box>
               )
             })}
-            {visibleCount < found.length && (
+            {(visibleCount < found.length || !serverExhausted) && (
               <Box sx={{ p: 1.5, display: 'flex', justifyContent: 'center', borderTop: '1px solid var(--border)' }}>
-                <Button size="small" onClick={handleLoadMore}
-                  sx={{ color: 'var(--accent, #60a5fa)', fontSize: '0.78rem', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.2)', borderRadius: 1.5, px: 2, textTransform: 'none', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)' } }}>
-                  {t.search.showMoreBtn} {Math.min(numResults, found.length - visibleCount)} {t.search.showMore} ({found.length - visibleCount} {t.search.remaining})
+                <Button size="small" onClick={handleLoadMore} disabled={fetchingMore}
+                  sx={{ color: 'var(--accent, #60a5fa)', fontSize: '0.78rem', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.2)', borderRadius: 1.5, px: 2, textTransform: 'none', gap: 0.8, '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)' }, '&.Mui-disabled': { color: 'rgba(96,165,250,0.4)', borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.1)' } }}>
+                  {fetchingMore
+                    ? <><CircularProgress size={13} sx={{ color: 'inherit' }} />{lang === 'en' ? 'Searching for more…' : 'Buscando más…'}</>
+                    : visibleCount < found.length
+                      ? `${t.search.showMoreBtn} ${Math.min(numResults, found.length - visibleCount)} ${t.search.showMore} (${found.length - visibleCount} ${t.search.remaining})`
+                      : (lang === 'en' ? 'Search for more results' : 'Buscar más resultados')}
                 </Button>
               </Box>
             )}

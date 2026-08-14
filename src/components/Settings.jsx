@@ -347,7 +347,7 @@ function AccountSection({ user }) {
                 const s = inst.live_status || 'unknown'
                 const isConn = ['open','connected'].includes(s)
                 const isConnecting = s === 'connecting'
-                const dot = isConn ? '#22c55e' : isConnecting ? '#f59e0b' : 'rgba(255,255,255,0.2)'
+                const dot = isConn ? '#22c55e' : isConnecting ? '#f59e0b' : '#64748b'
                 const label = isConn
                   ? (lang === 'en' ? 'Connected' : 'Conectada')
                   : isConnecting
@@ -522,7 +522,7 @@ function SendTimingSection() {
 
 export default function Settings() {
   const { user }                = useUser()
-  const { t }                    = useLang()
+  const { t, lang }              = useLang()
   const [settings, setSettings] = useState(DEFAULT_SETTINGS)
   const [evo,  setEvo]          = useState(DEFAULT_EVO)
   const [activeTab,  setActiveTab]  = useState(0)
@@ -574,7 +574,7 @@ export default function Settings() {
         const d = await r.json()
         const all = Array.isArray(d) ? d : (d.instances || [])
         const mine = all.filter(i => i.assigned_to === uid)
-        const connected = mine.filter(i => ['open','connected'].includes(i.live_status))
+        const connected = mine.filter(i => ['open','connected','WORKING'].includes(i.live_status))
         if (connected.length > 0) {
           setConnStatus('connected')
           setConnPhone(connected[0].number ? `+${connected[0].number}` : connected[0].name)
@@ -593,35 +593,34 @@ export default function Settings() {
   const fetchQr = useCallback(async (name, retries = 4) => {
     for (let i = 0; i < retries; i++) {
       try {
-        const r = await fetch(`/api/evolution/instance/${name}?type=qr`)
+        const r = await fetch(`/api/waha/session/qr/${name}`)
         const d = await r.json()
-        const b64 = d.base64 || d.qrcode?.base64 || d.qr?.base64
+        const b64 = d.base64
         if (b64) {
           setQrImage(b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`)
           if (qrTimerRef.current) { clearInterval(qrTimerRef.current); qrTimerRef.current = null; setQrWaitSecs(0) }
-          return true  // QR received
+          return true
         }
       } catch {}
       if (i < retries - 1) await new Promise(r => setTimeout(r, 1500))
     }
-    return false  // no QR after all retries
+    return false
   }, [])
 
   const checkStatus = useCallback(async (name) => {
     try {
-      const r = await fetch(`/api/evolution/instance/${name}?type=status`)
+      const r = await fetch(`/api/waha/session/status/${name}`)
       const d = await r.json()
-      const state = d.instance?.state || d.state || ''
+      const state = d.state || d.instance?.state || ''
       if (state === 'open') {
         stopPolling()
         setQrStatus('connected')
-        const phone = d.instance?.profileName || d.instance?.wid?.user || name
+        const phone = d.number || name
         setQrPhone(phone)
         saveEvoConfig({ ...loadEvoConfig(), instance: name })
         setEvo(prev => ({ ...prev, instance: name }))
         setConnStatus('connected')
         setConnPhone(phoneInput || phone)
-        // Save instance + phone to user profile in backend
         const token = localStorage.getItem('user_token')
         if (token) {
           fetch('/api/auth/evolution', {
@@ -635,7 +634,6 @@ export default function Settings() {
   }, [stopPolling])
 
   async function handleConnect() {
-    // Open phone input step first
     setPhoneInput('')
     setQrStatus('phone')
     setQrImage(null)
@@ -648,17 +646,16 @@ export default function Settings() {
     saveEvo({ instance: instanceName })
     setQrStatus('creating')
 
-    // Step 1: check if instance already exists and is connected
+    // Step 1: check if WAHA session already exists and is connected
     try {
-      const statusRes = await fetch(`/api/evolution/instance/${instanceName}?type=status`)
+      const statusRes = await fetch(`/api/waha/session/status/${instanceName}`)
       if (statusRes.ok) {
         const statusData = await statusRes.json()
-        const state = statusData?.instance?.state || statusData?.state || ''
+        const state = statusData?.state || statusData?.instance?.state || ''
         if (state === 'open') {
-          // Already connected — no QR needed
           stopPolling()
           setQrStatus('connected')
-          const phone = statusData?.instance?.profileName || statusData?.instance?.wid?.user || instanceName
+          const phone = statusData?.number || instanceName
           setQrPhone(phone)
           saveEvoConfig({ ...loadEvoConfig(), instance: instanceName })
           setEvo(prev => ({ ...prev, instance: instanceName }))
@@ -667,45 +664,48 @@ export default function Settings() {
           if (qrTimerRef.current) { clearInterval(qrTimerRef.current); qrTimerRef.current = null }
           return
         }
-        // Instance exists but not connected — delete so we can recreate with fresh QR
-        await fetch(`/api/evolution/instance/${instanceName}`, { method: 'DELETE' }).catch(() => {})
-        await new Promise(r => setTimeout(r, 1500))
+        // Session exists but not connected — delete and recreate for fresh QR
+        await fetch(`/api/waha/session/${instanceName}`, { method: 'DELETE' }).catch(() => {})
+        await new Promise(r => setTimeout(r, 1000))
       }
     } catch {}
 
-    // Step 2: create instance — QR comes back directly in response (qrcode: true)
+    // Step 2: create WAHA session (QR is not in create response — fetched separately)
     setQrStatus('waiting')
     setQrWaitSecs(0)
     qrTimerRef.current = setInterval(() => setQrWaitSecs(s => s + 1), 1000)
     try {
-      const res = await fetch('/api/evolution/instance', {
+      const res = await fetch('/api/waha/session/create', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instanceName }),
+        body: JSON.stringify({ name: instanceName }),
       })
       const data = await res.json()
       if (!res.ok) {
         setQrStatus('error')
         setQrImage(null)
-        console.error('[QR] instance create error:', data.detail)
+        console.error('[QR] WAHA session create error:', data.detail || data.error)
         if (qrTimerRef.current) { clearInterval(qrTimerRef.current); qrTimerRef.current = null }
         return
       }
-      if (data?.hash) saveEvo({ apiKey: data.hash })
-      const b64 = data?.qrcode?.base64
-      if (b64) {
-        setQrImage(b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`)
-        if (qrTimerRef.current) { clearInterval(qrTimerRef.current); qrTimerRef.current = null; setQrWaitSecs(0) }
-      }
-      await fetch('/api/evolution/instance/webhook', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instanceName }),
-      }).catch(() => {})
+      // Wait for session to initialize then fetch QR
+      await new Promise(r => setTimeout(r, 2500))
+      await fetchQr(instanceName)
     } catch (e) {
-      console.error('[QR] instance create exception:', e)
+      console.error('[QR] WAHA session create exception:', e)
     }
 
+    let qrShown = false
+    let pollAttempts = 0
     pollRef.current = setInterval(async () => {
+      pollAttempts++
+      if (!qrShown) qrShown = await fetchQr(instanceName)
       await checkStatus(instanceName)
+      // Auto-timeout after ~36s (12 × 3s) with no QR — avoids infinite spinner
+      if (!qrShown && pollAttempts >= 12) {
+        stopPolling()
+        if (qrTimerRef.current) { clearInterval(qrTimerRef.current); qrTimerRef.current = null }
+        setQrStatus('error')
+      }
     }, 3000)
   }
 
@@ -934,20 +934,36 @@ export default function Settings() {
               <Box sx={{ width: 64, height: 64, borderRadius: '50%', bgcolor: 'rgba(37,211,102,0.15)', border: '2px solid #25d366', display: 'flex', alignItems: 'center', justifyContent: 'center', mx: 'auto', mb: 2 }}>
                 <CheckIcon sx={{ color: '#25d366', fontSize: 32 }} />
               </Box>
-              <Typography sx={{ color: '#25d366', fontWeight: 700, fontSize: '1rem' }}>¡Número vinculado!</Typography>
+              <Typography sx={{ color: '#25d366', fontWeight: 700, fontSize: '1rem' }}>
+                {lang === 'en' ? 'Number linked!' : '¡Número vinculado!'}
+              </Typography>
               <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.85rem', mt: 0.5, fontFamily: 'monospace' }}>{phoneInput || qrPhone}</Typography>
-              <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem', mt: 0.5 }}>Los mensajes saldrán desde este número</Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem', mt: 0.5 }}>
+                {lang === 'en' ? 'Messages will be sent from this number' : 'Los mensajes saldrán desde este número'}
+              </Typography>
               <Box onClick={handleCloseQr} sx={{ mt: 2.5, px: 3, py: 0.8, borderRadius: 2, cursor: 'pointer', display: 'inline-block', bgcolor: 'rgba(37,211,102,0.15)', border: '1px solid rgba(37,211,102,0.3)', '&:hover': { bgcolor: 'rgba(37,211,102,0.25)' } }}>
-                <Typography sx={{ color: '#25d366', fontSize: '0.82rem', fontWeight: 600 }}>Listo</Typography>
+                <Typography sx={{ color: '#25d366', fontSize: '0.82rem', fontWeight: 600 }}>
+                  {lang === 'en' ? 'Done' : 'Listo'}
+                </Typography>
               </Box>
             </Box>
           )}
 
           {qrStatus === 'error' && (
-            <Box sx={{ py: 1.5, px: 2, bgcolor: 'rgba(248,113,113,0.06)', borderRadius: 2, border: '1px solid rgba(248,113,113,0.2)' }}>
-              <Typography sx={{ color: '#f87171', fontSize: '0.85rem' }}>
-                No se pudo crear la instancia. Verifica que Evolution API esté activo y la API Key sea correcta.
+            <Box sx={{ py: 2, px: 2, bgcolor: 'rgba(248,113,113,0.06)', borderRadius: 2, border: '1px solid rgba(248,113,113,0.2)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+              <Typography sx={{ color: '#f87171', fontSize: '0.85rem', textAlign: 'center' }}>
+                {lang === 'en'
+                  ? 'Could not generate QR. Make sure the WAHA server is running and the API Key is correct.'
+                  : 'No se pudo generar el QR. Verifica que el servidor WAHA esté activo y la API Key sea correcta.'}
               </Typography>
+              <Box onClick={handleStartConnection}
+                sx={{ px: 2.5, py: 0.7, borderRadius: 2, cursor: 'pointer',
+                  bgcolor: 'rgba(248,113,113,0.12)', border: '1px solid rgba(248,113,113,0.3)',
+                  '&:hover': { bgcolor: 'rgba(248,113,113,0.22)' } }}>
+                <Typography sx={{ color: '#f87171', fontSize: '0.82rem', fontWeight: 600 }}>
+                  {lang === 'en' ? 'Retry' : 'Reintentar'}
+                </Typography>
+              </Box>
             </Box>
           )}
         </DialogContent>

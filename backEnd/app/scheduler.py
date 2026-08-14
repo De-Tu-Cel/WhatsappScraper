@@ -8,8 +8,10 @@ from datetime import datetime
 
 log = logging.getLogger(__name__)
 
-_POLL_INTERVAL_SEC = 60  # check for due jobs every minute
-_REMINDER_LEAD_MIN = 60  # notify ~1h before a scheduled campaign fires
+_POLL_INTERVAL_SEC = 60        # check for due jobs every minute
+_REMINDER_LEAD_MIN = 60        # notify ~1h before a scheduled campaign fires
+_HEARTBEAT_INTERVAL_SEC = 4 * 3600  # ping idle WAHA sessions every 4 hours
+_last_heartbeat_at = 0.0
 
 
 def _render_message(text: str, name: str = "", industry: str = "", city: str = "", website: str = "") -> str:
@@ -107,6 +109,109 @@ def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_i
     except Exception:
         log.exception("[Scheduler] _send_via_evolution failed for company=%s to=%s", company_id, to_number)
         return False
+
+
+def _send_via_waha(db, company_id: str, to_number: str, message: str, job_id: str, delay_ms: int = 0, session: str = ""):
+    """Send a single WhatsApp message via WAHA and log it."""
+    from app.config import WAHA_API_KEY, WAHA_API_URL
+    from app.whatsapp_waha import WAHAClient, pick_connected_instance as waha_pick
+
+    if not WAHA_API_KEY:
+        log.warning("[Scheduler] WAHA not configured — skipping %s", to_number)
+        return False
+    try:
+        active_session = session or waha_pick(db, WAHA_API_URL, WAHA_API_KEY)
+        if not active_session:
+            log.warning("[Scheduler] WAHA: no session connected — skipping %s", to_number)
+            return False
+
+        waha = WAHAClient(WAHA_API_URL, WAHA_API_KEY, active_session)
+
+        from app.whatsapp_waha import _clean_digits as _wc
+        real_jid_num  = waha.get_jid(to_number)
+        _phone_digits = _wc(to_number)
+        # Always store phone digits — webhook delivers @c.us (never @lid)
+        db.db.jid_map.update_one(
+            {"jid": _phone_digits},
+            {"$set": {"company_id": company_id, "to_number": to_number, "updated_at": datetime.now()}},
+            upsert=True,
+        )
+        if real_jid_num and real_jid_num != _phone_digits:
+            db.db.jid_map.update_one(
+                {"jid": real_jid_num},
+                {"$set": {"company_id": company_id, "to_number": to_number, "updated_at": datetime.now()}},
+                upsert=True,
+            )
+
+        # Save as contact before sending — reduces spam/ban signals
+        try:
+            from bson import ObjectId as _OId
+            if company_id and len(company_id) == 24:
+                _co = db.db.companies.find_one({"_id": _OId(company_id)}, {"name": 1})
+                _co_name = (_co or {}).get("name", "")
+                if _co_name:
+                    waha.label_contact(_phone_digits, _co_name)
+        except Exception:
+            pass
+
+        waha_result = waha.send_text(to_number, message, delay_ms=delay_ms)
+        waha_json   = waha_result.get("response_json", {})
+        message_id  = waha_json.get("id") or waha_json.get("key", {}).get("id")
+
+        # Reachout Timelock — WA shadow-restricts the account (error 463)
+        # Do NOT retry; the restriction lifts automatically.
+        raw_text = waha_result.get("raw_text", "")
+        if "463" in raw_text or waha_result.get("status_code") == 463:
+            log.error("[Scheduler] WAHA ⛔ Reachout Timelock (error 463) on session=%s — pausando envíos nuevos", active_session)
+            db.db.instances.update_one({"name": active_session},
+                {"$set": {"reachout_timelock": True, "reachout_locked_at": datetime.now()}})
+            return False
+
+        status      = "sent" if waha_result.get("status_code") in (200, 201) else "failed"
+
+        db.insert_message_log({
+            "channel": "whatsapp",
+            "platform": "waha",
+            "direction": "outbound",
+            "company_id": company_id,
+            "to_number": to_number,
+            "message_body": message,
+            "message_text": message,
+            "message_id": message_id,
+            "status_code": waha_result.get("status_code"),
+            "api_response": waha_json,
+            "status": status,
+            "sent_at": waha_result.get("sent_at"),
+            "sent_by_username": "scheduler",
+            "sent_by_name": "Envio programado",
+            "scheduled_send_id": job_id,
+            "analysis_status": None,
+        })
+        log.info("[Scheduler] WAHA job=%s company=%s to=%s status=%s", job_id, company_id, to_number, status)
+        return status == "sent"
+    except Exception:
+        log.exception("[Scheduler] _send_via_waha failed for company=%s to=%s", company_id, to_number)
+        return False
+
+
+def _send_message(db, company_id: str, to_number: str, message: str, job_id: str, delay_ms: int = 0):
+    """Route to WAHA or Evolution based on the company's assigned instance provider."""
+    try:
+        from bson import ObjectId
+        if company_id and len(company_id) == 24:
+            co = db.db.companies.find_one({"_id": ObjectId(company_id)}, {"assigned_instance": 1})
+            inst_name = (co or {}).get("assigned_instance")
+            if inst_name:
+                inst_doc = db.db.instances.find_one({"name": inst_name}, {"provider": 1})
+                if inst_doc and inst_doc.get("provider") == "waha":
+                    return _send_via_waha(db, company_id, to_number, message, job_id, delay_ms, session=inst_name)
+    except Exception:
+        pass
+    # Fallback: if only WAHA is configured (no Evolution key), use WAHA
+    from app.config import WAHA_API_KEY, EVOLUTION_API_KEY
+    if WAHA_API_KEY and not EVOLUTION_API_KEY:
+        return _send_via_waha(db, company_id, to_number, message, job_id, delay_ms)
+    return _send_via_evolution(db, company_id, to_number, message, job_id, delay_ms)
 
 
 def _execute_send_job(job_id: str):
@@ -211,7 +316,7 @@ def _execute_send_job(job_id: str):
                     message_variant, company_name,
                     num_info.get("industry", ""), num_info.get("city", ""), num_info.get("web", ""),
                 )
-                ok = _send_via_evolution(db, cid, to_number, message, job_id, delay_ms=typing_ms)
+                ok = _send_message(db, cid, to_number, message, job_id, delay_ms=typing_ms)
                 if ok:
                     sent_count += 1
                 else:
@@ -292,7 +397,7 @@ def _execute_send_job(job_id: str):
                 message_variant = _pick_message(messages, last_text)
                 last_text = message_variant
                 message = _render_message(message_variant, company_name, company_industry, company_city, company_web)
-                ok = _send_via_evolution(db, cid, to_number, message, job_id, delay_ms=typing_ms)
+                ok = _send_message(db, cid, to_number, message, job_id, delay_ms=typing_ms)
                 send_index += 1
                 if ok:
                     sent_count += 1
@@ -403,12 +508,55 @@ def _check_reminders():
         log.exception("[Scheduler] _check_reminders failed")
 
 
+def _heartbeat_idle_waha_sessions():
+    """Ping presence for WAHA sessions idle >3h so WhatsApp doesn't disconnect them.
+
+    WAHA PR #1586 added maintainPresenceOnline() — a set_presence("available") call
+    triggers it internally, resetting the inactivity timer without sending notifications.
+    """
+    from app.config import WAHA_API_KEY, WAHA_API_URL
+    if not WAHA_API_KEY:
+        return
+    try:
+        import requests as _req
+        from app.whatsapp_waha import WAHAClient
+        _idle_threshold = 3 * 3600  # 3 hours in seconds
+        r = _req.get(f"{WAHA_API_URL}/api/sessions",
+                     headers={"X-Api-Key": WAHA_API_KEY},
+                     params={"all": "false"}, timeout=5)
+        sessions = r.json() if r.ok else []
+        now_ts = time.time()
+        for s in sessions:
+            if s.get("status") != "WORKING":
+                continue
+            session_name = s.get("name", "")
+            if not session_name:
+                continue
+            last_ts = s.get("lastActivityTimestamp")
+            if last_ts:
+                # WAHA returns epoch-ms; convert to seconds for comparison
+                last_ts_sec = last_ts / 1000 if last_ts > 1e10 else float(last_ts)
+                idle_sec = now_ts - last_ts_sec
+            else:
+                idle_sec = _idle_threshold + 1  # no timestamp = treat as idle
+            if idle_sec > _idle_threshold:
+                WAHAClient(WAHA_API_URL, WAHA_API_KEY, session_name).set_presence("available")
+                log.info("[Heartbeat] pinged presence for idle session=%s (idle=%.1fh)",
+                         session_name, idle_sec / 3600)
+    except Exception:
+        log.exception("[Heartbeat] _heartbeat_idle_waha_sessions failed")
+
+
 def start_scheduler():
     """Launch the scheduled-sends polling loop as a daemon thread. Call once at startup."""
     def _loop():
+        global _last_heartbeat_at
         while True:
             _poll_and_dispatch()
             _check_reminders()
+            if time.time() - _last_heartbeat_at >= _HEARTBEAT_INTERVAL_SEC:
+                _heartbeat_idle_waha_sessions()
+                _last_heartbeat_at = time.time()
             time.sleep(_POLL_INTERVAL_SEC)
 
     t = threading.Thread(target=_loop, daemon=True, name="scheduler-poll")

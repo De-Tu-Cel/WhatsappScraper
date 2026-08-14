@@ -1,13 +1,13 @@
 'use client'
-import { useState, useMemo, useRef } from 'react'
-import { authFetch } from '@/lib/api'
+import { useState, useMemo, useEffect } from 'react'
 import { useLang } from '../context/LangContext'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
+import { useSendQueue } from '../context/SendQueueContext'
 import { CompanyPicker, extractPhoneDigits } from './scheduledSends'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
-import { SendConfigPanel, CountdownBar } from './SendConfigPanel'
-import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
-import { loadSendConfig, randMsgDelayMs, randBatchBreakMs, randBatchSize } from '@/lib/sendConfig'
+import { SendConfigPanel } from './SendConfigPanel'
+import { InstanceDisconnectedBanner } from './InstanceStatusBanner'
+import { loadSendConfig } from '@/lib/sendConfig'
 import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
@@ -15,8 +15,6 @@ import Chip from '@mui/material/Chip'
 import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
 import LinearProgress from '@mui/material/LinearProgress'
-import Snackbar from '@mui/material/Snackbar'
-import Alert from '@mui/material/Alert'
 import SendIcon from '@mui/icons-material/Send'
 import CampaignIcon from '@mui/icons-material/Campaign'
 import GroupsIcon from '@mui/icons-material/Groups'
@@ -67,6 +65,7 @@ function SectionCard({ children, sx }) {
 export default function SendCampaign() {
   const { t } = useLang()
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
+  const { addBatch, active, queueLen } = useSendQueue()
 
   // ── Recipients (per-number selection, same shape CompanyPicker/CampaignForm use) ──
   const [selectedNums, setSelectedNums] = useState(() => new Set())
@@ -76,21 +75,20 @@ export default function SendCampaign() {
   const [templateTexts, setTemplateTexts] = useState([])
   const [sendCfg,       setSendCfg]       = useState(() => loadSendConfig())
 
-  // ── Send state ──
-  const [sending,   setSending]   = useState(false)
-  const [sendError, setSendError] = useState('')
-  const [progress,  setProgress]  = useState(0)
-  const [results,   setResults]   = useState([])
+  // ── Done state: captured from context on success phase ──
   const [done,      setDone]      = useState(false)
-  const [countdown, setCountdown] = useState(null)
-  const [cdTotal,   setCdTotal]   = useState(null)
-  const [cdLabel,   setCdLabel]   = useState('msg')
-  const [batchNum,  setBatchNum]  = useState(1)
-  const sendingRef = useRef(false)
-  const cancelRef  = useRef(false)
-  const [snack, setSnack] = useState({ open: false, msg: '', severity: 'success' })
+  const [doneCount, setDoneCount] = useState(0)
 
-  const notify = (msg, severity = 'success') => setSnack({ open: true, msg, severity })
+  useEffect(() => {
+    if (active?.phase === 'success') {
+      setDoneCount(active.sent)
+      setDone(true)
+    }
+  }, [active])
+
+  // isSending is true while the global queue is processing this campaign
+  const isSending = active !== null || queueLen > 0
+  const progress  = active && active.total > 0 ? Math.round(active.sent / active.total * 100) : 0
 
   const targets = useMemo(() => [...numInfoMap.values()], [numInfoMap])
   // Which {{variable}} placeholders can actually be filled for the current
@@ -102,44 +100,15 @@ export default function SendCampaign() {
   const hasWebData      = targets.some(n => n.web)
   const cleanMessages = useMemo(() => templateTexts.map(m => m.trim()).filter(Boolean), [templateTexts])
   const belowMinTemplates = targets.length > 1 && cleanMessages.length < MIN_TEMPLATES_FOR_BULK
-  const canSend = targets.length > 0 && cleanMessages.length > 0 && !belowMinTemplates && !sending
+  const canSend = targets.length > 0 && cleanMessages.length > 0 && !belowMinTemplates && !isSending
 
-  async function waitWithTimer(ms, label) {
-    const totalSecs = Math.ceil(ms / 1000)
-    setCdTotal(totalSecs); setCountdown(totalSecs); setCdLabel(label)
-    const end = Date.now() + ms
-    await new Promise(resolve => {
-      const tick = () => {
-        if (cancelRef.current) { resolve(); return }
-        const remaining = end - Date.now()
-        if (remaining <= 0) { setCountdown(0); resolve(); return }
-        setCountdown(Math.ceil(remaining / 1000))
-        setTimeout(tick, 200)
-      }
-      tick()
-    })
-    setCountdown(null); setCdTotal(null)
-  }
-
-  async function handleSend() {
-    if (!canSend || sendingRef.current) return
-    cancelRef.current = false
-    sendingRef.current = true
-    setSending(true); setProgress(0); setResults([]); setDone(false)
-    const res = []
+  function handleSend() {
+    if (!canSend) return
+    setDone(false)
+    // Pre-compute per-recipient messages (variant selection + variable substitution)
+    // before enqueuing so all randomization happens at click time, not during send.
     let lastVariant = null
-    let msgsInBatch = 0
-    let nextBreakAt = randBatchSize(sendCfg)
-    let currentBatch = 1
-    setBatchNum(1)
-
-    for (let i = 0; i < targets.length; i++) {
-      if (cancelRef.current) break
-      const info = targets[i]
-      setProgress(Math.round(((i + 1) / targets.length) * 100))
-      // Only pick among templates that actually fit THIS recipient's data —
-      // falls back to the full pool only if none of the selected templates fit
-      // (better to send something than to skip the recipient entirely).
+    const jobs = targets.map(info => {
       const eligible = cleanMessages.filter(m => templateFitsTarget(m, info))
       const pool = eligible.length ? eligible : cleanMessages
       const variant = pickMessageVariant(pool, lastVariant)
@@ -149,55 +118,15 @@ export default function SendCampaign() {
         .replace(/\{\{ciudad\}\}/g,    info.city || '')
         .replace(/\{\{industria\}\}/g, info.industry || '')
         .replace(/\{\{web\}\}/g,       info.web || '')
-      // Defensive: some scraped WhatsApp contacts got saved with page text glued
-      // onto the number (e.g. a click-to-chat button's label + pre-filled message
-      // concatenated in). Sending that raw string as to_number would just fail —
-      // pull out the actual digits before it ever reaches the API.
       const cleanNumber = extractPhoneDigits(info.number) || info.number
-      try {
-        const r = await authFetch('/api/send-message', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ company_id: info.company_id, to_number: cleanNumber, message, website: info.web }),
-        })
-        if (!r.ok) {
-          const errJson = await r.json().catch(() => ({}))
-          const detail = errJson.detail || `Error ${r.status}`
-          setSendError(detail)
-          setTimeout(() => setSendError(''), 10_000)
-          throw new Error(detail)
-        }
-        const json = await r.json()
-        res.push({ name: info.company_name, number: info.number, status: json.status === 'sent' ? 'sent' : 'failed' })
-      } catch {
-        res.push({ name: info.company_name, number: info.number, status: 'failed' })
-      }
-      setResults([...res])
-      msgsInBatch++
-      if (i < targets.length - 1) {
-        if (msgsInBatch >= nextBreakAt) {
-          msgsInBatch = 0
-          nextBreakAt = randBatchSize(sendCfg)
-          currentBatch++
-          setBatchNum(currentBatch)
-          await waitWithTimer(randBatchBreakMs(sendCfg), 'batch')
-        } else {
-          await waitWithTimer(randMsgDelayMs(sendCfg), 'msg')
-        }
-      }
-    }
-
-    setSending(false); setDone(true); sendingRef.current = false
-    setCountdown(null); setBatchNum(1)
-    const sent = res.filter(r => r.status === 'sent').length
-    notify(
-      `${sent} mensaje${sent !== 1 ? 's' : ''} enviado${sent !== 1 ? 's' : ''}`,
-      sent > 0 ? 'success' : 'warning'
-    )
+      return { numbers: [cleanNumber], messages: [message], companyId: info.company_id, website: info.web }
+    })
+    addBatch(jobs, t.campaign.title)
   }
 
-  const sentCount   = results.filter(r => r.status === 'sent').length
-  const failedCount = results.filter(r => r.status === 'failed').length
+  // Countdown label derived from global queue state
+  const isWaiting    = active?.phase === 'waiting' && active.countdown > 0
+  const isBatchBreak = isWaiting && active.batch
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
@@ -238,23 +167,24 @@ export default function SendCampaign() {
 
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
               <StepHeader n={2} title={t.campaign.stepTiming} />
-              <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={sending} />
+              <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
             </Box>
 
-            {sending && countdown !== null && (
-              <CountdownBar countdown={countdown} total={cdTotal} label={cdLabel} batchNum={batchNum} msgNum={results.length} msgTotal={targets.length} />
-            )}
-
             <InstanceDisconnectedBanner status={instanceStatus} />
-            <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} />
 
-            {(sending || done) && (
+            {/* Progress — driven by global queue state so it persists across navigation */}
+            {(isSending || done) && (
               <Box>
-                {sending && (
+                {isSending && active && (
                   <Box sx={{ mb: 1 }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.6 }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.6 }}>
                       <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                        Enviando… {results.length} de {targets.length}
+                        {isWaiting
+                          ? (isBatchBreak
+                              ? `${t.campaign.sendingProgress(active.sent, active.total)} — pausa ${active.countdown}s`
+                              : `${t.campaign.sendingProgress(active.sent, active.total)} — ${active.countdown}s`)
+                          : t.campaign.sendingProgress(active.sent, active.total)
+                        }
                       </Typography>
                       <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>{progress}%</Typography>
                     </Box>
@@ -262,14 +192,10 @@ export default function SendCampaign() {
                       sx={{ borderRadius: 4, height: 5, bgcolor: 'rgba(34,197,94,0.1)', '& .MuiLinearProgress-bar': { background: 'linear-gradient(90deg,#22c55e,#4ade80)', borderRadius: 4 } }} />
                   </Box>
                 )}
-                {done && (
+                {done && !isSending && (
                   <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                    <Chip label={`${sentCount} enviado${sentCount !== 1 ? 's' : ''}`} size="small"
+                    <Chip label={`${doneCount} enviado${doneCount !== 1 ? 's' : ''}`} size="small"
                       sx={{ bgcolor: 'rgba(34,197,94,0.12)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', fontSize: '0.72rem', height: 24 }} />
-                    {failedCount > 0 && (
-                      <Chip label={`${failedCount} fallido${failedCount !== 1 ? 's' : ''}`} size="small"
-                        sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', fontSize: '0.72rem', height: 24 }} />
-                    )}
                   </Box>
                 )}
               </Box>
@@ -290,7 +216,7 @@ export default function SendCampaign() {
                 fullWidth
                 onClick={handleSend}
                 disabled={!canSend || isDisconnected}
-                startIcon={sending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 16 }} />}
+                startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 16 }} />}
                 sx={{
                   bgcolor: canSend ? 'rgba(34,197,94,0.85)' : 'rgba(255,255,255,0.05)',
                   color:   canSend ? '#fff' : 'rgba(255,255,255,0.3)',
@@ -299,9 +225,9 @@ export default function SendCampaign() {
                   '&:hover': { bgcolor: canSend ? '#22c55e' : 'rgba(255,255,255,0.05)' },
                 }}
               >
-                {sending ? 'Enviando…' : `${t.campaign.sendBtn}${targets.length ? ` (${targets.length})` : ''}`}
+                {isSending ? t.campaign.sending : `${t.campaign.sendBtn}${targets.length ? ` (${targets.length})` : ''}`}
               </Button>
-              {!canSend && !sending && (
+              {!canSend && !isSending && (
                 <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', textAlign: 'center' }}>
                   {targets.length === 0 ? t.campaign.blockedNoRecipients
                     : cleanMessages.length === 0 ? t.campaign.blockedNoTemplate
@@ -330,12 +256,6 @@ export default function SendCampaign() {
           />
         </Box>
       </Box>
-
-      <Snackbar open={snack.open} autoHideDuration={4000} onClose={() => setSnack(s => ({ ...s, open: false }))} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
-        <Alert severity={snack.severity} onClose={() => setSnack(s => ({ ...s, open: false }))} sx={{ width: '100%' }}>
-          {snack.msg}
-        </Alert>
-      </Snackbar>
     </Box>
   )
 }

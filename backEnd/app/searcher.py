@@ -3,6 +3,7 @@ import os
 import re
 import json
 import requests
+import unicodedata
 import concurrent.futures
 from urllib.parse import urlparse, quote_plus
 from dotenv import load_dotenv
@@ -534,6 +535,79 @@ COUNTRY_CONFIG: dict[str, dict] = {
 }
 DEFAULT_COUNTRY = "México"
 
+
+def _norm_loc(s: str) -> str:
+    s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii')
+    return re.sub(r'\s+', ' ', s).strip().lower()
+
+
+# Nombres en español de ciudades extranjeras que en COUNTRY_CONFIG están en su
+# idioma local (las ciudades de EEUU están en inglés) — sin esto, alguien que
+# escribe "abogados en Nueva York" no coincide con la lista curada ("New York").
+_CITY_EXONYMS = {
+    "nueva york": "New York",
+    "nueva orleans": "New Orleans",
+    "filadelfia": "Philadelphia",
+}
+
+
+def _build_city_index() -> dict:
+    """city (normalized, accent/case-insensitive) -> (canonical city name, country)."""
+    idx: dict = {}
+    for country_name, cfg in COUNTRY_CONFIG.items():
+        for city in cfg.get("cities", []):
+            idx[_norm_loc(city)] = (city, country_name)
+    for exonym, canonical in _CITY_EXONYMS.items():
+        hit = idx.get(_norm_loc(canonical))
+        if hit:
+            idx[exonym] = hit
+    return idx
+
+
+_CITY_INDEX = _build_city_index()
+_LOCATION_TAIL_RE = re.compile(r'\ben\s+(.+)$', re.IGNORECASE)
+
+
+def _extract_location(text: str) -> tuple[str, str, str | None]:
+    """
+    Best-effort split of a free-typed query like "dentistas en Guadalajara" or
+    "restaurantes cerca de Bogotá, Colombia" into (clean_industry, city, country).
+
+    The UI is a single free-text box — the user types business + place together
+    ("gimnasios en Monterrey") and expects the search to understand both parts,
+    not just treat the whole phrase as an opaque industry string. This matches
+    the trailing "en <lugar>" clause against the curated city list already used
+    for city fan-out (COUNTRY_CONFIG), so downstream query-building gets the
+    right city AND the right country (fixing the geo bias — without a detected
+    city/country, Bright Data silently defaulted to México's gl/hl regardless of
+    where the business actually is).
+
+    Falls back to (text, "", None) when nothing recognizable is found, which is
+    exactly the previous behaviour (whole text passed through as industry).
+    """
+    m = _LOCATION_TAIL_RE.search(text)
+    if not m:
+        return text, "", None
+    tail = m.group(1).strip(" ,.")
+    primary = tail.split(",")[0].strip()
+    for cand in ([tail, primary] if primary != tail else [tail]):
+        words = cand.split()
+        for n in (3, 2, 1):
+            if n > len(words):
+                continue
+            sub = " ".join(words[:n])
+            hit = _CITY_INDEX.get(_norm_loc(sub))
+            if hit:
+                city, country_name = hit
+                clean = text[:m.start()].strip(" ,.")
+                return (clean or text), city, country_name
+    country_name = _detect_effective_country(None, tail)
+    if country_name:
+        clean = text[:m.start()].strip(" ,.")
+        return (clean or text), "", country_name
+    return text, "", None
+
+
 # Sinónimos y términos relacionados por industria para ampliar la búsqueda
 INDUSTRY_SYNONYMS: dict[str, list[str]] = {
     "gimnasio":      ["gym", "fitness center", "crossfit", "club deportivo", "smartfit", "iron gym"],
@@ -839,95 +913,42 @@ def _slugify(text: str) -> str:
 
 
 def _sa_extract_urls(html: str) -> tuple[list, dict]:
-    """Extraer URLs de negocios de una página de Sección Amarilla."""
+    """
+    Extraer sitios web de negocio de una página de resultados de Sección Amarilla.
+
+    Cada listado es un <article data-name="..." data-phone="..." data-address="...">
+    con un <a class="business-click" href="..."> adentro. Cuando el negocio SÍ
+    tiene sitio propio, ese href es el dominio pelón sin esquema (ej.
+    href="criregjal.com.mx", no "https://..."), lo que antes hacía que SIEMPRE
+    se descartara (el filtro exigía "http..." al inicio). Cuando NO tiene sitio
+    propio, el href simplemente apunta de vuelta a la propia página de negocio
+    dentro de seccionamarilla.com.mx — a esos se les excluye aquí.
+    """
     from bs4 import BeautifulSoup
     soup = BeautifulSoup(html, "html.parser")
     urls: list[str] = []
     snippets: dict = {}
 
-    def _add(href: str, name: str = "") -> None:
-        href = href.strip()
+    for card in soup.find_all("article", attrs={"data-name": True}):
+        link = card.find("a", class_="business-click")
+        href = (link.get("href", "") if link else "").strip()
+        if not href:
+            continue
+        if href.startswith("/"):
+            continue  # ruta relativa interna de SA (ej. /informacion/...) — sin sitio propio
         if not href.startswith("http"):
-            return
+            href = "http://" + href  # dominio pelón sin esquema, ej. "criregjal.com.mx"
         if _SA_EXCLUDE.search(href):
-            return
+            continue  # sin sitio propio — enlaza de vuelta a Sección Amarilla
         if not _is_business_url(href):
-            return
-        if href not in urls:
-            urls.append(href)
-            snippets[href] = {"title": name, "body": "Sección Amarilla"}
-
-    # 1. External <a href> links
-    for a in soup.find_all("a", href=True):
-        name = ""
-        parent = a.find_parent()
-        for selector in ["h2", "h3", "h4"]:
-            container = parent.find_previous(selector) if parent else None
-            if container:
-                name = container.get_text(strip=True)
-                break
-        _add(a["href"], name)
-
-    # 2. data-website / data-site / data-url attributes (SA uses these on listing cards)
-    for tag in soup.find_all(True):
-        for attr in ("data-website", "data-site", "data-url", "data-href"):
-            val = tag.get(attr, "")
-            if val:
-                _add(val)
-
-    # 3. JSON-LD structured data (SA embeds Schema.org LocalBusiness)
-    for script in soup.find_all("script", type="application/ld+json"):
-        try:
-            data = json.loads(script.string or "")
-            entries = data if isinstance(data, list) else [data]
-            for entry in entries:
-                url = entry.get("url") or entry.get("website") or entry.get("sameAs")
-                if isinstance(url, str):
-                    _add(url, entry.get("name", ""))
-                if isinstance(entry.get("sameAs"), list):
-                    for u in entry["sameAs"]:
-                        if isinstance(u, str):
-                            _add(u, entry.get("name", ""))
-        except Exception:
-            pass
-
-    return urls, snippets
-
-
-def _sa_fetch_city_bd(industry_slug: str, city_slug: str, max_pages: int = 3) -> tuple[list, dict]:
-    """Obtener resultados de Sección Amarilla via Bright Data (rendering JS incluido)."""
-    urls: list[str] = []
-    snippets: dict = {}
-    bd_key = _brightdata_key()
-
-    for page in range(1, max_pages + 1):
-        page_url = (
-            f"https://www.seccionamarilla.com.mx/buscar"
-            f"?q={quote_plus(industry_slug.replace('-', ' '))}"
-            f"&l={quote_plus(city_slug.replace('-', ' '))}"
-            + (f"&pag={page}" if page > 1 else "")
-        )
-        try:
-            resp = requests.post(
-                "https://api.brightdata.com/request",
-                headers={"Authorization": f"Bearer {bd_key}", "Content-Type": "application/json"},
-                json={"zone": "serp_api1", "url": page_url, "format": "raw", "country": "mx"},
-                timeout=35,
-            )
-            html = resp.text
-            if not html or len(html) < 500:
-                break
-        except Exception:
-            break
-
-        page_urls, page_snips = _sa_extract_urls(html)
-        if not page_urls:
-            break
-
-        for u in page_urls:
-            if u not in urls:
-                urls.append(u)
-                snippets[u] = page_snips[u]
+            continue
+        if href in urls:
+            continue
+        urls.append(href)
+        snippets[href] = {
+            "title": card.get("data-name", ""),
+            "body": card.get("data-address", "Sección Amarilla"),
+        }
 
     return urls, snippets
 
@@ -935,23 +956,23 @@ def _sa_fetch_city_bd(industry_slug: str, city_slug: str, max_pages: int = 3) ->
 def _sa_fetch_city(industry_slug: str, city_slug: str, max_pages: int = 3) -> tuple[list, dict]:
     """
     Scraper para una combinación industria+ciudad en Sección Amarilla.
-    Usa Bright Data si está disponible (resuelve JS rendering); fallback a requests/Playwright.
-    """
-    if _brightdata_key():
-        bd_urls, bd_snips = _sa_fetch_city_bd(industry_slug, city_slug, max_pages)
-        if bd_urls:
-            return bd_urls, bd_snips
-        # BD returned nothing (zone may not support non-SERP URLs) — fall through to requests
 
+    La URL real de resultados es /resultados/{industria}/{ciudad}/{página} —
+    la anterior (/buscar?q=...&l=...) sólo devuelve la portada genérica del
+    sitio sin importar qué se le pida, así que nunca traía negocios reales.
+    Bright Data tampoco sirve aquí: su zona serp_api1 sólo acepta URLs de
+    buscadores y rechaza cualquier otro sitio con "wrong_api" (confirmado en
+    pruebas reales), así que se scrapea directo con requests — más rápido,
+    sin gastar créditos, y ya funciona (200 + contenido real en las pruebas).
+    Pagina hasta max_pages o hasta que una página no traiga ningún negocio
+    nuevo (evita seguir pidiendo páginas una vez agotados los resultados).
+    """
     urls: list[str] = []
     snippets: dict = {}
+    seen_domains: set[str] = set()
 
     for page in range(1, max_pages + 1):
-        page_url = (
-            f"https://www.seccionamarilla.com.mx/buscar"
-            f"?q={industry_slug.replace('-', '+')}&l={city_slug.replace('-', '+')}"
-            + (f"&pag={page}" if page > 1 else "")
-        )
+        page_url = f"https://www.seccionamarilla.com.mx/resultados/{industry_slug}/{city_slug}/{page}"
         html = None
 
         try:
@@ -978,13 +999,17 @@ def _sa_fetch_city(industry_slug: str, city_slug: str, max_pages: int = 3) -> tu
             break
 
         page_urls, page_snips = _sa_extract_urls(html)
-        if not page_urls:
-            break
-
+        new_count = 0
         for u in page_urls:
-            if u not in urls:
+            d = _get_domain(u)
+            if d and d not in seen_domains:
+                seen_domains.add(d)
                 urls.append(u)
                 snippets[u] = page_snips[u]
+                new_count += 1
+
+        if new_count == 0 and page > 1:
+            break
 
     return urls, snippets
 
@@ -1004,10 +1029,12 @@ def _search_via_seccion_amarilla(
     ).strip(" ,.-")
     ind_slug = _slugify(industry_clean)
 
-    # Ciudades a barrer: si el usuario especificó ciudad solo esa; si no, las principales
+    # Ciudades a barrer: si el usuario especificó ciudad solo esa; si no, las principales.
+    # Con ciudad específica, cada página cuesta un solo GET directo (sin Bright
+    # Data) — se puede escalar bastante más que antes sin gastar créditos.
     if city.strip():
         city_slugs = [_slugify(city.strip())]
-        pages_per_city = 8
+        pages_per_city = min(20, max(5, num_results // 10))
     else:
         cfg = COUNTRY_CONFIG.get("México", {})
         cities = cfg.get("cities", [])  # todas las ciudades (32)
@@ -1058,17 +1085,23 @@ def _search_via_google_maps(
     base = f"{kw} {ind_clean}".strip() if kw else ind_clean
 
     cities = cfg["cities"] if cfg and cfg.get("cities") else []
+    _ik = ind_clean.lower()
+    static_synonyms = INDUSTRY_SYNONYMS.get(_ik) or INDUSTRY_SYNONYMS.get(_ik.rstrip("s")) or []
     # search_queries: list of (query_base, location) — allows synonyms with different query_base
     if city.strip():
-        search_queries: list[tuple[str, str]] = [(base, city.strip())]
+        # Antes era 1 sola query para toda la ciudad — Maps sólo devuelve ~1 página
+        # de resultados por query (sin paginación real), así que la única forma de
+        # sacarle más de una ciudad puntual es variar los términos de búsqueda (los
+        # mismos sinónimos estáticos + IA que ya usa DDG).
+        loc = city.strip()
+        ai_synonyms = _ai_expand_synonyms(ind_clean) if (OPENAI_API_KEY or DEEPSEEK_API_KEY) else []
+        all_synonyms = list(dict.fromkeys(static_synonyms + ai_synonyms))
+        search_queries: list[tuple[str, str]] = [(base, loc)] + [(syn, loc) for syn in all_synonyms[:10]]
     elif cities:
         search_queries = [(base, c) for c in cities]
         # Synonyms × top cities to discover businesses registered under alternate terms
-        # Try plural and singular forms for lookup
-        _ik = ind_clean.lower()
-        synonyms = (INDUSTRY_SYNONYMS.get(_ik) or INDUSTRY_SYNONYMS.get(_ik.rstrip("s")) or [])[:2]
         top_cities = cities[:14]
-        for syn in synonyms:
+        for syn in static_synonyms[:2]:
             search_queries.extend((syn, c) for c in top_cities)
     else:
         search_queries = [(base, "")]
@@ -1080,53 +1113,64 @@ def _search_via_google_maps(
     _maps_logged = False
 
     def _fetch_maps(qbase: str, location: str) -> tuple[list, dict]:
+        import time
+        import random
         nonlocal _maps_logged
-        try:
-            q = f"{qbase} {location}".strip() if location else qbase
-            maps_url = (
-                f"https://www.google.com/maps/search/{quote_plus(q)}/"
-                f"?brd_json=1&gl={gl}&hl={hl}"
-            )
-            resp = requests.post(
-                "https://api.brightdata.com/request",
-                headers={"Authorization": f"Bearer {_brightdata_key()}", "Content-Type": "application/json"},
-                json={"zone": "serp_api1", "url": maps_url, "format": "raw", "country": bd_country},
-                timeout=30,
-            )
-            text = resp.text
-            if not _maps_logged:
-                _maps_logged = True
-                print(f"[maps-debug] status={resp.status_code} len={len(text)} snippet={text[:400]!r}")
-
-            body = json.loads(text)
-            if isinstance(body.get("body"), str):
-                body = json.loads(body["body"])
-
-            batch_urls, batch_snips = [], {}
-            results = (
-                body.get("local_results") or body.get("results") or
-                body.get("places") or body.get("organic") or []
-            )
-            for item in results:
-                website = (
-                    item.get("website") or item.get("url") or item.get("link") or
-                    item.get("website_url") or item.get("web")
+        q = f"{qbase} {location}".strip() if location else qbase
+        maps_url = (
+            f"https://www.google.com/maps/search/{quote_plus(q)}/"
+            f"?brd_json=1&gl={gl}&hl={hl}"
+        )
+        # Igual que Bright Data SERP: la respuesta a veces no es JSON válido
+        # (render fallido/rate limit) — un retry recupera esos casos en vez de
+        # perder la query entera en silencio.
+        for attempt in range(2):
+            try:
+                resp = requests.post(
+                    "https://api.brightdata.com/request",
+                    headers={"Authorization": f"Bearer {_brightdata_key()}", "Content-Type": "application/json"},
+                    json={"zone": "serp_api1", "url": maps_url, "format": "raw", "country": bd_country},
+                    timeout=30,
                 )
-                if website and isinstance(website, str) and _is_business_url(website):
-                    if website not in batch_urls:
-                        batch_urls.append(website)
-                        batch_snips[website] = {
-                            "title": item.get("name") or item.get("title", ""),
-                            "body": item.get("address") or item.get("description", ""),
-                        }
-            return batch_urls, batch_snips
-        except Exception as e:
-            if not _maps_logged:
-                print(f"[maps-debug] exception: {e}")
-            return [], {}
+                text = resp.text
+                if not _maps_logged:
+                    _maps_logged = True
+                    print(f"[maps-debug] status={resp.status_code} len={len(text)} snippet={text[:400]!r}")
 
-    n_syn = len(search_queries) - len(cities) if cities else 0
-    print(f"[maps] {len(search_queries)} queries ({len(cities)} cities + {n_syn} synonym variants)")
+                body = json.loads(text)
+                if isinstance(body.get("body"), str):
+                    body = json.loads(body["body"])
+
+                batch_urls, batch_snips = [], {}
+                results = (
+                    body.get("local_results") or body.get("results") or
+                    body.get("places") or body.get("organic") or []
+                )
+                for item in results:
+                    website = (
+                        item.get("website") or item.get("url") or item.get("link") or
+                        item.get("website_url") or item.get("web")
+                    )
+                    if website and isinstance(website, str) and _is_business_url(website):
+                        if website not in batch_urls:
+                            batch_urls.append(website)
+                            batch_snips[website] = {
+                                "title": item.get("name") or item.get("title", ""),
+                                "body": item.get("address") or item.get("description", ""),
+                            }
+                return batch_urls, batch_snips
+            except Exception as e:
+                if not _maps_logged:
+                    print(f"[maps-debug] exception: {e}")
+                if attempt == 0:
+                    time.sleep(1 + random.random())
+        return [], {}
+
+    if city.strip():
+        print(f"[maps] {len(search_queries)} queries (1 ciudad × {len(search_queries)} variantes de término)")
+    else:
+        n_syn = len(search_queries) - len(cities) if cities else 0
+        print(f"[maps] {len(search_queries)} queries ({len(cities)} cities + {n_syn} synonym variants)")
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(search_queries), 16)) as ex:
         futures = [ex.submit(_fetch_maps, qb, loc) for qb, loc in search_queries]
         for f in concurrent.futures.as_completed(futures):
@@ -1150,10 +1194,29 @@ def search_prospects(
     exclude_domains: set | None = None,
     country: str = None,
 ) -> list:
+    # La UI es un solo cuadro de texto libre — el usuario escribe negocio + lugar
+    # juntos ("gimnasios en Monterrey") y no manda `city`/`country` por separado.
+    # Si no vinieron explícitos, se intentan extraer del propio texto para que
+    # el fan-out por ciudad y el sesgo geográfico (gl/hl/bd_country) usen el
+    # país/ciudad reales en vez de asumir México por default.
+    if not city.strip():
+        clean_industry, extracted_city, extracted_country = _extract_location(industry)
+        if extracted_city or extracted_country:
+            industry = clean_industry
+            city = extracted_city
+            country = country or extracted_country
+
     _bd_key = _brightdata_key()
 
-    if _bd_key:
-        # Correr 3 fuentes en paralelo: Bright Data + DuckDuckGo + Sección Amarilla
+    if _bd_key and offset:
+        # "Cargar más": la llamada anterior (offset=0) ya cubrió DDG/Maps/Sección
+        # Amarilla — ninguna de esas 3 fuentes soporta paginación real, repetirlas
+        # solo devolvería lo mismo. Sólo Bright Data pagina de verdad (páginas de
+        # Google), así que "cargar más" únicamente profundiza ahí.
+        urls, snippets = _search_via_brightdata_multi(industry, city, country, keywords, num_results, offset)
+
+    elif _bd_key:
+        # Correr 4 fuentes en paralelo: Bright Data + DuckDuckGo + Sección Amarilla + Maps
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
             bd_future   = ex.submit(_search_via_brightdata_multi, industry, city, country, keywords, num_results, offset)
             ddg_future  = ex.submit(_search_via_duckduckgo, industry, city, exclude_domains or set(), country, num_results)
@@ -1310,21 +1373,32 @@ def _bd_build_queries(industry: str, city: str, country: str | None, keywords: s
     base_raw = f"{kw} {ind}".strip() if kw else ind          # query sin ciudad (usa texto original)
     base_city = f"{kw} {ind_clean}".strip() if kw else ind_clean  # query CON ciudad (texto limpio)
 
+    def _get_synonyms(key: str) -> list[str]:
+        k = key.lower()
+        return INDUSTRY_SYNONYMS.get(k) or INDUSTRY_SYNONYMS.get(k.rstrip("s")) or []
+
     if city.strip():
         loc = city.strip()
-        return [
+        # Con ciudad específica antes esto eran sólo 5 plantillas fijas — un techo
+        # bajo cuando el usuario pide muchos resultados de una sola ciudad. Los
+        # sinónimos del rubro (estáticos + los que ya usa DDG vía IA) multiplican
+        # la cobertura sin perder precisión (siguen siendo esa ciudad exacta, no
+        # fan-out geográfico).
+        static_synonyms = _get_synonyms(ind_clean)
+        ai_synonyms = _ai_expand_synonyms(ind_clean) if (OPENAI_API_KEY or DEEPSEEK_API_KEY) else []
+        synonyms = list(dict.fromkeys(static_synonyms + ai_synonyms))
+        queries = [
             f"{base_city} {loc}",
             f"{base_city} empresa {loc}",
             f"{base_city} negocio {loc}",
             f"{base_city} contacto {loc}",
             f"{base_city} whatsapp {loc}",
+            f"{base_city} cerca de {loc}",
         ]
+        queries += [f"{syn} {loc}" for syn in synonyms[:10]]
+        return queries
 
     cities = cfg["cities"] if cfg and cfg.get("cities") else []
-
-    def _get_synonyms(key: str) -> list[str]:
-        k = key.lower()
-        return INDUSTRY_SYNONYMS.get(k) or INDUSTRY_SYNONYMS.get(k.rstrip("s")) or []
 
     if cities:
         # Obtener sinónimos del rubro para multiplicar queries con terminología diferente
@@ -1349,11 +1423,28 @@ def _bd_build_queries(industry: str, city: str, country: str | None, keywords: s
     return base_queries + syn_queries
 
 
+def pages_per_query_for(num_results: int) -> int:
+    """
+    How many Google result pages (10 organic results each) to pull per Bright
+    Data query. Google caps each page at ~10 organic results, so previously a
+    "wide" ask (num_results=100+) only multiplied *how many different queries*
+    ran — every single query still topped out at 10 hits. Pulling extra pages
+    per query adds real depth on top of that width.
+    """
+    if num_results <= 20:
+        return 1
+    if num_results <= 60:
+        return 2
+    return 3
+
+
 def _search_via_brightdata_multi(
     industry: str, city: str = "", country: str = None,
     keywords: str = "", num_results: int = 10, offset: int = 0,
 ) -> tuple[list, dict]:
-    """Fan-out múltiples queries a Bright Data en paralelo."""
+    """Fan-out múltiples queries a Bright Data en paralelo, cada una a varias páginas de Google."""
+    import time
+    import random
     # Escalar al máximo: el usuario dijo "explotar al límite aunque nos manchemos".
     # Con 5000 créditos free: 150 queries/búsqueda → ~33 búsquedas del free tier.
     MAX_QUERIES = min(max(30, num_results * 2), 150)
@@ -1367,18 +1458,27 @@ def _search_via_brightdata_multi(
     hl = cfg.get("hl", "es") if cfg else "es"
     bd_country = cfg.get("bd_country", "mx") if cfg else "mx"
 
+    pages = pages_per_query_for(num_results)
+    tasks = [(q, offset + page * 10) for q in queries for page in range(pages)]
+
     seen_domains: set[str] = set()
     urls: list[str] = []
     snippets: dict[str, dict] = {}
 
-    def _fetch_one(q: str) -> tuple[list, dict]:
-        try:
-            return _search_via_brightdata(q, num_results=10, offset=offset, gl=gl, hl=hl, bd_country=bd_country)
-        except Exception:
-            return [], {}
+    def _fetch_one(q: str, start: int) -> tuple[list, dict]:
+        # Bright Data ocasionalmente devuelve una respuesta no-JSON (render fallido,
+        # rate limit) — se observó ~1 de cada 4 llamadas fallando así en pruebas
+        # reales. Sin retry, esas queries simplemente se perdían en silencio.
+        for attempt in range(2):
+            try:
+                return _search_via_brightdata(q, num_results=10, offset=start, gl=gl, hl=hl, bd_country=bd_country)
+            except Exception:
+                if attempt == 0:
+                    time.sleep(1 + random.random())
+        return [], {}
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(queries)) as ex:
-        futures = [ex.submit(_fetch_one, q) for q in queries]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), 40)) as ex:
+        futures = [ex.submit(_fetch_one, q, start) for q, start in tasks]
         for f in concurrent.futures.as_completed(futures):
             batch_urls, batch_snips = f.result()
             for u in batch_urls:

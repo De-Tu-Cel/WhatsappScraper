@@ -35,12 +35,19 @@ import { useLang } from '../context/LangContext'
 const token = () => typeof window !== 'undefined' ? localStorage.getItem('user_token') : ''
 
 const STATUS_COLOR = {
-  open:         '#22c55e',
-  connected:    '#22c55e',
-  connecting:   '#f59e0b',
-  close:        '#ef4444',
-  disconnected: '#ef4444',
-  unknown:      'rgba(255,255,255,0.2)',
+  // Evolution API / generic
+  open:          '#22c55e',
+  connected:     '#22c55e',
+  connecting:    '#f59e0b',
+  close:         '#ef4444',
+  disconnected:  '#ef4444',
+  // WAHA statuses (uppercase)
+  WORKING:       '#22c55e',
+  SCAN_QR_CODE:  '#f59e0b',
+  STARTING:      '#f59e0b',
+  STOPPED:       '#ef4444',
+  FAILED:        '#ef4444',
+  unknown:       '#64748b',
 }
 
 const FIELD_SX = {
@@ -73,27 +80,26 @@ const STAT_CHIP_SX = {
   fontSize: '0.68rem', fontWeight: 600, height: 22,
 }
 
-const STATUS_LABEL_ES = { open: 'Conectada', connected: 'Conectada', connecting: 'Conectando', close: 'Desconectada', disconnected: 'Desconectada', unknown: 'Desconocida' }
-const STATUS_LABEL_EN = { open: 'Connected', connected: 'Connected', connecting: 'Connecting', close: 'Disconnected', disconnected: 'Disconnected', unknown: 'Unknown' }
+const STATUS_LABEL_ES = { open: 'Conectada', connected: 'Conectada', connecting: 'Conectando', close: 'Desconectada', disconnected: 'Desconectada', WORKING: 'Conectada', SCAN_QR_CODE: 'Escanear QR', STARTING: 'Iniciando', STOPPED: 'Detenida', FAILED: 'Error', unknown: 'Desconocida' }
+const STATUS_LABEL_EN = { open: 'Connected', connected: 'Connected', connecting: 'Connecting', close: 'Disconnected', disconnected: 'Disconnected', WORKING: 'Connected', SCAN_QR_CODE: 'Scan QR', STARTING: 'Starting', STOPPED: 'Stopped', FAILED: 'Failed', unknown: 'Unknown' }
 
-const DISCONNECT_LABEL_ES = { banned: 'Baneado por WhatsApp', logged_out: 'Cerró sesión', conflict: 'Conflicto de dispositivo', multidevice: 'Conflicto multi-dispositivo', server_error: 'Error interno', restart: 'Requiere reinicio', replaced: 'Sesión reemplazada', timeout: 'Timeout de conexión', closed: 'Conexión cerrada', disconnected: 'Desconectada' }
-const DISCONNECT_LABEL_EN = { banned: 'Banned by WhatsApp', logged_out: 'Logged out', conflict: 'Device conflict', multidevice: 'Multi-device conflict', server_error: 'Internal error', restart: 'Restart required', replaced: 'Session replaced', timeout: 'Connection timeout', closed: 'Connection closed', disconnected: 'Disconnected' }
+const DISCONNECT_LABEL_ES = { banned: 'Baneado por WhatsApp', logged_out: 'Cerró sesión', conflict: 'Conflicto de dispositivo', multidevice: 'Conflicto multi-dispositivo', server_error: 'Error interno', restart: 'Requiere reinicio', replaced: 'Sesión reemplazada', timeout: 'Timeout de conexión', closed: 'Conexión cerrada', disconnected: 'Desconectada', failed: 'Error de conexión' }
+const DISCONNECT_LABEL_EN = { banned: 'Banned by WhatsApp', logged_out: 'Logged out', conflict: 'Device conflict', multidevice: 'Multi-device conflict', server_error: 'Internal error', restart: 'Restart required', replaced: 'Session replaced', timeout: 'Connection timeout', closed: 'Connection closed', disconnected: 'Disconnected', failed: 'Connection error' }
 
 // ── InstanceRow ──────────────────────────────────────────────────────────────
-function InstanceRow({ inst, health, onQr, onEditNumber, onRemove }) {
+function InstanceRow({ inst, onQr, onEditNumber, onRemove }) {
   const { t, lang } = useLang()
   const [hover, setHover] = useState(false)
   const status = inst.live_status || 'unknown'
   const color = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
   const isConnected = ['open', 'connected'].includes(status)
   const statusLabel = (lang === 'en' ? STATUS_LABEL_EN : STATUS_LABEL_ES)[status] ?? (lang === 'en' ? 'Unknown' : 'Desconocida')
-  const REASON_COLOR = { banned: '#f87171', logged_out: '#fbbf24', conflict: '#fbbf24', multidevice: '#fbbf24', server_error: '#f87171', restart: '#fb923c', timeout: '#94a3b8', closed: '#94a3b8', replaced: '#fb923c' }
-  const disconnectColor = inst.disconnect_reason ? (REASON_COLOR[inst.disconnect_reason] ?? '#94a3b8') : color
-  const displayColor = isConnected ? color : disconnectColor
+  const REASON_COLOR = { banned: '#f87171', logged_out: '#fbbf24', conflict: '#fbbf24', multidevice: '#fbbf24', server_error: '#f87171', restart: '#fb923c', timeout: '#94a3b8', closed: '#94a3b8', replaced: '#fb923c', disconnected: '#f87171', failed: '#f87171' }
+  const disconnectColor = inst.disconnect_reason ? (REASON_COLOR[inst.disconnect_reason] ?? '#f87171') : color
+  // While actively reconnecting (connecting) show the connecting color, not the stale disconnect reason
+  const displayColor = (isConnected || status === 'connecting') ? color : disconnectColor
   const reasonLabel = inst.disconnect_reason ? ((lang === 'en' ? DISCONNECT_LABEL_EN : DISCONNECT_LABEL_ES)[inst.disconnect_reason] ?? inst.disconnect_reason_label) : null
-  const displayLabel = !isConnected && reasonLabel ? reasonLabel : statusLabel
-  const uptime = health?.uptime_pct ?? null
-  const uptimeColor = uptime === null ? '#64748b' : uptime >= 90 ? '#4ade80' : uptime >= 60 ? '#fbbf24' : '#f87171'
+  const displayLabel = (!isConnected && status !== 'connecting' && reasonLabel) ? reasonLabel : statusLabel
   return (
     <Box
       onMouseEnter={() => setHover(true)}
@@ -115,10 +121,11 @@ function InstanceRow({ inst, health, onQr, onEditNumber, onRemove }) {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
           <Typography sx={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text)', lineHeight: 1.2,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inst.label || inst.name}</Typography>
-          {uptime !== null && (
-            <Typography sx={{ fontSize: '0.58rem', fontWeight: 700, color: uptimeColor,
-              bgcolor: `${uptimeColor}18`, px: 0.5, borderRadius: 0.8, lineHeight: 1.6, flexShrink: 0 }}>
-              {uptime}%
+          {inst.provider === 'waha' && (
+            <Typography sx={{ fontSize: '0.55rem', fontWeight: 700, color: '#60a5fa',
+              bgcolor: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.25)',
+              px: 0.5, borderRadius: 0.8, lineHeight: 1.6, flexShrink: 0, letterSpacing: '0.03em' }}>
+              WAHA
             </Typography>
           )}
         </Box>
@@ -158,7 +165,7 @@ function InstanceRow({ inst, health, onQr, onEditNumber, onRemove }) {
 }
 
 // ── UserCard ─────────────────────────────────────────────────────────────────
-function UserCard({ user, instances, health, onAddSlot, onQr, onEditNumber, onRemove }) {
+function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove }) {
   const { t, lang } = useLang()
   const connectedCount = instances.filter(i => ['open', 'connected'].includes(i.live_status)).length
   const isAdmin = user.role === 'admin'
@@ -210,7 +217,7 @@ function UserCard({ user, instances, health, onAddSlot, onQr, onEditNumber, onRe
       {instances.length > 0 && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.2, mb: 1.2 }}>
           {instances.map(inst => (
-            <InstanceRow key={inst.name} inst={inst} health={health[inst.name]} onQr={onQr} onEditNumber={onEditNumber} onRemove={onRemove} />
+            <InstanceRow key={inst.name} inst={inst} onQr={onQr} onEditNumber={onEditNumber} onRemove={onRemove} />
           ))}
         </Box>
       )}
@@ -282,6 +289,10 @@ function InlineUserPicker({ instanceName, users, instances, onAssign, t, lang })
   const filtered = users.filter(u =>
     (u.display_name || u.username || '').toLowerCase().includes(search.toLowerCase())
   )
+  const allFull = filtered.length > 0 && filtered.every(u => {
+    const uid = u._id || u.id || u.username
+    return instances.filter(i => i.assigned_to === uid).length >= 5
+  })
   return (
     <Box sx={{ px: 1.5, pb: 1.5, pt: 1.5,
       borderTop: '1px solid rgba(59,130,246,0.15)',
@@ -291,6 +302,16 @@ function InlineUserPicker({ instanceName, users, instances, onAssign, t, lang })
         mb: 1.2, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
         {lang === 'en' ? 'Assign to' : 'Asignar a'}
       </Typography>
+
+      {allFull && (
+        <Typography sx={{ fontSize: '0.73rem', color: '#fbbf24', mb: 1,
+          bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)',
+          borderRadius: 1.5, px: 1.2, py: 0.6, lineHeight: 1.4 }}>
+          {lang === 'en'
+            ? 'All users are at 5/5 capacity. Unassign an instance first.'
+            : 'Todos los usuarios tienen 5/5 instancias. Desasigna una primero.'}
+        </Typography>
+      )}
 
       {/* Search — only shown when > 4 users */}
       {users.length > 4 && (
@@ -380,7 +401,6 @@ export default function InstancesPanel() {
   const [instances,    setInstances]    = useState([])
   const [loading,      setLoading]      = useState(true)
   const [users,        setUsers]        = useState([])
-  const [health,       setHealth]       = useState({})  // { [instanceName]: { uptime_pct, last_event, last_ts, last_reason } }
   const skeletonCounts = useRef({ users: [], unassigned: 3 })
 
   // ── Create dialog ──
@@ -444,6 +464,19 @@ export default function InstancesPanel() {
   const [syncing,      setSyncing]      = useState(false)
   const [snack,        setSnack]        = useState({ open: false, msg: '' })
 
+  // ── WAHA session dialog ──
+  const [wahaOpen,      setWahaOpen]      = useState(false)
+  const [wahaName,      setWahaName]      = useState('')
+  const [wahaLoading,   setWahaLoading]   = useState(false)
+  const [wahaErr,       setWahaErr]       = useState('')
+  const [wahaQr,        setWahaQr]        = useState(null)   // base64 QR image
+  const [wahaConnected, setWahaConnected] = useState(false)
+  const [wahaScanned,   setWahaScanned]   = useState(false)  // phone scanned QR, now authenticating
+  const [wahaSyncing,   setWahaSyncing]   = useState(false)
+  const [wahaStatus,    setWahaStatus]    = useState('')     // STOPPED | STARTING | SCAN_QR_CODE | WORKING
+  const wahaQrPollRef    = useRef(null)
+  const wahaQrShownRef   = useRef(false)   // tracks if QR was ever displayed (avoids stale closure)
+
   // ── Card menu (kept for assign dialog compatibility) ──
   const [menuAnchor,   setMenuAnchor]   = useState(null)
   const [menuInst,     setMenuInst]     = useState(null)
@@ -463,13 +496,6 @@ export default function InstancesPanel() {
     finally { setLoading(false) }
   }, [])
 
-  const fetchHealth = useCallback(async () => {
-    try {
-      const r = await fetch('/api/evolution/instances/health', { headers: { 'x-user-token': token() } })
-      if (r.ok) setHealth(await r.json())
-    } catch {}
-  }, [])
-
   const handleSync = useCallback(async () => {
     setSyncing(true)
     try {
@@ -479,6 +505,76 @@ export default function InstancesPanel() {
     finally { setSyncing(false) }
   }, [fetchInstances])
 
+  const handleSyncWaha = useCallback(async () => {
+    setWahaSyncing(true)
+    try {
+      await fetch('/api/admin/instances/sync-waha', { method: 'POST', headers: { 'x-user-token': token() } })
+      await fetchInstances()
+      setSnack({ open: true, msg: lang === 'en' ? 'WAHA sessions synced' : 'Sesiones WAHA sincronizadas' })
+    } catch {}
+    finally { setWahaSyncing(false) }
+  }, [fetchInstances, lang])
+
+  function wahaClose() {
+    if (wahaQrPollRef.current) clearInterval(wahaQrPollRef.current)
+    setWahaOpen(false); setWahaName(''); setWahaQr(null)
+    setWahaConnected(false); setWahaScanned(false); setWahaErr(''); setWahaLoading(false); setWahaStatus('')
+    wahaQrShownRef.current = false
+  }
+
+  async function handleWahaCreate() {
+    const name = wahaName.trim()
+    if (!name) { setWahaErr(lang === 'en' ? 'Name required' : 'El nombre es requerido'); return }
+    setWahaLoading(true); setWahaErr(''); setWahaQr(null); setWahaConnected(false)
+    try {
+      const r = await fetch('/api/waha/session/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
+        body: JSON.stringify({ name }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setWahaErr(d.detail || 'Error al crear sesión'); setWahaLoading(false); return }
+
+      // Keep wahaLoading=true (spinner) until QR arrives — don't use finally
+      if (wahaQrPollRef.current) clearInterval(wahaQrPollRef.current)
+      wahaQrPollRef.current = setInterval(async () => {
+        try {
+          const [qrRes, stRes] = await Promise.all([
+            fetch(`/api/waha/session/qr/${name}`),
+            fetch(`/api/waha/session/status/${name}`),
+          ])
+          if (stRes.ok) {
+            const sd = await stRes.json()
+            const rawStatus = sd.status || ''
+            setWahaStatus(rawStatus)
+            if (['WORKING', 'open', 'connected'].includes(sd.state || rawStatus)) {
+              clearInterval(wahaQrPollRef.current)
+              wahaQrShownRef.current = false
+              setWahaQr(null); setWahaScanned(false); setWahaConnected(true); setWahaLoading(false)
+              fetchInstances()
+              return
+            }
+            // Phone scanned QR → status left SCAN_QR_CODE → hide QR, show authenticating
+            if (wahaQrShownRef.current && rawStatus && rawStatus !== 'SCAN_QR_CODE') {
+              setWahaQr(null)
+              setWahaScanned(true)
+            }
+          }
+          if (qrRes.ok) {
+            const qd = await qrRes.json()
+            if (qd.base64) {
+              wahaQrShownRef.current = true
+              setWahaQr(qd.base64)
+              setWahaScanned(false)
+              setWahaLoading(false)
+            }
+          }
+        } catch {}
+      }, 2500)
+      // intentionally no finally — wahaLoading stays true until QR or WORKING
+    } catch (e) { setWahaErr(e.message); setWahaLoading(false) }
+  }
+
   const fetchUsers = useCallback(async () => {
     try {
       const r = await fetch('/api/auth/users', { headers: { 'x-user-token': token() } })
@@ -486,7 +582,9 @@ export default function InstancesPanel() {
     } catch {}
   }, [])
 
-  useEffect(() => { fetchInstances(); fetchUsers(); fetchHealth() }, [fetchInstances, fetchUsers, fetchHealth])
+  useEffect(() => { fetchInstances(); fetchUsers() }, [fetchInstances, fetchUsers])
+  // Cleanup WAHA QR poll on unmount / hot reload
+  useEffect(() => () => { if (wahaQrPollRef.current) clearInterval(wahaQrPollRef.current) }, [])
 
   // Actualizar conteos para skeleton cada vez que llegan datos reales
   useEffect(() => {
@@ -524,9 +622,13 @@ export default function InstancesPanel() {
   const [qrStatus, setQrStatus] = useState('loading') // loading | retrying | ready | error
 
   // ── QR polling ──────────────────────────────────────────────────────────────
-  const fetchQrOnce = useCallback(async (name) => {
+  const fetchQrOnce = useCallback(async (name, provider) => {
     try {
-      const r = await fetch(`/api/evolution/instance/${name}?type=qr`)
+      const isWaha = (provider ?? qrTarget?.provider) === 'waha'
+      const url = isWaha
+        ? `/api/waha/session/qr/${name}`
+        : `/api/evolution/instance/${name}?type=qr`
+      const r = await fetch(url)
       if (!r.ok) return false
       const d = await r.json()
       const b64 = d.base64 || d.qrcode?.base64 || d.qr?.base64
@@ -535,17 +637,23 @@ export default function InstancesPanel() {
         setQrStatus('ready')
         return true
       }
+      // WAHA returns status=WORKING when the user just scanned the QR
+      if (d?.status === 'WORKING') return 'scanned'
     } catch {}
     return false
-  }, [])
+  }, [qrTarget])
 
-  const startQrPoll = useCallback(async (name, withLogout = false) => {
+  const startQrPoll = useCallback(async (name, withLogout = false, provider) => {
     if (qrPollRef.current) clearTimeout(qrPollRef.current)
     setQrImage(null); setQrStatus(withLogout ? 'retrying' : 'loading')
 
     if (withLogout) {
       try {
-        await fetch(`/api/evolution/instance/${name}?action=logout`, { method: 'POST' })
+        const isWaha = (provider ?? qrTarget?.provider) === 'waha'
+        const logoutUrl = isWaha
+          ? `/api/waha/session/logout/${name}`
+          : `/api/evolution/instance/${name}?action=logout`
+        await fetch(logoutUrl, { method: 'POST' })
       } catch {}
       await new Promise(r => setTimeout(r, 700))
       setQrStatus('loading')
@@ -554,13 +662,22 @@ export default function InstancesPanel() {
     let attempts = 0
     const poll = async () => {
       attempts++
-      const ok = await fetchQrOnce(name)
-      if (ok) return
-      if (attempts >= 10) { setQrStatus('error'); return }
-      qrPollRef.current = setTimeout(poll, 1500)
+      const ok = await fetchQrOnce(name, provider)
+      if (ok === 'scanned') {
+        // User scanned QR — show connecting state and stop; connPoll closes dialog on WORKING
+        setQrStatus('connecting')
+        return
+      } else if (ok) {
+        // QR shown — re-poll immediately so WAHA long-polls for the next rotation (~60s)
+        attempts = 0
+        qrPollRef.current = setTimeout(poll, 300)
+      } else {
+        if (attempts >= 10) { setQrStatus('error'); return }
+        qrPollRef.current = setTimeout(poll, 1500)
+      }
     }
     poll()
-  }, [fetchQrOnce])
+  }, [fetchQrOnce, qrTarget])
 
   function closeQr() {
     if (qrPollRef.current)   clearTimeout(qrPollRef.current)
@@ -568,13 +685,17 @@ export default function InstancesPanel() {
     setQrOpen(false); setQrTarget(null); setQrImage(null); setQrStatus('loading')
   }
 
-  const startConnPoll = useCallback((name) => {
+  const startConnPoll = useCallback((name, provider) => {
     if (connPollRef.current) clearInterval(connPollRef.current)
     let firstPoll = true
     let prevState = ''
+    const isWaha = (provider ?? qrTarget?.provider) === 'waha'
     connPollRef.current = setInterval(async () => {
       try {
-        const r = await fetch(`/api/evolution/instance/${name}`)
+        const url = isWaha
+          ? `/api/waha/session/status/${name}`
+          : `/api/evolution/instance/${name}`
+        const r = await fetch(url)
         if (!r.ok) return
         const d = await r.json()
         const state = d?.instance?.state || d?.state || ''
@@ -593,18 +714,46 @@ export default function InstancesPanel() {
           fetchInstances()
         }
       } catch {}
-    }, 3000)
-  }, [fetchInstances])
+    }, 2000)
+  }, [fetchInstances, qrTarget])
 
   // ── Handlers ────────────────────────────────────────────────────────────────
   function closeMenu() { setMenuAnchor(null); setMenuInst(null) }
 
-  function handleQrClick(directInst) {
+  async function handleQrClick(directInst) {
     const inst = directInst || menuInst
     closeMenu()
-    setQrTarget(inst); setQrOpen(true)
-    startQrPoll(inst.name)
-    startConnPoll(inst.name)
+    setQrTarget(inst); setQrOpen(true); setQrStatus('loading')
+
+    if (inst.provider === 'waha') {
+      try {
+        const stRes = await fetch(`/api/waha/session/status/${inst.name}`)
+        const stData = stRes.ok ? await stRes.json() : {}
+        const wahaStatus = stData.status || ''
+
+        if (['FAILED', 'STOPPED'].includes(wahaStatus)) {
+          setQrStatus('retrying')
+          // 1. Logout to clear stored auth — forces a fresh QR instead of reconnect attempt
+          await fetch(`/api/waha/session/logout/${inst.name}`, { method: 'POST' }).catch(() => {})
+          await new Promise(r => setTimeout(r, 1500))
+          // 2. Restart the session
+          await fetch(`/api/waha/session/restart/${inst.name}`, { method: 'POST' }).catch(() => {})
+          // 3. Poll until SCAN_QR_CODE (max 20s)
+          for (let i = 0; i < 13; i++) {
+            await new Promise(r => setTimeout(r, 1500))
+            const sRes = await fetch(`/api/waha/session/status/${inst.name}`).catch(() => null)
+            if (sRes?.ok) {
+              const sd = await sRes.json()
+              if (sd.status === 'SCAN_QR_CODE' || sd.status === 'WORKING') break
+            }
+          }
+          setQrStatus('loading')
+        }
+      } catch {}
+    }
+
+    startQrPoll(inst.name, false, inst.provider)
+    startConnPoll(inst.name, inst.provider)
   }
 
   function handleAssignClick(directInst) {
@@ -907,7 +1056,11 @@ export default function InstancesPanel() {
     if (!pairPhone.trim()) { setPairErr('Ingresa el número de teléfono'); return }
     setPairLoading(true); setPairErr(''); setPairCode(null)
     try {
-      const r = await fetch(`/api/evolution/instance/${pairTarget?.name}?action=pairing-code`, {
+      const isWaha = pairTarget?.provider === 'waha'
+      const pairUrl = isWaha
+        ? `/api/waha/session/pairing-code/${pairTarget?.name}`
+        : `/api/evolution/instance/${pairTarget?.name}?action=pairing-code`
+      const r = await fetch(pairUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: pairPhone.replace(/\D/g, '') }),
@@ -1048,19 +1201,22 @@ export default function InstancesPanel() {
           </Box>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, ml: 'auto', alignItems: 'center' }}>
-          <Tooltip title={t.inst.refresh}>
-            <IconButton size="small" onClick={handleSync} disabled={syncing}
-              sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
-              {syncing ? <CircularProgress size={16} sx={{ color: 'var(--text-muted)' }} />
+          <Tooltip title={lang === 'en' ? 'Refresh session status' : 'Actualizar estado de sesiones'}>
+            <IconButton size="small" onClick={handleSyncWaha} disabled={wahaSyncing}
+              sx={{ color: 'var(--text-muted)', '&:hover': { color: '#60a5fa' } }}>
+              {wahaSyncing ? <CircularProgress size={16} sx={{ color: '#60a5fa' }} />
                 : <RefreshIcon fontSize="small" />}
             </IconButton>
           </Tooltip>
-          <Button variant="contained" startIcon={<AddIcon />}
-            onClick={openWizard}
-            sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'var(--accent,#2563eb)' },
-              fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, textTransform: 'none', px: 2 }}>
-            {t.inst.newBtn}
-          </Button>
+          <Tooltip title={lang === 'en' ? 'Connect a new WhatsApp number via QR code' : 'Conectar un nuevo número de WhatsApp con código QR'} placement="bottom">
+            <Button variant="outlined" startIcon={<AddIcon sx={{ fontSize: 15 }} />}
+              onClick={() => { setWahaOpen(true); setWahaName(''); setWahaErr(''); setWahaQr(null); setWahaConnected(false) }}
+              sx={{ color: '#60a5fa', borderColor: 'rgba(59,130,246,0.4)', fontWeight: 700,
+                fontSize: '0.82rem', borderRadius: 2, textTransform: 'none', px: 2,
+                '&:hover': { borderColor: '#60a5fa', bgcolor: 'rgba(59,130,246,0.08)' } }}>
+              {lang === 'en' ? 'Connect number' : 'Conectar número'}
+            </Button>
+          </Tooltip>
         </Box>
       </Box>
 
@@ -1157,7 +1313,6 @@ export default function InstancesPanel() {
                     key={uid}
                     user={user}
                     instances={userInsts}
-                    health={health}
                     onAddSlot={() => openPickForUser(user)}
                     onQr={inst => handleQrClick(inst)}
                     onEditNumber={inst => handleEditNumberClick(inst)}
@@ -1202,12 +1357,9 @@ export default function InstancesPanel() {
                         const status = inst.live_status || 'unknown'
                         const color  = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
                         const isConn = ['open','connected'].includes(status)
-                        const _REASON_COLOR = { banned: '#f87171', logged_out: '#fbbf24', conflict: '#fbbf24', multidevice: '#fbbf24', server_error: '#f87171', restart: '#fb923c', timeout: '#94a3b8', closed: '#94a3b8', replaced: '#fb923c' }
-                        const instDotColor = !isConn && inst.disconnect_reason ? (_REASON_COLOR[inst.disconnect_reason] ?? '#94a3b8') : color
+                        const _REASON_COLOR = { banned: '#f87171', logged_out: '#fbbf24', conflict: '#fbbf24', multidevice: '#fbbf24', server_error: '#f87171', restart: '#fb923c', timeout: '#94a3b8', closed: '#94a3b8', replaced: '#fb923c', disconnected: '#f87171', failed: '#f87171' }
+                        const instDotColor = (!isConn && status !== 'connecting' && inst.disconnect_reason) ? (_REASON_COLOR[inst.disconnect_reason] ?? '#f87171') : color
                         const instReasonLabel = inst.disconnect_reason ? ((lang === 'en' ? DISCONNECT_LABEL_EN : DISCONNECT_LABEL_ES)[inst.disconnect_reason] ?? inst.disconnect_reason_label) : null
-                        const instHealth = health[inst.name]
-                        const instUptime = instHealth?.uptime_pct ?? null
-                        const instUptimeColor = instUptime === null ? '#64748b' : instUptime >= 90 ? '#4ade80' : instUptime >= 60 ? '#fbbf24' : '#f87171'
                         return (
                           <Box key={inst.name} sx={{ border: '1px solid var(--border)',
                             borderRadius: 2, overflow: 'hidden', bgcolor: 'var(--card-bg)',
@@ -1224,12 +1376,6 @@ export default function InstancesPanel() {
                                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                     {inst.label || inst.name}
                                   </Typography>
-                                  {instUptime !== null && (
-                                    <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: instUptimeColor,
-                                      bgcolor: `${instUptimeColor}18`, px: 0.5, borderRadius: 0.8, lineHeight: 1.6, flexShrink: 0 }}>
-                                      {instUptime}%
-                                    </Typography>
-                                  )}
                                 </Box>
                                 <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
                                   {inst.number ? `+${inst.number}` : t.inst.noNumber}
@@ -1242,6 +1388,13 @@ export default function InstancesPanel() {
                               </Box>
                               {/* Actions */}
                               <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', flexShrink: 0 }}>
+                                <Tooltip title={t.inst.connectQr}>
+                                  <IconButton size="small" onClick={() => handleQrClick(inst)}
+                                    sx={{ color: '#60a5fa', border: '1px solid rgba(59,130,246,0.25)', borderRadius: 1.5, p: 0.5,
+                                      '&:hover': { bgcolor: 'rgba(59,130,246,0.1)', borderColor: 'rgba(59,130,246,0.5)' } }}>
+                                    <QrCodeIcon sx={{ fontSize: 13 }} />
+                                  </IconButton>
+                                </Tooltip>
                                 {!isExp ? (
                                   <Button size="small" onClick={e => { e.stopPropagation(); setExpandedAssign(inst.name) }}
                                     endIcon={<KeyboardArrowDownIcon sx={{ fontSize: '14px !important' }} />}
@@ -1357,11 +1510,9 @@ export default function InstancesPanel() {
             onChange={e => setEditNumberValue(e.target.value.replace(/[^\d]/g, ''))}
             onKeyDown={e => e.key === 'Enter' && !editNumberSaving && handleEditNumberSave()}
             sx={FIELD_SX}
-            InputProps={{
-              startAdornment: (
-                <Typography sx={{ color: 'var(--text-muted,rgba(255,255,255,0.3))', fontSize: '0.88rem', mr: 0.5, userSelect: 'none' }}>+</Typography>
-              ),
-            }}
+            slotProps={{ input: { startAdornment: (
+              <Typography sx={{ color: 'var(--text-muted,rgba(255,255,255,0.3))', fontSize: '0.88rem', mr: 0.5, userSelect: 'none' }}>+</Typography>
+            ) } }}
             helperText={editNumberErr
               ? <span style={{ color: '#f87171' }}>{editNumberErr}</span>
               : <span style={{ color: 'var(--text-muted,rgba(255,255,255,0.28))', fontSize: '0.67rem' }}>
@@ -1443,7 +1594,7 @@ export default function InstancesPanel() {
                         </Typography>
                       </Box>
                       <Typography sx={{ fontSize: '0.65rem', color, fontWeight: 600, flexShrink: 0 }}>
-                        {['open', 'connected'].includes(status) ? t.inst.statusConnected : status === 'close' ? t.inst.statusDisconnected : t.inst.statusUnknown}
+                        {['open', 'connected', 'WORKING'].includes(status) ? t.inst.statusConnected : ['close', 'disconnected'].includes(status) ? t.inst.statusDisconnected : t.inst.statusUnknown}
                       </Typography>
                     </Box>
                   )
@@ -2050,27 +2201,31 @@ export default function InstancesPanel() {
               ? <img src={qrImage} alt="QR" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
               : (
                 <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5, p: 2 }}>
-                  <CircularProgress size={32} sx={{ color: '#3b82f6' }} />
+                  <CircularProgress size={32} sx={{ color: qrStatus === 'connecting' ? '#22c55e' : '#3b82f6' }} />
                   <Typography sx={{ color: '#666', fontSize: '0.72rem', textAlign: 'center', lineHeight: 1.4 }}>
                     {qrStatus === 'retrying'
                       ? t.inst.qrRetrying
                       : qrStatus === 'error'
                         ? t.inst.qrError
-                        : t.inst.qrGenerating}
+                        : qrStatus === 'connecting'
+                          ? t.inst.qrConnecting
+                          : t.inst.qrGenerating}
                   </Typography>
                 </Box>
               )
             }
           </Box>
 
-          {/* Retry button */}
+          {/* Retry button — hidden while connecting */}
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+            {qrStatus !== 'connecting' && (
             <Button size="small" startIcon={<RefreshIcon sx={{ fontSize: '14px !important' }} />}
-              onClick={() => { if (qrTarget) startQrPoll(qrTarget.name, qrStatus === 'error') }}
+              onClick={() => { if (qrTarget) startQrPoll(qrTarget.name, qrStatus === 'error', qrTarget.provider) }}
               sx={{ color: 'rgba(255,255,255,0.35)', textTransform: 'none', fontSize: '0.72rem',
                 '&:hover': { color: 'rgba(255,255,255,0.7)' } }}>
               {qrStatus === 'error' ? t.inst.qrForce : t.inst.qrRetryBtn}
             </Button>
+            )}
             {qrStatus === 'error' && (
               <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,100,100,0.6)', textAlign: 'center', maxWidth: 220 }}>
                 {t.inst.qrForceWarn}
@@ -2315,6 +2470,155 @@ export default function InstancesPanel() {
             </Button>
           </Box>
         </Box>
+      </Dialog>
+
+      {/* ── WAHA session dialog ── */}
+      <Dialog open={wahaOpen} onClose={() => !wahaLoading && setWahaOpen(false)} sx={{
+        '& .MuiDialog-paper': {
+          background: 'linear-gradient(160deg, rgba(96,165,250,0.1) 0%, var(--card-bg,#161d2e) 55%)',
+          border: '1px solid rgba(96,165,250,0.2)',
+          borderRadius: 3, minWidth: 380,
+          boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+        },
+      }}>
+        <DialogTitle sx={{ pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+            <Box sx={{
+              width: 34, height: 34, borderRadius: 2, flexShrink: 0,
+              bgcolor: '#1e3a5f',
+              border: '1px solid #3b82f6',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <SmartphoneIcon sx={{ fontSize: 18, color: '#60a5fa' }} />
+            </Box>
+            <Box>
+              <Typography sx={{ color: 'var(--text,white)', fontWeight: 700, fontSize: '0.97rem', lineHeight: 1.2 }}>
+                {lang === 'en' ? 'New WAHA Session' : 'Nueva Sesión WAHA'}
+              </Typography>
+              <Typography sx={{ color: 'var(--text-muted,rgba(255,255,255,0.4))', fontSize: '0.72rem', mt: 0.2 }}>
+                {lang === 'en' ? 'Link a WhatsApp number via WAHA' : 'Vincula un número de WhatsApp vía WAHA'}
+              </Typography>
+            </Box>
+          </Box>
+        </DialogTitle>
+        <DialogContent sx={{ pt: '4px !important', px: 3 }}>
+          {wahaScanned && !wahaConnected ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, py: 2 }}>
+              <CircularProgress size={40} thickness={3} sx={{ color: '#25d366' }} />
+              <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.95rem' }}>
+                {lang === 'en' ? 'QR scanned — authenticating…' : 'QR escaneado — autenticando…'}
+              </Typography>
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>
+                {lang === 'en'
+                  ? 'WhatsApp is verifying the session on your phone'
+                  : 'WhatsApp está verificando la sesión en tu teléfono'}
+              </Typography>
+            </Box>
+          ) : wahaConnected ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5, py: 2 }}>
+              <CheckCircleIcon sx={{ fontSize: 52, color: '#4ade80' }} />
+              <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '1rem' }}>
+                {lang === 'en' ? 'Session connected!' : '¡Sesión conectada!'}
+              </Typography>
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem', textAlign: 'center' }}>
+                {lang === 'en' ? 'Assign it to a user from the panel.' : 'Asígnala a un usuario desde el panel.'}
+              </Typography>
+            </Box>
+          ) : wahaQr ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5, py: 0.5 }}>
+              <Box component="img" src={wahaQr} alt="QR"
+                sx={{ width: 220, height: 220, borderRadius: 2, border: '2px solid #334155', bgcolor: '#fff', p: 1 }} />
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>
+                {lang === 'en'
+                  ? 'Scan with WhatsApp → Settings → Linked Devices → Link a Device'
+                  : 'Escanea con WhatsApp → Ajustes → Dispositivos vinculados → Vincular dispositivo'}
+              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.6, borderRadius: 2, bgcolor: '#1e3a5f', border: '1px solid #3b82f6' }}>
+                <CircularProgress size={12} sx={{ color: '#60a5fa' }} />
+                <Typography sx={{ color: '#60a5fa', fontSize: '0.72rem', fontWeight: 600 }}>
+                  {lang === 'en' ? 'Waiting for scan…' : 'Esperando escaneo…'}
+                </Typography>
+              </Box>
+            </Box>
+          ) : (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <TextField label={lang === 'en' ? 'Session name' : 'Nombre de sesión'} value={wahaName}
+                onChange={e => setWahaName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                placeholder="mi-sesion-1" size="small" fullWidth autoFocus sx={FIELD_SX}
+                onKeyDown={e => e.key === 'Enter' && !wahaLoading && wahaName.trim() && handleWahaCreate()}
+                helperText={<span style={{ color: 'var(--text-muted,rgba(255,255,255,0.3))', fontSize: '0.68rem' }}>
+                  {lang === 'en' ? 'Lowercase letters, numbers and dashes only' : 'Solo minúsculas, números y guiones'}
+                </span>} />
+              {wahaErr && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1.5, py: 1, borderRadius: 1.5, bgcolor: '#450a0a', border: '1px solid #ef4444' }}>
+                  <Typography sx={{ color: '#f87171', fontSize: '0.78rem' }}>{wahaErr}</Typography>
+                </Box>
+              )}
+              {wahaLoading && !wahaErr && (() => {
+                const steps = [
+                  { key: 'STOPPED',       label: lang === 'en' ? 'Creating session…'  : 'Creando sesión…' },
+                  { key: 'STARTING',      label: lang === 'en' ? 'Chrome starting…'   : 'Chrome iniciando…' },
+                  { key: 'SCAN_QR_CODE',  label: lang === 'en' ? 'Generating QR…'     : 'Generando QR…' },
+                ]
+                const activeIdx = steps.findIndex(s => s.key === wahaStatus)
+                return (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.2, p: 1.5, borderRadius: 1.5, bgcolor: '#1c2333', border: '1px solid #334155' }}>
+                    {steps.map((s, i) => {
+                      const done    = activeIdx > i
+                      const active  = activeIdx === i
+                      const pending = activeIdx < i && activeIdx !== -1
+                      const initial = activeIdx === -1 && i === 0
+                      return (
+                        <Box key={s.key} sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+                          <Box sx={{ width: 18, height: 18, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            {done
+                              ? <CheckCircleIcon sx={{ fontSize: 16, color: '#4ade80' }} />
+                              : (active || initial)
+                                ? <CircularProgress size={14} sx={{ color: '#60a5fa' }} />
+                                : <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#475569' }} />
+                            }
+                          </Box>
+                          <Typography sx={{
+                            fontSize: '0.78rem',
+                            color: done ? '#4ade80' : (active || initial) ? 'var(--text)' : '#64748b',
+                            fontWeight: (active || initial) ? 600 : 400,
+                          }}>
+                            {s.label}
+                          </Typography>
+                        </Box>
+                      )
+                    })}
+                  </Box>
+                )
+              })()}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
+          {!(wahaScanned && !wahaConnected) && (
+            <Button onClick={wahaClose}
+              sx={{ color: 'var(--text-muted,rgba(255,255,255,0.4))', textTransform: 'none', fontSize: '0.82rem', borderRadius: 2 }}>
+              {wahaConnected ? (lang === 'en' ? 'Close' : 'Cerrar') : (lang === 'en' ? 'Cancel' : 'Cancelar')}
+            </Button>
+          )}
+          {!wahaQr && !wahaConnected && !wahaScanned && (
+            <Button
+              onClick={handleWahaCreate}
+              disabled={wahaLoading || !wahaName.trim()}
+              variant="contained"
+              sx={{
+                bgcolor: '#3b82f6', textTransform: 'none', fontWeight: 700,
+                fontSize: '0.82rem', borderRadius: 2, minWidth: 130,
+                '&:hover': { bgcolor: '#2563eb' },
+                '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.2)' },
+              }}
+            >
+              {wahaLoading
+                ? <><CircularProgress size={14} sx={{ color: 'white', mr: 1 }} />{lang === 'en' ? 'Creating…' : 'Creando…'}</>
+                : (lang === 'en' ? 'Create' : 'Crear')}
+            </Button>
+          )}
+        </DialogActions>
       </Dialog>
 
     </Box>

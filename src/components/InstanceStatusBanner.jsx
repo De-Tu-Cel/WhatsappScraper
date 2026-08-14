@@ -53,8 +53,8 @@ export function InstanceStatusDot({ status, sx }) {
   const { user } = useUser()
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, ...sx }}>
-      <Box sx={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, bgcolor: status === 'connected' ? '#22c55e' : status === 'disconnected' ? '#ef4444' : 'rgba(255,255,255,0.2)' }} />
-      <Typography sx={{ fontSize: '0.62rem', color: status === 'connected' ? 'rgba(34,197,94,0.7)' : status === 'disconnected' ? 'rgba(239,68,68,0.7)' : 'rgba(255,255,255,0.2)' }}>
+      <Box sx={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, bgcolor: status === 'connected' ? '#22c55e' : status === 'disconnected' ? '#ef4444' : '#64748b' }} />
+      <Typography sx={{ fontSize: '0.62rem', color: status === 'connected' ? 'rgba(34,197,94,0.7)' : status === 'disconnected' ? 'rgba(239,68,68,0.7)' : '#64748b' }}>
         {status === 'connected'
           ? `${user?.evolution_instance || 'WhatsApp'} ${t.instance.connectedLbl}`
           : status === 'disconnected' ? t.instance.disconnectedLbl : t.instance.verifying}

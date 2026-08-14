@@ -26,21 +26,29 @@ function _startPolling(token) {
 
   async function _tick() {
     try {
-      const res = await fetch('/api/evolution/instances/user-status', {
-        headers: { 'x-user-token': _userToken },
-      })
-      if (!res.ok) {
-        _status = 'disconnected'
-        _disconnectReason = null
-      } else {
-        const d = await res.json()
-        _connectedCount = d.connected_count ?? 0
-        _totalCount     = d.total ?? 0
-        _status = d.connected ? 'connected' : 'disconnected'
-        _disconnectReason = (!d.connected && d.disconnect_reason)
-          ? { key: d.disconnect_reason, label: d.disconnect_reason_label || 'Desconectada', code: d.disconnect_code ?? null }
-          : null
-      }
+      const headers = { 'x-user-token': _userToken }
+      const [evoRes, wahaRes] = await Promise.allSettled([
+        fetch('/api/evolution/instances/user-status', { headers }),
+        fetch('/api/waha/instances/user-status',      { headers }),
+      ])
+      const evo  = evoRes.status  === 'fulfilled' && evoRes.value.ok  ? await evoRes.value.json()  : null
+      const waha = wahaRes.status === 'fulfilled' && wahaRes.value.ok ? await wahaRes.value.json() : null
+
+      const evoConnected  = evo?.connected  ?? false
+      const wahaConnected = waha?.connected ?? false
+      _connectedCount = (evo?.connected_count ?? 0) + (waha?.connected_count ?? 0)
+      _totalCount     = (evo?.total ?? 0)           + (waha?.total ?? 0)
+      _status = (evoConnected || wahaConnected) ? 'connected' : 'disconnected'
+
+      // Prefer WAHA disconnect reason if both are down (WAHA errors are more specific)
+      const anyDown = !evoConnected || !wahaConnected
+      const reasonSource = (!wahaConnected && waha?.disconnect_reason) ? waha
+                         : (!evoConnected  && evo?.disconnect_reason)  ? evo
+                         : null
+      _disconnectReason = (_status === 'disconnected' && reasonSource)
+        ? { key: reasonSource.disconnect_reason, label: reasonSource.disconnect_reason_label || 'Desconectada', code: reasonSource.disconnect_code ?? null }
+        : null
+      void anyDown  // suppress unused-var warning
     } catch {
       _status = 'disconnected'
       _disconnectReason = null

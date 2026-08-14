@@ -107,25 +107,40 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
         company_id = str(_scraped_id)
         print(f"♻️  Empresa guardada por scraper ({_db_action}), ID: {company_id}")
     else:
-        company_id = db.insert_company({
-            "name": scraped["name"],
-            "industry": scraped["industry"],
-            "description": scraped["description"],
-            "main_activity": _extra.get("main_activity"),
-            "website": website,
-            "domain": _domain,
-            "address": _extra.get("address"),
-            "city": _extra.get("city"),
-            "state": _extra.get("state"),
-            "country": _extra.get("country"),
-            "postal_code": _extra.get("postal_code"),
-            "business_hours": _extra.get("business_hours"),
-            "services": _extra.get("services"),
-            "products": _extra.get("products"),
-            "metadata": scraped["metadata"],
-            "has_whatsapp": has_whatsapp,
-        })
-        print(f"✅ Empresa nueva guardada con ID: {company_id}")
+        # Dedup por WhatsApp: si no hay dominio, buscar si ya existe una empresa con
+        # el mismo número para no crear duplicados en búsquedas repetidas.
+        _primary_wa = (_cr.get("whatsapp_numbers") or [None])[0]
+        _existing_by_wa = None
+        if _primary_wa and not _domain:
+            _existing_contact = db.db.contacts.find_one(
+                {"type": "whatsapp", "value": _primary_wa}
+            )
+            if _existing_contact:
+                _existing_by_wa = str(_existing_contact["company_id"])
+                print(f"♻️  Número WA {_primary_wa} ya existe en empresa {_existing_by_wa} — reutilizando")
+
+        if _existing_by_wa:
+            company_id = _existing_by_wa
+        else:
+            company_id = db.insert_company({
+                "name": scraped["name"],
+                "industry": scraped["industry"],
+                "description": scraped["description"],
+                "main_activity": _extra.get("main_activity"),
+                "website": website,
+                "domain": _domain,
+                "address": _extra.get("address"),
+                "city": _extra.get("city"),
+                "state": _extra.get("state"),
+                "country": _extra.get("country"),
+                "postal_code": _extra.get("postal_code"),
+                "business_hours": _extra.get("business_hours"),
+                "services": _extra.get("services"),
+                "products": _extra.get("products"),
+                "metadata": scraped["metadata"],
+                "has_whatsapp": has_whatsapp,
+            })
+            print(f"✅ Empresa nueva guardada con ID: {company_id}")
 
     # ========================================================================
     # GUARDAR CONTACTOS DE WHATSAPP

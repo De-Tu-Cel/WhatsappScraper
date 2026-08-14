@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
 
   # ── Frontend (Next.js) ────────────────────────────────────────
@@ -11,10 +9,15 @@ services:
       - BACKEND_URL=http://backend:8000
       - NODE_ENV=production
     ports:
-      - "3000"
+      - "3000:3000"
     depends_on:
       - backend
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
 
   # ── Backend (FastAPI) ─────────────────────────────────────────
   backend:
@@ -24,32 +27,44 @@ services:
     environment:
       - MONGODB_URI=${MONGODB_URI}
       - DATABASE_NAME=commercial
-      - EVOLUTION_API_URL=http://evolution:8080
-      - EVOLUTION_API_KEY=${EVOLUTION_API_KEY}
-      - EVOLUTION_INSTANCE=${EVOLUTION_INSTANCE}
+      - WAHA_API_URL=http://waha:3000
+      - WAHA_API_KEY=${WAHA_API_KEY}
+      - APP_PUBLIC_URL=${APP_PUBLIC_URL}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
     ports:
-      - "8000"
+      - "8000:8000"
     depends_on:
-      - evolution
+      - waha
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 100m
+        max-file: "10"
 
-  # ── Evolution API ─────────────────────────────────────────────
-  evolution:
-    image: atendai/evolution-api:v1.8.2
+  # ── WAHA (WhatsApp HTTP API — NOWEB engine) ───────────────────
+  waha:
+    image: devlikeapro/waha:noweb
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     volumes:
-      - evolution_data:/evolution/instances
+      - waha_sessions:/app/.sessions
+      - waha_media:/app/.media
     environment:
-      - SERVER_PORT=8080
-      - AUTHENTICATION_TYPE=apikey
-      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY}
-      - WEBHOOK_GLOBAL_URL=${WEBHOOK_URL}
-      - WEBHOOK_GLOBAL_ENABLED=true
-      - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
-      - WEBHOOK_EVENTS_MESSAGES_UPDATE=true
+      - WHATSAPP_DEFAULT_ENGINE=NOWEB
+      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WAHA_PRINT_QR=false
     ports:
-      - "8080"
+      - "3001:3000"
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 100m
+        max-file: "10"
 
 volumes:
-  evolution_data:
+  waha_sessions:
+  waha_media:

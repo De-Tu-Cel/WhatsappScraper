@@ -34,6 +34,12 @@ import TextField from '@mui/material/TextField'
 import InputAdornment from '@mui/material/InputAdornment'
 import Snackbar from '@mui/material/Snackbar'
 import Alert from '@mui/material/Alert'
+import Dialog from '@mui/material/Dialog'
+import DialogTitle from '@mui/material/DialogTitle'
+import DialogContent from '@mui/material/DialogContent'
+import DialogActions from '@mui/material/DialogActions'
+import Button from '@mui/material/Button'
+import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight'
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
@@ -66,6 +72,7 @@ const CATEGORY_CONFIG = {
   // solo para que análisis viejos guardados con esa categoría se muestren igual que "bot".
   menu:       { tKey: 'bot',       color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', icon: '🤖' },
   bot_ia:     { tKey: 'botAi',     color: '#c084fc', bg: 'rgba(192,132,252,0.15)', icon: '🧠' },
+  sin_respuesta: { tKey: 'noReply', color: '#f87171', bg: 'rgba(248,113,113,0.12)', icon: '🔇' },
 }
 
 // Normaliza la categoría legado "menu" a la vigente "bot" para filtros/conteos — la
@@ -254,6 +261,7 @@ export default function Analytics() {
   const [reportThread, setReportThread]     = useState([])
   const [captureVisible, setCaptureVisible] = useState(false)
   const [expandedRows, setExpandedRows]     = useState(new Set())
+  const [pendingReportConfirm, setPendingReportConfirm] = useState(null) // { row, filterNum, message, resolvesBy }
 
   function toggleExpand(company_id) {
     setExpandedRows(prev => {
@@ -357,7 +365,7 @@ export default function Analytics() {
     return () => { if (esRef.current === es) { es.close(); esRef.current = null } }
   }, [data, mutateAnalytics, analyzeAttempts, triggerRequeue])
 
-  const handleGenerateReport = useCallback(async (row, filterNum = null) => {
+  const handleGenerateReport = useCallback(async (row, filterNum = null, force = false) => {
     const genKey = filterNum ? `${row.company_id}_${filterNum}` : row.company_id
     setGenerating(genKey)
     try {
@@ -408,10 +416,21 @@ export default function Analytics() {
       const reportRes = await fetch(`/api/reports/${row.company_id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ screenshot_b64: screenshotB64, filter_number: filterNum || null }),
+        body: JSON.stringify({ screenshot_b64: screenshotB64, filter_number: filterNum || null, force }),
       })
 
       if (!reportRes.ok) {
+        if (reportRes.status === 409) {
+          let detail = null
+          try { detail = JSON.parse(await reportRes.text())?.error } catch {}
+          try { detail = typeof detail === 'string' ? JSON.parse(detail)?.detail : detail } catch {}
+          setPendingReportConfirm({
+            row, filterNum,
+            message: detail?.message || 'Todavía no se confirma si la última respuesta es de un bot o una persona.',
+            resolvesBy: detail?.resolves_by || null,
+          })
+          return
+        }
         const errText = await reportRes.text()
         notify(`Error al generar el reporte: ${errText || reportRes.statusText}`)
         return
@@ -1178,6 +1197,40 @@ export default function Analytics() {
           {snack.message}
         </Alert>
       </Snackbar>
+
+      <Dialog open={!!pendingReportConfirm} onClose={() => setPendingReportConfirm(null)} maxWidth="xs" fullWidth
+        slotProps={{ paper: { sx: { bgcolor: 'var(--card-bg,#1e293b)', backgroundImage: 'none', color: 'var(--text,#f1f5f9)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 3 } } }}>
+        <DialogTitle sx={{ pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+            <WarningAmberIcon sx={{ fontSize: 20, color: '#f59e0b' }} />
+            <Typography sx={{ fontWeight: 700, fontSize: '0.95rem' }}>Análisis todavía en progreso</Typography>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Typography sx={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+            {pendingReportConfirm?.message}
+            {pendingReportConfirm?.resolvesBy && (
+              <> Se resuelve solo antes de las {new Date(pendingReportConfirm.resolvesBy).toLocaleString('es-MX', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' })}.</>
+            )}
+            {' '}¿Quieres descargarlo de todos modos con esa categoría aún sin confirmar?
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
+          <Button onClick={() => setPendingReportConfirm(null)} sx={{ color: 'var(--text-muted)', textTransform: 'none' }}>
+            Esperar
+          </Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              const { row, filterNum } = pendingReportConfirm
+              setPendingReportConfirm(null)
+              handleGenerateReport(row, filterNum, true)
+            }}
+            sx={{ bgcolor: '#f59e0b', color: '#000', textTransform: 'none', fontWeight: 700, '&:hover': { bgcolor: '#fbbf24' } }}>
+            Descargar de todos modos
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

@@ -32,6 +32,7 @@ ENV/
 *.egg-info/
 *.egg
 build/
+!src/app/api/andy/build/
 develop-eggs/
 eggs/
 sdist/

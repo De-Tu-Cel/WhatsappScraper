@@ -32,6 +32,10 @@ EVOLUTION_API_KEY      = os.getenv("EVOLUTION_API_KEY", "")
 EVOLUTION_INSTANCE     = os.getenv("EVOLUTION_INSTANCE", "")
 APP_PUBLIC_URL         = os.getenv("APP_PUBLIC_URL", "https://app.detucel.com")
 
+# WAHA (WhatsApp HTTP API) — alternative provider with Chromium-based engine
+WAHA_API_URL           = os.getenv("WAHA_API_URL", "http://localhost:3000")
+WAHA_API_KEY           = os.getenv("WAHA_API_KEY", "")
+
 # LLM API keys — priority: OPENAI > DEEPSEEK
 OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY", "")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")

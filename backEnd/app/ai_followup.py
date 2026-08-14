@@ -439,42 +439,81 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
     # the moment that one specific instance disconnects, even if others are healthy.
     from app.whatsapp_evolution import EvolutionClient, pick_connected_instance
     preferred_instance = None
+    _inst_provider = "evolution"
     try:
         from bson import ObjectId
         if company_id and len(company_id) == 24:
             co = db.db.companies.find_one({"_id": ObjectId(company_id)}, {"assigned_instance": 1})
             preferred_instance = (co or {}).get("assigned_instance")
+            if preferred_instance:
+                _doc = db.db.instances.find_one({"name": preferred_instance}, {"provider": 1})
+                if _doc and _doc.get("provider") == "waha":
+                    _inst_provider = "waha"
     except Exception:
         pass
-    instance = pick_connected_instance(db, EVOLUTION_API_URL, EVOLUTION_API_KEY, preferred_instance)
-    if not instance:
-        log.warning("[AIFollowup] no hay ninguna instancia conectada — Andy no puede enviar a %s", phone_number)
-        print(f"[AIFollowup] EXIT: sin instancias conectadas (phone={phone_number})")
-        db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": False}})
-        return
-    if instance != preferred_instance and company_id and len(company_id) == 24:
-        try:
-            db.db.companies.update_one({"_id": ObjectId(company_id)}, {"$set": {"assigned_instance": instance}})
-        except Exception:
-            pass
+
+    if _inst_provider == "waha":
+        instance = preferred_instance
+        if not instance:
+            log.warning("[AIFollowup] WAHA: sin sesión asignada — Andy no puede enviar a %s", phone_number)
+            db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": False}})
+            return
+    else:
+        instance = pick_connected_instance(db, EVOLUTION_API_URL, EVOLUTION_API_KEY, preferred_instance)
+        if not instance:
+            log.warning("[AIFollowup] no hay ninguna instancia conectada — Andy no puede enviar a %s", phone_number)
+            print(f"[AIFollowup] EXIT: sin instancias conectadas (phone={phone_number})")
+            db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": False}})
+            return
+        if instance != preferred_instance and company_id and len(company_id) == 24:
+            try:
+                db.db.companies.update_one({"_id": ObjectId(company_id)}, {"$set": {"assigned_instance": instance}})
+            except Exception:
+                pass
 
     try:
-        # Simulate typing on WhatsApp
-        _send_typing_presence(phone_number, instance)
-        typing_delay = random.uniform(TYPING_DELAY_MIN, TYPING_DELAY_MAX)
-        time.sleep(typing_delay)
-
-        # Send message
-        evo = EvolutionClient(EVOLUTION_API_URL, EVOLUTION_API_KEY, instance)
-        send_result = evo.send_text(phone_number, ai_text)
-        evo_json = send_result.get("response_json", {})
-        message_id = evo_json.get("key", {}).get("id") or evo_json.get("id")
-        status = "sent" if send_result.get("status_code") in (200, 201) else "failed"
+        if _inst_provider == "waha":
+            from app.whatsapp_waha import WAHAClient, _clean_digits as _waha_clean
+            from app.config import WAHA_API_URL, WAHA_API_KEY
+            waha_client = WAHAClient(WAHA_API_URL, WAHA_API_KEY, instance)
+            _real_jid = waha_client.get_jid(phone_number)
+            _phone_digits = _waha_clean(phone_number)
+            # Map phone digits so inbound webhook can route replies correctly
+            db.db.jid_map.update_one({"jid": _phone_digits},
+                {"$set": {"company_id": company_id, "updated_at": datetime.now()}}, upsert=True)
+            if _real_jid and _real_jid != _phone_digits:
+                db.db.jid_map.update_one({"jid": _real_jid},
+                    {"$set": {"company_id": company_id, "updated_at": datetime.now()}}, upsert=True)
+            # Save as contact before sending — reduces spam/ban signals
+            try:
+                from bson import ObjectId as _OId
+                if company_id and len(company_id) == 24:
+                    _co = db.db.companies.find_one({"_id": _OId(company_id)}, {"name": 1})
+                    _co_name = (_co or {}).get("name", "")
+                    if _co_name:
+                        waha_client.label_contact(_phone_digits, _co_name)
+            except Exception:
+                pass
+            typing_delay_ms = int(random.uniform(TYPING_DELAY_MIN, TYPING_DELAY_MAX) * 1000)
+            send_result = waha_client.send_text(phone_number, ai_text, delay_ms=typing_delay_ms)
+            resp_json = send_result.get("response_json", {})
+            message_id = resp_json.get("id") or resp_json.get("key", {}).get("id")
+            status = "sent" if send_result.get("status_code") in (200, 201) else "failed"
+        else:
+            # Simulate typing on WhatsApp (Evolution native presence API)
+            _send_typing_presence(phone_number, instance)
+            typing_delay = random.uniform(TYPING_DELAY_MIN, TYPING_DELAY_MAX)
+            time.sleep(typing_delay)
+            evo = EvolutionClient(EVOLUTION_API_URL, EVOLUTION_API_KEY, instance)
+            send_result = evo.send_text(phone_number, ai_text)
+            resp_json = send_result.get("response_json", {})
+            message_id = resp_json.get("key", {}).get("id") or resp_json.get("id")
+            status = "sent" if send_result.get("status_code") in (200, 201) else "failed"
 
         # Persist AI message in message_logs
         from datetime import datetime as _dt
         ai_log_id = db.insert_message_log({
-            "platform": "evolution",
+            "platform": _inst_provider,
             "direction": "outbound",
             "channel": "whatsapp",
             "company_id": company_id,

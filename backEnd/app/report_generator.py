@@ -144,11 +144,18 @@ def _st(name, **kw):
     return ParagraphStyle(name, **kw)
 
 
-def _reaction_str(m) -> str:
+def _reaction_str(m, seconds=None) -> str:
+    """`m` = reaction_time_min (redondeado a 0.1 min = bloques de 6s — se usa
+    para minutos/horas, donde ese redondeo no importa). `seconds` = valor exacto
+    sin redondear a bloques; si se pasa y la respuesta fue menor a 1 minuto, se
+    usa ese en vez de derivarlo de `m` — evita que 3-9s reales se vean todos
+    igual como "6 seg"."""
     if m is None:
         return "—"
     m = float(m)
     if m < 1:
+        if seconds is not None:
+            return f"{round(float(seconds))} seg"
         return f"{round(m * 60)} seg"
     if m < 60:
         return f"{round(m)} min"
@@ -168,6 +175,16 @@ def _speed_label(reaction_min):
     if m < 120:
         return "Regular", C["amber"]
     return "Lento", C["red"]
+
+
+def _business_hours_label(business_hours):
+    """(label, color) para el horario de respuesta. business_hours puede ser
+    True/False/None — None significa "no hay dato" (ej. la empresa solo tiene
+    mensajes salientes, sin ninguna respuesta analizada todavía) y NO debe
+    mostrarse como "Fuera de horario", que afirmaría algo que no sabemos."""
+    if business_hours is None:
+        return "Sin datos", C["muted"]
+    return ("En horario habil", C["humano"]) if business_hours else ("Fuera de horario", C["amber"])
 
 
 _SVC_DIMS = [
@@ -707,21 +724,38 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
             break
 
     # ── Analytics values ──────────────────────────────────────────────────────
-    cat_key              = analytics.get("category", "humano")
-    cat_label, cat_color = CATEGORY_INFO.get(cat_key, ("Desconocido", C["muted"]))
+    # analytics.get("category", "humano") NO alcanza cuando la llave existe con
+    # valor None (pasa cuando la empresa solo tiene salientes, sin ninguna
+    # respuesta analizada aún — ver get_analytics() en database.py) — el default
+    # de .get() solo aplica si la llave falta por completo, no si vale None.
+    # Sin este chequeo explícito, ese caso caía en "Desconocido" como si fuera
+    # un error, cuando en realidad es "todavía no hay nada que clasificar".
+    cat_key = analytics.get("category")
+    if cat_key is None:
+        cat_label, cat_color = "Pendiente de analisis", C["muted"]
+    else:
+        cat_label, cat_color = CATEGORY_INFO.get(cat_key, ("Desconocido", C["muted"]))
     quality              = float(analytics.get("response_quality") or 0)
     reaction_min         = analytics.get("reaction_time_min")
     try:
         reaction_min = float(reaction_min) if reaction_min is not None else None
     except (TypeError, ValueError):
         reaction_min = None
-    business_hours = bool(analytics.get("business_hours", False))
+    reaction_seconds = analytics.get("reaction_time_seconds")
+    try:
+        reaction_seconds = float(reaction_seconds) if reaction_seconds is not None else None
+    except (TypeError, ValueError):
+        reaction_seconds = None
+    # Igual que category: .get(key, False) no aplica el default si la llave
+    # existe con valor None — se preserva el tri-estado (True/False/None) y se
+    # resuelve en _business_hours_label(), que sí distingue "sin dato" de
+    # "fuera de horario" (antes ambos casos se veían idénticos en el reporte).
+    business_hours = analytics.get("business_hours")
     notes          = _safe(analytics.get("notes") or "")
 
     qual_level, qual_color   = QUALITY_LEVELS.get(round(quality), ("Desconocido", C["muted"]))
     speed_label, speed_color = _speed_label(reaction_min)
-    bh_label = "En horario habil" if business_hours else "Fuera de horario"
-    bh_color = C["humano"] if business_hours else C["amber"]
+    bh_label, bh_color = _business_hours_label(business_hours)
 
     sent_c = sum(1 for m in thread if m.get("direction") == "outbound")
     recv_c = sum(1 for m in thread if m.get("direction") == "inbound")
@@ -875,10 +909,9 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
         ]))
         return t
 
-    reaction_str = _reaction_str(reaction_min) if reaction_min is not None else "Sin datos"
+    reaction_str = _reaction_str(reaction_min, reaction_seconds) if reaction_min is not None else "Sin datos"
     react_color  = _speed_label(reaction_min)[1] if reaction_min is not None else C["muted"]
-    bh_label     = "En horario habil" if business_hours else "Fuera de horario"
-    bh_color     = C["humano"] if business_hours else C["amber"]
+    bh_label, bh_color = _business_hours_label(business_hours)
 
     right_items.append(_info_row("Tiempo de primera respuesta", reaction_str, react_color))
     right_items.append(_info_row("Horario de respuesta",        bh_label,     bh_color))

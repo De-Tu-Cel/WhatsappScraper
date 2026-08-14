@@ -1,7 +1,8 @@
 # database.py
 import re
 from pymongo import MongoClient
-from datetime import datetime, timedelta
+from pymongo.errors import DuplicateKeyError
+from datetime import datetime, timedelta, timezone
 from gridfs import GridFS
 from config import MONGODB_URI, DATABASE_NAME
 
@@ -41,6 +42,22 @@ class MongoDBManager:
             self.db.companies.create_index("domain", unique=True, sparse=True)
         except Exception:
             pass  # duplicates exist — index will be created after cleanup
+        try:
+            # Partial (not sparse) porque casi todos los mensajes tienen message_id=None
+            # explícito (no ausente) — un índice sparse+unique seguiría exigiendo
+            # unicidad entre todos los None y fallaría de inmediato. Solo exige
+            # unicidad cuando message_id es un string real. Sin este índice, dos
+            # entregas casi simultáneas del webhook (retry de Evolution/WhatsApp,
+            # visto en producción con 187ms de diferencia) pueden pasar el chequeo
+            # find-then-insert de save_evolution_log() antes de que la primera
+            # termine de guardarse — duplicando el mensaje con clasificaciones
+            # distintas y pudiendo encolar el seguimiento de IA dos veces.
+            self.db.message_logs.create_index(
+                "message_id", unique=True,
+                partialFilterExpression={"message_id": {"$type": "string"}},
+            )
+        except Exception:
+            pass  # ya existen duplicados — el índice se creará tras limpiarlos
 
     def get_classifier_settings(self) -> dict:
         """Umbrales configurables del flujo T1/T2 (Settings > Clasificación). Sin
@@ -100,7 +117,9 @@ class MongoDBManager:
         return str(result.inserted_id)
 
     def insert_message_log(self, log_data):
-        log_data["created_at"] = log_data.get("created_at", datetime.now())
+        # Naive-pero-UTC: is_business_hours() asume UTC cuando el datetime no
+        # tiene tzinfo. datetime.now() (hora local del servidor) rompía eso.
+        log_data["created_at"] = log_data.get("created_at", datetime.now(timezone.utc).replace(tzinfo=None))
         result = self.db.message_logs.insert_one(log_data)
         return str(result.inserted_id)
 
@@ -349,7 +368,7 @@ class MongoDBManager:
         # inbound messages — otherwise personal contacts get mis-attributed.
         if not allow_fallback:
             return None
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
         cutoff = datetime.now() - timedelta(hours=1)
         recent = list(self.db.message_logs.find(
             {"direction": "outbound", "status": {"$ne": "failed"},
@@ -393,7 +412,8 @@ class MongoDBManager:
                            status: str = "received", raw_data: dict = None,
                            interactive: dict = None,
                            related_to_number: str = None,
-                           instance_name: str = None):
+                           instance_name: str = None,
+                           created_at: datetime = None):
         # Dedup: if this message_id already exists, avoid duplicate entries.
         # If the existing record has company_id="unknown" and we now know the real
         # company, upgrade it in place (handles the race: inbound before JID learned).
@@ -416,7 +436,11 @@ class MongoDBManager:
             "message_type": message_type,
             "status": status,
             "raw_data": raw_data or {},
-            "created_at": datetime.utcnow(),
+            # Cuando se conoce el momento REAL del mensaje (ej. messageTimestamp al
+            # sincronizar historial), se usa ese — no el momento en que se procesó/
+            # sincronizó. Si no se pasa (webhook en vivo), "ahora" sigue siendo
+            # correcto porque el mensaje se procesa casi al instante de llegar.
+            "created_at": created_at or datetime.utcnow(),
         }
         if interactive:
             doc["interactive"] = interactive
@@ -429,10 +453,16 @@ class MongoDBManager:
             if instance_name:
                 doc["received_on_instance"] = instance_name
             # Mark for analysis so the analytics panel can show a loading indicator.
-            # Skip unknown company_id — classifier won't run for them anyway.
+            # Skip unknown/manual company_id — classifier won't run for them anyway, and
+            # "manual" es lo que usa el webhook de WAHA (número personal) para contactos y
+            # GRUPOS de WhatsApp sin vincular a una empresa — sin esta exclusión, contenido
+            # personal/de grupo terminaba en analysis_status=pending y era elegible para
+            # que classify_and_save lo mandara al LLM real a "calificar calidad de
+            # servicio" (confirmado en producción: 326 mensajes personales analizados así
+            # entre el 23-jun y 6-jul de 2026, antes de este fix).
             # Skip personal-contact companies (.local domain) — they flood inbound messages
             # from personal WhatsApp chats and would keep the spinner permanently active.
-            if message_body and message_body != "[media]" and company_id not in (None, "unknown"):
+            if message_body and message_body != "[media]" and company_id not in (None, "unknown", "manual"):
                 _skip_analysis = False
                 try:
                     from bson import ObjectId
@@ -443,8 +473,17 @@ class MongoDBManager:
                 if not _skip_analysis:
                     doc["analysis_status"] = "pending"
                     doc["pending_since"] = datetime.utcnow()
-        result = self.db.message_logs.insert_one(doc)
-        return str(result.inserted_id)
+        try:
+            result = self.db.message_logs.insert_one(doc)
+            return str(result.inserted_id)
+        except DuplicateKeyError:
+            # El find_one de arriba no vio nada, pero otra entrega casi simultánea
+            # del mismo webhook (visto en producción: reintento de Evolution/WhatsApp
+            # con ~187ms de diferencia) ganó la carrera e insertó primero — el índice
+            # único de message_id evita el duplicado real; aquí solo se recupera su
+            # _id para devolver la misma referencia que un caller normal esperaría.
+            existing = self.db.message_logs.find_one({"message_id": message_id})
+            return str(existing["_id"]) if existing else None
 
     def save_instance_health_log(self, instance_name: str, event: str,
                                   reason: str = None, reason_label: str = None,
@@ -582,7 +621,21 @@ class MongoDBManager:
                 "sent_by_username":   g.get("first_sent_by_user") or "",
                 "last_analysis":      last_inbound_analyzed.get("analysis") if last_inbound_analyzed else None,
             })
-        deduped = results
+        # Deduplicate: same domain+name scraped multiple times → keep the one with
+        # the most recent activity. Companies with no domain are deduped by name alone.
+        _seen_key: dict = {}
+        deduped = []
+        for r in results:
+            domain = (r.get("domain") or "").strip().lower()
+            key = (r["company_name"].strip().lower(), domain)
+            existing = _seen_key.get(key)
+            if existing is None:
+                _seen_key[key] = r
+                deduped.append(r)
+            else:
+                # Replace if this entry has a more recent message
+                if (r.get("last_at") or "") > (existing.get("last_at") or ""):
+                    existing.update(r)
 
         # Annotate with AI follow-up session status
         if deduped:
@@ -634,7 +687,7 @@ class MongoDBManager:
              "status": 1, "created_at": 1, "sent_at": 1, "platform": 1,
              "to_number": 1, "from_number": 1, "message_id": 1, "interactive": 1,
              "related_to_number": 1, "ai_generated": 1, "sent_by_name": 1,
-             "instance_name": 1, "instance_number": 1}
+             "instance_name": 1, "instance_number": 1, "received_on_instance": 1}
         ).sort("created_at", 1))
 
         # Deduplicate: if same message_id exists as both outbound and inbound, keep outbound only
@@ -646,6 +699,8 @@ class MongoDBManager:
             if m.get("sent_at") and hasattr(m["sent_at"], "isoformat"): m["sent_at"] = m["sent_at"].isoformat()
             m["body"] = m.get("message_body") or m.get("message_text") or ""
             mid = m.get("message_id")
+            if mid and not isinstance(mid, (str, int, float)):
+                mid = str(mid)  # some legacy docs stored message_id as a dict
             if mid:
                 if mid in seen_ids:
                     # prefer outbound over inbound for same message_id
@@ -706,11 +761,13 @@ class MongoDBManager:
                 }},
             ])
         }
-        # "Tiempo de primera respuesta" = reaction_time_min of the chronologically FIRST
-        # analyzed inbound per company — NOT an average across the whole conversation,
-        # which would blend later (possibly much slower/faster) replies into the number.
+        # "Tiempo de primera respuesta" = reaction_time_min/seconds of the chronologically
+        # FIRST analyzed inbound per company — NOT an average across the whole
+        # conversation, which would blend later (possibly much slower/faster) replies
+        # into the number. reaction_time_seconds es el valor exacto sin redondear a
+        # bloques de 6s (0.1 min) — se muestra en el reporte para dar precisión real.
         first_response_groups = {
-            g["_id"]: g["reaction_time_min"]
+            g["_id"]: g
             for g in self.db.message_logs.aggregate([
                 {"$match": {
                     "direction": "inbound",
@@ -720,11 +777,14 @@ class MongoDBManager:
                 {"$group": {
                     "_id": "$company_id",
                     "reaction_time_min": {"$first": "$analysis.reaction_time_min"},
+                    "reaction_time_seconds": {"$first": "$analysis.reaction_time_seconds"},
                 }},
             ])
         }
         for cid, g in inbound_groups.items():
-            g["reaction_time_min"] = first_response_groups.get(cid)
+            first = first_response_groups.get(cid, {})
+            g["reaction_time_min"] = first.get("reaction_time_min")
+            g["reaction_time_seconds"] = first.get("reaction_time_seconds")
         # Companies with outbound messages only (no analyzed inbound yet)
         outbound_groups = {
             g["_id"]: g
@@ -734,16 +794,31 @@ class MongoDBManager:
                 {"$group": {"_id": "$company_id", "last_at": {"$first": "$created_at"}}},
             ])
         }
+        # El sweep en background (_sweep_pending) ya confirma y guarda "sin_respuesta"
+        # (definitivo: se esperó el tiempo configurado y nunca llegó respuesta) en el
+        # OUTBOUND — pero esta compañía no tiene inbound analizado, así que sin esto
+        # el bloque de abajo la dejaba en category=None ("sin clasificar"/pendiente),
+        # indistinguible de un caso que de verdad sigue esperando análisis.
+        sin_respuesta_groups = {
+            g["_id"]
+            for g in self.db.message_logs.aggregate([
+                {"$match": {"direction": "outbound", "analysis.category": "sin_respuesta"}},
+                {"$group": {"_id": "$company_id"}},
+            ])
+        }
         # Merge: prioritize inbound_groups, add outbound-only companies
         merged = dict(inbound_groups)
         for cid, og in outbound_groups.items():
             if cid not in merged:
+                confirmed_no_reply = cid in sin_respuesta_groups
                 merged[cid] = {
                     "_id": cid,
                     "last_at": og["last_at"],
-                    "category": None, "is_ai": None, "response_quality": None,
-                    "reaction_time_min": None, "business_hours": None,
-                    "notes": None, "total_responses": 0,
+                    "category": "sin_respuesta" if confirmed_no_reply else None,
+                    "is_ai": None, "response_quality": None,
+                    "reaction_time_min": None, "reaction_time_seconds": None, "business_hours": None,
+                    "notes": "El canal no respondió al contacto realizado." if confirmed_no_reply else None,
+                    "total_responses": 0,
                 }
         groups = sorted(merged.values(), key=lambda g: g.get("last_at") or "", reverse=True)
         results = []
@@ -779,10 +854,12 @@ class MongoDBManager:
                 if not n:
                     continue
                 if n not in num_map:
-                    num_map[n] = {"sent": 0, "inbound": []}
+                    num_map[n] = {"sent": 0, "inbound": [], "outbound_sin_respuesta": False}
                     num_raw[n] = raw  # keep first seen raw value for display
                 if direction == "outbound":
                     num_map[n]["sent"] += 1
+                    if (m.get("analysis") or {}).get("category") == "sin_respuesta":
+                        num_map[n]["outbound_sin_respuesta"] = True
                 else:
                     num_map[n]["inbound"].append(m)
 
@@ -868,10 +945,18 @@ class MongoDBManager:
                 }
                 if analyzed:
                     # Prefer conversation-level analysis for category/notes/quality;
-                    # fall back to most recent individual message if none exists.
+                    # fall back to most recent individual message if none exists. Debe
+                    # ser explícitamente el más reciente por created_at — analyzed[0]
+                    # (orden natural de Mongo, sin sort) no lo garantiza, y causaba que
+                    # esta fila mostrara la clasificación del PRIMER mensaje histórico
+                    # (p. ej. un saludo automático clasificado "bot") mientras el reporte
+                    # PDF, que sí ordena por fecha, mostraba correctamente el estado
+                    # actual de la conversación ("humano") — mismo número, dos respuestas
+                    # distintas para la misma pregunta.
                     _conv = next((m for m in analyzed
                                   if m["analysis"].get("conversation_analysis")), None)
-                    best = _conv or analyzed[0]
+                    most_recent = max(analyzed, key=lambda m: m.get("created_at") or datetime.min)
+                    best = _conv or most_recent
                     entry["category"]       = best["analysis"].get("category")
                     entry["is_ai"]          = best["analysis"].get("is_ai")
                     entry["notes"]          = best["analysis"].get("notes") or ""
@@ -895,7 +980,8 @@ class MongoDBManager:
                     # No direct match — inherit company-level analysis (central WA Business number).
                     _conv = next((m for m in company_analyzed
                                   if m["analysis"].get("conversation_analysis")), None)
-                    best = _conv or company_analyzed[0]
+                    most_recent = max(company_analyzed, key=lambda m: m.get("created_at") or datetime.min)
+                    best = _conv or most_recent
                     entry["category"]          = best["analysis"].get("category")
                     entry["is_ai"]             = best["analysis"].get("is_ai")
                     entry["notes"]             = best["analysis"].get("notes") or ""
@@ -907,6 +993,13 @@ class MongoDBManager:
                     first_analyzed = min(with_reaction, key=lambda m: m.get("created_at") or datetime.max) if with_reaction else None
                     entry["reaction_time_min"] = first_analyzed["analysis"]["reaction_time_min"] if first_analyzed else None
                     entry["inherited_analysis"] = True
+                elif data.get("outbound_sin_respuesta"):
+                    # Ni respuesta directa a este número ni análisis heredado de la
+                    # compañía — pero el sweep ya confirmó (tras esperar el timeout
+                    # configurado) que este número nunca contestó. Sin este chequeo,
+                    # entry["category"] se quedaba en None, igual que un caso todavía
+                    # pendiente de analizar — aquí ya sabemos la respuesta definitiva.
+                    entry["category"] = "sin_respuesta"
                 inbound_dates = [m.get("created_at") for m in data["inbound"] if m.get("created_at")]
                 entry["last_at"] = max(inbound_dates).isoformat() if inbound_dates else None
                 numbers.append(entry)
@@ -928,8 +1021,12 @@ class MongoDBManager:
             })
             analyzing = _cnt > 0
 
-            # Company-level analysis: use real data from inbound_groups, or null if no responses
-            has_real_analysis = g["total_responses"] > 0 and g["category"]
+            # Company-level analysis: use real data from inbound_groups, or null if no responses.
+            # "sin_respuesta" es la excepción: por definición tiene total_responses=0 (esa
+            # es la confirmación en sí — el sweep esperó y nunca llegó nada) pero SÍ es un
+            # análisis real, no un "todavía no sabemos" — sin este OR, la línea de abajo lo
+            # volvía a pisar con None pese al fix en el merge de outbound_groups arriba.
+            has_real_analysis = (g["total_responses"] > 0 and g["category"]) or g["category"] == "sin_respuesta"
             results.append({
                 "company_id": company_id,
                 "company_name": company["name"],
@@ -939,6 +1036,7 @@ class MongoDBManager:
                 "is_ai": g.get("is_ai") if has_real_analysis else None,
                 "response_quality": round(g["response_quality"] or 0, 1) if has_real_analysis else None,
                 "reaction_time_min": round(g["reaction_time_min"], 1) if (has_real_analysis and g.get("reaction_time_min") is not None) else None,
+                "reaction_time_seconds": round(g["reaction_time_seconds"], 1) if (has_real_analysis and g.get("reaction_time_seconds") is not None) else None,
                 "business_hours": g.get("business_hours") if has_real_analysis else None,
                 "notes": g["notes"] or "" if has_real_analysis else "",
                 "total_responses": g["total_responses"],

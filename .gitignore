@@ -101,4 +101,5 @@ backEnd/app/__pycache__/
 backEnd/__pycache__/
 
 # ── PDFs generados por el sistema ────────────────────────────────
-reporte-*.pdf
+reporte-*.pdfbackEnd/bore.exe
+backEnd/bore_*.log

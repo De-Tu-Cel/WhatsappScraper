@@ -1,10 +1,17 @@
 # daily_cap.py — daily message cap tracking per WhatsApp instance
 DAILY_CAP = 250
 
+import os as _os
 
 def _today() -> str:
-    from datetime import datetime
-    return datetime.now().strftime("%Y-%m-%d")
+    try:
+        import pytz
+        tz = pytz.timezone(_os.environ.get("APP_TIMEZONE", "America/Mexico_City"))
+        from datetime import datetime
+        return datetime.now(tz).strftime("%Y-%m-%d")
+    except Exception:
+        from datetime import datetime
+        return datetime.now().strftime("%Y-%m-%d")
 
 
 def get_daily_count(db, instance_name: str) -> int:

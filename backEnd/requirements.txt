@@ -3,7 +3,8 @@ bcrypt>=4.0
 uvicorn[standard]>=0.29
 pymongo>=4.7
 python-dotenv>=1.0
-requests>=2.31
+requests
+pytz>=2.31
 cloudscraper>=1.2.71
 beautifulsoup4>=4.12
 ddgs>=9.0

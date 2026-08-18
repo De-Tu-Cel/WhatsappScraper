@@ -4,7 +4,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Cargar variables de entorno — busca .env junto a este archivo primero, luego sube
-load_dotenv(dotenv_path=Path(__file__).parent / '.env')
+load_dotenv(dotenv_path=Path(__file__).parent.parent / '.env', override=True)
 
 # MongoDB
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
@@ -32,9 +32,13 @@ EVOLUTION_API_KEY      = os.getenv("EVOLUTION_API_KEY", "")
 EVOLUTION_INSTANCE     = os.getenv("EVOLUTION_INSTANCE", "")
 APP_PUBLIC_URL         = os.getenv("APP_PUBLIC_URL", "https://app.detucel.com")
 
-# WAHA (WhatsApp HTTP API) — alternative provider with Chromium-based engine
+# WAHA (WhatsApp HTTP API) — self-hosted provider (being phased out)
 WAHA_API_URL           = os.getenv("WAHA_API_URL", "http://localhost:3000")
 WAHA_API_KEY           = os.getenv("WAHA_API_KEY", "")
+
+# WasenderAPI — SaaS WhatsApp provider (current)
+WASENDER_PAT           = os.getenv("WASENDER_PAT", "")
+WASENDER_BASE_URL      = os.getenv("WASENDER_BASE_URL", "https://www.wasenderapi.com")
 
 # LLM API keys — priority: OPENAI > DEEPSEEK
 OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY", "")

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Header, Request
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Header, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 from typing import Optional
 import asyncio, json as _json, re, os
@@ -13,6 +13,7 @@ from app.utils import serialize
 from app.pipeline import process_url, run_pipeline_batch, _check_blacklist   # ← app.pipeline
 from app.searcher import search_prospects, pages_per_query_for  # ← app.searcher
 from app.database import MongoDBManager
+from app.daily_cap import DAILY_CAP, get_daily_count, increment_daily_count, get_scheduled_count_today
 
 router = APIRouter()
 
@@ -177,17 +178,14 @@ def api_process_url(req: ProcessUrlRequest, x_user_token: Optional[str] = Header
 @router.post("/send-message")
 def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Header(None)):
     try:
-        from app.config import EVOLUTION_API_KEY, EVOLUTION_API_URL, EVOLUTION_INSTANCE, WAHA_API_KEY
+        from app.config import EVOLUTION_API_KEY, EVOLUTION_API_URL, EVOLUTION_INSTANCE, WAHA_API_KEY, WASENDER_PAT, WASENDER_BASE_URL
         from app.whatsapp_evolution import EvolutionClient
         from app.auth import get_user_by_token
         from app.database import MongoDBManager
         db = MongoDBManager()
-        if not EVOLUTION_API_KEY and not WAHA_API_KEY:
-            raise HTTPException(status_code=400, detail="Sin proveedor de WhatsApp configurado (Evolution ni WAHA)")
-        if not (req.message or "").strip():
-            # Backend-level net for every send surface (batch, CSV, prospect search,
-            # single-URL, database viewer) — some of those don't block an emptied
-            # template client-side before calling this endpoint.
+        if not EVOLUTION_API_KEY and not WAHA_API_KEY and not WASENDER_PAT:
+            raise HTTPException(status_code=400, detail="Sin proveedor de WhatsApp configurado")
+        if not (req.message or "").strip() and not req.image_url and not req.document_url:
             raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío")
 
         # ── Bloqueo por blacklist / chat bloqueado ──────────────────────────────────
@@ -249,6 +247,18 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                                     headers={"X-Api-Key": WAHA_API_KEY}, timeout=2)
                                 st = r.json().get("status", "") if r.ok else ""
                                 return name if st == "WORKING" else None
+                            elif _inst_providers.get(name) == "wasender":
+                                _inst_ws = db.db.instances.find_one({"name": name}, {"wasender_id": 1})
+                                _wid = (_inst_ws or {}).get("wasender_id")
+                                if not _wid:
+                                    return None
+                                r = _req.get(
+                                    f"{WASENDER_BASE_URL.rstrip('/')}/api/whatsapp-sessions/{_wid}",
+                                    headers={"Authorization": f"Bearer {WASENDER_PAT}"},
+                                    timeout=3,
+                                )
+                                _st = ((r.json().get("data") or {}) if r.ok else {}).get("status", "")
+                                return name if _st == "connected" else None
                             else:
                                 r = _req.get(
                                     f"{EVOLUTION_API_URL}/instance/connectionState/{name}",
@@ -315,6 +325,13 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         _inst_provider_send = _inst_doc_send.get("provider", "evolution")
         _inst_number = _inst_doc_send.get("number") or "?"
 
+        # Daily send cap — block early before any API call
+        if get_daily_count(db, instance) >= DAILY_CAP:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Límite diario alcanzado ({DAILY_CAP} mensajes). Reinicia a las 00:00 hora local.",
+            )
+
         if _inst_provider_send == "waha":
             from app.whatsapp_waha import WAHAClient, _clean_digits as _waha_clean
             from app.config import WAHA_API_URL, WAHA_API_KEY
@@ -356,6 +373,41 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                     {"$set": {"reachout_timelock": True, "reachout_timelock_at": _dt.now()}},
                 )
                 status = "timelock"
+        elif _inst_provider_send == "wasender":
+            from app.whatsapp_wasender import WasenderClient, _clean_digits as _ws_clean
+            _inst_doc_ws = db.db.instances.find_one({"name": instance}, {"wasender_api_key": 1, "number": 1}) or {}
+            _ws_api_key = _inst_doc_ws.get("wasender_api_key", "")
+            ws_client = WasenderClient(WASENDER_BASE_URL, _ws_api_key, instance,
+                                       own_number=_inst_doc_ws.get("number", ""))
+            _phone_digits = _ws_clean(req.to_number)
+            db.db.jid_map.update_one({"jid": _phone_digits},
+                {"$set": {"company_id": req.company_id, "updated_at": _dt.now()}}, upsert=True)
+            try:
+                from bson import ObjectId as _OId
+                _co = db.db.companies.find_one({"_id": _OId(req.company_id)}, {"name": 1}) if req.company_id and len(req.company_id) == 24 else None
+                _co_name = (_co or {}).get("name", "") or _phone_digits
+                ws_client.label_contact(_phone_digits, _co_name)
+            except Exception:
+                pass
+            import random as _rnd2
+            send_to = req.to_number
+            if req.image_url:
+                send_result = ws_client.send_image(req.to_number, req.image_url, caption=req.message or "")
+                _msg_type = "image"
+            elif req.document_url:
+                send_result = ws_client.send_document(
+                    req.to_number, req.document_url,
+                    caption=req.message or "", file_name=req.file_name or "",
+                )
+                _msg_type = "document"
+            else:
+                _typing_ms = _rnd2.randint(800, 1800)
+                send_result = ws_client.send_text(req.to_number, req.message, delay_ms=_typing_ms)
+                _msg_type = "text"
+            resp_json = send_result.get("response_json", {})
+            message_id = (resp_json.get("data") or {}).get("message_id")
+            status = "sent" if send_result.get("status_code") in (200, 201) else "failed"
+            _platform = "wasender"
         else:
             evo = EvolutionClient(EVOLUTION_API_URL, EVOLUTION_API_KEY, instance)
             # Resolve the real WhatsApp JID before sending so the mapping is ready
@@ -386,10 +438,16 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
 
         sender_instance = db.db.instances.find_one({"name": instance}, {"_id": 0, "number": 1})
 
+        _msg_body = req.message or ""
+        _media_url = req.image_url or req.document_url or ""
         log_doc = {
             "channel": "whatsapp", "platform": _platform, "direction": "outbound",
             "company_id": req.company_id, "to_number": req.to_number,
-            "message_body": req.message, "message_text": req.message, "message_id": message_id,
+            "message_body": _msg_body or _media_url,
+            "message_text": _msg_body or _media_url,
+            "message_type": locals().get("_msg_type", "text"),
+            "media_url": _media_url or None,
+            "message_id": message_id,
             "status_code": send_result.get("status_code"),
             "api_response": resp_json, "status": status,
             "sent_at": send_result.get("sent_at"),
@@ -402,12 +460,53 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 log_doc["sent_by_username"] = sender.get("username", "")
                 log_doc["sent_by_name"]     = sender.get("display_name", "")
         log_id = db.insert_message_log(log_doc)
+        if status == "sent":
+            increment_daily_count(db, instance)
 
         return {"ok": True, "status": status, "log_id": log_id, "message_id": message_id}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/instances/daily-stats")
+def api_instances_daily_stats(x_user_token: Optional[str] = Header(None)):
+    user = _require_user(x_user_token)
+    db = MongoDBManager()
+    user_id = user.get("id") or str(user.get("_id", ""))
+    instances = list(db.db.instances.find(
+        {"assigned_to": user_id},
+        {"_id": 0, "name": 1, "label": 1, "number": 1},
+    )) if user_id else []
+
+    rows = []
+    for inst in instances:
+        name = inst["name"]
+        sent = get_daily_count(db, name)
+        rows.append({
+            "instance":   name,
+            "label":      inst.get("label") or name,
+            "number":     inst.get("number"),
+            "sent_today": sent,
+            "cap":        DAILY_CAP,
+            "available":  max(0, DAILY_CAP - sent),
+        })
+
+    total_sent      = sum(r["sent_today"] for r in rows)
+    scheduled_today = get_scheduled_count_today(db)
+    total_cap       = DAILY_CAP * max(len(rows), 1)
+    total_available = max(0, total_cap - total_sent - scheduled_today)
+
+    return {
+        "instances":        rows,
+        "total_sent":       total_sent,
+        "scheduled_today":  scheduled_today,
+        "total_cap":        total_cap,
+        "total_available":  total_available,
+        "cap_per_instance": DAILY_CAP,
+        "reset_hour":       "00:00 local",
+    }
+
 
 @router.post("/search")
 def api_search(req: SearchRequest):
@@ -634,10 +733,14 @@ def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks):
                     if inst_doc and inst_doc.get("provider") == "waha":
                         _provider = "waha"
                         _waha_session = inst_name
+                    elif inst_doc and inst_doc.get("provider") == "wasender":
+                        _provider = "wasender"
         except Exception:
             pass
 
-        if _provider == "waha":
+        if _provider == "wasender":
+            return {"synced": 0, "message": "WasenderAPI no expone historial — los mensajes se registran en tiempo real desde el webhook"}
+        elif _provider == "waha":
             if not WAHA_API_KEY:
                 raise HTTPException(400, "WAHA no configurado")
             from app.whatsapp_waha import WAHAClient, pick_connected_instance as _waha_pick
@@ -759,6 +862,51 @@ def api_get_conversations():
     try:
         db = MongoDBManager()
         return serialize(db.get_conversations())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/conversations/ai-health")
+def api_get_ai_health():
+    try:
+        import os
+        from app.llm_guard import circuit_is_open
+        from app.ai_followup import _is_business_hours
+        from app.llm import active_provider
+        return {
+            "circuit_open": circuit_is_open(),
+            "business_hours_active": _is_business_hours(),
+            "active_provider": active_provider(),
+            "openai_key_set": bool(os.getenv("OPENAI_API_KEY")),
+            "deepseek_key_set": bool(os.getenv("DEEPSEEK_API_KEY")),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/conversations/ai-global-config")
+def api_get_ai_global_config():
+    try:
+        from app.ai_followup import _DEFAULT_SYSTEM_PROMPT
+        db = MongoDBManager()
+        cfg = db.db.ai_global_config.find_one({"_id": "global"}) or {}
+        return {
+            "system_prompt":         cfg.get("system_prompt") or "",
+            "default_system_prompt": _DEFAULT_SYSTEM_PROMPT,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/conversations/ai-global-config")
+def api_put_ai_global_config(body: dict):
+    try:
+        from datetime import datetime as _dt
+        db = MongoDBManager()
+        system_prompt = str(body.get("system_prompt") or "").strip()
+        db.db.ai_global_config.update_one(
+            {"_id": "global"},
+            {"$set": {"system_prompt": system_prompt, "updated_at": _dt.now()}},
+            upsert=True,
+        )
+        return {"ok": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -903,62 +1051,6 @@ def api_put_ai_config(company_id: str, body: dict):
         db.db.conversation_ai_prefs.update_one(
             {"company_id": company_id},
             {"$set": update},
-            upsert=True,
-        )
-        return {"ok": True}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/conversations/ai-health")
-def api_get_ai_health():
-    """
-    Diagnóstico de por qué el seguimiento automático de IA podría estar en pausa
-    ahora mismo — para mostrarlo en la UI en vez de que el usuario tenga que
-    revisar logs cuando "deja de responder" sin ningún error visible.
-    """
-    try:
-        import os
-        from app.llm_guard import circuit_is_open
-        from app.ai_followup import _is_business_hours
-        from app.llm import active_provider
-        return {
-            "circuit_open": circuit_is_open(),
-            "business_hours_active": _is_business_hours(),
-            # Nunca se regresa el valor de la key — solo si el proceso la ve o no.
-            # Sirve para confirmar en caliente si el contenedor de producción
-            # realmente está recibiendo la variable de entorno configurada,
-            # sin necesidad de entrar por SSH/terminal del contenedor.
-            "active_provider": active_provider(),
-            "openai_key_set": bool(os.getenv("OPENAI_API_KEY")),
-            "deepseek_key_set": bool(os.getenv("DEEPSEEK_API_KEY")),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/conversations/ai-global-config")
-def api_get_ai_global_config():
-    """Instrucción base global del Chat IA — normalmente bloqueada tras un candado en la UI."""
-    try:
-        from app.ai_followup import _DEFAULT_SYSTEM_PROMPT
-        db = MongoDBManager()
-        cfg = db.db.ai_global_config.find_one({"_id": "global"}) or {}
-        return {
-            "system_prompt":         cfg.get("system_prompt") or "",
-            "default_system_prompt": _DEFAULT_SYSTEM_PROMPT,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.put("/conversations/ai-global-config")
-def api_put_ai_global_config(body: dict):
-    """Guarda (o limpia, si viene vacío) el override de la instrucción base global."""
-    try:
-        from datetime import datetime as _dt
-        db = MongoDBManager()
-        system_prompt = str(body.get("system_prompt") or "").strip()
-        db.db.ai_global_config.update_one(
-            {"_id": "global"},
-            {"$set": {"system_prompt": system_prompt, "updated_at": _dt.now()}},
             upsert=True,
         )
         return {"ok": True}
@@ -1927,9 +2019,10 @@ def api_evo_user_status(x_user_token: Optional[str] = Header(None)):
 
     db = MongoDBManager()
     user_id = user.get("id") or str(user.get("_id", ""))
-    # Exclude WAHA instances — those are checked by /waha/instances/user-status
+    # Only include Evolution instances (or legacy docs with no provider field).
+    # WAHA → /waha/instances/user-status  |  Wasender → /wasender/instances/user-status
     all_instances = list(db.db.instances.find(
-        {"assigned_to": user_id, "provider": {"$nin": ["waha"]}},
+        {"assigned_to": user_id, "provider": {"$nin": ["waha", "wasender"]}},
         {"_id": 0, "name": 1, "number": 1, "disconnect_reason": 1, "disconnect_reason_label": 1, "disconnect_code": 1},
     )) if user_id else []
 
@@ -2371,7 +2464,13 @@ def api_waha_webhook(body: dict, background_tasks: BackgroundTasks):
                 inst_doc = db.db.instances.find_one(
                     {"name": session_name},
                     {"failed_restart_count": 1, "last_failed_at": 1, "reachout_timelock": 1}
-                ) or {}
+                )
+                if not inst_doc:
+                    # Session exists in WAHA but not in our DB (orphaned / manually deleted).
+                    # Do NOT restart it — that would perpetuate the loop forever.
+                    print(f"[WAHA Webhook] {session_name} not in MongoDB — skipping restart (orphaned session, delete it from WAHA)")
+                    return {"ok": True, "action": "ignored_orphan"}
+                inst_doc = inst_doc or {}
                 fail_count  = inst_doc.get("failed_restart_count", 0)
                 last_fail   = inst_doc.get("last_failed_at")
                 min_since   = ((datetime.now() - last_fail).total_seconds() / 60) if last_fail else 999
@@ -2635,6 +2734,598 @@ def api_sync_waha_instances(x_user_token: Optional[str] = Header(None)):
         )
         imported += 1
     return {"ok": True, "imported": imported}
+
+# ── WasenderAPI (SaaS WhatsApp provider) ─────────────────────────────────────
+
+WASENDER_ACK_MAP = {
+    0: "failed",
+    1: "pending",
+    2: "sent",
+    3: "delivered",
+    4: "read",
+    5: "read",  # PLAYED
+}
+
+WASENDER_STATUS_MAP = {
+    "connected":    ("connected",     "Conectada"),
+    "connecting":   ("starting",      "Conectando"),
+    "need_scan":    ("scan_qr",       "Esperando QR"),
+    "need_passkey": ("scan_qr",       "Esperando clave"),
+    "disconnected": ("disconnected",  "Desconectada"),
+    "logged_out":   ("logged_out",    "Sesión cerrada"),
+    "expired":      ("expired",       "Expirada"),
+}
+
+
+def _wasender_auto_register_inbound(db, number: str, instance_name: str = "") -> str:
+    """Create a minimal company + contact record for an unknown inbound WasenderAPI number."""
+    from datetime import datetime as _dt
+    clean = "".join(filter(str.isdigit, number))
+    existing = db.find_company_id_by_phone(clean)
+    if existing:
+        return existing
+    display = f"+{clean}"
+    company_id = db.insert_company({
+        "name": display,
+        "status": "inbound",
+        "has_whatsapp": True,
+        "source": "inbound_whatsapp",
+        "via_instance": instance_name,
+    })
+    db.insert_contact({
+        "company_id": company_id,
+        "type": "whatsapp",
+        "value": clean,
+        "source": "inbound_whatsapp",
+        "is_primary": True,
+    })
+    db.db.jid_map.update_one(
+        {"jid": clean},
+        {"$set": {"company_id": company_id, "updated_at": _dt.now()}},
+        upsert=True,
+    )
+    print(f"[Wasender Webhook] Auto-registered inbound {display} → {company_id} (via {instance_name})")
+    return company_id
+
+
+@router.post("/wasender/webhook")
+async def api_wasender_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Receive events from WasenderAPI. Verifies X-Wasender-Signature when secret is configured."""
+    import json as _json
+    from wasenderapi.webhook import WasenderWebhookEventType as _WE
+    try:
+        raw_body = await request.body()
+        try:
+            body = _json.loads(raw_body)
+        except Exception:
+            raise HTTPException(400, "invalid JSON")
+        from datetime import datetime, timezone
+        db = MongoDBManager()
+        event = body.get("event", "")
+        # sessionId in WasenderAPI webhooks = the session's api_key (hex string)
+        session_api_key = body.get("sessionId", "")
+        data = body.get("data") or {}
+        if event not in ("messages-personal.received",):
+            print(f"[Wasender Webhook] event={event} sessionId={session_api_key[:12]}…")
+
+        # Resolve instance name and webhook secret from the api_key stored in MongoDB
+        inst_doc = db.db.instances.find_one(
+            {"wasender_api_key": session_api_key, "provider": "wasender"},
+            {"name": 1, "wasender_webhook_secret": 1},
+        ) if session_api_key else None
+        instance_name = (inst_doc or {}).get("name", "")
+
+        # WasenderAPI does not sign webhook requests — no signature verification needed
+
+        if event == _WE.PERSONAL_MESSAGE_RECEIVED.value:
+            msg = data.get("messages") or {}
+            key = msg.get("key") or {}
+            from_me = key.get("fromMe", False)
+            remote_jid = key.get("remoteJid", "")
+            message_id = key.get("id", "")
+            message_body = msg.get("messageBody") or ""
+            # Resolve @lid JIDs to phone numbers via WasenderAPI
+            if "@lid" in remote_jid and session_api_key:
+                try:
+                    from app.config import WASENDER_BASE_URL
+                    from app.whatsapp_wasender import WasenderClient as _WSC
+                    _resolved = _WSC(WASENDER_BASE_URL, session_api_key, instance_name).resolve_lid(remote_jid)
+                    if _resolved:
+                        remote_jid = f"{_resolved}@s.whatsapp.net"
+                except Exception:
+                    pass
+            # Strip @s.whatsapp.net / @c.us to get just digits
+            number = remote_jid.replace("@s.whatsapp.net", "").replace("@c.us", "").split("@")[0]
+            if event not in ("messages-personal.received",):
+                print(f"[Wasender Webhook] msg from_me={from_me} number={number} body={str(message_body)[:80]}")
+
+            if from_me:
+                if message_id:
+                    db.update_evolution_message_status(message_id, "sent")
+                return {"ok": True, "action": "outbound_echo"}
+
+            # Drop messages from other internal Wasender instances
+            _sender_is_internal = bool(db.db.instances.find_one({"number": number}))
+            if _sender_is_internal:
+                print(f"[Wasender Webhook] skipping internal-to-internal message from {number}")
+                return {"ok": True, "action": "ignored_internal"}
+
+            company_id = db.find_company_id_by_phone(number)
+            if not company_id:
+                # Only auto-register if we previously contacted this number (prospect replying).
+                # Personal contacts on the phone that we never messaged should be ignored.
+                _clean10 = "".join(filter(str.isdigit, number))[-10:]
+                _was_contacted = bool(db.db.message_logs.find_one({
+                    "direction": "outbound",
+                    "to_number": {"$regex": _clean10},
+                }))
+                if _was_contacted:
+                    company_id = _wasender_auto_register_inbound(db, number, instance_name)
+                else:
+                    return {"ok": True, "action": "ignored_personal"}
+
+            # Send read receipt
+            if session_api_key and message_id and remote_jid:
+                try:
+                    from app.config import WASENDER_BASE_URL
+                    from app.whatsapp_wasender import WasenderClient as _WSClient
+                    _WSClient(WASENDER_BASE_URL, session_api_key, instance_name).mark_read(
+                        message_id, remote_jid, from_me=False
+                    )
+                except Exception as _re:
+                    print(f"[Wasender Webhook] mark_read failed: {_re}")
+
+            log_id = db.save_evolution_log(
+                direction="inbound", company_id=company_id,
+                number=number, message_body=message_body,
+                message_id=message_id, message_type="conversation",
+                status="received", raw_data=data, interactive=None,
+                instance_name=instance_name,
+            )
+
+            _ai_session_active = bool(db.db.ai_followup_sessions.find_one(
+                {"company_id": company_id, "status": {"$in": ["active", "waiting"]}}
+            )) if company_id not in ("unknown", "manual") else False
+            if message_body and company_id not in ("unknown", "manual") and not _ai_session_active:
+                from app.llm import active_provider as _cls_provider
+                if _cls_provider() != "none":
+                    from datetime import timedelta
+                    _recent_cls = db.db.message_logs.find_one(
+                        {"company_id": company_id, "direction": "inbound",
+                         "analysis_status": "done",
+                         "updated_at": {"$gte": datetime.now() - timedelta(minutes=10)}},
+                        projection={"_id": 1},
+                    )
+                    if not _recent_cls:
+                        from app.classifier import classify_and_save
+                        background_tasks.add_task(classify_and_save, log_id, company_id, message_body, datetime.now(timezone.utc).replace(tzinfo=None))
+            from app.classifier import NON_TEXT_PLACEHOLDERS
+            if message_body and message_body not in NON_TEXT_PLACEHOLDERS and company_id not in ("unknown", "manual"):
+                try:
+                    from app.llm import active_provider as _llm_provider
+                    if _llm_provider() != "none":
+                        _prefs_doc = db.db.conversation_ai_prefs.find_one({"company_id": company_id})
+                        _prefs = _prefs_doc or {}
+                        _should_enqueue = _prefs.get("ai_enabled", False)
+                        _user_explicitly_disabled = _prefs_doc is not None and not _prefs.get("ai_enabled", True)
+                        if not _should_enqueue and not _ai_session_active and not _user_explicitly_disabled:
+                            from datetime import timedelta
+                            _recent_ended = db.db.ai_followup_sessions.find_one({
+                                "company_id": company_id, "status": "ended",
+                                "last_activity": {"$gte": datetime.now() - timedelta(hours=2)},
+                            }, projection={"_id": 1})
+                            if not _recent_ended:
+                                _had_outbound = db.db.message_logs.find_one(
+                                    {"company_id": company_id, "direction": "outbound",
+                                     "created_at": {"$gte": datetime.now() - timedelta(days=7)}},
+                                    projection={"_id": 1},
+                                )
+                                if _had_outbound:
+                                    _should_enqueue = True
+                        if _should_enqueue:
+                            from app.followup_queue import enqueue as _ai_enqueue
+                            _ai_enqueue(number, company_id, message_body, log_id)
+                except Exception as _fe:
+                    print(f"[Wasender Webhook] followup_queue error: {_fe}")
+            return {"ok": True, "action": "message_handled"}
+
+        elif event == _WE.MESSAGES_UPDATE.value:
+            key = data.get("key") or {}
+            message_id = key.get("id", "")
+            ack_int = (data.get("update") or {}).get("status")
+            if message_id and ack_int is not None:
+                status = WASENDER_ACK_MAP.get(ack_int, "")
+                if status:
+                    db.update_evolution_message_status(message_id, status)
+            return {"ok": True, "action": "ack_updated"}
+
+        elif event == _WE.SESSION_STATUS.value:
+            ws_status = (data.get("status") or "").lower()
+            reason_key, reason_label = WASENDER_STATUS_MAP.get(ws_status, (ws_status, ws_status))
+            if ws_status == "connected" and instance_name:
+                db.db.instances.update_one(
+                    {"name": instance_name},
+                    {"$set": {"disconnect_reason": None, "disconnect_reason_label": None},
+                     "$unset": {"last_disconnect_at": ""}},
+                )
+                db.save_instance_health_log(instance_name, "connected")
+                print(f"[Wasender Webhook] session={instance_name} connected")
+            elif ws_status in ("disconnected", "logged_out", "expired") and instance_name:
+                db.db.instances.update_one(
+                    {"name": instance_name},
+                    {"$set": {"disconnect_reason": reason_key, "disconnect_reason_label": reason_label,
+                              "last_disconnect_at": datetime.now()}},
+                )
+                db.save_instance_health_log(instance_name, "disconnected", reason=reason_key, reason_label=reason_label)
+                print(f"[Wasender Webhook] session={instance_name} {ws_status} → {reason_label}")
+            return {"ok": True, "action": "session_status_updated"}
+
+        return {"ok": True, "action": "ignored", "event": event}
+    except HTTPException: raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/wasender/session/create")
+def api_wasender_create_session(body: dict):
+    """Create a WasenderAPI session. Returns session details including api_key."""
+    try:
+        import requests as _req
+        from app.config import WASENDER_PAT, WASENDER_BASE_URL, APP_PUBLIC_URL
+        name = (body.get("name") or "").strip()
+        phone_number = (body.get("phone_number") or "").strip()
+        if not name:
+            raise HTTPException(400, "name requerido")
+        if not phone_number:
+            raise HTTPException(400, "phone_number requerido")
+        if not WASENDER_PAT:
+            raise HTTPException(500, "WASENDER_PAT no configurado")
+        webhook_url = f"{APP_PUBLIC_URL}/api/wasender/webhook"
+        _hdrs = {"Authorization": f"Bearer {WASENDER_PAT}", "Content-Type": "application/json"}
+        r = _req.post(
+            f"{WASENDER_BASE_URL.rstrip('/')}/api/whatsapp-sessions",
+            headers=_hdrs,
+            json={
+                "name": name,
+                "phone_number": phone_number,
+                "webhook_url": webhook_url,
+                "webhook_enabled": True,
+                "webhook_events": ["messages-personal.received", "messages.update", "session.status"],
+                "always_online": True,
+                "account_protection": True,
+                "read_incoming_messages": False,
+            },
+            timeout=15,
+        )
+        if r.status_code not in (200, 201):
+            raise HTTPException(500, f"Wasender error: {r.text[:300]}")
+        resp_data = r.json()
+        session_info = resp_data.get("data") or resp_data
+        wasender_id = session_info.get("id")
+        api_key = session_info.get("api_key", "")
+        webhook_secret = session_info.get("webhook_secret", "")
+        from datetime import datetime
+        db = MongoDBManager()
+        db.db.instances.update_one(
+            {"name": name},
+            {"$set": {"name": name, "provider": "wasender",
+                      "wasender_id": wasender_id,
+                      "wasender_api_key": api_key,
+                      "wasender_webhook_secret": webhook_secret},
+             "$setOnInsert": {"assigned_to": None, "assigned_name": None,
+                              "created_at": datetime.utcnow().isoformat()}},
+            upsert=True,
+        )
+        # Auto-connect to trigger QR generation
+        try:
+            conn_r = _req.post(
+                f"{WASENDER_BASE_URL.rstrip('/')}/api/whatsapp-sessions/{wasender_id}/connect",
+                headers=_hdrs, timeout=15,
+            )
+            if conn_r.ok:
+                conn_data = (conn_r.json().get("data") or {})
+                if conn_data.get("qrCode"):
+                    session_info["qrCode"] = conn_data["qrCode"]
+        except Exception:
+            pass
+        return session_info
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(500, str(e))
+
+
+@router.get("/wasender/session/qr/{wasender_id}")
+def api_wasender_get_qr(wasender_id: int):
+    """Get QR code for a WasenderAPI session. Returns base64 PNG."""
+    try:
+        import requests as _req
+        from app.config import WASENDER_PAT, WASENDER_BASE_URL
+        _hdrs = {"Authorization": f"Bearer {WASENDER_PAT}"}
+        r = _req.get(f"{WASENDER_BASE_URL.rstrip('/')}/api/whatsapp-sessions/{wasender_id}/qrcode",
+            headers=_hdrs, timeout=15)
+        if not r.ok:
+            raise HTTPException(r.status_code, f"Wasender QR error: {r.text[:200]}")
+        resp = r.json()
+        qr_string = (resp.get("data") or resp).get("qrCode") or (resp.get("data") or resp).get("qr") or ""
+        if not qr_string:
+            return resp.get("data") or resp
+        try:
+            import qrcode, io, base64 as _b64
+            img = qrcode.make(qr_string)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return {"base64": f"data:image/png;base64,{_b64.b64encode(buf.getvalue()).decode()}"}
+        except ImportError:
+            return {"qrString": qr_string}
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(500, str(e))
+
+
+@router.get("/wasender/session/status/{wasender_id}")
+def api_wasender_get_status(wasender_id: int):
+    """Get WasenderAPI session status."""
+    try:
+        import requests as _req
+        from app.config import WASENDER_PAT, WASENDER_BASE_URL
+        _hdrs = {"Authorization": f"Bearer {WASENDER_PAT}"}
+        r = _req.get(f"{WASENDER_BASE_URL.rstrip('/')}/api/whatsapp-sessions/{wasender_id}",
+            headers=_hdrs, timeout=10)
+        data = r.json() if r.ok else {}
+        session_info = data.get("data") or data
+        ws_status = (session_info.get("status") or "").lower()
+        session_info["state"] = "open" if ws_status == "connected" else "close"
+        # Enrich with MongoDB data (phone number, disconnect reason)
+        db = MongoDBManager()
+        inst_doc = db.db.instances.find_one(
+            {"wasender_id": wasender_id},
+            {"_id": 0, "name": 1, "number": 1, "disconnect_reason": 1, "disconnect_reason_label": 1},
+        ) or {}
+        if ws_status == "connected":
+            phone = session_info.get("phone_number", "")
+            if phone:
+                clean = "".join(filter(str.isdigit, phone))
+                db.db.instances.update_one({"wasender_id": wasender_id}, {"$set": {"number": clean}})
+                session_info["number"] = clean
+        if not session_info.get("number") and inst_doc.get("number"):
+            session_info["number"] = inst_doc["number"]
+        if inst_doc.get("disconnect_reason"):
+            session_info["disconnect_reason"] = inst_doc["disconnect_reason"]
+            session_info["disconnect_reason_label"] = inst_doc.get("disconnect_reason_label", "Desconectada")
+        return session_info
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(500, str(e))
+
+
+@router.delete("/wasender/session/{wasender_id}")
+def api_wasender_delete_session(wasender_id: int):
+    """Delete a WasenderAPI session and remove from MongoDB."""
+    try:
+        import requests as _req
+        from app.config import WASENDER_PAT, WASENDER_BASE_URL
+        _hdrs = {"Authorization": f"Bearer {WASENDER_PAT}"}
+        r = _req.delete(f"{WASENDER_BASE_URL.rstrip('/')}/api/whatsapp-sessions/{wasender_id}",
+            headers=_hdrs, timeout=15)
+        db = MongoDBManager()
+        db.db.instances.delete_one({"wasender_id": wasender_id})
+        return {"ok": True, "status": r.status_code}
+    except Exception as e: raise HTTPException(500, str(e))
+
+
+@router.put("/wasender/session/{wasender_id}")
+def api_wasender_update_session(wasender_id: int, body: dict):
+    """Update WasenderAPI session settings (webhook, always_online, account_protection, etc.)."""
+    try:
+        import requests as _req
+        from app.config import WASENDER_PAT, WASENDER_BASE_URL
+        _hdrs = {"Authorization": f"Bearer {WASENDER_PAT}", "Content-Type": "application/json"}
+        r = _req.put(
+            f"{WASENDER_BASE_URL.rstrip('/')}/api/whatsapp-sessions/{wasender_id}",
+            headers=_hdrs,
+            json=body,
+            timeout=15,
+        )
+        if not r.ok:
+            raise HTTPException(r.status_code, f"Wasender error: {r.text[:200]}")
+        return r.json() if r.content else {"ok": True}
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(500, str(e))
+
+
+@router.post("/wasender/session/{wasender_id}/connect")
+def api_wasender_connect_session(wasender_id: int):
+    """Initiate connection for a logged_out/disconnected session — removes proxy temporarily,
+    calls /connect, then re-applies proxy so the QR scan goes through cleanly."""
+    try:
+        import requests as _req
+        from app.config import WASENDER_PAT, WASENDER_BASE_URL
+        _hdrs = {"Authorization": f"Bearer {WASENDER_PAT}", "Content-Type": "application/json"}
+        _base = f"{WASENDER_BASE_URL.rstrip('/')}/api/whatsapp-sessions/{wasender_id}"
+
+        # Save current proxy_url so we can restore it after connect
+        _sess_r = _req.get(_base, headers={"Authorization": f"Bearer {WASENDER_PAT}"}, timeout=5)
+        _current_proxy = (_sess_r.json().get("data") or {}).get("proxy_url") if _sess_r.ok else None
+
+        # Remove proxy temporarily (proxy blocks connect when bore tunnel is down)
+        if _current_proxy:
+            _req.put(_base, json={"proxy_url": None}, headers=_hdrs, timeout=5)
+
+        # Initiate connection (generates QR)
+        r = _req.post(f"{_base}/connect", json={"method": "qr"}, headers=_hdrs, timeout=15)
+
+        # Restore proxy regardless of connect result
+        if _current_proxy:
+            _req.put(_base, json={"proxy_url": _current_proxy}, headers=_hdrs, timeout=5)
+
+        if not r.ok:
+            raise HTTPException(r.status_code, f"Wasender error: {r.text[:200]}")
+        return r.json() if r.content else {"ok": True}
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(500, str(e))
+
+
+@router.post("/wasender/session/{wasender_id}/restart")
+def api_wasender_restart_session(wasender_id: int):
+    """Restart a connected WasenderAPI session (soft refresh, no QR re-scan needed)."""
+    try:
+        import requests as _req
+        from app.config import WASENDER_PAT, WASENDER_BASE_URL
+        _hdrs = {"Authorization": f"Bearer {WASENDER_PAT}"}
+        r = _req.post(
+            f"{WASENDER_BASE_URL.rstrip('/')}/api/whatsapp-sessions/{wasender_id}/restart",
+            headers=_hdrs,
+            timeout=15,
+        )
+        if not r.ok:
+            raise HTTPException(r.status_code, f"Wasender error: {r.text[:200]}")
+        return r.json() if r.content else {"ok": True}
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(500, str(e))
+
+
+@router.get("/wasender/instances/user-status")
+def api_wasender_user_status(x_user_token: Optional[str] = Header(None)):
+    """Check WasenderAPI connection status for instances assigned to the current user."""
+    from app.auth import get_user_by_token
+    from app.config import WASENDER_PAT, WASENDER_BASE_URL
+    if not x_user_token:
+        return {"connected": False, "connected_count": 0, "total": 0}
+    user = get_user_by_token(x_user_token)
+    if not user:
+        return {"connected": False, "connected_count": 0, "total": 0}
+    db = MongoDBManager()
+    user_id = user.get("id") or str(user.get("_id", ""))
+    all_instances = list(db.db.instances.find(
+        {"assigned_to": user_id, "provider": "wasender"},
+        {"_id": 0, "name": 1, "number": 1, "wasender_id": 1, "disconnect_reason": 1, "disconnect_reason_label": 1},
+    )) if user_id else []
+    if not all_instances:
+        return {"connected": False, "connected_count": 0, "total": 0}
+    try:
+        import requests as _req
+        r = _req.get(f"{WASENDER_BASE_URL.rstrip('/')}/api/whatsapp-sessions",
+            headers={"Authorization": f"Bearer {WASENDER_PAT}"}, timeout=5)
+        body = r.json() if r.ok else {}
+        sessions = body.get("data", []) if isinstance(body, dict) else []
+        connected_ids = {s["id"] for s in sessions if s.get("status") == "connected"}
+    except Exception:
+        connected_ids = set()
+    results = [i.get("wasender_id") in connected_ids and bool(i.get("number")) for i in all_instances]
+    connected_count = sum(results)
+    first_disconnected = next(
+        (i for i, ok in zip(all_instances, results) if not ok and i.get("disconnect_reason")), None
+    )
+    resp = {"connected": connected_count > 0, "connected_count": connected_count, "total": len(all_instances)}
+    if first_disconnected:
+        resp["disconnect_reason"] = first_disconnected["disconnect_reason"]
+        resp["disconnect_reason_label"] = first_disconnected.get("disconnect_reason_label", "")
+    return resp
+
+
+@router.post("/admin/instances/sync-wasender")
+def api_sync_wasender_instances(x_user_token: Optional[str] = Header(None)):
+    """Import all existing WasenderAPI sessions into MongoDB."""
+    user = _require_user(x_user_token)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Solo admins")
+    import requests as _req
+    from app.config import WASENDER_PAT, WASENDER_BASE_URL
+    from datetime import datetime
+    _hdrs = {"Authorization": f"Bearer {WASENDER_PAT}"}
+    r = _req.get(f"{WASENDER_BASE_URL.rstrip('/')}/api/whatsapp-sessions", headers=_hdrs, timeout=10)
+    if not r.ok:
+        raise HTTPException(500, f"Wasender error: {r.text[:200]}")
+    body = r.json()
+    sessions = body.get("data", []) if isinstance(body, dict) else (body if isinstance(body, list) else [])
+    db = MongoDBManager()
+    imported = 0
+    for sess in sessions:
+        wasender_id = sess.get("id")
+        name = sess.get("name") or f"wasender-{wasender_id}"
+        api_key = sess.get("api_key", "")
+        phone = sess.get("phone_number", "")
+        clean_phone = "".join(filter(str.isdigit, phone)) if phone else ""
+        db.db.instances.update_one(
+            {"wasender_id": wasender_id},
+            {"$set": {"name": name, "provider": "wasender",
+                      "wasender_id": wasender_id, "wasender_api_key": api_key,
+                      **({"number": clean_phone} if clean_phone else {})},
+             "$setOnInsert": {"assigned_to": None, "assigned_name": None,
+                              "created_at": datetime.utcnow().isoformat()}},
+            upsert=True,
+        )
+        imported += 1
+    return {"ok": True, "imported": imported}
+
+
+# ── File upload / serve (GridFS) ──────────────────────────────────────────────
+
+_ALLOWED_MIME = {
+    "image/jpeg", "image/png",
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+_MAX_IMAGE_BYTES = 5 * 1024 * 1024    # 5 MB (WasenderAPI image limit)
+_MAX_DOC_BYTES   = 100 * 1024 * 1024  # 100 MB (WasenderAPI document limit)
+
+
+@router.post("/files/upload")
+async def api_upload_file(file: UploadFile = File(...)):
+    """Store an uploaded file in MongoDB GridFS and return its public URL.
+
+    The URL (APP_PUBLIC_URL/api/files/{id}) is what you pass as imageUrl or
+    documentUrl when calling /send-message — WasenderAPI fetches it directly.
+    """
+    from app.config import APP_PUBLIC_URL
+    content_type = (file.content_type or "").split(";")[0].strip()
+    if content_type not in _ALLOWED_MIME:
+        raise HTTPException(400, f"Tipo de archivo no soportado: {content_type or 'desconocido'}")
+    data = await file.read()
+    is_image = content_type.startswith("image/")
+    max_bytes = _MAX_IMAGE_BYTES if is_image else _MAX_DOC_BYTES
+    if len(data) > max_bytes:
+        limit_label = "5 MB" if is_image else "100 MB"
+        raise HTTPException(413, f"Archivo demasiado grande — máximo {limit_label}")
+    db = MongoDBManager()
+    file_id = db.fs.put(data, filename=file.filename or "upload", content_type=content_type)
+    url = f"{APP_PUBLIC_URL.rstrip('/')}/api/files/{file_id}"
+    return {
+        "file_id": str(file_id),
+        "url": url,
+        "filename": file.filename,
+        "content_type": content_type,
+        "size_bytes": len(data),
+    }
+
+
+@router.get("/files/{file_id}")
+def api_serve_file(file_id: str):
+    """Serve a GridFS file by ID. Called by WasenderAPI to download uploaded media."""
+    import io
+    from bson import ObjectId
+    db = MongoDBManager()
+    try:
+        oid = ObjectId(file_id)
+    except Exception:
+        raise HTTPException(400, "file_id inválido")
+    try:
+        grid_out = db.fs.get(oid)
+    except Exception:
+        raise HTTPException(404, "Archivo no encontrado")
+    data = grid_out.read()
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type=grid_out.content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'inline; filename="{grid_out.filename}"',
+            "Content-Length": str(len(data)),
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
+
 
 # ── Analytics ─────────────────────────────────────────────────────────────────
 
@@ -3470,6 +4161,7 @@ def api_list_instances(x_user_token: Optional[str] = Header(None)):
     from datetime import datetime
     db = MongoDBManager()
     from app.config import WAHA_API_URL, WAHA_API_KEY
+    from app.config import WASENDER_PAT, WASENDER_BASE_URL
     instances = list(db.db.instances.find({}, {"_id": 0}))
     for inst in instances:
         try:
@@ -3480,6 +4172,21 @@ def api_list_instances(x_user_token: Optional[str] = Header(None)):
                 waha_st = waha_data.get("status", "unknown")
                 state = "open" if waha_st == "WORKING" else ("connecting" if waha_st in ("STARTING", "SCAN_QR_CODE") else "disconnected")
                 inst["last_activity_at"] = waha_data.get("lastActivityTimestamp")
+            elif inst.get("provider") == "wasender":
+                _wid = inst.get("wasender_id")
+                if _wid and WASENDER_PAT:
+                    r = _req.get(
+                        f"{WASENDER_BASE_URL.rstrip('/')}/api/whatsapp-sessions/{_wid}",
+                        headers={"Authorization": f"Bearer {WASENDER_PAT}"},
+                        timeout=5,
+                    )
+                    ws_data = (r.json().get("data") or {}) if r.ok else {}
+                    ws_st = ws_data.get("status", "unknown")
+                    state = "open" if ws_st == "connected" else (
+                        "connecting" if ws_st in ("connecting", "need_scan") else "disconnected"
+                    )
+                else:
+                    state = "unknown"
             else:
                 r = _req.get(
                     f"{EVOLUTION_API_URL}/instance/connectionState/{inst['name']}",
@@ -3538,7 +4245,7 @@ def api_delete_instance(name: str, x_user_token: Optional[str] = Header(None)):
         raise HTTPException(403, "Solo admins")
     import requests as _req
     db = MongoDBManager()
-    inst_doc = db.db.instances.find_one({"name": name}, {"provider": 1}) or {}
+    inst_doc = db.db.instances.find_one({"name": name}, {"provider": 1, "wasender_id": 1}) or {}
     if inst_doc.get("provider") == "waha":
         from app.config import WAHA_API_URL, WAHA_API_KEY
         try:
@@ -3546,6 +4253,18 @@ def api_delete_instance(name: str, x_user_token: Optional[str] = Header(None)):
                 headers={"X-Api-Key": WAHA_API_KEY}, timeout=10)
         except Exception:
             pass
+    elif inst_doc.get("provider") == "wasender":
+        _wid = inst_doc.get("wasender_id")
+        if _wid:
+            from app.config import WASENDER_PAT, WASENDER_BASE_URL
+            try:
+                _req.delete(
+                    f"{WASENDER_BASE_URL.rstrip('/')}/api/whatsapp-sessions/{_wid}",
+                    headers={"Authorization": f"Bearer {WASENDER_PAT}"},
+                    timeout=10,
+                )
+            except Exception:
+                pass
     else:
         from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
         try:

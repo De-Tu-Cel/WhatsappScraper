@@ -5,8 +5,40 @@ import random
 import threading
 import time
 from datetime import datetime
+from app.daily_cap import DAILY_CAP, get_daily_count, increment_daily_count
 
 log = logging.getLogger(__name__)
+
+
+def _any_instance_connected(db) -> bool:
+    """Return True if at least one WhatsApp session is reachable and connected."""
+    from app.config import WASENDER_PAT, WASENDER_BASE_URL, WAHA_API_KEY, WAHA_API_URL, EVOLUTION_API_KEY
+    if WASENDER_PAT:
+        try:
+            from app.whatsapp_wasender import pick_connected_instance as _ws_pick
+            if _ws_pick(db, WASENDER_PAT, WASENDER_BASE_URL):
+                return True
+        except Exception:
+            pass
+    if WAHA_API_KEY:
+        try:
+            from app.whatsapp_waha import pick_connected_instance as _waha_pick
+            if _waha_pick(db, WAHA_API_URL, WAHA_API_KEY):
+                return True
+        except Exception:
+            pass
+    if EVOLUTION_API_KEY:
+        try:
+            from app.config import EVOLUTION_API_URL, EVOLUTION_INSTANCE
+            import requests as _r
+            r = _r.get(f"{EVOLUTION_API_URL}/instance/connectionState/{EVOLUTION_INSTANCE}",
+                       headers={"apikey": EVOLUTION_API_KEY}, timeout=3)
+            state = (r.json().get("instance") or {}).get("state") or r.json().get("state", "")
+            if state == "open":
+                return True
+        except Exception:
+            pass
+    return False
 
 _POLL_INTERVAL_SEC = 60        # check for due jobs every minute
 _REMINDER_LEAD_MIN = 60        # notify ~1h before a scheduled campaign fires
@@ -59,6 +91,10 @@ def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_i
     try:
         evo = EvolutionClient(EVOLUTION_API_URL, EVOLUTION_API_KEY, EVOLUTION_INSTANCE)
 
+        if get_daily_count(db, EVOLUTION_INSTANCE) >= DAILY_CAP:
+            log.warning("[Scheduler] Daily cap %d reached for evolution=%s — skipping %s", DAILY_CAP, EVOLUTION_INSTANCE, to_number)
+            return False
+
         # Learn JID before sending (so instant bot replies can be matched)
         real_jid_num = evo.get_jid(to_number)
         if real_jid_num:
@@ -72,6 +108,8 @@ def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_i
         evo_json = evo_result.get("response_json", {})
         message_id = evo_json.get("key", {}).get("id") or evo_json.get("id")
         status = "sent" if evo_result.get("status_code") in (200, 201) else "failed"
+        if status == "sent":
+            increment_daily_count(db, EVOLUTION_INSTANCE)
 
         # Learn JID from send response as fallback
         if not real_jid_num and status == "sent":
@@ -125,6 +163,10 @@ def _send_via_waha(db, company_id: str, to_number: str, message: str, job_id: st
             log.warning("[Scheduler] WAHA: no session connected — skipping %s", to_number)
             return False
 
+        if get_daily_count(db, active_session) >= DAILY_CAP:
+            log.warning("[Scheduler] Daily cap %d reached for waha=%s — skipping %s", DAILY_CAP, active_session, to_number)
+            return False
+
         waha = WAHAClient(WAHA_API_URL, WAHA_API_KEY, active_session)
 
         from app.whatsapp_waha import _clean_digits as _wc
@@ -168,6 +210,8 @@ def _send_via_waha(db, company_id: str, to_number: str, message: str, job_id: st
             return False
 
         status      = "sent" if waha_result.get("status_code") in (200, 201) else "failed"
+        if status == "sent":
+            increment_daily_count(db, active_session)
 
         db.insert_message_log({
             "channel": "whatsapp",
@@ -194,8 +238,79 @@ def _send_via_waha(db, company_id: str, to_number: str, message: str, job_id: st
         return False
 
 
+def _send_via_wasender(db, company_id: str, to_number: str, message: str, job_id: str, delay_ms: int = 0, session: str = ""):
+    """Send a single WhatsApp message via WasenderAPI and log it."""
+    from app.config import WASENDER_PAT, WASENDER_BASE_URL
+    from app.whatsapp_wasender import WasenderClient, pick_connected_instance as wasender_pick, _clean_digits as _wc
+
+    if not WASENDER_PAT:
+        log.warning("[Scheduler] WasenderAPI not configured — skipping %s", to_number)
+        return False
+    try:
+        active_session = session or wasender_pick(db, WASENDER_PAT, WASENDER_BASE_URL)
+        if not active_session:
+            log.warning("[Scheduler] Wasender: no session connected — skipping %s", to_number)
+            return False
+
+        if get_daily_count(db, active_session) >= DAILY_CAP:
+            log.warning("[Scheduler] Daily cap %d reached for wasender=%s — skipping %s", DAILY_CAP, active_session, to_number)
+            return False
+
+        inst_doc = db.db.instances.find_one({"name": active_session}, {"wasender_api_key": 1, "number": 1})
+        api_key = (inst_doc or {}).get("wasender_api_key", "")
+        if not api_key:
+            log.warning("[Scheduler] Wasender: no api_key for instance=%s", active_session)
+            return False
+
+        client = WasenderClient(WASENDER_BASE_URL, api_key, active_session,
+                                own_number=(inst_doc or {}).get("number", ""))
+
+        _phone_digits = _wc(to_number)
+        # Ensure jid_map entry so inbound replies can be routed
+        db.db.jid_map.update_one(
+            {"jid": _phone_digits},
+            {"$set": {"company_id": company_id, "to_number": to_number, "updated_at": datetime.now()}},
+            upsert=True,
+        )
+
+        result = client.send_text(to_number, message, delay_ms=delay_ms)
+        resp_json = result.get("response_json", {})
+        # WasenderAPI: {data: {message_id: "..."}}
+        _data = resp_json.get("data") or {}
+        message_id = _data.get("message_id") or _data.get("id")
+
+        status = "sent" if result.get("status_code") in (200, 201) else "failed"
+        if status == "sent":
+            increment_daily_count(db, active_session)
+
+        db.insert_message_log({
+            "channel": "whatsapp",
+            "platform": "wasender",
+            "direction": "outbound",
+            "company_id": company_id,
+            "to_number": to_number,
+            "message_body": message,
+            "message_text": message,
+            "message_id": message_id,
+            "status_code": result.get("status_code"),
+            "api_response": resp_json,
+            "status": status,
+            "sent_at": result.get("sent_at"),
+            "instance_name": active_session,
+            "sent_by_username": "scheduler",
+            "sent_by_name": "Envio programado",
+            "scheduled_send_id": job_id,
+            "analysis_status": None,
+        })
+        log.info("[Scheduler] Wasender job=%s company=%s to=%s status=%s", job_id, company_id, to_number, status)
+        return status == "sent"
+    except Exception:
+        log.exception("[Scheduler] _send_via_wasender failed for company=%s to=%s", company_id, to_number)
+        return False
+
+
 def _send_message(db, company_id: str, to_number: str, message: str, job_id: str, delay_ms: int = 0):
-    """Route to WAHA or Evolution based on the company's assigned instance provider."""
+    """Route to WasenderAPI, WAHA, or Evolution based on the company's assigned instance provider."""
     try:
         from bson import ObjectId
         if company_id and len(company_id) == 24:
@@ -203,12 +318,17 @@ def _send_message(db, company_id: str, to_number: str, message: str, job_id: str
             inst_name = (co or {}).get("assigned_instance")
             if inst_name:
                 inst_doc = db.db.instances.find_one({"name": inst_name}, {"provider": 1})
-                if inst_doc and inst_doc.get("provider") == "waha":
+                provider = (inst_doc or {}).get("provider", "")
+                if provider == "wasender":
+                    return _send_via_wasender(db, company_id, to_number, message, job_id, delay_ms, session=inst_name)
+                if provider == "waha":
                     return _send_via_waha(db, company_id, to_number, message, job_id, delay_ms, session=inst_name)
     except Exception:
         pass
-    # Fallback: if only WAHA is configured (no Evolution key), use WAHA
-    from app.config import WAHA_API_KEY, EVOLUTION_API_KEY
+    # Fallback: prefer WasenderAPI if configured, then WAHA, then Evolution
+    from app.config import WASENDER_PAT, WAHA_API_KEY, EVOLUTION_API_KEY
+    if WASENDER_PAT:
+        return _send_via_wasender(db, company_id, to_number, message, job_id, delay_ms)
     if WAHA_API_KEY and not EVOLUTION_API_KEY:
         return _send_via_waha(db, company_id, to_number, message, job_id, delay_ms)
     return _send_via_evolution(db, company_id, to_number, message, job_id, delay_ms)
@@ -231,6 +351,24 @@ def _execute_send_job(job_id: str):
         company_ids = job.get("company_ids") or []
         selected_numbers = job.get("selected_numbers") or []
         messages = job.get("messages") or ([job["message"]] if job.get("message") else [])
+
+        # ── Pre-flight: abort immediately if no WA instance is connected ─────
+        # Reverts to "pending" so the scheduler retries in 5 min, instead of
+        # burning through the entire recipient list producing only errors.
+        if not _any_instance_connected(db):
+            from datetime import timedelta
+            deferred_count = job.get("no_instance_deferred_count", 0) + 1
+            log.warning("[Scheduler] job=%s — no connected instance (defer #%d), retrying in 5min",
+                        job_id, deferred_count)
+            db.db.scheduled_sends.update_one(
+                {"_id": ObjectId(job_id)},
+                {"$set": {
+                    "status": "pending",
+                    "retry_not_before": datetime.now() + timedelta(minutes=5),
+                    "no_instance_deferred_count": deferred_count,
+                }},
+            )
+            return
 
         # ── Send timing config (saved from UI — same shape as sendConfig.js) ──
         _sc = job.get("send_config") or {}
@@ -431,11 +569,15 @@ def _poll_and_dispatch():
         db = MongoDBManager()
         now = datetime.now()
 
-        # Find pending jobs whose scheduled_at has arrived
+        # Find pending jobs whose scheduled_at has arrived and are not in a retry backoff
         due_jobs = list(db.db.scheduled_sends.find(
             {
                 "status": "pending",
                 "scheduled_at": {"$lte": now},
+                "$or": [
+                    {"retry_not_before": {"$exists": False}},
+                    {"retry_not_before": {"$lte": now}},
+                ],
             },
             {"_id": 1},
         ))

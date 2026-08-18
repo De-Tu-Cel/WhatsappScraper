@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
+import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
 import { DatePicker } from '@mui/x-date-pickers/DatePicker'
@@ -594,6 +595,7 @@ export function MessageVariantsEditor({ messages, setMessages, recipientCount = 
 
 function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
   const { t, lang } = useLang()
+  const { isDisconnected: noInstance } = useInstanceStatus()
   const isEdit = !!editJob
   const src    = duplicateFrom || editJob  // source for pre-filling
 
@@ -626,6 +628,7 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
 
   async function handleSubmit(e) {
     e.preventDefault(); setError('')
+    if (noInstance) { setError(lang === 'en' ? 'No connected WhatsApp instance. Connect one from Instances before scheduling.' : 'Sin instancia WhatsApp conectada. Conéctala desde Instancias antes de programar.'); return }
     if (!name.trim() || cleanMessages.length === 0 || !dateVal || !timeVal) { setError(t.sched.fillAll); return }
     if (selectedNums.size === 0) { setError(t.sched.selectNum); return }
     if (belowMinTemplates) { setError(t.tplLib.minRequiredBlock(MIN_TEMPLATES_FOR_BULK, cleanMessages.length)); return }
@@ -703,13 +706,24 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
         )}
       </Box>
       <CompanyPicker selectedNums={selectedNums} numInfoMap={numInfoMap} onChange={(ns, nm) => { setSelectedNums(ns); setNumInfoMap(nm) }} />
+      {noInstance && (
+        <Box sx={{ px: 1.5, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', display: 'flex', alignItems: 'center', gap: 0.8 }}>
+          <Typography sx={{ color: '#f87171', fontSize: '0.75rem', fontWeight: 600 }}>
+            {lang === 'en' ? '⚠ No connected WhatsApp instance — connect one from Instances to schedule.' : '⚠ Sin instancia WhatsApp conectada — conéctala desde Instancias para poder programar.'}
+          </Typography>
+        </Box>
+      )}
       {error && <Box sx={{ px: 1.5, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}><Typography sx={{ color: '#ef4444', fontSize: '0.78rem' }}>{error}</Typography></Box>}
       <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
-        <Button type="submit" variant="contained" disabled={submitting || belowMinTemplates}
+        <Tooltip title={noInstance ? (lang === 'en' ? 'Connect a WhatsApp instance first' : 'Conecta una instancia WhatsApp primero') : ''}>
+        <span>
+        <Button type="submit" variant="contained" disabled={submitting || belowMinTemplates || noInstance}
           startIcon={submitting ? <CircularProgress size={13} sx={{ color: 'inherit' }} /> : <SendIcon />}
           sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.85)' }, '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.2)' }, textTransform: 'none', fontWeight: 600, fontSize: '0.82rem', borderRadius: 2, px: 2, minWidth: 140 }}>
           {submitting ? t.sched.saving : (isEdit ? t.sched.saveLbl : (duplicateFrom ? t.sched.duplicateLbl : t.sched.scheduleLbl))}
         </Button>
+        </span>
+        </Tooltip>
         <Button variant="outlined" onClick={() => onDone(null, false)} sx={{ color: '#ef4444', borderColor: 'rgba(239,68,68,0.4)', '&:hover': { borderColor: '#ef4444', bgcolor: 'rgba(239,68,68,0.08)' }, textTransform: 'none', fontSize: '0.8rem', borderRadius: 2 }}>{t.common.cancel}</Button>
       </Box>
     </Box>

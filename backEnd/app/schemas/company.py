@@ -11,9 +11,12 @@ class ProcessUrlRequest(BaseModel):
 class SendMessageRequest(BaseModel):
     company_id: str
     to_number: str
-    message: str
+    message: Optional[str] = ""
     website: Optional[str] = ""
     instance: Optional[str] = None  # explicit instance bypass (e.g. for conversation replies)
+    image_url: Optional[str] = None      # send image via public URL (JPEG/PNG, max 5MB)
+    document_url: Optional[str] = None  # send document via public URL (PDF/DOCX/etc, max 100MB)
+    file_name: Optional[str] = None     # display name for document
 
 class SearchRequest(BaseModel):
     industry: str

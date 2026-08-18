@@ -9,7 +9,8 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import TimerIcon from '@mui/icons-material/Timer'
 import DynamicFeedIcon from '@mui/icons-material/DynamicFeed'
 import LocalCafeIcon from '@mui/icons-material/LocalCafe'
-import { saveSendConfig } from '@/lib/sendConfig'
+import RestartAltIcon from '@mui/icons-material/RestartAlt'
+import { saveSendConfig, DEFAULT_SEND_CONFIG } from '@/lib/sendConfig'
 import { useLang } from '../context/LangContext'
 
 function sliderSx(color = '#3b82f6') {
@@ -144,6 +145,11 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
     saveSendConfig(next)
   }
 
+  function resetDefaults() {
+    onChange({ ...DEFAULT_SEND_CONFIG })
+    saveSendConfig({ ...DEFAULT_SEND_CONFIG })
+  }
+
   return (
     <Box sx={{
       borderRadius: 2,
@@ -228,6 +234,24 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
             marks={[1,5,10,15,20,30].map(v => ({ value: v, label: `${v}m` }))}
           />
           <RiskBadge config={config} />
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 0.5 }}>
+            <Box
+              onClick={disabled ? undefined : resetDefaults}
+              sx={{
+                display: 'flex', alignItems: 'center', gap: 0.5,
+                px: 1, py: 0.4, borderRadius: 1.2, cursor: disabled ? 'default' : 'pointer',
+                border: '1px solid rgba(255,255,255,0.08)',
+                bgcolor: 'rgba(255,255,255,0.03)',
+                opacity: disabled ? 0.4 : 1,
+                '&:hover': disabled ? {} : { bgcolor: 'rgba(255,255,255,0.07)' },
+              }}
+            >
+              <RestartAltIcon sx={{ fontSize: 12, color: 'rgba(255,255,255,0.35)' }} />
+              <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.35)', fontWeight: 600 }}>
+                Restaurar defaults
+              </Typography>
+            </Box>
+          </Box>
         </Box>
       </Collapse>
     </Box>

@@ -272,7 +272,7 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
                   value={globalPrompt}
                   disabled={locked}
                   onChange={e => setGlobalPrompt(e.target.value)}
-                  sx={{ ...FIELD_SX, '& .MuiInputBase-input': { color: 'white', fontFamily: 'monospace', fontSize: '0.78rem' } }}
+                  sx={{ ...FIELD_SX, '& .MuiInputBase-input': { color: 'white', fontFamily: 'monospace', fontSize: '0.78rem' }, '& .MuiInputBase-input.Mui-disabled': { WebkitTextFillColor: 'rgba(255,255,255,0.45)' } }}
                 />
                 {!locked && (
                   <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 1 }}>

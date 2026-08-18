@@ -191,11 +191,28 @@ def _get_or_create_session(db: MongoDBManager, phone_number: str, company_id: st
     prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
     max_turns = int(prefs.get("max_turns", MAX_TURNS))
 
+    # Pre-populate turns with recent message history so the AI has context
+    # to detect bots/humans before the first response (e.g. "Soy AMAIA").
+    _seed_turns = []
+    clean10_seed = "".join(filter(str.isdigit, phone_number))[-10:]
+    _recent_msgs = list(db.db.message_logs.find(
+        {"company_id": company_id,
+         "$or": [{"to_number": {"$regex": clean10_seed}},
+                 {"from_number": {"$regex": clean10_seed}}]},
+        sort=[("created_at", -1)], limit=8,
+    ))
+    for _m in reversed(_recent_msgs):
+        _role = "assistant" if _m.get("direction") == "outbound" else "user"
+        _body = (_m.get("message_body") or "").strip()
+        if _body:
+            _seed_turns.append({"role": _role, "content": _body,
+                                 "seeded": True, "ts": _m.get("created_at")})
+
     doc = {
         "phone_number": phone_number,
         "company_id": company_id,
         "status": "waiting",
-        "turns": [],
+        "turns": _seed_turns,
         "turn_count": 0,
         "max_turns": max_turns,
         "context": ctx,
@@ -447,12 +464,21 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
             preferred_instance = (co or {}).get("assigned_instance")
             if preferred_instance:
                 _doc = db.db.instances.find_one({"name": preferred_instance}, {"provider": 1})
-                if _doc and _doc.get("provider") == "waha":
+                _provider = (_doc or {}).get("provider", "")
+                if _provider == "wasender":
+                    _inst_provider = "wasender"
+                elif _provider == "waha":
                     _inst_provider = "waha"
     except Exception:
         pass
 
-    if _inst_provider == "waha":
+    if _inst_provider == "wasender":
+        instance = preferred_instance
+        if not instance:
+            log.warning("[AIFollowup] Wasender: sin sesión asignada — Andy no puede enviar a %s", phone_number)
+            db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": False}})
+            return
+    elif _inst_provider == "waha":
         instance = preferred_instance
         if not instance:
             log.warning("[AIFollowup] WAHA: sin sesión asignada — Andy no puede enviar a %s", phone_number)
@@ -472,7 +498,30 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
                 pass
 
     try:
-        if _inst_provider == "waha":
+        if _inst_provider == "wasender":
+            from app.whatsapp_wasender import WasenderClient, _clean_digits as _ws_clean
+            from app.config import WASENDER_BASE_URL
+            inst_doc = db.db.instances.find_one({"name": instance}, {"wasender_api_key": 1, "number": 1})
+            _ws_api_key = (inst_doc or {}).get("wasender_api_key", "")
+            ws_client = WasenderClient(WASENDER_BASE_URL, _ws_api_key, instance,
+                                       own_number=(inst_doc or {}).get("number", ""))
+            _phone_digits = _ws_clean(phone_number)
+            db.db.jid_map.update_one({"jid": _phone_digits},
+                {"$set": {"company_id": company_id, "updated_at": datetime.now()}}, upsert=True)
+            try:
+                from bson import ObjectId as _OIdAI
+                _co_ai = db.db.companies.find_one({"_id": _OIdAI(company_id)}, {"name": 1}) if company_id and len(company_id) == 24 else None
+                _co_name_ai = (_co_ai or {}).get("name", "") or _phone_digits
+                ws_client.label_contact(_phone_digits, _co_name_ai)
+            except Exception:
+                pass
+            typing_delay_ms = int(random.uniform(TYPING_DELAY_MIN, TYPING_DELAY_MAX) * 1000)
+            send_result = ws_client.send_text(phone_number, ai_text, delay_ms=typing_delay_ms)
+            resp_json = send_result.get("response_json", {})
+            _ws_data = resp_json.get("data") or {}
+            message_id = _ws_data.get("message_id") or _ws_data.get("id")
+            status = "sent" if send_result.get("status_code") in (200, 201) else "failed"
+        elif _inst_provider == "waha":
             from app.whatsapp_waha import WAHAClient, _clean_digits as _waha_clean
             from app.config import WAHA_API_URL, WAHA_API_KEY
             waha_client = WAHAClient(WAHA_API_URL, WAHA_API_KEY, instance)
@@ -484,7 +533,6 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
             if _real_jid and _real_jid != _phone_digits:
                 db.db.jid_map.update_one({"jid": _real_jid},
                     {"$set": {"company_id": company_id, "updated_at": datetime.now()}}, upsert=True)
-            # Save as contact before sending — reduces spam/ban signals
             try:
                 from bson import ObjectId as _OId
                 if company_id and len(company_id) == 24:
@@ -509,6 +557,10 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
             resp_json = send_result.get("response_json", {})
             message_id = resp_json.get("key", {}).get("id") or resp_json.get("id")
             status = "sent" if send_result.get("status_code") in (200, 201) else "failed"
+
+        if status == "sent":
+            from app.daily_cap import increment_daily_count as _incr_daily
+            _incr_daily(db, instance)
 
         # Persist AI message in message_logs
         from datetime import datetime as _dt

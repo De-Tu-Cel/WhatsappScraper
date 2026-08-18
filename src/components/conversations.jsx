@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useRef, useCallback, useMemo, Fragment, memo } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment, memo, useTransition } from 'react'
 import { MAX_WA_MSG } from '@/lib/validators'
 import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
@@ -472,11 +472,16 @@ export default function Conversations() {
   const [selected, setSelected]     = useState(null)
   const [thread, setThread]         = useState([])
   const [threadLoad, setThreadLoad] = useState(false)
-  const [search, setSearch]         = useState('')
+  const [searchInput, setSearchInput] = useState('')
+  const [search, setSearch]           = useState('')
+  const [, startSearchTransition]     = useTransition()
   const [reply, setReply]           = useState('')
   const replyValueRef = useRef('')
   replyValueRef.current = reply
   const [sending, setSending]       = useState(false)
+  const [attachedFile, setAttachedFile] = useState(null) // {file, name, type}
+  const [uploading, setUploading]   = useState(false)
+  const fileInputRef = useRef(null)
   const [waNumbers, setWaNumbers]       = useState([])
   const [selectedNums, setSelectedNums] = useState([])
   const [activeNum, setActiveNum]       = useState('all')
@@ -485,6 +490,7 @@ export default function Conversations() {
   const [emojiGroup, setEmojiGroup]     = useState(0)
   const syncingRef                      = useRef(false)
   const lastSyncedRef                   = useRef(null)  // evita re-sync al mismo company
+  const [dailyStats, setDailyStats]     = useState(null)
   const currentCompanyRef               = useRef(null)  // evita race condition en fetchCompanyNumbers
   const { t, lang } = useLang()
   const { user } = useUser()
@@ -522,6 +528,19 @@ export default function Conversations() {
     const id = setInterval(poll, 60_000)
     return () => { cancelled = true; clearInterval(id) }
   }, [])
+
+  const fetchDailyStats = useCallback(async () => {
+    try {
+      const r = await authFetch('/api/instances/daily-stats')
+      if (r.ok) setDailyStats(await r.json())
+    } catch {}
+  }, [])
+
+  useEffect(() => {
+    fetchDailyStats()
+    const id = setInterval(fetchDailyStats, 5 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [fetchDailyStats])
 
   // When a notification card is clicked, auto-select the matching conversation
   useEffect(() => {
@@ -749,9 +768,44 @@ export default function Conversations() {
   const handleSendReply = useCallback(async function handleSendReply(overrideText = null) {
     const text   = overrideText ?? replyValueRef.current
     const toSend = selectedNums.length > 0 ? selectedNums : waNumbers.slice(0, 1)
-    if (!text.trim() || !selected || toSend.length === 0) return
+    if (!text.trim() && !attachedFile) return
+    if (!selected || toSend.length === 0) return
+    if (dailyStats && dailyStats.total_available <= 0) {
+      setSendError(lang === 'en'
+        ? `Daily limit reached (${dailyStats.total_sent}/${dailyStats.total_cap} messages). Resets at midnight UTC.`
+        : `Límite diario alcanzado (${dailyStats.total_sent}/${dailyStats.total_cap} mensajes). Reinicia a las 00:00 UTC.`)
+      return
+    }
     setSendError('')
     setSending(true)
+
+    // Upload file first if attached
+    let mediaUrl = null
+    let mediaField = null
+    let mediaFileName = null
+    if (attachedFile) {
+      setUploading(true)
+      try {
+        const fd = new FormData()
+        fd.append('file', attachedFile.file)
+        const upRes = await authFetch('/api/files/upload', { method: 'POST', body: fd })
+        if (!upRes.ok) {
+          const err = await upRes.json().catch(() => ({}))
+          throw new Error(err.detail || 'Error al subir archivo')
+        }
+        const upData = await upRes.json()
+        mediaUrl = upData.url
+        mediaField = attachedFile.type.startsWith('image/') ? 'image_url' : 'document_url'
+        mediaFileName = attachedFile.name
+      } catch (e) {
+        setSendError(e.message)
+        setSending(false)
+        setUploading(false)
+        return
+      }
+      setUploading(false)
+    }
+
     // Route reply through the same instance that received the last inbound message
     const lastInbound = [...thread].reverse().find(m => m.direction === 'inbound')
     const replyInstance = lastInbound?.received_on_instance || null
@@ -764,6 +818,10 @@ export default function Conversations() {
           website: selected.website || '',
         }
         if (replyInstance) payload.instance = replyInstance
+        if (mediaUrl) {
+          payload[mediaField] = mediaUrl
+          if (mediaField === 'document_url' && mediaFileName) payload.file_name = mediaFileName
+        }
         const res = await authFetch('/api/send-message', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -793,6 +851,9 @@ export default function Conversations() {
       ])
       setReply('')
       if (replyRef._textarea) replyRef._textarea.value = ''
+      setAttachedFile(null)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      fetchDailyStats()
       const cid = selected.company_id
       setTimeout(() => fetchThread(cid, true), 1500)
       ;[4000, 8000].forEach(ms => setTimeout(() => fetchThread(cid, false, true), ms))
@@ -802,7 +863,7 @@ export default function Conversations() {
       setTimeout(() => setSendError(''), 8000)
     }
     finally { setSending(false) }
-  }, [selectedNums, waNumbers, thread, selected, fetchThread])
+  }, [selectedNums, waNumbers, thread, selected, fetchThread, dailyStats, fetchDailyStats, lang])
 
   const filtered = useMemo(() => convs.filter(c => {
     if (myConvsOnly && c.sent_by_username !== user?.username) return false
@@ -877,8 +938,12 @@ export default function Conversations() {
               </Typography>
             </Box>
           )}
-          <TextField fullWidth size="small" placeholder={t.convs.search} value={search}
-            onChange={e => setSearch(e.target.value)}
+          <TextField fullWidth size="small" placeholder={t.convs.search} value={searchInput}
+            onChange={e => {
+              const v = e.target.value
+              setSearchInput(v)
+              startSearchTransition(() => setSearch(v))
+            }}
             slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 16, color: 'var(--text-muted)' }} /></InputAdornment> } }}
             sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.8rem', bgcolor: 'var(--item-hover)', '& fieldset': { borderColor: 'var(--border)' }, '&:hover fieldset': { borderColor: 'var(--text-muted)' } }, '& input': { color: 'var(--text)', py: 0.8 } }} />
 
@@ -910,7 +975,7 @@ export default function Conversations() {
             <Box sx={{ px: 2, pt: 4, textAlign: 'center' }}>
               <WhatsAppIcon sx={{ fontSize: 36, color: 'rgba(255,255,255,0.1)', mb: 1 }} />
               <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem' }}>
-                {search ? t.common.noData : t.convs.noConvs}
+                {searchInput ? t.common.noData : t.convs.noConvs}
               </Typography>
             </Box>
           ) : filtered.map(c => (
@@ -1167,7 +1232,38 @@ export default function Conversations() {
             <Box sx={{ px: 2, pt: 1.5, pb: 1, borderTop: '1px solid var(--border)', flexShrink: 0, bgcolor: 'var(--card-bg)' }}>
               <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1.2 }} />
               <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1.2 }} />
+              {/* File preview chip */}
+              {attachedFile && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, px: 0.5 }}>
+                  <Chip
+                    size="small"
+                    icon={attachedFile.type.startsWith('image/') ? <ImageIcon sx={{ fontSize: 14 }} /> : <InsertDriveFileIcon sx={{ fontSize: 14 }} />}
+                    label={attachedFile.name}
+                    onDelete={() => { setAttachedFile(null); if (fileInputRef.current) fileInputRef.current.value = '' }}
+                    sx={{ bgcolor: 'rgba(99,102,241,0.15)', color: 'rgba(255,255,255,0.8)', border: '1px solid rgba(99,102,241,0.3)',
+                      fontSize: '0.72rem', maxWidth: 240,
+                      '& .MuiChip-deleteIcon': { color: 'rgba(255,255,255,0.4)', '&:hover': { color: '#ef4444' } } }}
+                  />
+                  {uploading && <CircularProgress size={12} sx={{ color: 'var(--accent, #a5b4fc)' }} />}
+                </Box>
+              )}
+
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-end' }}>
+                {/* Hidden file input */}
+                <input ref={fileInputRef} type="file" hidden
+                  accept="image/jpeg,image/png,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  onChange={e => {
+                    const f = e.target.files?.[0]
+                    if (f) setAttachedFile({ file: f, name: f.name, type: f.type })
+                  }}
+                />
+                <Tooltip title="Adjuntar imagen o documento">
+                  <IconButton size="small" onClick={() => fileInputRef.current?.click()}
+                    sx={{ color: attachedFile ? 'var(--accent, #a5b4fc)' : 'rgba(255,255,255,0.3)',
+                      flexShrink: 0, mb: 0.5, '&:hover': { color: 'var(--accent, #a5b4fc)' } }}>
+                    <AttachFileIcon sx={{ fontSize: 20 }} />
+                  </IconButton>
+                </Tooltip>
                 <Tooltip title="Emojis">
                   <IconButton size="small" onClick={e => setEmojiAnchor(e.currentTarget)}
                     sx={{ color: 'rgba(255,255,255,0.3)', flexShrink: 0, mb: 0.5, '&:hover': { color: '#facc15' } }}>
@@ -1192,7 +1288,7 @@ export default function Conversations() {
                 }>
                   <span>
                     <IconButton onClick={() => handleSendReply()}
-                      disabled={instanceStatus === 'disconnected' || !reply.trim() || sending || reply.length > MAX_WA_MSG || (waNumbers.length > 0 && selectedNums.length === 0) || (waNumbers.length > 1 && (!activeNum || activeNum === 'all'))}
+                      disabled={instanceStatus === 'disconnected' || (!reply.trim() && !attachedFile) || sending || uploading || reply.length > MAX_WA_MSG || (waNumbers.length > 0 && selectedNums.length === 0) || (waNumbers.length > 1 && (!activeNum || activeNum === 'all'))}
                       sx={{ bgcolor: instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.12)' : 'rgba(var(--accent-rgb, 99,102,241), 0.2)', border: `1px solid ${instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.25)' : 'rgba(var(--accent-rgb, 99,102,241), 0.3)'}`, borderRadius: 2, color: instanceStatus === 'disconnected' ? '#ef4444' : 'var(--accent, #a5b4fc)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 99,102,241), 0.35)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.15)' } }}>
                       {sending ? <CircularProgress size={18} sx={{ color: 'var(--accent, #a5b4fc)' }} /> : instanceStatus === 'disconnected' ? <WifiOffIcon sx={{ fontSize: 18 }} /> : <SendIcon sx={{ fontSize: 18 }} />}
                     </IconButton>
@@ -1201,6 +1297,37 @@ export default function Conversations() {
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 0.4 }}>
                 <InstanceStatusDot status={instanceStatus} />
+                {dailyStats !== null && (() => {
+                  const _committed  = dailyStats.total_sent + (dailyStats.scheduled_today || 0)
+                  const _pending    = selectedNums.length
+                  const _avail      = dailyStats.total_available
+                  const _afterAvail = Math.max(0, _avail - _pending)
+                  const _danger  = _afterAvail <= 0
+                  const _warn    = !_danger && _afterAvail < 30
+                  const _textCol = _danger ? '#f87171' : _warn ? '#fbbf24' : 'rgba(255,255,255,0.4)'
+                  const _border  = _danger ? 'rgba(239,68,68,0.35)' : _warn ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.1)'
+                  const _bg      = _danger ? 'rgba(239,68,68,0.08)' : _warn ? 'rgba(251,191,36,0.06)' : 'rgba(255,255,255,0.04)'
+                  const _tip = _pending > 0
+                    ? `${dailyStats.total_sent} enviados + ${dailyStats.scheduled_today || 0} programados + ${_pending} seleccionados = ${_committed + _pending} / ${dailyStats.total_cap} • Quedan ${_afterAvail} disponibles • Reset 00:00 UTC`
+                    : `${dailyStats.total_sent} enviados + ${dailyStats.scheduled_today || 0} programados hoy • ${_avail} disponibles • Reset 00:00 UTC`
+                  return (
+                    <Tooltip title={_tip} placement="top">
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: '3px', px: 0.9, py: 0.3,
+                        borderRadius: 1.5, border: `1px solid ${_border}`, bgcolor: _bg, cursor: 'default' }}>
+                        <Box component="span" sx={{ fontSize: '0.6rem', color: _textCol, fontVariantNumeric: 'tabular-nums', lineHeight: 1, display: 'flex', alignItems: 'center', gap: '2px' }}>
+                          <span style={{ fontWeight: 600 }}>{_committed}</span>
+                          {_pending > 0 && <>
+                            <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.55rem' }}>+</span>
+                            <span style={{ color: '#fbbf24', fontWeight: 700 }}>{_pending}</span>
+                          </>}
+                          <span style={{ color: 'rgba(255,255,255,0.15)', margin: '0 2px' }}>/</span>
+                          <span style={{ color: 'rgba(255,255,255,0.3)' }}>{dailyStats.total_cap}</span>
+                        </Box>
+                        <Box component="span" sx={{ fontSize: '0.52rem', color: 'rgba(255,255,255,0.2)', lineHeight: 1, letterSpacing: '0.02em' }}>hoy</Box>
+                      </Box>
+                    </Tooltip>
+                  )
+                })()}
                 <Typography sx={{ fontSize: '0.65rem', color: reply.length > MAX_WA_MSG ? '#f87171' : reply.length > MAX_WA_MSG * 0.9 ? '#fbbf24' : 'rgba(255,255,255,0.2)' }}>
                   {reply.length} / {MAX_WA_MSG}
                 </Typography>

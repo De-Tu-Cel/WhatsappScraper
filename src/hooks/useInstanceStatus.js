@@ -16,6 +16,11 @@ let _timerId          = null
 let _userToken        = null
 const _subscribers    = new Set()
 
+// Skip polling providers that returned total:0 — avoids ~2 pointless HTTP calls/tick
+// when the user only has wasender instances.
+let _skipEvo  = false
+let _skipWaha = false
+
 function _notify() {
   _subscribers.forEach(fn => fn(_status, _disconnectReason, _connectedCount, _totalCount))
 }
@@ -27,22 +32,31 @@ function _startPolling(token) {
   async function _tick() {
     try {
       const headers = { 'x-user-token': _userToken }
-      const [evoRes, wahaRes] = await Promise.allSettled([
-        fetch('/api/evolution/instances/user-status', { headers }),
-        fetch('/api/waha/instances/user-status',      { headers }),
+      const _empty = Promise.resolve({ ok: false })
+      const [evoRes, wahaRes, wsRes] = await Promise.allSettled([
+        _skipEvo  ? _empty : fetch('/api/evolution/instances/user-status', { headers }),
+        _skipWaha ? _empty : fetch('/api/waha/instances/user-status',      { headers }),
+        fetch('/api/wasender/instances/user-status',  { headers }),
       ])
       const evo  = evoRes.status  === 'fulfilled' && evoRes.value.ok  ? await evoRes.value.json()  : null
       const waha = wahaRes.status === 'fulfilled' && wahaRes.value.ok ? await wahaRes.value.json() : null
+      const ws   = wsRes.status   === 'fulfilled' && wsRes.value.ok   ? await wsRes.value.json()   : null
+
+      // Remember which providers have no instances — skip until user comes back with instances
+      if (evo  !== null) _skipEvo  = evo.total  === 0
+      if (waha !== null) _skipWaha = waha.total === 0
 
       const evoConnected  = evo?.connected  ?? false
       const wahaConnected = waha?.connected ?? false
-      _connectedCount = (evo?.connected_count ?? 0) + (waha?.connected_count ?? 0)
-      _totalCount     = (evo?.total ?? 0)           + (waha?.total ?? 0)
-      _status = (evoConnected || wahaConnected) ? 'connected' : 'disconnected'
+      const wsConnected   = ws?.connected   ?? false
+      _connectedCount = (evo?.connected_count ?? 0) + (waha?.connected_count ?? 0) + (ws?.connected_count ?? 0)
+      _totalCount     = (evo?.total ?? 0)           + (waha?.total ?? 0)           + (ws?.total ?? 0)
+      _status = (evoConnected || wahaConnected || wsConnected) ? 'connected' : 'disconnected'
 
-      // Prefer WAHA disconnect reason if both are down (WAHA errors are more specific)
-      const anyDown = !evoConnected || !wahaConnected
+      // Prefer WAHA disconnect reason if multiple are down (WAHA errors are more specific)
+      const anyDown = !evoConnected || !wahaConnected || !wsConnected
       const reasonSource = (!wahaConnected && waha?.disconnect_reason) ? waha
+                         : (!wsConnected   && ws?.disconnect_reason)   ? ws
                          : (!evoConnected  && evo?.disconnect_reason)  ? evo
                          : null
       _disconnectReason = (_status === 'disconnected' && reasonSource)
@@ -70,6 +84,8 @@ function _stopPolling() {
   _disconnectReason = null
   _connectedCount = 0
   _totalCount = 0
+  _skipEvo  = false
+  _skipWaha = false
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────

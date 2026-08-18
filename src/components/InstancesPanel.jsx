@@ -128,6 +128,13 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove }) {
               WAHA
             </Typography>
           )}
+          {inst.provider === 'wasender' && (
+            <Typography sx={{ fontSize: '0.55rem', fontWeight: 700, color: '#a78bfa',
+              bgcolor: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.25)',
+              px: 0.5, borderRadius: 0.8, lineHeight: 1.6, flexShrink: 0, letterSpacing: '0.03em' }}>
+              WS
+            </Typography>
+          )}
         </Box>
         <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', fontFamily: 'monospace', lineHeight: 1.2 }}>
           {inst.number ? `+${inst.number}` : t.inst.noNumber}
@@ -477,6 +484,19 @@ export default function InstancesPanel() {
   const wahaQrPollRef    = useRef(null)
   const wahaQrShownRef   = useRef(false)   // tracks if QR was ever displayed (avoids stale closure)
 
+  // ── Wasender create dialog ──
+  const [wsOpen,      setWsOpen]      = useState(false)
+  const [wsName,      setWsName]      = useState('')
+  const [wsPhone,     setWsPhone]     = useState('')
+  const [wsLoading,   setWsLoading]   = useState(false)
+  const [wsErr,       setWsErr]       = useState('')
+  const [wsQr,        setWsQr]        = useState(null)
+  const [wsConnected, setWsConnected] = useState(false)
+  const [wsScanned,   setWsScanned]   = useState(false)
+  const [wsId,        setWsId]        = useState(null)
+  const wsQrPollRef  = useRef(null)
+  const wsQrShownRef = useRef(false)
+
   // ── Card menu (kept for assign dialog compatibility) ──
   const [menuAnchor,   setMenuAnchor]   = useState(null)
   const [menuInst,     setMenuInst]     = useState(null)
@@ -508,9 +528,12 @@ export default function InstancesPanel() {
   const handleSyncWaha = useCallback(async () => {
     setWahaSyncing(true)
     try {
-      await fetch('/api/admin/instances/sync-waha', { method: 'POST', headers: { 'x-user-token': token() } })
+      await Promise.allSettled([
+        fetch('/api/admin/instances/sync-waha',      { method: 'POST', headers: { 'x-user-token': token() } }),
+        fetch('/api/admin/instances/sync-wasender',  { method: 'POST', headers: { 'x-user-token': token() } }),
+      ])
       await fetchInstances()
-      setSnack({ open: true, msg: lang === 'en' ? 'WAHA sessions synced' : 'Sesiones WAHA sincronizadas' })
+      setSnack({ open: true, msg: lang === 'en' ? 'Sessions synced' : 'Sesiones sincronizadas' })
     } catch {}
     finally { setWahaSyncing(false) }
   }, [fetchInstances, lang])
@@ -575,6 +598,76 @@ export default function InstancesPanel() {
     } catch (e) { setWahaErr(e.message); setWahaLoading(false) }
   }
 
+  function wsClose() {
+    if (wsQrPollRef.current) clearInterval(wsQrPollRef.current)
+    setWsOpen(false); setWsName(''); setWsPhone(''); setWsQr(null)
+    setWsConnected(false); setWsScanned(false); setWsErr(''); setWsLoading(false)
+    wsQrShownRef.current = false; setWsId(null)
+  }
+
+  async function handleWsCreate() {
+    const name = wsName.trim()
+    const phone = wsPhone.trim()
+    if (!name) { setWsErr(lang === 'en' ? 'Name required' : 'El nombre es requerido'); return }
+    if (!phone) { setWsErr(lang === 'en' ? 'Phone number required (e.g. +521234567890)' : 'Número requerido (ej. +521234567890)'); return }
+    setWsLoading(true); setWsErr(''); setWsQr(null); setWsConnected(false)
+    try {
+      const r = await fetch('/api/wasender/session/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
+        body: JSON.stringify({ name, phone_number: phone }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setWsErr(d.detail || d.error || 'Error al crear sesión'); setWsLoading(false); return }
+      const wid = d.id
+      if (!wid) { setWsErr('No se obtuvo wasender_id'); setWsLoading(false); return }
+      setWsId(wid)
+      // If create already returned a QR (from auto-connect), show it immediately
+      if (d.qrCode) {
+        try {
+          const qrRes = await fetch(`/api/wasender/session/qr/${wid}`)
+          if (qrRes.ok) {
+            const qd = await qrRes.json()
+            if (qd.base64) { wsQrShownRef.current = true; setWsQr(qd.base64); setWsLoading(false) }
+          }
+        } catch {}
+      }
+      if (wsQrPollRef.current) clearInterval(wsQrPollRef.current)
+      wsQrPollRef.current = setInterval(async () => {
+        try {
+          const [qrRes, stRes] = await Promise.all([
+            fetch(`/api/wasender/session/qr/${wid}`),
+            fetch(`/api/wasender/session/status/${wid}`),
+          ])
+          if (stRes.ok) {
+            const sd = await stRes.json()
+            const stState = sd.state || ''
+            const stStatus = (sd.status || '').toLowerCase()
+            if (stState === 'open' || stStatus === 'connected') {
+              clearInterval(wsQrPollRef.current)
+              wsQrShownRef.current = false
+              setWsQr(null); setWsScanned(false); setWsConnected(true); setWsLoading(false)
+              fetchInstances()
+              return
+            }
+            if (wsQrShownRef.current && stState && stState !== 'close') {
+              setWsQr(null); setWsScanned(true)
+            }
+          }
+          if (qrRes.ok) {
+            const qd = await qrRes.json()
+            if (qd.base64) {
+              wsQrShownRef.current = true
+              setWsQr(qd.base64)
+              setWsScanned(false)
+              setWsLoading(false)
+            }
+          }
+        } catch {}
+      }, 2500)
+    } catch (e) { setWsErr(e.message); setWsLoading(false) }
+  }
+
   const fetchUsers = useCallback(async () => {
     try {
       const r = await fetch('/api/auth/users', { headers: { 'x-user-token': token() } })
@@ -583,8 +676,9 @@ export default function InstancesPanel() {
   }, [])
 
   useEffect(() => { fetchInstances(); fetchUsers() }, [fetchInstances, fetchUsers])
-  // Cleanup WAHA QR poll on unmount / hot reload
+  // Cleanup QR polls on unmount / hot reload
   useEffect(() => () => { if (wahaQrPollRef.current) clearInterval(wahaQrPollRef.current) }, [])
+  useEffect(() => () => { if (wsQrPollRef.current) clearInterval(wsQrPollRef.current) }, [])
 
   // Actualizar conteos para skeleton cada vez que llegan datos reales
   useEffect(() => {
@@ -622,10 +716,15 @@ export default function InstancesPanel() {
   const [qrStatus, setQrStatus] = useState('loading') // loading | retrying | ready | error
 
   // ── QR polling ──────────────────────────────────────────────────────────────
-  const fetchQrOnce = useCallback(async (name, provider) => {
+  const fetchQrOnce = useCallback(async (name, provider, wasenderId) => {
     try {
-      const isWaha = (provider ?? qrTarget?.provider) === 'waha'
-      const url = isWaha
+      const resolvedProvider = provider ?? qrTarget?.provider
+      const isWaha     = resolvedProvider === 'waha'
+      const isWasender = resolvedProvider === 'wasender'
+      const wid        = wasenderId ?? qrTarget?.wasender_id
+      const url = isWasender
+        ? `/api/wasender/session/qr/${wid}`
+        : isWaha
         ? `/api/waha/session/qr/${name}`
         : `/api/evolution/instance/${name}?type=qr`
       const r = await fetch(url)
@@ -637,23 +736,28 @@ export default function InstancesPanel() {
         setQrStatus('ready')
         return true
       }
-      // WAHA returns status=WORKING when the user just scanned the QR
-      if (d?.status === 'WORKING') return 'scanned'
+      // WAHA returns status=WORKING / wasender returns state=open when already connected
+      if (d?.status === 'WORKING' || d?.state === 'open') return 'scanned'
     } catch {}
     return false
   }, [qrTarget])
 
-  const startQrPoll = useCallback(async (name, withLogout = false, provider) => {
+  const startQrPoll = useCallback(async (name, withLogout = false, provider, wasenderId) => {
     if (qrPollRef.current) clearTimeout(qrPollRef.current)
     setQrImage(null); setQrStatus(withLogout ? 'retrying' : 'loading')
 
     if (withLogout) {
       try {
-        const isWaha = (provider ?? qrTarget?.provider) === 'waha'
-        const logoutUrl = isWaha
-          ? `/api/waha/session/logout/${name}`
-          : `/api/evolution/instance/${name}?action=logout`
-        await fetch(logoutUrl, { method: 'POST' })
+        const resolvedProvider = provider ?? qrTarget?.provider
+        const isWasender = resolvedProvider === 'wasender'
+        const wid        = wasenderId ?? qrTarget?.wasender_id
+        if (isWasender) {
+          await fetch(`/api/wasender/session/${wid}/restart`, { method: 'POST' })
+        } else if (resolvedProvider === 'waha') {
+          await fetch(`/api/waha/session/logout/${name}`, { method: 'POST' })
+        } else {
+          await fetch(`/api/evolution/instance/${name}?action=logout`, { method: 'POST' })
+        }
       } catch {}
       await new Promise(r => setTimeout(r, 700))
       setQrStatus('loading')
@@ -662,13 +766,13 @@ export default function InstancesPanel() {
     let attempts = 0
     const poll = async () => {
       attempts++
-      const ok = await fetchQrOnce(name, provider)
+      const ok = await fetchQrOnce(name, provider, wasenderId)
       if (ok === 'scanned') {
-        // User scanned QR — show connecting state and stop; connPoll closes dialog on WORKING
+        // User scanned QR — show connecting state and stop; connPoll closes dialog on WORKING/open
         setQrStatus('connecting')
         return
       } else if (ok) {
-        // QR shown — re-poll immediately so WAHA long-polls for the next rotation (~60s)
+        // QR shown — re-poll to catch rotation (~60s for WAHA, shorter for wasender)
         attempts = 0
         qrPollRef.current = setTimeout(poll, 300)
       } else {
@@ -685,14 +789,19 @@ export default function InstancesPanel() {
     setQrOpen(false); setQrTarget(null); setQrImage(null); setQrStatus('loading')
   }
 
-  const startConnPoll = useCallback((name, provider) => {
+  const startConnPoll = useCallback((name, provider, wasenderId) => {
     if (connPollRef.current) clearInterval(connPollRef.current)
     let firstPoll = true
     let prevState = ''
-    const isWaha = (provider ?? qrTarget?.provider) === 'waha'
+    const resolvedProvider = provider ?? qrTarget?.provider
+    const isWaha     = resolvedProvider === 'waha'
+    const isWasender = resolvedProvider === 'wasender'
+    const wid        = wasenderId ?? qrTarget?.wasender_id
     connPollRef.current = setInterval(async () => {
       try {
-        const url = isWaha
+        const url = isWasender
+          ? `/api/wasender/session/status/${wid}`
+          : isWaha
           ? `/api/waha/session/status/${name}`
           : `/api/evolution/instance/${name}`
         const r = await fetch(url)
@@ -725,6 +834,39 @@ export default function InstancesPanel() {
     closeMenu()
     setQrTarget(inst); setQrOpen(true); setQrStatus('loading')
 
+    if (inst.provider === 'wasender') {
+      const wid = inst.wasender_id
+      if (!wid) { setQrStatus('error'); return }
+      try {
+        const stRes = await fetch(`/api/wasender/session/status/${wid}`)
+        const stData = stRes.ok ? await stRes.json() : {}
+        const wsState  = stData.state  || ''
+        const wsStatus = (stData.status || '').toLowerCase()
+        const isLoggedOut = wsStatus === 'logged_out' || stData.status === 'logged_out'
+        if (wsState !== 'open' && wsStatus !== 'connected') {
+          setQrStatus('retrying')
+          if (isLoggedOut) {
+            // logged_out: use /connect which clears proxy, generates QR, restores proxy
+            await fetch(`/api/wasender/session/${wid}/connect`, { method: 'POST' }).catch(() => {})
+          } else {
+            await fetch(`/api/wasender/session/${wid}/restart`, { method: 'POST' }).catch(() => {})
+            for (let i = 0; i < 13; i++) {
+              await new Promise(r => setTimeout(r, 1500))
+              const sRes = await fetch(`/api/wasender/session/status/${wid}`).catch(() => null)
+              if (sRes?.ok) {
+                const sd = await sRes.json()
+                if (sd.state === 'open' || (sd.status || '').toLowerCase() === 'connected') break
+              }
+            }
+          }
+          setQrStatus('loading')
+        }
+      } catch {}
+      startQrPoll(inst.name, false, 'wasender', wid)
+      startConnPoll(inst.name, 'wasender', wid)
+      return
+    }
+
     if (inst.provider === 'waha') {
       try {
         const stRes = await fetch(`/api/waha/session/status/${inst.name}`)
@@ -752,8 +894,8 @@ export default function InstancesPanel() {
       } catch {}
     }
 
-    startQrPoll(inst.name, false, inst.provider)
-    startConnPoll(inst.name, inst.provider)
+    startQrPoll(inst.name, false, inst.provider, null)
+    startConnPoll(inst.name, inst.provider, null)
   }
 
   function handleAssignClick(directInst) {
@@ -1054,9 +1196,13 @@ export default function InstancesPanel() {
 
   async function handleRequestPairCode() {
     if (!pairPhone.trim()) { setPairErr('Ingresa el número de teléfono'); return }
+    if (pairTarget?.provider === 'wasender') {
+      setPairErr('WasenderAPI no soporta código de vinculación. Usa el botón QR para reconectar.')
+      return
+    }
     setPairLoading(true); setPairErr(''); setPairCode(null)
     try {
-      const isWaha = pairTarget?.provider === 'waha'
+      const isWaha     = pairTarget?.provider === 'waha'
       const pairUrl = isWaha
         ? `/api/waha/session/pairing-code/${pairTarget?.name}`
         : `/api/evolution/instance/${pairTarget?.name}?action=pairing-code`
@@ -1207,6 +1353,15 @@ export default function InstancesPanel() {
               {wahaSyncing ? <CircularProgress size={16} sx={{ color: '#60a5fa' }} />
                 : <RefreshIcon fontSize="small" />}
             </IconButton>
+          </Tooltip>
+          <Tooltip title={lang === 'en' ? 'Create a WasenderAPI session' : 'Crear sesión WasenderAPI'} placement="bottom">
+            <Button variant="outlined" startIcon={<SmartphoneIcon sx={{ fontSize: 15 }} />}
+              onClick={() => { setWsOpen(true); setWsName(''); setWsErr(''); setWsQr(null); setWsConnected(false); setWsId(null) }}
+              sx={{ color: '#a78bfa', borderColor: 'rgba(167,139,250,0.4)', fontWeight: 700,
+                fontSize: '0.82rem', borderRadius: 2, textTransform: 'none', px: 2,
+                '&:hover': { borderColor: '#a78bfa', bgcolor: 'rgba(167,139,250,0.08)' } }}>
+              Wasender
+            </Button>
           </Tooltip>
           <Tooltip title={lang === 'en' ? 'Connect a new WhatsApp number via QR code' : 'Conectar un nuevo número de WhatsApp con código QR'} placement="bottom">
             <Button variant="outlined" startIcon={<AddIcon sx={{ fontSize: 15 }} />}
@@ -2614,6 +2769,132 @@ export default function InstancesPanel() {
               }}
             >
               {wahaLoading
+                ? <><CircularProgress size={14} sx={{ color: 'white', mr: 1 }} />{lang === 'en' ? 'Creating…' : 'Creando…'}</>
+                : (lang === 'en' ? 'Create' : 'Crear')}
+            </Button>
+          )}
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Wasender create session dialog ── */}
+      <Dialog open={wsOpen} onClose={() => !wsLoading && wsClose()} sx={{
+        '& .MuiDialog-paper': {
+          background: 'linear-gradient(160deg, rgba(167,139,250,0.1) 0%, var(--card-bg,#161d2e) 55%)',
+          border: '1px solid rgba(167,139,250,0.2)',
+          borderRadius: 3, minWidth: 380,
+          boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+        },
+      }}>
+        <DialogTitle sx={{ pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+            <Box sx={{
+              width: 34, height: 34, borderRadius: 2, flexShrink: 0,
+              bgcolor: 'rgba(167,139,250,0.18)',
+              border: '1px solid rgba(167,139,250,0.4)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <SmartphoneIcon sx={{ fontSize: 18, color: '#a78bfa' }} />
+            </Box>
+            <Box>
+              <Typography sx={{ color: 'var(--text,white)', fontWeight: 700, fontSize: '0.97rem', lineHeight: 1.2 }}>
+                {lang === 'en' ? 'New Wasender Session' : 'Nueva Sesión Wasender'}
+              </Typography>
+              <Typography sx={{ color: 'var(--text-muted,rgba(255,255,255,0.4))', fontSize: '0.72rem', mt: 0.2 }}>
+                {lang === 'en' ? 'Link a WhatsApp number via WasenderAPI' : 'Vincula un número de WhatsApp vía WasenderAPI'}
+              </Typography>
+            </Box>
+          </Box>
+        </DialogTitle>
+        <DialogContent sx={{ pt: '4px !important', px: 3 }}>
+          {wsScanned && !wsConnected ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, py: 2 }}>
+              <CircularProgress size={40} thickness={3} sx={{ color: '#25d366' }} />
+              <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.95rem' }}>
+                {lang === 'en' ? 'QR scanned — authenticating…' : 'QR escaneado — autenticando…'}
+              </Typography>
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>
+                {lang === 'en'
+                  ? 'WhatsApp is verifying the session on your phone'
+                  : 'WhatsApp está verificando la sesión en tu teléfono'}
+              </Typography>
+            </Box>
+          ) : wsConnected ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5, py: 2 }}>
+              <CheckCircleIcon sx={{ fontSize: 52, color: '#4ade80' }} />
+              <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '1rem' }}>
+                {lang === 'en' ? 'Session connected!' : '¡Sesión conectada!'}
+              </Typography>
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem', textAlign: 'center' }}>
+                {lang === 'en' ? 'Assign it to a user from the panel.' : 'Asígnala a un usuario desde el panel.'}
+              </Typography>
+            </Box>
+          ) : wsQr ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5, py: 0.5 }}>
+              <Box component="img" src={wsQr} alt="QR"
+                sx={{ width: 220, height: 220, borderRadius: 2, border: '2px solid #334155', bgcolor: '#fff', p: 1 }} />
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>
+                {lang === 'en'
+                  ? 'Scan with WhatsApp → Settings → Linked Devices → Link a Device'
+                  : 'Escanea con WhatsApp → Ajustes → Dispositivos vinculados → Vincular dispositivo'}
+              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.6, borderRadius: 2,
+                bgcolor: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.3)' }}>
+                <CircularProgress size={12} sx={{ color: '#a78bfa' }} />
+                <Typography sx={{ color: '#a78bfa', fontSize: '0.72rem', fontWeight: 600 }}>
+                  {lang === 'en' ? 'Waiting for scan…' : 'Esperando escaneo…'}
+                </Typography>
+              </Box>
+            </Box>
+          ) : (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <TextField label={lang === 'en' ? 'Session name' : 'Nombre de sesión'} value={wsName}
+                onChange={e => setWsName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                placeholder="ws-mexico-1" size="small" fullWidth autoFocus sx={FIELD_SX}
+                onKeyDown={e => e.key === 'Enter' && !wsLoading && wsName.trim() && wsPhone.trim() && handleWsCreate()}
+                helperText={<span style={{ color: 'var(--text-muted,rgba(255,255,255,0.3))', fontSize: '0.68rem' }}>
+                  {lang === 'en' ? 'Lowercase letters, numbers and dashes only' : 'Solo minúsculas, números y guiones'}
+                </span>} />
+              <TextField label={lang === 'en' ? 'WhatsApp phone number' : 'Número de WhatsApp'} value={wsPhone}
+                onChange={e => setWsPhone(e.target.value.replace(/[^+\d]/g, ''))}
+                placeholder="+521234567890" size="small" fullWidth sx={FIELD_SX}
+                onKeyDown={e => e.key === 'Enter' && !wsLoading && wsName.trim() && wsPhone.trim() && handleWsCreate()}
+                helperText={<span style={{ color: 'var(--text-muted,rgba(255,255,255,0.3))', fontSize: '0.68rem' }}>
+                  {lang === 'en' ? 'International format with country code' : 'Formato internacional con código de país'}
+                </span>} />
+              {wsErr && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1.5, py: 1,
+                  borderRadius: 1.5, bgcolor: '#450a0a', border: '1px solid #ef4444' }}>
+                  <Typography sx={{ color: '#f87171', fontSize: '0.78rem' }}>{wsErr}</Typography>
+                </Box>
+              )}
+              {wsLoading && !wsErr && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, p: 1.5,
+                  borderRadius: 1.5, bgcolor: '#1c2333', border: '1px solid #334155' }}>
+                  <CircularProgress size={14} sx={{ color: '#a78bfa' }} />
+                  <Typography sx={{ fontSize: '0.78rem', color: 'var(--text)', fontWeight: 600 }}>
+                    {lang === 'en' ? 'Creating session…' : 'Creando sesión…'}
+                  </Typography>
+                </Box>
+              )}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
+          {!(wsScanned && !wsConnected) && (
+            <Button onClick={wsClose}
+              sx={{ color: 'var(--text-muted,rgba(255,255,255,0.4))', textTransform: 'none', fontSize: '0.82rem', borderRadius: 2 }}>
+              {wsConnected ? (lang === 'en' ? 'Close' : 'Cerrar') : (lang === 'en' ? 'Cancel' : 'Cancelar')}
+            </Button>
+          )}
+          {!wsQr && !wsConnected && !wsScanned && (
+            <Button onClick={handleWsCreate} disabled={wsLoading || !wsName.trim() || !wsPhone.trim()} variant="contained"
+              sx={{
+                bgcolor: '#7c3aed', textTransform: 'none', fontWeight: 700,
+                fontSize: '0.82rem', borderRadius: 2, minWidth: 130,
+                '&:hover': { bgcolor: '#6d28d9' },
+                '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.2)' },
+              }}>
+              {wsLoading
                 ? <><CircularProgress size={14} sx={{ color: 'white', mr: 1 }} />{lang === 'en' ? 'Creating…' : 'Creando…'}</>
                 : (lang === 'en' ? 'Create' : 'Crear')}
             </Button>

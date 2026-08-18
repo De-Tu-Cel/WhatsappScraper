@@ -39,6 +39,7 @@ WAHA_API_KEY           = os.getenv("WAHA_API_KEY", "")
 # WasenderAPI — SaaS WhatsApp provider (current)
 WASENDER_PAT           = os.getenv("WASENDER_PAT", "")
 WASENDER_BASE_URL      = os.getenv("WASENDER_BASE_URL", "https://www.wasenderapi.com")
+WWEBJS_URL             = os.getenv("WWEBJS_URL", "http://wwebjs:3001")
 
 # LLM API keys — priority: OPENAI > DEEPSEEK
 OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY", "")

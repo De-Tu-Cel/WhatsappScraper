@@ -373,6 +373,16 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                     {"$set": {"reachout_timelock": True, "reachout_timelock_at": _dt.now()}},
                 )
                 status = "timelock"
+        elif _inst_provider_send == "wwebjs":
+            from app.whatsapp_wwebjs import WWebjsClient
+            import random as _rnd3
+            ww_client = WWebjsClient(session_id=instance, instance_name=instance)
+            _typing_ms = _rnd3.randint(800, 1800)
+            result = ww_client.send(req.to_number, req.message, delay_ms=_typing_ms)
+            message_id = result.get("messageId")
+            status = "sent" if result.get("success") else "failed"
+            print(f"[SendMsg/wwebjs] from={instance} to={req.to_number} status={status}")
+            _platform = "wwebjs"
         elif _inst_provider_send == "wasender":
             from app.whatsapp_wasender import WasenderClient, _clean_digits as _ws_clean
             _inst_doc_ws = db.db.instances.find_one({"name": instance}, {"wasender_api_key": 1, "number": 1}) or {}
@@ -3257,6 +3267,139 @@ def api_sync_wasender_instances(x_user_token: Optional[str] = Header(None)):
 
 
 # ── File upload / serve (GridFS) ──────────────────────────────────────────────
+
+# ─── wwebjs endpoints ──────────────────────────────────────────────────────────
+
+@router.post("/wwebjs/session/{session_id}/start")
+def api_wwebjs_start(session_id: str):
+    from app.whatsapp_wwebjs import start_session
+    try:
+        return start_session(session_id)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@router.get("/wwebjs/session/{session_id}/status")
+def api_wwebjs_status(session_id: str):
+    from app.whatsapp_wwebjs import get_status
+    try:
+        return get_status(session_id)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@router.get("/wwebjs/session/{session_id}/qr")
+def api_wwebjs_qr(session_id: str):
+    from app.whatsapp_wwebjs import get_qr
+    try:
+        return get_qr(session_id)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@router.delete("/wwebjs/session/{session_id}")
+def api_wwebjs_delete(session_id: str):
+    from app.whatsapp_wwebjs import delete_session
+    try:
+        delete_session(session_id)
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@router.get("/wwebjs/sessions")
+def api_wwebjs_list():
+    from app.whatsapp_wwebjs import list_sessions
+    try:
+        return list_sessions()
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@router.post("/wwebjs/webhook")
+async def api_wwebjs_webhook(request: Request):
+    body = await request.json()
+    event = body.get("event", "")
+    session_id = body.get("sessionId", "")
+    data = body.get("data") or {}
+    db = MongoDBManager()
+
+    inst_doc = db.db.instances.find_one({"name": session_id, "provider": "wwebjs"})
+    if not inst_doc:
+        return {"ok": True, "action": "ignored_unknown_session"}
+    instance_name = inst_doc["name"]
+
+    if event == "session.status":
+        status = data.get("status", "")
+        label_map = {
+            "connected": "Sesión activa",
+            "disconnected": "Sesión desconectada",
+            "auth_failure": "Fallo de autenticación",
+        }
+        print(f"[wwebjs Webhook] session={instance_name} {status} → {label_map.get(status, status)}")
+        db.db.instances.update_one(
+            {"name": instance_name},
+            {"$set": {"disconnect_reason": status if status != "connected" else None,
+                      "disconnect_reason_label": label_map.get(status, status)}},
+        )
+        if data.get("phone"):
+            db.db.instances.update_one({"name": instance_name}, {"$set": {"number": data["phone"]}})
+        return {"ok": True}
+
+    if event == "messages.received":
+        from_me = data.get("fromMe", False)
+        number = data.get("number") or data.get("from", "").replace("@s.whatsapp.net", "").replace("@c.us", "")
+        message_body = data.get("body", "")
+        message_id = data.get("messageId", "")
+
+        if from_me:
+            if message_id:
+                db.update_evolution_message_status(message_id, "sent")
+            return {"ok": True, "action": "outbound_echo"}
+
+        _sender_is_internal = bool(db.db.instances.find_one({"number": number}))
+        if _sender_is_internal:
+            return {"ok": True, "action": "ignored_internal"}
+
+        company_id = db.find_company_id_by_phone(number)
+        if not company_id:
+            _clean10 = "".join(filter(str.isdigit, number))[-10:]
+            _was_contacted = bool(db.db.message_logs.find_one({
+                "direction": "outbound", "to_number": {"$regex": _clean10},
+            }))
+            if not _was_contacted:
+                return {"ok": True, "action": "ignored_personal"}
+            company_id = db.find_or_create_inbound_company(number, instance_name)
+
+        try:
+            from app.whatsapp_wwebjs import mark_read
+            mark_read(session_id, data.get("from", number))
+        except Exception:
+            pass
+
+        db.save_message(
+            company_id=str(company_id),
+            direction="inbound",
+            message=message_body,
+            instance_name=instance_name,
+            from_number=number,
+        )
+        db.update_conversation(company_id=str(company_id), last_message=message_body, instance_name=instance_name)
+
+        from app.ai_followup import process_inbound_reply
+        import asyncio
+        try:
+            asyncio.create_task(process_inbound_reply(
+                phone=number, company_id=str(company_id),
+                message=message_body, instance_name=instance_name, provider="wwebjs",
+            ))
+        except RuntimeError:
+            pass
+
+        return {"ok": True, "action": "processed"}
+
+    if event == "message_ack":
+        if data.get("messageId"):
+            db.update_evolution_message_status(data["messageId"], "delivered")
+        return {"ok": True}
+
+    return {"ok": True, "action": "ignored"}
+
 
 _ALLOWED_MIME = {
     "image/jpeg", "image/png",

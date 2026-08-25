@@ -7,6 +7,13 @@ import DialogContent from '@mui/material/DialogContent'
 import DialogActions from '@mui/material/DialogActions'
 import { authFetch } from '@/lib/api'
 import { useSendQueue } from '../context/SendQueueContext'
+import { useDailyCapStats } from '../hooks/useDailyCapStats'
+import DailyCapBadge, { getOverBy } from './DailyCapBadge'
+import WhatsAppNumberSummary from './WhatsAppNumberSummary'
+import RecipientsBox from './RecipientsBox'
+import CapacityBanner from './CapacityBanner'
+import { dedupeByCompany } from '../lib/companyDedupe'
+import { useScrapeJob } from '../hooks/useScrapeJob'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
 import { keyframes } from '@mui/system'
@@ -243,25 +250,28 @@ const SearchBarForm = React.memo(function SearchBarForm({
 export default function SearchProspects() {
   const { t, lang } = useLang()
   const TEMPLATES = getTemplates(t)
-  const pauseRef       = useRef(false)
-  const cancelRef      = useRef(false)
   const abortSearchRef = useRef(null)
+  const scrapeJob = useScrapeJob('search')
 
   const [lastIndustry, setLastIndustry] = useState('')
   const [numResults,  setNumResults]  = useState(50)
   const [searching,    setSearching]    = useState(false)
   const [searchError,  setSearchError]  = useState(false)
   const [visibleCount, setVisibleCount] = useState(10)
+  // Se fija una sola vez por búsqueda (a diferencia de visibleCount, que crece con
+  // "Cargar más") — permite avisar cuando lo encontrado se queda corto de lo pedido,
+  // ya que num_results no es un tope exacto en el backend (ver searcher.py).
+  const [requestedCount, setRequestedCount] = useState(10)
   const [nextOffset,   setNextOffset]   = useState(0)
   const [serverExhausted, setServerExhausted] = useState(false)
   const [fetchingMore, setFetchingMore] = useState(false)
   const [found,         setFound]         = useState([])
-  const [processing,  setProcessing]  = useState(false)
-  const [paused,      setPaused]      = useState(false)
-  const [results,     setResults]     = useState([])
-  const [progress,    setProgress]    = useState(0)
-  const [currentUrl,  setCurrentUrl]  = useState('')
-  const [done,        setDone]        = useState(false)
+  // El scraping en sí corre en el backend (useScrapeJob) — estos dos solo cubren
+  // lo que el job no sabe: el estado optimista de envío por url (msg_status) y,
+  // en "reintentar fallidas", las filas exitosas de la corrida anterior que un
+  // job nuevo (solo con las fallidas) no traería de vuelta.
+  const [sentOverlay, setSentOverlay] = useState({})
+  const [retryBase,   setRetryBase]   = useState([])
   const [filterScraped, setFilterScraped] = useState('all')
   const [history,     setHistory]     = useState([])
   const [selectedTpl, setSelectedTpl] = useState(TEMPLATES[0].id)
@@ -270,8 +280,13 @@ export default function SearchProspects() {
   const [sendCfg,     setSendCfg]     = useState(() => loadSendConfig())
   const [sendError,   setSendError]   = useState('')
   const { addBatch, cancel: cancelQueue, active: queueActive } = useSendQueue()
+  const { stats: capStats, refresh: refreshCapStats } = useDailyCapStats()
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
   const [waDeselected, setWaDeselected] = useState(new Set())
+  // Números EXTRA (además del principal) que el usuario prendió a mano al
+  // expandir el chip de una empresa — clave `${company_id}::${number}`.
+  const [extraSelected, setExtraSelected] = useState(new Set())
+  const [expandedCo, setExpandedCo] = useState(new Set())
   const [confirmDialog, setConfirmDialog] = useState({ open: false, names: '', resolve: null }) // números que el usuario quitó manualmente
   const msgRef = useRef(null)
 
@@ -279,15 +294,39 @@ export default function SearchProspects() {
     try { setHistory(JSON.parse(localStorage.getItem('searchHistory') || '[]')) } catch {}
   }, [])
 
+  // results = filas del job (backend) + base de un reintento previo (si aplica),
+  // con el estado optimista de envío superpuesto por url.
+  const results = useMemo(() => {
+    const merged = [...retryBase, ...scrapeJob.results]
+    return sentOverlay && Object.keys(sentOverlay).length
+      ? merged.map(r => sentOverlay[r.url] ? { ...r, msg_status: sentOverlay[r.url] } : r)
+      : merged
+  }, [retryBase, scrapeJob.results, sentOverlay])
+
   // Reset deselected when new results arrive
-  useEffect(() => { setWaDeselected(new Set()) }, [results])
+  // Los setState devuelven la MISMA referencia si ya estaban vacíos — evita que
+  // este efecto re-dispare un render indefinidamente si `results` llega a ser
+  // referencialmente inestable entre renders (ver useScrapeJob.js EMPTY_RESULTS).
+  useEffect(() => {
+    setWaDeselected(prev => prev.size ? new Set() : prev)
+    setExtraSelected(prev => prev.size ? new Set() : prev)
+    setExpandedCo(prev => prev.size ? new Set() : prev)
+  }, [results])
+
+  useEffect(() => {
+    if (queueActive?.phase === 'success') {
+      setSentOverlay(prev => {
+        const next = { ...prev }
+        for (const k in next) if (next[k] === 'queued') next[k] = 'sent'
+        return next
+      })
+      refreshCapStats()
+    }
+  }, [queueActive?.phase, refreshCapStats])
 
   // waRows y waRowsUnique deben ir ANTES de effectiveWaSelected
   const waRowsAll    = results.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
-  const waRowsUnique = useMemo(() => {
-    const seen = new Set()
-    return waRowsAll.filter(r => seen.has(r.company_id) ? false : seen.add(r.company_id))
-  }, [waRowsAll])
+  const waRowsUnique = useMemo(() => dedupeByCompany(waRowsAll), [waRowsAll])
 
   // Siempre sincronizado — sin delay de un render
   const effectiveWaSelected = useMemo(() =>
@@ -337,7 +376,7 @@ export default function SearchProspects() {
   const okCount       = results.filter(r => r.ok).length
   const errCount      = results.filter(r => !r.ok).length
   const waCount       = results.filter(r => r.whatsapp).length
-  const hasResults    = found.length > 0 || processing || done || searching || searchError
+  const hasResults    = found.length > 0 || scrapeJob.processing || scrapeJob.done || searching || searchError
 
   function saveHistory(query) {
     const next = [query, ...history.filter(h => h !== query)].slice(0, 6)
@@ -369,8 +408,9 @@ export default function SearchProspects() {
     abortSearchRef.current?.abort()
     const ctrl = new AbortController()
     abortSearchRef.current = ctrl
-    setSearching(true); setFound([]); setResults([]); setDone(false); setVisibleCount(numResults); setFilterScraped('all'); setSearchError(false)
+    setSearching(true); setFound([]); setVisibleCount(numResults); setRequestedCount(numResults); setFilterScraped('all'); setSearchError(false)
     setServerExhausted(false); setNextOffset(0)
+    setSentOverlay({}); setRetryBase([]); scrapeJob.reset()
     try {
       const res = await fetch('/api/search', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -439,89 +479,27 @@ export default function SearchProspects() {
   function selectOnlyNew()   { setFound(f => f.map(r => ({ ...r, selected: !r.scraped && !r.blocked }))) }
   function deselectScraped() { setFound(f => f.map(r => ({ ...r, selected: r.scraped ? false : r.selected }))) }
 
-  async function runProcessLoop(urls, baseResults) {
-    const res = [...baseResults]
-    const CONCURRENCY = 4
-    for (let i = 0; i < urls.length; i += CONCURRENCY) {
-      while (pauseRef.current && !cancelRef.current) await new Promise(r => setTimeout(r, 200))
-      if (cancelRef.current) break
-      const chunk = urls.slice(i, i + CONCURRENCY)
-      setCurrentUrl(chunk[0])
-      setProgress(Math.round(((baseResults.length + i) / (baseResults.length + urls.length)) * 100))
-      const chunkResults = await Promise.all(chunk.map(async (url) => {
-        try {
-          const r = await fetch('/api/process-url', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url, skip_send: true }),
-          })
-          if (!r.ok) throw new Error()
-          const d = await r.json()
-          return {
-            url, empresa: d.scraped?.name || '—', industria: d.scraped?.industry || '—',
-            whatsapp: d.primary_whatsapp_number || '',
-            all_whatsapp: d.all_whatsapp_numbers || (d.primary_whatsapp_number ? [d.primary_whatsapp_number] : []),
-            company_id: d.company_id || '',
-            scraped_data: d.scraped,
-            status_wa: d.send_result?.status_code || '—',
-            msg_status: null, ok: true,
-          }
-        } catch {
-          return { url, empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, status_wa: '—', msg_status: null, ok: false }
-        }
-      }))
-      res.push(...chunkResults)
-      setResults([...res])
-    }
-
-    // Check which companies were already contacted and by whom
-    const ids = res.filter(r => r.company_id).map(r => r.company_id)
-    if (ids.length > 0) {
-      try {
-        const cr = await fetch('/api/companies/check-contacted', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ company_ids: ids }),
-        })
-        if (cr.ok) {
-          const contactMap = await cr.json()
-          setResults(prev => prev.map(r => r.company_id && contactMap[r.company_id]
-            ? { ...r, already_contacted: contactMap[r.company_id] }
-            : r
-          ))
-        }
-      } catch {}
-    }
-    return res
-  }
-
+  // El loop de scraping ahora corre en el backend (backEnd/app/scrape_jobs.py) —
+  // esto solo crea el job y lo deja al hook useScrapeJob hacer polling.
   async function handleProcess() {
     // Always skip already-scraped URLs regardless of selection state
     const toProcess = found.filter(r => r.selected && !r.scraped)
     const skipped   = found.filter(r => r.selected && r.scraped).length
     if (!toProcess.length) return
     const urls = toProcess.map(r => r.url)
-    pauseRef.current = false; cancelRef.current = false
-    setResults([]); setProgress(0); setProcessing(true); setDone(false); setPaused(false)
+    setSentOverlay({}); setRetryBase([])
     if (skipped > 0) console.info(`⏭️ Saltando ${skipped} URL(s) ya scrapeadas`)
-    await runProcessLoop(urls, [])
-    setProgress(100); setCurrentUrl(''); setProcessing(false); setPaused(false); setDone(true)
+    await scrapeJob.start(urls)
   }
 
   async function handleRetryFailed() {
     const failedUrls = results.filter(r => !r.ok).map(r => r.url)
     if (!failedUrls.length) return
-    const successful = results.filter(r => r.ok)
-    pauseRef.current = false; cancelRef.current = false
-    setProcessing(true); setDone(false); setPaused(false)
-    setProgress(Math.round((successful.length / results.length) * 100))
-    await runProcessLoop(failedUrls, successful)
-    setProgress(100); setCurrentUrl(''); setProcessing(false); setPaused(false); setDone(true)
+    setRetryBase(results.filter(r => r.ok))
+    await scrapeJob.start(failedUrls)
   }
 
-  function handlePause()  { pauseRef.current = !pauseRef.current; setPaused(pauseRef.current) }
-  function handleCancel() {
-    cancelRef.current = true
-    pauseRef.current  = false
-    setPaused(false)
+  function handleCancelSearch() {
     abortSearchRef.current?.abort()
     setSearching(false)
     setSearchError(false)
@@ -535,11 +513,20 @@ export default function SearchProspects() {
   }
 
   const alreadySent  = results.some(r => r.msg_status === 'sent' || r.msg_status === 'failed' || r.msg_status === 'queued')
-  const sentCount    = results.filter(r => r.msg_status === 'sent' || r.msg_status === 'queued').length
+  const sentCount    = results.filter(r => r.msg_status === 'sent').length
   const isSending    = queueActive !== null && alreadySent
 
-  const totalRecipients = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id))
-    .reduce((sum, r) => sum + (r.all_whatsapp?.length > 0 ? r.all_whatsapp.length : (r.whatsapp ? 1 : 0)), 0)
+  // Un envío masivo manda por default 1 número por empresa (el principal) — no
+  // todos los que se hayan encontrado. Evita que una empresa con muchos números
+  // (varias sucursales/extensiones) se coma el cupo diario de warmup de varias
+  // empresas nuevas de golpe. Expandir el chip de una empresa permite agregar
+  // sus otros números a propósito — cada uno cuenta su propio slot de cupo
+  // (el backend deduplica por número real, no por empresa).
+  const totalRecipients = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id)).length
+  const totalContactPoints = totalRecipients +
+    [...extraSelected].filter(key => effectiveWaSelected.has(key.split('::')[0])).length
+  const overBy     = getOverBy(capStats, totalContactPoints)
+  const capBlocked = overBy > 0
   // Sending to 2+ numbers needs varied text (see MIN_TEMPLATES_FOR_BULK) — editing
   // one base message stops making sense there, so it switches to picking 3+ saved templates.
   const isBulk = totalRecipients > 1
@@ -552,6 +539,7 @@ export default function SearchProspects() {
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
   async function handleSendAll() {
+    if (capBlocked) return
     const targets = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id))
     if (!targets.length || belowMinTemplates) return
 
@@ -566,22 +554,26 @@ export default function SearchProspects() {
     }
 
     let lastVariant = null
-    const updated = results.map(r => ({ ...r }))
     const jobs = []
+    const queuedUrls = {}
     for (const row of targets) {
-      const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
-      if (!numbers.length) continue
-      const messages = numbers.map(() => {
-        const v = pickMessageVariant(allVariants, lastVariant)
-        lastVariant = v
-        return renderTemplate(v, row.scraped_data) || v
-      })
+      // Principal + números extra que el usuario haya prendido a mano para esta
+      // empresa (expandiendo su chip) — ver nota junto a totalContactPoints.
+      const primary = row.all_whatsapp?.length > 0 ? row.all_whatsapp[0] : row.whatsapp
+      if (!primary) continue
+      const extras = row.all_whatsapp?.slice(1).filter(n => extraSelected.has(`${row.company_id}::${n}`)) || []
+      const numbers = [primary, ...extras]
+      // Mismo texto para todos los números de UNA empresa — no son destinatarios
+      // distintos a variar, son la misma empresa por otra línea.
+      const v = pickMessageVariant(allVariants, lastVariant)
+      lastVariant = v
+      const message = renderTemplate(v, row.scraped_data) || v
+      const messages = numbers.map(() => message)
       jobs.push({ numbers, messages, companyId: row.company_id, website: row.url })
-      const idx = updated.findIndex(r => r.url === row.url)
-      if (idx >= 0) updated[idx] = { ...updated[idx], msg_status: 'queued' }
+      queuedUrls[row.url] = 'queued'
     }
     addBatch(jobs, lang === 'en' ? 'Prospect search' : 'Búsqueda de prospectos')
-    setResults(updated)
+    setSentOverlay(prev => ({ ...prev, ...queuedUrls }))
   }
 
   function exportUrlsTxt() {
@@ -631,11 +623,13 @@ export default function SearchProspects() {
       {!hasResults && (
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 2.5, pb: 4, px: 2.5, width: '100%' }}>
           <Box sx={{ textAlign: 'center' }}>
-            <Typography sx={{ color: 'var(--text, white)', fontWeight: 700, fontSize: '1.35rem', mb: 0.5 }}>{t.search.heading}</Typography>
-            <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.35))', fontSize: '0.82rem' }}>{t.search.headingSub}</Typography>
+            <Typography sx={{ fontWeight: 800, fontSize: '1.5rem', mb: 0.5, background: 'linear-gradient(135deg, var(--text,#f1f5f9) 20%, var(--accent,#60a5fa) 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
+              {t.search.heading}
+            </Typography>
+            <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>{t.search.headingSub}</Typography>
           </Box>
 
-          <SearchBarForm compact={false} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancel} defaultIndustry={lastIndustry} />
+          <SearchBarForm compact={false} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !scrapeJob.processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancelSearch} defaultIndustry={lastIndustry} />
           <CountSelector size="md" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} />
 
           {/* Historial reciente */}
@@ -656,11 +650,14 @@ export default function SearchProspects() {
           <Box sx={{ width: '100%', overflowY: 'auto', maxHeight: 'clamp(200px, 35vh, 340px)' }}>
             {INDUSTRY_GROUPS.map(group => (
               <Box key={group.label} sx={{ mb: 1.8 }}>
-                <Typography sx={{ color: group.color, fontSize: '0.65rem', fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', mb: 0.7, opacity: 0.7 }}>{group.label}</Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mb: 0.65 }}>
+                  <Box sx={{ width: 3, height: 12, borderRadius: 2, bgcolor: group.color, opacity: 0.65, flexShrink: 0 }} />
+                  <Typography sx={{ color: group.color, fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', opacity: 0.85 }}>{group.label}</Typography>
+                </Box>
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.8 }}>
                   {group.items.map(item => (
                     <Box key={item} onClick={() => handleSearch(item, '')}
-                      sx={{ px: 1.6, py: 0.55, borderRadius: '20px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 500, bgcolor: 'var(--item-hover)', color: 'var(--text-muted)', border: '1px solid var(--border)', transition: 'all 0.15s', '&:hover': { bgcolor: `${group.color}18`, color: group.color, border: `1px solid ${group.color}44` } }}>
+                      sx={{ px: 1.5, py: 0.5, borderRadius: '20px', cursor: 'pointer', fontSize: '0.77rem', fontWeight: 500, bgcolor: `${group.color}0d`, color: 'var(--text-muted)', border: `1px solid ${group.color}25`, transition: 'all 0.15s', '&:hover': { bgcolor: `${group.color}22`, color: group.color, border: `1px solid ${group.color}55`, transform: 'translateY(-1px)', boxShadow: `0 3px 10px ${group.color}1a` } }}>
                       {item}
                     </Box>
                   ))}
@@ -674,7 +671,7 @@ export default function SearchProspects() {
       {/* ── Barra compacta cuando hay resultados ── */}
       {hasResults && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', p: 1.5, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
-          <SearchBarForm compact={true} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancel} defaultIndustry={lastIndustry} />
+          <SearchBarForm compact={true} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !scrapeJob.processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancelSearch} defaultIndustry={lastIndustry} />
           <CountSelector size="sm" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} />
         </Box>
       )}
@@ -698,16 +695,16 @@ export default function SearchProspects() {
       {searching && (
         <Box sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, gap: 1.5 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 0.5 }}>
-            <Skeleton variant="circular" width={18} height={18} sx={{ bgcolor: 'rgba(255,255,255,0.06)', flexShrink: 0 }} />
-            <Skeleton variant="text" width={160} height={14} sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
+            <Skeleton variant="circular" width={18} height={18} sx={{ flexShrink: 0 }} />
+            <Skeleton variant="text" width={160} height={14} />
           </Box>
-          <Box sx={{ border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2, overflow: 'hidden', flexGrow: 1 }}>
+          <Box sx={{ border: '1px solid var(--border)', borderRadius: 2, overflow: 'hidden', flexGrow: 1 }}>
             {[72, 58, 83, 65, 77, 54, 69, 80, 61, 75].slice(0, Math.min(numResults, 8)).map((w, i) => (
-              <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.3, borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                <Skeleton variant="circular" width={16} height={16} sx={{ bgcolor: 'rgba(255,255,255,0.06)', flexShrink: 0 }} />
-                <Skeleton variant="circular" width={16} height={16} sx={{ bgcolor: 'rgba(255,255,255,0.05)', flexShrink: 0 }} />
-                <Skeleton variant="text" width={`${w}%`} height={14} sx={{ bgcolor: 'rgba(255,255,255,0.05)', flexGrow: 1 }} />
-                <Skeleton variant="rounded" width={54} height={16} sx={{ bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 10, flexShrink: 0 }} />
+              <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.3, borderBottom: '1px solid var(--border)' }}>
+                <Skeleton variant="circular" width={16} height={16} sx={{ flexShrink: 0 }} />
+                <Skeleton variant="circular" width={16} height={16} sx={{ flexShrink: 0 }} />
+                <Skeleton variant="text" width={`${w}%`} height={14} sx={{ flexGrow: 1 }} />
+                <Skeleton variant="rounded" width={54} height={16} sx={{ borderRadius: 10, flexShrink: 0 }} />
               </Box>
             ))}
           </Box>
@@ -715,13 +712,16 @@ export default function SearchProspects() {
       )}
 
       {/* ── Lista de URLs encontradas ── */}
-      {found.length > 0 && !processing && !done && (
+      {found.length > 0 && !scrapeJob.processing && !scrapeJob.done && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, flexGrow: 1, minHeight: 0 }}>
 
           {/* Banner resumen */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, px: 2, py: 1, bgcolor: 'var(--item-hover)', borderRadius: 1.5, border: '1px solid var(--border)', flexWrap: 'wrap' }}>
             <Typography sx={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
               <Box component="span" sx={{ color: 'var(--text)', fontWeight: 700 }}>{found.length}</Box> {t.search.foundCount}
+              {found.length < requestedCount && !searching && !fetchingMore && (
+                <> {t.search.fewerThanRequested.replace('{n}', requestedCount)}</>
+              )}
             </Typography>
             <Box sx={{ width: 1, height: 12, bgcolor: 'var(--border)' }} />
             <Typography sx={{ fontSize: '0.75rem', color: '#4ade80' }}>
@@ -814,7 +814,7 @@ export default function SearchProspects() {
               const domain = getDomain(item.url)
               return (
                 <Box key={realIdx} onClick={() => !item.blocked && toggleOne(realIdx)}
-                  sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.1, cursor: item.blocked ? 'not-allowed' : 'pointer', borderBottom: '1px solid var(--border)', opacity: item.blocked ? 0.6 : 1, bgcolor: item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.05)' : 'transparent', '&:hover': { bgcolor: item.blocked ? 'transparent' : item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.08)' : 'var(--item-hover)' }, '&:last-of-type': { borderBottom: 'none' }, transition: 'background-color 0.15s', animation: `${fadeSlideIn} 0.22s ease both`, animationDelay: `${realIdx * 0.025}s` }}>
+                  sx={{ display: 'flex', alignItems: 'center', gap: 1.5, pl: 1.5, pr: 2, py: 1.1, cursor: item.blocked ? 'not-allowed' : 'pointer', borderBottom: '1px solid var(--border)', borderLeft: item.blocked ? '3px solid rgba(239,68,68,0.4)' : item.scraped ? '3px solid rgba(251,191,36,0.35)' : '3px solid rgba(34,197,94,0.35)', opacity: item.blocked ? 0.6 : 1, bgcolor: item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.05)' : 'transparent', '&:hover': { bgcolor: item.blocked ? 'transparent' : item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.08)' : 'var(--item-hover)' }, '&:last-of-type': { borderBottom: 'none' }, transition: 'background-color 0.15s', animation: `${fadeSlideIn} 0.22s ease both`, animationDelay: `${realIdx * 0.025}s` }}>
                   <Checkbox size="small" checked={item.selected} disabled={item.blocked} onChange={() => toggleOne(realIdx)} onClick={e => e.stopPropagation()}
                     sx={{ color: 'var(--text-muted)', '&.Mui-checked': { color: 'var(--accent, #3b82f6)' }, p: 0.5, flexShrink: 0 }} />
                   {/* Favicon */}
@@ -857,36 +857,36 @@ export default function SearchProspects() {
       )}
 
       {/* ── Progress (fase 2) ── */}
-      {processing && (
+      {scrapeJob.processing && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Box sx={{ px: 2.5, py: 2, bgcolor: paused ? 'rgba(251,191,36,0.05)' : 'rgba(var(--accent-rgb, 59,130,246), 0.05)', border: `1px solid ${paused ? 'rgba(251,191,36,0.2)' : 'rgba(var(--accent-rgb, 59,130,246), 0.15)'}`, borderRadius: 2, transition: 'all 0.3s' }}>
+          <Box sx={{ px: 2.5, py: 2, bgcolor: scrapeJob.paused ? 'rgba(251,191,36,0.05)' : 'rgba(var(--accent-rgb, 59,130,246), 0.05)', border: `1px solid ${scrapeJob.paused ? 'rgba(251,191,36,0.2)' : 'rgba(var(--accent-rgb, 59,130,246), 0.15)'}`, borderRadius: 2, transition: 'all 0.3s' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                {paused ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} /> : <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />}
+                {scrapeJob.paused ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} /> : <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />}
                 <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
-                  {paused ? 'Pausado —' : 'Procesando'} {results.length} de {found.filter(r => r.selected).length}
+                  {scrapeJob.paused ? 'Pausado —' : 'Procesando'} {results.length} de {found.filter(r => r.selected).length}
                 </Typography>
               </Box>
-              <Typography sx={{ color: paused ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>{progress}%</Typography>
+              <Typography sx={{ color: scrapeJob.paused ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>{scrapeJob.progress}%</Typography>
             </Box>
-            <LinearProgress variant="determinate" value={progress}
-              sx={{ borderRadius: 4, height: 6, bgcolor: paused ? 'rgba(251,191,36,0.1)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)', '& .MuiLinearProgress-bar': { background: paused ? 'linear-gradient(90deg,#f59e0b,#fbbf24)' : 'linear-gradient(90deg, var(--accent, #3b82f6), var(--accent, #60a5fa))', borderRadius: 4 } }} />
-            {currentUrl && !paused && (
-              <Typography sx={{ mt: 1, color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{currentUrl}</Typography>
+            <LinearProgress variant="determinate" value={scrapeJob.progress}
+              sx={{ borderRadius: 4, height: 6, bgcolor: scrapeJob.paused ? 'rgba(251,191,36,0.1)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)', '& .MuiLinearProgress-bar': { background: scrapeJob.paused ? 'linear-gradient(90deg,#f59e0b,#fbbf24)' : 'linear-gradient(90deg, var(--accent, #3b82f6), var(--accent, #60a5fa))', borderRadius: 4 } }} />
+            {scrapeJob.currentUrl && !scrapeJob.paused && (
+              <Typography sx={{ mt: 1, color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{scrapeJob.currentUrl}</Typography>
             )}
           </Box>
           <Box sx={{ display: 'flex', gap: 1.5 }}>
-            <Button fullWidth onClick={handlePause} startIcon={paused ? <PlayArrowIcon /> : <PauseIcon />}
+            <Button fullWidth onClick={() => scrapeJob.paused ? scrapeJob.resume() : scrapeJob.pause()} startIcon={scrapeJob.paused ? <PlayArrowIcon /> : <PauseIcon />}
               sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' } }}>
-              {paused ? t.search.resume : t.search.pause}
+              {scrapeJob.paused ? t.search.resume : t.search.pause}
             </Button>
-            <Button fullWidth onClick={handleCancel} startIcon={<HighlightOffIcon />}
+            <Button fullWidth onClick={scrapeJob.cancel} startIcon={<HighlightOffIcon />}
               sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>
               {t.search.cancel}
             </Button>
             {results.some(r => r.ok) && (
               <Tooltip title={t.search.stopAndSendTip}>
-                <Button fullWidth onClick={handleCancel} startIcon={<SendIcon />}
+                <Button fullWidth onClick={scrapeJob.cancel} startIcon={<SendIcon />}
                   sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#4ade80', bgcolor: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(34,197,94,0.15)' } }}>
                   {t.search.stopAndSend}
                 </Button>
@@ -917,58 +917,44 @@ export default function SearchProspects() {
 
       {/* ── Panel de envío masivo — visible también durante el scraping, para
            poder empezar a enviar a lo ya encontrado sin esperar a que termine ── */}
-      {(done || processing) && results.length > 0 && (
-        <Box sx={{ p: 2, borderRadius: 2, border: '1px solid rgba(34,197,94,0.15)', bgcolor: 'rgba(34,197,94,0.03)' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.2 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <MessageIcon sx={{ fontSize: 16, color: '#4ade80' }} />
-              <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>{t.batch.sendMessages}</Typography>
+      {(scrapeJob.done || scrapeJob.processing) && results.length > 0 && (
+        <Box sx={{ borderRadius: 2.5, border: '1px solid rgba(34,197,94,0.2)', overflow: 'hidden' }}>
+          {/* Panel header */}
+          <Box sx={{ px: 2, py: 1.4, background: 'linear-gradient(180deg, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.02) 100%)', borderBottom: '1px solid rgba(34,197,94,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+              <Box sx={{ width: 30, height: 30, borderRadius: 1.5, bgcolor: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.28)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 12px rgba(34,197,94,0.12)', flexShrink: 0 }}>
+                <MessageIcon sx={{ fontSize: 14, color: '#4ade80' }} />
+              </Box>
+              <Box>
+                <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.84rem', lineHeight: 1.2 }}>{t.batch.sendMessages}</Typography>
+                {waRowsUnique.length > 0 && (
+                  <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.62rem' }}>{waRowsUnique.length} {t.search.withWa}</Typography>
+                )}
+              </Box>
             </Box>
             {waRowsUnique.length > 0 && (
-              <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={`${waRowsUnique.length} ${t.search.withWa}`} size="small"
+              <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={`${effectiveWaSelected.size} ${t.search.of} ${waRowsUnique.length} ${t.search.withWa}`} size="small"
                 sx={{ fontSize: '0.7rem', height: 22, bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', '& .MuiChip-icon': { color: '#4ade80' } }} />
             )}
           </Box>
-          {/* Selector de destinatarios WhatsApp */}
-          {waRowsUnique.length > 0 && (
-            <Box sx={{ mb: 1.5 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.8 }}>
-                <Checkbox size="small"
-                  checked={waRowsUnique.every(r => effectiveWaSelected.has(r.company_id))}
-                  indeterminate={waRowsUnique.some(r => effectiveWaSelected.has(r.company_id)) && !waRowsUnique.every(r => effectiveWaSelected.has(r.company_id))}
-                  onChange={e => setWaDeselected(e.target.checked ? new Set() : new Set(waRowsUnique.map(r => r.company_id)))}
-                  sx={{ color: 'rgba(255,255,255,0.25)', '&.Mui-checked': { color: '#4ade80' }, '&.MuiCheckbox-indeterminate': { color: '#4ade80' }, p: 0.5 }} />
-                <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
-                  {t.search.recipients} — {effectiveWaSelected.size} {t.search.of} {waRowsUnique.length} {t.search.selectedLabel}
-                </Typography>
-              </Box>
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6, maxHeight: 90, overflowY: 'auto',
-                scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent' }}>
-                {waRowsUnique.map(r => {
-                  const on = effectiveWaSelected.has(r.company_id)
-                  return (
-                    <Chip key={r.company_id} size="small"
-                      icon={<WhatsAppIcon sx={{ fontSize: '12px !important', color: on ? '#4ade80 !important' : 'rgba(255,255,255,0.25) !important' }} />}
-                      label={r.empresa || r.url}
-                      onClick={() => setWaDeselected(prev => {
-                        const next = new Set(prev)
-                        on ? next.add(r.company_id) : next.delete(r.company_id)
-                        return next
-                      })}
-                      sx={{
-                        height: 22, fontSize: '0.7rem', cursor: 'pointer',
-                        bgcolor: on ? 'rgba(34,197,94,0.12)' : 'rgba(255,255,255,0.04)',
-                        color:   on ? '#4ade80'              : 'rgba(255,255,255,0.3)',
-                        border: `1px solid ${on ? 'rgba(34,197,94,0.3)' : 'rgba(255,255,255,0.08)'}`,
-                        textDecoration: on ? 'none' : 'line-through',
-                        '& .MuiChip-label': { px: 0.8 },
-                        transition: 'all 0.15s',
-                      }} />
-                  )
-                })}
-              </Box>
-            </Box>
+          {/* Body */}
+          <Box sx={{ p: 2 }}>
+          {capStats && (
+            <CapacityBanner stats={capStats} selectionCount={totalContactPoints} sx={{ mb: 1.5 }} />
           )}
+
+          <Box sx={{ display: 'flex', gap: 2.5 }}>
+            <RecipientsBox rows={waRowsUnique}
+              effectiveSelected={effectiveWaSelected}
+              expandedCo={expandedCo}
+              extraSelected={extraSelected}
+              setDeselected={setWaDeselected}
+              setExpandedCo={setExpandedCo}
+              setExtraSelected={setExtraSelected}
+              title={t.search.recipients}
+              sx={{ width: 260, flexShrink: 0 }} />
+
+          <Box sx={{ flex: 1, minWidth: 0 }}>
 
           {!isBulk && <>
           <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>{t.batch.baseTemplate}</Typography>
@@ -1029,32 +1015,45 @@ export default function SearchProspects() {
           </Box>
           <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />
           <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 0.6 }}>
+            <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} />
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             {isSending && (
               <Tooltip title={t.search.cancelSend}>
                 <IconButton size="small" onClick={cancelQueue}
-                  sx={{ color: 'rgba(248,113,113,0.7)', '&:hover': { color: '#f87171' } }}>
+                  sx={{ color: 'rgba(248,113,113,0.7)', '&:hover': { color: '#f87171' }, flexShrink: 0 }}>
                   <HighlightOffIcon sx={{ fontSize: 16 }} />
                 </IconButton>
               </Tooltip>
             )}
             <Button
+              fullWidth
               onClick={handleSendAll}
-              disabled={effectiveWaSelected.size === 0 || alreadySent || isDisconnected || belowMinTemplates}
-              startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
-              size="small"
+              disabled={effectiveWaSelected.size === 0 || alreadySent || isDisconnected || belowMinTemplates || capBlocked}
+              startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 15 }} />}
               sx={{
-                fontSize: '0.78rem', fontWeight: 700, flexShrink: 0,
-                bgcolor: waRowsUnique.length > 0 && !alreadySent ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
+                fontSize: '0.84rem', fontWeight: 700,
+                py: 1.1, borderRadius: 1.8,
+                bgcolor: waRowsUnique.length > 0 && !alreadySent ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
                 color:   waRowsUnique.length > 0 && !alreadySent ? '#4ade80' : 'rgba(255,255,255,0.3)',
-                border:  `1px solid ${waRowsUnique.length > 0 && !alreadySent ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
-                borderRadius: 1.5, px: 2, py: 0.6,
-                '&:hover': { bgcolor: waRowsUnique.length > 0 && !alreadySent ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
+                border:  `1px solid ${waRowsUnique.length > 0 && !alreadySent ? 'rgba(34,197,94,0.38)' : 'rgba(255,255,255,0.1)'}`,
+                textTransform: 'none',
+                transition: 'all 0.2s',
+                '&:hover': waRowsUnique.length > 0 && !alreadySent ? { bgcolor: 'rgba(34,197,94,0.28)', borderColor: 'rgba(34,197,94,0.6)', boxShadow: '0 0 18px rgba(34,197,94,0.18)' } : {},
                 '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
               }}
             >
               {alreadySent ? `${sentCount} ${t.search.sentCount}` : `${t.search.sendButton} ${effectiveWaSelected.size} ${t.search.companies}`}
             </Button>
+          </Box>
+          {capBlocked && !isSending && (
+            <Typography sx={{ color: '#f59e0b', fontSize: '0.7rem', textAlign: 'right', mt: 0.5 }}>
+              {lang === 'en' ? `Deselect ${overBy} to fit today's quota` : `Desmarca ${overBy} para caber en tu cupo de hoy`}
+            </Typography>
+          )}
+          </Box>
+          </Box>
           </Box>
         </Box>
       )}
@@ -1065,13 +1064,13 @@ export default function SearchProspects() {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem', fontWeight: 600, letterSpacing: 0.5 }}>{t.search.results.toUpperCase()}</Typography>
             <Box sx={{ display: 'flex', gap: 1 }}>
-              {done && errCount > 0 && (
+              {scrapeJob.done && errCount > 0 && (
                 <Button size="small" startIcon={<ReplayIcon sx={{ fontSize: 14 }} />} onClick={handleRetryFailed}
                   sx={{ color: '#f87171', fontSize: '0.75rem', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, px: 1.5, py: 0.4, textTransform: 'none', '&:hover': { bgcolor: 'rgba(239,68,68,0.08)' } }}>
                   {t.search.retryFailed} {errCount} {t.search.failedLabel}
                 </Button>
               )}
-              {done && (
+              {scrapeJob.done && (
                 <Button size="small" startIcon={<DownloadIcon sx={{ fontSize: 14 }} />} onClick={downloadCsv}
                   sx={{ color: 'var(--accent, #60a5fa)', fontSize: '0.75rem', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)', borderRadius: 1.5, px: 1.5, py: 0.4, textTransform: 'none', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)' } }}>
                   {t.search.download}
@@ -1113,12 +1112,12 @@ export default function SearchProspects() {
                       {r.industria !== '—' && (
                         <Chip label={r.industria} size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(139,92,246,0.1)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.2)' }} />
                       )}
-                      {r.whatsapp && (
-                        <Chip icon={<WhatsAppIcon sx={{ fontSize: '11px !important' }} />} label={r.whatsapp} size="small"
-                          sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', '& .MuiChip-icon': { color: '#4ade80' } }} />
-                      )}
-                      {!r.whatsapp && r.ok && (
-                        <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', alignSelf: 'center' }}>Sin WhatsApp</Typography>
+                      {(r.all_whatsapp?.length > 0 || r.whatsapp) ? (
+                        <WhatsAppNumberSummary row={r} />
+                      ) : (
+                        r.ok && (
+                          <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', alignSelf: 'center' }}>Sin WhatsApp</Typography>
+                        )
                       )}
                     </Box>
                   </Box>

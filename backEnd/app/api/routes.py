@@ -1,7 +1,8 @@
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Header, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 from typing import Optional
-import asyncio, json as _json, re, os
+import asyncio, json as _json, re, os, logging
+_log = logging.getLogger(__name__)
 from app.schemas.company import (
     ProcessUrlRequest, SearchRequest, BatchRequest,
     CheckUrlsRequest, DeleteCompaniesRequest, UpdateCompanyRequest, CreateCompanyRequest,
@@ -13,7 +14,8 @@ from app.utils import serialize
 from app.pipeline import process_url, run_pipeline_batch, _check_blacklist   # ← app.pipeline
 from app.searcher import search_prospects, pages_per_query_for  # ← app.searcher
 from app.database import MongoDBManager
-from app.daily_cap import DAILY_CAP, get_daily_count, increment_daily_count, get_scheduled_count_today
+from app.daily_cap import DAILY_CAP, WARMUP_CAP, get_daily_count, increment_daily_count, get_scheduled_count_today, get_instance_cap, get_capacity_for_date
+from app.phone_utils import clean_digits
 
 router = APIRouter()
 
@@ -175,6 +177,60 @@ def api_process_url(req: ProcessUrlRequest, x_user_token: Optional[str] = Header
         status = 422 if any(k in msg.lower() for k in ("no response", "http error", "timeout", "connection", "name or service")) else 500
         raise HTTPException(status_code=status, detail=msg)
 
+# ── Scrape jobs (backend-persisted bulk scraping — survives a page refresh) ──
+# Used by searchProspects.jsx / batchProcessor.jsx / csvImporter.jsx instead of
+# each looping /process-url calls in the browser. See app/scrape_jobs.py.
+
+@router.post("/scrape-jobs")
+def api_create_scrape_job(body: dict, x_user_token: Optional[str] = Header(None)):
+    user = _require_user(x_user_token)
+    try:
+        from app.scrape_jobs import create_scrape_job
+        surface = body.get("surface", "search")
+        urls = [u for u in (body.get("urls") or []) if isinstance(u, str) and u.strip()]
+        if not urls:
+            raise HTTPException(status_code=400, detail="Sin URLs para procesar")
+        db = MongoDBManager()
+        doc = create_scrape_job(db, surface, urls, user)
+        return serialize(doc)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/scrape-jobs/{job_id}")
+def api_get_scrape_job(job_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    try:
+        from bson import ObjectId
+        db = MongoDBManager()
+        doc = db.db.scrape_jobs.find_one({"_id": ObjectId(job_id)})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Job no encontrado")
+        return serialize(doc)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.patch("/scrape-jobs/{job_id}")
+def api_update_scrape_job(job_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    try:
+        from app.scrape_jobs import set_job_action
+        action = body.get("action", "")
+        if action not in ("pause", "resume", "cancel"):
+            raise HTTPException(status_code=400, detail="action debe ser pause, resume o cancel")
+        db = MongoDBManager()
+        doc = set_job_action(db, job_id, action)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Job no encontrado")
+        return serialize(doc)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/send-message")
 def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Header(None)):
     try:
@@ -218,7 +274,7 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         # If caller provides an explicit instance (e.g. conversation reply), use it directly
         if req.instance:
             instance = req.instance
-            print(f"[SendMsg] instance=explicit:{instance}")
+            _log.info("[SendMsg] instance=explicit:%s", instance)
         elif x_user_token:
             user = get_user_by_token(x_user_token)
             if user:
@@ -228,7 +284,7 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 )) if user_id else []
                 # Only route through instances that have a number registered
                 assigned = [i for i in all_assigned if i.get("number")]
-                print(f"[Rotation] user_id={user_id!r} all={[i['name'] for i in all_assigned]} with_number={[i['name'] for i in assigned]}")
+                _log.debug("[Rotation] user_id=%r all=%s with_number=%s", user_id, [i['name'] for i in all_assigned], [i['name'] for i in assigned])
                 if all_assigned and not assigned:
                     raise HTTPException(
                         status_code=503,
@@ -242,12 +298,13 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
 
                     def _check_state(name):
                         try:
-                            if _inst_providers.get(name) == "waha":
+                            prov = _inst_providers.get(name, "evolution")
+                            if prov == "waha":
                                 r = _req.get(f"{WAHA_API_URL}/api/sessions/{name}",
                                     headers={"X-Api-Key": WAHA_API_KEY}, timeout=2)
                                 st = r.json().get("status", "") if r.ok else ""
                                 return name if st == "WORKING" else None
-                            elif _inst_providers.get(name) == "wasender":
+                            elif prov == "wasender":
                                 _inst_ws = db.db.instances.find_one({"name": name}, {"wasender_id": 1})
                                 _wid = (_inst_ws or {}).get("wasender_id")
                                 if not _wid:
@@ -259,6 +316,11 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                                 )
                                 _st = ((r.json().get("data") or {}) if r.ok else {}).get("status", "")
                                 return name if _st == "connected" else None
+                            elif prov == "wwebjs":
+                                from app.config import WWEBJS_URL as _WW_URL
+                                r = _req.get(f"{_WW_URL}/session/{name}/status", timeout=2)
+                                st = r.json().get("status", "") if r.ok else ""
+                                return name if st == "connected" else None
                             else:
                                 r = _req.get(
                                     f"{EVOLUTION_API_URL}/instance/connectionState/{name}",
@@ -283,21 +345,44 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                             if co and co.get("assigned_instance") in connected:
                                 preferred = co["assigned_instance"]
 
+                        # If preferred exists but is at its NC limit for new contacts, drop it
+                        # so the NC-aware picker below can find a better instance.
+                        # _nc_cap_fallback=True means preferred was set but temporarily saturated —
+                        # the fallback instance must NOT overwrite assigned_instance permanently.
+                        _nc_cap_fallback = False
+                        if preferred and req.company_id:
+                            from app.daily_cap import check_new_contact_cap as _check_nc_pref
+                            _nc_ok_p, _, _ = _check_nc_pref(db, preferred, req.company_id)
+                            if not _nc_ok_p:
+                                _log.info("[SendMsg] preferred=%s at NC limit — falling back to nc-aware pick (no reassign)", preferred)
+                                preferred = None
+                                _nc_cap_fallback = True
+
                         if preferred:
                             instance = preferred
-                            print(f"[SendMsg] instance=preferred:{instance} (company={req.company_id})")
+                            _log.info("[SendMsg] instance=preferred:%s company=%s", instance, req.company_id)
                         else:
-                            # Round-robin: incrementa contador atómico por usuario
-                            result = db.db.users.find_one_and_update(
-                                {"_id": ObjectId(user_id)},
-                                {"$inc": {"rr_index": 1}},
-                                return_document=True,
-                                projection={"rr_index": 1},
-                            )
-                            idx = (result.get("rr_index", 0)) % len(connected)
-                            instance = connected[idx]
-                            # Guardar asignación en la compañía para futuros mensajes
-                            if req.company_id and len(req.company_id) == 24:
+                            # For new contacts: pick the instance with most NC capacity left so the
+                            # warmup/NC cap is shared evenly. For existing contacts: round-robin.
+                            from app.daily_cap import is_new_contact as _is_new
+                            if req.company_id and _is_new(db, req.company_id):
+                                from app.scheduler import _nc_aware_pick as _ncp
+                                instance = _ncp(db, connected, req.company_id) or connected[0]
+                                _log.info("[SendMsg] instance=nc-aware:%s company=%s", instance, req.company_id)
+                            else:
+                                # Round-robin: incrementa contador atómico por usuario
+                                result = db.db.users.find_one_and_update(
+                                    {"_id": ObjectId(user_id)},
+                                    {"$inc": {"rr_index": 1}},
+                                    return_document=True,
+                                    projection={"rr_index": 1},
+                                )
+                                idx = (result.get("rr_index", 0)) % len(connected)
+                                instance = connected[idx]
+                                _log.info("[SendMsg] instance=round-robin:%s idx=%d/%d company=%s", instance, idx, len(connected), req.company_id)
+                            # Guardar asignación permanente solo cuando NO es fallback temporal por NC cap.
+                            # Si es fallback, la empresa ya tiene assigned_instance válido — no sobreescribir.
+                            if not _nc_cap_fallback and req.company_id and len(req.company_id) == 24:
                                 try:
                                     db.db.companies.update_one(
                                         {"_id": ObjectId(req.company_id)},
@@ -305,7 +390,6 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                                     )
                                 except Exception:
                                     pass
-                            print(f"[SendMsg] instance=round-robin:{instance} (idx={idx}/{len(connected)}, company={req.company_id})")
                     else:
                         _all_disconnected = True
                 elif user.get("evolution_instance"):
@@ -326,10 +410,19 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         _inst_number = _inst_doc_send.get("number") or "?"
 
         # Daily send cap — block early before any API call
-        if get_daily_count(db, instance) >= DAILY_CAP:
+        if get_daily_count(db, instance) >= get_instance_cap(db, instance):
             raise HTTPException(
                 status_code=429,
                 detail=f"Límite diario alcanzado ({DAILY_CAP} mensajes). Reinicia a las 00:00 hora local.",
+            )
+
+        # Per-instance new-contact warmup cap (5 for warmup, 12 for normal)
+        from app.daily_cap import check_new_contact_cap
+        _nc_ok, _nc_count, _nc_limit = check_new_contact_cap(db, instance, req.company_id)
+        if not _nc_ok:
+            raise HTTPException(
+                status_code=429,
+                detail=f"new_contact_limit:{_nc_limit}",
             )
 
         if _inst_provider_send == "waha":
@@ -345,7 +438,7 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
             if real_jid_num and real_jid_num != _phone_digits:
                 db.db.jid_map.update_one({"jid": real_jid_num},
                     {"$set": {"company_id": req.company_id, "updated_at": _dt.now()}}, upsert=True)
-            print(f"[SendMsg/WAHA] jid_learned phone={_phone_digits} lid={real_jid_num or '-'} → {req.company_id}")
+            _log.debug("[SendMsg/WAHA] jid_learned phone=%s lid=%s company=%s", _phone_digits, real_jid_num or '-', req.company_id)
             # Always send to phone-number format; LID stored in jid_map for inbound routing only.
             # Sending to a LID-numeric chatId causes "No LID for user" in WEBJS.
             send_to = _phone_digits
@@ -374,14 +467,37 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 )
                 status = "timelock"
         elif _inst_provider_send == "wwebjs":
-            from app.whatsapp_wwebjs import WWebjsClient
+            from app.whatsapp_wwebjs import WWebjsClient, send_media as _ww_send_media
             import random as _rnd3
             ww_client = WWebjsClient(session_id=instance, instance_name=instance)
             _typing_ms = _rnd3.randint(800, 1800)
-            result = ww_client.send(req.to_number, req.message, delay_ms=_typing_ms)
-            message_id = result.get("messageId")
-            status = "sent" if result.get("success") else "failed"
-            print(f"[SendMsg/wwebjs] from={instance} to={req.to_number} status={status}")
+            _phone_digits_ww = "".join(filter(str.isdigit, req.to_number))
+            try:
+                from bson import ObjectId as _OId_ww
+                _co_ww = db.db.companies.find_one({"_id": _OId_ww(req.company_id)}, {"name": 1}) if req.company_id and len(req.company_id) == 24 else None
+                _co_name_ww = (_co_ww or {}).get("name", "")
+            except Exception:
+                _co_name_ww = ""
+            if req.image_url:
+                _ww_result = _ww_send_media(instance, req.to_number, req.image_url,
+                                            caption=req.message or "", typing_ms=_typing_ms)
+                _msg_type = "image"
+            elif req.document_url:
+                _ww_result = _ww_send_media(instance, req.to_number, req.document_url,
+                                            caption=req.message or "", filename=req.file_name or "",
+                                            typing_ms=_typing_ms)
+                _msg_type = "document"
+            else:
+                _ww_result = ww_client.send(req.to_number, req.message, delay_ms=_typing_ms,
+                                            save_contact=bool(_co_name_ww), contact_name=_co_name_ww)
+                _msg_type = "text"
+            db.db.jid_map.update_one({"jid": _phone_digits_ww},
+                {"$set": {"company_id": req.company_id, "updated_at": _dt.now()}}, upsert=True)
+            message_id = _ww_result.get("messageId")
+            status = "sent" if _ww_result.get("success") else "failed"
+            send_to = _phone_digits_ww
+            send_result = {"status_code": 200 if status == "sent" else 400}
+            resp_json = _ww_result
             _platform = "wwebjs"
         elif _inst_provider_send == "wasender":
             from app.whatsapp_wasender import WasenderClient, _clean_digits as _ws_clean
@@ -426,7 +542,7 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
             if real_jid_num:
                 db.db.jid_map.update_one({"jid": real_jid_num},
                     {"$set": {"company_id": req.company_id, "updated_at": _dt.now()}}, upsert=True)
-                print(f"[SendMsg] jid_learned={real_jid_num} → {req.company_id}")
+                _log.debug("[SendMsg] jid_learned=%s company=%s", real_jid_num, req.company_id)
             send_to = real_jid_num if real_jid_num else req.to_number
             send_result = evo.send_text(send_to, req.message)
             resp_json = send_result.get("response_json", {})
@@ -441,10 +557,7 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                     db.db.jid_map.update_one({"jid": jid_num},
                         {"$set": {"company_id": req.company_id, "updated_at": _dt.now()}}, upsert=True)
 
-        print(
-            f"[SendMsg/{_platform}] from={instance}({_inst_number})"
-            f" to={send_to} status={status}"
-        )
+        _log.info("[SendMsg/%s] from=%s(%s) to=%s status=%s", _platform, instance, _inst_number, send_to, status)
 
         sender_instance = db.db.instances.find_one({"name": instance}, {"_id": 0, "number": 1})
 
@@ -471,11 +584,58 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 log_doc["sent_by_name"]     = sender.get("display_name", "")
         log_id = db.insert_message_log(log_doc)
         if status == "sent":
-            increment_daily_count(db, instance)
+            increment_daily_count(db, instance, clean_digits(req.to_number))
 
         return {"ok": True, "status": status, "log_id": log_id, "message_id": message_id}
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ── Send queue (backend-persisted immediate bulk sending — survives a page
+# refresh). Used by SendQueueContext.jsx instead of processing its queue with
+# an in-browser loop. See app/send_now_worker.py. ───────────────────────────
+
+@router.post("/send-queue")
+def api_enqueue_send(body: dict, x_user_token: Optional[str] = Header(None)):
+    user = _require_user(x_user_token)
+    try:
+        from app.send_now_worker import enqueue_send_items
+        from datetime import datetime
+        import uuid as _uuid
+        jobs = body.get("jobs") or []
+        if not jobs:
+            raise HTTPException(status_code=400, detail="Sin destinatarios para encolar")
+        batch_id = f"b{int(datetime.now().timestamp()*1000)}{_uuid.uuid4().hex[:6]}"
+        db = MongoDBManager()
+        count = enqueue_send_items(
+            db, jobs, batch_id, body.get("label", ""), body.get("send_config") or {},
+            sent_by_username=user.get("username", ""), sent_by_name=user.get("display_name", ""),
+        )
+        return {"ok": True, "batch_id": batch_id, "queued": count}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/send-queue/status")
+def api_send_queue_status(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    try:
+        from app.send_now_worker import get_status
+        db = MongoDBManager()
+        return serialize(get_status(db))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/send-queue/cancel")
+def api_send_queue_cancel(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    try:
+        from app.send_now_worker import cancel_pending_send_items
+        db = MongoDBManager()
+        cancelled = cancel_pending_send_items(db)
+        return {"ok": True, "cancelled": cancelled}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -486,36 +646,77 @@ def api_instances_daily_stats(x_user_token: Optional[str] = Header(None)):
     user_id = user.get("id") or str(user.get("_id", ""))
     instances = list(db.db.instances.find(
         {"assigned_to": user_id},
-        {"_id": 0, "name": 1, "label": 1, "number": 1},
+        {"_id": 0, "name": 1, "label": 1, "number": 1, "warmup_mode": 1},
     )) if user_id else []
+
+    from app.daily_cap import count_new_contacts_today_for_instance, get_new_contacts_limit
 
     rows = []
     for inst in instances:
-        name = inst["name"]
-        sent = get_daily_count(db, name)
+        name    = inst["name"]
+        warmup  = bool(inst.get("warmup_mode"))
+        sent    = get_daily_count(db, name)
+        cap     = WARMUP_CAP if warmup else DAILY_CAP
+        nc_today = count_new_contacts_today_for_instance(db, name)
+        nc_limit = get_new_contacts_limit(warmup)
         rows.append({
-            "instance":   name,
-            "label":      inst.get("label") or name,
-            "number":     inst.get("number"),
-            "sent_today": sent,
-            "cap":        DAILY_CAP,
-            "available":  max(0, DAILY_CAP - sent),
+            "instance":           name,
+            "label":              inst.get("label") or name,
+            "number":             inst.get("number"),
+            "sent_today":         sent,
+            "cap":                cap,
+            "available":          max(0, cap - sent),
+            "warmup_mode":        warmup,
+            "new_contacts_today": nc_today,
+            "new_contacts_limit": nc_limit,
+            "new_contacts_left":  max(0, nc_limit - nc_today),
         })
 
-    total_sent      = sum(r["sent_today"] for r in rows)
-    scheduled_today = get_scheduled_count_today(db)
-    total_cap       = DAILY_CAP * max(len(rows), 1)
-    total_available = max(0, total_cap - total_sent - scheduled_today)
+    total_sent            = sum(r["sent_today"] for r in rows)
+    scheduled_today       = get_scheduled_count_today(db)
+    total_cap             = sum(r["cap"] for r in rows) or DAILY_CAP
+    total_available       = max(0, total_cap - total_sent - scheduled_today)
+    new_contacts_today    = sum(r["new_contacts_today"] for r in rows)
+    new_contacts_capacity = sum(r["new_contacts_left"] for r in rows)
 
     return {
-        "instances":        rows,
-        "total_sent":       total_sent,
-        "scheduled_today":  scheduled_today,
-        "total_cap":        total_cap,
-        "total_available":  total_available,
-        "cap_per_instance": DAILY_CAP,
-        "reset_hour":       "00:00 local",
+        "instances":             rows,
+        "total_sent":            total_sent,
+        "scheduled_today":       scheduled_today,
+        "total_cap":             total_cap,
+        "total_available":       total_available,
+        "cap_per_instance":      DAILY_CAP,
+        "reset_hour":            "00:00 local",
+        "new_contacts_today":    new_contacts_today,
+        "new_contacts_capacity": new_contacts_capacity,
     }
+
+
+@router.get("/instances/capacity-for-date")
+def api_instances_capacity_for_date(date: str = Query(...), exclude_id: Optional[str] = Query(None), x_user_token: Optional[str] = Header(None)):
+    user = _require_user(x_user_token)
+    db = MongoDBManager()
+    user_id = user.get("id") or str(user.get("_id", ""))
+    try:
+        from datetime import datetime
+        target_date = datetime.strptime(date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    return get_capacity_for_date(db, user_id, target_date, exclude_id)
+
+
+@router.post("/instances/{instance_name}/warmup")
+def api_toggle_warmup(instance_name: str, body: dict = {}, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    db = MongoDBManager()
+    inst = db.db.instances.find_one({"name": instance_name}, {"warmup_mode": 1})
+    if not inst:
+        raise HTTPException(status_code=404, detail="Instancia no encontrada")
+    new_val = not bool(inst.get("warmup_mode"))
+    if "enabled" in body:
+        new_val = bool(body["enabled"])
+    db.db.instances.update_one({"name": instance_name}, {"$set": {"warmup_mode": new_val}})
+    return {"instance": instance_name, "warmup_mode": new_val, "cap": WARMUP_CAP if new_val else DAILY_CAP}
 
 
 @router.post("/search")
@@ -559,26 +760,8 @@ def api_search(req: SearchRequest):
 def api_check_contacted(body: dict):
     """Returns contact history for a list of company_ids or domains."""
     try:
-        from datetime import datetime
         db = MongoDBManager()
-        company_ids = body.get("company_ids", [])
-        result = {}
-        for cid in company_ids:
-            first = db.db.message_logs.find_one(
-                {"company_id": cid, "direction": "outbound"},
-                sort=[("created_at", 1)],
-                projection={"sent_by_name": 1, "sent_by_username": 1, "created_at": 1}
-            )
-            if first:
-                result[cid] = {
-                    "contacted": True,
-                    "by_name":     first.get("sent_by_name", ""),
-                    "by_username": first.get("sent_by_username", ""),
-                    "at":          first["created_at"].isoformat() if first.get("created_at") else None,
-                }
-            else:
-                result[cid] = {"contacted": False}
-        return result
+        return db.check_contacted(body.get("company_ids", []))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1248,18 +1431,9 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
                     if message_body and company_id != "unknown" and not _ai_session_active:
                         from app.llm import active_provider as _cls_provider
                         if _cls_provider() != "none":
-                            from datetime import timedelta
-                            _throttle_cutoff = datetime.now() - timedelta(minutes=10)
-                            _recent_cls = db.db.message_logs.find_one(
-                                {"company_id": company_id, "direction": "inbound",
-                                 "analysis_status": "done",
-                                 "updated_at": {"$gte": _throttle_cutoff}},
-                                projection={"_id": 1},
-                            )
-                            if not _recent_cls:
-                                from app.classifier import classify_and_save
-                                # Naive-pero-UTC — is_business_hours() asume UTC cuando no hay tzinfo.
-                                background_tasks.add_task(classify_and_save, log_id, company_id, message_body, datetime.now(timezone.utc).replace(tzinfo=None))
+                            from app.classifier import classify_or_copy_recent
+                            # Naive-pero-UTC — is_business_hours() asume UTC cuando no hay tzinfo.
+                            classify_or_copy_recent(db, background_tasks, log_id, company_id, message_body, datetime.now(timezone.utc).replace(tzinfo=None))
                     # AI follow-up: enqueue when ai_enabled is ON, or auto-activate on first reply.
                     # message_body can be a literal placeholder ("[audio]", "[sticker]", etc. —
                     # see _extract_body_and_interactive) when the reply has no real text — Andy
@@ -1456,11 +1630,16 @@ def api_rescrape_company(company_id: str):
         if _bl_ind:
             raise HTTPException(status_code=403, detail=f"Industry is blacklisted: {_bl_ind['matched']}")
 
-        # Update the correct DB (scraper uses 'comercial', app uses 'commercial')
+        # Update the correct DB (scraper uses 'comercial', app uses 'commercial').
+        # last_scraped_at/next_allowed_scrape_at must be copied too — scrape_site()
+        # computes fresh values for both on every real scrape, but they were missing
+        # from this list, so "última fecha de scraping" never advanced here even
+        # when the rescrape actually ran and updated everything else.
         update_fields = {"updated_at": datetime.now()}
         for field in ("name", "industry", "description", "city", "state", "country",
                       "address", "phone_numbers", "whatsapp_numbers", "all_whatsapp_numbers",
-                      "has_whatsapp", "business_hours", "services", "products"):
+                      "has_whatsapp", "business_hours", "services", "products",
+                      "last_scraped_at", "next_allowed_scrape_at"):
             if result.get(field) is not None:
                 update_fields[field] = result[field]
 
@@ -1588,32 +1767,6 @@ def api_update_contacts(company_id: str, req: UpdateContactsRequest):
         db = MongoDBManager()
         db.replace_whatsapp_contacts(company_id, req.whatsapp_numbers)
         return {"ok": True}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# ── Check contacted ───────────────────────────────────────────────────────────
-
-@router.post("/companies/check-contacted")
-def api_check_contacted(payload: dict):
-    """Returns a map of company_id → last outbound message info for the given IDs."""
-    try:
-        from bson import ObjectId
-        db = MongoDBManager()
-        company_ids = payload.get("company_ids", [])
-        result = {}
-        for cid in company_ids:
-            log = db.db.message_logs.find_one(
-                {"company_id": cid, "direction": "outbound"},
-                sort=[("created_at", -1)],
-                projection={"sent_by_name": 1, "sent_by_username": 1, "created_at": 1, "status": 1},
-            )
-            if log:
-                result[cid] = {
-                    "sent_by":    log.get("sent_by_name") or log.get("sent_by_username") or "—",
-                    "sent_at":    log["created_at"].isoformat() if log.get("created_at") else None,
-                    "status":     log.get("status"),
-                }
-        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -2385,22 +2538,30 @@ def api_waha_webhook(body: dict, background_tasks: BackgroundTasks):
                 _ai_session_active = bool(db.db.ai_followup_sessions.find_one(
                     {"company_id": company_id, "status": {"$in": ["active", "waiting"]}}
                 )) if company_id not in ("unknown", "manual") else False
-                if message_body and company_id not in ("unknown", "manual") and not _ai_session_active:
+                # Block classifier + AI for contacts auto-registered from inbound
+                # (external numbers that wrote to us first) with no outbound history.
+                _is_pure_inbound = False
+                if company_id not in ("unknown", "manual"):
+                    try:
+                        from bson import ObjectId as _OId
+                        _cmp_src = db.db.companies.find_one(
+                            {"_id": _OId(company_id)}, {"source": 1}
+                        )
+                        if _cmp_src and _cmp_src.get("source") == "inbound_whatsapp":
+                            _is_pure_inbound = not bool(db.db.message_logs.find_one(
+                                {"company_id": company_id, "direction": "outbound"},
+                                projection={"_id": 1},
+                            ))
+                    except Exception:
+                        pass
+                if message_body and company_id not in ("unknown", "manual") and not _ai_session_active and not _is_pure_inbound:
                     from app.llm import active_provider as _cls_provider
                     if _cls_provider() != "none":
-                        from datetime import timedelta
-                        _recent_cls = db.db.message_logs.find_one(
-                            {"company_id": company_id, "direction": "inbound",
-                             "analysis_status": "done",
-                             "updated_at": {"$gte": datetime.now() - timedelta(minutes=10)}},
-                            projection={"_id": 1},
-                        )
-                        if not _recent_cls:
-                            from app.classifier import classify_and_save
-                            # Naive-pero-UTC — is_business_hours() asume UTC cuando no hay tzinfo.
-                            background_tasks.add_task(classify_and_save, log_id, company_id, message_body, datetime.now(timezone.utc).replace(tzinfo=None))
+                        from app.classifier import classify_or_copy_recent
+                        # Naive-pero-UTC — is_business_hours() asume UTC cuando no hay tzinfo.
+                        classify_or_copy_recent(db, background_tasks, log_id, company_id, message_body, datetime.now(timezone.utc).replace(tzinfo=None))
                 from app.classifier import NON_TEXT_PLACEHOLDERS
-                if message_body and message_body not in NON_TEXT_PLACEHOLDERS and company_id not in ("unknown", "manual"):
+                if message_body and message_body not in NON_TEXT_PLACEHOLDERS and company_id not in ("unknown", "manual") and not _is_pure_inbound:
                     try:
                         from app.llm import active_provider as _llm_provider
                         if _llm_provider() != "none":
@@ -2899,16 +3060,8 @@ async def api_wasender_webhook(request: Request, background_tasks: BackgroundTas
             if message_body and company_id not in ("unknown", "manual") and not _ai_session_active:
                 from app.llm import active_provider as _cls_provider
                 if _cls_provider() != "none":
-                    from datetime import timedelta
-                    _recent_cls = db.db.message_logs.find_one(
-                        {"company_id": company_id, "direction": "inbound",
-                         "analysis_status": "done",
-                         "updated_at": {"$gte": datetime.now() - timedelta(minutes=10)}},
-                        projection={"_id": 1},
-                    )
-                    if not _recent_cls:
-                        from app.classifier import classify_and_save
-                        background_tasks.add_task(classify_and_save, log_id, company_id, message_body, datetime.now(timezone.utc).replace(tzinfo=None))
+                    from app.classifier import classify_or_copy_recent
+                    classify_or_copy_recent(db, background_tasks, log_id, company_id, message_body, datetime.now(timezone.utc).replace(tzinfo=None))
             from app.classifier import NON_TEXT_PLACEHOLDERS
             if message_body and message_body not in NON_TEXT_PLACEHOLDERS and company_id not in ("unknown", "manual"):
                 try:
@@ -3266,6 +3419,42 @@ def api_sync_wasender_instances(x_user_token: Optional[str] = Header(None)):
     return {"ok": True, "imported": imported}
 
 
+@router.post("/admin/instances/sync-wwebjs")
+def api_sync_wwebjs_instances(x_user_token: Optional[str] = Header(None)):
+    """Sync all active wwebjs sessions from the Node service into MongoDB and update their status."""
+    user = _require_user(x_user_token)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Solo admins")
+    import requests as _req
+    from app.config import WWEBJS_URL as _ww_url
+    from datetime import datetime
+    r = _req.get(f"{_ww_url}/sessions", timeout=10)
+    if not r.ok:
+        raise HTTPException(500, f"wwebjs-service error: {r.text[:200]}")
+    sessions = r.json()  # {sessionId: {status, phone}}
+    db = MongoDBManager()
+    synced = 0
+    for session_id, info in sessions.items():
+        status = info.get("status", "unknown")
+        phone = info.get("phone") or ""
+        update = {
+            "name": session_id,
+            "provider": "wwebjs",
+            "disconnect_reason": None if status == "connected" else status,
+            "updated_at": datetime.utcnow(),
+        }
+        if phone:
+            update["number"] = phone
+        db.db.instances.update_one(
+            {"name": session_id},
+            {"$set": update, "$setOnInsert": {"assigned_to": None, "assigned_name": None,
+                                               "created_at": datetime.utcnow().isoformat()}},
+            upsert=True,
+        )
+        synced += 1
+    return {"ok": True, "synced": synced, "sessions": sessions}
+
+
 # ── File upload / serve (GridFS) ──────────────────────────────────────────────
 
 # ─── wwebjs endpoints ──────────────────────────────────────────────────────────
@@ -3294,6 +3483,108 @@ def api_wwebjs_qr(session_id: str):
     except Exception as e:
         raise HTTPException(400, str(e))
 
+@router.post("/wwebjs/bulk-verify")
+def api_wwebjs_bulk_verify(body: dict, x_user_token: Optional[str] = Header(None)):
+    """Verify a list of phone numbers against WhatsApp. Returns per-number result + caches in jid_map."""
+    from app.auth import get_user_by_token
+    from app.whatsapp_wwebjs import verify_number
+    from app.config import WWEBJS_URL as _ww_url
+    from datetime import datetime as _dt
+    import concurrent.futures as _cf
+
+    if not x_user_token or not get_user_by_token(x_user_token):
+        raise HTTPException(status_code=401, detail="No autorizado")
+
+    numbers: list = body.get("numbers") or []
+    session: str = body.get("session") or ""
+    if not numbers or not session:
+        raise HTTPException(status_code=400, detail="numbers y session requeridos")
+    if len(numbers) > 500:
+        raise HTTPException(status_code=400, detail="Máximo 500 números por solicitud")
+
+    _db = MongoDBManager()
+    digits_map = {n: "".join(filter(str.isdigit, str(n))) for n in numbers}
+
+    # Load cache
+    cached_docs = {d["jid"]: d for d in _db.db.jid_map.find(
+        {"jid": {"$in": list(digits_map.values())}, "wa_valid": {"$exists": True}},
+        {"jid": 1, "wa_valid": 1},
+    )}
+
+    results = {}
+    to_check = []
+    for original, digits in digits_map.items():
+        if digits in cached_docs:
+            results[original] = {"valid": cached_docs[digits]["wa_valid"], "cached": True}
+        else:
+            to_check.append((original, digits))
+
+    def _check(item):
+        original, digits = item
+        try:
+            r = verify_number(session, digits)
+            valid = bool(r.get("exists", False))
+        except Exception:
+            valid = None  # unknown
+        return original, digits, valid
+
+    with _cf.ThreadPoolExecutor(max_workers=8) as pool:
+        for original, digits, valid in pool.map(_check, to_check):
+            results[original] = {"valid": valid, "cached": False}
+            if valid is not None:
+                _db.db.jid_map.update_one(
+                    {"jid": digits},
+                    {"$set": {"wa_valid": valid, "wa_checked_at": _dt.utcnow()}},
+                    upsert=True,
+                )
+
+    valid_count   = sum(1 for v in results.values() if v["valid"] is True)
+    invalid_count = sum(1 for v in results.values() if v["valid"] is False)
+    unknown_count = sum(1 for v in results.values() if v["valid"] is None)
+    return {
+        "total": len(numbers),
+        "valid": valid_count,
+        "invalid": invalid_count,
+        "unknown": unknown_count,
+        "results": results,
+    }
+
+
+@router.post("/wwebjs/session/create")
+def api_wwebjs_create_session(body: dict):
+    """Create a new wwebjs session in the service and register it in MongoDB."""
+    import re as _re, requests as _req
+    from app.config import WWEBJS_URL as _ww_url
+    from datetime import datetime as _dt
+
+    name = (body.get("name") or "").strip().lower()
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    if not _re.match(r'^[a-z0-9][a-z0-9\-]{0,30}$', name):
+        raise HTTPException(status_code=400, detail="Nombre inválido: solo minúsculas, números y guiones")
+
+    _db = MongoDBManager()
+    if _db.db.instances.find_one({"name": name}):
+        raise HTTPException(status_code=409, detail=f"Ya existe una instancia con el nombre '{name}'")
+
+    try:
+        r = _req.post(f"{_ww_url}/session/{name}/start", timeout=15)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"No se pudo contactar wwebjs-service: {e}")
+    if not r.ok:
+        raise HTTPException(status_code=500, detail=r.json().get("error", "Error en wwebjs-service"))
+
+    _db.db.instances.insert_one({
+        "name": name,
+        "provider": "wwebjs",
+        "status": "disconnected",
+        "number": "",
+        "assigned_to": None,
+        "created_at": _dt.utcnow(),
+    })
+    return {"name": name, "status": r.json().get("status", "initializing")}
+
+
 @router.delete("/wwebjs/session/{session_id}")
 def api_wwebjs_delete(session_id: str):
     from app.whatsapp_wwebjs import delete_session
@@ -3310,6 +3601,105 @@ def api_wwebjs_list():
         return list_sessions()
     except Exception as e:
         raise HTTPException(500, str(e))
+
+@router.get("/wwebjs/session/{session_id}/info")
+def api_wwebjs_info(session_id: str):
+    from app.whatsapp_wwebjs import get_info
+    try:
+        return get_info(session_id)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@router.post("/wwebjs/session/{session_id}/verify")
+def api_wwebjs_verify(session_id: str, body: dict):
+    from app.whatsapp_wwebjs import verify_number
+    phone = body.get("phone", "")
+    if not phone:
+        raise HTTPException(400, "phone required")
+    try:
+        return verify_number(session_id, phone)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@router.post("/wwebjs/session/{session_id}/contact/save")
+def api_wwebjs_save_contact(session_id: str, body: dict):
+    from app.whatsapp_wwebjs import save_contact
+    phone = body.get("phone", "")
+    first_name = body.get("firstName") or body.get("first_name", "")
+    last_name = body.get("lastName") or body.get("last_name", "")
+    if not phone or not first_name:
+        raise HTTPException(400, "phone and firstName required")
+    try:
+        return save_contact(session_id, phone, first_name, last_name)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@router.post("/wwebjs/session/{session_id}/profile/status")
+def api_wwebjs_profile_status(session_id: str, body: dict):
+    from app.whatsapp_wwebjs import set_profile_status
+    status_text = body.get("status", "")
+    if not isinstance(status_text, str):
+        raise HTTPException(400, "status string required")
+    try:
+        return set_profile_status(session_id, status_text)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@router.post("/wwebjs/session/{session_id}/react")
+def api_wwebjs_react(session_id: str, body: dict):
+    from app.whatsapp_wwebjs import send_reaction
+    message_id = body.get("messageId", "")
+    emoji = body.get("emoji", "")
+    if not message_id or not emoji:
+        raise HTTPException(400, "messageId and emoji required")
+    try:
+        return send_reaction(session_id, message_id, emoji)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@router.get("/wwebjs/instances/user-status")
+def api_wwebjs_user_status(x_user_token: Optional[str] = Header(None)):
+    """Returns aggregate wwebjs connection status for all instances assigned to the user."""
+    from app.auth import get_user_by_token
+    from app.config import WWEBJS_URL as _ww_url
+    import requests as _req
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not x_user_token:
+        return {"connected": False, "connected_count": 0, "total": 0}
+    user = get_user_by_token(x_user_token)
+    if not user:
+        return {"connected": False, "connected_count": 0, "total": 0}
+
+    db = MongoDBManager()
+    user_id = user.get("id") or str(user.get("_id", ""))
+    instances = list(db.db.instances.find(
+        {"assigned_to": user_id, "provider": "wwebjs"},
+        {"_id": 0, "name": 1, "number": 1, "disconnect_reason": 1},
+    )) if user_id else []
+
+    if not instances:
+        return {"connected": False, "connected_count": 0, "total": 0}
+
+    def _check(inst):
+        try:
+            r = _req.get(f"{_ww_url}/session/{inst['name']}/status", timeout=2)
+            return r.ok and r.json().get("status") == "connected" and bool(inst.get("number"))
+        except Exception:
+            return False
+
+    with ThreadPoolExecutor(max_workers=len(instances)) as ex:
+        results = list(ex.map(_check, instances))
+
+    connected_count = sum(1 for r in results if r)
+    return {
+        "connected": connected_count > 0,
+        "connected_count": connected_count,
+        "total": len(instances),
+    }
+
+
+
 
 @router.post("/wwebjs/webhook")
 async def api_wwebjs_webhook(request: Request):
@@ -3334,11 +3724,37 @@ async def api_wwebjs_webhook(request: Request):
         print(f"[wwebjs Webhook] session={instance_name} {status} → {label_map.get(status, status)}")
         db.db.instances.update_one(
             {"name": instance_name},
-            {"$set": {"disconnect_reason": status if status != "connected" else None,
-                      "disconnect_reason_label": label_map.get(status, status)}},
+            {"$set": {
+                "status": status,
+                "disconnect_reason": status if status != "connected" else None,
+                "disconnect_reason_label": label_map.get(status, status),
+            }},
         )
         if data.get("phone"):
             db.db.instances.update_one({"name": instance_name}, {"$set": {"number": data["phone"]}})
+        return {"ok": True}
+
+    if event == "message_ack":
+        ack = data.get("ack", 0)
+        if ack >= 2:
+            # Delivered or read — clear degraded flag
+            db.db.instances.update_one(
+                {"name": instance_name},
+                {"$set": {"ack_degraded": False}, "$unset": {"ack_degraded_since": ""}},
+            )
+        elif ack == 1:
+            # Only sent to server, not delivered — wwebjs-service tracks streak,
+            # it fires session.degraded when threshold is hit
+            pass
+        return {"ok": True}
+
+    if event == "session.degraded":
+        from datetime import datetime as _dt
+        db.db.instances.update_one(
+            {"name": instance_name},
+            {"$set": {"ack_degraded": True, "ack_degraded_since": _dt.utcnow()}},
+        )
+        _log.warning("[ACK Monitor] instance=%s degraded — consecutive undelivered messages", instance_name)
         return {"ok": True}
 
     if event == "messages.received":
@@ -3358,38 +3774,78 @@ async def api_wwebjs_webhook(request: Request):
 
         company_id = db.find_company_id_by_phone(number)
         if not company_id:
+            # Only auto-register if the system previously contacted this number.
+            # Unknown external contacts that messaged us first are silently ignored.
             _clean10 = "".join(filter(str.isdigit, number))[-10:]
-            _was_contacted = bool(db.db.message_logs.find_one({
-                "direction": "outbound", "to_number": {"$regex": _clean10},
-            }))
-            if not _was_contacted:
-                return {"ok": True, "action": "ignored_personal"}
-            company_id = db.find_or_create_inbound_company(number, instance_name)
-
-        try:
-            from app.whatsapp_wwebjs import mark_read
-            mark_read(session_id, data.get("from", number))
-        except Exception:
-            pass
-
-        db.save_message(
-            company_id=str(company_id),
-            direction="inbound",
-            message=message_body,
-            instance_name=instance_name,
-            from_number=number,
-        )
-        db.update_conversation(company_id=str(company_id), last_message=message_body, instance_name=instance_name)
-
-        from app.ai_followup import process_inbound_reply
-        import asyncio
-        try:
-            asyncio.create_task(process_inbound_reply(
-                phone=number, company_id=str(company_id),
-                message=message_body, instance_name=instance_name, provider="wwebjs",
+            _was_contacted = bool(db.db.message_logs.find_one(
+                {"direction": "outbound", "to_number": {"$regex": _clean10}},
+                projection={"_id": 1},
             ))
-        except RuntimeError:
-            pass
+            if _was_contacted:
+                company_id = _waha_auto_register_inbound(db, number, instance_name)
+            else:
+                return {"ok": True, "action": "ignored_personal"}
+
+        # Fire-and-forget: mark chat as read after brief human delay (non-blocking)
+        import threading as _threading
+        def _do_mark_read():
+            try:
+                from app.whatsapp_wwebjs import mark_read
+                mark_read(session_id, data.get("from", number))
+            except Exception:
+                pass
+        _threading.Thread(target=_do_mark_read, daemon=True).start()
+
+        log_id = db.save_evolution_log(
+            direction="inbound",
+            company_id=str(company_id),
+            number=number,
+            message_body=message_body,
+            message_id=data.get("messageId"),
+            message_type="conversation",
+            status="received",
+            instance_name=instance_name,
+        )
+        print(f"[wwebjs Webhook] inbound saved log_id={log_id} company={company_id} from={number}")
+
+        # Block AI for contacts auto-registered from inbound with no outbound history
+        _is_pure_inbound = False
+        if company_id not in ("unknown", "manual"):
+            try:
+                from bson import ObjectId as _OId
+                _cmp_src = db.db.companies.find_one({"_id": _OId(company_id)}, {"source": 1})
+                if _cmp_src and _cmp_src.get("source") == "inbound_whatsapp":
+                    _is_pure_inbound = not bool(db.db.message_logs.find_one(
+                        {"company_id": company_id, "direction": "outbound"}, projection={"_id": 1}
+                    ))
+            except Exception:
+                pass
+
+        if message_body and company_id not in ("unknown", "manual") and log_id and not _is_pure_inbound:
+            try:
+                from datetime import datetime, timedelta
+                from app.llm import active_provider as _llm_provider
+                if _llm_provider() != "none":
+                    _ai_session_active = bool(db.db.ai_followup_sessions.find_one(
+                        {"company_id": company_id, "status": {"$in": ["active", "waiting"]}}
+                    ))
+                    _prefs_doc = db.db.conversation_ai_prefs.find_one({"company_id": company_id})
+                    _prefs = _prefs_doc or {}
+                    _should_enqueue = _prefs.get("ai_enabled", False)
+                    _user_explicitly_disabled = _prefs_doc is not None and not _prefs.get("ai_enabled", True)
+                    if not _should_enqueue and not _ai_session_active and not _user_explicitly_disabled:
+                        _had_outbound = db.db.message_logs.find_one(
+                            {"company_id": company_id, "direction": "outbound",
+                             "created_at": {"$gte": datetime.now() - timedelta(days=7)}},
+                            projection={"_id": 1},
+                        )
+                        if _had_outbound:
+                            _should_enqueue = True
+                    if _should_enqueue:
+                        from app.followup_queue import enqueue as _ai_enqueue
+                        _ai_enqueue(number, company_id, message_body, log_id)
+            except Exception as _fe:
+                print(f"[wwebjs Webhook] followup_queue error: {_fe}")
 
         return {"ok": True, "action": "processed"}
 
@@ -3882,6 +4338,8 @@ def api_notifications_list(x_user_token: Optional[str] = Header(None)):
                 "scheduled_send_id": e.get("scheduled_send_id", ""),
                 "scheduled_at": scheduled_at.isoformat() if scheduled_at else None,
                 "created_at": created_at.isoformat() if created_at else None,
+                "instance": e.get("instance", ""),
+                "cap": e.get("cap", 0),
             })
 
         result.sort(key=lambda x: x.get("created_at") or "", reverse=True)
@@ -4300,45 +4758,58 @@ def api_list_instances(x_user_token: Optional[str] = Header(None)):
     if user.get("role") != "admin":
         raise HTTPException(403, "Solo admins")
     import requests as _req
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
-    from datetime import datetime
-    db = MongoDBManager()
     from app.config import WAHA_API_URL, WAHA_API_KEY
     from app.config import WASENDER_PAT, WASENDER_BASE_URL
+    from app.config import WWEBJS_URL as _ww_url
+    db = MongoDBManager()
     instances = list(db.db.instances.find({}, {"_id": 0}))
-    for inst in instances:
+
+    def _get_live_status(inst):
         try:
-            if inst.get("provider") == "waha":
+            prov = inst.get("provider")
+            if prov == "waha":
                 r = _req.get(f"{WAHA_API_URL}/api/sessions/{inst['name']}",
-                    headers={"X-Api-Key": WAHA_API_KEY}, timeout=5)
+                    headers={"X-Api-Key": WAHA_API_KEY}, timeout=3)
                 waha_data = r.json() if r.ok else {}
                 waha_st = waha_data.get("status", "unknown")
-                state = "open" if waha_st == "WORKING" else ("connecting" if waha_st in ("STARTING", "SCAN_QR_CODE") else "disconnected")
                 inst["last_activity_at"] = waha_data.get("lastActivityTimestamp")
-            elif inst.get("provider") == "wasender":
+                return "open" if waha_st == "WORKING" else ("connecting" if waha_st in ("STARTING", "SCAN_QR_CODE") else "disconnected")
+            elif prov == "wasender":
                 _wid = inst.get("wasender_id")
                 if _wid and WASENDER_PAT:
                     r = _req.get(
                         f"{WASENDER_BASE_URL.rstrip('/')}/api/whatsapp-sessions/{_wid}",
-                        headers={"Authorization": f"Bearer {WASENDER_PAT}"},
-                        timeout=5,
-                    )
+                        headers={"Authorization": f"Bearer {WASENDER_PAT}"}, timeout=3)
                     ws_data = (r.json().get("data") or {}) if r.ok else {}
                     ws_st = ws_data.get("status", "unknown")
-                    state = "open" if ws_st == "connected" else (
-                        "connecting" if ws_st in ("connecting", "need_scan") else "disconnected"
-                    )
-                else:
-                    state = "unknown"
+                    return "open" if ws_st == "connected" else (
+                        "connecting" if ws_st in ("connecting", "need_scan") else "disconnected")
+                return "unknown"
+            elif prov == "wwebjs":
+                r = _req.get(f"{_ww_url}/session/{inst['name']}/status", timeout=3)
+                ww_data = r.json() if r.ok else {}
+                ww_st = ww_data.get("status", "unknown")
+                if ww_st in ("need_scan", "initializing", "authenticated"):
+                    inst["live_status_detail"] = ww_st
+                if ww_data.get("phone"):
+                    inst["number"] = inst.get("number") or ww_data["phone"]
+                return "connected" if ww_st == "connected" else (
+                    "connecting" if ww_st in ("initializing", "authenticated", "need_scan") else "disconnected")
             else:
                 r = _req.get(
                     f"{EVOLUTION_API_URL}/instance/connectionState/{inst['name']}",
-                    headers={"apikey": EVOLUTION_API_KEY}, timeout=5,
-                )
-                state = r.json().get("instance", {}).get("state", "unknown") if r.ok else "unknown"
+                    headers={"apikey": EVOLUTION_API_KEY}, timeout=3)
+                return r.json().get("instance", {}).get("state", "unknown") if r.ok else "unknown"
         except Exception:
-            state = "unknown"
-        inst["live_status"] = state
+            return "unknown"
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(_get_live_status, inst): inst for inst in instances}
+        for fut in as_completed(futures):
+            futures[fut]["live_status"] = fut.result()
+
     return instances
 
 
@@ -4347,27 +4818,42 @@ def api_create_instance(body: dict, x_user_token: Optional[str] = Header(None)):
     user = _require_user(x_user_token)
     if user.get("role") != "admin":
         raise HTTPException(403, "Solo admins")
-    name   = (body.get("name") or "").strip()
-    number = (body.get("number") or "").strip()
+    name     = (body.get("name") or "").strip()
+    number   = (body.get("number") or "").strip()
+    provider = (body.get("provider") or "evolution").strip()
     if not name:
         raise HTTPException(400, "name requerido")
     import requests as _req
-    from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
     from datetime import datetime
-    print(f"[DEBUG] create_instance body={body} name={name!r} url={EVOLUTION_API_URL} key={EVOLUTION_API_KEY!r}")
-    # Create instance in Evolution API
+    db = MongoDBManager()
+
+    if provider == "wwebjs":
+        from app.config import WWEBJS_URL as _ww_url
+        r = _req.post(f"{_ww_url}/session/{name}/start", timeout=10)
+        if not r.ok:
+            raise HTTPException(500, f"Error wwebjs-service: {r.text[:200]}")
+        doc = {
+            "name": name,
+            "number": number,
+            "provider": "wwebjs",
+            "assigned_to": None,
+            "assigned_name": None,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        db.db.instances.update_one({"name": name}, {"$set": doc}, upsert=True)
+        return {"ok": True, "instance": doc}
+
+    from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
     r = _req.post(
         f"{EVOLUTION_API_URL}/instance/create",
         headers={"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"},
         json={"instanceName": name, "integration": "WHATSAPP-BAILEYS", "qrcode": False},
         timeout=15,
-    )  # qrcode:False porque usamos pairing code, no QR
-    print(f"[DEBUG] Evolution response: {r.status_code} {r.text[:300]}")
+    )
     if r.status_code not in (200, 201):
         raise HTTPException(500, f"Error Evolution API: {r.text[:200]}")
     evo_data = r.json()
     instance_token = (evo_data.get("instance", {}) or {}).get("token") or evo_data.get("hash") or ""
-    db = MongoDBManager()
     doc = {
         "name": name,
         "number": number,
@@ -4408,6 +4894,12 @@ def api_delete_instance(name: str, x_user_token: Optional[str] = Header(None)):
                 )
             except Exception:
                 pass
+    elif inst_doc.get("provider") == "wwebjs":
+        from app.config import WWEBJS_URL as _ww_url
+        try:
+            _req.delete(f"{_ww_url}/session/{name}", timeout=10)
+        except Exception:
+            pass
     else:
         from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
         try:
@@ -4429,6 +4921,8 @@ def api_patch_instance(name: str, body: dict, x_user_token: Optional[str] = Head
         update["number"] = str(body["number"]).strip().replace("+", "").replace(" ", "")
     if "label" in body:
         update["label"] = str(body["label"]).strip()
+    if "provider" in body and body["provider"] in ("wwebjs", "wasender", "waha", "evolution"):
+        update["provider"] = body["provider"]
     if not update:
         raise HTTPException(400, "Nada que actualizar")
     db = MongoDBManager()

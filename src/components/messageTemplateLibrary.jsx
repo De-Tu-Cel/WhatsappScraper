@@ -194,15 +194,16 @@ export function TemplateManagerBody({ onChange, onCountChange }) {
                 <Box key={tpl._id}
                   onClick={() => { setEditing({ _id: tpl._id, name: tpl.name, text: tpl.text }); setError('') }}
                   sx={{ borderRadius: 1.5, p: 1, cursor: 'pointer',
-                    border: `1px solid ${isActive ? 'rgba(var(--accent-rgb,59,130,246),0.5)' : 'var(--border)'}`,
-                    bgcolor: isActive ? 'rgba(var(--accent-rgb,59,130,246),0.1)' : 'transparent',
+                    border: `1px solid ${isActive ? 'rgba(var(--accent-rgb,59,130,246),0.45)' : 'var(--border)'}`,
+                    borderLeft: isActive ? '3px solid var(--accent,#60a5fa)' : '1px solid var(--border)',
+                    bgcolor: isActive ? 'rgba(var(--accent-rgb,59,130,246),0.08)' : 'transparent',
                     transition: 'all 0.15s',
-                    '&:hover': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)', bgcolor: isActive ? 'rgba(var(--accent-rgb,59,130,246),0.1)' : 'rgba(var(--accent-rgb,59,130,246),0.04)' },
+                    '&:hover': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)', bgcolor: isActive ? 'rgba(var(--accent-rgb,59,130,246),0.08)' : 'rgba(var(--accent-rgb,59,130,246),0.04)', '& .del-btn': { opacity: 1 } },
                   }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.5 }}>
                     <Typography sx={{ color: 'var(--text)', fontWeight: 600, fontSize: '0.78rem', flex: 1, minWidth: 0 }} noWrap>{tpl.name}</Typography>
-                    <IconButton size="small" onClick={e => { e.stopPropagation(); setConfirmDel(tpl) }}
-                      sx={{ color: 'var(--text-muted)', p: 0.2, flexShrink: 0, '&:hover': { color: '#ef4444' } }}>
+                    <IconButton className="del-btn" size="small" onClick={e => { e.stopPropagation(); setConfirmDel(tpl) }}
+                      sx={{ color: 'var(--text-muted)', p: 0.2, flexShrink: 0, opacity: isActive ? 0.6 : 0, transition: 'opacity 0.15s, color 0.15s', '&:hover': { color: '#ef4444', opacity: 1 } }}>
                       <DeleteIcon sx={{ fontSize: 13 }} />
                     </IconButton>
                   </Box>
@@ -236,10 +237,11 @@ export function TemplateManagerBody({ onChange, onCountChange }) {
                   <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', mr: 0.5 }}>{t.tplLib.messageLabel}</Typography>
                   {VAR_CHIPS.map(v => (
                     <Box key={v.key} onClick={() => insertVar(v.key)} sx={{
-                      cursor: 'pointer', fontSize: '0.65rem', fontWeight: 700, px: 0.9, py: 0.2,
-                      borderRadius: 1, border: '1px solid var(--border)',
-                      bgcolor: 'var(--item-hover)', color: VAR_COLORS[v.key],
-                      userSelect: 'none', '&:hover': { opacity: 0.75 },
+                      cursor: 'pointer', fontSize: '0.65rem', fontWeight: 700, px: 0.9, py: 0.25,
+                      borderRadius: 1, border: `1px solid ${VAR_COLORS[v.key]}40`,
+                      bgcolor: `${VAR_COLORS[v.key]}15`, color: VAR_COLORS[v.key],
+                      userSelect: 'none', transition: 'all 0.12s',
+                      '&:hover': { bgcolor: `${VAR_COLORS[v.key]}28`, transform: 'translateY(-1px)' },
                     }}>
                       {lang === 'en' ? v.labelEn : v.labelEs}
                     </Box>
@@ -262,9 +264,13 @@ export function TemplateManagerBody({ onChange, onCountChange }) {
             </Box>
           ) : (
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-              height: '100%', gap: 1.2, color: 'var(--text-muted)', opacity: 0.45 }}>
-              <DescriptionIcon sx={{ fontSize: 38 }} />
-              <Typography sx={{ fontSize: '0.8rem', textAlign: 'center', lineHeight: 1.6 }}>
+              height: '100%', gap: 1.5 }}>
+              <Box sx={{ width: 52, height: 52, borderRadius: '50%',
+                bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <DescriptionIcon sx={{ fontSize: 24, color: 'rgba(255,255,255,0.15)' }} />
+              </Box>
+              <Typography sx={{ fontSize: '0.78rem', textAlign: 'center', lineHeight: 1.65, color: 'rgba(255,255,255,0.22)' }}>
                 {lang === 'en' ? 'Select a template to edit\nor create a new one' : 'Selecciona una plantilla para editar\no crea una nueva'}
               </Typography>
             </Box>
@@ -297,17 +303,18 @@ export function TemplateManagerDialog({ open, onClose, onChange }) {
       } }}>
 
       {/* ── Header ── */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 2.5, py: 1.5, borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-        <Box sx={{ width: 32, height: 32, borderRadius: 2, flexShrink: 0,
-          bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <DescriptionIcon sx={{ fontSize: 17, color: 'var(--accent,#60a5fa)' }} />
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 2.5, py: 1.6, borderBottom: '1px solid var(--border)', flexShrink: 0, background: 'linear-gradient(180deg, rgba(var(--accent-rgb,59,130,246),0.07) 0%, transparent 100%)' }}>
+        <Box sx={{ width: 34, height: 34, borderRadius: 2, flexShrink: 0,
+          bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.32)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          boxShadow: '0 0 16px rgba(var(--accent-rgb,59,130,246),0.2)' }}>
+          <DescriptionIcon sx={{ fontSize: 18, color: 'var(--accent,#60a5fa)' }} />
         </Box>
         <Box sx={{ flex: 1 }}>
           <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.93rem', lineHeight: 1.2 }}>{t.tplLib.manageBtn}</Typography>
-          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{t.tplLib.libraryCount(count)}</Typography>
+          <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.68rem' }}>{t.tplLib.libraryCount(count)}</Typography>
         </Box>
-        <IconButton size="small" onClick={onClose} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
+        <IconButton size="small" onClick={onClose} sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: 'var(--text)' }, transition: 'color 0.15s' }}>
           <CloseIcon sx={{ fontSize: 17 }} />
         </IconButton>
       </Box>

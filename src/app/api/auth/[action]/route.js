@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-const B = process.env.BACKEND_URL || 'http://localhost:8000'
+import { backendFetch } from '../../../../lib/backendFetch'
 
 async function proxy(request, action, method = 'POST') {
   try {
@@ -10,7 +10,7 @@ async function proxy(request, action, method = 'POST') {
     if (method !== 'GET') {
       try { opts.body = JSON.stringify(await request.json()) } catch {}
     }
-    const res = await fetch(`${B}/api/auth/${action}`, opts)
+    const res = await backendFetch(`/api/auth/${action}`, opts)
     return NextResponse.json(await res.json(), { status: res.status })
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 })

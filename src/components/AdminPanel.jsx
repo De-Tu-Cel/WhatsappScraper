@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import CircularProgress from '@mui/material/CircularProgress'
+import Skeleton from '@mui/material/Skeleton'
 import Tooltip from '@mui/material/Tooltip'
 import Chip from '@mui/material/Chip'
 import Dialog from '@mui/material/Dialog'
@@ -58,6 +59,33 @@ function StatChip({ icon, label, value, color }) {
       <Box sx={{ color, display: 'flex', alignItems: 'center' }}>{icon}</Box>
       <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, color, fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
       <Typography sx={{ fontSize: '0.68rem', color: `${color}99` }}>{label}</Typography>
+    </Box>
+  )
+}
+
+const SKEL_SX = {
+  bgcolor: 'var(--border)',
+  '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.04), transparent)' },
+}
+
+function UserCardSkeleton() {
+  return (
+    <Box sx={{
+      borderRadius: 3, overflow: 'hidden',
+      bgcolor: 'var(--card-bg, rgba(255,255,255,0.025))',
+      border: '1px solid rgba(255,255,255,0.06)',
+      display: 'flex', flexDirection: 'column',
+    }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', pt: 2.5, pb: 1.5, px: 1.5, gap: 0.8 }}>
+        <Skeleton variant="circular" width={56} height={56} sx={SKEL_SX} />
+        <Skeleton variant="text" width={90} sx={{ ...SKEL_SX, fontSize: '0.87rem' }} />
+        <Skeleton variant="text" width={65} sx={{ ...SKEL_SX, fontSize: '0.68rem' }} />
+        <Skeleton variant="rounded" width={70} height={20} sx={{ ...SKEL_SX, mt: 0.5, borderRadius: 2 }} />
+      </Box>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5, px: 1, py: 0.8, borderTop: '1px solid rgba(255,255,255,0.06)', mt: 'auto' }}>
+        <Skeleton variant="circular" width={22} height={22} sx={SKEL_SX} />
+        <Skeleton variant="circular" width={22} height={22} sx={SKEL_SX} />
+      </Box>
     </Box>
   )
 }
@@ -175,78 +203,98 @@ export default function AdminPanel() {
     : users
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 2.5 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 0 }}>
 
       {/* ── Header ── */}
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexShrink: 0, mb: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <Box sx={{
-            width: 40, height: 40, borderRadius: 2.5, flexShrink: 0,
-            background: 'linear-gradient(135deg, rgba(var(--accent-rgb,99,102,241),0.25) 0%, rgba(var(--accent-rgb,99,102,241),0.1) 100%)',
-            border: '1px solid rgba(var(--accent-rgb,99,102,241),0.3)',
+            width: 38, height: 38, borderRadius: 2, flexShrink: 0,
+            background: 'linear-gradient(135deg, rgba(var(--accent-rgb,99,102,241),0.22) 0%, rgba(var(--accent-rgb,99,102,241),0.08) 100%)',
+            border: '1px solid rgba(var(--accent-rgb,99,102,241),0.28)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
-            <AdminPanelSettingsIcon sx={{ color: 'var(--accent,#a5b4fc)', fontSize: 22 }} />
+            <AdminPanelSettingsIcon sx={{ color: 'var(--accent,#a5b4fc)', fontSize: 20 }} />
           </Box>
-          <Box>
-            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.3 }}>
-              {t.admin.title}
-            </Typography>
-            <Box sx={{ display: 'flex', gap: 0.8, mt: 0.6, flexWrap: 'wrap' }}>
-              <StatChip icon={<GroupIcon sx={{ fontSize: 13 }} />}  label={t.admin.statTotal}  value={users.length} color="#60a5fa" />
-              <StatChip icon={<ShieldIcon sx={{ fontSize: 13 }} />} label={t.admin.statAdmins} value={adminsCount}  color="#a78bfa" />
-              <StatChip icon={<PersonIcon sx={{ fontSize: 13 }} />} label={t.admin.statAgents} value={agentsCount}  color="#34d399" />
-            </Box>
-          </Box>
+          <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '1rem' }}>
+            {t.admin.title}
+          </Typography>
         </Box>
-
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flexShrink: 0 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
           <Tooltip title={t.admin.newUserTip}>
             <Box onClick={() => { setCreateOpen(true); setCreateMsg('') }}
               sx={{
                 cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 0.6,
-                px: 1.4, py: 0.6, borderRadius: 2,
+                px: 1.4, py: 0.55, borderRadius: 2,
                 bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)',
                 border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)',
-                color: 'var(--accent,#60a5fa)',
-                transition: 'all 0.15s',
-                '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.22)', borderColor: 'rgba(var(--accent-rgb,59,130,246),0.45)' },
+                color: 'var(--accent,#60a5fa)', transition: 'all 0.15s',
+                '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.2)', borderColor: 'rgba(var(--accent-rgb,59,130,246),0.45)' },
               }}>
-              <PersonAddIcon sx={{ fontSize: 15 }} />
-              <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, color: 'inherit' }}>{t.admin.newUserBtn}</Typography>
+              <PersonAddIcon sx={{ fontSize: 14 }} />
+              <Typography sx={{ fontSize: '0.73rem', fontWeight: 600, color: 'inherit' }}>{t.admin.newUserBtn}</Typography>
             </Box>
           </Tooltip>
           <Tooltip title={t.admin.refreshTip}>
             <IconButton size="small" onClick={fetchUsers}
               sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)', bgcolor: 'var(--item-hover)' } }}>
-              <RefreshIcon sx={{ fontSize: 18 }} />
+              <RefreshIcon sx={{ fontSize: 17 }} />
             </IconButton>
           </Tooltip>
         </Box>
       </Box>
 
-      {/* ── Búsqueda ── */}
-      <Box sx={{ flexShrink: 0 }}>
-        <TextField
-          size="small"
-          placeholder={t.admin.searchUsers || 'Buscar usuario…'}
-          value={userSearch}
-          onChange={e => setUserSearch(e.target.value)}
-          slotProps={{ input: { startAdornment: (
-            <Box sx={{ display: 'flex', mr: 0.5, color: 'rgba(255,255,255,0.3)' }}>
-              <SearchIcon sx={{ fontSize: 16 }} />
+      {/* ── Stats bar ── */}
+      <Box sx={{ display: 'flex', gap: 1, mb: 2, flexShrink: 0 }}>
+        {[
+          { icon: <GroupIcon sx={{ fontSize: 16 }} />,  value: users.length, label: t.admin.statTotal,  color: '#60a5fa', bg: 'rgba(96,165,250,0.08)',  border: 'rgba(96,165,250,0.18)'  },
+          { icon: <ShieldIcon sx={{ fontSize: 16 }} />, value: adminsCount,  label: t.admin.statAdmins, color: '#a78bfa', bg: 'rgba(167,139,250,0.08)', border: 'rgba(167,139,250,0.18)' },
+          { icon: <PersonIcon sx={{ fontSize: 16 }} />, value: agentsCount,  label: t.admin.statAgents, color: '#34d399', bg: 'rgba(52,211,153,0.08)',  border: 'rgba(52,211,153,0.18)'  },
+        ].map(({ icon, value, label, color, bg, border }) => (
+          <Box key={label} sx={{ flex: 1, display: 'flex', alignItems: 'center', gap: 1.2,
+            px: 1.6, py: 1, borderRadius: 2.5, bgcolor: bg, border: `1px solid ${border}` }}>
+            <Box sx={{ color, display: 'flex', opacity: 0.8 }}>{icon}</Box>
+            <Box>
+              <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
+              <Typography sx={{ fontSize: '0.6rem', color: `${color}99`, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', mt: 0.2 }}>{label}</Typography>
             </Box>
-          ) } }}
-          fullWidth
-          sx={FIELD_SX}
-        />
+          </Box>
+        ))}
       </Box>
 
-      {/* ── Grid de usuarios ── */}
-      <Box sx={{ flex: 1, overflowY: 'auto' }}>
+      {/* ── Búsqueda ── */}
+      <Box sx={{ flexShrink: 0, mb: 1.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1,
+          px: 1.2, py: 0.7, borderRadius: 2,
+          bgcolor: 'var(--card-bg)', border: '1px solid var(--border)',
+          '&:focus-within': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' }, transition: 'border-color 0.15s',
+        }}>
+          <SearchIcon sx={{ fontSize: 16, color: 'var(--text-muted)', flexShrink: 0 }} />
+          <Box component="input"
+            placeholder={t.admin.searchUsers || 'Buscar usuario…'}
+            value={userSearch}
+            onChange={e => setUserSearch(e.target.value)}
+            sx={{ flex: 1, background: 'none', border: 'none', outline: 'none',
+              color: 'var(--text)', fontSize: '0.78rem',
+              '&::placeholder': { color: 'var(--text-muted)', opacity: 0.7 } }}
+          />
+          {userSearch && (
+            <Box onClick={() => setUserSearch('')}
+              sx={{ cursor: 'pointer', color: 'var(--text-muted)', fontSize: '1rem', lineHeight: 1,
+                '&:hover': { color: 'var(--text)' }, userSelect: 'none' }}>×</Box>
+          )}
+        </Box>
+      </Box>
+
+      {/* ── Lista de usuarios ── */}
+      <Box sx={{ flex: 1, overflowY: 'auto',
+        '&::-webkit-scrollbar': { width: 4 },
+        '&::-webkit-scrollbar-button': { display: 'none' },
+        '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(100,116,139,0.3)', borderRadius: 4 },
+      }}>
         {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', pt: 6 }}>
-            <CircularProgress size={28} sx={{ color: 'var(--accent,#6366f1)' }} />
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 210px))', gap: 1.5 }}>
+            {Array.from({ length: 8 }).map((_, i) => <UserCardSkeleton key={i} />)}
           </Box>
         ) : users.length === 0 ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 1.5, opacity: 0.4 }}>

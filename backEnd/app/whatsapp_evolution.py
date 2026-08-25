@@ -1,6 +1,7 @@
 # whatsapp_evolution.py
 import requests
 from datetime import datetime
+from app.phone_utils import clean_digits as _clean_number
 
 
 def pick_connected_instance(db, api_url: str, api_key: str, preferred: str | None = None) -> str | None:
@@ -151,11 +152,3 @@ class EvolutionClient:
         except Exception:
             pass
         return []
-
-
-def _clean_number(number: str) -> str:
-    """Normalize to international format without + or spaces."""
-    digits = "".join(filter(str.isdigit, number))
-    if len(digits) == 10:
-        digits = "52" + digits    # local 10-digit → Mexican
-    return digits

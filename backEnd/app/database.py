@@ -249,7 +249,7 @@ class MongoDBManager:
         companies = list(
             self.db.companies.find(
                 query,
-                {"name": 1, "domain": 1, "website": 1, "industry": 1, "city": 1, "state": 1, "has_whatsapp": 1, "status": 1, "created_at": 1}
+                {"name": 1, "domain": 1, "website": 1, "industry": 1, "city": 1, "state": 1, "has_whatsapp": 1, "status": 1, "created_at": 1, "last_scraped_at": 1}
             )
             .sort("created_at", -1)
             .skip((page - 1) * page_size)
@@ -320,6 +320,29 @@ class MongoDBManager:
                 if c:
                     out.add(c)
         return out
+
+    def check_contacted(self, company_ids: list) -> dict:
+        """Returns contact history for a list of company_ids — who first messaged each
+        one and when. Extracted from routes.py's /companies/check-contacted so the
+        scrape-jobs background worker can call it directly instead of doing an HTTP
+        self-call from inside the same process."""
+        result = {}
+        for cid in company_ids:
+            first = self.db.message_logs.find_one(
+                {"company_id": cid, "direction": "outbound"},
+                sort=[("created_at", 1)],
+                projection={"sent_by_name": 1, "sent_by_username": 1, "created_at": 1}
+            )
+            if first:
+                result[cid] = {
+                    "contacted": True,
+                    "by_name":     first.get("sent_by_name", ""),
+                    "by_username": first.get("sent_by_username", ""),
+                    "at":          first["created_at"].isoformat() if first.get("created_at") else None,
+                }
+            else:
+                result[cid] = {"contacted": False}
+        return result
 
     def check_urls_scraped(self, urls: list) -> dict:
         from urllib.parse import urlparse
@@ -580,6 +603,7 @@ class MongoDBManager:
                 "first_sent_by_user": {"$last": {"$cond": [
                     {"$eq": ["$direction", "outbound"]}, "$sent_by_username", None
                 ]}},
+                "has_outbound": {"$sum": {"$cond": [{"$eq": ["$direction", "outbound"]}, 1, 0]}},
             }},
             {"$sort": {"last_at": -1}},
         ]
@@ -591,12 +615,16 @@ class MongoDBManager:
             try:
                 company = self.db.companies.find_one(
                     {"_id": ObjectId(company_id)},
-                    {"name": 1, "domain": 1, "website": 1, "industry": 1}
+                    {"name": 1, "domain": 1, "website": 1, "industry": 1, "source": 1}
                 ) if company_id and company_id != "manual" and company_id != "unknown" else None
             except Exception:
                 pass
             if not company:
                 continue  # skip personal chats and unknown contacts
+            # Skip contacts auto-registered from an inbound message (external numbers
+            # that messaged the connected WA account) if the system never sent them anything.
+            if company.get("source") == "inbound_whatsapp" and g.get("has_outbound", 0) == 0:
+                continue
             has_wa = self.db.contacts.find_one({"company_id": company_id, "type": "whatsapp"})
             if not has_wa:
                 continue  # skip companies with no WhatsApp number

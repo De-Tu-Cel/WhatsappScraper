@@ -298,9 +298,12 @@ def _probe_doc(company_id="co1"):
 class TestResolveProbeT2Guard:
     def test_andy_not_sent_yet_falls_back_to_automatico_without_crashing(self):
         # No qualifying outbound AI message exists at all — msg2 stays None.
+        # Reply body is deliberately long/neutral (>20 chars, no casual greeting)
+        # so it doesn't trip the separate _looks_human_casual heuristic added later
+        # — this test is about the T2-guard fallback mechanics, not text content.
         db = FakeMongoDBManager(msg2_doc=None)
         received_at = T1_TIME + timedelta(seconds=8)
-        result = _resolve_probe(db, _probe_doc(), "hola de nuevo", received_at)
+        result = _resolve_probe(db, _probe_doc(), "Aún no me han contactado por este tema", received_at)
         assert result["category"] == "automatico"
         assert "aún no enviado" in result["notes"]
 
@@ -312,10 +315,13 @@ class TestResolveProbeT2Guard:
         # doc back regardless, which lets us pin down the numeric `0 <= t2_seconds`
         # guard as its own independent safety net: even if a stale/out-of-window
         # doc ever slipped through, a negative delta must never read as "fast".
+        # Reply body is deliberately long/neutral (>20 chars, no casual greeting)
+        # so it doesn't trip the separate _looks_human_casual heuristic added later
+        # — this test is about the negative-delta T2 guard, not text content.
         andy_sent_at = T1_TIME + timedelta(seconds=20)   # Andy replies "late"
         received_at = T1_TIME + timedelta(seconds=6)     # but this 2nd inbound came first
         db = FakeMongoDBManager(msg2_doc={"created_at": andy_sent_at})
-        result = _resolve_probe(db, _probe_doc(), "ya te contactaron?", received_at)
+        result = _resolve_probe(db, _probe_doc(), "No he recibido ninguna llamada de ustedes", received_at)
         assert result["category"] == "automatico"
         assert result["category"] != "bot"
 

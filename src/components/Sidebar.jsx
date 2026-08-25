@@ -8,7 +8,6 @@ import ListItemIcon from '@mui/material/ListItemIcon'
 import Divider from '@mui/material/Divider'
 import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
-import StorefrontIcon from '@mui/icons-material/Storefront'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import MenuIcon from '@mui/icons-material/Menu'
 import LogoutIcon from '@mui/icons-material/Logout'
@@ -16,6 +15,7 @@ import SettingsIcon from '@mui/icons-material/Settings'
 import { useUser } from '../context/UserContext'
 import { useLang } from '../context/LangContext'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
+import AnimatedFingerprint from './AnimatedFingerprint'
 
 const SIDEBAR_FULL = 248
 const SIDEBAR_MINI = 64
@@ -148,7 +148,7 @@ export default React.memo(function Sidebar({ open, setOpen, active, setActive, n
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             border: '1px solid rgba(59,130,246,0.3)',
           }}>
-            <StorefrontIcon sx={{ color: C.accentText, fontSize: 20 }} />
+            <AnimatedFingerprint size={20} color={C.accentText} duration={2200} />
           </Box>
           <Box>
             <Typography sx={{ color: C.text, fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2 }}>Mystery</Typography>

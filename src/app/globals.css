@@ -1,3 +1,10 @@
+/* Hide scrollbar arrow buttons globally */
+*::-webkit-scrollbar-button {
+  display: none;
+  height: 0;
+  width: 0;
+}
+
 /* react-joyride beacon */
 .react-joyride__beacon {
   outline: none !important;
@@ -363,6 +370,33 @@
 /* ── Scrollbars dentro de TableContainer (sx scrollbarColor no es overrideable, pero webkit sí) ── */
 [data-theme-mode="light"] .MuiTableContainer-root *::-webkit-scrollbar-thumb {
   background: rgba(0,0,0,0.16) !important;
+}
+
+/* ── Skeletons: visibles en fondo blanco ── */
+[data-theme-mode="light"] .MuiSkeleton-root {
+  background-color: rgba(0,0,0,0.09) !important;
+}
+[data-theme-mode="light"] .MuiSkeleton-root::after {
+  background: linear-gradient(90deg, transparent, rgba(0,0,0,0.05), transparent) !important;
+}
+
+/* ── Bordes de Box/contenedores genéricos ── */
+[data-theme-mode="light"] [style*="rgba(255,255,255,0.0"],
+[data-theme-mode="light"] [style*="rgba(255,255,255, 0.0"] {
+  border-color: rgba(0,0,0,0.1) !important;
+}
+
+/* ── Chip text en colores de industria/categoría ── */
+[data-theme-mode="light"] .MuiChip-label {
+  color: #1e293b !important;
+}
+
+/* ── Botones deshabilitados ── */
+[data-theme-mode="light"] .MuiButton-root:disabled,
+[data-theme-mode="light"] .MuiButton-root.Mui-disabled {
+  color: rgba(0,0,0,0.3) !important;
+  border-color: rgba(0,0,0,0.12) !important;
+  background-color: rgba(0,0,0,0.04) !important;
 }
 
 /* ── Login screen: siempre oscuro, inmune al light mode ────────────────────

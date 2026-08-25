@@ -109,15 +109,20 @@ gestión de sesión, se autoidentifica como bot, menú numerado) → "bot" aunqu
 
 ══ PASO 2: CALIDAD DE SERVICIO (escala 1-5) ══
 Mide CÓMO atendió la empresa al prospecto. Independiente del interés de compra del lead.
-1=inexistente/pésimo · 2=deficiente · 3=aceptable · 4=bueno · 5=excelente
 Automáticos/bots que ignoran la consulta: 1-2 en TODAS las dimensiones sin excepción.
+Acuse de recibo o cortesía vacía sin abordar el tema ("gracias", "ok", "entendido",
+"gracias por su mensaje", emoji solo, 1-4 palabras sin sustancia) — sea humano o bot —
+TODAS las dimensiones en 1-2. El tono amable no compensa la falta de contenido real.
 
-svc_prof  (Profesionalismo): ortografía, tono apropiado, coherencia y claridad
-svc_comp  (Completitud): ¿respondió específicamente lo que se preguntó o solicitó?
-svc_empa  (Empatía): calidez, personalización, reconoce y valida la necesidad del prospecto
-svc_solu  (Solución): ¿ofreció algo concreto? (precio orientativo, producto específico, alternativa, cita)
-svc_next  (Siguiente paso): ¿quedó claro qué sigue? (CTA explícito: llamada, link, reunión, precio)
-svc_proact (Proactividad): ¿anticipó necesidades, hizo preguntas de calificación, ofreció info extra?
+svc_prof   (Profesionalismo) — 1-2: errores graves o tono cortante/inapropiado · 4-5: impecable, tono cálido y consistente
+svc_comp   (Completitud) — 1-2: ignora la pregunta o da algo genérico que no aplica · 4-5: responde punto por punto, sin dejar nada sin cubrir
+svc_empa   (Empatía) — 1-2: trato robótico, no usa nombre ni contexto · 4-5: usa el nombre, reconoce la situación específica del prospecto
+svc_solu   (Solución) — 1-2: nada concreto, solo "te contactaremos" · 4-5: precio/producto/cita específicos, no genéricos
+svc_next   (Siguiente paso) — 1-2: termina sin ningún CTA · 4-5: CTA explícito y accionable de inmediato
+svc_proact (Proactividad) — 1-2: solo reacciona, cero iniciativa · 4-5: anticipa, califica, ofrece más de lo pedido
+
+CALIBRACIÓN: no asumas 3 por default. Un 3 exige evidencia mixta real (ni claramente bien ni mal) —
+si dudas entre 2 y 3, o entre 3 y 4, elige el extremo que tenga evidencia concreta en el texto.
 
 ══ PASO 3: SEÑAL COMERCIAL (1-5) ══
 ¿Qué tan "caliente" quedó el lead? ¿Esta respuesta acerca o aleja una venta?
@@ -142,7 +147,7 @@ ai_confidence: 0.0-1.0 solo si is_ai=true
 Si hay menú numerado: category="bot", is_ai=false siempre, bot_quality=null siempre.
 
 Responde SOLO con JSON válido:
-{{"category":"humano|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"response_quality":1,"bot_quality":null,"notes":"diagnóstico"}}\
+{{"category":"humano|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"bot_quality":null,"notes":"diagnóstico"}}\
 """
 
 
@@ -204,13 +209,19 @@ EXCEPCIÓN ABSOLUTA: si detectaste señales FUERTES de bot/menú en alguna fase,
 
 Si la categoría es "hibrido": evalúa PRINCIPALMENTE la fase humana (ignora la calidad del bot).
 Si es "bot" puro (incluye menú/IVR): TODAS las dimensiones van en 1-2, sin excepción.
+Acuse de recibo o cortesía vacía sin abordar el tema ("gracias", "ok", "entendido",
+"gracias por su mensaje", emoji solo, 1-4 palabras sin sustancia) — sea humano o bot —
+TODAS las dimensiones en 1-2. El tono amable no compensa la falta de contenido real.
 
-svc_prof  (Profesionalismo): ortografía, tono, coherencia
-svc_comp  (Completitud): ¿respondió específicamente lo que se pidió?
-svc_empa  (Empatía): calidez, personalización, valida la necesidad
-svc_solu  (Solución): ¿ofreció algo concreto? (precio, producto, alternativa, cita)
-svc_next  (Siguiente paso): ¿quedó claro qué sigue? (CTA explícito)
-svc_proact (Proactividad): ¿anticipó necesidades o hizo preguntas de calificación?
+svc_prof   (Profesionalismo) — 1-2: errores graves o tono cortante/inapropiado · 4-5: impecable, tono cálido y consistente
+svc_comp   (Completitud) — 1-2: ignora la pregunta o da algo genérico que no aplica · 4-5: responde punto por punto, sin dejar nada sin cubrir
+svc_empa   (Empatía) — 1-2: trato robótico, no usa nombre ni contexto · 4-5: usa el nombre, reconoce la situación específica del prospecto
+svc_solu   (Solución) — 1-2: nada concreto, solo "te contactaremos" · 4-5: precio/producto/cita específicos, no genéricos
+svc_next   (Siguiente paso) — 1-2: termina sin ningún CTA · 4-5: CTA explícito y accionable de inmediato
+svc_proact (Proactividad) — 1-2: solo reacciona, cero iniciativa · 4-5: anticipa, califica, ofrece más de lo pedido
+
+CALIBRACIÓN: no asumas 3 por default. Un 3 exige evidencia mixta real (ni claramente bien ni mal) —
+si dudas entre 2 y 3, o entre 3 y 4, elige el extremo que tenga evidencia concreta en el texto.
 
 ══ PASO 4: SEÑAL COMERCIAL FINAL (1-5) ══
 Estado del lead al cierre de la conversación:
@@ -226,7 +237,7 @@ que hubo un bot inicial y luego un agente real, y evalúa la calidad del agente.
 Indica la acción concreta más importante a tomar.
 
 Responde SOLO con JSON válido:
-{{"category":"humano|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"response_quality":3,"bot_quality":null,"notes":"diagnóstico","conversation_analysis":true}}\
+{{"category":"humano|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"bot_quality":null,"notes":"diagnóstico","conversation_analysis":true}}\
 """
 
 _ERROR_RESULT = {
@@ -323,17 +334,20 @@ def _parse_llm_response(raw: str) -> dict:
         except (TypeError, ValueError):
             return None
 
-    return {
-        "category": category,
-        "is_ai": is_ai,
-        "ai_confidence": round(float(result.get("ai_confidence", 0.0)), 2) if is_ai else 0.0,
+    svc_scores = {
         "svc_prof":   _svc("svc_prof"),
         "svc_comp":   _svc("svc_comp"),
         "svc_empa":   _svc("svc_empa"),
         "svc_solu":   _svc("svc_solu"),
         "svc_next":   _svc("svc_next"),
         "svc_proact": _svc("svc_proact"),
-        "response_quality": result.get("response_quality") or 2,
+    }
+    return {
+        "category": category,
+        "is_ai": is_ai,
+        "ai_confidence": round(float(result.get("ai_confidence", 0.0)), 2) if is_ai else 0.0,
+        **svc_scores,
+        "response_quality": _response_quality_from_svc(svc_scores),
         "bot_quality": result.get("bot_quality"),
         "notes": result.get("notes", ""),
         "conversation_analysis": bool(result.get("conversation_analysis", False)),
@@ -487,6 +501,20 @@ NON_TEXT_PLACEHOLDERS = {"[audio]", "[sticker]", "[location]", "[contact]", "[me
 
 def _has_real_text(body: str | None) -> bool:
     return bool(body) and body.strip() not in NON_TEXT_PLACEHOLDERS
+
+
+def _response_quality_from_svc(svc_scores: dict) -> int | None:
+    """response_quality debe reflejar las 6 sub-dimensiones (svc_prof/comp/empa/solu/
+    next/proact), no ser un número aparte que el LLM inventa por su cuenta — antes se
+    pedía como campo independiente en el mismo JSON, sin ninguna garantía de que
+    coincidiera con el detalle de las 6 dimensiones (podía decir svc_comp=4 y
+    response_quality=1 sin que nada lo detectara). Se calcula como el promedio
+    redondeado de las dimensiones evaluadas; si ninguna tiene valor, queda en None
+    (sin base para calificar) — igual criterio que ya usa _quick_result_unrated."""
+    values = [v for v in svc_scores.values() if v is not None]
+    if not values:
+        return None
+    return max(1, min(5, round(sum(values) / len(values))))
 
 
 def _quick_result(category: str, notes: str) -> dict:
@@ -661,12 +689,21 @@ MENSAJE ENVIADO: {outbound_body}
 RESPUESTA DEL PROSPECTO: {inbound_body}
 
 ══ CALIDAD DE SERVICIO (escala 1-5) ══
-svc_prof   (Profesionalismo): ortografía, tono apropiado, coherencia y claridad
-svc_comp   (Completitud): ¿respondió específicamente lo que se preguntó o solicitó?
-svc_empa   (Empatía): calidez, personalización, reconoce y valida la necesidad del prospecto
-svc_solu   (Solución): ¿ofreció algo concreto? (precio orientativo, producto específico, alternativa, cita)
-svc_next   (Siguiente paso): ¿quedó claro qué sigue? (CTA explícito: llamada, link, reunión, precio)
-svc_proact (Proactividad): ¿anticipó necesidades, hizo preguntas de calificación, ofreció info extra?
+Acuse de recibo o cortesía vacía sin abordar el tema ("gracias", "ok", "entendido",
+"gracias por su mensaje", emoji solo, 1-4 palabras sin sustancia) — aunque sea de una
+persona real y el tono sea amable — TODAS las dimensiones en 1-2. El tono no compensa
+la falta de contenido real; aquí se califica QUÉ tan útil fue la respuesta, no si la
+persona fue agradable.
+
+svc_prof   (Profesionalismo) — 1-2: errores graves o tono cortante/inapropiado · 4-5: impecable, tono cálido y consistente
+svc_comp   (Completitud) — 1-2: ignora la pregunta o da algo genérico que no aplica · 4-5: responde punto por punto, sin dejar nada sin cubrir
+svc_empa   (Empatía) — 1-2: trato robótico, no usa nombre ni contexto · 4-5: usa el nombre, reconoce la situación específica del prospecto
+svc_solu   (Solución) — 1-2: nada concreto, solo "te contactaremos" · 4-5: precio/producto/cita específicos, no genéricos
+svc_next   (Siguiente paso) — 1-2: termina sin ningún CTA · 4-5: CTA explícito y accionable de inmediato
+svc_proact (Proactividad) — 1-2: solo reacciona, cero iniciativa · 4-5: anticipa, califica, ofrece más de lo pedido
+
+CALIBRACIÓN: no asumas 3 por default. Un 3 exige evidencia mixta real (ni claramente bien ni mal) —
+si dudas entre 2 y 3, o entre 3 y 4, elige el extremo que tenga evidencia concreta en el texto.
 
 ══ SEÑAL COMERCIAL (1-5) ══
 ¿Qué tan "caliente" quedó el lead?
@@ -680,7 +717,7 @@ svc_proact (Proactividad): ¿anticipó necesidades, hizo preguntas de calificaci
 Lenguaje simple, como si hablaras con el dueño del negocio, no un técnico.
 
 Responde SOLO con JSON válido:
-{{"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"response_quality":3,"notes":"diagnóstico"}}\
+{{"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"notes":"diagnóstico"}}\
 """
 
 
@@ -716,14 +753,17 @@ def _grade_quality_only(inbound_body: str, outbound_body: str) -> dict | None:
             except (TypeError, ValueError):
                 return None
 
-        return {
+        svc_scores = {
             "svc_prof":   _svc("svc_prof"),
             "svc_comp":   _svc("svc_comp"),
             "svc_empa":   _svc("svc_empa"),
             "svc_solu":   _svc("svc_solu"),
             "svc_next":   _svc("svc_next"),
             "svc_proact": _svc("svc_proact"),
-            "response_quality": _svc("response_quality") or 3,
+        }
+        return {
+            **svc_scores,
+            "response_quality": _response_quality_from_svc(svc_scores),
             "notes": result.get("notes", "") or "",
         }
     except LLMQuotaExceeded:
@@ -892,6 +932,32 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
     return analysis
 
 
+def classify_or_copy_recent(db, background_tasks, log_id: str, company_id: str,
+                             inbound_body: str, received_at: datetime, throttle_minutes: int = 10):
+    """Throttle-aware entry point used by the inbound webhooks (Evolution/WAHA/wwebjs,
+    Wasender): if this company already has a classification within `throttle_minutes`,
+    copy it onto this message instead of skipping it outright. Skipping used to leave
+    the message with no `analysis_status` at all — permanently unclassified for any
+    consumer that looks at individual messages, only ever recovered if someone happened
+    to open Analytics and trigger requeue-unanalyzed (client-driven, not automatic).
+    Copying forward keeps the original "don't re-run the LLM on every message in a fast
+    back-and-forth" intent without leaving a silent gap."""
+    from datetime import timedelta
+    throttle_cutoff = datetime.now() - timedelta(minutes=throttle_minutes)
+    recent = db.db.message_logs.find_one(
+        {"company_id": company_id, "direction": "inbound",
+         "analysis_status": "done", "updated_at": {"$gte": throttle_cutoff}},
+        sort=[("updated_at", -1)],
+    )
+    if recent and recent.get("analysis"):
+        copied = dict(recent["analysis"])
+        copied["notes"] = (copied.get("notes") or "") + f" — copiado del análisis reciente de esta empresa (throttle {throttle_minutes} min)"
+        copied["copied_from_throttle"] = True
+        db.save_message_analysis(log_id, copied)
+    else:
+        background_tasks.add_task(classify_and_save, log_id, company_id, inbound_body, received_at)
+
+
 def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_at: datetime):
     """Background task: classify a single inbound message and save the analysis."""
     if all_quota_exhausted():
@@ -963,9 +1029,20 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
                 delta = received_at - last_sent_at
                 raw_seconds = delta.total_seconds()
                 minutes = round(raw_seconds / 60, 1)
-                reaction_time_min = minutes if minutes >= 0 else None
-                if raw_seconds < 0:
+                # Sanity bound: get_last_outbound_for_company() falls back to "last
+                # outbound to this company from ANY number" when the to_number match
+                # fails — for a company with more than one WhatsApp number this can
+                # pair the reply with an unrelated outbound and produce a technically
+                # positive but meaningless delta. > 120 min already sits outside the
+                # window ai_followup treats as "still relevant", and is the same cutoff
+                # a past manual data-repair pass (fix_reaction.py) used to null out bad
+                # historical values — keep that invariant live instead of only cleaning
+                # it up after the fact.
+                if minutes < 0 or minutes > 120:
+                    reaction_time_min = None
                     raw_seconds = None
+                else:
+                    reaction_time_min = minutes
 
         business_hours = is_business_hours(received_at)
 

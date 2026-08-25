@@ -8,9 +8,11 @@ import MenuItem from '@mui/material/MenuItem'
 import Tooltip from '@mui/material/Tooltip'
 import PaletteIcon from '@mui/icons-material/Palette'
 import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone'
+import HelpOutlineIcon from '@mui/icons-material/HelpOutlined'
 import { useLang } from '../context/LangContext'
 import { authFetch } from '@/lib/api'
 import { LANGS } from './Settings'
+import FlagIcon from './FlagIcon'
 
 const ICON_BTN_SX = (active) => ({
   width: 28, height: 28, borderRadius: '50%', p: 0,
@@ -24,10 +26,12 @@ const ICON_BTN_SX = (active) => ({
 // Global controls that live above the active nav tab, independent of which
 // page is open: language switch (flag menu), notification bell (recent inbound
 // replies), and appearance toggle (opens AppearancePanel, a right-side
-// slide-in — mirrored from the left Sidebar). Icons stay borderless/transparent
-// at rest, same treatment as the reference — a plain filled circle only shows
-// up on hover (or while its panel/menu is open).
-export default function TopControls({ appearanceOpen, onToggleAppearance, notifOpen, onToggleNotifications }) {
+// slide-in — mirrored from the left Sidebar). Wrapped in its own bordered/
+// blurred pill (mirrors the Sidebar's panel treatment) instead of floating
+// bare over the content background. Icons themselves stay borderless/
+// transparent at rest — a plain filled circle only shows up on hover (or
+// while its panel/menu is open).
+export default function TopControls({ appearanceOpen, onToggleAppearance, notifOpen, onToggleNotifications, helpOpen, onToggleHelp }) {
   const { lang, setLang, t } = useLang()
   const [anchorEl, setAnchorEl] = useState(null)
   const [notifCount, setNotifCount] = useState(0)
@@ -57,13 +61,18 @@ export default function TopControls({ appearanceOpen, onToggleAppearance, notifO
   }, [notifOpen])
 
   return (
-    <Box id="tour-top-controls" sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+    <Box id="tour-top-controls" sx={{
+      display: 'flex', alignItems: 'center', gap: 0.5,
+      px: 0.75, py: 0.5, borderRadius: 99,
+      bgcolor: 'var(--card-bg, rgba(255,255,255,0.04))',
+      border: '1px solid var(--border, rgba(255,255,255,0.1))',
+      backdropFilter: 'blur(12px)',
+      boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+    }}>
       <Tooltip title={t.settings.language}>
         <IconButton size="small" onClick={e => setAnchorEl(e.currentTarget)}
           sx={{ ...ICON_BTN_SX(!!anchorEl), fontSize: '1.15rem' }}>
-          <Box component="span" sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>
-            {current.flag}
-          </Box>
+          <FlagIcon code={current.flagCode} size={18} />
         </IconButton>
       </Tooltip>
       <Menu anchorEl={anchorEl} open={!!anchorEl} onClose={() => setAnchorEl(null)}
@@ -89,7 +98,7 @@ export default function TopControls({ appearanceOpen, onToggleAppearance, notifO
               '&.Mui-selected': { bgcolor: 'var(--item-hover, rgba(255,255,255,0.1))' },
               '&.Mui-selected:hover': { bgcolor: 'var(--item-hover, rgba(255,255,255,0.13))' },
             }}>
-            <Box component="span" sx={{ fontSize: '1.05rem', lineHeight: 1, flexShrink: 0 }}>{l.flag}</Box>
+            <FlagIcon code={l.flagCode} size={20} />
             {l.labels[lang]}
           </MenuItem>
         ))}
@@ -108,6 +117,12 @@ export default function TopControls({ appearanceOpen, onToggleAppearance, notifO
             }}>
             <NotificationsNoneIcon sx={{ fontSize: 17 }} />
           </Badge>
+        </IconButton>
+      </Tooltip>
+
+      <Tooltip title={lang === 'en' ? 'Help & FAQ' : 'Ayuda y FAQ'}>
+        <IconButton size="small" onClick={onToggleHelp} sx={ICON_BTN_SX(helpOpen)}>
+          <HelpOutlineIcon sx={{ fontSize: 17 }} />
         </IconButton>
       </Tooltip>
 

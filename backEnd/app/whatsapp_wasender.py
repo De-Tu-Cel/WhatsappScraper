@@ -12,6 +12,7 @@ Two-tier auth:
 import time
 import requests
 from datetime import datetime
+from app.phone_utils import clean_digits as _clean_digits
 
 
 WASENDER_DEFAULT_BASE_URL = "https://www.wasenderapi.com"
@@ -75,6 +76,24 @@ def pick_connected_instance(db, pat: str, base_url: str = WASENDER_DEFAULT_BASE_
             return inst["name"]
 
     return None
+
+
+def get_all_connected_instances(db, pat: str, base_url: str = WASENDER_DEFAULT_BASE_URL) -> list:
+    """Return all connected Wasender instance names (MongoDB names)."""
+    try:
+        from wasenderapi import create_sync_wasender
+        sdk = create_sync_wasender(api_key=pat, personal_access_token=pat)
+        result = sdk.get_all_whatsapp_sessions()
+        sessions = (result.response.data or []) if result.response else []
+        connected_ids = {s.id for s in sessions if s.status and s.status.value == "connected"}
+        names = []
+        for wid in connected_ids:
+            inst = db.db.instances.find_one({"wasender_id": wid, "provider": "wasender"}, {"name": 1})
+            if inst:
+                names.append(inst["name"])
+        return names
+    except Exception:
+        return []
 
 
 # ── Client ────────────────────────────────────────────────────────────────────
@@ -344,13 +363,6 @@ def wasender_status_label(status: str) -> str:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _clean_digits(number: str) -> str:
-    """Normalize to international digits without + or spaces."""
-    digits = "".join(filter(str.isdigit, number))
-    if len(digits) == 10:
-        digits = "52" + digits  # local 10-digit → Mexican
-    return digits
 
 
 def _to_phone(number: str) -> str:

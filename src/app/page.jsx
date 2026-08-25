@@ -1,8 +1,8 @@
 'use client'
-import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, startTransition } from 'react'
 import { useUser } from '../context/UserContext'
 import LoginScreen from '../components/LoginScreen'
-import CircularProgress from '@mui/material/CircularProgress'
+import LoadingScreen from '../components/LoadingScreen'
 
 const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect
 import Box from '@mui/material/Box'
@@ -17,18 +17,18 @@ import ScheduleSendIcon from '@mui/icons-material/ScheduleSend'
 import Sidebar from '../components/Sidebar'
 import dynamic from 'next/dynamic'
 const SingleUrlProcessor = dynamic(() => import('../components/singleUrlProcessor'), { ssr: false })
-import SearchProspects from '../components/searchProspects'
-import BatchProcessor from '../components/batchProcessor'
-import CsvImporter from '../components/csvImporter'
-import DatabaseViewer from '../components/databaseViewer'
-import Conversations from '../components/conversations'
-import Analytics from '../components/analytics'
-import ScheduledSends from '../components/scheduledSends'
-import SendCampaign from '../components/sendCampaign'
+const SearchProspects    = dynamic(() => import('../components/searchProspects'),    { ssr: false })
+const BatchProcessor     = dynamic(() => import('../components/batchProcessor'),     { ssr: false })
+const CsvImporter        = dynamic(() => import('../components/csvImporter'),        { ssr: false })
+const DatabaseViewer     = dynamic(() => import('../components/databaseViewer'),     { ssr: false })
+const Conversations      = dynamic(() => import('../components/conversations'),      { ssr: false })
+const Analytics          = dynamic(() => import('../components/analytics'),          { ssr: false })
+const ScheduledSends     = dynamic(() => import('../components/scheduledSends'),     { ssr: false })
+const SendCampaign       = dynamic(() => import('../components/sendCampaign'),       { ssr: false })
+const AdminPanel         = dynamic(() => import('../components/AdminPanel'),         { ssr: false })
+const InstancesPanel     = dynamic(() => import('../components/InstancesPanel'),     { ssr: false })
 import CampaignIcon from '@mui/icons-material/Campaign'
-import AdminPanel from '../components/AdminPanel'
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
-import InstancesPanel from '../components/InstancesPanel'
 import RouterIcon from '@mui/icons-material/Router'
 import Settings, { loadSettings, applySettings } from '../components/Settings'
 import { useLang } from '../context/LangContext'
@@ -36,6 +36,7 @@ import AppTour from '../components/AppTour'
 import TopControls from '../components/TopControls'
 import AppearancePanel from '../components/AppearancePanel'
 import NotificationsPanel from '../components/NotificationsPanel'
+import HelpPanel from '../components/HelpPanel'
 import BlacklistPanel from '../components/BlacklistPanel'
 import BlockIcon from '@mui/icons-material/Block'
 import { SendQueueProvider } from '../context/SendQueueContext'
@@ -96,10 +97,11 @@ function DashboardInner() {
   const [open,         setOpen]         = useState(true)
   const [mounted,      setMounted]      = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  // Appearance and notifications share the right-side dock — only one open at a time.
-  const [rightPanel, setRightPanel] = useState(null) // 'appearance' | 'notifications' | null
+  // Appearance, notifications, and help share the right-side dock — only one open at a time.
+  const [rightPanel, setRightPanel] = useState(null) // 'appearance' | 'notifications' | 'help' | null
   const appearanceOpen = rightPanel === 'appearance'
   const notifOpen = rightPanel === 'notifications'
+  const helpOpen = rightPanel === 'help'
 
   const { t } = useLang()
   const NAV_ITEMS = useMemo(
@@ -137,10 +139,11 @@ function DashboardInner() {
 
   const { setPendingConvId, setPendingConvNumber } = useNavigation()
 
-  const handleNavClick      = useCallback((i) => { setActive(i); setSettingsOpen(false) }, [])
+  const handleNavClick      = useCallback((i) => { startTransition(() => { setActive(i); setSettingsOpen(false) }) }, [])
   const handleSettingsClick = useCallback(() => setSettingsOpen(s => !s), [])
   const toggleAppearance    = useCallback(() => setRightPanel(p => p === 'appearance' ? null : 'appearance'), [])
   const toggleNotifications = useCallback(() => setRightPanel(p => p === 'notifications' ? null : 'notifications'), [])
+  const toggleHelp          = useCallback(() => setRightPanel(p => p === 'help' ? null : 'help'), [])
   const closeRightPanel     = useCallback(() => setRightPanel(null), [])
 
   const handleNavigateToConv = useCallback((companyId, number) => {
@@ -148,30 +151,25 @@ function DashboardInner() {
     if (convIdx === -1) return
     setPendingConvId(companyId)
     setPendingConvNumber(number || null)
-    setActive(convIdx)
-    setSettingsOpen(false)
     setRightPanel(null)
+    startTransition(() => { setActive(convIdx); setSettingsOpen(false) })
   }, [visibleNavItems, setPendingConvId, setPendingConvNumber])
 
   const handleNavigateToSchedule = useCallback(() => {
     const schedIdx = visibleNavItems.findIndex(i => i.key === 'schedule')
     if (schedIdx === -1) return
-    setActive(schedIdx)
-    setSettingsOpen(false)
     setRightPanel(null)
+    startTransition(() => { setActive(schedIdx); setSettingsOpen(false) })
   }, [visibleNavItems])
 
   // ── Returns condicionales al final, tras todos los hooks ──
-  if (authLoading) return (
-    <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'var(--bg,#080c14)' }}>
-      <CircularProgress sx={{ color: 'var(--accent,#3b82f6)' }} />
-    </Box>
-  )
+  if (authLoading) return <LoadingScreen />
+
 
   if (!user) return <LoginScreen hasUsers={hasUsers} />
 
   return (
-    <Box sx={{ display: 'flex', height: '100vh', bgcolor: 'var(--bg, #080c14)', p: 1.5, gap: 1.5, boxSizing: 'border-box', position: 'relative' }}>
+    <Box sx={{ display: 'flex', height: '100vh', bgcolor: 'var(--bg, #080c14)', backgroundImage: 'radial-gradient(circle, rgba(148,163,184,0.055) 1px, transparent 1px)', backgroundSize: '24px 24px', p: 1.5, gap: 1.5, boxSizing: 'border-box', position: 'relative' }}>
 
       {/* ── Inactivity warning banner ── */}
       {showWarning && (
@@ -228,18 +226,28 @@ function DashboardInner() {
           boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
           border: '1px solid var(--border, rgba(255,255,255,0.06))',
           p: 4,
+          // TopControls es un pill absoluto que flota sobre esta tarjeta (top: 3.2,
+          // ver más abajo) — su borde/padding lo hace más alto que el simple ícono
+          // suelto de antes, así que el padding superior normal (p:4) ya no alcanza
+          // para que el contenido de cada panel (ej. el botón "Nuevo" de Admin) no
+          // quede debajo de él. pt más grande reserva ese espacio para todos los paneles.
+          pt: 9,
           display: 'flex', flexDirection: 'column',
           flex: 1,
           minHeight: 0,
           position: 'relative',
           overflow: 'hidden',
           color: 'var(--text, #f1f5f9)',
-          background: 'linear-gradient(160deg, rgba(var(--accent-rgb, 59,130,246), 0.08) 0%, rgba(var(--accent-rgb, 59,130,246), 0.04) 35%, var(--card-bg, #161d2e) 65%)',
+          background: `
+            radial-gradient(circle, rgba(148,163,184,0.045) 1px, transparent 1px),
+            linear-gradient(160deg, rgba(var(--accent-rgb, 59,130,246), 0.08) 0%, rgba(var(--accent-rgb, 59,130,246), 0.04) 35%, var(--card-bg, #161d2e) 65%)
+          `,
+          backgroundSize: '24px 24px, 100% 100%',
         }}>
           <Box sx={{
             position: 'absolute', top: -60, left: -60,
             width: 300, height: 300, borderRadius: '50%',
-            background: 'radial-gradient(circle, rgba(var(--accent-rgb, 99,102,241), 0.07) 0%, transparent 70%)',
+            background: 'radial-gradient(circle, rgba(var(--accent-rgb, 99,102,241), 0.04) 0%, transparent 70%)',
             pointerEvents: 'none', zIndex: 0,
           }} />
           {/* TopControls: se desliza a la izquierda cuando un panel derecho está abierto */}
@@ -249,13 +257,14 @@ function DashboardInner() {
             // offset per panel so there's a consistent ~16px gap to its left edge
             // instead of reusing one value that left the icons pressed against
             // (or overlapping into) the wider Notifications panel.
-            right: notifOpen ? 376 : appearanceOpen ? 356 : 16,
+            right: notifOpen ? 376 : appearanceOpen ? 356 : helpOpen ? 436 : 16,
             transition: 'right 0.25s cubic-bezier(0.4,0,0.2,1)',
             whiteSpace: 'nowrap',
           }}>
             <TopControls
               appearanceOpen={appearanceOpen} onToggleAppearance={toggleAppearance}
               notifOpen={notifOpen} onToggleNotifications={toggleNotifications}
+              helpOpen={helpOpen} onToggleHelp={toggleHelp}
             />
           </Box>
           <Box sx={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -275,6 +284,7 @@ function DashboardInner() {
           )}
           <AppearancePanel open={appearanceOpen} onClose={closeRightPanel} />
           <NotificationsPanel open={notifOpen} onClose={closeRightPanel} onNavigateToConv={handleNavigateToConv} onNavigateToSchedule={handleNavigateToSchedule} />
+          <HelpPanel open={helpOpen} onClose={closeRightPanel} />
         </Box>
       </Box>
       <SendBubble />

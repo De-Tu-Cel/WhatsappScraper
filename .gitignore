@@ -101,5 +101,10 @@ backEnd/app/__pycache__/
 backEnd/__pycache__/
 
 # ── PDFs generados por el sistema ────────────────────────────────
-reporte-*.pdfbackEnd/bore.exe
+reporte-*.pdf
+backEnd/bore.exe
 backEnd/bore_*.log
+
+# ── wwebjs-service — datos de sesión y caché ────────────────────
+wwebjs-service/.wwebjs_cache/
+wwebjs-service/sessions/

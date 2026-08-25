@@ -1,5 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
+import { INSTANCES_CHANGED_EVENT } from '../hooks/useDailyCapStats'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import IconButton from '@mui/material/IconButton'
@@ -16,6 +18,7 @@ import Skeleton from '@mui/material/Skeleton'
 import Chip from '@mui/material/Chip'
 import Snackbar from '@mui/material/Snackbar'
 import Divider from '@mui/material/Divider'
+import Switch from '@mui/material/Switch'
 import CloseIcon from '@mui/icons-material/Close'
 import AddIcon from '@mui/icons-material/Add'
 import SearchIcon from '@mui/icons-material/Search'
@@ -47,6 +50,13 @@ const STATUS_COLOR = {
   STARTING:      '#f59e0b',
   STOPPED:       '#ef4444',
   FAILED:        '#ef4444',
+  // wwebjs statuses
+  initializing:  '#f59e0b',
+  authenticated: '#f59e0b',
+  need_scan:     '#f59e0b',
+  auth_failure:  '#ef4444',
+  error:         '#ef4444',
+  not_found:     '#64748b',
   unknown:       '#64748b',
 }
 
@@ -80,14 +90,14 @@ const STAT_CHIP_SX = {
   fontSize: '0.68rem', fontWeight: 600, height: 22,
 }
 
-const STATUS_LABEL_ES = { open: 'Conectada', connected: 'Conectada', connecting: 'Conectando', close: 'Desconectada', disconnected: 'Desconectada', WORKING: 'Conectada', SCAN_QR_CODE: 'Escanear QR', STARTING: 'Iniciando', STOPPED: 'Detenida', FAILED: 'Error', unknown: 'Desconocida' }
-const STATUS_LABEL_EN = { open: 'Connected', connected: 'Connected', connecting: 'Connecting', close: 'Disconnected', disconnected: 'Disconnected', WORKING: 'Connected', SCAN_QR_CODE: 'Scan QR', STARTING: 'Starting', STOPPED: 'Stopped', FAILED: 'Failed', unknown: 'Unknown' }
+const STATUS_LABEL_ES = { open: 'Conectada', connected: 'Conectada', connecting: 'Conectando', close: 'Desconectada', disconnected: 'Desconectada', WORKING: 'Conectada', SCAN_QR_CODE: 'Escanear QR', STARTING: 'Iniciando', STOPPED: 'Detenida', FAILED: 'Error', unknown: 'Desconocida', initializing: 'Iniciando', authenticated: 'Autenticando', need_scan: 'Escanear QR', auth_failure: 'Error auth', error: 'Error', not_found: 'No iniciada' }
+const STATUS_LABEL_EN = { open: 'Connected', connected: 'Connected', connecting: 'Connecting', close: 'Disconnected', disconnected: 'Disconnected', WORKING: 'Connected', SCAN_QR_CODE: 'Scan QR', STARTING: 'Starting', STOPPED: 'Stopped', FAILED: 'Failed', unknown: 'Unknown', initializing: 'Starting', authenticated: 'Authenticating', need_scan: 'Scan QR', auth_failure: 'Auth error', error: 'Error', not_found: 'Not started' }
 
 const DISCONNECT_LABEL_ES = { banned: 'Baneado por WhatsApp', logged_out: 'Cerró sesión', conflict: 'Conflicto de dispositivo', multidevice: 'Conflicto multi-dispositivo', server_error: 'Error interno', restart: 'Requiere reinicio', replaced: 'Sesión reemplazada', timeout: 'Timeout de conexión', closed: 'Conexión cerrada', disconnected: 'Desconectada', failed: 'Error de conexión' }
 const DISCONNECT_LABEL_EN = { banned: 'Banned by WhatsApp', logged_out: 'Logged out', conflict: 'Device conflict', multidevice: 'Multi-device conflict', server_error: 'Internal error', restart: 'Restart required', replaced: 'Session replaced', timeout: 'Connection timeout', closed: 'Connection closed', disconnected: 'Disconnected', failed: 'Connection error' }
 
 // ── InstanceRow ──────────────────────────────────────────────────────────────
-function InstanceRow({ inst, onQr, onEditNumber, onRemove }) {
+function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup }) {
   const { t, lang } = useLang()
   const [hover, setHover] = useState(false)
   const status = inst.live_status || 'unknown'
@@ -114,8 +124,25 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove }) {
       }}
     >
       {/* Status dot */}
-      <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: displayColor, flexShrink: 0,
-        boxShadow: isConnected ? `0 0 6px ${displayColor}aa` : 'none' }} />
+      <Box sx={{ position: 'relative', width: 8, height: 8, flexShrink: 0 }}>
+        <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: displayColor,
+          boxShadow: isConnected ? `0 0 6px ${displayColor}aa` : 'none',
+          position: 'relative', zIndex: 1 }} />
+        {isConnected && (
+          <Box sx={{
+            position: 'absolute', top: '50%', left: '50%',
+            transform: 'translate(-50%, -50%)',
+            width: 8, height: 8, borderRadius: '50%',
+            bgcolor: displayColor, opacity: 0.4,
+            '@keyframes ping': {
+              '0%':   { transform: 'translate(-50%,-50%) scale(1)', opacity: 0.4 },
+              '75%':  { transform: 'translate(-50%,-50%) scale(2.2)', opacity: 0 },
+              '100%': { transform: 'translate(-50%,-50%) scale(2.2)', opacity: 0 },
+            },
+            animation: 'ping 2s cubic-bezier(0,0,0.2,1) infinite',
+          }} />
+        )}
+      </Box>
       {/* Name + number */}
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
@@ -127,6 +154,10 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove }) {
               px: 0.5, borderRadius: 0.8, lineHeight: 1.6, flexShrink: 0, letterSpacing: '0.03em' }}>
               WAHA
             </Typography>
+          )}
+          {inst.provider === 'wwebjs' && (
+            <Typography sx={{ fontSize: '0.55rem', fontWeight: 700, color: '#34d399',
+              bgcolor: 'rgba(52,211,153,0.12)', px: 0.6, py: 0.1, borderRadius: 0.5 }}>WWEBJS</Typography>
           )}
           {inst.provider === 'wasender' && (
             <Typography sx={{ fontSize: '0.55rem', fontWeight: 700, color: '#a78bfa',
@@ -142,7 +173,19 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove }) {
       </Box>
       {/* Right side: status label (resting) or action icons (hover) */}
       {hover ? (
-        <Box sx={{ display: 'flex', gap: 0.2, flexShrink: 0 }}>
+        <Box sx={{ display: 'flex', gap: 0.2, flexShrink: 0, alignItems: 'center' }}>
+          <Tooltip title={inst.warmup_mode ? (lang === 'en' ? 'Warmup ON — 20 msg/day' : 'Calentamiento ON — 20 msg/día') : (lang === 'en' ? 'Warmup OFF — 150 msg/day' : 'Calentamiento OFF — 150 msg/día')} placement="top">
+            <Switch
+              size="small"
+              checked={!!inst.warmup_mode}
+              onChange={() => onWarmup(inst)}
+              onClick={e => e.stopPropagation()}
+              sx={{
+                '& .MuiSwitch-switchBase.Mui-checked': { color: '#fbbf24' },
+                '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': { bgcolor: '#fbbf24' },
+              }}
+            />
+          </Tooltip>
           <Tooltip title={t.inst.connectQr} placement="top">
             <IconButton size="small" onClick={() => onQr(inst)}
               sx={{ color: 'var(--accent,#60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(59,130,246,0.15)' } }}>
@@ -163,16 +206,32 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove }) {
           </Tooltip>
         </Box>
       ) : (
-        <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color: displayColor, flexShrink: 0, letterSpacing: '0.01em', maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {displayLabel}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
+          {inst.ack_degraded && (
+            <Tooltip title={lang === 'en' ? 'Delivery degraded — messages not reaching recipients' : 'Entrega degradada — mensajes no llegan a destinatarios'} placement="top">
+              <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: '#f87171',
+                bgcolor: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.3)',
+                px: 0.5, borderRadius: 0.8, lineHeight: 1.6, cursor: 'default' }}>⚠ ACK</Typography>
+            </Tooltip>
+          )}
+          {inst.warmup_mode && (
+            <Tooltip title={lang === 'en' ? 'Warmup mode — 20 msg/day' : 'Modo calentamiento — 20 msg/día'} placement="top">
+              <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: '#fbbf24',
+                bgcolor: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)',
+                px: 0.5, borderRadius: 0.8, lineHeight: 1.6, cursor: 'default' }}>20/d</Typography>
+            </Tooltip>
+          )}
+          <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color: displayColor, letterSpacing: '0.01em', maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {displayLabel}
+          </Typography>
+        </Box>
       )}
     </Box>
   )
 }
 
 // ── UserCard ─────────────────────────────────────────────────────────────────
-function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove }) {
+function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, onWarmup, cardIndex = 0 }) {
   const { t, lang } = useLang()
   const connectedCount = instances.filter(i => ['open', 'connected'].includes(i.live_status)).length
   const isAdmin = user.role === 'admin'
@@ -185,13 +244,20 @@ function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove }) 
   const hasRotation = connectedCount >= 2
   const roleLabel = isAdmin ? 'Admin' : (lang === 'en' ? 'Agent' : 'Agente')
   const connectedWord = connectedCount === 1 ? t.inst.connectedSingular : t.inst.connectedPlural
+  const glowColor = isAdmin ? 'rgba(167,139,250,0.22)' : 'rgba(59,130,246,0.22)'
   return (
     <Box sx={{
       bgcolor: 'var(--card-bg)', borderRadius: 3, p: 2,
       display: 'flex', flexDirection: 'column', gap: 0,
       border: '1px solid var(--border)',
-      transition: 'border-color 0.2s',
-      '&:hover': { borderColor: 'var(--text-muted)' },
+      transition: 'border-color 0.25s, box-shadow 0.25s',
+      '&:hover': { borderColor: roleColor, boxShadow: `0 0 0 1px ${roleColor}28, 0 8px 28px ${glowColor}` },
+      '@keyframes fadeUp': {
+        '0%':   { opacity: 0, transform: 'translateY(14px)' },
+        '100%': { opacity: 1, transform: 'translateY(0)' },
+      },
+      animation: 'fadeUp 0.38s ease both',
+      animationDelay: `${cardIndex * 0.06}s`,
     }}>
       {/* User header */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, mb: 1.5 }}>
@@ -218,67 +284,84 @@ function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove }) 
         />
       </Box>
 
-      <Divider sx={{ borderColor: 'var(--border)', mb: 1.2 }} />
+      <Divider sx={{ borderColor: 'var(--border)', mb: instances.length === 0 ? 0 : 1.2 }} />
 
-      {/* Instance rows (only when populated) */}
-      {instances.length > 0 && (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.2, mb: 1.2 }}>
-          {instances.map(inst => (
-            <InstanceRow key={inst.name} inst={inst} onQr={onQr} onEditNumber={onEditNumber} onRemove={onRemove} />
-          ))}
-        </Box>
-      )}
-
-      {/* Capacity bar — 5 slot dots + add button */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1,
-        pt: instances.length > 0 ? 1 : 0,
-        borderTop: instances.length > 0 ? '1px solid var(--border)' : 'none',
-        mt: instances.length === 0 ? 0.5 : 0,
-      }}>
-        {/* 5 dots: filled = instance status color, empty = dashed circle */}
-        <Box sx={{ display: 'flex', gap: 0.7, alignItems: 'center', flex: 1 }}>
-          {Array.from({ length: 5 }).map((_, i) => {
-            const inst = instances[i]
-            if (inst) {
-              const status = inst.live_status || 'unknown'
-              const color = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
-              const isConn = ['open', 'connected'].includes(status)
-              return (
-                <Tooltip key={i} title={inst.name} placement="top">
-                  <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: color, flexShrink: 0,
-                    boxShadow: isConn ? `0 0 5px ${color}99` : 'none',
-                    cursor: 'default',
-                  }} />
-                </Tooltip>
-              )
-            }
-            return (
-              <Tooltip key={i} title={t.inst.addSlot} placement="top">
-                <Box onClick={onAddSlot} sx={{ width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
-                  border: '1.5px dashed var(--text-muted)', cursor: 'pointer',
-                  transition: 'border-color 0.15s',
-                  '&:hover': { borderColor: roleColor, bgcolor: avatarBg },
-                }} />
-              </Tooltip>
-            )
-          })}
-        </Box>
-
-        {/* Right side: rotation chip OR add button */}
-        {hasRotation ? (
-          <Chip label={t.inst.rotationActive} size="small"
-            sx={{ fontSize: '0.58rem', height: 17, bgcolor: 'rgba(34,197,94,0.1)',
-              color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', fontWeight: 600 }} />
-        ) : emptySlots > 0 ? (
-          <Box onClick={onAddSlot}
-            sx={{ display: 'flex', alignItems: 'center', gap: 0.4, cursor: 'pointer',
-              color: 'var(--text-muted)', fontSize: '0.7rem', flexShrink: 0,
-              transition: 'color 0.15s', '&:hover': { color: roleColor } }}>
-            <AddIcon sx={{ fontSize: 12 }} />
-            {t.inst.addSlot}
+      {instances.length === 0 ? (
+        /* ── Empty state ── */
+        <Box onClick={onAddSlot} sx={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          py: 2, gap: 1, cursor: 'pointer', borderRadius: 2, mt: 1,
+          border: `1px dashed ${roleColor}30`,
+          bgcolor: avatarBg.replace('0.18)', '0.05)'),
+          transition: 'all 0.18s',
+          '&:hover': { bgcolor: avatarBg.replace('0.18)', '0.12)'), borderColor: `${roleColor}60` },
+        }}>
+          <Box sx={{ display: 'flex', gap: 0.7 }}>
+            {Array(5).fill(null).map((_, i) => (
+              <Box key={i} sx={{ width: 9, height: 9, borderRadius: '50%',
+                border: `1.5px dashed ${roleColor}45`, transition: 'all 0.18s' }} />
+            ))}
           </Box>
-        ) : null}
-      </Box>
+          <Typography sx={{ fontSize: '0.68rem', color: roleColor, fontWeight: 600, opacity: 0.75 }}>
+            {lang === 'en' ? 'No instances assigned' : 'Sin instancias asignadas'}
+          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
+            px: 1.4, py: 0.45, borderRadius: 1.5, fontSize: '0.63rem', fontWeight: 700,
+            bgcolor: `${roleColor}18`, color: roleColor, border: `1px solid ${roleColor}28` }}>
+            <AddIcon sx={{ fontSize: 12 }} />
+            {lang === 'en' ? 'Assign from sidebar' : 'Asignar del sidebar'}
+          </Box>
+        </Box>
+      ) : (
+        <>
+          {/* Instance rows */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.2, mb: 1.2 }}>
+            {instances.map(inst => (
+              <InstanceRow key={inst.name} inst={inst} onQr={onQr} onEditNumber={onEditNumber} onRemove={onRemove} onWarmup={onWarmup} />
+            ))}
+          </Box>
+          {/* Capacity bar — 5 slot dots + add button */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, pt: 1, borderTop: '1px solid var(--border)' }}>
+            <Box sx={{ display: 'flex', gap: 0.7, alignItems: 'center', flex: 1 }}>
+              {Array.from({ length: 5 }).map((_, i) => {
+                const inst = instances[i]
+                if (inst) {
+                  const status = inst.live_status || 'unknown'
+                  const color = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
+                  const isConn = ['open', 'connected'].includes(status)
+                  return (
+                    <Tooltip key={i} title={inst.name} placement="top">
+                      <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: color, flexShrink: 0,
+                        boxShadow: isConn ? `0 0 5px ${color}99` : 'none', cursor: 'default' }} />
+                    </Tooltip>
+                  )
+                }
+                return (
+                  <Tooltip key={i} title={t.inst.addSlot} placement="top">
+                    <Box onClick={onAddSlot} sx={{ width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
+                      border: '1.5px dashed var(--text-muted)', cursor: 'pointer',
+                      transition: 'border-color 0.15s',
+                      '&:hover': { borderColor: roleColor, bgcolor: avatarBg } }} />
+                  </Tooltip>
+                )
+              })}
+            </Box>
+            {hasRotation ? (
+              <Chip label={t.inst.rotationActive} size="small"
+                sx={{ fontSize: '0.58rem', height: 17, bgcolor: 'rgba(34,197,94,0.1)',
+                  color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', fontWeight: 600 }} />
+            ) : emptySlots > 0 ? (
+              <Box onClick={onAddSlot}
+                sx={{ display: 'flex', alignItems: 'center', gap: 0.4, cursor: 'pointer',
+                  color: 'var(--text-muted)', fontSize: '0.7rem', flexShrink: 0,
+                  transition: 'color 0.15s', '&:hover': { color: roleColor } }}>
+                <AddIcon sx={{ fontSize: 12 }} />
+                {t.inst.addSlot}
+              </Box>
+            ) : null}
+          </Box>
+        </>
+      )}
 
       {/* Stats line (only when instances exist) */}
       {instances.length > 0 && (
@@ -301,104 +384,206 @@ function InlineUserPicker({ instanceName, users, instances, onAssign, t, lang })
     return instances.filter(i => i.assigned_to === uid).length >= 5
   })
   return (
-    <Box sx={{ px: 1.5, pb: 1.5, pt: 1.5,
-      borderTop: '1px solid rgba(59,130,246,0.15)',
-      bgcolor: 'rgba(59,130,246,0.04)' }}>
-
-      <Typography sx={{ fontSize: '0.63rem', color: 'var(--text-muted)',
-        mb: 1.2, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-        {lang === 'en' ? 'Assign to' : 'Asignar a'}
-      </Typography>
-
-      {allFull && (
-        <Typography sx={{ fontSize: '0.73rem', color: '#fbbf24', mb: 1,
-          bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)',
-          borderRadius: 1.5, px: 1.2, py: 0.6, lineHeight: 1.4 }}>
-          {lang === 'en'
-            ? 'All users are at 5/5 capacity. Unassign an instance first.'
-            : 'Todos los usuarios tienen 5/5 instancias. Desasigna una primero.'}
+    <Box>
+      {/* Header */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1,
+        borderBottom: '1px solid var(--border)', bgcolor: 'rgba(59,130,246,0.04)' }}>
+        <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: '#60a5fa',
+          textTransform: 'uppercase', letterSpacing: '0.08em', flex: 1 }}>
+          {lang === 'en' ? 'Assign to' : 'Asignar a'}
         </Typography>
-      )}
-
-      {/* Search — only shown when > 4 users */}
-      {users.length > 4 && (
-        <Box component="input"
-          placeholder={t.inst.searchUser}
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          sx={{ display: 'block', width: '100%', boxSizing: 'border-box', mb: 1.2,
-            bgcolor: 'var(--item-hover)', border: '1px solid var(--border)',
-            borderRadius: 1.5, py: 0.5, px: 1.2, color: 'var(--text)', fontSize: '0.75rem',
-            outline: 'none', fontFamily: 'inherit',
-            '&:focus': { borderColor: 'rgba(59,130,246,0.5)' },
-          }}
-        />
-      )}
-
-      {/* User avatars — scrollable if tall */}
-      <Box sx={{ display: 'flex', gap: 1.2, flexWrap: 'wrap',
-        maxHeight: 154, overflowY: 'auto', pt: '4px',
-        '&::-webkit-scrollbar': { width: 3 },
-        '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(255,255,255,0.1)', borderRadius: 4 },
-      }}>
-        {filtered.map(u => {
-          const uid    = u._id || u.id || u.username
-          const uAdmin = u.role === 'admin'
-          const uColor  = uAdmin ? '#a78bfa' : '#60a5fa'
-          const uBg     = uAdmin ? 'rgba(167,139,250,0.18)' : 'rgba(59,130,246,0.18)'
-          const uBorder = uAdmin ? 'rgba(167,139,250,0.55)' : 'rgba(59,130,246,0.5)'
-          const uInitials = (u.display_name || u.username || '?').slice(0, 2).toUpperCase()
-          const uSlots = instances.filter(i => i.assigned_to === uid).length
-          const isFull = uSlots >= 5
-          return (
-            <Tooltip key={uid}
-              title={isFull
-                ? (lang === 'en' ? 'Full — 5/5 slots used' : 'Lleno — 5/5 slots usados')
-                : `${u.display_name || u.username} · ${uSlots}/5`}
-              placement="top">
-              <Box onClick={() => !isFull && onAssign(instanceName, u)}
-                sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5,
-                  cursor: isFull ? 'not-allowed' : 'pointer',
-                  opacity: isFull ? 0.4 : 1, transition: 'transform 0.15s',
-                  '&:hover': isFull ? {} : { transform: 'translateY(-2px)' } }}>
-                <Box sx={{ position: 'relative' }}>
-                  <Box sx={{ width: 36, height: 36, borderRadius: 1.5,
-                    bgcolor: uBg, border: `1.5px solid ${uBorder}`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    transition: 'border-color 0.15s',
-                    '&:hover': isFull ? {} : { borderColor: uColor, boxShadow: `0 0 0 2px ${uBg}` } }}>
-                    <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, color: uColor }}>
-                      {uInitials}
-                    </Typography>
-                  </Box>
-                  {/* "Full" badge */}
-                  {isFull && (
-                    <Box sx={{ position: 'absolute', top: -5, right: -5, borderRadius: 1,
-                      bgcolor: '#ef4444', px: 0.4, py: 0.1,
-                      border: '1.5px solid var(--card-bg,#0d1117)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <Typography sx={{ fontSize: '0.42rem', fontWeight: 900, color: 'white', lineHeight: 1 }}>
-                        5/5
-                      </Typography>
-                    </Box>
-                  )}
-                </Box>
-                <Typography sx={{ fontSize: '0.6rem', color: 'var(--text-muted)',
-                  maxWidth: 52, textAlign: 'center', lineHeight: 1.2,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {u.display_name || u.username}
-                </Typography>
-              </Box>
-            </Tooltip>
-          )
-        })}
-        {filtered.length === 0 && (
-          <Typography sx={{ fontSize: '0.75rem', color: 'var(--text-muted)', py: 0.5 }}>
-            {t.inst.noResults}
+        {allFull && (
+          <Typography sx={{ fontSize: '0.58rem', color: '#fbbf24', fontWeight: 600 }}>
+            {lang === 'en' ? 'All full' : 'Todos llenos'}
           </Typography>
         )}
       </Box>
+
+      {/* Search — only when > 4 users */}
+      {users.length > 4 && (
+        <Box sx={{ px: 1.2, pt: 0.8, pb: 0.2 }}>
+          <Box component="input"
+            placeholder={t.inst.searchUser}
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            sx={{ display: 'block', width: '100%', boxSizing: 'border-box',
+              bgcolor: 'var(--item-hover)', border: '1px solid var(--border)',
+              borderRadius: 1.5, py: 0.5, px: 1.2, color: 'var(--text)', fontSize: '0.75rem',
+              outline: 'none', fontFamily: 'inherit',
+              '&:focus': { borderColor: 'rgba(59,130,246,0.5)' } }}
+          />
+        </Box>
+      )}
+
+      {/* User list rows */}
+      <Box sx={{ maxHeight: 220, overflowY: 'auto',
+        '&::-webkit-scrollbar': { width: 3 },
+        '&::-webkit-scrollbar-button': { display: 'none' },
+        '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(255,255,255,0.12)', borderRadius: 4 },
+      }}>
+        {filtered.map((u, idx) => {
+          const uid      = u._id || u.id || u.username
+          const uAdmin   = u.role === 'admin'
+          const uColor   = uAdmin ? '#a78bfa' : '#60a5fa'
+          const uBg      = uAdmin ? 'rgba(167,139,250,0.18)' : 'rgba(59,130,246,0.18)'
+          const uBorder  = uAdmin ? 'rgba(167,139,250,0.45)' : 'rgba(59,130,246,0.4)'
+          const uInitials = (u.display_name || u.username || '?').slice(0, 2).toUpperCase()
+          const uSlots   = instances.filter(i => i.assigned_to === uid).length
+          const isFull   = uSlots >= 5
+          const roleLabel = uAdmin ? 'Admin' : (lang === 'en' ? 'Agent' : 'Agente')
+          return (
+            <Box key={uid}
+              onClick={() => !isFull && onAssign(instanceName, u)}
+              sx={{
+                display: 'flex', alignItems: 'center', gap: 1.4,
+                px: 1.5, py: 1,
+                borderBottom: idx < filtered.length - 1 ? '1px solid var(--border)' : 'none',
+                cursor: isFull ? 'not-allowed' : 'pointer',
+                opacity: isFull ? 0.45 : 1,
+                transition: 'background 0.12s',
+                '&:hover': isFull ? {} : { bgcolor: 'rgba(59,130,246,0.07)' },
+              }}>
+              {/* Avatar */}
+              <Box sx={{ width: 32, height: 32, borderRadius: 1.5, flexShrink: 0,
+                bgcolor: uBg, border: `1.5px solid ${uBorder}`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 800, color: uColor }}>
+                  {uInitials}
+                </Typography>
+              </Box>
+              {/* Name + role */}
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography sx={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text)',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.3 }}>
+                  {u.display_name || u.username}
+                </Typography>
+                <Typography sx={{ fontSize: '0.6rem', color: uColor, fontWeight: 600, lineHeight: 1.2 }}>
+                  {roleLabel}
+                </Typography>
+              </Box>
+              {/* Slot counter / Full badge */}
+              <Box sx={{ flexShrink: 0, px: 0.9, py: 0.35, borderRadius: 1.2,
+                bgcolor: isFull ? 'rgba(239,68,68,0.12)' : `${uBg}`,
+                border: `1px solid ${isFull ? 'rgba(239,68,68,0.3)' : uBorder}` }}>
+                <Typography sx={{ fontSize: '0.6rem', fontWeight: 700,
+                  color: isFull ? '#f87171' : uColor, lineHeight: 1 }}>
+                  {uSlots}/5
+                </Typography>
+              </Box>
+            </Box>
+          )
+        })}
+        {filtered.length === 0 && (
+          <Box sx={{ px: 1.5, py: 1.5 }}>
+            <Typography sx={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              {t.inst.noResults}
+            </Typography>
+          </Box>
+        )}
+      </Box>
     </Box>
+  )
+}
+
+// ── Bulk assign picker dialog ─────────────────────────────────────────────────
+function BulkPickDialog({ open, onClose, selectedNames, users, instances, onAssign, lang }) {
+  const [search, setSearch] = useState('')
+  const count = selectedNames.size
+  const filtered = users.filter(u =>
+    (u.display_name || u.username || '').toLowerCase().includes(search.toLowerCase())
+  )
+  return (
+    <Dialog open={open} onClose={onClose} slotProps={{ paper: { sx: {
+      bgcolor: 'var(--card-bg)', border: '1px solid rgba(59,130,246,0.3)',
+      borderRadius: 3, minWidth: 320, maxWidth: 400,
+      backgroundImage: 'none',
+    } }}}>
+      <DialogTitle sx={{ pb: 0.5 }}>
+        <Typography sx={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text)' }}>
+          {lang === 'en' ? `Assign ${count} instance${count !== 1 ? 's' : ''}` : `Asignar ${count} instancia${count !== 1 ? 's' : ''}`}
+        </Typography>
+        <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)', mt: 0.3 }}>
+          {lang === 'en' ? 'Select the target user' : 'Elige el usuario destino'}
+        </Typography>
+      </DialogTitle>
+      <DialogContent sx={{ pt: 1, pb: 0, px: 2 }}>
+        {users.length > 4 && (
+          <Box component="input"
+            placeholder={lang === 'en' ? 'Search user…' : 'Buscar usuario…'}
+            value={search} onChange={e => setSearch(e.target.value)}
+            sx={{ display: 'block', width: '100%', boxSizing: 'border-box', mb: 1.5,
+              bgcolor: 'var(--item-hover)', border: '1px solid var(--border)',
+              borderRadius: 1.5, py: 0.6, px: 1.2, color: 'var(--text)', fontSize: '0.78rem',
+              outline: 'none', fontFamily: 'inherit',
+              '&:focus': { borderColor: 'rgba(59,130,246,0.5)' } }}
+          />
+        )}
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6, pb: 1.5 }}>
+          {filtered.map(u => {
+            const uid       = u._id || u.id || u.username
+            const uAdmin    = u.role === 'admin'
+            const uColor    = uAdmin ? '#a78bfa' : '#60a5fa'
+            const uBg       = uAdmin ? 'rgba(167,139,250,0.14)' : 'rgba(59,130,246,0.12)'
+            const uBorder   = uAdmin ? 'rgba(167,139,250,0.35)' : 'rgba(59,130,246,0.35)'
+            const uInitials = (u.display_name || u.username || '?').slice(0, 2).toUpperCase()
+            const curSlots  = instances.filter(i => i.assigned_to === uid).length
+            const canAssign = Math.max(0, 5 - curSlots)
+            const willAssign = Math.min(count, canAssign)
+            const isFull    = canAssign === 0
+            return (
+              <Box key={uid}
+                onClick={() => !isFull && onAssign(u)}
+                sx={{
+                  display: 'flex', alignItems: 'center', gap: 1.2, p: 1.2,
+                  borderRadius: 2, border: '1px solid var(--border)',
+                  bgcolor: 'rgba(255,255,255,0.025)',
+                  cursor: isFull ? 'not-allowed' : 'pointer',
+                  opacity: isFull ? 0.45 : 1,
+                  transition: 'background 0.12s, border-color 0.12s',
+                  '&:hover': isFull ? {} : { bgcolor: 'rgba(59,130,246,0.07)', borderColor: 'rgba(59,130,246,0.25)' },
+                }}>
+                <Box sx={{ width: 34, height: 34, borderRadius: 1.5, flexShrink: 0,
+                  bgcolor: uBg, border: `1.5px solid ${uBorder}`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Typography sx={{ fontSize: '0.65rem', fontWeight: 800, color: uColor }}>
+                    {uInitials}
+                  </Typography>
+                </Box>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography sx={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text)',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {u.display_name || u.username}
+                  </Typography>
+                  {willAssign < count && !isFull ? (
+                    <Typography sx={{ fontSize: '0.65rem', color: '#fbbf24', fontWeight: 500 }}>
+                      {lang === 'en' ? `${willAssign}/${count} fit` : `${willAssign}/${count} caben`}
+                    </Typography>
+                  ) : (
+                    <Typography sx={{ fontSize: '0.65rem', color: uColor }}>
+                      {uAdmin ? 'Admin' : (lang === 'en' ? 'Agent' : 'Agente')}
+                    </Typography>
+                  )}
+                </Box>
+                <Box sx={{ flexShrink: 0, px: 0.9, py: 0.35, borderRadius: 1.2,
+                  bgcolor: isFull ? 'rgba(239,68,68,0.12)' : uBg,
+                  border: `1px solid ${isFull ? 'rgba(239,68,68,0.3)' : uBorder}` }}>
+                  <Typography sx={{ fontSize: '0.62rem', fontWeight: 700,
+                    color: isFull ? '#f87171' : uColor, lineHeight: 1 }}>
+                    {curSlots}/5
+                  </Typography>
+                </Box>
+              </Box>
+            )
+          })}
+        </Box>
+      </DialogContent>
+      <DialogActions sx={{ px: 2, pb: 1.5, pt: 0 }}>
+        <Button onClick={onClose} size="small"
+          sx={{ color: 'var(--text-muted)', textTransform: 'none', fontSize: '0.8rem' }}>
+          {lang === 'en' ? 'Cancel' : 'Cancelar'}
+        </Button>
+      </DialogActions>
+    </Dialog>
   )
 }
 
@@ -504,8 +689,17 @@ export default function InstancesPanel() {
   // ── Pick instance dialog ──
   const [pickOpen,        setPickOpen]        = useState(false)
   const [pickTargetUser,  setPickTargetUser]  = useState(null)
+  const [pickSelected,    setPickSelected]    = useState(new Set())
   const [unassignedOpen,  setUnassignedOpen]  = useState(true)
   const [expandedAssign,  setExpandedAssign]  = useState(null)
+  const [sidebarAnchor,   setSidebarAnchor]   = useState(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [userSearch,       setUserSearch]       = useState('')
+  const sidebarRowRefs = useRef({})
+
+  // ── Multi-select assign ──
+  const [selectedInsts, setSelectedInsts] = useState(new Set())
+  const [bulkPickOpen,  setBulkPickOpen]  = useState(false)
 
   const fetchInstances = useCallback(async () => {
     setLoading(true)
@@ -529,8 +723,9 @@ export default function InstancesPanel() {
     setWahaSyncing(true)
     try {
       await Promise.allSettled([
-        fetch('/api/admin/instances/sync-waha',      { method: 'POST', headers: { 'x-user-token': token() } }),
-        fetch('/api/admin/instances/sync-wasender',  { method: 'POST', headers: { 'x-user-token': token() } }),
+        fetch('/api/admin/instances/sync-waha',    { method: 'POST', headers: { 'x-user-token': token() } }),
+        fetch('/api/admin/instances/sync-wasender',{ method: 'POST', headers: { 'x-user-token': token() } }),
+        fetch('/api/admin/instances/sync-wwebjs',  { method: 'POST', headers: { 'x-user-token': token() } }),
       ])
       await fetchInstances()
       setSnack({ open: true, msg: lang === 'en' ? 'Sessions synced' : 'Sesiones sincronizadas' })
@@ -548,9 +743,9 @@ export default function InstancesPanel() {
   async function handleWahaCreate() {
     const name = wahaName.trim()
     if (!name) { setWahaErr(lang === 'en' ? 'Name required' : 'El nombre es requerido'); return }
-    setWahaLoading(true); setWahaErr(''); setWahaQr(null); setWahaConnected(false)
+    setWahaLoading(true); setWahaErr(''); setWahaQr(null); setWahaConnected(false); setWahaScanned(false)
     try {
-      const r = await fetch('/api/waha/session/create', {
+      const r = await fetch('/api/wwebjs/session/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
         body: JSON.stringify({ name }),
@@ -558,43 +753,43 @@ export default function InstancesPanel() {
       const d = await r.json()
       if (!r.ok) { setWahaErr(d.detail || 'Error al crear sesión'); setWahaLoading(false); return }
 
-      // Keep wahaLoading=true (spinner) until QR arrives — don't use finally
+      // Keep wahaLoading=true until QR arrives
       if (wahaQrPollRef.current) clearInterval(wahaQrPollRef.current)
       wahaQrPollRef.current = setInterval(async () => {
         try {
           const [qrRes, stRes] = await Promise.all([
-            fetch(`/api/waha/session/qr/${name}`),
-            fetch(`/api/waha/session/status/${name}`),
+            fetch(`/api/wwebjs/session/${name}/qr`),
+            fetch(`/api/wwebjs/session/${name}/status`),
           ])
           if (stRes.ok) {
             const sd = await stRes.json()
             const rawStatus = sd.status || ''
             setWahaStatus(rawStatus)
-            if (['WORKING', 'open', 'connected'].includes(sd.state || rawStatus)) {
+            if (rawStatus === 'connected') {
               clearInterval(wahaQrPollRef.current)
               wahaQrShownRef.current = false
               setWahaQr(null); setWahaScanned(false); setWahaConnected(true); setWahaLoading(false)
               fetchInstances()
               return
             }
-            // Phone scanned QR → status left SCAN_QR_CODE → hide QR, show authenticating
-            if (wahaQrShownRef.current && rawStatus && rawStatus !== 'SCAN_QR_CODE') {
+            // QR scanned → authenticated state → show "autenticando…"
+            if (wahaQrShownRef.current && rawStatus === 'authenticated') {
               setWahaQr(null)
               setWahaScanned(true)
             }
           }
           if (qrRes.ok) {
             const qd = await qrRes.json()
-            if (qd.base64) {
+            if (qd.qr) {
               wahaQrShownRef.current = true
-              setWahaQr(qd.base64)
+              setWahaQr(qd.qr)   // already a full data: URL
               setWahaScanned(false)
               setWahaLoading(false)
             }
           }
         } catch {}
       }, 2500)
-      // intentionally no finally — wahaLoading stays true until QR or WORKING
+      // intentionally no finally — wahaLoading stays true until QR arrives
     } catch (e) { setWahaErr(e.message); setWahaLoading(false) }
   }
 
@@ -721,15 +916,35 @@ export default function InstancesPanel() {
       const resolvedProvider = provider ?? qrTarget?.provider
       const isWaha     = resolvedProvider === 'waha'
       const isWasender = resolvedProvider === 'wasender'
+      const isWwebjs   = resolvedProvider === 'wwebjs'
       const wid        = wasenderId ?? qrTarget?.wasender_id
       const url = isWasender
         ? `/api/wasender/session/qr/${wid}`
         : isWaha
         ? `/api/waha/session/qr/${name}`
+        : isWwebjs
+        ? `/api/wwebjs/session/${name}/qr`
         : `/api/evolution/instance/${name}?type=qr`
       const r = await fetch(url)
-      if (!r.ok) return false
+      if (!r.ok) {
+        if (isWwebjs) {
+          // wwebjs returns 400 with status when no QR yet — check if already connected
+          const d = await r.json().catch(() => ({}))
+          if (d?.status === 'connected') return 'scanned'
+        }
+        return false
+      }
       const d = await r.json()
+      // wwebjs returns { qr: 'data:image/png;base64,...', status }
+      if (isWwebjs) {
+        if (d?.status === 'connected') return 'scanned'
+        if (d?.qr) {
+          setQrImage(d.qr)
+          setQrStatus('ready')
+          return true
+        }
+        return false
+      }
       const b64 = d.base64 || d.qrcode?.base64 || d.qr?.base64
       if (b64) {
         setQrImage(b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`)
@@ -755,6 +970,9 @@ export default function InstancesPanel() {
           await fetch(`/api/wasender/session/${wid}/restart`, { method: 'POST' })
         } else if (resolvedProvider === 'waha') {
           await fetch(`/api/waha/session/logout/${name}`, { method: 'POST' })
+        } else if (resolvedProvider === 'wwebjs') {
+          // Re-start the session so it generates a fresh QR
+          await fetch(`/api/wwebjs/session/${name}/start`, { method: 'POST' }).catch(() => {})
         } else {
           await fetch(`/api/evolution/instance/${name}?action=logout`, { method: 'POST' })
         }
@@ -796,6 +1014,7 @@ export default function InstancesPanel() {
     const resolvedProvider = provider ?? qrTarget?.provider
     const isWaha     = resolvedProvider === 'waha'
     const isWasender = resolvedProvider === 'wasender'
+    const isWwebjs   = resolvedProvider === 'wwebjs'
     const wid        = wasenderId ?? qrTarget?.wasender_id
     connPollRef.current = setInterval(async () => {
       try {
@@ -803,18 +1022,27 @@ export default function InstancesPanel() {
           ? `/api/wasender/session/status/${wid}`
           : isWaha
           ? `/api/waha/session/status/${name}`
+          : isWwebjs
+          ? `/api/wwebjs/session/${name}/status`
           : `/api/evolution/instance/${name}`
         const r = await fetch(url)
         if (!r.ok) return
         const d = await r.json()
-        const state = d?.instance?.state || d?.state || ''
+        // wwebjs: { status: 'connected' | 'need_scan' | ... }
+        const state = isWwebjs
+          ? d?.status || ''
+          : (d?.instance?.state || d?.state || '')
         if (firstPoll) {
           firstPoll = false
           prevState = state
           return
         }
-        const isConnected = ['open', 'connected'].includes(state)
-        const wasConnected = ['open', 'connected'].includes(prevState)
+        const isConnected = isWwebjs
+          ? state === 'connected'
+          : ['open', 'connected'].includes(state)
+        const wasConnected = isWwebjs
+          ? prevState === 'connected'
+          : ['open', 'connected'].includes(prevState)
         prevState = state
         if (isConnected && !wasConnected) {
           if (connPollRef.current) clearInterval(connPollRef.current)
@@ -864,6 +1092,29 @@ export default function InstancesPanel() {
       } catch {}
       startQrPoll(inst.name, false, 'wasender', wid)
       startConnPoll(inst.name, 'wasender', wid)
+      return
+    }
+
+    if (inst.provider === 'wwebjs') {
+      // Ensure session is started in wwebjs-service
+      try {
+        const stRes = await fetch(`/api/wwebjs/session/${inst.name}/status`)
+        const stData = stRes.ok ? await stRes.json() : {}
+        const st = stData.status || ''
+        if (st === 'connected') {
+          // Already connected — nothing to do, just close
+          setQrOpen(false); setQrTarget(null); setQrStatus('loading')
+          return
+        }
+        if (st === 'not_found') {
+          setQrStatus('retrying')
+          await fetch(`/api/wwebjs/session/${inst.name}/start`, { method: 'POST' }).catch(() => {})
+          setQrStatus('loading')
+        }
+        // For need_scan/disconnected/initializing just show QR
+      } catch {}
+      startQrPoll(inst.name, false, 'wwebjs', null)
+      startConnPoll(inst.name, 'wwebjs', null)
       return
     }
 
@@ -1285,6 +1536,11 @@ export default function InstancesPanel() {
     setPickOpen(true)
   }
 
+  function closePick() {
+    setPickOpen(false)
+    setPickSelected(new Set())
+  }
+
   async function handlePickAssign(instanceName) {
     if (!pickTargetUser) return
     const userId = pickTargetUser._id || pickTargetUser.id || pickTargetUser.username
@@ -1294,39 +1550,124 @@ export default function InstancesPanel() {
       headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
       body: JSON.stringify({ user_id: userId, user_name: userName }),
     })
-    setPickOpen(false)
+    closePick()
     fetchInstances()
+  }
+
+  async function handlePickAssignMulti() {
+    if (!pickTargetUser || pickSelected.size === 0) return
+    const uid      = pickTargetUser._id || pickTargetUser.id || pickTargetUser.username
+    const userName = pickTargetUser.display_name || pickTargetUser.username || ''
+    const names    = [...pickSelected]
+    setInstances(prev => prev.map(i => names.includes(i.name) ? { ...i, assigned_to: uid, assigned_name: userName } : i))
+    closePick()
+    const results = await Promise.all(names.map(name =>
+      fetch(`/api/instances/${name}?action=assign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
+        body: JSON.stringify({ user_id: uid, user_name: userName }),
+      }).then(r => r.ok)
+    ))
+    const ok = results.filter(Boolean).length
+    const failed = names.filter((_, i) => !results[i])
+    if (failed.length) setInstances(prev => prev.map(i => failed.includes(i.name) ? { ...i, assigned_to: null, assigned_name: null } : i))
+    setSnack({ open: true, msg: `${ok} instancia${ok !== 1 ? 's' : ''} → ${userName}` })
   }
 
   async function handleInlineAssign(instanceName, user) {
     const userId   = user._id || user.id || user.username
     const userName = user.display_name || user.username || ''
+    setInstances(prev => prev.map(i => i.name === instanceName ? { ...i, assigned_to: userId, assigned_name: userName } : i))
+    setExpandedAssign(null)
     const r = await fetch(`/api/instances/${instanceName}?action=assign`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
       body: JSON.stringify({ user_id: userId, user_name: userName }),
     })
     if (!r.ok) {
+      setInstances(prev => prev.map(i => i.name === instanceName ? { ...i, assigned_to: null, assigned_name: null } : i))
       const d = await r.json().catch(() => ({}))
       setSnack({ open: true, msg: d.detail || (lang === 'en' ? 'Could not assign instance' : 'No se pudo asignar la instancia') })
       return
     }
-    setExpandedAssign(null)
-    fetchInstances()
     setSnack({ open: true, msg: `${instanceName} → ${userName}` })
   }
 
   async function handleQuickUnassign(inst) {
-    await fetch(`/api/instances/${inst.name}?action=unassign`, {
+    setInstances(prev => prev.map(i => i.name === inst.name ? { ...i, assigned_to: null, assigned_name: null } : i))
+    const r = await fetch(`/api/instances/${inst.name}?action=unassign`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
       body: JSON.stringify({}),
     })
-    fetchInstances()
-    setSnack({ open: true, msg: `${inst.name} ${t.inst.quickUnassignDone}` })
+    if (!r.ok) fetchInstances()
+    else setSnack({ open: true, msg: `${inst.name} ${t.inst.quickUnassignDone}` })
+  }
+
+  function toggleSelectInst(name) {
+    setSelectedInsts(prev => {
+      const next = new Set(prev)
+      next.has(name) ? next.delete(name) : next.add(name)
+      return next
+    })
+  }
+
+  async function handleBulkAssign(user) {
+    const uid       = user._id || user.id || user.username
+    const userName  = user.display_name || user.username || ''
+    const curSlots  = instances.filter(i => i.assigned_to === uid).length
+    const canAssign = Math.max(0, 5 - curSlots)
+    const toAssign  = [...selectedInsts].slice(0, canAssign)
+    const skipped   = selectedInsts.size - toAssign.length
+    setInstances(prev => prev.map(i => toAssign.includes(i.name) ? { ...i, assigned_to: uid, assigned_name: userName } : i))
+    setBulkPickOpen(false)
+    setSelectedInsts(new Set())
+    const results = await Promise.all(toAssign.map(name =>
+      fetch(`/api/instances/${name}?action=assign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
+        body: JSON.stringify({ user_id: uid, user_name: userName }),
+      }).then(r => ({ name, ok: r.ok }))
+    ))
+    const failed = results.filter(r => !r.ok).map(r => r.name)
+    const ok     = results.length - failed.length
+    if (failed.length) setInstances(prev => prev.map(i => failed.includes(i.name) ? { ...i, assigned_to: null, assigned_name: null } : i))
+    const pfx = lang === 'en'
+      ? `${ok} instance${ok !== 1 ? 's' : ''} → ${userName}`
+      : `${ok} instancia${ok !== 1 ? 's' : ''} → ${userName}`
+    setSnack({ open: true, msg: skipped > 0
+      ? `${pfx} (${skipped} ${lang === 'en' ? 'skipped, cap' : 'omitidas, límite'})`
+      : pfx })
+  }
+
+  async function handleWarmupToggle(inst) {
+    const optimisticVal = !inst.warmup_mode
+    setInstances(prev => prev.map(i => i.name === inst.name ? { ...i, warmup_mode: optimisticVal } : i))
+    const res = await fetch(`/api/instances/${inst.name}?action=warmup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
+      body: JSON.stringify({}),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      setInstances(prev => prev.map(i => i.name === inst.name ? { ...i, warmup_mode: data.warmup_mode } : i))
+      const label = data.warmup_mode
+        ? `🌱 ${inst.name}: calentamiento ON (${data.cap} msg/día)`
+        : `${inst.name}: calentamiento OFF (${data.cap} msg/día)`
+      setSnack({ open: true, msg: label })
+      // Los badges de cupo de las demás pestañas (search/batch/csv/campaña/
+      // programados/URL individual) se quedan montados en segundo plano y no
+      // saben que el cupo de este número acaba de cambiar — este evento los
+      // hace refrescar de inmediato en vez de quedarse con el dato viejo.
+      window.dispatchEvent(new Event(INSTANCES_CHANGED_EVENT))
+    } else {
+      setInstances(prev => prev.map(i => i.name === inst.name ? { ...i, warmup_mode: inst.warmup_mode } : i))
+    }
   }
 
   const connected = instances.filter(i => ['open', 'connected'].includes(i.live_status)).length
+  const disconnected = instances.filter(i => !['open','connected','connecting'].includes(i.live_status) && i.live_status).length
+  const warmupCount  = instances.filter(i => i.warmup_mode).length
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 2 }}>
@@ -1343,6 +1684,16 @@ export default function InstancesPanel() {
               sx={{ ...STAT_CHIP_SX, bgcolor: connected > 0 ? 'rgba(34,197,94,0.1)' : 'var(--item-hover)',
                 color: connected > 0 ? '#4ade80' : 'var(--text-muted)',
                 border: `1px solid ${connected > 0 ? 'rgba(34,197,94,0.25)' : 'var(--border)'}` }} />
+            {disconnected > 0 && (
+              <Chip label={`${disconnected} desconectadas`} size="small"
+                sx={{ ...STAT_CHIP_SX, bgcolor: 'rgba(248,113,113,0.1)', color: '#f87171',
+                  border: '1px solid rgba(248,113,113,0.25)' }} />
+            )}
+            {warmupCount > 0 && (
+              <Chip label={`${warmupCount} calentamiento`} size="small"
+                sx={{ ...STAT_CHIP_SX, bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24',
+                  border: '1px solid rgba(251,191,36,0.25)' }} />
+            )}
             <Chip label={`${users.length} ${t.inst.statUsers}`} size="small" sx={STAT_CHIP_SX} />
           </Box>
         </Box>
@@ -1354,18 +1705,9 @@ export default function InstancesPanel() {
                 : <RefreshIcon fontSize="small" />}
             </IconButton>
           </Tooltip>
-          <Tooltip title={lang === 'en' ? 'Create a WasenderAPI session' : 'Crear sesión WasenderAPI'} placement="bottom">
-            <Button variant="outlined" startIcon={<SmartphoneIcon sx={{ fontSize: 15 }} />}
-              onClick={() => { setWsOpen(true); setWsName(''); setWsErr(''); setWsQr(null); setWsConnected(false); setWsId(null) }}
-              sx={{ color: '#a78bfa', borderColor: 'rgba(167,139,250,0.4)', fontWeight: 700,
-                fontSize: '0.82rem', borderRadius: 2, textTransform: 'none', px: 2,
-                '&:hover': { borderColor: '#a78bfa', bgcolor: 'rgba(167,139,250,0.08)' } }}>
-              Wasender
-            </Button>
-          </Tooltip>
           <Tooltip title={lang === 'en' ? 'Connect a new WhatsApp number via QR code' : 'Conectar un nuevo número de WhatsApp con código QR'} placement="bottom">
             <Button variant="outlined" startIcon={<AddIcon sx={{ fontSize: 15 }} />}
-              onClick={() => { setWahaOpen(true); setWahaName(''); setWahaErr(''); setWahaQr(null); setWahaConnected(false) }}
+              onClick={() => { setWahaOpen(true); setWahaName(''); setWahaErr(''); setWahaQr(null); setWahaConnected(false); setWahaScanned(false); setWahaStatus('') }}
               sx={{ color: '#60a5fa', borderColor: 'rgba(59,130,246,0.4)', fontWeight: 700,
                 fontSize: '0.82rem', borderRadius: 2, textTransform: 'none', px: 2,
                 '&:hover': { borderColor: '#60a5fa', bgcolor: 'rgba(59,130,246,0.08)' } }}>
@@ -1375,234 +1717,522 @@ export default function InstancesPanel() {
         </Box>
       </Box>
 
-      {/* User cards grid + unassigned accordion */}
-      <Box sx={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', pr: 0.5 }}>
-        {loading ? (
-          <Box>
-            {/* ── User cards grid ── */}
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 2, mb: 3 }}>
-              {(skeletonCounts.current.users.length ? skeletonCounts.current.users : [2, 0, 0]).map((rowCount, i) => (
-                <Box key={i} sx={{
-                  bgcolor: 'var(--card-bg)', borderRadius: 3, p: 2,
-                  border: '1px solid var(--border)',
-                  display: 'flex', flexDirection: 'column', gap: 0,
-                }}>
-                  {/* Header: avatar + name/role + slot counter */}
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
-                    <Skeleton variant="rounded" width={38} height={38} sx={{ borderRadius: 2, bgcolor: 'var(--border)', flexShrink: 0 }} />
-                    <Box sx={{ flex: 1 }}>
-                      <Skeleton variant="text" width="50%" height={15} sx={{ bgcolor: 'var(--border)', mb: 0.4 }} />
-                      <Skeleton variant="text" width="30%" height={12} sx={{ bgcolor: 'var(--border)' }} />
-                    </Box>
-                    <Skeleton variant="rounded" width={28} height={18} sx={{ borderRadius: 1, bgcolor: 'var(--border)' }} />
-                  </Box>
-                  {/* Instance rows */}
-                  {rowCount > 0 ? [...Array(rowCount)].map((_, r) => (
-                    <Box key={r} sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.2, py: 0.85,
-                      borderRadius: 1.5, mb: 0.5,
-                      bgcolor: 'rgba(255,255,255,0.02)', border: '1px solid transparent' }}>
-                      <Skeleton variant="circular" width={8} height={8} sx={{ bgcolor: 'var(--border)', flexShrink: 0 }} />
-                      <Box sx={{ flex: 1 }}>
-                        <Skeleton variant="text" width="45%" height={13} sx={{ bgcolor: 'var(--border)', mb: 0.2 }} />
-                        <Skeleton variant="text" width="60%" height={11} sx={{ bgcolor: 'var(--border)' }} />
-                      </Box>
-                      <Skeleton variant="rounded" width={70} height={20} sx={{ borderRadius: 1, bgcolor: 'var(--border)' }} />
-                    </Box>
-                  )) : (
-                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', py: 2 }}>
-                      <Skeleton variant="text" width="40%" height={13} sx={{ bgcolor: 'var(--border)' }} />
-                    </Box>
-                  )}
-                  {/* Slot dots footer */}
-                  <Box sx={{ display: 'flex', gap: 0.6, mt: 1.5, pt: 1, borderTop: '1px solid var(--border)' }}>
-                    {[...Array(5)].map((_, d) => (
-                      <Skeleton key={d} variant="circular" width={10} height={10}
-                        sx={{ bgcolor: d < rowCount ? 'rgba(34,197,94,0.25)' : 'var(--border)' }} />
-                    ))}
-                  </Box>
+      {/* ── System health bar ── */}
+      {!loading && instances.length > 0 && (() => {
+        const total = instances.length
+        const connPct  = Math.round((connected / total) * 100)
+        const warmPct  = Math.round((warmupCount / total) * 100)
+        const discPct  = Math.round((disconnected / total) * 100)
+        const restPct  = Math.max(0, 100 - connPct - warmPct - discPct)
+        return (
+          <Box sx={{ mb: 0.5 }}>
+            {/* Segmented bar */}
+            <Box sx={{ height: 5, borderRadius: 4, overflow: 'hidden', display: 'flex',
+              bgcolor: 'rgba(255,255,255,0.06)', gap: '1px' }}>
+              {connPct  > 0 && <Box sx={{ width: `${connPct}%`,  bgcolor: '#4ade80', transition: 'width 0.6s ease' }} />}
+              {warmPct  > 0 && <Box sx={{ width: `${warmPct}%`,  bgcolor: '#fbbf24', transition: 'width 0.6s ease' }} />}
+              {discPct  > 0 && <Box sx={{ width: `${discPct}%`,  bgcolor: '#f87171', transition: 'width 0.6s ease' }} />}
+              {restPct  > 0 && <Box sx={{ width: `${restPct}%`,  bgcolor: 'rgba(148,163,184,0.3)' }} />}
+            </Box>
+            {/* Legend */}
+            <Box sx={{ display: 'flex', gap: 2, mt: 0.8, flexWrap: 'wrap' }}>
+              {[
+                { color: '#4ade80', label: lang === 'en' ? `${connected} connected` : `${connected} conectadas`, show: connected > 0 },
+                { color: '#fbbf24', label: lang === 'en' ? `${warmupCount} warmup` : `${warmupCount} calentamiento`, show: warmupCount > 0 },
+                { color: '#f87171', label: lang === 'en' ? `${disconnected} disconnected` : `${disconnected} desconectadas`, show: disconnected > 0 },
+              ].filter(i => i.show).map(({ color, label }) => (
+                <Box key={label} sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                  <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
+                  <Typography sx={{ fontSize: '0.62rem', color: 'var(--text-muted)', fontWeight: 500 }}>{label}</Typography>
                 </Box>
               ))}
-            </Box>
-
-            {/* ── Unassigned accordion ── */}
-            <Box sx={{
-              border: '1px solid rgba(245,158,11,0.2)', borderRadius: 3,
-              bgcolor: 'rgba(245,158,11,0.03)', overflow: 'hidden',
-            }}>
-              {/* Accordion header */}
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.4 }}>
-                <Skeleton variant="circular" width={10} height={10} sx={{ bgcolor: 'rgba(245,158,11,0.3)' }} />
-                <Skeleton variant="text" width={90} height={16} sx={{ bgcolor: 'var(--border)' }} />
-                <Box sx={{ flex: 1 }} />
-                <Skeleton variant="rounded" width={140} height={20} sx={{ borderRadius: 1, bgcolor: 'var(--border)' }} />
-                <Skeleton variant="circular" width={18} height={18} sx={{ bgcolor: 'var(--border)' }} />
-              </Box>
-              {/* Unassigned cards grid */}
-              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 1.5, p: 2, pt: 0.5 }}>
-                {[...Array(skeletonCounts.current.unassigned || 6)].map((_, i) => (
-                  <Box key={i} sx={{
-                    display: 'flex', alignItems: 'center', gap: 1, px: 1.2, py: 0.9,
-                    borderRadius: 1.5, bgcolor: 'var(--card-bg)',
-                    border: '1px solid var(--border)',
-                  }}>
-                    <Skeleton variant="circular" width={8} height={8} sx={{ bgcolor: 'var(--border)', flexShrink: 0 }} />
-                    <Box sx={{ flex: 1 }}>
-                      <Skeleton variant="text" width="70%" height={12} sx={{ bgcolor: 'var(--border)', mb: 0.2 }} />
-                      <Skeleton variant="text" width="55%" height={10} sx={{ bgcolor: 'var(--border)' }} />
-                    </Box>
-                    <Skeleton variant="rounded" width={72} height={22} sx={{ borderRadius: 1, bgcolor: 'var(--border)' }} />
-                  </Box>
-                ))}
-              </Box>
+              <Typography sx={{ fontSize: '0.62rem', color: 'rgba(148,163,184,0.5)', ml: 'auto' }}>
+                {connPct}% {lang === 'en' ? 'online' : 'en línea'}
+              </Typography>
             </Box>
           </Box>
+        )
+      })()}
+
+      {/* User cards grid + unassigned sidebar */}
+      <Box sx={{ flex: 1, display: 'flex', gap: 2, minHeight: 0, overflow: 'hidden' }}>
+        {/* Left: scrollable content */}
+        <Box sx={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', pr: 0.5,
+          '&::-webkit-scrollbar': { width: 4 },
+          '&::-webkit-scrollbar-button': { display: 'none' },
+          '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(100,116,139,0.3)', borderRadius: 4 },
+          '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
+        }}>
+          {/* User search filter */}
+          {!loading && users.length > 0 && (
+            <Box sx={{ mb: 1.5, display: 'flex', alignItems: 'center', gap: 1,
+              px: 1.2, py: 0.7, borderRadius: 2,
+              bgcolor: 'var(--card-bg)', border: '1px solid var(--border)',
+              '&:focus-within': { borderColor: 'rgba(100,116,139,0.5)' }, transition: 'border-color 0.15s',
+            }}>
+              <Box component="svg" viewBox="0 0 20 20" fill="none"
+                sx={{ width: 14, height: 14, flexShrink: 0, color: 'var(--text-muted)' }}>
+                <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.6" />
+                <path d="M13 13l3 3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </Box>
+              <Box component="input"
+                placeholder={lang === 'en' ? 'Search users…' : 'Buscar usuarios…'}
+                value={userSearch}
+                onChange={e => setUserSearch(e.target.value)}
+                sx={{
+                  flex: 1, background: 'none', border: 'none', outline: 'none',
+                  color: 'var(--text)', fontSize: '0.78rem',
+                  '&::placeholder': { color: 'var(--text-muted)', opacity: 0.7 },
+                }}
+              />
+              {userSearch && (
+                <Box onClick={() => setUserSearch('')} component="span"
+                  sx={{ cursor: 'pointer', color: 'var(--text-muted)', fontSize: '1rem', lineHeight: 1,
+                    '&:hover': { color: 'var(--text)' }, userSelect: 'none' }}>
+                  ×
+                </Box>
+              )}
+            </Box>
+          )}
+        {loading ? (
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 2 }}>
+            {(skeletonCounts.current.users.length ? skeletonCounts.current.users : [2, 3, 1, 2, 0, 1]).map((rowCount, i) => (
+              <Box key={i} sx={{
+                bgcolor: 'var(--card-bg)', borderRadius: 3, p: 2,
+                border: '1px solid var(--border)',
+                display: 'flex', flexDirection: 'column', gap: 0,
+                '@keyframes skCardIn': { '0%': { opacity: 0, transform: 'translateY(12px)' }, '100%': { opacity: 1, transform: 'translateY(0)' } },
+                animation: 'skCardIn 0.35s ease both',
+                animationDelay: `${i * 0.08}s`,
+              }}>
+                {/* Header: avatar + name/role + slot counter */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, mb: 1.5 }}>
+                  <Skeleton variant="rounded" width={38} height={38} sx={{ borderRadius: 2, flexShrink: 0,
+                    bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.14)',
+                    border: '1.5px solid rgba(var(--accent-rgb,59,130,246),0.22)',
+                    '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.15), transparent)' } }} />
+                  <Box sx={{ flex: 1 }}>
+                    <Skeleton variant="text" width="56%" height={14} sx={{ mb: 0.3,
+                      bgcolor: 'rgba(255,255,255,0.1)',
+                      '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.11), transparent)' } }} />
+                    <Skeleton variant="text" width="30%" height={10} sx={{
+                      bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.13)',
+                      '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.10), transparent)' } }} />
+                  </Box>
+                  <Skeleton variant="rounded" width={34} height={20} sx={{ borderRadius: 10,
+                    bgcolor: 'rgba(255,255,255,0.07)',
+                    '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.09), transparent)' } }} />
+                </Box>
+
+                <Divider sx={{ borderColor: 'var(--border)', mb: rowCount === 0 ? 0 : 1.2 }} />
+
+                {/* Instance rows */}
+                {rowCount > 0 ? [...Array(rowCount)].map((_, r) => (
+                  <Box key={r} sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.2, py: 0.9,
+                    borderRadius: 1.5, mb: 0.5,
+                    bgcolor: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.04)',
+                    '@keyframes skRowIn': { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
+                    animation: 'skRowIn 0.25s ease both',
+                    animationDelay: `${i * 0.08 + r * 0.05 + 0.12}s`,
+                  }}>
+                    {/* status dot */}
+                    <Skeleton variant="circular" width={8} height={8} sx={{ flexShrink: 0,
+                      bgcolor: r === 0 ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.12)' }} />
+                    {/* name + provider badge + phone */}
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, mb: 0.25 }}>
+                        <Skeleton variant="text" width={`${34 + (i * 13 + r * 11) % 22}%`} height={12} sx={{
+                          bgcolor: 'rgba(255,255,255,0.09)',
+                          '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.08), transparent)' } }} />
+                        <Skeleton variant="rounded" width={30} height={13} sx={{ borderRadius: 0.7, flexShrink: 0,
+                          bgcolor: 'rgba(52,211,153,0.14)',
+                          '&::after': { background: 'linear-gradient(90deg, transparent, rgba(52,211,153,0.1), transparent)' } }} />
+                      </Box>
+                      <Skeleton variant="text" width={`${48 + (i * 7 + r * 9) % 22}%`} height={10} sx={{
+                        bgcolor: 'rgba(255,255,255,0.06)',
+                        '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.06), transparent)' } }} />
+                    </Box>
+                    {/* status label */}
+                    <Skeleton variant="text" width={r === 0 ? 52 : 70} height={12} sx={{ flexShrink: 0,
+                      bgcolor: r === 0 ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.07)',
+                      '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)' } }} />
+                  </Box>
+                )) : (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                    py: 2.5, gap: 1, borderRadius: 1.5, mt: 1,
+                    border: '1px dashed rgba(var(--accent-rgb,59,130,246),0.16)',
+                    bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.025)' }}>
+                    <Box sx={{ display: 'flex', gap: 0.7 }}>
+                      {[...Array(5)].map((_, d) => (
+                        <Skeleton key={d} variant="circular" width={9} height={9}
+                          sx={{ bgcolor: 'rgba(255,255,255,0.07)' }} />
+                      ))}
+                    </Box>
+                    <Skeleton variant="text" width="50%" height={10} sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
+                    <Skeleton variant="rounded" width={100} height={20} sx={{ borderRadius: 1.5, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' }} />
+                  </Box>
+                )}
+
+                {/* Capacity bar — 5 slot dots + chip/button */}
+                <Box sx={{ display: 'flex', gap: 0.7, mt: 1.5, pt: 1, borderTop: '1px solid var(--border)', alignItems: 'center' }}>
+                  {[...Array(5)].map((_, d) => (
+                    <Skeleton key={d} variant="circular" width={10} height={10}
+                      sx={{ bgcolor: d < rowCount ? 'rgba(34,197,94,0.32)' : 'rgba(255,255,255,0.07)' }} />
+                  ))}
+                  {rowCount >= 2 ? (
+                    <Skeleton variant="rounded" width={80} height={17} sx={{ ml: 'auto', borderRadius: 10,
+                      bgcolor: 'rgba(34,197,94,0.1)',
+                      '&::after': { background: 'linear-gradient(90deg, transparent, rgba(34,197,94,0.1), transparent)' } }} />
+                  ) : (
+                    <Skeleton variant="text" width={58} height={12} sx={{ ml: 'auto', bgcolor: 'rgba(255,255,255,0.05)' }} />
+                  )}
+                </Box>
+
+                {/* Stats line */}
+                {rowCount > 0 && (
+                  <Skeleton variant="text" width="44%" height={10} sx={{ mt: 0.8, bgcolor: 'rgba(255,255,255,0.04)' }} />
+                )}
+              </Box>
+            ))}
+          </Box>
+
         ) : (
-          <>
-            {/* User grid */}
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 2, mb: 3 }}>
-              {users.map(user => {
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 2 }}>
+            {users
+              .filter(u => {
+                if (!userSearch.trim()) return true
+                const q = userSearch.toLowerCase()
+                return (u.display_name || u.username || '').toLowerCase().includes(q) ||
+                  (u.email || '').toLowerCase().includes(q)
+              })
+              .map((user, cardIndex) => {
                 const uid = user._id || user.id || user.username
                 const userInsts = instances.filter(i => i.assigned_to === uid)
                 return (
-                  <UserCard
-                    key={uid}
-                    user={user}
-                    instances={userInsts}
+                  <UserCard key={uid} user={user} instances={userInsts} cardIndex={cardIndex}
                     onAddSlot={() => openPickForUser(user)}
                     onQr={inst => handleQrClick(inst)}
                     onEditNumber={inst => handleEditNumberClick(inst)}
                     onRemove={handleQuickUnassign}
+                    onWarmup={handleWarmupToggle}
                   />
                 )
               })}
+          </Box>
+        )}
+        </Box>{/* end left panel */}
+
+        {/* Right sidebar: unassigned instances */}
+        {loading ? (
+          <Box sx={{
+            width: 240, flexShrink: 0,
+            border: '1px solid rgba(245,158,11,0.2)', borderRadius: 2.5,
+            bgcolor: 'var(--card-bg)', alignSelf: 'flex-start', overflow: 'hidden',
+            '@keyframes skCardIn': { '0%': { opacity: 0, transform: 'translateY(12px)' }, '100%': { opacity: 1, transform: 'translateY(0)' } },
+            animation: 'skCardIn 0.35s ease both', animationDelay: '0.3s',
+          }}>
+            {/* Header: amber dot + "Sin asignar" + count + arrow */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.2,
+              borderBottom: '1px solid rgba(245,158,11,0.12)' }}>
+              <Skeleton variant="circular" width={7} height={7} sx={{ bgcolor: 'rgba(245,158,11,0.45)', flexShrink: 0 }} />
+              <Skeleton variant="text" width="52%" height={14} sx={{ flex: 1,
+                bgcolor: 'rgba(255,255,255,0.1)',
+                '&::after': { background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.12), transparent)' } }} />
+              <Skeleton variant="rounded" width={22} height={16} sx={{ borderRadius: 10, bgcolor: 'rgba(245,158,11,0.12)' }} />
+              <Skeleton variant="circular" width={12} height={12} sx={{ bgcolor: 'rgba(255,255,255,0.06)', flexShrink: 0 }} />
             </Box>
+            {/* Group label row — mirrors the "SIN CONEXIÓN" section header */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1.5, py: 0.55,
+              bgcolor: 'rgba(255,255,255,0.025)',
+              borderBottom: '1px solid var(--border)', borderTop: '1px solid var(--border)',
+              '@keyframes skRowIn': { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
+              animation: 'skRowIn 0.2s ease both', animationDelay: '0.32s' }}>
+              <Skeleton variant="circular" width={5} height={5} sx={{ bgcolor: 'rgba(148,163,184,0.35)', flexShrink: 0 }} />
+              <Skeleton variant="text" width="44%" height={10} sx={{ bgcolor: 'rgba(148,163,184,0.15)',
+                '&::after': { background: 'linear-gradient(90deg, transparent, rgba(148,163,184,0.12), transparent)' } }} />
+              <Skeleton variant="rounded" width={16} height={12} sx={{ borderRadius: 10, ml: 'auto', bgcolor: 'rgba(255,255,255,0.06)' }} />
+            </Box>
+            {/* Instance rows */}
+            {[...Array(skeletonCounts.current.unassigned || 4)].map((_, r) => (
+              <Box key={r} sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1.2, py: 0.65,
+                borderBottom: '1px solid var(--border)',
+                '@keyframes skRowIn': { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
+                animation: 'skRowIn 0.25s ease both', animationDelay: `${r * 0.06 + 0.38}s` }}>
+                <Skeleton variant="circular" width={8} height={8} sx={{ flexShrink: 0,
+                  bgcolor: 'rgba(255,255,255,0.12)' }} />
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Skeleton variant="text" width={`${42 + (r * 13) % 28}%`} height={11} sx={{ mb: 0.2,
+                    bgcolor: 'rgba(255,255,255,0.09)',
+                    '&::after': { background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.08), transparent)' } }} />
+                  <Skeleton variant="text" width={`${52 + (r * 9) % 24}%`} height={9} sx={{ bgcolor: 'rgba(255,255,255,0.06)' }} />
+                </Box>
+                {/* Action buttons: QR, assign, edit, delete */}
+                <Box sx={{ display: 'flex', gap: 0.3, flexShrink: 0 }}>
+                  {[
+                    'rgba(96,165,250,0.25)',
+                    'rgba(96,165,250,0.2)',
+                    'rgba(167,139,250,0.2)',
+                    'rgba(248,113,113,0.2)',
+                  ].map((bg, b) => (
+                    <Skeleton key={b} variant="circular" width={20} height={20} sx={{ bgcolor: bg }} />
+                  ))}
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        ) : (() => {
+          const unassigned = instances.filter(i => !i.assigned_to)
+          if (unassigned.length === 0) return null
+          const connGroup   = unassigned.filter(i => ['open','connected'].includes(i.live_status))
+          const pendGroup   = unassigned.filter(i => i.live_status === 'connecting')
+          const restGroup   = unassigned.filter(i => !['open','connected','connecting'].includes(i.live_status))
+          const grouped = [
+            ...(connGroup.length   ? [{ _group: lang === 'en' ? 'Connected' : 'Conectadas',   color: '#4ade80', items: connGroup }] : []),
+            ...(pendGroup.length   ? [{ _group: lang === 'en' ? 'Connecting' : 'Conectando',  color: '#fbbf24', items: pendGroup }] : []),
+            ...(restGroup.length   ? [{ _group: lang === 'en' ? 'Disconnected' : 'Sin conexión', color: '#94a3b8', items: restGroup }] : []),
+          ]
+          return (
+            <Box sx={{
+              width: 240, flexShrink: 0,
+              border: '1px solid rgba(245,158,11,0.2)', borderRadius: 2.5,
+              bgcolor: 'var(--card-bg)', alignSelf: 'flex-start',
+              display: 'flex', flexDirection: 'column',
+              maxHeight: 'calc(100vh - 200px)',
+              overflow: 'hidden',
+            }}>
+              {/* Sidebar header — fixed, click to collapse/expand (lives outside the scroll area) */}
+              <Box onClick={() => setSidebarCollapsed(c => !c)}
+                sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.2,
+                  borderBottom: sidebarCollapsed ? 'none' : '1px solid rgba(245,158,11,0.12)',
+                  cursor: 'pointer', userSelect: 'none',
+                  flexShrink: 0,
+                  bgcolor: 'var(--card-bg)', borderRadius: '10px 10px 0 0',
+                  '&:hover': { bgcolor: 'rgba(245,158,11,0.04)' }, transition: 'background 0.12s',
+                }}>
+                <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#f59e0b', flexShrink: 0, boxShadow: '0 0 6px #f59e0b88' }} />
+                <Typography sx={{ color: 'var(--text)', fontSize: '0.82rem', fontWeight: 700, flex: 1 }}>
+                  {lang === 'en' ? 'Unassigned' : 'Sin asignar'}
+                </Typography>
+                <Typography sx={{ fontSize: '0.67rem', color: 'rgba(245,158,11,0.7)',
+                  bgcolor: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)',
+                  px: 1, py: 0.2, borderRadius: 10, fontWeight: 600, mr: 0.5 }}>
+                  {unassigned.length}
+                </Typography>
+                <KeyboardArrowDownIcon sx={{ fontSize: 15, color: 'rgba(245,158,11,0.6)',
+                  transition: 'transform 0.2s', transform: sidebarCollapsed ? 'rotate(-90deg)' : 'none' }} />
+              </Box>
 
-            {/* Unassigned section */}
-            {(() => {
-              const unassigned = instances.filter(i => !i.assigned_to)
-              if (unassigned.length === 0) return null
-              return (
-                <Box sx={{ border: '1px solid rgba(245,158,11,0.2)', borderRadius: 2.5, overflow: 'hidden',
-                  bgcolor: 'rgba(245,158,11,0.03)' }}>
-                  {/* Header */}
-                  <Box onClick={() => setUnassignedOpen(p => !p)}
-                    sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.4, cursor: 'pointer',
-                      '&:hover': { bgcolor: 'var(--item-hover)' } }}>
-                    <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#f59e0b', flexShrink: 0,
-                      boxShadow: '0 0 6px #f59e0b88' }} />
-                    <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.82rem', fontWeight: 600, flex: 1 }}>
-                      {t.inst.unassigned}
+              {/* Compact list — grouped by status; this is the ONLY scrollable region now */}
+              {!sidebarCollapsed && (
+              <Box sx={{
+                flex: 1, minHeight: 0, overflowY: 'auto',
+                '&::-webkit-scrollbar': { width: 4 },
+                '&::-webkit-scrollbar-button': { display: 'none' },
+                '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(245,158,11,0.25)', borderRadius: 4 },
+                '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
+              }}>
+              {grouped.map(({ _group, color: gColor, items }) => (
+                <Box key={_group}>
+                  {/* Group label */}
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1.5, py: 0.55,
+                    bgcolor: 'rgba(255,255,255,0.025)', borderBottom: '1px solid var(--border)',
+                    borderTop: '1px solid var(--border)' }}>
+                    <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: gColor, flexShrink: 0,
+                      boxShadow: `0 0 4px ${gColor}99` }} />
+                    <Typography sx={{ fontSize: '0.57rem', fontWeight: 700, color: gColor,
+                      textTransform: 'uppercase', letterSpacing: '0.07em', flex: 1 }}>
+                      {_group}
                     </Typography>
-                    <Typography sx={{ fontSize: '0.67rem', color: 'rgba(245,158,11,0.6)', mr: 0.5 }}>
-                      {unassigned.length === 1
-                        ? (lang === 'en' ? '1 instance needs a user' : '1 instancia sin usuario')
-                        : (lang === 'en' ? `${unassigned.length} instances need a user` : `${unassigned.length} instancias sin usuario`)}
+                    <Typography sx={{ fontSize: '0.57rem', color: gColor, opacity: 0.6, fontWeight: 600 }}>
+                      {items.length}
                     </Typography>
-                    <KeyboardArrowDownIcon sx={{ fontSize: 18, color: 'var(--text-muted)',
-                      transform: unassignedOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
                   </Box>
-
-                  {/* Instance list */}
-                  {unassignedOpen && (
-                    <Box sx={{ px: 1.5, pt: 1.5, pb: 1.5,
-                      display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 0.8,
-                      borderTop: '1px solid rgba(245,158,11,0.12)' }}>
-                      {unassigned.map(inst => {
-                        const isExp = expandedAssign === inst.name
-                        const status = inst.live_status || 'unknown'
-                        const color  = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
-                        const isConn = ['open','connected'].includes(status)
-                        const _REASON_COLOR = { banned: '#f87171', logged_out: '#fbbf24', conflict: '#fbbf24', multidevice: '#fbbf24', server_error: '#f87171', restart: '#fb923c', timeout: '#94a3b8', closed: '#94a3b8', replaced: '#fb923c', disconnected: '#f87171', failed: '#f87171' }
-                        const instDotColor = (!isConn && status !== 'connecting' && inst.disconnect_reason) ? (_REASON_COLOR[inst.disconnect_reason] ?? '#f87171') : color
-                        const instReasonLabel = inst.disconnect_reason ? ((lang === 'en' ? DISCONNECT_LABEL_EN : DISCONNECT_LABEL_ES)[inst.disconnect_reason] ?? inst.disconnect_reason_label) : null
-                        return (
-                          <Box key={inst.name} sx={{ border: '1px solid var(--border)',
-                            borderRadius: 2, overflow: 'hidden', bgcolor: 'var(--card-bg)',
-                            transition: 'border-color 0.15s',
-                            ...(isExp && { borderColor: 'rgba(59,130,246,0.3)' }) }}>
-
-                            {/* Instance row */}
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 1.5, py: 1.1 }}>
-                              <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: instDotColor, flexShrink: 0,
-                                boxShadow: isConn ? `0 0 5px ${instDotColor}88` : 'none' }} />
-                              <Box sx={{ flex: 1, minWidth: 0 }}>
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-                                  <Typography sx={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text)',
-                                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                    {inst.label || inst.name}
-                                  </Typography>
-                                </Box>
-                                <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-                                  {inst.number ? `+${inst.number}` : t.inst.noNumber}
-                                </Typography>
-                                {!isConn && instReasonLabel && (
-                                  <Typography sx={{ fontSize: '0.62rem', color: instDotColor, lineHeight: 1.2, mt: 0.2 }}>
-                                    {instReasonLabel}
-                                  </Typography>
-                                )}
-                              </Box>
-                              {/* Actions */}
-                              <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', flexShrink: 0 }}>
-                                <Tooltip title={t.inst.connectQr}>
-                                  <IconButton size="small" onClick={() => handleQrClick(inst)}
-                                    sx={{ color: '#60a5fa', border: '1px solid rgba(59,130,246,0.25)', borderRadius: 1.5, p: 0.5,
-                                      '&:hover': { bgcolor: 'rgba(59,130,246,0.1)', borderColor: 'rgba(59,130,246,0.5)' } }}>
-                                    <QrCodeIcon sx={{ fontSize: 13 }} />
-                                  </IconButton>
-                                </Tooltip>
-                                {!isExp ? (
-                                  <Button size="small" onClick={e => { e.stopPropagation(); setExpandedAssign(inst.name) }}
-                                    endIcon={<KeyboardArrowDownIcon sx={{ fontSize: '14px !important' }} />}
-                                    sx={{ fontSize: '0.72rem', textTransform: 'none', py: 0.35, px: 1, borderRadius: 1.5,
-                                      color: '#60a5fa', border: '1px solid rgba(59,130,246,0.25)',
-                                      '&:hover': { bgcolor: 'rgba(59,130,246,0.08)', borderColor: 'rgba(59,130,246,0.5)' } }}>
-                                    {t.inst.assignUser}
-                                  </Button>
-                                ) : (
-                                  <IconButton size="small" onClick={e => { e.stopPropagation(); setExpandedAssign(null) }}
-                                    sx={{ color: 'var(--text-muted)', p: 0.4, '&:hover': { color: 'var(--text)' } }}>
-                                    <CloseIcon sx={{ fontSize: 14 }} />
-                                  </IconButton>
-                                )}
-                                <Tooltip title={lang === 'en' ? 'Edit phone number' : 'Editar número'}>
-                                  <IconButton size="small" onClick={() => handleEditNumberClick(inst)}
-                                    sx={{ color: '#a78bfa', border: '1px solid rgba(167,139,250,0.2)', borderRadius: 1.5, p: 0.5,
-                                      '&:hover': { bgcolor: 'rgba(167,139,250,0.1)' } }}>
-                                    <EditIcon sx={{ fontSize: 13 }} />
-                                  </IconButton>
-                                </Tooltip>
-                                <Tooltip title={t.inst.delete}>
-                                  <IconButton size="small" onClick={() => handleDeleteClick(inst)}
-                                    sx={{ color: '#f87171', border: '1px solid rgba(248,113,133,0.2)', borderRadius: 1.5, p: 0.5,
-                                      '&:hover': { bgcolor: 'rgba(248,113,133,0.1)' } }}>
-                                    <DeleteForeverIcon sx={{ fontSize: 13 }} />
-                                  </IconButton>
-                                </Tooltip>
-                              </Box>
-                            </Box>
-
-                            {/* Inline user picker */}
-                            {isExp && (
-                              <InlineUserPicker
-                                instanceName={inst.name}
-                                users={users}
-                                instances={instances}
-                                onAssign={handleInlineAssign}
-                                t={t}
-                                lang={lang}
-                              />
+                  {/* Rows */}
+                  {items.map((inst, idx) => {
+                    const isExp = expandedAssign === inst.name
+                    const status = inst.live_status || 'unknown'
+                    const icolor = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
+                    const isConn = ['open','connected'].includes(status)
+                    const _RC = { banned: '#f87171', logged_out: '#fbbf24', conflict: '#fbbf24', multidevice: '#fbbf24', server_error: '#f87171', restart: '#fb923c', timeout: '#94a3b8', closed: '#94a3b8', replaced: '#fb923c', disconnected: '#f87171', failed: '#f87171' }
+                    const dotColor = (!isConn && status !== 'connecting' && inst.disconnect_reason) ? (_RC[inst.disconnect_reason] ?? '#f87171') : icolor
+                    const reasonLabel = inst.disconnect_reason ? ((lang === 'en' ? DISCONNECT_LABEL_EN : DISCONNECT_LABEL_ES)[inst.disconnect_reason] ?? inst.disconnect_reason_label) : null
+                    return (
+                      <Box key={inst.name}
+                        ref={el => { sidebarRowRefs.current[inst.name] = el }}
+                        sx={{ position: 'relative', ...(isExp && { zIndex: 201 }) }}>
+                        <Box sx={{
+                          display: 'flex', alignItems: 'center', gap: 0.8, px: 1.2, py: 0.65,
+                          borderBottom: idx < items.length - 1 ? '1px solid var(--border)' : 'none',
+                          '&:hover': { bgcolor: 'var(--item-hover)' }, transition: 'background 0.12s',
+                          '&:hover .inst-check': { opacity: 1 },
+                          ...(isExp && { bgcolor: 'rgba(59,130,246,0.04)' }),
+                        }}>
+                          {/* Multi-select checkbox */}
+                          <Box className="inst-check"
+                            onClick={e => { e.stopPropagation(); toggleSelectInst(inst.name) }}
+                            sx={{
+                              width: 13, height: 13, flexShrink: 0, borderRadius: 0.4,
+                              border: selectedInsts.has(inst.name) ? '1.5px solid #60a5fa' : '1.5px solid rgba(255,255,255,0.22)',
+                              bgcolor: selectedInsts.has(inst.name) ? 'rgba(59,130,246,0.85)' : 'transparent',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              cursor: 'pointer', transition: 'all 0.1s',
+                              opacity: selectedInsts.size > 0 ? 1 : 0,
+                              zIndex: 1,
+                            }}>
+                            {selectedInsts.has(inst.name) && (
+                              <Typography sx={{ fontSize: '9px', lineHeight: 1, color: 'white', fontWeight: 700, userSelect: 'none', mt: '1px' }}>✓</Typography>
                             )}
                           </Box>
-                        )
-                      })}
-                    </Box>
-                  )}
+                          <Box sx={{ position: 'relative', width: 8, height: 8, flexShrink: 0 }}>
+                            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: dotColor,
+                              boxShadow: isConn ? `0 0 6px ${dotColor}aa` : 'none', position: 'relative', zIndex: 1 }} />
+                            {isConn && (
+                              <Box sx={{
+                                position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
+                                width: 8, height: 8, borderRadius: '50%', bgcolor: dotColor, opacity: 0.4,
+                                '@keyframes ping': {
+                                  '0%':   { transform: 'translate(-50%,-50%) scale(1)', opacity: 0.4 },
+                                  '75%':  { transform: 'translate(-50%,-50%) scale(2.2)', opacity: 0 },
+                                  '100%': { transform: 'translate(-50%,-50%) scale(2.2)', opacity: 0 },
+                                },
+                                animation: 'ping 2s cubic-bezier(0,0,0.2,1) infinite',
+                              }} />
+                            )}
+                          </Box>
+                          <Box sx={{ flex: 1, minWidth: 0 }}>
+                            <Typography sx={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text)',
+                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {inst.label || inst.name}
+                            </Typography>
+                            <Typography sx={{ fontSize: '0.65rem', fontFamily: 'monospace', lineHeight: 1.2,
+                              color: reasonLabel && !isConn ? dotColor : 'var(--text-muted)' }}>
+                              {reasonLabel && !isConn ? reasonLabel : (inst.number ? `+${inst.number}` : t.inst.noNumber)}
+                            </Typography>
+                          </Box>
+                          <Box sx={{ display: 'flex', gap: 0.2, alignItems: 'center', flexShrink: 0 }}>
+                            <Tooltip title={t.inst.connectQr}>
+                              <IconButton size="small" onClick={() => handleQrClick(inst)}
+                                sx={{ color: '#60a5fa', p: 0.4, '&:hover': { bgcolor: 'rgba(59,130,246,0.1)' } }}>
+                                <QrCodeIcon sx={{ fontSize: 13 }} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title={isExp ? (lang === 'en' ? 'Close' : 'Cerrar') : t.inst.assignUser}>
+                              <IconButton size="small"
+                                onClick={e => {
+                                  e.stopPropagation()
+                                  if (isExp) {
+                                    setExpandedAssign(null); setSidebarAnchor(null)
+                                  } else {
+                                    const el = sidebarRowRefs.current[inst.name]
+                                    const rect = el ? el.getBoundingClientRect() : null
+                                    setExpandedAssign(inst.name)
+                                    setSidebarAnchor(rect ? { top: rect.bottom + 2, left: rect.left, width: rect.width } : null)
+                                  }
+                                }}
+                                sx={{ color: '#60a5fa', p: 0.4, ...(isExp && { bgcolor: 'rgba(59,130,246,0.08)' }),
+                                  '&:hover': { bgcolor: 'rgba(59,130,246,0.1)' } }}>
+                                <KeyboardArrowDownIcon sx={{ fontSize: 14, transition: 'transform 0.2s',
+                                  transform: isExp ? 'rotate(180deg)' : 'none' }} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title={lang === 'en' ? 'Edit number' : 'Editar número'}>
+                              <IconButton size="small" onClick={() => handleEditNumberClick(inst)}
+                                sx={{ color: '#a78bfa', p: 0.4, '&:hover': { bgcolor: 'rgba(167,139,250,0.1)' } }}>
+                                <EditIcon sx={{ fontSize: 13 }} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title={t.inst.delete}>
+                              <IconButton size="small" onClick={() => handleDeleteClick(inst)}
+                                sx={{ color: '#f87171', p: 0.4, '&:hover': { bgcolor: 'rgba(248,113,133,0.1)' } }}>
+                                <DeleteForeverIcon sx={{ fontSize: 13 }} />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                        </Box>
+                      </Box>
+                    )
+                  })}
                 </Box>
-              )
-            })()}
-          </>
-        )}
+              ))}
+              </Box>
+              )}
+
+              {/* Multi-select footer bar — fixed, lives outside the scroll area */}
+              {selectedInsts.size > 0 && (
+                <Box sx={{
+                  flexShrink: 0,
+                  px: 1.5, py: 1,
+                  borderTop: '1px solid rgba(59,130,246,0.25)',
+                  bgcolor: 'var(--card-bg)',
+                  display: 'flex', alignItems: 'center', gap: 1,
+                }}>
+                  <Box sx={{
+                    width: 20, height: 20, borderRadius: 1, flexShrink: 0,
+                    bgcolor: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.35)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: '#60a5fa' }}>
+                      {selectedInsts.size}
+                    </Typography>
+                  </Box>
+                  <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)', flex: 1 }}>
+                    {lang === 'en' ? `selected` : `seleccionada${selectedInsts.size !== 1 ? 's' : ''}`}
+                  </Typography>
+                  <Box onClick={() => setSelectedInsts(new Set())}
+                    sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', cursor: 'pointer', px: 0.5,
+                      '&:hover': { color: 'rgba(255,255,255,0.6)' }, userSelect: 'none' }}>
+                    ✕
+                  </Box>
+                  <Box onClick={() => setBulkPickOpen(true)}
+                    sx={{
+                      px: 1.2, py: 0.45, borderRadius: 1.5, cursor: 'pointer',
+                      bgcolor: 'rgba(59,130,246,0.18)', border: '1px solid rgba(59,130,246,0.45)',
+                      transition: 'background 0.12s',
+                      '&:hover': { bgcolor: 'rgba(59,130,246,0.28)' },
+                    }}>
+                    <Typography sx={{ fontSize: '0.72rem', color: '#60a5fa', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      {lang === 'en' ? 'Assign' : 'Asignar'}
+                    </Typography>
+                  </Box>
+                </Box>
+              )}
+            </Box>
+          )
+        })()}
       </Box>
+
+      {/* Bulk assign dialog */}
+      <BulkPickDialog
+        open={bulkPickOpen}
+        onClose={() => setBulkPickOpen(false)}
+        selectedNames={selectedInsts}
+        users={users}
+        instances={instances}
+        onAssign={handleBulkAssign}
+        lang={lang}
+      />
+
+      {/* Sidebar assign dropdown — portal to body so overflow:auto never clips it */}
+      {typeof window !== 'undefined' && expandedAssign && sidebarAnchor && createPortal(
+        <>
+          <Box onClick={() => { setExpandedAssign(null); setSidebarAnchor(null) }}
+            sx={{ position: 'fixed', inset: 0, zIndex: 1200 }} />
+          <Box sx={{
+            position: 'fixed',
+            top: sidebarAnchor.top,
+            left: sidebarAnchor.left,
+            width: Math.max(sidebarAnchor.width, 240),
+            zIndex: 1201,
+            border: '1px solid rgba(59,130,246,0.35)', borderRadius: 2,
+            bgcolor: 'var(--card-bg)', boxShadow: '0 12px 40px rgba(0,0,0,0.55)', overflow: 'hidden',
+          }}>
+            <InlineUserPicker instanceName={expandedAssign} users={users} instances={instances}
+              onAssign={(...args) => { handleInlineAssign(...args); setSidebarAnchor(null) }}
+              t={t} lang={lang} />
+          </Box>
+        </>,
+        document.body
+      )}
 
       {/* ── Edit number dialog ── */}
       <Dialog open={editNumberOpen} onClose={() => setEditNumberOpen(false)} sx={{
@@ -1696,72 +2326,181 @@ export default function InstancesPanel() {
       </Dialog>
 
       {/* ── Pick instance dialog ── */}
-      <Dialog open={pickOpen} onClose={() => setPickOpen(false)} sx={{
+      <Dialog open={pickOpen} onClose={closePick} sx={{
         '& .MuiDialog-paper': {
           bgcolor: 'var(--card-bg,#161d2e)',
-          background: 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.08) 0%, var(--card-bg,#161d2e) 55%)',
-          border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)',
-          borderRadius: 3, minWidth: 360, maxWidth: 440,
+          background: 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.09) 0%, var(--card-bg,#161d2e) 55%)',
+          border: '1px solid rgba(var(--accent-rgb,59,130,246),0.22)',
+          borderRadius: 3, minWidth: 390, maxWidth: 460,
+          boxShadow: '0 24px 64px rgba(0,0,0,0.65)',
         },
       }}>
-        <DialogTitle sx={{ pb: 1 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Box>
-              <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.97rem' }}>
+        <DialogTitle sx={{ pb: 1.2 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.3 }}>
+            <Box sx={{
+              width: 38, height: 38, borderRadius: 2, flexShrink: 0,
+              bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.14)',
+              border: '1px solid rgba(var(--accent-rgb,59,130,246),0.28)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <PersonAddIcon sx={{ fontSize: 20, color: 'var(--accent,#60a5fa)' }} />
+            </Box>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography sx={{ color: 'var(--text,white)', fontWeight: 700, fontSize: '0.97rem', lineHeight: 1.2 }}>
                 {t.inst.assignTitle}
               </Typography>
-              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem', mt: 0.2 }}>
-                {pickTargetUser?.display_name || pickTargetUser?.username}
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mt: 0.3 }}>
+                <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: 'var(--accent,#60a5fa)', flexShrink: 0 }} />
+                <Typography sx={{ fontSize: '0.72rem', color: 'var(--accent,#60a5fa)', fontWeight: 600,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {pickTargetUser?.display_name || pickTargetUser?.username}
+                </Typography>
+                {(() => {
+                  const uid = pickTargetUser?._id || pickTargetUser?.id || pickTargetUser?.username
+                  const cur = instances.filter(i => i.assigned_to === uid).length
+                  return (
+                    <Box sx={{ px: 0.8, py: 0.2, borderRadius: 1, flexShrink: 0,
+                      bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)',
+                      border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)' }}>
+                      <Typography sx={{ fontSize: '0.58rem', color: 'var(--accent,#60a5fa)', fontWeight: 700 }}>
+                        {cur}/5 slots
+                      </Typography>
+                    </Box>
+                  )
+                })()}
+              </Box>
             </Box>
-            <IconButton size="small" onClick={() => setPickOpen(false)}
-              sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: 'white' } }}>
-              <CloseIcon sx={{ fontSize: 18 }} />
+            <IconButton size="small" onClick={closePick}
+              sx={{ color: 'rgba(255,255,255,0.25)', flexShrink: 0,
+                '&:hover': { color: 'white', bgcolor: 'rgba(255,255,255,0.06)' } }}>
+              <CloseIcon sx={{ fontSize: 17 }} />
             </IconButton>
           </Box>
         </DialogTitle>
-        <DialogContent sx={{ pt: '4px !important', pb: 1 }}>
+
+        <DialogContent sx={{ pt: '4px !important', pb: 0 }}>
           {(() => {
             const unassigned = instances.filter(i => !i.assigned_to)
+            const uid = pickTargetUser?._id || pickTargetUser?.id || pickTargetUser?.username
+            const curSlots = instances.filter(i => i.assigned_to === uid).length
+            const maxPick = Math.max(0, 5 - curSlots)
             if (unassigned.length === 0)
               return (
-                <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem', py: 2, textAlign: 'center' }}>
+                <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem', py: 3, textAlign: 'center' }}>
                   {t.inst.noUnassigned}
                 </Typography>
               )
             return (
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6, maxHeight: 320, overflowY: 'auto' }}>
-                {unassigned.map(inst => {
-                  const status = inst.live_status || 'unknown'
-                  const color = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
-                  return (
-                    <Box key={inst.name} onClick={() => handlePickAssign(inst.name)}
-                      sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 1.5, py: 1.1,
-                        borderRadius: 2, cursor: 'pointer', border: '1px solid transparent',
-                        bgcolor: 'rgba(255,255,255,0.03)',
-                        '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.08)',
-                          borderColor: 'rgba(var(--accent-rgb,59,130,246),0.25)' } }}>
-                      <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography sx={{ color: 'var(--text)', fontSize: '0.83rem', fontWeight: 600 }}>{inst.label || inst.name}</Typography>
-                        <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.67rem', fontFamily: 'monospace' }}>
-                          {inst.number ? `+${inst.number}` : 'Sin número'}
-                        </Typography>
+              <Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.2 }}>
+                  <Box sx={{ flex: 1, height: '1px', bgcolor: 'var(--border)' }} />
+                  <Typography sx={{ fontSize: '0.58rem', color: 'var(--text-muted)', fontWeight: 700,
+                    textTransform: 'uppercase', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}>
+                    {maxPick === 0
+                      ? (lang === 'en' ? 'Slots full' : 'Slots llenos')
+                      : (lang === 'en' ? `Up to ${maxPick} more` : `Hasta ${maxPick} más`)}
+                  </Typography>
+                  <Box sx={{ flex: 1, height: '1px', bgcolor: 'var(--border)' }} />
+                </Box>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxHeight: 280, overflowY: 'auto',
+                  pr: 0.5,
+                  '&::-webkit-scrollbar': { width: 3 },
+                  '&::-webkit-scrollbar-button': { display: 'none' },
+                  '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.25)', borderRadius: 4 },
+                }}>
+                  {unassigned.map(inst => {
+                    const status  = inst.live_status || 'unknown'
+                    const color   = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
+                    const isConn  = ['open','connected','WORKING'].includes(status)
+                    const isDisco = ['close','disconnected','STOPPED','FAILED','auth_failure','error'].includes(status)
+                    const isSel   = pickSelected.has(inst.name)
+                    const atMax   = !isSel && pickSelected.size >= maxPick
+                    const disabled = maxPick === 0 || atMax
+                    return (
+                      <Box key={inst.name}
+                        onClick={() => {
+                          if (disabled) return
+                          setPickSelected(prev => {
+                            const next = new Set(prev)
+                            next.has(inst.name) ? next.delete(inst.name) : next.add(inst.name)
+                            return next
+                          })
+                        }}
+                        sx={{
+                          display: 'flex', alignItems: 'center', gap: 1.2, px: 1.4, py: 0.9,
+                          borderRadius: 2, cursor: disabled ? 'not-allowed' : 'pointer',
+                          border: isSel ? '1px solid rgba(var(--accent-rgb,59,130,246),0.45)' : '1px solid transparent',
+                          bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.09)' : 'rgba(255,255,255,0.025)',
+                          opacity: disabled ? 0.38 : 1,
+                          transition: 'all 0.12s',
+                          '&:hover': disabled ? {} : {
+                            bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.12)' : 'rgba(var(--accent-rgb,59,130,246),0.06)',
+                            borderColor: 'rgba(var(--accent-rgb,59,130,246),0.28)',
+                          },
+                        }}>
+                        {/* Checkbox */}
+                        <Box sx={{
+                          width: 15, height: 15, borderRadius: 0.5, flexShrink: 0,
+                          border: isSel ? '1.5px solid var(--accent,#60a5fa)' : '1.5px solid rgba(255,255,255,0.2)',
+                          bgcolor: isSel ? 'var(--accent,#60a5fa)' : 'transparent',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          transition: 'all 0.1s',
+                        }}>
+                          {isSel && <Typography sx={{ fontSize: '9px', color: 'white', fontWeight: 800, userSelect: 'none', mt: '1px' }}>✓</Typography>}
+                        </Box>
+                        {/* Status dot */}
+                        <Box sx={{ position: 'relative', width: 9, height: 9, flexShrink: 0 }}>
+                          <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: color,
+                            boxShadow: isConn ? `0 0 6px ${color}bb` : 'none' }} />
+                        </Box>
+                        {/* Name + number */}
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography sx={{ color: 'var(--text)', fontSize: '0.82rem', fontWeight: 600,
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {inst.label || inst.name}
+                          </Typography>
+                          <Typography sx={{ color: 'rgba(255,255,255,0.32)', fontSize: '0.64rem', fontFamily: 'monospace' }}>
+                            {inst.number ? `+${inst.number}` : (lang === 'en' ? 'No number' : 'Sin número')}
+                          </Typography>
+                        </Box>
+                        {/* Status chip */}
+                        <Box sx={{ px: 0.8, py: 0.25, borderRadius: 1, flexShrink: 0,
+                          bgcolor: `${color}18`, border: `1px solid ${color}44` }}>
+                          <Typography sx={{ fontSize: '0.6rem', color, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                            {isConn ? t.inst.statusConnected : isDisco ? t.inst.statusDisconnected : t.inst.statusUnknown}
+                          </Typography>
+                        </Box>
                       </Box>
-                      <Typography sx={{ fontSize: '0.65rem', color, fontWeight: 600, flexShrink: 0 }}>
-                        {['open', 'connected', 'WORKING'].includes(status) ? t.inst.statusConnected : ['close', 'disconnected'].includes(status) ? t.inst.statusDisconnected : t.inst.statusUnknown}
-                      </Typography>
-                    </Box>
-                  )
-                })}
+                    )
+                  })}
+                </Box>
               </Box>
             )
           })()}
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2.5, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-          <Button onClick={() => setPickOpen(false)}
-            sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.82rem' }}>
-            Cancelar
+
+        <DialogActions sx={{ px: 2.5, pb: 2, pt: 1.5, mt: 1,
+          borderTop: '1px solid rgba(255,255,255,0.06)', gap: 1 }}>
+          <Typography sx={{ flex: 1, fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+            {pickSelected.size > 0 ? `${pickSelected.size} seleccionada${pickSelected.size !== 1 ? 's' : ''}` : ''}
+          </Typography>
+          <Button onClick={closePick}
+            sx={{ color: 'rgba(255,255,255,0.4)', textTransform: 'none', fontSize: '0.82rem',
+              '&:hover': { color: 'var(--text)', bgcolor: 'rgba(255,255,255,0.05)' } }}>
+            {lang === 'en' ? 'Cancel' : 'Cancelar'}
+          </Button>
+          <Button onClick={handlePickAssignMulti} disabled={pickSelected.size === 0}
+            variant="contained"
+            sx={{
+              bgcolor: 'var(--accent,#3b82f6)', color: 'white', textTransform: 'none',
+              borderRadius: 1.5, px: 2, fontSize: '0.82rem', fontWeight: 600,
+              boxShadow: 'none',
+              '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.82)', boxShadow: 'none' },
+              '&:disabled': { bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.2)' },
+            }}>
+            {lang === 'en'
+              ? `Assign${pickSelected.size > 0 ? ` (${pickSelected.size})` : ''}`
+              : `Asignar${pickSelected.size > 0 ? ` (${pickSelected.size})` : ''}`}
           </Button>
         </DialogActions>
       </Dialog>
@@ -2627,7 +3366,7 @@ export default function InstancesPanel() {
         </Box>
       </Dialog>
 
-      {/* ── WAHA session dialog ── */}
+      {/* ── wwebjs session dialog ── */}
       <Dialog open={wahaOpen} onClose={() => !wahaLoading && setWahaOpen(false)} sx={{
         '& .MuiDialog-paper': {
           background: 'linear-gradient(160deg, rgba(96,165,250,0.1) 0%, var(--card-bg,#161d2e) 55%)',
@@ -2640,18 +3379,18 @@ export default function InstancesPanel() {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
             <Box sx={{
               width: 34, height: 34, borderRadius: 2, flexShrink: 0,
-              bgcolor: '#1e3a5f',
-              border: '1px solid #3b82f6',
+              bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)',
+              border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
-              <SmartphoneIcon sx={{ fontSize: 18, color: '#60a5fa' }} />
+              <SmartphoneIcon sx={{ fontSize: 18, color: 'var(--accent,#60a5fa)' }} />
             </Box>
             <Box>
               <Typography sx={{ color: 'var(--text,white)', fontWeight: 700, fontSize: '0.97rem', lineHeight: 1.2 }}>
-                {lang === 'en' ? 'New WAHA Session' : 'Nueva Sesión WAHA'}
+                {lang === 'en' ? 'Connect WhatsApp Number' : 'Conectar Número WhatsApp'}
               </Typography>
               <Typography sx={{ color: 'var(--text-muted,rgba(255,255,255,0.4))', fontSize: '0.72rem', mt: 0.2 }}>
-                {lang === 'en' ? 'Link a WhatsApp number via WAHA' : 'Vincula un número de WhatsApp vía WAHA'}
+                {lang === 'en' ? 'Link a number via QR code (whatsapp-web.js)' : 'Vincula un número vía código QR'}
               </Typography>
             </Box>
           </Box>
@@ -2709,43 +3448,14 @@ export default function InstancesPanel() {
                   <Typography sx={{ color: '#f87171', fontSize: '0.78rem' }}>{wahaErr}</Typography>
                 </Box>
               )}
-              {wahaLoading && !wahaErr && (() => {
-                const steps = [
-                  { key: 'STOPPED',       label: lang === 'en' ? 'Creating session…'  : 'Creando sesión…' },
-                  { key: 'STARTING',      label: lang === 'en' ? 'Chrome starting…'   : 'Chrome iniciando…' },
-                  { key: 'SCAN_QR_CODE',  label: lang === 'en' ? 'Generating QR…'     : 'Generando QR…' },
-                ]
-                const activeIdx = steps.findIndex(s => s.key === wahaStatus)
-                return (
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.2, p: 1.5, borderRadius: 1.5, bgcolor: '#1c2333', border: '1px solid #334155' }}>
-                    {steps.map((s, i) => {
-                      const done    = activeIdx > i
-                      const active  = activeIdx === i
-                      const pending = activeIdx < i && activeIdx !== -1
-                      const initial = activeIdx === -1 && i === 0
-                      return (
-                        <Box key={s.key} sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
-                          <Box sx={{ width: 18, height: 18, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            {done
-                              ? <CheckCircleIcon sx={{ fontSize: 16, color: '#4ade80' }} />
-                              : (active || initial)
-                                ? <CircularProgress size={14} sx={{ color: '#60a5fa' }} />
-                                : <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#475569' }} />
-                            }
-                          </Box>
-                          <Typography sx={{
-                            fontSize: '0.78rem',
-                            color: done ? '#4ade80' : (active || initial) ? 'var(--text)' : '#64748b',
-                            fontWeight: (active || initial) ? 600 : 400,
-                          }}>
-                            {s.label}
-                          </Typography>
-                        </Box>
-                      )
-                    })}
-                  </Box>
-                )
-              })()}
+              {wahaLoading && !wahaErr && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, p: 1.5, borderRadius: 1.5, bgcolor: '#1c2333', border: '1px solid #334155' }}>
+                  <CircularProgress size={14} sx={{ color: '#60a5fa' }} />
+                  <Typography sx={{ fontSize: '0.78rem', color: 'var(--text)', fontWeight: 600 }}>
+                    {lang === 'en' ? 'Starting session, generating QR…' : 'Iniciando sesión, generando QR…'}
+                  </Typography>
+                </Box>
+              )}
             </Box>
           )}
         </DialogContent>

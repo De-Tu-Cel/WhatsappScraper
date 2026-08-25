@@ -1,194 +1,120 @@
 'use client'
-import { createContext, useContext, useState, useRef, useCallback, startTransition } from 'react'
+import { createContext, useContext, useState, useRef, useCallback, useEffect, startTransition } from 'react'
 import { authFetch } from '@/lib/api'
-import { loadSendConfig, randMsgDelayMs, randBatchBreakMs, randBatchSize } from '@/lib/sendConfig'
+import { loadSendConfig } from '@/lib/sendConfig'
 
 const SendQueueCtx = createContext(null)
 export const useSendQueue = () => useContext(SendQueueCtx)
 
+// The actual sending now runs entirely server-side (backEnd/app/send_now_worker.py)
+// as a single global FIFO worker — this context just submits jobs and polls the
+// shared queue's status, so a page refresh never drops what's mid-send. The
+// public API (addJob/addBatch/cancel/active/queueLen/completedCount/queueError)
+// is kept byte-identical to the old in-browser-loop version so none of the 6
+// call sites (searchProspects/batchProcessor/csvImporter/sendCampaign/
+// singleUrlProcessor/databaseViewer) or SendBubble.jsx need to change at all.
+const POLL_ACTIVE = 1000
+const POLL_IDLE   = 4000
+const POLL_ERROR  = 30_000  // slow down when backend is unreachable
+
 export function SendQueueProvider({ children }) {
-  const queueRef      = useRef([])
-  const processingRef = useRef(false)
-  const cancelRef     = useRef(false)
-  const batchMetaRef  = useRef(new Map()) // batchId -> { remaining, sent, failed, label }
   const [active,         setActive]         = useState(null)
   const [queueLen,       setQueueLen]       = useState(0)
-  const [completedCount, setCompletedCount] = useState(null) // null = no toast
-  const [queueError,     setQueueError]     = useState(null) // null = no error
+  const [completedCount, setCompletedCount] = useState(null)
+  const [queueError,     setQueueError]     = useState(null)
+
+  const timerRef            = useRef(null)
+  const lastCompletedAtRef   = useRef(null)
+  const lastErrorAtRef       = useRef(null)
+  const dismissedErrorAtRef  = useRef(null)
+  const debugActiveRef       = useRef(false)  // true while the Shift+B fake preview is running
 
   const clearCompleted  = useCallback(() => setCompletedCount(null), [])
-  const clearQueueError = useCallback(() => setQueueError(null), [])
-
-  const reportBatchComplete = useCallback((sent, failed, label) => {
-    authFetch('/api/notifications/batch-complete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sent, failed, label }),
-    }).catch(() => {})
+  const clearQueueError = useCallback(() => {
+    dismissedErrorAtRef.current = lastErrorAtRef.current
+    setQueueError(null)
   }, [])
 
-  const processNext = useCallback(async () => {
-    if (processingRef.current) return
-    processingRef.current = true
-    cancelRef.current = false
-
-    // Request browser notification permission once
-    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      Notification.requestPermission()
-    }
-
-    let allSent = 0
-    // Batch-break tracking spans the whole queue (not just one job/company) so
-    // a long anti-detection pause lands every N messages regardless of how
-    // they're grouped into jobs — mirrors databaseViewer.jsx's send loop.
-    let msgsInBatch = 0
-    let nextBreakAt = randBatchSize(loadSendConfig())
-
-    async function waitBetweenMessages(total, sentSoFar) {
-      if (cancelRef.current) return
-      const cfg = loadSendConfig()
-      const isBatchBreak = msgsInBatch >= nextBreakAt
-      if (isBatchBreak) {
-        msgsInBatch = 0
-        nextBreakAt = randBatchSize(cfg)
-      }
-      const delayMs = isBatchBreak ? randBatchBreakMs(cfg) : randMsgDelayMs(cfg)
-      const end = Date.now() + delayMs
-      await new Promise(resolve => {
-        const tick = () => {
-          if (cancelRef.current) { resolve(); return }
-          const rem = end - Date.now()
-          if (rem <= 0) { resolve(); return }
-          startTransition(() => {
-            setActive({ total, sent: sentSoFar, phase: 'waiting', countdown: Math.ceil(rem / 1000), batch: isBatchBreak })
-          })
-          setTimeout(tick, 200)
-        }
-        tick()
-      })
-    }
-
-    while (queueRef.current.length > 0) {
-      const job = queueRef.current.shift()
-      setQueueLen(queueRef.current.length)
-      const { numbers, messages, companyId, website, batchId } = job
-      const total = numbers.length
-      let jobSent = 0
-      let jobFailed = 0
-
-      for (let i = 0; i < total; i++) {
-        if (cancelRef.current) break
-        setActive({ total, sent: i, phase: 'sending', countdown: null })
-
-        try {
-          const res = await authFetch('/api/send-message', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              company_id: companyId,
-              to_number: numbers[i],
-              message: Array.isArray(messages) ? messages[i] : messages,
-              website,
-            }),
-          })
-          if (res.ok) {
-            allSent++
-            jobSent++
+  const poll = useCallback(async () => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
+    let fast = false
+    let error = false
+    if (!debugActiveRef.current) {
+      try {
+        const res = await authFetch('/api/send-queue/status')
+        if (res.ok) {
+          const s = await res.json()
+          fast = s.phase !== 'idle'
+          if (fast) {
+            const countdown = s.next_action_at
+              ? Math.max(0, Math.ceil((new Date(s.next_action_at) - Date.now()) / 1000))
+              : null
+            startTransition(() => {
+              setActive({ total: s.active_total ?? 1, sent: s.active_sent ?? 0, phase: s.phase, countdown, batch: !!s.active_batch })
+            })
           } else {
-            jobFailed++
-            if (res.status === 503 || res.status === 400) {
-              // Fatal: all instances disconnected or no instance configured — stop queue
-              const errData = await res.json().catch(() => ({}))
-              setQueueError(errData.detail || (res.status === 503 ? 'Instancias desconectadas' : 'Sin instancia configurada'))
-              cancelRef.current = true
-              break
-            }
+            setActive(null)
           }
-        } catch {}
+          setQueueLen(s.queue_len || 0)
 
-        msgsInBatch++
-        const isLastMessageOverall = i === total - 1 && queueRef.current.length === 0
-        if (!isLastMessageOverall && !cancelRef.current) {
-          await waitBetweenMessages(total, i + 1)
-        }
-      }
-
-      if (batchId && !cancelRef.current) {
-        const meta = batchMetaRef.current.get(batchId)
-        if (meta) {
-          meta.sent   += jobSent
-          meta.failed += jobFailed + (total - jobSent - jobFailed) // unprocessed due to cancel
-          meta.remaining -= 1
-          if (meta.remaining <= 0) {
-            batchMetaRef.current.delete(batchId)
-            reportBatchComplete(meta.sent, meta.failed, meta.label)
+          if (s.last_completed?.at && s.last_completed.at !== lastCompletedAtRef.current) {
+            lastCompletedAtRef.current = s.last_completed.at
+            setCompletedCount(s.last_completed.sent)
           }
+          if (s.last_error?.at && s.last_error.at !== dismissedErrorAtRef.current) {
+            lastErrorAtRef.current = s.last_error.at
+            setQueueError(s.last_error.message)
+          } else if (!s.last_error) {
+            setQueueError(null)
+          }
+        } else {
+          error = true
         }
-      }
-
-      if (cancelRef.current) break
+      } catch { error = true }
     }
+    const delay = document.hidden ? POLL_IDLE : (fast ? POLL_ACTIVE : error ? POLL_ERROR : POLL_IDLE)
+    timerRef.current = setTimeout(poll, delay)
+  }, [])
 
-    // Success flash — bubble shows green checkmark
-    setActive({ phase: 'success', sent: allSent, total: allSent })
+  useEffect(() => {
+    poll()
+    return () => { if (timerRef.current) clearTimeout(timerRef.current) }
+  }, [poll])
 
-    // Browser notification if tab is hidden
-    if (
-      typeof Notification !== 'undefined' &&
-      Notification.permission === 'granted' &&
-      typeof document !== 'undefined' &&
-      document.hidden
-    ) {
-      new Notification('Envíos completados', {
-        body: `${allSent} mensaje${allSent !== 1 ? 's' : ''} enviado${allSent !== 1 ? 's' : ''} correctamente`,
-        icon: '/favicon.ico',
+  // Single job (e.g. "Enviar" a una sola empresa/URL, posiblemente a varios números).
+  const addJob = useCallback(async (job, label = '') => {
+    try {
+      await authFetch('/api/send-queue', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobs: [job], label, send_config: loadSendConfig() }),
       })
-    }
+    } catch {}
+    poll()  // refresh right away instead of waiting for the next tick
+  }, [poll])
 
-    // After success animation: hide bubble, show toast
-    setTimeout(() => {
-      setActive(null)
-      setQueueLen(0)
-      processingRef.current = false
-      setCompletedCount(allSent)
-    }, 1800)
-  }, [])
-
-  // Single job (e.g. "Enviar" a una sola empresa/URL, posiblemente a varios
-  // números). Se le asigna su propio batchId para que también dispare
-  // reportBatchComplete al terminar — antes solo los jobs de addBatch
-  // generaban notificación, dejando sin aviso los envíos individuales que
-  // pasan por la burbuja de timing con varios números/pausas.
-  const addJob = useCallback((job, label = '') => {
-    const batchId = `j${Date.now()}${Math.random().toString(36).slice(2, 8)}`
-    batchMetaRef.current.set(batchId, { remaining: 1, sent: 0, failed: 0, label })
-    queueRef.current.push({ ...job, batchId })
-    setQueueLen(queueRef.current.length)
-    processNext()
-  }, [processNext])
-
-  // Groups several jobs (e.g. every company in one "Enviar todos" click) under
-  // a single batchId so the notification fires once — when the whole group is
-  // done — instead of once per company.
-  const addBatch = useCallback((jobs, label = '') => {
+  // Groups several jobs (e.g. every company in one "Enviar todos" click) under a
+  // single batch_id so the completion notification fires once for the whole group.
+  const addBatch = useCallback(async (jobs, label = '') => {
     if (!jobs?.length) return
-    const batchId = `b${Date.now()}${Math.random().toString(36).slice(2, 8)}`
-    batchMetaRef.current.set(batchId, { remaining: jobs.length, sent: 0, failed: 0, label })
-    jobs.forEach(job => queueRef.current.push({ ...job, batchId }))
-    setQueueLen(queueRef.current.length)
-    processNext()
-  }, [processNext])
+    try {
+      await authFetch('/api/send-queue', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobs, label, send_config: loadSendConfig() }),
+      })
+    } catch {}
+    poll()
+  }, [poll])
 
-  const cancel = useCallback(() => {
-    cancelRef.current = true
-    queueRef.current = []
-    batchMetaRef.current.clear()
-    setQueueLen(0)
-  }, [])
+  const cancel = useCallback(async () => {
+    try { await authFetch('/api/send-queue/cancel', { method: 'POST' }) } catch {}
+    poll()
+  }, [poll])
 
+  // Shift+B local preview — never touches the real queue, so it's guarded against
+  // the poll loop overwriting it mid-animation (debugActiveRef).
   const debugBubble = useCallback(async () => {
-    if (processingRef.current) return
-    processingRef.current = true
+    if (debugActiveRef.current) return
+    debugActiveRef.current = true
     setQueueLen(2)
     const total = 5
     let allSent = 0
@@ -215,8 +141,8 @@ export function SendQueueProvider({ children }) {
     setTimeout(() => {
       setActive(null)
       setQueueLen(0)
-      processingRef.current = false
       setCompletedCount(allSent)
+      debugActiveRef.current = false
     }, 1800)
   }, [])
 

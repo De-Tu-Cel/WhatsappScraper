@@ -17,17 +17,21 @@ function sliderSx(color = '#3b82f6') {
   return {
     color,
     height: 4,
-    px: 1,        // prevents thumb clipping at min/max edges
-    py: 1.5,      // enough vertical hit-area for the thumb to be draggable
+    px: 1,
+    py: 1.5,
+    transition: 'color 0.3s ease',
     '& .MuiSlider-thumb': {
       width: 16, height: 16,
       boxShadow: `0 0 0 3px ${color}30`,
+      transition: 'box-shadow 0.3s ease',
       '&:hover, &.Mui-focusVisible': { boxShadow: `0 0 0 6px ${color}40` },
     },
-    '& .MuiSlider-track': { border: 'none', height: 4 },
+    '& .MuiSlider-track': { border: 'none', height: 4, transition: 'background-color 0.3s' },
     '& .MuiSlider-rail': { opacity: 0.35, height: 4, bgcolor: 'var(--border)' },
     '& .MuiSlider-mark': { width: 2, height: 2, borderRadius: '50%', bgcolor: 'var(--border)', transform: 'translate(-50%,-50%)' },
     '& .MuiSlider-markActive': { bgcolor: color, opacity: 0.6 },
+    '& .MuiSlider-markLabel': { color: 'var(--text-muted)', fontSize: '0.65rem' },
+    '& .MuiSlider-markLabelActive': { color: 'var(--text-muted)' },
     '& .MuiSlider-valueLabel': {
       fontSize: '0.65rem', fontWeight: 700, py: 0.3, px: 0.8,
       bgcolor: color,
@@ -35,6 +39,15 @@ function sliderSx(color = '#3b82f6') {
     },
   }
 }
+
+function riskStyle(level) {
+  if (level === 'danger') return { color: '#f87171', bg: 'rgba(239,68,68,0.12)' }
+  if (level === 'warn')   return { color: '#fbbf24', bg: 'rgba(251,191,36,0.12)' }
+  return { color: '#4ade80', bg: 'rgba(34,197,94,0.12)' }
+}
+function msgDelayStyle(min) { return riskStyle(min < 15 ? 'danger' : min < 25 ? 'warn' : 'ok') }
+function batchSizeStyle(max) { return riskStyle(max > 15 ? 'danger' : max > 10 ? 'warn' : 'ok') }
+function batchDelayStyle(min) { return riskStyle(min < 2 ? 'danger' : min < 4 ? 'warn' : 'ok') }
 
 const CARD_SX = {
   mb: 1.5, p: 1.5, borderRadius: 2,
@@ -66,6 +79,7 @@ function RangeRow({ icon, color, bg, label, value, onChange, min, max, step = 1,
             width: 24, height: 24, borderRadius: 1.2, flexShrink: 0,
             bgcolor: bg, border: `1px solid ${color}55`,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'background-color 0.3s, border-color 0.3s',
           }}>
             {icon}
           </Box>
@@ -73,8 +87,8 @@ function RangeRow({ icon, color, bg, label, value, onChange, min, max, step = 1,
             {label}
           </Typography>
         </Box>
-        <Box sx={{ px: 1, py: 0.15, borderRadius: 1, bgcolor: bg, border: `1px solid ${color}55` }}>
-          <Typography sx={{ fontSize: '0.68rem', color, fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>
+        <Box sx={{ px: 1, py: 0.15, borderRadius: 1, bgcolor: bg, border: `1px solid ${color}55`, transition: 'background-color 0.3s, border-color 0.3s' }}>
+          <Typography sx={{ fontSize: '0.68rem', color, fontVariantNumeric: 'tabular-nums', fontWeight: 700, transition: 'color 0.3s' }}>
             {value[0]}–{value[1]} {unit}
           </Typography>
         </Box>
@@ -203,36 +217,43 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
           pl: 2.5, pr: 2.5, pb: 1.5, pt: 0.5,
           borderTop: '1px solid var(--border)',
         }}>
-          <RangeRow
-            icon={<TimerIcon sx={{ fontSize: 14, color: '#60a5fa' }} />}
-            color="#60a5fa" bg="rgba(96,165,250,0.12)"
-            label={sc.msgDelay}
-            value={config.msgDelay}
-            onChange={v => update('msgDelay', v)}
-            min={5} max={300} step={5}
-            unit={sc.seconds} minDist={5}
-            marks={[5,30,60,120,180,240,300].map(v => ({ value: v, label: v >= 60 ? `${v/60}m` : `${v}s` }))}
-          />
-          <RangeRow
-            icon={<DynamicFeedIcon sx={{ fontSize: 14, color: '#a78bfa' }} />}
-            color="#a78bfa" bg="rgba(167,139,250,0.12)"
-            label={sc.batchSize}
-            value={config.batchSize}
-            onChange={v => update('batchSize', v)}
-            min={1} max={20} step={1}
-            unit={sc.msgs} minDist={1}
-            marks={[1,5,10,15,20].map(v => ({ value: v, label: String(v) }))}
-          />
-          <RangeRow
-            icon={<LocalCafeIcon sx={{ fontSize: 14, color: '#fbbf24' }} />}
-            color="#fbbf24" bg="rgba(251,191,36,0.12)"
-            label={sc.batchDelay}
-            value={config.batchDelay}
-            onChange={v => update('batchDelay', v)}
-            min={1} max={30} step={1}
-            unit={sc.minutes} minDist={1}
-            marks={[1,5,10,15,20,30].map(v => ({ value: v, label: `${v}m` }))}
-          />
+          {(() => {
+            const ds = msgDelayStyle(config.msgDelay[0])
+            const bs = batchSizeStyle(config.batchSize[1])
+            const rs = batchDelayStyle(config.batchDelay[0])
+            return (<>
+              <RangeRow
+                icon={<TimerIcon sx={{ fontSize: 14, color: ds.color, transition: 'color 0.3s' }} />}
+                color={ds.color} bg={ds.bg}
+                label={sc.msgDelay}
+                value={config.msgDelay}
+                onChange={v => update('msgDelay', v)}
+                min={5} max={300} step={5}
+                unit={sc.seconds} minDist={5}
+                marks={[5,30,60,120,180,240,300].map(v => ({ value: v, label: v >= 60 ? `${v/60}m` : `${v}s` }))}
+              />
+              <RangeRow
+                icon={<DynamicFeedIcon sx={{ fontSize: 14, color: bs.color, transition: 'color 0.3s' }} />}
+                color={bs.color} bg={bs.bg}
+                label={sc.batchSize}
+                value={config.batchSize}
+                onChange={v => update('batchSize', v)}
+                min={1} max={20} step={1}
+                unit={sc.msgs} minDist={1}
+                marks={[1,5,10,15,20].map(v => ({ value: v, label: String(v) }))}
+              />
+              <RangeRow
+                icon={<LocalCafeIcon sx={{ fontSize: 14, color: rs.color, transition: 'color 0.3s' }} />}
+                color={rs.color} bg={rs.bg}
+                label={sc.batchDelay}
+                value={config.batchDelay}
+                onChange={v => update('batchDelay', v)}
+                min={1} max={30} step={1}
+                unit={sc.minutes} minDist={1}
+                marks={[1,5,10,15,20,30].map(v => ({ value: v, label: `${v}m` }))}
+              />
+            </>)
+          })()}
           <RiskBadge config={config} />
           <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 0.5 }}>
             <Box

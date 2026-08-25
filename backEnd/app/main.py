@@ -1,12 +1,26 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))  # ← añade backEnd/app/ al path
 
+# En Windows, stdout/stderr por default usan el codepage legacy de la consola
+# (cp1252/"charmap"), no UTF-8 — cualquier print() con acentos, emojis o
+# flechas (→) tumba la request con UnicodeEncodeError. Esto rompía sends
+# reales (whatsapp_wwebjs.py logueaba "composing →" antes de mandar el
+# mensaje) de forma silenciosa: el error solo se veía como un 500 genérico,
+# nunca como lo que realmente era.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
 from app.classifier import start_classifier_background
 from app.scheduler import start_scheduler
+from app.scrape_jobs import start_scrape_worker
+from app.send_now_worker import start_send_now_worker
 
 
 @asynccontextmanager
@@ -46,8 +60,31 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+    # 3. Auto-start wwebjs sessions registered in MongoDB
+    try:
+        import requests as _req
+        from app.config import WWEBJS_URL as _ww_url
+        _ww_insts = list(db.db.instances.find({"provider": "wwebjs"}, {"name": 1}))
+        for _inst in _ww_insts:
+            _name = _inst.get("name", "")
+            if not _name:
+                continue
+            try:
+                _st = _req.get(f"{_ww_url}/session/{_name}/status", timeout=2).json()
+                if _st.get("status") == "not_found":
+                    _req.post(f"{_ww_url}/session/{_name}/start", timeout=10)
+                    _logger.info("[Startup] wwebjs session started: %s", _name)
+                else:
+                    _logger.info("[Startup] wwebjs session already running: %s (%s)", _name, _st.get("status"))
+            except Exception as _e:
+                _logger.warning("[Startup] wwebjs session %s failed to start: %s", _name, _e)
+    except Exception:
+        pass
+
     start_classifier_background()
     start_scheduler()
+    start_scrape_worker()
+    start_send_now_worker()
     yield
 
 

@@ -38,6 +38,17 @@ import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariant
 import { SendConfigPanel } from './SendConfigPanel'
 import { loadSendConfig } from '@/lib/sendConfig'
 import { useSendQueue } from '../context/SendQueueContext'
+import { useScrapeJob } from '../hooks/useScrapeJob'
+import { useDailyCapStats } from '../hooks/useDailyCapStats'
+import DailyCapBadge, { getOverBy } from './DailyCapBadge'
+import WhatsAppNumberSummary from './WhatsAppNumberSummary'
+import RecipientsBox from './RecipientsBox'
+import CapacityBanner from './CapacityBanner'
+import { dedupeByCompany } from '../lib/companyDedupe'
+import Dialog from '@mui/material/Dialog'
+import DialogTitle from '@mui/material/DialogTitle'
+import DialogContent from '@mui/material/DialogContent'
+import DialogActions from '@mui/material/DialogActions'
 
 const EXAMPLES = [
   'https://pizzeria-mario.com.mx/\nhttps://ferreteria-sanchez.mx/\nhttps://spa-belleza-queretaro.com/\nhttps://taller-mecanico-hdz.mx/\nhttps://restaurante-oaxaca.com.mx/\nhttps://constructora-garcia.mx/',
@@ -121,25 +132,102 @@ function EmptyState({ t }) {
   return (
     <Box sx={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      py: 6, gap: 1.5,
-      border: '1px dashed var(--border)',
+      py: 5, gap: 1.5,
       borderRadius: 3,
+      border: '1px dashed rgba(255,255,255,0.07)',
+      background: 'radial-gradient(ellipse at 50% 60%, rgba(59,130,246,0.04) 0%, transparent 70%)',
     }}>
       <Box sx={{
-        width: 52, height: 52,
-        bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)',
-        border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.18)',
-        borderRadius: 3,
+        width: 48, height: 48,
+        bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.07)',
+        border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.15)',
+        borderRadius: '14px',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
+        boxShadow: '0 0 24px rgba(59,130,246,0.08)',
       }}>
-        <InboxIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 26, opacity: 0.6 }} />
+        <InboxIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 22, opacity: 0.55 }} />
       </Box>
-      <Typography sx={{ color: 'var(--text)', fontSize: '0.85rem', fontWeight: 500 }}>
-        {t.batch.emptyTitle}
-      </Typography>
-      <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
-        {t.batch.emptyHint}
-      </Typography>
+      <Box sx={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+        <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.83rem', fontWeight: 600 }}>
+          {t.batch.emptyTitle}
+        </Typography>
+        <Typography sx={{ color: 'rgba(255,255,255,0.22)', fontSize: '0.73rem' }}>
+          {t.batch.emptyHint}
+        </Typography>
+      </Box>
+    </Box>
+  )
+}
+
+// ─── URL preview list (live, pre-scrape) ──────────────────────────────────────
+function UrlPreviewList({ urlList }) {
+  const validCount = urlList.filter(u => isValidUrl(u)).length
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.1 }}>
+        <Typography sx={{ fontSize: '0.66rem', color: 'rgba(255,255,255,0.28)', textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 600 }}>
+          URLs detectadas
+        </Typography>
+        <Typography sx={{ fontSize: '0.66rem', color: 'rgba(255,255,255,0.18)', fontVariantNumeric: 'tabular-nums' }}>
+          {validCount} / {urlList.length} válidas
+        </Typography>
+      </Box>
+      <Box sx={{
+        display: 'flex', flexDirection: 'column', gap: 0.3,
+        maxHeight: 230, overflowY: 'auto',
+        scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.08) transparent',
+        '&::-webkit-scrollbar': { width: 3 },
+        '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.1)', borderRadius: 2 },
+        pr: 0.25,
+      }}>
+        {urlList.map((url, i) => {
+          const valid = isValidUrl(url)
+          const isDup = urlList.indexOf(url) !== i
+          let domain = null
+          try {
+            domain = new URL(url.startsWith('http') ? url : `https://${url}`).hostname.replace(/^www\./, '')
+          } catch {}
+
+          const borderColor = isDup ? 'rgba(251,191,36,0.18)' : valid ? 'rgba(255,255,255,0.055)' : 'rgba(239,68,68,0.22)'
+          const bgColor     = isDup ? 'rgba(251,191,36,0.035)' : valid ? 'rgba(255,255,255,0.02)' : 'rgba(239,68,68,0.055)'
+          const dotColor    = isDup ? '#fbbf24' : valid ? '#4ade80' : '#f87171'
+          const textColor   = isDup ? '#fbbf24' : valid ? 'rgba(255,255,255,0.72)' : '#f87171'
+
+          return (
+            <Box key={i} sx={{
+              display: 'flex', alignItems: 'center', gap: 0.9,
+              px: 1.1, py: 0.5, borderRadius: 1.5,
+              bgcolor: bgColor, border: `1px solid ${borderColor}`,
+            }}>
+              <Typography sx={{ fontSize: '0.59rem', color: 'rgba(255,255,255,0.18)', fontVariantNumeric: 'tabular-nums', minWidth: 16, textAlign: 'right', flexShrink: 0 }}>
+                {i + 1}
+              </Typography>
+              <Box sx={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, bgcolor: dotColor, boxShadow: `0 0 5px ${dotColor}88` }} />
+              {domain && valid && (
+                <Box component="img"
+                  src={`https://www.google.com/s2/favicons?domain=${domain}&sz=16`}
+                  width={13} height={13}
+                  sx={{ borderRadius: '2px', flexShrink: 0 }}
+                  onError={e => { e.target.style.display = 'none' }}
+                />
+              )}
+              <Typography sx={{ flex: 1, fontSize: '0.75rem', color: textColor, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {domain || url}
+              </Typography>
+              {isDup && (
+                <Box sx={{ px: 0.65, py: 0.1, borderRadius: '4px', bgcolor: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.22)', flexShrink: 0 }}>
+                  <Typography sx={{ fontSize: '0.57rem', color: '#fbbf24', fontWeight: 700, letterSpacing: '0.04em' }}>DUP</Typography>
+                </Box>
+              )}
+              {!valid && (
+                <Box sx={{ px: 0.65, py: 0.1, borderRadius: '4px', bgcolor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.22)', flexShrink: 0 }}>
+                  <Typography sx={{ fontSize: '0.57rem', color: '#f87171', fontWeight: 700, letterSpacing: '0.04em' }}>INV</Typography>
+                </Box>
+              )}
+            </Box>
+          )
+        })}
+      </Box>
     </Box>
   )
 }
@@ -169,13 +257,10 @@ export default function BatchProcessor() {
   const { t, lang } = useLang()
   const TEMPLATES = getTemplates(t)
   const [rawUrls,     setRawUrls]     = useState('')
-  const [loading,     setLoading]     = useState(false)
-  const [rows,        setRows]        = useState([])
-  const [progress,    setProgress]    = useState(0)
-  const [doneCount,   setDoneCount]   = useState(0)
-  const [currentUrl,  setCurrentUrl]  = useState('')
-  const [phase,       setPhase]       = useState('')
-  const [done,        setDone]        = useState(false)
+  const scrapeJob = useScrapeJob('batch')
+  // El scraping en sí corre en el backend (useScrapeJob) — esto solo cubre el
+  // estado optimista de envío por url, que el job no conoce.
+  const [sentOverlay, setSentOverlay] = useState({})
   const [selectedTpl, setSelectedTpl] = useState(TEMPLATES[0].id)
   const [msgText,     setMsgText]     = useState(TEMPLATES[0].text)
   const [extraVariants, setExtraVariants] = useState([])
@@ -183,6 +268,17 @@ export default function BatchProcessor() {
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
   const [sendCfg,     setSendCfg]     = useState(() => loadSendConfig())
   const { addBatch, cancel: cancelQueue, active: queueActive } = useSendQueue()
+  const { stats: capStats, refresh: refreshCapStats } = useDailyCapStats()
+  const [confirmDialog,     setConfirmDialog]     = useState({ open: false, names: '', resolve: null })
+  const [newContactsDialog, setNewContactsDialog] = useState({ open: false, trimCount: 0, newRemaining: 0, resolve: null })
+  // Qué empresas (de las que tienen WhatsApp) quedan destildadas del envío masivo —
+  // mismo patrón que ya usa searchProspects.jsx, portado aquí porque antes esto
+  // era todo-o-nada.
+  const [waDeselected, setWaDeselected] = useState(new Set())
+  // Números EXTRA (además del principal) prendidos a mano al expandir el chip
+  // de una empresa — clave `${company_id}::${number}`.
+  const [extraSelected, setExtraSelected] = useState(new Set())
+  const [expandedCo, setExpandedCo] = useState(new Set())
   const msgRef       = useRef(null)
   const highlightRef = useRef(null)
   function syncScroll() {
@@ -190,9 +286,30 @@ export default function BatchProcessor() {
       highlightRef.current.scrollTop = msgRef.current.scrollTop
   }
   const urlsRef     = useRef(null)
-  const pauseRef    = useRef(false)
-  const cancelRef   = useRef(false)
-  const [paused, setPaused] = useState(false)
+
+  const loading    = scrapeJob.processing
+  const paused     = scrapeJob.paused
+  const done       = scrapeJob.done
+  const progress   = scrapeJob.progress
+  const doneCount  = scrapeJob.processed
+  const currentUrl = scrapeJob.currentUrl
+  const rows = useMemo(() => {
+    const results = scrapeJob.results
+    return Object.keys(sentOverlay).length
+      ? results.map(r => sentOverlay[r.url] ? { ...r, msg_status: sentOverlay[r.url] } : r)
+      : results
+  }, [scrapeJob.results, sentOverlay])
+
+  useEffect(() => {
+    if (queueActive?.phase === 'success') {
+      setSentOverlay(prev => {
+        const next = { ...prev }
+        for (const k in next) if (next[k] === 'queued') next[k] = 'sent'
+        return next
+      })
+      refreshCapStats()
+    }
+  }, [queueActive?.phase, refreshCapStats])
 
   const placeholder = useTypewriter(EXAMPLES, !rawUrls && !loading)
 
@@ -206,10 +323,33 @@ export default function BatchProcessor() {
   const canBatch      = urlList.length > 0 && !overLimit && invalidUrls.length === 0 && duplicateUrls.length === 0
 
 
-  const waRows      = rows.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
+  // waRowsUnique deduplicado por company_id — dos URLs distintas del lote pueden
+  // resolver a la misma empresa ya existente en la BD.
+  const waRowsAll    = rows.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
+  const waRowsUnique = useMemo(() => dedupeByCompany(waRowsAll), [waRowsAll])
+  // Los setState devuelven la MISMA referencia si ya estaban vacíos — evita que
+  // este efecto re-dispare un render indefinidamente si `rows` llega a ser
+  // referencialmente inestable entre renders (ver useScrapeJob.js EMPTY_RESULTS).
+  useEffect(() => {
+    setWaDeselected(prev => prev.size ? new Set() : prev)
+    setExtraSelected(prev => prev.size ? new Set() : prev)
+    setExpandedCo(prev => prev.size ? new Set() : prev)
+  }, [rows])
+  const effectiveWaSelected = useMemo(() =>
+    new Set(waRowsUnique.map(r => r.company_id).filter(id => !waDeselected.has(id))),
+  [waRowsUnique, waDeselected])
   const alreadySent = rows.some(r => r.msg_status === 'sent' || r.msg_status === 'failed' || r.msg_status === 'queued')
   const isSending   = queueActive !== null && alreadySent
-  const totalNumbers = waRows.reduce((sum, r) => sum + (r.all_whatsapp?.length > 0 ? r.all_whatsapp.length : (r.whatsapp ? 1 : 0)), 0)
+  // Un envío masivo manda por default 1 número por empresa (el principal) — evita
+  // que una empresa con muchos números se coma el cupo diario de warmup de varias
+  // empresas nuevas de golpe. Expandir el chip de una empresa permite agregar sus
+  // otros números a propósito — cada uno cuenta su propio slot de cupo (el
+  // backend deduplica por número real, no por empresa).
+  const totalNumbers = effectiveWaSelected.size
+  const totalContactPoints = totalNumbers +
+    [...extraSelected].filter(key => effectiveWaSelected.has(key.split('::')[0])).length
+  const overBy      = getOverBy(capStats, totalContactPoints)
+  const capBlocked  = overBy > 0
   // Sending to 2+ numbers needs varied text (see MIN_TEMPLATES_FOR_BULK) — editing
   // one base message stops making sense there, so it switches to picking 3+ saved templates.
   const isBulk = totalNumbers > 1
@@ -220,88 +360,100 @@ export default function BatchProcessor() {
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
   function handlePause() {
-    pauseRef.current = !pauseRef.current
-    setPaused(pauseRef.current)
+    paused ? scrapeJob.resume() : scrapeJob.pause()
   }
 
   function handleCancelBatch() {
-    cancelRef.current = true
-    pauseRef.current  = false
-    setPaused(false)
+    scrapeJob.cancel()
   }
 
+  // El loop de scraping ahora corre en el backend (backEnd/app/scrape_jobs.py) —
+  // esto solo crea el job y lo deja al hook useScrapeJob hacer polling.
   async function handleBatch() {
     if (!urlList.length) return
-    pauseRef.current = false; cancelRef.current = false
-    setRows([]); setProgress(0); setDoneCount(0); setLoading(true); setDone(false); setPaused(false)
-
-    const scraped = []
-    const CONCURRENCY = 4
-    const total = urlList.length
-    let completed = 0
-    setPhase('scraping')
-    try {
-      for (let i = 0; i < total; i += CONCURRENCY) {
-        while (pauseRef.current && !cancelRef.current) await new Promise(r => setTimeout(r, 200))
-        if (cancelRef.current) break
-        const chunk = urlList.slice(i, i + CONCURRENCY)
-        setCurrentUrl(chunk[0])
-        const chunkResults = await Promise.all(chunk.map(async (url) => {
-          try {
-            const res = await fetch('/api/process-url', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ url, skip_send: true }),
-            })
-            if (!res.ok) {
-              const body = await res.json().catch(() => null)
-              throw new Error(body?.detail || `HTTP ${res.status}`)
-            }
-            const d = await res.json()
-            const row = d.blacklisted
-              ? { url, empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, ok: false, blacklisted: true, blockReason: d.matched, msg_status: null }
-              : { url, empresa: d.scraped?.name || '—', industria: d.scraped?.industry || '—', whatsapp: d.primary_whatsapp_number || '', all_whatsapp: d.all_whatsapp_numbers || (d.primary_whatsapp_number ? [d.primary_whatsapp_number] : []), company_id: d.company_id || '', scraped_data: d.scraped, ok: true, blacklisted: false, blockReason: null, msg_status: null }
-            completed++
-            setProgress(Math.round(completed / total * 100))
-            setDoneCount(completed)
-            setCurrentUrl(url)
-            return row
-          } catch (e) {
-            completed++
-            setProgress(Math.round(completed / total * 100))
-            setDoneCount(completed)
-            return { url, empresa: '—', industria: '—', whatsapp: '', company_id: '', scraped_data: null, ok: false, msg_status: null, errorReason: e.message }
-          }
-        }))
-        scraped.push(...chunkResults)
-        setRows([...scraped])
-      }
-    } finally {
-      setProgress(100)
-      setCurrentUrl(''); setPhase(''); setLoading(false); setPaused(false); setDone(true)
-    }
+    setSentOverlay({})
+    await scrapeJob.start(urlList)
   }
 
-  function handleSendAll() {
-    const targets = rows.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
-    if (!targets.length || belowMinTemplates) return
+  async function handleSendAll() {
+    let targets = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id))
+    if (!targets.length || belowMinTemplates || capBlocked) return
+
+    // New-contacts daily cap — per-instance aware pre-flight.
+    // Backend enforces 5/day per warmup instance and 12/day per normal instance.
+    // Companies with an assigned_instance are checked against THAT instance's remaining cap.
+    // Unassigned companies (new, not yet sent to) use the global pool.
+    {
+      const newInBatch = targets.filter(r => !r.already_contacted?.contacted)
+      if (newInBatch.length > 0) {
+        // Build per-instance remaining capacity map from capStats
+        const instCapMap = Object.fromEntries(
+          (capStats?.instances ?? []).map(inst => [inst.instance, inst.new_contacts_left ?? 0])
+        )
+        const globalPool = capStats?.new_contacts_capacity ?? Infinity
+
+        // Split new contacts into "assigned to a known instance" vs "unassigned"
+        const byInstance = {}
+        const unassigned  = []
+        for (const r of newInBatch) {
+          if (r.assigned_instance && instCapMap[r.assigned_instance] !== undefined) {
+            ;(byInstance[r.assigned_instance] ??= []).push(r)
+          } else {
+            unassigned.push(r)
+          }
+        }
+
+        // Trim per-instance group to that instance's remaining cap
+        const kept = []
+        let totalTrimmed = 0
+        for (const [inst, companies] of Object.entries(byInstance)) {
+          const cap = instCapMap[inst] ?? 0
+          kept.push(...companies.slice(0, cap))
+          totalTrimmed += Math.max(0, companies.length - cap)
+        }
+        // Unassigned new contacts share the global remaining pool
+        const unassignedCap = Math.min(globalPool, unassigned.length)
+        kept.push(...unassigned.slice(0, unassignedCap))
+        totalTrimmed += Math.max(0, unassigned.length - unassignedCap)
+
+        if (totalTrimmed > 0) {
+          const newRemaining = newInBatch.length - totalTrimmed
+          const confirmed = await new Promise(resolve =>
+            setNewContactsDialog({ open: true, trimCount: totalTrimmed, newRemaining, resolve })
+          )
+          if (!confirmed) return
+          const existing = targets.filter(r => r.already_contacted?.contacted)
+          targets = [...existing, ...kept]
+        }
+      }
+    }
+
+    const alreadyContacted = targets.filter(r => r.already_contacted?.contacted)
+    if (alreadyContacted.length) {
+      const names = alreadyContacted.map(r => r.empresa || r.url).join(', ')
+      const confirmed = await new Promise(resolve => setConfirmDialog({ open: true, names, resolve }))
+      if (!confirmed) return
+    }
     let lastVariant = null
-    const updated = rows.map(r => ({ ...r }))
     const jobs = []
+    const queuedUrls = {}
     for (const row of targets) {
-      const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
-      if (!numbers.length) continue
-      const messages = numbers.map(() => {
-        const v = pickMessageVariant(allVariants, lastVariant)
-        lastVariant = v
-        return renderTemplate(v, row.scraped_data)
-      })
+      // Principal + números extra prendidos a mano para esta empresa — ver
+      // nota junto a totalContactPoints.
+      const primary = row.all_whatsapp?.length > 0 ? row.all_whatsapp[0] : row.whatsapp
+      if (!primary) continue
+      const extras = row.all_whatsapp?.slice(1).filter(n => extraSelected.has(`${row.company_id}::${n}`)) || []
+      const numbers = [primary, ...extras]
+      // Mismo texto para todos los números de UNA empresa.
+      const v = pickMessageVariant(allVariants, lastVariant)
+      lastVariant = v
+      const message = renderTemplate(v, row.scraped_data)
+      const messages = numbers.map(() => message)
       jobs.push({ numbers, messages, companyId: row.company_id, website: row.url })
-      const idx = updated.findIndex(r => r.url === row.url)
-      if (idx >= 0) updated[idx] = { ...updated[idx], msg_status: 'queued' }
+      queuedUrls[row.url] = 'queued'
     }
     addBatch(jobs, lang === 'en' ? 'URL batch' : 'Lote de URLs')
-    setRows(updated)
+    setSentOverlay(prev => ({ ...prev, ...queuedUrls }))
   }
 
   const sentCount  = rows.filter(r => r.msg_status === 'sent').length
@@ -384,7 +536,7 @@ export default function BatchProcessor() {
               <Tooltip title={t.batch.clear}>
                 <IconButton
                   size="small"
-                  onClick={() => { if (urlsRef.current) { urlsRef.current.value = ''; urlsRef.current.dispatchEvent(new Event('input', { bubbles: true })) } setRows([]); setDone(false) }}
+                  onClick={() => { if (urlsRef.current) { urlsRef.current.value = ''; urlsRef.current.dispatchEvent(new Event('input', { bubbles: true })) } setSentOverlay({}); scrapeJob.reset() }}
                   sx={{ color: 'rgba(255,255,255,0.2)', p: 0.3, '&:hover': { color: 'rgba(255,255,255,0.6)' } }}
                 >
                   <CloseIcon sx={{ fontSize: 14 }} />
@@ -573,10 +725,10 @@ export default function BatchProcessor() {
               <MessageIcon sx={{ fontSize: 16, color: '#4ade80' }} />
               <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>{t.batch.sendMessages}</Typography>
             </Box>
-            {waRows.length > 0 && (
+            {waRowsUnique.length > 0 && (
               <Chip
                 icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />}
-                label={`${waRows.length} ${t.batch.withWa}`}
+                label={`${effectiveWaSelected.size} ${t.search.of} ${waRowsUnique.length} ${t.batch.withWa}`}
                 size="small"
                 sx={{
                   fontSize: '0.7rem', height: 22,
@@ -587,6 +739,22 @@ export default function BatchProcessor() {
               />
             )}
           </Box>
+          {capStats && (
+            <CapacityBanner stats={capStats} selectionCount={totalContactPoints} sx={{ mb: 1.5 }} />
+          )}
+
+          <Box sx={{ display: 'flex', gap: 2.5 }}>
+            <RecipientsBox rows={waRowsUnique}
+              effectiveSelected={effectiveWaSelected}
+              expandedCo={expandedCo}
+              extraSelected={extraSelected}
+              setDeselected={setWaDeselected}
+              setExpandedCo={setExpandedCo}
+              setExtraSelected={setExtraSelected}
+              title={t.search.recipients}
+              sx={{ width: 260, flexShrink: 0 }} />
+
+          <Box sx={{ flex: 1, minWidth: 0 }}>
           {!isBulk && <>
           <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
             {t.batch.baseTemplate}
@@ -646,7 +814,7 @@ export default function BatchProcessor() {
                 p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit',
                 whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                 overflowY: 'hidden', pointerEvents: 'none',
-                color: '#e2e8f0', borderRadius: 1.5,
+                color: 'var(--text, #e2e8f0)', borderRadius: 1.5,
               }}
             />
             <Box component="textarea" ref={msgRef} defaultValue={msgText}
@@ -655,7 +823,7 @@ export default function BatchProcessor() {
               sx={{
                 position: 'relative', zIndex: 1, display: 'block',
                 width: '100%', minHeight: 100, maxHeight: 200, resize: 'vertical',
-                bgcolor: 'transparent', color: 'transparent', caretColor: '#e2e8f0',
+                bgcolor: 'transparent', color: 'transparent', caretColor: 'var(--text, #e2e8f0)',
                 border: 'none', outline: 'none', borderRadius: 1.5,
                 p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit',
                 boxSizing: 'border-box',
@@ -680,6 +848,7 @@ export default function BatchProcessor() {
           <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />
           <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
+            <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} />
             {isSending && (
               <Tooltip title={t.search.cancelSend}>
                 <IconButton size="small" onClick={cancelQueue}
@@ -690,25 +859,34 @@ export default function BatchProcessor() {
             )}
             <Button
               onClick={handleSendAll}
-              disabled={waRows.length === 0 || alreadySent || isDisconnected || belowMinTemplates}
+              disabled={effectiveWaSelected.size === 0 || alreadySent || isDisconnected || belowMinTemplates || capBlocked}
               startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
               size="small"
               sx={{
                 fontSize: '0.78rem', fontWeight: 700, flexShrink: 0,
-                bgcolor: waRows.length > 0 && !alreadySent ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
-                color:   waRows.length > 0 && !alreadySent ? '#4ade80' : 'rgba(255,255,255,0.3)',
-                border:  `1px solid ${waRows.length > 0 && !alreadySent ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
+                bgcolor: effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
+                color:   effectiveWaSelected.size > 0 && !alreadySent ? '#4ade80' : 'rgba(255,255,255,0.3)',
+                border:  `1px solid ${effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
                 borderRadius: 1.5, px: 2, py: 0.6,
-                '&:hover': { bgcolor: waRows.length > 0 && !alreadySent ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
+                '&:hover': { bgcolor: effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
                 '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
               }}
             >
               {alreadySent
                 ? t.batch.msgSent
                 : lang === 'en'
-                  ? `Send to ${waRows.length} ${waRows.length !== 1 ? 'companies' : 'company'} with WhatsApp`
-                  : `Enviar a ${waRows.length} empresa${waRows.length !== 1 ? 's' : ''} con WhatsApp`}
+                  ? `Send to ${effectiveWaSelected.size} ${effectiveWaSelected.size !== 1 ? 'companies' : 'company'} with WhatsApp`
+                  : `Enviar a ${effectiveWaSelected.size} empresa${effectiveWaSelected.size !== 1 ? 's' : ''} con WhatsApp`}
             </Button>
+          </Box>
+          {capBlocked && !isSending && (
+            <Typography sx={{ color: '#f59e0b', fontSize: '0.7rem', textAlign: 'right', mt: 0.5 }}>
+              {lang === 'en'
+                ? `Deselect ${overBy} to fit today's quota`
+                : `Desmarca ${overBy} para caber en tu cupo de hoy`}
+            </Typography>
+          )}
+          </Box>
           </Box>
         </Box>
       )}
@@ -756,6 +934,8 @@ export default function BatchProcessor() {
       {/* ── Results ── */}
       {done && rows.length === 0 ? (
         <EmptyState t={t} />
+      ) : rows.length === 0 && !loading && urlList.length > 0 ? (
+        <UrlPreviewList urlList={urlList} />
       ) : rows.length > 0 ? (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -815,28 +995,34 @@ export default function BatchProcessor() {
                     '&:hover': { bgcolor: 'rgba(255,255,255,0.025)' },
                     '& td': { borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: '0.8rem' },
                   }}>
-                    <TableCell sx={{ maxWidth: 200, color: '#60a5fa' }}>
-                      <Typography
-                        component="a" href={r.url} target="_blank" rel="noopener"
-                        sx={{ fontSize: '0.78rem', color: '#60a5fa', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
-                      >
-                        {r.url.length > 32 ? r.url.slice(0, 32) + '…' : r.url}
-                      </Typography>
+                    <TableCell sx={{ maxWidth: 200 }}>
+                      {(() => {
+                        let domain = null
+                        try { domain = new URL(r.url).hostname.replace(/^www\./, '') } catch {}
+                        return (
+                          <Box component="a" href={r.url} target="_blank" rel="noopener"
+                            sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, textDecoration: 'none', '&:hover .bt': { textDecoration: 'underline' } }}>
+                            {domain && (
+                              <Box component="img"
+                                src={`https://www.google.com/s2/favicons?domain=${domain}&sz=16`}
+                                width={13} height={13}
+                                sx={{ borderRadius: '2px', flexShrink: 0 }}
+                                onError={e => { e.target.style.display = 'none' }}
+                              />
+                            )}
+                            <Typography component="span" className="bt"
+                              sx={{ fontSize: '0.78rem', color: '#60a5fa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>
+                              {domain || (r.url.length > 28 ? r.url.slice(0, 28) + '…' : r.url)}
+                            </Typography>
+                          </Box>
+                        )
+                      })()}
                     </TableCell>
                     <TableCell sx={{ color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{r.empresa}</TableCell>
                     <TableCell sx={{ color: 'rgba(255,255,255,0.55)' }}>{r.industria}</TableCell>
                     <TableCell>
                       {(r.all_whatsapp?.length > 0 || r.whatsapp) ? (
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
-                          {(r.all_whatsapp?.length > 0 ? r.all_whatsapp : [r.whatsapp]).map((num, ni) => (
-                            <Chip key={ni}
-                              icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />}
-                              label={num}
-                              size="small"
-                              sx={{ bgcolor: ni === 0 ? 'rgba(34,197,94,0.1)' : 'rgba(34,197,94,0.06)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#4ade80' } }}
-                            />
-                          ))}
-                        </Box>
+                        <WhatsAppNumberSummary row={r} />
                       ) : (
                         <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>
                       )}
@@ -846,7 +1032,7 @@ export default function BatchProcessor() {
                         {r.msg_status === 'sent'    && <Chip label={t.batch.chipSent}   size="small" sx={{ bgcolor: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)', height: 20, fontSize: '0.68rem' }} />}
                         {r.msg_status === 'failed'  && <Chip label={t.batch.chipFailed} size="small" sx={{ bgcolor: 'rgba(239,68,68,0.1)',   color: '#f87171', border: '1px solid rgba(239,68,68,0.25)',   height: 20, fontSize: '0.68rem' }} />}
                         {r.msg_status === 'no_wa'   && <Chip label={t.batch.chipNoWa}   size="small" sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.08)', height: 20, fontSize: '0.68rem' }} />}
-                        {r.msg_status === 'skipped' && <Chip label="Saltado"   size="small" sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.08)', height: 20, fontSize: '0.68rem' }} />}
+                        {r.msg_status === 'skipped' && <Chip label={lang === 'en' ? 'Skipped' : 'Saltado'} size="small" sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.08)', height: 20, fontSize: '0.68rem' }} />}
                         {!r.msg_status && <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>}
                       </TableCell>
                     )}
@@ -876,7 +1062,7 @@ export default function BatchProcessor() {
                         <Chip label="OK" size="small" icon={<CheckCircleIcon sx={{ fontSize: '12px !important' }} />}
                           sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#4ade80' } }} />
                       ) : (
-                        <Tooltip title={r.errorReason || 'Error desconocido'} placement="top" arrow>
+                        <Tooltip title={r.errorReason || (lang === 'en' ? 'Unknown error' : 'Error desconocido')} placement="top" arrow>
                           <Chip label="Error" size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
                             sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' }, cursor: 'help' }} />
                         </Tooltip>
@@ -891,6 +1077,70 @@ export default function BatchProcessor() {
       ) : !loading && (
         <EmptyState t={t} />
       )}
+
+      <Dialog
+        open={confirmDialog.open}
+        onClose={() => { confirmDialog.resolve?.(false); setConfirmDialog({ open: false, names: '', resolve: null }) }}
+        slotProps={{ paper: { sx: { bgcolor: 'var(--bg-card, #1e293b)', border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 2, minWidth: 340 } } }}
+      >
+        <DialogTitle sx={{ color: 'var(--text, white)', fontSize: '0.95rem', fontWeight: 700, pb: 1 }}>
+          {lang === 'en' ? 'Already sent contacts' : 'Contactos ya enviados'}
+        </DialogTitle>
+        <DialogContent sx={{ pt: '8px !important' }}>
+          <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.6))', fontSize: '0.85rem' }}>
+            {lang === 'en' ? 'The following contacts have already received a message:' : 'Los siguientes contactos ya recibieron un mensaje:'}
+          </Typography>
+          <Typography sx={{ color: 'var(--text, white)', fontSize: '0.85rem', fontWeight: 600, mt: 0.5, wordBreak: 'break-word' }}>
+            {confirmDialog.names}
+          </Typography>
+          <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.6))', fontSize: '0.85rem', mt: 1.5 }}>
+            {lang === 'en' ? 'Send them a message anyway?' : '¿Enviarles mensaje de todas formas?'}
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 2, pb: 2, gap: 1 }}>
+          <Button size="small" onClick={() => { confirmDialog.resolve?.(false); setConfirmDialog({ open: false, names: '', resolve: null }) }}
+            sx={{ color: 'var(--text-muted, rgba(255,255,255,0.5))', textTransform: 'none' }}>
+            {lang === 'en' ? 'Cancel' : 'Cancelar'}
+          </Button>
+          <Button size="small" variant="contained" onClick={() => { confirmDialog.resolve?.(true); setConfirmDialog({ open: false, names: '', resolve: null }) }}
+            sx={{ bgcolor: 'var(--accent, #3b82f6)', '&:hover': { bgcolor: 'var(--accent-hover, #2563eb)' }, textTransform: 'none', fontWeight: 600 }}>
+            {lang === 'en' ? 'Send anyway' : 'Enviar de todas formas'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── New-contacts daily-cap trim dialog ── */}
+      <Dialog
+        open={newContactsDialog.open}
+        onClose={() => { newContactsDialog.resolve?.(false); setNewContactsDialog({ open: false, trimCount: 0, newRemaining: 0, resolve: null }) }}
+        slotProps={{ paper: { sx: { bgcolor: 'var(--bg-card, #1e293b)', border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 2, minWidth: 340 } } }}
+      >
+        <DialogTitle sx={{ color: '#fbbf24', fontSize: '0.95rem', fontWeight: 700, pb: 1 }}>
+          {lang === 'en' ? 'New-contact limit reached' : 'Límite de contactos nuevos'}
+        </DialogTitle>
+        <DialogContent sx={{ pt: '8px !important' }}>
+          <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.6))', fontSize: '0.85rem', lineHeight: 1.6 }}>
+            {lang === 'en'
+              ? `Your warmup limit allows ${newContactsDialog.newRemaining} new contacts today. ${newContactsDialog.trimCount} will be removed from the batch.`
+              : `Tu límite de calentamiento permite ${newContactsDialog.newRemaining} contactos nuevos hoy. Se eliminarán ${newContactsDialog.trimCount} del lote.`}
+          </Typography>
+          <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.5))', fontSize: '0.78rem', mt: 1.2 }}>
+            {lang === 'en'
+              ? 'Existing contacts (already messaged before) are not affected.'
+              : 'Los contactos existentes (ya enviados antes) no se ven afectados.'}
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 2, pb: 2, gap: 1 }}>
+          <Button size="small" onClick={() => { newContactsDialog.resolve?.(false); setNewContactsDialog({ open: false, trimCount: 0, newRemaining: 0, resolve: null }) }}
+            sx={{ color: 'var(--text-muted, rgba(255,255,255,0.5))', textTransform: 'none' }}>
+            {lang === 'en' ? 'Cancel' : 'Cancelar'}
+          </Button>
+          <Button size="small" variant="contained" onClick={() => { newContactsDialog.resolve?.(true); setNewContactsDialog({ open: false, trimCount: 0, newRemaining: 0, resolve: null }) }}
+            sx={{ bgcolor: '#d97706', '&:hover': { bgcolor: '#b45309' }, textTransform: 'none', fontWeight: 600 }}>
+            {lang === 'en' ? 'Send trimmed batch' : 'Enviar lote reducido'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

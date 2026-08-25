@@ -5,6 +5,7 @@ import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
 import { useUser } from '../context/UserContext'
 import { useNavigation } from '../context/NavigationContext'
+import { useDailyCapStats } from '../hooks/useDailyCapStats'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -37,14 +38,15 @@ import ArticleIcon from '@mui/icons-material/Article'
 import Popover from '@mui/material/Popover'
 import EmojiEmotionsIcon from '@mui/icons-material/EmojiEmotions'
 import TuneIcon from '@mui/icons-material/Tune'
+import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner, InstanceStatusDot } from './InstanceStatusBanner'
 import ChatAIConfig from './ChatAIConfig'
 
 const EMOJI_GROUPS = [
-  { label: 'Frecuentes', emojis: ['😀','😂','🥹','😊','😍','🤩','😎','🥳','😅','😭','😤','🤔','👍','👎','👋','🙌','🤝','❤️','🔥','✅','⭐','🎉','💯','🚀'] },
-  { label: 'Negocio',    emojis: ['📞','📱','💬','📧','📝','💼','🏢','💰','📊','📈','🤝','⏰','📅','✔️','❌','⚠️','💡','🔔','📌','🔍'] },
-  { label: 'Gestos',     emojis: ['👏','🙏','💪','🤞','✌️','🤙','👌','🫡','🫶','🫂','😁','😇','🥰','😘','🤗','😶','🙄','😴','🤯','🥴'] },
+  { label: { en: 'Frequent',  es: 'Frecuentes' }, emojis: ['😀','😂','🥹','😊','😍','🤩','😎','🥳','😅','😭','😤','🤔','👍','👎','👋','🙌','🤝','❤️','🔥','✅','⭐','🎉','💯','🚀'] },
+  { label: { en: 'Business',  es: 'Negocio' },    emojis: ['📞','📱','💬','📧','📝','💼','🏢','💰','📊','📈','🤝','⏰','📅','✔️','❌','⚠️','💡','🔔','📌','🔍'] },
+  { label: { en: 'Gestures',  es: 'Gestos' },     emojis: ['👏','🙏','💪','🤞','✌️','🤙','👌','🫡','🫶','🫂','😁','😇','🥰','😘','🤗','😶','🙄','😴','🤯','🥴'] },
 ]
 
 const AGENT_COLORS = [
@@ -60,17 +62,34 @@ function agentColor(name) {
 
 const _TZ = 'America/Mexico_City'
 
-function formatTime(iso) {
+// WhatsApp bubble outline — tile for chat background (no fill, stroke only)
+const _WA_SVG = [
+  '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">',
+  // large bubble (top-left)
+  '<g transform="translate(5,3) scale(0.9)">',
+  '<path d="M25 5C13.9 5 5 13.9 5 25c0 3.8 1.1 7.4 2.9 10.4L5 45l9.9-2.9C17.8 43.6 21.3 45 25 45c11.1 0 20-8.9 20-20S36.1 5 25 5z" fill="none" stroke="rgba(37,211,102,0.15)" stroke-width="2" stroke-linejoin="round"/>',
+  '<path d="M17 19c0-.8.7-1.5 1.5-1.5H22l2 5-2.5 2c1.5 2.5 3.5 4.5 6 6l2-2.5 5 2v3.5c0 .8-.7 1.5-1.5 1.5C24 34.5 17 27 17 19z" fill="none" stroke="rgba(37,211,102,0.15)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+  '</g>',
+  // small bubble (bottom-right, rotated)
+  '<g transform="translate(60,58) rotate(-12) scale(0.52)">',
+  '<path d="M25 5C13.9 5 5 13.9 5 25c0 3.8 1.1 7.4 2.9 10.4L5 45l9.9-2.9C17.8 43.6 21.3 45 25 45c11.1 0 20-8.9 20-20S36.1 5 25 5z" fill="none" stroke="rgba(37,211,102,0.09)" stroke-width="2" stroke-linejoin="round"/>',
+  '</g>',
+  '</svg>',
+].join('')
+const WA_BG_PATTERN = `url("data:image/svg+xml,${encodeURIComponent(_WA_SVG)}")`
+
+function formatTime(iso, lang = 'es') {
   if (!iso) return ''
   const d = new Date(iso.endsWith('Z') ? iso : iso + 'Z')
   if (isNaN(d.getTime())) return ''
   const now = new Date()
   const diff = now - d
-  if (diff < 0) return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', timeZone: _TZ })
-  if (diff < 60000) return 'ahora'
+  const loc = lang === 'en' ? 'en-US' : 'es-MX'
+  if (diff < 0) return d.toLocaleDateString(loc, { day: '2-digit', month: 'short', timeZone: _TZ })
+  if (diff < 60000) return lang === 'en' ? 'now' : 'ahora'
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m`
-  if (diff < 86400000) return d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', timeZone: _TZ })
-  return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', timeZone: _TZ })
+  if (diff < 86400000) return d.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit', timeZone: _TZ })
+  return d.toLocaleDateString(loc, { day: '2-digit', month: 'short', timeZone: _TZ })
 }
 
 function localeFor(lang) { return lang === 'en' ? 'en-US' : 'es-MX' }
@@ -115,11 +134,11 @@ function DateDivider({ label }) {
   return (
     <Box sx={{ position: 'sticky', top: 0, zIndex: 2, display: 'flex', justifyContent: 'center', py: 0.8, mb: 0.4, pointerEvents: 'none' }}>
       <Box sx={{
-        bgcolor: 'var(--card-bg, rgba(20,24,38,0.92))', backdropFilter: 'blur(4px)',
-        border: '1px solid rgba(255,255,255,0.08)',
-        borderRadius: 99, px: 1.4, py: 0.35, boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
+        bgcolor: 'var(--card-bg)', backdropFilter: 'blur(4px)',
+        border: '1px solid var(--border)',
+        borderRadius: 99, px: 1.4, py: 0.35, boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
       }}>
-        <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.55)', fontWeight: 600 }}>
+        <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 600 }}>
           {label}
         </Typography>
       </Box>
@@ -172,6 +191,7 @@ function ConversationItemSkeleton() {
 
 // Comparator ignores onClick (it's always () => setSelected(conv), stable behavior)
 const ConversationItem = memo(function _ConversationItem({ conv, active, onClick }) {
+  const { lang } = useLang()
   const isInbound = conv.last_direction === 'inbound'
   const domain = conv.domain || conv.website?.replace(/https?:\/\/(www\.)?/, '').split('/')[0] || ''
   return (
@@ -210,7 +230,7 @@ const ConversationItem = memo(function _ConversationItem({ conv, active, onClick
               {conv.company_name || conv.company_id}
             </Typography>
             {conv.ai_active && (
-              <Tooltip title={conv.ai_typing ? 'Chat IA está redactando...' : 'Chat IA en conversación'}>
+              <Tooltip title={conv.ai_typing ? (lang === 'en' ? 'AI Chat is typing...' : 'Chat IA está redactando...') : (lang === 'en' ? 'AI Chat active' : 'Chat IA en conversación')}>
                 <Box sx={{
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   width: 14, height: 14, borderRadius: '50%', flexShrink: 0, ml: 0.5,
@@ -242,7 +262,7 @@ const ConversationItem = memo(function _ConversationItem({ conv, active, onClick
             })()}
           </Box>
           <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.68rem', flexShrink: 0, ml: 0.75 }}>
-            {formatTime(conv.last_at)}
+            {formatTime(conv.last_at, lang)}
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
@@ -273,19 +293,20 @@ const ConversationItem = memo(function _ConversationItem({ conv, active, onClick
 }, (prev, next) => prev.active === next.active && prev.conv === next.conv)
 
 const MEDIA_LABELS = {
-  '[sticker]':  { Icon: EmojiEmotionsIcon,   label: 'Sticker' },
-  '[audio]':    { Icon: MicIcon,             label: 'Audio' },
-  '[imagen]':   { Icon: ImageIcon,           label: 'Imagen' },
-  '[image]':    { Icon: ImageIcon,           label: 'Imagen' },
-  '[video]':    { Icon: VideocamIcon,        label: 'Video' },
-  '[location]': { Icon: LocationOnIcon,      label: 'Ubicación' },
-  '[contact]':  { Icon: PersonIcon,          label: 'Contacto' },
-  '[document]': { Icon: InsertDriveFileIcon, label: 'Documento' },
-  '[media]':    { Icon: AttachFileIcon,      label: 'Multimedia' },
-  '[template]': { Icon: ArticleIcon,         label: 'Plantilla' },
+  '[sticker]':  { Icon: EmojiEmotionsIcon,   label: { en: 'Sticker',   es: 'Sticker' } },
+  '[audio]':    { Icon: MicIcon,             label: { en: 'Audio',     es: 'Audio' } },
+  '[imagen]':   { Icon: ImageIcon,           label: { en: 'Image',     es: 'Imagen' } },
+  '[image]':    { Icon: ImageIcon,           label: { en: 'Image',     es: 'Imagen' } },
+  '[video]':    { Icon: VideocamIcon,        label: { en: 'Video',     es: 'Video' } },
+  '[location]': { Icon: LocationOnIcon,      label: { en: 'Location',  es: 'Ubicación' } },
+  '[contact]':  { Icon: PersonIcon,          label: { en: 'Contact',   es: 'Contacto' } },
+  '[document]': { Icon: InsertDriveFileIcon, label: { en: 'Document',  es: 'Documento' } },
+  '[media]':    { Icon: AttachFileIcon,      label: { en: 'Media',     es: 'Multimedia' } },
+  '[template]': { Icon: ArticleIcon,         label: { en: 'Template',  es: 'Plantilla' } },
 }
 
 function InteractiveMessage({ interactive, isOut, onReply }) {
+  const { lang } = useLang()
   const [open, setOpen] = useState(false)
   const [anchor, setAnchor] = useState(null)
   const [sent, setSent] = useState(null)
@@ -341,7 +362,7 @@ function InteractiveMessage({ interactive, isOut, onReply }) {
           }}>
             <Typography sx={{ fontSize: '0.85rem', lineHeight: 1 }}>📋</Typography>
             <Typography sx={{ color: accent, fontSize: '0.8rem', fontWeight: 600 }}>
-              Ver opciones ({options.length})
+              {lang === 'en' ? `View options (${options.length})` : `Ver opciones (${options.length})`}
             </Typography>
             <Typography sx={{ color: accent, fontSize: '0.75rem' }}>›</Typography>
           </Box>
@@ -350,7 +371,7 @@ function InteractiveMessage({ interactive, isOut, onReply }) {
             transformOrigin={{ vertical: 'bottom', horizontal: 'center' }}
             slotProps={{ paper: { sx: { bgcolor: 'var(--sidebar-bg,#0d1117)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 2, minWidth: 220, maxWidth: 300, overflow: 'hidden' } } }}>
             <Box sx={{ p: 1.5 }}>
-              <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.06em', mb: 1 }}>Opciones</Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.06em', mb: 1 }}>{lang === 'en' ? 'Options' : 'Opciones'}</Typography>
               {options.map((opt, i) => {
                 const isSent = sent === opt
                 return (
@@ -374,7 +395,7 @@ function InteractiveMessage({ interactive, isOut, onReply }) {
 
       {type === 'poll' && (
         <Box sx={{ mt: 0.5, borderTop: `1px solid ${borderColor}`, pt: 0.8 }}>
-          <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.06em', mb: 0.8 }}>📊 Encuesta</Typography>
+          <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.06em', mb: 0.8 }}>📊 {lang === 'en' ? 'Poll' : 'Encuesta'}</Typography>
           {options.map((opt, i) => (
             <Box key={i} sx={{ mb: 0.5 }}>
               <Typography sx={{ color: 'rgba(255,255,255,0.75)', fontSize: '0.78rem', mb: 0.2 }}>{opt}</Typography>
@@ -411,11 +432,11 @@ const MessageBubble = memo(function _MessageBubble({ msg, onReply }) {
         maxWidth: '72%', px: 1.5, py: 1,
         borderRadius: isOut ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
         bgcolor: isOut
-          ? isAI ? 'rgba(var(--accent-rgb, 99,102,241), 0.15)' : 'rgba(var(--accent-rgb, 99,102,241), 0.22)'
-          : 'rgba(255,255,255,0.07)',
+          ? isAI ? 'rgba(var(--accent-rgb, 99,102,241), 0.88)' : 'var(--accent, #6366f1)'
+          : 'var(--card-bg, #161d2e)',
         border: `1px solid ${isOut
-          ? isAI ? 'rgba(var(--accent-rgb, 99,102,241), 0.22)' : 'rgba(var(--accent-rgb, 99,102,241), 0.3)'
-          : 'rgba(255,255,255,0.09)'}`,
+          ? 'rgba(0,0,0,0.15)'
+          : 'rgba(255,255,255,0.1)'}`,
       }}>
         {interactive ? (
           <InteractiveMessage interactive={interactive} isOut={isOut} onReply={onReply} />
@@ -423,7 +444,7 @@ const MessageBubble = memo(function _MessageBubble({ msg, onReply }) {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
             <media.Icon sx={{ fontSize: 18, color: isOut ? 'rgba(var(--accent-rgb, 99,102,241), 0.9)' : 'rgba(255,255,255,0.5)' }} />
             <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.78rem', fontStyle: 'italic' }}>
-              {media.label}
+              {media.label[lang] || media.label.es}
             </Typography>
           </Box>
         ) : (
@@ -449,7 +470,7 @@ const MessageBubble = memo(function _MessageBubble({ msg, onReply }) {
         </Box>
         {/* AI badge — bottom-right corner of bubble */}
         {isAI && (
-          <Tooltip title="Enviado por Chat IA">
+          <Tooltip title={lang === 'en' ? 'Sent by AI Chat' : 'Enviado por Chat IA'}>
             <Box sx={{
               position: 'absolute', bottom: -4, right: -4,
               width: 16, height: 16, borderRadius: '50%',
@@ -490,7 +511,7 @@ export default function Conversations() {
   const [emojiGroup, setEmojiGroup]     = useState(0)
   const syncingRef                      = useRef(false)
   const lastSyncedRef                   = useRef(null)  // evita re-sync al mismo company
-  const [dailyStats, setDailyStats]     = useState(null)
+  const { stats: dailyStats, refresh: fetchDailyStats } = useDailyCapStats()
   const currentCompanyRef               = useRef(null)  // evita race condition en fetchCompanyNumbers
   const { t, lang } = useLang()
   const { user } = useUser()
@@ -529,18 +550,6 @@ export default function Conversations() {
     return () => { cancelled = true; clearInterval(id) }
   }, [])
 
-  const fetchDailyStats = useCallback(async () => {
-    try {
-      const r = await authFetch('/api/instances/daily-stats')
-      if (r.ok) setDailyStats(await r.json())
-    } catch {}
-  }, [])
-
-  useEffect(() => {
-    fetchDailyStats()
-    const id = setInterval(fetchDailyStats, 5 * 60 * 1000)
-    return () => clearInterval(id)
-  }, [fetchDailyStats])
 
   // When a notification card is clicked, auto-select the matching conversation
   useEffect(() => {
@@ -858,7 +867,14 @@ export default function Conversations() {
       setTimeout(() => fetchThread(cid, true), 1500)
       ;[4000, 8000].forEach(ms => setTimeout(() => fetchThread(cid, false, true), ms))
     } catch (err) {
-      const msg = err.message || 'No se pudo enviar el mensaje'
+      let msg = err.message || (lang === 'en' ? 'Failed to send message' : 'No se pudo enviar el mensaje')
+      const ncMatch = msg.match(/^new_contact_limit:(\d+)$/)
+      if (ncMatch) {
+        const lim = ncMatch[1]
+        msg = lang === 'en'
+          ? `New-contact limit reached (${lim}/day) — this number can only start ${lim} new conversations per day.`
+          : `Límite de contactos nuevos alcanzado (${lim}/día) — este número solo puede iniciar ${lim} conversaciones nuevas por día.`
+      }
       setSendError(msg)
       setTimeout(() => setSendError(''), 8000)
     }
@@ -998,15 +1014,21 @@ export default function Conversations() {
       {/* ── Hilo de mensajes ── */}
       <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
         {!selected ? (
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2 }}>
-            <Box sx={{ p: 3, borderRadius: '50%', bgcolor: 'rgba(37,211,102,0.06)', border: '1px solid rgba(37,211,102,0.1)' }}>
-              <WhatsAppIcon sx={{ fontSize: 48, color: 'rgba(37,211,102,0.25)', display: 'block' }} />
-            </Box>
-            <Box sx={{ textAlign: 'center' }}>
-              <Typography sx={{ color: 'rgba(255,255,255,0.55)', fontSize: '1rem', fontWeight: 600, mb: 0.5 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%',
+            backgroundImage: WA_BG_PATTERN, backgroundSize: '100px 100px' }}>
+            <Box sx={{ textAlign: 'center', px: 4, py: 3, borderRadius: 3,
+              bgcolor: 'var(--card-bg)', backdropFilter: 'blur(12px)',
+              border: '1px solid rgba(37,211,102,0.22)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.04)' }}>
+              <Box sx={{ width: 40, height: 40, borderRadius: '50%', mx: 'auto', mb: 1.5,
+                bgcolor: 'rgba(37,211,102,0.1)', border: '1px solid rgba(37,211,102,0.2)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <ForumOutlinedIcon sx={{ fontSize: 20, color: 'rgba(37,211,102,0.7)' }} />
+              </Box>
+              <Typography sx={{ color: 'var(--text)', fontSize: '0.92rem', fontWeight: 600, mb: 0.4 }}>
                 {t.convs.noneSelected}
               </Typography>
-              <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.8rem' }}>
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
                 {t.convs.pickCompany}
               </Typography>
             </Box>
@@ -1133,13 +1155,14 @@ export default function Conversations() {
             {waNumbers.length > 1 && activeNum && activeNum !== 'all' && (
               <Box sx={{ px: 2, py: 0.6, borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
                 <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-                  Filtrando · {activeNum.replace(/\D/g,'').slice(-10).replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')}
+                  {lang === 'en' ? 'Filtering · ' : 'Filtrando · '}{activeNum.replace(/\D/g,'').slice(-10).replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')}
                 </Typography>
               </Box>
             )}
 
             {/* Mensajes — área scrolleable */}
             <Box ref={messagesBoxRef} sx={{ flex: 1, overflowY: 'auto', py: 1.5, minHeight: 0,
+              backgroundImage: WA_BG_PATTERN, backgroundSize: '100px 100px',
               scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent',
               '&::-webkit-scrollbar': { width: 4 },
               '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 },
@@ -1149,15 +1172,24 @@ export default function Conversations() {
                   <CircularProgress size={24} sx={{ color: 'var(--accent, #6366f1)' }} />
                 </Box>
               ) : waNumbers.length > 1 && (!activeNum || activeNum === 'all') ? (
-                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 2, px: 3 }}>
-                  <WhatsAppIcon sx={{ fontSize: 40, color: 'rgba(37,211,102,0.2)' }} />
-                  <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.85rem', textAlign: 'center' }}>
-                    {t.convs.selectNumTab}
-                  </Typography>
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', px: 3 }}>
+                  <Box sx={{ textAlign: 'center', px: 4, py: 3, borderRadius: 3,
+                    bgcolor: 'var(--card-bg)', backdropFilter: 'blur(12px)',
+                    border: '1px solid rgba(37,211,102,0.22)',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.04)' }}>
+                    <Box sx={{ width: 40, height: 40, borderRadius: '50%', mx: 'auto', mb: 1.5,
+                      bgcolor: 'rgba(37,211,102,0.1)', border: '1px solid rgba(37,211,102,0.2)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <WhatsAppIcon sx={{ fontSize: 20, color: 'rgba(37,211,102,0.7)' }} />
+                    </Box>
+                    <Typography sx={{ color: 'var(--text)', fontSize: '0.92rem', fontWeight: 600 }}>
+                      {t.convs.selectNumTab}
+                    </Typography>
+                  </Box>
                 </Box>
               ) : visibleThread.length === 0 ? (
                 <Box sx={{ textAlign: 'center', pt: 4 }}>
-                  <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.8rem' }}>Sin mensajes</Typography>
+                  <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.8rem' }}>{lang === 'en' ? 'No messages' : 'Sin mensajes'}</Typography>
                 </Box>
               ) : (
                 <>
@@ -1186,7 +1218,7 @@ export default function Conversations() {
                       }}>
                         <SmartToyIcon sx={{ fontSize: 12, color: 'var(--accent, #a5b4fc)', opacity: 0.7 }} />
                         <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem', fontStyle: 'italic' }}>
-                          Chat IA está redactando
+                          {lang === 'en' ? 'AI Chat is typing' : 'Chat IA está redactando'}
                         </Typography>
                         <TypingDots />
                       </Box>
@@ -1206,12 +1238,12 @@ export default function Conversations() {
             >
               <Box sx={{ display: 'flex', gap: 0.5, mb: 1 }}>
                 {EMOJI_GROUPS.map((g, i) => (
-                  <Box key={g.label} onClick={() => setEmojiGroup(i)} sx={{
+                  <Box key={g.label.es} onClick={() => setEmojiGroup(i)} sx={{
                     px: 1, py: 0.3, borderRadius: 1.5, cursor: 'pointer', fontSize: '0.65rem',
                     bgcolor: emojiGroup === i ? 'rgba(var(--accent-rgb,99,102,241),0.2)' : 'rgba(255,255,255,0.05)',
                     color: emojiGroup === i ? 'var(--accent,#a5b4fc)' : 'rgba(255,255,255,0.4)',
                     border: `1px solid ${emojiGroup === i ? 'rgba(var(--accent-rgb,99,102,241),0.35)' : 'transparent'}`,
-                  }}>{g.label}</Box>
+                  }}>{g.label[lang] || g.label.es}</Box>
                 ))}
               </Box>
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.3 }}>
@@ -1257,7 +1289,7 @@ export default function Conversations() {
                     if (f) setAttachedFile({ file: f, name: f.name, type: f.type })
                   }}
                 />
-                <Tooltip title="Adjuntar imagen o documento">
+                <Tooltip title={lang === 'en' ? 'Attach image or document' : 'Adjuntar imagen o documento'}>
                   <IconButton size="small" onClick={() => fileInputRef.current?.click()}
                     sx={{ color: attachedFile ? 'var(--accent, #a5b4fc)' : 'rgba(255,255,255,0.3)',
                       flexShrink: 0, mb: 0.5, '&:hover': { color: 'var(--accent, #a5b4fc)' } }}>
@@ -1271,7 +1303,7 @@ export default function Conversations() {
                   </IconButton>
                 </Tooltip>
                 <TextField ref={replyRef} fullWidth multiline maxRows={4} size="small"
-                  placeholder={instanceStatus === 'disconnected' ? 'Instancia desconectada — ve a Configuración' : t.convs.reply}
+                  placeholder={instanceStatus === 'disconnected' ? (lang === 'en' ? 'Instance disconnected — go to Settings' : 'Instancia desconectada — ve a Configuración') : t.convs.reply}
                   defaultValue=""
                   slotProps={{ htmlInput: { ref: el => { if (el) replyRef._textarea = el } } }}
                   onInput={e => setReply(e.target.value)}
@@ -1280,15 +1312,16 @@ export default function Conversations() {
                   sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.85rem', bgcolor: 'rgba(255,255,255,0.04)',
                     '& fieldset': { borderColor: reply.length > MAX_WA_MSG ? '#ef4444' : instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.1)' } }, '& textarea': { color: 'white' } }} />
                 <Tooltip title={
-                  instanceStatus === 'disconnected' ? 'Instancia WhatsApp desconectada' :
-                  reply.length > MAX_WA_MSG ? `Demasiado largo (máx. ${MAX_WA_MSG})` :
-                  waNumbers.length === 0 ? 'Sin números WhatsApp registrados' :
-                  (waNumbers.length > 1 && (!activeNum || activeNum === 'all')) ? 'Selecciona un número primero' :
-                  selectedNums.length === 0 ? 'Selecciona al menos un número' : 'Enviar (Enter)'
+                  instanceStatus === 'disconnected' ? (lang === 'en' ? 'WhatsApp instance disconnected' : 'Instancia WhatsApp desconectada') :
+                  dailyStats?.total_available <= 0 ? (lang === 'en' ? `Daily limit reached (${dailyStats.total_sent}/${dailyStats.total_cap}). Resets at midnight.` : `Límite diario alcanzado (${dailyStats.total_sent}/${dailyStats.total_cap}). Reinicia a medianoche.`) :
+                  reply.length > MAX_WA_MSG ? (lang === 'en' ? `Too long (max ${MAX_WA_MSG})` : `Demasiado largo (máx. ${MAX_WA_MSG})`) :
+                  waNumbers.length === 0 ? (lang === 'en' ? 'No WhatsApp numbers registered' : 'Sin números WhatsApp registrados') :
+                  (waNumbers.length > 1 && (!activeNum || activeNum === 'all')) ? (lang === 'en' ? 'Select a number first' : 'Selecciona un número primero') :
+                  selectedNums.length === 0 ? (lang === 'en' ? 'Select at least one number' : 'Selecciona al menos un número') : (lang === 'en' ? 'Send (Enter)' : 'Enviar (Enter)')
                 }>
                   <span>
                     <IconButton onClick={() => handleSendReply()}
-                      disabled={instanceStatus === 'disconnected' || (!reply.trim() && !attachedFile) || sending || uploading || reply.length > MAX_WA_MSG || (waNumbers.length > 0 && selectedNums.length === 0) || (waNumbers.length > 1 && (!activeNum || activeNum === 'all'))}
+                      disabled={instanceStatus === 'disconnected' || (dailyStats?.total_available <= 0) || (!reply.trim() && !attachedFile) || sending || uploading || reply.length > MAX_WA_MSG || (waNumbers.length > 0 && selectedNums.length === 0) || (waNumbers.length > 1 && (!activeNum || activeNum === 'all'))}
                       sx={{ bgcolor: instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.12)' : 'rgba(var(--accent-rgb, 99,102,241), 0.2)', border: `1px solid ${instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.25)' : 'rgba(var(--accent-rgb, 99,102,241), 0.3)'}`, borderRadius: 2, color: instanceStatus === 'disconnected' ? '#ef4444' : 'var(--accent, #a5b4fc)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 99,102,241), 0.35)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.15)' } }}>
                       {sending ? <CircularProgress size={18} sx={{ color: 'var(--accent, #a5b4fc)' }} /> : instanceStatus === 'disconnected' ? <WifiOffIcon sx={{ fontSize: 18 }} /> : <SendIcon sx={{ fontSize: 18 }} />}
                     </IconButton>
@@ -1304,12 +1337,16 @@ export default function Conversations() {
                   const _afterAvail = Math.max(0, _avail - _pending)
                   const _danger  = _afterAvail <= 0
                   const _warn    = !_danger && _afterAvail < 30
-                  const _textCol = _danger ? '#f87171' : _warn ? '#fbbf24' : 'rgba(255,255,255,0.4)'
-                  const _border  = _danger ? 'rgba(239,68,68,0.35)' : _warn ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.1)'
-                  const _bg      = _danger ? 'rgba(239,68,68,0.08)' : _warn ? 'rgba(251,191,36,0.06)' : 'rgba(255,255,255,0.04)'
+                  const _textCol = _danger ? '#f87171' : _warn ? '#fbbf24' : 'var(--text-muted)'
+                  const _border  = _danger ? 'rgba(239,68,68,0.35)' : _warn ? 'rgba(251,191,36,0.3)' : 'var(--border)'
+                  const _bg      = _danger ? 'rgba(239,68,68,0.08)' : _warn ? 'rgba(251,191,36,0.06)' : 'var(--item-hover)'
                   const _tip = _pending > 0
-                    ? `${dailyStats.total_sent} enviados + ${dailyStats.scheduled_today || 0} programados + ${_pending} seleccionados = ${_committed + _pending} / ${dailyStats.total_cap} • Quedan ${_afterAvail} disponibles • Reset 00:00 UTC`
-                    : `${dailyStats.total_sent} enviados + ${dailyStats.scheduled_today || 0} programados hoy • ${_avail} disponibles • Reset 00:00 UTC`
+                    ? (lang === 'en'
+                        ? `${dailyStats.total_sent} sent + ${dailyStats.scheduled_today || 0} scheduled + ${_pending} selected = ${_committed + _pending} / ${dailyStats.total_cap} • ${_afterAvail} available • Resets at 00:00 UTC`
+                        : `${dailyStats.total_sent} enviados + ${dailyStats.scheduled_today || 0} programados + ${_pending} seleccionados = ${_committed + _pending} / ${dailyStats.total_cap} • Quedan ${_afterAvail} disponibles • Reset 00:00 UTC`)
+                    : (lang === 'en'
+                        ? `${dailyStats.total_sent} sent + ${dailyStats.scheduled_today || 0} scheduled today • ${_avail} available • Resets at 00:00 UTC`
+                        : `${dailyStats.total_sent} enviados + ${dailyStats.scheduled_today || 0} programados hoy • ${_avail} disponibles • Reset 00:00 UTC`)
                   return (
                     <Tooltip title={_tip} placement="top">
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: '3px', px: 0.9, py: 0.3,
@@ -1317,13 +1354,13 @@ export default function Conversations() {
                         <Box component="span" sx={{ fontSize: '0.6rem', color: _textCol, fontVariantNumeric: 'tabular-nums', lineHeight: 1, display: 'flex', alignItems: 'center', gap: '2px' }}>
                           <span style={{ fontWeight: 600 }}>{_committed}</span>
                           {_pending > 0 && <>
-                            <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.55rem' }}>+</span>
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.55rem', opacity: 0.6 }}>+</span>
                             <span style={{ color: '#fbbf24', fontWeight: 700 }}>{_pending}</span>
                           </>}
-                          <span style={{ color: 'rgba(255,255,255,0.15)', margin: '0 2px' }}>/</span>
-                          <span style={{ color: 'rgba(255,255,255,0.3)' }}>{dailyStats.total_cap}</span>
+                          <span style={{ opacity: 0.3, margin: '0 2px' }}>/</span>
+                          <span style={{ opacity: 0.55 }}>{dailyStats.total_cap}</span>
                         </Box>
-                        <Box component="span" sx={{ fontSize: '0.52rem', color: 'rgba(255,255,255,0.2)', lineHeight: 1, letterSpacing: '0.02em' }}>hoy</Box>
+                        <Box component="span" sx={{ fontSize: '0.52rem', color: 'var(--text-muted)', opacity: 0.6, lineHeight: 1, letterSpacing: '0.02em' }}>{lang === 'en' ? 'today' : 'hoy'}</Box>
                       </Box>
                     </Tooltip>
                   )

@@ -3,7 +3,9 @@ import { useState, useEffect, useRef } from 'react'
 import { authFetch } from '@/lib/api'
 import { useSendQueue } from '../context/SendQueueContext'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
+import { useDailyCapStats } from '../hooks/useDailyCapStats'
 import { InstanceDisconnectedBanner } from './InstanceStatusBanner'
+import DailyCapBadge, { getOverBy } from './DailyCapBadge'
 import Box from '@mui/material/Box'
 import TextField from '@mui/material/TextField'
 import IconButton from '@mui/material/IconButton'
@@ -129,7 +131,7 @@ function renderWithValues(text, vals) {
     .replace(/\{\{web\}\}/g,       vals.web       ?? '')
 }
 
-export function MessageComposer({ result, onSend, sending, disabled }) {
+export function MessageComposer({ result, onSend, sending, disabled, capStats }) {
   const { t } = useLang()
   const inputRef = useRef(null)
   const vals = extractValues(result)
@@ -142,7 +144,10 @@ export function MessageComposer({ result, onSend, sending, disabled }) {
   const allNumbers = result?.scraped?._contacts_raw?.all_whatsapp_numbers || []
   const primary    = result?.primary_whatsapp_number
   const numbers    = allNumbers.length > 0 ? allNumbers : (primary ? [primary] : [])
-  const [selectedNums, setSelectedNums] = useState(numbers)
+  // Default seguro: solo el número principal, no todos los que se hayan encontrado —
+  // mandar a los demás números de la misma empresa queda como decisión explícita
+  // (los chips de abajo siguen permitiendo agregarlos a mano).
+  const [selectedNums, setSelectedNums] = useState(() => (primary ? [primary] : numbers.slice(0, 1)))
   const toggleNum = (n) => setSelectedNums(prev => prev.includes(n) ? prev.filter(x => x !== n) : [...prev, n])
   const [extraVariants, setExtraVariants] = useState([])
 
@@ -192,7 +197,11 @@ export function MessageComposer({ result, onSend, sending, disabled }) {
     : [getCurrentText().trim()].filter(Boolean)
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
   const overLength = !isBulk && charCount > MAX_WA_MSG
-  const sendBlocked = sending || disabled || selectedNums.length === 0 || overLength || belowMinTemplates
+  // El backend deduplica por número real, no por empresa — cada número marcado
+  // aquí (aunque sean todos de la misma empresa) cuesta su propio slot de cupo.
+  const overBy      = getOverBy(capStats, selectedNums.length)
+  const capBlocked  = overBy > 0
+  const sendBlocked = sending || disabled || selectedNums.length === 0 || overLength || belowMinTemplates || capBlocked
     || (isBulk && allVariants.some(v => v.length > MAX_WA_MSG))
 
   function handleSendClick() {
@@ -331,6 +340,14 @@ export function MessageComposer({ result, onSend, sending, disabled }) {
       {selectedNums.length === 0 && numbers.length > 1 && (
         <Typography sx={{ color: '#fbbf24', fontSize: '0.72rem', mb: 1 }}>
           {t.single.selectNum}
+        </Typography>
+      )}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 0.6 }}>
+        <DailyCapBadge stats={capStats} selectionCount={selectedNums.length} />
+      </Box>
+      {capBlocked && !sending && (
+        <Typography sx={{ color: '#f59e0b', fontSize: '0.72rem', mb: 1, textAlign: 'right' }}>
+          Cupo diario agotado — inténtalo más tarde o desde otra instancia
         </Typography>
       )}
       <Box onClick={handleSendClick}
@@ -493,6 +510,7 @@ function SearchBar({ url, setUrl, onSearch, loading, compact, onCancel }) {
 export default function SingleUrlProcessor() {
   const { t } = useLang()
   const { addJob } = useSendQueue()
+  const { stats: capStats, refresh: refreshCapStats } = useDailyCapStats()
   const [url, setUrl] = useState('')
   const [loading,     setLoading]     = useState(false)
   const [sending,     setSending]     = useState(false)
@@ -558,7 +576,8 @@ export default function SingleUrlProcessor() {
       website:   result.website,
     }, result.name || result.website || '')
     setSendSuccess(true)
-    setTimeout(() => setSendSuccess(false), 2500)
+    refreshCapStats()
+    setTimeout(() => { setSendSuccess(false); refreshCapStats() }, 2500)
   }
 
   /* ── ESTADO INICIAL: barra centrada ── */
@@ -566,7 +585,7 @@ export default function SingleUrlProcessor() {
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, minHeight: 0, gap: 1, px: 2.5, width: '100%' }}>
         <Box sx={{ textAlign: 'center', mb: 1 }}>
-          <Typography variant="h4" fontWeight={700} color="text.primary" gutterBottom>
+          <Typography fontWeight={800} sx={{ fontSize: 'clamp(1.4rem, 3vw, 2rem)', mb: 0.5, background: 'linear-gradient(135deg, var(--text,#f1f5f9) 20%, var(--accent,#60a5fa) 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
             {t.single.heading}
           </Typography>
         </Box>
@@ -646,7 +665,7 @@ export default function SingleUrlProcessor() {
           ? <>
               <InstanceDisconnectedBanner status={instanceStatus} sx={{ mt: 2, mb: 1 }} />
               {sendSuccess && <Alert severity="success" sx={{ mt: 2 }}>Mensaje enviado correctamente</Alert>}
-              {!sendSuccess && <MessageComposer result={result} onSend={handleSend} sending={sending} disabled={isDisconnected} />}
+              {!sendSuccess && <MessageComposer result={result} onSend={handleSend} sending={sending} disabled={isDisconnected} capStats={capStats} />}
             </>
           : <Box sx={{ mt: 3, p: 2, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--item-hover)', textAlign: 'center' }}>
               <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>

@@ -3,10 +3,13 @@ import { useState, useMemo, useEffect } from 'react'
 import { useLang } from '../context/LangContext'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { useSendQueue } from '../context/SendQueueContext'
+import { useDailyCapStats } from '../hooks/useDailyCapStats'
 import { CompanyPicker, extractPhoneDigits } from './scheduledSends'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { SendConfigPanel } from './SendConfigPanel'
 import { InstanceDisconnectedBanner } from './InstanceStatusBanner'
+import DailyCapBadge, { getOverBy } from './DailyCapBadge'
+import CapacityBanner from './CapacityBanner'
 import { loadSendConfig } from '@/lib/sendConfig'
 import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
 import Box from '@mui/material/Box'
@@ -36,17 +39,54 @@ function templateFitsTarget(text, info) {
 
 function StepHeader({ n, title }) {
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
       <Box sx={{
-        width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
-        bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.18)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.4)',
+        width: 28, height: 28, borderRadius: '50%', flexShrink: 0,
+        background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.22), rgba(var(--accent-rgb,59,130,246),0.06))',
+        border: '1.5px solid rgba(var(--accent-rgb,59,130,246),0.5)',
+        boxShadow: '0 0 10px rgba(var(--accent-rgb,59,130,246),0.2)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
-        <Typography sx={{ fontSize: '0.66rem', fontWeight: 800, color: 'var(--accent,#60a5fa)' }}>{n}</Typography>
+        <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--accent,#60a5fa)' }}>{n}</Typography>
       </Box>
-      <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+      <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.88rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
         {title}
       </Typography>
+    </Box>
+  )
+}
+
+function StepSection({ n, title, children, isLast = false }) {
+  return (
+    <Box sx={{ display: 'flex', gap: 1.5 }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0, width: 28 }}>
+        <Box sx={{
+          width: 28, height: 28, borderRadius: '50%', flexShrink: 0,
+          background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.22), rgba(var(--accent-rgb,59,130,246),0.06))',
+          border: '1.5px solid rgba(var(--accent-rgb,59,130,246),0.5)',
+          boxShadow: '0 0 10px rgba(var(--accent-rgb,59,130,246),0.2)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--accent,#60a5fa)' }}>{n}</Typography>
+        </Box>
+        {!isLast && (
+          <Box sx={{
+            flex: 1, width: 2, mt: 0.75,
+            background: 'linear-gradient(180deg, rgba(var(--accent-rgb,59,130,246),0.28) 0%, transparent 100%)',
+            borderRadius: 1,
+          }} />
+        )}
+      </Box>
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography sx={{
+          color: 'var(--text)', fontWeight: 700, fontSize: '0.88rem',
+          textTransform: 'uppercase', letterSpacing: '0.05em',
+          mt: '2px', mb: 1, lineHeight: 1,
+        }}>
+          {title}
+        </Typography>
+        {children}
+      </Box>
     </Box>
   )
 }
@@ -63,7 +103,7 @@ function SectionCard({ children, sx }) {
 }
 
 export default function SendCampaign() {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
   const { addBatch, active, queueLen } = useSendQueue()
 
@@ -76,15 +116,17 @@ export default function SendCampaign() {
   const [sendCfg,       setSendCfg]       = useState(() => loadSendConfig())
 
   // ── Done state: captured from context on success phase ──
-  const [done,      setDone]      = useState(false)
-  const [doneCount, setDoneCount] = useState(0)
+  const [done,       setDone]       = useState(false)
+  const [doneCount,  setDoneCount]  = useState(0)
+  const { stats: capStats, refresh: refreshCapStats } = useDailyCapStats()
 
   useEffect(() => {
     if (active?.phase === 'success') {
       setDoneCount(active.sent)
       setDone(true)
+      refreshCapStats()
     }
-  }, [active])
+  }, [active, refreshCapStats])
 
   // isSending is true while the global queue is processing this campaign
   const isSending = active !== null || queueLen > 0
@@ -100,7 +142,9 @@ export default function SendCampaign() {
   const hasWebData      = targets.some(n => n.web)
   const cleanMessages = useMemo(() => templateTexts.map(m => m.trim()).filter(Boolean), [templateTexts])
   const belowMinTemplates = targets.length > 1 && cleanMessages.length < MIN_TEMPLATES_FOR_BULK
-  const canSend = targets.length > 0 && cleanMessages.length > 0 && !belowMinTemplates && !isSending
+  const overBy      = getOverBy(capStats, targets.length)
+  const capBlocked  = overBy > 0
+  const canSend = targets.length > 0 && cleanMessages.length > 0 && !belowMinTemplates && !capBlocked && !isSending
 
   function handleSend() {
     if (!canSend) return
@@ -133,8 +177,8 @@ export default function SendCampaign() {
       {/* Header */}
       <Box sx={{ flexShrink: 0, mb: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, mb: 0.4 }}>
-          <Box sx={{ width: 34, height: 34, borderRadius: 2, bgcolor: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <CampaignIcon sx={{ color: '#4ade80', fontSize: 18 }} />
+          <Box sx={{ width: 34, height: 34, borderRadius: 2, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <CampaignIcon sx={{ color: 'var(--accent)', fontSize: 18 }} />
           </Box>
           <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '1.05rem' }}>{t.campaign.title}</Typography>
         </Box>
@@ -150,8 +194,7 @@ export default function SendCampaign() {
         {/* Left — templates, timing, send */}
         <Box sx={{ flex: '1 1 420px', minWidth: 320, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1.8, pr: 0.5 }}>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              <StepHeader n={1} title={t.campaign.stepTemplates} />
+            <StepSection n={1} title={t.campaign.stepTemplates}>
               <SectionCard>
                 <TemplateLibraryPicker
                   onChange={setTemplateTexts}
@@ -163,12 +206,11 @@ export default function SendCampaign() {
                   hasWeb={hasWebData}
                 />
               </SectionCard>
-            </Box>
+            </StepSection>
 
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              <StepHeader n={2} title={t.campaign.stepTiming} />
+            <StepSection n={2} title={t.campaign.stepTiming} isLast>
               <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
-            </Box>
+            </StepSection>
 
             <InstanceDisconnectedBanner status={instanceStatus} />
 
@@ -212,17 +254,30 @@ export default function SendCampaign() {
               bgcolor: 'var(--card-bg, #161d2e)',
               display: 'flex', flexDirection: 'column', gap: 0.6,
             }}>
+              {capStats && capStats.total_available <= 0 && (
+                <CapacityBanner stats={capStats} selectionCount={Math.max(targets.length, 1)} sx={{ mb: 0.5 }} />
+              )}
+              <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <DailyCapBadge stats={capStats} selectionCount={targets.length} />
+              </Box>
+              {canSend && !isSending && (
+                <Typography sx={{ fontSize: '0.67rem', color: '#4ade80', textAlign: 'center', opacity: 0.75, fontVariantNumeric: 'tabular-nums' }}>
+                  {cleanMessages.length} variante{cleanMessages.length !== 1 ? 's' : ''} → {targets.length} destinatario{targets.length !== 1 ? 's' : ''}
+                </Typography>
+              )}
               <Button
                 fullWidth
                 onClick={handleSend}
                 disabled={!canSend || isDisconnected}
                 startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 16 }} />}
                 sx={{
-                  bgcolor: canSend ? 'rgba(34,197,94,0.85)' : 'rgba(255,255,255,0.05)',
-                  color:   canSend ? '#fff' : 'rgba(255,255,255,0.3)',
-                  border:  `1px solid ${canSend ? 'rgba(34,197,94,0.9)' : 'rgba(255,255,255,0.1)'}`,
+                  bgcolor: canSend ? 'rgba(34,197,94,0.85)' : 'var(--item-hover)',
+                  color:   canSend ? '#fff' : 'var(--text-muted)',
+                  border:  `1px solid ${canSend ? 'rgba(34,197,94,0.9)' : 'var(--border)'}`,
                   borderRadius: 2, px: 3, py: 1.1, fontWeight: 700, textTransform: 'none', fontSize: '0.9rem',
-                  '&:hover': { bgcolor: canSend ? '#22c55e' : 'rgba(255,255,255,0.05)' },
+                  boxShadow: canSend ? '0 4px 20px rgba(34,197,94,0.35), 0 1px 8px rgba(34,197,94,0.15)' : 'none',
+                  transition: 'all 0.25s ease',
+                  '&:hover': { bgcolor: canSend ? '#22c55e' : 'rgba(255,255,255,0.05)', boxShadow: canSend ? '0 6px 28px rgba(34,197,94,0.5)' : 'none' },
                 }}
               >
                 {isSending ? t.campaign.sending : `${t.campaign.sendBtn}${targets.length ? ` (${targets.length})` : ''}`}
@@ -232,6 +287,7 @@ export default function SendCampaign() {
                   {targets.length === 0 ? t.campaign.blockedNoRecipients
                     : cleanMessages.length === 0 ? t.campaign.blockedNoTemplate
                     : belowMinTemplates ? t.tplLib.minRequiredBlock(MIN_TEMPLATES_FOR_BULK, cleanMessages.length)
+                    : capBlocked ? (lang === 'en' ? `Deselect ${overBy} to fit today's quota` : `Desmarca ${overBy} para caber en tu cupo de hoy`)
                     : ''}
                 </Typography>
               )}
@@ -244,8 +300,21 @@ export default function SendCampaign() {
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <StepHeader n={3} title={t.campaign.stepRecipients} />
             {targets.length > 0 && (
-              <Chip icon={<GroupsIcon sx={{ fontSize: '13px !important' }} />} label={t.campaign.selectedCount(targets.length)} size="small"
-                sx={{ bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', color: 'var(--accent,#60a5fa)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)', fontWeight: 700, '& .MuiChip-icon': { color: 'inherit' } }} />
+              <Box sx={{
+                display: 'flex', alignItems: 'center', gap: 0.8,
+                px: 1.2, py: 0.5, borderRadius: 2,
+                background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.2), rgba(var(--accent-rgb,59,130,246),0.07))',
+                border: '1px solid rgba(var(--accent-rgb,59,130,246),0.4)',
+                boxShadow: '0 0 12px rgba(var(--accent-rgb,59,130,246),0.12)',
+              }}>
+                <GroupsIcon sx={{ fontSize: 14, color: 'var(--accent,#60a5fa)' }} />
+                <Typography sx={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--accent,#60a5fa)', fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
+                  {targets.length}
+                </Typography>
+                <Typography sx={{ fontSize: '0.66rem', color: 'rgba(var(--accent-rgb,59,130,246),0.55)', lineHeight: 1 }}>
+                  sel.
+                </Typography>
+              </Box>
             )}
           </Box>
           <CompanyPicker

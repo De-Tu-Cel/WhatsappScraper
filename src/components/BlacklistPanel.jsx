@@ -93,7 +93,10 @@ function EntryRow({ entry, onDelete, onSave, dupError, genericError }) {
   return (
     <Box sx={{
       display: 'flex', alignItems: 'center', gap: 0.8, px: 1.2, py: 0.8, borderRadius: 1.5,
-      bgcolor: 'var(--item-hover, rgba(255,255,255,0.04))', border: '1px solid var(--border, rgba(255,255,255,0.08))',
+      bgcolor: 'rgba(239,68,68,0.03)', border: '1px solid rgba(239,68,68,0.12)',
+      borderLeft: '3px solid rgba(239,68,68,0.32)',
+      transition: 'all 0.15s',
+      '&:hover': { bgcolor: 'rgba(239,68,68,0.055)', borderLeftColor: 'rgba(239,68,68,0.55)' },
     }}>
       <BlockIcon sx={{ fontSize: 13, color: DANGER, flexShrink: 0 }} />
       {editing ? (
@@ -215,13 +218,16 @@ function BlacklistList({ type, icon, label, placeholder, tip, bl }) {
   return (
     <Box sx={{
       position: 'relative', mt: 1.6,
-      border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 3,
-      pt: 2.4, pb: 2, px: 2, bgcolor: 'var(--surface, rgba(255,255,255,0.02))',
+      border: '1px solid var(--border, rgba(255,255,255,0.1))',
+      borderTop: `2px solid rgba(239,68,68,0.55)`,
+      borderRadius: 3,
+      pt: 2.4, pb: 2, px: 2, bgcolor: 'rgba(239,68,68,0.015)',
     }}>
       <Box sx={{
         position: 'absolute', top: -13, left: 14,
         display: 'inline-flex', alignItems: 'center', gap: 0.6,
-        bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid var(--border, rgba(255,255,255,0.1))',
+        bgcolor: 'var(--card-bg, #161d2e)', border: `1px solid ${DANGER_BORDER}`,
+        boxShadow: '0 0 10px rgba(239,68,68,0.1)',
         borderRadius: 999, px: 1.3, py: 0.4,
       }}>
         {icon}
@@ -252,9 +258,12 @@ function BlacklistList({ type, icon, label, placeholder, tip, bl }) {
           <CircularProgress size={16} sx={{ color: 'var(--accent, #3b82f6)' }} />
         </Box>
       ) : items.length === 0 ? (
-        <Typography sx={{ fontSize: '0.75rem', color: 'var(--text-muted, rgba(255,255,255,0.35))', fontStyle: 'italic', textAlign: 'center', py: 1 }}>
-          {search ? (bl.noResults || 'Sin resultados') : bl.empty}
-        </Typography>
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.8, py: 2.5, borderRadius: 2, background: 'radial-gradient(ellipse at 50% 40%, rgba(239,68,68,0.04) 0%, transparent 70%)' }}>
+          <BlockIcon sx={{ fontSize: 22, color: 'rgba(239,68,68,0.22)' }} />
+          <Typography sx={{ fontSize: '0.75rem', color: 'var(--text-muted, rgba(255,255,255,0.35))', fontStyle: 'italic', textAlign: 'center' }}>
+            {search ? (bl.noResults || 'Sin resultados') : bl.empty}
+          </Typography>
+        </Box>
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6 }}>
           {items.map(e => (
@@ -289,17 +298,26 @@ const SYS_BORDER = 'rgba(255,255,255,0.1)'
 function SystemBlacklist({ bl }) {
   const [expanded, setExpanded] = useState(false)
   const [all,      setAll]      = useState([])
-  const [loading,  setLoading]  = useState(true)
+  const [loading,  setLoading]  = useState(false)
   const [search,   setSearch]   = useState('')
   const [page,     setPage]     = useState(1)
+  const fetchedRef = useRef(false)
 
-  useEffect(() => {
-    fetch('/api/blacklist/system')
-      .then(r => r.json())
-      .then(d => setAll(d.domains || []))
-      .catch(() => setAll([]))
-      .finally(() => setLoading(false))
-  }, [])
+  // Defer the fetch until the user expands — avoids blocking initial paint (LCP)
+  function handleExpand() {
+    setExpanded(e => {
+      if (!e && !fetchedRef.current) {
+        fetchedRef.current = true
+        setLoading(true)
+        fetch('/api/blacklist/system')
+          .then(r => r.json())
+          .then(d => setAll(d.domains || []))
+          .catch(() => setAll([]))
+          .finally(() => setLoading(false))
+      }
+      return !e
+    })
+  }
 
   const filtered = search.trim()
     ? all.filter(d => d.includes(search.toLowerCase().trim()))
@@ -336,7 +354,7 @@ function SystemBlacklist({ bl }) {
           {bl.systemDesc}
         </Typography>
         <Box
-          onClick={() => setExpanded(e => !e)}
+          onClick={handleExpand}
           sx={{
             display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', flexShrink: 0,
             px: 1.2, py: 0.4, borderRadius: 1.5, border: `1px solid ${SYS_BORDER}`,
@@ -425,12 +443,13 @@ export default function BlacklistPanel({ isActive }) {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
-      {/* Header — a touch of red so it reads as a blocklist, not a generic settings page */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2, flexShrink: 0 }}>
+      {/* Header */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2, flexShrink: 0, px: 2, py: 1.5, borderRadius: 2, background: 'linear-gradient(135deg, rgba(239,68,68,0.07) 0%, transparent 60%)', border: '1px solid rgba(239,68,68,0.1)' }}>
         <Box sx={{
           width: 36, height: 36, borderRadius: 2,
           bgcolor: DANGER_SOFT, border: `1px solid ${DANGER_BORDER}`,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
+          boxShadow: '0 0 16px rgba(239,68,68,0.18)',
         }}>
           <GppBadIcon sx={{ color: DANGER, fontSize: 19 }} />
         </Box>
@@ -438,7 +457,7 @@ export default function BlacklistPanel({ isActive }) {
           <Typography sx={{ color: 'var(--text, white)', fontWeight: 700, fontSize: '1.05rem', lineHeight: 1.2 }}>
             {bl.title}
           </Typography>
-          <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.4))', fontSize: '0.75rem' }}>
+          <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem' }}>
             {bl.subtitle}
           </Typography>
         </Box>

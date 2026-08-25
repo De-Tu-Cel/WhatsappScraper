@@ -2,8 +2,9 @@
 import { useState, useEffect } from 'react'
 import { useUser } from '../context/UserContext'
 
-const POLL_DISCONNECTED = 10_000  // 10s when disconnected
+const POLL_DISCONNECTED = 10_000  // 10s when disconnected but reachable
 const POLL_CONNECTED    = 45_000  // 45s when connected
+const POLL_UNREACHABLE  = 30_000  // 30s when backend times out / all fail
 
 // ─── Module-level singleton ───────────────────────────────────────────────────
 // One timer for all subscribers — polls aggregate status across ALL user instances.
@@ -16,10 +17,11 @@ let _timerId          = null
 let _userToken        = null
 const _subscribers    = new Set()
 
-// Skip polling providers that returned total:0 — avoids ~2 pointless HTTP calls/tick
-// when the user only has wasender instances.
-let _skipEvo  = false
-let _skipWaha = false
+// Skip polling providers that returned total:0 — avoids pointless HTTP calls/tick
+// when the user only has instances on one provider.
+let _skipEvo    = false
+let _skipWaha   = false
+let _skipWwebjs = false
 
 function _notify() {
   _subscribers.forEach(fn => fn(_status, _disconnectReason, _connectedCount, _totalCount))
@@ -30,31 +32,38 @@ function _startPolling(token) {
   _userToken = token
 
   async function _tick() {
+    let allFailed = false
     try {
       const headers = { 'x-user-token': _userToken }
       const _empty = Promise.resolve({ ok: false })
-      const [evoRes, wahaRes, wsRes] = await Promise.allSettled([
-        _skipEvo  ? _empty : fetch('/api/evolution/instances/user-status', { headers }),
-        _skipWaha ? _empty : fetch('/api/waha/instances/user-status',      { headers }),
-        fetch('/api/wasender/instances/user-status',  { headers }),
+      const [evoRes, wahaRes, wsRes, wwRes] = await Promise.allSettled([
+        _skipEvo    ? _empty : fetch('/api/evolution/instances/user-status', { headers }),
+        _skipWaha   ? _empty : fetch('/api/waha/instances/user-status',      { headers }),
+        fetch('/api/wasender/instances/user-status', { headers }),
+        _skipWwebjs ? _empty : fetch('/api/wwebjs/instances/user-status',    { headers }),
       ])
       const evo  = evoRes.status  === 'fulfilled' && evoRes.value.ok  ? await evoRes.value.json()  : null
       const waha = wahaRes.status === 'fulfilled' && wahaRes.value.ok ? await wahaRes.value.json() : null
       const ws   = wsRes.status   === 'fulfilled' && wsRes.value.ok   ? await wsRes.value.json()   : null
+      const ww   = wwRes.status   === 'fulfilled' && wwRes.value.ok   ? await wwRes.value.json()   : null
+
+      // If every non-skipped provider failed to respond, treat as unreachable
+      allFailed = evo === null && waha === null && ws === null && ww === null
 
       // Remember which providers have no instances — skip until user comes back with instances
-      if (evo  !== null) _skipEvo  = evo.total  === 0
-      if (waha !== null) _skipWaha = waha.total === 0
+      if (evo  !== null) _skipEvo    = evo.total  === 0
+      if (waha !== null) _skipWaha   = waha.total === 0
+      if (ww   !== null) _skipWwebjs = ww.total   === 0
 
       const evoConnected  = evo?.connected  ?? false
       const wahaConnected = waha?.connected ?? false
       const wsConnected   = ws?.connected   ?? false
-      _connectedCount = (evo?.connected_count ?? 0) + (waha?.connected_count ?? 0) + (ws?.connected_count ?? 0)
-      _totalCount     = (evo?.total ?? 0)           + (waha?.total ?? 0)           + (ws?.total ?? 0)
-      _status = (evoConnected || wahaConnected || wsConnected) ? 'connected' : 'disconnected'
+      const wwConnected   = ww?.connected   ?? false
+      _connectedCount = (evo?.connected_count ?? 0) + (waha?.connected_count ?? 0) + (ws?.connected_count ?? 0) + (ww?.connected_count ?? 0)
+      _totalCount     = (evo?.total ?? 0)           + (waha?.total ?? 0)           + (ws?.total ?? 0)           + (ww?.total ?? 0)
+      _status = (evoConnected || wahaConnected || wsConnected || wwConnected) ? 'connected' : 'disconnected'
 
       // Prefer WAHA disconnect reason if multiple are down (WAHA errors are more specific)
-      const anyDown = !evoConnected || !wahaConnected || !wsConnected
       const reasonSource = (!wahaConnected && waha?.disconnect_reason) ? waha
                          : (!wsConnected   && ws?.disconnect_reason)   ? ws
                          : (!evoConnected  && evo?.disconnect_reason)  ? evo
@@ -62,14 +71,14 @@ function _startPolling(token) {
       _disconnectReason = (_status === 'disconnected' && reasonSource)
         ? { key: reasonSource.disconnect_reason, label: reasonSource.disconnect_reason_label || 'Desconectada', code: reasonSource.disconnect_code ?? null }
         : null
-      void anyDown  // suppress unused-var warning
     } catch {
       _status = 'disconnected'
       _disconnectReason = null
+      allFailed = true
     }
     _notify()
     if (_subscribers.size > 0) {
-      const delay = _status === 'connected' ? POLL_CONNECTED : POLL_DISCONNECTED
+      const delay = _status === 'connected' ? POLL_CONNECTED : allFailed ? POLL_UNREACHABLE : POLL_DISCONNECTED
       _timerId = setTimeout(_tick, delay)
     }
   }
@@ -84,8 +93,9 @@ function _stopPolling() {
   _disconnectReason = null
   _connectedCount = 0
   _totalCount = 0
-  _skipEvo  = false
-  _skipWaha = false
+  _skipEvo    = false
+  _skipWaha   = false
+  _skipWwebjs = false
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────

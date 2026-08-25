@@ -3,6 +3,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
+import { useDailyCapForDate } from '../hooks/useDailyCapStats'
+import DailyCapBadge, { getOverBy } from './DailyCapBadge'
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
 import { DatePicker } from '@mui/x-date-pickers/DatePicker'
@@ -357,10 +359,15 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
 
   return (
     <Box sx={{ border: '1px solid var(--border)', borderRadius: 2, overflow: 'hidden' }}>
-      <Box sx={{ px: 1.5, py: 1, bgcolor: 'var(--surface)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 0.8 }}>
-        <BusinessIcon sx={{ fontSize: 14, color: 'var(--text-muted)' }} />
-        <Typography sx={{ color: 'var(--text-muted)', fontWeight: 700, fontSize: '0.75rem', flex: 1 }}>{t.sched.recipients}</Typography>
-        {loadingCo && <CircularProgress size={11} sx={{ color: 'var(--accent,#3b82f6)' }} />}
+      <Box sx={{ px: 1.5, py: 1, bgcolor: 'var(--surface)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 0.8, background: 'linear-gradient(90deg, rgba(var(--accent-rgb,59,130,246),0.06) 0%, transparent 60%)' }}>
+        <Box sx={{ width: 3, height: 12, borderRadius: 2, bgcolor: 'var(--accent,#3b82f6)', opacity: 0.55, flexShrink: 0 }} />
+        <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontWeight: 700, fontSize: '0.68rem', flex: 1, textTransform: 'uppercase', letterSpacing: '0.07em' }}>{t.sched.recipients}</Typography>
+        {loadingCo
+          ? <CircularProgress size={11} sx={{ color: 'var(--accent,#3b82f6)' }} />
+          : selCount > 0 && <Box sx={{ px: 0.9, py: 0.1, borderRadius: '4px', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)' }}>
+              <Typography sx={{ fontSize: '0.6rem', color: 'var(--accent,#60a5fa)', fontWeight: 700 }}>{selCount}</Typography>
+            </Box>
+        }
       </Box>
 
       <Box sx={{ px: 1.5, pt: 1.2, pb: 0.8, borderBottom: '1px solid var(--border)' }}>
@@ -626,12 +633,23 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
   const cleanMessages = useMemo(() => messages.map(m => m.trim()).filter(Boolean), [messages])
   const belowMinTemplates = selectedNums.size > 1 && cleanMessages.length < MIN_TEMPLATES_FOR_BULK
 
+  // Cupo estimado para la fecha elegida — el backend deduplica por número real
+  // contactado (no por empresa), así que el conteo aquí es 1 por número marcado.
+  const dateStr = dateVal ? dateVal.format('YYYY-MM-DD') : null
+  const futureStats = useDailyCapForDate(dateStr, isEdit ? editJob._id : null)
+  const overBy           = getOverBy(futureStats, selectedNums.size)
+  const capBlocked       = overBy > 0
+  const isToday          = dateStr === dayjs().format('YYYY-MM-DD')
+  const capExhaustedToday = isToday && futureStats !== null && (futureStats?.total_available ?? 1) <= 0
+
   async function handleSubmit(e) {
     e.preventDefault(); setError('')
     if (noInstance) { setError(lang === 'en' ? 'No connected WhatsApp instance. Connect one from Instances before scheduling.' : 'Sin instancia WhatsApp conectada. Conéctala desde Instancias antes de programar.'); return }
     if (!name.trim() || cleanMessages.length === 0 || !dateVal || !timeVal) { setError(t.sched.fillAll); return }
     if (selectedNums.size === 0) { setError(t.sched.selectNum); return }
     if (belowMinTemplates) { setError(t.tplLib.minRequiredBlock(MIN_TEMPLATES_FOR_BULK, cleanMessages.length)); return }
+    if (capExhaustedToday) { setError(lang === 'en' ? 'Daily cap exhausted for today — sends will resume automatically tomorrow' : 'Cupo diario agotado para hoy — los envíos continuarán mañana automáticamente'); return }
+    if (capBlocked) { setError(lang === 'en' ? `Deselect ${overBy} to fit the estimated quota for that day` : `Desmarca ${overBy} para caber en el cupo estimado de esa fecha`); return }
     setSubmitting(true)
     try {
       const combined = dateVal.hour(timeVal.hour()).minute(timeVal.minute()).second(0)
@@ -660,7 +678,11 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
         <Box sx={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', bgcolor: 'rgba(13,17,23,0.93)', zIndex: 10, borderRadius: 1, gap: 1.2 }}>
           <CheckCircleIcon sx={{ fontSize: 50, color: '#4ade80' }} />
           <Typography sx={{ color: 'rgba(255,255,255,0.75)', fontSize: '0.88rem', fontWeight: 600 }}>
-            {isEdit ? 'Cambios guardados' : (duplicateFrom ? 'Campaña duplicada' : 'Envío programado')}
+            {isEdit
+              ? (lang === 'en' ? 'Changes saved' : 'Cambios guardados')
+              : (duplicateFrom
+                  ? (lang === 'en' ? 'Campaign duplicated' : 'Campaña duplicada')
+                  : (lang === 'en' ? 'Send scheduled' : 'Envío programado'))}
           </Typography>
         </Box>
       )}
@@ -672,8 +694,13 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
           </Typography>
         )}
       </Box>
-      <Divider sx={{ borderColor: 'rgba(255,255,255,0.07)' }} />
-      <Box sx={{ bgcolor: 'var(--surface,rgba(255,255,255,0.04))', borderRadius: 2, p: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mt: -0.5 }}>
+        <Box sx={{ width: 3, height: 13, borderRadius: 2, bgcolor: 'var(--accent,#3b82f6)', opacity: 0.55, flexShrink: 0 }} />
+        <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>
+          {t.sched.dateLabel} · {t.sched.timeLabel}
+        </Typography>
+      </Box>
+      <Box sx={{ bgcolor: 'var(--surface,rgba(255,255,255,0.04))', borderRadius: 2, p: 1.5, display: 'flex', flexDirection: 'column', gap: 1, border: '1px solid rgba(255,255,255,0.055)', borderLeft: '3px solid rgba(var(--accent-rgb,59,130,246),0.38)', mt: -0.5 }}>
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
           <DatePicker label={t.sched.dateLabel} value={dateVal} onChange={v => setDateVal(v)} disablePast
             slotProps={{ textField: { size: 'small', fullWidth: true, sx: PICKER_FIELD_SX }, popper: { sx: PICKER_POPPER_SX } }} />
@@ -706,6 +733,21 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
         )}
       </Box>
       <CompanyPicker selectedNums={selectedNums} numInfoMap={numInfoMap} onChange={(ns, nm) => { setSelectedNums(ns); setNumInfoMap(nm) }} />
+      {futureStats && (
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <DailyCapBadge stats={futureStats} selectionCount={selectedNums.size} />
+        </Box>
+      )}
+      {capExhaustedToday && (
+        <Typography sx={{ color: '#f59e0b', fontSize: '0.7rem', textAlign: 'right' }}>
+          {lang === 'en' ? '⚠ Daily cap exhausted for today — no sends available until midnight reset' : '⚠ Cupo diario agotado para hoy — no hay envíos disponibles hasta que reinicie a medianoche'}
+        </Typography>
+      )}
+      {capBlocked && !capExhaustedToday && (
+        <Typography sx={{ color: '#f59e0b', fontSize: '0.7rem', textAlign: 'right' }}>
+          {lang === 'en' ? `Deselect ${overBy} to fit the estimated quota for that day` : `Desmarca ${overBy} para caber en el cupo estimado de esa fecha`}
+        </Typography>
+      )}
       {noInstance && (
         <Box sx={{ px: 1.5, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', display: 'flex', alignItems: 'center', gap: 0.8 }}>
           <Typography sx={{ color: '#f87171', fontSize: '0.75rem', fontWeight: 600 }}>
@@ -714,17 +756,17 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
         </Box>
       )}
       {error && <Box sx={{ px: 1.5, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}><Typography sx={{ color: '#ef4444', fontSize: '0.78rem' }}>{error}</Typography></Box>}
-      <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
+      <Box sx={{ display: 'flex', gap: 1, pt: 0.5 }}>
         <Tooltip title={noInstance ? (lang === 'en' ? 'Connect a WhatsApp instance first' : 'Conecta una instancia WhatsApp primero') : ''}>
-        <span>
-        <Button type="submit" variant="contained" disabled={submitting || belowMinTemplates || noInstance}
+        <span style={{ flex: 1, minWidth: 0 }}>
+        <Button type="submit" fullWidth variant="contained" disabled={submitting || belowMinTemplates || noInstance || capBlocked || capExhaustedToday}
           startIcon={submitting ? <CircularProgress size={13} sx={{ color: 'inherit' }} /> : <SendIcon />}
-          sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.85)' }, '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.2)' }, textTransform: 'none', fontWeight: 600, fontSize: '0.82rem', borderRadius: 2, px: 2, minWidth: 140 }}>
+          sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.85)', boxShadow: '0 0 18px rgba(var(--accent-rgb,59,130,246),0.35)' }, '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.2)' }, textTransform: 'none', fontWeight: 700, fontSize: '0.85rem', borderRadius: 2, py: 1, boxShadow: 'none', transition: 'all 0.2s' }}>
           {submitting ? t.sched.saving : (isEdit ? t.sched.saveLbl : (duplicateFrom ? t.sched.duplicateLbl : t.sched.scheduleLbl))}
         </Button>
         </span>
         </Tooltip>
-        <Button variant="outlined" onClick={() => onDone(null, false)} sx={{ color: '#ef4444', borderColor: 'rgba(239,68,68,0.4)', '&:hover': { borderColor: '#ef4444', bgcolor: 'rgba(239,68,68,0.08)' }, textTransform: 'none', fontSize: '0.8rem', borderRadius: 2 }}>{t.common.cancel}</Button>
+        <Button variant="outlined" onClick={() => onDone(null, false)} sx={{ color: 'rgba(255,255,255,0.45)', borderColor: 'rgba(255,255,255,0.15)', '&:hover': { borderColor: '#ef4444', color: '#ef4444', bgcolor: 'rgba(239,68,68,0.07)' }, textTransform: 'none', fontSize: '0.8rem', borderRadius: 2, px: 2.5, transition: 'all 0.18s', flexShrink: 0 }}>{t.common.cancel}</Button>
       </Box>
     </Box>
     </LocalizationProvider>
@@ -753,25 +795,109 @@ function CampaignPill({ job, onClick }) {
 // ─── Day cell ─────────────────────────────────────────────────────────────────
 
 function DayCell({ date, jobs, inCurrentMonth, isToday, isSelected, onDayClick, onJobClick }) {
-  const todayMs = new Date(); todayMs.setHours(0, 0, 0, 0)
-  const isPast  = date < todayMs && !isToday
-  const dayJobs = jobs.filter(j => { try { return isSameDay(new Date(j.scheduled_at), date) } catch { return false } })
+  const todayMs  = new Date(); todayMs.setHours(0, 0, 0, 0)
+  const isPast   = date < todayMs && !isToday
+  const isWeekend = date.getDay() === 0 || date.getDay() === 6
+  const dayJobs  = jobs.filter(j => { try { return isSameDay(new Date(j.scheduled_at), date) } catch { return false } })
   return (
     <Box onClick={() => !isPast && onDayClick(date)} sx={{
       minHeight: 90,
       border: isSelected ? '1px solid rgba(var(--accent-rgb,59,130,246),0.6)' : '1px solid var(--border)',
-      bgcolor: isSelected ? 'rgba(var(--accent-rgb,59,130,246),0.1)' : isToday ? 'rgba(var(--accent-rgb,59,130,246),0.05)' : 'transparent',
+      bgcolor: isSelected ? 'rgba(var(--accent-rgb,59,130,246),0.1)'
+        : isToday ? 'rgba(var(--accent-rgb,59,130,246),0.05)'
+        : isWeekend ? 'rgba(255,255,255,0.02)' : 'transparent',
       p: 0.5, cursor: isPast ? 'not-allowed' : 'pointer',
       opacity: isPast ? 0.35 : (inCurrentMonth ? 1 : 0.3),
       '&:hover': isPast ? {} : { bgcolor: isSelected ? 'rgba(var(--accent-rgb,59,130,246),0.14)' : isToday ? 'rgba(var(--accent-rgb,59,130,246),0.09)' : 'var(--item-hover)' },
       transition: 'background-color 0.12s, border-color 0.12s',
     }}>
       <Box sx={{ width: 22, height: 22, borderRadius: '50%', mb: 0.4, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: isToday ? 'var(--accent,#3b82f6)' : 'transparent' }}>
-        <Typography sx={{ color: isToday ? '#fff' : 'var(--text-muted)', fontSize: '0.72rem', fontWeight: isToday ? 700 : 400, lineHeight: 1 }}>{date.getDate()}</Typography>
+        <Typography sx={{ color: isToday ? '#fff' : 'var(--text)', opacity: isToday ? 1 : 0.6, fontSize: '0.72rem', fontWeight: isToday ? 700 : 500, lineHeight: 1 }}>{date.getDate()}</Typography>
       </Box>
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.3 }}>
         {dayJobs.slice(0, 3).map(j => <CampaignPill key={j._id} job={j} onClick={onJobClick} />)}
         {dayJobs.length > 3 && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.6rem', pl: 0.5 }}>+{dayJobs.length - 3} más</Typography>}
+      </Box>
+    </Box>
+  )
+}
+
+// ─── Calendar loading skeletons ────────────────────────────────────────────────
+
+function MonthGridSkeleton() {
+  return (
+    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', borderBottom: '1px solid var(--border)', bgcolor: 'var(--surface, rgba(255,255,255,0.03))' }}>
+        {Array.from({ length: 7 }).map((_, i) => (
+          <Box key={i} sx={{ display: 'flex', justifyContent: 'center', py: 0.9 }}>
+            <Skeleton variant="text" width={26} sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
+          </Box>
+        ))}
+      </Box>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', flex: 1, minHeight: 0 }}>
+        {Array.from({ length: 42 }).map((_, i) => {
+          const pillCount = i % 5 === 0 ? 2 : i % 3 === 0 ? 1 : 0
+          return (
+            <Box key={i} sx={{ minHeight: 90, border: '1px solid var(--border)', p: 0.5 }}>
+              <Skeleton variant="circular" width={22} height={22} sx={{ mb: 0.6, bgcolor: 'rgba(255,255,255,0.07)' }} />
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+                {Array.from({ length: pillCount }).map((_, j) => (
+                  <Skeleton key={j} variant="rounded" height={14} width={j === 0 ? '80%' : '55%'}
+                    sx={{ borderRadius: '0 3px 3px 0', bgcolor: 'rgba(255,255,255,0.05)' }} />
+                ))}
+              </Box>
+            </Box>
+          )
+        })}
+      </Box>
+    </Box>
+  )
+}
+
+function WeekGridSkeleton() {
+  return (
+    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', borderBottom: '1px solid var(--border)' }}>
+        {Array.from({ length: 7 }).map((_, i) => (
+          <Box key={i} sx={{ textAlign: 'center', py: 1, borderRight: i < 6 ? '1px solid var(--border)' : 'none' }}>
+            <Skeleton variant="text" width={30} sx={{ mx: 'auto', bgcolor: 'rgba(255,255,255,0.08)' }} />
+            <Skeleton variant="circular" width={30} height={30} sx={{ mx: 'auto', mt: 0.3, bgcolor: 'rgba(255,255,255,0.07)' }} />
+          </Box>
+        ))}
+      </Box>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', flex: 1 }}>
+        {Array.from({ length: 7 }).map((_, i) => (
+          <Box key={i} sx={{ borderRight: i < 6 ? '1px solid var(--border)' : 'none', minHeight: 160, p: 0.75, display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+            {i % 3 !== 2 && <Skeleton variant="rounded" height={16} width="75%" sx={{ borderRadius: '0 3px 3px 0', bgcolor: 'rgba(255,255,255,0.05)' }} />}
+            {i % 4 === 0 && <Skeleton variant="rounded" height={16} width="55%" sx={{ borderRadius: '0 3px 3px 0', bgcolor: 'rgba(255,255,255,0.05)' }} />}
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+function ListRowsSkeleton() {
+  return (
+    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+      <Box sx={{ display: 'flex', gap: 0.5, px: 2, py: 1, borderBottom: '1px solid var(--border)' }}>
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Skeleton key={i} variant="rounded" width={i === 0 ? 60 : 78} height={22} sx={{ borderRadius: 10, bgcolor: 'rgba(255,255,255,0.06)' }} />
+        ))}
+      </Box>
+      <Box sx={{ px: 2, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.2 }}>
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Box key={i} sx={{ display: 'flex', alignItems: 'stretch', borderRadius: 2, overflow: 'hidden', border: '1px solid var(--border)', bgcolor: 'var(--card-bg)' }}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', px: 1.8, py: 1.5, borderRight: '1px solid var(--border)', minWidth: 58, gap: 0.4 }}>
+              <Skeleton variant="text" width={22} height={22} sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
+              <Skeleton variant="text" width={26} sx={{ bgcolor: 'rgba(255,255,255,0.06)' }} />
+            </Box>
+            <Box sx={{ flex: 1, minWidth: 0, px: 1.8, py: 1.4, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 0.6 }}>
+              <Skeleton variant="text" width="40%" sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
+              <Skeleton variant="text" width="65%" sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
+            </Box>
+          </Box>
+        ))}
       </Box>
     </Box>
   )
@@ -790,9 +916,9 @@ function MonthView({ jobs, viewYear, viewMonth, selectedDate, onDayClick, onJobC
 
   return (
     <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' }}>
-      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', borderBottom: '1px solid var(--border)' }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', borderBottom: '1px solid var(--border)', bgcolor: 'var(--surface, rgba(255,255,255,0.03))' }}>
         {t.sched.daysShort.map(d => (
-          <Typography key={d} sx={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.7rem', fontWeight: 700, py: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{d}</Typography>
+          <Typography key={d} sx={{ textAlign: 'center', color: 'var(--text)', opacity: 0.65, fontSize: '0.7rem', fontWeight: 700, py: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{d}</Typography>
         ))}
       </Box>
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', flex: 1, minHeight: 0 }}>
@@ -863,7 +989,7 @@ function WeekView({ jobs, weekStart, selectedDate, onDayClick, onJobClick }) {
               {dayJobs.map(j => <CampaignPill key={j._id} job={j} onClick={onJobClick} />)}
               {dayJobs.length === 0 && !isPast && (
                 <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <AddIcon sx={{ fontSize: 18, color: 'rgba(255,255,255,0.06)' }} />
+                  <AddIcon sx={{ fontSize: 22, color: 'rgba(var(--accent-rgb,59,130,246),0.35)' }} />
                 </Box>
               )}
             </Box>
@@ -1025,8 +1151,8 @@ function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicat
     }}>
       {isOpen && (
         <Box sx={{ width: 'min(390px, 55vw)', display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2.5, py: 1.8, borderBottom: '1px solid rgba(255,255,255,0.07)', bgcolor: 'rgba(255,255,255,0.02)', flexShrink: 0 }}>
-            <Box sx={{ width: 28, height: 28, borderRadius: 1.5, flexShrink: 0, bgcolor: `rgba(${modeRgb},0.12)`, border: `1px solid rgba(${modeRgb},0.25)`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2.5, py: 1.8, borderBottom: '1px solid rgba(255,255,255,0.07)', background: `linear-gradient(180deg, rgba(${modeRgb},0.07) 0%, transparent 100%)`, flexShrink: 0 }}>
+            <Box sx={{ width: 32, height: 32, borderRadius: 1.5, flexShrink: 0, bgcolor: `rgba(${modeRgb},0.12)`, border: `1px solid rgba(${modeRgb},0.3)`, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `0 0 14px rgba(${modeRgb},0.2)` }}>
               {panel.mode === 'duplicate' ? <ContentCopyIcon sx={{ fontSize: 14, color: modeColor }} /> : isEdit ? <EditIcon sx={{ fontSize: 14, color: modeColor }} /> : <ScheduleSendIcon sx={{ fontSize: 15, color: modeColor }} />}
             </Box>
             <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -1328,10 +1454,7 @@ export default function ScheduledSends() {
 
           {/* Content */}
           {loading ? (
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 1.5 }}>
-              <CircularProgress size={22} sx={{ color: 'var(--accent,#3b82f6)' }} />
-              <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem' }}>{t.sched.loading}</Typography>
-            </Box>
+            calView === 'week' ? <WeekGridSkeleton /> : calView === 'list' ? <ListRowsSkeleton /> : <MonthGridSkeleton />
           ) : calView === 'month' ? (
             <MonthView jobs={jobs} viewYear={viewYear} viewMonth={viewMonth}
               selectedDate={panel?.mode === 'create' || panel?.mode === 'duplicate' ? panel.defaultDate : null}

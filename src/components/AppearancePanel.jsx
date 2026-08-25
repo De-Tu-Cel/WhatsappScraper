@@ -52,7 +52,7 @@ const SUB_LABEL_SX = {
 // the left Sidebar, so it's reachable from anywhere without leaving the tab
 // the user is on.
 export default function AppearancePanel({ open, onClose }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const [settings, setSettings] = useState(null)
 
   useEffect(() => { setSettings(loadSettings()) }, [])
@@ -85,24 +85,35 @@ export default function AppearancePanel({ open, onClose }) {
       {open && settings && (
         <Box sx={{ width: 'min(340px, 60vw)', display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
           <Box sx={{
-            display: 'flex', alignItems: 'center', gap: 1, px: 2.5, py: 1.8,
-            borderBottom: '1px solid var(--border, rgba(255,255,255,0.07))',
-            bgcolor: 'var(--surface, rgba(255,255,255,0.02))', flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2.2, py: 1.6,
+            borderBottom: '1px solid rgba(255,255,255,0.07)',
+            background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.13) 0%, rgba(var(--accent-rgb,59,130,246),0.04) 60%, transparent 100%)',
+            flexShrink: 0,
           }}>
-            <Box sx={{
-              width: 28, height: 28, borderRadius: 1.5, flexShrink: 0,
-              bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)',
-              border: '1px solid var(--accent, #3b82f6)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <PaletteIcon sx={{ fontSize: 15, color: 'var(--accent, #3b82f6)' }} />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.4 }}>
+              <Box sx={{
+                width: 32, height: 32, borderRadius: 2, flexShrink: 0,
+                background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.4), rgba(var(--accent-rgb,59,130,246),0.15))',
+                border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 2px 12px rgba(var(--accent-rgb,59,130,246),0.2)',
+              }}>
+                <PaletteIcon sx={{ fontSize: 17, color: 'var(--accent, #60a5fa)' }} />
+              </Box>
+              <Box>
+                <Typography sx={{ color: 'var(--text, #f1f5f9)', fontWeight: 700, fontSize: '0.88rem', lineHeight: 1.2 }}>
+                  {t.settings.tabAppearance || 'Apariencia'}
+                </Typography>
+                <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.32)', mt: 0.1 }}>
+                  {lang === 'en' ? 'Themes & colors' : 'Temas y colores'}
+                </Typography>
+              </Box>
             </Box>
-            <Typography sx={{ color: 'var(--text, #f1f5f9)', fontWeight: 700, fontSize: '0.88rem', flex: 1 }}>
-              {t.settings.tabAppearance || 'Apariencia'}
-            </Typography>
-            <IconButton size="small" onClick={onClose}
-              sx={{ color: 'var(--text-muted, rgba(255,255,255,0.3))', '&:hover': { color: 'var(--text, #f1f5f9)' } }}>
-              <CloseIcon sx={{ fontSize: 17 }} />
+            <IconButton size="small" onClick={onClose} sx={{
+              color: 'rgba(255,255,255,0.3)', width: 26, height: 26,
+              '&:hover': { color: 'var(--text,#f1f5f9)', bgcolor: 'rgba(255,255,255,0.07)' },
+            }}>
+              <CloseIcon sx={{ fontSize: 15 }} />
             </IconButton>
           </Box>
 

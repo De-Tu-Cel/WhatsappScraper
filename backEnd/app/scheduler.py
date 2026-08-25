@@ -5,7 +5,8 @@ import random
 import threading
 import time
 from datetime import datetime
-from app.daily_cap import DAILY_CAP, get_daily_count, increment_daily_count
+from app.daily_cap import DAILY_CAP, get_daily_count, increment_daily_count, get_instance_cap, notify_cap_reached_once
+from app.phone_utils import clean_digits
 
 log = logging.getLogger(__name__)
 
@@ -13,6 +14,15 @@ log = logging.getLogger(__name__)
 def _any_instance_connected(db) -> bool:
     """Return True if at least one WhatsApp session is reachable and connected."""
     from app.config import WASENDER_PAT, WASENDER_BASE_URL, WAHA_API_KEY, WAHA_API_URL, EVOLUTION_API_KEY
+    # Check wwebjs instances first (local, fastest check)
+    try:
+        from app.config import WWEBJS_URL as _ww_url
+        import requests as _r2
+        ww_sessions = _r2.get(f"{_ww_url}/sessions", timeout=2).json()
+        if any(s.get("status") == "connected" for s in ww_sessions.values()):
+            return True
+    except Exception:
+        pass
     if WASENDER_PAT:
         try:
             from app.whatsapp_wasender import pick_connected_instance as _ws_pick
@@ -75,7 +85,68 @@ def _pick_message(messages, last_text=None):
     return random.choice(choices or messages)
 
 
-def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_id: str, delay_ms: int = 0):
+def _stamp_assigned_instance(db, company_id: str, instance_name: str) -> None:
+    """Write assigned_instance to the company doc if not already set.
+    Called after every successful send so future sends (batch, scheduled, AI
+    followup) always route back to the same WhatsApp number, preserving the
+    conversation thread. Only sets; never overwrites an existing assignment."""
+    if not company_id or len(company_id) != 24 or not instance_name:
+        return
+    try:
+        from bson import ObjectId
+        db.db.companies.update_one(
+            {"_id": ObjectId(company_id), "assigned_instance": {"$in": [None, ""]}},
+            {"$set": {"assigned_instance": instance_name}},
+        )
+    except Exception:
+        pass
+
+
+def _nc_aware_pick(db, candidates: list, company_id: str) -> str | None:
+    """Pick the best connected instance for this send.
+
+    For new contacts: prefer the instance with the most NC capacity left so the
+    NC cap is shared evenly across sessions. Returns None if all instances are
+    at their NC cap — the caller should treat this as "skipped_nc_cap".
+
+    For existing contacts: returns the first instance not at its daily send cap
+    (same as the old pick_connected_instance behavior).
+
+    Returns None when candidates is empty (nothing connected) or when all
+    instances are at their NC cap for a new contact.
+    """
+    from app.daily_cap import (
+        is_new_contact, get_new_contacts_limit,
+        count_new_contacts_today_for_instance,
+    )
+    if not candidates:
+        return None
+
+    # Exclude instances already at their daily send cap; fall back to all if
+    # all are full (the existing daily-cap check handles it with a notification).
+    available = [n for n in candidates if get_daily_count(db, n) < get_instance_cap(db, n)]
+    pool = available or candidates
+
+    if not company_id or not is_new_contact(db, company_id):
+        return pool[0]  # existing contact: first available is fine
+
+    # New contact: rank by NC space left (descending).
+    scored = []
+    for name in pool:
+        inst = db.db.instances.find_one({"name": name}, {"warmup_mode": 1})
+        warmup = bool((inst or {}).get("warmup_mode"))
+        limit = get_new_contacts_limit(warmup)
+        count = count_new_contacts_today_for_instance(db, name)
+        scored.append((limit - count, name))
+    scored.sort(reverse=True)
+    # If the best candidate has no capacity left, all are saturated → skip.
+    if scored[0][0] <= 0:
+        return None
+    return scored[0][1]
+
+
+def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_id: str, delay_ms: int = 0,
+                         sent_by_username: str = "scheduler", sent_by_name: str = "Envio programado"):
     """Send a single WhatsApp message via Evolution API and log it.
 
     Mirrors the logic in routes.py POST /api/send-message, but runs in a
@@ -91,9 +162,16 @@ def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_i
     try:
         evo = EvolutionClient(EVOLUTION_API_URL, EVOLUTION_API_KEY, EVOLUTION_INSTANCE)
 
-        if get_daily_count(db, EVOLUTION_INSTANCE) >= DAILY_CAP:
-            log.warning("[Scheduler] Daily cap %d reached for evolution=%s — skipping %s", DAILY_CAP, EVOLUTION_INSTANCE, to_number)
-            return False
+        if get_daily_count(db, EVOLUTION_INSTANCE) >= get_instance_cap(db, EVOLUTION_INSTANCE):
+            log.warning("[Scheduler] Daily cap %d reached for evolution=%s — skipping %s", get_instance_cap(db, EVOLUTION_INSTANCE), EVOLUTION_INSTANCE, to_number)
+            notify_cap_reached_once(db, EVOLUTION_INSTANCE)
+            return "skipped_daily_cap"
+
+        from app.daily_cap import check_new_contact_cap
+        _nc_ok, _nc_count, _nc_limit = check_new_contact_cap(db, EVOLUTION_INSTANCE, company_id)
+        if not _nc_ok:
+            log.info("[Scheduler] New-contact cap %d/day reached for evolution=%s — skipping new contact company=%s", _nc_limit, EVOLUTION_INSTANCE, company_id)
+            return "skipped_nc_cap"
 
         # Learn JID before sending (so instant bot replies can be matched)
         real_jid_num = evo.get_jid(to_number)
@@ -109,7 +187,8 @@ def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_i
         message_id = evo_json.get("key", {}).get("id") or evo_json.get("id")
         status = "sent" if evo_result.get("status_code") in (200, 201) else "failed"
         if status == "sent":
-            increment_daily_count(db, EVOLUTION_INSTANCE)
+            increment_daily_count(db, EVOLUTION_INSTANCE, clean_digits(to_number))
+            _stamp_assigned_instance(db, company_id, EVOLUTION_INSTANCE)
 
         # Learn JID from send response as fallback
         if not real_jid_num and status == "sent":
@@ -135,8 +214,8 @@ def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_i
             "api_response": evo_json,
             "status": status,
             "sent_at": evo_result.get("sent_at"),
-            "sent_by_username": "scheduler",
-            "sent_by_name": "Envio programado",
+            "sent_by_username": sent_by_username,
+            "sent_by_name": sent_by_name,
             "scheduled_send_id": job_id,
             # Outbound messages are not classified -- only inbound replies are
             "analysis_status": None,
@@ -149,23 +228,34 @@ def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_i
         return False
 
 
-def _send_via_waha(db, company_id: str, to_number: str, message: str, job_id: str, delay_ms: int = 0, session: str = ""):
+def _send_via_waha(db, company_id: str, to_number: str, message: str, job_id: str, delay_ms: int = 0, session: str = "",
+                    sent_by_username: str = "scheduler", sent_by_name: str = "Envio programado"):
     """Send a single WhatsApp message via WAHA and log it."""
     from app.config import WAHA_API_KEY, WAHA_API_URL
-    from app.whatsapp_waha import WAHAClient, pick_connected_instance as waha_pick
+    from app.whatsapp_waha import WAHAClient, get_all_connected_instances as _waha_all
 
     if not WAHA_API_KEY:
         log.warning("[Scheduler] WAHA not configured — skipping %s", to_number)
         return False
     try:
-        active_session = session or waha_pick(db, WAHA_API_URL, WAHA_API_KEY)
+        if session:
+            active_session = session
+        else:
+            active_session = _nc_aware_pick(db, _waha_all(db, WAHA_API_URL, WAHA_API_KEY), company_id)
         if not active_session:
             log.warning("[Scheduler] WAHA: no session connected — skipping %s", to_number)
             return False
 
-        if get_daily_count(db, active_session) >= DAILY_CAP:
-            log.warning("[Scheduler] Daily cap %d reached for waha=%s — skipping %s", DAILY_CAP, active_session, to_number)
-            return False
+        if get_daily_count(db, active_session) >= get_instance_cap(db, active_session):
+            log.warning("[Scheduler] Daily cap %d reached for waha=%s — skipping %s", get_instance_cap(db, active_session), active_session, to_number)
+            notify_cap_reached_once(db, active_session)
+            return "skipped_daily_cap"
+
+        from app.daily_cap import check_new_contact_cap
+        _nc_ok, _nc_count, _nc_limit = check_new_contact_cap(db, active_session, company_id)
+        if not _nc_ok:
+            log.info("[Scheduler] New-contact cap %d/day reached for waha=%s — skipping new contact company=%s", _nc_limit, active_session, company_id)
+            return "skipped_nc_cap"
 
         waha = WAHAClient(WAHA_API_URL, WAHA_API_KEY, active_session)
 
@@ -211,7 +301,8 @@ def _send_via_waha(db, company_id: str, to_number: str, message: str, job_id: st
 
         status      = "sent" if waha_result.get("status_code") in (200, 201) else "failed"
         if status == "sent":
-            increment_daily_count(db, active_session)
+            increment_daily_count(db, active_session, _phone_digits)
+            _stamp_assigned_instance(db, company_id, active_session)
 
         db.insert_message_log({
             "channel": "whatsapp",
@@ -226,8 +317,8 @@ def _send_via_waha(db, company_id: str, to_number: str, message: str, job_id: st
             "api_response": waha_json,
             "status": status,
             "sent_at": waha_result.get("sent_at"),
-            "sent_by_username": "scheduler",
-            "sent_by_name": "Envio programado",
+            "sent_by_username": sent_by_username,
+            "sent_by_name": sent_by_name,
             "scheduled_send_id": job_id,
             "analysis_status": None,
         })
@@ -238,23 +329,34 @@ def _send_via_waha(db, company_id: str, to_number: str, message: str, job_id: st
         return False
 
 
-def _send_via_wasender(db, company_id: str, to_number: str, message: str, job_id: str, delay_ms: int = 0, session: str = ""):
+def _send_via_wasender(db, company_id: str, to_number: str, message: str, job_id: str, delay_ms: int = 0, session: str = "",
+                        sent_by_username: str = "scheduler", sent_by_name: str = "Envio programado"):
     """Send a single WhatsApp message via WasenderAPI and log it."""
     from app.config import WASENDER_PAT, WASENDER_BASE_URL
-    from app.whatsapp_wasender import WasenderClient, pick_connected_instance as wasender_pick, _clean_digits as _wc
+    from app.whatsapp_wasender import WasenderClient, get_all_connected_instances as _wasender_all, _clean_digits as _wc
 
     if not WASENDER_PAT:
         log.warning("[Scheduler] WasenderAPI not configured — skipping %s", to_number)
         return False
     try:
-        active_session = session or wasender_pick(db, WASENDER_PAT, WASENDER_BASE_URL)
+        if session:
+            active_session = session
+        else:
+            active_session = _nc_aware_pick(db, _wasender_all(db, WASENDER_PAT, WASENDER_BASE_URL), company_id)
         if not active_session:
             log.warning("[Scheduler] Wasender: no session connected — skipping %s", to_number)
             return False
 
-        if get_daily_count(db, active_session) >= DAILY_CAP:
-            log.warning("[Scheduler] Daily cap %d reached for wasender=%s — skipping %s", DAILY_CAP, active_session, to_number)
-            return False
+        if get_daily_count(db, active_session) >= get_instance_cap(db, active_session):
+            log.warning("[Scheduler] Daily cap %d reached for wasender=%s — skipping %s", get_instance_cap(db, active_session), active_session, to_number)
+            notify_cap_reached_once(db, active_session)
+            return "skipped_daily_cap"
+
+        from app.daily_cap import check_new_contact_cap
+        _nc_ok, _nc_count, _nc_limit = check_new_contact_cap(db, active_session, company_id)
+        if not _nc_ok:
+            log.info("[Scheduler] New-contact cap %d/day reached for wasender=%s — skipping new contact company=%s", _nc_limit, active_session, company_id)
+            return "skipped_nc_cap"
 
         inst_doc = db.db.instances.find_one({"name": active_session}, {"wasender_api_key": 1, "number": 1})
         api_key = (inst_doc or {}).get("wasender_api_key", "")
@@ -281,7 +383,8 @@ def _send_via_wasender(db, company_id: str, to_number: str, message: str, job_id
 
         status = "sent" if result.get("status_code") in (200, 201) else "failed"
         if status == "sent":
-            increment_daily_count(db, active_session)
+            increment_daily_count(db, active_session, _phone_digits)
+            _stamp_assigned_instance(db, company_id, active_session)
 
         db.insert_message_log({
             "channel": "whatsapp",
@@ -297,8 +400,8 @@ def _send_via_wasender(db, company_id: str, to_number: str, message: str, job_id
             "status": status,
             "sent_at": result.get("sent_at"),
             "instance_name": active_session,
-            "sent_by_username": "scheduler",
-            "sent_by_name": "Envio programado",
+            "sent_by_username": sent_by_username,
+            "sent_by_name": sent_by_name,
             "scheduled_send_id": job_id,
             "analysis_status": None,
         })
@@ -309,8 +412,96 @@ def _send_via_wasender(db, company_id: str, to_number: str, message: str, job_id
         return False
 
 
-def _send_message(db, company_id: str, to_number: str, message: str, job_id: str, delay_ms: int = 0):
-    """Route to WasenderAPI, WAHA, or Evolution based on the company's assigned instance provider."""
+def _verify_wa_number(db, phone_digits: str, session: str) -> bool:
+    """Return True if phone_digits is registered on WhatsApp. Caches result in jid_map."""
+    cached = db.db.jid_map.find_one({"jid": phone_digits}, {"wa_valid": 1, "wa_checked_at": 1})
+    if cached and "wa_valid" in cached:
+        return cached["wa_valid"]
+    try:
+        from app.whatsapp_wwebjs import verify_number
+        result = verify_number(session, phone_digits)
+        valid = bool(result.get("exists", False))
+    except Exception:
+        return True  # on error, allow send (don't block on verify failure)
+    db.db.jid_map.update_one(
+        {"jid": phone_digits},
+        {"$set": {"wa_valid": valid, "wa_checked_at": datetime.now()}},
+        upsert=True,
+    )
+    if not valid:
+        log.info("[Scheduler] verify: %s not on WhatsApp — skipping", phone_digits)
+    return valid
+
+
+def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: str, delay_ms: int = 0, session: str = "",
+                      sent_by_username: str = "scheduler", sent_by_name: str = "Envio programado"):
+    """Send a single WhatsApp message via whatsapp-web.js and log it."""
+    from app.whatsapp_wwebjs import WWebjsClient
+    if not session:
+        log.warning("[Scheduler] wwebjs: no session provided — skipping %s", to_number)
+        return False
+    try:
+        if get_daily_count(db, session) >= get_instance_cap(db, session):
+            log.warning("[Scheduler] Daily cap %d reached for wwebjs=%s — skipping %s", get_instance_cap(db, session), session, to_number)
+            notify_cap_reached_once(db, session)
+            return "skipped_daily_cap"
+
+        from app.daily_cap import check_new_contact_cap
+        _nc_ok, _nc_count, _nc_limit = check_new_contact_cap(db, session, company_id)
+        if not _nc_ok:
+            log.info("[Scheduler] New-contact cap %d/day reached for wwebjs=%s — skipping new contact company=%s", _nc_limit, session, company_id)
+            return "skipped_nc_cap"
+
+        _phone_digits = clean_digits(to_number)
+
+        if not _verify_wa_number(db, _phone_digits, session):
+            return False
+        db.db.jid_map.update_one(
+            {"jid": _phone_digits},
+            {"$set": {"company_id": company_id, "to_number": to_number, "updated_at": datetime.now()}},
+            upsert=True,
+        )
+
+        ww_client = WWebjsClient(session)
+        ww_result = ww_client.send(to_number, message, delay_ms=delay_ms)
+        message_id = ww_result.get("messageId")
+        status = "sent" if ww_result.get("success") else "failed"
+        if status == "sent":
+            increment_daily_count(db, session, _phone_digits)
+            _stamp_assigned_instance(db, company_id, session)
+
+        db.insert_message_log({
+            "channel": "whatsapp",
+            "platform": "wwebjs",
+            "direction": "outbound",
+            "company_id": company_id,
+            "to_number": to_number,
+            "message_body": message,
+            "message_text": message,
+            "message_id": message_id,
+            "status": status,
+            "instance_name": session,
+            "sent_by_username": sent_by_username,
+            "sent_by_name": sent_by_name,
+            "scheduled_send_id": job_id,
+            "analysis_status": None,
+        })
+        log.info("[Scheduler] wwebjs job=%s company=%s to=%s status=%s", job_id, company_id, to_number, status)
+        return status == "sent"
+    except Exception:
+        log.exception("[Scheduler] _send_via_wwebjs failed for company=%s to=%s", company_id, to_number)
+        return False
+
+
+def _send_message(db, company_id: str, to_number: str, message: str, job_id: str, delay_ms: int = 0,
+                   sent_by_username: str = "scheduler", sent_by_name: str = "Envio programado"):
+    """Route to wwebjs, WasenderAPI, WAHA, or Evolution based on the company's assigned instance provider.
+
+    sent_by_username/sent_by_name default to the scheduled-campaign attribution
+    ("scheduler"/"Envio programado") but callers outside scheduler.py — e.g. the
+    immediate send-now worker — pass the real acting user so message_logs
+    attributes the send correctly instead of showing it as a scheduled campaign.
+    """
     try:
         from bson import ObjectId
         if company_id and len(company_id) == 24:
@@ -319,19 +510,41 @@ def _send_message(db, company_id: str, to_number: str, message: str, job_id: str
             if inst_name:
                 inst_doc = db.db.instances.find_one({"name": inst_name}, {"provider": 1})
                 provider = (inst_doc or {}).get("provider", "")
+                if provider == "wwebjs":
+                    return _send_via_wwebjs(db, company_id, to_number, message, job_id, delay_ms, session=inst_name,
+                                             sent_by_username=sent_by_username, sent_by_name=sent_by_name)
                 if provider == "wasender":
-                    return _send_via_wasender(db, company_id, to_number, message, job_id, delay_ms, session=inst_name)
+                    return _send_via_wasender(db, company_id, to_number, message, job_id, delay_ms, session=inst_name,
+                                               sent_by_username=sent_by_username, sent_by_name=sent_by_name)
                 if provider == "waha":
-                    return _send_via_waha(db, company_id, to_number, message, job_id, delay_ms, session=inst_name)
+                    return _send_via_waha(db, company_id, to_number, message, job_id, delay_ms, session=inst_name,
+                                           sent_by_username=sent_by_username, sent_by_name=sent_by_name)
     except Exception:
         pass
-    # Fallback: prefer WasenderAPI if configured, then WAHA, then Evolution
-    from app.config import WASENDER_PAT, WAHA_API_KEY, EVOLUTION_API_KEY
+    # Fallback: wwebjs → WasenderAPI → WAHA → Evolution
+    from app.config import WWEBJS_URL, WASENDER_PAT, WAHA_API_KEY, EVOLUTION_API_KEY
+    if WWEBJS_URL:
+        from app.whatsapp_wwebjs import get_all_connected_instances as _ww_all
+        _ww_all_connected = _ww_all(db)
+        # Only use instances that are claimed (assigned_to is set) — avoids picking
+        # orphaned/test sessions that don't belong to any user's account.
+        _ww_candidates = [
+            n for n in _ww_all_connected
+            if (db.db.instances.find_one({"name": n}, {"assigned_to": 1}) or {}).get("assigned_to")
+        ]
+        if _ww_candidates:
+            _picked = _nc_aware_pick(db, _ww_candidates, company_id)
+            if _picked:
+                return _send_via_wwebjs(db, company_id, to_number, message, job_id, delay_ms, session=_picked,
+                                        sent_by_username=sent_by_username, sent_by_name=sent_by_name)
     if WASENDER_PAT:
-        return _send_via_wasender(db, company_id, to_number, message, job_id, delay_ms)
+        return _send_via_wasender(db, company_id, to_number, message, job_id, delay_ms,
+                                   sent_by_username=sent_by_username, sent_by_name=sent_by_name)
     if WAHA_API_KEY and not EVOLUTION_API_KEY:
-        return _send_via_waha(db, company_id, to_number, message, job_id, delay_ms)
-    return _send_via_evolution(db, company_id, to_number, message, job_id, delay_ms)
+        return _send_via_waha(db, company_id, to_number, message, job_id, delay_ms,
+                               sent_by_username=sent_by_username, sent_by_name=sent_by_name)
+    return _send_via_evolution(db, company_id, to_number, message, job_id, delay_ms,
+                                sent_by_username=sent_by_username, sent_by_name=sent_by_name)
 
 
 def _execute_send_job(job_id: str):
@@ -455,9 +668,9 @@ def _execute_send_job(job_id: str):
                     num_info.get("industry", ""), num_info.get("city", ""), num_info.get("web", ""),
                 )
                 ok = _send_message(db, cid, to_number, message, job_id, delay_ms=typing_ms)
-                if ok:
+                if ok is True:
                     sent_count += 1
-                else:
+                elif ok is False:
                     error_count += 1
 
                 db.db.scheduled_sends.update_one(
@@ -537,9 +750,9 @@ def _execute_send_job(job_id: str):
                 message = _render_message(message_variant, company_name, company_industry, company_city, company_web)
                 ok = _send_message(db, cid, to_number, message, job_id, delay_ms=typing_ms)
                 send_index += 1
-                if ok:
+                if ok is True:
                     sent_count += 1
-                else:
+                elif ok is False:
                     error_count += 1
 
                 db.db.scheduled_sends.update_one(

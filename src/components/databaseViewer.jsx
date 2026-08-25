@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { authFetch } from '@/lib/api'
 import { useSendQueue } from '../context/SendQueueContext'
+import { useDailyCapStats } from '../hooks/useDailyCapStats'
 const display = v => (!v || ['null','none','undefined','n/a'].includes(String(v).trim().toLowerCase())) ? '—' : v
 import { useLang } from '../context/LangContext'
 import { isValidUrl, urlValidationMsg, isValidWhatsAppNumber, waNumberValidationMsg } from '@/lib/validators'
@@ -54,7 +55,16 @@ import AddIcon from '@mui/icons-material/Add'
 import VisibilityIcon from '@mui/icons-material/Visibility'
 import SendIcon from '@mui/icons-material/Send'
 import MessageIcon from '@mui/icons-material/Message'
+import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import { visuallyHidden } from '@mui/utils'
+
+function cleanDomain(url) {
+  if (!url) return null
+  try {
+    const u = new URL(url.startsWith('http') ? url : `https://${url}`)
+    return u.hostname.replace(/^www\./, '')
+  } catch { return url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] }
+}
 import ResultDisplay from './resultDisplay'
 import { MessageComposer, getTemplates } from './singleUrlProcessor'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
@@ -67,8 +77,8 @@ import { loadSendConfig, randMsgDelayMs, randBatchBreakMs, randBatchSize } from 
 
 function getHeadCells(t) {
   return [
-    { id: 'name',         label: t.db.colCompany,    align: 'left',   sortable: true  },
-    { id: 'website',      label: t.db.colWebsite,    align: 'left',   sortable: false },
+    { id: 'name',         label: t.db.colCompany,    align: 'center', sortable: true  },
+    { id: 'website',      label: t.db.colWebsite,    align: 'center', sortable: false },
     { id: 'industry',     label: t.db.colIndustry,   align: 'center', sortable: true  },
     { id: 'city',         label: t.db.colCity,       align: 'center', sortable: true  },
     { id: 'has_whatsapp', label: t.db.whatsapp,      align: 'center', sortable: true  },
@@ -142,11 +152,11 @@ const FIELD_SX = {
   '& .MuiInputBase-root': { color: 'rgba(255,255,255,0.85)' },
   '& .MuiOutlinedInput-input': { paddingTop: '16.5px', paddingBottom: '8.5px' },
   '& .MuiInputLabel-root': { color: 'rgba(255,255,255,0.35)' },
-  '& .MuiInputLabel-root.Mui-focused': { color: '#3b82f6' },
+  '& .MuiInputLabel-root.Mui-focused': { color: 'var(--accent, #3b82f6)' },
   '& .MuiInputLabel-root.Mui-error': { color: '#f87171' },
   '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.1)' },
   '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.22)' },
-  '& .MuiInputBase-root.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#3b82f6' },
+  '& .MuiInputBase-root.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--accent, #3b82f6)' },
   '& .MuiInputBase-root.Mui-error .MuiOutlinedInput-notchedOutline': { borderColor: '#ef4444 !important' },
   '& .MuiFormHelperText-root': { color: 'rgba(255,255,255,0.3)' },
   '& .MuiFormHelperText-root.Mui-error': { color: '#f87171' },
@@ -178,7 +188,9 @@ function renderTemplate(template, row) {
 
 // ─── Toolbar ──────────────────────────────────────────────────────────────────
 function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescraping, selectedWithWA, onRefresh, onToggleFilter, filterOpen, total, instanceStatus, onAddCompany }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
+  const { stats: capStats } = useDailyCapStats()
+  const capBlocked = !!(capStats && capStats.total_available <= 0)
   return (
     <Toolbar sx={{
       pl: { sm: 2 }, pr: { xs: 1, sm: 1 },
@@ -224,9 +236,14 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
         {numSelected > 0 ? (
           <>
-            <Tooltip title={instanceStatus === 'disconnected' ? t.db.instDisconnTip : selectedWithWA === 0 ? t.db.noWaSelected : `${t.db.sendMsgTo} ${selectedWithWA} ${t.db.withWA}`}>
+            <Tooltip title={
+              instanceStatus === 'disconnected' ? t.db.instDisconnTip :
+              capBlocked ? (lang === 'en' ? `Daily limit reached (${capStats.total_sent}/${capStats.total_cap}). Resets at midnight.` : `Límite diario alcanzado (${capStats.total_sent}/${capStats.total_cap}). Reinicia a medianoche.`) :
+              selectedWithWA === 0 ? t.db.noWaSelected :
+              `${t.db.sendMsgTo} ${selectedWithWA} ${t.db.withWA}`
+            }>
               <span>
-                <Button size="small" onClick={onCampaign} disabled={selectedWithWA === 0 || instanceStatus === 'disconnected'}
+                <Button size="small" onClick={onCampaign} disabled={selectedWithWA === 0 || instanceStatus === 'disconnected' || capBlocked}
                   startIcon={<MessageIcon sx={{ fontSize: '14px !important' }} />}
                   sx={{
                     fontSize: '0.75rem', fontWeight: 600, textTransform: 'none',
@@ -250,10 +267,10 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
                   startIcon={rescraping ? <CircularProgress size={12} sx={{ color: 'inherit' }} /> : <RefreshIcon sx={{ fontSize: '14px !important' }} />}
                   sx={{
                     fontSize: '0.75rem', fontWeight: 600, textTransform: 'none',
-                    color: '#60a5fa', bgcolor: 'rgba(59,130,246,0.1)',
-                    border: '1px solid rgba(59,130,246,0.25)', borderRadius: 1.5,
+                    color: 'var(--accent, #60a5fa)', bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.1)',
+                    border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)', borderRadius: 1.5,
                     px: 1.5, py: 0.5,
-                    '&:hover': { bgcolor: 'rgba(59,130,246,0.18)', borderColor: 'rgba(59,130,246,0.45)' },
+                    '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.18)', borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.45)' },
                     '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'transparent', border: '1px solid rgba(255,255,255,0.08)' },
                   }}>
                   {t.db.rescrape}
@@ -287,7 +304,7 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
               </IconButton>
             </Tooltip>
             <Tooltip title={t.db.filters}>
-              <IconButton onClick={onToggleFilter} size="small" sx={{ color: filterOpen ? '#3b82f6' : 'var(--text-muted, rgba(255,255,255,0.5))', '&:hover': { color: 'var(--text, white)' } }}>
+              <IconButton onClick={onToggleFilter} size="small" sx={{ color: filterOpen ? 'var(--accent, #3b82f6)' : 'var(--text-muted, rgba(255,255,255,0.5))', '&:hover': { color: 'var(--text, white)' } }}>
                 <FilterListIcon fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -484,7 +501,7 @@ function AddCompanyDialog({ open, onClose, onCreated, onNotify }) {
 
 // ─── Edit dialog ──────────────────────────────────────────────────────────────
 function EditDialog({ open, company, contacts, onClose, onSave }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const [form, setForm] = useState({})
   const [saving, setSaving] = useState(false)
   const [waNumbers, setWaNumbers] = useState([])
@@ -574,9 +591,9 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
         }}>
           <Avatar sx={{
             width: 44, height: 44, flexShrink: 0,
-            bgcolor: 'rgba(59,130,246,0.2)',
-            border: '1px solid rgba(59,130,246,0.35)',
-            color: '#60a5fa',
+            bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.2)',
+            border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.35)',
+            color: 'var(--accent, #60a5fa)',
             fontWeight: 700,
             fontSize: '1.1rem',
           }}>
@@ -595,7 +612,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
 
       <DialogContent sx={{ px: 3, pt: 2.5, pb: 1, display: 'flex', flexDirection: 'column', gap: 0, bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
         {/* Sección: General */}
-        <Typography variant="overline" sx={{ color: '#3b82f6', fontSize: '0.65rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
+        <Typography variant="overline" sx={{ color: 'var(--accent, #3b82f6)', fontSize: '0.65rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
           {t.db.generalInfo}
         </Typography>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, mb: 2.5 }}>
@@ -626,7 +643,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
         <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', mb: 2.5 }} />
 
         {/* Sección: Descripción */}
-        <Typography variant="overline" sx={{ color: '#3b82f6', fontSize: '0.65rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
+        <Typography variant="overline" sx={{ color: 'var(--accent, #3b82f6)', fontSize: '0.65rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
           {t.db.descLabel}
         </Typography>
         <TextField
@@ -679,7 +696,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
         </Box>
 
         <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', my: 2 }} />
-        <Typography variant="overline" sx={{ color: '#3b82f6', fontSize: '0.65rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
+        <Typography variant="overline" sx={{ color: 'var(--accent, #3b82f6)', fontSize: '0.65rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
           {t.db.whatsappNums}
         </Typography>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.8, mb: 1.5 }}>
@@ -771,9 +788,9 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
           const webErr    = !!(form.website?.trim() && urlValidationMsg(form.website.trim(), { badProtocol: t.common.urlBadProtocol, invalid: t.common.urlInvalid }))
           const waErr     = form.has_whatsapp && waNumbers.length === 0
           const isInvalid = nameErr || webErr || waErr
-          const tooltip   = nameErr   ? 'El nombre de la empresa es requerido'
-                          : webErr    ? 'El sitio web tiene un formato inválido'
-                          : waErr     ? 'La empresa tiene WhatsApp activo pero no hay números registrados'
+          const tooltip   = nameErr   ? (lang === 'en' ? 'Company name is required' : 'El nombre de la empresa es requerido')
+                          : webErr    ? (lang === 'en' ? 'Website has an invalid format' : 'El sitio web tiene un formato inválido')
+                          : waErr     ? (lang === 'en' ? 'Company has WhatsApp enabled but no numbers registered' : 'La empresa tiene WhatsApp activo pero no hay números registrados')
                           : ''
           return (
             <Tooltip title={tooltip} disableHoverListener={!isInvalid || saving}>
@@ -799,6 +816,11 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
 }
 
 // ─── Skeleton rows ─────────────────────────────────────────────────────────────
+// Debe tener exactamente las mismas 9 celdas que una fila real (checkbox + 7
+// columnas de headCells + acciones) — antes se quedaba corto por una columna
+// (faltaba "Últ. scrape") y la celda de acciones iba vacía, así que al llegar
+// los datos reales aparecía una columna entera de golpe en vez de solo
+// rellenarse el contenido.
 function SkeletonRows({ count }) {
   return Array.from({ length: count }).map((_, i) => (
     <TableRow key={i}>
@@ -806,7 +828,10 @@ function SkeletonRows({ count }) {
         <Skeleton variant="rounded" width={18} height={18} sx={SKEL_SX} />
       </TableCell>
       <TableCell>
-        <Skeleton variant="text" width="70%" sx={{ ...SKEL_SX, fontSize: '0.82rem' }} />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.9 }}>
+          <Skeleton variant="circular" width={6} height={6} sx={SKEL_SX} />
+          <Skeleton variant="text" width="70%" sx={{ ...SKEL_SX, fontSize: '0.82rem', flex: 1 }} />
+        </Box>
       </TableCell>
       <TableCell>
         <Skeleton variant="text" width="80%" sx={{ ...SKEL_SX, fontSize: '0.78rem' }} />
@@ -831,7 +856,18 @@ function SkeletonRows({ count }) {
           <Skeleton variant="text" width={80} sx={{ ...SKEL_SX, fontSize: '0.82rem' }} />
         </Box>
       </TableCell>
-      <TableCell />
+      <TableCell align="center">
+        <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+          <Skeleton variant="text" width={80} sx={{ ...SKEL_SX, fontSize: '0.82rem' }} />
+        </Box>
+      </TableCell>
+      <TableCell align="right" sx={{ pr: 1 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 0.5 }}>
+          <Skeleton variant="circular" width={22} height={22} sx={SKEL_SX} />
+          <Skeleton variant="circular" width={22} height={22} sx={SKEL_SX} />
+          <Skeleton variant="circular" width={22} height={22} sx={SKEL_SX} />
+        </Box>
+      </TableCell>
     </TableRow>
   ))
 }
@@ -934,7 +970,11 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
           })
           if (!r.ok) {
             const errJson = await r.json().catch(() => ({}))
-            const detail = errJson.detail || `Error ${r.status}`
+            let detail = errJson.detail || `Error ${r.status}`
+            const ncMatch = detail.match(/^new_contact_limit:(\d+)$/)
+            if (ncMatch) {
+              detail = `Límite de contactos nuevos alcanzado (${ncMatch[1]}/día)`
+            }
             setSendError(detail)
             setTimeout(() => setSendError(''), 10_000)
             throw new Error(detail)
@@ -964,7 +1004,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
     setCountdown(null); setBatchNum(1)
     const sent = res.filter(r => r.status === 'sent').length
     onNotify(
-      `${sent} mensaje${sent !== 1 ? 's' : ''} enviado${sent !== 1 ? 's' : ''}`,
+      lang === 'en' ? `${sent} message${sent !== 1 ? 's' : ''} sent` : `${sent} mensaje${sent !== 1 ? 's' : ''} enviado${sent !== 1 ? 's' : ''}`,
       sent > 0 ? 'success' : 'warning'
     )
   }
@@ -978,9 +1018,13 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
             <MessageIcon sx={{ color: '#4ade80', fontSize: 22 }} />
           </Box>
           <Box>
-            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.3 }}>Enviar campaña</Typography>
+            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.3 }}>
+              {lang === 'en' ? 'Send campaign' : 'Enviar campaña'}
+            </Typography>
             <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.78rem', mt: 0.25 }}>
-              {waRows.length} empresa{waRows.length !== 1 ? 's' : ''} con WhatsApp seleccionada{waRows.length !== 1 ? 's' : ''}
+              {lang === 'en'
+                ? `${waRows.length} ${waRows.length !== 1 ? 'companies' : 'company'} with WhatsApp selected`
+                : `${waRows.length} empresa${waRows.length !== 1 ? 's' : ''} con WhatsApp seleccionada${waRows.length !== 1 ? 's' : ''}`}
             </Typography>
           </Box>
         </Box>
@@ -1008,7 +1052,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
 
         {/* Editor libre */}
         <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
-          Mensaje
+          {lang === 'en' ? 'Message' : 'Mensaje'}
         </Typography>
         <HighlightedMessageInput value={msgText} onChange={setMsgText} disabled={sending} rows={5} maxLength={MAX_CAMPAIGN_MSG + 1} lang={lang} />
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 0.6, mb: 1.5 }}>
@@ -1053,7 +1097,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
               <Box sx={{ mb: 1.5 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                   <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.78rem' }}>
-                    Enviando… {results.length} de {waRows.length}
+                    {lang === 'en' ? `Sending… ${results.length} of ${waRows.length}` : `Enviando… ${results.length} de ${waRows.length}`}
                   </Typography>
                   <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>{progress}%</Typography>
                 </Box>
@@ -1063,14 +1107,14 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
             )}
             {done && (
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                <Chip label={`${sentCount} enviado${sentCount !== 1 ? 's' : ''}`} size="small"
+                <Chip label={lang === 'en' ? `${sentCount} sent` : `${sentCount} enviado${sentCount !== 1 ? 's' : ''}`} size="small"
                   sx={{ bgcolor: 'rgba(34,197,94,0.12)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', fontSize: '0.72rem', height: 24 }} />
                 {failedCount > 0 && (
-                  <Chip label={`${failedCount} fallido${failedCount !== 1 ? 's' : ''}`} size="small"
+                  <Chip label={lang === 'en' ? `${failedCount} failed` : `${failedCount} fallido${failedCount !== 1 ? 's' : ''}`} size="small"
                     sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', fontSize: '0.72rem', height: 24 }} />
                 )}
                 {noWaCount > 0 && (
-                  <Chip label={`${noWaCount} sin número`} size="small"
+                  <Chip label={lang === 'en' ? `${noWaCount} no number` : `${noWaCount} sin número`} size="small"
                     sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.1)', fontSize: '0.72rem', height: 24 }} />
                 )}
               </Box>
@@ -1098,7 +1142,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
               '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.2)', border: '1px solid rgba(255,255,255,0.07)' },
             }}
           >
-            {sending ? 'Enviando…' : `Enviar a ${waRows.length} empresa${waRows.length !== 1 ? 's' : ''}`}
+            {sending ? (lang === 'en' ? 'Sending…' : 'Enviando…') : (lang === 'en' ? `Send to ${waRows.length} ${waRows.length !== 1 ? 'companies' : 'company'}` : `Enviar a ${waRows.length} empresa${waRows.length !== 1 ? 's' : ''}`)}
           </Button>
         )}
       </DialogActions>
@@ -1108,7 +1152,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function DatabaseViewer({ isActive }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const headCells  = getHeadCells(t)
   const alertTitles = getAlertTitles(t)
   const [rows, setRows] = useState([])
@@ -1172,7 +1216,7 @@ export default function DatabaseViewer({ isActive }) {
         return next
       })
     } catch {
-      notify('No se pudieron cargar los datos', 'error')
+      notify(lang === 'en' ? 'Failed to load data' : 'No se pudieron cargar los datos', 'error')
     } finally {
       setLoading(false)
     }
@@ -1222,17 +1266,17 @@ export default function DatabaseViewer({ isActive }) {
         body: JSON.stringify({ ids: selected }),
       })
       const data = await res.json()
-      notify(`${data.deleted} empresa${data.deleted !== 1 ? 's' : ''} eliminada${data.deleted !== 1 ? 's' : ''}`, 'success')
+      notify(lang === 'en' ? `${data.deleted} ${data.deleted !== 1 ? 'companies' : 'company'} deleted` : `${data.deleted} empresa${data.deleted !== 1 ? 's' : ''} eliminada${data.deleted !== 1 ? 's' : ''}`, 'success')
       setSelected([])
       fetchData()
     } catch {
-      notify('No se pudieron eliminar los registros', 'error')
+      notify(lang === 'en' ? 'Failed to delete records' : 'No se pudieron eliminar los registros', 'error')
     }
   }
 
   const handleRescrape = async () => {
     const targets = sortedRows.filter(r => selected.includes(r._id))
-    if (!targets.length) { notify('Selecciona al menos una empresa', 'warning'); return }
+    if (!targets.length) { notify(lang === 'en' ? 'Select at least one company' : 'Selecciona al menos una empresa', 'warning'); return }
     let ok = 0, fail = 0, noUrl = 0
     const CONCURRENCY = 4
     for (let i = 0; i < targets.length; i += CONCURRENCY) {
@@ -1250,10 +1294,10 @@ export default function DatabaseViewer({ isActive }) {
     setRescraping('')
     setSelected([])
     fetchData()
-    const parts = [`${ok} actualizadas`]
-    if (fail)  parts.push(`${fail} fallidas`)
-    if (noUrl) parts.push(`${noUrl} sin URL`)
-    notify(`Re-scraping completo: ${parts.join(', ')}`, ok > 0 ? 'success' : 'error')
+    const parts = lang === 'en' ? [`${ok} updated`] : [`${ok} actualizadas`]
+    if (fail)  parts.push(lang === 'en' ? `${fail} failed` : `${fail} fallidas`)
+    if (noUrl) parts.push(lang === 'en' ? `${noUrl} no URL` : `${noUrl} sin URL`)
+    notify((lang === 'en' ? 'Re-scraping complete: ' : 'Re-scraping completo: ') + parts.join(', '), ok > 0 ? 'success' : 'error')
   }
 
   const handleOpenView = async (row) => {
@@ -1296,7 +1340,7 @@ export default function DatabaseViewer({ isActive }) {
         message_log_id: data.last_message_log_id || null,
       })
     } catch {
-      notify('No se pudo cargar la información', 'error')
+      notify(lang === 'en' ? 'Failed to load information' : 'No se pudo cargar la información', 'error')
       setViewTarget(null)
     } finally {
       setViewLoading(false)
@@ -1326,7 +1370,7 @@ export default function DatabaseViewer({ isActive }) {
         company_id: row._id,
       })
     } catch {
-      notify('No se pudo cargar la información', 'error')
+      notify(lang === 'en' ? 'Failed to load information' : 'No se pudo cargar la información', 'error')
       setMsgTarget(null)
     } finally {
       setViewLoading(false)
@@ -1364,11 +1408,11 @@ export default function DatabaseViewer({ isActive }) {
         }),
       ])
       if (!r1.ok || !r2.ok) throw new Error()
-      notify('Los cambios fueron guardados correctamente', 'success')
+      notify(lang === 'en' ? 'Changes saved successfully' : 'Los cambios fueron guardados correctamente', 'success')
       setEditTarget(null)
       fetchData()
     } catch {
-      notify('No se pudieron guardar los cambios', 'error')
+      notify(lang === 'en' ? 'Failed to save changes' : 'No se pudieron guardar los cambios', 'error')
     }
   }
 
@@ -1423,6 +1467,115 @@ export default function DatabaseViewer({ isActive }) {
           </Box>
         </Collapse>
 
+        {/* ── Stats strip ── */}
+        {!loading && (
+          <Box sx={{ px: 2, py: 0.9, display: 'flex', alignItems: 'center', gap: 2.5, flexWrap: 'wrap',
+            borderBottom: '1px solid rgba(255,255,255,0.05)',
+            bgcolor: 'rgba(255,255,255,0.012)', position: 'relative', zIndex: 1,
+          }}>
+            {/* Total count */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+              <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'var(--accent,#3b82f6)', flexShrink: 0,
+                boxShadow: '0 0 5px rgba(var(--accent-rgb,59,130,246),0.5)' }} />
+              <Typography sx={{ fontSize: '0.69rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+                <Box component="span" sx={{ color: 'var(--text)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                  {total.toLocaleString()}
+                </Box>{' '}{lang === 'en' ? (total === 1 ? 'company' : 'companies') : (total === 1 ? 'empresa' : 'empresas')}
+              </Typography>
+            </Box>
+            {/* WA ratio — current page */}
+            {rows.length > 0 && (() => {
+              const waCount = rows.filter(r => r.has_whatsapp).length
+              const pct = Math.round((waCount / rows.length) * 100)
+              return (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                  <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#22c55e', flexShrink: 0 }} />
+                  <Typography sx={{ fontSize: '0.69rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+                    <Box component="span" sx={{ color: '#22c55e', fontWeight: 700 }}>{pct}%</Box>{' '}{lang === 'en' ? 'with WA' : 'con WA'}
+                  </Typography>
+                </Box>
+              )
+            })()}
+            {/* Contacted — current page */}
+            {rows.length > 0 && (() => {
+              const c = rows.filter(r => r.contacted).length
+              if (!c) return null
+              return (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                  <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'var(--accent, #60a5fa)', flexShrink: 0 }} />
+                  <Typography sx={{ fontSize: '0.69rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+                    <Box component="span" sx={{ color: 'var(--accent, #60a5fa)', fontWeight: 700 }}>{c}</Box>{' '}{lang === 'en' ? 'contacted' : 'contactadas'}
+                  </Typography>
+                </Box>
+              )
+            })()}
+            {/* Último scraping — most recent across current page */}
+            {rows.length > 0 && (() => {
+              const dates = rows.map(r => r.last_scraped_at).filter(Boolean)
+              if (!dates.length) return (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                  <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'rgba(148,163,184,0.3)', flexShrink: 0 }} />
+                  <Typography sx={{ fontSize: '0.69rem', color: 'rgba(148,163,184,0.4)', fontWeight: 500 }}>
+                    {lang === 'en' ? 'not scraped' : 'sin scraping'}
+                  </Typography>
+                </Box>
+              )
+              const latest = dates.reduce((a, b) => a > b ? a : b)
+              const daysAgo = Math.floor((Date.now() - new Date(latest).getTime()) / 86_400_000)
+              const label = lang === 'en'
+                ? (daysAgo === 0 ? 'today' : daysAgo === 1 ? 'yesterday' : `${daysAgo}d ago`)
+                : (daysAgo === 0 ? 'hoy' : daysAgo === 1 ? 'ayer' : `hace ${daysAgo}d`)
+              const color = daysAgo <= 1 ? '#4ade80' : daysAgo <= 7 ? '#fbbf24' : '#f87171'
+              return (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                  <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color, flexShrink: 0,
+                    boxShadow: `0 0 5px ${color}88` }} />
+                  <Typography sx={{ fontSize: '0.69rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+                    {lang === 'en' ? 'last scrape' : 'últ. scraping'}{' '}
+                    <Box component="span" sx={{ color, fontWeight: 700 }}>{label}</Box>
+                  </Typography>
+                </Box>
+              )
+            })()}
+            {/* Active filter chips — right side */}
+            {(filters.search || filters.industry || filters.city || filters.has_whatsapp !== '') && (
+              <Box sx={{ ml: 'auto', display: 'flex', gap: 0.7, flexWrap: 'wrap', alignItems: 'center' }}>
+                {filters.search && (
+                  <Chip size="small" label={`"${filters.search}"`}
+                    onDelete={() => handleFilterChange('search', '')}
+                    sx={{ height: 20, fontSize: '0.63rem', bgcolor: 'rgba(var(--accent-rgb, 96,165,250), 0.1)', color: 'var(--accent, #60a5fa)',
+                      border: '1px solid rgba(var(--accent-rgb, 96,165,250), 0.22)',
+                      '& .MuiChip-deleteIcon': { color: 'var(--accent, #60a5fa)', fontSize: 12, '&:hover': { color: 'var(--accent, #93c5fd)' } } }} />
+                )}
+                {filters.industry && (
+                  <Chip size="small" label={filters.industry}
+                    onDelete={() => handleFilterChange('industry', '')}
+                    sx={{ height: 20, fontSize: '0.63rem', bgcolor: 'rgba(167,139,250,0.1)', color: '#a78bfa',
+                      border: '1px solid rgba(167,139,250,0.22)',
+                      '& .MuiChip-deleteIcon': { color: '#a78bfa', fontSize: 12, '&:hover': { color: '#c4b5fd' } } }} />
+                )}
+                {filters.city && (
+                  <Chip size="small" label={filters.city}
+                    onDelete={() => handleFilterChange('city', '')}
+                    sx={{ height: 20, fontSize: '0.63rem', bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24',
+                      border: '1px solid rgba(251,191,36,0.22)',
+                      '& .MuiChip-deleteIcon': { color: '#fbbf24', fontSize: 12, '&:hover': { color: '#fcd34d' } } }} />
+                )}
+                {filters.has_whatsapp !== '' && (
+                  <Chip size="small"
+                    label={filters.has_whatsapp === 'true' ? (lang === 'en' ? 'Has WA' : 'Con WA') : (lang === 'en' ? 'No WA' : 'Sin WA')}
+                    onDelete={() => handleFilterChange('has_whatsapp', '')}
+                    sx={{ height: 20, fontSize: '0.63rem',
+                      bgcolor: filters.has_whatsapp === 'true' ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
+                      color: filters.has_whatsapp === 'true' ? '#22c55e' : '#f87171',
+                      border: `1px solid ${filters.has_whatsapp === 'true' ? 'rgba(34,197,94,0.22)' : 'rgba(239,68,68,0.22)'}`,
+                      '& .MuiChip-deleteIcon': { color: 'inherit', fontSize: 12 } }} />
+                )}
+              </Box>
+            )}
+          </Box>
+        )}
+
         <TableContainer
           sx={{
             flexGrow: 1, position: 'relative', zIndex: 1,
@@ -1446,7 +1599,7 @@ export default function DatabaseViewer({ isActive }) {
                     indeterminate={numSelected > 0 && numSelected < rowCount}
                     checked={rowCount > 0 && numSelected === rowCount}
                     onChange={handleSelectAll}
-                    sx={{ color: 'rgba(255,255,255,0.3)', '&.Mui-checked': { color: '#3b82f6' } }}
+                    sx={{ color: 'rgba(255,255,255,0.3)', '&.Mui-checked': { color: 'var(--accent, #3b82f6)' }, '&.MuiCheckbox-indeterminate': { color: 'var(--accent, #3b82f6)' } }}
                   />
                 </TableCell>
                 {headCells.map((hc) => (
@@ -1467,7 +1620,7 @@ export default function DatabaseViewer({ isActive }) {
                           onClick={(e) => handleRequestSort(e, hc.id)}
                           sx={{
                             color: 'inherit !important',
-                            '& .MuiTableSortLabel-icon': { color: '#3b82f6 !important', marginLeft: '6px', fontSize: 16 },
+                            '& .MuiTableSortLabel-icon': { color: 'var(--accent, #3b82f6) !important', marginLeft: '6px', fontSize: 16 },
                           }}
                         >
                           {hc.label}
@@ -1503,8 +1656,8 @@ export default function DatabaseViewer({ isActive }) {
                       selected={isSelected}
                       sx={{
                         cursor: 'pointer',
-                        '&.Mui-selected': { bgcolor: 'rgba(59,130,246,0.08)' },
-                        '&.Mui-selected:hover': { bgcolor: 'rgba(59,130,246,0.12)' },
+                        '&.Mui-selected': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246),0.08)', boxShadow: 'inset 3px 0 0 var(--accent, #3b82f6)' },
+                        '&.Mui-selected:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246),0.12)', boxShadow: 'inset 3px 0 0 var(--accent, #3b82f6)' },
                         '&:hover': { bgcolor: 'rgba(255,255,255,0.03)' },
                         '& td': { borderBottom: '1px solid rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.8)', fontSize: '0.82rem' },
                       }}
@@ -1513,25 +1666,58 @@ export default function DatabaseViewer({ isActive }) {
                         <Checkbox
                           checked={isSelected}
                           color="primary"
-                          sx={{ color: 'rgba(255,255,255,0.2)', '&.Mui-checked': { color: '#3b82f6' } }}
+                          sx={{ color: 'rgba(255,255,255,0.2)', '&.Mui-checked': { color: 'var(--accent, #3b82f6)' } }}
                         />
                       </TableCell>
                       <TableCell onClick={() => handleSelectRow(row._id)}>
-                        <Tooltip title={row.name || '—'} placement="top" disableHoverListener={!row.name || row.name.length <= 28}>
-                          <Typography sx={{ fontSize: '0.82rem', fontWeight: 500, color: 'white' }}>
-                            {truncate(row.name, 28) || '—'}
-                          </Typography>
-                        </Tooltip>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.9 }}>
+                          <Box sx={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                            bgcolor: row.contacted ? '#4ade80' : 'rgba(255,255,255,0.1)',
+                            boxShadow: row.contacted ? '0 0 5px rgba(74,222,128,0.55)' : 'none',
+                            transition: 'all 0.2s',
+                          }} />
+                          <Tooltip title={row.name || '—'} placement="top" disableHoverListener={!row.name || row.name.length <= 28}>
+                            <Typography sx={{ fontSize: '0.82rem', fontWeight: 500, color: 'white' }}>
+                              {truncate(row.name, 28) || '—'}
+                            </Typography>
+                          </Tooltip>
+                        </Box>
                       </TableCell>
                       <TableCell onClick={() => handleSelectRow(row._id)}>
-                        <Tooltip title={row.website || row.domain || '—'} placement="top" disableHoverListener={!((row.website || row.domain || '').length > 30)}>
-                          <Typography component="a" href={row.website} target="_blank" rel="noopener"
-                            onClick={(e) => e.stopPropagation()}
-                            sx={{ fontSize: '0.78rem', color: '#60a5fa', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
-                          >
-                            {truncate(row.website || row.domain, 30)}
-                          </Typography>
-                        </Tooltip>
+                        {(() => {
+                          const url = row.website || row.domain
+                          const domain = cleanDomain(url)
+                          if (!domain) return <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>
+                          const faviconSrc = `https://www.google.com/s2/favicons?domain=${domain}&sz=16`
+                          return (
+                            <Tooltip title={url} placement="top">
+                              <Box component="a" href={url} target="_blank" rel="noopener"
+                                onClick={e => e.stopPropagation()}
+                                sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.7,
+                                  textDecoration: 'none', cursor: 'pointer',
+                                  '&:hover .url-text': { textDecoration: 'underline' },
+                                  '&:hover .url-ext': { opacity: 1 },
+                                }}>
+                                <Box sx={{
+                                  width: 18, height: 18, flexShrink: 0, borderRadius: '5px',
+                                  bgcolor: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+                                }}>
+                                  <Box component="img" src={faviconSrc} width={12} height={12}
+                                    sx={{ flexShrink: 0, display: 'block', objectFit: 'contain' }}
+                                    onError={e => { e.target.style.display = 'none' }} />
+                                </Box>
+                                <Typography className="url-text"
+                                  sx={{ fontSize: '0.78rem', color: '#60a5fa', lineHeight: 1.2,
+                                    maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {domain}
+                                </Typography>
+                                <OpenInNewIcon className="url-ext"
+                                  sx={{ fontSize: 11, color: '#60a5fa', opacity: 0, transition: 'opacity 0.15s', flexShrink: 0 }} />
+                              </Box>
+                            </Tooltip>
+                          )
+                        })()}
                       </TableCell>
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>
                         <Tooltip title={row.industry || '—'} placement="top" disableHoverListener={!row.industry || row.industry.length <= 22}>
@@ -1636,7 +1822,7 @@ export default function DatabaseViewer({ isActive }) {
           {viewLoading && (
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 6, gap: 2 }}>
               <CircularProgress size={36} sx={{ color: '#6366f1' }} />
-              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem' }}>Cargando números de contacto…</Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem' }}>{lang === 'en' ? 'Loading contact numbers…' : 'Cargando números de contacto…'}</Typography>
             </Box>
           )}
           {!viewLoading && msgData && (

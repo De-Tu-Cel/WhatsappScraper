@@ -48,6 +48,11 @@ import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import LocalGasStationIcon from '@mui/icons-material/LocalGasStation'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlined'
 import TuneIcon from '@mui/icons-material/Tune'
+import PsychologyIcon from '@mui/icons-material/Psychology'
+import SyncAltIcon from '@mui/icons-material/SyncAlt'
+import SpeakerNotesOffIcon from '@mui/icons-material/SpeakerNotesOff'
+import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
+import CloseIcon from '@mui/icons-material/Close'
 import AndyBotBuilder from './AndyBotBuilder'
 import { isPlausibleLabel } from './scheduledSends'
 import GasBotModal from './GasBotModal'
@@ -64,15 +69,15 @@ function isGasIndustry(industry) {
 }
 
 const CATEGORY_CONFIG = {
-  humano:     { tKey: 'human',     color: '#4ade80', bg: 'rgba(34,197,94,0.12)',   icon: '👤' },
-  automatico: { tKey: 'automatic', color: '#facc15', bg: 'rgba(250,204,21,0.12)',  icon: '⚡' },
-  hibrido:    { tKey: 'hybrid',    color: '#38bdf8', bg: 'rgba(56,189,248,0.12)',  icon: '🔀' },
-  bot:        { tKey: 'bot',       color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', icon: '🤖' },
+  humano:     { tKey: 'human',     color: '#4ade80', bg: 'rgba(34,197,94,0.12)',   icon: PersonIcon },
+  automatico: { tKey: 'automatic', color: '#facc15', bg: 'rgba(250,204,21,0.12)',  icon: FlashOnIcon },
+  hibrido:    { tKey: 'hybrid',    color: '#38bdf8', bg: 'rgba(56,189,248,0.12)',  icon: SyncAltIcon },
+  bot:        { tKey: 'bot',       color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', icon: SmartToyIcon },
   // "menu" ya no la produce el clasificador (se fusionó con "bot") — se mantiene aquí
   // solo para que análisis viejos guardados con esa categoría se muestren igual que "bot".
-  menu:       { tKey: 'bot',       color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', icon: '🤖' },
-  bot_ia:     { tKey: 'botAi',     color: '#c084fc', bg: 'rgba(192,132,252,0.15)', icon: '🧠' },
-  sin_respuesta: { tKey: 'noReply', color: '#f87171', bg: 'rgba(248,113,113,0.12)', icon: '🔇' },
+  menu:       { tKey: 'bot',       color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', icon: SmartToyIcon },
+  bot_ia:     { tKey: 'botAi',     color: '#c084fc', bg: 'rgba(192,132,252,0.15)', icon: PsychologyIcon },
+  sin_respuesta: { tKey: 'noReply', color: '#f87171', bg: 'rgba(248,113,113,0.12)', icon: SpeakerNotesOffIcon },
 }
 
 // Normaliza la categoría legado "menu" a la vigente "bot" para filtros/conteos — la
@@ -90,7 +95,7 @@ const matchesCategory = (row, cat) => {
 
 function getCategoryConfig(row) {
   if (row.category === 'bot' && row.is_ai) return CATEGORY_CONFIG.bot_ia
-  return CATEGORY_CONFIG[row.category] || { tKey: 'noClass', color: '#94a3b8', bg: 'rgba(148,163,184,0.08)', icon: '⏳' }
+  return CATEGORY_CONFIG[row.category] || { tKey: 'noClass', color: '#94a3b8', bg: 'rgba(148,163,184,0.08)', icon: HourglassEmptyIcon }
 }
 
 function QualityDots({ score, color }) {
@@ -110,10 +115,13 @@ function QualityDots({ score, color }) {
   )
 }
 
-function formatReactionTime(minutes) {
+function formatReactionTime(minutes, seconds) {
   if (minutes === null || minutes === undefined) return '—'
   if (minutes < 0) return '—'
-  if (minutes < 1) return `${Math.round(minutes * 60)}s`
+  if (minutes < 1) {
+    const s = seconds != null ? Math.round(seconds) : Math.round(minutes * 60)
+    return `${s}s`
+  }
   if (minutes < 60) return `${Math.round(minutes)}m`
   const h = Math.floor(minutes / 60)
   const m = Math.round(minutes % 60)
@@ -121,17 +129,18 @@ function formatReactionTime(minutes) {
 }
 
 function BusinessHoursChip({ value }) {
+  const { lang } = useLang()
   if (value === null || value === undefined) {
     return <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.78rem' }}>—</Typography>
   }
   return value ? (
-    <Chip label="Hábil" size="small" sx={{
+    <Chip label={lang === 'en' ? 'Business hrs' : 'Hábil'} size="small" sx={{
       height: 18, fontSize: '0.65rem',
       bgcolor: 'rgba(34,197,94,0.12)', color: '#4ade80',
       border: '1px solid rgba(34,197,94,0.25)',
     }} />
   ) : (
-    <Chip label="Fuera" size="small" sx={{
+    <Chip label={lang === 'en' ? 'Off hours' : 'Fuera'} size="small" sx={{
       height: 18, fontSize: '0.65rem',
       bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)',
       border: '1px solid rgba(255,255,255,0.1)',
@@ -602,16 +611,16 @@ export default function Analytics() {
         </Box>
 
         {[
-          { icon: '⚡', color: '#facc15', label: t.analytics.automatic, value: autoPct    },
-          { icon: '🔀', color: '#38bdf8', label: t.analytics.hybrid,    value: hibridoPct },
-          { icon: '🤖', color: '#a78bfa', label: t.analytics.bot,       value: botPct     },
-          { icon: '🧠', color: '#c084fc', label: t.analytics.botAi,     value: botIaPct   },
-        ].map(({ icon, color, label, value }) => (
+          { icon: FlashOnIcon,  color: '#facc15', label: t.analytics.automatic, value: autoPct    },
+          { icon: SyncAltIcon,  color: '#38bdf8', label: t.analytics.hybrid,    value: hibridoPct },
+          { icon: SmartToyIcon, color: '#a78bfa', label: t.analytics.bot,       value: botPct     },
+          { icon: PsychologyIcon, color: '#c084fc', label: t.analytics.botAi,   value: botIaPct   },
+        ].map(({ icon: Icon, color, label, value }) => (
           <Box key={label} sx={{
             display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
             bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2,
           }}>
-            <Typography sx={{ fontSize: '0.9rem', lineHeight: 1 }}>{icon}</Typography>
+            <Icon sx={{ fontSize: 15, color }} />
             <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>{label}:</Typography>
             <Typography sx={{ fontSize: '0.85rem', color, fontWeight: 700 }}>{value}%</Typography>
           </Box>
@@ -641,18 +650,19 @@ export default function Analytics() {
 
         {/* Chips de categoría */}
         {[
-          { value: 'all',           label: t.analytics.all,                          color: 'rgba(255,255,255,0.6)',  bg: 'rgba(255,255,255,0.06)'  },
-          { value: 'humano',        label: `👤 ${t.analytics.human}`,                color: '#4ade80',                bg: 'rgba(74,222,128,0.1)'    },
-          { value: 'automatico',    label: `⚡ ${t.analytics.automatic}`,            color: '#facc15',                bg: 'rgba(250,204,21,0.1)'    },
-          { value: 'hibrido',       label: `🔀 ${t.analytics.hybrid}`,              color: '#38bdf8',                bg: 'rgba(56,189,248,0.1)'    },
-          { value: 'bot',           label: `🤖 ${t.analytics.bot}`,                 color: '#a78bfa',                bg: 'rgba(167,139,250,0.1)'   },
-          { value: 'bot_ia',        label: `🧠 ${t.analytics.botAi}`,               color: '#c084fc',                bg: 'rgba(192,132,252,0.1)'   },
-          { value: 'sin_clasificar',label: `⏳ ${t.analytics.noClass}`,             color: '#94a3b8',                bg: 'rgba(148,163,184,0.08)'  },
+          { value: 'all',           icon: null,             label: t.analytics.all,     color: 'rgba(255,255,255,0.6)',  bg: 'rgba(255,255,255,0.06)'  },
+          { value: 'humano',        icon: PersonIcon,       label: t.analytics.human,   color: '#4ade80',                bg: 'rgba(74,222,128,0.1)'    },
+          { value: 'automatico',    icon: FlashOnIcon,      label: t.analytics.automatic, color: '#facc15',              bg: 'rgba(250,204,21,0.1)'    },
+          { value: 'hibrido',       icon: SyncAltIcon,      label: t.analytics.hybrid,  color: '#38bdf8',                bg: 'rgba(56,189,248,0.1)'    },
+          { value: 'bot',           icon: SmartToyIcon,     label: t.analytics.bot,     color: '#a78bfa',                bg: 'rgba(167,139,250,0.1)'   },
+          { value: 'bot_ia',        icon: PsychologyIcon,   label: t.analytics.botAi,   color: '#c084fc',                bg: 'rgba(192,132,252,0.1)'   },
+          { value: 'sin_clasificar',icon: HourglassEmptyIcon, label: t.analytics.noClass, color: '#94a3b8',              bg: 'rgba(148,163,184,0.08)'  },
         ].map(f => {
           const isActive = filterCat === f.value
           const count    = f.value === 'all' ? data.length
                          : f.value === 'sin_clasificar' ? data.filter(d => !d.category || d.category === 'sin_clasificar').length
                          : data.filter(d => matchesCategory(d, f.value)).length
+          const Icon = f.icon
           return (
             <Box key={f.value} onClick={() => { setFilterCat(f.value); setPage(1) }} sx={{
               display: 'flex', alignItems: 'center', gap: 0.5,
@@ -663,6 +673,7 @@ export default function Analytics() {
               WebkitTapHighlightColor: 'transparent',
               '&:hover': { bgcolor: f.bg, borderColor: f.color + '44' },
             }}>
+              {Icon && <Icon sx={{ fontSize: 14, color: isActive ? f.color : 'rgba(255,255,255,0.4)' }} />}
               <Typography sx={{ fontSize: '0.75rem', fontWeight: isActive ? 700 : 400, color: isActive ? f.color : 'rgba(255,255,255,0.45)', whiteSpace: 'nowrap' }}>
                 {f.label}
               </Typography>
@@ -678,12 +689,14 @@ export default function Analytics() {
         {/* Limpiar filtros */}
         {(filterCat !== 'all' || searchText) && (
           <Box onClick={() => { setFilterCat('all'); setSearchText(''); setPage(1) }} sx={{
+            display: 'flex', alignItems: 'center', gap: 0.4,
             px: 1, py: 0.45, borderRadius: 99, cursor: 'pointer',
             border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.35)',
             fontSize: '0.72rem', transition: 'all 0.15s',
             '&:hover': { color: '#f87171', borderColor: 'rgba(248,113,113,0.3)' },
           }}>
-            <Typography sx={{ fontSize: '0.72rem', color: 'inherit' }}>✕ Limpiar</Typography>
+            <CloseIcon sx={{ fontSize: 13, color: 'inherit' }} />
+            <Typography sx={{ fontSize: '0.72rem', color: 'inherit' }}>Limpiar</Typography>
           </Box>
         )}
 
@@ -698,25 +711,62 @@ export default function Analytics() {
       {/* Table / states */}
       <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {loading ? (
-          <TableContainer sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <TableContainer sx={{
+            flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'auto',
+            scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent',
+            '&::-webkit-scrollbar': { width: 4, height: 4 },
+            '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 },
+          }}>
             <Table size="small" stickyHeader sx={{ minWidth: 800 }}>
               <TableHead>
                 <TableRow>
-                  {Array.from({ length: 12 }).map((_, i) => (
-                    <TableCell key={i} sx={HEADER_CELL_SX}>
-                      <Skeleton variant="text" width={i === 0 ? 16 : '70%'} sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
+                  {/* anchos espejo de la tabla real: expand, empresa, número, industria, categoría, calidad, reacción, última resp, notas, chatIA, modBot, reporte */}
+                  {[32, '22%', 115, 130, 100, 60, 55, 65, 220, 45, 65, 45].map((w, i) => (
+                    <TableCell key={i} sx={{ ...HEADER_CELL_SX, width: i === 0 ? 32 : undefined, px: i === 0 ? 0.5 : undefined }}>
+                      {i > 0 && (
+                        <Skeleton variant="text" width={typeof w === 'number' ? Math.min(w * 0.55, 70) : 55} height={11}
+                          sx={{ bgcolor: 'rgba(255,255,255,0.1)',
+                            '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent)' } }} />
+                      )}
                     </TableCell>
                   ))}
                 </TableRow>
               </TableHead>
               <TableBody>
-                {Array.from({ length: 8 }).map((_, row) => (
-                  <TableRow key={row}>
-                    {Array.from({ length: 12 }).map((_, col) => (
-                      <TableCell key={col} sx={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                        <Skeleton variant="text" width={col === 0 ? 16 : '80%'} sx={{ bgcolor: 'rgba(255,255,255,0.06)' }} />
-                      </TableCell>
-                    ))}
+                {Array.from({ length: 18 }).map((_, row) => (
+                  <TableRow key={row} sx={{
+                    '@keyframes skRowIn': { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
+                    animation: 'skRowIn 0.28s ease both',
+                    animationDelay: `${row * 0.03}s`,
+                  }}>
+                    {[32, '22%', 115, 130, 100, 60, 55, 65, 220, 45, 65, 45].map((w, col) => {
+                      const isChip = col === 4
+                      const isIcon = col === 9 || col === 10 || col === 11
+                      const numBg  = col === 5 ? 'rgba(96,165,250,0.1)'
+                                   : col === 4 ? 'rgba(139,92,246,0.12)'
+                                   : col === 6 ? 'rgba(250,204,21,0.1)'
+                                   : isIcon    ? 'rgba(255,255,255,0.05)'
+                                   : 'rgba(255,255,255,0.07)'
+                      // variación determinista de ancho para que las filas no sean idénticas
+                      const RATIOS = [0.72, 0.58, 0.85, 0.65, 0.78, 0.52, 0.68, 0.81, 0.60, 0.74, 0.56, 0.83, 0.63, 0.70, 0.55, 0.77, 0.62, 0.80]
+                      const ratio  = RATIOS[(row * 7 + col) % RATIOS.length]
+                      if (col === 0) return (
+                        <TableCell key={col} sx={{ borderBottom: '1px solid rgba(255,255,255,0.04)', width: 32, px: 0.5 }}>
+                          <Skeleton variant="circular" width={10} height={10}
+                            sx={{ bgcolor: 'rgba(255,255,255,0.08)', '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent)' } }} />
+                        </TableCell>
+                      )
+                      return (
+                        <TableCell key={col} sx={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                          <Skeleton
+                            variant={isChip || isIcon ? 'rounded' : 'text'}
+                            width={isIcon ? 22 : typeof w === 'number' ? Math.round(w * ratio) : w}
+                            height={isChip ? 20 : isIcon ? 22 : col === 1 ? 13 : 11}
+                            sx={{ bgcolor: numBg, borderRadius: isChip ? 10 : isIcon ? 6 : undefined,
+                              '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent)' } }} />
+                        </TableCell>
+                      )
+                    })}
                   </TableRow>
                 ))}
               </TableBody>
@@ -896,7 +946,7 @@ export default function Analytics() {
                       {/* Categoría */}
                       <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
                         {!hasMultiple && (row.category
-                          ? <Chip label={`${cat.icon} ${t.analytics[cat.tKey]}`} size="small" sx={{ height: 20, fontSize: '0.7rem', bgcolor: cat.bg, color: cat.color, border: `1px solid ${cat.color}44` }} />
+                          ? <Chip icon={<cat.icon />} label={t.analytics[cat.tKey]} size="small" sx={{ height: 20, fontSize: '0.7rem', bgcolor: cat.bg, color: cat.color, border: `1px solid ${cat.color}44`, '& .MuiChip-icon': { color: cat.color, fontSize: 13, ml: '6px' } }} />
                           : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>{t.analytics.noCategory}</Typography>)}
                       </TableCell>
 
@@ -911,7 +961,7 @@ export default function Analytics() {
                       <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
                         {!hasMultiple && (
                           <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem', textAlign: 'center' }}>
-                            {formatReactionTime(row.reaction_time_min)}
+                            {formatReactionTime(row.reaction_time_min, row.reaction_time_seconds)}
                           </Typography>
                         )}
                       </TableCell>
@@ -1038,11 +1088,13 @@ export default function Analytics() {
                               ? <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>
                               : hasAnalysis
                                 ? <Chip
-                                    label={`${nCat.icon} ${t.analytics[nCat.tKey]}`}
+                                    icon={<nCat.icon />}
+                                    label={t.analytics[nCat.tKey]}
                                     size="small"
                                     sx={{ height: 18, fontSize: '0.65rem', bgcolor: nCat.bg, color: nCat.color,
                                           border: `1px solid ${nCat.color}44`,
-                                          opacity: inherited ? 0.65 : 1 }}
+                                          opacity: inherited ? 0.65 : 1,
+                                          '& .MuiChip-icon': { color: nCat.color, fontSize: 12, ml: '5px' } }}
                                   />
                                 : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>}
                           </TableCell>
@@ -1055,7 +1107,7 @@ export default function Analytics() {
                           {/* T. Reacción */}
                           <TableCell sx={{ ...NSUB, textAlign: 'center' }}>
                             <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.75rem', textAlign: 'center' }}>
-                              {n.reaction_time_min != null ? formatReactionTime(n.reaction_time_min) : '—'}
+                              {n.reaction_time_min != null ? formatReactionTime(n.reaction_time_min, n.reaction_time_seconds) : '—'}
                             </Typography>
                           </TableCell>
                           {/* Última respuesta */}

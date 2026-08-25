@@ -205,8 +205,9 @@ class WebsiteScraper:
             ],
             # ── Gas / Energía ─────────────────────────────────────────────────
             "Gas LP / Energía": [
-                "gas", "gas lp", "cilindro", "tanque", "gasera", "combustible",
-                "gas natural", "energia", "energía", "solar", "panel solar",
+                "gas lp", "gas natural", "gasera", "cilindro de gas", "tanque de gas",
+                "pipa de gas", "distribuidora de gas", "glp", "combustible",
+                "gas", "cilindro", "tanque", "energia", "energía", "solar", "panel solar",
             ],
             # ── Financiero ────────────────────────────────────────────────────
             "Financiero": [
@@ -319,7 +320,14 @@ class WebsiteScraper:
             print(f"❌ Error al obtener página: {e}")
             raise
         
-        soup = BeautifulSoup(response.text, "html.parser")
+        # response.content (bytes crudos), no response.text — .text usa el encoding
+        # que requests adivina de los headers HTTP, que cae en ISO-8859-1 por defecto
+        # cuando el servidor no lo declara explícitamente, aunque la página real sea
+        # UTF-8 (declarado en su <meta charset>). Eso corrompía nombres con acentos/
+        # signos ("¡", "—", "á") guardándolos ya rotos en la base — BeautifulSoup sobre
+        # los bytes crudos detecta el encoding real (mira el <meta> y hace su propio
+        # sniffing) en vez de heredar el default equivocado de requests.
+        soup = BeautifulSoup(response.content, "html.parser")
         text = soup.get_text(" ", strip=True)
 
         # Datos adicionales de fuentes estáticas (JSON-LD, __NEXT_DATA__, script vars)
@@ -336,12 +344,13 @@ class WebsiteScraper:
                 _wa_seen.add(_n)
 
         # Extraer todos los datos
+        _company_name = self._extract_company_name(soup, url)
         result = {
             # Campos para MongoDB companies
             "website": url,
             "domain": domain,
-            "name": self._extract_company_name(soup, url),
-            "industry": self._detect_industry(text, soup),
+            "name": _company_name,
+            "industry": self._detect_industry(text, soup, company_name=_company_name),
             "description": self._extract_description(soup, text),
             "has_whatsapp": False,
             "status": "new",
@@ -353,11 +362,7 @@ class WebsiteScraper:
             # Campos extra (no van a companies)
             "_extra": {
                 "main_activity": self._detect_main_activity(text),
-                "address": self._extract_address(text, soup),
-                "city": self._extract_city(text),
-                "state": self._extract_state(text),
-                "country": self._extract_country(text),
-                "postal_code": self._extract_postal_code(text),
+                **self._extract_address_structured(soup, text),  # address, city, state, postal_code, country, lat, lon
                 "social_media": self._extract_social_media(soup),
                 "business_hours": self._extract_business_hours(text, soup),
                 "services": self._extract_services(text, soup),
@@ -434,6 +439,15 @@ class WebsiteScraper:
                     result["_extra"]["business_hours"] = data["hours"]
                 if not result["_extra"]["address"] and data["address"]:
                     result["_extra"]["address"] = data["address"]
+                    # Cuando encontramos la dirección, también tomamos ciudad/estado de la
+                    # misma subpágina — más confiable que lo que se llenó antes del texto
+                    for field in ("city", "state", "postal_code", "country"):
+                        if data.get(field):
+                            result["_extra"][field] = data[field]
+                else:
+                    for field in ("city", "state", "postal_code", "country"):
+                        if not result["_extra"].get(field) and data.get(field):
+                            result["_extra"][field] = data[field]
 
         if result["_contacts_raw"]["all_whatsapp_numbers"]:
             result["_contacts_raw"]["whatsapp_numbers"] = result["_contacts_raw"]["all_whatsapp_numbers"]
@@ -499,7 +513,7 @@ class WebsiteScraper:
                             print(f"🎭 Playwright encontró contactos en {pw_url}")
                             # Re-detectar industria con el texto completo renderizado
                             if result.get("industry") in ("No detectada", "", None):
-                                detected = self._detect_industry(js_text, js_soup)
+                                detected = self._detect_industry(js_text, js_soup, company_name=result.get("name", ""))
                                 if detected != "No detectada":
                                     result["industry"] = detected
                                     print(f"🏷️  Industria detectada desde Playwright: {detected}")
@@ -782,7 +796,9 @@ class WebsiteScraper:
         try:
             resp = self._get_page(url, timeout=10)
             if resp is not None and resp.status_code == 200:
-                sub_soup = BeautifulSoup(resp.text, "html.parser")
+                # resp.content (bytes crudos) — mismo motivo que en scrape_site: no
+                # confiar en el encoding adivinado por requests.
+                sub_soup = BeautifulSoup(resp.content, "html.parser")
                 return sub_soup, sub_soup.get_text(" ", strip=True)
         except Exception:
             pass
@@ -794,13 +810,18 @@ class WebsiteScraper:
         if not sub_soup:
             return None
         phones_s, wa_s = self._extract_from_scripts(sub_soup)
+        addr_data = self._extract_address_structured(sub_soup, sub_text)
         return {
             "wa_contacts": self._extract_whatsapp_with_labels(sub_soup, sub_text),
             "wa_scripts":  wa_s,
             "phones":      self._extract_phone_numbers(sub_soup, sub_text) + phones_s,
             "emails":      self._extract_emails(sub_text),
             "hours":       self._extract_business_hours(sub_text, sub_soup),
-            "address":     self._extract_address(sub_text, sub_soup),
+            "address":     addr_data.get("address", ""),
+            "city":        addr_data.get("city", ""),
+            "state":       addr_data.get("state", ""),
+            "postal_code": addr_data.get("postal_code", ""),
+            "country":     addr_data.get("country", ""),
         }
 
     # ========================================================================
@@ -956,17 +977,30 @@ class WebsiteScraper:
         domain = urlparse(url).netloc.replace("www.", "")
         return domain.split(".")[0].capitalize()
 
-    def _detect_industry(self, text: str, soup: BeautifulSoup) -> str:
+    def _detect_industry(self, text: str, soup: BeautifulSoup, company_name: str = "") -> str:
         """DeepSeek clasifica la industria; keywords como fallback si falla."""
-        # 1. Intentar con DeepSeek primero
-        llm_result = self._classify_industry_deepseek(text[:800])
+        import re as _re
+
+        # 0. Pre-clasificación por nombre de empresa — señal muy fuerte que el LLM
+        #    puede ignorar si el sitio usa palabras genéricas como "tecnología".
+        if company_name:
+            _nm = company_name.lower()
+            _GAS_NAME = _re.compile(
+                r"gas|gas\s*lp|glp|gasera|tanque.*gas|gas.*tanque|cilindro|"
+                r"pipa\s*de\s*gas|distribuidora.*gas|gas.*distribuidora",
+                _re.I,
+            )
+            if _GAS_NAME.search(_nm):
+                return "Gas LP / Energía"
+
+        # 1. Intentar con LLM (incluye el nombre para que no lo ignore)
+        llm_result = self._classify_industry_deepseek(text[:800], company_name=company_name)
         if llm_result:
             return llm_result
 
-        # 2. Fallback: keywords
-        import re as _re
-        text_lower = text.lower()
-        _words = set(_re.findall(r"[\w\u00C0-\u024F]+", text_lower))
+        # 2. Fallback: keywords sobre texto + nombre combinados
+        combined = (company_name + " " + text).lower()
+        _words = set(_re.findall(r"[\wÀ-ɏ]+", combined))
 
         def _count(kw: str, t: str) -> int:
             if " " in kw:
@@ -979,29 +1013,34 @@ class WebsiteScraper:
         # palabras genéricas como "industrial", aunque el sitio sea claramente lo otro.
         scores = {}
         for industry, keywords in self.INDUSTRY_KEYWORDS.items():
-            raw = sum(_count(kw, text_lower) for kw in keywords)
+            raw = sum(_count(kw, combined) for kw in keywords)
             if raw > 0:
                 scores[industry] = raw / len(keywords)
 
         return max(scores, key=scores.get) if scores else "No detectada"
 
-    def _classify_industry_deepseek(self, text_snippet: str) -> str:
-        """Usa el LLM activo (OpenAI o DeepSeek) para clasificar industria cuando keywords no son suficientes."""
+    def _classify_industry_deepseek(self, text_snippet: str, company_name: str = "") -> str:
+        """Usa el LLM activo (OpenAI o DeepSeek) para clasificar industria."""
         from app.llm import active_provider
         if active_provider() == "none" or not text_snippet.strip():
             return ""
         try:
             categories = list(self.INDUSTRY_KEYWORDS.keys())
+            cat_list = "\n".join(f"- {c}" for c in categories)
+            name_section = f"NOMBRE DE LA EMPRESA: {company_name}\n" if company_name else ""
             prompt = (
-                f"Eres un clasificador de industrias. Analiza el texto de este sitio web y elige UNA categor\u00EDa.\n\n"
-                f"CATEGOR\u00CDAS DISPONIBLES:\n"
-                f"{chr(10).join(f'- {c}' for c in categories)}\n\n"
+                "Eres un clasificador de industrias. Analiza el nombre y el texto"
+                " del sitio web y elige UNA categoria.\n\n"
+                f"CATEGORIAS DISPONIBLES:\n{cat_list}\n\n"
+                f"{name_section}"
                 f"TEXTO DEL SITIO:\n{text_snippet}\n\n"
-                f"INSTRUCCIONES:\n"
-                f"- Responde \u00DANICAMENTE con el nombre exacto de la categor\u00EDa (copia y pega).\n"
-                f"- Si la empresa distribuye o vende gas LP, GLP, gas natural o combustibles \u2192 responde: Gas LP / Energ\u00EDa\n"
-                f"- Si no encaja en ninguna \u2192 responde: No detectada\n"
-                f"- NO expliques nada, solo el nombre de la categor\u00EDa."
+                "INSTRUCCIONES:\n"
+                "- El NOMBRE DE LA EMPRESA tiene mas peso que el texto si hay conflicto.\n"
+                "- Si el nombre o sitio distribuye/vende gas LP, GLP, gas natural o combustibles"
+                " responde: Gas LP / Energia\n"
+                "- Responde UNICAMENTE con el nombre exacto de la categoria (copia y pega).\n"
+                "- Si no encaja en ninguna responde: No detectada\n"
+                "- NO expliques nada, solo el nombre de la categoria."
             )
             from app.llm import call_llm
             result = call_llm([{"role": "user", "content": prompt}], max_tokens=20, temperature=0)
@@ -1130,25 +1169,225 @@ class WebsiteScraper:
     # EXTRACCIÓN DE DIRECCIÓN
     # ========================================================================
 
-    def _extract_address(self, text: str, soup: BeautifulSoup) -> str:
-        """Extrae dirección física completa"""
-        # 1. Schema.org
-        address_schema = soup.find(["span", "div"], {"itemprop": "address"})
-        if address_schema:
-            return address_schema.get_text(" ", strip=True)
-        
-        # 2. Patrones de dirección mexicana
-        patterns = [
-            r"(?:Calle|Av\.|Avenida|Boulevard|Blvd\.|Calzada)\s+[A-Za-zÁÉÍÓÚáéíóúñÑ\s]+\d+[^\.]{0,100}",
-            r"(?:Dirección|Ubicación|Domicilio):\s*([^\n]{20,150})",
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                return match.group(0).strip()
-        
+    # ── Nominatim (reutiliza la infra de OSM del searcher) ───────────────────
+    _NOM_URL     = "https://nominatim.openstreetmap.org/search"
+    _NOM_HEADERS = {"User-Agent": "WhatsappScraper/1.0 (contact@detucel.mx)"}
+    _NOM_LOCK    = None   # throttle: 1 req/s
+
+    def _nominatim_structure_address(self, raw: str) -> dict:
+        """Envía una dirección cruda a Nominatim y devuelve {city,state,postal_code,country,lat,lon}."""
+        import threading, time
+        if not raw or len(raw) < 8:
+            return {}
+        # Throttle: mínimo 1 s entre llamadas (política de uso de Nominatim)
+        cls = type(self)
+        if cls._NOM_LOCK is None:
+            cls._NOM_LOCK = threading.Lock()
+        with cls._NOM_LOCK:
+            try:
+                resp = requests.get(
+                    self._NOM_URL,
+                    params={"q": raw, "format": "json", "addressdetails": 1, "limit": 1},
+                    headers=self._NOM_HEADERS,
+                    timeout=6,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if not data:
+                    return {}
+                hit = data[0]
+                addr = hit.get("address", {})
+                return {
+                    "city":        addr.get("city") or addr.get("town") or addr.get("village") or "",
+                    "state":       addr.get("state") or "",
+                    "postal_code": addr.get("postcode") or "",
+                    "country":     addr.get("country") or "",
+                    "lat":         hit.get("lat") or "",
+                    "lon":         hit.get("lon") or "",
+                }
+            except Exception:
+                return {}
+            finally:
+                time.sleep(1.1)   # respeto Nominatim usage policy
+
+    def _extract_schema_address(self, soup: BeautifulSoup) -> dict:
+        """Extrae dirección desde JSON-LD (Schema.org LocalBusiness/Organization/Store).
+        Fuente más fiable: datos SEO ya estructurados por la empresa."""
+        import json as _json
+        _TYPES = {"LocalBusiness", "Organization", "Store", "Restaurant",
+                  "Hotel", "MedicalBusiness", "ProfessionalService"}
+        for script in soup.find_all("script", type="application/ld+json"):
+            try:
+                raw = script.string
+                if not raw:
+                    continue
+                data = _json.loads(raw)
+                items = data if isinstance(data, list) else [data]
+                for item in items:
+                    # Buscar recursivamente en @graph si existe
+                    if "@graph" in item:
+                        items = item["@graph"]
+                    t = item.get("@type", "")
+                    types_here = t if isinstance(t, list) else [t]
+                    if not any(x in _TYPES for x in types_here):
+                        continue
+                    adr = item.get("address") or item.get("location", {})
+                    if isinstance(adr, str) and len(adr) > 5:
+                        return {"address": adr, "city": "", "state": "", "postal_code": "", "country": ""}
+                    if isinstance(adr, dict):
+                        return {
+                            "address":     adr.get("streetAddress") or "",
+                            "city":        adr.get("addressLocality") or "",
+                            "state":       adr.get("addressRegion") or "",
+                            "postal_code": adr.get("postalCode") or "",
+                            "country":     adr.get("addressCountry") or "",
+                        }
+            except Exception:
+                continue
+        return {}
+
+    def _extract_map_iframe_text(self, soup: BeautifulSoup) -> str:
+        """Extrae el query 'q=' de un iframe de Google Maps embebido.
+        Muchas páginas de contacto tienen un mapa con la dirección exacta en la URL del iframe."""
+        import urllib.parse
+        for iframe in soup.find_all("iframe"):
+            src = iframe.get("src") or iframe.get("data-src") or ""
+            if "google.com/maps" not in src and "maps.google" not in src:
+                continue
+            try:
+                parsed = urllib.parse.urlparse(src)
+                params = urllib.parse.parse_qs(parsed.query)
+                if "q" in params:
+                    q = params["q"][0].strip()
+                    if len(q) > 5:
+                        return q
+                # Formato alternativo: pb= o embed/v1/place?q=
+                for key in ("query", "place"):
+                    if key in params:
+                        return params[key][0].strip()
+                # Coordenadas: ll=lat,lon — útiles pero devolver texto descriptivo no sirve
+            except Exception:
+                continue
         return ""
+
+    def _extract_address_regex(self, text: str, soup: BeautifulSoup) -> str:
+        """Fallback: microdata itemprop + regex de calle mexicana."""
+        addr_tag = soup.find(["span", "div", "p"], {"itemprop": "address"})
+        if addr_tag:
+            return addr_tag.get_text(" ", strip=True)
+        patterns = [
+            # Captura hasta 250 chars después del número para incluir ciudad/estado al final
+            r"(?:Calle|Av\.|Avenida|Boulevard|Blvd\.|Calzada|Carretera)\s+[A-Za-zÁÉÍÓÚáéíóúñÑ\s]+\d+[^\.]{0,250}",
+            r"(?:Dirección|Ubicación|Domicilio|Domicilo)\s*[:\-]\s*([^\n]{20,300})",
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                return m.group(0).strip()[:300]
+        return ""
+
+    def _extract_address(self, text: str, soup: BeautifulSoup) -> str:
+        """Wrapper para compatibilidad con llamadas directas desde subpáginas."""
+        return self._extract_address_structured(soup, text).get("address", "")
+
+    _CDMX_ALIASES = {"cdmx", "df", "d.f.", "ciudad de mexico", "ciudad de méxico"}
+
+    def _clean_city(self, city: str) -> str:
+        """Normaliza el campo ciudad: elimina abreviaciones pegadas (CDMX, DF), trim."""
+        if not city:
+            return ""
+        # Quitar sufijos comunes: "Ciudad de México, CDMX" → "Ciudad de México"
+        for alias in ("CDMX", "D.F.", "DF", "MX", "México, MX"):
+            city = city.replace(f", {alias}", "").replace(f" {alias}", "")
+        return city.strip().strip(",").strip()
+
+    def _infer_state_from_city(self, city: str) -> str:
+        """Si la ciudad implica un estado, lo devuelve."""
+        _MAP = {
+            "querétaro": "Querétaro", "santiago de querétaro": "Querétaro",
+            "guadalajara": "Jalisco", "zapopan": "Jalisco", "tlaquepaque": "Jalisco",
+            "monterrey": "Nuevo León", "san pedro garza garcía": "Nuevo León",
+            "puebla": "Puebla", "heroica puebla": "Puebla",
+            "tijuana": "Baja California", "mexicali": "Baja California",
+            "ciudad de méxico": "Ciudad de México", "cdmx": "Ciudad de México",
+            "mérida": "Yucatán", "cancún": "Quintana Roo",
+            "hermosillo": "Sonora", "culiacán": "Sinaloa",
+            "chihuahua": "Chihuahua", "saltillo": "Coahuila",
+            "san luis potosí": "San Luis Potosí", "morelia": "Michoacán",
+            "toluca": "Estado de México", "ecatepec": "Estado de México",
+            "oaxaca": "Oaxaca", "villahermosa": "Tabasco",
+            "veracruz": "Veracruz", "xalapa": "Veracruz",
+            "tuxtla gutiérrez": "Chiapas", "aguascalientes": "Aguascalientes",
+        }
+        return _MAP.get(city.lower().strip(), "")
+
+    def _extract_address_structured(self, soup: BeautifulSoup, text: str) -> dict:
+        """Cascade de 4 estrategias para extraer dirección estructurada.
+        Devuelve {address, city, state, postal_code, country, lat, lon}."""
+        empty = {"address": "", "city": "", "state": "", "postal_code": "", "country": "", "lat": "", "lon": ""}
+
+        # ── 1. JSON-LD (Schema.org) — máxima precisión ────────────────────────
+        schema = self._extract_schema_address(soup)
+        if schema and (schema.get("address") or schema.get("city")):
+            schema["city"] = self._clean_city(schema.get("city", ""))
+            # Inferir estado desde ciudad si quedó vacío
+            if not schema.get("state") and schema.get("city"):
+                schema["state"] = self._infer_state_from_city(schema["city"])
+            # Completar campos vacíos con Nominatim si tenemos dirección
+            if schema.get("address") and not schema.get("city"):
+                nom = self._nominatim_structure_address(schema["address"])
+                schema.update({k: v for k, v in nom.items() if v and not schema.get(k)})
+            return {**empty, **schema}
+
+        # ── 2. Google Maps iframe — dirección del embed ──────────────────────
+        map_q = self._extract_map_iframe_text(soup)
+        if map_q:
+            nom = self._nominatim_structure_address(map_q)
+            result = {**empty, "address": map_q}
+            result.update({k: v for k, v in nom.items() if v})
+            result["city"] = self._clean_city(result.get("city", ""))
+            return result
+
+        # ── 3. Regex — preferir ciudad/estado del string de dirección ────────
+        raw_addr = self._extract_address_regex(text, soup)
+        cp       = self._extract_postal_code(raw_addr or text)
+        country  = self._extract_country(raw_addr or text)
+
+        # Buscar ciudad/estado en el string de dirección primero (más preciso
+        # que escanear el texto completo — evita falsos positivos en páginas
+        # de cadenas con sucursales en múltiples ciudades)
+        city_from_addr  = self._extract_city(raw_addr)  if raw_addr else ""
+        state_from_addr = self._extract_state(raw_addr) if raw_addr else ""
+        city_from_text  = self._extract_city(text)
+        state_from_text = self._extract_state(text)
+
+        city  = city_from_addr  or city_from_text
+        state = state_from_addr or state_from_text
+
+        # Inferir estado desde ciudad si regex no lo encontró
+        if city and not state:
+            state = self._infer_state_from_city(city)
+
+        result = {**empty, "address": raw_addr, "city": self._clean_city(city),
+                  "state": state, "postal_code": cp, "country": country}
+
+        # ── 4. Nominatim ──────────────────────────────────────────────────────
+        # Activar si: (a) no hay ciudad, o (b) la ciudad vino del texto completo
+        # y NO aparece en el string de dirección (señal de multi-sucursal)
+        city_mismatch = (
+            raw_addr and city_from_text and not city_from_addr
+            and city_from_text.lower() not in raw_addr.lower()
+        )
+        if raw_addr and (not city or city_mismatch):
+            nom = self._nominatim_structure_address(raw_addr)
+            if nom:
+                result.update({k: v for k, v in nom.items() if v and not result.get(k)})
+                if city_mismatch and nom.get("city"):
+                    result["city"] = self._clean_city(nom["city"])
+                    result["state"] = nom.get("state") or self._infer_state_from_city(nom.get("city",""))
+            result["city"] = self._clean_city(result.get("city", ""))
+
+        return result
 
     def _extract_city(self, text: str) -> str:
         """Extrae ciudad buscando lo que aparece antes de un estado conocido."""
@@ -1430,6 +1669,15 @@ class WebsiteScraper:
         "clientes", "proveedores", "trabaja", "nosotros", "quienes", "quiénes", "somos",
         "avenida", "calle", "colonia", "municipio", "estado", "codigo", "código", "postal",
         "num", "numero", "número", "telefono", "teléfono", "email", "correo",
+        # Palabras de departamento/tipo que el regex de rol confunde con apellidos
+        "tel", "comercial", "técnico", "tecnico", "general", "nacional", "regional",
+        "central", "norte", "sur", "oriente", "occidente", "corporativo", "ejecutivo",
+        "administración", "administracion", "área", "area", "departamento", "depto",
+        # Verbos/pronombres que el regex de nombres confunde con nombres de persona
+        "ventas", "soporte", "contáctanos", "contactanos", "nuestro", "nuestra",
+        "horario", "lunes", "martes", "miércoles", "miercoles", "jueves", "viernes",
+        "sábado", "sabado", "domingo", "whats", "app", "llamar", "escríbenos",
+        "escribenos", "visítanos", "visitanos", "síguenos", "siguenos",
     }
 
     def _is_probable_person_name(self, name: str) -> bool:
@@ -1437,28 +1685,92 @@ class WebsiteScraper:
         return bool(words) and not any(w in self.NAME_STOPWORDS for w in words)
 
     def _extract_person_contacts(self, soup: BeautifulSoup, text: str) -> List[Dict]:
-        """Extrae nombres asociados a teléfonos (sucursales, personas, ubicaciones).
-        Nota: los resultados van a person_contacts y se usan como labels de números en analytics,
-        pero NO se muestran en la UI como 'Personas de contacto'."""
-        # Quitar nav/header/footer/menú antes de buscar — ahí viven los falsos positivos
-        # (ítems de menú en mayúscula inicial que el regex de nombres confunde con personas).
+        """Extrae nombres asociados a teléfonos/emails de un sitio web.
+        Combina tres estrategias en cascada:
+        1. DOM proximity — tarjetas de contacto estructuradas
+        2. Role-prefix regex — "Ventas: Juan Pérez 5551234567"
+        3. LLM extraction — fallback para páginas de texto libre
+        """
         clean_soup = BeautifulSoup(str(soup), "html.parser")
         for tag in clean_soup.find_all(["nav", "header", "footer", "script", "style"]):
             tag.decompose()
         for tag in clean_soup.find_all(class_=re.compile(r"(menu|nav|footer|header)", re.IGNORECASE)):
             tag.decompose()
 
-        contacts = []
-        team_sections = clean_soup.find_all(["div", "section"], class_=re.compile(
-            r"(team|equipo|staff)",
-            re.IGNORECASE
-        ))
-        for section in team_sections:
-            contacts.extend(self._parse_contacts_from_text(section.get_text(" ", strip=True)))
-        if not contacts:
-            clean_text = clean_soup.get_text(" ", strip=True)
-            contacts = self._parse_contacts_from_text(clean_text[:5000])
-        return self._llm_filter_persons(contacts)
+        contacts: List[Dict] = []
+
+        # ── 1. DOM PROXIMITY: tarjetas de equipo/contacto ─────────────────────
+        # Busca contenedores que típicamente agrupan info de una persona
+        card_pattern = re.compile(
+            r"(team|equipo|staff|contact|contacto|profile|perfil|miembro|member"
+            r"|persona|card|directorio|speaker|ponente|asesor|agente|vendedor)",
+            re.IGNORECASE,
+        )
+        cards = clean_soup.find_all(["div", "li", "article", "tr", "section"], class_=card_pattern)
+        for card in cards:
+            card_text = card.get_text(" ", strip=True)
+            # Nombre desde heading dentro de la tarjeta
+            heading = card.find(["h2", "h3", "h4", "h5", "strong", "b"])
+            candidate_name = heading.get_text(" ", strip=True) if heading else ""
+            if candidate_name and self._is_probable_person_name(candidate_name):
+                phone_match = re.search(r"\+?\d[\d\s\-\(\)]{8,}\d", card_text)
+                email_match = re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", card_text)
+                phone = self._normalize_phone(phone_match.group(0)) if phone_match else ""
+                email = email_match.group(0) if email_match else ""
+                if phone or email:
+                    contacts.append({
+                        "name": candidate_name.strip()[:80],
+                        "email": email,
+                        "phone": phone,
+                        "whatsapp": phone if "whatsapp" in card_text.lower() else "",
+                    })
+            else:
+                # Si no hay heading claro, delegar al regex parser
+                contacts.extend(self._parse_contacts_from_text(card_text))
+
+        # ── 2. ROLE-PREFIX REGEX: "Rol: Nombre Apellido - teléfono" ───────────
+        clean_text = clean_soup.get_text(" ", strip=True)
+        role_pattern = re.compile(
+            # Rol (case-insensitive está bien aquí)
+            r"(?:contacto|atenci[oó]n|ventas|gerente|director|coordinador|responsable"
+            r"|asesor|ejecutivo|soporte|administrador|encargado|representante)"
+            # Separador case-SENSITIVE: solo punctuación + palabras en minúscula real
+            # (ej. "técnico", "de", "la señorita") — NO consume mayúsculas del nombre
+            r"(?-i:[\s:,]+(?:[a-záéíóúñ]+[\s:,]+)*)"
+            # Nombre case-SENSITIVE: primer char debe ser REALMENTE mayúscula
+            r"(?-i:([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,3}))"
+            r"[^\d]{0,30}(\+?\d[\d\s\-\(\)]{8,}\d)",
+            re.IGNORECASE,
+        )
+        for m in role_pattern.finditer(clean_text):
+            name = m.group(1).strip()
+            phone = self._normalize_phone(m.group(2)) if m.group(2) else ""
+            if self._is_probable_person_name(name) and phone:
+                contacts.append({
+                    "name": name[:80],
+                    "email": "",
+                    "phone": phone,
+                    "whatsapp": "",
+                })
+
+        # ── 3. REGEX GENÉRICO — siempre combinar, no solo como fallback ─────────
+        # El dedup posterior evita duplicados; esto añade contactos que DOM/rol-prefix perdieron
+        contacts.extend(self._parse_contacts_from_text(clean_text[:5000]))
+
+        # Dedup por nombre (case-insensitive)
+        seen_names: set = set()
+        unique: List[Dict] = []
+        for c in contacts:
+            key = c["name"].lower().strip()
+            if key not in seen_names:
+                seen_names.add(key)
+                unique.append(c)
+
+        # LLM filter/extraction: filtra falsos positivos e infiere roles
+        # Si no encontramos nada, intentar extracción LLM directa desde texto limpio
+        if unique:
+            return self._llm_filter_persons(unique)
+        return self._llm_extract_contacts(clean_text[:3500])
 
     def _llm_filter_persons(self, candidates: List[Dict]) -> List[Dict]:
         """El regex de arriba solo hace un primer filtro barato (stopwords). Para decidir
@@ -1506,6 +1818,47 @@ class WebsiteScraper:
         except Exception:
             return candidates
 
+    def _llm_extract_contacts(self, clean_text: str) -> List[Dict]:
+        """Extracción LLM directa desde texto libre cuando el regex no encontró nada.
+        Útil para páginas de contacto con formato no estructurado."""
+        if not clean_text.strip():
+            return []
+        from app.llm import OPENAI_API_KEY, DEEPSEEK_API_KEY
+        if not (OPENAI_API_KEY or DEEPSEEK_API_KEY):
+            return []
+        import json
+        prompt = (
+            "Extrae todos los contactos (personas o departamentos con teléfono/email) "
+            "del siguiente texto de un sitio web mexicano.\n"
+            "Devuelve ÚNICAMENTE un JSON array puro, sin markdown:\n"
+            '[{"name":"Nombre completo o departamento","phone":"teléfono o vacío","email":"email o vacío","role":"puesto o vacío"}]\n'
+            "Si no hay ningún contacto identificable, devuelve [].\n\n"
+            f"Texto:\n{clean_text}"
+        )
+        try:
+            from app.llm import call_llm
+            raw = call_llm([{"role": "user", "content": prompt}], max_tokens=600, temperature=0)
+            start = raw.find("[")
+            end = raw.rfind("]") + 1
+            if start < 0 or end <= start:
+                return []
+            items = json.loads(raw[start:end])
+            results = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                name = (item.get("name") or "").strip()[:80]
+                phone_raw = (item.get("phone") or "").strip()
+                phone = self._normalize_phone(phone_raw) if phone_raw else ""
+                email = (item.get("email") or "").strip()[:120]
+                role = (item.get("role") or "").strip()[:60]
+                if name and (phone or email):
+                    results.append({"name": name, "phone": phone, "email": email,
+                                    "whatsapp": "", "role": role})
+            return results[:10]
+        except Exception:
+            return []
+
     def _parse_contacts_from_text(self, text: str) -> List[Dict]:
         """Parsea contactos desde texto"""
         contacts = []
@@ -1522,18 +1875,21 @@ class WebsiteScraper:
             name_pos = text.find(name)
             if name_pos == -1:
                 continue
-            
-            context = text[max(0, name_pos - 150):min(len(text), name_pos + 250)]
 
-            # Buscar email cerca
-            email_match = re.search(
-                r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
-                context
-            )
+            # Contexto: preferir ventana hacia adelante para evitar capturar datos de la persona anterior
+            forward_ctx = text[name_pos:min(len(text), name_pos + 250)]
+            full_ctx    = text[max(0, name_pos - 100):min(len(text), name_pos + 250)]
+
+            # Buscar email (forward primero, luego full)
+            email_match = re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", forward_ctx)
+            if not email_match:
+                email_match = re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", full_ctx)
             email = email_match.group(0) if email_match else ""
 
-            # Buscar teléfono cerca
-            phone_match = re.search(r"\+?\d[\d\s\-\(\)]{8,}\d", context)
+            # Buscar teléfono (forward primero para no robar el teléfono de la persona anterior)
+            phone_match = re.search(r"\+?\d[\d\s\-\(\)]{8,}\d", forward_ctx)
+            if not phone_match:
+                phone_match = re.search(r"\+?\d[\d\s\-\(\)]{8,}\d", full_ctx)
             phone = self._normalize_phone(phone_match.group(0)) if phone_match else ""
 
             # Solo agregar si tiene al menos email o teléfono
@@ -1542,7 +1898,7 @@ class WebsiteScraper:
                     "name": name.strip(),
                     "email": email,
                     "phone": phone,
-                    "whatsapp": phone if "whatsapp" in context.lower() else "",
+                    "whatsapp": phone if "whatsapp" in full_ctx.lower() else "",
                 })
         
         return contacts[:10]  # Máximo 10 contactos

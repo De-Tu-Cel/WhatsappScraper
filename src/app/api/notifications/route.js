@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server'
+import { backendFetch } from '../../../lib/backendFetch'
 export const dynamic = 'force-dynamic'
-const B = process.env.BACKEND_URL || 'http://localhost:8000'
 
 export async function GET(request) {
   try {
     const token = request.headers.get('x-user-token') || ''
-    const res = await fetch(`${B}/api/notifications`, {
+    const res = await backendFetch('/api/notifications', {
       headers: { 'x-user-token': token },
     })
     const data = await res.json()

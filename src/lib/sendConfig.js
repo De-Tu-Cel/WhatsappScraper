@@ -4,6 +4,7 @@ export const DEFAULT_SEND_CONFIG = {
   batchSize:  [3, 8],   // [min, max] messages per batch before a long break
   msgDelay:   [25, 55], // [min, max] seconds between consecutive messages
   batchDelay: [3, 8],   // [min, max] minutes between batches
+  // newContactsLimit is enforced by the backend per-instance (5 warmup / 12 normal)
 }
 
 export function loadSendConfig() {

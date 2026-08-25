@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server'
-
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000'
+import { backendFetch } from '../../../lib/backendFetch'
 
 export async function GET() {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/conversations`)
+    const res = await backendFetch('/api/conversations')
     const data = await res.json()
     return NextResponse.json(data, { status: res.status })
   } catch (error) {

@@ -565,7 +565,10 @@ def _build_city_index() -> dict:
 
 
 _CITY_INDEX = _build_city_index()
-_LOCATION_TAIL_RE = re.compile(r'\ben\s+(.+)$', re.IGNORECASE)
+# "en" era el único disparador reconocido — el docstring de abajo ya prometía
+# soportar "cerca de Bogotá" pero el regex no lo cubría. Se agregan las otras
+# formas comunes en que la gente escribe la ubicación en un texto libre.
+_LOCATION_TAIL_RE = re.compile(r'\b(?:cerca de|cercano a|junto a|por|en)\s+(.+)$', re.IGNORECASE)
 
 
 def _extract_location(text: str) -> tuple[str, str, str | None]:
@@ -576,8 +579,9 @@ def _extract_location(text: str) -> tuple[str, str, str | None]:
     The UI is a single free-text box — the user types business + place together
     ("gimnasios en Monterrey") and expects the search to understand both parts,
     not just treat the whole phrase as an opaque industry string. This matches
-    the trailing "en <lugar>" clause against the curated city list already used
-    for city fan-out (COUNTRY_CONFIG), so downstream query-building gets the
+    a trailing "en/cerca de/cercano a/junto a/por <lugar>" clause against the
+    curated city list already used for city fan-out (COUNTRY_CONFIG), so downstream
+    query-building gets the
     right city AND the right country (fixing the geo bias — without a detected
     city/country, Bright Data silently defaulted to México's gl/hl regardless of
     where the business actually is).
@@ -664,7 +668,8 @@ INDUSTRY_SYNONYMS: dict[str, list[str]] = {
 }
 
 
-_NOISE = '-directorio -guia -guía -blog -listado -noticias -revista -articulo'
+_NOISE = '-directorio -guia -guía -blog -listado -noticias -revista -articulo -inurl:blog -inurl:noticias -inurl:articulo'
+_DORK_PRESENCE = '("contacto" OR "servicios" OR "nosotros" OR "cotizar")'
 
 
 _SYNONYM_CACHE: dict[str, list[str]] = {}
@@ -733,10 +738,11 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
 
     if city.strip():
         loc = city.strip()
-        queries = [f"{ind_q} {loc}"]
+        queries = [f"{ind_q} {loc} {_DORK_PRESENCE}"]  # dork primary
         if cfg:
             queries += [f"site:{tld} {ind} {loc}" for tld in cfg["tlds"]]
         queries += [
+            f"{ind_q} {loc}",                                               # broad fallback
             f"intitle:{ind_q} {loc}",
             f"{ind} {loc} {_NOISE}",
             f"{ind} {loc} whatsapp",
@@ -751,6 +757,7 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
         # El propio texto de `industry` puede ya incluir la ubicación
         # ("... en Bogotá", "... en Latinoamérica") escrita libremente por el usuario.
         queries = [
+            f"{ind_q} {_DORK_PRESENCE}",   # dork primary
             ind_q,
             f"intitle:{ind_q}",
             f"{ind} {_NOISE}",
@@ -767,7 +774,7 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
     country_name = country
     tlds = cfg["tlds"]
     cities = cfg["cities"]
-    base = [f"{ind_q} {country_name}"]
+    base = [f"{ind_q} {country_name} {_DORK_PRESENCE}"]  # dork primary
     base += [f"site:{tld} {ind}" for tld in tlds]
     base += [
         f"intitle:{ind_q} {country_name}",
@@ -881,6 +888,302 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
         ranked.extend(batch)
 
     return ranked
+
+
+def _shallow_fetch_meta(urls: list[str], timeout: int = 5, max_bytes: int = 5120) -> dict:
+    """
+    Fetches only the first 5 KB of each URL to extract <title> and
+    <meta name="description">. Enriches snippets for URLs that search engines
+    didn't describe (e.g. Sección Amarilla or Maps hits). All fetches run
+    concurrently; slow/broken sites are silently skipped.
+    """
+    _HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+    }
+
+    def _fetch_one(url: str) -> tuple[str, dict]:
+        try:
+            resp = requests.get(
+                url, headers=_HEADERS, timeout=timeout,
+                stream=True, verify=False, allow_redirects=True,
+            )
+            raw = b""
+            for chunk in resp.iter_content(chunk_size=1024):
+                raw += chunk
+                if len(raw) >= max_bytes:
+                    break
+            html = raw.decode("utf-8", errors="ignore")
+            soup = BeautifulSoup(html, "html.parser")
+            title = (soup.title.string or "").strip()[:120] if soup.title else ""
+            desc_tag = soup.find("meta", {"name": re.compile(r"^description$", re.I)})
+            body = (desc_tag.get("content", "") if desc_tag else "").strip()[:200]
+            if not title and not body:
+                return url, {}
+            return url, {"title": title, "body": body}
+        except Exception:
+            return url, {}
+
+    result: dict = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(urls), 20)) as ex:
+        futs = {ex.submit(_fetch_one, u): u for u in urls}
+        for fut in concurrent.futures.as_completed(futs, timeout=timeout + 3):
+            try:
+                u, meta = fut.result()
+                if meta:
+                    result[u] = meta
+            except Exception:
+                pass
+    return result
+
+
+# ---------------------------------------------------------------------------
+# OpenStreetMap / Overpass API source
+# ---------------------------------------------------------------------------
+_NOMINATIM_URL    = "https://nominatim.openstreetmap.org/search"
+_OVERPASS_URLS    = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.openstreetmap.fr/api/interpreter",
+]
+_NOMINATIM_HEADERS = {"User-Agent": "DetucelProspectSearcher/1.0 (contact@detucel.mx)"}
+_nominatim_cache: dict = {}
+
+# Spanish industry keyword → list of (osm_key, osm_value) tag pairs
+_OSM_INDUSTRY_TAGS: dict[str, list[tuple[str, str]]] = {
+    # Alimentos y Bebidas
+    "restaurante":     [("amenity", "restaurant")],
+    "restaurant":      [("amenity", "restaurant")],
+    "taquería":        [("amenity", "restaurant")],
+    "taqueria":        [("amenity", "restaurant")],
+    "café":            [("amenity", "cafe")],
+    "cafe":            [("amenity", "cafe")],
+    "cafetería":       [("amenity", "cafe")],
+    "bar":             [("amenity", "bar"), ("amenity", "pub")],
+    "cantina":         [("amenity", "bar")],
+    "panadería":       [("shop", "bakery")],
+    "pastelería":      [("shop", "confectionery"), ("shop", "bakery")],
+    "mariscos":        [("amenity", "restaurant")],
+    # Salud
+    "hospital":        [("amenity", "hospital")],
+    "clínica":         [("amenity", "clinic"), ("healthcare", "clinic")],
+    "clinica":         [("amenity", "clinic"), ("healthcare", "clinic")],
+    "dentista":        [("healthcare", "dentist")],
+    "dental":          [("healthcare", "dentist")],
+    "farmacia":        [("amenity", "pharmacy")],
+    "óptica":          [("shop", "optician")],
+    "optica":          [("shop", "optician")],
+    "veterinaria":     [("amenity", "veterinary")],
+    "laboratorio":     [("healthcare", "laboratory")],
+    "médico":          [("healthcare", "doctor")],
+    "medico":          [("healthcare", "doctor")],
+    # Educación
+    "escuela":         [("amenity", "school")],
+    "colegio":         [("amenity", "school")],
+    "universidad":     [("amenity", "university")],
+    "guardería":       [("amenity", "kindergarten")],
+    "jardín de niños": [("amenity", "kindergarten")],
+    "academia":        [("amenity", "school")],
+    "instituto":       [("amenity", "college")],
+    # Automotriz
+    "taller":          [("shop", "car_repair")],
+    "agencia de autos":[("shop", "car")],
+    "distribuidora":   [("shop", "car")],
+    "gasolinera":      [("amenity", "fuel")],
+    "lavado de autos": [("amenity", "car_wash")],
+    # Belleza y Cuidado Personal
+    "salón de belleza":[("shop", "hairdresser")],
+    "estética":        [("shop", "hairdresser")],
+    "estetica":        [("shop", "hairdresser")],
+    "peluquería":      [("shop", "barber"), ("shop", "hairdresser")],
+    "barbería":        [("shop", "barber")],
+    "spa":             [("leisure", "spa")],
+    "uñas":            [("shop", "beauty")],
+    # Deportes / Fitness
+    "gimnasio":        [("leisure", "fitness_centre"), ("leisure", "sports_centre")],
+    "gym":             [("leisure", "fitness_centre")],
+    "alberca":         [("leisure", "swimming_pool")],
+    "canchas":         [("leisure", "sports_centre")],
+    # Hoteles / Turismo
+    "hotel":           [("tourism", "hotel")],
+    "hostal":          [("tourism", "hostel")],
+    "motel":           [("tourism", "motel")],
+    "airbnb":          [("tourism", "apartment")],
+    # Comercio
+    "ferretería":      [("shop", "hardware")],
+    "papelería":       [("shop", "stationery")],
+    "supermercado":    [("shop", "supermarket")],
+    "tienda":          [("shop", "convenience")],
+    "abarrotes":       [("shop", "convenience")],
+    "mueblería":       [("shop", "furniture")],
+    "electrónica":     [("shop", "electronics")],
+    "ropa":            [("shop", "clothes")],
+    "zapatería":       [("shop", "shoes")],
+    "joyería":         [("shop", "jewelry")],
+    # Servicios profesionales
+    "notaría":         [("office", "notary")],
+    "abogado":         [("office", "lawyer")],
+    "bufete":          [("office", "lawyer")],
+    "contador":        [("office", "accountant")],
+    "arquitecto":      [("office", "architect")],
+    "bienes raíces":   [("office", "estate_agent")],
+    "inmobiliaria":    [("office", "estate_agent")],
+    "agencia de seguros": [("office", "insurance")],
+    # Tecnología
+    "computadoras":    [("shop", "computer")],
+    "celulares":       [("shop", "mobile_phone")],
+    # Construcción / Industria
+    "constructora":    [("office", "construction_company")],
+    # Financiero
+    "banco":           [("amenity", "bank")],
+    "caja popular":    [("amenity", "bank")],
+    "casa de cambio":  [("amenity", "bureau_de_change")],
+    # Gastronomía especial
+    "pizzería":        [("amenity", "restaurant")],
+    "sushi":           [("amenity", "restaurant")],
+    "hamburguesería":  [("amenity", "fast_food")],
+    "comida rápida":   [("amenity", "fast_food")],
+    "heladería":       [("shop", "ice_cream")],
+}
+
+
+def _osm_geocode(city: str, country: str | None) -> tuple[float, float, float, float] | None:
+    """Returns (south, west, north, east) bbox for a city via Nominatim, with cache."""
+    cache_key = f"{city}|{country or ''}"
+    if cache_key in _nominatim_cache:
+        return _nominatim_cache[cache_key]
+    try:
+        geo_q = f"{city.strip()}, {country}" if country else city.strip()
+        resp = requests.get(
+            _NOMINATIM_URL,
+            params={"q": geo_q, "format": "json", "limit": 1, "addressdetails": 0},
+            headers=_NOMINATIM_HEADERS,
+            timeout=8,
+        )
+        data = resp.json()
+        if not data:
+            _nominatim_cache[cache_key] = None
+            return None
+        bb = data[0]["boundingbox"]   # [south, north, west, east]
+        result = (float(bb[0]), float(bb[2]), float(bb[1]), float(bb[3]))  # → (S, W, N, E)
+        _nominatim_cache[cache_key] = result
+        return result
+    except Exception:
+        _nominatim_cache[cache_key] = None
+        return None
+
+
+def _search_via_openstreetmap(
+    industry: str, city: str, country: str | None = None, num_results: int = 30,
+) -> tuple[list[str], dict]:
+    """
+    Queries OpenStreetMap via Overpass API for local businesses with registered websites.
+    Free, no API key, no CAPTCHAs, returns structured JSON with name/address/phone.
+    Only runs when a city is provided (global queries are too broad to be useful).
+    """
+    if not city.strip():
+        return [], {}
+
+    bbox_tuple = _osm_geocode(city, country)
+    if not bbox_tuple:
+        print(f"[OSM] geocoding failed for '{city}'")
+        return [], {}
+
+    south, west, north, east = bbox_tuple
+    bbox = f"({south},{west},{north},{east})"
+    cap = min(num_results * 4, 300)
+
+    # Match industry text to OSM tags (substring match against our keyword map)
+    ind_lower = industry.lower().strip()
+    tag_pairs: list[tuple[str, str]] = []
+    for keyword, tags in _OSM_INDUSTRY_TAGS.items():
+        if keyword in ind_lower or ind_lower in keyword:
+            for pair in tags:
+                if pair not in tag_pairs:
+                    tag_pairs.append(pair)
+
+    # Build Overpass QL query
+    website_filter = '[~"^(website|contact:website|url)$"~"http"]'
+    if tag_pairs:
+        lines = []
+        for k, v in tag_pairs:
+            lines.append(f'node["{k}"="{v}"]{website_filter}{bbox};')
+            lines.append(f'way["{k}"="{v}"]{website_filter}{bbox};')
+        query = f'[out:json][timeout:28];\n(\n  ' + '\n  '.join(lines) + f'\n);\nout center {cap};'
+    else:
+        # No specific tag match — return all nodes with a website in the bbox;
+        # AI filter will pick the relevant industry afterwards
+        query = (
+            f'[out:json][timeout:28];\n'
+            f'(\n'
+            f'  node{website_filter}{bbox};\n'
+            f'  way{website_filter}{bbox};\n'
+            f');\n'
+            f'out center {cap};'
+        )
+
+    # Try each Overpass endpoint until one responds
+    elements: list[dict] = []
+    for endpoint in _OVERPASS_URLS:
+        try:
+            resp = requests.post(
+                endpoint, data={"data": query},
+                timeout=32, headers=_NOMINATIM_HEADERS,
+            )
+            resp.raise_for_status()
+            elements = resp.json().get("elements", [])
+            break
+        except Exception as e:
+            print(f"[OSM] Overpass {endpoint} failed: {e}")
+            continue
+
+    if not elements:
+        return [], {}
+
+    # Extract URLs and build snippets
+    urls: list[str] = []
+    snippets: dict = {}
+    seen_domains: set = set()
+
+    for el in elements:
+        tags = el.get("tags", {})
+        website = (
+            tags.get("website") or tags.get("contact:website") or
+            tags.get("url") or tags.get("contact:url") or ""
+        ).strip()
+
+        if not website or not website.startswith("http"):
+            continue
+        domain = _get_domain(website)
+        if not domain or domain in seen_domains or not _is_business_url(website):
+            continue
+
+        seen_domains.add(domain)
+        urls.append(website)
+
+        # Build rich snippet for AI filter
+        name = tags.get("name", "")
+        osm_type = (
+            tags.get("amenity") or tags.get("shop") or tags.get("tourism") or
+            tags.get("office") or tags.get("healthcare") or tags.get("leisure") or ""
+        ).replace("_", " ")
+        addr = ", ".join(filter(None, [
+            tags.get("addr:street", ""), tags.get("addr:housenumber", ""),
+            tags.get("addr:city") or city,
+        ]))
+        phone = tags.get("phone") or tags.get("contact:phone") or ""
+        body_parts = [p for p in [osm_type.title(), addr, f"Tel: {phone}" if phone else ""] if p]
+        snippets[website] = {
+            "title": name[:120],
+            "body":  " | ".join(body_parts)[:200],
+        }
+
+    print(f"[OSM] {len(urls)} URLs for '{industry}' in '{city}'")
+    return urls, snippets
 
 
 # ---------------------------------------------------------------------------
@@ -1216,29 +1519,33 @@ def search_prospects(
         urls, snippets = _search_via_brightdata_multi(industry, city, country, keywords, num_results, offset)
 
     elif _bd_key:
-        # Correr 4 fuentes en paralelo: Bright Data + DuckDuckGo + Sección Amarilla + Maps
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+        # Correr 5 fuentes en paralelo: Bright Data + DuckDuckGo + Sección Amarilla + Maps + OSM
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
             bd_future   = ex.submit(_search_via_brightdata_multi, industry, city, country, keywords, num_results, offset)
             ddg_future  = ex.submit(_search_via_duckduckgo, industry, city, exclude_domains or set(), country, num_results)
             sa_future   = ex.submit(_search_via_seccion_amarilla, industry, city, country, num_results)
             maps_future = ex.submit(_search_via_google_maps, industry, city, country, keywords, num_results)
+            osm_future  = ex.submit(_search_via_openstreetmap, industry, city, country, num_results)
             bd_urls,   bd_snips   = bd_future.result()
             ddg_urls,  ddg_snips  = ddg_future.result()
             sa_urls,   sa_snips   = sa_future.result()
             maps_urls, maps_snips = maps_future.result()
+            osm_urls,  osm_snips  = osm_future.result()
 
-        print(f"[search] BD={len(bd_urls)} DDG={len(ddg_urls)} SA={len(sa_urls)} Maps={len(maps_urls)}")
+        print(f"[search] BD={len(bd_urls)} DDG={len(ddg_urls)} SA={len(sa_urls)} Maps={len(maps_urls)} OSM={len(osm_urls)}")
 
-        # Mergear: Maps y BD primero (más calidad), luego DDG, luego SA
+        # Mergear: Maps y BD primero (más calidad), luego DDG, SA, OSM
+        # OSM va al final porque ya trae snippets ricos — el AI filter los aprovechará aunque lleguen últimos
         seen: set[str] = set()
         urls: list[str] = []
         snippets: dict = {}
-        for u in maps_urls + bd_urls + ddg_urls + sa_urls:
+        for u in maps_urls + bd_urls + ddg_urls + sa_urls + osm_urls:
             d = _get_domain(u)
             if d and d not in seen:
                 seen.add(d)
                 urls.append(u)
-                snippets[u] = maps_snips.get(u) or bd_snips.get(u) or ddg_snips.get(u) or sa_snips.get(u, {})
+                snippets[u] = (maps_snips.get(u) or bd_snips.get(u) or ddg_snips.get(u)
+                               or sa_snips.get(u) or osm_snips.get(u, {}))
 
     elif SERPAPI_KEY:
         query = f"{industry.strip()} empresa en {city.strip() or country or ''}".strip()
@@ -1246,11 +1553,35 @@ def search_prospects(
             query = f"{keywords.strip()} {query}"
         urls, snippets = _search_via_serpapi(query, num_results, offset)
     else:
-        urls, snippets = _search_via_duckduckgo(industry, city, exclude_domains or set(), country, num_results)
+        # DDG-only: also run OSM in parallel for free structured data
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+            ddg_future = ex.submit(_search_via_duckduckgo, industry, city, exclude_domains or set(), country, num_results)
+            osm_future = ex.submit(_search_via_openstreetmap, industry, city, country, num_results)
+            ddg_urls, ddg_snips = ddg_future.result()
+            osm_urls, osm_snips = osm_future.result()
+        seen: set[str] = set()
+        urls: list[str] = []
+        snippets: dict = {}
+        for u in ddg_urls + osm_urls:
+            d = _get_domain(u)
+            if d and d not in seen:
+                seen.add(d)
+                urls.append(u)
+                snippets[u] = ddg_snips.get(u) or osm_snips.get(u, {})
+        print(f"[search] DDG={len(ddg_urls)} OSM={len(osm_urls)}")
 
     # Apply domain exclusion
     if exclude_domains:
         urls = [u for u in urls if _get_domain(u) not in exclude_domains]
+
+    # Shallow-fetch title + meta description for URLs the search engines didn't describe.
+    # Gives the AI filter much richer signal with no extra LLM cost.
+    _urls_no_meta = [u for u in urls if not (snippets.get(u) or {}).get("title")]
+    if _urls_no_meta:
+        _shallow = _shallow_fetch_meta(_urls_no_meta[:40])
+        for u, meta in _shallow.items():
+            if meta:
+                snippets[u] = meta
 
     return _ai_filter_urls(urls, industry, snippets)  # no cap — caller decides how many to show
 
@@ -1388,6 +1719,7 @@ def _bd_build_queries(industry: str, city: str, country: str | None, keywords: s
         ai_synonyms = _ai_expand_synonyms(ind_clean) if (OPENAI_API_KEY or DEEPSEEK_API_KEY) else []
         synonyms = list(dict.fromkeys(static_synonyms + ai_synonyms))
         queries = [
+            f"{base_city} {loc} {_DORK_PRESENCE}",  # dork primary
             f"{base_city} {loc}",
             f"{base_city} empresa {loc}",
             f"{base_city} negocio {loc}",

@@ -7,16 +7,13 @@ pipeline.py) can switch by changing one import line.
 import time
 import requests
 from datetime import datetime
+from app.phone_utils import clean_digits as _clean_digits
 
 
 # ── Session management ────────────────────────────────────────────────────────
 
-def pick_connected_instance(db, api_url: str, api_key: str, preferred: str | None = None) -> str | None:
-    """Return a WAHA session name that is currently WORKING (connected).
-
-    Mirrors pick_connected_instance() from whatsapp_evolution.py — same
-    signature so callers need no changes.
-    """
+def get_all_connected_instances(db, api_url: str, api_key: str) -> list:
+    """Return all WAHA session names currently WORKING (connected)."""
     try:
         resp = requests.get(
             f"{api_url.rstrip('/')}/api/sessions",
@@ -25,10 +22,18 @@ def pick_connected_instance(db, api_url: str, api_key: str, preferred: str | Non
             timeout=5,
         )
         sessions = resp.json() if resp.ok else []
-        working = [s["name"] for s in sessions if s.get("status") == "WORKING"]
+        return [s["name"] for s in sessions if s.get("status") == "WORKING"]
     except Exception:
-        return None
+        return []
 
+
+def pick_connected_instance(db, api_url: str, api_key: str, preferred: str | None = None) -> str | None:
+    """Return a WAHA session name that is currently WORKING (connected).
+
+    Mirrors pick_connected_instance() from whatsapp_evolution.py — same
+    signature so callers need no changes.
+    """
+    working = get_all_connected_instances(db, api_url, api_key)
     if not working:
         return None
     if preferred and preferred in working:
@@ -248,13 +253,6 @@ def waha_status_label(status: str) -> str:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _clean_digits(number: str) -> str:
-    """Normalize to international digits without + or spaces."""
-    digits = "".join(filter(str.isdigit, number))
-    if len(digits) == 10:
-        digits = "52" + digits  # local 10-digit → Mexican
-    return digits
 
 
 def _to_chat_id(number: str) -> str:

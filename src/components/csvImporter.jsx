@@ -1,5 +1,5 @@
 'use client'
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
 import * as XLSX from 'xlsx'
@@ -40,8 +40,19 @@ import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariant
 import { SendConfigPanel } from './SendConfigPanel'
 import { loadSendConfig } from '@/lib/sendConfig'
 import { useSendQueue } from '../context/SendQueueContext'
+import { useScrapeJob } from '../hooks/useScrapeJob'
+import { useDailyCapStats } from '../hooks/useDailyCapStats'
+import DailyCapBadge, { getOverBy } from './DailyCapBadge'
+import WhatsAppNumberSummary from './WhatsAppNumberSummary'
+import RecipientsBox from './RecipientsBox'
+import CapacityBanner from './CapacityBanner'
+import { dedupeByCompany } from '../lib/companyDedupe'
 import { useLang } from '../context/LangContext'
 import { isValidUrl } from '@/lib/validators'
+import Dialog from '@mui/material/Dialog'
+import DialogTitle from '@mui/material/DialogTitle'
+import DialogContent from '@mui/material/DialogContent'
+import DialogActions from '@mui/material/DialogActions'
 
 const URL_REGEX = /^https?:\/\//i
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024  // 5 MB — plenty for a text/xlsx list of URLs
@@ -126,8 +137,10 @@ export default function CsvImporter() {
   const { t, lang } = useLang()
   const TEMPLATES = getTemplates(t)
   const inputRef   = useRef(null)
-  const pauseRef   = useRef(false)
-  const cancelRef  = useRef(false)
+  const scrapeJob = useScrapeJob('csv')
+  // El scraping en sí corre en el backend (useScrapeJob) — esto solo cubre el
+  // estado optimista de envío por url, que el job no conoce.
+  const [sentOverlay, setSentOverlay] = useState({})
 
   const [dragging,   setDragging]   = useState(false)
   const [fileName,   setFileName]   = useState('')
@@ -135,13 +148,18 @@ export default function CsvImporter() {
   const [urlCol,     setUrlCol]     = useState('')
   const [allUrls,    setAllUrls]    = useState([])
   const [preview,    setPreview]    = useState([])
-  const [loading,    setLoading]    = useState(false)
-  const [paused,     setPaused]     = useState(false)
-  const [results,    setResults]    = useState([])
-  const [progress,        setProgress]        = useState(0)
-  const [completedCount,  setCompletedCount]  = useState(0)
-  const [currentUrl, setCurrentUrl] = useState('')
-  const [done,       setDone]       = useState(false)
+  const loading    = scrapeJob.processing
+  const paused     = scrapeJob.paused
+  const done       = scrapeJob.done
+  const progress   = scrapeJob.progress
+  const completedCount = scrapeJob.processed
+  const currentUrl = scrapeJob.currentUrl
+  const results = useMemo(() => {
+    const r = scrapeJob.results
+    return Object.keys(sentOverlay).length
+      ? r.map(row => sentOverlay[row.url] ? { ...row, msg_status: sentOverlay[row.url] } : row)
+      : r
+  }, [scrapeJob.results, sentOverlay])
   const [page,       setPage]       = useState(0)
   const [rowsPerPage,setRowsPerPage]= useState(25)
   const [selectedTpl,setSelectedTpl]= useState(TEMPLATES[0].id)
@@ -152,7 +170,16 @@ export default function CsvImporter() {
   const [showTiming, setShowTiming] = useState(false)
   const [sendCfg,    setSendCfg]    = useState(() => loadSendConfig())
   const { addBatch, cancel: cancelQueue, active: queueActive } = useSendQueue()
+  const { stats: capStats, refresh: refreshCapStats } = useDailyCapStats()
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, names: '', resolve: null })
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
+  // Qué empresas (de las que tienen WhatsApp) quedan destildadas del envío
+  // masivo — mismo patrón que ya usa searchProspects.jsx.
+  const [waDeselected, setWaDeselected] = useState(new Set())
+  // Números EXTRA (además del principal) prendidos a mano al expandir el chip
+  // de una empresa — clave `${company_id}::${number}`.
+  const [extraSelected, setExtraSelected] = useState(new Set())
+  const [expandedCo, setExpandedCo] = useState(new Set())
   const msgRef       = useRef(null)
   const highlightRef = useRef(null)
   function syncScroll() {
@@ -205,8 +232,8 @@ export default function CsvImporter() {
       setUrlCol(detected)
       setAllUrls(urls)
       setPreview(cols)
-      setResults([])
-      setDone(false)
+      setSentOverlay({})
+      scrapeJob.reset()
       setPage(0)
     }
     reader.onerror = () => setFileError(t.csv.readError)
@@ -218,96 +245,35 @@ export default function CsvImporter() {
   function handleInputChange(e) { parseFile(e.target.files?.[0]) }
   function handleReset() {
     setFileName(''); setFileError(''); setUrlCol(''); setAllUrls([]); setPreview([])
-    setResults([]); setDone(false)
+    setSentOverlay({}); scrapeJob.reset()
     if (inputRef.current) inputRef.current.value = ''
   }
 
+  // El loop de scraping ahora corre en el backend (backEnd/app/scrape_jobs.py) —
+  // esto solo crea el job y lo deja al hook useScrapeJob hacer polling.
   async function handleProcess() {
     if (!allUrls.length) return
-    pauseRef.current  = false
-    cancelRef.current = false
-    setResults([]); setProgress(0); setCompletedCount(0); setLoading(true); setDone(false); setPaused(false); setPage(0)
-
-    const res = []
-    const CONCURRENCY = 4
-    const total = allUrls.length
-    let completed = 0
-    for (let i = 0; i < total; i += CONCURRENCY) {
-      while (pauseRef.current && !cancelRef.current) {
-        await new Promise(r => setTimeout(r, 200))
-      }
-      if (cancelRef.current) break
-
-      const chunk = allUrls.slice(i, i + CONCURRENCY)
-      setCurrentUrl(chunk[0])
-
-      const chunkResults = await Promise.all(chunk.map(async (url) => {
-        try {
-          const r = await fetch('/api/process-url', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url, skip_send: true }),
-          })
-          if (!r.ok) {
-            const body = await r.json().catch(() => null)
-            throw new Error(body?.detail || `HTTP ${r.status}`)
-          }
-          const d = await r.json()
-          if (d.blacklisted) {
-            completed++
-            setProgress(Math.round(completed / total * 100))
-            setCompletedCount(completed)
-            setCurrentUrl(url)
-            return { url, empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, status_wa: '—', msg_status: null, ok: false, blacklisted: true, blockReason: d.matched, duplicate: false }
-          }
-          const duplicate = d.duplicate === true
-          const row = {
-            url,
-            empresa:     d.scraped?.name || '—',
-            industria:   d.scraped?.industry || '—',
-            whatsapp:    d.primary_whatsapp_number || '',
-            all_whatsapp: d.all_whatsapp_numbers || (d.primary_whatsapp_number ? [d.primary_whatsapp_number] : []),
-            company_id:  d.company_id || '',
-            scraped_data: d.scraped,
-            status_wa:   d.send_result?.status_code || '—',
-            msg_status:  null,
-            ok:          true,
-            blacklisted: false,
-            blockReason: null,
-            duplicate,
-          }
-          completed++
-          setProgress(Math.round(completed / total * 100))
-          setCompletedCount(completed)
-          setCurrentUrl(url)
-          return row
-        } catch (e) {
-          completed++
-          setProgress(Math.round(completed / total * 100))
-          setCompletedCount(completed)
-          return { url, empresa: '—', industria: '—', whatsapp: '', all_whatsapp: [], company_id: '', scraped_data: null, status_wa: '—', msg_status: null, ok: false, duplicate: false, errorReason: e.message }
-        }
-      }))
-      res.push(...chunkResults)
-      setResults([...res])
-    }
-
-    setProgress(100)
-    setCurrentUrl('')
-    setLoading(false)
-    setPaused(false)
-    setDone(true)
+    setSentOverlay({}); setPage(0)
+    await scrapeJob.start(allUrls)
   }
 
+  useEffect(() => {
+    if (queueActive?.phase === 'success') {
+      setSentOverlay(prev => {
+        const next = { ...prev }
+        for (const k in next) if (next[k] === 'queued') next[k] = 'sent'
+        return next
+      })
+      refreshCapStats()
+    }
+  }, [queueActive?.phase, refreshCapStats])
+
   function handlePause() {
-    pauseRef.current = !pauseRef.current
-    setPaused(pauseRef.current)
+    paused ? scrapeJob.resume() : scrapeJob.pause()
   }
 
   function handleCancel() {
-    cancelRef.current = true
-    pauseRef.current  = false
-    setPaused(false)
+    scrapeJob.cancel()
   }
 
   function downloadCsv() {
@@ -327,37 +293,69 @@ export default function CsvImporter() {
   }
 
 
-  const waRows      = results.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
+  // waRowsUnique deduplicado por company_id — dos filas de CSV distintas pueden
+  // resolver a la misma empresa ya existente en la BD.
+  const waRowsAll    = results.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
+  const waRowsUnique = useMemo(() => dedupeByCompany(waRowsAll), [waRowsAll])
+  // Los setState devuelven la MISMA referencia si ya estaban vacíos — evita que
+  // este efecto re-dispare un render indefinidamente si `results` llega a ser
+  // referencialmente inestable entre renders (ver useScrapeJob.js EMPTY_RESULTS).
+  useEffect(() => {
+    setWaDeselected(prev => prev.size ? new Set() : prev)
+    setExtraSelected(prev => prev.size ? new Set() : prev)
+    setExpandedCo(prev => prev.size ? new Set() : prev)
+  }, [results])
+  const effectiveWaSelected = useMemo(() =>
+    new Set(waRowsUnique.map(r => r.company_id).filter(id => !waDeselected.has(id))),
+  [waRowsUnique, waDeselected])
   const alreadySent = results.some(r => r.msg_status === 'sent' || r.msg_status === 'failed' || r.msg_status === 'queued')
   const isSending   = queueActive !== null && alreadySent
-  const sentCount   = results.filter(r => r.msg_status === 'sent' || r.msg_status === 'queued').length
-  const totalNumbers = waRows.reduce((sum, r) => sum + (r.all_whatsapp?.length > 0 ? r.all_whatsapp.length : (r.whatsapp ? 1 : 0)), 0)
+  const sentCount   = results.filter(r => r.msg_status === 'sent').length
+  // Un envío masivo manda por default 1 número por empresa (el principal) — evita
+  // que una empresa con muchos números se coma el cupo diario de warmup de varias
+  // empresas nuevas de golpe. Expandir el chip de una empresa permite agregar sus
+  // otros números a propósito — cada uno cuenta su propio slot de cupo (el
+  // backend deduplica por número real, no por empresa).
+  const totalNumbers = effectiveWaSelected.size
+  const totalContactPoints = totalNumbers +
+    [...extraSelected].filter(key => effectiveWaSelected.has(key.split('::')[0])).length
+  const overBy     = getOverBy(capStats, totalContactPoints)
+  const capBlocked = overBy > 0
   // Sending to 2+ numbers needs varied text (see MIN_TEMPLATES_FOR_BULK) — editing
   // one base message stops making sense there, so it switches to picking 3+ saved templates.
   const isBulk = totalNumbers > 1
   const allVariants = (isBulk ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean)
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
-  function handleSendAll() {
-    const targets = waRows
-    if (!targets.length || belowMinTemplates) return
+  async function handleSendAll() {
+    const targets = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id))
+    if (!targets.length || belowMinTemplates || capBlocked) return
+    const alreadyContacted = targets.filter(r => r.already_contacted?.contacted)
+    if (alreadyContacted.length) {
+      const names = alreadyContacted.map(r => r.empresa || r.url).join(', ')
+      const confirmed = await new Promise(resolve => setConfirmDialog({ open: true, names, resolve }))
+      if (!confirmed) return
+    }
     let lastVariant = null
-    const updated = results.map(r => ({ ...r }))
     const jobs = []
+    const queuedUrls = {}
     for (const row of targets) {
-      const numbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
-      if (!numbers.length) continue
-      const messages = numbers.map(() => {
-        const v = pickMessageVariant(allVariants, lastVariant)
-        lastVariant = v
-        return renderTemplate(v, row.scraped_data)
-      })
+      // Principal + números extra prendidos a mano para esta empresa — ver
+      // nota junto a totalContactPoints.
+      const primary = row.all_whatsapp?.length > 0 ? row.all_whatsapp[0] : row.whatsapp
+      if (!primary) continue
+      const extras = row.all_whatsapp?.slice(1).filter(n => extraSelected.has(`${row.company_id}::${n}`)) || []
+      const numbers = [primary, ...extras]
+      // Mismo texto para todos los números de UNA empresa.
+      const v = pickMessageVariant(allVariants, lastVariant)
+      lastVariant = v
+      const message = renderTemplate(v, row.scraped_data)
+      const messages = numbers.map(() => message)
       jobs.push({ numbers, messages, companyId: row.company_id, website: row.url })
-      const idx = updated.findIndex(r => r.url === row.url)
-      if (idx >= 0) updated[idx] = { ...updated[idx], msg_status: 'queued' }
+      queuedUrls[row.url] = 'queued'
     }
     addBatch(jobs, lang === 'en' ? 'CSV import' : 'Importación CSV')
-    setResults(updated)
+    setSentOverlay(prev => ({ ...prev, ...queuedUrls }))
   }
 
   const hasFile    = allUrls.length > 0
@@ -614,14 +612,14 @@ export default function CsvImporter() {
 
       {/* ── Toggle de envío masivo — visible también durante el procesamiento,
            para poder empezar a enviar a lo ya encontrado sin esperar ── */}
-      {(done || loading) && results.length > 0 && waRows.length > 0 && (
+      {(done || loading) && results.length > 0 && waRowsUnique.length > 0 && (
         <Box sx={{ borderRadius: 2, border: `1px solid ${showSend ? 'rgba(34,197,94,0.25)' : 'rgba(34,197,94,0.12)'}`, bgcolor: showSend ? 'rgba(34,197,94,0.04)' : 'transparent', transition: 'all 0.2s' }}>
           {/* Header toggle */}
           <Box onClick={() => setShowSend(o => !o)} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2, py: 1.2, cursor: 'pointer', borderRadius: showSend ? '8px 8px 0 0' : 2, '&:hover': { bgcolor: 'rgba(34,197,94,0.06)' } }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <MessageIcon sx={{ fontSize: 15, color: '#4ade80' }} />
               <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>{t.csv.sendMessages}</Typography>
-              <Chip icon={<WhatsAppIcon sx={{ fontSize: '11px !important' }} />} label={`${waRows.length} ${t.csv.withWhatsApp}`} size="small"
+              <Chip icon={<WhatsAppIcon sx={{ fontSize: '11px !important' }} />} label={`${effectiveWaSelected.size} ${t.search.of} ${waRowsUnique.length} ${t.csv.withWhatsApp}`} size="small"
                 sx={{ fontSize: '0.68rem', height: 20, bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', '& .MuiChip-icon': { color: '#4ade80' } }} />
             </Box>
             <Box sx={{ fontSize: 15, color: 'rgba(34,197,94,0.5)', transform: showSend ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', display: 'flex' }}>▾</Box>
@@ -662,6 +660,22 @@ export default function CsvImporter() {
                 </Button>
               )}
 
+              {capStats && (
+                <CapacityBanner stats={capStats} selectionCount={totalContactPoints} sx={{ mb: 1.5 }} />
+              )}
+
+              <Box sx={{ display: 'flex', gap: 2.5 }}>
+                <RecipientsBox rows={waRowsUnique}
+                  effectiveSelected={effectiveWaSelected}
+                  expandedCo={expandedCo}
+                  extraSelected={extraSelected}
+                  setDeselected={setWaDeselected}
+                  setExpandedCo={setExpandedCo}
+                  setExtraSelected={setExtraSelected}
+                  title={t.search.recipients}
+                  sx={{ width: 260, flexShrink: 0 }} />
+
+              <Box sx={{ flex: 1, minWidth: 0 }}>
               {!isBulk && <>
               <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>{t.csv.baseTemplate}</Typography>
               <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.5 }}>
@@ -719,8 +733,11 @@ export default function CsvImporter() {
               <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />
               <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
 
+              <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 0.6 }}>
+                <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} />
+              </Box>
               <Button fullWidth onClick={handleSendAll}
-                disabled={waRows.length === 0 || alreadySent || isDisconnected || belowMinTemplates}
+                disabled={effectiveWaSelected.size === 0 || alreadySent || isDisconnected || belowMinTemplates || capBlocked}
                 startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
                 sx={{
                   fontSize: '0.82rem', fontWeight: 700, py: 1, textTransform: 'none', borderRadius: 1.5,
@@ -728,8 +745,15 @@ export default function CsvImporter() {
                   '&:hover': { bgcolor: 'rgba(34,197,94,0.25)' },
                   '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
                 }}>
-                {alreadySent ? `${sentCount} ${t.csv.msgSent}` : `${t.csv.sendTo} ${waRows.length} ${waRows.length !== 1 ? t.csv.companies : t.csv.company} ${t.csv.withWhatsApp}`}
+                {alreadySent ? `${sentCount} ${t.csv.msgSent}` : `${t.csv.sendTo} ${effectiveWaSelected.size} ${effectiveWaSelected.size !== 1 ? t.csv.companies : t.csv.company} ${t.csv.withWhatsApp}`}
               </Button>
+              {capBlocked && !isSending && (
+                <Typography sx={{ color: '#f59e0b', fontSize: '0.7rem', textAlign: 'right', mt: 0.5 }}>
+                  {lang === 'en' ? `Deselect ${overBy} to fit today's quota` : `Desmarca ${overBy} para caber en tu cupo de hoy`}
+                </Typography>
+              )}
+              </Box>
+              </Box>
             </Box>
           </Collapse>
         </Box>
@@ -786,9 +810,8 @@ export default function CsvImporter() {
                       <TableCell sx={{ color: 'var(--text)', fontWeight: 500, fontSize: '0.8rem' }}>{r.empresa}</TableCell>
                       <TableCell sx={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{r.industria}</TableCell>
                       <TableCell>
-                        {r.whatsapp ? (
-                          <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={r.whatsapp} size="small"
-                            sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#4ade80' } }} />
+                        {(r.all_whatsapp?.length > 0 || r.whatsapp) ? (
+                          <WhatsAppNumberSummary row={r} />
                         ) : (
                           <Typography sx={{ color: 'var(--border)', fontSize: '0.78rem' }}>—</Typography>
                         )}
@@ -847,6 +870,37 @@ export default function CsvImporter() {
           </Box>
         </Box>
       )}
+
+      <Dialog
+        open={confirmDialog.open}
+        onClose={() => { confirmDialog.resolve?.(false); setConfirmDialog({ open: false, names: '', resolve: null }) }}
+        slotProps={{ paper: { sx: { bgcolor: 'var(--bg-card, #1e293b)', border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 2, minWidth: 340 } } }}
+      >
+        <DialogTitle sx={{ color: 'var(--text, white)', fontSize: '0.95rem', fontWeight: 700, pb: 1 }}>
+          Contactos ya enviados
+        </DialogTitle>
+        <DialogContent sx={{ pt: '8px !important' }}>
+          <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.6))', fontSize: '0.85rem' }}>
+            Los siguientes contactos ya recibieron un mensaje:
+          </Typography>
+          <Typography sx={{ color: 'var(--text, white)', fontSize: '0.85rem', fontWeight: 600, mt: 0.5, wordBreak: 'break-word' }}>
+            {confirmDialog.names}
+          </Typography>
+          <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.6))', fontSize: '0.85rem', mt: 1.5 }}>
+            ¿Enviarles mensaje de todas formas?
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 2, pb: 2, gap: 1 }}>
+          <Button size="small" onClick={() => { confirmDialog.resolve?.(false); setConfirmDialog({ open: false, names: '', resolve: null }) }}
+            sx={{ color: 'var(--text-muted, rgba(255,255,255,0.5))', textTransform: 'none' }}>
+            Cancelar
+          </Button>
+          <Button size="small" variant="contained" onClick={() => { confirmDialog.resolve?.(true); setConfirmDialog({ open: false, names: '', resolve: null }) }}
+            sx={{ bgcolor: 'var(--accent, #3b82f6)', '&:hover': { bgcolor: 'var(--accent-hover, #2563eb)' }, textTransform: 'none', fontWeight: 600 }}>
+            Enviar de todas formas
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

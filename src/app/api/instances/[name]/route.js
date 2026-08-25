@@ -21,6 +21,18 @@ export async function POST(request, { params }) {
   const { searchParams } = new URL(request.url)
   const action = searchParams.get('action')
 
+  if (action === 'warmup') {
+    const body = await request.json().catch(() => ({}))
+    try {
+      const res = await fetch(`${B}/api/instances/${encodeURIComponent(name)}/warmup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-token': token },
+        body: JSON.stringify(body),
+      })
+      return NextResponse.json(await res.json(), { status: res.status })
+    } catch (e) { return NextResponse.json({ error: e.message }, { status: 500 }) }
+  }
+
   const backendAction = action === 'unassign' ? `${name}/unassign` : `${name}/assign`
   const body = action === 'unassign' ? {} : await request.json()
 

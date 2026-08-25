@@ -272,7 +272,8 @@ export default function SearchProspects() {
   // job nuevo (solo con las fallidas) no traería de vuelta.
   const [sentOverlay, setSentOverlay] = useState({})
   const [retryBase,   setRetryBase]   = useState([])
-  const [filterScraped, setFilterScraped] = useState('all')
+  const [filterScraped,    setFilterScraped]    = useState('all')
+  const [filterContacted,  setFilterContacted]  = useState('all') // 'all' | 'new' | 'contacted'
   const [history,     setHistory]     = useState([])
   const [selectedTpl, setSelectedTpl] = useState(TEMPLATES[0].id)
   const [msgText,     setMsgText]     = useState(TEMPLATES[0].text)
@@ -328,10 +329,17 @@ export default function SearchProspects() {
   const waRowsAll    = results.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
   const waRowsUnique = useMemo(() => dedupeByCompany(waRowsAll), [waRowsAll])
 
+  // Filtro de "ya contactados": se aplica sobre waRowsUnique antes de calcular la selección
+  const filteredWaRows = useMemo(() => {
+    if (filterContacted === 'all') return waRowsUnique
+    if (filterContacted === 'contacted') return waRowsUnique.filter(r => r.already_contacted?.contacted)
+    return waRowsUnique.filter(r => !r.already_contacted?.contacted)
+  }, [waRowsUnique, filterContacted])
+
   // Siempre sincronizado — sin delay de un render
   const effectiveWaSelected = useMemo(() =>
-    new Set(waRowsUnique.map(r => r.company_id).filter(id => !waDeselected.has(id))),
-  [waRowsUnique, waDeselected])
+    new Set(filteredWaRows.map(r => r.company_id).filter(id => !waDeselected.has(id))),
+  [filteredWaRows, waDeselected])
 
   const INDUSTRY_GROUPS = useMemo(() => {
     const i = t.search.industries
@@ -364,8 +372,8 @@ export default function SearchProspects() {
   }), [t, INDUSTRY_EXAMPLES])
 
   const visibleFound = found
-    .slice(0, visibleCount)
     .filter(r => filterScraped === 'all' ? true : filterScraped === 'new' ? !r.scraped : r.scraped)
+    .slice(0, visibleCount)
   const selectedCount    = found.filter(r => r.selected).length
   const processableCount = found.filter(r => r.selected && !r.scraped && !r.blocked).length
   const skippedCount     = found.filter(r => r.selected && r.scraped).length
@@ -408,7 +416,7 @@ export default function SearchProspects() {
     abortSearchRef.current?.abort()
     const ctrl = new AbortController()
     abortSearchRef.current = ctrl
-    setSearching(true); setFound([]); setVisibleCount(numResults); setRequestedCount(numResults); setFilterScraped('all'); setSearchError(false)
+    setSearching(true); setFound([]); setVisibleCount(numResults); setRequestedCount(numResults); setFilterScraped('all'); setFilterContacted('all'); setSearchError(false)
     setServerExhausted(false); setNextOffset(0)
     setSentOverlay({}); setRetryBase([]); scrapeJob.reset()
     try {
@@ -933,7 +941,7 @@ export default function SearchProspects() {
               </Box>
             </Box>
             {waRowsUnique.length > 0 && (
-              <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={`${effectiveWaSelected.size} ${t.search.of} ${waRowsUnique.length} ${t.search.withWa}`} size="small"
+              <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={`${effectiveWaSelected.size} ${t.search.of} ${filteredWaRows.length} ${t.search.withWa}`} size="small"
                 sx={{ fontSize: '0.7rem', height: 22, bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', '& .MuiChip-icon': { color: '#4ade80' } }} />
             )}
           </Box>
@@ -943,8 +951,20 @@ export default function SearchProspects() {
             <CapacityBanner stats={capStats} selectionCount={totalContactPoints} sx={{ mb: 1.5 }} />
           )}
 
+          {waRowsUnique.length > 0 && (
+            <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 1 }}>
+              {[
+                { key: 'all',       label: `Todos (${waRowsUnique.length})`,                                                     color: '#60a5fa', bg: 'rgba(59,130,246,0.1)',  border: 'rgba(59,130,246,0.25)' },
+                { key: 'new',       label: `Sin contactar (${waRowsUnique.filter(r => !r.already_contacted?.contacted).length})`, color: '#4ade80', bg: 'rgba(34,197,94,0.1)',   border: 'rgba(34,197,94,0.25)'  },
+                { key: 'contacted', label: `Ya contactados (${waRowsUnique.filter(r => r.already_contacted?.contacted).length})`, color: '#fbbf24', bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.25)' },
+              ].map(f => (
+                <Chip key={f.key} label={f.label} size="small" onClick={() => setFilterContacted(f.key)}
+                  sx={{ height: 22, fontSize: '0.68rem', cursor: 'pointer', bgcolor: filterContacted === f.key ? f.bg : 'var(--item-hover)', color: filterContacted === f.key ? f.color : 'var(--text-muted)', border: `1px solid ${filterContacted === f.key ? f.border : 'var(--border)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
+              ))}
+            </Box>
+          )}
           <Box sx={{ display: 'flex', gap: 2.5 }}>
-            <RecipientsBox rows={waRowsUnique}
+            <RecipientsBox rows={filteredWaRows}
               effectiveSelected={effectiveWaSelected}
               expandedCo={expandedCo}
               extraSelected={extraSelected}

@@ -13,6 +13,7 @@ import pytest
 from app.classifier import (
     _has_real_text,
     _looks_like_auto_reply,
+    _looks_like_bot_selfid,
     _looks_like_menu,
     _parse_llm_response,
     _quick_classify,
@@ -65,6 +66,13 @@ class TestLooksLikeMenu:
         "Responde con el número de la opción que te interese",
         "Escribe 1 para continuar",
         "Selecciona una opción del menú",
+        # Prod cases: inline menus on a single line (Hidrogas, Rivera Gas)
+        "¿Cómo podemos ayudarte? 1.- Solicitar un servicio   2.- Conocer nuestros servicios",
+        "favor de indicar la ciudad:    1. Ciudad Obregón    2. Hermosillo    3. Culiacán",
+        # Prod case: "selecciona un número" keyword (Laboratorio del Chopo)
+        "Por favor, selecciona un número:  1. Cotizar, agendar mis estudios.  2. Solicitar estudios a domicilio.",
+        # Nissan-style: "1 - Autos nuevos 2 - Seminuevos" on same line
+        "Por favor selecciona la opción.  1 - Autos nuevos 2 - Seminuevos",
     ])
     def test_detects_numbered_or_lettered_menus(self, text):
         assert _looks_like_menu(text) is True
@@ -85,6 +93,37 @@ class TestLooksLikeMenu:
         assert _looks_like_menu("1. Compramos maquinaria usada, escríbenos para más info") is False
 
 
+# ── _looks_like_bot_selfid ──────────────────────────────────────────────────
+
+class TestLooksLikeBotSelfid:
+    @pytest.mark.parametrize("text", [
+        # Classic virtual assistant labels
+        "Hola, soy tu asistente virtual de Gas Express",
+        "Hola, soy el asistente digital de Mazda de México.",
+        # Role + virtual (HSBC Leo, Smart Fit Bell)
+        "*Leo* Tu ejecutivo virtual oficial de HSBC México.",
+        "¡Hola! Soy Bell, el reclutador virtual de Smart Fit.",
+        "Me comunica con un asesor virtual",
+        # Emoji bot marker
+        "Bienvenido al asistente 🤖 de atención al cliente",
+        # Session end (bilingual)
+        "La sesión ha finalizado. / Session ended.",
+    ])
+    def test_detects_bot_selfid(self, text):
+        assert _looks_like_bot_selfid(text) is True
+
+    @pytest.mark.parametrize("text", [
+        # Human with name — must NOT be flagged
+        "Hola, soy Emmanuel, en qué le puedo ayudar",
+        "Mi nombre es Juan, coordinador de ventas",
+        # Hybrid handoff announcement — classifier excludes these on purpose
+        "Reemplazaré a nuestro asistente virtual, soy Fernanda",
+        "Se está comunicando con un agente de Bancomer",
+    ])
+    def test_does_not_flag_humans_or_handoffs(self, text):
+        assert _looks_like_bot_selfid(text) is False
+
+
 # ── _looks_like_auto_reply ──────────────────────────────────────────────────
 
 class TestLooksLikeAutoReply:
@@ -96,12 +135,21 @@ class TestLooksLikeAutoReply:
         "TKT-0023 generado correctamente",
         "Estimado cliente, gracias por contactarnos",
         "Nuestro horario de atención es Lun-Vie 9am-6pm",
+        # Prod cases added in 2026-08
+        "Bienvenido(a) a Laboratorio Médico del Chopo. Con 75 años de experiencia.",
+        "Gracias por escribir a Gas Flamazul, ¿nos puede proporcionar su nombre?",
+        "Por el momento nuestro equipo se encuentra fuera del horario laboral.",
+        "Por el momento nos encontramos fuera de nuestro horario de atención.",
     ])
     def test_detects_template_markers(self, text):
         assert _looks_like_auto_reply(text) is True
 
-    def test_normal_reply_is_not_flagged(self):
-        assert _looks_like_auto_reply("Hola, sí tenemos disponible, ¿cuántos necesitas?") is False
+    @pytest.mark.parametrize("text", [
+        "Hola, sí tenemos disponible, ¿cuántos necesitas?",
+        "gracias por todo, fue un placer trabajar contigo",  # "gracias por" sin verbo de contacto
+    ])
+    def test_normal_reply_is_not_flagged(self, text):
+        assert _looks_like_auto_reply(text) is False
 
 
 # ── _has_real_text ──────────────────────────────────────────────────────────

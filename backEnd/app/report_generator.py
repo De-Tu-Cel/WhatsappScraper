@@ -731,10 +731,15 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     # Sin este chequeo explícito, ese caso caía en "Desconocido" como si fuera
     # un error, cuando en realidad es "todavía no hay nada que clasificar".
     cat_key = analytics.get("category")
+    is_ai   = bool(analytics.get("is_ai", False))
     if cat_key is None:
         cat_label, cat_color = "Pendiente de analisis", C["muted"]
     else:
         cat_label, cat_color = CATEGORY_INFO.get(cat_key, ("Desconocido", C["muted"]))
+    # Refine label when the bot is confirmed conversational AI
+    if cat_key == "bot" and is_ai:
+        cat_label = "Bot con IA"
+        cat_color = C["bot_ia"]
     quality              = float(analytics.get("response_quality") or 0)
     reaction_min         = analytics.get("reaction_time_min")
     try:
@@ -886,7 +891,27 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
             ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
         ]))
         right_items.append(desc_tbl)
-        right_items.append(Spacer(1, 4 * mm))
+        right_items.append(Spacer(1, 3 * mm))
+
+    # — Classifier diagnostic notes —
+    if notes:
+        right_items.append(Paragraph("Diagnostico del clasificador", _st("notesh",
+            fontSize=7, fontName="Helvetica-Bold", textColor=C["muted"], leading=9, spaceAfter=2)))
+        notes_tbl = Table(
+            [[Paragraph(notes, _st("notes", fontSize=8, textColor=C["text"], leading=12))]],
+            colWidths=[RIGHT_W],
+        )
+        notes_tbl.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), HexColor("#f8faff")),
+            ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
+            ("LINEBEFORE",    (0, 0), (0, -1),  3,   C["muted"]),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
+            ("TOPPADDING",    (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ]))
+        right_items.append(notes_tbl)
+        right_items.append(Spacer(1, 3 * mm))
 
     # — Supporting context: reaction time + message counts —
     right_items.append(HRFlowable(width=RIGHT_W, thickness=0.5, color=C["border"], spaceAfter=4))
@@ -910,19 +935,33 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
         return t
 
     reaction_str = _reaction_str(reaction_min, reaction_seconds) if reaction_min is not None else "Sin datos"
-    react_color  = _speed_label(reaction_min)[1] if reaction_min is not None else C["muted"]
+    react_color  = speed_color
+    # Show the speed label inline with the time value ("17 seg · Excelente")
+    reaction_display = f"{reaction_str} - {speed_label}" if reaction_min is not None else "Sin datos"
     bh_label, bh_color = _business_hours_label(business_hours)
 
-    right_items.append(_info_row("Tiempo de primera respuesta", reaction_str, react_color))
-    right_items.append(_info_row("Horario de respuesta",        bh_label,     bh_color))
+    right_items.append(_info_row("Tiempo de primera respuesta", reaction_display, react_color))
+    # right_items.append(_info_row("Horario de respuesta",        bh_label,         bh_color))
+    # if quality > 0:
+    #     right_items.append(_info_row("Calidad del prospecto",
+    #                                  f"{qual_level}  ({round(quality)}/5)", qual_color))
     right_items.append(_info_row("Mensajes enviados",           str(sent_c),  C["primary"]))
     right_items.append(_info_row("Mensajes recibidos",          str(recv_c),  C["primary"]))
+
+    # — Service quality dimensions (svc_*) from LLM evaluation —
+    has_svc = any(analytics.get(k) is not None for k, _ in _SVC_DIMS)
+    if has_svc:
+        right_items.append(Spacer(1, 3 * mm))
+        right_items.append(HRFlowable(width=RIGHT_W, thickness=0.5, color=C["border"], spaceAfter=4))
+        right_items.append(Paragraph("Calidad de atencion", _st("svch",
+            fontSize=7.5, fontName="Helvetica-Bold", textColor=C["muted"],
+            leading=10, spaceAfter=3)))
+        right_items.append(ServiceQualityTable(analytics, RIGHT_W))
 
     # ── PRESERVED FOR FUTURE USE (not rendered) ───────────────────────────────
     # The following sections exist in this file and can be re-enabled:
     #   _composite_score()  — weighted 0-100 score with ScoreArc gauge
     #   _suggestions()      — 5 AI-generated improvement tips via LLM
-    #   ServiceQualityTable — 6 service dimension bars (svc_prof, svc_comp, …)
     #   CardGrid            — 6 metric cards (quality, speed, hours, msg counts)
     #   QualityDots         — 1-5 dot indicator for commercial lead score
     #   ScoreArc / ScoreBar — circular / bar gauge flowables

@@ -46,9 +46,24 @@ import { NavigationProvider, useNavigation } from '../context/NavigationContext'
 // Lazy-mount + memo: each tab mounts only on first visit, then stays mounted
 // (hidden via display:none) so returning to it is instant. This prevents all
 // 11 nav components from mounting simultaneously on page load.
+// After 2s, remaining sections preload one-by-one (350ms apart) so their data
+// fetches run in the background before the user ever clicks them.
 const NavContent = React.memo(function NavContent({ items, active, settingsOpen, mounted }) {
   const visitedRef = useRef(new Set())
+  const [, forceUpdate] = useState(0)
   if (mounted && !settingsOpen) visitedRef.current.add(active)
+
+  useEffect(() => {
+    if (!mounted) return
+    const timers = items.map((_, i) => {
+      if (visitedRef.current.has(i)) return null
+      return setTimeout(() => {
+        visitedRef.current.add(i)
+        forceUpdate(c => c + 1)
+      }, 2000 + i * 350)
+    })
+    return () => timers.forEach(t => t && clearTimeout(t))
+  }, [mounted, items])
 
   return (
     <>

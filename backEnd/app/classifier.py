@@ -377,8 +377,10 @@ def _call_deepseek(messages: list, max_tokens: int = 280) -> str:
 # the LLM — this is not an attempt to replace that, only to skip it when it's redundant.
 
 _MENU_MARKERS = re.compile(
-    r'\[Opciones:|\[Lista:|responde con el n[uú]mero|elige una opci[oó]n|'
-    r'escribe (?:el )?(?:1|2|3|un n[uú]mero)|selecciona (?:una|la) opci[oó]n',
+    r'\[Opciones:|\[Lista:|responde con el n[uú]mero|elige una? opci[oó]n|'
+    r'escribe (?:el )?(?:1|2|3|un n[uú]mero)|selecciona (?:una?|la|el)\s+(?:opci[oó]n|n[uú]mero)|'
+    # "Por favor, selecciona un número: 1. Cotizar..." (Laboratorio Chopo, Hidrogas)
+    r'selecciona (?:un )?n[uú]mero|favor de indicar (?:la )?(?:ciudad|opci[oó]n)',
     re.IGNORECASE,
 )
 # El separador tras el número también viene como guión ("1 - Autos nuevos"), no solo
@@ -386,6 +388,14 @@ _MENU_MARKERS = re.compile(
 # como "humano" porque ningún ítem de la lista hacía match.
 _MENU_LIST_ITEM = re.compile(
     r'(?:^|\n)\s*(?:[0-9]{1,2}[.\)-]|[*_]?[A-H][*_]?\s*[.\)-])\s+\S',
+    re.MULTILINE,
+)
+# Listas numeradas inline — ítems en la misma línea, separador "." o ".-" o "-"
+# Casos reales: "1.- Solicitar un servicio  2.- Conocer nuestros servicios" (Hidrogas),
+# "1. Ciudad Obregón  2. Hermosillo" (Rivera Gas), "1. 🔬 Cotizar  2. 🏠 Solicitar" (Chopo).
+# [-.)]{1,2} cubre tanto "1." como "1.-" como "1-".
+_INLINE_MENU_ITEM = re.compile(
+    r'(?<![0-9])\b[1-9][0-9]?\s*[-.)]{1,2}\s+\S',
     re.MULTILINE,
 )
 
@@ -401,13 +411,14 @@ _AUTO_REPLY_MARKERS = re.compile(
     # que gestiona la sesión o la espera — ninguna otra regla los cubría.
     r'sigues ah[ií]|aqu[ií] sigo|est[aá] en la cola|buscando (?:un|una) agente|'
     r'espera un momento por favor|volver cuando quieras|'
-    # Mensaje de "saludo automático" de WhatsApp Business — patrón real muy común
-    # ("Bienvenido/a a [negocio]... gracias por contactarnos/escribirnos... te
-    # responderemos/atenderemos en breve/pronto") que el regex anterior no cubría
-    # y se colaba como "humano" (encontrado en producción: ~15 variantes reales
-    # para una sola empresa, todas con reacción casi instantánea).
-    r'bienvenid[oa]s?\s+a\b|gracias por (?:contactarnos|escribirnos|comunicarte|comunicarse)|'
-    r'te (?:responderemos|atenderemos|contestaremos)\b',
+    # Mensaje de "saludo automático" de WhatsApp Business — patrón real muy común.
+    # "(a)" es notación inclusiva ("bienvenido(a)") que rompe [oa] simple.
+    r'bienvenid[oa]s?(?:\([ao]\))?\s+a\b|'
+    r'gracias por (?:contactarnos|escribir(?:nos)?|comunicarte|comunicarse)|'
+    r'te (?:responderemos|atenderemos|contestaremos)\b|'
+    # "Por el momento nuestro equipo se encuentra fuera del horario laboral" —
+    # plantilla de fuera de horario, caso real (Salones de Belleza, Nissan Vallejo).
+    r'fuera de(?:l| nuestro)?\s+horario',
     re.IGNORECASE,
 )
 
@@ -417,7 +428,10 @@ _AUTO_REPLY_MARKERS = re.compile(
 # reales encontradas en producción como "Soy Bell, el reclutador virtual de
 # Smart Fit" — la redacción literal "asistente virtual" no las detectaba.
 _BOT_SELFID_MARKERS = re.compile(
-    r'asistente virtual|soy (?:un|una)?\s*bot\b|chatbot|soy\s+\w+[,.]?\s*tu\s+asistente|'
+    # "asistente virtual/digital", "ejecutivo virtual" (HSBC Leo), "reclutador virtual" (Smart Fit)
+    r'asistente (?:virtual|digital)|'
+    r'\b(?:asesor|agente|ejecutivo|operador|reclutador|coordinador)\s+virtual\b|'
+    r'soy (?:un|una)?\s*bot\b|chatbot|soy\s+\w+[,.]?\s*tu\s+asistente|'
     r'\bsoy\b[^.!?\n]{0,45}\bvirtual\b|'
     r'inteligencia artificial|🤖|envía\s*["\']?hola["\']?\s*para\s+(?:comenzar|empezar)|'
     r'la sesi[oó]n ha finalizado|session (?:has )?ended',
@@ -442,6 +456,18 @@ _HANDOFF_MARKERS = re.compile(
 
 def _looks_like_handoff_announcement(text: str) -> bool:
     return bool(_HANDOFF_MARKERS.search(text or ""))
+
+# Presentación personal humana — "mi nombre es Emmanuel", "soy Juan, asesor".
+# Señal fuerte de humano real, especialmente útil cuando el probe T1→T2 timeout
+# caería por default a "automatico" (texto largo, sin menú ni plantilla de bot).
+# Caso real: "Buen día, gracias por contactar a Aceromex, mi nombre es Emmanuel,
+# ¿En qué le puedo ayudar?" → T1 rápido → probe timeout → caía a "automatico".
+_HUMAN_NAME_INTRO = re.compile(
+    r'\bmi nombre es\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+\b|'
+    r'\bme llamo\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+\b|'
+    r'\bsoy\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+,?\s+(?:asesor|vendedor|ejecutivo|gerente|coordinador|encargado|agente)\b',
+    re.IGNORECASE,
+)
 
 # Saludos cortos e informales tal como los escribe una persona real desde el
 # celular — sin mayúscula inicial, sin acentos, alguna falta de ortografía.
@@ -485,7 +511,10 @@ def _looks_human_casual(text: str) -> bool:
 def _looks_like_menu(text: str) -> bool:
     if _MENU_MARKERS.search(text):
         return True
-    return len(_MENU_LIST_ITEM.findall(text)) >= 2
+    if len(_MENU_LIST_ITEM.findall(text)) >= 2:
+        return True
+    # Inline numbered list: "1.- Solicitar  2.- Conocer" o "1. 🔬 Cotizar  2. 🏠 Solicitar"
+    return len(_INLINE_MENU_ITEM.findall(text)) >= 2
 
 
 def _looks_like_auto_reply(text: str) -> bool:
@@ -917,6 +946,14 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
             analysis = _quick_result_unrated(
                 "humano", f"{base_notes} — sin señal de bot, estilo humano informal ('{sample[:30]}')"
             )
+        elif bool(_HUMAN_NAME_INTRO.search(original_text)) or (reply_text and bool(_HUMAN_NAME_INTRO.search(reply_text))):
+            # "mi nombre es Emmanuel", "soy Juan, asesor" — persona real presentándose.
+            # Sin este chequeo caía a "automatico" porque el texto es largo (> 20 chars)
+            # aunque no tenga ninguna señal de bot.
+            sample = original_text if _HUMAN_NAME_INTRO.search(original_text) else reply_text
+            analysis = _quick_result_unrated(
+                "humano", f"{base_notes} — presentación personal detectada ('{sample[:40]}')"
+            )
         else:
             analysis = _quick_result("automatico", f"{base_notes} — determinista")
 
@@ -1029,16 +1066,7 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
                 delta = received_at - last_sent_at
                 raw_seconds = delta.total_seconds()
                 minutes = round(raw_seconds / 60, 1)
-                # Sanity bound: get_last_outbound_for_company() falls back to "last
-                # outbound to this company from ANY number" when the to_number match
-                # fails — for a company with more than one WhatsApp number this can
-                # pair the reply with an unrelated outbound and produce a technically
-                # positive but meaningless delta. > 120 min already sits outside the
-                # window ai_followup treats as "still relevant", and is the same cutoff
-                # a past manual data-repair pass (fix_reaction.py) used to null out bad
-                # historical values — keep that invariant live instead of only cleaning
-                # it up after the fact.
-                if minutes < 0 or minutes > 120:
+                if minutes < 0:
                     reaction_time_min = None
                     raw_seconds = None
                 else:
@@ -1098,16 +1126,27 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
                 "bot", f"Señal de bot en el contenido pese a T1={raw_seconds:.0f}s > {t1_threshold}s — determinista"
             )
         else:
-            # T1 > umbral y sin señal de bot en el contenido — el ORIGEN es
-            # determinista: "humano", sin IA. La CALIDAD sí se intenta calificar
-            # aparte (llamada de IA separada, no decide categoría) — si falla o no
-            # hay LLM disponible, queda sin calificar.
-            analysis = _quick_result_unrated(
-                "humano", f"T1={raw_seconds:.0f}s > {t1_threshold}s — origen determinista, sin IA"
-            )
-            quality = _grade_quality_only(inbound_body, outbound_body)
-            if quality:
-                analysis.update(quality)
+            # T1 > umbral y sin señal determinista de bot en el contenido.
+            # Se manda al LLM completo para que juzgue origen + calidad: el LLM
+            # puede detectar bots de lenguaje natural (CRMs de respuesta lenta,
+            # IVR con delay, IA conversacional sin auto-identificación) que las
+            # reglas deterministas no pueden distinguir de un humano real.
+            # Si el LLM no está disponible o falla, el fallback es "humano" sin
+            # calificar — comportamiento conservador idéntico al anterior.
+            from app.llm import active_provider
+            if active_provider() == "none" or all_quota_exhausted():
+                analysis = _quick_result_unrated(
+                    "humano", f"T1={raw_seconds:.0f}s > {t1_threshold}s — LLM no disponible, fallback humano"
+                )
+            else:
+                try:
+                    analysis = classify_response(inbound_body, outbound_body, reaction_time_min)
+                except LLMQuotaExceeded:
+                    raise
+                except Exception:
+                    analysis = _quick_result_unrated(
+                        "humano", f"T1={raw_seconds:.0f}s > {t1_threshold}s — error LLM, fallback humano"
+                    )
 
         analysis["reaction_time_min"] = reaction_time_min
         # Segundos exactos, sin redondear a bloques de 6s (0.1 min) — para mostrar

@@ -382,7 +382,7 @@ export function TemplateLibraryPicker({
   useEffect(() => {
     setSelectedIds(prev => prev.filter(id => {
       const tpl = templates.find(x => x._id === id)
-      return !tpl || missingVarsFor(tpl.text).length === 0
+      return tpl && missingVarsFor(tpl.text).length === 0
     }))
   }, [templates, missingVarsFor])
 

@@ -487,6 +487,59 @@ const MessageBubble = memo(function _MessageBubble({ msg, onReply }) {
   )
 })
 
+function ThreadSkeleton() {
+  const BUBBLES = [
+    { align: 'flex-start', w: '68%', h: 52 },
+    { align: 'flex-end',   w: '42%', h: 38 },
+    { align: 'flex-start', w: '80%', h: 72 },
+    { align: 'flex-end',   w: '55%', h: 44 },
+    { align: 'flex-start', w: '44%', h: 36 },
+    { align: 'flex-end',   w: '72%', h: 60 },
+    { align: 'flex-end',   w: '35%', h: 36 },
+    { align: 'center',     w: '26%', h: 20, isDivider: true },
+    { align: 'flex-start', w: '62%', h: 56 },
+    { align: 'flex-end',   w: '48%', h: 40 },
+    { align: 'flex-start', w: '76%', h: 80 },
+    { align: 'flex-end',   w: '38%', h: 36 },
+    { align: 'flex-start', w: '58%', h: 44 },
+    { align: 'flex-end',   w: '65%', h: 64 },
+    { align: 'flex-start', w: '50%', h: 36 },
+    { align: 'flex-end',   w: '30%', h: 36 },
+  ]
+
+  // All bubbles share the same phase — one calm, unified breath, no strobing
+  return (
+    <Box sx={{
+      display: 'flex', flexDirection: 'column', gap: 1.4, px: 2, pt: 2.5, pb: 5,
+      '@keyframes skelBreathe': {
+        '0%,100%': { opacity: 0.45 },
+        '50%':     { opacity: 0.75 },
+      },
+      animation: 'skelBreathe 2.8s ease-in-out infinite',
+    }}>
+      {BUBBLES.map((b, i) => {
+        if (b.isDivider) {
+          return (
+            <Box key={i} sx={{
+              alignSelf: 'center', width: b.w, height: b.h,
+              borderRadius: 99, bgcolor: 'rgba(255,255,255,0.08)',
+              mt: 0.5, mb: 0.5,
+            }} />
+          )
+        }
+        const isEnd = b.align === 'flex-end'
+        return (
+          <Box key={i} sx={{
+            alignSelf: b.align, width: b.w, maxWidth: '74%', height: b.h,
+            borderRadius: isEnd ? '14px 14px 3px 14px' : '14px 14px 14px 3px',
+            bgcolor: isEnd ? 'rgba(var(--accent-rgb,99,102,241),0.18)' : 'rgba(255,255,255,0.08)',
+          }} />
+        )
+      })}
+    </Box>
+  )
+}
+
 export default function Conversations() {
   const [convs, setConvs]           = useState([])
   const [loading, setLoading]       = useState(true)
@@ -576,12 +629,13 @@ export default function Conversations() {
   const fetchConvs = useCallback(async () => {
     try {
       const res = await authFetch('/api/conversations')
+      if (!res.ok) return
       const data = await res.json()
       const list = Array.isArray(data) ? data : []
       setConvs(list)
       setSelected(prev => prev && list.find(c => c.company_id === prev.company_id) ? prev : null)
     } catch {
-      setConvs([])
+      // Network error — keep existing convs visible
     } finally {
       setLoading(false)
     }
@@ -767,6 +821,7 @@ export default function Conversations() {
     if (selected) {
       threadLenRef.current = 0
       setThread([])
+      setWaNumbers([])    // clear old company's number tabs immediately
       setActiveNum('all')
       fetchThread(selected.company_id, true)
       fetchCompanyNumbers(selected.company_id)
@@ -1168,9 +1223,7 @@ export default function Conversations() {
               '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 },
             }}>
               {threadLoad ? (
-                <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4 }}>
-                  <CircularProgress size={24} sx={{ color: 'var(--accent, #6366f1)' }} />
-                </Box>
+                <ThreadSkeleton />
               ) : waNumbers.length > 1 && (!activeNum || activeNum === 'all') ? (
                 <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', px: 3 }}>
                   <Box sx={{ textAlign: 'center', px: 4, py: 3, borderRadius: 3,
@@ -1192,7 +1245,10 @@ export default function Conversations() {
                   <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.8rem' }}>{lang === 'en' ? 'No messages' : 'Sin mensajes'}</Typography>
                 </Box>
               ) : (
-                <>
+                <Box key={selected?.company_id} sx={{
+                  '@keyframes threadAppear': { from: { opacity: 0, transform: 'translateY(6px)' }, to: { opacity: 1, transform: 'translateY(0)' } },
+                  animation: 'threadAppear 0.18s ease',
+                }}>
                   {(() => {
                     let lastDay = null
                     return visibleThread.map(m => {
@@ -1224,7 +1280,7 @@ export default function Conversations() {
                       </Box>
                     </Box>
                   )}
-                </>
+                </Box>
               )}
             </Box>
 

@@ -674,7 +674,7 @@ def api_instances_daily_stats(x_user_token: Optional[str] = Header(None)):
 
     total_sent            = sum(r["sent_today"] for r in rows)
     scheduled_today       = get_scheduled_count_today(db)
-    total_cap             = sum(r["cap"] for r in rows) or DAILY_CAP
+    total_cap             = sum(r["cap"] for r in rows) if rows else 0
     total_available       = max(0, total_cap - total_sent - scheduled_today)
     new_contacts_today    = sum(r["new_contacts_today"] for r in rows)
     new_contacts_capacity = sum(r["new_contacts_left"] for r in rows)
@@ -3959,10 +3959,11 @@ async def api_analytics_stream():
 def api_get_analytics(
     page:      int = Query(1,  ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    category:  str | None = Query(None),
 ):
     try:
         db = MongoDBManager()
-        return serialize(db.get_analytics(page=page, page_size=page_size))
+        return serialize(db.get_analytics(page=page, page_size=page_size, category=category))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

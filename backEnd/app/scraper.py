@@ -1222,11 +1222,16 @@ class WebsiteScraper:
                 if not raw:
                     continue
                 data = _json.loads(raw)
-                items = data if isinstance(data, list) else [data]
+                top = data if isinstance(data, list) else [data]
+                # Flatten @graph wrappers — rebinding the loop var mid-iteration
+                # has no effect on the active iterator, so we collect first.
+                items = []
+                for node in top:
+                    if "@graph" in node:
+                        items.extend(node["@graph"])
+                    else:
+                        items.append(node)
                 for item in items:
-                    # Buscar recursivamente en @graph si existe
-                    if "@graph" in item:
-                        items = item["@graph"]
                     t = item.get("@type", "")
                     types_here = t if isinstance(t, list) else [t]
                     if not any(x in _TYPES for x in types_here):

@@ -286,23 +286,24 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
     let cancelled = false
     authFetch('/api/admin/companies-with-numbers')
       .then(r => r.json())
-      .then(async (d) => {
+      .then(d => {
         const list = Array.isArray(d) ? d : []
         if (cancelled) return
         setCompanies(list)
+        setLoadingCo(false)  // unblock UI immediately — don't wait for check-contacted
         if (!list.length) return
-        // Overlay "already contacted" status — best-effort, never blocks the picker
-        // from rendering if this second call fails or is slow.
-        try {
-          const cRes = await authFetch('/api/companies/check-contacted', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ company_ids: list.map(c => c._id) }),
+        // Overlay "already contacted" status — fire-and-forget, never blocks the spinner
+        authFetch('/api/companies/check-contacted', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ company_ids: list.map(c => c._id) }),
+        })
+          .then(r => r.json())
+          .then(contactedMap => {
+            if (!cancelled) setCompanies(list.map(c => ({ ...c, contacted: !!contactedMap[c._id]?.contacted })))
           })
-          const contactedMap = await cRes.json()
-          if (!cancelled) setCompanies(list.map(c => ({ ...c, contacted: !!contactedMap[c._id]?.contacted })))
-        } catch { /* badge just stays hidden */ }
+          .catch(() => {})
       })
-      .catch(() => {}).finally(() => { if (!cancelled) setLoadingCo(false) })
+      .catch(() => { if (!cancelled) setLoadingCo(false) })
     return () => { cancelled = true }
   }, [])
 

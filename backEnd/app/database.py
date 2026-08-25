@@ -765,7 +765,7 @@ class MongoDBManager:
             {"$set": {"analysis": analysis, "analysis_status": "done"}},
         )
 
-    def get_analytics(self, page: int = 1, page_size: int = 20):
+    def get_analytics(self, page: int = 1, page_size: int = 20, category: str | None = None):
         """Aggregate response analysis data per company for the dashboard."""
         # Companies with at least one analyzed inbound
         inbound_groups = {
@@ -1072,12 +1072,37 @@ class MongoDBManager:
                 "numbers": numbers,
                 "analyzing": analyzing,
             })
+        # Compute global category distribution from ALL results before any filtering.
+        # Replicates frontend matchesCategory: "menu" normalizes to "bot", and
+        # bot/bot_ia split is determined by the is_ai flag (not the category field).
+        from collections import Counter
+        def _eff_cat(r):
+            rc = r.get("category")
+            nc = "bot" if rc == "menu" else rc
+            if nc == "bot":
+                return "bot_ia" if r.get("is_ai") else "bot"
+            return nc if nc is not None else "sin_clasificar"
+        cat_counts = Counter(_eff_cat(r) for r in results)
+        category_counts = {
+            "humano":         cat_counts.get("humano", 0),
+            "automatico":     cat_counts.get("automatico", 0),
+            "hibrido":        cat_counts.get("hibrido", 0),
+            "bot":            cat_counts.get("bot", 0),
+            "bot_ia":         cat_counts.get("bot_ia", 0),
+            "sin_respuesta":  cat_counts.get("sin_respuesta", 0),
+            "sin_clasificar": cat_counts.get("sin_clasificar", 0),
+            "total":          len(results),
+        }
+        # Apply server-side category filter after computing global counts
+        if category and category != "all":
+            results = [r for r in results if _eff_cat(r) == category]
         total = len(results)
         start = (page - 1) * page_size
         return {
-            "total":     total,
-            "page":      page,
-            "page_size": page_size,
-            "pages":     (total + page_size - 1) // page_size,
-            "items":     results[start: start + page_size],
+            "total":           total,
+            "page":            page,
+            "page_size":       page_size,
+            "pages":           (total + page_size - 1) // page_size,
+            "items":           results[start: start + page_size],
+            "category_counts": category_counts,
         }

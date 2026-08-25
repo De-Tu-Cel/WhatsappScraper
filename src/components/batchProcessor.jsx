@@ -354,8 +354,8 @@ export default function BatchProcessor() {
   // one base message stops making sense there, so it switches to picking 3+ saved templates.
   const isBulk = totalNumbers > 1
   const allVariants = useMemo(
-    () => (isBulk ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean),
-    [isBulk, msgText, extraVariants]
+    () => (extraVariants.length > 0 ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean),
+    [msgText, extraVariants]
   )
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
@@ -836,11 +836,9 @@ export default function BatchProcessor() {
             </Typography>
           </Box>
           </>}
-          {isBulk && (
-            <Box sx={{ mt: 1.5, mb: 0.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
-              <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalNumbers} baseCount={0} />
-            </Box>
-          )}
+          <Box sx={{ mt: 1.5, mb: 0.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
+            <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalNumbers} baseCount={0} />
+          </Box>
           {/* Send config */}
           <Box sx={{ mb: 1 }}>
             <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />

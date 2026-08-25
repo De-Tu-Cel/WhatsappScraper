@@ -1670,17 +1670,23 @@ export default function DatabaseViewer({ isActive }) {
                         />
                       </TableCell>
                       <TableCell onClick={() => handleSelectRow(row._id)}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.9 }}>
-                          <Box sx={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-                            bgcolor: row.contacted ? '#4ade80' : 'rgba(255,255,255,0.1)',
-                            boxShadow: row.contacted ? '0 0 5px rgba(74,222,128,0.55)' : 'none',
-                            transition: 'all 0.2s',
-                          }} />
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7 }}>
                           <Tooltip title={row.name || '—'} placement="top" disableHoverListener={!row.name || row.name.length <= 28}>
                             <Typography sx={{ fontSize: '0.82rem', fontWeight: 500, color: 'white' }}>
                               {truncate(row.name, 28) || '—'}
                             </Typography>
                           </Tooltip>
+                          {row.contacted && (
+                            <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.3, flexShrink: 0,
+                              bgcolor: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.3)',
+                              borderRadius: 1, px: 0.6, py: 0.15 }}>
+                              <Box component="span" sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: '#4ade80', flexShrink: 0 }} />
+                              <Typography sx={{ fontSize: '0.6rem', color: '#4ade80', fontWeight: 700, whiteSpace: 'nowrap',
+                                '[data-theme-mode="light"] &': { color: '#16a34a' } }}>
+                                {t.campaign?.contacted || 'Contactada'}
+                              </Typography>
+                            </Box>
+                          )}
                         </Box>
                       </TableCell>
                       <TableCell onClick={() => handleSelectRow(row._id)}>
@@ -1743,7 +1749,7 @@ export default function DatabaseViewer({ isActive }) {
                             <VisibilityIcon sx={{ fontSize: 15 }} />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip title={row.has_whatsapp ? t.db.sendMsg : t.db.noWaReg}>
+                        <Tooltip title={row.has_whatsapp ? (row.contacted ? (t.campaign?.contacted || 'Ya contactada') + ' — ' + t.db.sendMsg : t.db.sendMsg) : t.db.noWaReg}>
                           <span>
                             <IconButton size="small" disabled={!row.has_whatsapp} onClick={(e) => { e.stopPropagation(); handleOpenMsg(row) }}
                               sx={{

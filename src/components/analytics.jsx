@@ -257,15 +257,24 @@ export default function Analytics() {
   // ── SWR: caching + background revalidation ────────────────────────────────
   const [page, setPage] = useState(1)
   const PAGE_SIZE = 20
+  const [filterCat, setFilterCat] = useState('all')
+  const [searchText, setSearchText] = useState('')
   const _swrFetcher = url => fetch(url).then(r => r.json())
+  const _swrKey = filterCat !== 'all'
+    ? `/api/analytics?page=${page}&page_size=${PAGE_SIZE}&category=${filterCat}`
+    : `/api/analytics?page=${page}&page_size=${PAGE_SIZE}`
   const { data: _analyticsData, isLoading: loading, mutate: mutateAnalytics } = useSWR(
-    `/api/analytics?page=${page}&page_size=${PAGE_SIZE}`,
+    _swrKey,
     _swrFetcher,
     { revalidateOnFocus: false, dedupingInterval: 5000, keepPreviousData: true }
   )
-  const data      = _analyticsData?.items      || []
-  const totalPages = _analyticsData?.pages     || 1
-  const totalItems = _analyticsData?.total     || 0
+  const data           = _analyticsData?.items           || []
+  const totalPages     = _analyticsData?.pages           || 1
+  const totalItems     = _analyticsData?.total           || 0
+  // Persist last known counts so filter chips never flicker to 0 while a new page/filter loads
+  const _ccRef = useRef({})
+  if (_analyticsData?.category_counts) _ccRef.current = _analyticsData.category_counts
+  const categoryCounts = _ccRef.current
   const [generating, setGenerating]         = useState(null)
   const [reportThread, setReportThread]     = useState([])
   const [captureVisible, setCaptureVisible] = useState(false)
@@ -283,8 +292,6 @@ export default function Analytics() {
   const [snack, setSnack] = useState({ open: false, message: '', severity: 'error' })
   const notify = (message, severity = 'error') => setSnack({ open: true, message, severity })
   const [sortField, setSortField] = useState('last_at')
-  const [filterCat, setFilterCat] = useState('all')
-  const [searchText, setSearchText] = useState('')
   const [sortDir, setSortDir]     = useState('desc')
   const [botBuilderOpen,  setBotBuilderOpen]  = useState(false)
   const [botBuilderRow,   setBotBuilderRow]   = useState(null)
@@ -487,11 +494,7 @@ export default function Analytics() {
   }
 
   const filteredData = data.filter(row => {
-    if (filterCat !== 'all') {
-      if (filterCat === 'sin_clasificar') {
-        if (row.category && row.category !== 'sin_clasificar') return false
-      } else if (!matchesCategory(row, filterCat)) return false
-    }
+    // filterCat is now server-side — backend returns only matching items
     if (searchText.trim()) {
       const q = searchText.toLowerCase()
       if (!(row.company_name || '').toLowerCase().includes(q) &&
@@ -510,15 +513,15 @@ export default function Analytics() {
     return 0
   })
 
-  const total       = data.length
-  const pct = cat  => total ? Math.round((data.filter(d => matchesCategory(d, cat)).length / total) * 100) : 0
+  const globalTotal = categoryCounts.total || 0
+  const pct = cat  => globalTotal ? Math.round(((categoryCounts[cat] || 0) / globalTotal) * 100) : 0
   const humanPct   = pct('humano')
   const autoPct    = pct('automatico')
   const hibridoPct = pct('hibrido')
   const botPct     = pct('bot')
   const botIaPct   = pct('bot_ia')
-  const avgQuality = total
-    ? (data.reduce((acc, d) => acc + (d.response_quality || 0), 0) / total).toFixed(1)
+  const avgQuality = data.length
+    ? (data.reduce((acc, d) => acc + (d.response_quality || 0), 0) / data.length).toFixed(1)
     : '—'
 
   const { t } = useLang()
@@ -598,7 +601,7 @@ export default function Analytics() {
         }}>
           <StarIcon sx={{ fontSize: 15, color: 'var(--text-muted)' }} />
           <Typography sx={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{t.analytics.total}:</Typography>
-          <Typography sx={{ fontSize: '0.85rem', color: 'var(--text)', fontWeight: 700 }}>{total}</Typography>
+          <Typography sx={{ fontSize: '0.85rem', color: 'var(--text)', fontWeight: 700 }}>{globalTotal}</Typography>
         </Box>
 
         <Box sx={{
@@ -659,9 +662,9 @@ export default function Analytics() {
           { value: 'sin_clasificar',icon: HourglassEmptyIcon, label: t.analytics.noClass, color: '#94a3b8',              bg: 'rgba(148,163,184,0.08)'  },
         ].map(f => {
           const isActive = filterCat === f.value
-          const count    = f.value === 'all' ? data.length
-                         : f.value === 'sin_clasificar' ? data.filter(d => !d.category || d.category === 'sin_clasificar').length
-                         : data.filter(d => matchesCategory(d, f.value)).length
+          const count    = f.value === 'all' ? (categoryCounts.total || 0)
+                         : f.value === 'sin_clasificar' ? (categoryCounts.sin_clasificar || 0)
+                         : (categoryCounts[f.value] || 0)
           const Icon = f.icon
           return (
             <Box key={f.value} onClick={() => { setFilterCat(f.value); setPage(1) }} sx={{

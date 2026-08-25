@@ -169,7 +169,7 @@ def get_capacity_for_date(db, user_id: str, target_date, exclude_id=None) -> dic
     (which instance a not-yet-contacted company will use is only resolved at send
     time), so this is a combined total, not per-instance rows like get_daily_count."""
     instances = list(db.db.instances.find({"assigned_to": user_id})) if user_id else []
-    total_cap = sum(get_instance_cap(db, i["name"]) for i in instances) or DAILY_CAP
+    total_cap = sum(get_instance_cap(db, i["name"]) for i in instances) if instances else 0
     scheduled_that_day = get_scheduled_count_for_date(db, target_date, exclude_id)
     # For today, also subtract messages already sent so the estimate reflects
     # real remaining capacity, not just the scheduled-sends portion of the quota.

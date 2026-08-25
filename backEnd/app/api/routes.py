@@ -3808,6 +3808,22 @@ async def api_wwebjs_webhook(request: Request):
         )
         print(f"[wwebjs Webhook] inbound saved log_id={log_id} company={company_id} from={number}")
 
+        if message_body and log_id and company_id not in ("unknown", "manual"):
+            from app.llm import active_provider as _wwebjs_cls_provider
+            if _wwebjs_cls_provider() != "none":
+                import threading as _wwebjs_t
+                from app.classifier import classify_and_save as _wwebjs_classify
+                _ts = data.get("timestamp")
+                _received_at = (
+                    datetime.fromtimestamp(int(_ts), tz=timezone.utc).replace(tzinfo=None)
+                    if _ts else datetime.now(timezone.utc).replace(tzinfo=None)
+                )
+                _wwebjs_t.Thread(
+                    target=_wwebjs_classify,
+                    args=(log_id, str(company_id), message_body, _received_at),
+                    daemon=True,
+                ).start()
+
         # Block AI for contacts auto-registered from inbound with no outbound history
         _is_pure_inbound = False
         if company_id not in ("unknown", "manual"):

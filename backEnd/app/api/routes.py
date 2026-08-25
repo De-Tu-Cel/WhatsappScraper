@@ -4092,39 +4092,30 @@ _DEFAULT_TEMPLATES = {
 }
 
 
-def _seed_default_message_templates(db, lang: str = "es"):
+def _seed_default_message_templates(db, username: str, display_name: str = "", lang: str = "es"):
     from datetime import datetime
     now = datetime.now()
     templates = _DEFAULT_TEMPLATES.get(lang, _DEFAULT_TEMPLATES["es"])
     db.db.message_templates.insert_many([
-        {**tpl, "created_at": now, "created_by_username": "", "created_by_name": ""}
+        {**tpl, "created_at": now, "created_by_username": username, "created_by_name": display_name}
         for tpl in templates
     ])
 
 
-def _all_are_unmodified_defaults(docs: list) -> bool:
-    """True if every doc in the collection exactly matches one of the default
-    templates in any language — meaning the user hasn't edited them yet."""
-    all_default_texts = {tpl["text"] for lang_tpls in _DEFAULT_TEMPLATES.values() for tpl in lang_tpls}
-    return all(doc.get("text", "") in all_default_texts for doc in docs)
-
-
 @router.get("/admin/message-templates")
 def api_list_message_templates(lang: str = "es", x_user_token: Optional[str] = Header(None)):
-    _require_user(x_user_token)
+    user = _require_user(x_user_token)
+    username = user.get("username", "")
     try:
         db = MongoDBManager()
-        docs = list(db.db.message_templates.find({}, sort=[("created_at", -1)]))
+        docs = list(db.db.message_templates.find(
+            {"created_by_username": username}, sort=[("created_at", -1)]
+        ))
         if not docs:
-            _seed_default_message_templates(db, lang)
-            docs = list(db.db.message_templates.find({}, sort=[("created_at", -1)]))
-        elif _all_are_unmodified_defaults(docs):
-            current_default_texts = {tpl["text"] for tpl in _DEFAULT_TEMPLATES.get(lang, _DEFAULT_TEMPLATES["es"])}
-            already_correct = all(doc.get("text", "") in current_default_texts for doc in docs)
-            if not already_correct:
-                db.db.message_templates.delete_many({})
-                _seed_default_message_templates(db, lang)
-                docs = list(db.db.message_templates.find({}, sort=[("created_at", -1)]))
+            _seed_default_message_templates(db, username, user.get("display_name", ""), lang)
+            docs = list(db.db.message_templates.find(
+                {"created_by_username": username}, sort=[("created_at", -1)]
+            ))
         return serialize(docs)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -4162,7 +4153,7 @@ def api_create_message_template(body: dict, x_user_token: Optional[str] = Header
 
 @router.put("/admin/message-templates/{template_id}")
 def api_update_message_template(template_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
-    _require_user(x_user_token)
+    user = _require_user(x_user_token)
     try:
         from bson import ObjectId
         from datetime import datetime
@@ -4171,6 +4162,8 @@ def api_update_message_template(template_id: str, body: dict, x_user_token: Opti
         doc = db.db.message_templates.find_one({"_id": ObjectId(template_id)})
         if not doc:
             raise HTTPException(status_code=404, detail="Plantilla no encontrada")
+        if doc.get("created_by_username") != user.get("username", ""):
+            raise HTTPException(status_code=403, detail="No tienes permiso para editar esta plantilla")
 
         update: dict = {}
         if "name" in body:
@@ -4198,13 +4191,16 @@ def api_update_message_template(template_id: str, body: dict, x_user_token: Opti
 
 @router.delete("/admin/message-templates/{template_id}")
 def api_delete_message_template(template_id: str, x_user_token: Optional[str] = Header(None)):
-    _require_user(x_user_token)
+    user = _require_user(x_user_token)
     try:
         from bson import ObjectId
         db = MongoDBManager()
-        result = db.db.message_templates.delete_one({"_id": ObjectId(template_id)})
-        if result.deleted_count == 0:
+        doc = db.db.message_templates.find_one({"_id": ObjectId(template_id)}, {"created_by_username": 1})
+        if not doc:
             raise HTTPException(status_code=404, detail="Plantilla no encontrada")
+        if doc.get("created_by_username") != user.get("username", ""):
+            raise HTTPException(status_code=403, detail="No tienes permiso para eliminar esta plantilla")
+        db.db.message_templates.delete_one({"_id": ObjectId(template_id)})
         return {"ok": True}
     except HTTPException:
         raise

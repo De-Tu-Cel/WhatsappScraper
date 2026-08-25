@@ -4062,31 +4062,70 @@ def api_cleanup_contacts():
 
 _DEFAULT_TEMPLATES = {
     "es": [
+        # — Primer contacto —
         {
-            "name": "Industria + ciudad",
+            "name": "Primer contacto — industria + ciudad",
             "text": "Hola 👋 vi su negocio de {{industria}} en {{ciudad}} y quería preguntar si tienen disponibilidad esta semana. ¿Me pueden compartir información?",
         },
         {
-            "name": "Con giro del negocio",
+            "name": "Primer contacto — giro del negocio",
             "text": "Buenas, encontré su página de {{industria}} y me interesa cotizar el servicio. ¿Podrían darme más información?",
         },
         {
-            "name": "Solo con nombre",
+            "name": "Primer contacto — recomendación",
             "text": "Hola, me recomendaron su negocio de {{industria}} en {{ciudad}} 🙌 ¿Siguen atendiendo? Quisiera saber precios.",
+        },
+        {
+            "name": "Primer contacto — directo al precio",
+            "text": "Hola, ¿cuánto cobran por el servicio de {{industria}}? Estoy en {{ciudad}} y me interesa cotizar.",
+        },
+        {
+            "name": "Primer contacto — tono formal",
+            "text": "Buenos días, me comunico con ustedes para solicitar información sobre sus servicios de {{industria}}. Quedamos en espera de su respuesta. Saludos.",
+        },
+        # — Seguimiento —
+        {
+            "name": "Seguimiento — sin respuesta",
+            "text": "Hola, le escribí hace unos días sobre {{industria}} en {{ciudad}}. ¿Tuvieron oportunidad de revisar mi mensaje? 😊",
+        },
+        {
+            "name": "Seguimiento — segundo intento",
+            "text": "Buenas tardes, intento contactarlos nuevamente. ¿Siguen ofreciendo el servicio de {{industria}}? Quedo pendiente.",
+        },
+        # — Interés específico —
+        {
+            "name": "Solicitud de catálogo",
+            "text": "Hola 👋 ¿Podrían compartirme su catálogo o lista de precios de {{industria}}? Estoy comparando opciones en {{ciudad}}. Gracias.",
+        },
+        {
+            "name": "Horario y disponibilidad",
+            "text": "Hola, ¿cuál es su horario de atención? Quiero pasar a {{ciudad}} a conocer sus servicios de {{industria}}.",
+        },
+        {
+            "name": "Pedido urgente",
+            "text": "Buenas, necesito con urgencia el servicio de {{industria}} en {{ciudad}}. ¿Tienen disponibilidad hoy o mañana?",
         },
     ],
     "en": [
         {
-            "name": "Industry + city",
+            "name": "First contact — industry + city",
             "text": "Hi 👋 I saw your {{industria}} business in {{ciudad}} — do you have availability this week? Could you share more info?",
         },
         {
-            "name": "With business type",
+            "name": "First contact — business type",
             "text": "Hello, I found your {{industria}} page and I'm interested in a quote. Could you send me more details?",
         },
         {
-            "name": "Name only",
+            "name": "First contact — referral",
             "text": "Hi, someone recommended your {{industria}} business in {{ciudad}} 🙌 Are you still taking clients? I'd like to know pricing.",
+        },
+        {
+            "name": "Follow-up — no reply",
+            "text": "Hi, I reached out a few days ago about your {{industria}} services in {{ciudad}}. Did you get a chance to see my message? 😊",
+        },
+        {
+            "name": "Price inquiry",
+            "text": "Hello, could you share your pricing for {{industria}}? I'm based in {{ciudad}} and comparing options.",
         },
     ],
 }

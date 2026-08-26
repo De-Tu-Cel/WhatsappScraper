@@ -560,9 +560,10 @@ export default function SearchProspects() {
     [...extraSelected].filter(key => effectiveWaSelected.has(key.split('::')[0])).length
   const overBy     = getOverBy(capStats, totalContactPoints)
   const capBlocked = overBy > 0
-  // Sending to 2+ numbers needs varied text (see MIN_TEMPLATES_FOR_BULK) — editing
-  // one base message stops making sense there, so it switches to picking 3+ saved templates.
-  const isBulk = totalRecipients > 1
+  // Sending to 2+ contact points needs varied text (see MIN_TEMPLATES_FOR_BULK).
+  // Uses totalContactPoints (not totalRecipients) so selecting multiple numbers
+  // of a single company also triggers the template-library mode.
+  const isBulk = totalContactPoints > 1
   // En bulk, el mensaje base deja de usarse — solo se envían las plantillas
   // marcadas en la Biblioteca, para que lo enviado sea exactamente lo seleccionado.
   const allVariants = useMemo(

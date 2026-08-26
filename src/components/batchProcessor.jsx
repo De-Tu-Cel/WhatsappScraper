@@ -376,9 +376,10 @@ export default function BatchProcessor() {
     [...extraSelected].filter(key => effectiveWaSelected.has(key.split('::')[0])).length
   const overBy      = getOverBy(capStats, totalContactPoints)
   const capBlocked  = overBy > 0
-  // Sending to 2+ numbers needs varied text (see MIN_TEMPLATES_FOR_BULK) — editing
-  // one base message stops making sense there, so it switches to picking 3+ saved templates.
-  const isBulk = totalNumbers > 1
+  // Sending to 2+ contact points needs varied text (see MIN_TEMPLATES_FOR_BULK).
+  // Uses totalContactPoints so selecting multiple numbers of a single company
+  // also triggers the template-library mode.
+  const isBulk = totalContactPoints > 1
   const allVariants = useMemo(
     () => (extraVariants.length > 0 ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean),
     [msgText, extraVariants]

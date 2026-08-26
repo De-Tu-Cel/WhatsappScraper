@@ -310,7 +310,7 @@ def _get_domain(url: str) -> str:
 
 MAJOR_CITIES = [
     # Las 32 capitales estatales — garantiza cobertura de cada estado de la república
-    "Ciudad de México", "Mexicali", "La Paz", "Campeche", "Saltillo",
+    "Aguascalientes", "Ciudad de México", "Mexicali", "La Paz", "Campeche", "Saltillo",
     "Colima", "Tuxtla Gutiérrez", "Chihuahua", "Durango", "Guanajuato",
     "Chilpancingo", "Pachuca", "Guadalajara", "Toluca", "Morelia",
     "Cuernavaca", "Tepic", "Monterrey", "Oaxaca", "Puebla",
@@ -551,8 +551,46 @@ _CITY_EXONYMS = {
 }
 
 
+# Mapa estado mexicano → capital, para que "gaseras en jalisco" se resuelva
+# a city="Guadalajara" + country="México" en lugar de pasar como industry completo.
+_MX_STATE_TO_CAPITAL: dict[str, str] = {
+    "aguascalientes":      "Aguascalientes",
+    "baja california":     "Mexicali",
+    "baja california sur": "La Paz",
+    "campeche":            "Campeche",
+    "chiapas":             "Tuxtla Gutiérrez",
+    "chihuahua":           "Chihuahua",
+    "coahuila":            "Saltillo",
+    "colima":              "Colima",
+    "cdmx":                "Ciudad de México",
+    "durango":             "Durango",
+    "guanajuato":          "Guanajuato",
+    "guerrero":            "Chilpancingo",
+    "hidalgo":             "Pachuca",
+    "jalisco":             "Guadalajara",
+    "estado de mexico":    "Toluca",
+    "michoacan":           "Morelia",
+    "morelos":             "Cuernavaca",
+    "nayarit":             "Tepic",
+    "nuevo leon":          "Monterrey",
+    "oaxaca":              "Oaxaca",
+    "puebla":              "Puebla",
+    "queretaro":           "Querétaro",
+    "quintana roo":        "Chetumal",
+    "san luis potosi":     "San Luis Potosí",
+    "sinaloa":             "Culiacán",
+    "sonora":              "Hermosillo",
+    "tabasco":             "Villahermosa",
+    "tamaulipas":          "Ciudad Victoria",
+    "tlaxcala":            "Tlaxcala",
+    "veracruz":            "Xalapa",
+    "yucatan":             "Mérida",
+    "zacatecas":           "Zacatecas",
+}
+
+
 def _build_city_index() -> dict:
-    """city (normalized, accent/case-insensitive) -> (canonical city name, country)."""
+    """city/state (normalized, accent/case-insensitive) -> (canonical city name, country)."""
     idx: dict = {}
     for country_name, cfg in COUNTRY_CONFIG.items():
         for city in cfg.get("cities", []):
@@ -561,6 +599,11 @@ def _build_city_index() -> dict:
         hit = idx.get(_norm_loc(canonical))
         if hit:
             idx[exonym] = hit
+    # Add Mexican state names → their capitals so "gaseras en jalisco" resolves
+    # to city="Guadalajara" instead of passing the whole phrase as industry.
+    for state_norm, capital in _MX_STATE_TO_CAPITAL.items():
+        if _norm_loc(state_norm) not in idx:  # city name takes priority if it matches
+            idx[_norm_loc(state_norm)] = (capital, "México")
     return idx
 
 

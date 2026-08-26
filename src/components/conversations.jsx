@@ -39,6 +39,7 @@ import Popover from '@mui/material/Popover'
 import EmojiEmotionsIcon from '@mui/icons-material/EmojiEmotions'
 import TuneIcon from '@mui/icons-material/Tune'
 import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined'
+import { getCategoryConfig } from '@/lib/categoryConfig'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner, InstanceStatusDot } from './InstanceStatusBanner'
 import ChatAIConfig from './ChatAIConfig'
@@ -247,17 +248,16 @@ const ConversationItem = memo(function _ConversationItem({ conv, active, onClick
               </Tooltip>
             )}
             {conv.last_analysis?.category && (() => {
-              const cat = conv.last_analysis.category
-              const isAI = cat === 'bot' && conv.last_analysis?.is_ai
-              const cfg = isAI
-                ? { label: '🧠', color: '#c084fc' }
-                : ({ humano: { label: '👤', color: '#4ade80' }, automatico: { label: '⚡', color: '#facc15' }, bot: { label: '🤖', color: '#a78bfa' } }[cat] || { label: '?', color: 'rgba(255,255,255,0.3)' })
+              const cfg = getCategoryConfig(conv.last_analysis)
+              const Icon = cfg.icon
               return (
-                <Chip
-                  label={cfg.label}
-                  size="small"
-                  sx={{ height: 16, fontSize: '0.6rem', bgcolor: 'transparent', color: cfg.color, border: `1px solid ${cfg.color}44`, px: 0.3, ml: 0.5, flexShrink: 0 }}
-                />
+                <Box sx={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  width: 16, height: 16, borderRadius: '50%', flexShrink: 0, ml: 0.5,
+                  border: `1px solid ${cfg.color}44`, bgcolor: cfg.bg,
+                }}>
+                  <Icon sx={{ fontSize: 11, color: cfg.color }} />
+                </Box>
               )
             })()}
           </Box>

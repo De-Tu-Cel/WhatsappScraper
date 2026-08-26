@@ -21,8 +21,9 @@ log = logging.getLogger(__name__)
 _POLL_INTERVAL_SEC = 15   # scraping is interactive (user is watching a progress bar) —
                           # kept short; the real "feels instant" part is the direct
                           # dispatch nudge in create_scrape_job(), not this tick.
-_STALE_AFTER_SEC    = 120  # no progress in 2min while "running" → assume the worker
-                          # thread died and let another tick reclaim the job.
+_STALE_AFTER_SEC    = 600  # A single slow URL (JS/SPA with 25 route probes) can take
+                          # 3-5 min. 10-min threshold avoids false-stale reclaims that
+                          # spawn a duplicate worker and cause double-scraping.
 _CONCURRENCY        = 4    # matches the CONCURRENCY the frontend loops used to hardcode.
 
 
@@ -70,6 +71,24 @@ def _run_scrape_job(job_id: str):
 
     db = MongoDBManager()
     oid = ObjectId(job_id)
+
+    # Heartbeat thread: keeps last_progress_at fresh even when a single slow URL
+    # (e.g. a JS/SPA with 25 route probes) stalls the as_completed loop for minutes.
+    # Without this, _sweep_stale_jobs would see a stale timestamp and spawn a second
+    # worker for the same job, causing duplicate scraping and progress-bar oscillation.
+    _hb_stop = threading.Event()
+    def _heartbeat():
+        while not _hb_stop.is_set():
+            try:
+                db.db.scrape_jobs.update_one(
+                    {"_id": oid, "status": "running"},
+                    {"$set": {"last_progress_at": datetime.now()}},
+                )
+            except Exception:
+                pass
+            _hb_stop.wait(timeout=30)
+    _hb_thread = threading.Thread(target=_heartbeat, daemon=True, name=f"scrape-hb-{job_id}")
+    _hb_thread.start()
 
     try:
         job = db.db.scrape_jobs.find_one({"_id": oid})
@@ -185,6 +204,9 @@ def _run_scrape_job(job_id: str):
             )
         except Exception:
             pass
+    finally:
+        _hb_stop.set()
+        _hb_thread.join(timeout=2)
 
 
 def _claim_and_dispatch():
@@ -221,8 +243,10 @@ def _sweep_stale_jobs():
     try:
         db = MongoDBManager()
         cutoff = datetime.now() - timedelta(seconds=_STALE_AFTER_SEC)
+        # Exclude paused jobs — they legitimately make no progress while sleeping.
+        # A failed heartbeat on a paused job must not trigger a duplicate worker.
         result = db.db.scrape_jobs.update_many(
-            {"status": "running", "last_progress_at": {"$lt": cutoff}},
+            {"status": "running", "paused": {"$ne": True}, "last_progress_at": {"$lt": cutoff}},
             {"$set": {"status": "pending"}, "$inc": {"recovered_count": 1}},
         )
         if result.modified_count:

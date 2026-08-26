@@ -333,11 +333,13 @@ export default function BatchProcessor() {
   // Los setState devuelven la MISMA referencia si ya estaban vacíos — evita que
   // este efecto re-dispare un render indefinidamente si `rows` llega a ser
   // referencialmente inestable entre renders (ver useScrapeJob.js EMPTY_RESULTS).
+  // Reset selections only when a NEW scrape job starts (job _id changes),
+  // not on every poll update — otherwise deselections get wiped every 3s.
   useEffect(() => {
     setWaDeselected(prev => prev.size ? new Set() : prev)
     setExtraSelected(prev => prev.size ? new Set() : prev)
     setExpandedCo(prev => prev.size ? new Set() : prev)
-  }, [rows])
+  }, [scrapeJob.job?._id])
   // Sent/failed rows auto-deselect so the user can send to new rows from resumed
   // scraping without having to manually uncheck the ones already processed.
   const effectiveWaSelected = useMemo(() =>

@@ -26,20 +26,20 @@ def _get_client() -> MongoClient:
         _mongo_client = MongoClient(
             MONGODB_URI,
             serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000,
+            # Sin esto, un socket ya establecido que se queda mudo (túnel SSH
+            # colgado, NAT que tira la conexión) bloquea el hilo de FastAPI
+            # indefinidamente sin levantar ninguna excepción — el request nunca
+            # falla del lado de Python, solo expira 20s después en el proxy de
+            # Next.js (backendFetch) sin dejar rastro en el log del backend.
+            socketTimeoutMS=8000,
             maxPoolSize=50,
             minPoolSize=2,
         )
         _mongo_client.admin.command("ping")
-    return _mongo_client
-
-
-class MongoDBManager:
-    def __init__(self):
-        self.client = _get_client()
-        self.db = self.client[DATABASE_NAME]
-        self.fs = GridFS(self.db)
+        db = _mongo_client[DATABASE_NAME]
         try:
-            self.db.companies.create_index("domain", unique=True, sparse=True)
+            db.companies.create_index("domain", unique=True, sparse=True)
         except Exception:
             pass  # duplicates exist — index will be created after cleanup
         try:
@@ -52,12 +52,20 @@ class MongoDBManager:
             # find-then-insert de save_evolution_log() antes de que la primera
             # termine de guardarse — duplicando el mensaje con clasificaciones
             # distintas y pudiendo encolar el seguimiento de IA dos veces.
-            self.db.message_logs.create_index(
+            db.message_logs.create_index(
                 "message_id", unique=True,
                 partialFilterExpression={"message_id": {"$type": "string"}},
             )
         except Exception:
             pass  # ya existen duplicados — el índice se creará tras limpiarlos
+    return _mongo_client
+
+
+class MongoDBManager:
+    def __init__(self):
+        self.client = _get_client()
+        self.db = self.client[DATABASE_NAME]
+        self.fs = GridFS(self.db)
 
     def get_classifier_settings(self) -> dict:
         """Umbrales configurables del flujo T1/T2 (Settings > Clasificación). Sin

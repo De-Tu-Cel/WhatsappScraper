@@ -150,6 +150,7 @@ export default function CsvImporter() {
   const [preview,    setPreview]    = useState([])
   const loading    = scrapeJob.processing
   const paused     = scrapeJob.paused
+  const pausing    = scrapeJob.pausing
   const done       = scrapeJob.done
   const progress   = scrapeJob.progress
   const completedCount = scrapeJob.processed
@@ -273,6 +274,7 @@ export default function CsvImporter() {
   }, [queueActive, refreshCapStats])
 
   function handlePause() {
+    if (pausing) return
     paused ? scrapeJob.resume() : scrapeJob.pause()
   }
 
@@ -520,15 +522,17 @@ export default function CsvImporter() {
               <Button
                 fullWidth
                 onClick={handlePause}
-                startIcon={paused ? <PlayArrowIcon /> : <PauseIcon />}
+                disabled={pausing}
+                startIcon={pausing ? <CircularProgress size={14} sx={{ color: '#fbbf24' }} /> : paused ? <PlayArrowIcon /> : <PauseIcon />}
                 sx={{
                   flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem',
                   color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)',
                   border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5,
                   '&:hover': { bgcolor: 'rgba(251,191,36,0.15)', borderColor: 'rgba(251,191,36,0.45)' },
+                  '&.Mui-disabled': { color: 'rgba(251,191,36,0.4)', bgcolor: 'rgba(251,191,36,0.04)', border: '1px solid rgba(251,191,36,0.12)' },
                 }}
               >
-                {paused ? t.csv.resume : t.csv.pause}
+                {paused ? t.csv.resume : pausing ? (lang === 'en' ? 'Pausing…' : 'Pausando…') : t.csv.pause}
               </Button>
               <Button
                 fullWidth

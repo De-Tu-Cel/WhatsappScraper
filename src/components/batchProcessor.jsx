@@ -717,8 +717,9 @@ export default function BatchProcessor() {
             )}
           </Box>
           <Box sx={{ display: 'flex', gap: 1.5 }}>
-            <Button fullWidth onClick={handlePause} disabled={pausing} startIcon={paused ? <PlayArrowIcon /> : <PauseIcon />}
-              sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' } }}>
+            <Button fullWidth onClick={handlePause} disabled={pausing}
+              startIcon={pausing ? <CircularProgress size={14} sx={{ color: '#fbbf24' }} /> : paused ? <PlayArrowIcon /> : <PauseIcon />}
+              sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' }, '&.Mui-disabled': { color: 'rgba(251,191,36,0.4)', bgcolor: 'rgba(251,191,36,0.04)', border: '1px solid rgba(251,191,36,0.12)' } }}>
               {paused ? t.batch.resume : pausing ? (lang === 'en' ? 'Pausing…' : 'Pausando…') : t.batch.pause}
             </Button>
             <Button fullWidth onClick={handleCancelBatch} startIcon={<HighlightOffIcon />}

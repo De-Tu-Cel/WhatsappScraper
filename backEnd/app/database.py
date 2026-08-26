@@ -619,13 +619,16 @@ class MongoDBManager:
                 ) if company_id and company_id != "manual" and company_id != "unknown" else None
             except Exception:
                 pass
-            if not company:
+            if company is None:
                 continue  # skip personal chats and unknown contacts
             # Skip contacts auto-registered from an inbound message (external numbers
             # that messaged the connected WA account) if the system never sent them anything.
             if company.get("source") == "inbound_whatsapp" and g.get("has_outbound", 0) == 0:
                 continue
-            has_wa = self.db.contacts.find_one({"company_id": company_id, "type": "whatsapp"})
+            has_wa = (
+                self.db.contacts.find_one({"company_id": company_id, "type": "whatsapp"})
+                or self.db.jid_map.find_one({"company_id": company_id})
+            )
             if not has_wa:
                 continue  # skip companies with no WhatsApp number
             last_inbound_analyzed = self.db.message_logs.find_one(

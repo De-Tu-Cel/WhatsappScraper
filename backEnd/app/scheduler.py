@@ -420,7 +420,8 @@ def _verify_wa_number(db, phone_digits: str, session: str) -> bool:
     try:
         from app.whatsapp_wwebjs import verify_number
         result = verify_number(session, phone_digits)
-        valid = bool(result.get("exists", False))
+        # wwebjs service returns "registered"; "exists" was never in the response
+        valid = bool(result.get("registered", result.get("exists", False)))
     except Exception:
         return True  # on error, allow send (don't block on verify failure)
     db.db.jid_map.update_one(

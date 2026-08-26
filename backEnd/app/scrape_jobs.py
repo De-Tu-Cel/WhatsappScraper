@@ -14,7 +14,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 log = logging.getLogger(__name__)
 
@@ -101,8 +101,24 @@ def _run_scrape_job(job_id: str):
                 {"$set": {"current_urls": chunk, "last_progress_at": datetime.now()}},
             )
 
+            # Process in parallel but update processed_count + current_urls as
+            # each URL finishes (not only after all 4 complete), so the progress
+            # bar advances one tick at a time instead of jumping by 4.
+            in_flight = list(chunk)
+            chunk_results = []
             with ThreadPoolExecutor(max_workers=len(chunk)) as ex:
-                chunk_results = list(ex.map(_process_one_url, chunk))
+                future_map = {ex.submit(_process_one_url, url): url for url in chunk}
+                for future in as_completed(future_map):
+                    url = future_map[future]
+                    chunk_results.append(future.result())
+                    in_flight = [u for u in in_flight if u != url]
+                    db.db.scrape_jobs.update_one(
+                        {"_id": oid},
+                        {
+                            "$inc": {"processed_count": 1},
+                            "$set": {"current_urls": in_flight, "last_progress_at": datetime.now()},
+                        },
+                    )
 
             # Stamp already_contacted + assigned_instance for this chunk.
             company_ids = [r["company_id"] for r in chunk_results if r.get("company_id")]

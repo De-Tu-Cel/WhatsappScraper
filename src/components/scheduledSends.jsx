@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
@@ -272,7 +272,7 @@ function CompanyCardSkeleton() {
 
 const PICKER_PAGE_SIZE = 25
 
-export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeight = 240 }) {
+export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeight = 240, contactedRefreshKey = 0 }) {
   const { t } = useLang()
   const [companies,          setCompanies]          = useState([])
   const [loadingCo,          setLoadingCo]          = useState(true)
@@ -281,6 +281,7 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
   const [showAllIndustries,  setShowAllIndustries]  = useState(false)
   const [page,               setPage]               = useState(0)
   const MAX_IND = 4
+  const companiesRef = useRef([])
 
   useEffect(() => {
     let cancelled = false
@@ -306,6 +307,27 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
       .catch(() => { if (!cancelled) setLoadingCo(false) })
     return () => { cancelled = true }
   }, [])
+
+  // Keep ref in sync so the refresh effect always sees the current list
+  useEffect(() => { companiesRef.current = companies }, [companies])
+
+  // Re-check contacted status after a send completes (contactedRefreshKey increments)
+  useEffect(() => {
+    if (!contactedRefreshKey) return
+    const ids = companiesRef.current.map(c => c._id)
+    if (!ids.length) return
+    let cancelled = false
+    authFetch('/api/companies/check-contacted', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_ids: ids }),
+    })
+      .then(r => r.json())
+      .then(contactedMap => {
+        if (!cancelled) setCompanies(curr => curr.map(c => ({ ...c, contacted: !!contactedMap[c._id]?.contacted })))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [contactedRefreshKey])
 
   const industries = useMemo(() => [...new Set(companies.map(c => c.industry).filter(Boolean))].sort(), [companies])
   const filtered   = useMemo(() => companies.filter(c => {

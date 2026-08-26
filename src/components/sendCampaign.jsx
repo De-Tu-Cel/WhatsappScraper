@@ -116,8 +116,9 @@ export default function SendCampaign() {
   const [sendCfg,       setSendCfg]       = useState(() => loadSendConfig())
 
   // ── Done state: captured from context on success phase ──
-  const [done,       setDone]       = useState(false)
-  const [doneCount,  setDoneCount]  = useState(0)
+  const [done,                setDone]                = useState(false)
+  const [doneCount,           setDoneCount]           = useState(0)
+  const [contactedRefreshKey, setContactedRefreshKey] = useState(0)
   const { stats: capStats, refresh: refreshCapStats } = useDailyCapStats()
 
   useEffect(() => {
@@ -125,6 +126,7 @@ export default function SendCampaign() {
       setDoneCount(active.sent)
       setDone(true)
       refreshCapStats()
+      setContactedRefreshKey(k => k + 1)
     }
   }, [active, refreshCapStats])
 
@@ -322,6 +324,7 @@ export default function SendCampaign() {
             numInfoMap={numInfoMap}
             onChange={(ns, nm) => { setSelectedNums(ns); setNumInfoMap(nm) }}
             listMaxHeight="60vh"
+            contactedRefreshKey={contactedRefreshKey}
           />
         </Box>
       </Box>

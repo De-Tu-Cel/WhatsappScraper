@@ -34,6 +34,15 @@ export function useScrapeJob(surface) {
       }
       const data = await res.json()
       if (!mountedRef.current) return
+      // Stale terminal job (>24h old) → show clean state instead of old results
+      if (TERMINAL.includes(data.status) && data.finished_at) {
+        const age = Date.now() - new Date(data.finished_at).getTime()
+        if (age > 24 * 60 * 60 * 1000) {
+          localStorage.removeItem(storageKey)
+          setJob(null); setJobId(null)
+          return
+        }
+      }
       setJob(data)
       if (!TERMINAL.includes(data.status)) {
         const delay = document.hidden ? POLL_IDLE : POLL_RUNNING

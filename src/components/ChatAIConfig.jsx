@@ -99,6 +99,7 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
       const d = await r.json()
       if (!r.ok) { setGlobalError(d.detail || `Error ${r.status}`); return }
       setGlobalSaved(true)
+      setLocked(true)
       setTimeout(() => setGlobalSaved(false), 2500)
     } catch (e) {
       setGlobalError(e.message)

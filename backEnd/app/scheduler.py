@@ -463,8 +463,12 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
             upsert=True,
         )
 
-        ww_client = WWebjsClient(session)
-        ww_result = ww_client.send(to_number, message, delay_ms=delay_ms)
+        from bson import ObjectId as _OIdWW
+        _co_ww = db.db.companies.find_one({"_id": _OIdWW(company_id)}, {"name": 1, "business_name": 1}) if company_id and len(company_id) == 24 else None
+        _co_name_ww = (_co_ww or {}).get("name") or (_co_ww or {}).get("business_name") or ""
+        ww_client = WWebjsClient(session, instance_name=session)
+        ww_result = ww_client.send(to_number, message, delay_ms=delay_ms,
+                                   save_contact=bool(_co_name_ww), contact_name=_co_name_ww)
         message_id = ww_result.get("messageId")
         status = "sent" if ww_result.get("success") else "failed"
         if status == "sent":

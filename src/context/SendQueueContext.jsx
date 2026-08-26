@@ -27,6 +27,7 @@ export function SendQueueProvider({ children }) {
   const lastCompletedAtRef   = useRef(null)
   const lastErrorAtRef       = useRef(null)
   const dismissedErrorAtRef  = useRef(null)
+  const isFirstPollRef       = useRef(true)   // suppress toast on initial page load
   const debugActiveRef       = useRef(false)  // true while the Shift+B fake preview is running
 
   const clearCompleted  = useCallback(() => setCompletedCount(null), [])
@@ -59,8 +60,13 @@ export function SendQueueProvider({ children }) {
 
           if (s.last_completed?.at && s.last_completed.at !== lastCompletedAtRef.current) {
             lastCompletedAtRef.current = s.last_completed.at
-            setCompletedCount(s.last_completed.sent)
+            // Skip toast on the very first poll — it reflects a send from a
+            // prior session, not something that just completed this page load.
+            if (!isFirstPollRef.current) {
+              setCompletedCount(s.last_completed.sent)
+            }
           }
+          isFirstPollRef.current = false
           if (s.last_error?.at && s.last_error.at !== dismissedErrorAtRef.current) {
             lastErrorAtRef.current = s.last_error.at
             setQueueError(s.last_error.message)

@@ -335,10 +335,19 @@ export default function BatchProcessor() {
     setExtraSelected(prev => prev.size ? new Set() : prev)
     setExpandedCo(prev => prev.size ? new Set() : prev)
   }, [rows])
+  // Sent/failed rows auto-deselect so the user can send to new rows from resumed
+  // scraping without having to manually uncheck the ones already processed.
   const effectiveWaSelected = useMemo(() =>
-    new Set(waRowsUnique.map(r => r.company_id).filter(id => !waDeselected.has(id))),
+    new Set(waRowsUnique
+      .filter(r => !waDeselected.has(r.company_id) && r.msg_status !== 'sent' && r.msg_status !== 'failed')
+      .map(r => r.company_id)),
   [waRowsUnique, waDeselected])
-  const alreadySent = rows.some(r => r.msg_status === 'sent' || r.msg_status === 'failed' || r.msg_status === 'queued')
+  // Only block if the CURRENT selection has already-sent rows (prevents in-flight
+  // double-sends without blocking newly-scraped rows after a send completes).
+  const alreadySent = rows.some(r =>
+    effectiveWaSelected.has(r.company_id) &&
+    (r.msg_status === 'sent' || r.msg_status === 'failed' || r.msg_status === 'queued')
+  )
   const isSending   = queueActive !== null && alreadySent
   // Un envío masivo manda por default 1 número por empresa (el principal) — evita
   // que una empresa con muchos números se coma el cupo diario de warmup de varias

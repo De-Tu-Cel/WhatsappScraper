@@ -3817,7 +3817,7 @@ async def api_wwebjs_webhook(request: Request):
         print(f"[wwebjs Webhook] inbound saved log_id={log_id} company={company_id} from={number}")
 
         if message_body and log_id and company_id not in ("unknown", "manual"):
-            from datetime import datetime, timedelta
+            from datetime import datetime, timedelta, timezone
             from app.llm import active_provider as _wwebjs_cls_provider
             if _wwebjs_cls_provider() != "none":
                 import threading as _wwebjs_t

@@ -174,7 +174,8 @@ function createClient(sessionId) {
     if (msg.from.includes('@lid')) {
       try {
         const contact = await msg.getContact()
-        if (contact.number) number = contact.number
+        // contact.number returns the LID — contact.id.user is the real phone number
+        if (contact.id?.user) number = contact.id.user
       } catch (_) {}
     }
     console.log(`[${sessionId}] ← ${number}: ${String(msg.body).substring(0, 60)}`)

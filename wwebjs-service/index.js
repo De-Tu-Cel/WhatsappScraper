@@ -168,7 +168,15 @@ function createClient(sessionId) {
 
   client.on('message', async (msg) => {
     if (msg.fromMe) return
-    const number = msg.from.replace('@s.whatsapp.net', '').replace('@c.us', '').replace('@lid', '')
+    let number = msg.from.replace('@s.whatsapp.net', '').replace('@c.us', '').replace('@lid', '')
+    // @lid JIDs are Linked Device IDs (not real phone numbers) — resolve to the
+    // actual contact number so the backend can match it to a known company.
+    if (msg.from.includes('@lid')) {
+      try {
+        const contact = await msg.getContact()
+        if (contact.number) number = contact.number
+      } catch (_) {}
+    }
     console.log(`[${sessionId}] ← ${number}: ${String(msg.body).substring(0, 60)}`)
     forwardWebhook({
       event: 'messages.received',

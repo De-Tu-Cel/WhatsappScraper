@@ -289,7 +289,8 @@ export default function SearchProspects() {
   const [extraSelected, setExtraSelected] = useState(new Set())
   const [expandedCo, setExpandedCo] = useState(new Set())
   const [confirmDialog, setConfirmDialog] = useState({ open: false, names: '', resolve: null }) // números que el usuario quitó manualmente
-  const msgRef = useRef(null)
+  const msgRef       = useRef(null)
+  const wasActiveRef = useRef(false)
 
   useEffect(() => {
     try { setHistory(JSON.parse(localStorage.getItem('searchHistory') || '[]')) } catch {}
@@ -315,7 +316,10 @@ export default function SearchProspects() {
   }, [results])
 
   useEffect(() => {
-    if (queueActive?.phase === 'success') {
+    if (queueActive !== null) {
+      wasActiveRef.current = true
+    } else if (wasActiveRef.current) {
+      wasActiveRef.current = false
       setSentOverlay(prev => {
         const next = { ...prev }
         for (const k in next) if (next[k] === 'queued') next[k] = 'sent'
@@ -323,7 +327,7 @@ export default function SearchProspects() {
       })
       refreshCapStats()
     }
-  }, [queueActive?.phase, refreshCapStats])
+  }, [queueActive, refreshCapStats])
 
   // waRows y waRowsUnique deben ir ANTES de effectiveWaSelected
   const waRowsAll    = results.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)

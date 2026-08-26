@@ -153,8 +153,9 @@ export default function SendBubble() {
     }
   }, [])
 
-  // Shift+B preview
+  // Shift+B preview — dev only so it can't fire accidentally in prod
   useEffect(() => {
+    if (process.env.NODE_ENV !== 'development') return
     const onKey = (e) => { if (e.shiftKey && e.key === 'B') debugBubble() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

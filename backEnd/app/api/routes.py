@@ -928,11 +928,15 @@ def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks):
                         _waha_session = inst_name
                     elif inst_doc and inst_doc.get("provider") == "wasender":
                         _provider = "wasender"
+                    elif inst_doc and inst_doc.get("provider") == "wwebjs":
+                        _provider = "wwebjs"
         except Exception:
             pass
 
         if _provider == "wasender":
             return {"synced": 0, "message": "WasenderAPI no expone historial — los mensajes se registran en tiempo real desde el webhook"}
+        elif _provider == "wwebjs":
+            return {"synced": 0, "message": "WhatsApp Web no expone historial — los mensajes se registran en tiempo real desde el webhook"}
         elif _provider == "waha":
             if not WAHA_API_KEY:
                 raise HTTPException(400, "WAHA no configurado")
@@ -3742,6 +3746,10 @@ async def api_wwebjs_webhook(request: Request):
                 {"name": instance_name},
                 {"$set": {"ack_degraded": False}, "$unset": {"ack_degraded_since": ""}},
             )
+            # Update delivery/read status in message_logs so the chat thread shows ticks
+            if data.get("messageId"):
+                status = "read" if ack >= 3 else "delivered"
+                db.update_evolution_message_status(data["messageId"], status)
         elif ack == 1:
             # Only sent to server, not delivered — wwebjs-service tracks streak,
             # it fires session.degraded when threshold is hit
@@ -3864,11 +3872,6 @@ async def api_wwebjs_webhook(request: Request):
                 print(f"[wwebjs Webhook] followup_queue error: {_fe}")
 
         return {"ok": True, "action": "processed"}
-
-    if event == "message_ack":
-        if data.get("messageId"):
-            db.update_evolution_message_status(data["messageId"], "delivered")
-        return {"ok": True}
 
     return {"ok": True, "action": "ignored"}
 

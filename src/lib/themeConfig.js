@@ -86,23 +86,23 @@ export const THEMES = [
   { tKey: 'themeCinnamon',  value: 'canela',    bg: '#130a04', sidebar: '#1f1207', surface: '#261609', card: '#2e1a0b', preview: ['#130a04','#1f1207','#2e1a0b'] },
   { tKey: 'themeDaytime',   value: 'diurna',    bg: '#15100a', sidebar: '#1e170b', surface: '#25200d', card: '#2d2610', preview: ['#15100a','#1e170b','#2d2610'] },
   // ── Monocromático (fondo blanco, texto negro) ──
-  { tKey: 'themeMonochrome', value: 'mono', cat:'mono', bg: '#d8dce6', sidebar: '#ccd1dc', surface: '#d2d6e0', card: '#c3c8d4', preview: ['#d8dce6','#ccd1dc','#c3c8d4'] },
+  { tKey: 'themeMonochrome', value: 'mono', cat:'mono', bg: '#a0aac2', sidebar: '#96a0b7', surface: '#9ca4bb', card: '#8e97ae', preview: ['#a0aac2','#96a0b7','#8e97ae'] },
 
   // ── Neutros sofisticados (claros sin saturación, elegantes) ──
-  { tKey: 'themeSnow',       value: 'nieve',    cat:'mono', bg: '#eeecea', sidebar: '#e4e2de', surface: '#e8e6e2', card: '#dbd8d4', preview: ['#eeecea','#e4e2de','#dbd8d4'] },
-  { tKey: 'themeParchment',  value: 'pergamino',cat:'mono', bg: '#e8e0d0', sidebar: '#dfd6c6', surface: '#e2d9c8', card: '#d4c9b6', preview: ['#e8e0d0','#dfd6c6','#d4c9b6'] },
-  { tKey: 'themeCement',     value: 'cemento',  cat:'mono', bg: '#d0cecc', sidebar: '#c6c4c2', surface: '#cac8c6', card: '#bcb8b6', preview: ['#d0cecc','#c6c4c2','#bcb8b6'] },
-  { tKey: 'themeSand',       value: 'arena',    cat:'mono', bg: '#ddd6c8', sidebar: '#d4cdc0', surface: '#d8d0c2', card: '#cac2b2', preview: ['#ddd6c8','#d4cdc0','#cac2b2'] },
-  { tKey: 'themeSilver',     value: 'plata',    cat:'mono', bg: '#d6d6d6', sidebar: '#cacaca', surface: '#d0d0d0', card: '#c0c0c0', preview: ['#d6d6d6','#cacaca','#c0c0c0'] },
-  { tKey: 'themeFog',        value: 'niebla',   cat:'mono', bg: '#d4dae0', sidebar: '#c8d0d8', surface: '#cdd4dc', card: '#bec6ce', preview: ['#d4dae0','#c8d0d8','#bec6ce'] },
+  { tKey: 'themeSnow',       value: 'nieve',    cat:'mono', bg: '#c5beb7', sidebar: '#bbb6ac', surface: '#bfbaaf', card: '#b1aba2', preview: ['#c5beb7','#bbb6ac','#b1aba2'] },
+  { tKey: 'themeParchment',  value: 'pergamino',cat:'mono', bg: '#cab792', sidebar: '#beac8b', surface: '#c2af8c', card: '#b29e7c', preview: ['#cab792','#beac8b','#b29e7c'] },
+  { tKey: 'themeCement',     value: 'cemento',  cat:'mono', bg: '#a4a09c', sidebar: '#9a9693', surface: '#9e9a96', card: '#908986', preview: ['#a4a09c','#9a9693','#908986'] },
+  { tKey: 'themeSand',       value: 'arena',    cat:'mono', bg: '#baac8f', sidebar: '#afa289', surface: '#b4a58a', card: '#a5977c', preview: ['#baac8f','#afa289','#a5977c'] },
+  { tKey: 'themeSilver',     value: 'plata',    cat:'mono', bg: '#a8a8a8', sidebar: '#9c9c9c', surface: '#a2a2a2', card: '#929292', preview: ['#a8a8a8','#9c9c9c','#929292'] },
+  { tKey: 'themeFog',        value: 'niebla',   cat:'mono', bg: '#9facba', sidebar: '#92a2b2', surface: '#97a6b6', card: '#8a98a7', preview: ['#9facba','#92a2b2','#8a98a7'] },
 
   // ── Pasteles (fondos muy claros, texto oscuro) ──
-  { tKey: 'themeCloud',      value: 'nube',     cat:'mono', bg: '#c4d0dc', sidebar: '#b8c6d4', surface: '#ccd6e0', card: '#b0bece', preview: ['#c4d0dc','#b8c6d4','#b0bece'] },
-  { tKey: 'themeMintFresh',  value: 'menta',    cat:'mono', bg: '#c8ddd4', sidebar: '#bcd4ca', surface: '#d0e4da', card: '#b0ccc0', preview: ['#c8ddd4','#bcd4ca','#b0ccc0'] },
-  { tKey: 'themeBlush',      value: 'rubor',    cat:'mono', bg: '#ddd0d4', sidebar: '#d4c6cc', surface: '#e4d8da', card: '#ccb8be', preview: ['#ddd0d4','#d4c6cc','#ccb8be'] },
-  { tKey: 'themePowderBlue', value: 'polvos',   cat:'mono', bg: '#c8d4e8', sidebar: '#bccae0', surface: '#d0daf0', card: '#b8c8dc', preview: ['#c8d4e8','#bccae0','#b8c8dc'] },
-  { tKey: 'themeChampagne',  value: 'champan',  cat:'mono', bg: '#ddd8c4', sidebar: '#d4cebc', surface: '#e6e0cc', card: '#ccc8b0', preview: ['#ddd8c4','#d4cebc','#ccc8b0'] },
-  { tKey: 'themeLilacMist',  value: 'lila',     cat:'mono', bg: '#d4cce0', sidebar: '#cac0d8', surface: '#dcd4e8', card: '#c0b8d0', preview: ['#d4cce0','#cac0d8','#c0b8d0'] },
+  { tKey: 'themeCloud',      value: 'nube',     cat:'mono', bg: '#8aa2ba', sidebar: '#7f98b1', surface: '#93a8bd', card: '#778fab', preview: ['#8aa2ba','#7f98b1','#778fab'] },
+  { tKey: 'themeMintFresh',  value: 'menta',    cat:'mono', bg: '#8fbaa8', sidebar: '#84b09e', surface: '#96c3ac', card: '#78a894', preview: ['#8fbaa8','#84b09e','#78a894'] },
+  { tKey: 'themeBlush',      value: 'rubor',    cat:'mono', bg: '#b69ba3', sidebar: '#ad929d', surface: '#bea2a7', card: '#a6838d', preview: ['#b69ba3','#ad929d','#a6838d'] },
+  { tKey: 'themePowderBlue', value: 'polvos',   cat:'mono', bg: '#87a1cd', sidebar: '#7d98c3', surface: '#8aa3da', card: '#7b98be', preview: ['#87a1cd','#7d98c3','#7b98be'] },
+  { tKey: 'themeChampagne',  value: 'champan',  cat:'mono', bg: '#bbb28a', sidebar: '#b0a584', surface: '#c8bb8e', card: '#a8a178', preview: ['#bbb28a','#b0a584','#a8a178'] },
+  { tKey: 'themeLilacMist',  value: 'lila',     cat:'mono', bg: '#a493bd', sidebar: '#9a87b5', surface: '#ab98c8', card: '#8f81ab', preview: ['#a493bd','#9a87b5','#8f81ab'] },
 
   // ── Claros (tonos medios ~33-40% L, saturación ~22-35% — elegantes, no chillan) ──
   { tKey: 'themeSlateBlue',  value: 'pizarra',  cat:'light', bg: '#445c6e', sidebar: '#526a7c', surface: '#3c5264', card: '#5a6e80', preview: ['#445c6e','#526a7c','#5a6e80'] },

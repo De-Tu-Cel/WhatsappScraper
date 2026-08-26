@@ -287,9 +287,10 @@ export default function BatchProcessor() {
   }
   const urlsRef     = useRef(null)
 
-  const loading    = scrapeJob.processing
-  const pausing    = scrapeJob.pausing
-  const paused     = scrapeJob.paused
+  const loading      = scrapeJob.processing
+  const pausing      = scrapeJob.pausing
+  const paused       = scrapeJob.paused
+  const scrapeActive = loading && !paused && !pausing   // running and not stopped
   const done       = scrapeJob.done
   const progress   = scrapeJob.progress
   const doneCount  = scrapeJob.processed
@@ -871,16 +872,16 @@ export default function BatchProcessor() {
             )}
             <Button
               onClick={handleSendAll}
-              disabled={effectiveWaSelected.size === 0 || alreadySent || isDisconnected || belowMinTemplates || capBlocked}
+              disabled={effectiveWaSelected.size === 0 || alreadySent || scrapeActive || isDisconnected || belowMinTemplates || capBlocked}
               startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
               size="small"
               sx={{
                 fontSize: '0.78rem', fontWeight: 700, flexShrink: 0,
-                bgcolor: effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
-                color:   effectiveWaSelected.size > 0 && !alreadySent ? '#4ade80' : 'rgba(255,255,255,0.3)',
-                border:  `1px solid ${effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
+                bgcolor: effectiveWaSelected.size > 0 && !alreadySent && !scrapeActive ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
+                color:   effectiveWaSelected.size > 0 && !alreadySent && !scrapeActive ? '#4ade80' : 'rgba(255,255,255,0.3)',
+                border:  `1px solid ${effectiveWaSelected.size > 0 && !alreadySent && !scrapeActive ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
                 borderRadius: 1.5, px: 2, py: 0.6,
-                '&:hover': { bgcolor: effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
+                '&:hover': { bgcolor: effectiveWaSelected.size > 0 && !alreadySent && !scrapeActive ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
                 '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
               }}
             >

@@ -513,17 +513,25 @@ def _send_message(db, company_id: str, to_number: str, message: str, job_id: str
             co = db.db.companies.find_one({"_id": ObjectId(company_id)}, {"assigned_instance": 1})
             inst_name = (co or {}).get("assigned_instance")
             if inst_name:
-                inst_doc = db.db.instances.find_one({"name": inst_name}, {"provider": 1})
-                provider = (inst_doc or {}).get("provider", "")
-                if provider == "wwebjs":
-                    return _send_via_wwebjs(db, company_id, to_number, message, job_id, delay_ms, session=inst_name,
-                                             sent_by_username=sent_by_username, sent_by_name=sent_by_name)
-                if provider == "wasender":
-                    return _send_via_wasender(db, company_id, to_number, message, job_id, delay_ms, session=inst_name,
+                # Mirror routes.py: verify the assigned instance hasn't hit its
+                # per-instance new-contact cap before committing to it.  If it has,
+                # fall through to the nc-aware pick below rather than letting
+                # _send_via_* return skipped_nc_cap and silently drop the message.
+                from app.daily_cap import check_new_contact_cap as _check_nc
+                _nc_ok, _, _ = _check_nc(db, inst_name, company_id)
+                if _nc_ok:
+                    inst_doc = db.db.instances.find_one({"name": inst_name}, {"provider": 1})
+                    provider = (inst_doc or {}).get("provider", "")
+                    if provider == "wwebjs":
+                        return _send_via_wwebjs(db, company_id, to_number, message, job_id, delay_ms, session=inst_name,
+                                                 sent_by_username=sent_by_username, sent_by_name=sent_by_name)
+                    if provider == "wasender":
+                        return _send_via_wasender(db, company_id, to_number, message, job_id, delay_ms, session=inst_name,
+                                                   sent_by_username=sent_by_username, sent_by_name=sent_by_name)
+                    if provider == "waha":
+                        return _send_via_waha(db, company_id, to_number, message, job_id, delay_ms, session=inst_name,
                                                sent_by_username=sent_by_username, sent_by_name=sent_by_name)
-                if provider == "waha":
-                    return _send_via_waha(db, company_id, to_number, message, job_id, delay_ms, session=inst_name,
-                                           sent_by_username=sent_by_username, sent_by_name=sent_by_name)
+                # NC cap exceeded on assigned instance — fall through to nc-aware pick
     except Exception:
         pass
     # Fallback: wwebjs → WasenderAPI → WAHA → Evolution

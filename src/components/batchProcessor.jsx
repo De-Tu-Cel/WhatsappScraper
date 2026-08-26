@@ -279,6 +279,7 @@ export default function BatchProcessor() {
   // de una empresa — clave `${company_id}::${number}`.
   const [extraSelected, setExtraSelected] = useState(new Set())
   const [expandedCo, setExpandedCo] = useState(new Set())
+  const [localContactedIds, setLocalContactedIds] = useState(new Set())
   const msgRef       = useRef(null)
   const highlightRef = useRef(null)
   const wasActiveRef = useRef(false)
@@ -333,7 +334,13 @@ export default function BatchProcessor() {
   // waRowsUnique deduplicado por company_id — dos URLs distintas del lote pueden
   // resolver a la misma empresa ya existente en la BD.
   const waRowsAll    = rows.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
-  const waRowsUnique = useMemo(() => dedupeByCompany(waRowsAll), [waRowsAll])
+  const waRowsUnique = useMemo(() =>
+    dedupeByCompany(waRowsAll).map(r => ({
+      ...r,
+      already_contacted: r.already_contacted
+        || (localContactedIds.has(r.company_id) ? { contacted: true } : null),
+    })),
+  [waRowsAll, localContactedIds])
   // Los setState devuelven la MISMA referencia si ya estaban vacíos — evita que
   // este efecto re-dispare un render indefinidamente si `rows` llega a ser
   // referencialmente inestable entre renders (ver useScrapeJob.js EMPTY_RESULTS).
@@ -343,6 +350,7 @@ export default function BatchProcessor() {
     setWaDeselected(prev => prev.size ? new Set() : prev)
     setExtraSelected(prev => prev.size ? new Set() : prev)
     setExpandedCo(prev => prev.size ? new Set() : prev)
+    setLocalContactedIds(new Set())
   }, [scrapeJob.job?._id])
   // Sent/failed rows auto-deselect so the user can send to new rows from resumed
   // scraping without having to manually uncheck the ones already processed.
@@ -473,6 +481,11 @@ export default function BatchProcessor() {
     }
     addBatch(jobs, lang === 'en' ? 'URL batch' : 'Lote de URLs')
     setSentOverlay(prev => ({ ...prev, ...queuedUrls }))
+    setLocalContactedIds(prev => {
+      const next = new Set(prev)
+      jobs.forEach(j => j.companyId && next.add(j.companyId))
+      return next
+    })
   }
 
   const sentCount  = rows.filter(r => r.msg_status === 'sent').length

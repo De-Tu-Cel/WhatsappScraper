@@ -294,6 +294,10 @@ export default function SearchProspects() {
   // expandir el chip de una empresa — clave `${company_id}::${number}`.
   const [extraSelected, setExtraSelected] = useState(new Set())
   const [expandedCo, setExpandedCo] = useState(new Set())
+  // Companies sent to in this session — augments already_contacted so a second
+  // "Send All" from the same scrape warns about them even before the backend
+  // scrape-result data is re-fetched (which only happens on a new job).
+  const [localContactedIds, setLocalContactedIds] = useState(new Set())
   const [confirmDialog, setConfirmDialog] = useState({ open: false, names: '', resolve: null }) // números que el usuario quitó manualmente
   const msgRef       = useRef(null)
   const wasActiveRef = useRef(false)
@@ -321,6 +325,11 @@ export default function SearchProspects() {
     setExpandedCo(prev => prev.size ? new Set() : prev)
   }, [results])
 
+  // Reset locally-tracked sent companies when a new scrape job starts.
+  useEffect(() => {
+    setLocalContactedIds(new Set())
+  }, [scrapeJob.job?._id])
+
   useEffect(() => {
     if (queueActive !== null) {
       wasActiveRef.current = true
@@ -337,7 +346,13 @@ export default function SearchProspects() {
 
   // waRows y waRowsUnique deben ir ANTES de effectiveWaSelected
   const waRowsAll    = results.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
-  const waRowsUnique = useMemo(() => dedupeByCompany(waRowsAll), [waRowsAll])
+  const waRowsUnique = useMemo(() =>
+    dedupeByCompany(waRowsAll).map(r => ({
+      ...r,
+      already_contacted: r.already_contacted
+        || (localContactedIds.has(r.company_id) ? { contacted: true } : null),
+    })),
+  [waRowsAll, localContactedIds])
 
   // Filtro de "ya contactados": se aplica sobre waRowsUnique antes de calcular la selección
   const filteredWaRows = useMemo(() => {
@@ -592,6 +607,11 @@ export default function SearchProspects() {
     }
     addBatch(jobs, lang === 'en' ? 'Prospect search' : 'Búsqueda de prospectos')
     setSentOverlay(prev => ({ ...prev, ...queuedUrls }))
+    setLocalContactedIds(prev => {
+      const next = new Set(prev)
+      jobs.forEach(j => j.companyId && next.add(j.companyId))
+      return next
+    })
   }
 
   function exportUrlsTxt() {

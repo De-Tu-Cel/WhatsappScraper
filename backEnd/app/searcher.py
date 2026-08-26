@@ -812,15 +812,17 @@ def _fetch_ddg(query: str, max_results: int = 80) -> list[dict]:
     return results
 
 
-def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None) -> list[str]:
+def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None, country: str | None = None) -> list[str]:
     """
-    Use the active LLM (OpenAI if configured, else DeepSeek) to rank URLs as real
-    business websites. Processes in batches of 60, preserves ALL URLs (ranked first,
-    unranked appended). Returns the full list — no cap applied here.
+    Use the active LLM to rank and filter URLs for real local business websites.
+    Approved URLs are returned in relevance order; unapproved ones are dropped.
+    If the LLM approves nothing from a batch (possible false-negative), the full
+    batch is kept as a fallback so we never silently discard valid prospects.
     """
     if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not urls:
         return urls
     snippets = snippets or {}
+    geo = country or "México"
 
     ranked: list[str] = []
     remaining = list(urls)
@@ -843,7 +845,7 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
                 lines.append(line)
             prompt = (
                 f'Eres un filtro ESTRICTO de URLs. Se buscan ÚNICAMENTE sitios web oficiales '
-                f'de negocios LOCALES e INDEPENDIENTES del sector "{industry}" en México.\n\n'
+                f'de negocios LOCALES e INDEPENDIENTES del sector "{industry}" en {geo}.\n\n'
                 f'INCLUIR SOLO si es la página oficial de UN negocio específico con nombre y dirección propios:\n'
                 f'  ✓ Un restaurante, clínica, gimnasio, taller, tienda, despacho, salón específico.\n\n'
                 f'EXCLUIR SIN EXCEPCIÓN (devuelve [] si ninguna aplica):\n'
@@ -855,8 +857,8 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
                 f'  ✗ Directorios conocidos (Yelp, Sección Amarilla, Hotfrog, Páginas Amarillas, Kompass, Foursquare, Zomato)\n'
                 f'  ✗ Redes sociales, YouTube, Wikipedia, Quora, Reddit\n'
                 f'  ✗ Marketplaces (MercadoLibre, Amazon, Uber Eats, Rappi, Didi Food)\n'
-                f'  ✗ Franquicias o cadenas NACIONALES con decenas de sucursales '
-                f'(SmartFit, OXXO, Starbucks, McDonald\'s, Domino\'s, Cinépolis, etc.)\n'
+                f'  ✗ Franquicias o cadenas con decenas de sucursales '
+                f'(SmartFit, OXXO, Starbucks, McDonald\'s, Domino\'s, etc.)\n'
                 f'  ✗ Asociaciones gremiales, cámaras de comercio, federaciones del sector\n'
                 f'  ✗ Proveedores de software/SaaS para el sector (herramientas, no el negocio mismo)\n'
                 f'  ✗ Páginas gubernamentales o educativas\n'
@@ -875,16 +877,19 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
             if m:
                 indices = json.loads(m.group(0))
                 approved_idx = {i for i in indices if 1 <= i <= len(batch)}
-                batch_ranked = [batch[i - 1] for i in indices if i in approved_idx]
-                # Anything DeepSeek didn't approve isn't discarded — just deprioritized,
-                # per this function's contract of never dropping a candidate URL outright.
-                batch_unranked = [u for i, u in enumerate(batch, start=1) if i not in approved_idx]
-                ranked.extend(batch_ranked)
-                ranked.extend(batch_unranked)
+                batch_approved = [batch[i - 1] for i in indices if i in approved_idx]
+                if batch_approved:
+                    # Drop unapproved URLs — with the 3× fetch pool there are enough
+                    # good candidates that we don't need to fall back to junk.
+                    ranked.extend(batch_approved)
+                else:
+                    # AI approved nothing: keep full batch as fallback to avoid
+                    # silently discarding valid prospects on a false-negative.
+                    ranked.extend(batch)
                 continue
         except Exception:
             pass
-        # Fallback sin DeepSeek: mantener el batch tal cual
+        # Fallback: LLM unavailable or parse error — keep batch as-is
         ranked.extend(batch)
 
     return ranked
@@ -1583,7 +1588,7 @@ def search_prospects(
             if meta:
                 snippets[u] = meta
 
-    return _ai_filter_urls(urls, industry, snippets)  # no cap — caller decides how many to show
+    return _ai_filter_urls(urls, industry, snippets, country=country)  # no cap — caller decides how many to show
 
 
 def _search_via_serpapi(query: str, num_results: int, offset: int = 0) -> tuple[list, dict]:

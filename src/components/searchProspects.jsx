@@ -44,6 +44,12 @@ import IndeterminateCheckBoxIcon from '@mui/icons-material/IndeterminateCheckBox
 import HistoryIcon from '@mui/icons-material/History'
 import MessageIcon from '@mui/icons-material/Message'
 import SendIcon from '@mui/icons-material/Send'
+import Table from '@mui/material/Table'
+import TableHead from '@mui/material/TableHead'
+import TableBody from '@mui/material/TableBody'
+import TableCell from '@mui/material/TableCell'
+import TableRow from '@mui/material/TableRow'
+import TableContainer from '@mui/material/TableContainer'
 import { getTemplates } from './singleUrlProcessor'
 import { HighlightedMessageInput } from './highlightedMessageInput'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
@@ -876,7 +882,7 @@ export default function SearchProspects() {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 {scrapeJob.paused ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} /> : <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />}
                 <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
-                  {scrapeJob.paused ? 'Pausado —' : 'Procesando'} {results.length} de {found.filter(r => r.selected).length}
+                  {scrapeJob.paused ? 'Pausado —' : 'Procesando'} {results.length} de {scrapeJob.total || found.filter(r => r.selected).length}
                 </Typography>
               </Box>
               <Typography sx={{ color: scrapeJob.paused ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>{scrapeJob.progress}%</Typography>
@@ -888,9 +894,14 @@ export default function SearchProspects() {
             )}
           </Box>
           <Box sx={{ display: 'flex', gap: 1.5 }}>
-            <Button fullWidth onClick={() => scrapeJob.paused ? scrapeJob.resume() : scrapeJob.pause()} startIcon={scrapeJob.paused ? <PlayArrowIcon /> : <PauseIcon />}
-              sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' } }}>
-              {scrapeJob.paused ? t.search.resume : t.search.pause}
+            <Button fullWidth
+              disabled={scrapeJob.pausing}
+              onClick={() => scrapeJob.paused ? scrapeJob.resume() : scrapeJob.pause()}
+              startIcon={scrapeJob.pausing
+                ? <CircularProgress size={14} sx={{ color: '#fbbf24' }} />
+                : scrapeJob.paused ? <PlayArrowIcon /> : <PauseIcon />}
+              sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' }, '&.Mui-disabled': { color: 'rgba(251,191,36,0.4)', bgcolor: 'rgba(251,191,36,0.04)', border: '1px solid rgba(251,191,36,0.12)' } }}>
+              {scrapeJob.pausing ? (lang === 'en' ? 'Pausing…' : 'Pausando…') : scrapeJob.paused ? t.search.resume : t.search.pause}
             </Button>
             <Button fullWidth onClick={scrapeJob.cancel} startIcon={<HighlightOffIcon />}
               sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>
@@ -930,7 +941,7 @@ export default function SearchProspects() {
       {/* ── Panel de envío masivo — visible también durante el scraping, para
            poder empezar a enviar a lo ya encontrado sin esperar a que termine ── */}
       {(scrapeJob.done || scrapeJob.processing) && results.length > 0 && (
-        <Box sx={{ borderRadius: 2.5, border: '1px solid rgba(34,197,94,0.2)', overflow: 'hidden' }}>
+        <Box sx={{ borderRadius: 2.5, border: '1px solid rgba(34,197,94,0.2)', overflow: 'hidden', maxHeight: 'clamp(400px, 70vh, 860px)', display: 'flex', flexDirection: 'column' }}>
           {/* Panel header */}
           <Box sx={{ px: 2, py: 1.4, background: 'linear-gradient(180deg, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.02) 100%)', borderBottom: '1px solid rgba(34,197,94,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
@@ -950,7 +961,7 @@ export default function SearchProspects() {
             )}
           </Box>
           {/* Body */}
-          <Box sx={{ p: 2 }}>
+          <Box sx={{ p: 2, flex: 1, minHeight: 0, overflowY: 'auto', scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 } }}>
           {capStats && (
             <CapacityBanner stats={capStats} selectionCount={totalContactPoints} sx={{ mb: 1.5 }} />
           )}
@@ -1103,52 +1114,103 @@ export default function SearchProspects() {
             </Box>
           </Box>
 
-          <Box>
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 1.5, pb: 1 }}>
-              {results.map((r, i) => {
-                const domain = getDomain(r.url)
-                return (
-                  <Box key={i}
-                    sx={{ p: 1.8, borderRadius: 2, border: `1px solid ${r.ok ? 'rgba(255,255,255,0.07)' : 'rgba(239,68,68,0.2)'}`, bgcolor: r.ok ? 'rgba(255,255,255,0.02)' : 'rgba(239,68,68,0.04)', display: 'flex', flexDirection: 'column', gap: 1, animation: `${fadeSlideIn} 0.25s ease both`, animationDelay: `${i * 0.03}s` }}>
-                    {/* Header */}
-                    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
-                      <Box component="img"
-                        src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`}
-                        width={18} height={18}
-                        sx={{ borderRadius: 0.5, flexShrink: 0, mt: 0.2 }}
-                        onError={e => { e.target.style.display = 'none' }}
-                      />
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography sx={{ color: r.ok ? 'rgba(255,255,255,0.9)' : '#f87171', fontWeight: 600, fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.3 }}>
-                          {r.empresa !== '—' ? r.empresa : domain}
+          <TableContainer sx={{
+            borderRadius: 2,
+            border: '1px solid rgba(255,255,255,0.07)',
+            maxHeight: 'clamp(220px, 45vh, 560px)',
+            overflow: 'auto',
+            scrollbarWidth: 'thin',
+            scrollbarColor: 'rgba(255,255,255,0.1) transparent',
+            '&::-webkit-scrollbar': { width: 4, height: 4 },
+            '&::-webkit-scrollbar-button': { display: 'none' },
+            '&::-webkit-scrollbar-track': { background: 'transparent', marginBlock: '40px' },
+            '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 },
+            '&::-webkit-scrollbar-thumb:hover': { background: 'rgba(255,255,255,0.28)' },
+          }}>
+            <Table size="small" stickyHeader>
+              <TableHead>
+                <TableRow>
+                  {['URL', t.batch.colCompany, t.batch.colIndustry, 'WhatsApp', alreadySent ? t.batch.colMessage : null, t.batch.colStatus].filter(Boolean).map(h => (
+                    <TableCell key={h} sx={{
+                      bgcolor: 'var(--card-bg, #161d2e)',
+                      color: 'rgba(255,255,255,0.5)',
+                      fontWeight: 700,
+                      fontSize: '0.7rem',
+                      letterSpacing: 0.5,
+                      borderBottom: '1px solid rgba(255,255,255,0.08)',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {h}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {results.map((r, i) => {
+                  const domain = getDomain(r.url)
+                  return (
+                    <TableRow key={i} sx={{
+                      '&:hover': { bgcolor: 'rgba(255,255,255,0.025)' },
+                      '& td': { borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: '0.8rem' },
+                      animation: `${fadeSlideIn} 0.22s ease both`,
+                      animationDelay: `${i * 0.025}s`,
+                    }}>
+                      <TableCell sx={{ maxWidth: 200 }}>
+                        <Box component="a" href={r.url} target="_blank" rel="noopener"
+                          sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, textDecoration: 'none', '&:hover .bt': { textDecoration: 'underline' } }}>
+                          <Box component="img"
+                            src={`https://www.google.com/s2/favicons?domain=${domain}&sz=16`}
+                            width={13} height={13}
+                            sx={{ borderRadius: '2px', flexShrink: 0 }}
+                            onError={e => { e.target.style.display = 'none' }}
+                          />
+                          <Typography component="span" className="bt"
+                            sx={{ fontSize: '0.78rem', color: '#60a5fa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>
+                            {domain}
+                          </Typography>
+                        </Box>
+                      </TableCell>
+                      <TableCell sx={{ color: 'rgba(255,255,255,0.8)', fontWeight: 500, maxWidth: 180 }}>
+                        <Typography sx={{ fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 170 }}>
+                          {r.empresa !== '—' ? r.empresa : '—'}
                         </Typography>
-                        <Typography component="a" href={r.url} target="_blank" rel="noopener"
-                          sx={{ fontSize: '0.7rem', color: '#60a5fa', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}>
-                          {domain}
-                        </Typography>
-                      </Box>
-                      <Chip label={r.ok ? 'OK' : 'Error'} size="small"
-                        icon={r.ok ? <CheckCircleIcon sx={{ fontSize: '11px !important' }} /> : <ErrorIcon sx={{ fontSize: '11px !important' }} />}
-                        sx={{ height: 20, fontSize: '0.62rem', flexShrink: 0, bgcolor: r.ok ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', color: r.ok ? '#4ade80' : '#f87171', border: `1px solid ${r.ok ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'}`, '& .MuiChip-icon': { color: 'inherit' } }} />
-                    </Box>
-                    {/* Info */}
-                    <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap' }}>
-                      {r.industria !== '—' && (
-                        <Chip label={r.industria} size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(139,92,246,0.1)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.2)' }} />
+                      </TableCell>
+                      <TableCell sx={{ color: 'rgba(255,255,255,0.55)' }}>
+                        {r.industria && r.industria !== '—'
+                          ? <Chip label={r.industria} size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(139,92,246,0.1)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.2)' }} />
+                          : <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>
+                        }
+                      </TableCell>
+                      <TableCell>
+                        {(r.all_whatsapp?.length > 0 || r.whatsapp) ? (
+                          <WhatsAppNumberSummary row={r} />
+                        ) : (
+                          <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>
+                        )}
+                      </TableCell>
+                      {alreadySent && (
+                        <TableCell>
+                          {r.msg_status === 'sent'    && <Chip label={t.batch.chipSent}   size="small" sx={{ bgcolor: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)', height: 20, fontSize: '0.68rem' }} />}
+                          {r.msg_status === 'failed'  && <Chip label={t.batch.chipFailed} size="small" sx={{ bgcolor: 'rgba(239,68,68,0.1)',   color: '#f87171', border: '1px solid rgba(239,68,68,0.25)',   height: 20, fontSize: '0.68rem' }} />}
+                          {r.msg_status === 'queued'  && <Chip label={lang === 'en' ? 'Queued' : 'En cola'} size="small" sx={{ bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)', height: 20, fontSize: '0.68rem' }} />}
+                          {!r.msg_status && <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>}
+                        </TableCell>
                       )}
-                      {(r.all_whatsapp?.length > 0 || r.whatsapp) ? (
-                        <WhatsAppNumberSummary row={r} />
-                      ) : (
-                        r.ok && (
-                          <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', alignSelf: 'center' }}>Sin WhatsApp</Typography>
-                        )
-                      )}
-                    </Box>
-                  </Box>
-                )
-              })}
-            </Box>
-          </Box>
+                      <TableCell>
+                        {r.ok ? (
+                          <Chip label="OK" size="small" icon={<CheckCircleIcon sx={{ fontSize: '12px !important' }} />}
+                            sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#4ade80' } }} />
+                        ) : (
+                          <Chip label="Error" size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
+                            sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' } }} />
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
         </Box>
       )}
     </Box>

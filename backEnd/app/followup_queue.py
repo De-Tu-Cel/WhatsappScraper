@@ -17,6 +17,13 @@ _worker_thread: threading.Thread | None = None
 _cleanup_thread: threading.Thread | None = None
 _lock = threading.Lock()
 
+# Debounce: accumulate rapid-fire messages from the same number before processing.
+# When someone sends 5 messages in 30 seconds we wait until they stop typing,
+# then pass the whole burst to the AI as a single combined message.
+_DEBOUNCE_SEC = 4.0
+_pending: dict = {}   # phone_number → {timer, messages[], log_ids[], company_id, manual}
+_pending_lock = threading.Lock()
+
 # Minimum pause between different conversations (after previous one finishes)
 _MIN_INTER_CHAT_GAP = 45   # seconds
 _MAX_INTER_CHAT_GAP = 90
@@ -141,18 +148,54 @@ def _ensure_worker():
             log.info("[FollowupQ] cleanup worker started")
 
 
+def _flush_debounced(phone_number: str):
+    """Timer callback — push accumulated messages to the worker queue as one item."""
+    with _pending_lock:
+        entry = _pending.pop(phone_number, None)
+    if not entry:
+        return
+    msgs = entry["messages"]
+    combined = "\n".join(msgs) if len(msgs) == 1 else "\n".join(f"[{i+1}] {m}" for i, m in enumerate(msgs))
+    _q.put({
+        "phone_number": phone_number,
+        "company_id": entry["company_id"],
+        "inbound_body": combined,
+        "inbound_log_id": entry["log_ids"][-1],
+        "manual_activation": entry["manual"],
+    })
+    log.info("[FollowupQ] debounce flush: %d msg(s) from %s → queue depth=%d", len(msgs), phone_number, _q.qsize())
+
+
 def enqueue(phone_number: str, company_id: str, inbound_body: str, inbound_log_id: str,
             manual_activation: bool = False):
     """Add an inbound message to the AI follow-up queue. Returns immediately.
-    Pass manual_activation=True when triggered by the user enabling the AI toggle —
-    bypasses the stale-message age check so the AI sends a greeting immediately.
+    Debounces rapid-fire messages: if the same number sends several messages within
+    _DEBOUNCE_SEC seconds, they are accumulated and delivered to the AI as a single
+    combined context instead of triggering N separate responses.
+    Pass manual_activation=True when triggered by the user enabling the AI toggle.
     """
     _ensure_worker()
-    _q.put({
-        "phone_number": phone_number,
-        "company_id": company_id,
-        "inbound_body": inbound_body,
-        "inbound_log_id": inbound_log_id,
-        "manual_activation": manual_activation,
-    })
-    log.info("[FollowupQ] queued reply from %s (manual=%s, depth=%d)", phone_number, manual_activation, _q.qsize())
+    with _pending_lock:
+        existing = _pending.get(phone_number)
+        if existing:
+            existing["timer"].cancel()
+            existing["messages"].append(inbound_body)
+            existing["log_ids"].append(inbound_log_id)
+            if manual_activation:
+                existing["manual"] = True
+            log.info("[FollowupQ] debounce: accumulated msg #%d from %s", len(existing["messages"]), phone_number)
+            entry = existing
+        else:
+            entry = {
+                "messages": [inbound_body],
+                "log_ids": [inbound_log_id],
+                "company_id": company_id,
+                "manual": manual_activation,
+                "timer": None,
+            }
+            _pending[phone_number] = entry
+            log.info("[FollowupQ] debounce: new window for %s (manual=%s)", phone_number, manual_activation)
+        t = threading.Timer(_DEBOUNCE_SEC, _flush_debounced, args=[phone_number])
+        t.daemon = True
+        entry["timer"] = t
+        t.start()

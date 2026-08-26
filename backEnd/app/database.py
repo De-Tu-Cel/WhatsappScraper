@@ -768,13 +768,16 @@ class MongoDBManager:
             {"$set": {"analysis": analysis, "analysis_status": "done"}},
         )
 
-    def get_analytics(self, page: int = 1, page_size: int = 20, category: str | None = None):
-        """Aggregate response analysis data per company for the dashboard."""
+    def get_analytics(self, page: int = 1, page_size: int = 20, category: str | None = None, company_id: str | None = None):
+        """Aggregate response analysis data per company for the dashboard.
+        Pass company_id to fetch analytics for a single company (e.g. for report generation)
+        — drastically faster than loading all companies and filtering in Python."""
+        _cid_filter = {"company_id": company_id} if company_id else {}
         # Companies with at least one analyzed inbound
         inbound_groups = {
             g["_id"]: g
             for g in self.db.message_logs.aggregate([
-                {"$match": {"direction": "inbound", "analysis": {"$exists": True}}},
+                {"$match": {"direction": "inbound", "analysis": {"$exists": True}, **_cid_filter}},
                 # Conversation-level analyses (conversation_analysis=true) go first — they
                 # have the most complete view of category/quality/notes. Within each tier,
                 # most recent message wins. last_at uses $max to always reflect the actual
@@ -803,6 +806,7 @@ class MongoDBManager:
                 {"$match": {
                     "direction": "inbound",
                     "analysis.reaction_time_min": {"$ne": None},
+                    **_cid_filter,
                 }},
                 {"$sort": {"created_at": 1}},
                 {"$group": {
@@ -820,7 +824,7 @@ class MongoDBManager:
         outbound_groups = {
             g["_id"]: g
             for g in self.db.message_logs.aggregate([
-                {"$match": {"direction": "outbound"}},
+                {"$match": {"direction": "outbound", **_cid_filter}},
                 {"$sort": {"created_at": -1}},
                 {"$group": {"_id": "$company_id", "last_at": {"$first": "$created_at"}}},
             ])
@@ -833,7 +837,7 @@ class MongoDBManager:
         sin_respuesta_groups = {
             g["_id"]
             for g in self.db.message_logs.aggregate([
-                {"$match": {"direction": "outbound", "analysis.category": "sin_respuesta"}},
+                {"$match": {"direction": "outbound", "analysis.category": "sin_respuesta", **_cid_filter}},
                 {"$group": {"_id": "$company_id"}},
             ])
         }

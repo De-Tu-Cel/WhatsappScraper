@@ -1795,10 +1795,6 @@ def api_generate_report(company_id: str, req: ReportRequest):
         if not company:
             raise HTTPException(status_code=404, detail="Company not found")
 
-        # No dejar descargar el reporte mientras la última respuesta del prospecto
-        # sigue esperando confirmación (T1 rápido, esperando a ver si llega T2) —
-        # antes se podía descargar a medias y salía "Desconocido"/mal clasificado.
-        # req.force=True permite descargar de todos modos si el usuario insiste.
         if not req.force:
             open_probe = db.db.message_logs.find_one(
                 {"company_id": company_id, "analysis_status": "awaiting_t2"},
@@ -1813,9 +1809,9 @@ def api_generate_report(company_id: str, req: ReportRequest):
                     "resolves_by": deadline.isoformat() if deadline else None,
                 })
 
-        analytics_raw  = db.get_analytics(page=1, page_size=9999)
-        analytics_list = analytics_raw.get("items", analytics_raw) if isinstance(analytics_raw, dict) else analytics_raw
-        analytics = next((a for a in analytics_list if a.get("company_id") == company_id), {})
+        analytics_raw  = db.get_analytics(company_id=company_id)
+        analytics_list = analytics_raw.get("items", []) if isinstance(analytics_raw, dict) else analytics_raw
+        analytics = analytics_list[0] if analytics_list else {}
 
         thread = db.get_conversation_thread(company_id)
 

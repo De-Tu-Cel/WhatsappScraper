@@ -152,7 +152,7 @@ def _run_scrape_job(job_id: str):
                 {"$set": {
                     "results": results,
                     "next_index": next_index,
-                    "processed_count": len(results),
+                    "processed_count": min(len(results), total),
                     "current_urls": [],
                     "last_progress_at": datetime.now(),
                 }},

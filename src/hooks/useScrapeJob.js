@@ -104,7 +104,7 @@ export function useScrapeJob(surface) {
     job,
     results:    job?.results || EMPTY_RESULTS,
     total, processed,
-    progress:   total > 0 ? Math.round((processed / total) * 100) : 0,
+    progress:   total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0,
     currentUrl: job?.current_urls?.[0] || '',
     status,
     processing: status === 'pending' || status === 'running',

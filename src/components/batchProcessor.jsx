@@ -293,6 +293,7 @@ export default function BatchProcessor() {
   const done       = scrapeJob.done
   const progress   = scrapeJob.progress
   const doneCount  = scrapeJob.processed
+  const totalCount = scrapeJob.total
   const currentUrl = scrapeJob.currentUrl
   const rows = useMemo(() => {
     const results = scrapeJob.results
@@ -370,6 +371,7 @@ export default function BatchProcessor() {
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
   function handlePause() {
+    if (pausing) return   // chunk still draining, button is disabled but guard anyway
     paused ? scrapeJob.resume() : scrapeJob.pause()
   }
 
@@ -674,10 +676,10 @@ export default function BatchProcessor() {
                 {paused ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} /> : <CircularProgress size={14} sx={{ color: pausing ? '#fbbf24' : 'var(--accent, #3b82f6)' }} />}
                 <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
                   {paused
-                    ? (lang === 'en' ? `Paused — ${doneCount} of ${urlList.length}` : `Pausado — ${doneCount} de ${urlList.length}`)
+                    ? (lang === 'en' ? `Paused — ${doneCount} of ${totalCount}` : `Pausado — ${doneCount} de ${totalCount}`)
                     : pausing
-                      ? (lang === 'en' ? `Pausing… — ${doneCount} of ${urlList.length}` : `Pausando… — ${doneCount} de ${urlList.length}`)
-                      : (lang === 'en' ? `Scraping — ${doneCount} of ${urlList.length}` : `Scrapeando — ${doneCount} de ${urlList.length}`)}
+                      ? (lang === 'en' ? `Pausing… — ${doneCount} of ${totalCount}` : `Pausando… — ${doneCount} de ${totalCount}`)
+                      : (lang === 'en' ? `Scraping — ${doneCount} of ${totalCount}` : `Scrapeando — ${doneCount} de ${totalCount}`)}
                 </Typography>
               </Box>
               <Typography sx={{ color: (paused || pausing) ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>

@@ -207,16 +207,16 @@
 
 /* ── Bordes / outlines ── */
 [data-theme-mode="light"] .MuiOutlinedInput-notchedOutline {
-  border-color: rgba(0,0,0,0.23) !important;
+  border-color: rgba(0,0,0,0.16) !important;
 }
 [data-theme-mode="light"] .MuiOutlinedInput-root:hover .MuiOutlinedInput-notchedOutline {
-  border-color: rgba(0,0,0,0.5) !important;
+  border-color: rgba(0,0,0,0.36) !important;
 }
 [data-theme-mode="light"] .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline {
   border-color: var(--accent, #3b82f6) !important;
 }
 [data-theme-mode="light"] .MuiDivider-root {
-  border-color: rgba(0,0,0,0.1) !important;
+  border-color: rgba(0,0,0,0.08) !important;
 }
 
 /* ── Tablas ── */
@@ -243,7 +243,7 @@
 
 /* ── Paper / Cards ── */
 [data-theme-mode="light"] .MuiPaper-root {
-  border-color: rgba(0,0,0,0.09) !important;
+  border-color: rgba(0,0,0,0.07) !important;
   color: #1e293b !important;
 }
 [data-theme-mode="light"] .MuiPaper-elevation,
@@ -251,13 +251,13 @@
 [data-theme-mode="light"] .MuiMenu-paper,
 [data-theme-mode="light"] .MuiPopover-paper {
   background-color: var(--surface, #eaecf2) !important;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.1) !important;
+  box-shadow: 0 2px 16px rgba(0,0,0,0.08), 0 1px 4px rgba(0,0,0,0.06) !important;
 }
-/* Dropdowns y autocomplete usan surface más claro */
+/* Dropdowns y autocomplete usan card (que es el tono más contrastado) */
 [data-theme-mode="light"] .MuiMenu-paper,
 [data-theme-mode="light"] .MuiPopover-paper,
 [data-theme-mode="light"] .MuiAutocomplete-paper {
-  background-color: #f4f6f9 !important;
+  background-color: var(--card-bg, #d8dce6) !important;
 }
 
 /* ── Tabs ── */

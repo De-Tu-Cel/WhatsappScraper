@@ -88,9 +88,17 @@ export const THEMES = [
   // ── Monocromático (fondo blanco, texto negro) ──
   { tKey: 'themeMonochrome', value: 'mono', cat:'mono', bg: '#d8dce6', sidebar: '#ccd1dc', surface: '#d2d6e0', card: '#c3c8d4', preview: ['#d8dce6','#ccd1dc','#c3c8d4'] },
 
+  // ── Neutros sofisticados (claros sin saturación, elegantes) ──
+  { tKey: 'themeSnow',       value: 'nieve',    cat:'mono', bg: '#eeecea', sidebar: '#e4e2de', surface: '#e8e6e2', card: '#dbd8d4', preview: ['#eeecea','#e4e2de','#dbd8d4'] },
+  { tKey: 'themeParchment',  value: 'pergamino',cat:'mono', bg: '#e8e0d0', sidebar: '#dfd6c6', surface: '#e2d9c8', card: '#d4c9b6', preview: ['#e8e0d0','#dfd6c6','#d4c9b6'] },
+  { tKey: 'themeCement',     value: 'cemento',  cat:'mono', bg: '#d0cecc', sidebar: '#c6c4c2', surface: '#cac8c6', card: '#bcb8b6', preview: ['#d0cecc','#c6c4c2','#bcb8b6'] },
+  { tKey: 'themeSand',       value: 'arena',    cat:'mono', bg: '#ddd6c8', sidebar: '#d4cdc0', surface: '#d8d0c2', card: '#cac2b2', preview: ['#ddd6c8','#d4cdc0','#cac2b2'] },
+  { tKey: 'themeSilver',     value: 'plata',    cat:'mono', bg: '#d6d6d6', sidebar: '#cacaca', surface: '#d0d0d0', card: '#c0c0c0', preview: ['#d6d6d6','#cacaca','#c0c0c0'] },
+  { tKey: 'themeFog',        value: 'niebla',   cat:'mono', bg: '#d4dae0', sidebar: '#c8d0d8', surface: '#cdd4dc', card: '#bec6ce', preview: ['#d4dae0','#c8d0d8','#bec6ce'] },
+
   // ── Pasteles (fondos muy claros, texto oscuro) ──
   { tKey: 'themeCloud',      value: 'nube',     cat:'mono', bg: '#c4d0dc', sidebar: '#b8c6d4', surface: '#ccd6e0', card: '#b0bece', preview: ['#c4d0dc','#b8c6d4','#b0bece'] },
-  { tKey: 'themeMintFresh',  value: 'menta',    cat:'mono', bg: '#c8ddd4', sidebar: '#bcd4ca', surface: '#d0e4da', card: '#b0ccC0', preview: ['#c8ddd4','#bcd4ca','#b0ccc0'] },
+  { tKey: 'themeMintFresh',  value: 'menta',    cat:'mono', bg: '#c8ddd4', sidebar: '#bcd4ca', surface: '#d0e4da', card: '#b0ccc0', preview: ['#c8ddd4','#bcd4ca','#b0ccc0'] },
   { tKey: 'themeBlush',      value: 'rubor',    cat:'mono', bg: '#ddd0d4', sidebar: '#d4c6cc', surface: '#e4d8da', card: '#ccb8be', preview: ['#ddd0d4','#d4c6cc','#ccb8be'] },
   { tKey: 'themePowderBlue', value: 'polvos',   cat:'mono', bg: '#c8d4e8', sidebar: '#bccae0', surface: '#d0daf0', card: '#b8c8dc', preview: ['#c8d4e8','#bccae0','#b8c8dc'] },
   { tKey: 'themeChampagne',  value: 'champan',  cat:'mono', bg: '#ddd8c4', sidebar: '#d4cebc', surface: '#e6e0cc', card: '#ccc8b0', preview: ['#ddd8c4','#d4cebc','#ccc8b0'] },
@@ -118,4 +126,12 @@ export const THEMES = [
   { tKey: 'themeMauve',      value: 'malva',    cat:'light', bg: '#5e3d52', sidebar: '#6c4b60', surface: '#543444', card: '#7a5870', preview: ['#5e3d52','#6c4b60','#7a5870'] },
   { tKey: 'themeJade',       value: 'jade',     cat:'light', bg: '#2d6b50', sidebar: '#387a5e', surface: '#276046', card: '#428868', preview: ['#2d6b50','#387a5e','#428868'] },
   { tKey: 'themeAsh',        value: 'ceniza',   cat:'light', bg: '#4a5058', surface: '#424850', sidebar: '#585e66', card: '#626870', preview: ['#4a5058','#585e66','#626870'] },
+
+  // ── Oscuros nuevos ──
+  { tKey: 'themeCosmos',     value: 'cosmos',   bg: '#080612', sidebar: '#0e0c1e', surface: '#120f26', card: '#171330', preview: ['#080612','#0e0c1e','#171330'] },
+  { tKey: 'themeEspresso',   value: 'espresso', bg: '#0a0705', sidebar: '#120e08', surface: '#18120a', card: '#1e160c', preview: ['#0a0705','#120e08','#1e160c'] },
+  { tKey: 'themeCenote',     value: 'cenote',   bg: '#04090f', sidebar: '#07131e', surface: '#091828', card: '#0c1e32', preview: ['#04090f','#07131e','#0c1e32'] },
+  { tKey: 'themeMagma',      value: 'magma',    bg: '#0e0504', sidebar: '#1a0806', surface: '#200a07', card: '#260d09', preview: ['#0e0504','#1a0806','#260d09'] },
+  { tKey: 'themeArcade',     value: 'arcade',   bg: '#060610', sidebar: '#0c0c1e', surface: '#0f0f26', card: '#13132e', preview: ['#060610','#0c0c1e','#13132e'] },
+  { tKey: 'themeWetAsphalt', value: 'asfalto',  bg: '#07090c', sidebar: '#0e1014', surface: '#13151a', card: '#181a20', preview: ['#07090c','#0e1014','#181a20'] },
 ]

@@ -288,6 +288,7 @@ export default function BatchProcessor() {
   const urlsRef     = useRef(null)
 
   const loading    = scrapeJob.processing
+  const pausing    = scrapeJob.pausing
   const paused     = scrapeJob.paused
   const done       = scrapeJob.done
   const progress   = scrapeJob.progress
@@ -664,20 +665,22 @@ export default function BatchProcessor() {
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <Box sx={{
             px: 2.5, py: 2,
-            bgcolor: paused ? 'rgba(251,191,36,0.05)' : 'rgba(var(--accent-rgb, 59,130,246), 0.05)',
-            border: `1px solid ${paused ? 'rgba(251,191,36,0.2)' : 'rgba(var(--accent-rgb, 59,130,246), 0.15)'}`,
+            bgcolor: (paused || pausing) ? 'rgba(251,191,36,0.05)' : 'rgba(var(--accent-rgb, 59,130,246), 0.05)',
+            border: `1px solid ${(paused || pausing) ? 'rgba(251,191,36,0.2)' : 'rgba(var(--accent-rgb, 59,130,246), 0.15)'}`,
             borderRadius: 2, transition: 'all 0.3s',
           }}>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                {paused ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} /> : <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />}
+                {paused ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} /> : <CircularProgress size={14} sx={{ color: pausing ? '#fbbf24' : 'var(--accent, #3b82f6)' }} />}
                 <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
                   {paused
                     ? (lang === 'en' ? `Paused — ${doneCount} of ${urlList.length}` : `Pausado — ${doneCount} de ${urlList.length}`)
-                    : (lang === 'en' ? `Scraping — ${doneCount} of ${urlList.length}` : `Scrapeando — ${doneCount} de ${urlList.length}`)}
+                    : pausing
+                      ? (lang === 'en' ? `Pausing… — ${doneCount} of ${urlList.length}` : `Pausando… — ${doneCount} de ${urlList.length}`)
+                      : (lang === 'en' ? `Scraping — ${doneCount} of ${urlList.length}` : `Scrapeando — ${doneCount} de ${urlList.length}`)}
                 </Typography>
               </Box>
-              <Typography sx={{ color: paused ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>
+              <Typography sx={{ color: (paused || pausing) ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>
                 {progress}%
               </Typography>
             </Box>
@@ -686,9 +689,9 @@ export default function BatchProcessor() {
               value={progress}
               sx={{
                 borderRadius: 4, height: 6,
-                bgcolor: paused ? 'rgba(251,191,36,0.1)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)',
+                bgcolor: (paused || pausing) ? 'rgba(251,191,36,0.1)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)',
                 '& .MuiLinearProgress-bar': {
-                  background: paused
+                  background: (paused || pausing)
                     ? 'linear-gradient(90deg,#f59e0b,#fbbf24)'
                     : 'linear-gradient(90deg, var(--accent, #3b82f6), var(--accent, #60a5fa))',
                   borderRadius: 4,
@@ -705,9 +708,9 @@ export default function BatchProcessor() {
             )}
           </Box>
           <Box sx={{ display: 'flex', gap: 1.5 }}>
-            <Button fullWidth onClick={handlePause} startIcon={paused ? <PlayArrowIcon /> : <PauseIcon />}
+            <Button fullWidth onClick={handlePause} disabled={pausing} startIcon={paused ? <PlayArrowIcon /> : <PauseIcon />}
               sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' } }}>
-              {paused ? t.batch.resume : t.batch.pause}
+              {paused ? t.batch.resume : pausing ? (lang === 'en' ? 'Pausing…' : 'Pausando…') : t.batch.pause}
             </Button>
             <Button fullWidth onClick={handleCancelBatch} startIcon={<HighlightOffIcon />}
               sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>

@@ -933,16 +933,20 @@ class WebsiteScraper:
         """Extrae nombre de la empresa"""
         domain_hint = urlparse(url).netloc.replace("www.", "").split(".")[0].lower()
 
+        def _norm(s: str) -> str:
+            """Colapsa whitespace interno (saltos de línea, tabs, espacios múltiples)."""
+            return re.sub(r'\s+', ' ', s).strip()
+
         # 1. og:site_name — diseñado específicamente para el nombre del sitio
         og_site = soup.find("meta", property="og:site_name")
         if og_site and og_site.get("content"):
-            name = og_site["content"].strip()
+            name = _norm(og_site["content"])
             if name and len(name) <= 60 and not self._GENERIC_NAME.match(name):
                 return name
 
         # 2. Title tag — buscar la parte que contiene el nombre real
         if soup.title and soup.title.string:
-            title = soup.title.string.strip()
+            title = _norm(soup.title.string)
             for sep in ["|", "–", "—", " - ", ":", "•", ","]:
                 if sep in title:
                     parts = [p.strip() for p in title.split(sep) if p.strip()]
@@ -962,14 +966,14 @@ class WebsiteScraper:
         # 3. Logo alt text — más fiable que H1 para el nombre de marca
         logo = soup.find("img", alt=re.compile(r"logo", re.IGNORECASE))
         if logo and logo.get("alt"):
-            alt = logo["alt"].strip()
+            alt = _norm(logo["alt"])
             if alt and len(alt) <= 60:
                 return alt
 
         # 4. H1 principal
         h1 = soup.find("h1")
         if h1:
-            text = h1.get_text(strip=True)
+            text = _norm(h1.get_text())
             if text and len(text) <= 60:
                 return text
 
@@ -1297,14 +1301,46 @@ class WebsiteScraper:
 
     _CDMX_ALIASES = {"cdmx", "df", "d.f.", "ciudad de mexico", "ciudad de méxico"}
 
+    # Palabras que revelan que el campo "city" del Schema.org es en realidad
+    # un string de SEO y no una ciudad real (ej. "Dentista en Monterrey N.L.")
+    _SEO_CITY_WORDS = re.compile(
+        r'\b(ubicaci[oó]n|dentista|m[eé]dico|doctor|cl[ií]nica|servicio|'
+        r'tratamiento|especialista|cirujano|consultorio|ortodoncia|'
+        r'psic[oó]logo|nutrici[oó]n|quiropr[aá]ctic|fisioter|'
+        r'abogado|despacho|contador|empresa|agencia)\b',
+        re.IGNORECASE,
+    )
+    _KNOWN_CITIES = [
+        "Ciudad de México", "Guadalajara", "Monterrey", "Puebla", "Tijuana",
+        "León", "Juárez", "Torreón", "San Luis Potosí", "Mérida", "Querétaro",
+        "Aguascalientes", "Mexicali", "Culiacán", "Cancún", "Tlalnepantla",
+        "Ecatepec", "Naucalpan", "Nezahualcóyotl", "Zapopan", "Saltillo",
+        "San Pedro Garza García", "Chihuahua", "Hermosillo", "Veracruz",
+        "Morelia", "Toluca", "Oaxaca", "Villahermosa", "Tuxtla Gutiérrez",
+        "Tepic", "Colima", "La Paz", "Durango", "Zacatecas", "Campeche",
+        "Chetumal", "Pachuca", "Tlaxcala", "Cuernavaca",
+    ]
+
     def _clean_city(self, city: str) -> str:
-        """Normaliza el campo ciudad: elimina abreviaciones pegadas (CDMX, DF), trim."""
+        """Normaliza el campo ciudad: elimina abreviaciones pegadas y strings SEO."""
         if not city:
             return ""
         # Quitar sufijos comunes: "Ciudad de México, CDMX" → "Ciudad de México"
         for alias in ("CDMX", "D.F.", "DF", "MX", "México, MX"):
             city = city.replace(f", {alias}", "").replace(f" {alias}", "")
-        return city.strip().strip(",").strip()
+        city = city.strip().strip(",").strip()
+
+        # Si la ciudad parece un string de SEO (demasiado larga o contiene palabras
+        # que no son nombres de ciudad), intentar extraer la ciudad real dentro del string
+        if len(city) > 28 or self._SEO_CITY_WORDS.search(city):
+            cl = city.lower()
+            for known in self._KNOWN_CITIES:
+                if known.lower() in cl:
+                    return known
+            # No se encontró ciudad conocida — devolver vacío para no contaminar la DB
+            return ""
+
+        return city
 
     def _infer_state_from_city(self, city: str) -> str:
         """Si la ciudad implica un estado, lo devuelve."""

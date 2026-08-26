@@ -97,7 +97,7 @@ export function useScrapeJob(surface) {
   }, [storageKey])
 
   const total      = job?.total_count || 0
-  const processed  = job?.processed_count || 0
+  const processed  = Math.min(job?.processed_count || 0, total)
   const status     = job?.status || null
 
   return {

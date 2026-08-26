@@ -106,7 +106,9 @@ def _run_scrape_job(job_id: str):
             # bar advances one tick at a time instead of jumping by 4.
             in_flight = list(chunk)
             chunk_results = []
-            with ThreadPoolExecutor(max_workers=len(chunk)) as ex:
+            # Don't use `with` so we can shutdown(wait=False) on early pause break.
+            ex = ThreadPoolExecutor(max_workers=len(chunk))
+            try:
                 future_map = {ex.submit(_process_one_url, url): url for url in chunk}
                 for future in as_completed(future_map):
                     url = future_map[future]
@@ -119,6 +121,16 @@ def _run_scrape_job(job_id: str):
                             "$set": {"current_urls": in_flight, "last_progress_at": datetime.now()},
                         },
                     )
+                    # Check pause after EACH URL instead of after the full chunk —
+                    # lets the user stop within one URL's latency instead of waiting
+                    # for all _CONCURRENCY URLs to finish.
+                    _st = db.db.scrape_jobs.find_one({"_id": oid}, {"paused": 1, "status": 1})
+                    if _st and (_st.get("paused") or _st.get("status") == "cancelled"):
+                        break
+            finally:
+                # Don't block waiting for the remaining in-flight futures — they
+                # keep running in the background, but their results are discarded.
+                ex.shutdown(wait=False)
 
             # Stamp already_contacted + assigned_instance for this chunk.
             company_ids = [r["company_id"] for r in chunk_results if r.get("company_id")]
@@ -146,7 +158,7 @@ def _run_scrape_job(job_id: str):
                             r["assigned_instance"] = ai
 
             results.extend(chunk_results)
-            next_index += len(chunk)
+            next_index += len(chunk_results)  # partial chunk if we broke early
             db.db.scrape_jobs.update_one(
                 {"_id": oid},
                 {"$set": {

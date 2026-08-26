@@ -1557,6 +1557,18 @@ def search_prospects(
             city = extracted_city
             country = country or extracted_country
 
+    # Sin ciudad ni país detectados, usar el país por defecto para que el fan-out
+    # por ciudades y el sesgo geográfico de BD funcionen — sin esto, "clinics" (o
+    # cualquier término sin ubicación) busca worldwide y BD usa gl="mx" de todos
+    # modos pero sin queries de ciudad, devolviendo muy pocos resultados relevantes.
+    if not country and not city.strip():
+        country = DEFAULT_COUNTRY
+
+    import logging as _logging
+    _log = _logging.getLogger("searcher")
+    _log.info("[search] industry=%r city=%r country=%r num=%d offset=%d",
+              industry, city, country, num_results, offset)
+
     _bd_key = _brightdata_key()
 
     if _bd_key and offset:
@@ -1580,7 +1592,9 @@ def search_prospects(
             maps_urls, maps_snips = maps_future.result()
             osm_urls,  osm_snips  = osm_future.result()
 
-        print(f"[search] BD={len(bd_urls)} DDG={len(ddg_urls)} SA={len(sa_urls)} Maps={len(maps_urls)} OSM={len(osm_urls)}")
+        _log.info("[search] BD=%d DDG=%d SA=%d Maps=%d OSM=%d → merged=%d",
+                  len(bd_urls), len(ddg_urls), len(sa_urls), len(maps_urls), len(osm_urls),
+                  len(set(_get_domain(u) for u in maps_urls + bd_urls + ddg_urls + sa_urls + osm_urls if _get_domain(u))))
 
         # Mergear: Maps y BD primero (más calidad), luego DDG, SA, OSM
         # OSM va al final porque ya trae snippets ricos — el AI filter los aprovechará aunque lleguen últimos
@@ -1616,11 +1630,14 @@ def search_prospects(
                 seen.add(d)
                 urls.append(u)
                 snippets[u] = ddg_snips.get(u) or osm_snips.get(u, {})
-        print(f"[search] DDG={len(ddg_urls)} OSM={len(osm_urls)}")
+        _log.info("[search] DDG=%d OSM=%d", len(ddg_urls), len(osm_urls))
 
     # Apply domain exclusion
+    before_excl = len(urls)
     if exclude_domains:
         urls = [u for u in urls if _get_domain(u) not in exclude_domains]
+    if before_excl != len(urls):
+        _log.info("[search] after exclude_domains: %d → %d URLs", before_excl, len(urls))
 
     # Shallow-fetch title + meta description for URLs the search engines didn't describe.
     # Gives the AI filter much richer signal with no extra LLM cost.
@@ -1631,7 +1648,10 @@ def search_prospects(
             if meta:
                 snippets[u] = meta
 
-    return _ai_filter_urls(urls, industry, snippets, country=country)  # no cap — caller decides how many to show
+    _log.info("[search] sending %d URLs to AI filter", len(urls))
+    result = _ai_filter_urls(urls, industry, snippets, country=country)
+    _log.info("[search] AI filter returned %d URLs (from %d)", len(result), len(urls))
+    return result
 
 
 def _search_via_serpapi(query: str, num_results: int, offset: int = 0) -> tuple[list, dict]:

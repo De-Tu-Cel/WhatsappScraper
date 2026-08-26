@@ -120,12 +120,15 @@ def _run_scrape_job(job_id: str):
                 {"$set": {"current_urls": chunk, "last_progress_at": datetime.now()}},
             )
 
-            # Process in parallel but update processed_count + current_urls as
-            # each URL finishes (not only after all 4 complete), so the progress
-            # bar advances one tick at a time instead of jumping by 4.
+            # Always finish the full chunk before checking pause state.
+            # Breaking mid-chunk left the remaining in-flight URLs running in
+            # background threads whose results were discarded; on resume those
+            # URLs fell back inside next_index and were scraped a second time,
+            # producing duplicate rows in results and recipient count drops.
+            # Cancel (irreversible) still breaks immediately; pause (reversible)
+            # is caught by the outer while-loop between chunks.
             in_flight = list(chunk)
             chunk_results = []
-            # Don't use `with` so we can shutdown(wait=False) on early pause break.
             ex = ThreadPoolExecutor(max_workers=len(chunk))
             try:
                 future_map = {ex.submit(_process_one_url, url): url for url in chunk}
@@ -140,15 +143,13 @@ def _run_scrape_job(job_id: str):
                             "$set": {"current_urls": in_flight, "last_progress_at": datetime.now()},
                         },
                     )
-                    # Check pause after EACH URL instead of after the full chunk —
-                    # lets the user stop within one URL's latency instead of waiting
-                    # for all _CONCURRENCY URLs to finish.
-                    _st = db.db.scrape_jobs.find_one({"_id": oid}, {"paused": 1, "status": 1})
-                    if _st and (_st.get("paused") or _st.get("status") == "cancelled"):
+                    # Only break on cancel (job is gone for good); pause waits for
+                    # the chunk to drain so next_index stays aligned with chunk
+                    # boundaries and no URL is submitted twice on resume.
+                    _st = db.db.scrape_jobs.find_one({"_id": oid}, {"status": 1})
+                    if _st and _st.get("status") == "cancelled":
                         break
             finally:
-                # Don't block waiting for the remaining in-flight futures — they
-                # keep running in the background, but their results are discarded.
                 ex.shutdown(wait=False)
 
             # Stamp already_contacted + assigned_instance for this chunk.

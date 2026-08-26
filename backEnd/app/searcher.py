@@ -541,13 +541,38 @@ def _norm_loc(s: str) -> str:
     return re.sub(r'\s+', ' ', s).strip().lower()
 
 
-# Nombres en español de ciudades extranjeras que en COUNTRY_CONFIG están en su
-# idioma local (las ciudades de EEUU están en inglés) — sin esto, alguien que
-# escribe "abogados en Nueva York" no coincide con la lista curada ("New York").
+# Nombres alternativos de ciudades — español ↔ inglés y exónimos comunes.
+# Solo para las ciudades cuyo nombre difiere del registrado en COUNTRY_CONFIG;
+# las que ya son iguales en ambos idiomas (paris, berlin, tokyo…) no necesitan entrada.
 _CITY_EXONYMS = {
-    "nueva york": "New York",
-    "nueva orleans": "New Orleans",
-    "filadelfia": "Philadelphia",
+    # ES → EN (el usuario escribe en español pero la lista está en inglés)
+    "nueva york":          "New York",
+    "nueva orleans":       "New Orleans",
+    "filadelfia":          "Philadelphia",
+    "los angeles":         "Los Angeles",
+    "san francisco":       "San Francisco",
+    "las vegas":           "Las Vegas",
+    # EN → ES (el usuario escribe en inglés pero la lista está en español)
+    "london":              "Londres",
+    "rome":                "Roma",
+    "naples":              "Nápoles",
+    "florence":            "Florencia",
+    "venice":              "Venecia",
+    "lisbon":              "Lisboa",
+    "seville":             "Sevilla",
+    "bilbao":              "Bilbao",   # same, but keep for explicitness
+    "mexico city":         "Ciudad de México",
+    "cdmx":                "Ciudad de México",
+    "guadalajara mexico":  "Guadalajara",
+    "monterrey mexico":    "Monterrey",
+    "buenos aires":        "Buenos Aires",   # same in both
+    "bogota":              "Bogotá",         # accent-stripped already matches, but explicit
+    "sao paulo":           "São Paulo",
+    "rio":                 "Rio de Janeiro",
+    "rio de janeiro":      "Rio de Janeiro",
+    "santiago chile":      "Santiago",
+    "lima peru":           "Lima",
+    "bogotá":              "Bogotá",
 }
 
 
@@ -608,10 +633,13 @@ def _build_city_index() -> dict:
 
 
 _CITY_INDEX = _build_city_index()
-# "en" era el único disparador reconocido — el docstring de abajo ya prometía
-# soportar "cerca de Bogotá" pero el regex no lo cubría. Se agregan las otras
-# formas comunes en que la gente escribe la ubicación en un texto libre.
-_LOCATION_TAIL_RE = re.compile(r'\b(?:cerca de|cercano a|junto a|por|en)\s+(.+)$', re.IGNORECASE)
+# Reconoce preposiciones de ubicación en español e inglés:
+#   "dentistas en Monterrey", "clinics in London", "gyms near Bogotá"
+# El orden importa: "cerca de" antes de "de" para que no se parta a la mitad.
+_LOCATION_TAIL_RE = re.compile(
+    r'\b(?:cerca de|cercano a|junto a|cerca a|near|around|at|in|por|en)\s+(.+)$',
+    re.IGNORECASE,
+)
 
 
 def _extract_location(text: str) -> tuple[str, str, str | None]:
@@ -865,7 +893,7 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not urls:
         return urls
     snippets = snippets or {}
-    geo = country or "México"
+    geo = country  # None = no geographic restriction in the prompt
 
     ranked: list[str] = []
     remaining = list(urls)
@@ -886,9 +914,10 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
                 if body:
                     line += f"\n   Resumen: {body}"
                 lines.append(line)
+            geo_clause = f"en {geo}" if geo else "en cualquier país"
             prompt = (
                 f'Eres un filtro ESTRICTO de URLs. Se buscan ÚNICAMENTE sitios web oficiales '
-                f'de negocios LOCALES e INDEPENDIENTES del sector "{industry}" en {geo}.\n\n'
+                f'de negocios LOCALES e INDEPENDIENTES del sector "{industry}" {geo_clause}.\n\n'
                 f'INCLUIR SOLO si es la página oficial de UN negocio específico con nombre y dirección propios:\n'
                 f'  ✓ Un restaurante, clínica, gimnasio, taller, tienda, despacho, salón específico.\n\n'
                 f'EXCLUIR SIN EXCEPCIÓN (devuelve [] si ninguna aplica):\n'
@@ -1556,13 +1585,6 @@ def search_prospects(
             industry = clean_industry
             city = extracted_city
             country = country or extracted_country
-
-    # Sin ciudad ni país detectados, usar el país por defecto para que el fan-out
-    # por ciudades y el sesgo geográfico de BD funcionen — sin esto, "clinics" (o
-    # cualquier término sin ubicación) busca worldwide y BD usa gl="mx" de todos
-    # modos pero sin queries de ciudad, devolviendo muy pocos resultados relevantes.
-    if not country and not city.strip():
-        country = DEFAULT_COUNTRY
 
     import logging as _logging
     _log = _logging.getLogger("searcher")

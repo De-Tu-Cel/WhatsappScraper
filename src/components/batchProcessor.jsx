@@ -281,6 +281,7 @@ export default function BatchProcessor() {
   const [expandedCo, setExpandedCo] = useState(new Set())
   const msgRef       = useRef(null)
   const highlightRef = useRef(null)
+  const wasActiveRef = useRef(false)
   function syncScroll() {
     if (highlightRef.current && msgRef.current)
       highlightRef.current.scrollTop = msgRef.current.scrollTop
@@ -304,7 +305,10 @@ export default function BatchProcessor() {
   }, [scrapeJob.results, sentOverlay])
 
   useEffect(() => {
-    if (queueActive?.phase === 'success') {
+    if (queueActive !== null) {
+      wasActiveRef.current = true
+    } else if (wasActiveRef.current) {
+      wasActiveRef.current = false
       setSentOverlay(prev => {
         const next = { ...prev }
         for (const k in next) if (next[k] === 'queued') next[k] = 'sent'
@@ -312,7 +316,7 @@ export default function BatchProcessor() {
       })
       refreshCapStats()
     }
-  }, [queueActive?.phase, refreshCapStats])
+  }, [queueActive, refreshCapStats])
 
   const placeholder = useTypewriter(EXAMPLES, !rawUrls && !loading)
 

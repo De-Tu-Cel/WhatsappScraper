@@ -268,9 +268,15 @@ _TRAILING_ARTICLE_ID = re.compile(r'-\d{6,}(?:\.\w+)?/?$')
 
 def _is_business_url(url: str) -> bool:
     try:
+        # Reject non-web schemes (tel:, mailto:, javascript:) and the
+        # malformed variant "http://tel:(xxx)" that Maps sometimes emits.
+        if not url or url.lstrip().startswith("tel:"):
+            return False
         parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
         domain = parsed.netloc.lower().replace('www.', '', 1)
-        if not domain:
+        if not domain or "." not in domain:
             return False
         if any(domain == ex or domain.endswith('.' + ex) for ex in EXCLUDED_DOMAINS):
             return False

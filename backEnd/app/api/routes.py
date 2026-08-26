@@ -727,12 +727,19 @@ def api_search(req: SearchRequest):
 
         db = MongoDBManager()
         known = db.get_all_scraped_domains() | set(req.already_shown_domains or [])
-        urls  = search_prospects(
+        target = req.num_results or 10
+        # Fetch 3× the target so that after filtering out already-known domains
+        # we still have enough fresh results. Cap at 90 to limit API spend.
+        fetch_count = min(target * 3, 90)
+        urls = search_prospects(
             req.industry, req.city or "", req.keywords or "",
-            req.num_results, req.offset or 0,
+            fetch_count, req.offset or 0,
             exclude_domains=known,
             country=req.country,
         )
+        # All returned URLs are already "new" (exclude_domains filtered inside
+        # search_prospects), so just trim to what the user asked for.
+        urls = urls[:target]
 
         # Flag domain-blacklisted results here (industry isn't known until the
         # site is actually scraped, so only the domain rule can apply pre-scrape)
@@ -750,7 +757,8 @@ def api_search(req: SearchRequest):
 
         # El frontend usa esto para saber desde dónde continuar la próxima vez
         # que pida "cargar más" (paginación real de Bright Data, ver searcher.py).
-        next_offset = (req.offset or 0) + pages_per_query_for(req.num_results or 10) * 10
+        # Use fetch_count (not target) so the offset reflects actual BD pages consumed.
+        next_offset = (req.offset or 0) + pages_per_query_for(fetch_count) * 10
 
         return {"urls": urls, "results": results, "next_offset": next_offset}  # "urls" kept for now, not read by the frontend anymore
     except Exception as e:

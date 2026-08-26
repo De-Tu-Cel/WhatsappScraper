@@ -4494,12 +4494,13 @@ def api_companies_with_numbers(x_user_token: Optional[str] = Header(None)):
 
 @router.get("/admin/scheduled-sends")
 def api_list_scheduled_sends(x_user_token: Optional[str] = Header(None)):
-    """List all scheduled send campaigns, sorted by scheduled_at descending."""
-    _require_user(x_user_token)
+    """List scheduled send campaigns belonging to the current user."""
+    user = _require_user(x_user_token)
     try:
         db = MongoDBManager()
+        username = user.get("username", "")
         docs = list(db.db.scheduled_sends.find(
-            {},
+            {"created_by_username": username},
             sort=[("scheduled_at", -1)],
         ))
         return serialize(docs)

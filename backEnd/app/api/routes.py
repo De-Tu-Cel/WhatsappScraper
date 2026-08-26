@@ -3817,6 +3817,7 @@ async def api_wwebjs_webhook(request: Request):
         print(f"[wwebjs Webhook] inbound saved log_id={log_id} company={company_id} from={number}")
 
         if message_body and log_id and company_id not in ("unknown", "manual"):
+            from datetime import datetime, timedelta
             from app.llm import active_provider as _wwebjs_cls_provider
             if _wwebjs_cls_provider() != "none":
                 import threading as _wwebjs_t
@@ -3847,7 +3848,6 @@ async def api_wwebjs_webhook(request: Request):
 
         if message_body and company_id not in ("unknown", "manual") and log_id and not _is_pure_inbound:
             try:
-                from datetime import datetime, timedelta
                 from app.llm import active_provider as _llm_provider
                 if _llm_provider() != "none":
                     _ai_session_active = bool(db.db.ai_followup_sessions.find_one(

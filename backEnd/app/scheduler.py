@@ -513,13 +513,15 @@ def _send_message(db, company_id: str, to_number: str, message: str, job_id: str
             co = db.db.companies.find_one({"_id": ObjectId(company_id)}, {"assigned_instance": 1})
             inst_name = (co or {}).get("assigned_instance")
             if inst_name:
-                # Mirror routes.py: verify the assigned instance hasn't hit its
-                # per-instance new-contact cap before committing to it.  If it has,
-                # fall through to the nc-aware pick below rather than letting
-                # _send_via_* return skipped_nc_cap and silently drop the message.
+                # Verify the assigned instance hasn't hit its daily cap OR its
+                # new-contact cap before committing to it.  If either is exceeded,
+                # fall through to the nc-aware pick so the message isn't silently
+                # dropped (skipped_daily_cap / skipped_nc_cap are truthy strings
+                # that the caller can't distinguish from True, causing a silent loss).
                 from app.daily_cap import check_new_contact_cap as _check_nc
+                _daily_ok = get_daily_count(db, inst_name) < get_instance_cap(db, inst_name)
                 _nc_ok, _, _ = _check_nc(db, inst_name, company_id)
-                if _nc_ok:
+                if _daily_ok and _nc_ok:
                     inst_doc = db.db.instances.find_one({"name": inst_name}, {"provider": 1})
                     provider = (inst_doc or {}).get("provider", "")
                     if provider == "wwebjs":
@@ -531,7 +533,7 @@ def _send_message(db, company_id: str, to_number: str, message: str, job_id: str
                     if provider == "waha":
                         return _send_via_waha(db, company_id, to_number, message, job_id, delay_ms, session=inst_name,
                                                sent_by_username=sent_by_username, sent_by_name=sent_by_name)
-                # NC cap exceeded on assigned instance — fall through to nc-aware pick
+                # Daily cap or NC cap exceeded on assigned instance — fall through to nc-aware pick
     except Exception:
         pass
     # Fallback: wwebjs → WasenderAPI → WAHA → Evolution

@@ -181,6 +181,8 @@ export default function CsvImporter() {
   // de una empresa — clave `${company_id}::${number}`.
   const [extraSelected, setExtraSelected] = useState(new Set())
   const [expandedCo, setExpandedCo] = useState(new Set())
+  const [filterContacted,  setFilterContacted]  = useState('all') // 'all' | 'new' | 'contacted'
+  const [localContactedIds, setLocalContactedIds] = useState(new Set())
   const msgRef       = useRef(null)
   const highlightRef = useRef(null)
   const wasActiveRef = useRef(false)
@@ -302,7 +304,13 @@ export default function CsvImporter() {
   // waRowsUnique deduplicado por company_id — dos filas de CSV distintas pueden
   // resolver a la misma empresa ya existente en la BD.
   const waRowsAll    = results.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
-  const waRowsUnique = useMemo(() => dedupeByCompany(waRowsAll), [waRowsAll])
+  const waRowsUnique = useMemo(() =>
+    dedupeByCompany(waRowsAll).map(r => ({
+      ...r,
+      already_contacted: r.already_contacted
+        || (localContactedIds.has(r.company_id) ? { contacted: true } : null),
+    })),
+  [waRowsAll, localContactedIds])
   // Los setState devuelven la MISMA referencia si ya estaban vacíos — evita que
   // este efecto re-dispare un render indefinidamente si `results` llega a ser
   // referencialmente inestable entre renders (ver useScrapeJob.js EMPTY_RESULTS).
@@ -311,9 +319,18 @@ export default function CsvImporter() {
     setExtraSelected(prev => prev.size ? new Set() : prev)
     setExpandedCo(prev => prev.size ? new Set() : prev)
   }, [results])
+  useEffect(() => {
+    setLocalContactedIds(new Set())
+    setFilterContacted('all')
+  }, [scrapeJob.job?._id])
+  const filteredWaRows = useMemo(() => {
+    if (filterContacted === 'new') return waRowsUnique.filter(r => !r.already_contacted?.contacted)
+    if (filterContacted === 'contacted') return waRowsUnique.filter(r => r.already_contacted?.contacted)
+    return waRowsUnique
+  }, [waRowsUnique, filterContacted])
   const effectiveWaSelected = useMemo(() =>
-    new Set(waRowsUnique.map(r => r.company_id).filter(id => !waDeselected.has(id))),
-  [waRowsUnique, waDeselected])
+    new Set(filteredWaRows.map(r => r.company_id).filter(id => !waDeselected.has(id))),
+  [filteredWaRows, waDeselected])
   const alreadySent = results.some(r => r.msg_status === 'sent' || r.msg_status === 'failed' || r.msg_status === 'queued')
   const isSending   = queueActive !== null && alreadySent
   const sentCount   = results.filter(r => r.msg_status === 'sent').length
@@ -327,14 +344,15 @@ export default function CsvImporter() {
     [...extraSelected].filter(key => effectiveWaSelected.has(key.split('::')[0])).length
   const overBy     = getOverBy(capStats, totalContactPoints)
   const capBlocked = overBy > 0
-  // Sending to 2+ numbers needs varied text (see MIN_TEMPLATES_FOR_BULK) — editing
-  // one base message stops making sense there, so it switches to picking 3+ saved templates.
-  const isBulk = totalNumbers > 1
+  // Sending to 2+ contact points needs varied text (see MIN_TEMPLATES_FOR_BULK).
+  // Uses totalContactPoints so selecting multiple numbers of a single company
+  // also triggers the template-library mode.
+  const isBulk = totalContactPoints > 1
   const allVariants = (isBulk ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean)
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
   async function handleSendAll() {
-    const targets = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id))
+    const targets = filteredWaRows.filter(r => effectiveWaSelected.has(r.company_id))
     if (!targets.length || belowMinTemplates || capBlocked) return
     const alreadyContacted = targets.filter(r => r.already_contacted?.contacted)
     if (alreadyContacted.length) {
@@ -362,6 +380,11 @@ export default function CsvImporter() {
     }
     addBatch(jobs, lang === 'en' ? 'CSV import' : 'Importación CSV')
     setSentOverlay(prev => ({ ...prev, ...queuedUrls }))
+    setLocalContactedIds(prev => {
+      const next = new Set(prev)
+      jobs.forEach(j => j.companyId && next.add(j.companyId))
+      return next
+    })
   }
 
   const hasFile    = allUrls.length > 0
@@ -635,7 +658,7 @@ export default function CsvImporter() {
 
           {/* Panel colapsable */}
           <Collapse in={showSend}>
-            <Box sx={{ px: 2, pb: 2, borderTop: '1px solid rgba(34,197,94,0.1)' }}>
+            <Box sx={{ px: 2, pb: 2, borderTop: '1px solid rgba(34,197,94,0.1)', maxHeight: '70vh', overflowY: 'auto' }}>
               {/* Timing config toggle */}
               <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1.2, mb: 1 }}>
                 <Tooltip title={t.sendConfig?.title || 'Timing de envío'} placement="left" arrow>
@@ -672,8 +695,27 @@ export default function CsvImporter() {
                 <CapacityBanner stats={capStats} selectionCount={totalContactPoints} sx={{ mb: 1.5 }} />
               )}
 
+              {/* Filter tabs */}
+              <Box sx={{ display: 'flex', gap: 0.75, mb: 1.5 }}>
+                {[
+                  { key: 'all',       label: lang === 'en' ? 'All'             : 'Todos' },
+                  { key: 'new',       label: lang === 'en' ? 'Not contacted'   : 'Sin contactar' },
+                  { key: 'contacted', label: lang === 'en' ? 'Already contacted': 'Ya contactados' },
+                ].map(tab => (
+                  <Chip key={tab.key} label={tab.label} size="small"
+                    onClick={() => setFilterContacted(tab.key)}
+                    sx={{
+                      cursor: 'pointer',
+                      fontSize: '0.7rem', height: 22,
+                      bgcolor: filterContacted === tab.key ? 'rgba(34,197,94,0.18)' : 'var(--item-hover)',
+                      color:  filterContacted === tab.key ? '#4ade80' : 'var(--text-muted)',
+                      border: `1px solid ${filterContacted === tab.key ? 'rgba(34,197,94,0.35)' : 'var(--border)'}`,
+                    }} />
+                ))}
+              </Box>
+
               <Box sx={{ display: 'flex', gap: 2.5 }}>
-                <RecipientsBox rows={waRowsUnique}
+                <RecipientsBox rows={filteredWaRows}
                   effectiveSelected={effectiveWaSelected}
                   expandedCo={expandedCo}
                   extraSelected={extraSelected}
@@ -885,27 +927,27 @@ export default function CsvImporter() {
         slotProps={{ paper: { sx: { bgcolor: 'var(--bg-card, #1e293b)', border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 2, minWidth: 340 } } }}
       >
         <DialogTitle sx={{ color: 'var(--text, white)', fontSize: '0.95rem', fontWeight: 700, pb: 1 }}>
-          Contactos ya enviados
+          {t.search?.confirmContactedTitle || (lang === 'en' ? 'Already contacted' : 'Contactos ya enviados')}
         </DialogTitle>
         <DialogContent sx={{ pt: '8px !important' }}>
           <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.6))', fontSize: '0.85rem' }}>
-            Los siguientes contactos ya recibieron un mensaje:
+            {t.search?.confirmContactedDesc || (lang === 'en' ? 'These contacts already received a message:' : 'Los siguientes contactos ya recibieron un mensaje:')}
           </Typography>
           <Typography sx={{ color: 'var(--text, white)', fontSize: '0.85rem', fontWeight: 600, mt: 0.5, wordBreak: 'break-word' }}>
             {confirmDialog.names}
           </Typography>
           <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.6))', fontSize: '0.85rem', mt: 1.5 }}>
-            ¿Enviarles mensaje de todas formas?
+            {t.search?.confirmContactedAsk || (lang === 'en' ? 'Send them a message anyway?' : '¿Enviarles mensaje de todas formas?')}
           </Typography>
         </DialogContent>
         <DialogActions sx={{ px: 2, pb: 2, gap: 1 }}>
           <Button size="small" onClick={() => { confirmDialog.resolve?.(false); setConfirmDialog({ open: false, names: '', resolve: null }) }}
             sx={{ color: 'var(--text-muted, rgba(255,255,255,0.5))', textTransform: 'none' }}>
-            Cancelar
+            {t.csv.cancel || (lang === 'en' ? 'Cancel' : 'Cancelar')}
           </Button>
           <Button size="small" variant="contained" onClick={() => { confirmDialog.resolve?.(true); setConfirmDialog({ open: false, names: '', resolve: null }) }}
             sx={{ bgcolor: 'var(--accent, #3b82f6)', '&:hover': { bgcolor: 'var(--accent-hover, #2563eb)' }, textTransform: 'none', fontWeight: 600 }}>
-            Enviar de todas formas
+            {t.search?.confirmContactedConfirm || (lang === 'en' ? 'Send anyway' : 'Enviar de todas formas')}
           </Button>
         </DialogActions>
       </Dialog>

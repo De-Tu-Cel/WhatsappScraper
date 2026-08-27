@@ -633,7 +633,7 @@ def _execute_send_job(job_id: str):
                             job_id, delay_sec, msg_delay_min, msg_delay_max, send_index + 1)
                 time.sleep(delay_sec)
 
-        def _finish(sent: int, errors: int):
+        def _finish(sent: int, errors: int, skipped_nc: int = 0, skipped_daily: int = 0):
             final_status = "done" if sent > 0 or errors == 0 else "error"
             db.db.scheduled_sends.update_one(
                 {"_id": ObjectId(job_id)},
@@ -641,11 +641,13 @@ def _execute_send_job(job_id: str):
                     "status": final_status,
                     "sent_count": sent,
                     "error_count": errors,
+                    "skipped_nc_cap_count": skipped_nc,
+                    "skipped_daily_cap_count": skipped_daily,
                     "finished_at": datetime.now(),
                 }},
             )
-            log.warning("[Scheduler] job=%s ✅ finished status=%s sent=%d errors=%d",
-                        job_id, final_status, sent, errors)
+            log.warning("[Scheduler] job=%s ✅ finished status=%s sent=%d errors=%d skipped_nc=%d skipped_daily=%d",
+                        job_id, final_status, sent, errors, skipped_nc, skipped_daily)
 
         # ── Branch A: explicit number list (from company picker) ──────────────
         if selected_numbers:
@@ -655,6 +657,8 @@ def _execute_send_job(job_id: str):
             )
             sent_count = 0
             error_count = 0
+            skipped_nc_count = 0
+            skipped_daily_count = 0
             last_text = None
             log.warning("[Scheduler] job=%s 🚀 starting Branch A — %d numbers, %d template variant(s)",
                         job_id, len(selected_numbers), len(messages))
@@ -685,15 +689,26 @@ def _execute_send_job(job_id: str):
                 ok = _send_message(db, cid, to_number, message, job_id, delay_ms=typing_ms)
                 if ok is True:
                     sent_count += 1
+                elif ok == "skipped_nc_cap":
+                    skipped_nc_count += 1
+                    log.warning("[Scheduler] job=%s ⏭ NC cap reached — skipped %s", job_id, to_number[-4:])
+                elif ok == "skipped_daily_cap":
+                    skipped_daily_count += 1
+                    log.warning("[Scheduler] job=%s ⏭ daily cap reached — skipped %s", job_id, to_number[-4:])
                 elif ok is False:
                     error_count += 1
 
                 db.db.scheduled_sends.update_one(
                     {"_id": ObjectId(job_id)},
-                    {"$set": {"sent_count": sent_count, "error_count": error_count}},
+                    {"$set": {
+                        "sent_count": sent_count,
+                        "error_count": error_count,
+                        "skipped_nc_cap_count": skipped_nc_count,
+                        "skipped_daily_cap_count": skipped_daily_count,
+                    }},
                 )
 
-            _finish(sent_count, error_count)
+            _finish(sent_count, error_count, skipped_nc_count, skipped_daily_count)
             return
 
         # ── Branch B: resolve by company_ids / industry (legacy) ─────────────
@@ -730,6 +745,8 @@ def _execute_send_job(job_id: str):
 
         sent_count = 0
         error_count = 0
+        skipped_nc_count = 0
+        skipped_daily_count = 0
         send_index = 0
         last_text = None
         log.warning("[Scheduler] job=%s 🚀 starting Branch B — %d companies, ~%d contacts, %d template variant(s)",
@@ -767,15 +784,26 @@ def _execute_send_job(job_id: str):
                 send_index += 1
                 if ok is True:
                     sent_count += 1
+                elif ok == "skipped_nc_cap":
+                    skipped_nc_count += 1
+                    log.warning("[Scheduler] job=%s ⏭ NC cap reached — skipped %s", job_id, to_number[-4:])
+                elif ok == "skipped_daily_cap":
+                    skipped_daily_count += 1
+                    log.warning("[Scheduler] job=%s ⏭ daily cap reached — skipped %s", job_id, to_number[-4:])
                 elif ok is False:
                     error_count += 1
 
                 db.db.scheduled_sends.update_one(
                     {"_id": ObjectId(job_id)},
-                    {"$set": {"sent_count": sent_count, "error_count": error_count}},
+                    {"$set": {
+                        "sent_count": sent_count,
+                        "error_count": error_count,
+                        "skipped_nc_cap_count": skipped_nc_count,
+                        "skipped_daily_cap_count": skipped_daily_count,
+                    }},
                 )
 
-        _finish(sent_count, error_count)
+        _finish(sent_count, error_count, skipped_nc_count, skipped_daily_count)
 
     except Exception:
         log.exception("[Scheduler] _execute_send_job failed for job %s", job_id)

@@ -3,6 +3,8 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { authFetch } from '@/lib/api'
 import { useSendQueue } from '../context/SendQueueContext'
 import { useDailyCapStats } from '../hooks/useDailyCapStats'
+import { getOverBy } from '../lib/dailyCap'
+import DailyCapBadge from './DailyCapBadge'
 const display = v => (!v || ['null','none','undefined','n/a'].includes(String(v).trim().toLowerCase())) ? '—' : v
 import { useLang } from '../context/LangContext'
 import { isValidUrl, urlValidationMsg, isValidWhatsAppNumber, waNumberValidationMsg } from '@/lib/validators'
@@ -190,7 +192,7 @@ function renderTemplate(template, row) {
 function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescraping, selectedWithWA, onRefresh, onToggleFilter, filterOpen, total, instanceStatus, onAddCompany }) {
   const { t, lang } = useLang()
   const { stats: capStats } = useDailyCapStats()
-  const capBlocked = !!(capStats && capStats.total_available <= 0)
+  const capBlocked = getOverBy(capStats, selectedWithWA || 0) > 0
   return (
     <Toolbar sx={{
       pl: { sm: 2 }, pr: { xs: 1, sm: 1 },
@@ -875,7 +877,7 @@ function SkeletonRows({ count }) {
 // ─── Campaign dialog ──────────────────────────────────────────────────────────
 export const MAX_CAMPAIGN_MSG = 4096
 
-export function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus = 'unknown', isDisconnected = false }) {
+export function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus = 'unknown', isDisconnected = false, capStats = null }) {
   const { t, lang } = useLang()
   const TEMPLATES_DATA = getTemplates(t)
   const [msgText,      setMsgText]      = useState(TEMPLATES_DATA[0].text)
@@ -904,6 +906,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
   }
 
   const waRows      = selectedRows.filter(r => r.has_whatsapp)
+  const capOverBy   = getOverBy(capStats, waRows.length)
   const sentCount   = results.filter(r => r.status === 'sent').length
   const failedCount = results.filter(r => r.status === 'failed').length
   const noWaCount   = results.filter(r => r.status === 'no_wa').length
@@ -1123,7 +1126,10 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
         )}
       </DialogContent>
 
-      <DialogActions sx={{ px: 3, pb: 3, pt: 2, gap: 1, bgcolor: 'var(--sidebar-bg, #0d1117)', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+      <DialogActions sx={{ px: 3, pb: 3, pt: 2, gap: 1, bgcolor: 'var(--sidebar-bg, #0d1117)', borderTop: '1px solid rgba(255,255,255,0.06)', flexWrap: 'wrap' }}>
+        {capStats && waRows.length > 0 && (
+          <DailyCapBadge stats={capStats} selectionCount={waRows.length} sx={{ mr: 'auto' }} />
+        )}
         <Button onClick={onClose} disabled={sending}
           sx={{ color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, px: 2.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.7)' } }}>
           {done ? t.common.close : t.common.cancel}
@@ -1131,7 +1137,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
         {!done && (
           <Button
             onClick={handleSend}
-            disabled={sending || waRows.length === 0 || msgInvalid || isDisconnected || belowMinTemplates}
+            disabled={sending || waRows.length === 0 || msgInvalid || isDisconnected || belowMinTemplates || capOverBy > 0}
             startIcon={sending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 16 }} />}
             sx={{
               bgcolor: !sending && waRows.length > 0 && !msgInvalid ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.05)',
@@ -1153,6 +1159,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function DatabaseViewer({ isActive }) {
   const { t, lang } = useLang()
+  const { stats: capStats } = useDailyCapStats()
   const headCells  = getHeadCells(t)
   const alertTitles = getAlertTitles(t)
   const [rows, setRows] = useState([])
@@ -1338,6 +1345,7 @@ export default function DatabaseViewer({ isActive }) {
         to_number: data.contacts?.find(c => c.type === 'whatsapp')?.value || null,
         company_id: row._id,
         message_log_id: data.last_message_log_id || null,
+        already_contacted: data.already_contacted || null,
       })
     } catch {
       notify(lang === 'en' ? 'Failed to load information' : 'No se pudo cargar la información', 'error')
@@ -1368,6 +1376,7 @@ export default function DatabaseViewer({ isActive }) {
         primary_whatsapp_number: data.contacts?.find(c => c.type === 'whatsapp' && c.is_primary)?.value
           || data.contacts?.find(c => c.type === 'whatsapp')?.value || null,
         company_id: row._id,
+        already_contacted: data.already_contacted || null,
       })
     } catch {
       notify(lang === 'en' ? 'Failed to load information' : 'No se pudo cargar la información', 'error')
@@ -1832,7 +1841,7 @@ export default function DatabaseViewer({ isActive }) {
             </Box>
           )}
           {!viewLoading && msgData && (
-            <MessageComposer result={msgData} onSend={handleSendFromDB} sending={msgSending} disabled={isDisconnected} />
+            <MessageComposer result={msgData} onSend={handleSendFromDB} sending={msgSending} disabled={isDisconnected} capStats={capStats} />
           )}
           {!viewLoading && msgData && !msgData.primary_whatsapp_number && (
             <Alert severity="warning" sx={{ mt: 2, bgcolor: 'rgba(251,146,60,0.1)', color: '#fb923c', border: '1px solid rgba(251,146,60,0.2)' }}>
@@ -1874,6 +1883,7 @@ export default function DatabaseViewer({ isActive }) {
         onNotify={notify}
         instanceStatus={instanceStatus}
         isDisconnected={isDisconnected}
+        capStats={capStats}
       />
 
       <AddCompanyDialog

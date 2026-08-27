@@ -167,7 +167,7 @@ function ContactColumn({ icon, title, items, color, emptyMsg }) {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function ResultDisplay({ result }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const r = t.result
   const s  = result?.scraped || {}
   const sx = s._extra || {}
@@ -175,6 +175,15 @@ export default function ResultDisplay({ result }) {
   const totalContacts = (cr.emails?.length || 0) + (cr.phone_numbers?.length || 0)
   const domain = s.domain || s.website?.replace(/https?:\/\/(www\.)?/, '').split('/')[0] || ''
   const contacted = result?.already_contacted
+
+  const completeness = [
+    !!result?.primary_whatsapp_number,
+    (cr.phone_numbers?.length || 0) > 0,
+    (cr.emails?.length || 0) > 0,
+    !!s.description,
+    !!(sx.city || sx.state),
+  ].filter(Boolean).length
+  const completenessColor = completeness >= 4 ? '#4ade80' : completeness >= 2 ? '#fbbf24' : '#f87171'
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
@@ -283,7 +292,7 @@ export default function ResultDisplay({ result }) {
 
       {/* ── MÉTRICAS ── */}
       <Box sx={{ display: 'flex', gap: 1.5, mb: 2.5, flexWrap: 'wrap' }}>
-        <MetricCard icon={<BusinessIcon sx={{ fontSize: 20 }} />} title={r.company}   value={s.name?.slice(0, 14) || '—'} color="#60a5fa" />
+        <MetricCard icon={<CheckCircleIcon sx={{ fontSize: 20 }} />} title={lang === 'en' ? 'Data' : 'Datos'} value={`${Math.round((completeness / 5) * 100)}%`} color={completenessColor} />
         <MetricCard icon={<CategoryIcon sx={{ fontSize: 20 }} />} title={r.industry}  value={s.industry?.split(' ')[0] || '—'} color="#a78bfa" />
         <MetricCard icon={<WhatsAppIcon sx={{ fontSize: 20 }} />} title={r.whatsapp}  value={result.primary_whatsapp_number ? t.common.yes : t.common.no} color={result.primary_whatsapp_number ? '#4ade80' : '#f87171'} />
         <MetricCard icon={<PeopleIcon sx={{ fontSize: 20 }} />}   title={r.contacts}  value={totalContacts} color="#fb923c" />
@@ -356,6 +365,26 @@ export default function ResultDisplay({ result }) {
                   <Chip size="small" label={`${r.language}: ${s.metadata.language}`} sx={{ bgcolor: 'var(--surface, rgba(255,255,255,0.04))', color: 'var(--text-muted, rgba(255,255,255,0.35))', border: '1px solid var(--border, rgba(255,255,255,0.08))' }} />
                 )}
               </Box>
+            )}
+          </Box>
+        </Section>
+      )}
+
+      {/* ── YA CONTACTADA ── */}
+      {contacted?.contacted && (
+        <Section icon={<CheckCircleIcon fontSize="small" />} title={lang === 'en' ? 'Already contacted' : 'Ya contactada'} color="#fbbf24">
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+            {contacted.by_name && (
+              <InfoRow label={lang === 'en' ? 'By' : 'Por'} value={contacted.by_name} />
+            )}
+            {contacted.at && (
+              <InfoRow
+                label={r.contactedAt}
+                value={new Date(contacted.at).toLocaleString(lang === 'en' ? 'en-US' : 'es-MX', {
+                  day: '2-digit', month: 'short', year: 'numeric',
+                  hour: '2-digit', minute: '2-digit',
+                })}
+              />
             )}
           </Box>
         </Section>

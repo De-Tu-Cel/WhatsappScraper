@@ -342,7 +342,11 @@ export default function CsvImporter() {
   const totalNumbers = effectiveWaSelected.size
   const totalContactPoints = totalNumbers +
     [...extraSelected].filter(key => effectiveWaSelected.has(key.split('::')[0])).length
-  const overBy     = getOverBy(capStats, totalContactPoints)
+  const _contactedCids = new Set(waRowsUnique.filter(r => r.already_contacted?.contacted).map(r => r.company_id))
+  const newContactPoints =
+    waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id) && !_contactedCids.has(r.company_id)).length +
+    [...extraSelected].filter(key => { const cid = key.split('::')[0]; return effectiveWaSelected.has(cid) && !_contactedCids.has(cid) }).length
+  const overBy     = getOverBy(capStats, totalContactPoints, newContactPoints)
   const capBlocked = overBy > 0
   // Sending to 2+ contact points needs varied text (see MIN_TEMPLATES_FOR_BULK).
   // Uses totalContactPoints so selecting multiple numbers of a single company
@@ -570,23 +574,6 @@ export default function CsvImporter() {
               >
                 {t.csv.cancel}
               </Button>
-              {results.some(r => r.ok) && (
-                <Tooltip title={t.csv.stopAndSendTip}>
-                  <Button
-                    fullWidth
-                    onClick={handleCancel}
-                    startIcon={<SendIcon />}
-                    sx={{
-                      flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem',
-                      color: '#4ade80', bgcolor: 'rgba(34,197,94,0.08)',
-                      border: '1px solid rgba(34,197,94,0.25)', borderRadius: 1.5,
-                      '&:hover': { bgcolor: 'rgba(34,197,94,0.15)' },
-                    }}
-                  >
-                    {t.csv.stopAndSend}
-                  </Button>
-                </Tooltip>
-              )}
             </Box>
           )}
         </Box>
@@ -599,10 +586,10 @@ export default function CsvImporter() {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               {paused
                 ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} />
-                : <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />
+                : <CircularProgress size={14} sx={{ color: pausing ? '#fbbf24' : 'var(--accent, #3b82f6)' }} />
               }
               <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
-                {paused ? t.csv.paused : t.csv.processing} {completedCount} {t.csv.of} {allUrls.length}
+                {paused ? t.csv.paused : pausing ? (lang === 'en' ? 'Pausing…' : 'Pausando…') : t.csv.processing} {completedCount} {t.csv.of} {allUrls.length}
               </Typography>
             </Box>
             <Typography sx={{ color: paused ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>
@@ -641,9 +628,9 @@ export default function CsvImporter() {
         </Box>
       )}
 
-      {/* ── Toggle de envío masivo — visible también durante el procesamiento,
-           para poder empezar a enviar a lo ya encontrado sin esperar ── */}
-      {(done || loading) && results.length > 0 && waRowsUnique.length > 0 && (
+      {/* ── Toggle de envío masivo — visible cuando done o pausado (no durante pausing,
+           ya que los datos siguen cargando y el usuario no debe adelantarse) ── */}
+      {(done || (loading && !pausing)) && results.length > 0 && waRowsUnique.length > 0 && (
         <Box sx={{ borderRadius: 2, border: `1px solid ${showSend ? 'rgba(34,197,94,0.25)' : 'rgba(34,197,94,0.12)'}`, bgcolor: showSend ? 'rgba(34,197,94,0.04)' : 'transparent', transition: 'all 0.2s' }}>
           {/* Header toggle */}
           <Box onClick={() => setShowSend(o => !o)} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2, py: 1.2, cursor: 'pointer', borderRadius: showSend ? '8px 8px 0 0' : 2, '&:hover': { bgcolor: 'rgba(34,197,94,0.06)' } }}>
@@ -784,7 +771,7 @@ export default function CsvImporter() {
               <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
 
               <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 0.6 }}>
-                <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} />
+                <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} />
               </Box>
               <Button fullWidth onClick={handleSendAll}
                 disabled={effectiveWaSelected.size === 0 || alreadySent || isDisconnected || belowMinTemplates || capBlocked}

@@ -11,7 +11,7 @@ export { getOverBy }
 // Chip "X/Y hoy" (mismo estilo que ya vivía inline en sendCampaign.jsx) + al
 // hacer hover, desglose por instancia (warmup o no) — antes solo existía el
 // total combinado, sin decir de dónde salía cada número.
-export default function DailyCapBadge({ stats, selectionCount = 0, sx }) {
+export default function DailyCapBadge({ stats, selectionCount = 0, newSelectionCount = selectionCount, sx }) {
   const { lang } = useLang()
   if (!stats) return null
 
@@ -24,7 +24,7 @@ export default function DailyCapBadge({ stats, selectionCount = 0, sx }) {
   const used      = isFutureMode ? (stats.scheduled_that_day || 0) : (stats.total_sent + (stats.scheduled_today || 0))
   const cap       = stats.total_cap
   const available = stats.total_available
-  const overBy    = getOverBy(stats, selectionCount)
+  const overBy    = getOverBy(stats, selectionCount, newSelectionCount)
   const danger    = available <= 0 || overBy > 0
   const warn      = !danger && available < 30
   // Ámbar, no rojo — agotar el cupo se resetea solo a medianoche, no es una
@@ -105,16 +105,16 @@ export default function DailyCapBadge({ stats, selectionCount = 0, sx }) {
               ? `${available} sends available ${isFutureMode ? 'that day' : 'today'}`
               : `${available} envíos disponibles ${isFutureMode ? 'ese día' : 'hoy'}`)}
       </Typography>
-      {!isFutureMode && stats.new_contacts_capacity != null && (
-        <Typography sx={{
-          fontSize: '0.62rem',
-          color: stats.new_contacts_capacity <= 0 ? '#f59e0b' : 'rgba(74,222,128,0.75)',
-        }}>
-          {lang === 'en'
-            ? `${stats.new_contacts_capacity} new contacts available today`
-            : `${stats.new_contacts_capacity} contactos nuevos disponibles hoy`}
-        </Typography>
-      )}
+      {!isFutureMode && stats.new_contacts_capacity != null && (() => {
+        const ncRemaining = Math.max(0, stats.new_contacts_capacity - newSelectionCount)
+        return (
+          <Typography sx={{ fontSize: '0.62rem', color: ncRemaining <= 0 ? '#f59e0b' : 'rgba(74,222,128,0.75)' }}>
+            {lang === 'en'
+              ? `${ncRemaining} new contacts available today`
+              : `${ncRemaining} contactos nuevos disponibles hoy`}
+          </Typography>
+        )
+      })()}
     </Box>
   )
 }

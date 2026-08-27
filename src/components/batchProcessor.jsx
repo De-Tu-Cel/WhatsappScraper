@@ -374,7 +374,11 @@ export default function BatchProcessor() {
   const totalNumbers = effectiveWaSelected.size
   const totalContactPoints = totalNumbers +
     [...extraSelected].filter(key => effectiveWaSelected.has(key.split('::')[0])).length
-  const overBy      = getOverBy(capStats, totalContactPoints)
+  const _contactedCids = new Set(waRowsUnique.filter(r => r.already_contacted?.contacted).map(r => r.company_id))
+  const newContactPoints =
+    waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id) && !_contactedCids.has(r.company_id)).length +
+    [...extraSelected].filter(key => { const cid = key.split('::')[0]; return effectiveWaSelected.has(cid) && !_contactedCids.has(cid) }).length
+  const overBy      = getOverBy(capStats, totalContactPoints, newContactPoints)
   const capBlocked  = overBy > 0
   // Sending to 2+ contact points needs varied text (see MIN_TEMPLATES_FOR_BULK).
   // Uses totalContactPoints so selecting multiple numbers of a single company
@@ -882,7 +886,7 @@ export default function BatchProcessor() {
           <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />
           <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
-            <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} />
+            <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} />
             {isSending && (
               <Tooltip title={t.search.cancelSend}>
                 <IconButton size="small" onClick={cancelQueue}

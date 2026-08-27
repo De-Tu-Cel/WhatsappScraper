@@ -6,9 +6,16 @@
 // en vez de reimplementarlo por su cuenta. Funciona tanto con stats de "hoy"
 // (total_available combinado) como con el cupo estimado de un día futuro — ambas
 // formas exponen total_available.
-export function getOverBy(stats, selectionCount) {
+// newCount: how many of the selected numbers are NEW contacts (not previously messaged).
+// Defaults to selectionCount (conservative — treats all as new) for callers that
+// don't track per-number history. MessageComposer passes the accurate value.
+export function getOverBy(stats, selectionCount, newCount = selectionCount) {
   if (!stats || !selectionCount) return 0
-  return Math.max(0, selectionCount - stats.total_available)
+  const totalOver = Math.max(0, selectionCount - stats.total_available)
+  const ncOver = stats.new_contacts_capacity != null
+    ? Math.max(0, newCount - stats.new_contacts_capacity)
+    : 0
+  return Math.max(totalOver, ncOver)
 }
 
 // Recomendación personalizada de cómo distribuir envíos, calculada con las

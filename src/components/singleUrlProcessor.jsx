@@ -132,7 +132,7 @@ function renderWithValues(text, vals) {
 }
 
 export function MessageComposer({ result, onSend, sending, disabled, capStats }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const inputRef = useRef(null)
   const vals = extractValues(result)
   const [charCount, setCharCount] = useState(0)
@@ -197,9 +197,13 @@ export function MessageComposer({ result, onSend, sending, disabled, capStats })
     : [getCurrentText().trim()].filter(Boolean)
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
   const overLength = !isBulk && charCount > MAX_WA_MSG
+  // Números que ya fueron contactados previamente (por número, no solo por empresa)
+  const contactedNumbers = new Set(result?.already_contacted?.contacted_numbers || [])
+  // Solo los números NUEVOS (no contactados antes) consumen cupo de nuevos contactos
+  const newCount = selectedNums.filter(n => !contactedNumbers.has(n)).length
   // El backend deduplica por número real, no por empresa — cada número marcado
   // aquí (aunque sean todos de la misma empresa) cuesta su propio slot de cupo.
-  const overBy      = getOverBy(capStats, selectedNums.length)
+  const overBy      = getOverBy(capStats, selectedNums.length, newCount)
   const capBlocked  = overBy > 0
   const sendBlocked = sending || disabled || selectedNums.length === 0 || overLength || belowMinTemplates || capBlocked
     || (isBulk && allVariants.some(v => v.length > MAX_WA_MSG))
@@ -240,17 +244,29 @@ export function MessageComposer({ result, onSend, sending, disabled, capStats })
               }}
             />
           )}
-          {numbers.map(n => (
-            <Chip key={n} label={n} size="small"
-              onClick={() => numbers.length > 1 && toggleNum(n)}
-              sx={{ fontSize: '0.72rem', height: 24,
-                cursor: numbers.length > 1 ? 'pointer' : 'default',
-                bgcolor: selectedNums.includes(n) ? 'rgba(34,197,94,0.2)' : 'rgba(255,255,255,0.05)',
-                color:   selectedNums.includes(n) ? '#4ade80' : 'rgba(255,255,255,0.35)',
-                border:  `1px solid ${selectedNums.includes(n) ? 'rgba(34,197,94,0.4)' : 'rgba(255,255,255,0.08)'}`,
-                textDecoration: selectedNums.includes(n) ? 'none' : 'line-through',
-              }} />
-          ))}
+          {numbers.map(n => {
+            const isContacted = contactedNumbers.has(n)
+            const isSelected  = selectedNums.includes(n)
+            return (
+              <Tooltip key={n} title={isContacted ? (lang === 'en' ? 'Previously contacted' : 'Ya contactado') : ''} placement="top" arrow>
+                <Chip label={n} size="small"
+                  onClick={() => numbers.length > 1 && toggleNum(n)}
+                  sx={{ fontSize: '0.72rem', height: 24,
+                    cursor: numbers.length > 1 ? 'pointer' : 'default',
+                    bgcolor: isSelected
+                      ? (isContacted ? 'rgba(251,191,36,0.18)' : 'rgba(34,197,94,0.2)')
+                      : (isContacted ? 'rgba(251,191,36,0.05)' : 'rgba(255,255,255,0.05)'),
+                    color: isSelected
+                      ? (isContacted ? '#fbbf24' : '#4ade80')
+                      : (isContacted ? 'rgba(251,191,36,0.45)' : 'rgba(255,255,255,0.35)'),
+                    border: `1px solid ${isSelected
+                      ? (isContacted ? 'rgba(251,191,36,0.4)' : 'rgba(34,197,94,0.4)')
+                      : (isContacted ? 'rgba(251,191,36,0.18)' : 'rgba(255,255,255,0.08)')}`,
+                    textDecoration: isSelected ? 'none' : 'line-through',
+                  }} />
+              </Tooltip>
+            )
+          })}
         </Box>
       )}
 
@@ -343,7 +359,7 @@ export function MessageComposer({ result, onSend, sending, disabled, capStats })
         </Typography>
       )}
       <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 0.6 }}>
-        <DailyCapBadge stats={capStats} selectionCount={selectedNums.length} />
+        <DailyCapBadge stats={capStats} selectionCount={selectedNums.length} newSelectionCount={newCount} />
       </Box>
       {capBlocked && !sending && (
         <Typography sx={{ color: '#f59e0b', fontSize: '0.72rem', mb: 1, textAlign: 'right' }}>

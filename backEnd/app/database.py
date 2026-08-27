@@ -342,11 +342,16 @@ class MongoDBManager:
                 projection={"sent_by_name": 1, "sent_by_username": 1, "created_at": 1}
             )
             if first:
+                contacted_nums = self.db.message_logs.distinct(
+                    "to_number",
+                    {"company_id": cid, "direction": "outbound"},
+                )
                 result[cid] = {
                     "contacted": True,
                     "by_name":     first.get("sent_by_name", ""),
                     "by_username": first.get("sent_by_username", ""),
                     "at":          first["created_at"].isoformat() if first.get("created_at") else None,
+                    "contacted_numbers": [n for n in contacted_nums if n],
                 }
             else:
                 result[cid] = {"contacted": False}

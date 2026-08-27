@@ -120,13 +120,11 @@ def _run_scrape_job(job_id: str):
                 {"$set": {"current_urls": chunk, "last_progress_at": datetime.now()}},
             )
 
-            # Always finish the full chunk before checking pause state.
-            # Breaking mid-chunk left the remaining in-flight URLs running in
-            # background threads whose results were discarded; on resume those
-            # URLs fell back inside next_index and were scraped a second time,
-            # producing duplicate rows in results and recipient count drops.
-            # Cancel (irreversible) still breaks immediately; pause (reversible)
-            # is caught by the outer while-loop between chunks.
+            # Pause breaks immediately after the first URL that completes post-pause.
+            # Remaining futures run to completion in the background but results are
+            # discarded; next_index advances only by len(chunk_results), so those
+            # 1-3 URLs are re-scraped on resume (idempotent — upsert). This keeps
+            # the progress bar/counter truly frozen at the pause point.
             in_flight = list(chunk)
             chunk_results = []
             ex = ThreadPoolExecutor(max_workers=len(chunk))
@@ -134,20 +132,26 @@ def _run_scrape_job(job_id: str):
                 future_map = {ex.submit(_process_one_url, url): url for url in chunk}
                 for future in as_completed(future_map):
                     url = future_map[future]
-                    chunk_results.append(future.result())
+                    result = future.result()
+                    chunk_results.append(result)
                     in_flight = [u for u in in_flight if u != url]
                     db.db.scrape_jobs.update_one(
                         {"_id": oid},
                         {
+                            "$push": {"results": result},  # visible en tabla inmediatamente
                             "$inc": {"processed_count": 1},
                             "$set": {"current_urls": in_flight, "last_progress_at": datetime.now()},
                         },
                     )
-                    # Only break on cancel (job is gone for good); pause waits for
-                    # the chunk to drain so next_index stays aligned with chunk
-                    # boundaries and no URL is submitted twice on resume.
-                    _st = db.db.scrape_jobs.find_one({"_id": oid}, {"status": 1})
+                    # Break on cancel OR pause. Remaining futures keep running in the
+                    # background (ThreadPoolExecutor can't cancel submitted futures)
+                    # but their results are discarded — next_index advances only by
+                    # len(chunk_results), so those URLs are re-scraped on resume.
+                    # Re-scraping is idempotent (upsert), so no data is lost.
+                    _st = db.db.scrape_jobs.find_one({"_id": oid}, {"status": 1, "paused": 1})
                     if _st and _st.get("status") == "cancelled":
+                        break
+                    if _st and _st.get("paused"):
                         break
             finally:
                 ex.shutdown(wait=False)

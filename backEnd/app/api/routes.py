@@ -891,7 +891,10 @@ def api_get_company(company_id: str):
         data = db.get_company_full_data(company_id)
         if not data:
             raise HTTPException(status_code=404, detail="Company not found")
-        return serialize(data)
+        result = serialize(data)
+        contacted_map = db.check_contacted([company_id])
+        result["already_contacted"] = contacted_map.get(company_id, {"contacted": False})
+        return result
     except HTTPException:
         raise
     except Exception as e:

@@ -910,6 +910,7 @@ export const T = {
       noWa:           'Sin WA',
       alreadyLabel:   '⚠️ Ya contactada',
       alreadyBy:      'por',
+      contactedAt:    'Fecha',
       descNA:         'Descripción no disponible',
     },
     instance: {
@@ -2165,6 +2166,7 @@ export const T = {
       noWa:           'No WA',
       alreadyLabel:   '⚠️ Already contacted',
       alreadyBy:      'by',
+      contactedAt:    'Date',
       descNA:         'Description not available',
     },
     instance: {

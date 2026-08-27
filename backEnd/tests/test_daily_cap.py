@@ -178,12 +178,14 @@ def test_notify_cap_reached_once_is_independent_per_instance():
 
 # ── get_scheduled_count_for_date / get_scheduled_count_today ────────────────
 
-def _pending(scheduled_at, total_count=None, selected_numbers=None, _id="job"):
+def _pending(scheduled_at, total_count=None, selected_numbers=None, _id="job", user_id=None):
     doc = {"_id": _id, "status": "pending", "scheduled_at": scheduled_at}
     if total_count is not None:
         doc["total_count"] = total_count
     if selected_numbers is not None:
         doc["selected_numbers"] = selected_numbers
+    if user_id is not None:
+        doc["user_id"] = user_id
     return doc
 
 
@@ -237,7 +239,7 @@ def test_get_capacity_for_date_combines_instances_and_subtracts_scheduled():
             {"name": "wa-normal", "warmup_mode": False, "assigned_to": "u1"},
         ],
         scheduled_sends=[
-            _pending(datetime(2026, 3, 10, 9, 0), total_count=15, _id="a"),
+            _pending(datetime(2026, 3, 10, 9, 0), total_count=15, _id="a", user_id="u1"),
         ],
     )
     result = get_capacity_for_date(db, "u1", day)
@@ -250,7 +252,7 @@ def test_get_capacity_for_date_never_goes_negative():
     day = date(2026, 3, 10)
     db = FakeMongoDBManager(
         instances=[{"name": "wa-warmup", "warmup_mode": True, "assigned_to": "u1"}],
-        scheduled_sends=[_pending(datetime(2026, 3, 10, 9, 0), total_count=999, _id="a")],
+        scheduled_sends=[_pending(datetime(2026, 3, 10, 9, 0), total_count=999, _id="a", user_id="u1")],
     )
     result = get_capacity_for_date(db, "u1", day)
     assert result["total_available"] == 0

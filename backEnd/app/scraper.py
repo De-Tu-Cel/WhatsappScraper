@@ -1,4 +1,4 @@
-# scraper.py - VERSIÓN EXTENDIDA
+﻿# scraper.py - VERSIÓN EXTENDIDA
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -345,6 +345,7 @@ class WebsiteScraper:
 
         # Extraer todos los datos
         _company_name = self._extract_company_name(soup, url)
+        _addr = self._extract_address_structured(soup, text)
         result = {
             # Campos para MongoDB companies
             "website": url,
@@ -358,11 +359,16 @@ class WebsiteScraper:
             "next_allowed_scrape_at": datetime.now(timezone.utc) + timedelta(days=365),
             "created_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc),
+            # Campos de dirección promovidos al nivel raíz para que queden en companies
+            "city":    _addr.get("city", ""),
+            "state":   _addr.get("state", ""),
+            "country": _addr.get("country", ""),
+            "address": _addr.get("address", ""),
 
             # Campos extra (no van a companies)
             "_extra": {
                 "main_activity": self._detect_main_activity(text),
-                **self._extract_address_structured(soup, text),  # address, city, state, postal_code, country, lat, lon
+                **_addr,  # address, city, state, postal_code, country, lat, lon
                 "social_media": self._extract_social_media(soup),
                 "business_hours": self._extract_business_hours(text, soup),
                 "services": self._extract_services(text, soup),
@@ -439,15 +445,20 @@ class WebsiteScraper:
                     result["_extra"]["business_hours"] = data["hours"]
                 if not result["_extra"]["address"] and data["address"]:
                     result["_extra"]["address"] = data["address"]
+                    result["address"] = data["address"]
                     # Cuando encontramos la dirección, también tomamos ciudad/estado de la
                     # misma subpágina — más confiable que lo que se llenó antes del texto
                     for field in ("city", "state", "postal_code", "country"):
                         if data.get(field):
                             result["_extra"][field] = data[field]
+                            if field in ("city", "state", "country"):
+                                result[field] = data[field]
                 else:
                     for field in ("city", "state", "postal_code", "country"):
                         if not result["_extra"].get(field) and data.get(field):
                             result["_extra"][field] = data[field]
+                            if field in ("city", "state", "country"):
+                                result[field] = result[field] or data[field]
 
         if result["_contacts_raw"]["all_whatsapp_numbers"]:
             result["_contacts_raw"]["whatsapp_numbers"] = result["_contacts_raw"]["all_whatsapp_numbers"]
@@ -991,11 +1002,26 @@ class WebsiteScraper:
             _nm = company_name.lower()
             _GAS_NAME = _re.compile(
                 r"gas|gas\s*lp|glp|gasera|tanque.*gas|gas.*tanque|cilindro|"
-                r"pipa\s*de\s*gas|distribuidora.*gas|gas.*distribuidora",
+                r"pipas?\s*de\s*gas|distribuidora.*gas|gas.*distribuidora",
                 _re.I,
             )
             if _GAS_NAME.search(_nm):
                 return "Gas LP / Energía"
+
+            # Salud — nombre revela más que el texto ("tecnología de vanguardia" confunde el LLM)
+            if _re.search(
+                r"dental|cl[ií]nica|m[eé]dic[oa]|hospital|ortodoncia|odontolog|"
+                r"quiropract|psicolog|nutriolog|veterinari|farmaci",
+                _nm, _re.I,
+            ):
+                return "Salud"
+
+            # Hospedaje — nombre revela más que el texto ("salón de eventos" confunde el LLM)
+            if _re.search(
+                r"hotel|hostal|posada|suites|\binn\b|resort|motel|\bvillas?\b",
+                _nm, _re.I,
+            ):
+                return "Hospedaje"
 
         # 1. Intentar con LLM (incluye el nombre para que no lo ignore)
         llm_result = self._classify_industry_deepseek(text[:800], company_name=company_name)
@@ -1042,6 +1068,11 @@ class WebsiteScraper:
                 "- El NOMBRE DE LA EMPRESA tiene mas peso que el texto si hay conflicto.\n"
                 "- Si el nombre o sitio distribuye/vende gas LP, GLP, gas natural o combustibles"
                 " responde: Gas LP / Energia\n"
+                "- Si el nombre contiene 'Dental', 'Clinica', 'Doctor', 'Hospital'," " 'Medico', 'Estetica dental', 'Ortodoncia' → Salud"
+                " (aunque el texto mencione 'tecnologia').\n"
+                "- Si el nombre contiene 'Hotel', 'Inn', 'Suites', 'Hostal'," " 'Posada', 'Resort' → Hospedaje (aunque el texto mencione 'eventos' o 'salon').\n"
+                "- Frases como 'tecnologia de vanguardia' o 'salon de eventos' en el TEXTO"
+                " no cambian la industria si el NOMBRE indica otra categoria mas especifica.\n"
                 "- Responde UNICAMENTE con el nombre exacto de la categoria (copia y pega).\n"
                 "- Si no encaja en ninguna responde: No detectada\n"
                 "- NO expliques nada, solo el nombre de la categoria."
@@ -1106,6 +1137,7 @@ class WebsiteScraper:
                         result["services"] = svs[:8]
                 if need_city and _val(data.get("ciudad")):
                     result["_extra"]["city"] = data["ciudad"]
+                    result["city"] = data["ciudad"]
         except Exception:
             pass  # DeepSeek falló — no bloquear el scraping
 

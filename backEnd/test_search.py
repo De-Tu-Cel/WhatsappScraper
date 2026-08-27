@@ -47,6 +47,36 @@ CASES = [
     ("clinics",                       "clinics",        "",                  None),
     ("gaseras",                       "gaseras",        "",                  None),
     ("dentistas",                     "dentistas",      "",                  None),
+
+    # ── Region aliases ────────────────────────────────────────────────────────
+    ("restaurantes en cdmx",          "restaurantes",   "Ciudad de México",  "México"),
+    ("dentistas en zmg",              "dentistas",      "Guadalajara",       "México"),
+    ("hoteles en la laguna",          "hoteles",        "Torreón",           "México"),
+    ("restaurantes en el bajio",      "restaurantes",   "Guanajuato",        "México"),
+    ("hoteles en riviera maya",       "hoteles",        "Playa del Carmen",  "México"),
+    ("spas en vallarta",              "spas",           "Puerto Vallarta",   "México"),
+    ("bares en df",                   "bares",          "Ciudad de México",  "México"),
+
+    # ── Filler phrase stripping ───────────────────────────────────────────────
+    ("empresas que fabrican plasticos en queretaro",
+                                      "plasticos",      "Querétaro",         "México"),
+    ("proveedores de acero en monterrey",
+                                      "acero",          "Monterrey",         "México"),
+    ("negocios que ofrecen servicios de limpieza en guadalajara",
+                                      "servicios de limpieza", "Guadalajara","México"),
+
+    # ── Multiple "en" — greedy regex, first preposition consumed as one tail ──
+    # "salones en tecnologia en monterrey": the first "en" match consumes
+    # "en tecnologia en monterrey" greedily; the tail scanner then finds "monterrey"
+    # inside that tail, so city resolves correctly and industry = "salones".
+    ("salones en tecnologia en monterrey",
+                                      "salones",              "Monterrey",   "México"),
+    ("servicios en retail en bogota", "servicios",            "Bogotá",      "Colombia"),
+
+    # ── City buried in a long tail ────────────────────────────────────────────
+    ("gyms en zona norte monterrey",  "gyms",           "Monterrey",         "México"),
+    ("clinicas en la zona metropolitana de monterrey",
+                                      "clinicas",       "Monterrey",         "México"),
 ]
 
 print("\n" + "="*70)

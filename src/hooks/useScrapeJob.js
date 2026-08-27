@@ -20,8 +20,12 @@ export function useScrapeJob(surface) {
   const storageKey = `scrape_job_${surface}`
   const [job,   setJob]   = useState(null)
   const [jobId, setJobId] = useState(null)
-  const timerRef   = useRef(null)
-  const mountedRef = useRef(true)
+  const timerRef    = useRef(null)
+  const mountedRef  = useRef(true)
+  // Valor congelado en el momento exacto en que el usuario hace clic en Pause.
+  // Evita saltos hacia atrás (next_index < processed_count) o hacia adelante
+  // (in-flight $inc) mientras el chunk termina de drenarse.
+  const frozenCountRef = useRef(null)
 
   const poll = useCallback(async (id) => {
     if (!id) return
@@ -79,6 +83,12 @@ export function useScrapeJob(surface) {
 
   const act = useCallback(async (action) => {
     if (!jobId) return
+    if (action === 'pause') {
+      // Freeze optimista inmediato (valor del último poll, puede tener hasta 3s de lag)
+      frozenCountRef.current = job ? Math.min(job.processed_count || 0, job.total_count || 0) : null
+    } else {
+      frozenCountRef.current = null
+    }
     const res = await authFetch(`/api/scrape-jobs/${jobId}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action }),
@@ -86,9 +96,14 @@ export function useScrapeJob(surface) {
     if (res.ok) {
       const data = await res.json()
       setJob(data)
+      if (action === 'pause') {
+        // Actualiza el freeze con el processed_count real del servidor en ese instante,
+        // más preciso que el valor de React state que pudo ser hasta 3s stale.
+        frozenCountRef.current = Math.min(data.processed_count || 0, data.total_count || 0)
+      }
       if (action === 'cancel') localStorage.removeItem(storageKey)
     }
-  }, [jobId, storageKey])
+  }, [jobId, storageKey, job])
 
   const reset = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current)
@@ -97,8 +112,17 @@ export function useScrapeJob(surface) {
   }, [storageKey])
 
   const total      = job?.total_count || 0
-  const processed  = Math.min(job?.processed_count || 0, total)
   const status     = job?.status || null
+  const isPausing  = !!job?.paused && (job?.current_urls?.length > 0)
+  // Durante pausing mostramos el valor congelado en el clic de Pause (frozenCountRef).
+  // Esto evita tanto el salto hacia adelante (in-flight $inc) como el salto hacia
+  // atrás (next_index < processed_count) mientras el chunk en vuelo termina.
+  const processed  = Math.min(
+    isPausing && frozenCountRef.current !== null
+      ? frozenCountRef.current
+      : (job?.processed_count || 0),
+    total,
+  )
 
   return {
     job,
@@ -108,7 +132,7 @@ export function useScrapeJob(surface) {
     currentUrl: job?.current_urls?.[0] || '',
     status,
     processing: status === 'pending' || status === 'running',
-    pausing:    !!job?.paused && (job?.current_urls?.length > 0),
+    pausing:    isPausing,
     paused:     !!job?.paused && !(job?.current_urls?.length > 0),
     done:       TERMINAL.includes(status),
     start,

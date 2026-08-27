@@ -647,45 +647,98 @@ _LOCATION_TAIL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Alias de regiones/zonas que no son ciudades exactas pero se resuelven a una
+# ciudad representativa para la búsqueda.
+_REGION_ALIASES: dict[str, tuple[str, str]] = {
+    "cdmx":                       ("Ciudad de México", "México"),
+    "ciudad de mexico":            ("Ciudad de México", "México"),
+    "df":                         ("Ciudad de México", "México"),
+    "distrito federal":           ("Ciudad de México", "México"),
+    "zmvm":                       ("Ciudad de México", "México"),
+    "zona metropolitana de mexico": ("Ciudad de México", "México"),
+    "bajio":                      ("Guanajuato", "México"),
+    "el bajio":                   ("Guanajuato", "México"),
+    "bajío":                      ("Guanajuato", "México"),
+    "el bajío":                   ("Guanajuato", "México"),
+    "zmg":                        ("Guadalajara", "México"),
+    "zona metropolitana de guadalajara": ("Guadalajara", "México"),
+    "area metropolitana de guadalajara": ("Guadalajara", "México"),
+    "zona metropolitana de monterrey":   ("Monterrey", "México"),
+    "area metropolitana de monterrey":   ("Monterrey", "México"),
+    "norte de mexico":            ("Monterrey", "México"),
+    "sureste":                    ("Mérida", "México"),
+    "sureste de mexico":          ("Mérida", "México"),
+    "laguna":                     ("Torreón", "México"),
+    "la laguna":                  ("Torreón", "México"),
+    "vallarta":                   ("Puerto Vallarta", "México"),
+    "los cabos":                  ("San José del Cabo", "México"),
+    "riviera maya":               ("Playa del Carmen", "México"),
+}
+
+# Frases de relleno al inicio del query que no aportan a la industria.
+_FILLER_RE = re.compile(
+    r'^(?:empresas?\s+(?:que\s+(?:se\s+dedican?\s+a|ofrecen|venden|fabrican|producen|hacen|prestan)\s+|dedicadas?\s+a\s+)?'
+    r'|negocios?\s+(?:que\s+)?(?:ofrecen|venden|se\s+dedican?\s+a)\s+'
+    r'|compan[íi]as?\s+(?:que\s+)?(?:se\s+dedican?\s+a|ofrecen)\s+'
+    r'|industrias?\s+(?:que\s+)?(?:fabrican|producen)\s+'
+    r'|proveedores?\s+(?:de\s+)?)',
+    re.IGNORECASE,
+)
+
 
 def _extract_location(text: str) -> tuple[str, str, str | None]:
     """
-    Best-effort split of a free-typed query like "dentistas en Guadalajara" or
-    "restaurantes cerca de Bogotá, Colombia" into (clean_industry, city, country).
+    Splits a free-typed query like "dentistas en Guadalajara" or
+    "empresas que fabrican plásticos en la zona metropolitana de Monterrey"
+    into (clean_industry, city, country).
 
-    The UI is a single free-text box — the user types business + place together
-    ("gimnasios en Monterrey") and expects the search to understand both parts,
-    not just treat the whole phrase as an opaque industry string. This matches
-    a trailing "en/cerca de/cercano a/junto a/por <lugar>" clause against the
-    curated city list already used for city fan-out (COUNTRY_CONFIG), so downstream
-    query-building gets the
-    right city AND the right country (fixing the geo bias — without a detected
-    city/country, Bright Data silently defaulted to México's gl/hl regardless of
-    where the business actually is).
-
-    Falls back to (text, "", None) when nothing recognizable is found, which is
-    exactly the previous behaviour (whole text passed through as industry).
+    Fixes over the original:
+    - Takes the LAST location preposition (handles "empresas en tech en Monterrey")
+    - Scans ALL word positions in the tail, not just the first 3
+    - Resolves region aliases (el bajío, CDMX, ZMG, La Laguna, …)
+    - Strips leading filler phrases ("empresas que se dedican a …")
     """
-    m = _LOCATION_TAIL_RE.search(text)
-    if not m:
+    # Take the LAST location preposition match so "en tecnología en Monterrey"
+    # correctly extracts Monterrey and not "tecnología en Monterrey".
+    matches = list(_LOCATION_TAIL_RE.finditer(text))
+    if not matches:
         return text, "", None
+    m = matches[-1]
     tail = m.group(1).strip(" ,.")
+    industry_raw = text[:m.start()].strip(" ,.")
+    clean_industry = _FILLER_RE.sub('', industry_raw).strip() or industry_raw or text
+
+    # Build candidates: full tail + comma-primary (e.g. "Bogotá, Colombia" → "Bogotá")
     primary = tail.split(",")[0].strip()
-    for cand in ([tail, primary] if primary != tail else [tail]):
+    candidates = [tail, primary] if primary != tail else [tail]
+
+    for cand in candidates:
+        # Check region aliases first (multi-word regions like "el bajío")
+        alias_hit = _REGION_ALIASES.get(_norm_loc(cand))
+        if alias_hit:
+            return clean_industry, alias_hit[0], alias_hit[1]
+
+        # Scan ALL starting positions (not just the first 3 words) so
+        # "zona norte de Monterrey" still resolves "Monterrey".
         words = cand.split()
-        for n in (3, 2, 1):
-            if n > len(words):
-                continue
-            sub = " ".join(words[:n])
-            hit = _CITY_INDEX.get(_norm_loc(sub))
-            if hit:
-                city, country_name = hit
-                clean = text[:m.start()].strip(" ,.")
-                return (clean or text), city, country_name
+        for start in range(len(words)):
+            for n in (3, 2, 1):
+                if start + n > len(words):
+                    continue
+                sub = " ".join(words[start:start + n])
+                # Check alias map for n-gram
+                alias_hit = _REGION_ALIASES.get(_norm_loc(sub))
+                if alias_hit:
+                    return clean_industry, alias_hit[0], alias_hit[1]
+                # Check curated city index
+                city_hit = _CITY_INDEX.get(_norm_loc(sub))
+                if city_hit:
+                    city, country_name = city_hit
+                    return clean_industry, city, country_name
+
     country_name = _detect_effective_country(None, tail)
     if country_name:
-        clean = text[:m.start()].strip(" ,.")
-        return (clean or text), "", country_name
+        return clean_industry, "", country_name
     return text, "", None
 
 

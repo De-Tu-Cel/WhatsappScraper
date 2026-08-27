@@ -621,34 +621,72 @@ class MongoDBManager:
             {"$sort": {"last_at": -1}},
         ]
         groups = list(self.db.message_logs.aggregate(pipeline))
+        if not groups:
+            return []
+
+        # ── Batch lookups — 4 queries total instead of N×4 ───────────────────
+        all_cids = [
+            g["_id"] for g in groups
+            if g["_id"] and g["_id"] not in ("manual", "unknown")
+        ]
+        valid_oids = []
+        for cid in all_cids:
+            try:
+                valid_oids.append(ObjectId(cid))
+            except Exception:
+                pass
+
+        companies_map = {
+            str(c["_id"]): c
+            for c in self.db.companies.find(
+                {"_id": {"$in": valid_oids}},
+                {"name": 1, "domain": 1, "website": 1, "industry": 1, "source": 1},
+            )
+        }
+        wa_contact_cids = {
+            c["company_id"]
+            for c in self.db.contacts.find(
+                {"company_id": {"$in": all_cids}, "type": "whatsapp"},
+                {"company_id": 1},
+            )
+        }
+        jid_map_cids = {
+            j["company_id"]
+            for j in self.db.jid_map.find(
+                {"company_id": {"$in": all_cids}},
+                {"company_id": 1},
+            )
+        }
+        has_wa_cids = wa_contact_cids | jid_map_cids
+
+        # Last analyzed inbound per company — one aggregation instead of N find_ones
+        analyzed_map = {
+            doc["_id"]: doc.get("analysis")
+            for doc in self.db.message_logs.aggregate([
+                {"$match": {
+                    "company_id": {"$in": all_cids},
+                    "direction": "inbound",
+                    "analysis": {"$exists": True},
+                }},
+                {"$sort": {"created_at": -1}},
+                {"$group": {"_id": "$company_id", "analysis": {"$first": "$analysis"}}},
+            ])
+        }
+
         results = []
         for g in groups:
             company_id = g["_id"]
-            company = None
-            try:
-                company = self.db.companies.find_one(
-                    {"_id": ObjectId(company_id)},
-                    {"name": 1, "domain": 1, "website": 1, "industry": 1, "source": 1}
-                ) if company_id and company_id != "manual" and company_id != "unknown" else None
-            except Exception:
-                pass
+            if not company_id or company_id in ("manual", "unknown"):
+                continue
+            company = companies_map.get(company_id)
             if company is None:
-                continue  # skip personal chats and unknown contacts
+                continue
             # Skip contacts auto-registered from an inbound message (external numbers
             # that messaged the connected WA account) if the system never sent them anything.
             if company.get("source") == "inbound_whatsapp" and g.get("has_outbound", 0) == 0:
                 continue
-            has_wa = (
-                self.db.contacts.find_one({"company_id": company_id, "type": "whatsapp"})
-                or self.db.jid_map.find_one({"company_id": company_id})
-            )
-            if not has_wa:
-                continue  # skip companies with no WhatsApp number
-            last_inbound_analyzed = self.db.message_logs.find_one(
-                {"company_id": company_id, "direction": "inbound", "analysis": {"$exists": True}},
-                sort=[("created_at", -1)],
-                projection={"analysis": 1}
-            )
+            if company_id not in has_wa_cids:
+                continue
             results.append({
                 "company_id": company_id,
                 "company_name": company["name"],
@@ -663,7 +701,7 @@ class MongoDBManager:
                 "unread":             g["unread"],
                 "sent_by_name":       g.get("first_sent_by_name") or "",
                 "sent_by_username":   g.get("first_sent_by_user") or "",
-                "last_analysis":      last_inbound_analyzed.get("analysis") if last_inbound_analyzed else None,
+                "last_analysis":      analyzed_map.get(company_id),
             })
         # Deduplicate: same domain+name scraped multiple times → keep the one with
         # the most recent activity. Companies with no domain are deduped by name alone.

@@ -4569,6 +4569,7 @@ def api_create_scheduled_send(body: dict, x_user_token: Optional[str] = Header(N
             "error_count": 0,
             "total_count": 0,
             "created_at": datetime.now(),
+            "user_id": user.get("id") or str(user.get("_id", "")),
             "created_by_username": user.get("username", ""),
             "created_by_name": user.get("display_name", ""),
             "send_config": send_config,

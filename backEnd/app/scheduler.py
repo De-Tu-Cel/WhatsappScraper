@@ -635,6 +635,7 @@ def _execute_send_job(job_id: str):
 
         def _finish(sent: int, errors: int, skipped_nc: int = 0, skipped_daily: int = 0):
             final_status = "done" if sent > 0 or errors == 0 else "error"
+            now = datetime.now()
             db.db.scheduled_sends.update_one(
                 {"_id": ObjectId(job_id)},
                 {"$set": {
@@ -643,9 +644,25 @@ def _execute_send_job(job_id: str):
                     "error_count": errors,
                     "skipped_nc_cap_count": skipped_nc,
                     "skipped_daily_cap_count": skipped_daily,
-                    "finished_at": datetime.now(),
+                    "finished_at": now,
                 }},
             )
+            # Notificación en el panel de notificaciones del usuario
+            job_name = job.get("name") or job.get("industry") or "Campaña"
+            user_id  = job.get("user_id") or job.get("created_by")
+            notif = {
+                "type":                "campaign_finished",
+                "scheduled_send_id":   job_id,
+                "name":                job_name,
+                "status":              final_status,
+                "sent_count":          sent,
+                "error_count":         errors,
+                "created_by_username": job.get("created_by_username", ""),
+                "created_at":          now,
+            }
+            if user_id:
+                notif["user_id"] = user_id
+            db.db.app_notifications.insert_one(notif)
             log.warning("[Scheduler] job=%s ✅ finished status=%s sent=%d errors=%d skipped_nc=%d skipped_daily=%d",
                         job_id, final_status, sent, errors, skipped_nc, skipped_daily)
 

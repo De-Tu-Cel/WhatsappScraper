@@ -345,16 +345,18 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                             if co and co.get("assigned_instance") in connected:
                                 preferred = co["assigned_instance"]
 
-                        # If preferred exists but is at its NC limit for new contacts, drop it
+                        # If preferred exists but is at its daily cap OR NC limit, drop it
                         # so the NC-aware picker below can find a better instance.
                         # _nc_cap_fallback=True means preferred was set but temporarily saturated —
                         # the fallback instance must NOT overwrite assigned_instance permanently.
                         _nc_cap_fallback = False
                         if preferred and req.company_id:
                             from app.daily_cap import check_new_contact_cap as _check_nc_pref
+                            _daily_ok_p = get_daily_count(db, preferred) < get_instance_cap(db, preferred)
                             _nc_ok_p, _, _ = _check_nc_pref(db, preferred, req.company_id)
-                            if not _nc_ok_p:
-                                _log.info("[SendMsg] preferred=%s at NC limit — falling back to nc-aware pick (no reassign)", preferred)
+                            if not _daily_ok_p or not _nc_ok_p:
+                                _log.info("[SendMsg] preferred=%s at %s limit — falling back to nc-aware pick (no reassign)",
+                                          preferred, "daily" if not _daily_ok_p else "NC")
                                 preferred = None
                                 _nc_cap_fallback = True
 

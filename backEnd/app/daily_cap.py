@@ -75,12 +75,15 @@ def notify_cap_reached_once(db, instance_name: str) -> None:
     })
 
 
-def get_scheduled_count_for_date(db, target_date, exclude_id=None) -> int:
-    """Sum of all pending scheduled send recipients for a given local calendar day."""
+def get_scheduled_count_for_date(db, target_date, exclude_id=None, user_id=None) -> int:
+    """Sum of all pending scheduled send recipients for a given local calendar day.
+    Pass user_id to scope to a single user's campaigns (avoids cross-user inflation)."""
     from datetime import datetime, timedelta
     day_start = datetime(target_date.year, target_date.month, target_date.day)
     day_end   = day_start + timedelta(days=1)
     query = {"status": "pending", "scheduled_at": {"$gte": day_start, "$lt": day_end}}
+    if user_id:
+        query["user_id"] = user_id
     if exclude_id:
         from bson import ObjectId
         try:
@@ -170,7 +173,7 @@ def get_capacity_for_date(db, user_id: str, target_date, exclude_id=None) -> dic
     time), so this is a combined total, not per-instance rows like get_daily_count."""
     instances = list(db.db.instances.find({"assigned_to": user_id})) if user_id else []
     total_cap = sum(get_instance_cap(db, i["name"]) for i in instances) if instances else 0
-    scheduled_that_day = get_scheduled_count_for_date(db, target_date, exclude_id)
+    scheduled_that_day = get_scheduled_count_for_date(db, target_date, exclude_id, user_id=user_id)
     # For today, also subtract messages already sent so the estimate reflects
     # real remaining capacity, not just the scheduled-sends portion of the quota.
     already_sent = 0

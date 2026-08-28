@@ -82,33 +82,54 @@ function SessionDetail({ sessionId, onBack, token }) {
   if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4 }}><CircularProgress size={28} /></Box>
   if (!session) return <Alert severity="error">No se pudo cargar la sesión.</Alert>
 
+  const msgs = session.messages || []
   return (
-    <Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-        <IconButton size="small" onClick={onBack}><ArrowBackIcon fontSize="small" /></IconButton>
-        <Typography variant="subtitle2" fontWeight={700}>{session.instance_a} ↔ {session.instance_b}</Typography>
-        <Chip label={`${session.total_messages_today} msgs`} size="small" sx={{ ml: 'auto', fontSize: 11 }} />
+    <Box sx={{
+      flex: 1, overflow: 'auto',
+      bgcolor: 'action.hover',
+      backgroundImage: 'radial-gradient(circle, rgba(128,128,128,0.06) 1px, transparent 1px)',
+      backgroundSize: '20px 20px',
+      display: 'flex', flexDirection: 'column',
+    }}>
+      {/* Subtítulo: instancias */}
+      <Box sx={{ textAlign: 'center', pt: 1.5, pb: 0.5 }}>
+        <Chip
+          label={`${session.instance_a} ↔ ${session.instance_b}`}
+          size="small"
+          sx={{ fontSize: 11, bgcolor: 'background.paper', color: 'text.secondary' }}
+        />
       </Box>
-      {(session.messages || []).length === 0 ? (
-        <Typography variant="body2" color="text.secondary" textAlign="center" py={3}>Sin mensajes aún hoy.</Typography>
+
+      {msgs.length === 0 ? (
+        <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Typography variant="body2" color="text.secondary">Sin mensajes aún hoy.</Typography>
+        </Box>
       ) : (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          {(session.messages || []).map((msg, i) => {
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 0.75, px: 2, pt: 1, pb: 2 }}>
+          {msgs.map((msg, i) => {
             const isA = msg.speaker === 'a'
             return (
               <Box key={i} sx={{ display: 'flex', justifyContent: isA ? 'flex-start' : 'flex-end' }}>
                 <Box sx={{
-                  maxWidth: '75%', px: 1.5, py: 0.75,
-                  bgcolor: isA ? 'rgba(59,130,246,0.12)' : 'rgba(34,197,94,0.10)',
-                  border: `1px solid ${isA ? 'rgba(59,130,246,0.2)' : 'rgba(34,197,94,0.2)'}`,
-                  borderRadius: isA ? '4px 14px 14px 14px' : '14px 4px 14px 14px',
+                  maxWidth: '78%', px: 1.25, pt: 0.5, pb: 0.25,
+                  bgcolor: isA ? 'background.paper' : 'primary.main',
+                  color: isA ? 'text.primary' : 'primary.contrastText',
+                  borderRadius: isA ? '2px 12px 12px 12px' : '12px 2px 12px 12px',
+                  boxShadow: 1,
                 }}>
-                  <Typography variant="caption" sx={{ color: isA ? '#60a5fa' : '#4ade80', fontWeight: 600, display: 'block', mb: 0.25 }}>
+                  <Typography variant="caption" sx={{
+                    fontWeight: 700, display: 'block', mb: 0.25,
+                    color: isA ? 'primary.main' : 'rgba(255,255,255,0.8)',
+                  }}>
                     {isA ? session.instance_a : session.instance_b}
                   </Typography>
-                  <Typography variant="body2">{msg.content}</Typography>
+                  <Typography variant="body2" sx={{ lineHeight: 1.4 }}>{msg.content}</Typography>
                   {msg.ts && (
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'right', mt: 0.25 }}>
+                    <Typography variant="caption" sx={{
+                      display: 'block', textAlign: 'right', mt: 0.25,
+                      color: isA ? 'text.disabled' : 'rgba(255,255,255,0.65)',
+                      fontSize: 10,
+                    }}>
                       {new Date(msg.ts).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
                     </Typography>
                   )}
@@ -139,7 +160,7 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth
-      PaperProps={{ sx: { borderRadius: 2.5, overflow: 'hidden', height: '70vh', maxHeight: 560, display: 'flex', flexDirection: 'column' } }}>
+      slotProps={{ paper: { sx: { borderRadius: 2.5, overflow: 'hidden', height: '70vh', maxHeight: 560, display: 'flex', flexDirection: 'column' } } }}>
 
       {/* Header estilo WhatsApp — Box evita el h2 de DialogTitle */}
       <Box sx={{
@@ -162,16 +183,14 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
         </IconButton>
       </Box>
 
-      {/* Lista de sesiones */}
-      <DialogContent sx={{ p: 0, overflow: 'auto', flex: 1 }}>
+      {/* Lista de sesiones / chat */}
+      <DialogContent sx={{ p: 0, overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column' }}>
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4 }}>
             <CircularProgress size={28} />
           </Box>
         ) : selected ? (
-          <Box sx={{ p: 2 }}>
-            <SessionDetail sessionId={selected} onBack={() => setSelected(null)} token={token} />
-          </Box>
+          <SessionDetail sessionId={selected} onBack={() => setSelected(null)} token={token} />
         ) : sessions.length === 0 ? (
           <Box sx={{ textAlign: 'center', py: 6 }}>
             <ChatBubbleOutlinedIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />

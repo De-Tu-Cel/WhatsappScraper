@@ -3785,8 +3785,20 @@ async def api_wwebjs_webhook(request: Request):
                 db.update_evolution_message_status(message_id, "sent")
             return {"ok": True, "action": "outbound_echo"}
 
-        # Filter out WhatsApp status updates (stories)
-        if data.get("isStatus") or "@broadcast" in data.get("from", "") or "@broadcast" in data.get("chatId", ""):
+        # Filter out WhatsApp status updates, stories, and replies to statuses.
+        # isStatus covers stories posted by others; @broadcast covers group/broadcast JIDs.
+        # isStatusReply covers reactions/replies to your own status (arrives from @c.us so
+        # isStatus is false, but wwebjs sets isStatusReply=true on the message object).
+        _from_jid = data.get("from", "")
+        _chat_jid = data.get("chatId", "")
+        if (
+            data.get("isStatus")
+            or data.get("isStatusReply")
+            or "@broadcast" in _from_jid
+            or "@broadcast" in _chat_jid
+            or "status@broadcast" in _from_jid
+            or "status@broadcast" in _chat_jid
+        ):
             return {"ok": True, "action": "ignored_status"}
 
         _sender_is_internal = bool(db.db.instances.find_one({"number": number}))

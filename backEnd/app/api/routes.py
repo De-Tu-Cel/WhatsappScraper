@@ -3888,7 +3888,8 @@ async def api_wwebjs_webhook(request: Request):
 # ── Warmup endpoints ──────────────────────────────────────────────────────────
 
 @router.get("/warmup/instances")
-async def warmup_get_instances(current_user=Depends(get_current_user)):
+def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     from datetime import datetime as _dt
     db = MongoDBManager()
     # All wwebjs instances
@@ -3945,7 +3946,8 @@ async def warmup_get_instances(current_user=Depends(get_current_user)):
 
 
 @router.post("/warmup/instances/{name}/enable")
-async def warmup_enable_instance(name: str, current_user=Depends(get_current_user)):
+def warmup_enable_instance(name: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     db = MongoDBManager()
     db.db.instances.update_one(
         {"name": name, "provider": "wwebjs"},
@@ -3955,7 +3957,8 @@ async def warmup_enable_instance(name: str, current_user=Depends(get_current_use
 
 
 @router.post("/warmup/instances/{name}/disable")
-async def warmup_disable_instance(name: str, current_user=Depends(get_current_user)):
+def warmup_disable_instance(name: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     db = MongoDBManager()
     db.db.instances.update_one(
         {"name": name, "provider": "wwebjs"},
@@ -3965,7 +3968,8 @@ async def warmup_disable_instance(name: str, current_user=Depends(get_current_us
 
 
 @router.post("/warmup/instances/{name}/pause")
-async def warmup_pause_instance(name: str, current_user=Depends(get_current_user)):
+def warmup_pause_instance(name: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     db = MongoDBManager()
     db.db.instances.update_one(
         {"name": name, "provider": "wwebjs"},
@@ -3975,7 +3979,8 @@ async def warmup_pause_instance(name: str, current_user=Depends(get_current_user
 
 
 @router.post("/warmup/instances/{name}/resume")
-async def warmup_resume_instance(name: str, current_user=Depends(get_current_user)):
+def warmup_resume_instance(name: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     db = MongoDBManager()
     db.db.instances.update_one(
         {"name": name, "provider": "wwebjs"},
@@ -3985,7 +3990,8 @@ async def warmup_resume_instance(name: str, current_user=Depends(get_current_use
 
 
 @router.get("/warmup/sessions")
-async def warmup_get_sessions(current_user=Depends(get_current_user)):
+def warmup_get_sessions(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     from datetime import datetime as _dt
     db = MongoDBManager()
     today = _dt.utcnow().strftime("%Y-%m-%d")
@@ -4002,7 +4008,8 @@ async def warmup_get_sessions(current_user=Depends(get_current_user)):
 
 
 @router.get("/warmup/sessions/{session_id}/messages")
-async def warmup_get_messages(session_id: str, current_user=Depends(get_current_user)):
+def warmup_get_messages(session_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     from bson import ObjectId
     db = MongoDBManager()
     session = db.db.warmup_sessions.find_one({"_id": ObjectId(session_id)})
@@ -4021,8 +4028,9 @@ async def warmup_get_messages(session_id: str, current_user=Depends(get_current_
 
 
 @router.get("/warmup/chats/{instance_name}")
-async def warmup_get_instance_chats(instance_name: str, current_user=Depends(get_current_user)):
+def warmup_get_instance_chats(instance_name: str, x_user_token: Optional[str] = Header(None)):
     """All warmup sessions involving an instance, newest first."""
+    _require_user(x_user_token)
     db = MongoDBManager()
     sessions = list(db.db.warmup_sessions.find(
         {"$or": [{"instance_a": instance_name}, {"instance_b": instance_name}]},
@@ -4633,7 +4641,7 @@ def api_companies_with_numbers(x_user_token: Optional[str] = Header(None)):
             for contact in c.get("wa_contacts", []):
                 num = contact.get("value", "")
                 numbers.append({
-                    "contact_id": str(contact["_id"]),
+                    "contact_id": str(contact.get("_id", "")),
                     "number": num,
                     "label": contact.get("label", ""),
                     "active": num in active_numbers,
@@ -4649,6 +4657,8 @@ def api_companies_with_numbers(x_user_token: Optional[str] = Header(None)):
             })
         return result
     except Exception as e:
+        import logging as _log2
+        _log2.getLogger(__name__).exception("[companies-with-numbers] error")
         raise HTTPException(status_code=500, detail=str(e))
 
 

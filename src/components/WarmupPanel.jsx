@@ -896,17 +896,20 @@ function WarmupConfigDialog({ open, onClose, token }) {
               size="small"
               fullWidth
               MenuProps={{
-                PaperProps: {
-                  sx: {
-                    bgcolor: '#1a2234',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    borderRadius: 2,
-                    mt: 0.5,
-                    '& .MuiMenuItem-root': {
-                      fontSize: 13,
-                      py: 1,
-                      '&:hover':    { bgcolor: 'rgba(59,130,246,0.12)' },
-                      '&.Mui-selected': { bgcolor: 'rgba(59,130,246,0.18)', color: '#93bbfd', '&:hover': { bgcolor: 'rgba(59,130,246,0.24)' } },
+                slotProps: {
+                  paper: {
+                    sx: {
+                      bgcolor: '#111827',
+                      backgroundImage: 'none',
+                      border: '1px solid rgba(255,255,255,0.08)',
+                      borderRadius: 2,
+                      mt: 0.5,
+                      '& .MuiMenuItem-root': {
+                        fontSize: 13,
+                        py: 1,
+                        '&:hover':    { bgcolor: 'rgba(59,130,246,0.12)' },
+                        '&.Mui-selected': { bgcolor: 'rgba(59,130,246,0.18)', color: '#93bbfd', '&:hover': { bgcolor: 'rgba(59,130,246,0.24)' } },
+                      },
                     },
                   },
                 },

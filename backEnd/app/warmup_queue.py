@@ -11,6 +11,16 @@ import threading
 import time
 from datetime import datetime, timedelta
 
+try:
+    from zoneinfo import ZoneInfo as _ZoneInfo
+    _MX_TZ = _ZoneInfo("America/Mexico_City")
+except Exception:
+    try:
+        import pytz as _pytz
+        _MX_TZ = _pytz.timezone("America/Mexico_City")
+    except Exception:
+        _MX_TZ = None  # fallback: UTC-6 offset
+
 log = logging.getLogger(__name__)
 
 _thread: threading.Thread | None = None
@@ -20,15 +30,32 @@ _POLL_INTERVAL       = 300   # seconds between checks
 _MAX_MSGS_PER_PAIR   = 10    # messages per pair per day
 _MIN_DELAY_MIN       = 8     # min minutes between turns
 _MAX_DELAY_MIN       = 25    # max minutes between turns
-_BUSINESS_HOUR_START = 9     # 09:00 CST (UTC-6)
-_BUSINESS_HOUR_END   = 21    # 21:00 CST
+_BUSINESS_HOUR_START = 9     # 09:00 hora México
+_BUSINESS_HOUR_END   = 21    # 21:00 hora México
+
+# Temas rotativos para la conversación
+_TOPICS = [
+    "están hablando de películas clásicas de los 80s-90s (Volver al Futuro, Matrix, Terminator, etc.)",
+    "están hablando de series que están viendo en Netflix o alguna plataforma de streaming",
+    "están platicando de sus planes para el fin de semana o el siguiente puente",
+    "están hablando de comida, de algún restaurante que probaron o de un antojo que tienen",
+    "están hablando de fútbol, ya sea la liga MX, algún equipo o la Champions",
+    "están hablando de música, canciones o artistas que están escuchando últimamente",
+    "están platicando casualmente del trabajo o de algo que les pasó en la semana",
+    "están hablando de viajes, algún lugar que visitaron o que quieren visitar",
+]
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+def _mx_now() -> datetime:
+    if _MX_TZ is not None:
+        return datetime.now(_MX_TZ)
+    return datetime.utcnow() - timedelta(hours=6)
+
 def _is_business_hours() -> bool:
-    now_cst = datetime.utcnow() - timedelta(hours=6)
-    return _BUSINESS_HOUR_START <= now_cst.hour < _BUSINESS_HOUR_END
+    now = _mx_now()
+    return _BUSINESS_HOUR_START <= now.hour < _BUSINESS_HOUR_END
 
 
 def _get_warmup_instances(db) -> list[dict]:
@@ -132,22 +159,32 @@ def _get_or_create_session(db, inst_a: dict, inst_b: dict, today: str) -> dict:
     return doc
 
 
-def _generate_message(history: list[dict], speaker_key: str) -> str:
-    """Ask the LLM for the next line in the Back-to-the-Future conversation."""
+def _generate_message(history: list[dict], speaker_key: str, session_id=None) -> str:
+    """Ask the LLM for the next message in the warmup conversation."""
     from app.llm import call_llm, PRIORITY_BATCH
 
+    # Seleccionar tema determinista por sesión para que ambos hablen del mismo tema
+    topic_idx = abs(hash(str(session_id))) % len(_TOPICS) if session_id else random.randint(0, len(_TOPICS) - 1)
+    topic = _TOPICS[topic_idx]
+
     system = (
-        "Eres una persona real chateando por WhatsApp con un amigo. "
-        "Están hablando sobre la saga de películas 'Volver al Futuro' (Back to the Future). "
-        "Tus mensajes son cortos (1-2 oraciones máximo), muy casuales y naturales, en español informal. "
-        "No repitas lo que ya dijiste. Reacciona genuinamente a lo que dijo la otra persona. "
-        "Varía el tono: entusiasta, curioso o nostálgico según el contexto. "
+        "Eres una persona real mexicana chateando con un amigo por WhatsApp. "
+        f"Contexto: {topic}. "
+        "REGLAS para sonar como humano de verdad:\n"
+        "- Mensajes MUY cortos: máximo 1-2 oraciones, a veces solo 2-4 palabras\n"
+        "- Español mexicano informal: 'wey', 'bro', 'nel', 'simon', 'sale', 'órale', 'chido', 'ps sí', 'a poco', 'no manches'\n"
+        "- A veces omite acentos o signos de apertura (¿ ¡) como lo hacen en chat\n"
+        "- Usa 'jaja', 'jajaja', 'haha', 'ajá', 'oye' cuando corresponde\n"
+        "- Emojis ocasionalmente (no en cada mensaje): 😂 🔥 👀 😭 💀\n"
+        "- NO seas formal ni perfecto en gramática\n"
+        "- NO uses puntuación perfecta — a veces sin punto final, sin coma\n"
+        "- Varía el tono: a veces entusiasmado, a veces relajado, a veces sorprendido\n"
+        "- Reacciona genuinamente a lo que dijo la otra persona antes de añadir algo nuevo\n"
         "Escribe SOLO el mensaje, sin comillas ni explicaciones."
     )
 
     openai_msgs = [{"role": "system", "content": system}]
 
-    # Build conversation history (last 12 turns for context)
     for msg in history[-12:]:
         role = "assistant" if msg["speaker"] == speaker_key else "user"
         openai_msgs.append({"role": role, "content": msg["content"]})
@@ -155,18 +192,24 @@ def _generate_message(history: list[dict], speaker_key: str) -> str:
     if not history:
         openai_msgs.append({
             "role": "user",
-            "content": "(Inicia la conversación sobre Volver al Futuro con un mensaje corto y casual)"
+            "content": "(Inicia la conversación con un mensaje corto y casual sobre el tema, como si hubiera pasado algo relevante hace poco)"
         })
 
-    return call_llm(openai_msgs, max_tokens=80, temperature=0.9, priority=PRIORITY_BATCH)
+    return call_llm(openai_msgs, max_tokens=90, temperature=0.95, priority=PRIORITY_BATCH)
 
 
-def _send_warmup_message(db, from_inst: dict, to_inst: dict, text: str, session_id) -> str:
+def _send_warmup_message(db, from_inst: dict, to_inst: dict, text: str, session_id, save_contact: bool = False) -> str:
     """Send via wwebjs and write an is_warmup log entry. Returns message_id."""
     from app.whatsapp_wwebjs import send_message
 
     to_wa = to_inst["number"].lstrip("+") + "@c.us"
-    result = send_message(from_inst["name"], to_wa, text, typing_ms=random.randint(800, 2500))
+    contact_name = (to_inst.get("label") or to_inst["name"]).split("-")[0].strip().capitalize()
+    result = send_message(
+        from_inst["name"], to_wa, text,
+        typing_ms=random.randint(800, 2500),
+        save_contact=save_contact,
+        contact_first_name=contact_name if save_contact else "",
+    )
     msg_id = (result.get("id") or {}).get("id") or result.get("messageId", "")
 
     now = datetime.utcnow()
@@ -203,14 +246,17 @@ def _process_pair(db, inst_a: dict, inst_b: dict, session: dict) -> None:
     if from_inst.get("paused") or to_inst.get("paused"):
         return
 
+    messages = session.get("messages", [])
+    is_first_msg = len(messages) == 0
+
     try:
-        text = _generate_message(session.get("messages", []), speaker_key)
+        text = _generate_message(messages, speaker_key, session_id=session["_id"])
     except Exception as exc:
         log.error("[Warmup] LLM error for %s↔%s: %s", inst_a["name"], inst_b["name"], exc)
         return
 
     try:
-        _send_warmup_message(db, from_inst, to_inst, text, session["_id"])
+        _send_warmup_message(db, from_inst, to_inst, text, session["_id"], save_contact=is_first_msg)
     except Exception as exc:
         log.error("[Warmup] send error %s→%s: %s", from_inst["name"], to_inst["name"], exc)
         return
@@ -221,10 +267,10 @@ def _process_pair(db, inst_a: dict, inst_b: dict, session: dict) -> None:
         {
             "$push": {"messages": {"speaker": speaker_key, "content": text, "ts": now}},
             "$set": {
-                "next_speaker":         next_key,
-                "next_send_at":         now + timedelta(minutes=delay_min),
-                "total_messages_today": session["total_messages_today"] + 1,
+                "next_speaker": next_key,
+                "next_send_at": now + timedelta(minutes=delay_min),
             },
+            "$inc": {"total_messages_today": 1},
         },
     )
     log.info(
@@ -257,7 +303,7 @@ def _warmup_loop() -> None:
                 continue
 
             pairs = _get_today_pairs(instances)
-            today = datetime.utcnow().strftime("%Y-%m-%d")
+            today = _mx_now().strftime("%Y-%m-%d")
 
             for inst_a, inst_b in pairs:
                 session = _get_or_create_session(db, inst_a, inst_b, today)

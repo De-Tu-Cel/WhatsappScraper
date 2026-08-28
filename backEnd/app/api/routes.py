@@ -3911,7 +3911,8 @@ def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
     except Exception:
         _st = {}
 
-    today = _dt.utcnow().strftime("%Y-%m-%d")
+    from app.warmup_queue import _mx_now as _warmup_now
+    today = _warmup_now().strftime("%Y-%m-%d")
 
     # Fetch all today's sessions once — compute per-instance stats in Python
     all_sessions = list(db.db.warmup_sessions.find(
@@ -4050,9 +4051,9 @@ def warmup_toggle_global(x_user_token: Optional[str] = Header(None)):
 @router.get("/warmup/sessions")
 def warmup_get_sessions(x_user_token: Optional[str] = Header(None)):
     _require_user(x_user_token)
-    from datetime import datetime as _dt
+    from app.warmup_queue import _mx_now as _warmup_now
     db = MongoDBManager()
-    today = _dt.utcnow().strftime("%Y-%m-%d")
+    today = _warmup_now().strftime("%Y-%m-%d")
     sessions = list(db.db.warmup_sessions.find(
         {"date": today},
         {"instance_a": 1, "instance_b": 1, "total_messages_today": 1,

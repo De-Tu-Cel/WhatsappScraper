@@ -27,9 +27,11 @@ const ScheduledSends     = dynamic(() => import('../components/scheduledSends'),
 const SendCampaign       = dynamic(() => import('../components/sendCampaign'),       { ssr: false })
 const AdminPanel         = dynamic(() => import('../components/AdminPanel'),         { ssr: false })
 const InstancesPanel     = dynamic(() => import('../components/InstancesPanel'),     { ssr: false })
+const WarmupPanel        = dynamic(() => import('../components/WarmupPanel'),         { ssr: false })
 import CampaignIcon from '@mui/icons-material/Campaign'
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
 import RouterIcon from '@mui/icons-material/Router'
+import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment'
 import Settings, { loadSettings, applySettings } from '../components/Settings'
 import { useLang } from '../context/LangContext'
 import AppTour from '../components/AppTour'
@@ -92,7 +94,8 @@ const NAV_KEYS = [
   { key: 'schedule',  icon: <ScheduleSendIcon />,       component: <ScheduledSends /> },
   { key: 'campaign',  icon: <CampaignIcon />,           component: <SendCampaign /> },
   { key: 'admin',     icon: <AdminPanelSettingsIcon />, component: <AdminPanel />,     adminOnly: true },
-  { key: 'instances', icon: <RouterIcon />,             component: <InstancesPanel />, adminOnly: true },
+  { key: 'instances', icon: <RouterIcon />,                   component: <InstancesPanel />, adminOnly: true },
+  { key: 'warmup',    icon: <LocalFireDepartmentIcon />,      component: <WarmupPanel />,    adminOnly: true },
 ]
 
 export default function DashboardPage() {

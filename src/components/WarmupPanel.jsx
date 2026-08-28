@@ -650,6 +650,7 @@ export default function WarmupPanel() {
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState(null)
   const [toggling, setToggling] = useState(false)
+  const [search, setSearch]     = useState('')
   const tickRef = useRef(null)
 
   const load = useCallback(() => {
@@ -695,7 +696,7 @@ export default function WarmupPanel() {
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <LocalFireDepartmentIcon sx={{ color: '#e11d68', fontSize: 26 }} />
-            <Typography variant="h6" fontWeight={800} sx={{ lineHeight: 1.2 }}>Warmup</Typography>
+            <Typography id="tour-nav-warmup" variant="h6" fontWeight={800} sx={{ lineHeight: 1.2 }}>Warmup</Typography>
           </Box>
           <Typography variant="caption" color="text.secondary">Calentamiento automático entre instancias activas</Typography>
         </Box>
@@ -704,47 +705,55 @@ export default function WarmupPanel() {
         {!loading && data && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
             {activeCount > 0 && (
-              <Chip
-                size="small" label={`${activeCount} activa${activeCount !== 1 ? 's' : ''}`}
-                icon={<Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#22c55e', ml: '6px !important' }} />}
-                sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600, fontSize: 11, border: '1px solid rgba(34,197,94,0.2)' }}
-              />
+              <Tooltip title="Instancias participando en el ciclo de calentamiento hoy" placement="bottom">
+                <Chip
+                  size="small" label={`${activeCount} activa${activeCount !== 1 ? 's' : ''}`}
+                  icon={<Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#22c55e', ml: '6px !important' }} />}
+                  sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600, fontSize: 11, border: '1px solid rgba(34,197,94,0.2)', cursor: 'default' }}
+                />
+              </Tooltip>
             )}
             {discCount > 0 && (
-              <Chip
-                size="small" label={`${discCount} desconectada${discCount !== 1 ? 's' : ''}`}
-                icon={<Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#ef4444', ml: '6px !important' }} />}
-                sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#ef4444', fontWeight: 600, fontSize: 11, border: '1px solid rgba(239,68,68,0.2)' }}
-              />
+              <Tooltip title="Sin conexión activa de WhatsApp. Vuelven al ciclo automáticamente al reconectarse." placement="bottom">
+                <Chip
+                  size="small" label={`${discCount} desconectada${discCount !== 1 ? 's' : ''}`}
+                  icon={<Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#ef4444', ml: '6px !important' }} />}
+                  sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#ef4444', fontWeight: 600, fontSize: 11, border: '1px solid rgba(239,68,68,0.2)', cursor: 'default' }}
+                />
+              </Tooltip>
             )}
             {(sentTotal > 0 || recvTotal > 0) && (
-              <Chip
-                size="small"
-                label={
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    <ArrowUpwardIcon sx={{ fontSize: 11 }} />{sentTotal}
-                    <ArrowDownwardIcon sx={{ fontSize: 11, ml: 0.5 }} />{recvTotal}
-                    <Box component="span" sx={{ ml: 0.25, color: 'text.disabled' }}>hoy</Box>
-                  </Box>
-                }
-                sx={{ bgcolor: 'rgba(255,255,255,0.05)', fontWeight: 600, fontSize: 11, border: '1px solid rgba(255,255,255,0.1)' }}
-              />
+              <Tooltip title={`Mensajes de calentamiento hoy: ${sentTotal} enviados · ${recvTotal} recibidos entre todas las instancias`} placement="bottom">
+                <Chip
+                  size="small"
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      <ArrowUpwardIcon sx={{ fontSize: 11 }} />{sentTotal}
+                      <ArrowDownwardIcon sx={{ fontSize: 11, ml: 0.5 }} />{recvTotal}
+                      <Box component="span" sx={{ ml: 0.25, color: 'text.disabled' }}>hoy</Box>
+                    </Box>
+                  }
+                  sx={{ bgcolor: 'rgba(255,255,255,0.05)', fontWeight: 600, fontSize: 11, border: '1px solid rgba(255,255,255,0.1)', cursor: 'default' }}
+                />
+              </Tooltip>
             )}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-              <Typography variant="caption" color={globalOn ? 'text.primary' : 'text.disabled'} fontWeight={600}>
-                {globalOn ? 'Activo' : 'Pausado'}
-              </Typography>
-              <Switch
-                checked={globalOn}
-                onChange={handleToggle}
-                disabled={toggling}
-                size="small"
-                sx={{
-                  '& .MuiSwitch-thumb': { bgcolor: globalOn ? '#e11d68' : undefined },
-                  '& .MuiSwitch-track': { bgcolor: globalOn ? 'rgba(225,29,104,0.4) !important' : undefined },
-                }}
-              />
-            </Box>
+            <Tooltip title={globalOn ? 'El sistema de warmup está activo. Tócalo para pausar todos los envíos.' : 'El sistema está pausado. Tócalo para reactivar el calentamiento.'} placement="bottom">
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Typography variant="caption" color={globalOn ? 'text.primary' : 'text.disabled'} fontWeight={600}>
+                  {globalOn ? 'Activo' : 'Pausado'}
+                </Typography>
+                <Switch
+                  checked={globalOn}
+                  onChange={handleToggle}
+                  disabled={toggling}
+                  size="small"
+                  sx={{
+                    '& .MuiSwitch-thumb': { bgcolor: globalOn ? '#e11d68' : undefined },
+                    '& .MuiSwitch-track': { bgcolor: globalOn ? 'rgba(225,29,104,0.4) !important' : undefined },
+                  }}
+                />
+              </Box>
+            </Tooltip>
             <Tooltip title="Actualizar">
               <IconButton size="small" onClick={load} disabled={loading}>
                 {loading ? <CircularProgress size={16} /> : <RefreshIcon fontSize="small" />}
@@ -772,7 +781,7 @@ export default function WarmupPanel() {
                 Próxima rotación de pares:{' '}
                 <Box component="span" fontWeight={700} color="text.primary">{formatNextRotation(nextRot)}</Box>
                 {discNames.length > 0 && (
-                  <>{' · '}{discNames.join(', ')} entrará{discNames.length > 1 ? 'n' : ''} en rotación cuando recupere{discNames.length > 1 ? 'n' : ''} conexión.</>
+                  <>{' · '}<Box component="span" sx={{ color: '#f87171' }}>{discNames.length} instancia{discNames.length !== 1 ? 's' : ''} desconectada{discNames.length !== 1 ? 's' : ''}</Box> entrará{discNames.length !== 1 ? 'n' : ''} en rotación cuando recupere{discNames.length !== 1 ? 'n' : ''} conexión.</>
                 )}
               </Typography>
             </Box>
@@ -783,19 +792,66 @@ export default function WarmupPanel() {
             <Alert severity="info">No hay instancias wwebjs registradas.</Alert>
           ) : (
             <>
-              <Typography variant="caption" color="text.disabled" sx={{ letterSpacing: '0.08em', fontSize: 10, fontWeight: 700, mb: 1.5, display: 'block' }}>
-                INSTANCIAS
-              </Typography>
+              {/* Buscador */}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
+                <Box sx={{
+                  flex: 1, display: 'flex', alignItems: 'center', gap: 1,
+                  px: 1.5, py: 0.75, borderRadius: 2,
+                  bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)',
+                  '&:focus-within': { borderColor: 'rgba(255,255,255,0.2)' }, transition: 'border-color 0.15s',
+                }}>
+                  <Box component="span" sx={{ color: 'text.disabled', fontSize: 16, lineHeight: 1 }}>🔍</Box>
+                  <Box
+                    component="input"
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    placeholder="Buscar instancia..."
+                    sx={{
+                      flex: 1, border: 'none', outline: 'none', bgcolor: 'transparent',
+                      color: 'text.primary', fontSize: 13,
+                      '&::placeholder': { color: 'rgba(255,255,255,0.25)' },
+                    }}
+                  />
+                  {search && (
+                    <Box
+                      component="button"
+                      onClick={() => setSearch('')}
+                      sx={{ border: 'none', bgcolor: 'transparent', cursor: 'pointer', color: 'rgba(255,255,255,0.3)', p: 0, lineHeight: 1, fontSize: 14, '&:hover': { color: 'text.secondary' } }}
+                    >✕</Box>
+                  )}
+                </Box>
+                <Typography variant="caption" color="text.disabled" sx={{ letterSpacing: '0.08em', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>
+                  {instances.length} INSTANCIA{instances.length !== 1 ? 'S' : ''}
+                </Typography>
+              </Box>
+
               {instances.filter(i => i.enabled).length < 2 && (
                 <Alert severity="warning" sx={{ mb: 2 }}>
                   Se necesitan al menos 2 instancias activas para que el calentamiento funcione.
                 </Alert>
               )}
-              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1fr 1fr 1fr' }, gap: 2 }}>
-                {instances.map(inst => (
-                  <InstanceCard key={inst.name} inst={inst} token={user?.token} onRefresh={load} />
-                ))}
-              </Box>
+
+              {(() => {
+                const q = search.toLowerCase()
+                const filtered = q
+                  ? instances.filter(i =>
+                      (i.name || '').toLowerCase().includes(q) ||
+                      (i.label || '').toLowerCase().includes(q) ||
+                      (i.number || '').includes(q)
+                    )
+                  : instances
+                return filtered.length === 0 ? (
+                  <Box sx={{ textAlign: 'center', py: 4 }}>
+                    <Typography variant="body2" color="text.secondary">Sin resultados para «{search}»</Typography>
+                  </Box>
+                ) : (
+                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1fr 1fr 1fr' }, gap: 2 }}>
+                    {filtered.map(inst => (
+                      <InstanceCard key={inst.name} inst={inst} token={user?.token} onRefresh={load} />
+                    ))}
+                  </Box>
+                )
+              })()}
             </>
           )}
         </>

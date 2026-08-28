@@ -22,6 +22,7 @@ const TOUR_TARGETS = [
   '#tour-nav-schedule',
   '#tour-nav-campaign',
   '#tour-nav-analytics',
+  '#tour-nav-warmup',
   '#tour-settings',
 ]
 

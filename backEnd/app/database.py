@@ -907,18 +907,63 @@ class MongoDBManager:
                     "total_responses": 0,
                 }
         groups = sorted(merged.values(), key=lambda g: g.get("last_at") or "", reverse=True)
+        from bson import ObjectId
+        from collections import defaultdict
+
+        _all_cids = [g["_id"] for g in groups if g["_id"] and g["_id"] not in ("unknown", "manual")]
+        _valid_oids = [ObjectId(cid) for cid in _all_cids if ObjectId.is_valid(cid)]
+
+        companies_map = {
+            str(c["_id"]): c
+            for c in self.db.companies.find(
+                {"_id": {"$in": _valid_oids}},
+                {"name": 1, "industry": 1, "domain": 1}
+            )
+        }
+
+        _msgs_all = list(self.db.message_logs.find(
+            {"company_id": {"$in": _all_cids}},
+            {"direction": 1, "to_number": 1, "from_number": 1, "number": 1,
+             "analysis": 1, "created_at": 1, "company_id": 1}
+        ))
+        _msgs_by_cid = defaultdict(list)
+        for _m in _msgs_all:
+            _msgs_by_cid[_m.get("company_id", "")].append(_m)
+
+        _contacts_all = list(self.db.contacts.find(
+            {"company_id": {"$in": _all_cids}, "type": "whatsapp"},
+            {"company_id": 1, "value": 1, "label": 1, "source": 1}
+        ))
+        _contacts_by_cid = defaultdict(list)
+        for _c in _contacts_all:
+            _contacts_by_cid[_c.get("company_id", "")].append(_c)
+
+        _pcs_all = list(self.db.person_contacts.find(
+            {"company_id": {"$in": _all_cids}},
+            {"company_id": 1, "name": 1, "phone": 1, "whatsapp": 1}
+        ))
+        _pcs_by_cid = defaultdict(list)
+        for _pc in _pcs_all:
+            _pcs_by_cid[_pc.get("company_id", "")].append(_pc)
+
+        _fresh_threshold = datetime.utcnow() - timedelta(minutes=10)
+        _pending_counts = {
+            str(r["_id"]): r["cnt"]
+            for r in self.db.message_logs.aggregate([
+                {"$match": {
+                    "company_id": {"$in": _all_cids},
+                    "direction": "inbound",
+                    "analysis_status": "pending",
+                    "pending_since": {"$gte": _fresh_threshold},
+                }},
+                {"$group": {"_id": "$company_id", "cnt": {"$sum": 1}}},
+            ])
+        }
+
         results = []
         for g in groups:
             company_id = g["_id"]
-            company = None
-            try:
-                from bson import ObjectId
-                company = self.db.companies.find_one(
-                    {"_id": ObjectId(company_id)},
-                    {"name": 1, "industry": 1, "domain": 1}
-                ) if company_id and company_id not in ("unknown", "manual") else None
-            except Exception:
-                pass
+            company = companies_map.get(company_id) if company_id and company_id not in ("unknown", "manual") else None
             if not company:
                 continue
 
@@ -926,10 +971,7 @@ class MongoDBManager:
             def _norm(n):
                 return (n or "").replace("+", "").replace(" ", "").replace("-", "")[-10:]
 
-            msgs = list(self.db.message_logs.find(
-                {"company_id": company_id},
-                {"direction": 1, "to_number": 1, "from_number": 1, "number": 1, "analysis": 1, "created_at": 1}
-            ))
+            msgs = _msgs_by_cid.get(company_id, [])
             num_map = {}  # key = normalized 10-digit number
             num_raw  = {}  # key = normalized → raw display number
             for m in msgs:
@@ -952,17 +994,13 @@ class MongoDBManager:
             # Merge bot/unknown inbound-only numbers into the primary registered contact.
             # Bot numbers (e.g. WhatsApp Business senders) have no outbound and are not
             # in the contacts collection — they pollute the per-number breakdown.
-            registered_contacts = list(self.db.contacts.find(
-                {"company_id": company_id, "type": "whatsapp"}, {"value": 1, "label": 1, "source": 1}
-            ))
+            registered_contacts = _contacts_by_cid.get(company_id, [])
             registered_norms = {_norm(c["value"]) for c in registered_contacts}
             contact_meta = {_norm(c["value"]): c for c in registered_contacts}
 
             # Build name map from person_contacts: normalized phone → first name found
             _person_name_map = {}
-            for pc in self.db.person_contacts.find(
-                {"company_id": company_id}, {"name": 1, "phone": 1, "whatsapp": 1}
-            ):
+            for pc in _pcs_by_cid.get(company_id, []):
                 for _field in ("whatsapp", "phone"):
                     _pnum = _norm(pc.get(_field, "") or "")
                     if _pnum and _pnum not in _person_name_map and pc.get("name"):
@@ -1092,20 +1130,7 @@ class MongoDBManager:
 
             # Check if any inbound for this company is still awaiting classification.
             # Search both string and ObjectId forms — old docs may store company_id as ObjectId.
-            from bson import ObjectId as _ObjId
-            cid_str = str(company_id)
-            try:
-                cid_variants = [cid_str, _ObjId(cid_str)]
-            except Exception:
-                cid_variants = [cid_str]
-            _fresh_threshold = datetime.utcnow() - timedelta(minutes=10)
-            _cnt = self.db.message_logs.count_documents({
-                "company_id": {"$in": cid_variants},
-                "direction": "inbound",
-                "analysis_status": "pending",
-                "pending_since": {"$gte": _fresh_threshold},
-            })
-            analyzing = _cnt > 0
+            analyzing = _pending_counts.get(str(company_id), 0) > 0
 
             # Company-level analysis: use real data from inbound_groups, or null if no responses.
             # "sin_respuesta" es la excepción: por definición tiene total_responses=0 (esa

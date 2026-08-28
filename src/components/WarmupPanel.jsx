@@ -49,6 +49,16 @@ function formatTime(isoString) {
   return new Date(isoString).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
 }
 
+function formatDaySeparator(isoString) {
+  if (!isoString) return 'Hoy'
+  const d = new Date(isoString)
+  const today = new Date()
+  const yesterday = new Date(); yesterday.setDate(today.getDate() - 1)
+  if (d.toDateString() === today.toDateString()) return 'Hoy'
+  if (d.toDateString() === yesterday.toDateString()) return 'Ayer'
+  return d.toLocaleDateString('es-MX', { day: 'numeric', month: 'long' })
+}
+
 function formatNextRotation(isoString) {
   if (!isoString) return ''
   const d = new Date(isoString)
@@ -83,24 +93,45 @@ function SessionDetail({ sessionId, onBack, token }) {
   if (!session) return <Alert severity="error">No se pudo cargar la sesión.</Alert>
 
   const msgs = session.messages || []
+
+  // Agrupar mensajes por día para los separadores estilo WhatsApp
+  const grouped = []
+  let lastDay = null
+  for (const msg of msgs) {
+    const dayKey = msg.ts ? new Date(msg.ts).toDateString() : 'unknown'
+    if (dayKey !== lastDay) {
+      grouped.push({ type: 'separator', ts: msg.ts, key: dayKey })
+      lastDay = dayKey
+    }
+    grouped.push({ type: 'msg', msg })
+  }
+
   return (
     <Box sx={{ flex: 1, overflow: 'auto', bgcolor: '#080c14', display: 'flex', flexDirection: 'column' }}>
-      {/* Chip con nombres — mismo estilo que el "fecha" centrado en conversations */}
-      <Box sx={{ textAlign: 'center', pt: 1.5, pb: 0.5 }}>
-        <Chip
-          label={`${session.instance_a} ↔ ${session.instance_b}`}
-          size="small"
-          sx={{ fontSize: 11, bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.45)', border: '1px solid rgba(255,255,255,0.07)' }}
-        />
-      </Box>
-
       {msgs.length === 0 ? (
         <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Typography variant="body2" color="text.secondary">Sin mensajes aún hoy.</Typography>
         </Box>
       ) : (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, px: 2, pt: 1, pb: 2 }}>
-          {msgs.map((msg, i) => {
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, px: 1.5, pt: 1.5, pb: 2 }}>
+          {grouped.map((item, i) => {
+            if (item.type === 'separator') {
+              return (
+                <Box key={`sep-${item.key}`} sx={{ textAlign: 'center', my: 0.5 }}>
+                  <Chip
+                    label={formatDaySeparator(item.ts)}
+                    size="small"
+                    sx={{
+                      fontSize: 11, height: 22,
+                      bgcolor: 'rgba(255,255,255,0.06)',
+                      color: 'rgba(255,255,255,0.45)',
+                      border: '1px solid rgba(255,255,255,0.07)',
+                    }}
+                  />
+                </Box>
+              )
+            }
+            const { msg } = item
             const isA = msg.speaker === 'a'
             return (
               <Box key={i} sx={{ display: 'flex', justifyContent: isA ? 'flex-start' : 'flex-end' }}>
@@ -158,23 +189,26 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth
       slotProps={{ paper: { sx: { borderRadius: 2.5, overflow: 'hidden', height: '70vh', maxHeight: 560, display: 'flex', flexDirection: 'column' } } }}>
 
-      {/* Header estilo WhatsApp — Box evita el h2 de DialogTitle */}
+      {/* Header — fondo paper del tema, borde inferior divisor */}
       <Box sx={{
-        display: 'flex', alignItems: 'center', gap: 1.5,
-        px: 2, py: 1.5, flexShrink: 0,
-        bgcolor: 'primary.main', color: 'primary.contrastText',
+        display: 'flex', alignItems: 'center', gap: 1,
+        px: 1.5, py: 1, flexShrink: 0,
+        bgcolor: '#161d2e',
+        borderBottom: '1px solid rgba(255,255,255,0.07)',
       }}>
         {selected ? (
-          <IconButton size="small" onClick={() => setSelected(null)} sx={{ color: 'inherit' }}>
+          <IconButton size="small" onClick={() => setSelected(null)}>
             <ArrowBackIcon fontSize="small" />
           </IconButton>
         ) : (
-          <ChatBubbleOutlinedIcon fontSize="small" />
+          <Box sx={{ pl: 0.5, display: 'flex', alignItems: 'center' }}>
+            <ChatBubbleOutlinedIcon fontSize="small" sx={{ color: 'primary.light', mr: 1 }} />
+          </Box>
         )}
-        <Typography variant="subtitle1" fontWeight={700} component="span" sx={{ flex: 1, lineHeight: 1 }}>
+        <Typography variant="subtitle2" fontWeight={700} component="span" sx={{ flex: 1 }}>
           {selected ? 'Conversación' : `Chats — ${instanceName}`}
         </Typography>
-        <IconButton size="small" onClick={onClose} sx={{ color: 'inherit', opacity: 0.8 }}>
+        <IconButton size="small" onClick={onClose}>
           <CloseIcon fontSize="small" />
         </IconButton>
       </Box>

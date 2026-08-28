@@ -4613,32 +4613,32 @@ def api_companies_with_numbers(x_user_token: Optional[str] = Header(None)):
                 if num:
                     active_numbers.add(num)
 
-        # Aggregate companies with their WhatsApp contacts
-        pipeline = [
-            {
-                "$lookup": {
-                    "from": "contacts",
-                    "let": {"cid": {"$toString": "$_id"}},
-                    "pipeline": [
-                        {"$match": {"$expr": {"$and": [
-                            {"$eq": ["$company_id", "$$cid"]},
-                            {"$eq": ["$type", "whatsapp"]},
-                        ]}}},
-                        {"$project": {"value": 1, "label": 1}},
-                    ],
-                    "as": "wa_contacts",
-                },
-            },
-            {"$match": {"wa_contacts.0": {"$exists": True}}},
-            {"$project": {"name": 1, "business_name": 1, "industry": 1, "domain": 1, "website": 1, "city": 1, "wa_contacts": 1}},
-            {"$sort": {"name": 1}},
-        ]
-        companies = list(db.db.companies.aggregate(pipeline))
+        # Step 1: fetch all WA contacts (uses index on type)
+        from collections import defaultdict
+        from bson import ObjectId
+        wa_contacts_raw = list(db.db.contacts.find(
+            {"type": "whatsapp"},
+            {"company_id": 1, "value": 1, "label": 1},
+        ))
+        contacts_by_company: dict = defaultdict(list)
+        for ct in wa_contacts_raw:
+            cid = ct.get("company_id", "")
+            if cid:
+                contacts_by_company[cid].append(ct)
+
+        # Step 2: fetch only companies that have WA contacts (uses _id index)
+        valid_oids = [ObjectId(cid) for cid in contacts_by_company if ObjectId.is_valid(cid)]
+        companies_raw = list(db.db.companies.find(
+            {"_id": {"$in": valid_oids}},
+            {"name": 1, "business_name": 1, "industry": 1, "domain": 1, "website": 1, "city": 1},
+            sort=[("name", 1)],
+        ))
 
         result = []
-        for c in companies:
+        for c in companies_raw:
+            cid_str = str(c["_id"])
             numbers = []
-            for contact in c.get("wa_contacts", []):
+            for contact in contacts_by_company.get(cid_str, []):
                 num = contact.get("value", "")
                 numbers.append({
                     "contact_id": str(contact.get("_id", "")),
@@ -4647,7 +4647,7 @@ def api_companies_with_numbers(x_user_token: Optional[str] = Header(None)):
                     "active": num in active_numbers,
                 })
             result.append({
-                "_id": str(c["_id"]),
+                "_id": cid_str,
                 "name": c.get("name") or c.get("business_name") or "",
                 "industry": c.get("industry", ""),
                 "domain": c.get("domain", ""),

@@ -1,9 +1,7 @@
 'use client'
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
-import Card from '@mui/material/Card'
-import CardContent from '@mui/material/CardContent'
 import Chip from '@mui/material/Chip'
 import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
@@ -16,16 +14,19 @@ import ListItemButton from '@mui/material/ListItemButton'
 import ListItemText from '@mui/material/ListItemText'
 import Divider from '@mui/material/Divider'
 import Alert from '@mui/material/Alert'
-import Badge from '@mui/material/Badge'
+import Switch from '@mui/material/Switch'
+import LinearProgress from '@mui/material/LinearProgress'
 import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment'
 import PauseCircleIcon from '@mui/icons-material/PauseCircle'
 import PlayCircleIcon from '@mui/icons-material/PlayCircle'
-import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew'
-import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutlined'
+import ChatBubbleOutlinedIcon from '@mui/icons-material/ChatBubbleOutlined'
 import SignalWifiOffIcon from '@mui/icons-material/SignalWifiOff'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import RefreshIcon from '@mui/icons-material/Refresh'
-import PhoneIphoneIcon from '@mui/icons-material/PhoneIphone'
+import SyncIcon from '@mui/icons-material/Sync'
+import MovieIcon from '@mui/icons-material/Movie'
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward'
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward'
 import { useUser } from '../context/UserContext'
 
 const API = (path) => `/api${path}`
@@ -33,69 +34,75 @@ function authHeaders(token) {
   return { 'Content-Type': 'application/json', 'x-user-token': token || '' }
 }
 
-// ── Status chip ───────────────────────────────────────────────────────────────
-function StatusChip({ status }) {
-  const cfg = {
-    active:       { label: 'Activo',       color: '#22c55e', bg: 'rgba(34,197,94,0.12)' },
-    paused:       { label: 'Pausado',      color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
-    disconnected: { label: 'Desconectado', color: '#6b7280', bg: 'rgba(107,114,128,0.12)' },
-  }
-  const { label, color, bg } = cfg[status] || cfg.disconnected
-  return (
-    <Chip
-      label={label}
-      size="small"
-      sx={{ bgcolor: bg, color, fontWeight: 600, fontSize: 11, height: 22, border: `1px solid ${color}33` }}
-    />
-  )
+// ── helpers ───────────────────────────────────────────────────────────────────
+function relativeTime(isoString) {
+  if (!isoString) return null
+  const diff = Math.floor((Date.now() - new Date(isoString)) / 1000)
+  if (diff < 60)   return 'ahora mismo'
+  if (diff < 3600) return `hace ${Math.floor(diff / 60)} min`
+  const h = Math.floor(diff / 3600)
+  const m = Math.floor((diff % 3600) / 60)
+  return m > 0 ? `hace ${h}h ${m}min` : `hace ${h}h`
 }
 
-// ── Chat history view (per session) ──────────────────────────────────────────
-function SessionDetail({ sessionId, onBack }) {
-  const { user } = useUser()
+function formatTime(isoString) {
+  if (!isoString) return ''
+  return new Date(isoString).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
+}
+
+function formatNextRotation(isoString) {
+  if (!isoString) return ''
+  const d = new Date(isoString)
+  const now = new Date()
+  const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1); tomorrow.setHours(0,0,0,0)
+  const isToday    = d.toDateString() === now.toDateString()
+  const isTomorrow = d.toDateString() === tomorrow.toDateString()
+  const time = d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
+  if (isToday)    return `hoy a las ${time}`
+  if (isTomorrow) return `mañana a las ${time}`
+  return d.toLocaleDateString('es-MX', { weekday: 'long', hour: '2-digit', minute: '2-digit' })
+}
+
+const STATUS_CFG = {
+  active:       { label: 'Activo',       color: '#22c55e', bg: 'rgba(34,197,94,0.12)',   border: '#e11d68' },
+  paused:       { label: 'Pausado',      color: '#f59e0b', bg: 'rgba(245,158,11,0.12)',  border: '#f59e0b' },
+  disconnected: { label: 'Desconectado', color: '#ef4444', bg: 'rgba(239,68,68,0.12)',   border: '#ef4444' },
+}
+
+// ── Session detail dialog ─────────────────────────────────────────────────────
+function SessionDetail({ sessionId, onBack, token }) {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    fetch(API(`/warmup/sessions/${sessionId}/messages`), { headers: authHeaders(user?.token) })
-      .then(r => r.json())
-      .then(setSession)
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }, [sessionId, user?.token])
+    fetch(API(`/warmup/sessions/${sessionId}/messages`), { headers: authHeaders(token) })
+      .then(r => r.json()).then(setSession).catch(() => {}).finally(() => setLoading(false))
+  }, [sessionId, token])
 
   if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4 }}><CircularProgress size={28} /></Box>
   if (!session) return <Alert severity="error">No se pudo cargar la sesión.</Alert>
-
-  const messages = session.messages || []
 
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
         <IconButton size="small" onClick={onBack}><ArrowBackIcon fontSize="small" /></IconButton>
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-          {session.instance_a} ↔ {session.instance_b}
-        </Typography>
+        <Typography variant="subtitle2" fontWeight={700}>{session.instance_a} ↔ {session.instance_b}</Typography>
         <Chip label={`${session.total_messages_today} msgs`} size="small" sx={{ ml: 'auto', fontSize: 11 }} />
       </Box>
-
-      {messages.length === 0 ? (
-        <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 3 }}>
-          Sin mensajes aún hoy.
-        </Typography>
+      {(session.messages || []).length === 0 ? (
+        <Typography variant="body2" color="text.secondary" textAlign="center" py={3}>Sin mensajes aún hoy.</Typography>
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          {messages.map((msg, i) => {
+          {(session.messages || []).map((msg, i) => {
             const isA = msg.speaker === 'a'
             return (
               <Box key={i} sx={{ display: 'flex', justifyContent: isA ? 'flex-start' : 'flex-end' }}>
                 <Box sx={{
-                  maxWidth: '75%',
+                  maxWidth: '75%', px: 1.5, py: 0.75,
                   bgcolor: isA ? 'rgba(59,130,246,0.12)' : 'rgba(34,197,94,0.10)',
                   border: `1px solid ${isA ? 'rgba(59,130,246,0.2)' : 'rgba(34,197,94,0.2)'}`,
                   borderRadius: isA ? '4px 14px 14px 14px' : '14px 4px 14px 14px',
-                  px: 1.5, py: 0.75,
                 }}>
                   <Typography variant="caption" sx={{ color: isA ? '#60a5fa' : '#4ade80', fontWeight: 600, display: 'block', mb: 0.25 }}>
                     {isA ? session.instance_a : session.instance_b}
@@ -116,7 +123,7 @@ function SessionDetail({ sessionId, onBack }) {
   )
 }
 
-// ── Chat list for one instance ────────────────────────────────────────────────
+// ── Chats dialog ──────────────────────────────────────────────────────────────
 function InstanceChatsDialog({ open, onClose, instanceName, token }) {
   const [sessions, setSessions] = useState([])
   const [loading, setLoading]   = useState(true)
@@ -124,25 +131,18 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
 
   useEffect(() => {
     if (!open) return
-    setSelected(null)
-    setLoading(true)
+    setSelected(null); setLoading(true)
     fetch(API(`/warmup/chats/${instanceName}`), { headers: authHeaders(token) })
-      .then(r => r.json())
-      .then(setSessions)
-      .catch(() => {})
-      .finally(() => setLoading(false))
+      .then(r => r.json()).then(setSessions).catch(() => {}).finally(() => setLoading(false))
   }, [open, instanceName, token])
 
-  const peer = (s) => s.instance_a === instanceName ? s.instance_b : s.instance_a
+  const peer = s => s.instance_a === instanceName ? s.instance_b : s.instance_a
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth
-      PaperProps={{ sx: { borderRadius: 3 } }}>
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
       <DialogTitle sx={{ pb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-        {selected ? (
-          <IconButton size="small" onClick={() => setSelected(null)}><ArrowBackIcon fontSize="small" /></IconButton>
-        ) : null}
-        <ChatBubbleOutlineIcon fontSize="small" color="primary" />
+        {selected && <IconButton size="small" onClick={() => setSelected(null)}><ArrowBackIcon fontSize="small" /></IconButton>}
+        <ChatBubbleOutlinedIcon fontSize="small" color="primary" />
         <Typography variant="subtitle1" fontWeight={700}>
           {selected ? 'Conversación' : `Chats — ${instanceName}`}
         </Typography>
@@ -151,11 +151,9 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4 }}><CircularProgress size={28} /></Box>
         ) : selected ? (
-          <SessionDetail sessionId={selected} onBack={() => setSelected(null)} />
+          <SessionDetail sessionId={selected} onBack={() => setSelected(null)} token={token} />
         ) : sessions.length === 0 ? (
-          <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
-            Sin chats de calentamiento aún.
-          </Typography>
+          <Typography variant="body2" color="text.secondary" textAlign="center" py={4}>Sin chats de calentamiento aún.</Typography>
         ) : (
           <List disablePadding>
             {sessions.map((s, i) => (
@@ -168,7 +166,7 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
                     primaryTypographyProps={{ fontWeight: 600, variant: 'body2' }}
                     secondaryTypographyProps={{ variant: 'caption' }}
                   />
-                  <Chip label={`${s.total_messages_today} msgs`} size="small" sx={{ ml: 1, fontSize: 11 }} />
+                  <Chip label={`${s.total_messages_today}`} size="small" sx={{ ml: 1, fontSize: 11 }} />
                 </ListItemButton>
               </React.Fragment>
             ))}
@@ -181,8 +179,9 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
 
 // ── Instance card ─────────────────────────────────────────────────────────────
 function InstanceCard({ inst, token, onRefresh }) {
-  const [busy, setBusy]   = useState(false)
+  const [busy, setBusy]       = useState(false)
   const [chatsOpen, setChatsOpen] = useState(false)
+  const cfg = STATUS_CFG[inst.warmup_status] || STATUS_CFG.disconnected
 
   async function action(endpoint) {
     setBusy(true)
@@ -191,115 +190,170 @@ function InstanceCard({ inst, token, onRefresh }) {
         method: 'POST', headers: authHeaders(token),
       })
       onRefresh()
-    } finally {
-      setBusy(false)
-    }
+    } finally { setBusy(false) }
   }
 
+  const isActive       = inst.warmup_status === 'active'
+  const isPaused       = inst.warmup_status === 'paused'
   const isDisconnected = inst.warmup_status === 'disconnected'
-  const isActive  = inst.warmup_status === 'active'
-  const isPaused  = inst.warmup_status === 'paused'
-  const isEnabled = inst.enabled
+  const progress       = inst.daily_limit > 0 ? Math.min((inst.msgs_today / inst.daily_limit) * 100, 100) : 0
+  const lastRel        = relativeTime(inst.last_msg_at)
 
   return (
     <>
-      <Card variant="outlined" sx={{
+      <Box sx={{
         borderRadius: 2.5,
-        borderColor: isDisconnected ? 'divider'
-          : isActive ? 'rgba(34,197,94,0.25)' : 'rgba(245,158,11,0.25)',
-        bgcolor: 'background.paper',
+        border: '1px solid',
+        borderColor: `${cfg.border}33`,
+        borderTop: `3px solid ${cfg.border}`,
+        bgcolor: 'rgba(255,255,255,0.025)',
+        display: 'flex', flexDirection: 'column', gap: 0,
+        overflow: 'hidden',
         transition: 'border-color 0.2s',
       }}>
-        <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-          {/* Header */}
-          <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1.5 }}>
-            <Box sx={{
-              width: 36, height: 36, borderRadius: '50%',
-              bgcolor: isDisconnected ? 'rgba(107,114,128,0.12)' : 'rgba(59,130,246,0.12)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-            }}>
-              <PhoneIphoneIcon fontSize="small" sx={{ color: isDisconnected ? 'text.disabled' : 'primary.main' }} />
+        {/* Header */}
+        <Box sx={{ px: 2, pt: 2, pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', mb: 0.25 }}>
+            <Typography variant="body1" fontWeight={700} sx={{ lineHeight: 1.3 }}>{inst.label || inst.name}</Typography>
+            <Chip
+              label={cfg.label} size="small"
+              sx={{ bgcolor: cfg.bg, color: cfg.color, fontWeight: 600, fontSize: 11, height: 20, border: `1px solid ${cfg.color}33` }}
+            />
+          </Box>
+          <Typography variant="caption" color="text.secondary">{inst.number ? `+${inst.number}` : inst.name}</Typography>
+
+          {/* Topic */}
+          {inst.topic && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 1 }}>
+              <MovieIcon sx={{ fontSize: 12, color: 'text.disabled' }} />
+              <Typography variant="caption" color="text.disabled" noWrap>{inst.topic}</Typography>
             </Box>
-            <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Typography variant="body2" fontWeight={700} noWrap>{inst.label || inst.name}</Typography>
-              <Typography variant="caption" color="text.secondary" noWrap>
-                {inst.number ? `+${inst.number}` : inst.name}
+          )}
+        </Box>
+
+        {/* Stats row */}
+        {!isDisconnected ? (
+          <Box sx={{ px: 2, py: 1, display: 'flex', gap: 2.5, alignItems: 'flex-end' }}>
+            <Box>
+              <Typography variant="h6" fontWeight={700} lineHeight={1} color={isActive ? '#22c55e' : 'text.primary'}>
+                {inst.sent_today}
+              </Typography>
+              <Typography variant="caption" color="text.disabled" sx={{ letterSpacing: '0.05em', fontSize: 10 }}>ENVIADOS</Typography>
+            </Box>
+            <Box>
+              <Typography variant="h6" fontWeight={700} lineHeight={1}>{inst.received_today}</Typography>
+              <Typography variant="caption" color="text.disabled" sx={{ letterSpacing: '0.05em', fontSize: 10 }}>RECIBIDOS</Typography>
+            </Box>
+            {lastRel && (
+              <Box sx={{ ml: 'auto', textAlign: 'right' }}>
+                <Typography variant="body2" fontWeight={600} lineHeight={1}>{lastRel}</Typography>
+                <Typography variant="caption" color="text.disabled" sx={{ letterSpacing: '0.05em', fontSize: 10 }}>ÚLTIMO</Typography>
+              </Box>
+            )}
+          </Box>
+        ) : (
+          <Box sx={{ px: 2, py: 1 }}>
+            <Typography variant="caption" color="error.main" fontWeight={500}>
+              Sin conexión de WhatsApp. Esta instancia no participará en warmup hasta que vuelva a conectarse — entrará al siguiente ciclo de rotación de forma automática.
+            </Typography>
+          </Box>
+        )}
+
+        {/* Progress bar */}
+        {!isDisconnected && (
+          <Box sx={{ px: 2, pb: 1 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+              <Typography variant="caption" color="text.disabled" sx={{ fontSize: 10, letterSpacing: '0.04em' }}>
+                Progreso del día
+              </Typography>
+              <Typography variant="caption" fontWeight={700} sx={{ fontSize: 11 }}>
+                {inst.msgs_today} / {inst.daily_limit}
               </Typography>
             </Box>
-            <StatusChip status={inst.warmup_status} />
-          </Box>
-
-          {/* Stats */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
-            <Chip
-              icon={<ChatBubbleOutlineIcon sx={{ fontSize: '13px !important' }} />}
-              label={`${inst.msgs_today} msgs hoy`}
-              size="small"
-              variant="outlined"
-              sx={{ fontSize: 11, height: 22 }}
+            <LinearProgress
+              variant="determinate"
+              value={progress}
+              sx={{
+                height: 5, borderRadius: 3,
+                bgcolor: 'rgba(255,255,255,0.08)',
+                '& .MuiLinearProgress-bar': {
+                  borderRadius: 3,
+                  bgcolor: isActive ? '#e11d68' : '#f59e0b',
+                },
+              }}
             />
-            {isDisconnected && (
-              <Chip icon={<SignalWifiOffIcon sx={{ fontSize: '13px !important' }} />}
-                label="Sin conexión" size="small" variant="outlined"
-                sx={{ fontSize: 11, height: 22, color: 'text.disabled', borderColor: 'divider' }}
-              />
+            {isPaused && inst.paused_at && (
+              <Typography variant="caption" color="text.disabled" sx={{ mt: 0.5, display: 'block', fontSize: 10 }}>
+                Pausado a las {formatTime(inst.paused_at)}
+              </Typography>
+            )}
+          </Box>
+        )}
+
+        {/* Actions */}
+        <Box sx={{ px: 1.5, pb: 1.5, display: 'flex', gap: 1, alignItems: 'center' }}>
+          {/* Ver chats */}
+          <Box
+            component="button"
+            onClick={() => setChatsOpen(true)}
+            disabled={busy}
+            sx={{
+              display: 'flex', alignItems: 'center', gap: 0.75,
+              px: 1.5, py: 0.6, borderRadius: 1.5, cursor: 'pointer',
+              bgcolor: 'transparent', border: '1px solid rgba(255,255,255,0.12)',
+              color: 'text.primary', fontSize: 12, fontWeight: 600,
+              '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' }, transition: 'background 0.15s',
+            }}
+          >
+            <ChatBubbleOutlinedIcon sx={{ fontSize: 14 }} />
+            Ver chats
+            {inst.msgs_today > 0 && (
+              <Box sx={{ bgcolor: '#e11d68', color: '#fff', borderRadius: '50%', minWidth: 16, height: 16, fontSize: 10, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', px: 0.5 }}>
+                {inst.msgs_today}
+              </Box>
             )}
           </Box>
 
-          {/* Actions */}
-          <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
-            {/* Ver chats */}
-            <Tooltip title="Ver chats">
-              <span>
-                <IconButton size="small" onClick={() => setChatsOpen(true)} disabled={busy}>
-                  <Badge badgeContent={inst.msgs_today || 0} color="primary" max={99}
-                    sx={{ '& .MuiBadge-badge': { fontSize: 9, minWidth: 14, height: 14 } }}>
-                    <ChatBubbleOutlineIcon fontSize="small" />
-                  </Badge>
-                </IconButton>
-              </span>
-            </Tooltip>
+          {/* Pause / Resume */}
+          {inst.enabled && !isDisconnected && (
+            isPaused ? (
+              <Box
+                component="button"
+                onClick={() => action('resume')}
+                disabled={busy}
+                sx={{
+                  display: 'flex', alignItems: 'center', gap: 0.75,
+                  px: 1.5, py: 0.6, borderRadius: 1.5, cursor: 'pointer',
+                  bgcolor: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)',
+                  color: '#22c55e', fontSize: 12, fontWeight: 600,
+                  '&:hover': { bgcolor: 'rgba(34,197,94,0.18)' }, transition: 'background 0.15s',
+                }}
+              >
+                {busy ? <CircularProgress size={12} /> : <PlayCircleIcon sx={{ fontSize: 14 }} />}
+                Reanudar
+              </Box>
+            ) : (
+              <Box
+                component="button"
+                onClick={() => action('pause')}
+                disabled={busy}
+                sx={{
+                  display: 'flex', alignItems: 'center', gap: 0.75,
+                  px: 1.5, py: 0.6, borderRadius: 1.5, cursor: 'pointer',
+                  bgcolor: 'transparent', border: '1px solid rgba(255,255,255,0.12)',
+                  color: 'text.secondary', fontSize: 12, fontWeight: 600,
+                  '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' }, transition: 'background 0.15s',
+                }}
+              >
+                {busy ? <CircularProgress size={12} /> : <PauseCircleIcon sx={{ fontSize: 14 }} />}
+                Pausar
+              </Box>
+            )
+          )}
+        </Box>
+      </Box>
 
-            {/* Pause / Resume */}
-            {isEnabled && !isDisconnected && (
-              isPaused ? (
-                <Tooltip title="Reanudar (permitir que otros te escriban)">
-                  <span>
-                    <IconButton size="small" onClick={() => action('resume')} disabled={busy} color="success">
-                      <PlayCircleIcon fontSize="small" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-              ) : (
-                <Tooltip title="Pausar (otros dejan de escribirte)">
-                  <span>
-                    <IconButton size="small" onClick={() => action('pause')} disabled={busy} color="warning">
-                      <PauseCircleIcon fontSize="small" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-              )
-            )}
-
-            {/* Enable / Disable */}
-            <Tooltip title={isEnabled ? 'Desactivar calentamiento' : 'Activar calentamiento'}>
-              <span>
-                <IconButton size="small" onClick={() => action(isEnabled ? 'disable' : 'enable')}
-                  disabled={busy} color={isEnabled ? 'error' : 'default'} sx={{ ml: 'auto' }}>
-                  {busy ? <CircularProgress size={16} /> : <PowerSettingsNewIcon fontSize="small" />}
-                </IconButton>
-              </span>
-            </Tooltip>
-          </Box>
-        </CardContent>
-      </Card>
-
-      <InstanceChatsDialog
-        open={chatsOpen}
-        onClose={() => setChatsOpen(false)}
-        instanceName={inst.name}
-        token={token}
-      />
+      <InstanceChatsDialog open={chatsOpen} onClose={() => setChatsOpen(false)} instanceName={inst.name} token={token} />
     </>
   )
 }
@@ -307,81 +361,158 @@ function InstanceCard({ inst, token, onRefresh }) {
 // ── Main panel ────────────────────────────────────────────────────────────────
 export default function WarmupPanel() {
   const { user } = useUser()
-  const [instances, setInstances] = useState([])
-  const [loading, setLoading]     = useState(true)
-  const [error, setError]         = useState(null)
+  const [data, setData]       = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState(null)
+  const [toggling, setToggling] = useState(false)
+  const tickRef = useRef(null)
 
   const load = useCallback(() => {
-    setLoading(true)
     setError(null)
     fetch(API('/warmup/instances'), { headers: authHeaders(user?.token) })
       .then(r => { if (!r.ok) throw new Error(r.status); return r.json() })
-      .then(setInstances)
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false))
+      .then(d => { setData(d); setLoading(false) })
+      .catch(e => { setError(e.message); setLoading(false) })
   }, [user?.token])
 
   useEffect(() => { load() }, [load])
 
-  const active = instances.filter(i => i.warmup_status === 'active').length
-  const total  = instances.filter(i => i.enabled).length
+  // Re-calculate relative times every 30s
+  useEffect(() => {
+    tickRef.current = setInterval(() => setData(d => d ? { ...d } : d), 30_000)
+    return () => clearInterval(tickRef.current)
+  }, [])
+
+  async function handleToggle() {
+    if (toggling) return
+    setToggling(true)
+    try {
+      const r = await fetch(API('/warmup/toggle'), { method: 'POST', headers: authHeaders(user?.token) })
+      const { enabled } = await r.json()
+      setData(d => ({ ...d, global_enabled: enabled }))
+    } finally { setToggling(false) }
+  }
+
+  const instances   = data?.instances || []
+  const activeCount = data?.active_count ?? 0
+  const discCount   = data?.disconnected_count ?? 0
+  const discNames   = data?.disconnected_names || []
+  const sentTotal   = data?.total_sent_today ?? 0
+  const recvTotal   = data?.total_received_today ?? 0
+  const globalOn    = data?.global_enabled ?? true
+  const nextRot     = data?.next_rotation_at
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 900, mx: 'auto', width: '100%' }}>
-      {/* Header */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3 }}>
-        <LocalFireDepartmentIcon sx={{ color: '#f97316', fontSize: 28 }} />
-        <Box>
-          <Typography variant="h6" fontWeight={700} sx={{ lineHeight: 1.2 }}>
-            Calentamiento de números
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            Las sesiones activas se envían mensajes entre sí para mantener la salud de los números
-          </Typography>
+    <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 960, mx: 'auto', width: '100%' }}>
+
+      {/* ── Header ── */}
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, mb: 2.5, flexWrap: 'wrap' }}>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <LocalFireDepartmentIcon sx={{ color: '#e11d68', fontSize: 26 }} />
+            <Typography variant="h6" fontWeight={800} sx={{ lineHeight: 1.2 }}>Warmup</Typography>
+          </Box>
+          <Typography variant="caption" color="text.secondary">Calentamiento automático entre instancias activas</Typography>
         </Box>
-        <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 1 }}>
-          {!loading && (
-            <Chip
-              label={`${active} / ${total} activas`}
-              size="small"
-              icon={<LocalFireDepartmentIcon sx={{ fontSize: '14px !important', color: '#f97316 !important' }} />}
-              sx={{ bgcolor: 'rgba(249,115,22,0.10)', color: '#f97316', fontWeight: 600, border: '1px solid rgba(249,115,22,0.2)' }}
-            />
-          )}
-          <Tooltip title="Actualizar">
-            <IconButton size="small" onClick={load} disabled={loading}>
-              {loading ? <CircularProgress size={16} /> : <RefreshIcon fontSize="small" />}
-            </IconButton>
-          </Tooltip>
-        </Box>
+
+        {/* Stats + controls */}
+        {!loading && data && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            {activeCount > 0 && (
+              <Chip
+                size="small" label={`${activeCount} activa${activeCount !== 1 ? 's' : ''}`}
+                icon={<Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#22c55e', ml: '6px !important' }} />}
+                sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600, fontSize: 11, border: '1px solid rgba(34,197,94,0.2)' }}
+              />
+            )}
+            {discCount > 0 && (
+              <Chip
+                size="small" label={`${discCount} desconectada${discCount !== 1 ? 's' : ''}`}
+                icon={<Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#ef4444', ml: '6px !important' }} />}
+                sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#ef4444', fontWeight: 600, fontSize: 11, border: '1px solid rgba(239,68,68,0.2)' }}
+              />
+            )}
+            {(sentTotal > 0 || recvTotal > 0) && (
+              <Chip
+                size="small"
+                label={
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <ArrowUpwardIcon sx={{ fontSize: 11 }} />{sentTotal}
+                    <ArrowDownwardIcon sx={{ fontSize: 11, ml: 0.5 }} />{recvTotal}
+                    <Box component="span" sx={{ ml: 0.25, color: 'text.disabled' }}>hoy</Box>
+                  </Box>
+                }
+                sx={{ bgcolor: 'rgba(255,255,255,0.05)', fontWeight: 600, fontSize: 11, border: '1px solid rgba(255,255,255,0.1)' }}
+              />
+            )}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <Typography variant="caption" color={globalOn ? 'text.primary' : 'text.disabled'} fontWeight={600}>
+                {globalOn ? 'Activo' : 'Pausado'}
+              </Typography>
+              <Switch
+                checked={globalOn}
+                onChange={handleToggle}
+                disabled={toggling}
+                size="small"
+                sx={{
+                  '& .MuiSwitch-thumb': { bgcolor: globalOn ? '#e11d68' : undefined },
+                  '& .MuiSwitch-track': { bgcolor: globalOn ? 'rgba(225,29,104,0.4) !important' : undefined },
+                }}
+              />
+            </Box>
+            <Tooltip title="Actualizar">
+              <IconButton size="small" onClick={load} disabled={loading}>
+                {loading ? <CircularProgress size={16} /> : <RefreshIcon fontSize="small" />}
+              </IconButton>
+            </Tooltip>
+          </Box>
+        )}
       </Box>
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
-      {loading && instances.length === 0 ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', pt: 6 }}>
-          <CircularProgress />
-        </Box>
-      ) : instances.length === 0 ? (
-        <Alert severity="info">No hay instancias wwebjs registradas.</Alert>
+      {loading ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', pt: 6 }}><CircularProgress /></Box>
       ) : (
         <>
-          {/* Info banner when < 2 enabled */}
-          {instances.filter(i => i.enabled).length < 2 && (
-            <Alert severity="warning" sx={{ mb: 2 }}>
-              Se necesitan al menos 2 instancias activas para que el calentamiento funcione.
-            </Alert>
+          {/* ── Rotation banner ── */}
+          {nextRot && (
+            <Box sx={{
+              display: 'flex', alignItems: 'flex-start', gap: 1.5, mb: 3,
+              px: 2, py: 1.5, borderRadius: 2,
+              bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)',
+            }}>
+              <SyncIcon sx={{ fontSize: 16, color: 'text.disabled', mt: 0.25, flexShrink: 0 }} />
+              <Typography variant="caption" color="text.secondary">
+                Próxima rotación de pares:{' '}
+                <Box component="span" fontWeight={700} color="text.primary">{formatNextRotation(nextRot)}</Box>
+                {discNames.length > 0 && (
+                  <>{' · '}{discNames.join(', ')} entrará{discNames.length > 1 ? 'n' : ''} en rotación cuando recupere{discNames.length > 1 ? 'n' : ''} conexión.</>
+                )}
+              </Typography>
+            </Box>
           )}
 
-          <Box sx={{
-            display: 'grid',
-            gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1fr 1fr 1fr' },
-            gap: 2,
-          }}>
-            {instances.map(inst => (
-              <InstanceCard key={inst.name} inst={inst} token={user?.token} onRefresh={load} />
-            ))}
-          </Box>
+          {/* ── Instances grid ── */}
+          {instances.length === 0 ? (
+            <Alert severity="info">No hay instancias wwebjs registradas.</Alert>
+          ) : (
+            <>
+              <Typography variant="caption" color="text.disabled" sx={{ letterSpacing: '0.08em', fontSize: 10, fontWeight: 700, mb: 1.5, display: 'block' }}>
+                INSTANCIAS
+              </Typography>
+              {instances.filter(i => i.enabled).length < 2 && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  Se necesitan al menos 2 instancias activas para que el calentamiento funcione.
+                </Alert>
+              )}
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1fr 1fr 1fr' }, gap: 2 }}>
+                {instances.map(inst => (
+                  <InstanceCard key={inst.name} inst={inst} token={user?.token} onRefresh={load} />
+                ))}
+              </Box>
+            </>
+          )}
         </>
       )}
     </Box>

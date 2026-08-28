@@ -24,6 +24,7 @@ import CloseIcon from '@mui/icons-material/Close'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import SyncIcon from '@mui/icons-material/Sync'
 import MovieIcon from '@mui/icons-material/Movie'
+import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew'
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward'
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward'
 import { useUser } from '../context/UserContext'
@@ -541,8 +542,17 @@ function InstanceCard({ inst, token, onRefresh }) {
           </Box>
         )}
 
+        {/* Disabled overlay notice */}
+        {!inst.enabled && (
+          <Box sx={{ mx: 2, mb: 1, px: 1.25, py: 0.75, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.2)' }}>
+            <Typography variant="caption" sx={{ color: '#f87171', fontSize: 11 }}>
+              Excluida del warmup. Habilítala para que participe en el ciclo de calentamiento.
+            </Typography>
+          </Box>
+        )}
+
         {/* Actions */}
-        <Box sx={{ px: 1.5, pb: 1.5, display: 'flex', gap: 1, alignItems: 'center' }}>
+        <Box sx={{ px: 1.5, pb: 1.5, display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
           {/* Ver chats */}
           <Box
             component="button"
@@ -565,7 +575,7 @@ function InstanceCard({ inst, token, onRefresh }) {
             )}
           </Box>
 
-          {/* Pause / Resume */}
+          {/* Pause / Resume — solo si habilitada y conectada */}
           {inst.enabled && !isDisconnected && (
             isPaused ? (
               <Box
@@ -601,6 +611,30 @@ function InstanceCard({ inst, token, onRefresh }) {
               </Box>
             )
           )}
+
+          {/* Enable / Disable warmup participation */}
+          <Tooltip title={inst.enabled ? 'Excluir del warmup' : 'Incluir en warmup'} placement="top">
+            <Box
+              component="button"
+              onClick={() => action(inst.enabled ? 'disable' : 'enable')}
+              disabled={busy}
+              sx={{
+                ml: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 30, height: 30, borderRadius: 1.5, cursor: 'pointer',
+                bgcolor: inst.enabled ? 'transparent' : 'rgba(34,197,94,0.1)',
+                border: inst.enabled ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(34,197,94,0.3)',
+                color: inst.enabled ? 'rgba(255,255,255,0.3)' : '#22c55e',
+                '&:hover': {
+                  bgcolor: inst.enabled ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.18)',
+                  color: inst.enabled ? '#f87171' : '#22c55e',
+                  borderColor: inst.enabled ? 'rgba(239,68,68,0.35)' : 'rgba(34,197,94,0.5)',
+                },
+                transition: 'all 0.15s',
+              }}
+            >
+              {busy ? <CircularProgress size={12} /> : <PowerSettingsNewIcon sx={{ fontSize: 15 }} />}
+            </Box>
+          </Tooltip>
         </Box>
       </Box>
 

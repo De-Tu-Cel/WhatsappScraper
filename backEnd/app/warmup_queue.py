@@ -32,6 +32,7 @@ _MIN_DELAY_MIN       = 8     # min minutes between turns
 _MAX_DELAY_MIN       = 25    # max minutes between turns
 _BUSINESS_HOUR_START = 9     # 09:00 hora México
 _BUSINESS_HOUR_END   = 21    # 21:00 hora México
+_BUSY_WINDOW_SECS    = 180   # si la instancia envió/recibió msg real en los últimos 3 min, skip warmup
 
 # Temas rotativos para la conversación
 _TOPICS = [
@@ -47,6 +48,20 @@ _TOPICS = [
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+def _is_instance_busy(db, instance_name: str) -> bool:
+    """True if the instance sent a real (non-warmup) message in the last _BUSY_WINDOW_SECS.
+    Prevents warmup messages from overlapping with active campaign/manual sends."""
+    cutoff = datetime.utcnow() - timedelta(seconds=_BUSY_WINDOW_SECS)
+    return db.db.message_logs.find_one(
+        {
+            "instance_name": instance_name,
+            "is_warmup":     {"$ne": True},
+            "created_at":    {"$gte": cutoff},
+        },
+        {"_id": 1},
+    ) is not None
+
 
 def _mx_now() -> datetime:
     if _MX_TZ is not None:
@@ -244,6 +259,10 @@ def _process_pair(db, inst_a: dict, inst_b: dict, session: dict) -> None:
     next_key = "b" if speaker_key == "a" else "a"
 
     if from_inst.get("paused") or to_inst.get("paused"):
+        return
+
+    if _is_instance_busy(db, from_inst["name"]):
+        log.info("[Warmup] %s has recent non-warmup activity — skipping turn to avoid overlap", from_inst["name"])
         return
 
     messages = session.get("messages", [])

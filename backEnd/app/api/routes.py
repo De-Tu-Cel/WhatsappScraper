@@ -3785,6 +3785,10 @@ async def api_wwebjs_webhook(request: Request):
                 db.update_evolution_message_status(message_id, "sent")
             return {"ok": True, "action": "outbound_echo"}
 
+        # Filter out WhatsApp status updates (stories)
+        if data.get("isStatus") or "@broadcast" in data.get("from", "") or "@broadcast" in data.get("chatId", ""):
+            return {"ok": True, "action": "ignored_status"}
+
         _sender_is_internal = bool(db.db.instances.find_one({"number": number}))
         if _sender_is_internal:
             return {"ok": True, "action": "ignored_internal"}

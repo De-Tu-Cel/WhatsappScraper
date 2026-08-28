@@ -16,6 +16,7 @@ export function useDailyCapStats() {
   const [stats, setStats] = useState(null)
 
   const refresh = useCallback(async () => {
+    if (typeof window === 'undefined' || !localStorage.getItem('user_token')) return
     try {
       const r = await authFetch('/api/instances/daily-stats')
       if (r.ok) setStats(await r.json())

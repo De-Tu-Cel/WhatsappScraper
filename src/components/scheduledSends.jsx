@@ -1331,6 +1331,7 @@ export default function ScheduledSends() {
   const [panel,     setPanel]     = useState(null)
   const [confirm,   setConfirm]   = useState(null)   // { action, job, title, body }
   const fetchJobs = useCallback(async () => {
+    if (!localStorage.getItem('user_token')) return
     try {
       const res = await authFetch('/api/admin/scheduled-sends')
       if (!res.ok) return

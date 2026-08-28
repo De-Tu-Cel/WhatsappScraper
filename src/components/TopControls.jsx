@@ -38,7 +38,8 @@ export default function TopControls({ appearanceOpen, onToggleAppearance, notifO
   const current = LANGS.find(l => l.value === lang) || LANGS[0]
 
   const fetchNotifCount = useCallback(() => {
-    const since = typeof window !== 'undefined' ? (localStorage.getItem('notif_last_read') || '') : ''
+    if (typeof window === 'undefined' || !localStorage.getItem('user_token')) return
+    const since = localStorage.getItem('notif_last_read') || ''
     const url = since ? `/api/notifications/count?since=${encodeURIComponent(since)}` : '/api/notifications/count'
     authFetch(url)
       .then(r => r.json())

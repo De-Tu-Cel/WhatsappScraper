@@ -40,6 +40,10 @@ export function SendQueueProvider({ children }) {
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
     let fast = false
     let error = false
+    if (!debugActiveRef.current && typeof window !== 'undefined' && !localStorage.getItem('user_token')) {
+      timerRef.current = setTimeout(poll, POLL_IDLE)
+      return
+    }
     if (!debugActiveRef.current) {
       try {
         const res = await authFetch('/api/send-queue/status')

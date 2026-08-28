@@ -7,11 +7,9 @@ import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
 import CircularProgress from '@mui/material/CircularProgress'
 import Dialog from '@mui/material/Dialog'
-import DialogTitle from '@mui/material/DialogTitle'
 import DialogContent from '@mui/material/DialogContent'
 import List from '@mui/material/List'
 import ListItemButton from '@mui/material/ListItemButton'
-import ListItemText from '@mui/material/ListItemText'
 import Divider from '@mui/material/Divider'
 import Alert from '@mui/material/Alert'
 import Switch from '@mui/material/Switch'
@@ -22,6 +20,7 @@ import PlayCircleIcon from '@mui/icons-material/PlayCircle'
 import ChatBubbleOutlinedIcon from '@mui/icons-material/ChatBubbleOutlined'
 import SignalWifiOffIcon from '@mui/icons-material/SignalWifiOff'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
+import CloseIcon from '@mui/icons-material/Close'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import SyncIcon from '@mui/icons-material/Sync'
 import MovieIcon from '@mui/icons-material/Movie'
@@ -139,37 +138,94 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
   const peer = s => s.instance_a === instanceName ? s.instance_b : s.instance_a
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
-      <DialogTitle sx={{ pb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-        {selected && <IconButton size="small" onClick={() => setSelected(null)}><ArrowBackIcon fontSize="small" /></IconButton>}
-        <ChatBubbleOutlinedIcon fontSize="small" color="primary" />
-        <Typography variant="subtitle1" fontWeight={700}>
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth
+      PaperProps={{ sx: { borderRadius: 2.5, overflow: 'hidden', height: '70vh', maxHeight: 560, display: 'flex', flexDirection: 'column' } }}>
+
+      {/* Header estilo WhatsApp — Box evita el h2 de DialogTitle */}
+      <Box sx={{
+        display: 'flex', alignItems: 'center', gap: 1.5,
+        px: 2, py: 1.5, flexShrink: 0,
+        bgcolor: 'primary.main', color: 'primary.contrastText',
+      }}>
+        {selected ? (
+          <IconButton size="small" onClick={() => setSelected(null)} sx={{ color: 'inherit' }}>
+            <ArrowBackIcon fontSize="small" />
+          </IconButton>
+        ) : (
+          <ChatBubbleOutlinedIcon fontSize="small" />
+        )}
+        <Typography variant="subtitle1" fontWeight={700} component="span" sx={{ flex: 1, lineHeight: 1 }}>
           {selected ? 'Conversación' : `Chats — ${instanceName}`}
         </Typography>
-      </DialogTitle>
-      <DialogContent sx={{ minHeight: 260 }}>
+        <IconButton size="small" onClick={onClose} sx={{ color: 'inherit', opacity: 0.8 }}>
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      </Box>
+
+      {/* Lista de sesiones */}
+      <DialogContent sx={{ p: 0, overflow: 'auto', flex: 1 }}>
         {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4 }}><CircularProgress size={28} /></Box>
+          <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4 }}>
+            <CircularProgress size={28} />
+          </Box>
         ) : selected ? (
-          <SessionDetail sessionId={selected} onBack={() => setSelected(null)} token={token} />
+          <Box sx={{ p: 2 }}>
+            <SessionDetail sessionId={selected} onBack={() => setSelected(null)} token={token} />
+          </Box>
         ) : sessions.length === 0 ? (
-          <Typography variant="body2" color="text.secondary" textAlign="center" py={4}>Sin chats de calentamiento aún.</Typography>
+          <Box sx={{ textAlign: 'center', py: 6 }}>
+            <ChatBubbleOutlinedIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
+            <Typography variant="body2" color="text.secondary">Sin chats de calentamiento aún.</Typography>
+          </Box>
         ) : (
           <List disablePadding>
-            {sessions.map((s, i) => (
-              <React.Fragment key={s._id}>
-                {i > 0 && <Divider />}
-                <ListItemButton onClick={() => setSelected(s._id)} sx={{ borderRadius: 1 }}>
-                  <ListItemText
-                    primary={peer(s)}
-                    secondary={`${s.date} · ${s.total_messages_today} mensajes`}
-                    primaryTypographyProps={{ fontWeight: 600, variant: 'body2' }}
-                    secondaryTypographyProps={{ variant: 'caption' }}
-                  />
-                  <Chip label={`${s.total_messages_today}`} size="small" sx={{ ml: 1, fontSize: 11 }} />
-                </ListItemButton>
-              </React.Fragment>
-            ))}
+            {sessions.map((s, i) => {
+              const peerName = peer(s)
+              const initials = peerName.slice(0, 2).toUpperCase()
+              const lastMsg = s.messages?.[s.messages.length - 1]?.content
+              return (
+                <React.Fragment key={s._id}>
+                  {i > 0 && <Divider component="li" />}
+                  <ListItemButton onClick={() => setSelected(s._id)} sx={{ px: 2, py: 1.5, gap: 1.5 }}>
+                    {/* Avatar */}
+                    <Box sx={{
+                      width: 46, height: 46, borderRadius: '50%', flexShrink: 0,
+                      bgcolor: 'primary.main', color: 'primary.contrastText',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontWeight: 700, fontSize: 15,
+                    }}>
+                      {initials}
+                    </Box>
+                    {/* Texto */}
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', mb: 0.25 }}>
+                        <Typography variant="body2" fontWeight={600} noWrap sx={{ flex: 1, mr: 1 }}>
+                          {peerName}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+                          {s.date}
+                        </Typography>
+                      </Box>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, mr: 1 }}>
+                          {lastMsg || `${s.total_messages_today} mensajes hoy`}
+                        </Typography>
+                        {s.total_messages_today > 0 && (
+                          <Box sx={{
+                            minWidth: 20, height: 20, px: 0.75, borderRadius: 10, flexShrink: 0,
+                            bgcolor: 'success.main', color: 'white',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 11, fontWeight: 700,
+                          }}>
+                            {s.total_messages_today}
+                          </Box>
+                        )}
+                      </Box>
+                    </Box>
+                  </ListItemButton>
+                </React.Fragment>
+              )
+            })}
           </List>
         )}
       </DialogContent>

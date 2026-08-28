@@ -3885,6 +3885,157 @@ async def api_wwebjs_webhook(request: Request):
     return {"ok": True, "action": "ignored"}
 
 
+# ── Warmup endpoints ──────────────────────────────────────────────────────────
+
+@router.get("/warmup/instances")
+async def warmup_get_instances(current_user=Depends(get_current_user)):
+    from datetime import datetime as _dt
+    db = MongoDBManager()
+    # All wwebjs instances
+    raw = list(db.db.instances.find(
+        {"provider": "wwebjs"},
+        {"name": 1, "number": 1, "label": 1, "peer_warmup_enabled": 1, "peer_warmup_paused": 1, "status": 1},
+    ))
+
+    # Live session statuses
+    try:
+        import requests as _r
+        from app.whatsapp_wwebjs import _headers as _ww_headers
+        _st = _r.get(f"{WWEBJS_URL}/sessions", headers=_ww_headers(), timeout=5).json()
+    except Exception:
+        _st = {}
+
+    today = _dt.utcnow().strftime("%Y-%m-%d")
+
+    result = []
+    for inst in raw:
+        name = inst["name"]
+        live = _st.get(name, {})
+        enabled = inst.get("peer_warmup_enabled") is not False
+        paused  = bool(inst.get("peer_warmup_paused", False))
+        connected = live.get("status") == "connected"
+
+        if connected and enabled and not paused:
+            warmup_status = "active"
+        elif connected and enabled and paused:
+            warmup_status = "paused"
+        else:
+            warmup_status = "disconnected"
+
+        # Today's message count across sessions involving this instance
+        msgs_today = 0
+        sessions = list(db.db.warmup_sessions.find(
+            {"date": today, "$or": [{"instance_a": name}, {"instance_b": name}]},
+            {"total_messages_today": 1},
+        ))
+        for s in sessions:
+            msgs_today += s.get("total_messages_today", 0)
+
+        result.append({
+            "name":    name,
+            "label":   inst.get("label", name),
+            "number":  inst.get("number", live.get("phone", "")),
+            "enabled": enabled,
+            "paused":  paused,
+            "warmup_status": warmup_status,
+            "msgs_today": msgs_today,
+        })
+
+    return result
+
+
+@router.post("/warmup/instances/{name}/enable")
+async def warmup_enable_instance(name: str, current_user=Depends(get_current_user)):
+    db = MongoDBManager()
+    db.db.instances.update_one(
+        {"name": name, "provider": "wwebjs"},
+        {"$set": {"peer_warmup_enabled": True, "peer_warmup_paused": False}},
+    )
+    return {"ok": True}
+
+
+@router.post("/warmup/instances/{name}/disable")
+async def warmup_disable_instance(name: str, current_user=Depends(get_current_user)):
+    db = MongoDBManager()
+    db.db.instances.update_one(
+        {"name": name, "provider": "wwebjs"},
+        {"$set": {"peer_warmup_enabled": False, "peer_warmup_paused": False}},
+    )
+    return {"ok": True}
+
+
+@router.post("/warmup/instances/{name}/pause")
+async def warmup_pause_instance(name: str, current_user=Depends(get_current_user)):
+    db = MongoDBManager()
+    db.db.instances.update_one(
+        {"name": name, "provider": "wwebjs"},
+        {"$set": {"peer_warmup_paused": True}},
+    )
+    return {"ok": True}
+
+
+@router.post("/warmup/instances/{name}/resume")
+async def warmup_resume_instance(name: str, current_user=Depends(get_current_user)):
+    db = MongoDBManager()
+    db.db.instances.update_one(
+        {"name": name, "provider": "wwebjs"},
+        {"$set": {"peer_warmup_paused": False}},
+    )
+    return {"ok": True}
+
+
+@router.get("/warmup/sessions")
+async def warmup_get_sessions(current_user=Depends(get_current_user)):
+    from datetime import datetime as _dt
+    db = MongoDBManager()
+    today = _dt.utcnow().strftime("%Y-%m-%d")
+    sessions = list(db.db.warmup_sessions.find(
+        {"date": today},
+        {"instance_a": 1, "instance_b": 1, "total_messages_today": 1,
+         "next_speaker": 1, "next_send_at": 1, "messages": {"$slice": -1}},
+    ))
+    for s in sessions:
+        s["_id"] = str(s["_id"])
+        if s.get("next_send_at"):
+            s["next_send_at"] = s["next_send_at"].isoformat()
+    return sessions
+
+
+@router.get("/warmup/sessions/{session_id}/messages")
+async def warmup_get_messages(session_id: str, current_user=Depends(get_current_user)):
+    from bson import ObjectId
+    db = MongoDBManager()
+    session = db.db.warmup_sessions.find_one({"_id": ObjectId(session_id)})
+    if not session:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Session not found")
+    session["_id"] = str(session["_id"])
+    if session.get("next_send_at"):
+        session["next_send_at"] = session["next_send_at"].isoformat()
+    if session.get("created_at"):
+        session["created_at"] = session["created_at"].isoformat()
+    for m in session.get("messages", []):
+        if m.get("ts"):
+            m["ts"] = m["ts"].isoformat()
+    return session
+
+
+@router.get("/warmup/chats/{instance_name}")
+async def warmup_get_instance_chats(instance_name: str, current_user=Depends(get_current_user)):
+    """All warmup sessions involving an instance, newest first."""
+    db = MongoDBManager()
+    sessions = list(db.db.warmup_sessions.find(
+        {"$or": [{"instance_a": instance_name}, {"instance_b": instance_name}]},
+        {"instance_a": 1, "instance_b": 1, "date": 1, "total_messages_today": 1,
+         "messages": {"$slice": -1}},
+        sort=[("date", -1)],
+        limit=30,
+    ))
+    for s in sessions:
+        s["_id"] = str(s["_id"])
+    return sessions
+
+
 _ALLOWED_MIME = {
     "image/jpeg", "image/png",
     "application/pdf",

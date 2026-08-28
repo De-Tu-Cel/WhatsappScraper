@@ -21,6 +21,7 @@ from app.classifier import start_classifier_background
 from app.scheduler import start_scheduler
 from app.scrape_jobs import start_scrape_worker
 from app.send_now_worker import start_send_now_worker
+from app.warmup_queue import start_warmup_worker
 
 
 @asynccontextmanager
@@ -85,6 +86,7 @@ async def lifespan(app: FastAPI):
     start_scheduler()
     start_scrape_worker()
     start_send_now_worker()
+    start_warmup_worker()
     yield
 
 

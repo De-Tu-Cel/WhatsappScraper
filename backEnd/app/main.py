@@ -86,7 +86,8 @@ async def lifespan(app: FastAPI):
     start_scheduler()
     start_scrape_worker()
     start_send_now_worker()
-    start_warmup_worker()
+    if os.getenv("WARMUP_ENABLED", "false").lower() == "true":
+        start_warmup_worker()
     yield
 
 

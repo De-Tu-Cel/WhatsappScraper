@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Header, Request, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Header, Request, UploadFile, File, Body
 from fastapi.responses import StreamingResponse
 from typing import Optional
 import asyncio, json as _json, re, os, logging
@@ -4046,6 +4046,43 @@ def warmup_toggle_global(x_user_token: Optional[str] = Header(None)):
         {"_id": "global"}, {"$set": {"enabled": new_state}}, upsert=True,
     )
     return {"enabled": new_state}
+
+
+@router.get("/warmup/config")
+def warmup_get_config(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    db = MongoDBManager()
+    cfg = db.db.warmup_config.find_one({"_id": "global"}) or {}
+    return {
+        "enabled":             cfg.get("enabled", True),
+        "business_hour_start": cfg.get("business_hour_start", 9),
+        "business_hour_end":   cfg.get("business_hour_end", 21),
+        "min_msgs_per_pair":   cfg.get("min_msgs_per_pair", 6),
+        "max_msgs_per_pair":   cfg.get("max_msgs_per_pair", 10),
+        "min_delay_min":       cfg.get("min_delay_min", 8),
+        "max_delay_min":       cfg.get("max_delay_min", 25),
+        "topic":               cfg.get("topic", "auto"),
+    }
+
+
+@router.post("/warmup/config")
+def warmup_save_config(
+    body: dict = Body(...),
+    x_user_token: Optional[str] = Header(None),
+):
+    _require_user(x_user_token)
+    allowed = {
+        "business_hour_start", "business_hour_end",
+        "min_msgs_per_pair", "max_msgs_per_pair",
+        "min_delay_min", "max_delay_min", "topic",
+    }
+    update = {k: v for k, v in body.items() if k in allowed}
+    if update:
+        db = MongoDBManager()
+        db.db.warmup_config.update_one(
+            {"_id": "global"}, {"$set": update}, upsert=True,
+        )
+    return {"ok": True}
 
 
 @router.get("/warmup/sessions")

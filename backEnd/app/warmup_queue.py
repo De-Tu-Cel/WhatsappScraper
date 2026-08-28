@@ -174,13 +174,20 @@ def _get_or_create_session(db, inst_a: dict, inst_b: dict, today: str) -> dict:
     return doc
 
 
-def _generate_message(history: list[dict], speaker_key: str, session_id=None) -> str:
+def _generate_message(history: list[dict], speaker_key: str, session_id=None, topic_override: str | None = None) -> str:
     """Ask the LLM for the next message in the warmup conversation."""
     from app.llm import call_llm, PRIORITY_BATCH
 
-    # Seleccionar tema determinista por sesión para que ambos hablen del mismo tema
-    topic_idx = abs(hash(str(session_id))) % len(_TOPICS) if session_id else random.randint(0, len(_TOPICS) - 1)
-    topic = _TOPICS[topic_idx]
+    if topic_override and topic_override != "auto":
+        try:
+            idx = int(topic_override)
+            topic = _TOPICS[idx] if 0 <= idx < len(_TOPICS) else _TOPICS[0]
+        except (ValueError, IndexError):
+            topic = _TOPICS[0]
+    else:
+        # Seleccionar tema determinista por sesión para que ambos hablen del mismo tema
+        topic_idx = abs(hash(str(session_id))) % len(_TOPICS) if session_id else random.randint(0, len(_TOPICS) - 1)
+        topic = _TOPICS[topic_idx]
 
     system = (
         "Eres una persona real mexicana chateando con un amigo por WhatsApp. "
@@ -243,11 +250,28 @@ def _send_warmup_message(db, from_inst: dict, to_inst: dict, text: str, session_
     return msg_id
 
 
-def _process_pair(db, inst_a: dict, inst_b: dict, session: dict) -> None:
+def _load_config(db) -> dict:
+    """Read warmup settings from MongoDB, falling back to module-level constants."""
+    cfg = db.db.warmup_config.find_one({"_id": "global"}) or {}
+    return {
+        "enabled":    cfg.get("enabled", True),
+        "hour_start": cfg.get("business_hour_start", _BUSINESS_HOUR_START),
+        "hour_end":   cfg.get("business_hour_end", _BUSINESS_HOUR_END),
+        "min_msgs":   cfg.get("min_msgs_per_pair", 6),
+        "max_msgs":   cfg.get("max_msgs_per_pair", _MAX_MSGS_PER_PAIR),
+        "min_delay":  cfg.get("min_delay_min", _MIN_DELAY_MIN),
+        "max_delay":  cfg.get("max_delay_min", _MAX_DELAY_MIN),
+        "topic":      cfg.get("topic", "auto"),
+    }
+
+
+def _process_pair(db, inst_a: dict, inst_b: dict, session: dict, config: dict | None = None) -> None:
     """Send one message for this pair if it's their turn and time."""
     now = datetime.utcnow()
+    if config is None:
+        config = _load_config(db)
 
-    if session["total_messages_today"] >= _MAX_MSGS_PER_PAIR:
+    if session["total_messages_today"] >= config["max_msgs"]:
         return
 
     next_send_at = session.get("next_send_at")
@@ -269,7 +293,7 @@ def _process_pair(db, inst_a: dict, inst_b: dict, session: dict) -> None:
     is_first_msg = len(messages) == 0
 
     try:
-        text = _generate_message(messages, speaker_key, session_id=session["_id"])
+        text = _generate_message(messages, speaker_key, session_id=session["_id"], topic_override=config.get("topic"))
     except Exception as exc:
         log.error("[Warmup] LLM error for %s↔%s: %s", inst_a["name"], inst_b["name"], exc)
         return
@@ -280,7 +304,7 @@ def _process_pair(db, inst_a: dict, inst_b: dict, session: dict) -> None:
         log.error("[Warmup] send error %s→%s: %s", from_inst["name"], to_inst["name"], exc)
         return
 
-    delay_min = random.randint(_MIN_DELAY_MIN, _MAX_DELAY_MIN)
+    delay_min = random.randint(config["min_delay"], config["max_delay"])
     db.db.warmup_sessions.update_one(
         {"_id": session["_id"]},
         {
@@ -304,15 +328,17 @@ def _process_pair(db, inst_a: dict, inst_b: dict, session: dict) -> None:
 def _warmup_loop() -> None:
     while True:
         try:
-            if not _is_business_hours():
-                time.sleep(_POLL_INTERVAL)
-                continue
-
             from app.database import MongoDBManager
             db = MongoDBManager()
 
-            cfg = db.db.warmup_config.find_one({"_id": "global"}) or {}
-            if not cfg.get("enabled", True):
+            config = _load_config(db)
+
+            now_mx = _mx_now()
+            if not (config["hour_start"] <= now_mx.hour < config["hour_end"]):
+                time.sleep(_POLL_INTERVAL)
+                continue
+
+            if not config["enabled"]:
                 time.sleep(_POLL_INTERVAL)
                 continue
 
@@ -326,7 +352,7 @@ def _warmup_loop() -> None:
 
             for inst_a, inst_b in pairs:
                 session = _get_or_create_session(db, inst_a, inst_b, today)
-                _process_pair(db, inst_a, inst_b, session)
+                _process_pair(db, inst_a, inst_b, session, config)
                 time.sleep(random.uniform(2, 5))
 
         except Exception as exc:

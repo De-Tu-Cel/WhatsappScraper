@@ -27,6 +27,15 @@ import MovieIcon from '@mui/icons-material/Movie'
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew'
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward'
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward'
+import SearchIcon from '@mui/icons-material/Search'
+import TuneIcon from '@mui/icons-material/Tune'
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined'
+import WarningAmberIcon from '@mui/icons-material/WarningAmber'
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
+import AccessTimeIcon from '@mui/icons-material/AccessTime'
+import TextsmsOutlinedIcon from '@mui/icons-material/TextsmsOutlined'
+import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
+import TopicIcon from '@mui/icons-material/Topic'
 import { useUser } from '../context/UserContext'
 
 const API = (path) => `/api${path}`
@@ -643,14 +652,291 @@ function InstanceCard({ inst, token, onRefresh }) {
   )
 }
 
+// ── WarmupConfigDialog ────────────────────────────────────────────────────────
+
+const WARMUP_TOPICS = [
+  { value: 'auto', label: 'Auto-rotation (8 topics)' },
+  { value: '0', label: 'Classic 80s–90s films' },
+  { value: '1', label: 'Streaming series' },
+  { value: '2', label: 'Weekend plans' },
+  { value: '3', label: 'Food & restaurants' },
+  { value: '4', label: 'Soccer & sports' },
+  { value: '5', label: 'Music & artists' },
+  { value: '6', label: 'Work & week highlights' },
+  { value: '7', label: 'Travel & destinations' },
+]
+
+function safetyLevel(maxMsgs, minDelay) {
+  if (maxMsgs <= 8 && minDelay >= 12) return 'safe'
+  if (maxMsgs <= 12 && minDelay >= 7) return 'moderate'
+  return 'risky'
+}
+
+const SAFETY = {
+  safe:     { color: '#22c55e', bg: 'rgba(34,197,94,0.08)',  border: 'rgba(34,197,94,0.2)',  Icon: CheckCircleOutlineIcon, label: 'Safe',     desc: 'Optimal for new numbers — low detection risk' },
+  moderate: { color: '#f59e0b', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.2)', Icon: WarningAmberIcon,       label: 'Moderate', desc: 'Acceptable — monitor number health regularly'  },
+  risky:    { color: '#ef4444', bg: 'rgba(239,68,68,0.08)',  border: 'rgba(239,68,68,0.2)',  Icon: ErrorOutlineIcon,       label: 'High Risk', desc: 'WhatsApp may flag unusual activity'           },
+}
+
+const fieldSx = {
+  width: '100%',
+  px: 1.5, py: 0.75,
+  borderRadius: 1.5,
+  border: '1px solid rgba(255,255,255,0.12)',
+  bgcolor: 'rgba(255,255,255,0.04)',
+  color: 'inherit',
+  fontSize: 13,
+  fontFamily: 'inherit',
+  outline: 'none',
+  '&:focus': { borderColor: '#3b82f6' },
+  transition: 'border-color 0.15s',
+}
+
+function ConfigField({ label, icon: Icon, children }) {
+  return (
+    <Box>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.75 }}>
+        <Icon sx={{ fontSize: 14, color: 'text.disabled' }} />
+        <Typography variant="caption" color="text.secondary" fontWeight={600} sx={{ letterSpacing: '0.04em' }}>
+          {label}
+        </Typography>
+      </Box>
+      {children}
+    </Box>
+  )
+}
+
+function NumInput({ value, onChange, min = 0, max = 99, sx: extraSx }) {
+  return (
+    <Box
+      component="input"
+      type="number"
+      value={value}
+      onChange={e => onChange(Math.max(min, Math.min(max, Number(e.target.value))))}
+      min={min} max={max}
+      sx={{ ...fieldSx, ...extraSx }}
+    />
+  )
+}
+
+function WarmupConfigDialog({ open, onClose, token }) {
+  const DEFAULT_CFG = { business_hour_start: 9, business_hour_end: 21, min_msgs_per_pair: 6, max_msgs_per_pair: 10, min_delay_min: 8, max_delay_min: 25, topic: 'auto' }
+  const [cfg, setCfg]       = useState(DEFAULT_CFG)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving]   = useState(false)
+  const [saved, setSaved]     = useState(false)
+  const [err, setErr]         = useState(null)
+
+  useEffect(() => {
+    if (!open) return
+    setLoading(true); setErr(null); setSaved(false)
+    fetch(API('/warmup/config'), { headers: authHeaders(token) })
+      .then(r => r.json())
+      .then(d => { setCfg(d); setLoading(false) })
+      .catch(() => { setCfg(DEFAULT_CFG); setLoading(false) })
+  }, [open, token])
+
+  const set = (key) => (val) => setCfg(prev => ({ ...prev, [key]: val }))
+
+  async function handleSave() {
+    setSaving(true); setErr(null)
+    try {
+      const r = await fetch(API('/warmup/config'), {
+        method: 'POST',
+        headers: authHeaders(token),
+        body: JSON.stringify({
+          business_hour_start: cfg.business_hour_start,
+          business_hour_end:   cfg.business_hour_end,
+          min_msgs_per_pair:   cfg.min_msgs_per_pair,
+          max_msgs_per_pair:   cfg.max_msgs_per_pair,
+          min_delay_min:       cfg.min_delay_min,
+          max_delay_min:       cfg.max_delay_min,
+          topic:               cfg.topic,
+        }),
+      })
+      if (!r.ok) throw new Error(r.status)
+      setSaved(true)
+      setTimeout(onClose, 900)
+    } catch (e) { setErr('Error al guardar: ' + e.message) }
+    finally { setSaving(false) }
+  }
+
+  const level = safetyLevel(cfg.max_msgs_per_pair, cfg.min_delay_min)
+  const safety = SAFETY[level]
+  const SafetyIcon = safety.Icon
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      maxWidth="sm"
+      fullWidth
+      slotProps={{
+        paper: {
+          sx: {
+            bgcolor: '#161d2e',
+            backgroundImage: 'linear-gradient(135deg, rgba(59,130,246,0.04) 0%, rgba(99,102,241,0.03) 100%)',
+            border: '1px solid rgba(255,255,255,0.08)',
+            borderRadius: 3,
+          }
+        }
+      }}
+    >
+      {/* Header */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 3, pt: 2.5, pb: 2, borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+        <Box sx={{ width: 36, height: 36, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #3b82f6 0%, #6366f1 100%)' }}>
+          <TuneIcon sx={{ fontSize: 18, color: '#fff' }} />
+        </Box>
+        <Box sx={{ flex: 1 }}>
+          <Typography fontWeight={700} fontSize={15}>Warmup Settings</Typography>
+          <Typography variant="caption" color="text.secondary">Configure the automated warmup behavior</Typography>
+        </Box>
+        <IconButton size="small" onClick={onClose}><CloseIcon fontSize="small" /></IconButton>
+      </Box>
+
+      <DialogContent sx={{ px: 3, py: 2.5 }}>
+        {loading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress size={28} /></Box>
+        ) : (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+
+            {/* Safety indicator */}
+            <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, p: 1.5, borderRadius: 2, bgcolor: safety.bg, border: `1px solid ${safety.border}` }}>
+              <SafetyIcon sx={{ fontSize: 20, color: safety.color, mt: 0.1 }} />
+              <Box>
+                <Typography fontWeight={700} fontSize={13} sx={{ color: safety.color }}>{safety.label}</Typography>
+                <Typography variant="caption" color="text.secondary">{safety.desc}</Typography>
+              </Box>
+            </Box>
+
+            {/* Business hours */}
+            <ConfigField label="BUSINESS HOURS" icon={AccessTimeIcon}>
+              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+                <Box>
+                  <Typography variant="caption" color="text.disabled" sx={{ mb: 0.5, display: 'block' }}>Start (hour 0–23)</Typography>
+                  <NumInput value={cfg.business_hour_start} onChange={set('business_hour_start')} min={0} max={23} />
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.disabled" sx={{ mb: 0.5, display: 'block' }}>End (hour 1–24)</Typography>
+                  <NumInput value={cfg.business_hour_end} onChange={set('business_hour_end')} min={1} max={24} />
+                </Box>
+              </Box>
+            </ConfigField>
+
+            {/* Messages per pair */}
+            <ConfigField label="MESSAGES PER PAIR / DAY" icon={TextsmsOutlinedIcon}>
+              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+                <Box>
+                  <Typography variant="caption" color="text.disabled" sx={{ mb: 0.5, display: 'block' }}>Min messages</Typography>
+                  <NumInput value={cfg.min_msgs_per_pair} onChange={set('min_msgs_per_pair')} min={1} max={30} />
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.disabled" sx={{ mb: 0.5, display: 'block' }}>Max messages</Typography>
+                  <NumInput value={cfg.max_msgs_per_pair} onChange={set('max_msgs_per_pair')} min={1} max={30} />
+                </Box>
+              </Box>
+              <Box sx={{ mt: 1, display: 'flex', gap: 0.75 }}>
+                {[
+                  { label: 'Conservative', msgs: 6, color: '#22c55e' },
+                  { label: 'Standard',     msgs: 10, color: '#3b82f6' },
+                  { label: 'Aggressive',   msgs: 16, color: '#f59e0b' },
+                ].map(p => (
+                  <Box
+                    key={p.label}
+                    component="button"
+                    onClick={() => setCfg(prev => ({ ...prev, min_msgs_per_pair: Math.max(1, p.msgs - 2), max_msgs_per_pair: p.msgs }))}
+                    sx={{
+                      border: `1px solid ${p.color}40`, bgcolor: `${p.color}10`, color: p.color,
+                      borderRadius: 1, cursor: 'pointer', px: 1, py: 0.4, fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
+                      '&:hover': { bgcolor: `${p.color}20` }, transition: 'background 0.15s',
+                    }}
+                  >{p.label}</Box>
+                ))}
+              </Box>
+            </ConfigField>
+
+            {/* Delay between turns */}
+            <ConfigField label="DELAY BETWEEN TURNS (MINUTES)" icon={HourglassEmptyIcon}>
+              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+                <Box>
+                  <Typography variant="caption" color="text.disabled" sx={{ mb: 0.5, display: 'block' }}>Min delay</Typography>
+                  <NumInput value={cfg.min_delay_min} onChange={set('min_delay_min')} min={1} max={120} />
+                </Box>
+                <Box>
+                  <Typography variant="caption" color="text.disabled" sx={{ mb: 0.5, display: 'block' }}>Max delay</Typography>
+                  <NumInput value={cfg.max_delay_min} onChange={set('max_delay_min')} min={1} max={240} />
+                </Box>
+              </Box>
+              <Box sx={{ mt: 1, display: 'flex', gap: 0.75 }}>
+                {[
+                  { label: 'Natural', min: 12, max: 35, color: '#22c55e' },
+                  { label: 'Fast',    min: 8,  max: 20, color: '#3b82f6' },
+                  { label: 'Quick',   min: 3,  max: 10, color: '#f59e0b' },
+                ].map(p => (
+                  <Box
+                    key={p.label}
+                    component="button"
+                    onClick={() => setCfg(prev => ({ ...prev, min_delay_min: p.min, max_delay_min: p.max }))}
+                    sx={{
+                      border: `1px solid ${p.color}40`, bgcolor: `${p.color}10`, color: p.color,
+                      borderRadius: 1, cursor: 'pointer', px: 1, py: 0.4, fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
+                      '&:hover': { bgcolor: `${p.color}20` }, transition: 'background 0.15s',
+                    }}
+                  >{p.label}</Box>
+                ))}
+              </Box>
+            </ConfigField>
+
+            {/* Topic */}
+            <ConfigField label="CONVERSATION TOPIC" icon={TopicIcon}>
+              <Box
+                component="select"
+                value={cfg.topic}
+                onChange={e => set('topic')(e.target.value)}
+                sx={{ ...fieldSx, appearance: 'none', cursor: 'pointer' }}
+              >
+                {WARMUP_TOPICS.map(t => (
+                  <option key={t.value} value={t.value} style={{ background: '#161d2e' }}>{t.label}</option>
+                ))}
+              </Box>
+            </ConfigField>
+
+            {err && <Alert severity="error" sx={{ mt: 0 }}>{err}</Alert>}
+          </Box>
+        )}
+      </DialogContent>
+
+      {/* Footer */}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1.5, px: 3, py: 2, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+        <Box component="button" onClick={onClose} sx={{ border: '1px solid rgba(255,255,255,0.1)', bgcolor: 'transparent', color: 'rgba(255,255,255,0.6)', borderRadius: 1.5, cursor: 'pointer', px: 2, py: 0.75, fontSize: 13, fontFamily: 'inherit', '&:hover': { bgcolor: 'rgba(255,255,255,0.05)' }, transition: 'background 0.15s' }}>
+          Cancel
+        </Box>
+        <Box component="button" onClick={handleSave} disabled={saving || saved} sx={{
+          border: 'none',
+          bgcolor: saved ? '#22c55e' : '#3b82f6',
+          color: '#fff', borderRadius: 1.5, cursor: saving || saved ? 'default' : 'pointer',
+          px: 2.5, py: 0.75, fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
+          opacity: saving ? 0.7 : 1,
+          '&:hover': { bgcolor: saved ? '#22c55e' : '#2563eb' },
+          transition: 'background 0.2s, opacity 0.15s',
+        }}>
+          {saved ? 'Saved!' : saving ? 'Saving…' : 'Save'}
+        </Box>
+      </Box>
+    </Dialog>
+  )
+}
+
+
 // ── Main panel ────────────────────────────────────────────────────────────────
 export default function WarmupPanel() {
   const { user } = useUser()
   const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState(null)
-  const [toggling, setToggling] = useState(false)
-  const [search, setSearch]     = useState('')
+  const [toggling, setToggling]     = useState(false)
+  const [search, setSearch]         = useState('')
+  const [configOpen, setConfigOpen] = useState(false)
   const tickRef = useRef(null)
 
   const load = useCallback(() => {
@@ -754,6 +1040,11 @@ export default function WarmupPanel() {
                 />
               </Box>
             </Tooltip>
+            <Tooltip title="Warmup Settings">
+              <IconButton size="small" onClick={() => setConfigOpen(true)}>
+                <TuneIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
             <Tooltip title="Actualizar">
               <IconButton size="small" onClick={load} disabled={loading}>
                 {loading ? <CircularProgress size={16} /> : <RefreshIcon fontSize="small" />}
@@ -800,7 +1091,7 @@ export default function WarmupPanel() {
                   bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)',
                   '&:focus-within': { borderColor: 'rgba(255,255,255,0.2)' }, transition: 'border-color 0.15s',
                 }}>
-                  <Box component="span" sx={{ color: 'text.disabled', fontSize: 16, lineHeight: 1 }}>🔍</Box>
+                  <SearchIcon sx={{ fontSize: 16, color: 'text.disabled', flexShrink: 0 }} />
                   <Box
                     component="input"
                     value={search}
@@ -817,7 +1108,7 @@ export default function WarmupPanel() {
                       component="button"
                       onClick={() => setSearch('')}
                       sx={{ border: 'none', bgcolor: 'transparent', cursor: 'pointer', color: 'rgba(255,255,255,0.3)', p: 0, lineHeight: 1, fontSize: 14, '&:hover': { color: 'text.secondary' } }}
-                    >✕</Box>
+                    ><CloseIcon sx={{ fontSize: 14 }} /></Box>
                   )}
                 </Box>
                 <Typography variant="caption" color="text.disabled" sx={{ letterSpacing: '0.08em', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>
@@ -856,6 +1147,8 @@ export default function WarmupPanel() {
           )}
         </>
       )}
+
+      <WarmupConfigDialog open={configOpen} onClose={() => setConfigOpen(false)} token={user?.token} />
     </Box>
   )
 }

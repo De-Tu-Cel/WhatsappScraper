@@ -3748,7 +3748,7 @@ async def api_wwebjs_webhook(request: Request):
         return {"ok": True}
 
     if event == "message_ack":
-        ack = data.get("ack", 0)
+        ack = data.get("ack") or 0
         if ack >= 2:
             # Delivered or read — clear degraded flag
             db.db.instances.update_one(

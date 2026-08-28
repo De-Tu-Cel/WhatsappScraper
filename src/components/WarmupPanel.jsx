@@ -47,7 +47,7 @@ function authHeaders(token) {
   return { 'Content-Type': 'application/json', 'x-user-token': token || '' }
 }
 
-// Mismo patrón de fondo WA que usa conversations.jsx
+// WA bubble background pattern
 const _WA_SVG = [
   '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">',
   '<g transform="translate(5,3) scale(0.9)">',
@@ -65,26 +65,26 @@ const WA_BG_PATTERN = `url("data:image/svg+xml,${encodeURIComponent(_WA_SVG)}")`
 function relativeTime(isoString) {
   if (!isoString) return null
   const diff = Math.floor((Date.now() - new Date(isoString)) / 1000)
-  if (diff < 60)   return 'ahora mismo'
-  if (diff < 3600) return `hace ${Math.floor(diff / 60)} min`
+  if (diff < 60)   return 'just now'
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
   const h = Math.floor(diff / 3600)
   const m = Math.floor((diff % 3600) / 60)
-  return m > 0 ? `hace ${h}h ${m}min` : `hace ${h}h`
+  return m > 0 ? `${h}h ${m}m ago` : `${h}h ago`
 }
 
 function formatTime(isoString) {
   if (!isoString) return ''
-  return new Date(isoString).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
+  return new Date(isoString).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
 }
 
 function formatDaySeparator(isoString) {
-  if (!isoString) return 'Hoy'
+  if (!isoString) return 'Today'
   const d = new Date(isoString)
   const today = new Date()
   const yesterday = new Date(); yesterday.setDate(today.getDate() - 1)
-  if (d.toDateString() === today.toDateString()) return 'Hoy'
-  if (d.toDateString() === yesterday.toDateString()) return 'Ayer'
-  return d.toLocaleDateString('es-MX', { day: 'numeric', month: 'long' })
+  if (d.toDateString() === today.toDateString()) return 'Today'
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
+  return d.toLocaleDateString('en-US', { day: 'numeric', month: 'long' })
 }
 
 function formatNextRotation(isoString) {
@@ -94,16 +94,16 @@ function formatNextRotation(isoString) {
   const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1); tomorrow.setHours(0,0,0,0)
   const isToday    = d.toDateString() === now.toDateString()
   const isTomorrow = d.toDateString() === tomorrow.toDateString()
-  const time = d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })
-  if (isToday)    return `hoy a las ${time}`
-  if (isTomorrow) return `mañana a las ${time}`
-  return d.toLocaleDateString('es-MX', { weekday: 'long', hour: '2-digit', minute: '2-digit' })
+  const time = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+  if (isToday)    return `today at ${time}`
+  if (isTomorrow) return `tomorrow at ${time}`
+  return d.toLocaleDateString('en-US', { weekday: 'long', hour: '2-digit', minute: '2-digit' })
 }
 
 const STATUS_CFG = {
-  active:       { label: 'Activo',       color: '#22c55e', bg: 'rgba(34,197,94,0.12)',   border: '#e11d68' },
-  paused:       { label: 'Pausado',      color: '#f59e0b', bg: 'rgba(245,158,11,0.12)',  border: '#f59e0b' },
-  disconnected: { label: 'Desconectado', color: '#ef4444', bg: 'rgba(239,68,68,0.12)',   border: '#ef4444' },
+  active:       { label: 'Active',       color: '#22c55e', bg: 'rgba(34,197,94,0.12)',   border: '#e11d68' },
+  paused:       { label: 'Paused',       color: '#f59e0b', bg: 'rgba(245,158,11,0.12)',  border: '#f59e0b' },
+  disconnected: { label: 'Disconnected', color: '#ef4444', bg: 'rgba(239,68,68,0.12)',   border: '#ef4444' },
 }
 
 // ── Session detail dialog ─────────────────────────────────────────────────────
@@ -125,7 +125,7 @@ function SessionDetail({ sessionId, token }) {
   }, [session])
 
   if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4 }}><CircularProgress size={28} /></Box>
-  if (!session) return <Alert severity="error">No se pudo cargar la sesión.</Alert>
+  if (!session) return <Alert severity="error">Failed to load session.</Alert>
 
   const msgs = session.messages || []
 
@@ -155,7 +155,7 @@ function SessionDetail({ sessionId, token }) {
       {msgs.length === 0 ? (
         <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1.5 }}>
           <ChatBubbleOutlinedIcon sx={{ fontSize: 44, color: 'rgba(255,255,255,0.07)' }} />
-          <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.28)' }}>Sin mensajes aún.</Typography>
+          <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.28)' }}>No messages yet.</Typography>
         </Box>
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', px: 1.5, pt: 1.5, pb: 2 }}>
@@ -218,7 +218,7 @@ function SessionDetail({ sessionId, token }) {
                       color: isA ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.5)',
                       fontSize: 9.5, letterSpacing: '0.02em',
                     }}>
-                      {new Date(msg.ts).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
+                      {new Date(msg.ts).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
                       {!isA && ' ✓✓'}
                     </Typography>
                   )}
@@ -254,8 +254,8 @@ function formatItemDate(dateStr) {
   if (!dateStr) return ''
   const today = new Date().toISOString().slice(0, 10)
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
-  if (dateStr === today) return 'Hoy'
-  if (dateStr === yesterday) return 'Ayer'
+  if (dateStr === today) return 'Today'
+  if (dateStr === yesterday) return 'Yesterday'
   const [, m, d] = dateStr.split('-')
   return `${d}/${m}`
 }
@@ -323,13 +323,13 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
           </Typography>
           {selected && selectedSession ? (
             <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, lineHeight: 1 }}>
-              {selectedSession.total_messages_today} mensajes hoy · {selectedSession.instance_a} ↔ {selectedSession.instance_b}
+              {selectedSession.total_messages_today} messages today · {selectedSession.instance_a} ↔ {selectedSession.instance_b}
             </Typography>
           ) : (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, mt: 0.1 }}>
               <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#22c55e', flexShrink: 0 }} />
               <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.38)', fontSize: 10, lineHeight: 1 }}>
-                Calentamiento activo
+                Warmup active
               </Typography>
             </Box>
           )}
@@ -357,7 +357,7 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
         ) : sessions.length === 0 ? (
           <Box sx={{ textAlign: 'center', py: 8, px: 3 }}>
             <ChatBubbleOutlinedIcon sx={{ fontSize: 52, color: 'rgba(255,255,255,0.1)', mb: 1.5 }} />
-            <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.35)' }}>Sin chats de calentamiento aún.</Typography>
+            <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.35)' }}>No warmup chats yet.</Typography>
           </Box>
         ) : (
           <List disablePadding sx={{ bgcolor: 'transparent' }}>
@@ -412,7 +412,7 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
                           color: hasUnread ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.28)',
                           fontStyle: lastMsg ? 'normal' : 'italic',
                         }}>
-                          {lastMsg || 'Sin mensajes aún'}
+                          {lastMsg || 'No messages yet'}
                         </Typography>
                         {s.total_messages_today > 0 && !hasUnread && (
                           <Typography variant="caption" sx={{ flexShrink: 0, fontSize: 10, color: 'rgba(255,255,255,0.22)' }}>
@@ -503,23 +503,23 @@ function InstanceCard({ inst, token, onRefresh }) {
               <Typography variant="h6" fontWeight={700} lineHeight={1} color={isActive ? '#22c55e' : 'text.primary'}>
                 {inst.sent_today}
               </Typography>
-              <Typography variant="caption" color="text.disabled" sx={{ letterSpacing: '0.05em', fontSize: 10 }}>ENVIADOS</Typography>
+              <Typography variant="caption" color="text.disabled" sx={{ letterSpacing: '0.05em', fontSize: 10 }}>SENT</Typography>
             </Box>
             <Box>
               <Typography variant="h6" fontWeight={700} lineHeight={1}>{inst.received_today}</Typography>
-              <Typography variant="caption" color="text.disabled" sx={{ letterSpacing: '0.05em', fontSize: 10 }}>RECIBIDOS</Typography>
+              <Typography variant="caption" color="text.disabled" sx={{ letterSpacing: '0.05em', fontSize: 10 }}>RECEIVED</Typography>
             </Box>
             {lastRel && (
               <Box sx={{ ml: 'auto', textAlign: 'right' }}>
                 <Typography variant="body2" fontWeight={600} lineHeight={1}>{lastRel}</Typography>
-                <Typography variant="caption" color="text.disabled" sx={{ letterSpacing: '0.05em', fontSize: 10 }}>ÚLTIMO</Typography>
+                <Typography variant="caption" color="text.disabled" sx={{ letterSpacing: '0.05em', fontSize: 10 }}>LAST</Typography>
               </Box>
             )}
           </Box>
         ) : (
           <Box sx={{ px: 2, py: 1 }}>
             <Typography variant="caption" color="error.main" fontWeight={500}>
-              Sin conexión de WhatsApp. Esta instancia no participará en warmup hasta que vuelva a conectarse — entrará al siguiente ciclo de rotación de forma automática.
+              No WhatsApp connection. This instance will rejoin the warmup rotation automatically when it reconnects.
             </Typography>
           </Box>
         )}
@@ -529,7 +529,7 @@ function InstanceCard({ inst, token, onRefresh }) {
           <Box sx={{ px: 2, pb: 1 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
               <Typography variant="caption" color="text.disabled" sx={{ fontSize: 10, letterSpacing: '0.04em' }}>
-                Progreso del día
+                Today's progress
               </Typography>
               <Typography variant="caption" fontWeight={700} sx={{ fontSize: 11 }}>
                 {inst.msgs_today} / {inst.daily_limit}
@@ -549,7 +549,7 @@ function InstanceCard({ inst, token, onRefresh }) {
             />
             {isPaused && inst.paused_at && (
               <Typography variant="caption" color="text.disabled" sx={{ mt: 0.5, display: 'block', fontSize: 10 }}>
-                Pausado a las {formatTime(inst.paused_at)}
+                Paused at {formatTime(inst.paused_at)}
               </Typography>
             )}
           </Box>
@@ -559,7 +559,7 @@ function InstanceCard({ inst, token, onRefresh }) {
         {!inst.enabled && (
           <Box sx={{ mx: 2, mb: 1, px: 1.25, py: 0.75, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.2)' }}>
             <Typography variant="caption" sx={{ color: '#f87171', fontSize: 11 }}>
-              Excluida del warmup. Habilítala para que participe en el ciclo de calentamiento.
+              Excluded from warmup. Enable it to participate in the rotation.
             </Typography>
           </Box>
         )}
@@ -580,7 +580,7 @@ function InstanceCard({ inst, token, onRefresh }) {
             }}
           >
             <ChatBubbleOutlinedIcon sx={{ fontSize: 14 }} />
-            Ver chats
+            View chats
             {inst.msgs_today > 0 && (
               <Box sx={{ bgcolor: '#e11d68', color: '#fff', borderRadius: '50%', minWidth: 16, height: 16, fontSize: 10, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', px: 0.5 }}>
                 {inst.msgs_today}
@@ -604,7 +604,7 @@ function InstanceCard({ inst, token, onRefresh }) {
                 }}
               >
                 {busy ? <CircularProgress size={12} /> : <PlayCircleIcon sx={{ fontSize: 14 }} />}
-                Reanudar
+                Resume
               </Box>
             ) : (
               <Box
@@ -620,13 +620,13 @@ function InstanceCard({ inst, token, onRefresh }) {
                 }}
               >
                 {busy ? <CircularProgress size={12} /> : <PauseCircleIcon sx={{ fontSize: 14 }} />}
-                Pausar
+                Pause
               </Box>
             )
           )}
 
           {/* Enable / Disable warmup participation */}
-          <Tooltip title={inst.enabled ? 'Excluir del warmup' : 'Incluir en warmup'} placement="top">
+          <Tooltip title={inst.enabled ? 'Exclude from warmup' : 'Include in warmup'} placement="top">
             <Box
               component="button"
               onClick={() => action(inst.enabled ? 'disable' : 'enable')}
@@ -1015,49 +1015,49 @@ export default function WarmupPanel() {
             <LocalFireDepartmentIcon sx={{ color: '#e11d68', fontSize: 26 }} />
             <Typography id="tour-nav-warmup" variant="h6" fontWeight={800} sx={{ lineHeight: 1.2 }}>Warmup</Typography>
           </Box>
-          <Typography variant="caption" color="text.secondary">Calentamiento automático entre instancias activas</Typography>
+          <Typography variant="caption" color="text.secondary">Automatic warmup between active instances</Typography>
         </Box>
 
         {/* Stats + controls */}
         {!loading && data && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
             {activeCount > 0 && (
-              <Tooltip title="Instancias participando en el ciclo de calentamiento hoy" placement="bottom">
+              <Tooltip title="Instances participating in today's warmup cycle" placement="bottom">
                 <Chip
-                  size="small" label={`${activeCount} activa${activeCount !== 1 ? 's' : ''}`}
+                  size="small" label={`${activeCount} active`}
                   icon={<Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#22c55e', ml: '6px !important' }} />}
                   sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600, fontSize: 11, border: '1px solid rgba(34,197,94,0.2)', cursor: 'default' }}
                 />
               </Tooltip>
             )}
             {discCount > 0 && (
-              <Tooltip title="Sin conexión activa de WhatsApp. Vuelven al ciclo automáticamente al reconectarse." placement="bottom">
+              <Tooltip title="No active WhatsApp connection. They rejoin automatically when reconnected." placement="bottom">
                 <Chip
-                  size="small" label={`${discCount} desconectada${discCount !== 1 ? 's' : ''}`}
+                  size="small" label={`${discCount} offline`}
                   icon={<Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#ef4444', ml: '6px !important' }} />}
                   sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#ef4444', fontWeight: 600, fontSize: 11, border: '1px solid rgba(239,68,68,0.2)', cursor: 'default' }}
                 />
               </Tooltip>
             )}
             {(sentTotal > 0 || recvTotal > 0) && (
-              <Tooltip title={`Mensajes de calentamiento hoy: ${sentTotal} enviados · ${recvTotal} recibidos entre todas las instancias`} placement="bottom">
+              <Tooltip title={`Warmup messages today: ${sentTotal} sent · ${recvTotal} received across all instances`} placement="bottom">
                 <Chip
                   size="small"
                   label={
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                       <ArrowUpwardIcon sx={{ fontSize: 11 }} />{sentTotal}
                       <ArrowDownwardIcon sx={{ fontSize: 11, ml: 0.5 }} />{recvTotal}
-                      <Box component="span" sx={{ ml: 0.25, color: 'text.disabled' }}>hoy</Box>
+                      <Box component="span" sx={{ ml: 0.25, color: 'text.disabled' }}>today</Box>
                     </Box>
                   }
                   sx={{ bgcolor: 'rgba(255,255,255,0.05)', fontWeight: 600, fontSize: 11, border: '1px solid rgba(255,255,255,0.1)', cursor: 'default' }}
                 />
               </Tooltip>
             )}
-            <Tooltip title={globalOn ? 'El sistema de warmup está activo. Tócalo para pausar todos los envíos.' : 'El sistema está pausado. Tócalo para reactivar el calentamiento.'} placement="bottom">
+            <Tooltip title={globalOn ? 'Warmup system is active. Toggle to pause all sends.' : 'System is paused. Toggle to reactivate warmup.'} placement="bottom">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <Typography variant="caption" color={globalOn ? 'text.primary' : 'text.disabled'} fontWeight={600}>
-                  {globalOn ? 'Activo' : 'Pausado'}
+                  {globalOn ? 'Active' : 'Paused'}
                 </Typography>
                 <Switch
                   checked={globalOn}
@@ -1076,7 +1076,7 @@ export default function WarmupPanel() {
                 <TuneIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Actualizar">
+            <Tooltip title="Refresh">
               <IconButton size="small" onClick={load} disabled={loading}>
                 {loading ? <CircularProgress size={16} /> : <RefreshIcon fontSize="small" />}
               </IconButton>
@@ -1100,10 +1100,10 @@ export default function WarmupPanel() {
             }}>
               <SyncIcon sx={{ fontSize: 16, color: 'text.disabled', mt: 0.25, flexShrink: 0 }} />
               <Typography variant="caption" color="text.secondary">
-                Próxima rotación de pares:{' '}
+                Next pair rotation:{' '}
                 <Box component="span" fontWeight={700} color="text.primary">{formatNextRotation(nextRot)}</Box>
                 {discNames.length > 0 && (
-                  <>{' · '}<Box component="span" sx={{ color: '#f87171' }}>{discNames.length} instancia{discNames.length !== 1 ? 's' : ''} desconectada{discNames.length !== 1 ? 's' : ''}</Box> entrará{discNames.length !== 1 ? 'n' : ''} en rotación cuando recupere{discNames.length !== 1 ? 'n' : ''} conexión.</>
+                  <>{' · '}<Box component="span" sx={{ color: '#f87171' }}>{discNames.length} disconnected instance{discNames.length !== 1 ? 's' : ''}</Box> will rejoin when reconnected.</>
                 )}
               </Typography>
             </Box>
@@ -1111,7 +1111,7 @@ export default function WarmupPanel() {
 
           {/* ── Instances grid ── */}
           {instances.length === 0 ? (
-            <Alert severity="info">No hay instancias wwebjs registradas.</Alert>
+            <Alert severity="info">No wwebjs instances registered.</Alert>
           ) : (
             <>
               {/* Buscador */}
@@ -1127,7 +1127,7 @@ export default function WarmupPanel() {
                     component="input"
                     value={search}
                     onChange={e => setSearch(e.target.value)}
-                    placeholder="Buscar instancia..."
+                    placeholder="Search instance..."
                     sx={{
                       flex: 1, border: 'none', outline: 'none', bgcolor: 'transparent',
                       color: 'text.primary', fontSize: 13,
@@ -1143,13 +1143,13 @@ export default function WarmupPanel() {
                   )}
                 </Box>
                 <Typography variant="caption" color="text.disabled" sx={{ letterSpacing: '0.08em', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>
-                  {instances.length} INSTANCIA{instances.length !== 1 ? 'S' : ''}
+                  {instances.length} INSTANCE{instances.length !== 1 ? 'S' : ''}
                 </Typography>
               </Box>
 
               {instances.filter(i => i.enabled).length < 2 && (
                 <Alert severity="warning" sx={{ mb: 2 }}>
-                  Se necesitan al menos 2 instancias activas para que el calentamiento funcione.
+                  At least 2 active instances are needed for warmup to work.
                 </Alert>
               )}
 
@@ -1164,7 +1164,7 @@ export default function WarmupPanel() {
                   : instances
                 return filtered.length === 0 ? (
                   <Box sx={{ textAlign: 'center', py: 4 }}>
-                    <Typography variant="body2" color="text.secondary">Sin resultados para «{search}»</Typography>
+                    <Typography variant="body2" color="text.secondary">No results for "{search}"</Typography>
                   </Box>
                 ) : (
                   <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1fr 1fr 1fr' }, gap: 2 }}>

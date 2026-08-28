@@ -13,6 +13,8 @@ import ListItemButton from '@mui/material/ListItemButton'
 import Divider from '@mui/material/Divider'
 import Alert from '@mui/material/Alert'
 import Switch from '@mui/material/Switch'
+import Select from '@mui/material/Select'
+import MenuItem from '@mui/material/MenuItem'
 import LinearProgress from '@mui/material/LinearProgress'
 import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment'
 import PauseCircleIcon from '@mui/icons-material/PauseCircle'
@@ -888,23 +890,42 @@ function WarmupConfigDialog({ open, onClose, token }) {
 
             {/* ── Topic ── */}
             <SectionLabel icon={TopicIcon}>Conversation topic</SectionLabel>
-            <Box
-              component="select"
+            <Select
               value={cfg.topic}
               onChange={e => set('topic')(e.target.value)}
+              size="small"
+              fullWidth
+              MenuProps={{
+                PaperProps: {
+                  sx: {
+                    bgcolor: '#1a2234',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: 2,
+                    mt: 0.5,
+                    '& .MuiMenuItem-root': {
+                      fontSize: 13,
+                      py: 1,
+                      '&:hover':    { bgcolor: 'rgba(59,130,246,0.12)' },
+                      '&.Mui-selected': { bgcolor: 'rgba(59,130,246,0.18)', color: '#93bbfd', '&:hover': { bgcolor: 'rgba(59,130,246,0.24)' } },
+                    },
+                  },
+                },
+              }}
               sx={{
-                width: '100%', px: 1.25, py: 0.9,
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: 1.5, bgcolor: 'rgba(255,255,255,0.03)',
-                color: 'rgba(255,255,255,0.75)', fontSize: 13, fontFamily: 'inherit',
-                outline: 'none', cursor: 'pointer', appearance: 'none',
-                '&:focus': { borderColor: 'rgba(59,130,246,0.5)' },
+                fontSize: 13,
+                '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.1)' },
+                '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.2)' },
+                '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(59,130,246,0.5)', borderWidth: 1 },
+                '& .MuiSelect-select': { py: 0.9, color: 'rgba(255,255,255,0.75)' },
+                '& .MuiSvgIcon-root': { color: 'rgba(255,255,255,0.3)' },
+                bgcolor: 'rgba(255,255,255,0.03)',
+                borderRadius: 1.5,
               }}
             >
               {WARMUP_TOPICS.map(t => (
-                <option key={t.value} value={t.value} style={{ background: '#111827', color: '#f1f5f9' }}>{t.label}</option>
+                <MenuItem key={t.value} value={t.value} sx={{ fontSize: 13 }}>{t.label}</MenuItem>
               ))}
-            </Box>
+            </Select>
 
             {err && <Alert severity="error" sx={{ mt: 2 }}>{err}</Alert>}
           </Box>

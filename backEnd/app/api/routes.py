@@ -3906,15 +3906,15 @@ async def api_wwebjs_webhook(request: Request):
 @router.get("/warmup/instances")
 def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
     _require_user(x_user_token)
-    from datetime import datetime as _dt
+    from datetime import datetime as _dt, timedelta as _td
+    from collections import defaultdict as _dd
     db = MongoDBManager()
-    # All wwebjs instances
+
     raw = list(db.db.instances.find(
         {"provider": "wwebjs"},
-        {"name": 1, "number": 1, "label": 1, "peer_warmup_enabled": 1, "peer_warmup_paused": 1, "status": 1},
+        {"name": 1, "number": 1, "label": 1, "peer_warmup_enabled": 1, "peer_warmup_paused": 1},
     ))
 
-    # Live session statuses
     try:
         import requests as _r
         from app.whatsapp_wwebjs import _headers as _ww_headers
@@ -3925,12 +3925,34 @@ def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
     from app.warmup_queue import _mx_now as _warmup_now
     today = _warmup_now().strftime("%Y-%m-%d")
 
+    # Batch-fetch all today's sessions — compute per-instance stats in Python
+    all_sessions = list(db.db.warmup_sessions.find(
+        {"date": today},
+        {"instance_a": 1, "instance_b": 1, "messages": 1},
+    ))
+    stats = _dd(lambda: {"sent": 0, "received": 0})
+    for sess in all_sessions:
+        a, b = sess["instance_a"], sess["instance_b"]
+        for msg in sess.get("messages", []):
+            sender, receiver = (a, b) if msg.get("speaker") == "a" else (b, a)
+            stats[sender]["sent"]     += 1
+            stats[receiver]["received"] += 1
+
+    # Global warmup enabled state
+    cfg = db.db.warmup_config.find_one({"_id": "global"}) or {}
+    global_enabled = cfg.get("enabled", True)
+
+    # Next rotation = tomorrow midnight MX
+    now_mx = _warmup_now()
+    tomorrow_mx = (now_mx + _td(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    next_rotation_at = tomorrow_mx.isoformat()
+
     result = []
     for inst in raw:
-        name = inst["name"]
-        live = _st.get(name, {})
-        enabled = inst.get("peer_warmup_enabled") is not False
-        paused  = bool(inst.get("peer_warmup_paused", False))
+        name      = inst["name"]
+        live      = _st.get(name, {})
+        enabled   = inst.get("peer_warmup_enabled") is not False
+        paused    = bool(inst.get("peer_warmup_paused", False))
         connected = live.get("status") == "connected"
 
         if connected and enabled and not paused:
@@ -3940,26 +3962,32 @@ def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
         else:
             warmup_status = "disconnected"
 
-        # Today's message count across sessions involving this instance
-        msgs_today = 0
-        sessions = list(db.db.warmup_sessions.find(
-            {"date": today, "$or": [{"instance_a": name}, {"instance_b": name}]},
-            {"total_messages_today": 1},
-        ))
-        for s in sessions:
-            msgs_today += s.get("total_messages_today", 0)
-
+        st = stats[name]
         result.append({
-            "name":    name,
-            "label":   inst.get("label", name),
-            "number":  inst.get("number", live.get("phone", "")),
-            "enabled": enabled,
-            "paused":  paused,
+            "name":         name,
+            "label":        inst.get("label", name),
+            "number":       inst.get("number", live.get("phone", "")),
+            "enabled":      enabled,
+            "paused":       paused,
             "warmup_status": warmup_status,
-            "msgs_today": msgs_today,
+            "msgs_today":   st["sent"] + st["received"],
+            "sent_today":   st["sent"],
+            "received_today": st["received"],
         })
 
-    return result
+    active_insts = [i for i in result if i["warmup_status"] == "active"]
+    disc_insts   = [i for i in result if i["warmup_status"] == "disconnected"]
+
+    return {
+        "instances":           result,
+        "global_enabled":      global_enabled,
+        "active_count":        len(active_insts),
+        "disconnected_count":  len(disc_insts),
+        "disconnected_names":  [i["name"] for i in disc_insts],
+        "total_sent_today":    sum(i["sent_today"] for i in result),
+        "total_received_today": sum(i["received_today"] for i in result),
+        "next_rotation_at":    next_rotation_at,
+    }
 
 
 @router.post("/warmup/instances/{name}/enable")

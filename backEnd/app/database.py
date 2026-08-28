@@ -58,6 +58,16 @@ def _get_client() -> MongoClient:
             )
         except Exception:
             pass  # ya existen duplicados — el índice se creará tras limpiarlos
+        try:
+            db.warmup_sessions.create_index(
+                [("date", 1), ("instance_a", 1), ("instance_b", 1)],
+            )
+        except Exception:
+            pass
+        try:
+            db.message_logs.create_index([("instance_name", 1), ("created_at", -1)])
+        except Exception:
+            pass
     return _mongo_client
 
 

@@ -20,6 +20,7 @@ import ForumIcon from '@mui/icons-material/Forum'
 import ArticleIcon from '@mui/icons-material/Article'
 import InsightsIcon from '@mui/icons-material/Insights'
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
+import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment'
 import { useLang } from '../context/LangContext'
 
 // ─── FAQ data ────────────────────────────────────────────────────────────────
@@ -290,6 +291,33 @@ const FAQ = {
         {
           q: "What does 'send to Andy' do in analytics?",
           a: "It opens the AndyBotBuilder so you can turn that specific classified conversation into training material for the auto-reply bot. It's only available once the company has actually replied and been analyzed.",
+        },
+      ],
+    },
+    {
+      key: 'warmup',
+      icon: LocalFireDepartmentIcon,
+      cat: 'Number Warmup',
+      items: [
+        {
+          q: 'What is number warmup?',
+          a: 'Warmup is an automatic system where your WhatsApp instances chat with each other using natural AI-generated conversations. This creates legitimate activity on your numbers, keeping them healthy and reducing the risk of getting blocked by WhatsApp.',
+        },
+        {
+          q: 'How many messages are sent per day?',
+          a: 'Each pair of instances exchanges up to 10 messages per day, spread between 9:00 AM and 9:00 PM (Mexico time) with random 8–25 minute gaps between turns. This mimics real human conversations and avoids detectable patterns.',
+        },
+        {
+          q: 'Does warmup interfere with my normal sends?',
+          a: 'No. The system automatically detects if an instance sent a real message in the last 3 minutes and skips its warmup turn if so. Two messages are never sent simultaneously from the same number.',
+        },
+        {
+          q: 'What happens if a number disconnects?',
+          a: 'A disconnected instance is excluded from the rotation for that day. When it reconnects, it automatically joins the next pairing cycle with no manual setup needed.',
+        },
+        {
+          q: 'Can I exclude an instance from warmup?',
+          a: 'Yes. Each instance card has a power button (⏻) to include or exclude it from the cycle. You can also pause it temporarily — pausing stops sends but keeps the instance in the rotation pool.',
         },
       ],
     },
@@ -575,6 +603,33 @@ const FAQ = {
         {
           q: "¿Qué hace 'enviar a Andy' en analíticas?",
           a: 'Abre el AndyBotBuilder para convertir esa conversación clasificada en material de entrenamiento para el bot de respuesta automática. Solo está disponible una vez que la empresa realmente respondió y fue analizada.',
+        },
+      ],
+    },
+    {
+      key: 'warmup',
+      icon: LocalFireDepartmentIcon,
+      cat: 'Calentamiento (Warmup)',
+      items: [
+        {
+          q: '¿Qué es el calentamiento de números?',
+          a: 'El warmup es un sistema automático donde tus instancias de WhatsApp se chatean entre sí con conversaciones naturales generadas por IA. Esto genera actividad legítima en los números, manteniéndolos activos y reduciendo el riesgo de bloqueo por parte de WhatsApp.',
+        },
+        {
+          q: '¿Cuántos mensajes se envían por día?',
+          a: 'Cada par de instancias intercambia hasta 10 mensajes por día, repartidos entre las 9:00 y las 21:00 (hora México) con pausas aleatorias de 8 a 25 minutos entre cada turno. Esto simula conversaciones humanas reales y evita patrones detectables.',
+        },
+        {
+          q: '¿El warmup interfiere con mis envíos normales?',
+          a: 'No. El sistema detecta automáticamente si una instancia envió un mensaje real en los últimos 3 minutos y en ese caso omite el turno de warmup. Nunca se envían dos mensajes al mismo tiempo desde el mismo número.',
+        },
+        {
+          q: '¿Qué pasa si un número se desconecta?',
+          a: 'La instancia desconectada queda excluida de la rotación ese día. Cuando vuelva a conectarse, entra automáticamente al siguiente ciclo de emparejamiento sin ninguna configuración manual.',
+        },
+        {
+          q: '¿Puedo excluir una instancia del warmup?',
+          a: 'Sí. Cada tarjeta de instancia tiene un botón de encendido (⏻) para incluirla o excluirla del ciclo. También puedes pausarla temporalmente sin excluirla — la pausa detiene los envíos pero mantiene la instancia en el pool de rotación.',
         },
       ],
     },

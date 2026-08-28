@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Header, Request, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Header, Request, UploadFile, File, Body
 from fastapi.responses import StreamingResponse
 from typing import Optional
 import asyncio, json as _json, re, os, logging
@@ -3785,8 +3785,20 @@ async def api_wwebjs_webhook(request: Request):
                 db.update_evolution_message_status(message_id, "sent")
             return {"ok": True, "action": "outbound_echo"}
 
-        # Filter out WhatsApp status updates (stories)
-        if data.get("isStatus") or "@broadcast" in data.get("from", "") or "@broadcast" in data.get("chatId", ""):
+        # Filter out WhatsApp status updates, stories, and replies to statuses.
+        # isStatus covers stories posted by others; @broadcast covers group/broadcast JIDs.
+        # isStatusReply covers reactions/replies to your own status (arrives from @c.us so
+        # isStatus is false, but wwebjs sets isStatusReply=true on the message object).
+        _from_jid = data.get("from", "")
+        _chat_jid = data.get("chatId", "")
+        if (
+            data.get("isStatus")
+            or data.get("isStatusReply")
+            or "@broadcast" in _from_jid
+            or "@broadcast" in _chat_jid
+            or "status@broadcast" in _from_jid
+            or "status@broadcast" in _chat_jid
+        ):
             return {"ok": True, "action": "ignored_status"}
 
         _sender_is_internal = bool(db.db.instances.find_one({"number": number}))
@@ -3910,7 +3922,8 @@ def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
     except Exception:
         _st = {}
 
-    today = _dt.utcnow().strftime("%Y-%m-%d")
+    from app.warmup_queue import _mx_now as _warmup_now
+    today = _warmup_now().strftime("%Y-%m-%d")
 
     result = []
     for inst in raw:
@@ -3993,12 +4006,62 @@ def warmup_resume_instance(name: str, x_user_token: Optional[str] = Header(None)
     return {"ok": True}
 
 
+@router.post("/warmup/toggle")
+def warmup_toggle_global(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    db = MongoDBManager()
+    cfg = db.db.warmup_config.find_one({"_id": "global"}) or {}
+    new_state = not cfg.get("enabled", True)
+    db.db.warmup_config.update_one(
+        {"_id": "global"}, {"$set": {"enabled": new_state}}, upsert=True,
+    )
+    return {"enabled": new_state}
+
+
+@router.get("/warmup/config")
+def warmup_get_config(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    db = MongoDBManager()
+    cfg = db.db.warmup_config.find_one({"_id": "global"}) or {}
+    return {
+        "enabled":             cfg.get("enabled", True),
+        "business_hour_start": cfg.get("business_hour_start", 9),
+        "business_hour_end":   cfg.get("business_hour_end", 21),
+        "min_msgs_per_pair":   cfg.get("min_msgs_per_pair", 6),
+        "max_msgs_per_pair":   cfg.get("max_msgs_per_pair", 10),
+        "min_delay_min":       cfg.get("min_delay_min", 8),
+        "max_delay_min":       cfg.get("max_delay_min", 25),
+        "topic":               cfg.get("topic", "auto"),
+    }
+
+
+@router.post("/warmup/config")
+def warmup_save_config(
+    body: dict = Body(...),
+    x_user_token: Optional[str] = Header(None),
+):
+    _require_user(x_user_token)
+    allowed = {
+        "business_hour_start", "business_hour_end",
+        "min_msgs_per_pair", "max_msgs_per_pair",
+        "min_delay_min", "max_delay_min", "topic",
+    }
+    update = {k: v for k, v in body.items() if k in allowed}
+    if update:
+        db = MongoDBManager()
+        db.db.warmup_config.update_one(
+            {"_id": "global"}, {"$set": update}, upsert=True,
+        )
+    return {"ok": True}
+
+
+
 @router.get("/warmup/sessions")
 def warmup_get_sessions(x_user_token: Optional[str] = Header(None)):
     _require_user(x_user_token)
-    from datetime import datetime as _dt
+    from app.warmup_queue import _mx_now as _warmup_now
     db = MongoDBManager()
-    today = _dt.utcnow().strftime("%Y-%m-%d")
+    today = _warmup_now().strftime("%Y-%m-%d")
     sessions = list(db.db.warmup_sessions.find(
         {"date": today},
         {"instance_a": 1, "instance_b": 1, "total_messages_today": 1,

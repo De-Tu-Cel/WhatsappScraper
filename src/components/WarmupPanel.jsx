@@ -29,13 +29,15 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward'
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward'
 import SearchIcon from '@mui/icons-material/Search'
 import TuneIcon from '@mui/icons-material/Tune'
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined'
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import TextsmsOutlinedIcon from '@mui/icons-material/TextsmsOutlined'
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
 import TopicIcon from '@mui/icons-material/Topic'
+import AddIcon from '@mui/icons-material/Add'
+import RemoveIcon from '@mui/icons-material/Remove'
 import { useUser } from '../context/UserContext'
 
 const API = (path) => `/api${path}`
@@ -673,55 +675,74 @@ function safetyLevel(maxMsgs, minDelay) {
 }
 
 const SAFETY = {
-  safe:     { color: '#22c55e', bg: 'rgba(34,197,94,0.08)',  border: 'rgba(34,197,94,0.2)',  Icon: CheckCircleOutlineIcon, label: 'Safe',     desc: 'Optimal for new numbers — low detection risk' },
-  moderate: { color: '#f59e0b', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.2)', Icon: WarningAmberIcon,       label: 'Moderate', desc: 'Acceptable — monitor number health regularly'  },
-  risky:    { color: '#ef4444', bg: 'rgba(239,68,68,0.08)',  border: 'rgba(239,68,68,0.2)',  Icon: ErrorOutlineIcon,       label: 'High Risk', desc: 'WhatsApp may flag unusual activity'           },
+  safe:     { color: '#22c55e', bg: 'rgba(34,197,94,0.07)',  border: 'rgba(34,197,94,0.18)',  Icon: CheckCircleOutlineIcon, label: 'Safe',      desc: 'Low detection risk — ideal for new numbers' },
+  moderate: { color: '#f59e0b', bg: 'rgba(245,158,11,0.07)', border: 'rgba(245,158,11,0.18)', Icon: WarningAmberIcon,       label: 'Moderate',  desc: 'Acceptable — monitor number health regularly' },
+  risky:    { color: '#ef4444', bg: 'rgba(239,68,68,0.07)',  border: 'rgba(239,68,68,0.18)',  Icon: ErrorOutlineIcon,       label: 'High Risk', desc: 'WhatsApp may flag unusual activity' },
 }
 
-const fieldSx = {
-  width: '100%',
-  px: 1.5, py: 0.75,
-  borderRadius: 1.5,
-  border: '1px solid rgba(255,255,255,0.12)',
-  bgcolor: 'rgba(255,255,255,0.04)',
-  color: 'inherit',
-  fontSize: 13,
-  fontFamily: 'inherit',
-  outline: 'none',
-  '&:focus': { borderColor: '#3b82f6' },
-  transition: 'border-color 0.15s',
-}
-
-function ConfigField({ label, icon: Icon, children }) {
+// Stepper control: styled −/value/+ replacing native browser arrows
+function NumStepper({ value, onChange, min = 0, max = 99, step = 1 }) {
+  const btnSx = {
+    border: 'none', bgcolor: 'transparent', cursor: 'pointer',
+    color: 'rgba(255,255,255,0.35)', px: 1.25, py: 0,
+    display: 'flex', alignItems: 'center', flexShrink: 0, alignSelf: 'stretch',
+    '&:hover': { bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.8)' },
+    transition: 'all 0.12s',
+  }
   return (
-    <Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.75 }}>
-        <Icon sx={{ fontSize: 14, color: 'text.disabled' }} />
-        <Typography variant="caption" color="text.secondary" fontWeight={600} sx={{ letterSpacing: '0.04em' }}>
-          {label}
-        </Typography>
+    <Box sx={{
+      display: 'flex', alignItems: 'center', width: '100%',
+      border: '1px solid rgba(255,255,255,0.1)',
+      borderRadius: 1.5, bgcolor: 'rgba(255,255,255,0.03)', overflow: 'hidden',
+    }}>
+      <Box component="button" onClick={() => onChange(Math.max(min, value - step))} sx={{ ...btnSx, borderRight: '1px solid rgba(255,255,255,0.07)' }}>
+        <RemoveIcon sx={{ fontSize: 13 }} />
       </Box>
-      {children}
+      <Box
+        component="input"
+        type="number"
+        value={value}
+        onChange={e => { const n = parseInt(e.target.value, 10); if (!isNaN(n)) onChange(Math.max(min, Math.min(max, n))) }}
+        min={min} max={max}
+        sx={{
+          flex: 1, border: 'none', outline: 'none', bgcolor: 'transparent',
+          textAlign: 'center', color: 'text.primary', fontSize: 13, fontWeight: 700,
+          fontFamily: 'inherit', py: 0.9, width: 0,
+          '&::-webkit-inner-spin-button,&::-webkit-outer-spin-button': { WebkitAppearance: 'none', margin: 0 },
+          MozAppearance: 'textfield',
+        }}
+      />
+      <Box component="button" onClick={() => onChange(Math.min(max, value + step))} sx={{ ...btnSx, borderLeft: '1px solid rgba(255,255,255,0.07)' }}>
+        <AddIcon sx={{ fontSize: 13 }} />
+      </Box>
     </Box>
   )
 }
 
-function NumInput({ value, onChange, min = 0, max = 99, sx: extraSx }) {
+// Preset chip — neutral style matching app chip language
+const presetChipSx = {
+  border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.03)',
+  color: 'rgba(255,255,255,0.45)', borderRadius: 1.5,
+  cursor: 'pointer', px: 1.25, py: 0.4, fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
+  '&:hover': { bgcolor: 'rgba(59,130,246,0.1)', borderColor: 'rgba(59,130,246,0.3)', color: '#93bbfd' },
+  transition: 'all 0.15s',
+}
+
+// Row label with icon
+function SectionLabel({ icon: Icon, children }) {
   return (
-    <Box
-      component="input"
-      type="number"
-      value={value}
-      onChange={e => onChange(Math.max(min, Math.min(max, Number(e.target.value))))}
-      min={min} max={max}
-      sx={{ ...fieldSx, ...extraSx }}
-    />
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1 }}>
+      <Icon sx={{ fontSize: 13, color: 'rgba(255,255,255,0.3)' }} />
+      <Typography sx={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase' }}>
+        {children}
+      </Typography>
+    </Box>
   )
 }
 
 function WarmupConfigDialog({ open, onClose, token }) {
   const DEFAULT_CFG = { business_hour_start: 9, business_hour_end: 21, min_msgs_per_pair: 6, max_msgs_per_pair: 10, min_delay_min: 8, max_delay_min: 25, topic: 'auto' }
-  const [cfg, setCfg]       = useState(DEFAULT_CFG)
+  const [cfg, setCfg]         = useState(DEFAULT_CFG)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving]   = useState(false)
   const [saved, setSaved]     = useState(false)
@@ -756,171 +777,160 @@ function WarmupConfigDialog({ open, onClose, token }) {
       })
       if (!r.ok) throw new Error(r.status)
       setSaved(true)
-      setTimeout(onClose, 900)
-    } catch (e) { setErr('Error al guardar: ' + e.message) }
+      setTimeout(onClose, 800)
+    } catch (e) { setErr('Save error: ' + e.message) }
     finally { setSaving(false) }
   }
 
-  const level = safetyLevel(cfg.max_msgs_per_pair, cfg.min_delay_min)
+  const level  = safetyLevel(cfg.max_msgs_per_pair, cfg.min_delay_min)
   const safety = SAFETY[level]
   const SafetyIcon = safety.Icon
 
   return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      maxWidth="sm"
-      fullWidth
-      slotProps={{
-        paper: {
-          sx: {
-            bgcolor: '#161d2e',
-            backgroundImage: 'linear-gradient(135deg, rgba(59,130,246,0.04) 0%, rgba(99,102,241,0.03) 100%)',
-            border: '1px solid rgba(255,255,255,0.08)',
-            borderRadius: 3,
-          }
-        }
-      }}
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth
+      slotProps={{ paper: { sx: { bgcolor: '#111827', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 3, backgroundImage: 'none' } } }}
     >
-      {/* Header */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 3, pt: 2.5, pb: 2, borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-        <Box sx={{ width: 36, height: 36, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #3b82f6 0%, #6366f1 100%)' }}>
-          <TuneIcon sx={{ fontSize: 18, color: '#fff' }} />
+      {/* ── Header ── */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2.5, pt: 2.5, pb: 2, borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+        <Box sx={{ width: 34, height: 34, borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #3b82f6 0%, #6366f1 100%)', flexShrink: 0 }}>
+          <TuneIcon sx={{ fontSize: 17, color: '#fff' }} />
         </Box>
-        <Box sx={{ flex: 1 }}>
-          <Typography fontWeight={700} fontSize={15}>Warmup Settings</Typography>
-          <Typography variant="caption" color="text.secondary">Configure the automated warmup behavior</Typography>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography fontWeight={700} fontSize={14} color="text.primary" sx={{ lineHeight: 1.3 }}>Warmup Settings</Typography>
+          <Typography fontSize={11} color="text.disabled">Automated conversation behavior</Typography>
         </Box>
-        <IconButton size="small" onClick={onClose}><CloseIcon fontSize="small" /></IconButton>
+        <IconButton size="small" onClick={onClose} sx={{ color: 'rgba(255,255,255,0.4)', '&:hover': { color: 'text.primary' } }}>
+          <CloseIcon sx={{ fontSize: 16 }} />
+        </IconButton>
       </Box>
 
-      <DialogContent sx={{ px: 3, py: 2.5 }}>
+      <DialogContent sx={{ px: 2.5, py: 2.5 }}>
         {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress size={28} /></Box>
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 5 }}><CircularProgress size={26} /></Box>
         ) : (
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
 
-            {/* Safety indicator */}
-            <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, p: 1.5, borderRadius: 2, bgcolor: safety.bg, border: `1px solid ${safety.border}` }}>
-              <SafetyIcon sx={{ fontSize: 20, color: safety.color, mt: 0.1 }} />
-              <Box>
-                <Typography fontWeight={700} fontSize={13} sx={{ color: safety.color }}>{safety.label}</Typography>
-                <Typography variant="caption" color="text.secondary">{safety.desc}</Typography>
+            {/* ── Safety badge ── */}
+            <Box sx={{
+              display: 'flex', alignItems: 'center', gap: 1.25,
+              px: 1.5, py: 1.25, mb: 2.5, borderRadius: 2,
+              bgcolor: safety.bg, border: `1px solid ${safety.border}`,
+            }}>
+              <SafetyIcon sx={{ fontSize: 18, color: safety.color, flexShrink: 0 }} />
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography fontSize={12} fontWeight={700} sx={{ color: safety.color, lineHeight: 1.2 }}>{safety.label}</Typography>
+                <Typography fontSize={11} color="text.disabled" sx={{ lineHeight: 1.4 }}>{safety.desc}</Typography>
               </Box>
             </Box>
 
-            {/* Business hours */}
-            <ConfigField label="BUSINESS HOURS" icon={AccessTimeIcon}>
-              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
-                <Box>
-                  <Typography variant="caption" color="text.disabled" sx={{ mb: 0.5, display: 'block' }}>Start (hour 0–23)</Typography>
-                  <NumInput value={cfg.business_hour_start} onChange={set('business_hour_start')} min={0} max={23} />
-                </Box>
-                <Box>
-                  <Typography variant="caption" color="text.disabled" sx={{ mb: 0.5, display: 'block' }}>End (hour 1–24)</Typography>
-                  <NumInput value={cfg.business_hour_end} onChange={set('business_hour_end')} min={1} max={24} />
-                </Box>
+            {/* ── Business hours ── */}
+            <SectionLabel icon={AccessTimeIcon}>Business Hours</SectionLabel>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, mb: 2.5 }}>
+              <Box>
+                <Typography fontSize={11} color="rgba(255,255,255,0.35)" sx={{ mb: 0.5 }}>Start</Typography>
+                <NumStepper value={cfg.business_hour_start} onChange={set('business_hour_start')} min={0} max={23} />
               </Box>
-            </ConfigField>
+              <Box>
+                <Typography fontSize={11} color="rgba(255,255,255,0.35)" sx={{ mb: 0.5 }}>End</Typography>
+                <NumStepper value={cfg.business_hour_end} onChange={set('business_hour_end')} min={1} max={24} />
+              </Box>
+            </Box>
 
-            {/* Messages per pair */}
-            <ConfigField label="MESSAGES PER PAIR / DAY" icon={TextsmsOutlinedIcon}>
-              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
-                <Box>
-                  <Typography variant="caption" color="text.disabled" sx={{ mb: 0.5, display: 'block' }}>Min messages</Typography>
-                  <NumInput value={cfg.min_msgs_per_pair} onChange={set('min_msgs_per_pair')} min={1} max={30} />
-                </Box>
-                <Box>
-                  <Typography variant="caption" color="text.disabled" sx={{ mb: 0.5, display: 'block' }}>Max messages</Typography>
-                  <NumInput value={cfg.max_msgs_per_pair} onChange={set('max_msgs_per_pair')} min={1} max={30} />
-                </Box>
+            {/* ── Messages per pair ── */}
+            <SectionLabel icon={TextsmsOutlinedIcon}>Messages per pair / day</SectionLabel>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, mb: 1 }}>
+              <Box>
+                <Typography fontSize={11} color="rgba(255,255,255,0.35)" sx={{ mb: 0.5 }}>Min</Typography>
+                <NumStepper value={cfg.min_msgs_per_pair} onChange={set('min_msgs_per_pair')} min={1} max={30} />
               </Box>
-              <Box sx={{ mt: 1, display: 'flex', gap: 0.75 }}>
-                {[
-                  { label: 'Conservative', msgs: 6, color: '#22c55e' },
-                  { label: 'Standard',     msgs: 10, color: '#3b82f6' },
-                  { label: 'Aggressive',   msgs: 16, color: '#f59e0b' },
-                ].map(p => (
-                  <Box
-                    key={p.label}
-                    component="button"
-                    onClick={() => setCfg(prev => ({ ...prev, min_msgs_per_pair: Math.max(1, p.msgs - 2), max_msgs_per_pair: p.msgs }))}
-                    sx={{
-                      border: `1px solid ${p.color}40`, bgcolor: `${p.color}10`, color: p.color,
-                      borderRadius: 1, cursor: 'pointer', px: 1, py: 0.4, fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
-                      '&:hover': { bgcolor: `${p.color}20` }, transition: 'background 0.15s',
-                    }}
-                  >{p.label}</Box>
-                ))}
+              <Box>
+                <Typography fontSize={11} color="rgba(255,255,255,0.35)" sx={{ mb: 0.5 }}>Max</Typography>
+                <NumStepper value={cfg.max_msgs_per_pair} onChange={set('max_msgs_per_pair')} min={1} max={30} />
               </Box>
-            </ConfigField>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 0.75, mb: 2.5 }}>
+              {[
+                { label: 'Conservative', min: 4,  max: 6  },
+                { label: 'Standard',     min: 7,  max: 10 },
+                { label: 'Aggressive',   min: 12, max: 16 },
+              ].map(p => (
+                <Box key={p.label} component="button"
+                  onClick={() => setCfg(prev => ({ ...prev, min_msgs_per_pair: p.min, max_msgs_per_pair: p.max }))}
+                  sx={presetChipSx}
+                >{p.label}</Box>
+              ))}
+            </Box>
 
-            {/* Delay between turns */}
-            <ConfigField label="DELAY BETWEEN TURNS (MINUTES)" icon={HourglassEmptyIcon}>
-              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
-                <Box>
-                  <Typography variant="caption" color="text.disabled" sx={{ mb: 0.5, display: 'block' }}>Min delay</Typography>
-                  <NumInput value={cfg.min_delay_min} onChange={set('min_delay_min')} min={1} max={120} />
-                </Box>
-                <Box>
-                  <Typography variant="caption" color="text.disabled" sx={{ mb: 0.5, display: 'block' }}>Max delay</Typography>
-                  <NumInput value={cfg.max_delay_min} onChange={set('max_delay_min')} min={1} max={240} />
-                </Box>
+            {/* ── Delay between turns ── */}
+            <SectionLabel icon={HourglassEmptyIcon}>Delay between turns (min)</SectionLabel>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, mb: 1 }}>
+              <Box>
+                <Typography fontSize={11} color="rgba(255,255,255,0.35)" sx={{ mb: 0.5 }}>Min</Typography>
+                <NumStepper value={cfg.min_delay_min} onChange={set('min_delay_min')} min={1} max={120} step={5} />
               </Box>
-              <Box sx={{ mt: 1, display: 'flex', gap: 0.75 }}>
-                {[
-                  { label: 'Natural', min: 12, max: 35, color: '#22c55e' },
-                  { label: 'Fast',    min: 8,  max: 20, color: '#3b82f6' },
-                  { label: 'Quick',   min: 3,  max: 10, color: '#f59e0b' },
-                ].map(p => (
-                  <Box
-                    key={p.label}
-                    component="button"
-                    onClick={() => setCfg(prev => ({ ...prev, min_delay_min: p.min, max_delay_min: p.max }))}
-                    sx={{
-                      border: `1px solid ${p.color}40`, bgcolor: `${p.color}10`, color: p.color,
-                      borderRadius: 1, cursor: 'pointer', px: 1, py: 0.4, fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
-                      '&:hover': { bgcolor: `${p.color}20` }, transition: 'background 0.15s',
-                    }}
-                  >{p.label}</Box>
-                ))}
+              <Box>
+                <Typography fontSize={11} color="rgba(255,255,255,0.35)" sx={{ mb: 0.5 }}>Max</Typography>
+                <NumStepper value={cfg.max_delay_min} onChange={set('max_delay_min')} min={1} max={240} step={5} />
               </Box>
-            </ConfigField>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 0.75, mb: 2.5 }}>
+              {[
+                { label: 'Natural', min: 15, max: 40 },
+                { label: 'Fast',    min: 8,  max: 20 },
+                { label: 'Quick',   min: 3,  max: 10 },
+              ].map(p => (
+                <Box key={p.label} component="button"
+                  onClick={() => setCfg(prev => ({ ...prev, min_delay_min: p.min, max_delay_min: p.max }))}
+                  sx={presetChipSx}
+                >{p.label}</Box>
+              ))}
+            </Box>
 
-            {/* Topic */}
-            <ConfigField label="CONVERSATION TOPIC" icon={TopicIcon}>
-              <Box
-                component="select"
-                value={cfg.topic}
-                onChange={e => set('topic')(e.target.value)}
-                sx={{ ...fieldSx, appearance: 'none', cursor: 'pointer' }}
-              >
-                {WARMUP_TOPICS.map(t => (
-                  <option key={t.value} value={t.value} style={{ background: '#161d2e' }}>{t.label}</option>
-                ))}
-              </Box>
-            </ConfigField>
+            {/* ── Topic ── */}
+            <SectionLabel icon={TopicIcon}>Conversation topic</SectionLabel>
+            <Box
+              component="select"
+              value={cfg.topic}
+              onChange={e => set('topic')(e.target.value)}
+              sx={{
+                width: '100%', px: 1.25, py: 0.9,
+                border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 1.5, bgcolor: 'rgba(255,255,255,0.03)',
+                color: 'rgba(255,255,255,0.75)', fontSize: 13, fontFamily: 'inherit',
+                outline: 'none', cursor: 'pointer', appearance: 'none',
+                '&:focus': { borderColor: 'rgba(59,130,246,0.5)' },
+              }}
+            >
+              {WARMUP_TOPICS.map(t => (
+                <option key={t.value} value={t.value} style={{ background: '#111827', color: '#f1f5f9' }}>{t.label}</option>
+              ))}
+            </Box>
 
-            {err && <Alert severity="error" sx={{ mt: 0 }}>{err}</Alert>}
+            {err && <Alert severity="error" sx={{ mt: 2 }}>{err}</Alert>}
           </Box>
         )}
       </DialogContent>
 
-      {/* Footer */}
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1.5, px: 3, py: 2, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
-        <Box component="button" onClick={onClose} sx={{ border: '1px solid rgba(255,255,255,0.1)', bgcolor: 'transparent', color: 'rgba(255,255,255,0.6)', borderRadius: 1.5, cursor: 'pointer', px: 2, py: 0.75, fontSize: 13, fontFamily: 'inherit', '&:hover': { bgcolor: 'rgba(255,255,255,0.05)' }, transition: 'background 0.15s' }}>
-          Cancel
-        </Box>
+      {/* ── Footer ── */}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, px: 2.5, py: 2, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+        <Box component="button" onClick={onClose} sx={{
+          border: '1px solid rgba(255,255,255,0.09)', bgcolor: 'transparent',
+          color: 'rgba(255,255,255,0.5)', borderRadius: 1.5, cursor: 'pointer',
+          px: 2, py: 0.7, fontSize: 13, fontFamily: 'inherit',
+          '&:hover': { bgcolor: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.8)' },
+          transition: 'all 0.15s',
+        }}>Cancel</Box>
         <Box component="button" onClick={handleSave} disabled={saving || saved} sx={{
           border: 'none',
-          bgcolor: saved ? '#22c55e' : '#3b82f6',
-          color: '#fff', borderRadius: 1.5, cursor: saving || saved ? 'default' : 'pointer',
-          px: 2.5, py: 0.75, fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
-          opacity: saving ? 0.7 : 1,
-          '&:hover': { bgcolor: saved ? '#22c55e' : '#2563eb' },
-          transition: 'background 0.2s, opacity 0.15s',
+          bgcolor: saved ? 'rgba(34,197,94,0.15)' : '#3b82f6',
+          color: saved ? '#22c55e' : '#fff',
+          borderRadius: 1.5, cursor: saving || saved ? 'default' : 'pointer',
+          px: 2.5, py: 0.7, fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
+          opacity: saving ? 0.65 : 1,
+          '&:hover': { bgcolor: saved ? 'rgba(34,197,94,0.15)' : '#2563eb' },
+          transition: 'all 0.15s',
         }}>
-          {saved ? 'Saved!' : saving ? 'Saving…' : 'Save'}
+          {saved ? '✓ Saved' : saving ? 'Saving…' : 'Save'}
         </Box>
       </Box>
     </Dialog>

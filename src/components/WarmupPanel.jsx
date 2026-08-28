@@ -93,9 +93,10 @@ const STATUS_CFG = {
 }
 
 // ── Session detail dialog ─────────────────────────────────────────────────────
-function SessionDetail({ sessionId, onBack, token }) {
+function SessionDetail({ sessionId, token }) {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
+  const bottomRef = useRef(null)
 
   useEffect(() => {
     setLoading(true)
@@ -103,21 +104,29 @@ function SessionDetail({ sessionId, onBack, token }) {
       .then(r => r.json()).then(setSession).catch(() => {}).finally(() => setLoading(false))
   }, [sessionId, token])
 
+  useEffect(() => {
+    if (session && bottomRef.current) {
+      bottomRef.current.scrollIntoView({ behavior: 'instant' })
+    }
+  }, [session])
+
   if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4 }}><CircularProgress size={28} /></Box>
   if (!session) return <Alert severity="error">No se pudo cargar la sesión.</Alert>
 
   const msgs = session.messages || []
 
-  // Agrupar mensajes por día para los separadores estilo WhatsApp
+  // Agrupar con detección de mensajes consecutivos del mismo speaker
   const grouped = []
-  let lastDay = null
-  for (const msg of msgs) {
+  let lastDay = null, lastSpeaker = null
+  for (let idx = 0; idx < msgs.length; idx++) {
+    const msg = msgs[idx]
     const dayKey = msg.ts ? new Date(msg.ts).toDateString() : 'unknown'
     if (dayKey !== lastDay) {
       grouped.push({ type: 'separator', ts: msg.ts, key: dayKey })
-      lastDay = dayKey
+      lastDay = dayKey; lastSpeaker = null
     }
-    grouped.push({ type: 'msg', msg })
+    grouped.push({ type: 'msg', msg, showSender: msg.speaker !== lastSpeaker })
+    lastSpeaker = msg.speaker
   }
 
   return (
@@ -125,66 +134,85 @@ function SessionDetail({ sessionId, onBack, token }) {
       flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column',
       bgcolor: '#080c14',
       backgroundImage: WA_BG_PATTERN, backgroundSize: '100px 100px',
-      scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent',
-      '&::-webkit-scrollbar': { width: 4 },
-      '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 },
+      scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.08) transparent',
+      '&::-webkit-scrollbar': { width: 3 },
+      '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.1)', borderRadius: 2 },
     }}>
       {msgs.length === 0 ? (
-        <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Typography variant="body2" color="text.secondary">Sin mensajes aún hoy.</Typography>
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1.5 }}>
+          <ChatBubbleOutlinedIcon sx={{ fontSize: 44, color: 'rgba(255,255,255,0.07)' }} />
+          <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.28)' }}>Sin mensajes aún.</Typography>
         </Box>
       ) : (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, px: 1.5, pt: 1.5, pb: 2 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', px: 1.5, pt: 1.5, pb: 2 }}>
           {grouped.map((item, i) => {
             if (item.type === 'separator') {
               return (
-                <Box key={`sep-${item.key}`} sx={{ textAlign: 'center', my: 0.5 }}>
-                  <Chip
-                    label={formatDaySeparator(item.ts)}
-                    size="small"
-                    sx={{
-                      fontSize: 11, height: 22,
-                      bgcolor: 'rgba(255,255,255,0.06)',
-                      color: 'rgba(255,255,255,0.45)',
-                      border: '1px solid rgba(255,255,255,0.07)',
-                    }}
-                  />
+                <Box key={`sep-${item.key}`} sx={{ textAlign: 'center', my: 1.25 }}>
+                  <Chip label={formatDaySeparator(item.ts)} size="small" sx={{
+                    fontSize: 11, height: 22,
+                    bgcolor: 'rgba(0,0,0,0.4)',
+                    backdropFilter: 'blur(6px)',
+                    color: 'rgba(255,255,255,0.5)',
+                    border: '1px solid rgba(255,255,255,0.09)',
+                  }} />
                 </Box>
               )
             }
-            const { msg } = item
+            const { msg, showSender } = item
             const isA = msg.speaker === 'a'
+            const nextItem = grouped[i + 1]
+            const isLastInGroup = !nextItem || nextItem.type === 'separator' || nextItem.msg?.speaker !== msg.speaker
             return (
-              <Box key={i} sx={{ display: 'flex', justifyContent: isA ? 'flex-start' : 'flex-end' }}>
+              <Box key={i} sx={{
+                display: 'flex', justifyContent: isA ? 'flex-start' : 'flex-end',
+                mb: isLastInGroup ? 0.75 : 0.15,
+                '@keyframes popIn': {
+                  from: { opacity: 0, transform: 'scale(0.94) translateY(4px)' },
+                  to:   { opacity: 1, transform: 'scale(1) translateY(0)' },
+                },
+                animation: 'popIn 0.16s ease both',
+                animationDelay: `${Math.min(i * 0.025, 0.4)}s`,
+              }}>
                 <Box sx={{
-                  maxWidth: '78%', px: 1.25, pt: 0.5, pb: 0.375,
-                  bgcolor: isA ? '#1e2840' : '#6366f1',
-                  borderRadius: isA ? '2px 12px 12px 12px' : '12px 2px 12px 12px',
-                  border: isA ? '1px solid rgba(255,255,255,0.06)' : 'none',
+                  maxWidth: '80%',
+                  px: 1.25, pt: showSender ? 0.5 : 0.35, pb: 0.4,
+                  background: isA ? '#1a2743' : 'linear-gradient(135deg,#6366f1,#4f46e5)',
+                  borderRadius: isA
+                    ? (showSender ? '2px 14px 14px 14px' : '14px 14px 14px 2px')
+                    : (showSender ? '14px 2px 14px 14px' : '14px 14px 2px 14px'),
+                  boxShadow: isA
+                    ? '0 1px 4px rgba(0,0,0,0.35)'
+                    : '0 2px 10px rgba(79,70,229,0.35)',
+                  border: isA ? '1px solid rgba(255,255,255,0.05)' : 'none',
                 }}>
-                  <Typography variant="caption" sx={{
-                    fontWeight: 700, display: 'block', mb: 0.25,
-                    color: isA ? '#60a5fa' : 'rgba(255,255,255,0.75)',
-                    fontSize: 11,
-                  }}>
-                    {isA ? session.instance_a : session.instance_b}
-                  </Typography>
-                  <Typography variant="body2" sx={{ lineHeight: 1.45, color: '#f1f5f9' }}>
+                  {showSender && (
+                    <Typography variant="caption" sx={{
+                      fontWeight: 700, display: 'block', mb: 0.2,
+                      color: isA ? '#60a5fa' : 'rgba(255,255,255,0.6)',
+                      fontSize: 10.5, letterSpacing: '0.01em',
+                    }}>
+                      {isA ? session.instance_a : session.instance_b}
+                    </Typography>
+                  )}
+                  <Typography variant="body2" sx={{ lineHeight: 1.5, color: '#f1f5f9', fontSize: 13 }}>
                     {msg.content}
                   </Typography>
                   {msg.ts && (
                     <Typography sx={{
-                      display: 'block', textAlign: 'right', mt: 0.25,
-                      color: isA ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.55)',
-                      fontSize: 10,
+                      display: 'block', textAlign: 'right', mt: 0.15,
+                      color: isA ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.5)',
+                      fontSize: 9.5, letterSpacing: '0.02em',
                     }}>
                       {new Date(msg.ts).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
+                      {!isA && ' ✓✓'}
                     </Typography>
                   )}
                 </Box>
               </Box>
             )
           })}
+          <div ref={bottomRef} />
         </Box>
       )}
     </Box>
@@ -261,26 +289,29 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
         backdropFilter: 'blur(4px)',
       }}>
         {selected ? (
-          <IconButton size="small" onClick={() => setSelected(null)} sx={{ color: 'rgba(255,255,255,0.7)', ml: -0.5 }}>
+          <IconButton size="small" onClick={() => setSelected(null)} sx={{ color: 'rgba(255,255,255,0.65)', ml: -0.5 }}>
             <ArrowBackIcon fontSize="small" />
           </IconButton>
-        ) : (
-          <Box sx={{
-            width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
-            background: instGradient,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontWeight: 800, fontSize: 13, color: '#fff',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
-          }}>
-            {instInitials}
-          </Box>
-        )}
+        ) : null}
+        <Box sx={{
+          width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+          background: selected ? avatarGradientFor(selected) : instGradient,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontWeight: 800, fontSize: 13, color: '#fff',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+        }}>
+          {selected ? (selectedPeer?.slice(0, 2).toUpperCase() ?? '??') : instInitials}
+        </Box>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="body1" fontWeight={700} noWrap
             sx={{ color: '#f1f5f9', lineHeight: 1.25, letterSpacing: '-0.01em' }}>
             {selectedPeer || instanceName}
           </Typography>
-          {!selected && (
+          {selected && selectedSession ? (
+            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, lineHeight: 1 }}>
+              {selectedSession.total_messages_today} mensajes hoy · {selectedSession.instance_a} ↔ {selectedSession.instance_b}
+            </Typography>
+          ) : (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, mt: 0.1 }}>
               <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#22c55e', flexShrink: 0 }} />
               <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.38)', fontSize: 10, lineHeight: 1 }}>

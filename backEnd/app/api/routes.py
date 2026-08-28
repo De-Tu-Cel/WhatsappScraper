@@ -3894,16 +3894,15 @@ async def api_wwebjs_webhook(request: Request):
 @router.get("/warmup/instances")
 def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
     _require_user(x_user_token)
-    from datetime import datetime as _dt, timedelta as _td
-    from collections import defaultdict as _dd
+    from datetime import datetime as _dt
     db = MongoDBManager()
-
+    # All wwebjs instances
     raw = list(db.db.instances.find(
         {"provider": "wwebjs"},
-        {"name": 1, "number": 1, "label": 1, "peer_warmup_enabled": 1,
-         "peer_warmup_paused": 1, "peer_warmup_paused_at": 1},
+        {"name": 1, "number": 1, "label": 1, "peer_warmup_enabled": 1, "peer_warmup_paused": 1, "status": 1},
     ))
 
+    # Live session statuses
     try:
         import requests as _r
         from app.whatsapp_wwebjs import _headers as _ww_headers
@@ -3913,34 +3912,14 @@ def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
 
     today = _dt.utcnow().strftime("%Y-%m-%d")
 
-    # Fetch all today's sessions once — compute per-instance stats in Python
-    all_sessions = list(db.db.warmup_sessions.find(
-        {"date": today},
-        {"instance_a": 1, "instance_b": 1, "messages": 1},
-    ))
-    _MAX_PER_PAIR = 10
-    _TOPIC = "Cine de culto · Volver al Futuro"
-    stats = _dd(lambda: {"sent": 0, "received": 0, "last_ts": None, "n_sess": 0})
-    for sess in all_sessions:
-        a, b = sess["instance_a"], sess["instance_b"]
-        stats[a]["n_sess"] += 1
-        stats[b]["n_sess"] += 1
-        for msg in sess.get("messages", []):
-            ts, spk = msg.get("ts"), msg.get("speaker")
-            sender, receiver = (a, b) if spk == "a" else (b, a)
-            stats[sender]["sent"]     += 1
-            stats[receiver]["received"] += 1
-            for nm in (a, b):
-                if ts and (stats[nm]["last_ts"] is None or ts > stats[nm]["last_ts"]):
-                    stats[nm]["last_ts"] = ts
-
     result = []
     for inst in raw:
-        name    = inst["name"]
-        live    = _st.get(name, {})
+        name = inst["name"]
+        live = _st.get(name, {})
         enabled = inst.get("peer_warmup_enabled") is not False
         paused  = bool(inst.get("peer_warmup_paused", False))
         connected = live.get("status") == "connected"
+
         if connected and enabled and not paused:
             warmup_status = "active"
         elif connected and enabled and paused:
@@ -3948,46 +3927,26 @@ def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
         else:
             warmup_status = "disconnected"
 
-        st         = stats[name]
-        n_sess     = max(st["n_sess"], 1)
-        paused_at  = inst.get("peer_warmup_paused_at")
-        last_ts    = st["last_ts"]
+        # Today's message count across sessions involving this instance
+        msgs_today = 0
+        sessions = list(db.db.warmup_sessions.find(
+            {"date": today, "$or": [{"instance_a": name}, {"instance_b": name}]},
+            {"total_messages_today": 1},
+        ))
+        for s in sessions:
+            msgs_today += s.get("total_messages_today", 0)
+
         result.append({
-            "name":           name,
-            "label":          inst.get("label", name),
-            "number":         inst.get("number") or live.get("phone", ""),
-            "enabled":        enabled,
-            "paused":         paused,
-            "warmup_status":  warmup_status,
-            "sent_today":     st["sent"],
-            "received_today": st["received"],
-            "msgs_today":     st["sent"] + st["received"],
-            "daily_limit":    _MAX_PER_PAIR * n_sess,
-            "topic":          _TOPIC if warmup_status != "disconnected" else None,
-            "last_msg_at":    last_ts.isoformat() if last_ts else None,
-            "paused_at":      paused_at.isoformat() if paused_at else None,
+            "name":    name,
+            "label":   inst.get("label", name),
+            "number":  inst.get("number", live.get("phone", "")),
+            "enabled": enabled,
+            "paused":  paused,
+            "warmup_status": warmup_status,
+            "msgs_today": msgs_today,
         })
 
-    order = {"active": 0, "paused": 1, "disconnected": 2}
-    result.sort(key=lambda x: order.get(x["warmup_status"], 3))
-
-    cfg = db.db.warmup_config.find_one({"_id": "global"}) or {}
-    global_enabled = cfg.get("enabled", True)
-
-    now = _dt.utcnow()
-    next_rotation = (_dt(now.year, now.month, now.day) + _td(days=1)).isoformat()
-    disconnected  = [r["label"] for r in result if r["warmup_status"] == "disconnected"]
-
-    return {
-        "instances":            result,
-        "global_enabled":       global_enabled,
-        "total_sent_today":     sum(r["sent_today"]     for r in result),
-        "total_received_today": sum(r["received_today"] for r in result),
-        "active_count":         sum(1 for r in result if r["warmup_status"] == "active"),
-        "disconnected_count":   len(disconnected),
-        "disconnected_names":   disconnected,
-        "next_rotation_at":     next_rotation,
-    }
+    return result
 
 
 @router.post("/warmup/instances/{name}/enable")
@@ -4015,11 +3974,10 @@ def warmup_disable_instance(name: str, x_user_token: Optional[str] = Header(None
 @router.post("/warmup/instances/{name}/pause")
 def warmup_pause_instance(name: str, x_user_token: Optional[str] = Header(None)):
     _require_user(x_user_token)
-    from datetime import datetime as _dt
     db = MongoDBManager()
     db.db.instances.update_one(
         {"name": name, "provider": "wwebjs"},
-        {"$set": {"peer_warmup_paused": True, "peer_warmup_paused_at": _dt.utcnow()}},
+        {"$set": {"peer_warmup_paused": True}},
     )
     return {"ok": True}
 
@@ -4030,21 +3988,9 @@ def warmup_resume_instance(name: str, x_user_token: Optional[str] = Header(None)
     db = MongoDBManager()
     db.db.instances.update_one(
         {"name": name, "provider": "wwebjs"},
-        {"$set": {"peer_warmup_paused": False}, "$unset": {"peer_warmup_paused_at": ""}},
+        {"$set": {"peer_warmup_paused": False}},
     )
     return {"ok": True}
-
-
-@router.post("/warmup/toggle")
-def warmup_toggle_global(x_user_token: Optional[str] = Header(None)):
-    _require_user(x_user_token)
-    db = MongoDBManager()
-    cfg = db.db.warmup_config.find_one({"_id": "global"}) or {}
-    new_state = not cfg.get("enabled", True)
-    db.db.warmup_config.update_one(
-        {"_id": "global"}, {"$set": {"enabled": new_state}}, upsert=True,
-    )
-    return {"enabled": new_state}
 
 
 @router.get("/warmup/sessions")

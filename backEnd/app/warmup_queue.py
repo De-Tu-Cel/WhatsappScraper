@@ -246,11 +246,6 @@ def _warmup_loop() -> None:
             from app.database import MongoDBManager
             db = MongoDBManager()
 
-            cfg = db.db.warmup_config.find_one({"_id": "global"}) or {}
-            if not cfg.get("enabled", True):
-                time.sleep(_POLL_INTERVAL)
-                continue
-
             instances = _get_warmup_instances(db)
             if len(instances) < 2:
                 time.sleep(_POLL_INTERVAL)

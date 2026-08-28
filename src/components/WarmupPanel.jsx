@@ -196,6 +196,7 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
   const [sessions, setSessions] = useState([])
   const [loading, setLoading]   = useState(true)
   const [selected, setSelected] = useState(null)
+  const [viewedIds, setViewedIds] = useState(() => new Set())
 
   useEffect(() => {
     if (!open) return
@@ -206,36 +207,51 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
 
   const peer = s => s.instance_a === instanceName ? s.instance_b : s.instance_a
 
+  const selectedSession = selected ? sessions.find(s => s._id === selected) : null
+  const selectedPeer = selectedSession ? peer(selectedSession) : null
+
+  const handleSelect = (id) => {
+    setViewedIds(prev => { const next = new Set(prev); next.add(id); return next })
+    setSelected(id)
+  }
+
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth
-      slotProps={{ paper: { sx: { borderRadius: 2.5, overflow: 'hidden', height: '70vh', maxHeight: 560, display: 'flex', flexDirection: 'column' } } }}>
+      slotProps={{ paper: { sx: { borderRadius: 2.5, overflow: 'hidden', height: '70vh', maxHeight: 560, display: 'flex', flexDirection: 'column', bgcolor: '#161d2e' } } }}>
 
-      {/* Header — fondo paper del tema, borde inferior divisor */}
+      {/* Header */}
       <Box sx={{
         display: 'flex', alignItems: 'center', gap: 1,
         px: 1.5, py: 1, flexShrink: 0,
         bgcolor: '#161d2e',
-        borderBottom: '1px solid rgba(255,255,255,0.07)',
+        borderBottom: '1px solid rgba(255,255,255,0.08)',
       }}>
         {selected ? (
-          <IconButton size="small" onClick={() => setSelected(null)}>
+          <IconButton size="small" onClick={() => setSelected(null)} sx={{ color: 'rgba(255,255,255,0.7)' }}>
             <ArrowBackIcon fontSize="small" />
           </IconButton>
         ) : (
           <Box sx={{ pl: 0.5, display: 'flex', alignItems: 'center' }}>
-            <ChatBubbleOutlinedIcon fontSize="small" sx={{ color: 'primary.light', mr: 1 }} />
+            <ChatBubbleOutlinedIcon fontSize="small" sx={{ color: 'rgba(255,255,255,0.55)', mr: 1 }} />
           </Box>
         )}
-        <Typography variant="subtitle2" fontWeight={700} component="span" sx={{ flex: 1 }}>
-          {selected ? 'Conversación' : `Chats — ${instanceName}`}
-        </Typography>
-        <IconButton size="small" onClick={onClose}>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="subtitle2" fontWeight={700} noWrap sx={{ color: '#f1f5f9', lineHeight: 1.2 }}>
+            {selectedPeer || instanceName}
+          </Typography>
+          {!selected && (
+            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, lineHeight: 1 }}>
+              Chats de calentamiento
+            </Typography>
+          )}
+        </Box>
+        <IconButton size="small" onClick={onClose} sx={{ color: 'rgba(255,255,255,0.5)' }}>
           <CloseIcon fontSize="small" />
         </IconButton>
       </Box>
 
       {/* Lista de sesiones / chat */}
-      <DialogContent sx={{ p: 0, overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column' }}>
+      <DialogContent sx={{ p: 0, overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column', bgcolor: '#161d2e' }}>
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4 }}>
             <CircularProgress size={28} />
@@ -253,7 +269,7 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
               const peerName = peer(s)
               const initials = peerName.slice(0, 2).toUpperCase()
               const lastMsg = s.messages?.[s.messages.length - 1]?.content
-              const hasUnread = s.total_messages_today > 0
+              const hasUnread = s.total_messages_today > 0 && !viewedIds.has(s._id)
               // Generar un color de avatar consistente por nombre
               const avatarHues = ['#3b82f6','#8b5cf6','#ec4899','#f59e0b','#22c55e','#06b6d4']
               const avatarColor = avatarHues[peerName.charCodeAt(0) % avatarHues.length]
@@ -261,7 +277,7 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
                 <React.Fragment key={s._id}>
                   {i > 0 && <Divider component="li" sx={{ borderColor: 'rgba(255,255,255,0.05)', ml: 9 }} />}
                   <ListItemButton
-                    onClick={() => setSelected(s._id)}
+                    onClick={() => handleSelect(s._id)}
                     sx={{
                       px: 2, py: 1.25, gap: 1.5,
                       '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' },

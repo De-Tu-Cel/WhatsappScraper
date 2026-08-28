@@ -82,13 +82,23 @@ def _get_warmup_instances(db) -> list[dict]:
     if not candidates:
         return []
 
-    # Check live connection status
+    # Check live connection status — call each session individually, same
+    # pattern as user-status endpoint (bulk /sessions is unreliable in prod).
     try:
         import requests
+        from concurrent.futures import ThreadPoolExecutor
         from app.config import WWEBJS_URL
         from app.whatsapp_wwebjs import _headers
-        resp = requests.get(f"{WWEBJS_URL}/sessions", headers=_headers(), timeout=5)
-        session_status: dict = resp.json()  # {name: {status, phone}}
+
+        def _check(inst):
+            try:
+                r = requests.get(f"{WWEBJS_URL}/session/{inst['name']}/status", headers=_headers(), timeout=3)
+                return inst["name"], r.json() if r.ok else {}
+            except Exception:
+                return inst["name"], {}
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            session_status = dict(ex.map(_check, candidates))
     except Exception:
         session_status = {}
 

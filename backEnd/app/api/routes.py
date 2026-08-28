@@ -3915,10 +3915,25 @@ def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
         {"name": 1, "number": 1, "label": 1, "peer_warmup_enabled": 1, "peer_warmup_paused": 1},
     ))
 
+    # Check each instance individually (same as user-status endpoint) — the
+    # bulk /sessions endpoint is unreliable in some prod environments.
     try:
         import requests as _r
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        from app.config import WWEBJS_URL as _WWEBJS_URL
         from app.whatsapp_wwebjs import _headers as _ww_headers
-        _st = _r.get(f"{WWEBJS_URL}/sessions", headers=_ww_headers(), timeout=5).json()
+
+        def _check_inst(inst):
+            try:
+                r = _r.get(f"{_WWEBJS_URL}/session/{inst['name']}/status", headers=_ww_headers(), timeout=3)
+                data = r.json() if r.ok else {}
+                return inst["name"], data
+            except Exception:
+                return inst["name"], {}
+
+        with _TPE(max_workers=8) as _ex:
+            _results = list(_ex.map(_check_inst, raw))
+        _st = {name: data for name, data in _results}
     except Exception:
         _st = {}
 

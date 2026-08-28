@@ -606,14 +606,27 @@ export default function Conversations() {
 
   // When a notification card is clicked, auto-select the matching conversation
   useEffect(() => {
-    if (!pendingConvId || !convs.length) return
+    if (!pendingConvId) return
+    if (!convs.length) {
+      // Convs not loaded yet — fetchConvs will set convs and re-trigger this effect
+      fetchConvs()
+      return
+    }
     const match = convs.find(c => c.company_id === pendingConvId)
     if (match) {
       pendingNumRef.current = pendingConvNumber || null
       setSelected(match)
       clearPendingConv()
+      // Scroll the selected item into view
+      setTimeout(() => {
+        const el = listBoxRef.current?.querySelector(`[data-company-id="${match.company_id}"]`)
+        if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      }, 80)
+    } else {
+      // Company not in current list — refresh and retry (handles newly registered contacts)
+      fetchConvs()
     }
-  }, [pendingConvId, convs, pendingConvNumber, clearPendingConv])
+  }, [pendingConvId, convs, pendingConvNumber, clearPendingConv, fetchConvs])
 
   // Once the company's numbers load, jump straight to the one that sent the notification
   // instead of leaving activeNum on 'all' (which shows the "select a number" placeholder)
@@ -1050,9 +1063,11 @@ export default function Conversations() {
               </Typography>
             </Box>
           ) : filtered.map(c => (
-            <ConversationItem key={c.company_id} conv={c}
-              active={selected?.company_id === c.company_id}
-              onClick={() => setSelected(c)} />
+            <div key={c.company_id} data-company-id={c.company_id}>
+              <ConversationItem conv={c}
+                active={selected?.company_id === c.company_id}
+                onClick={() => setSelected(c)} />
+            </div>
           ))}
         </Box>
 

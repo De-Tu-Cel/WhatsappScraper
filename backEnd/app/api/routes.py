@@ -4480,7 +4480,7 @@ def api_notifications_count(
             # Excluir remitentes no reconocidos (company_id="unknown") — no aparecen
             # en Chats (ver get_conversations) porque no hay empresa a la cual
             # asociarlos, así que tampoco deberían generar ruido en la campanita.
-            "company_id": {"$nin": [None, "unknown", "undefined", "manual"]},
+            "company_id": {"$nin": [None, "", "unknown", "undefined", "manual"]},
         })
         event_count = db.db.app_notifications.count_documents({
             "created_at": {"$gte": cutoff},
@@ -4503,7 +4503,7 @@ def api_notifications_list(x_user_token: Optional[str] = Header(None)):
         msgs = list(db.db.message_logs.find(
             {
                 "direction": "inbound", "created_at": {"$gte": cutoff},
-                "company_id": {"$nin": [None, "unknown", "undefined", "manual"]},
+                "company_id": {"$nin": [None, "", "unknown", "undefined", "manual"]},
             },
             {"company_id": 1, "message_body": 1, "message_text": 1, "from_number": 1, "created_at": 1},
             sort=[("created_at", -1)],

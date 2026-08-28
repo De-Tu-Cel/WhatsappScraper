@@ -1514,6 +1514,7 @@ export default function InstancesPanel() {
         : t.inst.unassignSuccess
       setAssignOpen(false)
       fetchInstances()
+      window.dispatchEvent(new Event(INSTANCES_CHANGED_EVENT))
       setSnack({ open: true, msg })
     } catch {}
     finally { setAssigning(false) }

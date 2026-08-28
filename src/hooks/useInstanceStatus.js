@@ -19,10 +19,6 @@ let _timerId          = null
 let _userToken        = null
 const _subscribers    = new Set()
 
-// Timestamp (epoch ms) of when a provider was last seen with total:0.
-// 0 = don't skip. Provider is skipped only while Date.now() - _skipX < SKIP_TTL.
-let _skipEvo    = 0
-let _skipWaha   = 0
 let _skipWwebjs = 0
 
 function _notify() {
@@ -39,39 +35,20 @@ function _startPolling(token) {
       const headers = { 'x-user-token': _userToken }
       const _empty = Promise.resolve({ ok: false })
       const now = Date.now()
-      const [evoRes, wahaRes, wsRes, wwRes] = await Promise.allSettled([
-        (_skipEvo    && now - _skipEvo    < SKIP_TTL) ? _empty : fetch('/api/evolution/instances/user-status', { headers }),
-        (_skipWaha   && now - _skipWaha   < SKIP_TTL) ? _empty : fetch('/api/waha/instances/user-status',      { headers }),
-        fetch('/api/wasender/instances/user-status', { headers }),
-        (_skipWwebjs && now - _skipWwebjs < SKIP_TTL) ? _empty : fetch('/api/wwebjs/instances/user-status',    { headers }),
+      const [wwRes] = await Promise.allSettled([
+        (_skipWwebjs && now - _skipWwebjs < SKIP_TTL) ? _empty : fetch('/api/wwebjs/instances/user-status', { headers }),
       ])
-      const evo  = evoRes.status  === 'fulfilled' && evoRes.value.ok  ? await evoRes.value.json()  : null
-      const waha = wahaRes.status === 'fulfilled' && wahaRes.value.ok ? await wahaRes.value.json() : null
-      const ws   = wsRes.status   === 'fulfilled' && wsRes.value.ok   ? await wsRes.value.json()   : null
-      const ww   = wwRes.status   === 'fulfilled' && wwRes.value.ok   ? await wwRes.value.json()   : null
+      const ww = wwRes.status === 'fulfilled' && wwRes.value.ok ? await wwRes.value.json() : null
 
-      // If every non-skipped provider failed to respond, treat as unreachable
-      allFailed = evo === null && waha === null && ws === null && ww === null
+      allFailed = ww === null
 
-      // Remember which providers have no instances — skip for SKIP_TTL, then re-check
-      // (uses timestamp instead of boolean so a newly assigned instance is auto-detected)
-      if (evo  !== null) _skipEvo    = evo.total  === 0 ? now : 0
-      if (waha !== null) _skipWaha   = waha.total === 0 ? now : 0
-      if (ww   !== null) _skipWwebjs = ww.total   === 0 ? now : 0
+      if (ww !== null) _skipWwebjs = ww.total === 0 ? now : 0
 
-      const evoConnected  = evo?.connected  ?? false
-      const wahaConnected = waha?.connected ?? false
-      const wsConnected   = ws?.connected   ?? false
-      const wwConnected   = ww?.connected   ?? false
-      _connectedCount = (evo?.connected_count ?? 0) + (waha?.connected_count ?? 0) + (ws?.connected_count ?? 0) + (ww?.connected_count ?? 0)
-      _totalCount     = (evo?.total ?? 0)           + (waha?.total ?? 0)           + (ws?.total ?? 0)           + (ww?.total ?? 0)
-      _status = (evoConnected || wahaConnected || wsConnected || wwConnected) ? 'connected' : 'disconnected'
+      _connectedCount = ww?.connected_count ?? 0
+      _totalCount     = ww?.total ?? 0
+      _status = ww?.connected ? 'connected' : 'disconnected'
 
-      // Prefer WAHA disconnect reason if multiple are down (WAHA errors are more specific)
-      const reasonSource = (!wahaConnected && waha?.disconnect_reason) ? waha
-                         : (!wsConnected   && ws?.disconnect_reason)   ? ws
-                         : (!evoConnected  && evo?.disconnect_reason)  ? evo
-                         : null
+      const reasonSource = (!ww?.connected && ww?.disconnect_reason) ? ww : null
       _disconnectReason = (_status === 'disconnected' && reasonSource)
         ? { key: reasonSource.disconnect_reason, label: reasonSource.disconnect_reason_label || 'Desconectada', code: reasonSource.disconnect_code ?? null }
         : null
@@ -97,8 +74,6 @@ function _stopPolling() {
   _disconnectReason = null
   _connectedCount = 0
   _totalCount = 0
-  _skipEvo    = 0
-  _skipWaha   = 0
   _skipWwebjs = 0
 }
 

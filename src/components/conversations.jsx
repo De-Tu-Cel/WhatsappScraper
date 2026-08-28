@@ -604,6 +604,21 @@ export default function Conversations() {
   }, [])
 
 
+  const fetchConvs = useCallback(async () => {
+    try {
+      const res = await authFetch('/api/conversations')
+      if (!res.ok) return
+      const data = await res.json()
+      const list = Array.isArray(data) ? data : []
+      setConvs(list)
+      setSelected(prev => prev && list.find(c => c.company_id === prev.company_id) ? prev : null)
+    } catch {
+      // Network error — keep existing convs visible
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
   // When a notification card is clicked, auto-select the matching conversation
   useEffect(() => {
     if (!pendingConvId) return
@@ -638,21 +653,6 @@ export default function Conversations() {
     if (match) setActiveNum(match)
     pendingNumRef.current = null
   }, [waNumbers])
-
-  const fetchConvs = useCallback(async () => {
-    try {
-      const res = await authFetch('/api/conversations')
-      if (!res.ok) return
-      const data = await res.json()
-      const list = Array.isArray(data) ? data : []
-      setConvs(list)
-      setSelected(prev => prev && list.find(c => c.company_id === prev.company_id) ? prev : null)
-    } catch {
-      // Network error — keep existing convs visible
-    } finally {
-      setLoading(false)
-    }
-  }, [])
 
   const fetchThread = useCallback(async (companyId, scrollToBottom = false, silent = false, numFilter = null) => {
     if (!silent) {

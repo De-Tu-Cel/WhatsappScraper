@@ -84,19 +84,13 @@ function SessionDetail({ sessionId, onBack, token }) {
 
   const msgs = session.messages || []
   return (
-    <Box sx={{
-      flex: 1, overflow: 'auto',
-      bgcolor: 'action.hover',
-      backgroundImage: 'radial-gradient(circle, rgba(128,128,128,0.06) 1px, transparent 1px)',
-      backgroundSize: '20px 20px',
-      display: 'flex', flexDirection: 'column',
-    }}>
-      {/* Subtítulo: instancias */}
+    <Box sx={{ flex: 1, overflow: 'auto', bgcolor: '#080c14', display: 'flex', flexDirection: 'column' }}>
+      {/* Chip con nombres — mismo estilo que el "fecha" centrado en conversations */}
       <Box sx={{ textAlign: 'center', pt: 1.5, pb: 0.5 }}>
         <Chip
           label={`${session.instance_a} ↔ ${session.instance_b}`}
           size="small"
-          sx={{ fontSize: 11, bgcolor: 'background.paper', color: 'text.secondary' }}
+          sx={{ fontSize: 11, bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.45)', border: '1px solid rgba(255,255,255,0.07)' }}
         />
       </Box>
 
@@ -105,29 +99,31 @@ function SessionDetail({ sessionId, onBack, token }) {
           <Typography variant="body2" color="text.secondary">Sin mensajes aún hoy.</Typography>
         </Box>
       ) : (
-        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 0.75, px: 2, pt: 1, pb: 2 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, px: 2, pt: 1, pb: 2 }}>
           {msgs.map((msg, i) => {
             const isA = msg.speaker === 'a'
             return (
               <Box key={i} sx={{ display: 'flex', justifyContent: isA ? 'flex-start' : 'flex-end' }}>
                 <Box sx={{
-                  maxWidth: '78%', px: 1.25, pt: 0.5, pb: 0.25,
-                  bgcolor: isA ? 'background.paper' : 'primary.main',
-                  color: isA ? 'text.primary' : 'primary.contrastText',
+                  maxWidth: '78%', px: 1.25, pt: 0.5, pb: 0.375,
+                  bgcolor: isA ? '#1e2840' : '#6366f1',
                   borderRadius: isA ? '2px 12px 12px 12px' : '12px 2px 12px 12px',
-                  boxShadow: 1,
+                  border: isA ? '1px solid rgba(255,255,255,0.06)' : 'none',
                 }}>
                   <Typography variant="caption" sx={{
                     fontWeight: 700, display: 'block', mb: 0.25,
-                    color: isA ? 'primary.main' : 'rgba(255,255,255,0.8)',
+                    color: isA ? '#60a5fa' : 'rgba(255,255,255,0.75)',
+                    fontSize: 11,
                   }}>
                     {isA ? session.instance_a : session.instance_b}
                   </Typography>
-                  <Typography variant="body2" sx={{ lineHeight: 1.4 }}>{msg.content}</Typography>
+                  <Typography variant="body2" sx={{ lineHeight: 1.45, color: '#f1f5f9' }}>
+                    {msg.content}
+                  </Typography>
                   {msg.ts && (
-                    <Typography variant="caption" sx={{
+                    <Typography sx={{
                       display: 'block', textAlign: 'right', mt: 0.25,
-                      color: isA ? 'text.disabled' : 'rgba(255,255,255,0.65)',
+                      color: isA ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.55)',
                       fontSize: 10,
                     }}>
                       {new Date(msg.ts).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}

@@ -33,6 +33,20 @@ function authHeaders(token) {
   return { 'Content-Type': 'application/json', 'x-user-token': token || '' }
 }
 
+// Mismo patrón de fondo WA que usa conversations.jsx
+const _WA_SVG = [
+  '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">',
+  '<g transform="translate(5,3) scale(0.9)">',
+  '<path d="M25 5C13.9 5 5 13.9 5 25c0 3.8 1.1 7.4 2.9 10.4L5 45l9.9-2.9C17.8 43.6 21.3 45 25 45c11.1 0 20-8.9 20-20S36.1 5 25 5z" fill="none" stroke="rgba(37,211,102,0.15)" stroke-width="2" stroke-linejoin="round"/>',
+  '<path d="M17 19c0-.8.7-1.5 1.5-1.5H22l2 5-2.5 2c1.5 2.5 3.5 4.5 6 6l2-2.5 5 2v3.5c0 .8-.7 1.5-1.5 1.5C24 34.5 17 27 17 19z" fill="none" stroke="rgba(37,211,102,0.15)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+  '</g>',
+  '<g transform="translate(60,58) rotate(-12) scale(0.52)">',
+  '<path d="M25 5C13.9 5 5 13.9 5 25c0 3.8 1.1 7.4 2.9 10.4L5 45l9.9-2.9C17.8 43.6 21.3 45 25 45c11.1 0 20-8.9 20-20S36.1 5 25 5z" fill="none" stroke="rgba(37,211,102,0.09)" stroke-width="2" stroke-linejoin="round"/>',
+  '</g>',
+  '</svg>',
+].join('')
+const WA_BG_PATTERN = `url("data:image/svg+xml,${encodeURIComponent(_WA_SVG)}")`
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 function relativeTime(isoString) {
   if (!isoString) return null
@@ -107,7 +121,14 @@ function SessionDetail({ sessionId, onBack, token }) {
   }
 
   return (
-    <Box sx={{ flex: 1, overflow: 'auto', bgcolor: '#080c14', display: 'flex', flexDirection: 'column' }}>
+    <Box sx={{
+      flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column',
+      bgcolor: '#080c14',
+      backgroundImage: WA_BG_PATTERN, backgroundSize: '100px 100px',
+      scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent',
+      '&::-webkit-scrollbar': { width: 4 },
+      '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 },
+    }}>
       {msgs.length === 0 ? (
         <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Typography variant="body2" color="text.secondary">Sin mensajes aún hoy.</Typography>
@@ -227,42 +248,57 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
             <Typography variant="body2" color="text.secondary">Sin chats de calentamiento aún.</Typography>
           </Box>
         ) : (
-          <List disablePadding>
+          <List disablePadding sx={{ bgcolor: '#161d2e' }}>
             {sessions.map((s, i) => {
               const peerName = peer(s)
               const initials = peerName.slice(0, 2).toUpperCase()
               const lastMsg = s.messages?.[s.messages.length - 1]?.content
+              const hasUnread = s.total_messages_today > 0
+              // Generar un color de avatar consistente por nombre
+              const avatarHues = ['#3b82f6','#8b5cf6','#ec4899','#f59e0b','#22c55e','#06b6d4']
+              const avatarColor = avatarHues[peerName.charCodeAt(0) % avatarHues.length]
               return (
                 <React.Fragment key={s._id}>
-                  {i > 0 && <Divider component="li" />}
-                  <ListItemButton onClick={() => setSelected(s._id)} sx={{ px: 2, py: 1.5, gap: 1.5 }}>
-                    {/* Avatar */}
+                  {i > 0 && <Divider component="li" sx={{ borderColor: 'rgba(255,255,255,0.05)', ml: 9 }} />}
+                  <ListItemButton
+                    onClick={() => setSelected(s._id)}
+                    sx={{
+                      px: 2, py: 1.25, gap: 1.5,
+                      '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' },
+                    }}
+                  >
+                    {/* Avatar con color consistente */}
                     <Box sx={{
-                      width: 46, height: 46, borderRadius: '50%', flexShrink: 0,
-                      bgcolor: 'primary.main', color: 'primary.contrastText',
+                      width: 48, height: 48, borderRadius: '50%', flexShrink: 0,
+                      bgcolor: avatarColor,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontWeight: 700, fontSize: 15,
+                      fontWeight: 800, fontSize: 16, color: '#fff',
+                      boxShadow: `0 0 0 2px rgba(255,255,255,0.06)`,
                     }}>
                       {initials}
                     </Box>
                     {/* Texto */}
                     <Box sx={{ flex: 1, minWidth: 0 }}>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', mb: 0.25 }}>
-                        <Typography variant="body2" fontWeight={600} noWrap sx={{ flex: 1, mr: 1 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.3 }}>
+                        <Typography variant="body2" fontWeight={hasUnread ? 700 : 600} noWrap sx={{ flex: 1, mr: 1, color: '#f1f5f9' }}>
                           {peerName}
                         </Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+                        <Typography variant="caption" sx={{ flexShrink: 0, fontSize: 11, color: hasUnread ? '#22c55e' : 'rgba(255,255,255,0.35)' }}>
                           {s.date}
                         </Typography>
                       </Box>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, mr: 1 }}>
-                          {lastMsg || `${s.total_messages_today} mensajes hoy`}
+                        <Typography variant="caption" noWrap sx={{
+                          flex: 1, mr: 1, fontSize: 12,
+                          color: hasUnread ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.32)',
+                          fontStyle: lastMsg ? 'normal' : 'italic',
+                        }}>
+                          {lastMsg || 'Sin mensajes aún'}
                         </Typography>
-                        {s.total_messages_today > 0 && (
+                        {hasUnread && (
                           <Box sx={{
                             minWidth: 20, height: 20, px: 0.75, borderRadius: 10, flexShrink: 0,
-                            bgcolor: 'success.main', color: 'white',
+                            bgcolor: '#22c55e', color: '#fff',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
                             fontSize: 11, fontWeight: 700,
                           }}>

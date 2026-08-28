@@ -140,6 +140,8 @@ def delete_session(session_id: str):
 
 def list_sessions() -> dict:
     r = _req.get(f"{WWEBJS_URL}/sessions", headers=_headers(), timeout=5)
+    if not r.ok:
+        return {}
     return r.json()
 
 

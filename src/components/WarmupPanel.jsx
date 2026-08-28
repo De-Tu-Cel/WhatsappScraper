@@ -192,6 +192,13 @@ function SessionDetail({ sessionId, onBack, token }) {
 }
 
 // ── Chats dialog ──────────────────────────────────────────────────────────────
+const AVATAR_PALETTE = ['#3b82f6','#8b5cf6','#ec4899','#f59e0b','#22c55e','#06b6d4','#f97316','#14b8a6']
+
+function avatarColorFor(str) {
+  const hash = String(str).split('').reduce((acc, c) => acc * 31 + c.charCodeAt(0), 7)
+  return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length]
+}
+
 function InstanceChatsDialog({ open, onClose, instanceName, token }) {
   const [sessions, setSessions] = useState([])
   const [loading, setLoading]   = useState(true)
@@ -215,43 +222,61 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
     setSelected(id)
   }
 
+  const instColor    = avatarColorFor(instanceName)
+  const instInitials = instanceName.slice(0, 2).toUpperCase()
+
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth
-      slotProps={{ paper: { sx: { borderRadius: 2.5, overflow: 'hidden', height: '70vh', maxHeight: 560, display: 'flex', flexDirection: 'column', bgcolor: '#161d2e' } } }}>
+      slotProps={{ paper: { sx: {
+        borderRadius: 2.5, overflow: 'hidden', height: '70vh', maxHeight: 560,
+        display: 'flex', flexDirection: 'column',
+        background: 'linear-gradient(160deg, #161d2e 0%, #0d1421 100%)',
+      } } }}>
 
       {/* Header */}
       <Box sx={{
-        display: 'flex', alignItems: 'center', gap: 1,
+        display: 'flex', alignItems: 'center', gap: 1.5,
         px: 1.5, py: 1, flexShrink: 0,
-        bgcolor: '#161d2e',
-        borderBottom: '1px solid rgba(255,255,255,0.08)',
+        background: 'rgba(13,20,33,0.6)',
+        borderBottom: '1px solid rgba(255,255,255,0.07)',
+        backdropFilter: 'blur(4px)',
       }}>
         {selected ? (
-          <IconButton size="small" onClick={() => setSelected(null)} sx={{ color: 'rgba(255,255,255,0.7)' }}>
+          <IconButton size="small" onClick={() => setSelected(null)} sx={{ color: 'rgba(255,255,255,0.7)', ml: -0.5 }}>
             <ArrowBackIcon fontSize="small" />
           </IconButton>
         ) : (
-          <Box sx={{ pl: 0.5, display: 'flex', alignItems: 'center' }}>
-            <ChatBubbleOutlinedIcon fontSize="small" sx={{ color: 'rgba(255,255,255,0.55)', mr: 1 }} />
+          <Box sx={{
+            width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+            bgcolor: instColor,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontWeight: 800, fontSize: 13, color: '#fff',
+            boxShadow: `0 0 0 2px rgba(255,255,255,0.08)`,
+          }}>
+            {instInitials}
           </Box>
         )}
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="subtitle2" fontWeight={700} noWrap sx={{ color: '#f1f5f9', lineHeight: 1.2 }}>
+          <Typography variant="body1" fontWeight={700} noWrap
+            sx={{ color: '#f1f5f9', lineHeight: 1.25, letterSpacing: '-0.01em' }}>
             {selectedPeer || instanceName}
           </Typography>
           {!selected && (
-            <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, lineHeight: 1 }}>
-              Chats de calentamiento
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, mt: 0.1 }}>
+              <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#22c55e', flexShrink: 0 }} />
+              <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.38)', fontSize: 10, lineHeight: 1 }}>
+                Calentamiento activo
+              </Typography>
+            </Box>
           )}
         </Box>
-        <IconButton size="small" onClick={onClose} sx={{ color: 'rgba(255,255,255,0.5)' }}>
+        <IconButton size="small" onClick={onClose} sx={{ color: 'rgba(255,255,255,0.45)' }}>
           <CloseIcon fontSize="small" />
         </IconButton>
       </Box>
 
       {/* Lista de sesiones / chat */}
-      <DialogContent sx={{ p: 0, overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column', bgcolor: '#161d2e' }}>
+      <DialogContent sx={{ p: 0, overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column', bgcolor: 'transparent' }}>
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4 }}>
             <CircularProgress size={28} />
@@ -264,49 +289,46 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
             <Typography variant="body2" color="text.secondary">Sin chats de calentamiento aún.</Typography>
           </Box>
         ) : (
-          <List disablePadding sx={{ bgcolor: '#161d2e' }}>
+          <List disablePadding sx={{ bgcolor: 'transparent' }}>
             {sessions.map((s, i) => {
               const peerName = peer(s)
               const initials = peerName.slice(0, 2).toUpperCase()
               const lastMsg = s.messages?.[s.messages.length - 1]?.content
               const hasUnread = s.total_messages_today > 0 && !viewedIds.has(s._id)
-              // Generar un color de avatar consistente por nombre
-              const avatarHues = ['#3b82f6','#8b5cf6','#ec4899','#f59e0b','#22c55e','#06b6d4']
-              const avatarColor = avatarHues[peerName.charCodeAt(0) % avatarHues.length]
+              const avatarColor = avatarColorFor(s._id || peerName + i)
               return (
                 <React.Fragment key={s._id}>
-                  {i > 0 && <Divider component="li" sx={{ borderColor: 'rgba(255,255,255,0.05)', ml: 9 }} />}
+                  {i > 0 && <Divider component="li" sx={{ borderColor: 'rgba(255,255,255,0.04)', ml: 9 }} />}
                   <ListItemButton
                     onClick={() => handleSelect(s._id)}
                     sx={{
                       px: 2, py: 1.25, gap: 1.5,
+                      borderLeft: hasUnread ? '3px solid #22c55e' : '3px solid transparent',
                       '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' },
                     }}
                   >
-                    {/* Avatar con color consistente */}
                     <Box sx={{
                       width: 48, height: 48, borderRadius: '50%', flexShrink: 0,
                       bgcolor: avatarColor,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       fontWeight: 800, fontSize: 16, color: '#fff',
-                      boxShadow: `0 0 0 2px rgba(255,255,255,0.06)`,
+                      boxShadow: `0 2px 8px rgba(0,0,0,0.35)`,
                     }}>
                       {initials}
                     </Box>
-                    {/* Texto */}
                     <Box sx={{ flex: 1, minWidth: 0 }}>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.3 }}>
-                        <Typography variant="body2" fontWeight={hasUnread ? 700 : 600} noWrap sx={{ flex: 1, mr: 1, color: '#f1f5f9' }}>
+                        <Typography variant="body2" fontWeight={hasUnread ? 700 : 500} noWrap sx={{ flex: 1, mr: 1, color: hasUnread ? '#f1f5f9' : 'rgba(255,255,255,0.75)' }}>
                           {peerName}
                         </Typography>
-                        <Typography variant="caption" sx={{ flexShrink: 0, fontSize: 11, color: hasUnread ? '#22c55e' : 'rgba(255,255,255,0.35)' }}>
+                        <Typography variant="caption" sx={{ flexShrink: 0, fontSize: 11, color: hasUnread ? '#22c55e' : 'rgba(255,255,255,0.3)' }}>
                           {s.date}
                         </Typography>
                       </Box>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <Typography variant="caption" noWrap sx={{
                           flex: 1, mr: 1, fontSize: 12,
-                          color: hasUnread ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.32)',
+                          color: hasUnread ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.28)',
                           fontStyle: lastMsg ? 'normal' : 'italic',
                         }}>
                           {lastMsg || 'Sin mensajes aún'}

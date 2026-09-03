@@ -300,9 +300,10 @@ class WebsiteScraper:
         except requests.exceptions.HTTPError as e:
             if response is not None and response.status_code == 403:
                 print(f"⚠️ Sitio bloqueó el scraper (403): {url}")
-                return {
-                    "website": url, "domain": urlparse(url).netloc.replace("www.", ""),
-                    "name": urlparse(url).netloc.replace("www.", "").split(".")[0].capitalize(),
+                _blocked_domain = urlparse(url).netloc.replace("www.", "")
+                blocked = {
+                    "website": url, "domain": _blocked_domain,
+                    "name": _blocked_domain.split(".")[0].capitalize(),
                     "industry": "No detectada", "description": "Sitio no accesible (403)",
                     "has_whatsapp": False, "status": "blocked",
                     "last_scraped_at": datetime.now(timezone.utc),
@@ -315,6 +316,37 @@ class WebsiteScraper:
                     },
                     "metadata": {"scraped_at": datetime.now(timezone.utc).isoformat()}
                 }
+                # Same dedup-by-domain path the success flow uses below — without it,
+                # a domain already saved by an earlier scrape (e.g. a different URL
+                # on the same site) hits the unique index and crashes with E11000
+                # instead of just reusing the existing company_id.
+                existing = self.companies_col.find_one({"domain": _blocked_domain})
+                if existing:
+                    blocked["_db_action"] = "skipped_duplicate"
+                    blocked["_company_id"] = existing["_id"]
+                else:
+                    company_doc = {k: v for k, v in blocked.items() if not k.startswith("_")}
+                    try:
+                        res = self.companies_col.update_one(
+                            {"domain": _blocked_domain},
+                            {"$setOnInsert": company_doc},
+                            upsert=True,
+                        )
+                        if res.upserted_id:
+                            blocked["_db_action"] = "created"
+                            blocked["_company_id"] = res.upserted_id
+                        else:
+                            existing_doc = self.companies_col.find_one({"domain": _blocked_domain})
+                            blocked["_db_action"] = "updated"
+                            blocked["_company_id"] = existing_doc["_id"] if existing_doc else None
+                    except Exception as e:
+                        if "E11000" in str(e) or "duplicate key" in str(e):
+                            existing_doc = self.companies_col.find_one({"domain": _blocked_domain})
+                            blocked["_db_action"] = "skipped_duplicate"
+                            blocked["_company_id"] = existing_doc["_id"] if existing_doc else None
+                        else:
+                            raise
+                return blocked
             raise
         except Exception as e:
             print(f"❌ Error al obtener página: {e}")

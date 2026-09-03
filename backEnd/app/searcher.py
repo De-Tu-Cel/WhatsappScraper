@@ -60,6 +60,12 @@ EXCLUDED_DOMAINS = {
     # Aerolíneas, cadenas nacionales (no prospectos locales)
     'aeromexico.com', 'volaris.com', 'vivaaerobus.com',
     'sephora.com.mx', 'maccosmetics.com', 'clinique.com',
+    # Generadores de páginas de negocio (miadn crea subdominios por empresa, no son sitios oficiales)
+    'miadn.mx',
+    # Directorios generales adicionales
+    'directorioempresas.mx', 'lasempresas.com.mx',
+    'viamichelin.es', 'viamichelin.com',
+    'citiservi.com.mx',
     # Mapas y directorios geográficos
     'mapquest.com', 'yellowpages.com', 'superpages.com',
     'grandhotelier.com', 'spa.grandhotelier.com',
@@ -119,6 +125,8 @@ EXCLUDED_DOMAINS = {
     'liverpool.com.mx', 'sanborns.com.mx', 'sears.com.mx', 'palacio.com.mx',
     'izzi.mx', 'totalplay.com.mx', 'megacable.com.mx', 'telmex.com',
     'telcel.com', 'att.com.mx', 'movistar.com.mx',
+    # Supermercados y cadenas de tiendas (no son del giro aunque vendan el producto)
+    'lacomer.com.mx', 'heb.com.mx', 'superama.com.mx', 'fresko.com.mx',
     # Asociaciones, cámaras y federaciones gremiales
     'canirac.org.mx', 'coparmex.org.mx', 'concamin.org.mx', 'canacintra.org.mx',
     'amfac.com.mx', 'conacero.org.mx', 'canaco.org.mx', 'amvo.org.mx',
@@ -619,6 +627,41 @@ _MX_STATE_TO_CAPITAL: dict[str, str] = {
     "zacatecas":           "Zacatecas",
 }
 
+_MX_STATE_CITIES: dict[str, list[str]] = {
+    "aguascalientes":      ["Aguascalientes", "Calvillo", "Jesús María", "Pabellón de Arteaga"],
+    "baja california":     ["Tijuana", "Mexicali", "Ensenada", "Tecate", "Playas de Rosarito"],
+    "baja california sur": ["La Paz", "Los Cabos", "Ciudad Constitución", "Loreto", "Mulegé"],
+    "campeche":            ["Campeche", "Ciudad del Carmen", "Champotón", "Escárcega"],
+    "chiapas":             ["Tuxtla Gutiérrez", "San Cristóbal de las Casas", "Tapachula", "Comitán", "Ocosingo", "Palenque"],
+    "chihuahua":           ["Chihuahua", "Ciudad Juárez", "Delicias", "Cuauhtémoc", "Hidalgo del Parral", "Nuevo Casas Grandes"],
+    "coahuila":            ["Saltillo", "Torreón", "Monclova", "Piedras Negras", "Acuña", "Sabinas"],
+    "colima":              ["Colima", "Manzanillo", "Tecomán", "Villa de Álvarez"],
+    "durango":             ["Durango", "Gómez Palacio", "Lerdo", "Hidalgo del Parral", "El Salto"],
+    "guanajuato":          ["León", "Guanajuato", "Irapuato", "Celaya", "Salamanca", "Silao", "San Miguel de Allende", "Acámbaro", "Pénjamo"],
+    "guerrero":            ["Acapulco", "Chilpancingo", "Zihuatanejo", "Iguala", "Taxco", "Chilapa"],
+    "hidalgo":             ["Pachuca", "Tulancingo", "Tula", "Tepeji del Río", "Huejutla", "Actopan"],
+    "jalisco":             ["Guadalajara", "Zapopan", "Tlaquepaque", "Tonalá", "Puerto Vallarta", "Lagos de Moreno", "Tepatitlán", "Ocotlán", "Autlán", "Ameca"],
+    "estado de mexico":    ["Toluca", "Ecatepec", "Nezahualcóyotl", "Naucalpan", "Tlalnepantla", "Chimalhuacán", "Texcoco", "Metepec", "Atizapán", "Nicolás Romero"],
+    "michoacan":           ["Morelia", "Uruapan", "Zamora", "Lázaro Cárdenas", "Apatzingán", "Pátzcuaro", "Zitácuaro"],
+    "morelos":             ["Cuernavaca", "Jiutepec", "Cuautla", "Temixco", "Yautepec"],
+    "nayarit":             ["Tepic", "Bahía de Banderas", "Santiago Ixcuintla", "Compostela", "Ixtlán del Río"],
+    "nuevo leon":          ["Monterrey", "San Nicolás de los Garza", "Guadalupe", "Apodaca", "General Escobedo", "San Pedro Garza García", "Linares", "Montemorelos"],
+    "oaxaca":              ["Oaxaca", "Juchitán", "Salina Cruz", "Tuxtepec", "Huajuapan de León", "Puerto Escondido"],
+    "puebla":              ["Puebla", "Tehuacán", "Cholula", "Atlixco", "Teziutlán", "San Martín Texmelucan"],
+    "queretaro":           ["Querétaro", "San Juan del Río", "Corregidora", "El Marqués", "Tequisquiapan", "Cadereyta"],
+    "quintana roo":        ["Cancún", "Playa del Carmen", "Cozumel", "Chetumal", "Tulum", "Isla Mujeres", "Solidaridad"],
+    "san luis potosi":     ["San Luis Potosí", "Ciudad Valles", "Matehuala", "Rioverde", "Soledad de Graciano Sánchez"],
+    "sinaloa":             ["Culiacán", "Mazatlán", "Los Mochis", "Guasave", "Navolato", "Guamúchil"],
+    "sonora":              ["Hermosillo", "Ciudad Obregón", "Nogales", "San Luis Río Colorado", "Guaymas", "Navojoa", "Caborca"],
+    "tabasco":             ["Villahermosa", "Cárdenas", "Comalcalco", "Macuspana", "Paraíso"],
+    "tamaulipas":          ["Reynosa", "Matamoros", "Nuevo Laredo", "Tampico", "Ciudad Victoria", "Ciudad Madero", "Altamira"],
+    "tlaxcala":            ["Tlaxcala", "Apizaco", "Chiautempan", "Huamantla", "Calpulalpan"],
+    "veracruz":            ["Veracruz", "Xalapa", "Coatzacoalcos", "Poza Rica", "Córdoba", "Orizaba", "Tuxpan", "Minatitlán"],
+    "yucatan":             ["Mérida", "Valladolid", "Progreso", "Umán", "Kanasín", "Tizimín"],
+    "zacatecas":           ["Zacatecas", "Fresnillo", "Guadalupe", "Jerez", "Calera"],
+    "cdmx":                ["Ciudad de México", "Iztapalapa", "Gustavo A. Madero", "Álvaro Obregón", "Coyoacán", "Tlalpan", "Xochimilco", "Benito Juárez"],
+}
+
 
 def _build_city_index() -> dict:
     """city/state (normalized, accent/case-insensitive) -> (canonical city name, country)."""
@@ -677,13 +720,40 @@ _REGION_ALIASES: dict[str, tuple[str, str]] = {
 
 # Frases de relleno al inicio del query que no aportan a la industria.
 _FILLER_RE = re.compile(
-    r'^(?:empresas?\s+(?:que\s+(?:se\s+dedican?\s+a|ofrecen|venden|fabrican|producen|hacen|prestan)\s+|dedicadas?\s+a\s+)?'
+    r'^(?:'
+    # Conversational search starters
+    r'busco\s+'
+    r'|buscamos\s+'
+    r'|(?:ando|estoy)\s+buscando\s+'
+    r'|necesito\s+(?:encontrar\s+|conseguir\s+|contactar\s+(?:a\s+)?)?'
+    r'|quiero\s+(?:encontrar\s+|contactar\s+(?:a\s+)?|conseguir\s+|llegar\s+a\s+)?'
+    r'|queremos\s+(?:encontrar\s+|contactar\s+(?:a\s+)?)?'
+    r'|me\s+interesan?\s+(?:contactar\s+(?:a\s+)?|encontrar\s+)?'
+    # Standalone "contactar a" when it hasn't been consumed above
+    r'|contactar\s+(?:a\s+)?'
+    # Owner/person references (the business type is what matters for search)
+    r'|(?:dueños?|propietarios?|encargados?)\s+de\s+'
+    r'|vendedores?\s+de\s+'
+    # Corporate filler patterns (original + hagan/hagan)
+    r'|empresas?\s+(?:que\s+(?:se\s+dedican?\s+a|ofrecen|venden|fabrican|producen|hacen|hagan|prestan)\s+|dedicadas?\s+a\s+)?'
     r'|negocios?\s+(?:que\s+)?(?:ofrecen|venden|se\s+dedican?\s+a)\s+'
     r'|compan[íi]as?\s+(?:que\s+)?(?:se\s+dedican?\s+a|ofrecen)\s+'
     r'|industrias?\s+(?:que\s+)?(?:fabrican|producen)\s+'
-    r'|proveedores?\s+(?:de\s+)?)',
+    r'|proveedores?\s+(?:de\s+)?'
+    r')',
     re.IGNORECASE,
 )
+
+
+def _strip_fillers(text: str) -> str:
+    """Strip leading filler phrases iteratively (handles chained prefixes)."""
+    current = text
+    for _ in range(4):
+        stripped = _FILLER_RE.sub('', current).strip()
+        if not stripped or stripped == current:
+            break
+        current = stripped
+    return current or text
 
 
 def _extract_location(text: str) -> tuple[str, str, str | None]:
@@ -702,11 +772,25 @@ def _extract_location(text: str) -> tuple[str, str, str | None]:
     # correctly extracts Monterrey and not "tecnología en Monterrey".
     matches = list(_LOCATION_TAIL_RE.finditer(text))
     if not matches:
-        return text, "", None
+        # Fallback: detectar nombre de ciudad al FINAL del query sin preposición
+        # ("taller hojalatería Querétaro" → city="Querétaro", industry="taller hojalatería")
+        words = text.split()
+        for n in (3, 2, 1):
+            if len(words) <= n:
+                continue
+            sub = " ".join(words[-n:])
+            alias_hit = _REGION_ALIASES.get(_norm_loc(sub))
+            if alias_hit:
+                return " ".join(words[:-n]).strip(" ,."), alias_hit[0], alias_hit[1]
+            city_hit = _CITY_INDEX.get(_norm_loc(sub))
+            if city_hit:
+                city_name, country_name = city_hit
+                return " ".join(words[:-n]).strip(" ,."), city_name, country_name
+        return _strip_fillers(text), "", None
     m = matches[-1]
     tail = m.group(1).strip(" ,.")
     industry_raw = text[:m.start()].strip(" ,.")
-    clean_industry = _FILLER_RE.sub('', industry_raw).strip() or industry_raw or text
+    clean_industry = _strip_fillers(industry_raw) or industry_raw or text
 
     # Build candidates: full tail + comma-primary (e.g. "Bogotá, Colombia" → "Bogotá")
     primary = tail.split(",")[0].strip()
@@ -747,8 +831,11 @@ INDUSTRY_SYNONYMS: dict[str, list[str]] = {
     "gimnasio":      ["gym", "fitness center", "crossfit", "club deportivo", "smartfit", "iron gym"],
     "gym":           ["gimnasio", "fitness", "crossfit", "club deportivo"],
     "fitness":       ["gimnasio", "gym", "crossfit", "entrenamiento"],
-    "restaurante":   ["restaurant", "comida", "gastronómico", "cocina"],
-    "taqueria":      ["taquería", "tacos", "antojitos"],
+    "restaurante":   ["restaurant", "taquería", "mariscos", "fonda", "comida corrida", "cocina regional", "gastronómico"],
+    "restaurantes":  ["restaurante", "restaurant", "taquería", "mariscos", "fonda", "comida corrida", "cocina regional"],
+    "taqueria":      ["taquería", "tacos", "antojitos", "birria", "barbacoa"],
+    "taquería":      ["tacos", "antojitos", "birria", "taqueria"],
+    "mariscos":      ["cevichería", "pescados y mariscos", "marisquería"],
     "dentista":      ["dental", "odontología", "clínica dental", "consultorio dental"],
     "farmacia":      ["farmacia", "droguería", "medicamentos"],
     "veterinaria":   ["veterinario", "clínica veterinaria", "mascotas"],
@@ -784,7 +871,7 @@ INDUSTRY_SYNONYMS: dict[str, list[str]] = {
     "autopartes":      ["refaccionaria", "refacciones", "accesorios automotrices"],
     "gasera":        ["gas lp", "distribuidora de gas", "gas licuado", "gas butano"],
     "gaseras":       ["gas lp", "distribuidora de gas", "gas licuado", "gas butano"],
-    "gasolinera":    ["gasera", "estación de servicio", "combustible"],
+    "gasolinera":    ["estación de servicio", "combustible", "gasolineras"],
     "gas lp":        ["gasera", "distribuidora de gas", "gas licuado"],
     "distribuidora de gas": ["gasera", "gas lp", "gas licuado"],
     "clinica":       ["clínica", "médico", "consultorio", "hospital"],
@@ -803,6 +890,80 @@ _DORK_PRESENCE = '("contacto" OR "servicios" OR "nosotros" OR "cotizar")'
 
 
 _SYNONYM_CACHE: dict[str, list[str]] = {}
+_NORMALIZE_CACHE: dict[str, dict] = {}
+
+
+def _normalize_query_with_llm(raw: str) -> dict | None:
+    """
+    Use the active LLM to correct typos/accents and extract industry, city,
+    country, and state from a free-typed business search query.
+
+    Returns a dict with keys: industry, city, country, state (all str or None).
+    Returns None if the LLM is not configured or on failure.
+    Caches results (including None) to avoid redundant calls.
+    """
+    key = raw.strip().lower()
+    if key in _NORMALIZE_CACHE:
+        return _NORMALIZE_CACHE[key]
+
+    if not (OPENAI_API_KEY or DEEPSEEK_API_KEY):
+        _NORMALIZE_CACHE[key] = None
+        return None
+
+    result: dict | None = None
+    try:
+        from app.llm import call_llm
+        prompt = (
+            'El usuario escribió esta búsqueda de negocios (puede tener errores ortográficos, '
+            'acentos faltantes, abreviaciones, inglés o redacción conversacional informal):\n\n'
+            f'"{raw}"\n\n'
+            'Extrae y corrige los campos: industry, city, country, state.\n'
+            'REGLAS DE UBICACIÓN:\n'
+            '1. state=null siempre que haya una ciudad específica (incluso si también se menciona el estado).\n'
+            '2. Cuando el nombre es a la vez ciudad y estado (Querétaro, Oaxaca, Mérida, Puebla…) sin la palabra "estado", trátalo como CIUDAD.\n'
+            '3. state se usa SOLO cuando el usuario menciona un estado SIN ciudad específica (ej: "jalisco", "nvo leon", "quintana roo estado").\n'
+            '4. Si hay ciudad + estado en la misma query, pon city=<ciudad> y state=null.\n'
+            '5. COLONIAS/BARRIOS → CIUDAD: Si se menciona una colonia, barrio o zona (Polanco, Condesa, Santa Fe, Roma, Cumbres, Del Valle, Tec, Lomas, Satelite, etc.) usa la CIUDAD que la contiene, no la colonia.\n'
+            '   Ejemplos: "polanco" → city="Ciudad de México" | "cumbres monterrey" → city="Monterrey" | "zona tec guadalajara" → city="Guadalajara"\n'
+            '6. REGIONES: "el bajío" → state="Guanajuato" | "bajío" → state="Guanajuato" | "valle de méxico" → city="Ciudad de México" | "zona metropolitana de monterrey" → city="Monterrey"\n'
+            'REGLAS DE GIRO (industry):\n'
+            '7. INGLÉS → ESPAÑOL: traduce términos en inglés al español de México. gym→gimnasio, shop→tienda, car wash→autolavado, spa→spa, clinic→clínica, store→tienda.\n'
+            '8. CONSERVA ESPECIALIZACIONES: mantén adjetivos clave del giro (mariscos, ortodoncia, hojalatería, orgánico, industrial, automotriz). Ejemplo: "restaurantes de mariscos" NO se simplifica a "restaurantes".\n'
+            '9. ELIMINA PALABRAS DE INTENCIÓN y ruido: "busco", "necesito", "quiero contactar", "quien me puede", "que tengan", "que atiendan", "con servicio a domicilio", "que también", y frases de características de negocio que no definen el giro.\n'
+            '10. CONSULTAS COLOQUIALES: convierte frases informales al giro más probable. "arreglar mi carro" → "talleres mecánicos" | "cosas de cocina" → "artículos de cocina" | "pintar mi casa" → "pintores".\n'
+            'Responde SOLO con JSON sin explicación.\n'
+            'Ejemplos:\n'
+            '"resturantes queretaro" → {"industry":"restaurantes","city":"Querétaro","country":"México","state":null}\n'
+            '"gyms gdl" → {"industry":"gimnasios","city":"Guadalajara","country":"México","state":null}\n'
+            '"jims en monterrey" → {"industry":"gimnasios","city":"Monterrey","country":"México","state":null}\n'
+            '"dentistas jalisco" → {"industry":"dentistas","city":null,"country":"México","state":"Jalisco"}\n'
+            '"hoteles cancun quintana roo" → {"industry":"hoteles","city":"Cancún","country":"México","state":null}\n'
+            '"taquerias queretaro estado" → {"industry":"taquerías","city":null,"country":"México","state":"Querétaro"}\n'
+            '"agencias de autos nvo leon" → {"industry":"agencias de autos","city":null,"country":"México","state":"Nuevo León"}\n'
+            '"spas cdmx" → {"industry":"spas","city":"Ciudad de México","country":"México","state":null}\n'
+            '"tacos stgo chile" → {"industry":"taquerías","city":"Santiago","country":"Chile","state":null}\n'
+            '"restorante monterey" → {"industry":"restaurantes","city":"Monterrey","country":"México","state":null}\n'
+            '"restaurantes de mariscos que tengan domicilio en monterrey" → {"industry":"restaurantes de mariscos","city":"Monterrey","country":"México","state":null}\n'
+            '"dentistas especializados en ortodoncia en polanco cdmx" → {"industry":"dentistas ortodoncia","city":"Ciudad de México","country":"México","state":null}\n'
+            '"busco talleres mecanicos que tambien hagan hojalateria en guadalajara" → {"industry":"talleres mecánicos hojalatería","city":"Guadalajara","country":"México","state":null}\n'
+            '"empresas que fabrican muebles de madera en el bajio" → {"industry":"fabricación de muebles de madera","city":null,"country":"México","state":"Guanajuato"}\n'
+            '"quien me puede arreglar mi carro en gdl" → {"industry":"talleres mecánicos","city":"Guadalajara","country":"México","state":null}'
+        )
+        content = call_llm([{"role": "user", "content": prompt}], max_tokens=200, temperature=0)
+        m = re.search(r'\{.*\}', content, re.DOTALL)
+        if m:
+            parsed = json.loads(m.group(0))
+            result = {
+                "industry": parsed.get("industry") or "",
+                "city":     parsed.get("city") or "",
+                "country":  parsed.get("country") or "",
+                "state":    parsed.get("state") or "",
+            }
+    except Exception:
+        result = None
+
+    _NORMALIZE_CACHE[key] = result
+    return result
 
 
 def _ai_expand_synonyms(industry: str) -> list[str]:
@@ -836,7 +997,46 @@ def _ai_expand_synonyms(industry: str) -> list[str]:
     return syns
 
 
-def _build_variations(industry: str, city: str = "", country: str = None, num_results: int = 10) -> list[str]:
+_SIMPLIFY_CACHE: dict[str, str] = {}
+
+def _simplify_industry_for_search(industry: str) -> str:
+    """
+    When the LLM returns a complex multi-word industry phrase (e.g. 'proveedores de
+    materia prima para panaderías'), long exact-phrase Google queries generate far
+    fewer results than a short core term. This function asks the LLM to reduce the
+    phrase to the 2-3 word core that best matches how people actually search for
+    those businesses on Google. Falls back to the original if the LLM is unavailable.
+    Cached per-process.
+    """
+    key = industry.strip().lower()
+    if key in _SIMPLIFY_CACHE:
+        return _SIMPLIFY_CACHE[key]
+    result = industry
+    try:
+        from app.llm import call_llm
+        prompt = (
+            f'El giro de negocio es: "{industry}"\n'
+            'Devuelve SOLO el término de búsqueda en español más corto (máximo 3 palabras) '
+            'que un usuario usaría en Google para encontrar estos negocios. '
+            'No expliques nada. Solo el término. '
+            'Ejemplos:\n'
+            '"proveedores de materia prima para panaderías" → "proveedores panaderías"\n'
+            '"fabricantes de muebles de madera para oficinas" → "fabricantes muebles oficina"\n'
+            '"talleres de reparación de electrodomésticos del hogar" → "talleres electrodomésticos"\n'
+            '"distribuidores mayoristas de productos de limpieza" → "distribuidores limpieza"\n'
+            f'"{industry}" →'
+        )
+        content = call_llm([{"role": "user", "content": prompt}], max_tokens=30, temperature=0)
+        simplified = content.strip().strip('"').strip("'").strip()
+        if simplified and 1 <= len(simplified.split()) <= 3:
+            result = simplified
+    except Exception:
+        pass
+    _SIMPLIFY_CACHE[key] = result
+    return result
+
+
+def _build_variations(industry: str, city: str = "", country: str = None, num_results: int = 10, state_cities: list[str] | None = None) -> list[str]:
     """
     Build DDG query variations designed to return actual business WEBSITES,
     not directories. Uses advanced DDG operators:
@@ -880,6 +1080,19 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
         ]
         for syn in synonyms[:4]:
             queries.append(f'"{syn}" {loc}')
+        # When many results are requested and the city is a Mexican state capital,
+        # fan-out to other cities in that state to increase coverage beyond what
+        # a single city can return.
+        if num_results > 20:
+            loc_norm = _norm_loc(loc)
+            state_key = next((sk for sk, cap in _MX_STATE_TO_CAPITAL.items() if _norm_loc(cap) == loc_norm), None)
+            if state_key:
+                extra_cities = [c for c in _MX_STATE_CITIES.get(state_key, []) if _norm_loc(c) != loc_norm]
+                max_extra = min(len(extra_cities), max(3, num_results // 10))
+                for c in extra_cities[:max_extra]:
+                    queries.append(f"{ind_q} {c}")
+                    for syn in synonyms[:2]:
+                        queries.append(f'"{syn}" {c}')
         return queries
 
     if not cfg:
@@ -896,6 +1109,21 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
         ]
         queries += [f'"{syn}"' for syn in synonyms[:6]]
         return queries
+
+    # Estado específico: fan-out solo por ciudades de ese estado
+    if state_cities and not city.strip():
+        max_c = min(len(state_cities), max(6, num_results * 3))
+        tlds = cfg["tlds"] if cfg else [".mx", "com.mx"]
+        base = [
+            f"{ind_q} {_DORK_PRESENCE}",
+            *[f"site:{tld} {ind}" for tld in tlds],
+            f"intitle:{ind_q}",
+            f"{ind} {_NOISE}",
+            f"{ind} whatsapp",
+        ]
+        city_queries = [f"{ind_q} {c}" for c in state_cities[:max_c]]
+        syn_queries = [f'"{syn}" {c}' for syn in synonyms[:4] for c in state_cities[:4]]
+        return base + city_queries + syn_queries
 
     # País conocido, sin ciudad: queries base + fan-out por sus ciudades
     # curadas + sinónimos. El número de ciudades fanned-out escala con
@@ -942,6 +1170,47 @@ def _fetch_ddg(query: str, max_results: int = 80) -> list[dict]:
     return results
 
 
+def _to_singular_es(term: str) -> str:
+    """
+    Best-effort Spanish singularization for industry terms used in the AI filter
+    prompt. The plural form ("taquerías", "restaurantes") causes the LLM to
+    interpret the query as looking for a category/directory rather than an
+    individual business, leading to mass rejection of valid sites.
+
+    Singularizes the head noun words (before "de"/"en"/"del" prepositions) only,
+    leaving qualifiers and category complements intact.
+    """
+    def _sing(w: str) -> str:
+        if w.endswith("ías"):   return w[:-1]
+        if w.endswith("ias"):   return w[:-1]
+        if w.endswith("antes"): return w[:-1]
+        if w.endswith("entes"): return w[:-1]
+        if w.endswith("ores"):  return w[:-2]
+        if w.endswith("bles"):  return w[:-1]
+        if w.endswith("les") and len(w) > 5: return w[:-2]
+        if w.endswith("ios"):   return w[:-1]
+        if w.endswith("cas") and len(w) > 4: return w[:-1]
+        if w.endswith("as")  and len(w) > 4: return w[:-1]
+        if w.endswith("cos") and len(w) > 4: return w[:-1]
+        if w.endswith("os")  and len(w) > 4: return w[:-1]
+        if w.endswith("es")  and len(w) > 4: return w[:-2]
+        if w.endswith("s")   and len(w) > 3: return w[:-1]
+        return w
+
+    _PREPS = {"de", "del", "en", "y", "e", "para", "con"}
+    parts = term.strip().split()
+    result = []
+    for i, word in enumerate(parts):
+        if word.lower() in _PREPS:
+            # Stop singularizing; keep the rest (complement) as-is
+            result.extend(parts[i:])
+            break
+        result.append(_sing(word))
+    else:
+        pass  # loop completed without break — result already filled
+    return " ".join(result)
+
+
 def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None, country: str | None = None) -> list[str]:
     """
     Use the active LLM to rank and filter URLs for real local business websites.
@@ -954,13 +1223,8 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     snippets = snippets or {}
     geo = country  # None = no geographic restriction in the prompt
 
-    ranked: list[str] = []
-    remaining = list(urls)
-
-    batch_size = 60
-    while remaining:
-        batch = remaining[:batch_size]
-        remaining = remaining[batch_size:]
+    def _filter_batch(batch: list[str]) -> list[str]:
+        """Filter one batch via LLM; returns approved URLs in relevance order."""
         try:
             lines = []
             for i, u in enumerate(batch):
@@ -976,27 +1240,33 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
             geo_clause = f"en {geo}" if geo else "en cualquier país"
             prompt = (
                 f'Eres un filtro ESTRICTO de URLs. Se buscan ÚNICAMENTE sitios web oficiales '
-                f'de negocios LOCALES e INDEPENDIENTES del sector "{industry}" {geo_clause}.\n\n'
-                f'INCLUIR SOLO si es la página oficial de UN negocio específico con nombre y dirección propios:\n'
-                f'  ✓ Un restaurante, clínica, gimnasio, taller, tienda, despacho, salón específico.\n\n'
+                f'de negocios LOCALES e INDEPENDIENTES cuyo GIRO PRINCIPAL sea "{industry}" {geo_clause}.\n\n'
+                f'CRITERIO DE ORO: el negocio debe dedicarse PRIMARIAMENTE a "{industry}". '
+                f'No alcanza que el negocio use, venda o mencione "{industry}" como actividad secundaria.\n\n'
+                f'INCLUIR SOLO si el sitio es la página oficial de UN negocio específico con nombre propio '
+                f'cuya actividad central sea "{industry}".\n\n'
                 f'EXCLUIR SIN EXCEPCIÓN (devuelve [] si ninguna aplica):\n'
-                f'  ✗ Catálogos o agregadores del sector: sitios que reúnen o listan VARIOS negocios '
-                f'del mismo tipo en una sola página (ej: "mejoresrestaurantes.com", "guiagymcdmx.com", '
-                f'"directoriodentistas.mx", cualquier sitio con fichas de múltiples negocios similares).\n'
-                f'  ✗ Listicles: "Los mejores X", "Top 10", "Guía de", "Dónde ir", "Lugares para", "Recomendados"\n'
-                f'  ✗ Artículos, noticias, reportajes, blogs, columnas de opinión\n'
-                f'  ✗ Directorios conocidos (Yelp, Sección Amarilla, Hotfrog, Páginas Amarillas, Kompass, Foursquare, Zomato)\n'
+                f'  ✗ Negocios de OTRO GIRO aunque mencionen "{industry}" en su descripción '
+                f'(ej: una taquería que "cocina con gas", un sanatorio que "tiene tanques de gas", '
+                f'una ferretería que "vende estufas", un supermercado que "vende cilindros") — '
+                f'si su giro principal NO ES "{industry}", excluir.\n'
+                f'  ✗ Catálogos o agregadores: sitios que reúnen o listan VARIOS negocios del mismo tipo.\n'
+                f'  ✗ Listicles: "Los mejores X", "Top 10", "Guía de", "Dónde ir", "Recomendados"\n'
+                f'  ✗ Artículos, noticias, reportajes, blogs, columnas de opinión '
+                f'(aunque hablen de negocios del sector "{industry}")\n'
+                f'  ✗ Directorios (Yelp, Sección Amarilla, Hotfrog, Páginas Amarillas, Kompass, Foursquare)\n'
                 f'  ✗ Redes sociales, YouTube, Wikipedia, Quora, Reddit\n'
-                f'  ✗ Marketplaces (MercadoLibre, Amazon, Uber Eats, Rappi, Didi Food)\n'
-                f'  ✗ Franquicias o cadenas con decenas de sucursales '
-                f'(SmartFit, OXXO, Starbucks, McDonald\'s, Domino\'s, etc.)\n'
+                f'  ✗ Marketplaces (MercadoLibre, Amazon, Uber Eats, Rappi)\n'
+                f'  ✗ Franquicias o cadenas con decenas de sucursales\n'
                 f'  ✗ Asociaciones gremiales, cámaras de comercio, federaciones del sector\n'
-                f'  ✗ Proveedores de software/SaaS para el sector (herramientas, no el negocio mismo)\n'
+                f'  ✗ Proveedores de software/SaaS para el sector\n'
                 f'  ✗ Páginas gubernamentales o educativas\n'
                 f'  ✗ Revistas, portales de contenido, medios digitales\n'
                 f'  ✗ URLs con /blog/, /noticias/, /articulo/, /post/, /catalogo/, /directorio/ o año en la ruta\n\n'
-                f'REGLA CLAVE: si el sitio parece ser un portal que AGRUPA o COMPARA negocios '
-                f'del sector "{industry}", descártalo aunque el dominio sea desconocido.\n\n'
+                f'REGLA FINAL: ante la duda de si el giro principal es "{industry}", '
+                f'INCLUIRLO si la URL parece claramente el sitio oficial de UN negocio local específico '
+                f'(tiene nombre propio, menú, dirección, teléfono, o sección de contacto). '
+                f'Solo excluir cuando la evidencia señala inequívocamente un giro DIFERENTE o un directorio/lista.\n\n'
                 f'URLs a evaluar:\n' + '\n'.join(lines) + '\n\n'
                 f'Responde ÚNICAMENTE con un array JSON de enteros con los números de URLs aprobadas, '
                 f'ordenadas de mayor a menor relevancia. Si ninguna califica, responde []. '
@@ -1009,24 +1279,104 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
                 indices = json.loads(m.group(0))
                 approved_idx = {i for i in indices if 1 <= i <= len(batch)}
                 batch_approved = [batch[i - 1] for i in indices if i in approved_idx]
-                if batch_approved:
-                    # Drop unapproved URLs — with the 3× fetch pool there are enough
-                    # good candidates that we don't need to fall back to junk.
-                    ranked.extend(batch_approved)
-                else:
-                    # AI approved nothing: keep full batch as fallback to avoid
-                    # silently discarding valid prospects on a false-negative.
-                    ranked.extend(batch)
-                continue
+                return batch_approved
         except Exception:
             pass
-        # Fallback: LLM unavailable or parse error — keep batch as-is
-        ranked.extend(batch)
+        return batch  # fallback: LLM unavailable or parse error
 
+    # Keywords en el dominio que delatan que el negocio es de otro giro.
+    # Si el dominio los contiene → nunca es del sector buscado, sin importar el snippet.
+    _WRONG_SECTOR_DOMAIN_KWS = {
+        'taqueria', 'taquero', 'tacos', 'taco',
+        'sanatorio', 'hospital', 'clinica', 'medica', 'dental',
+        'ferreteria', 'ferretero', 'ferreteras',
+        'carroceria', 'carrocerias',
+        'hotel', 'motel', 'hostal', 'hospedaje',
+        'salon', 'peluqueria', 'estetica', 'belleza',
+        'farmacia', 'botanica',
+        'panaderia', 'pasteleria', 'tortilleria',
+        'zapateria', 'ropa',
+        'noticia', 'noticias', 'informa', 'periodico', 'revista',
+        'universidad', 'escuela', 'colegio', 'preparatoria',
+    }
+
+    def _wrong_sector_domain(u: str) -> bool:
+        domain = urlparse(u).netloc.lower().replace('www.', '').split('.')[0]
+        return any(kw in domain for kw in _WRONG_SECTOR_DOMAIN_KWS)
+
+    def _keyword_fallback(candidates: list[str]) -> list[str]:
+        """Last-resort filter by industry keywords in domain when LLM rejects everything."""
+        kw_raw = re.sub(r'\b(de|del|en|la|el|los|las|y|o|con|para|por|a)\b', ' ', industry, flags=re.I)
+        kws = [w.lower() for w in re.split(r'\s+', kw_raw.strip()) if len(w) >= 3]
+        if not kws:
+            return [u for u in candidates if not _wrong_sector_domain(u)]
+        kept = []
+        for u in candidates:
+            if _wrong_sector_domain(u):
+                continue
+            domain = urlparse(u).netloc.lower().replace('www.', '')
+            if any(kw in domain for kw in kws):
+                kept.append(u)
+        # Only fall through to snippet matching if domain matching found nothing
+        if not kept:
+            for u in candidates:
+                if _wrong_sector_domain(u):
+                    continue
+                s = snippets.get(u, {})
+                text = ((s.get("title") or "") + " " + (s.get("body") or "")).lower()
+                if any(kw in text for kw in kws):
+                    kept.append(u)
+        return kept or [u for u in candidates if not _wrong_sector_domain(u)] or candidates
+
+    # Industry keywords used to rescue URLs the AI over-filtered.
+    # If a URL's domain contains an industry keyword and isn't a wrong-sector domain,
+    # it's kept regardless of the AI verdict — "gasnieto.com.mx" should never be
+    # discarded just because the AI was uncertain about it.
+    # Pull keywords from the industry term itself AND from all its synonyms so that
+    # short stems ("gas" from "gaseras") are included even when the user typed the
+    # plural/variant form.
+    _kw_raw = re.sub(r'\b(de|del|en|la|el|los|las|y|o|con|para|por|a)\b', ' ', industry, flags=re.I)
+    _ind_kws_set: set[str] = {w.lower() for w in re.split(r'\s+', _kw_raw.strip()) if len(w) >= 3}
+    # Add synonym terms (e.g. "gaseras" → synonyms include "gas lp", "distribuidora de gas" → "gas")
+    for syn in INDUSTRY_SYNONYMS.get(industry.lower().strip(), []):
+        syn_raw = re.sub(r'\b(de|del|en|la|el|los|las|y|o|con|para|por|a)\b', ' ', syn, flags=re.I)
+        _ind_kws_set.update(w.lower() for w in re.split(r'\s+', syn_raw.strip()) if len(w) >= 3)
+    _ind_kws = list(_ind_kws_set)
+
+    def _domain_kw_rescue(all_urls: list[str], already_approved: set) -> list[str]:
+        """Return URLs with an industry keyword in the domain that the AI missed."""
+        if not _ind_kws:
+            return []
+        rescued = []
+        for u in all_urls:
+            if u in already_approved or _wrong_sector_domain(u):
+                continue
+            domain = urlparse(u).netloc.lower().replace('www.', '')
+            if any(kw in domain for kw in _ind_kws):
+                rescued.append(u)
+        return rescued
+
+    # Process batches in parallel (up to 3 concurrent LLM calls)
+    batch_size = 60
+    batches = [urls[i:i + batch_size] for i in range(0, len(urls), batch_size)]
+    if len(batches) <= 1:
+        ai_result = [u for u in _filter_batch(urls) if not _wrong_sector_domain(u)]
+        rescued = _domain_kw_rescue(urls, set(ai_result))
+        result = list(dict.fromkeys(ai_result + rescued))
+        return result if result else _keyword_fallback(urls)
+
+    ranked: list[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(batches), 3)) as ex:
+        for batch_result in ex.map(_filter_batch, batches):
+            ranked.extend(u for u in batch_result if not _wrong_sector_domain(u))
+    rescued = _domain_kw_rescue(urls, set(ranked))
+    ranked = list(dict.fromkeys(ranked + rescued))
+    if not ranked and urls:
+        return _keyword_fallback(urls)
     return ranked
 
 
-def _shallow_fetch_meta(urls: list[str], timeout: int = 5, max_bytes: int = 5120) -> dict:
+def _shallow_fetch_meta(urls: list[str], timeout: int = 3, max_bytes: int = 4096) -> dict:
     """
     Fetches only the first 5 KB of each URL to extract <title> and
     <meta name="description">. Enriches snippets for URLs that search engines
@@ -1188,29 +1538,47 @@ _OSM_INDUSTRY_TAGS: dict[str, list[tuple[str, str]]] = {
 
 
 def _osm_geocode(city: str, country: str | None) -> tuple[float, float, float, float] | None:
-    """Returns (south, west, north, east) bbox for a city via Nominatim, with cache."""
+    """Returns (south, west, north, east) bbox for a city via Nominatim, with cache.
+    Tries accented form first, then ASCII fallback — Nominatim is inconsistent with
+    diacritics (e.g. 'Querétaro' returns [] but 'Queretaro' works fine)."""
+    import unicodedata
+
+    def _ascii(s: str) -> str:
+        return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+
+    def _try_query(q: str) -> tuple | None:
+        try:
+            resp = requests.get(
+                _NOMINATIM_URL,
+                params={"q": q, "format": "json", "limit": 1, "addressdetails": 0},
+                headers=_NOMINATIM_HEADERS,
+                timeout=8,
+            )
+            data = resp.json()
+            if not data:
+                return None
+            bb = data[0]["boundingbox"]
+            return (float(bb[0]), float(bb[2]), float(bb[1]), float(bb[3]))  # S, W, N, E
+        except Exception:
+            return None
+
     cache_key = f"{city}|{country or ''}"
     if cache_key in _nominatim_cache:
         return _nominatim_cache[cache_key]
-    try:
-        geo_q = f"{city.strip()}, {country}" if country else city.strip()
-        resp = requests.get(
-            _NOMINATIM_URL,
-            params={"q": geo_q, "format": "json", "limit": 1, "addressdetails": 0},
-            headers=_NOMINATIM_HEADERS,
-            timeout=8,
-        )
-        data = resp.json()
-        if not data:
-            _nominatim_cache[cache_key] = None
-            return None
-        bb = data[0]["boundingbox"]   # [south, north, west, east]
-        result = (float(bb[0]), float(bb[2]), float(bb[1]), float(bb[3]))  # → (S, W, N, E)
-        _nominatim_cache[cache_key] = result
-        return result
-    except Exception:
-        _nominatim_cache[cache_key] = None
-        return None
+
+    city_s = city.strip()
+    city_ascii = _ascii(city_s)
+
+    # Try accented form first, fall back to ASCII if Nominatim returns nothing
+    for candidate in dict.fromkeys([city_s, city_ascii]):  # dict.fromkeys preserves order + dedupes
+        geo_q = f"{candidate}, {country}" if country else candidate
+        result = _try_query(geo_q)
+        if result:
+            _nominatim_cache[cache_key] = result
+            return result
+
+    _nominatim_cache[cache_key] = None
+    return None
 
 
 def _search_via_openstreetmap(
@@ -1385,7 +1753,7 @@ def _sa_extract_urls(html: str) -> tuple[list, dict]:
             continue
         urls.append(href)
         snippets[href] = {
-            "title": card.get("data-name", ""),
+            "title": re.sub(r'^\d+-', '', card.get("data-name", "")).strip(),
             "body": card.get("data-address", "Sección Amarilla"),
         }
 
@@ -1415,7 +1783,7 @@ def _sa_fetch_city(industry_slug: str, city_slug: str, max_pages: int = 3) -> tu
         html = None
 
         try:
-            resp = requests.get(page_url, headers=_SA_HEADERS, timeout=15, allow_redirects=True)
+            resp = requests.get(page_url, headers=_SA_HEADERS, timeout=8, allow_redirects=True)
             if resp.status_code == 200 and len(resp.text) > 3000:
                 html = resp.text
         except Exception:
@@ -1428,7 +1796,7 @@ def _sa_fetch_city(industry_slug: str, city_slug: str, max_pages: int = 3) -> tu
                     browser = pw.chromium.launch(headless=True)
                     page_obj = browser.new_page()
                     page_obj.set_extra_http_headers({"Accept-Language": "es-MX,es;q=0.9"})
-                    page_obj.goto(page_url, wait_until="networkidle", timeout=20000)
+                    page_obj.goto(page_url, wait_until="networkidle", timeout=10000)
                     html = page_obj.content()
                     browser.close()
             except Exception:
@@ -1473,7 +1841,9 @@ def _search_via_seccion_amarilla(
     # Data) — se puede escalar bastante más que antes sin gastar créditos.
     if city.strip():
         city_slugs = [_slugify(city.strip())]
-        pages_per_city = min(20, max(5, num_results // 10))
+        # ~20 resultados por página — para obtener num_results basta con ceil(num/20),
+        # con un mínimo de 2 y tope de 10 para no bloquear la búsqueda completa.
+        pages_per_city = min(10, max(2, (num_results + 19) // 20))
     else:
         cfg = COUNTRY_CONFIG.get("México", {})
         cities = cfg.get("cities", [])  # todas las ciudades (32)
@@ -1533,9 +1903,23 @@ def _search_via_google_maps(
         # sacarle más de una ciudad puntual es variar los términos de búsqueda (los
         # mismos sinónimos estáticos + IA que ya usa DDG).
         loc = city.strip()
-        ai_synonyms = _ai_expand_synonyms(ind_clean) if (OPENAI_API_KEY or DEEPSEEK_API_KEY) else []
+        # Run AI synonym expansion in a thread with a 5s cap so it doesn't block
+        # the map queries when the LLM is slow. Static synonyms start immediately;
+        # AI synonyms are added only if the LLM responds fast enough.
+        if OPENAI_API_KEY or DEEPSEEK_API_KEY:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _syn_ex:
+                _syn_fut = _syn_ex.submit(_ai_expand_synonyms, ind_clean)
+                try:
+                    ai_synonyms = _syn_fut.result(timeout=5)
+                except Exception:
+                    ai_synonyms = []
+        else:
+            ai_synonyms = []
         all_synonyms = list(dict.fromkeys(static_synonyms + ai_synonyms))
-        search_queries: list[tuple[str, str]] = [(base, loc)] + [(syn, loc) for syn in all_synonyms[:10]]
+        # Para num_results pequeños, menos queries = menos latencia.
+        # Maps da ~20 resultados por query; 1 query base = suficiente para ≤20 resultados.
+        max_syn = min(10, max(0, (num_results - 1) // 20))
+        search_queries: list[tuple[str, str]] = [(base, loc)] + [(syn, loc) for syn in all_synonyms[:max_syn]]
     elif cities:
         search_queries = [(base, c) for c in cities]
         # Synonyms × top cities to discover businesses registered under alternate terms
@@ -1569,7 +1953,7 @@ def _search_via_google_maps(
                     "https://api.brightdata.com/request",
                     headers={"Authorization": f"Bearer {_brightdata_key()}", "Content-Type": "application/json"},
                     json={"zone": "serp_api1", "url": maps_url, "format": "raw", "country": bd_country},
-                    timeout=30,
+                    timeout=20,
                 )
                 text = resp.text
                 if not _maps_logged:
@@ -1602,7 +1986,7 @@ def _search_via_google_maps(
                 if not _maps_logged:
                     print(f"[maps-debug] exception: {e}")
                 if attempt == 0:
-                    time.sleep(1 + random.random())
+                    time.sleep(0.5)
         return [], {}
 
     if city.strip():
@@ -1610,7 +1994,7 @@ def _search_via_google_maps(
     else:
         n_syn = len(search_queries) - len(cities) if cities else 0
         print(f"[maps] {len(search_queries)} queries ({len(cities)} cities + {n_syn} synonym variants)")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(search_queries), 16)) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(search_queries), 32)) as ex:
         futures = [ex.submit(_fetch_maps, qb, loc) for qb, loc in search_queries]
         for f in concurrent.futures.as_completed(futures):
             batch_urls, batch_snips = f.result()
@@ -1638,17 +2022,55 @@ def search_prospects(
     # Si no vinieron explícitos, se intentan extraer del propio texto para que
     # el fan-out por ciudad y el sesgo geográfico (gl/hl/bd_country) usen el
     # país/ciudad reales en vez de asumir México por default.
+    state_cities: list[str] | None = None
+    _llm_result: dict | None = None
     if not city.strip():
-        clean_industry, extracted_city, extracted_country = _extract_location(industry)
-        if extracted_city or extracted_country:
-            industry = clean_industry
-            city = extracted_city
-            country = country or extracted_country
+        # Try LLM normalizer first (corrects typos, detects states, normalizes names)
+        _llm_result = _normalize_query_with_llm(industry)
+        if _llm_result and _llm_result.get("industry"):
+            industry = _llm_result["industry"]
+            city     = _llm_result.get("city") or ""
+            if not country:
+                country = _llm_result.get("country") or None
 
     import logging as _logging
     _log = _logging.getLogger("searcher")
+
+    if not city.strip():
+        # Continue state-level detection after _log is defined so we can log it
+        if _llm_result and _llm_result.get("industry"):
+            state_raw = _llm_result.get("state") or ""
+            if state_raw and not city:
+                state_key = _norm_loc(state_raw)
+                state_cities = _MX_STATE_CITIES.get(state_key)
+                if state_cities:
+                    _log.info("[search] state fan-out: %s → %d cities", state_raw, len(state_cities))
+                else:
+                    _log.info("[search] state %r not in _MX_STATE_CITIES, using country fan-out", state_raw)
+
+        # Regex parser as fallback (or additional enrichment when LLM gave no city)
+        if not city:
+            clean_industry, extracted_city, extracted_country = _extract_location(industry)
+            if extracted_city or extracted_country:
+                industry = clean_industry
+                city     = extracted_city
+                country  = country or extracted_country
+
     _log.info("[search] industry=%r city=%r country=%r num=%d offset=%d",
               industry, city, country, num_results, offset)
+
+    # For complex multi-word industry phrases, simplify to a shorter core term that
+    # generates better Google recall. The original 'industry' is kept for the AI filter
+    # so relevance checking still matches the user's full intent.
+    industry_q = industry
+    if len(industry.split()) > 3 and (OPENAI_API_KEY or DEEPSEEK_API_KEY):
+        industry_q = _simplify_industry_for_search(industry)
+        if industry_q != industry:
+            _log.info("[search] query simplified %r → %r", industry, industry_q)
+
+    # For geocoding-based sources (Maps, OSM, SA) supply at least the state capital
+    # when we're doing a state-level fan-out so they have a city to geocode.
+    geocode_city = (state_cities[0] if state_cities and not city else city)
 
     _bd_key = _brightdata_key()
 
@@ -1657,21 +2079,44 @@ def search_prospects(
         # Amarilla — ninguna de esas 3 fuentes soporta paginación real, repetirlas
         # solo devolvería lo mismo. Sólo Bright Data pagina de verdad (páginas de
         # Google), así que "cargar más" únicamente profundiza ahí.
-        urls, snippets = _search_via_brightdata_multi(industry, city, country, keywords, num_results, offset)
+        urls, snippets = _search_via_brightdata_multi(industry_q, city, country, keywords, num_results, offset, state_cities=state_cities)
 
     elif _bd_key:
         # Correr 5 fuentes en paralelo: Bright Data + DuckDuckGo + Sección Amarilla + Maps + OSM
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
-            bd_future   = ex.submit(_search_via_brightdata_multi, industry, city, country, keywords, num_results, offset)
-            ddg_future  = ex.submit(_search_via_duckduckgo, industry, city, exclude_domains or set(), country, num_results)
-            sa_future   = ex.submit(_search_via_seccion_amarilla, industry, city, country, num_results)
-            maps_future = ex.submit(_search_via_google_maps, industry, city, country, keywords, num_results)
-            osm_future  = ex.submit(_search_via_openstreetmap, industry, city, country, num_results)
-            bd_urls,   bd_snips   = bd_future.result()
-            ddg_urls,  ddg_snips  = ddg_future.result()
-            sa_urls,   sa_snips   = sa_future.result()
-            maps_urls, maps_snips = maps_future.result()
-            osm_urls,  osm_snips  = osm_future.result()
+        import time as _time
+        _t0 = _time.monotonic()
+        # Deadline global escalado a num_results: búsquedas pequeñas (≤20)
+        # ya tienen suficientes URLs de BD+DDG+SA a los 22s; búsquedas grandes
+        # necesitan Maps y OSM. Maps/OSM se descartan si llegan después del límite.
+        _GLOBAL_DEADLINE = 22 if num_results <= 20 else 30 if num_results <= 50 else 45
+        def _safe_result(f, label):
+            try:
+                remaining = _GLOBAL_DEADLINE - (_time.monotonic() - _t0)
+                res = f.result(timeout=max(0.1, remaining))
+                _log.info("[search] %s done in %.1fs (%d urls)", label, _time.monotonic() - _t0, len(res[0]))
+                return res
+            except concurrent.futures.TimeoutError:
+                _log.warning("[search] %s TIMEOUT at %.1fs — usando resultados parciales", label, _time.monotonic() - _t0)
+                return [], {}
+            except Exception as _e:
+                _log.warning("[search] %s error: %s", label, _e)
+                return [], {}
+
+        # No usar context manager: `with executor:` llama shutdown(wait=True) al salir
+        # y bloquea hasta que Maps termine (~40s extra). Con wait=False el hilo de
+        # Maps queda en background pero el thread principal no espera.
+        _ex = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+        bd_future   = _ex.submit(_search_via_brightdata_multi, industry_q, city, country, keywords, num_results, offset, state_cities)
+        ddg_future  = _ex.submit(_search_via_duckduckgo, industry_q, city, exclude_domains or set(), country, num_results, state_cities)
+        sa_future   = _ex.submit(_search_via_seccion_amarilla, industry_q, geocode_city, country, num_results)
+        maps_future = _ex.submit(_search_via_google_maps, industry_q, geocode_city, country, keywords, num_results)
+        osm_future  = _ex.submit(_search_via_openstreetmap, industry_q, geocode_city, country, num_results)
+        bd_urls,   bd_snips   = _safe_result(bd_future,   "BD")
+        ddg_urls,  ddg_snips  = _safe_result(ddg_future,  "DDG")
+        sa_urls,   sa_snips   = _safe_result(sa_future,   "SA")
+        maps_urls, maps_snips = _safe_result(maps_future, "Maps")
+        osm_urls,  osm_snips  = _safe_result(osm_future,  "OSM")
+        _ex.shutdown(wait=False)
 
         _log.info("[search] BD=%d DDG=%d SA=%d Maps=%d OSM=%d → merged=%d",
                   len(bd_urls), len(ddg_urls), len(sa_urls), len(maps_urls), len(osm_urls),
@@ -1698,8 +2143,8 @@ def search_prospects(
     else:
         # DDG-only: also run OSM in parallel for free structured data
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
-            ddg_future = ex.submit(_search_via_duckduckgo, industry, city, exclude_domains or set(), country, num_results)
-            osm_future = ex.submit(_search_via_openstreetmap, industry, city, country, num_results)
+            ddg_future = ex.submit(_search_via_duckduckgo, industry, city, exclude_domains or set(), country, num_results, state_cities)
+            osm_future = ex.submit(_search_via_openstreetmap, industry, geocode_city, country, num_results)
             ddg_urls, ddg_snips = ddg_future.result()
             osm_urls, osm_snips = osm_future.result()
         seen: set[str] = set()
@@ -1729,8 +2174,12 @@ def search_prospects(
             if meta:
                 snippets[u] = meta
 
-    _log.info("[search] sending %d URLs to AI filter", len(urls))
-    result = _ai_filter_urls(urls, industry, snippets, country=country)
+    # Singularize the industry term for the AI filter prompt.
+    # "taquerías" → "taquería": the plural form makes the LLM treat it as a
+    # category/directory query and reject individual business sites en masse.
+    _industry_singular = _to_singular_es(industry)
+    _log.info("[search] sending %d URLs to AI filter (industry=%r)", len(urls), _industry_singular)
+    result = _ai_filter_urls(urls, _industry_singular, snippets, country=country)
     _log.info("[search] AI filter returned %d URLs (from %d)", len(result), len(urls))
     return result
 
@@ -1833,7 +2282,7 @@ def _detect_effective_country(country: str | None, text: str) -> str | None:
     return None
 
 
-def _bd_build_queries(industry: str, city: str, country: str | None, keywords: str, num_results: int) -> list[str]:
+def _bd_build_queries(industry: str, city: str, country: str | None, keywords: str, num_results: int, state_cities: list[str] | None = None) -> list[str]:
     """Build Google-friendly query list for Bright Data (no DDG operators)."""
     import re
     ind = industry.strip()
@@ -1875,11 +2324,34 @@ def _bd_build_queries(industry: str, city: str, country: str | None, keywords: s
             f"{base_city} contacto {loc}",
             f"{base_city} whatsapp {loc}",
             f"{base_city} cerca de {loc}",
+            # Intent variants — más probable que devuelvan sitios individuales, no directorios
+            f"{base_city} menú {loc}",
+            f"{base_city} dirección teléfono {loc}",
+            f"{base_city} pedidos {loc}",
         ]
         queries += [f"{syn} {loc}" for syn in synonyms[:10]]
+        # Fan-out to other cities in the same state when many results requested
+        if num_results > 20:
+            loc_norm = _norm_loc(loc)
+            state_key = next((sk for sk, cap in _MX_STATE_TO_CAPITAL.items() if _norm_loc(cap) == loc_norm), None)
+            if state_key:
+                extra_cities = [c for c in _MX_STATE_CITIES.get(state_key, []) if _norm_loc(c) != loc_norm]
+                max_extra = min(len(extra_cities), max(3, num_results // 10))
+                for c in extra_cities[:max_extra]:
+                    queries.append(f"{base_city} {c}")
+                    queries.append(f"{base_city} empresa {c}")
+                    for syn in synonyms[:3]:
+                        queries.append(f"{syn} {c}")
         return queries
 
     cities = cfg["cities"] if cfg and cfg.get("cities") else []
+
+    if state_cities and not city.strip():
+        max_c = min(len(state_cities), max(6, num_results * 3))
+        city_queries = [f"{base_city} {c}" for c in state_cities[:max_c]]
+        extra_queries = [f"{base_city} empresa {c}" for c in state_cities[:max_c]]
+        syn_queries = [f"{syn} {c}" for syn in _get_synonyms(ind_clean)[:3] for c in state_cities[:5]]
+        return city_queries + extra_queries + syn_queries
 
     if cities:
         # Obtener sinónimos del rubro para multiplicar queries con terminología diferente
@@ -1916,20 +2388,27 @@ def pages_per_query_for(num_results: int) -> int:
         return 1
     if num_results <= 60:
         return 2
-    return 3
+    if num_results <= 120:
+        return 3
+    return 5
 
 
 def _search_via_brightdata_multi(
     industry: str, city: str = "", country: str = None,
     keywords: str = "", num_results: int = 10, offset: int = 0,
+    state_cities: list[str] | None = None,
 ) -> tuple[list, dict]:
     """Fan-out múltiples queries a Bright Data en paralelo, cada una a varias páginas de Google."""
     import time
     import random
-    # Escalar al máximo: el usuario dijo "explotar al límite aunque nos manchemos".
-    # Con 5000 créditos free: 150 queries/búsqueda → ~33 búsquedas del free tier.
-    MAX_QUERIES = min(max(30, num_results * 2), 150)
-    all_queries = _bd_build_queries(industry, city, country, keywords, num_results)
+    # Task budget: 40 workers × ~30s deadline / ~3.5s per call ≈ 340 tasks max.
+    # Cap MAX_QUERIES so queries × pages stays within budget to avoid wasting BD credits
+    # on tasks that get queued but never complete before the deadline.
+    _TASK_BUDGET = 320
+    pages = pages_per_query_for(num_results)
+    _q_cap = max(30, _TASK_BUDGET // max(pages, 1))
+    MAX_QUERIES = min(max(30, num_results * 2), 150, _q_cap)
+    all_queries = _bd_build_queries(industry, city, country, keywords, num_results, state_cities=state_cities)
     queries = all_queries[:MAX_QUERIES]
 
     # Geo-location: usar el gl/hl del país si está configurado
@@ -1939,7 +2418,6 @@ def _search_via_brightdata_multi(
     hl = cfg.get("hl", "es") if cfg else "es"
     bd_country = cfg.get("bd_country", "mx") if cfg else "mx"
 
-    pages = pages_per_query_for(num_results)
     tasks = [(q, offset + page * 10) for q in queries for page in range(pages)]
 
     seen_domains: set[str] = set()
@@ -1955,7 +2433,7 @@ def _search_via_brightdata_multi(
                 return _search_via_brightdata(q, num_results=10, offset=start, gl=gl, hl=hl, bd_country=bd_country)
             except Exception:
                 if attempt == 0:
-                    time.sleep(1 + random.random())
+                    time.sleep(0.5)
         return [], {}
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), 40)) as ex:
@@ -2012,9 +2490,9 @@ def _search_via_brightdata(
 
 def _search_via_duckduckgo(
     industry: str, city: str = "", exclude_domains: set | None = None,
-    country: str = None, num_results: int = 10,
+    country: str = None, num_results: int = 10, state_cities: list[str] | None = None,
 ) -> tuple[list, dict]:
-    variations = _build_variations(industry, city, country, num_results)
+    variations = _build_variations(industry, city, country, num_results, state_cities=state_cities)
     skip = exclude_domains or set()
 
     all_raw: list[dict] = []

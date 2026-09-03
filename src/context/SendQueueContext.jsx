@@ -55,7 +55,7 @@ export function SendQueueProvider({ children }) {
               ? Math.max(0, Math.ceil((new Date(s.next_action_at) - Date.now()) / 1000))
               : null
             startTransition(() => {
-              setActive({ total: s.active_total ?? 1, sent: s.active_sent ?? 0, phase: s.phase, countdown, batch: !!s.active_batch })
+              setActive({ total: s.active_total ?? 1, sent: s.active_sent ?? 0, phase: s.phase, countdown, next_action_at: s.next_action_at ?? null, batch: !!s.active_batch })
             })
           } else {
             setActive(null)

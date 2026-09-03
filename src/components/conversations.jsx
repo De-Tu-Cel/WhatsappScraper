@@ -39,6 +39,7 @@ import Popover from '@mui/material/Popover'
 import EmojiEmotionsIcon from '@mui/icons-material/EmojiEmotions'
 import TuneIcon from '@mui/icons-material/Tune'
 import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined'
+import { List, useListRef } from 'react-window'
 import { getCategoryConfig } from '@/lib/categoryConfig'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner, InstanceStatusDot } from './InstanceStatusBanner'
@@ -205,7 +206,7 @@ const ConversationItem = memo(function _ConversationItem({ conv, active, onClick
       '&:hover': { bgcolor: active ? 'rgba(var(--accent-rgb, 99,102,241), 0.12)' : 'rgba(255,255,255,0.03)' },
     }}>
       {/* Avatar */}
-      <Badge badgeContent={conv.unread || 0} color="error"
+      <Badge badgeContent={conv.unread > 0 ? conv.unread : undefined} color="error"
         sx={{ '& .MuiBadge-badge': { fontSize: '0.6rem', minWidth: 16, height: 16 } }}>
         <Box sx={{
           width: 40, height: 40, borderRadius: 2, flexShrink: 0, overflow: 'hidden',
@@ -213,7 +214,7 @@ const ConversationItem = memo(function _ConversationItem({ conv, active, onClick
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
           {domain ? (
-            <Box component="img"
+            <Box component="img" loading="lazy"
               src={`https://www.google.com/s2/favicons?domain=${domain}&sz=64`}
               sx={{ width: 22, height: 22, objectFit: 'contain' }}
               onError={e => { e.currentTarget.style.display = 'none'; e.currentTarget.nextSibling.style.display = 'flex' }} />
@@ -284,13 +285,32 @@ const ConversationItem = memo(function _ConversationItem({ conv, active, onClick
             fontSize: '0.73rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             fontStyle: isInbound ? 'normal' : 'italic', flex: 1, minWidth: 0,
           }}>
-            {conv.last_message || '—'}
+            {conv.last_message?.includes?.('BEGIN:VCARD')
+              ? '(contacto compartido)'
+              : (conv.last_message || '—')}
           </Typography>
         </Box>
       </Box>
     </Box>
   )
 }, (prev, next) => prev.active === next.active && prev.conv === next.conv)
+
+// react-window keys rows by index by default — after a refetch reorders the list
+// (a conversation jumping to the top on new activity), that would remount rows
+// instead of just moving them, causing a visible "reload" flash. Key by
+// company_id instead, matching the identity the plain-map version used before.
+const conversationRowKey = (index, data) => data.items[index]?.company_id ?? index
+
+// react-window row renderer — items/selectedId/onSelect come through rowProps
+function ConversationRow({ index, style, items, selectedId, onSelect }) {
+  const c = items[index]
+  if (!c) return null
+  return (
+    <div style={style} data-company-id={c.company_id}>
+      <ConversationItem conv={c} active={selectedId === c.company_id} onClick={() => onSelect(c)} />
+    </div>
+  )
+}
 
 const MEDIA_LABELS = {
   '[sticker]':  { Icon: EmojiEmotionsIcon,   label: { en: 'Sticker',   es: 'Sticker' } },
@@ -408,12 +428,73 @@ function InteractiveMessage({ interactive, isOut, onReply }) {
   )
 }
 
+const normPhone = n => (n || '').replace(/\D/g, '').slice(-10)
+
 function formatSenderNumber(raw) {
   let d = String(raw).replace(/\D/g, '')
   if (d.length === 13 && d.startsWith('521')) d = '52' + d.slice(3)  // strip mobile "1" marker
   if (d.length === 12) return `+${d.slice(0,2)} ${d.slice(2,5)} ${d.slice(5,8)} ${d.slice(8,12)}`
   if (d.length === 10) return `+52 ${d.slice(0,3)} ${d.slice(3,6)} ${d.slice(6,10)}`
-  return d ? `+${d}` : raw
+  return d ? `+${d}` : null
+}
+
+// ── vCard parser ──────────────────────────────────────────────────────────────
+function parseVCards(text) {
+  const cards = []
+  const blocks = text.match(/BEGIN:VCARD[\s\S]*?END:VCARD/gi) || []
+  for (const block of blocks) {
+    const get = (key) => {
+      const re = new RegExp(`^${key}[^:]*:(.+)`, 'im')
+      const m = block.match(re)
+      return m ? m[1].trim() : ''
+    }
+    const fn = get('FN') || get('N').split(';').filter(Boolean).reverse().join(' ')
+    const tel = get('TEL')
+    const biz = get('X-WA-BIZ-NAME')
+    cards.push({ fn, tel, biz })
+  }
+  return cards
+}
+
+function VCardBubble({ text, isOut }) {
+  const cards = parseVCards(text)
+  if (!cards.length) return null
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+      {cards.map((c, i) => (
+        <Box key={i} sx={{
+          display: 'flex', alignItems: 'center', gap: 1,
+          bgcolor: isOut ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.06)',
+          borderRadius: 1.5, px: 1.25, py: 0.9,
+          border: `1px solid ${isOut ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.1)'}`,
+          minWidth: 180,
+        }}>
+          <Box sx={{
+            width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+            bgcolor: isOut ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.1)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <PersonIcon sx={{ fontSize: 20, color: isOut ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.5)' }} />
+          </Box>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography sx={{ fontSize: '0.82rem', fontWeight: 600, color: 'rgba(255,255,255,0.9)', lineHeight: 1.2 }} noWrap>
+              {c.fn || 'Contacto'}
+            </Typography>
+            {c.biz && c.biz !== c.fn && (
+              <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.5)', lineHeight: 1.2 }} noWrap>
+                {c.biz}
+              </Typography>
+            )}
+            {c.tel && (
+              <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', lineHeight: 1.2, fontFamily: 'monospace' }} noWrap>
+                {c.tel}
+              </Typography>
+            )}
+          </Box>
+        </Box>
+      ))}
+    </Box>
+  )
 }
 
 const MessageBubble = memo(function _MessageBubble({ msg, onReply }) {
@@ -421,10 +502,11 @@ const MessageBubble = memo(function _MessageBubble({ msg, onReply }) {
   const isOut  = msg.direction === 'outbound'
   const isAI   = Boolean(msg.ai_generated)
   const raw    = msg.body || msg.message_body || ''
-  const media  = MEDIA_LABELS[raw.trim().toLowerCase()]
+  const isVCard = raw.includes('BEGIN:VCARD')
+  const media  = isVCard ? null : MEDIA_LABELS[raw.trim().toLowerCase()]
   const body   = raw || '—'
   const interactive = msg.interactive
-  const sentLabel = isOut ? (msg.instance_number ? formatSenderNumber(msg.instance_number) : msg.instance_name) : null
+  const sentLabel = isOut ? (formatSenderNumber(msg.instance_number) || msg.instance_name || null) : null
   return (
     <Box sx={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start', mb: 0.8, px: 2 }}>
       <Box sx={{
@@ -440,6 +522,8 @@ const MessageBubble = memo(function _MessageBubble({ msg, onReply }) {
       }}>
         {interactive ? (
           <InteractiveMessage interactive={interactive} isOut={isOut} onReply={onReply} />
+        ) : isVCard ? (
+          <VCardBubble text={raw} isOut={isOut} />
         ) : media ? (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
             <media.Icon sx={{ fontSize: 18, color: isOut ? 'rgba(var(--accent-rgb, 99,102,241), 0.9)' : 'rgba(255,255,255,0.5)' }} />
@@ -540,7 +624,7 @@ function ThreadSkeleton() {
   )
 }
 
-export default function Conversations() {
+export default function Conversations({ isActive } = {}) {
   const [convs, setConvs]           = useState([])
   const [loading, setLoading]       = useState(true)
   const [selected, setSelected]     = useState(null)
@@ -559,6 +643,7 @@ export default function Conversations() {
   const [waNumbers, setWaNumbers]       = useState([])
   const [selectedNums, setSelectedNums] = useState([])
   const [activeNum, setActiveNum]       = useState('all')
+  const [numbersReady, setNumbersReady] = useState(false)
   const [syncing, setSyncing]           = useState(false)
   const [emojiAnchor, setEmojiAnchor]   = useState(null)
   const [emojiGroup, setEmojiGroup]     = useState(0)
@@ -570,8 +655,10 @@ export default function Conversations() {
   const { user } = useUser()
   const [myConvsOnly, setMyConvsOnly] = useState(false)
   const threadLenRef    = useRef(0)
+  const threadRef       = useRef([])
   const messagesBoxRef  = useRef(null)
   const listBoxRef      = useRef(null)
+  const listRef         = useListRef(null)
   const [skeletonCount, setSkeletonCount] = useState(7)
   const pendingScrollRef = useRef(false)
   const replyRef  = useRef(null)
@@ -632,10 +719,11 @@ export default function Conversations() {
       pendingNumRef.current = pendingConvNumber || null
       setSelected(match)
       clearPendingConv()
-      // Scroll the selected item into view
+      // Scroll the selected item into view (list is virtualized — use react-window's API,
+      // a plain querySelector would miss rows outside the currently rendered viewport)
       setTimeout(() => {
-        const el = listBoxRef.current?.querySelector(`[data-company-id="${match.company_id}"]`)
-        if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        const idx = filtered.findIndex(c => c.company_id === match.company_id)
+        if (idx >= 0) listRef.current?.scrollToRow({ index: idx, align: 'smart', behavior: 'smooth' })
       }, 80)
     } else {
       // Company not in current list — refresh and retry (handles newly registered contacts)
@@ -647,9 +735,8 @@ export default function Conversations() {
   // instead of leaving activeNum on 'all' (which shows the "select a number" placeholder)
   useEffect(() => {
     if (!pendingNumRef.current || waNumbers.length === 0) return
-    const norm = v => (v || '').replace(/\D/g, '').slice(-10)
-    const target = norm(pendingNumRef.current)
-    const match = waNumbers.find(n => norm(n) === target)
+    const target = normPhone(pendingNumRef.current)
+    const match = waNumbers.find(n => normPhone(n) === target)
     if (match) setActiveNum(match)
     pendingNumRef.current = null
   }, [waNumbers])
@@ -696,7 +783,7 @@ export default function Conversations() {
     try {
       const res = await fetch(`/api/companies/${companyId}`)
       const data = await res.json()
-      if (currentCompanyRef.current !== companyId) return
+      if (currentCompanyRef.current !== companyId) return []
       const numbers = [...new Set(
         (data.contacts || [])
           .filter(c => c.type === 'whatsapp')
@@ -704,10 +791,13 @@ export default function Conversations() {
       )]
       setWaNumbers(numbers)
       setSelectedNums(numbers)
-      // Don't override activeNum here — it's already set to 'all' by the selection effect
+      setNumbersReady(true)
+      return numbers
     } catch {
-      if (currentCompanyRef.current !== companyId) return
+      if (currentCompanyRef.current !== companyId) return []
       setWaNumbers([])
+      setNumbersReady(true)
+      return []
     }
   }, [])
 
@@ -830,14 +920,20 @@ export default function Conversations() {
     finally { syncingRef.current = false; setSyncing(false) }
   }, [fetchThread, fetchConvs])
 
+  useEffect(() => { threadRef.current = thread }, [thread])
+
   useEffect(() => {
     if (selected) {
       threadLenRef.current = 0
       setThread([])
-      setWaNumbers([])    // clear old company's number tabs immediately
+      setWaNumbers([])
+      setNumbersReady(false)
       setActiveNum('all')
-      fetchThread(selected.company_id, true)
+      // Run both in parallel: numbers gate the render, thread populates numStats/icons.
+      // numbersReady prevents thread from rendering until we know the number count,
+      // avoiding the flicker where thread content shows before the multi-number placeholder.
       fetchCompanyNumbers(selected.company_id)
+      fetchThread(selected.company_id, true)
       handleSync(selected.company_id)
     }
   }, [selected, fetchThread, fetchCompanyNumbers, handleSync])
@@ -884,7 +980,7 @@ export default function Conversations() {
     }
 
     // Route reply through the same instance that received the last inbound message
-    const lastInbound = [...thread].reverse().find(m => m.direction === 'inbound')
+    const lastInbound = [...threadRef.current].reverse().find(m => m.direction === 'inbound')
     const replyInstance = lastInbound?.received_on_instance || null
     try {
       for (const num of toSend) {
@@ -947,7 +1043,7 @@ export default function Conversations() {
       setTimeout(() => setSendError(''), 8000)
     }
     finally { setSending(false) }
-  }, [selectedNums, waNumbers, thread, selected, fetchThread, dailyStats, fetchDailyStats, lang])
+  }, [selectedNums, waNumbers, selected, fetchThread, dailyStats, fetchDailyStats, lang])
 
   const filtered = useMemo(() => convs.filter(c => {
     if (myConvsOnly && c.sent_by_username !== user?.username) return false
@@ -956,16 +1052,14 @@ export default function Conversations() {
            (c.industry     || '').toLowerCase().includes(q)
   }), [convs, myConvsOnly, user?.username, search])
 
-  // Normalize: keep last 10 digits only for comparison
-  const norm = n => (n || '').replace(/\D/g, '').slice(-10)
-
-  // Stats per registered company number (using normalized comparison)
+  // Stats per registered company number — O(N) with pre-built normMap
   const numStats = useMemo(() => {
     const stats = {}
     waNumbers.forEach(n => { stats[n] = { sent: 0, received: 0 } })
+    const normMap = new Map(waNumbers.map(n => [normPhone(n), n]))
     thread.forEach(m => {
-      const msgNum = norm(m.to_number || m.from_number || m.number)
-      const match  = waNumbers.find(n => norm(n) === msgNum)
+      const msgNum = normPhone(m.to_number || m.from_number || m.number)
+      const match  = normMap.get(msgNum)
       if (match) {
         if (m.direction === 'outbound') stats[match].sent++
         else stats[match].received++
@@ -974,22 +1068,42 @@ export default function Conversations() {
     return stats
   }, [thread, waNumbers])
 
-  // Messages for the active tab (normalized comparison)
+  // Messages for the active tab — O(N) with pre-built normSet
   const visibleThread = useMemo(() => {
     if (!activeNum || activeNum === 'all') return thread
-    const target = norm(activeNum)
-    // Only show unknown-number inbound in this tab if we actually sent to this number
+    const target  = normPhone(activeNum)
+    const normSet = new Set(waNumbers.map(n => normPhone(n)))
     const sentToThisNum = thread.some(m =>
-      m.direction === 'outbound' && norm(m.to_number || m.number) === target
+      m.direction === 'outbound' && normPhone(m.to_number || m.number) === target
     )
     return thread.filter(m => {
-      const msgNum = norm(m.to_number || m.from_number || m.number)
+      const msgNum = normPhone(m.to_number || m.from_number || m.number)
       if (msgNum === target) return true
       // Include inbound from business/unknown numbers only if we sent to this tab's number
-      if (m.direction === 'inbound' && !waNumbers.some(n => norm(n) === msgNum)) return sentToThisNum
+      if (m.direction === 'inbound' && !normSet.has(msgNum)) return sentToThisNum
       return false
     })
   }, [thread, activeNum, waNumbers])
+
+  // Instance that sent the most recent outbound message for the ACTIVE number tab.
+  // Only shown when a specific number is selected (not "all") or when there's only one number.
+  const sendingInstance = useMemo(() => {
+    const showSingle = waNumbers.length <= 1 || (activeNum && activeNum !== 'all')
+    if (!showSingle) return null
+    let out = null
+    for (let i = visibleThread.length - 1; i >= 0; i--) {
+      if (visibleThread[i].direction === 'outbound') { out = visibleThread[i]; break }
+    }
+    if (!out) return null
+    const rawNum = out.instance_number || selected?.via_instance_number || null
+    const num    = rawNum ? formatSenderNumber(rawNum) : null
+    const name   = out.instance_name || null
+    // Use conversation-level sent_by_name (oldest outbound, same source as list chip)
+    // instead of the most-recent outbound thread message, which may be the AI persona.
+    const sentBy = selected?.sent_by_name || null
+    const label = (name && num) ? `${name} (${num})` : (num || name)
+    return { num, name, sentBy, label }
+  }, [visibleThread, activeNum, waNumbers, selected])
 
   return (
     <>
@@ -1051,10 +1165,13 @@ export default function Conversations() {
           </Box>
         </Box>
 
-        {/* Lista */}
-        <Box ref={listBoxRef} sx={{ flex: 1, overflowY: 'auto' }}>
+        {/* Lista — virtualizada con react-window: solo monta las filas visibles
+             en vez de las N conversaciones completas (evita LCP alto con listas grandes) */}
+        <Box ref={listBoxRef} sx={{ flex: 1, minHeight: 0 }}>
           {loading ? (
-            Array.from({ length: skeletonCount }).map((_, i) => <ConversationItemSkeleton key={i} />)
+            <Box sx={{ height: '100%', overflowY: 'auto' }}>
+              {Array.from({ length: skeletonCount }).map((_, i) => <ConversationItemSkeleton key={i} />)}
+            </Box>
           ) : filtered.length === 0 ? (
             <Box sx={{ px: 2, pt: 4, textAlign: 'center' }}>
               <WhatsAppIcon sx={{ fontSize: 36, color: 'rgba(255,255,255,0.1)', mb: 1 }} />
@@ -1062,13 +1179,17 @@ export default function Conversations() {
                 {searchInput ? t.common.noData : t.convs.noConvs}
               </Typography>
             </Box>
-          ) : filtered.map(c => (
-            <div key={c.company_id} data-company-id={c.company_id}>
-              <ConversationItem conv={c}
-                active={selected?.company_id === c.company_id}
-                onClick={() => setSelected(c)} />
-            </div>
-          ))}
+          ) : (
+            <List
+              listRef={listRef}
+              rowCount={filtered.length}
+              rowHeight={73}
+              rowKey={conversationRowKey}
+              overscanCount={8}
+              rowComponent={ConversationRow}
+              rowProps={{ items: filtered, selectedId: selected?.company_id, onSelect: setSelected }}
+              style={{ height: '100%', width: '100%' }} />
+          )}
         </Box>
 
         {/* Total */}
@@ -1178,6 +1299,33 @@ export default function Conversations() {
                 </Tooltip>
               </Box>
 
+              {/* Instancia origen + agente que envió */}
+              {(sendingInstance?.label || sendingInstance?.sentBy) && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, mb: waNumbers.length > 0 ? 0.6 : 0, flexWrap: 'wrap' }}>
+                  {sendingInstance.label && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
+                      <PhoneAndroidIcon sx={{ fontSize: 11, color: 'rgba(255,255,255,0.22)', flexShrink: 0 }} />
+                      <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.28)', fontFamily: 'monospace', letterSpacing: '0.04em' }}>
+                        {lang === 'en' ? 'via' : 'vía'}&nbsp;{sendingInstance.label}
+                      </Typography>
+                    </Box>
+                  )}
+                  {sendingInstance.sentBy && (
+                    <Box sx={{
+                      display: 'flex', alignItems: 'center', gap: 0.3,
+                      bgcolor: agentColor(sendingInstance.sentBy) + '18',
+                      border: `1px solid ${agentColor(sendingInstance.sentBy)}44`,
+                      borderRadius: 1, px: 0.6, py: 0.1,
+                    }}>
+                      <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: agentColor(sendingInstance.sentBy), flexShrink: 0 }} />
+                      <Typography sx={{ fontSize: '0.62rem', color: agentColor(sendingInstance.sentBy), fontWeight: 700, lineHeight: 1.4 }}>
+                        {sendingInstance.sentBy.split(' ')[0]}
+                      </Typography>
+                    </Box>
+                  )}
+                </Box>
+              )}
+
               {/* Números — mismo diseño para 1 o varios */}
               {waNumbers.length > 0 && (
                 <Box sx={{
@@ -1237,7 +1385,7 @@ export default function Conversations() {
               '&::-webkit-scrollbar': { width: 4 },
               '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 },
             }}>
-              {threadLoad ? (
+              {!numbersReady || threadLoad ? (
                 <ThreadSkeleton />
               ) : waNumbers.length > 1 && (!activeNum || activeNum === 'all') ? (
                 <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', px: 3 }}>

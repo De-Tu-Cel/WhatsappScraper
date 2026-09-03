@@ -53,6 +53,7 @@ export function HighlightedMessageInput({ value, onChange, rows = 3, maxLength =
         disabled={disabled}
         placeholder={placeholder}
         rows={rows}
+        spellCheck={true}
         sx={{
           position: 'relative', zIndex: 1, display: 'block',
           width: '100%', minHeight: rows * 24, resize: 'vertical',

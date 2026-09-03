@@ -16,12 +16,61 @@ import AnalyticsIcon from '@mui/icons-material/Analytics'
 import ScheduleSendIcon from '@mui/icons-material/ScheduleSend'
 import Sidebar from '../components/Sidebar'
 import dynamic from 'next/dynamic'
+import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined'
+import Skeleton from '@mui/material/Skeleton'
+
+// Skeleton painted immediately while the conversations.js chunk downloads.
+// Matches the 2-panel layout exactly so the LCP element (empty-state card)
+// is visible right away instead of waiting ~19s for the full chunk.
+function ConversationsSkeleton() {
+  return (
+    <Box sx={{ display: 'flex', height: '100%', minHeight: 0, gap: 0, borderRadius: 2, overflow: 'hidden', border: '1px solid var(--border)' }}>
+      {/* Left panel */}
+      <Box sx={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
+        <Box sx={{ px: 2, pt: 2, pb: 1.5, borderBottom: '1px solid var(--border)' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+            <ForumIcon sx={{ color: '#4ade80', fontSize: 20 }} />
+            <Skeleton variant="text" width={110} height={20} sx={{ bgcolor: 'rgba(255,255,255,0.07)' }} />
+          </Box>
+          <Skeleton variant="rounded" width="100%" height={34} sx={{ bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 1 }} />
+        </Box>
+        <Box sx={{ flex: 1, overflow: 'hidden', px: 1.5, pt: 1 }}>
+          {Array.from({ length: 7 }).map((_, i) => (
+            <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 1.1, px: 0.5 }}>
+              <Skeleton variant="circular" width={36} height={36} sx={{ bgcolor: 'rgba(255,255,255,0.06)', flexShrink: 0 }} />
+              <Box sx={{ flex: 1 }}>
+                <Skeleton variant="text" width="65%" height={14} sx={{ bgcolor: 'rgba(255,255,255,0.07)' }} />
+                <Skeleton variant="text" width="45%" height={12} sx={{ bgcolor: 'rgba(255,255,255,0.04)', mt: 0.3 }} />
+              </Box>
+            </Box>
+          ))}
+        </Box>
+      </Box>
+      {/* Right panel — empty state rendered immediately (this IS the LCP element) */}
+      <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Box sx={{ textAlign: 'center', px: 4, py: 3, borderRadius: 3,
+          bgcolor: 'var(--card-bg)', backdropFilter: 'blur(12px)',
+          border: '1px solid rgba(37,211,102,0.22)',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.04)' }}>
+          <Box sx={{ width: 40, height: 40, borderRadius: '50%', mx: 'auto', mb: 1.5,
+            bgcolor: 'rgba(37,211,102,0.1)', border: '1px solid rgba(37,211,102,0.2)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <ForumOutlinedIcon sx={{ fontSize: 20, color: 'rgba(37,211,102,0.7)' }} />
+          </Box>
+          <Box sx={{ color: 'var(--text)', fontSize: '0.92rem', fontWeight: 600, mb: 0.4 }}>No conversation selected</Box>
+          <Box sx={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>Choose a company from the list to view the message thread</Box>
+        </Box>
+      </Box>
+    </Box>
+  )
+}
+
 const SingleUrlProcessor = dynamic(() => import('../components/singleUrlProcessor'), { ssr: false })
 const SearchProspects    = dynamic(() => import('../components/searchProspects'),    { ssr: false })
 const BatchProcessor     = dynamic(() => import('../components/batchProcessor'),     { ssr: false })
 const CsvImporter        = dynamic(() => import('../components/csvImporter'),        { ssr: false })
 const DatabaseViewer     = dynamic(() => import('../components/databaseViewer'),     { ssr: false })
-const Conversations      = dynamic(() => import('../components/conversations'),      { ssr: false })
+const Conversations      = dynamic(() => import('../components/conversations'),      { ssr: false, loading: () => <ConversationsSkeleton /> })
 const Analytics          = dynamic(() => import('../components/analytics'),          { ssr: false })
 const ScheduledSends     = dynamic(() => import('../components/scheduledSends'),     { ssr: false })
 const SendCampaign       = dynamic(() => import('../components/sendCampaign'),       { ssr: false })

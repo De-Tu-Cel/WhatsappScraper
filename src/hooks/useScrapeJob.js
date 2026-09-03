@@ -32,12 +32,24 @@ export function useScrapeJob(surface) {
     try {
       const res = await authFetch(`/api/scrape-jobs/${id}`)
       if (!res.ok) {
-        if (mountedRef.current) { setJob(null); setJobId(null) }
-        localStorage.removeItem(storageKey)
+        // Only forget the job on 404 (truly gone). 5xx/other transient errors
+        // (e.g. MongoDB briefly down) should not erase localStorage — the job
+        // still exists on the server and will be recoverable once it's back.
+        if (res.status === 404 && mountedRef.current) {
+          setJob(null); setJobId(null)
+          localStorage.removeItem(storageKey)
+        }
         return
       }
       const data = await res.json()
       if (!mountedRef.current) return
+      // Guard: job belongs to a different surface (e.g. a stale search job ID
+      // stored under scrape_job_batch). Clear and show empty state.
+      if (data.surface && data.surface !== surface) {
+        localStorage.removeItem(storageKey)
+        setJob(null); setJobId(null)
+        return
+      }
       // Stale terminal job (>24h old) → show clean state instead of old results
       if (TERMINAL.includes(data.status) && data.finished_at) {
         const age = Date.now() - new Date(data.finished_at).getTime()
@@ -60,7 +72,22 @@ export function useScrapeJob(surface) {
   useEffect(() => {
     mountedRef.current = true
     const saved = localStorage.getItem(storageKey)
-    if (saved) { setJobId(saved); poll(saved) }
+    if (saved) {
+      setJobId(saved); poll(saved)
+    } else {
+      // localStorage was cleared (e.g. by a transient 500 while MongoDB was down).
+      // Ask the backend for the most recent non-terminal job for this surface so
+      // the user sees their in-progress scrape again after a reconnect/refresh.
+      authFetch(`/api/scrape-jobs/latest?surface=${surface}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (!data?._id || !mountedRef.current) return
+          localStorage.setItem(storageKey, data._id)
+          setJobId(data._id)
+          poll(data._id)
+        })
+        .catch(() => {})
+    }
     return () => { mountedRef.current = false; if (timerRef.current) clearTimeout(timerRef.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -101,9 +128,16 @@ export function useScrapeJob(surface) {
         // más preciso que el valor de React state que pudo ser hasta 3s stale.
         frozenCountRef.current = Math.min(data.processed_count || 0, data.total_count || 0)
       }
-      if (action === 'cancel') localStorage.removeItem(storageKey)
+      // On cancel: keep the job in localStorage so the "N pending URLs / Reanudar"
+      // banner survives a page refresh. reset() (the X button) is the explicit clear.
+      if (action === 'reanudar') {
+        // Job went back to 'pending' — ensure it's in localStorage and restart poll.
+        localStorage.setItem(storageKey, jobId)
+        if (timerRef.current) clearTimeout(timerRef.current)
+        poll(jobId)
+      }
     }
-  }, [jobId, storageKey, job])
+  }, [jobId, storageKey, job, poll])
 
   const reset = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current)
@@ -135,10 +169,12 @@ export function useScrapeJob(surface) {
     pausing:    isPausing,
     paused:     !!job?.paused && !(job?.current_urls?.length > 0),
     done:       TERMINAL.includes(status),
+    pendingCount: job?.pending_urls_count || 0,
     start,
-    pause:  () => act('pause'),
-    resume: () => act('resume'),
-    cancel: () => act('cancel'),
+    pause:    () => act('pause'),
+    resume:   () => act('resume'),
+    cancel:   () => act('cancel'),
+    reanudar: () => act('reanudar'),
     reset,
   }
 }

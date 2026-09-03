@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, memo } from 'react'
 import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
@@ -247,6 +247,93 @@ function SendProgress({ sent, total }) {
 
 // ─── Company picker ───────────────────────────────────────────────────────────
 
+// Pure normalizer — lives at module scope so CompanyCard (memoized) can use it
+// without receiving it as a prop.
+function normPhone(n) {
+  if (!n) return ''
+  const s = String(n).replace(/^\+/, '')
+  return s.replace(/^521(\d{10})$/, '52$1')
+}
+
+const EMPTY_CONTACTED = new Set()
+
+function _companyCardEqual(prev, next) {
+  if (prev.company !== next.company) return false
+  if (prev.contactedNormed !== next.contactedNormed) return false
+  if (prev.activeSet !== next.activeSet) return false
+  for (const n of prev.company.numbers) {
+    if (prev.selectedNums.has(n.number) !== next.selectedNums.has(n.number)) return false
+  }
+  return true
+}
+
+const CompanyCard = memo(function CompanyCard({
+  company, contactedNormed, selectedNums, activeSet, onToggle, onToggleCompany, t,
+}) {
+  const sc = company.numbers.filter(n => selectedNums.has(n.number)).length
+  const total = company.numbers.length
+  const allCompanySel = sc === total && total > 0
+  const isNumContacted = n => contactedNormed.has(normPhone(n))
+  const countSx = allCompanySel
+    ? { bgcolor: 'rgba(34,197,94,0.15)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.35)' }
+    : sc > 0
+      ? { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', color: 'var(--accent,#60a5fa)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)' }
+      : { bgcolor: 'var(--item-hover)', color: 'var(--text-muted)', border: '1px solid var(--border)' }
+  return (
+    <Box sx={{
+      flexShrink: 0, borderRadius: 2, overflow: 'hidden',
+      border: `1px solid ${sc > 0 ? 'rgba(var(--accent-rgb,59,130,246),0.3)' : 'var(--border)'}`,
+      bgcolor: 'var(--card-bg, rgba(255,255,255,0.015))', transition: 'border-color 0.15s',
+    }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.2, py: 0.7, minHeight: 44, bgcolor: sc > 0 ? 'rgba(var(--accent-rgb,59,130,246),0.05)' : 'var(--surface)', '&:hover': { bgcolor: 'var(--item-hover)' } }}>
+        <Checkbox size="small" checked={allCompanySel} indeterminate={sc > 0 && sc < total} onChange={() => onToggleCompany(company)} sx={{ p: 0.3, color: 'var(--border)', '&.Mui-checked,&.MuiCheckbox-indeterminate': { color: 'var(--accent,#3b82f6)' } }} />
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+            <Typography sx={{ color: 'var(--text)', fontSize: '0.8rem', fontWeight: 600, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{company.name}</Typography>
+            {company.contacted && (
+              <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.3, flexShrink: 0, bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 1, px: 0.6, py: 0.15 }}>
+                <CheckCircleIcon sx={{ fontSize: 9, color: '#fbbf24' }} />
+                <Typography sx={{ fontSize: '0.6rem', color: '#fbbf24', fontWeight: 700, whiteSpace: 'nowrap' }}>{t.campaign.contacted}</Typography>
+              </Box>
+            )}
+          </Box>
+          {company.domain && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>{company.domain}</Typography>}
+        </Box>
+        <Chip label={`${sc}/${total}`} size="small" sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700, flexShrink: 0, ...countSx }} />
+      </Box>
+      <Box sx={{ bgcolor: 'rgba(0,0,0,0.14)', '[data-theme-mode="light"] &': { bgcolor: 'rgba(0,0,0,0.03)' } }}>
+        {company.numbers.map((n, ni) => {
+          const isSel = selectedNums.has(n.number)
+          const nCont = isNumContacted(n.number)
+          return (
+            <Box key={`${company._id}::${n.number}::${ni}`}
+              onClick={() => onToggle(n.number, { number: n.number, company_id: company._id, company_name: company.name, label: n.label, industry: company.industry, city: company.city, web: company.website })}
+              sx={{
+                display: 'flex', alignItems: 'center', gap: 0.5, pl: 2.2, pr: 1.2, py: 0.45, minHeight: 32, cursor: 'pointer',
+                borderTop: ni > 0 ? '1px solid var(--border)' : 'none',
+                borderLeft: `2px solid ${isSel ? 'var(--accent,#3b82f6)' : nCont ? 'rgba(251,191,36,0.4)' : 'transparent'}`,
+                bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.12)' : nCont ? 'rgba(251,191,36,0.03)' : 'transparent',
+                '&:hover': { bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.16)' : nCont ? 'rgba(251,191,36,0.07)' : 'var(--item-hover)' },
+              }}>
+              <Checkbox size="small" checked={isSel} onChange={() => {}} sx={{ p: 0.25, color: nCont ? 'rgba(251,191,36,0.35)' : 'var(--border)', '&.Mui-checked': { color: nCont ? '#fbbf24' : 'var(--accent,#3b82f6)' } }} />
+              <WhatsAppIcon sx={{ fontSize: 11, color: isSel ? '#25d366' : nCont ? '#fbbf24' : 'var(--text-muted)', flexShrink: 0 }} />
+              <Typography sx={{ color: isSel ? 'var(--text)' : nCont ? 'rgba(251,191,36,0.75)' : 'var(--text-muted)', fontSize: '0.74rem', fontFamily: 'monospace', flex: 1 }}>{fmtNumber(n.number)}</Typography>
+              {n.active && (
+                <Tooltip title={t.sched.activeInCampaign}>
+                  <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.2, bgcolor: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 1, px: 0.5, py: 0.1 }}>
+                    <WarningAmberIcon sx={{ fontSize: 9, color: '#f59e0b' }} />
+                    <Typography sx={{ color: '#f59e0b', fontSize: '0.6rem', fontWeight: 600 }}>activa</Typography>
+                  </Box>
+                </Tooltip>
+              )}
+            </Box>
+          )
+        })}
+      </Box>
+    </Box>
+  )
+}, _companyCardEqual)
+
 function CompanyCardSkeleton() {
   return (
     <Box sx={{ borderRadius: 2, overflow: 'hidden', border: '1px solid var(--border)', bgcolor: 'var(--card-bg, rgba(255,255,255,0.015))' }}>
@@ -272,7 +359,7 @@ function CompanyCardSkeleton() {
 
 const PICKER_PAGE_SIZE = 25
 
-export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeight = 240, contactedRefreshKey = 0 }) {
+export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeight = 240, contactedRefreshKey = 0, newContactsCap = null }) {
   const { t } = useLang()
   const [companies,          setCompanies]          = useState([])
   const [loadingCo,          setLoadingCo]          = useState(true)
@@ -300,7 +387,11 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
         })
           .then(r => r.json())
           .then(contactedMap => {
-            if (!cancelled) setCompanies(list.map(c => ({ ...c, contacted: !!contactedMap[c._id]?.contacted })))
+            if (!cancelled) setCompanies(list.map(c => ({
+              ...c,
+              contacted: !!contactedMap[c._id]?.contacted,
+              already_contacted: contactedMap[c._id] || { contacted: false },
+            })))
           })
           .catch(() => {})
       })
@@ -323,7 +414,11 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
     })
       .then(r => r.json())
       .then(contactedMap => {
-        if (!cancelled) setCompanies(curr => curr.map(c => ({ ...c, contacted: !!contactedMap[c._id]?.contacted })))
+        if (!cancelled) setCompanies(curr => curr.map(c => ({
+          ...c,
+          contacted: !!contactedMap[c._id]?.contacted,
+          already_contacted: contactedMap[c._id] || { contacted: false },
+        })))
       })
       .catch(() => {})
     return () => { cancelled = true }
@@ -352,19 +447,69 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
     if (ns.has(num)) { ns.delete(num); nm.delete(num) } else { ns.add(num); nm.set(num, info) }
     onChange(ns, nm)
   }
+  function _countCurrentNew(ns, nm) {
+    if (newContactsCap === null) return 0
+    let count = 0
+    for (const [num, info] of nm) {
+      const co = companies.find(c => c._id === info.company_id)
+      const cNormed = new Set((co?.already_contacted?.contacted_numbers || []).map(normPhone))
+      if (!cNormed.has(normPhone(num))) count++
+    }
+    return count
+  }
   function toggleCompany(c) {
     const ns = new Set(selectedNums); const nm = new Map(numInfoMap)
     const allSel = c.numbers.every(n => ns.has(n.number))
-    c.numbers.forEach(n => { if (allSel) { ns.delete(n.number); nm.delete(n.number) } else { ns.add(n.number); nm.set(n.number, { number: n.number, company_id: c._id, company_name: c.name, label: n.label, industry: c.industry, city: c.city, web: c.website }) } })
+    if (allSel) {
+      c.numbers.forEach(n => { ns.delete(n.number); nm.delete(n.number) })
+    } else {
+      const cNormed = new Set((c.already_contacted?.contacted_numbers || []).map(normPhone))
+      let newSlots = newContactsCap !== null ? Math.max(0, newContactsCap - _countCurrentNew(ns, nm)) : Infinity
+      c.numbers.forEach(n => {
+        if (!ns.has(n.number)) {
+          const info = { number: n.number, company_id: c._id, company_name: c.name, label: n.label, industry: c.industry, city: c.city, web: c.website }
+          if (cNormed.has(normPhone(n.number))) {
+            ns.add(n.number); nm.set(n.number, info)
+          } else if (newSlots > 0) {
+            ns.add(n.number); nm.set(n.number, info); newSlots--
+          }
+        }
+      })
+    }
     onChange(ns, nm)
   }
   function toggleAll() {
     const allNums = filtered.flatMap(c => c.numbers.map(n => ({ number: n.number, company_id: c._id, company_name: c.name, label: n.label, industry: c.industry, city: c.city, web: c.website })))
-    const allSel = allNums.every(n => selectedNums.has(n.number))
+    const anySel = allNums.some(n => selectedNums.has(n.number))
     const ns = new Set(selectedNums); const nm = new Map(numInfoMap)
-    allNums.forEach(n => { if (allSel) { ns.delete(n.number); nm.delete(n.number) } else { ns.add(n.number); nm.set(n.number, n) } })
+    if (anySel) {
+      allNums.forEach(n => { ns.delete(n.number); nm.delete(n.number) })
+    } else {
+      const contactedByCompany = new Map(filtered.map(c => [c._id, new Set((c.already_contacted?.contacted_numbers || []).map(normPhone))]))
+      let newSlots = newContactsCap !== null ? Math.max(0, newContactsCap - _countCurrentNew(ns, nm)) : Infinity
+      for (const n of allNums) {
+        if (!ns.has(n.number)) {
+          const isCont = contactedByCompany.get(n.company_id)?.has(normPhone(n.number))
+          if (isCont) { ns.add(n.number); nm.set(n.number, n) }
+          else if (newSlots > 0) { ns.add(n.number); nm.set(n.number, n); newSlots-- }
+        }
+      }
+    }
     onChange(ns, nm)
   }
+
+  // Precomputed per-company — only recalculates when companies (contacted data) changes,
+  // NOT on every number toggle. Passed as a stable prop to CompanyCard.
+  const contactedByCompany = useMemo(() =>
+    new Map(companies.map(c => [c._id, new Set((c.already_contacted?.contacted_numbers || []).map(normPhone))]))
+  , [companies])
+
+  // Stable callbacks — CompanyCard receives the same function reference across renders
+  // so React.memo's comparison doesn't force re-renders just because of callback identity.
+  const _toggleRef = useRef(null); _toggleRef.current = toggle
+  const _toggleCRef = useRef(null); _toggleCRef.current = toggleCompany
+  const stableToggle        = useCallback((num, info) => _toggleRef.current(num, info), [])
+  const stableToggleCompany = useCallback((c) => _toggleCRef.current(c), [])
 
   const allFilteredNums = filtered.flatMap(c => c.numbers.map(n => n.number))
   const allSel  = allFilteredNums.length > 0 && allFilteredNums.every(n => selectedNums.has(n))
@@ -385,13 +530,57 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
       <Box sx={{ px: 1.5, py: 1, bgcolor: 'var(--surface)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 0.8, background: 'linear-gradient(90deg, rgba(var(--accent-rgb,59,130,246),0.06) 0%, transparent 60%)' }}>
         <Box sx={{ width: 3, height: 12, borderRadius: 2, bgcolor: 'var(--accent,#3b82f6)', opacity: 0.55, flexShrink: 0 }} />
         <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontWeight: 700, fontSize: '0.68rem', flex: 1, textTransform: 'uppercase', letterSpacing: '0.07em' }}>{t.sched.recipients}</Typography>
-        {loadingCo
-          ? <CircularProgress size={11} sx={{ color: 'var(--accent,#3b82f6)' }} />
-          : selCount > 0 && <Box sx={{ px: 0.9, py: 0.1, borderRadius: '4px', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)' }}>
-              <Typography sx={{ fontSize: '0.6rem', color: 'var(--accent,#60a5fa)', fontWeight: 700 }}>{selCount}</Typography>
-            </Box>
-        }
+        {loadingCo && <CircularProgress size={11} sx={{ color: 'var(--accent,#3b82f6)' }} />}
       </Box>
+
+      {selectedNums.size > 0 && (() => {
+        const looksLikePhone = s => /^[+\d\s\-().]{7,}$/.test(s || '')
+        const selCosRaw = companies.filter(c => c.numbers.some(n => selectedNums.has(n.number)))
+        const seen = new Set(); const selCos = selCosRaw.filter(c => seen.has(c._id) ? false : (seen.add(c._id), true))
+        if (!selCos.length) return null
+        return (
+          <Box sx={{ borderBottom: '1px solid var(--border)', px: 1.2, pt: 0.8, pb: 0.9, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.02)', maxHeight: 168, overflowY: 'auto', scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.07) transparent' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.8 }}>
+              <Typography sx={{ fontSize: '0.55rem', color: 'rgba(255,255,255,0.22)', textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>
+                Selected
+              </Typography>
+              <Typography sx={{ fontSize: '0.58rem', color: 'rgba(255,255,255,0.3)', fontVariantNumeric: 'tabular-nums' }}>
+                {selCount} {selCount === 1 ? 'number' : 'numbers'} · {selCos.length} {selCos.length === 1 ? 'co.' : 'cos.'}
+              </Typography>
+            </Box>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+              {selCos.map(c => {
+                const selNums = c.numbers.filter(n => selectedNums.has(n.number))
+                const cNormed = new Set((c.already_contacted?.contacted_numbers || []).map(normPhone))
+                const label = looksLikePhone(c.name) ? (c.domain || c.name) : c.name
+                const anyContacted = selNums.some(n => cNormed.has(normPhone(n.number)))
+                const accentC = anyContacted ? '#fbbf24' : 'var(--accent,#3b82f6)'
+                return (
+                  <Box key={c._id} sx={{ pl: 1, borderLeft: anyContacted ? '2px solid rgba(251,191,36,0.35)' : '2px solid rgba(var(--accent-rgb,59,130,246),0.22)', py: 0.2 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.35 }}>
+                      <Typography sx={{ fontSize: '0.67rem', color: 'var(--text)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{label}</Typography>
+                      <Typography sx={{ fontSize: '0.55rem', color: accentC, opacity: 0.7, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{selNums.length}</Typography>
+                    </Box>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.3 }}>
+                      {selNums.map((n, ni) => {
+                        const isCont = cNormed.has(normPhone(n.number))
+                        return (
+                          <Typography key={`${c._id}::${n.number}::${ni}`} sx={{
+                            fontSize: '0.58rem', fontFamily: 'monospace', px: 0.5, py: 0.1, borderRadius: 0.5,
+                            color: isCont ? '#fbbf24' : 'var(--accent,#60a5fa)',
+                            bgcolor: isCont ? 'rgba(251,191,36,0.08)' : 'rgba(59,130,246,0.08)',
+                            border: `1px solid ${isCont ? 'rgba(251,191,36,0.18)' : 'rgba(59,130,246,0.18)'}`,
+                          }}>{fmtNumber(n.number)}</Typography>
+                        )
+                      })}
+                    </Box>
+                  </Box>
+                )
+              })}
+            </Box>
+          </Box>
+        )
+      })()}
 
       <Box sx={{ px: 1.5, pt: 1.2, pb: 0.8, borderBottom: '1px solid var(--border)' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, bgcolor: 'var(--surface)', borderRadius: 1.5, border: '1px solid var(--border)', px: 1, py: 0.4, mb: 1 }}>
@@ -426,69 +615,18 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
           Array.from({ length: 6 }).map((_, i) => <CompanyCardSkeleton key={i} />)
         ) : filtered.length === 0 ? (
           <Box sx={{ textAlign: 'center', py: 3 }}><Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>Sin resultados</Typography></Box>
-        ) : paged.map(company => {
-          const sc = company.numbers.filter(n => selectedNums.has(n.number)).length
-          const total = company.numbers.length
-          const allCompanySel = sc === total && total > 0
-          const countSx = allCompanySel
-            ? { bgcolor: 'rgba(34,197,94,0.15)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.35)' }
-            : sc > 0
-              ? { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', color: 'var(--accent,#60a5fa)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)' }
-              : { bgcolor: 'var(--item-hover)', color: 'var(--text-muted)', border: '1px solid var(--border)' }
-          return (
-            <Box key={company._id} sx={{
-              flexShrink: 0,
-              borderRadius: 2, overflow: 'hidden',
-              border: `1px solid ${sc > 0 ? 'rgba(var(--accent-rgb,59,130,246),0.3)' : 'var(--border)'}`,
-              bgcolor: 'var(--card-bg, rgba(255,255,255,0.015))',
-              transition: 'border-color 0.15s',
-            }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.2, py: 0.7, minHeight: 44, bgcolor: sc > 0 ? 'rgba(var(--accent-rgb,59,130,246),0.05)' : 'var(--surface)', '&:hover': { bgcolor: 'var(--item-hover)' } }}>
-                <Checkbox size="small" checked={allCompanySel} indeterminate={sc > 0 && sc < total} onChange={() => toggleCompany(company)} sx={{ p: 0.3, color: 'var(--border)', '&.Mui-checked,&.MuiCheckbox-indeterminate': { color: 'var(--accent,#3b82f6)' } }} />
-                <Box sx={{ flex: 1, minWidth: 0 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-                    <Typography sx={{ color: 'var(--text)', fontSize: '0.8rem', fontWeight: 600, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{company.name}</Typography>
-                    {company.contacted && (
-                      <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.3, flexShrink: 0, bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 1, px: 0.6, py: 0.15 }}>
-                        <CheckCircleIcon sx={{ fontSize: 9, color: '#fbbf24' }} />
-                        <Typography sx={{ fontSize: '0.6rem', color: '#fbbf24', fontWeight: 700, whiteSpace: 'nowrap' }}>{t.campaign.contacted}</Typography>
-                      </Box>
-                    )}
-                  </Box>
-                  {company.domain && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>{company.domain}</Typography>}
-                </Box>
-                <Chip label={`${sc}/${total}`} size="small" sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700, flexShrink: 0, ...countSx }} />
-              </Box>
-              <Box sx={{ bgcolor: 'rgba(0,0,0,0.14)', '[data-theme-mode="light"] &': { bgcolor: 'rgba(0,0,0,0.03)' } }}>
-                {company.numbers.map((n, ni) => {
-                const isSel = selectedNums.has(n.number)
-                return (
-                  <Box key={n.number} onClick={() => toggle(n.number, { number: n.number, company_id: company._id, company_name: company.name, label: n.label, industry: company.industry, city: company.city, web: company.website })}
-                    sx={{
-                      display: 'flex', alignItems: 'center', gap: 0.5, pl: 2.2, pr: 1.2, py: 0.45, minHeight: 32, cursor: 'pointer',
-                      borderTop: ni > 0 ? '1px solid var(--border)' : 'none',
-                      borderLeft: `2px solid ${isSel ? 'var(--accent,#3b82f6)' : 'transparent'}`,
-                      bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.12)' : 'transparent',
-                      '&:hover': { bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.16)' : 'var(--item-hover)' },
-                    }}>
-                    <Checkbox size="small" checked={isSel} onChange={() => {}} sx={{ p: 0.25, color: 'var(--border)', '&.Mui-checked': { color: 'var(--accent,#3b82f6)' } }} />
-                    <WhatsAppIcon sx={{ fontSize: 11, color: isSel ? '#25d366' : 'var(--text-muted)', flexShrink: 0 }} />
-                    <Typography sx={{ color: isSel ? 'var(--text)' : 'var(--text-muted)', fontSize: '0.74rem', fontFamily: 'monospace', flex: 1 }}>{fmtNumber(n.number)}</Typography>
-                    {n.active && (
-                      <Tooltip title={t.sched.activeInCampaign}>
-                        <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.2, bgcolor: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 1, px: 0.5, py: 0.1 }}>
-                          <WarningAmberIcon sx={{ fontSize: 9, color: '#f59e0b' }} />
-                          <Typography sx={{ color: '#f59e0b', fontSize: '0.6rem', fontWeight: 600 }}>activa</Typography>
-                        </Box>
-                      </Tooltip>
-                    )}
-                  </Box>
-                )
-                })}
-              </Box>
-            </Box>
-          )
-        })}
+        ) : paged.map(company => (
+          <CompanyCard
+            key={company._id}
+            company={company}
+            contactedNormed={contactedByCompany.get(company._id) ?? EMPTY_CONTACTED}
+            selectedNums={selectedNums}
+            activeSet={activeSet}
+            onToggle={stableToggle}
+            onToggleCompany={stableToggleCompany}
+            t={t}
+          />
+        ))}
       </Box>
 
       {totalPages > 1 && (
@@ -505,15 +643,15 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
         </Box>
       )}
 
-      <Box sx={{ px: 1.5, py: 0.8, borderTop: '1px solid rgba(255,255,255,0.07)', bgcolor: 'rgba(255,255,255,0.02)', display: 'flex', alignItems: 'center', gap: 1 }}>
+      <Box sx={{ px: 1.5, py: 0.6, borderTop: '1px solid rgba(255,255,255,0.07)', bgcolor: 'rgba(255,255,255,0.02)', display: 'flex', alignItems: 'center', gap: 1 }}>
         {selCount === 0
-          ? <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.72rem' }}>{t.sched.noNumSel}</Typography>
-          : <>
-              <Typography sx={{ color: 'var(--accent,#3b82f6)', fontSize: '0.72rem', fontWeight: 600 }}>{selCount} {selCount !== 1 ? t.sched.numbers : t.sched.numSingular}</Typography>
-              {activeSelCount > 0 && <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3 }}><WarningAmberIcon sx={{ fontSize: 12, color: '#f59e0b' }} /><Typography sx={{ color: '#f59e0b', fontSize: '0.68rem' }}>{activeSelCount} {t.sched.alreadyInCampaign}</Typography></Box>}
-            </>
+          ? <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.7rem' }}>{t.sched.noNumSel}</Typography>
+          : activeSelCount > 0
+            ? <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3 }}><WarningAmberIcon sx={{ fontSize: 12, color: '#f59e0b' }} /><Typography sx={{ color: '#f59e0b', fontSize: '0.68rem' }}>{activeSelCount} {t.sched.alreadyInCampaign}</Typography></Box>
+            : <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.7rem' }}>{t.sched.noNumSel}</Typography>
         }
       </Box>
+
     </Box>
   )
 }

@@ -18,6 +18,7 @@ import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
 import AccountCircleIcon from '@mui/icons-material/AccountCircle'
 import Slider from '@mui/material/Slider'
 import TimerIcon from '@mui/icons-material/Timer'
+import SaveIcon from '@mui/icons-material/Save'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import Chip from '@mui/material/Chip'
 import IconButton from '@mui/material/IconButton'
@@ -373,11 +374,18 @@ function SendTimingSection() {
   const sc = t.sendConfig
   const [cfg, setCfg] = useState(() => loadSendConfig())
   const [tplOpen, setTplOpen] = useState(false)
+  const [saved, setSaved] = useState(false)
 
   function update(key, val) {
     const next = { ...cfg, [key]: val }
     setCfg(next)
     saveSendConfig(next)
+  }
+
+  function handleSave() {
+    saveSendConfig(cfg)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 1800)
   }
 
   return (
@@ -389,6 +397,28 @@ function SendTimingSection() {
       <TimingSliderRow label={sc.batchDelay} tooltip={sc.tipBatchDelay} value={cfg.batchDelay} onChange={v => update('batchDelay', v)} min={1}  max={30}  step={1}  unit={sc.minutes} minDist={1}
         marks={[1,5,10,15,20,30].map(v => ({ value: v, label: `${v}m` }))} />
       <RiskBadge config={cfg} />
+
+      {/* Save button */}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1.5 }}>
+        <Box
+          onClick={handleSave}
+          sx={{
+            display: 'flex', alignItems: 'center', gap: 0.75,
+            px: 1.6, py: 0.6, borderRadius: 1.5, cursor: 'pointer',
+            border: `1px solid ${saved ? 'rgba(34,197,94,0.5)' : 'rgba(59,130,246,0.4)'}`,
+            bgcolor: saved ? 'rgba(34,197,94,0.1)' : 'rgba(59,130,246,0.1)',
+            transition: 'all 0.25s',
+            '&:hover': { bgcolor: saved ? 'rgba(34,197,94,0.18)' : 'rgba(59,130,246,0.18)' },
+          }}
+        >
+          {saved
+            ? <CheckIcon sx={{ fontSize: 14, color: '#4ade80' }} />
+            : <SaveIcon  sx={{ fontSize: 14, color: '#60a5fa' }} />}
+          <Typography sx={{ fontSize: '0.75rem', fontWeight: 700, color: saved ? '#4ade80' : '#60a5fa', transition: 'color 0.25s' }}>
+            {saved ? sc.savedBtn : sc.saveBtn}
+          </Typography>
+        </Box>
+      </Box>
 
       <Box onClick={() => setTplOpen(true)} sx={{
         mt: 2.5, display: 'flex', alignItems: 'center', gap: 1, py: 1, px: 1.2, borderRadius: 2, cursor: 'pointer',

@@ -8,32 +8,39 @@ import { useLang } from '../context/LangContext'
 // peso visual que el aviso naranja de "selecciona al menos 3 plantillas", para
 // que no se pierda como texto chico junto al botón de enviar (ahí sigue
 // viviendo DailyCapBadge, con el desglose por instancia al hacer hover).
-export default function CapacityBanner({ stats, selectionCount = 0, sx }) {
+export default function CapacityBanner({ stats, selectionCount = 0, newSelectionCount, sx }) {
   const { lang } = useLang()
   if (!stats) return null
   const available    = stats.total_available
   const overBy       = getOverBy(stats, selectionCount)
-  const remaining     = Math.max(0, available - selectionCount)
-  const isFutureMode  = stats.total_sent === undefined
-  const blocked       = overBy > 0
-  const warn          = !blocked && remaining < 30
+  const remaining    = Math.max(0, available - selectionCount)
+  const isFutureMode = stats.total_sent === undefined
+  const blocked      = overBy > 0
+  const warn         = !blocked && remaining < 30
+
+  const newCount = newSelectionCount ?? selectionCount
+  const newCap   = stats.new_contacts_capacity
+  const newRemaining = newCap != null ? Math.max(0, newCap - newCount) : null
 
   // Rojo se reserva para fallas reales (sin instancia conectada, error de envío)
-  // — agotar el cupo del día no es una falla, es un límite que se resetea solo
-  // a medianoche, así que se queda en la familia ámbar/amarillo, no rojo.
   const color  = blocked ? '#f59e0b' : warn ? '#fbbf24' : '#4ade80'
   const bg     = blocked ? 'rgba(245,158,11,0.08)' : warn ? 'rgba(251,191,36,0.08)' : 'rgba(34,197,94,0.06)'
   const border = blocked ? 'rgba(245,158,11,0.25)' : warn ? 'rgba(251,191,36,0.25)' : 'rgba(34,197,94,0.2)'
 
   const when = isFutureMode ? (lang === 'en' ? 'that day' : 'ese día') : (lang === 'en' ? 'today' : 'hoy')
+
+  const newPart = newRemaining != null && selectionCount > 0
+    ? (lang === 'en' ? ` · ${newRemaining} new contacts left ${when}` : ` · ${newRemaining} nuevos contactos disponibles ${when}`)
+    : ''
+
   const label = blocked
     ? (lang === 'en'
         ? `⚠ Your selection exceeds the ${isFutureMode ? 'estimated' : "today's"} cap by ${overBy} — deselect some to continue.`
         : `⚠ Tu selección excede el cupo ${isFutureMode ? 'estimado' : 'de hoy'} por ${overBy} — desmarca algunos para continuar.`)
     : selectionCount > 0
       ? (lang === 'en'
-          ? `Selected ${selectionCount} — ${remaining} sends still available ${when}.`
-          : `Seleccionaste ${selectionCount} — quedarían ${remaining} envíos disponibles ${when}.`)
+          ? `Selected ${selectionCount} — ${remaining} sends available ${when}${newPart}.`
+          : `Seleccionaste ${selectionCount} — quedarían ${remaining} envíos disponibles ${when}${newPart}.`)
       : (lang === 'en'
           ? `You can send up to ${available} messages ${when} without exceeding your daily limit.`
           : `Puedes enviar hasta ${available} mensajes ${when} sin pasar tu límite diario.`)

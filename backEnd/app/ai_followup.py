@@ -80,7 +80,9 @@ CÓMO HABLAR:
   "ok entonces sí cubren esa área" — demuestra que estás leyendo, no mandando mensajes automáticos.
 
 IMPERFECCIONES REALES — así escribe un mexicano en WhatsApp, no un corrector de textos:
-- ❌ PROHIBIDO: "¡Hola!" con signos de exclamación invertidos — nadie en WhatsApp escribe ¡ eso es formal
+- ❌ PROHIBIDO: signos de apertura ¡ y ¿ — NADIE los usa en WhatsApp. Siempre solo el cierre:
+  ❌ MAL: "¿manejan servicio de catering?" / "¡qué bueno!"
+  ✅ BIEN: "manejan servicio de catering?" / "qué bueno!"
 - ❌ PROHIBIDO: abrir con "Hola!" en mensajes de seguimiento — ya se saludaron, no repitas el saludo
 - Sin tildes en palabras comunes: "mas", "como", "que", "si", "solo", "tu", "el", "como", "aun"
 - ⚠️ MINÚSCULA ESTRICTA al arrancar cada mensaje — la primera letra del mensaje en minúscula SIEMPRE:
@@ -90,11 +92,20 @@ IMPERFECCIONES REALES — así escribe un mexicano en WhatsApp, no un corrector 
   "ps" → pues, "ora" → ahora, "neta" → en realidad
 - Sin punto al final — nadie pone punto en WhatsApp en mensajes cortos
 - Erratas sutiles ocasionales: "osea", "ahi" en vez de "ahí", "deacuerdo", "porq"
-- Nunca ¡¡ ni ?? — un signo al final si acaso: "en serio?" / "y eso?"
+- Nunca ¡¡ ni ?? ni ¿ ni ¡ — solo el signo de cierre si acaso: "en serio?" / "y eso?"
 - Varía cómo abres cada mensaje — NUNCA dos mensajes seguidos con el mismo arranque:
   "oye" / "ps" / "bueno" / "ah" / "neta?" / "y eso?" / "no sabía" / "chido" / [sin arranque, directo al punto]
 - ❌ JAMÁS: "¡Hola! Soy Andrés. Vi su negocio y me pareció interesante, quería saber más sobre lo que hacen."
 - ✅ ASÍ: "oye q bueno que respondiste, llevan mucho tiempo con el negocio?"
+
+PUNTUACIÓN — lo más importante para no parecer bot:
+- ❌ CERO COMAS — nadie usa comas en WhatsApp casual. En vez de "oye, qué tal la calidad?" escribe "oye qué tal la calidad"
+- ❌ CERO DOS PUNTOS (:) ni PUNTO Y COMA (;) — eso es redacción formal
+- ❌ CERO PUNTOS EN MEDIO DE ORACIÓN — no fragmentes con puntos internos
+- ✅ Si quieres pausa natural: usa "..." o simplemente no pongas nada
+- ✅ Ejemplo real de cómo se ve: "ps no sabía eso oye y tienen servicio los fines de semana?"
+  (sin coma después de "ps", sin coma después de "eso", sin signos extras)
+- Una pregunta al final sí puede llevar "?" pero sin el "¿" de apertura — nunca ¿
 
 TU ACTITUD — eres un cliente que quiere saber más antes de decidir:
 - Haces preguntas de COMPRADOR: qué ofrecen, cómo funciona, cuánto cuesta, en qué zonas atienden,
@@ -188,10 +199,20 @@ Comportamiento: respuestas mínimas y directas, SIN preguntas de curiosidad — 
 ⚠️ EXCEPCIÓN CRÍTICA: si esta IA te envía un MENÚ con opciones (letras o números),
    aplica INMEDIATAMENTE la regla de [BOT CON MENÚS / IVR] — responde SOLO la letra/número.
    NO escribas texto libre como "Hablar con asesor" aunque eso sea lo que quieras. Usa la letra.
+
+⚠️ TRANSICIÓN A HUMANO — lee siempre el siguiente mensaje antes de decidir [FIN]:
+Si la siguiente respuesta muestra CUALQUIERA de estas señales → es un HUMANO REAL, cambia a [HUMANO REAL]:
+  · Usa tu nombre ("Hola Andrés", "Andrés, te paso...")
+  · Menciona un departamento real ("te comunico al área de ventas", "te paso con servicio")
+  · Da información concreta y accionable (un teléfono, un número de contacto, un dato específico)
+  · Tono personal y directo, no de plantilla
+  · Comparte un vCard / contacto de WhatsApp
+Un humano que transfiere a otro número o departamento ES un resultado útil — NO cierres con [FIN].
+
 1. Si no hay menú: pide hablar con humano con UNA sola frase corta.
-2. Si dice que te conectará con un agente → "Gracias, aquí espero." y NO mandes más mensajes.
-   Si en el siguiente turno sigue siendo el bot → [FIN].
-3. Si después de 2 turnos sin menú ni humano → [FIN].
+2. Si dice que te conectará con un agente o te da un contacto alternativo →
+   "ah gracias" y cierra con [FIN] — ya cumplió, no hace falta más.
+3. Si después de 2 turnos sin señal humana ni menú → [FIN].
 - NUNCA espontáneamente nombre + teléfono. Solo si te los piden.
 
 [MENSAJE REPETIDO / LOOP]
@@ -211,6 +232,9 @@ CUÁNDO CERRAR — responde normal y añade [FIN] pegado al final:
 - Sin interés, te piden que no escribas → cierra con respeto, sin insistir[FIN]
 - Bot ajeno detectado → "ok, cualquier cosa aquí ando"[FIN]
 - Conversación llegó a cierre natural[FIN]
+- La empresa cierra con despedida ("buen día", "hasta luego", "con gusto") →
+  reconoce brevemente y cierra: "ok gracias, cualquier cosa aquí ando"[FIN] /
+  "gracias a ustedes"[FIN] — nunca dejes su despedida sin respuesta
 
 IMPORTANTE: [FIN] es señal interna, nunca llega al contacto. Ponlo pegado al texto sin espacio.
 {extra_block}"""
@@ -462,7 +486,8 @@ def _build_context(db: MongoDBManager, company_id: str, outbound_log: dict) -> d
     }
 
 
-def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False, prefs: dict = None, db=None) -> str | None:
+def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False, prefs: dict = None, db=None,
+                         proactive_minutes: int = None) -> str | None:
     ctx = dict(context)
     parts = []
     if ctx.get("description"):
@@ -494,6 +519,15 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
             "Si NO es un ACK: puedes saludar brevemente si encaja — SIN ¡Hola! ni signos invertidos. "
             "Usa algo como \"hey\", \"buenas\", \"oye\" — o ve directo al punto. Nunca más de 2-3 palabras."
         )
+    if proactive_minutes is not None:
+        system += (
+            f"\n\n⚠️ MODO PROACTIVO: Llevas {proactive_minutes} minutos sin recibir respuesta. "
+            "El turno '[Sin respuesta]' representa ese silencio — no respondieron. "
+            "Genera UN mensaje de seguimiento muy breve y natural, como si acabaras de acordarte de algo "
+            "relacionado o simplemente quisieras saber si llegó tu mensaje. "
+            "REGLAS: nunca digas que estás esperando respuesta; nunca uses el mismo arranque que en "
+            "tu último mensaje (si empezaste con 'oye', empieza diferente); 1 frase máxima, casual, sin puntos."
+        )
     messages = []
     for t in turns:
         messages.append({
@@ -504,7 +538,7 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
         from app.llm import call_llm, PRIORITY_LIVE
         return call_llm(
             [{"role": "system", "content": system}] + messages,
-            max_tokens=120,
+            max_tokens=200,
             temperature=0.82,
             priority=PRIORITY_LIVE,
         )
@@ -532,8 +566,8 @@ def _send_typing_presence(phone_number: str, instance: str):
         log.debug("[AIFollowup] typing presence failed: %s", e)
 
 
-def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str, inbound_log_id: str,
-                          manual_activation: bool = False):
+def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str | None, inbound_log_id: str | None,
+                          manual_activation: bool = False, proactive: bool = False):
     """
     Entry point called from the follow-up queue worker.
     Applies anti-detection delays, generates an AI response, and sends it.
@@ -558,7 +592,8 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
     # to stale webhook re-deliveries or messages from closed sessions.
     # Skipped when the user manually activates the AI toggle (manual_activation=True)
     # so the AI can still send a greeting on old conversations.
-    if not manual_activation:
+    # Also skipped in proactive mode (no real inbound to check).
+    if not manual_activation and not proactive:
         try:
             from bson import ObjectId
             _msg = db.db.message_logs.find_one({"_id": ObjectId(inbound_log_id)}, {"created_at": 1})
@@ -570,8 +605,16 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
         except Exception as _age_err:
             print(f"[AIFollowup] age check error (ignored): {_age_err}")
 
-    session = _get_or_create_session(db, phone_number, company_id)
-    print(f"[AIFollowup] session={session is not None} id={session.get('_id') if session else None}")
+    if proactive:
+        # In proactive mode, only use an EXISTING waiting session — never create a new one.
+        # The session may have ended between the sweep and now (idle timeout, user disable, etc.)
+        session = db.db.ai_followup_sessions.find_one(
+            {"phone_number": phone_number, "company_id": company_id, "status": "waiting"},
+        )
+        print(f"[AIFollowup] proactive session={session is not None} id={session.get('_id') if session else None}")
+    else:
+        session = _get_or_create_session(db, phone_number, company_id)
+        print(f"[AIFollowup] session={session is not None} id={session.get('_id') if session else None}")
     if not session:
         print("[AIFollowup] EXIT: no session found/created")
         return
@@ -588,19 +631,26 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
         )
         return
 
-    # Append the user's inbound turn and mark session active
-    db.db.ai_followup_sessions.update_one(
-        {"_id": sid},
-        {
-            "$push": {"turns": {
-                "role": "user",
-                "content": inbound_body,
-                "log_id": inbound_log_id,
-                "ts": datetime.utcnow(),
-            }},
-            "$set": {"status": "active", "last_activity": datetime.utcnow()},
-        },
-    )
+    # Append the user's inbound turn and mark session active.
+    # In proactive mode there is no real inbound — skip the turn append.
+    if not proactive:
+        db.db.ai_followup_sessions.update_one(
+            {"_id": sid},
+            {
+                "$push": {"turns": {
+                    "role": "user",
+                    "content": inbound_body,
+                    "log_id": inbound_log_id,
+                    "ts": datetime.utcnow(),
+                }},
+                "$set": {"status": "active", "last_activity": datetime.utcnow()},
+            },
+        )
+    else:
+        db.db.ai_followup_sessions.update_one(
+            {"_id": sid},
+            {"$set": {"status": "active"}},
+        )
 
     # Anti-detection: shorter delay for menu/IVR messages (they expect fast button presses)
     import re as _re
@@ -642,26 +692,63 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
 
     # Hard-coded bot detection: if the contact has sent the same message before,
     # it's almost certainly a looping IVR/chatbot — close without spending LLM quota.
-    prior_user_msgs = [
-        t["content"] for t in session.get("turns", [])
-        if t.get("role") == "user" and t.get("content") != inbound_body
-    ]
-    repeated = sum(1 for m in prior_user_msgs if m.strip() == inbound_body.strip())
-    if repeated >= 1:
-        log.info("[AIFollowup] mensaje repetido detectado (bot loop) — cerrando sesión para %s", phone_number)
-        db.db.ai_followup_sessions.update_one(
-            {"_id": sid},
-            {"$set": {"status": "ended", "end_reason": "repeated_message", "ai_typing": False}},
-        )
-        db.db.conversation_ai_prefs.update_one(
-            {"company_id": company_id},
-            {"$set": {"ai_enabled": False}},
-        )
-        return
+    # Skip in proactive mode (no real inbound to compare).
+    if not proactive:
+        prior_user_msgs = [
+            t["content"] for t in session.get("turns", [])
+            if t.get("role") == "user" and t.get("content") != inbound_body
+        ]
+        repeated = sum(1 for m in prior_user_msgs if m.strip() == (inbound_body or "").strip())
+        if repeated >= 1:
+            log.info("[AIFollowup] mensaje repetido detectado (bot loop) — cerrando sesión para %s", phone_number)
+            db.db.ai_followup_sessions.update_one(
+                {"_id": sid},
+                {"$set": {"status": "ended", "end_reason": "repeated_message", "ai_typing": False}},
+            )
+            db.db.conversation_ai_prefs.update_one(
+                {"company_id": company_id},
+                {"$set": {"ai_enabled": False}},
+                upsert=True,
+            )
+            return
 
-    is_cold_start = session.get("turn_count", 0) == 0
+    # Fast-path: ACK automático / auto-reply → cierre silencioso sin gastar LLM quota.
+    # El clasificador ya lo detectaría, pero el LLM a temperatura 0.82 no siempre
+    # sigue las reglas de [MENSAJE AUTOMÁTICO] de forma confiable. Cerramos aquí
+    # directamente, sin enviar nada — el silencio ES la respuesta humana ante un ACK.
+    if not proactive:
+        try:
+            from app.classifier import _looks_like_auto_reply
+            if _looks_like_auto_reply(inbound_body or ""):
+                log.info("[AIFollowup] ACK/auto-reply detectado — cerrando silenciosamente para %s", phone_number)
+                db.db.ai_followup_sessions.update_one(
+                    {"_id": sid},
+                    {"$set": {"status": "ended", "end_reason": "ai_decision", "ai_typing": False}},
+                )
+                db.db.conversation_ai_prefs.update_one(
+                    {"company_id": company_id},
+                    {"$set": {"ai_enabled": False}},
+                    upsert=True,
+                )
+                return
+        except Exception:
+            pass  # si el classifier falla, deja que el LLM lo maneje
+
+    is_cold_start = session.get("turn_count", 0) == 0 and not proactive
+
+    # In proactive mode, inject a synthetic "[Sin respuesta]" user turn so the LLM
+    # has the right alternating user/assistant pattern and knows to continue.
+    _llm_turns = list(session.get("turns", []))
+    _proactive_minutes = None
+    if proactive:
+        last_act = session.get("last_activity") or session.get("created_at") or datetime.utcnow()
+        _proactive_minutes = max(1, int((datetime.utcnow() - last_act).total_seconds() / 60))
+        _llm_turns.append({"role": "user", "content": "[Sin respuesta]"})
+
     _prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
-    ai_text_raw = _call_llm_for_reply(session.get("turns", []), session.get("context", {}), is_cold_start=is_cold_start, prefs=_prefs, db=db)
+    ai_text_raw = _call_llm_for_reply(_llm_turns, session.get("context", {}),
+                                       is_cold_start=is_cold_start, prefs=_prefs, db=db,
+                                       proactive_minutes=_proactive_minutes)
     print(f"[AIFollowup] LLM response: {repr(ai_text_raw[:80]) if ai_text_raw else 'None'}")
     if not ai_text_raw:
         print("[AIFollowup] EXIT: LLM returned None")
@@ -880,6 +967,7 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str,
             db.db.conversation_ai_prefs.update_one(
                 {"company_id": company_id},
                 {"$set": {"ai_enabled": False}},
+                upsert=True,
             )
             log.info("[AIFollowup] conversation closed (%s), toggle disabled for %s", end_reason, company_id)
 

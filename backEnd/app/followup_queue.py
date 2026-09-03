@@ -52,9 +52,10 @@ def _worker():
             process_inbound_reply(
                 phone_number=item["phone_number"],
                 company_id=item["company_id"],
-                inbound_body=item["inbound_body"],
-                inbound_log_id=item["inbound_log_id"],
+                inbound_body=item.get("inbound_body"),
+                inbound_log_id=item.get("inbound_log_id"),
                 manual_activation=item.get("manual_activation", False),
+                proactive=item.get("proactive", False),
             )
             _last_send_ts = time.time()
         except Exception as e:
@@ -63,13 +64,44 @@ def _worker():
             _q.task_done()
 
 
+_MIN_PROACTIVE_TURNS = 3   # minimum Andy messages before we stop proactive nudges
+_PROACTIVE_WAIT_MIN = 60   # minutes of silence before sending a proactive follow-up
+
+
 def _cleanup_worker():
-    """Periodically expire sessions where the contact went silent."""
+    """Periodically expire sessions where the contact went silent, and send proactive follow-ups
+    for sessions with too few turns that haven't heard back."""
     while True:
         time.sleep(_CLEANUP_INTERVAL)
         try:
             from app.database import MongoDBManager
             db = MongoDBManager()
+
+            # ── Phase 1: proactive follow-up for low-turn waiting sessions ──────────────
+            proactive_cutoff = datetime.utcnow() - timedelta(minutes=_PROACTIVE_WAIT_MIN)
+            needs_followup = list(db.db.ai_followup_sessions.find({
+                "status": "waiting",
+                "turn_count": {"$lt": _MIN_PROACTIVE_TURNS},
+                "last_activity": {"$lt": proactive_cutoff},
+                "proactive_sent": {"$ne": True},
+            }, {"_id": 1, "company_id": 1, "phone_number": 1}))
+
+            for sess in needs_followup:
+                # Mark immediately to prevent double-queueing across cleanup cycles
+                db.db.ai_followup_sessions.update_one(
+                    {"_id": sess["_id"]}, {"$set": {"proactive_sent": True}}
+                )
+                log.info("[FollowupQ] proactive follow-up queued for %s (company=%s)",
+                         sess["phone_number"], sess["company_id"])
+                _q.put({
+                    "phone_number": sess["phone_number"],
+                    "company_id": sess["company_id"],
+                    "inbound_body": None,
+                    "inbound_log_id": None,
+                    "proactive": True,
+                })
+
+            # ── Phase 2: idle expiry ───────────────────────────────────────────────────
             cutoff = datetime.utcnow() - timedelta(hours=SESSION_IDLE_TIMEOUT_HOURS)
             stale = list(db.db.ai_followup_sessions.find({
                 "status": {"$in": ["active", "waiting"]},

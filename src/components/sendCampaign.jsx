@@ -298,7 +298,7 @@ export default function SendCampaign() {
         </Box>
 
         {/* Right — recipients table, ~half the screen */}
-        <Box sx={{ flex: '1 1 480px', minWidth: 320, display: 'flex', flexDirection: 'column', minHeight: 0, gap: 1 }}>
+        <Box sx={{ flex: '1 1 480px', minWidth: 320, display: 'flex', flexDirection: 'column', minHeight: 0, gap: 1, overflowY: 'auto' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <StepHeader n={3} title={t.campaign.stepRecipients} />
             {targets.length > 0 && (
@@ -325,6 +325,7 @@ export default function SendCampaign() {
             onChange={(ns, nm) => { setSelectedNums(ns); setNumInfoMap(nm) }}
             listMaxHeight="60vh"
             contactedRefreshKey={contactedRefreshKey}
+            newContactsCap={capStats?.new_contacts_capacity ?? null}
           />
         </Box>
       </Box>

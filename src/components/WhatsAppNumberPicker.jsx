@@ -11,11 +11,11 @@ import { useLang } from '../context/LangContext'
 // que ya vive en cada componente (Sets de React) — evita repetir esta misma
 // lógica de toggle cada vez que se renderiza un picker (tabla, tarjeta, y ahora
 // también el recuadro compacto de RecipientsBox).
-export function makeWaToggleHandlers(companyId, { effectiveSelected, setDeselected, setExpandedCo, setExtraSelected }) {
+export function makeWaToggleHandlers(companyId, { effectiveSelected, setSelected, setExpandedCo, setExtraSelected }) {
   return {
-    onToggleCompany: () => setDeselected(prev => {
+    onToggleCompany: () => setSelected(prev => {
       const next = new Set(prev)
-      effectiveSelected.has(companyId) ? next.add(companyId) : next.delete(companyId)
+      effectiveSelected.has(companyId) ? next.delete(companyId) : next.add(companyId)
       return next
     }),
     onToggleExpand: () => setExpandedCo(prev => {
@@ -45,6 +45,10 @@ export default function WhatsAppNumberPicker({
   if (!primary) return null
   const extras = row.all_whatsapp?.slice(1) || []
   const key = n => `${row.company_id}::${n}`
+  // Normalize phone numbers: strip leading +, collapse 521XXXXXXXXXX → 52XXXXXXXXXX
+  const normNum = n => { if (!n) return ''; let s = String(n).replace(/^\+/, ''); return s.replace(/^521(\d{10})$/, '52$1') }
+  const contactedNormed = new Set((row.already_contacted?.contacted_numbers || []).map(normNum))
+  const isContacted = n => contactedNormed.has(normNum(n))
   // Con `label` (uso en RecipientsBox), el número principal se esconde detrás
   // del contador de la flecha si hay más de uno — así el nombre de la empresa
   // se queda con todo el ancho en vez de competir con el chip del número.
@@ -54,7 +58,7 @@ export default function WhatsAppNumberPicker({
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.1 }}>
         <Checkbox size="small" checked={selected} onChange={onToggleCompany}
-          sx={{ p: 0.3, color: 'rgba(255,255,255,0.25)', '&.Mui-checked': { color: '#4ade80' } }} />
+          sx={{ p: 0.3, color: isContacted(primary) ? 'rgba(251,191,36,0.35)' : 'rgba(255,255,255,0.25)', '&.Mui-checked': { color: isContacted(primary) ? '#fbbf24' : '#4ade80' } }} />
         {label && (
           <Typography sx={{
             flex: 1, minWidth: 0, fontSize: '0.75rem', mr: 0.6,
@@ -62,18 +66,26 @@ export default function WhatsAppNumberPicker({
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>{label}</Typography>
         )}
-        {!collapseNumber && (
-          <Chip
-            icon={<WhatsAppIcon sx={{ fontSize: '11px !important', color: selected ? '#4ade80 !important' : 'rgba(255,255,255,0.25) !important' }} />}
-            label={primary} size="small"
-            sx={{
-              height: 20, fontSize: '0.68rem',
-              bgcolor: selected ? 'rgba(34,197,94,0.1)' : 'rgba(255,255,255,0.04)',
-              color:   selected ? '#4ade80'              : 'rgba(255,255,255,0.3)',
-              border: `1px solid ${selected ? 'rgba(34,197,94,0.2)' : 'rgba(255,255,255,0.08)'}`,
-              '& .MuiChip-label': { px: 0.7 },
-            }} />
-        )}
+        {!collapseNumber && (() => {
+          const pContacted = isContacted(primary)
+          const pColor     = pContacted ? '#fbbf24' : '#4ade80'
+          const pBg        = pContacted ? 'rgba(251,191,36,0.12)' : 'rgba(34,197,94,0.1)'
+          const pBorder    = pContacted ? 'rgba(251,191,36,0.3)'  : 'rgba(34,197,94,0.2)'
+          // Show amber border even when unselected for contacted numbers
+          const borderColor = selected ? pBorder : pContacted ? 'rgba(251,191,36,0.18)' : 'rgba(255,255,255,0.08)'
+          return (
+            <Chip
+              icon={<WhatsAppIcon sx={{ fontSize: '11px !important', color: selected ? `${pColor} !important` : pContacted ? '#fbbf24 !important' : 'rgba(255,255,255,0.25) !important' }} />}
+              label={primary} size="small"
+              sx={{
+                height: 20, fontSize: '0.68rem',
+                bgcolor: selected ? pBg    : 'rgba(255,255,255,0.04)',
+                color:   selected ? pColor : pContacted ? 'rgba(251,191,36,0.6)' : 'rgba(255,255,255,0.3)',
+                border: `1px solid ${borderColor}`,
+                '& .MuiChip-label': { px: 0.7 },
+              }} />
+          )
+        })()}
         {extras.length > 0 && (
           <Chip onClick={onToggleExpand} size="small"
             label={collapseNumber ? `${extras.length + 1}` : `+${extras.length}`}
@@ -91,32 +103,44 @@ export default function WhatsAppNumberPicker({
       </Box>
       {expanded && (
         <>
-          {collapseNumber && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.1, pl: 2.6 }}>
-              <Checkbox size="small" checked={selected} onChange={onToggleCompany}
-                sx={{ p: 0.2, color: 'rgba(255,255,255,0.2)', '&.Mui-checked': { color: '#4ade80' } }} />
-              <Chip label={primary} size="small"
-                sx={{
-                  height: 18, fontSize: '0.62rem',
-                  bgcolor: selected ? 'rgba(34,197,94,0.1)' : 'rgba(255,255,255,0.03)',
-                  color:   selected ? '#4ade80'              : 'rgba(255,255,255,0.25)',
-                  border: `1px solid ${selected ? 'rgba(34,197,94,0.2)' : 'rgba(255,255,255,0.06)'}`,
-                  '& .MuiChip-label': { px: 0.6 },
-                }} />
-            </Box>
-          )}
+          {collapseNumber && (() => {
+            const pContacted = isContacted(primary)
+            const pColor     = pContacted ? '#fbbf24' : '#4ade80'
+            const pBg        = pContacted ? 'rgba(251,191,36,0.12)' : 'rgba(34,197,94,0.1)'
+            const pBorder    = pContacted ? 'rgba(251,191,36,0.3)'  : 'rgba(34,197,94,0.2)'
+            const borderColor = selected ? pBorder : pContacted ? 'rgba(251,191,36,0.18)' : 'rgba(255,255,255,0.06)'
+            return (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.1, pl: 2.6 }}>
+                <Checkbox size="small" checked={selected} onChange={onToggleCompany}
+                  sx={{ p: 0.2, color: pContacted ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.2)', '&.Mui-checked': { color: pColor } }} />
+                <Chip label={primary} size="small"
+                  sx={{
+                    height: 18, fontSize: '0.62rem',
+                    bgcolor: selected ? pBg    : 'rgba(255,255,255,0.03)',
+                    color:   selected ? pColor : pContacted ? 'rgba(251,191,36,0.6)' : 'rgba(255,255,255,0.25)',
+                    border: `1px solid ${borderColor}`,
+                    '& .MuiChip-label': { px: 0.6 },
+                  }} />
+              </Box>
+            )
+          })()}
           {extras.map(n => {
-            const on = extraSelected.has(key(n))
+            const on         = extraSelected.has(key(n))
+            const nContacted = isContacted(n)
+            const nColor     = nContacted ? '#fbbf24' : '#4ade80'
+            const nBg        = nContacted ? 'rgba(251,191,36,0.12)' : 'rgba(34,197,94,0.1)'
+            const nBorder    = nContacted ? 'rgba(251,191,36,0.3)'  : 'rgba(34,197,94,0.2)'
+            const nBorderColor = on ? nBorder : nContacted ? 'rgba(251,191,36,0.18)' : 'rgba(255,255,255,0.06)'
             return (
               <Box key={n} sx={{ display: 'flex', alignItems: 'center', gap: 0.1, pl: 2.6 }}>
                 <Checkbox size="small" checked={on} onChange={() => onToggleExtra(key(n))}
-                  sx={{ p: 0.2, color: 'rgba(255,255,255,0.2)', '&.Mui-checked': { color: '#4ade80' } }} />
+                  sx={{ p: 0.2, color: nContacted ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.2)', '&.Mui-checked': { color: nColor } }} />
                 <Chip label={n} size="small"
                   sx={{
                     height: 18, fontSize: '0.62rem',
-                    bgcolor: on ? 'rgba(34,197,94,0.1)' : 'rgba(255,255,255,0.03)',
-                    color:   on ? '#4ade80'             : 'rgba(255,255,255,0.25)',
-                    border: `1px solid ${on ? 'rgba(34,197,94,0.2)' : 'rgba(255,255,255,0.06)'}`,
+                    bgcolor: on ? nBg     : 'rgba(255,255,255,0.03)',
+                    color:   on ? nColor  : nContacted ? 'rgba(251,191,36,0.6)' : 'rgba(255,255,255,0.25)',
+                    border: `1px solid ${nBorderColor}`,
                     '& .MuiChip-label': { px: 0.6 },
                   }} />
               </Box>

@@ -341,15 +341,16 @@ export function TemplateManagerDialog({ open, onClose, onChange }) {
 // have that data, since it would render with a blank gap for every one of them
 // (e.g. "te contactamos desde " with nothing after "desde" when city is missing).
 const VAR_CHECKS = [
-  { re: /\{\{nombre\}\}/,    flag: 'hasName',     labelKey: 'varName' },
-  { re: /\{\{ciudad\}\}/,    flag: 'hasCity',     labelKey: 'varCity' },
-  { re: /\{\{industria\}\}/, flag: 'hasIndustry', labelKey: 'varIndustry' },
-  { re: /\{\{web\}\}/,       flag: 'hasWeb',      labelKey: 'varWeb' },
+  { re: /\{\{nombre\}\}/,    flag: 'hasName',     labelKey: 'varName',     color: '#818cf8', key: 'nombre'   },
+  { re: /\{\{ciudad\}\}/,    flag: 'hasCity',     labelKey: 'varCity',     color: '#38bdf8', key: 'ciudad'   },
+  { re: /\{\{industria\}\}/, flag: 'hasIndustry', labelKey: 'varIndustry', color: '#fb923c', key: 'industria'},
+  { re: /\{\{web\}\}/,       flag: 'hasWeb',      labelKey: 'varWeb',      color: '#a78bfa', key: 'web'      },
 ]
 
 export function TemplateLibraryPicker({
   onChange, recipientCount = 0, baseCount = 0, label,
   hasName = true, hasCity = true, hasIndustry = true, hasWeb = true,
+  varCounts = null, totalSelected = 0,
 }) {
   const { t, lang } = useLang()
   const [templates,   setTemplates]   = useState([])
@@ -362,6 +363,26 @@ export function TemplateLibraryPicker({
   const availability = { hasName, hasCity, hasIndustry, hasWeb }
   const missingVarsFor = useCallback((text) => VAR_CHECKS.filter(v => v.re.test(text) && !availability[v.flag]),
     [hasName, hasCity, hasIndustry, hasWeb]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Build a human-readable tooltip for a blocked template with per-variable counts
+  const blockedTooltip = useCallback((missing) => {
+    if (!varCounts || totalSelected === 0) {
+      const varLabels = missing.map(v => t.tplLib[v.labelKey]).join(', ')
+      return t.tplLib.blockedMissingVar(varLabels)
+    }
+    const varMap = { varName: 'nombre', varCity: 'ciudad', varIndustry: 'industria', varWeb: 'web' }
+    const parts = missing.map(v => {
+      const key = varMap[v.labelKey]
+      const cnt = key && varCounts[key] != null ? varCounts[key] : 0
+      const label = t.tplLib[v.labelKey]
+      return lang === 'en'
+        ? `${label} (${cnt}/${totalSelected} companies)`
+        : `${label} (${cnt}/${totalSelected} empresas)`
+    })
+    return lang === 'en'
+      ? `No data for: ${parts.join(' · ')}`
+      : `Sin datos para: ${parts.join(' · ')}`
+  }, [varCounts, totalSelected, lang, t]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = useCallback(() => {
     setLoading(true)
@@ -397,14 +418,13 @@ export function TemplateLibraryPicker({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+
+      {/* ── Header row ── */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem', fontWeight: 600, flex: 1 }}>{label || t.tplLib.title}</Typography>
         <Button size="small" onClick={() => setManagerOpen(true)}
-          sx={{
-            color: 'var(--accent,#3b82f6)', textTransform: 'none', fontSize: '0.72rem', fontWeight: 600,
-            borderRadius: 1.5, px: 1, py: 0.3,
-            '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)' },
-          }}>
+          sx={{ color: 'var(--accent,#3b82f6)', textTransform: 'none', fontSize: '0.72rem', fontWeight: 600,
+            borderRadius: 1.5, px: 1, py: 0.3, '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)' } }}>
           {t.tplLib.manageBtn}
         </Button>
       </Box>
@@ -413,51 +433,92 @@ export function TemplateLibraryPicker({
         {baseCount > 0 ? t.tplLib.pickHintWithBase : t.tplLib.pickHint}
       </Typography>
 
-      {needsMin ? (
-        <Box sx={{ display: 'flex', gap: 0.6, alignItems: 'flex-start', borderRadius: 1.5, px: 1, py: 0.7,
-          bgcolor: ok ? 'rgba(34,197,94,0.08)' : 'rgba(245,158,11,0.08)',
-          border: `1px solid ${ok ? 'rgba(34,197,94,0.25)' : 'rgba(245,158,11,0.25)'}` }}>
-          {ok
-            ? <CheckCircleIcon sx={{ fontSize: 13, color: '#4ade80', mt: 0.2, flexShrink: 0 }} />
-            : <WarningAmberIcon sx={{ fontSize: 13, color: '#f59e0b', mt: 0.2, flexShrink: 0 }} />}
-          <Typography sx={{ color: ok ? '#4ade80' : '#f59e0b', fontSize: '0.7rem', lineHeight: 1.4 }}>
-            {ok ? t.tplLib.minRequiredOk(totalCount) : t.tplLib.minRequiredBlock(MIN_TEMPLATES_FOR_BULK, totalCount)}
+      {/* ── Min-templates progress: dots instead of big amber banner ── */}
+      {needsMin && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ display: 'flex', gap: 0.5 }}>
+            {Array.from({ length: MIN_TEMPLATES_FOR_BULK }).map((_, i) => {
+              const filled = i < totalCount
+              const color  = ok ? '#4ade80' : filled ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.12)'
+              return (
+                <Box key={i} sx={{
+                  width: 8, height: 8, borderRadius: '50%',
+                  bgcolor: filled ? color : 'transparent',
+                  border: `1.5px solid ${filled ? color : 'rgba(255,255,255,0.18)'}`,
+                  transition: 'all 0.2s',
+                  boxShadow: filled && ok ? `0 0 6px ${color}80` : 'none',
+                }} />
+              )
+            })}
+          </Box>
+          <Typography sx={{ fontSize: '0.67rem', color: ok ? '#4ade80' : 'rgba(255,255,255,0.35)', transition: 'color 0.2s' }}>
+            {ok
+              ? t.tplLib.minRequiredOk(totalCount)
+              : t.tplLib.minRequiredBlock(MIN_TEMPLATES_FOR_BULK, totalCount)}
           </Typography>
         </Box>
-      ) : (
-        <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', opacity: 0.6 }}>{t.tplLib.singleRecipientOk}</Typography>
       )}
 
+      {/* ── Template list ── */}
       {loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 1.5 }}><CircularProgress size={16} sx={{ color: 'var(--accent,#3b82f6)' }} /></Box>
       ) : templates.length === 0 ? (
         <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.76rem', py: 1 }}>{t.tplLib.noTemplates}</Typography>
       ) : (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxHeight: 220, overflowY: 'auto' }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxHeight: 260, overflowY: 'auto',
+          scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.08) transparent',
+          '&::-webkit-scrollbar': { width: 3 }, '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.1)', borderRadius: 2 },
+        }}>
           {templates.map(tpl => {
-            const isSel = selectedIds.includes(tpl._id)
-            const missing = missingVarsFor(tpl.text)
-            const blocked = missing.length > 0
+            const isSel    = selectedIds.includes(tpl._id)
+            const missing  = missingVarsFor(tpl.text)
+            const blocked  = missing.length > 0
+            const usedVars = VAR_CHECKS.filter(v => v.re.test(tpl.text))
             const row = (
               <Box key={tpl._id} onClick={() => toggle(tpl._id, blocked)} sx={{
                 display: 'flex', alignItems: 'flex-start', gap: 0.6, cursor: blocked ? 'not-allowed' : 'pointer',
-                border: `1px solid ${blocked ? 'rgba(239,68,68,0.25)' : isSel ? 'rgba(var(--accent-rgb,59,130,246),0.4)' : 'var(--border)'}`, borderRadius: 1.5, p: 0.8,
-                bgcolor: blocked ? 'rgba(239,68,68,0.04)' : isSel ? 'rgba(var(--accent-rgb,59,130,246),0.08)' : 'var(--card-bg)',
-                opacity: blocked ? 0.6 : 1,
-                transition: 'border-color 0.15s, background-color 0.15s',
-                '&:hover': blocked ? {} : { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)' },
+                borderRadius: 1.5, p: 0.8,
+                border: `1px solid ${blocked ? 'rgba(239,68,68,0.2)' : isSel ? 'rgba(var(--accent-rgb,59,130,246),0.35)' : 'var(--border)'}`,
+                borderLeft: `3px solid ${blocked ? 'rgba(239,68,68,0.4)' : isSel ? 'var(--accent,#3b82f6)' : 'transparent'}`,
+                bgcolor: blocked ? 'rgba(239,68,68,0.03)' : isSel ? 'rgba(var(--accent-rgb,59,130,246),0.07)' : 'transparent',
+                opacity: blocked ? 0.55 : 1,
+                transition: 'border-color 0.15s, background-color 0.15s, border-left-color 0.15s',
+                '&:hover': blocked ? {} : {
+                  borderColor: 'rgba(var(--accent-rgb,59,130,246),0.35)',
+                  borderLeftColor: isSel ? 'var(--accent,#3b82f6)' : 'rgba(var(--accent-rgb,59,130,246),0.4)',
+                  bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.09)' : 'rgba(var(--accent-rgb,59,130,246),0.03)',
+                },
               }}>
-                <Checkbox size="small" checked={isSel} disabled={blocked} onChange={() => toggle(tpl._id, blocked)} onClick={e => e.stopPropagation()}
-                  sx={{ p: 0.3, color: 'var(--border)', '&.Mui-checked': { color: 'var(--accent,#3b82f6)' } }} />
+                <Checkbox size="small" checked={isSel} disabled={blocked}
+                  onChange={() => toggle(tpl._id, blocked)} onClick={e => e.stopPropagation()}
+                  sx={{ p: 0.3, mt: 0.1, color: 'var(--border)', '&.Mui-checked': { color: 'var(--accent,#3b82f6)' } }} />
                 <Box sx={{ minWidth: 0, flex: 1 }}>
-                  <Typography sx={{ color: 'var(--text)', fontWeight: 600, fontSize: '0.78rem' }}>{tpl.name}</Typography>
-                  <HighlightedPreview text={tpl.text} lang={lang} sx={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} />
+                  <Typography sx={{ color: isSel ? 'var(--text)' : 'var(--text-muted)', fontWeight: isSel ? 700 : 600, fontSize: '0.78rem', lineHeight: 1.3, transition: 'color 0.15s' }}>
+                    {tpl.name}
+                  </Typography>
+                  {/* 2-line preview with variable highlighting */}
+                  <HighlightedPreview text={tpl.text} lang={lang} sx={{
+                    display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden',
+                    color: 'var(--text-muted)', fontSize: '0.68rem', mt: 0.3, lineHeight: 1.4,
+                  }} />
+                  {/* Variable pills */}
+                  {usedVars.length > 0 && (
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, mt: 0.5 }}>
+                      {usedVars.map(v => (
+                        <Box key={v.key} sx={{
+                          fontSize: '0.56rem', fontWeight: 700, px: 0.5, py: 0.1, borderRadius: 0.8,
+                          bgcolor: `${v.color}15`, color: v.color, border: `1px solid ${v.color}35`,
+                        }}>
+                          {t.tplLib[v.labelKey] || v.key}
+                        </Box>
+                      ))}
+                    </Box>
+                  )}
                 </Box>
               </Box>
             )
             if (!blocked) return row
-            const varLabels = missing.map(v => t.tplLib[v.labelKey]).join(', ')
-            return <Tooltip key={tpl._id} title={t.tplLib.blockedMissingVar(varLabels)} placement="top"><span>{row}</span></Tooltip>
+            return <Tooltip key={tpl._id} title={blockedTooltip(missing)} placement="top"><span>{row}</span></Tooltip>
           })}
         </Box>
       )}

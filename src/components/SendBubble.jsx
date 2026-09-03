@@ -107,6 +107,18 @@ export default function SendBubble() {
   }, [active?.sent])
 
   const [errorToastOut, setErrorToastOut] = useState(false)
+  const [localCountdown, setLocalCountdown] = useState(null)
+
+  // Local countdown — ticks every 500ms from next_action_at so the number
+  // updates smoothly instead of jumping only on each poll (~1s).
+  useEffect(() => {
+    const target = active?.next_action_at
+    if (!target) { setLocalCountdown(null); return }
+    const tick = () => setLocalCountdown(Math.max(0, Math.ceil((new Date(target) - Date.now()) / 1000)))
+    tick()
+    const id = setInterval(tick, 500)
+    return () => clearInterval(id)
+  }, [active?.next_action_at])
 
   // Success toast auto-dismiss
   useEffect(() => {
@@ -173,8 +185,9 @@ export default function SendBubble() {
   }
 
   const d = displayRef.current || { total: 1, sent: 0, phase: 'sending', countdown: null }
+  const displayCountdown = localCountdown !== null ? localCountdown : (d.countdown ?? 0)
   const isSuccess     = bubblePhase === 'success' || d.phase === 'success'
-  const isWaiting      = d.phase === 'waiting' && d.countdown > 0
+  const isWaiting      = d.phase === 'waiting' && displayCountdown > 0
   const isBatchWaiting = isWaiting && d.batch
   const progress   = d.total > 0 ? d.sent / d.total : 0
   const dashOffset = CIRC * (1 - progress)
@@ -321,7 +334,7 @@ export default function SendBubble() {
                     fontSize: 22, fontWeight: 700,
                     lineHeight: 1, fontVariantNumeric: 'tabular-nums',
                   }}>
-                    {d.countdown}s
+                    {displayCountdown}s
                   </span>
                 ) : (
                   <svg width={18} height={18} viewBox="0 0 24 24" fill="none"

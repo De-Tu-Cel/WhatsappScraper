@@ -3,6 +3,7 @@ import React from 'react'
 import { useState, useRef, useEffect, useMemo, useCallback, useDeferredValue } from 'react'
 import { useLang } from '../context/LangContext'
 import Dialog from '@mui/material/Dialog'
+import DialogTitle from '@mui/material/DialogTitle'
 import DialogContent from '@mui/material/DialogContent'
 import DialogActions from '@mui/material/DialogActions'
 import { authFetch } from '@/lib/api'
@@ -64,14 +65,27 @@ const fadeSlideIn = keyframes`
   to   { opacity: 1; transform: translateY(0); }
 `
 
-function CountSelector({ numResults, setNumResults, showCount, show, size = 'md' }) {
+function CountSelector({ numResults, setNumResults, showCount, show, size = 'md', disabled = false }) {
+  const [draft, setDraft] = useState(String(numResults))
+  const isMd = size === 'md'
+
+  useEffect(() => { setDraft(String(numResults)) }, [numResults])
+
+  function commitDraft(raw) {
+    const n = parseInt(raw, 10)
+    const clamped = Number.isFinite(n) ? Math.min(200, Math.max(1, n)) : numResults
+    setNumResults(clamped)
+    setDraft(String(clamped))
+  }
+
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, width: size === 'md' ? 220 : 170 }}>
-      {size === 'md' && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>{showCount}</Typography>}
-      {size === 'sm' && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>{show}</Typography>}
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, width: isMd ? 220 : 170, opacity: disabled ? 0.55 : 1 }}>
+      {isMd && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>{showCount}</Typography>}
+      {!isMd && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>{show}</Typography>}
       <Slider
         value={numResults}
-        onChange={(_, v) => setNumResults(v)}
+        onChange={disabled ? undefined : (_, v) => setNumResults(v)}
+        disabled={disabled}
         min={1} max={200} step={1}
         size="small"
         sx={{
@@ -80,12 +94,30 @@ function CountSelector({ numResults, setNumResults, showCount, show, size = 'md'
           '& .MuiSlider-thumb': { width: 14, height: 14, '&:hover, &.Mui-active': { boxShadow: '0 0 0 6px rgba(var(--accent-rgb,59,130,246),0.16)' } },
         }}
       />
-      <Box sx={{
-        px: size === 'md' ? 1.2 : 1, py: 0.3, borderRadius: 10, minWidth: size === 'md' ? 28 : 24, textAlign: 'center', flexShrink: 0,
-        bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.2)', color: 'var(--accent, #60a5fa)',
-        border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.4)',
-        fontSize: size === 'md' ? '0.75rem' : '0.72rem', fontWeight: 700,
-      }}>{numResults}</Box>
+      <Box
+        component="input"
+        type="text"
+        inputMode="numeric"
+        disabled={disabled}
+        value={draft}
+        onChange={e => {
+          const v = e.target.value.replace(/\D/g, '')
+          if (v === '') { setDraft(''); return }
+          const n = parseInt(v, 10)
+          setDraft(n > 50 ? '50' : v)
+        }}
+        onBlur={e => commitDraft(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitDraft(draft) } }}
+        sx={{
+          px: isMd ? 1.2 : 1, py: 0.3, borderRadius: 10, width: isMd ? 48 : 42, textAlign: 'center', flexShrink: 0,
+          bgcolor: disabled ? 'rgba(255,255,255,0.06)' : 'rgba(var(--accent-rgb, 59,130,246), 0.2)',
+          color:   disabled ? 'rgba(255,255,255,0.5)'  : 'var(--accent, #60a5fa)',
+          border: `1px solid ${disabled ? 'rgba(255,255,255,0.1)' : 'rgba(var(--accent-rgb, 59,130,246), 0.4)'}`,
+          fontSize: isMd ? '0.75rem' : '0.72rem', fontWeight: 700,
+          outline: 'none', appearance: 'none',
+          '&:focus': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.8)', boxShadow: '0 0 0 2px rgba(var(--accent-rgb,59,130,246),0.15)' },
+        }}
+      />
     </Box>
   )
 }
@@ -286,10 +318,15 @@ export default function SearchProspects() {
   const [extraVariants, setExtraVariants] = useState([])
   const [sendCfg,     setSendCfg]     = useState(() => loadSendConfig())
   const [sendError,   setSendError]   = useState('')
-  const { addBatch, cancel: cancelQueue, active: queueActive } = useSendQueue()
+  const { addBatch, cancel: _cancelQueueRaw, active: queueActive } = useSendQueue()
+  const cancelledRef = useRef(false)
+  const cancelQueue = useCallback(() => {
+    cancelledRef.current = true
+    _cancelQueueRaw()
+  }, [_cancelQueueRaw])
   const { stats: capStats, refresh: refreshCapStats } = useDailyCapStats()
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
-  const [waDeselected, setWaDeselected] = useState(new Set())
+  const [waSelected, setWaSelected] = useState(new Set())
   // Números EXTRA (además del principal) que el usuario prendió a mano al
   // expandir el chip de una empresa — clave `${company_id}::${number}`.
   const [extraSelected, setExtraSelected] = useState(new Set())
@@ -298,7 +335,13 @@ export default function SearchProspects() {
   // "Send All" from the same scrape warns about them even before the backend
   // scrape-result data is re-fetched (which only happens on a new job).
   const [localContactedIds, setLocalContactedIds] = useState(new Set())
+  // Numbers sent in this session: company_id → Set<number> — for real-time amber coloring
+  const [sessionSentNums, setSessionSentNums] = useState({})
+  // Fresh already_contacted data from the API — overrides stale scrape-job stamps
+  // so "Ya contactados" count is accurate even after a page refresh.
+  const [freshContactedMap, setFreshContactedMap] = useState({})
   const [confirmDialog, setConfirmDialog] = useState({ open: false, names: '', resolve: null }) // números que el usuario quitó manualmente
+  const [newContactsDialog, setNewContactsDialog] = useState({ open: false, trimCount: 0, newRemaining: 0, resolve: null })
   const msgRef       = useRef(null)
   const wasActiveRef = useRef(false)
 
@@ -308,26 +351,25 @@ export default function SearchProspects() {
 
   // results = filas del job (backend) + base de un reintento previo (si aplica),
   // con el estado optimista de envío superpuesto por url.
+  // Dedup by URL — the backend can push a URL twice on pause/resume; keep the last.
   const results = useMemo(() => {
     const merged = [...retryBase, ...scrapeJob.results]
+    const seenUrl = new Map()
+    for (const r of merged) seenUrl.set(r.url, r)  // last-wins per URL
+    const deduped = Array.from(seenUrl.values())
     return sentOverlay && Object.keys(sentOverlay).length
-      ? merged.map(r => sentOverlay[r.url] ? { ...r, msg_status: sentOverlay[r.url] } : r)
-      : merged
+      ? deduped.map(r => sentOverlay[r.url] ? { ...r, msg_status: sentOverlay[r.url] } : r)
+      : deduped
   }, [retryBase, scrapeJob.results, sentOverlay])
 
-  // Reset deselected when new results arrive
-  // Los setState devuelven la MISMA referencia si ya estaban vacíos — evita que
-  // este efecto re-dispare un render indefinidamente si `results` llega a ser
-  // referencialmente inestable entre renders (ver useScrapeJob.js EMPTY_RESULTS).
+  // Reset selection state only when a new scrape job starts — NOT on every
+  // results update (polling/retry during a paused send would re-select everything).
   useEffect(() => {
-    setWaDeselected(prev => prev.size ? new Set() : prev)
-    setExtraSelected(prev => prev.size ? new Set() : prev)
-    setExpandedCo(prev => prev.size ? new Set() : prev)
-  }, [results])
-
-  // Reset locally-tracked sent companies when a new scrape job starts.
-  useEffect(() => {
+    setWaSelected(new Set())
+    setExtraSelected(new Set())
+    setExpandedCo(new Set())
     setLocalContactedIds(new Set())
+    setFreshContactedMap({})
   }, [scrapeJob.job?._id])
 
   useEffect(() => {
@@ -335,9 +377,18 @@ export default function SearchProspects() {
       wasActiveRef.current = true
     } else if (wasActiveRef.current) {
       wasActiveRef.current = false
+      const wasCancelled = cancelledRef.current
+      cancelledRef.current = false
       setSentOverlay(prev => {
         const next = { ...prev }
-        for (const k in next) if (next[k] === 'queued') next[k] = 'sent'
+        for (const k in next) {
+          if (next[k] === 'queued') {
+            // On cancel: remove queued entries so those companies can be re-sent.
+            // On natural completion: promote to 'sent'.
+            if (wasCancelled) delete next[k]
+            else next[k] = 'sent'
+          }
+        }
         return next
       })
       refreshCapStats()
@@ -347,12 +398,48 @@ export default function SearchProspects() {
   // waRows y waRowsUnique deben ir ANTES de effectiveWaSelected
   const waRowsAll    = results.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
   const waRowsUnique = useMemo(() =>
-    dedupeByCompany(waRowsAll).map(r => ({
-      ...r,
-      already_contacted: r.already_contacted
-        || (localContactedIds.has(r.company_id) ? { contacted: true } : null),
-    })),
-  [waRowsAll, localContactedIds])
+    dedupeByCompany(waRowsAll).map(r => {
+      const sessionNums = sessionSentNums[r.company_id]
+      // freshContactedMap > r.already_contacted (stale job stamp) > localContactedIds (session)
+      const fresh = freshContactedMap[r.company_id]
+      const base = (fresh?.contacted ? fresh : null)
+        || r.already_contacted
+        || (localContactedIds.has(r.company_id) ? { contacted: true } : null)
+      const already_contacted = base
+        ? {
+            ...base,
+            contacted: true,
+            contacted_numbers: [
+              ...new Set([
+                ...(base.contacted_numbers || []),
+                ...(sessionNums ? [...sessionNums] : []),
+              ]),
+            ],
+          }
+        : sessionNums?.size > 0
+          ? { contacted: true, contacted_numbers: [...sessionNums] }
+          : null
+      return { ...r, already_contacted }
+    }),
+  [waRowsAll, localContactedIds, sessionSentNums, freshContactedMap])
+
+  // Refresh already_contacted from the API so the count is fresh after
+  // companies were contacted in a prior session (scrape-job stamps are stale).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const ids = waRowsAll.map(r => r.company_id).filter(Boolean)
+    if (!ids.length) return
+    let cancelled = false
+    authFetch('/api/companies/check-contacted', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_ids: ids }),
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (!cancelled && data) setFreshContactedMap(data) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [waRowsAll.map(r => r.company_id).join(',')])
 
   // Filtro de "ya contactados": se aplica sobre waRowsUnique antes de calcular la selección
   const filteredWaRows = useMemo(() => {
@@ -363,8 +450,8 @@ export default function SearchProspects() {
 
   // Siempre sincronizado — sin delay de un render
   const effectiveWaSelected = useMemo(() =>
-    new Set(filteredWaRows.map(r => r.company_id).filter(id => !waDeselected.has(id))),
-  [filteredWaRows, waDeselected])
+    new Set(filteredWaRows.map(r => r.company_id).filter(id => waSelected.has(id))),
+  [filteredWaRows, waSelected])
 
   const INDUSTRY_GROUPS = useMemo(() => {
     const i = t.search.industries
@@ -408,7 +495,7 @@ export default function SearchProspects() {
   const blockedCount  = found.filter(r => r.blocked).length
   const okCount       = results.filter(r => r.ok).length
   const errCount      = results.filter(r => !r.ok).length
-  const waCount       = results.filter(r => r.whatsapp).length
+  const waCount       = results.filter(r => r.all_whatsapp?.length > 0 || !!r.whatsapp).length
   const hasResults    = found.length > 0 || scrapeJob.processing || scrapeJob.done || searching || searchError
 
   function saveHistory(query) {
@@ -545,9 +632,20 @@ export default function SearchProspects() {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'prospectos.csv'; a.click()
   }
 
-  const alreadySent  = results.some(r => r.msg_status === 'sent' || r.msg_status === 'failed' || r.msg_status === 'queued')
-  const sentCount    = results.filter(r => r.msg_status === 'sent').length
-  const isSending    = queueActive !== null && alreadySent
+  // sentCids: companies whose messages are already processed in this session
+  const sentCids = useMemo(
+    () => new Set(results.filter(r => ['sent','queued','failed'].includes(r.msg_status)).map(r => r.company_id).filter(Boolean)),
+    [results]
+  )
+  const sentCount = results.filter(r => r.msg_status === 'sent').length
+  const isSending = queueActive !== null && results.some(r => r.msg_status === 'queued')
+  // True only when every currently-selected company has already been sent — disables button
+  const allSelectedSent = effectiveWaSelected.size > 0 && [...effectiveWaSelected].every(cid => sentCids.has(cid))
+  // Count of selected companies NOT yet sent (what the send button will actually process)
+  const unsentSelectedCount = useMemo(
+    () => [...effectiveWaSelected].filter(cid => !sentCids.has(cid)).length,
+    [effectiveWaSelected, sentCids]
+  )
 
   // Un envío masivo manda por default 1 número por empresa (el principal) — no
   // todos los que se hayan encontrado. Evita que una empresa con muchos números
@@ -564,10 +662,36 @@ export default function SearchProspects() {
     [...extraSelected].filter(key => { const cid = key.split('::')[0]; return effectiveWaSelected.has(cid) && !_contactedCids.has(cid) }).length
   const overBy     = getOverBy(capStats, totalContactPoints, newContactPoints)
   const capBlocked = overBy > 0
+
+  // Variable availability: does at least one selected company have each field?
+  // Passed to TemplateLibraryPicker so it can block/warn templates that use
+  // variables that no selected recipient can substitute.
+  const _selectedRows = useMemo(
+    () => waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id)),
+    [waRowsUnique, effectiveWaSelected]
+  )
+  const tplVarFlags = useMemo(() => ({
+    hasName:     _selectedRows.some(r => r.name     || r.empresa),
+    hasCity:     _selectedRows.some(r => r._extra?.city || r.city || r.ciudad),
+    hasIndustry: _selectedRows.some(r => r.industry || r.industria),
+    hasWeb:      _selectedRows.some(r => r.url      || r.website),
+  }), [_selectedRows])
+
+  // How many selected companies have each variable — shown in chip tooltip
+  const tplVarCounts = useMemo(() => ({
+    nombre:    _selectedRows.filter(r => r.name     || r.empresa).length,
+    ciudad:    _selectedRows.filter(r => r._extra?.city || r.city || r.ciudad).length,
+    industria: _selectedRows.filter(r => r.industry || r.industria).length,
+    web:       _selectedRows.filter(r => r.url      || r.website).length,
+  }), [_selectedRows])
+
   // Sending to 2+ contact points needs varied text (see MIN_TEMPLATES_FOR_BULK).
   // Uses totalContactPoints (not totalRecipients) so selecting multiple numbers
   // of a single company also triggers the template-library mode.
-  const isBulk = totalContactPoints > 1
+  // Also force template-library mode when any selected company was already contacted
+  // so the picker doesn't disappear when clicking a single "ya contactada" row.
+  const _anySelectedContacted = waRowsUnique.some(r => effectiveWaSelected.has(r.company_id) && r.already_contacted?.contacted)
+  const isBulk = totalContactPoints > 1 || _anySelectedContacted
   // En bulk, el mensaje base deja de usarse — solo se envían las plantillas
   // marcadas en la Biblioteca, para que lo enviado sea exactamente lo seleccionado.
   const allVariants = useMemo(
@@ -577,9 +701,46 @@ export default function SearchProspects() {
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
   async function handleSendAll() {
-    if (capBlocked) return
-    const targets = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id))
+    if (isSending || capBlocked) return
+    let targets = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id) && !sentCids.has(r.company_id))
     if (!targets.length || belowMinTemplates) return
+
+    // Per-instance daily cap trim
+    const newInBatch = targets.filter(r => !r.already_contacted?.contacted)
+    if (newInBatch.length > 0) {
+      const instCapMap = Object.fromEntries(
+        (capStats?.instances ?? []).map(inst => [inst.instance, inst.new_contacts_left ?? 0])
+      )
+      const globalPool = capStats?.new_contacts_capacity ?? Infinity
+      const byInstance = {}
+      const unassigned = []
+      for (const r of newInBatch) {
+        if (r.assigned_instance && instCapMap[r.assigned_instance] !== undefined) {
+          ;(byInstance[r.assigned_instance] ??= []).push(r)
+        } else {
+          unassigned.push(r)
+        }
+      }
+      const kept = []
+      let totalTrimmed = 0
+      for (const [inst, companies] of Object.entries(byInstance)) {
+        const cap = instCapMap[inst] ?? 0
+        kept.push(...companies.slice(0, cap))
+        totalTrimmed += Math.max(0, companies.length - cap)
+      }
+      const unassignedCap = Math.min(globalPool, unassigned.length)
+      kept.push(...unassigned.slice(0, unassignedCap))
+      totalTrimmed += Math.max(0, unassigned.length - unassignedCap)
+      if (totalTrimmed > 0) {
+        const newRemaining = newInBatch.length - totalTrimmed
+        const confirmed = await new Promise(resolve =>
+          setNewContactsDialog({ open: true, trimCount: totalTrimmed, newRemaining, resolve })
+        )
+        if (!confirmed) return
+        const existing = targets.filter(r => r.already_contacted?.contacted)
+        targets = [...existing, ...kept]
+      }
+    }
 
     // Warn about already-contacted companies — MUI dialog
     const alreadyContacted = targets.filter(r => r.already_contacted?.contacted)
@@ -615,6 +776,16 @@ export default function SearchProspects() {
     setLocalContactedIds(prev => {
       const next = new Set(prev)
       jobs.forEach(j => j.companyId && next.add(j.companyId))
+      return next
+    })
+    setSessionSentNums(prev => {
+      const next = { ...prev }
+      jobs.forEach(j => {
+        if (!j.companyId) return
+        const existing = new Set(next[j.companyId] || [])
+        j.numbers.forEach(n => existing.add(n))
+        next[j.companyId] = existing
+      })
       return next
     })
   }
@@ -662,6 +833,38 @@ export default function SearchProspects() {
         </DialogActions>
       </Dialog>
 
+      <Dialog
+        open={newContactsDialog.open}
+        onClose={() => { newContactsDialog.resolve?.(false); setNewContactsDialog({ open: false, trimCount: 0, newRemaining: 0, resolve: null }) }}
+        slotProps={{ paper: { sx: { bgcolor: 'var(--bg-card, #1e293b)', border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 2, minWidth: 340 } } }}
+      >
+        <DialogTitle sx={{ color: '#fbbf24', fontSize: '0.95rem', fontWeight: 700, pb: 1 }}>
+          {lang === 'en' ? 'New-contact limit reached' : 'Límite de contactos nuevos'}
+        </DialogTitle>
+        <DialogContent sx={{ pt: '8px !important' }}>
+          <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.6))', fontSize: '0.85rem', lineHeight: 1.6 }}>
+            {lang === 'en'
+              ? `Your warmup limit allows ${newContactsDialog.newRemaining} new contacts today. ${newContactsDialog.trimCount} will be removed from the batch.`
+              : `Tu límite de calentamiento permite ${newContactsDialog.newRemaining} contactos nuevos hoy. Se eliminarán ${newContactsDialog.trimCount} del lote.`}
+          </Typography>
+          <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.5))', fontSize: '0.78rem', mt: 1.2 }}>
+            {lang === 'en'
+              ? 'Existing contacts (already messaged before) are not affected.'
+              : 'Los contactos existentes (ya enviados antes) no se ven afectados.'}
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 2, pb: 2, gap: 1 }}>
+          <Button size="small" onClick={() => { newContactsDialog.resolve?.(false); setNewContactsDialog({ open: false, trimCount: 0, newRemaining: 0, resolve: null }) }}
+            sx={{ color: 'var(--text-muted, rgba(255,255,255,0.5))', textTransform: 'none' }}>
+            {lang === 'en' ? 'Cancel' : 'Cancelar'}
+          </Button>
+          <Button size="small" variant="contained" onClick={() => { newContactsDialog.resolve?.(true); setNewContactsDialog({ open: false, trimCount: 0, newRemaining: 0, resolve: null }) }}
+            sx={{ bgcolor: '#d97706', '&:hover': { bgcolor: '#b45309' }, textTransform: 'none', fontWeight: 600 }}>
+            {lang === 'en' ? 'Send trimmed batch' : 'Enviar lote reducido'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* ── Estado inicial: centrado ── */}
       {!hasResults && (
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 2.5, pb: 4, px: 2.5, width: '100%' }}>
@@ -673,7 +876,7 @@ export default function SearchProspects() {
           </Box>
 
           <SearchBarForm compact={false} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !scrapeJob.processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancelSearch} defaultIndustry={lastIndustry} />
-          <CountSelector size="md" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} />
+          <CountSelector size="md" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} disabled={searching || scrapeJob.processing} />
 
           {/* Historial reciente */}
           {history.length > 0 && (
@@ -715,7 +918,7 @@ export default function SearchProspects() {
       {hasResults && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', p: 1.5, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
           <SearchBarForm compact={true} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !scrapeJob.processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancelSearch} defaultIndustry={lastIndustry} />
-          <CountSelector size="sm" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} />
+          <CountSelector size="sm" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} disabled={searching || scrapeJob.processing} />
         </Box>
       )}
 
@@ -883,7 +1086,7 @@ export default function SearchProspects() {
                 </Box>
               )
             })}
-            {(visibleCount < found.length || !serverExhausted) && (
+            {(visibleCount < found.length || (!serverExhausted && found.length > 0 && !searching)) && (
               <Box sx={{ p: 1.5, display: 'flex', justifyContent: 'center', borderTop: '1px solid var(--border)' }}>
                 <Button size="small" onClick={handleLoadMore} disabled={fetchingMore}
                   sx={{ color: 'var(--accent, #60a5fa)', fontSize: '0.78rem', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.2)', borderRadius: 1.5, px: 2, textTransform: 'none', gap: 0.8, '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)' }, '&.Mui-disabled': { color: 'rgba(96,165,250,0.4)', borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.1)' } }}>
@@ -902,18 +1105,20 @@ export default function SearchProspects() {
       {/* ── Progress (fase 2) ── */}
       {scrapeJob.processing && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Box sx={{ px: 2.5, py: 2, bgcolor: scrapeJob.paused ? 'rgba(251,191,36,0.05)' : 'rgba(var(--accent-rgb, 59,130,246), 0.05)', border: `1px solid ${scrapeJob.paused ? 'rgba(251,191,36,0.2)' : 'rgba(var(--accent-rgb, 59,130,246), 0.15)'}`, borderRadius: 2, transition: 'all 0.3s' }}>
+          <Box sx={{ px: 2.5, py: 2, bgcolor: (scrapeJob.paused || scrapeJob.pausing) ? 'rgba(251,191,36,0.05)' : 'rgba(var(--accent-rgb, 59,130,246), 0.05)', border: `1px solid ${(scrapeJob.paused || scrapeJob.pausing) ? 'rgba(251,191,36,0.2)' : 'rgba(var(--accent-rgb, 59,130,246), 0.15)'}`, borderRadius: 2, transition: 'all 0.3s' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                {scrapeJob.paused ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} /> : <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />}
+                {scrapeJob.pausing
+                  ? <CircularProgress size={14} sx={{ color: '#fbbf24' }} />
+                  : scrapeJob.paused ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} /> : <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />}
                 <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
-                  {scrapeJob.paused ? 'Pausado —' : 'Procesando'} {results.length} de {scrapeJob.total || found.filter(r => r.selected).length}
+                  {scrapeJob.pausing ? (lang === 'en' ? 'Pausing…' : 'Pausando…') : scrapeJob.paused ? 'Pausado —' : 'Procesando'} {scrapeJob.processed ?? results.length} de {scrapeJob.total || found.filter(r => r.selected).length}
                 </Typography>
               </Box>
-              <Typography sx={{ color: scrapeJob.paused ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>{scrapeJob.progress}%</Typography>
+              <Typography sx={{ color: (scrapeJob.paused || scrapeJob.pausing) ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>{scrapeJob.progress}%</Typography>
             </Box>
             <LinearProgress variant="determinate" value={scrapeJob.progress}
-              sx={{ borderRadius: 4, height: 6, bgcolor: scrapeJob.paused ? 'rgba(251,191,36,0.1)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)', '& .MuiLinearProgress-bar': { background: scrapeJob.paused ? 'linear-gradient(90deg,#f59e0b,#fbbf24)' : 'linear-gradient(90deg, var(--accent, #3b82f6), var(--accent, #60a5fa))', borderRadius: 4 } }} />
+              sx={{ borderRadius: 4, height: 6, bgcolor: (scrapeJob.paused || scrapeJob.pausing) ? 'rgba(251,191,36,0.1)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)', '& .MuiLinearProgress-bar': { background: (scrapeJob.paused || scrapeJob.pausing) ? 'linear-gradient(90deg,#f59e0b,#fbbf24)' : 'linear-gradient(90deg, var(--accent, #3b82f6), var(--accent, #60a5fa))', borderRadius: 4 } }} />
             {scrapeJob.currentUrl && !scrapeJob.paused && (
               <Typography sx={{ mt: 1, color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{scrapeJob.currentUrl}</Typography>
             )}
@@ -932,15 +1137,29 @@ export default function SearchProspects() {
               sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>
               {t.search.cancel}
             </Button>
-            {results.some(r => r.ok) && (
-              <Tooltip title={t.search.stopAndSendTip}>
-                <Button fullWidth onClick={scrapeJob.cancel} startIcon={<SendIcon />}
-                  sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#4ade80', bgcolor: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(34,197,94,0.15)' } }}>
-                  {t.search.stopAndSend}
-                </Button>
-              </Tooltip>
-            )}
           </Box>
+        </Box>
+      )}
+
+      {/* ── Cancelled + pending URLs banner ── */}
+      {scrapeJob.done && scrapeJob.job?.status === 'cancelled' && scrapeJob.pendingCount > 0 && (
+        <Box sx={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5,
+          px: 2, py: 1.5, borderRadius: 2,
+          bgcolor: 'rgba(251,191,36,0.05)', border: '1px solid rgba(251,191,36,0.22)',
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <PauseIcon sx={{ fontSize: 15, color: '#fbbf24', flexShrink: 0 }} />
+            <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)' }}>
+              {lang === 'en'
+                ? <><span style={{ color: '#fbbf24', fontWeight: 700 }}>{scrapeJob.pendingCount} URL{scrapeJob.pendingCount !== 1 ? 's' : ''}</span> were not scraped — resume to continue</>
+                : <><span style={{ color: '#fbbf24', fontWeight: 700 }}>{scrapeJob.pendingCount} URL{scrapeJob.pendingCount !== 1 ? 's' : ''}</span> quedaron sin scrapear — reanuda para continuar</>}
+            </Typography>
+          </Box>
+          <Button onClick={scrapeJob.reanudar} startIcon={<ReplayIcon sx={{ fontSize: 15 }} />} size="small"
+            sx={{ flexShrink: 0, fontSize: '0.78rem', fontWeight: 700, textTransform: 'none', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 1.5, px: 1.5, py: 0.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.18)' } }}>
+            {lang === 'en' ? 'Resume' : 'Reanudar'}
+          </Button>
         </Box>
       )}
 
@@ -963,10 +1182,9 @@ export default function SearchProspects() {
         </Box>
       )}
 
-      {/* ── Panel de envío masivo — visible también durante el scraping, para
-           poder empezar a enviar a lo ya encontrado sin esperar a que termine ── */}
+      {/* ── Panel de envío masivo ── */}
       {(scrapeJob.done || scrapeJob.processing) && results.length > 0 && (
-        <Box sx={{ borderRadius: 2.5, border: '1px solid rgba(34,197,94,0.2)', overflow: 'hidden', maxHeight: 'clamp(400px, 70vh, 860px)', display: 'flex', flexDirection: 'column' }}>
+        <Box sx={{ borderRadius: 2.5, border: '1px solid rgba(34,197,94,0.2)', display: 'flex', flexDirection: 'column' }}>
           {/* Panel header */}
           <Box sx={{ px: 2, py: 1.4, background: 'linear-gradient(180deg, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.02) 100%)', borderBottom: '1px solid rgba(34,197,94,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
@@ -986,9 +1204,9 @@ export default function SearchProspects() {
             )}
           </Box>
           {/* Body */}
-          <Box sx={{ p: 2, flex: 1, minHeight: 0, overflowY: 'auto', scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 } }}>
+          <Box sx={{ p: 2 }}>
           {capStats && (
-            <CapacityBanner stats={capStats} selectionCount={totalContactPoints} sx={{ mb: 1.5 }} />
+            <CapacityBanner stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} sx={{ mb: 1.5 }} />
           )}
 
           {waRowsUnique.length > 0 && (
@@ -1008,13 +1226,13 @@ export default function SearchProspects() {
               effectiveSelected={effectiveWaSelected}
               expandedCo={expandedCo}
               extraSelected={extraSelected}
-              setDeselected={setWaDeselected}
+              setSelected={setWaSelected}
               setExpandedCo={setExpandedCo}
               setExtraSelected={setExtraSelected}
               title={t.search.recipients}
               sx={{ width: 260, flexShrink: 0 }} />
 
-          <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Box sx={{ flex: 1, minWidth: 0, opacity: filteredWaRows.length === 0 ? 0.35 : 1, pointerEvents: filteredWaRows.length === 0 ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
 
           {!isBulk && <>
           <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>{t.batch.baseTemplate}</Typography>
@@ -1022,8 +1240,7 @@ export default function SearchProspects() {
             {TEMPLATES.map(tpl => (
               <Chip key={tpl.id} label={tpl.label} size="small" onClick={() => {
                 setSelectedTpl(tpl.id)
-                const el = msgRef.current
-                if (el) { el.value = tpl.text; el.dispatchEvent(new Event('input', { bubbles: true })) }
+                setMsgText(tpl.text)
               }} sx={{
                 fontSize: '0.7rem', height: 24, cursor: 'pointer',
                 bgcolor: selectedTpl === tpl.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
@@ -1035,23 +1252,35 @@ export default function SearchProspects() {
           {/* Variable chips */}
           <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 1 }}>
             {[
-              ['{{nombre}}', t.search.varName, '#818cf8'],
-              ['{{ciudad}}', t.search.varCity, '#38bdf8'],
-              ['{{industria}}', t.search.varIndustry, '#fb923c'],
-              ['{{web}}', t.search.varWebsite, '#a78bfa'],
-            ].map(([v, label, color]) => (
-              <Box key={v} onClick={() => {
-                const el = msgRef.current; if (!el) return
-                el.setRangeText(v, el.selectionStart, el.selectionEnd, 'end')
-                el.dispatchEvent(new Event('input', { bubbles: true }))
-                el.focus()
-              }} sx={{
-                px: 1, py: 0.25, borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700,
-                cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace',
-                bgcolor: `${color}18`, color, border: `1px solid ${color}40`,
-                '&:hover': { bgcolor: `${color}30` },
-              }}>{label}</Box>
-            ))}
+              ['{{nombre}}',    'nombre',    t.search.varName,     '#818cf8'],
+              ['{{ciudad}}',    'ciudad',    t.search.varCity,     '#38bdf8'],
+              ['{{industria}}', 'industria', t.search.varIndustry, '#fb923c'],
+              ['{{web}}',       'web',       t.search.varWebsite,  '#a78bfa'],
+            ].map(([v, key, label, color]) => {
+              const n = _selectedRows.length
+              const cnt = tplVarCounts[key] ?? 0
+              const tip = n > 0
+                ? (lang === 'en'
+                    ? `${cnt} of ${n} selected companies have this data`
+                    : `${cnt} de ${n} empresas seleccionadas tienen este dato`)
+                : (lang === 'en' ? 'Click to insert into message' : 'Clic para insertar en el mensaje')
+              return (
+                <Tooltip key={v} title={tip} placement="top" arrow>
+                  <Box onClick={() => {
+                    const el = msgRef.current; if (!el) return
+                    el.setRangeText(v, el.selectionStart, el.selectionEnd, 'end')
+                    el.dispatchEvent(new Event('input', { bubbles: true }))
+                    el.focus()
+                  }} sx={{
+                    px: 1, py: 0.25, borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700,
+                    cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace',
+                    bgcolor: `${color}18`, color, border: `1px solid ${color}40`,
+                    opacity: n > 0 && cnt === 0 ? 0.45 : 1,
+                    '&:hover': { bgcolor: `${color}30` },
+                  }}>{label}{n > 0 && <Box component="span" sx={{ ml: 0.5, fontSize: '0.6rem', opacity: 0.7, fontFamily: 'inherit', fontWeight: 400 }}>({cnt}/{n})</Box>}</Box>
+                </Tooltip>
+              )
+            })}
             <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', alignSelf: 'center', ml: 0.5 }}>
               {t.search.clickInsert}
             </Typography>
@@ -1067,7 +1296,10 @@ export default function SearchProspects() {
           </>}
           {isBulk && (
             <Box sx={{ mb: 1.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
-              <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalRecipients} baseCount={0} />
+              <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalRecipients} baseCount={0}
+                hasName={tplVarFlags.hasName} hasCity={tplVarFlags.hasCity}
+                hasIndustry={tplVarFlags.hasIndustry} hasWeb={tplVarFlags.hasWeb}
+                varCounts={tplVarCounts} totalSelected={_selectedRows.length} />
             </Box>
           )}
           <Box sx={{ mb: 1.5 }}>
@@ -1078,33 +1310,36 @@ export default function SearchProspects() {
           <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 0.6 }}>
             <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} />
           </Box>
+          {isSending && (
+            <Button fullWidth onClick={cancelQueue} startIcon={<HighlightOffIcon />}
+              sx={{
+                mb: 0.8, py: 0.8, textTransform: 'none', fontWeight: 600, fontSize: '0.82rem',
+                color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)',
+                border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5,
+                '&:hover': { bgcolor: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.45)' },
+              }}>
+              {t.search.cancelSend}
+            </Button>
+          )}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            {isSending && (
-              <Tooltip title={t.search.cancelSend}>
-                <IconButton size="small" onClick={cancelQueue}
-                  sx={{ color: 'rgba(248,113,113,0.7)', '&:hover': { color: '#f87171' }, flexShrink: 0 }}>
-                  <HighlightOffIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-            )}
             <Button
               fullWidth
               onClick={handleSendAll}
-              disabled={effectiveWaSelected.size === 0 || alreadySent || isDisconnected || belowMinTemplates || capBlocked}
+              disabled={effectiveWaSelected.size === 0 || allSelectedSent || isSending || isDisconnected || belowMinTemplates || capBlocked}
               startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 15 }} />}
               sx={{
                 fontSize: '0.84rem', fontWeight: 700,
                 py: 1.1, borderRadius: 1.8,
-                bgcolor: waRowsUnique.length > 0 && !alreadySent ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
-                color:   waRowsUnique.length > 0 && !alreadySent ? '#4ade80' : 'rgba(255,255,255,0.3)',
-                border:  `1px solid ${waRowsUnique.length > 0 && !alreadySent ? 'rgba(34,197,94,0.38)' : 'rgba(255,255,255,0.1)'}`,
+                bgcolor: unsentSelectedCount > 0 ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
+                color:   unsentSelectedCount > 0 ? '#4ade80' : 'rgba(255,255,255,0.3)',
+                border:  `1px solid ${unsentSelectedCount > 0 ? 'rgba(34,197,94,0.38)' : 'rgba(255,255,255,0.1)'}`,
                 textTransform: 'none',
                 transition: 'all 0.2s',
-                '&:hover': waRowsUnique.length > 0 && !alreadySent ? { bgcolor: 'rgba(34,197,94,0.28)', borderColor: 'rgba(34,197,94,0.6)', boxShadow: '0 0 18px rgba(34,197,94,0.18)' } : {},
+                '&:hover': unsentSelectedCount > 0 ? { bgcolor: 'rgba(34,197,94,0.28)', borderColor: 'rgba(34,197,94,0.6)', boxShadow: '0 0 18px rgba(34,197,94,0.18)' } : {},
                 '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
               }}
             >
-              {alreadySent ? `${sentCount} ${t.search.sentCount}` : `${t.search.sendButton} ${effectiveWaSelected.size} ${t.search.companies}`}
+              {allSelectedSent ? `${sentCount} ${t.search.sentCount}` : `${t.search.sendButton} ${unsentSelectedCount || effectiveWaSelected.size} ${t.search.companies}`}
             </Button>
           </Box>
           {capBlocked && !isSending && (
@@ -1142,7 +1377,7 @@ export default function SearchProspects() {
           <TableContainer sx={{
             borderRadius: 2,
             border: '1px solid rgba(255,255,255,0.07)',
-            maxHeight: 'clamp(220px, 45vh, 560px)',
+            maxHeight: 'clamp(160px, 25vh, 320px)',
             overflow: 'auto',
             scrollbarWidth: 'thin',
             scrollbarColor: 'rgba(255,255,255,0.1) transparent',
@@ -1155,7 +1390,7 @@ export default function SearchProspects() {
             <Table size="small" stickyHeader>
               <TableHead>
                 <TableRow>
-                  {['URL', t.batch.colCompany, t.batch.colIndustry, 'WhatsApp', alreadySent ? t.batch.colMessage : null, t.batch.colStatus].filter(Boolean).map(h => (
+                  {['URL', t.batch.colCompany, t.batch.colIndustry, 'WhatsApp', sentCids.size > 0 ? t.batch.colMessage : null, t.batch.colStatus].filter(Boolean).map(h => (
                     <TableCell key={h} sx={{
                       bgcolor: 'var(--card-bg, #161d2e)',
                       color: 'rgba(255,255,255,0.5)',
@@ -1172,33 +1407,68 @@ export default function SearchProspects() {
               </TableHead>
               <TableBody>
                 {results.map((r, i) => {
-                  const domain = getDomain(r.url)
+                  const domain      = getDomain(r.url)
+                  const hasWa       = r.all_whatsapp?.length > 0 || !!r.whatsapp
+                  const isBlocked   = r.blacklisted
+                  const isContacted = r.company_id && _contactedCids.has(r.company_id)
+
+                  // Status dot: green=WA found, blue=OK/no WA, amber=blocked, red=error
+                  const dotColor = !r.ok
+                    ? '#f87171'
+                    : isBlocked ? '#f59e0b'
+                    : hasWa     ? '#4ade80'
+                    :              'rgba(255,255,255,0.2)'
+                  const dotTip = !r.ok
+                    ? (lang === 'en' ? 'Scrape error' : 'Error al scrapear')
+                    : isBlocked ? (lang === 'en' ? 'Blocked by site (Cloudflare/bot protection)' : 'Bloqueado por el sitio (Cloudflare/bot protection)')
+                    : hasWa     ? (lang === 'en' ? 'WhatsApp number found' : 'Número de WhatsApp encontrado')
+                    :              (lang === 'en' ? 'Scraped OK — no WhatsApp found' : 'Scrapeado OK — sin WhatsApp encontrado')
+
                   return (
                     <TableRow key={i} sx={{
-                      '&:hover': { bgcolor: 'rgba(255,255,255,0.025)' },
-                      '& td': { borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: '0.8rem' },
+                      bgcolor: isContacted ? 'rgba(251,191,36,0.03)' : 'transparent',
+                      '&:hover': { bgcolor: isContacted ? 'rgba(251,191,36,0.06)' : 'rgba(255,255,255,0.04)' },
+                      '& td': { borderBottom: '1px solid rgba(255,255,255,0.06)', fontSize: '0.8rem' },
                       animation: `${fadeSlideIn} 0.22s ease both`,
                       animationDelay: `${i * 0.025}s`,
+                      transition: 'background-color 0.15s',
                     }}>
                       <TableCell sx={{ maxWidth: 200 }}>
-                        <Box component="a" href={r.url} target="_blank" rel="noopener"
-                          sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, textDecoration: 'none', '&:hover .bt': { textDecoration: 'underline' } }}>
-                          <Box component="img"
-                            src={`https://www.google.com/s2/favicons?domain=${domain}&sz=16`}
-                            width={13} height={13}
-                            sx={{ borderRadius: '2px', flexShrink: 0 }}
-                            onError={e => { e.target.style.display = 'none' }}
-                          />
-                          <Typography component="span" className="bt"
-                            sx={{ fontSize: '0.78rem', color: '#60a5fa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>
-                            {domain}
-                          </Typography>
+                        <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.8 }}>
+                          {/* Scrape status dot */}
+                          <Tooltip title={dotTip} placement="top" arrow>
+                            <Box sx={{
+                              width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                              bgcolor: dotColor,
+                              boxShadow: r.ok && hasWa ? `0 0 4px ${dotColor}90` : 'none',
+                            }} />
+                          </Tooltip>
+                          <Box component="a" href={r.url} target="_blank" rel="noopener"
+                            sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, textDecoration: 'none', '&:hover .bt': { textDecoration: 'underline' } }}>
+                            <Box component="img"
+                              src={`https://www.google.com/s2/favicons?domain=${domain}&sz=16`}
+                              width={12} height={12}
+                              sx={{ borderRadius: '2px', flexShrink: 0 }}
+                              onError={e => { e.target.style.display = 'none' }}
+                            />
+                            <Typography component="span" className="bt"
+                              sx={{ fontSize: '0.78rem', color: '#60a5fa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 150 }}>
+                              {domain}
+                            </Typography>
+                          </Box>
                         </Box>
                       </TableCell>
-                      <TableCell sx={{ color: 'rgba(255,255,255,0.8)', fontWeight: 500, maxWidth: 180 }}>
-                        <Typography sx={{ fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 170 }}>
-                          {r.empresa !== '—' ? r.empresa : '—'}
-                        </Typography>
+                      <TableCell sx={{ maxWidth: 180 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                          <Typography sx={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.85)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>
+                            {r.empresa !== '—' ? r.empresa : '—'}
+                          </Typography>
+                          {isContacted && (
+                            <Tooltip title={lang === 'en' ? 'Already messaged' : 'Ya contactada'} placement="top" arrow>
+                              <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: '#fbbf24', flexShrink: 0, boxShadow: '0 0 4px #fbbf2480' }} />
+                            </Tooltip>
+                          )}
+                        </Box>
                       </TableCell>
                       <TableCell sx={{ color: 'rgba(255,255,255,0.55)' }}>
                         {r.industria && r.industria !== '—'
@@ -1207,13 +1477,14 @@ export default function SearchProspects() {
                         }
                       </TableCell>
                       <TableCell>
-                        {(r.all_whatsapp?.length > 0 || r.whatsapp) ? (
+                        {hasWa ? (
                           <WhatsAppNumberSummary row={r} />
                         ) : (
-                          <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>
+                          <Chip label={lang === 'en' ? 'No WA' : 'Sin WA'} size="small"
+                            sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'rgba(255,255,255,0.03)', color: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.08)', letterSpacing: '0.02em' }} />
                         )}
                       </TableCell>
-                      {alreadySent && (
+                      {sentCids.size > 0 && (
                         <TableCell>
                           {r.msg_status === 'sent'    && <Chip label={t.batch.chipSent}   size="small" sx={{ bgcolor: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)', height: 20, fontSize: '0.68rem' }} />}
                           {r.msg_status === 'failed'  && <Chip label={t.batch.chipFailed} size="small" sx={{ bgcolor: 'rgba(239,68,68,0.1)',   color: '#f87171', border: '1px solid rgba(239,68,68,0.25)',   height: 20, fontSize: '0.68rem' }} />}
@@ -1222,12 +1493,22 @@ export default function SearchProspects() {
                         </TableCell>
                       )}
                       <TableCell>
-                        {r.ok ? (
+                        {r.blacklisted ? (
+                          <Tooltip title={r.blockReason ? `🚫 Blacklist · "${r.blockReason}"` : '🚫 Blacklist'} placement="top" arrow>
+                            <Chip label={lang === 'en' ? 'Blocked' : 'Bloqueado'} size="small"
+                              sx={{ bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.2)', height: 20, fontSize: '0.68rem', cursor: 'help' }} />
+                          </Tooltip>
+                        ) : r.ok && !r.whatsapp ? (
+                          <Chip label={lang === 'en' ? 'Empty' : 'Vacío'} size="small"
+                            sx={{ bgcolor: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.1)', height: 20, fontSize: '0.68rem' }} />
+                        ) : r.ok ? (
                           <Chip label="OK" size="small" icon={<CheckCircleIcon sx={{ fontSize: '12px !important' }} />}
                             sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#4ade80' } }} />
                         ) : (
-                          <Chip label="Error" size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
-                            sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' } }} />
+                          <Tooltip title={r.errorReason || (lang === 'en' ? 'Scrape error' : 'Error al scrapear')} placement="top" arrow>
+                            <Chip label="Error" size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
+                              sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' }, cursor: 'help' }} />
+                          </Tooltip>
                         )}
                       </TableCell>
                     </TableRow>

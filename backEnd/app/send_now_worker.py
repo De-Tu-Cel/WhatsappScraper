@@ -31,7 +31,7 @@ import socket
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ def _ensure_lease_doc(db):
 
 
 def _try_acquire_lease(db) -> bool:
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     result = db.db.send_worker_lease.update_one(
         {"_id": "singleton", "expires_at": {"$lte": now}},
         {"$set": {"holder": _WORKER_ID, "expires_at": now + timedelta(seconds=_LEASE_SEC)}},
@@ -73,7 +73,7 @@ def _try_acquire_lease(db) -> bool:
 
 
 def _renew_lease(db) -> bool:
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     result = db.db.send_worker_lease.update_one(
         {"_id": "singleton", "holder": _WORKER_ID},
         {"$set": {"expires_at": now + timedelta(seconds=_LEASE_SEC)}},
@@ -117,11 +117,12 @@ def get_status(db) -> dict:
 # ─── Enqueue / cancel ─────────────────────────────────────────────────────────
 
 def enqueue_send_items(db, jobs: list, batch_id: str, label: str, send_config: dict,
-                        sent_by_username: str = "", sent_by_name: str = "") -> int:
+                        sent_by_username: str = "", sent_by_name: str = "",
+                        user_id: str = "") -> int:
     """Flattens each {numbers, messages, companyId, website} job into one
     send_queue_items doc per number (the real atomic send unit), matching what
     SendQueueContext.jsx used to push into its in-memory queueRef."""
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     docs = []
     for job_idx, job in enumerate(jobs):
         numbers  = job.get("numbers") or []
@@ -138,6 +139,7 @@ def enqueue_send_items(db, jobs: list, batch_id: str, label: str, send_config: d
                 "created_at": now, "started_at": None, "finished_at": None,
                 "error": None, "result": None,
                 "sent_by_username": sent_by_username, "sent_by_name": sent_by_name,
+                "user_id": user_id,
             })
     if not docs:
         return 0
@@ -150,7 +152,7 @@ def enqueue_send_items(db, jobs: list, batch_id: str, label: str, send_config: d
 
 def cancel_pending_send_items(db) -> int:
     result = db.db.send_queue_items.update_many(
-        {"status": "pending"}, {"$set": {"status": "cancelled", "finished_at": datetime.now()}},
+        {"status": "pending"}, {"$set": {"status": "cancelled", "finished_at": datetime.now(timezone.utc)}},
     )
     _set_state(db, phase="idle", active_total=None, active_sent=None, next_action_at=None, active_batch=False)
     return result.modified_count
@@ -187,7 +189,7 @@ def _antispam_wait(db, is_batch_break: bool, seconds: float, active_total, activ
         if remaining <= 0:
             return True
         _set_state(db, phase="waiting", active_total=active_total, active_sent=active_sent,
-                   active_batch=is_batch_break, next_action_at=datetime.now() + timedelta(seconds=remaining))
+                   active_batch=is_batch_break, next_action_at=datetime.now(timezone.utc) + timedelta(seconds=remaining))
         time.sleep(min(remaining, _LEASE_RENEW_TICK_SEC))
         if not _renew_lease(db):
             return False
@@ -217,7 +219,7 @@ def _maybe_finish_batch(db, batch_id: str):
     nc_skip = sum(1 for i in items if i.get("status") == "skipped_nc_cap")
     failed  = len(items) - sent - nc_skip
     label   = items[0].get("label", "") if items else ""
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     db.db.app_notifications.insert_one({
         "type": "batch_complete", "sent": sent, "failed": failed,
         "skipped_nc_cap": nc_skip, "label": label, "created_at": now,
@@ -241,7 +243,7 @@ def _process_item(db, item) -> bool:
 
     allowed, skip_status = _check_send_allowed(db, company_id)
     if not allowed:
-        db.db.send_queue_items.update_one({"_id": item_id}, {"$set": {"status": skip_status, "finished_at": datetime.now()}})
+        db.db.send_queue_items.update_one({"_id": item_id}, {"$set": {"status": skip_status, "finished_at": datetime.now(timezone.utc)}})
         _run_failed += 1
         _maybe_finish_batch(db, batch_id)
         return True
@@ -249,7 +251,7 @@ def _process_item(db, item) -> bool:
     if not _sched._any_instance_connected(db):
         db.db.send_queue_items.update_one({"_id": item_id}, {"$set": {"status": "pending", "started_at": None}})
         _set_state(db, phase="idle", active_total=None, active_sent=None, next_action_at=None,
-                   last_error={"message": "Sin instancia de WhatsApp conectada", "at": datetime.now()})
+                   last_error={"message": "Sin instancia de WhatsApp conectada", "at": datetime.now(timezone.utc)})
         return True  # not a crash — just no instance right now; retry on the next idle tick
 
     _set_state(db, phase="sending", active_total=job_size, active_sent=job_index, active_batch=False, last_error=None)
@@ -258,6 +260,7 @@ def _process_item(db, item) -> bool:
     ok = _sched._send_message(
         db, company_id, to_number, message, batch_id, delay_ms=typing_ms,
         sent_by_username=item.get("sent_by_username") or "", sent_by_name=item.get("sent_by_name") or "",
+        user_id=item.get("user_id") or "",
     )
     # Daily cap exhausted: reset item to pending so it retries tomorrow, then
     # signal the worker loop to pause for 5 min before the next attempt.
@@ -268,7 +271,7 @@ def _process_item(db, item) -> bool:
         )
         _set_state(db, phase="idle", active_total=None, active_sent=None,
                    next_action_at=None, active_batch=False,
-                   last_error={"message": "Límite diario alcanzado — envíos pendientes continuarán mañana al reiniciarse el cupo", "at": datetime.now()})
+                   last_error={"message": "Límite diario alcanzado — envíos pendientes continuarán mañana al reiniciarse el cupo", "at": datetime.now(timezone.utc)})
         log.warning("[SendQueue] Daily cap hit — pausing queue for 5 min, pending items will retry tomorrow")
         return "cap_paused"
 
@@ -287,14 +290,14 @@ def _process_item(db, item) -> bool:
             )
             _set_state(db, phase="idle", active_total=None, active_sent=None,
                        next_action_at=None, active_batch=False,
-                       last_error={"message": "Instancia desconectada durante el envío — cola pausada, reintentará al reconectar", "at": datetime.now()})
+                       last_error={"message": "Instancia desconectada durante el envío — cola pausada, reintentará al reconectar", "at": datetime.now(timezone.utc)})
             log.warning("[SendQueue] instance disconnected mid-campaign — resetting item %s to pending, pausing 2 min", item_id)
             return "disconnected_pause"
 
     status = ok if isinstance(ok, str) else ("sent" if ok else "failed")
     db.db.send_queue_items.update_one(
         {"_id": item_id},
-        {"$set": {"status": status, "finished_at": datetime.now()}},
+        {"$set": {"status": status, "finished_at": datetime.now(timezone.utc)}},
     )
     if ok is True:
         _run_sent += 1
@@ -316,10 +319,10 @@ def _process_item(db, item) -> bool:
 
 
 def _sweep_interrupted_items(db):
-    cutoff = datetime.now() - timedelta(seconds=_SENDING_STALE_AFTER_SEC)
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=_SENDING_STALE_AFTER_SEC)
     result = db.db.send_queue_items.update_many(
         {"status": "sending", "started_at": {"$lt": cutoff}},
-        {"$set": {"status": "interrupted", "finished_at": datetime.now()}},
+        {"$set": {"status": "interrupted", "finished_at": datetime.now(timezone.utc)}},
     )
     if result.modified_count:
         log.warning("[SendQueue] marked %d stuck item(s) as interrupted (never auto-retried)", result.modified_count)
@@ -347,7 +350,7 @@ def _worker_loop():
 
             item = db.db.send_queue_items.find_one_and_update(
                 {"status": "pending"},
-                {"$set": {"status": "sending", "started_at": datetime.now()}},
+                {"$set": {"status": "sending", "started_at": datetime.now(timezone.utc)}},
                 sort=[("_id", 1)],
             )
             if item is None:

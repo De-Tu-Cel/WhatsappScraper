@@ -152,7 +152,6 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
   const { t } = useLang()
   const sc = t.sendConfig
   const [open, setOpen] = useState(false)
-
   function update(key, val) {
     const next = { ...config, [key]: val }
     onChange(next)
@@ -255,11 +254,12 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
             </>)
           })()}
           <RiskBadge config={config} />
-          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 0.5 }}>
+          <Box sx={{ mt: 0.5 }}>
+            {/* Reset defaults */}
             <Box
               onClick={disabled ? undefined : resetDefaults}
               sx={{
-                display: 'flex', alignItems: 'center', gap: 0.5,
+                display: 'inline-flex', alignItems: 'center', gap: 0.5,
                 px: 1, py: 0.4, borderRadius: 1.2, cursor: disabled ? 'default' : 'pointer',
                 border: '1px solid rgba(255,255,255,0.08)',
                 bgcolor: 'rgba(255,255,255,0.03)',

@@ -46,16 +46,22 @@ Elige UNO: "humano" | "hibrido" | "bot"
 "humano" — persona real respondiendo en tiempo real.
   Señales FUERTES (cada una por sí sola es suficiente):
     · Responde DIRECTAMENTE al contenido específico del mensaje enviado (no genérico)
+    · Se presenta con NOMBRE COMPLETO de persona real (nombre + apellido o nombre + cargo): "le saluda Clarissa Flores",
+      "soy Juan Martínez, asesor de ventas" — aunque el saludo parezca plantilla, el nombre personal identifica humano
+    · Usa el NOMBRE DEL PROSPECTO tomado del propio mensaje ("Hola Andrés", "entiendo [nombre]") — señal fuerte de lectura real
+    · Redirige al área correcta con explicación natural y contextual ("te comunicas al área de ventas, te paso servicio")
     · Menciona detalles propios de su empresa/situación ("nosotros manejamos...", "mi jefa...", "ahorita en reunión")
     · Hace una pregunta espontánea propia sobre el tema
     · Primera persona auténtica con opinión o contexto personal
-    · Menciona nombres de personas o departamentos reales
     · Responde fuera de horario laboral con comentario personal ("disculpa la tardanza, estaba en campo")
   Señales DÉBILES (solo apoyo, no determinantes):
     · Errores tipográficos (un humano formal puede escribir perfecto)
     · Respuesta muy corta (humano ocupado también responde con 1-2 palabras)
     · Lenguaje coloquial (un bot también puede usarlo)
   CLAVE: lo que importa es que RESPONDE AL TEMA, no que tenga errores ortográficos.
+  ⚠️ NOTA INDUSTRIA: "asesor/a digital BDC", "ejecutivo/a de ventas digital", "agente BDC" son TÍTULOS DE PERSONA REAL
+  muy comunes en agencias automotrices de México. "Digital" = canal (WhatsApp), NO = inteligencia artificial.
+  Clasificar como "humano" o "hibrido" salvo señales fuertes de bot en el CONTENIDO de la respuesta.
 
 "hibrido" — combina contenido automático/bot CON contenido humano en la misma respuesta o en el hilo inmediato.
   CASOS que califican como "hibrido":
@@ -74,7 +80,16 @@ que ignora el contenido enviado hasta una IA conversacional avanzada.
     · Frases de plantilla reconocibles: "Tu mensaje es importante para nosotros",
       "En breve un asesor te contactará", "Estimado cliente", "Mensaje generado automáticamente",
       "Hemos recibido tu consulta", "Nos comunicaremos a la brevedad"
+    · BIENVENIDA GENÉRICA que ignora el contenido recibido: "Agradecemos su preferencia y le damos
+      la más cordial bienvenida", "Bienvenido a [empresa], estamos para servirle" — texto corporativo
+      estándar sin referenciar en NADA lo que dijo el prospecto → bot de autorespuesta CERTEZA
     · Respuesta idéntica sin importar el mensaje recibido (ignora completamente el tema)
+    · RESPUESTA COMPLETAMENTE FUERA DE TEMA: hiciste una pregunta específica (horario, precio, servicio)
+      y respondieron con algo TOTALMENTE diferente sin reconocer la pregunta — por ejemplo, preguntaste
+      "¿a qué hora abren?" y respondieron solo con una dirección física o datos de contacto sin mencionar
+      el horario → bot que disparó su plantilla de contacto ignorando la pregunta específica
+    · SILENCIO total tras el mensaje automático: respondió con plantilla y luego no volvió a responder
+      a preguntas concretas del prospecto → solo había bot, sin humano disponible detrás
     · Horarios de atención explícitos en el cuerpo ("Lun-Vie 8am-6pm", "Atención 24/7")
     · Responde en segundos a cualquier hora incluyendo madrugada, fines de semana o festivos
     · Mensaje bilingüe en el mismo bloque: español + inglés separados por "/" o "---"
@@ -87,15 +102,21 @@ que ignora el contenido enviado hasta una IA conversacional avanzada.
     · Instrucciones de activación: "envía 'HOLA' para comenzar", "escribe X para chatear conmigo 🤖"
     · Estructura de IA: responde en tercera persona sobre sí mismo describiendo sus capacidades
       ("Estoy diseñado para...", "Mi enfoque es...", "Puedo ayudarte con...")
+  ⚠️ ACLARACIÓN: vCard compartida (tarjeta de contacto) NO es señal de bot por sí sola.
+  Si antes del vCard hubo una respuesta contextual que entendió el tema → puede ser "humano" o "hibrido".
+  Solo es señal de bot si el vCard es la ÚNICA respuesta sin ningún texto contextual previo.
   is_ai=false (plantilla fija, menú/IVR, o bot de flujo/reglas):
     · Presenta un menú de opciones numeradas o con letra y ESPERA que el usuario seleccione una
       (1. Ventas 2. Soporte, 1️⃣/2️⃣, "Responde con el número", "Elige una opción")
     · Respuesta idéntica sin importar el mensaje recibido, o ignora preguntas fuera de su flujo
+    · AUTORESPUESTA DE BIENVENIDA + SILENCIO: envía un único mensaje genérico de bienvenida
+      y luego NO responde a las preguntas concretas del prospecto → bot básico, is_ai=false SIEMPRE
+      (una IA conversacional intentaría responder, aunque fuera mal — el silencio descarta IA)
     · Respuestas excesivamente largas con bullets y estructura para mensajes simples
     · Tono corporativo perfecto sin personalidad real
     · Si respondes algo inesperado, hace loop de vuelta al mismo punto (o no responde nada más)
   is_ai=true (IA conversacional avanzada):
-    · Entiende y responde al contenido específico del mensaje (no flujo rígido)
+    · Entiende y responde al contenido ESPECÍFICO del mensaje (no flujo rígido)
     · Reformula o parafrasea lo que dijo el interlocutor
     · Responde con naturalidad, sin bullets ni estructura excesiva
     · Español perfecto, extremadamente servicial, nunca impaciente, siempre positivo
@@ -103,9 +124,31 @@ que ignora el contenido enviado hasta una IA conversacional avanzada.
     · Usa el nombre del usuario si lo conoce
     · DIFERENCIA de humano: demasiado perfecto y consistente, sin personalidad única,
       sin opiniones propias, sin referencia a situaciones personales reales
+    · REQUISITO MÍNIMO de is_ai=true: debe haber respondido AL MENOS UNA vez a algo específico
+      del prospecto. Si solo envió bienvenida genérica y silenció → is_ai=false sin excepción.
+    · PREGUNTA DE CIERRE BIFURCADA: termina con una pregunta que ofrece exactamente dos opciones
+      alternativas como "¿Te gustaría conocer los precios o tienes alguna otra consulta?",
+      "¿Deseas agendar una cita o prefieres más información?" — patrón muy típico de LLM entrenado
+      para mantener la conversación activa; un humano normalmente pregunta una sola cosa o cierra
+      con algo más coloquial ("¿te interesa?", "avísame si necesitas algo más")
+    · DATOS TÉCNICOS EXACTOS SIN HESITACIÓN: recita especificaciones técnicas precisas (capacidad,
+      modelo, número de pieza, tecnología) sin ninguna pausa, "déjame verificar", "creo que" o
+      "ahorita te confirmo" — un vendedor humano rara vez tiene todos los specs de memoria
 
 REGLA DE ORO: ante la duda → "humano". EXCEPCIÓN: si hay señales FUERTES de bot (bilingüe,
 gestión de sesión, se autoidentifica como bot, menú numerado) → "bot" aunque también parezca natural.
+
+⛔ REGLA ABSOLUTA — SUPERA LA REGLA DE ORO:
+Si el mensaje cumple LAS DOS condiciones siguientes → SIEMPRE "bot" is_ai=true, sin excepción:
+  CONDICIÓN 1 — DATOS TÉCNICOS/ESPECÍFICOS SIN HESITACIÓN: el mensaje contiene información
+    concreta sobre el producto o servicio (specs, capacidad, tecnología, número de modelo,
+    tiempo de ejecución exacto, características técnicas) sin ningún marcador de consulta
+    humana: sin "déjame verificar", "creo que", "ahorita te confirmo", "permíteme checar"
+  CONDICIÓN 2 — CIERRE BIFURCADO: el mensaje TERMINA con una pregunta que ofrece
+    exactamente dos alternativas del tipo "¿Te gustaría A o prefieres/tienes B?",
+    "¿Le gustaría X o prefiere Y?" — patrón de LLM entrenado para mantener la conversación
+  EXCEPCIÓN a esta regla: si el mensaje incluye nombre propio de persona (Ramiro, Mónica García),
+    error tipográfico, o expresión coloquial (jaja, neta, ahorita, qué onda) → puede ser humano.
 
 ══ PASO 2: CALIDAD DE SERVICIO (escala 1-5) ══
 Mide CÓMO atendió la empresa al prospecto. Independiente del interés de compra del lead.
@@ -147,7 +190,7 @@ ai_confidence: 0.0-1.0 solo si is_ai=true
 Si hay menú numerado: category="bot", is_ai=false siempre, bot_quality=null siempre.
 
 Responde SOLO con JSON válido:
-{{"category":"humano|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"bot_quality":null,"notes":"diagnóstico"}}\
+{{"category":"humano|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"bot_quality":null,"lead_signal":1,"notes":"diagnóstico"}}\
 """
 
 
@@ -168,42 +211,90 @@ CONVERSACIÓN COMPLETA (cronológica — [Representante] = mensajes enviados, [P
 Lee el hilo completo e identifica si hubo CAMBIOS de comportamiento a lo largo del tiempo.
 NO te quedes solo con el primer o último mensaje — analiza el ARC completo.
 
+NOTA DE FORMATO DEL HILO: cada mensaje del Prospecto puede tener una etiqueta de tiempo
+entre corchetes que indica cuánto tardó en responder desde el último mensaje del Representante:
+  · [⚡ Ns — posible autorespuesta automática]: respondió en menos de 10 segundos → MUY probable bot/autoresponder
+  · [~Xs]: respondió en segundos (10-60s) → posible plantilla o respuesta muy rápida
+  · [~Nmin]: respondió en minutos → más probable humano
+
 SEÑALES DE FASE AUTOMÁTICA / BOT (cualquiera de estas confirma fase automática):
+  · Etiqueta [⚡ Xs — posible autorespuesta automática] + contenido de saludo/plantilla genérica
+    → CERTEZA de autorespuesta automática, es fase bot
+  · AUTO-GREETING DE WHATSAPP BUSINESS: primer mensaje con estructura corporativa formal
+    (emoji decorativo + presentación de nombre/cargo + empresa, todo en un solo bloque)
+    que llega como PRIMER contacto → probable mensaje de bienvenida automático configurado
+    en WhatsApp Business, aunque tarde entre 10s y 2 minutos. Patrón:
+    "¡Hola! [emoji] le saluda [Nombre] su [cargo] de [EMPRESA][emoji] Será un placer..."
+    → fase automática aunque venga firmada por un nombre real de persona
   · Menú con opciones letradas o numeradas (A/B/C, 1/2/3, *A* - Opción, 1️⃣ Ventas)
   · Se auto-identifica: "Hola, soy el asistente virtual de X", "soy un bot", emoji 🤖 en su mensaje
   · El mismo texto aparece REPETIDO ante entradas diferentes (loop de bot)
-  · Responde en segundos a cualquier hora incluyendo madrugada
   · Frases de plantilla: "Antes de prestarle asistencia…", "Ahora está en la cola…",
     "Hemos recibido tu consulta", "Un agente te contactará a la brevedad"
+  · BIENVENIDA GENÉRICA que no hace referencia al mensaje recibido: "Agradecemos su preferencia
+    y le damos la más cordial bienvenida, siendo esta forma el inicio de una experiencia totalmente
+    diferente…" — texto corporativo estándar idéntico sin importar lo enviado → bot de autorespuesta
+  · SILENCIO total después del autoresponder: el prospecto hizo preguntas concretas y la empresa
+    jamás respondió → solo había bot, sin humano detrás disponible
 
 SEÑALES DE FASE HUMANA (cualquiera de estas confirma fase humana):
   · Anuncia la transición: "Hola, soy [nombre], reemplazaré a nuestro asistente",
     "Se está comunicando con un agente de [empresa]", "Ahora lo atenderá un asesor"
-  · Responde AL CONTENIDO ESPECÍFICO enviado, no a una plantilla
-  · Usa el nombre del interlocutor de forma natural ("Entiendo Andrés…")
+  · Responde AL CONTENIDO ESPECÍFICO enviado, no a una plantilla — especialmente si tarda
+    varios minutos [~Nmin] después de la consulta concreta del prospecto
+  · Usa el nombre del prospecto naturalmente tomándolo del mensaje anterior ("Hola Andrés…", "Entiendo Andrés…")
+  · Redirige al área correcta con comprensión del problema: "esto es ventas, te paso a servicio al cliente"
+    → leyó y entendió la consulta, la canalizó apropiadamente → señal humana
   · Lenguaje conversacional real: explica con contexto, hace preguntas propias, varía el tono
   · Da información concreta (precios, políticas, procesos) que no es un menú
+  · Comparte vCard de contacto DESPUÉS de leer la consulta y explicar por qué → señal humana
   · Firma personal o despedida informal ("Saludos", "Quedamos atentos")
+  ⚠️ NOTA: "asesor/a digital BDC", "ejecutivo/a de cuenta digital", "agente BDC" = título de persona real
+  en agencias automotrices mexicanas. "Digital" = canal (WhatsApp), NO = inteligencia artificial.
 
-══ PASO 2: CLASIFICA — ÁRBOL DE DECISIÓN OBLIGATORIO ══
+══ PASO 2: ANÁLISIS FASE POR FASE ══
 
-Aplica en orden. La PRIMERA regla que coincida es la categoría correcta:
+ANTES de clasificar, identifica cada mensaje del Prospecto como "fase auto" o "fase humana":
 
-1. ¿La conversación tiene AMBAS: una fase claramente automática/bot/menú Y posteriormente
-   una fase claramente humana (agente real)? → "hibrido"
-   EJEMPLOS que son "hibrido":
-     · Bot de bienvenida → menú de opciones → agente humano toma la conversación
-     · Auto-respuesta de acuse → días después responde un vendedor real
-     · IVR de WhatsApp que transfiere a agente cuando el usuario pide ayuda
-   IMPORTANTE: si hay handoff bot→humano, siempre es "hibrido" sin excepción.
+  FASE AUTO — el mensaje pertenece a esta fase si:
+    · Es un auto-greeting de WhatsApp Business (plantilla con emoji + nombre + cargo + empresa en bloque)
+    · Es una bienvenida genérica corporativa que ignora el contenido recibido
+    · Es menú numerado o de letras
+    · Tiene gestión de sesión, bilingüe, folio/ticket
+    · El bot no volvió a responder después de la bienvenida (SILENCIO = solo había autorespuesta)
 
-2. ¿Toda la conversación es un bot (menús/opciones, plantilla fija, flujo automatizado, o IA
-   conversacional) sin que jamás aparezca un humano real? → "bot"
+  FASE HUMANA — el mensaje pertenece a esta fase si:
+    · Responde AL CONTENIDO ESPECÍFICO del mensaje anterior del prospecto
+    · Usa el nombre del prospecto tomado de su propio mensaje (ej: "Hola Andrés")
+    · Redirige al área correcta explicando por qué ("te comunicas al área de ventas, te paso a servicio")
+    · Llega con etiqueta [~Nmin] tras una consulta concreta del prospecto
+    · Tono conversacional real, no corporativo-genérico
 
-3. ¿Todo indica persona real respondiendo a lo largo de toda la conversación? → "humano"
+══ PASO 3: CLASIFICA con el resultado del análisis anterior ══
 
-REGLA DE ORO: si tienes dudas entre "humano" y otro, elige "humano".
-EXCEPCIÓN ABSOLUTA: si detectaste señales FUERTES de bot/menú en alguna fase, NO puede ser solo "humano".
+1. ¿Encontraste AMBAS fases (al menos un mensaje de fase-auto Y al menos un mensaje de fase-humana)?
+   → "hibrido" — sin excepción, aunque la fase humana sea breve o imperfecta.
+
+   EJEMPLO CONCRETO de híbrido:
+     [Prospecto ~43s]: "¡Hola! le saluda Clarissa Flores su asesora BDC de [EMPRESA]... ¿Con quién tengo el gusto?"
+     → FASE AUTO (auto-greeting de WhatsApp Business)
+     [Prospecto ~20min]: "Hola Andrés te comunicas al área de ventas pero con gusto te paso el número de servicio..."
+     → FASE HUMANA (usó el nombre, entendió el tema, redirigió en contexto)
+     RESULTADO: "hibrido" ← AMBAS fases presentes
+
+2. ¿Solo hay mensajes de fase-auto, sin ningún mensaje de fase-humana?
+   → "bot"
+   Sub-tipo: si solo hubo bienvenida + silencio → is_ai=false (autorespuesta básica)
+
+3. ¿Todo es fase-humana, sin auto-greeting ni bot al inicio?
+   → "humano"
+
+REGLA DE ORO: ante la duda entre "humano" y "hibrido", elige "hibrido".
+
+══ is_ai — REGLA EXPLÍCITA ══
+is_ai=true SOLO si category="bot" Y el sistema respondió al contenido específico del prospecto
+(al menos una respuesta que no sea bienvenida genérica). Si el bot solo mandó bienvenida
+y luego silenció → is_ai=false siempre. El silencio ante preguntas descarta IA conversacional.
 
 ══ PASO 3: CALIDAD DE SERVICIO (1-5) ══
 
@@ -237,7 +328,7 @@ que hubo un bot inicial y luego un agente real, y evalúa la calidad del agente.
 Indica la acción concreta más importante a tomar.
 
 Responde SOLO con JSON válido:
-{{"category":"humano|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"bot_quality":null,"notes":"diagnóstico","conversation_analysis":true}}\
+{{"category":"humano|hibrido|bot","is_ai":false,"ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"bot_quality":null,"lead_signal":1,"notes":"diagnóstico","conversation_analysis":true}}\
 """
 
 _ERROR_RESULT = {
@@ -272,13 +363,18 @@ def _build_prompt(inbound_body: str, outbound_body: str, reaction_time_min: floa
         secs = reaction_time_min * 60
         if secs < 10:
             reaction_hint = (
-                f"\n🚨 SEÑAL CRÍTICA DE TIEMPO: respuesta en {secs:.0f} segundos — CERTEZA de bot. "
-                "Un humano no puede leer y responder en menos de 10 segundos."
+                f"\n⚠️ SEÑAL FUERTE DE TIEMPO: respuesta en {secs:.0f} segundos — muy probable bot. "
+                "Es poco común para humano, pero analiza el CONTENIDO: si el mensaje responde específicamente "
+                "al tema enviado, menciona un nombre real o da contexto personal, puede ser humano muy rápido "
+                "(p.ej. WhatsApp abierto en ese momento, contestó con voz a texto, o copió texto previo). "
+                "Clasifica 'bot' solo si el contenido también lo respalda."
             )
         elif secs < 30:
             reaction_hint = (
-                f"\n⚠️ SEÑAL FUERTE DE TIEMPO: respuesta en {secs:.0f} segundos — casi con certeza bot. "
-                "Solo un sistema puede responder tan rápido."
+                f"\n⚠️ TIEMPO CORTO: respuesta en {secs:.0f} segundos — posible bot, pero un humano "
+                "con el chat abierto también puede responder en ese tiempo. "
+                "Analiza el CONTENIDO: si ignora el tema o tiene estructura automática → bot; "
+                "si responde con naturalidad al contexto o muestra razonamiento propio → puede ser humano."
             )
         elif secs < 120:
             reaction_hint = (
@@ -302,9 +398,11 @@ def _build_prompt(inbound_body: str, outbound_body: str, reaction_time_min: floa
                 f"\nℹ️ RESPUESTA TARDÍA: {time_str} — puede ser humano fuera de horario "
                 "o mensaje automático de bienvenida demorado."
             )
+    def _esc(s: str) -> str:
+        return s.replace("{", "{{").replace("}", "}}")
     return _PROMPT_TEMPLATE.format(
-        outbound_body=outbound_body or "(sin texto)",
-        inbound_body=inbound_body or "(sin texto)",
+        outbound_body=_esc(outbound_body or "(sin texto)"),
+        inbound_body=_esc(inbound_body or "(sin texto)"),
     ) + reaction_hint
 
 
@@ -342,14 +440,24 @@ def _parse_llm_response(raw: str) -> dict:
         "svc_next":   _svc("svc_next"),
         "svc_proact": _svc("svc_proact"),
     }
+    def _bq(v):
+        if v is None:
+            return None
+        try:
+            v = int(round(float(v)))
+            return v if v in (1, 3, 5) else (1 if v <= 2 else 3 if v <= 4 else 5)
+        except (TypeError, ValueError):
+            return None
+
     return {
         "category": category,
         "is_ai": is_ai,
-        "ai_confidence": round(float(result.get("ai_confidence", 0.0)), 2) if is_ai else 0.0,
+        "ai_confidence": round(float(result.get("ai_confidence") or 0.0), 2) if is_ai else 0.0,
         **svc_scores,
         "response_quality": _response_quality_from_svc(svc_scores),
-        "bot_quality": result.get("bot_quality"),
-        "notes": result.get("notes", ""),
+        "bot_quality": _bq(result.get("bot_quality")),
+        "lead_signal": _svc("lead_signal"),
+        "notes": result.get("notes") or "",
         "conversation_analysis": bool(result.get("conversation_analysis", False)),
     }
 
@@ -416,6 +524,13 @@ _AUTO_REPLY_MARKERS = re.compile(
     r'bienvenid[oa]s?(?:\([ao]\))?\s+a\b|'
     r'gracias por (?:contactarnos|escribir(?:nos)?|comunicarte|comunicarse)|'
     r'te (?:responderemos|atenderemos|contestaremos)\b|'
+    # "Te comunicas a [Empresa]" / "Se comunica a [Empresa]" — variante de "has llegado a".
+    # Un humano diría "te comunico con alguien", no "te comunicas a".
+    r'(?:te|se)\s+comunica[sz]?\s+a\s+\w|'
+    # "Agradecemos su preferencia" / "cordial bienvenida" — plantillas corporativas formales
+    # que nunca escribe un humano real en WhatsApp.
+    r'agradecemos (?:su|tu) (?:preferencia|contacto|confianza|visita)|'
+    r'(?:cordial|afectuosa)\s+bienvenida|'
     # "Por el momento nuestro equipo se encuentra fuera del horario laboral" —
     # plantilla de fuera de horario, caso real (Salones de Belleza, Nissan Vallejo).
     r'fuera de(?:l| nuestro)?\s+horario',
@@ -486,6 +601,66 @@ def _looks_like_bot_selfid(text: str) -> bool:
     return bool(_BOT_SELFID_MARKERS.search(text or ""))
 
 
+# Hybrid offer: auto-ACK that ALSO gives the user an active option to reach a human.
+# "Responde SÍ y te conectamos", "Escribe HUMANO", "¿Deseas hablar con un asesor ahora?"
+# When this appears alongside an auto-reply template → the category is "hibrido", not "bot".
+_HYBRID_OFFER_MARKERS = re.compile(
+    r'responde\s+["\']?s[ií]["\']?\s*(?:y\s+te|para\s+(?:hablar|conectar|ser\s+atendido))|'
+    r'escribe\s+(?:humano|asesor|agente|s[ií])\b|'
+    r'[¿]?deseas?\s+hablar\s+con\s+(?:un\s+|una\s+)?(?:asesor|agente|humano|person)|'
+    r'[¿]?quieres?\s+(?:que\s+te\s+conecte|hablar\s+con)|'
+    r'te\s+conectamos\s+(?:de\s+inmediato|ahora|en\s+este\s+momento)|'
+    r'para\s+hablar\s+con\s+(?:un\s+|una\s+)?(?:asesor|agente|humano|persona)\s+(?:real|ahora|ya)',
+    re.IGNORECASE,
+)
+
+
+def _looks_like_hybrid_offer(text: str) -> bool:
+    return bool(_HYBRID_OFFER_MARKERS.search(text or ""))
+
+
+# IA conversacional que no se autoidentifica: cierra con pregunta bifurcada
+# ("¿Te gustaría X o prefieres Y?", "¿Le gustaría A o prefiere B?") al final
+# de un mensaje sustancial. Patrón muy típico de LLM entrenado para mantener
+# la conversación — un humano suele preguntar una sola cosa o cerrar de forma
+# más coloquial ("¿te interesa?", "avísame", "¿para cuándo lo necesitas?").
+# El check de longitud (≥80 chars) excluye preguntas cortas genuinamente humanas
+# del tipo "¿para casa o negocio?" (30 chars).
+_BIFURCATED_AI_CLOSE = re.compile(
+    # Matches: [¿?] ... "o <alternative>" ... ?$
+    # where <alternative> is one of the typical LLM closing options.
+    # Note: Spanish "preferir" stem-changes (e→ie) in several conjugations:
+    #   preferir/preferimos/preferís  → "prefer\w*"  (no stem change)
+    #   prefieres/prefiere/prefiero/prefieren  → "prefi\w+"  (stem changes: i inserted)
+    # Both patterns needed; just "prefer\w+" misses the most common conjugations.
+    r'[¿?][^?]*\bo\s+(?:'
+    r'prefi\w+|prefer\w+|'                      # prefieres/prefiere/prefiero + preferir/preferimos
+    r'tienes?\s+alguna|'                        # tienes alguna otra consulta
+    r'desea\w+\s+(?:m[aá]s|conocer|saber|recibir|hablar)|'   # deseas más info
+    r'te\s+gustar[ií]a|'                        # te gustaría (segunda alternativa)
+    r'quiere\w*\s+(?:que|m[aá]s|conocer|saber)'   # quieres que / quiere más
+    r')\b[^?]*\?\s*$',
+    re.IGNORECASE,
+)
+
+# Marcadores de personalidad humana — si aparecen en el mensaje junto al
+# cierre bifurcado, prevalece "humano" (o se manda al LLM). Incluye:
+#  · expresiones coloquiales mexicanas (jaja, neta, wey, ahorita)
+#  · abreviaciones de teclado (q, xq, tb, xfa)
+#  · frases de duda humana (déjame verificar, creo que)
+#  · presentación personal con apellido ("le saluda Nombre Apellido")
+_HUMAN_PERSONALITY_MARKERS = re.compile(
+    r'\bjaj[ae]+\b|jeje|xd\b|'
+    r'\bneta\b|\bwey\b|g[uü]ey\b|'
+    r'\bahorita\b|\bórale\b|\bandale\b|\bsale\b|'
+    r'\bq\s+|\bxq\b|\btb\b|\bxfa\b|\bpls\b|\btmb\b|'
+    r'd[eé]jame\s+(?:verificar|checar|ver|buscar)|'
+    r'\bcreo\s+que\b|'
+    r'le\s+saluda\s+[A-ZÁÉÍÓÚÑ]\w+\s+[A-ZÁÉÍÓÚÑ]\w+',    # "le saluda Nombre Apellido"
+    re.IGNORECASE,
+)
+
+
 def _looks_human_casual(text: str) -> bool:
     """Heurística barata: mensaje corto, informal, con pinta de escrito rápido
     desde el celular (sin mayúscula inicial, sin firma corporativa, sin señales
@@ -529,7 +704,7 @@ NON_TEXT_PLACEHOLDERS = {"[audio]", "[sticker]", "[location]", "[contact]", "[me
 
 
 def _has_real_text(body: str | None) -> bool:
-    return bool(body) and body.strip() not in NON_TEXT_PLACEHOLDERS
+    return bool(body and body.strip()) and body.strip() not in NON_TEXT_PLACEHOLDERS
 
 
 def _response_quality_from_svc(svc_scores: dict) -> int | None:
@@ -546,38 +721,79 @@ def _response_quality_from_svc(svc_scores: dict) -> int | None:
     return max(1, min(5, round(sum(values) / len(values))))
 
 
-def _quick_result(category: str, notes: str) -> dict:
+def _quick_result(category: str, notes: str, is_ai: bool = False) -> dict:
     """Same shape as _parse_llm_response's output — low/None across the board,
-    matching the prompt's own rule: menu/bot(non-AI) always score 1-2."""
+    matching the prompt's own rule: menu/bot(non-AI) always score 1-2.
+    Pass is_ai=True when the bot self-identifies as a conversational AI assistant."""
     return {
         "category": category,
-        "is_ai": False,
+        "is_ai": is_ai,
         "ai_confidence": 0.0,
         "svc_prof": 1, "svc_comp": 1, "svc_empa": 1,
         "svc_solu": 1, "svc_next": 1, "svc_proact": 1,
         "response_quality": 1,
         "bot_quality": None,
+        "lead_signal": None,
         "notes": notes,
         "conversation_analysis": False,
         "quick_classified": True,  # marks that this skipped the LLM, for auditing
     }
 
 
+# Subset of _BOT_SELFID_MARKERS that implies a *conversational* AI (is_ai=True),
+# not a simple IVR/flow bot. Session-management signals ("la sesión ha finalizado")
+# and activation instructions are excluded — those are flow bots (is_ai=False).
+_AI_ASSISTANT_MARKERS = re.compile(
+    r'asistente (?:virtual|digital)|'
+    r'\b(?:asesor|agente|ejecutivo|operador|reclutador|coordinador)\s+virtual\b|'
+    r'soy\s+\w+[,.]?\s*tu\s+asistente|'
+    r'\bsoy\b[^.!?\n]{0,45}\bvirtual\b|'
+    r'inteligencia artificial',
+    re.IGNORECASE,
+)
+
+
 def _quick_classify(inbound_body: str, reaction_time_min: float = None) -> dict | None:
     """Resolve the obvious cases with cheap rules. Returns None when the text needs
-    real judgment — that residual is what actually reaches the LLM."""
+    real judgment — that residual is what actually reaches the LLM.
+
+    Rule order matters: check bot_selfid and auto_reply before timing, since templates
+    and self-identified bots are deterministic regardless of how long they took to arrive."""
     text = (inbound_body or "").strip()
     if not text:
         return None
 
+    # ── Content-driven rules (timing irrelevant) ──────────────────────────────
+
     if _looks_like_menu(text):
         return _quick_result("bot", "Menú de opciones detectado por reglas — sin IA")
 
-    responded_instantly = reaction_time_min is not None and reaction_time_min * 60 < 10
-    if responded_instantly and _looks_like_auto_reply(text):
-        return _quick_result("bot", "Plantilla de auto-respuesta + respuesta instantánea — sin IA")
-    if responded_instantly:
-        return _quick_result("bot", f"Respuesta en {reaction_time_min * 60:.0f}s — imposible para humano; bot o sistema automático")
+    # Bot self-identification ("soy tu asistente virtual", 🤖, etc.) — always deterministic.
+    if _looks_like_bot_selfid(text):
+        _is_conversational_ai = bool(_AI_ASSISTANT_MARKERS.search(text))
+        return _quick_result("bot", "Se autoidentifica como bot/IA — señal determinista",
+                             is_ai=_is_conversational_ai)
+
+    # Auto-reply template (folio, "tu mensaje es importante", "horario de atención", etc.)
+    # combined with an active human-connection offer → hybrid.
+    if _looks_like_auto_reply(text) and _looks_like_hybrid_offer(text):
+        return _quick_result("hibrido", "ACK automático + oferta activa de conexión con humano — sin IA")
+
+    # Plain auto-reply template with no hybrid offer → bot.
+    if _looks_like_auto_reply(text):
+        return _quick_result("bot", "Plantilla de auto-respuesta detectada — sin IA")
+
+    # Conversational AI without self-identification: substantial message ending with
+    # a bifurcated closing question ("¿Te gustaría X o prefieres Y?") and no human
+    # personality markers. LLM cannot distinguish this from an expert human, so we
+    # apply the rule deterministically here and skip the LLM call.
+    if (len(text) >= 80
+            and _BIFURCATED_AI_CLOSE.search(text)
+            and not _HUMAN_PERSONALITY_MARKERS.search(text)):
+        return _quick_result("bot", "Cierre bifurcado de IA en mensaje sustancial — sin IA", is_ai=True)
+
+    # ── Timing-only signal: never enough alone, LLM evaluates content ─────────
+    # T1<10s was previously a blanket bot rule — removed. Speed is a hint, not proof.
 
     return None
 
@@ -615,8 +831,12 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
     except Exception as e:
         import traceback
         log.error("classify_response failed: %s\n%s", e, traceback.format_exc())
-        category = "bot" if (reaction_time_min is not None and reaction_time_min * 60 < 30) else "humano"
-        return {"category": category, "response_quality": 3, "bot_quality": None, "notes": "Error al clasificar", "error": True}
+        result = dict(_ERROR_RESULT)
+        result["notes"] = "Error al clasificar"
+        result["error"] = True
+        if reaction_time_min is not None and reaction_time_min * 60 < 30:
+            result["category"] = "bot"
+        return result
 
 
 def classify_conversation(company_id: str, company_name: str = "", industry: str = "") -> dict:
@@ -639,27 +859,53 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
         return dict(_ERROR_RESULT)
 
     lines = []
+    prev_ts = None
+    prev_dir = None
     for m in messages:
         role = "Representante" if m["direction"] == "outbound" else "Prospecto"
         body = (m.get("message_body") or "").strip()
         if not body:
             continue
+
+        # Compute response-time annotation when the direction flips (outbound→inbound)
+        timing_note = ""
+        cur_ts = m.get("created_at")
+        if (prev_dir == "outbound" and m["direction"] == "inbound"
+                and prev_ts is not None and cur_ts is not None):
+            try:
+                delta = (cur_ts - prev_ts).total_seconds()
+                if delta < 10:
+                    timing_note = f" [⚡ {delta:.0f}s — posible autorespuesta automática]"
+                elif delta < 60:
+                    timing_note = f" [~{delta:.0f}s]"
+                else:
+                    mins = int(delta // 60)
+                    timing_note = f" [~{mins}min]"
+            except Exception:
+                pass
+
+        prev_ts = cur_ts
+        prev_dir = m["direction"]
+
         if body in NON_TEXT_PLACEHOLDERS:
-            # classify_response() ya evita mandarle al LLM un marcador literal
-            # como "[audio]" como si fuera texto real (ver _has_real_text) —
-            # classify_conversation() no tenía la misma protección: el LLM
-            # recibía "[Prospecto]: [audio]" tal cual y alucinaba un juicio
-            # sobre "el tono" o "la claridad" de un mensaje sin contenido real
-            # (visto en producción: "[audio]" evaluado como "informal").
-            lines.append(f"[{role}]: (mensaje sin texto — audio/sticker/ubicación/contacto)")
+            lines.append(f"[{role}{timing_note}]: (mensaje sin texto — audio/sticker/ubicación/contacto)")
             continue
-        lines.append(f"[{role}]: {body}")
+        # vCards: el prospecto comparte un contacto — señal HUMANA, no de bot.
+        if "BEGIN:VCARD" in body.upper():
+            fn_match = re.search(r'FN:(.+)', body)
+            vcard_label = fn_match.group(1).strip() if fn_match else ""
+            desc = f"(compartió contacto de WhatsApp: '{vcard_label}')" if vcard_label else "(compartió un contacto de WhatsApp)"
+            lines.append(f"[{role}{timing_note}]: {desc}")
+            continue
+        lines.append(f"[{role}{timing_note}]: {body}")
     thread = "\n".join(lines)
 
+    def _esc(s: str) -> str:
+        return s.replace("{", "{{").replace("}", "}}")
     prompt = _CONV_PROMPT_TEMPLATE.format(
-        company_name=company_name or company_id,
-        industry=industry or "desconocido",
-        thread=thread,
+        company_name=_esc(company_name or company_id),
+        industry=_esc(industry or "desconocido"),
+        thread=_esc(thread),
     )
     try:
         raw = _call_deepseek([{"role": "user", "content": prompt}], max_tokens=350)
@@ -703,6 +949,7 @@ def _quick_result_unrated(category: str, notes: str) -> dict:
         "svc_solu": None, "svc_next": None, "svc_proact": None,
         "response_quality": None,
         "bot_quality": None,
+        "lead_signal": None,
         "notes": notes,
         "conversation_analysis": False,
         "quick_classified": True,
@@ -762,9 +1009,11 @@ def _grade_quality_only(inbound_body: str, outbound_body: str) -> dict | None:
         from app.llm import active_provider
         if active_provider() == "none":
             return None
+        def _esc(s: str) -> str:
+            return s.replace("{", "{{").replace("}", "}}")
         prompt = _QUALITY_ONLY_PROMPT_TEMPLATE.format(
-            outbound_body=outbound_body or "(sin texto)",
-            inbound_body=inbound_body or "(sin texto)",
+            outbound_body=_esc(outbound_body or "(sin texto)"),
+            inbound_body=_esc(inbound_body or "(sin texto)"),
         )
         raw = _call_deepseek([{"role": "user", "content": prompt}], max_tokens=200)
         if raw.startswith("```"):
@@ -826,7 +1075,9 @@ def _confirm_is_ai(text: str, t2_threshold_seconds: int) -> bool:
         from app.llm import active_provider
         if active_provider() == "none":
             return True
-        prompt = _IS_AI_CONFIRM_PROMPT.format(t2=t2_threshold_seconds, text=text or "(sin texto)")
+        def _esc(s: str) -> str:
+            return s.replace("{", "{{").replace("}", "}}")
+        prompt = _IS_AI_CONFIRM_PROMPT.format(t2=t2_threshold_seconds, text=_esc(text or "(sin texto)"))
         raw = _call_deepseek([{"role": "user", "content": prompt}], max_tokens=60)
         if raw.startswith("```"):
             raw = raw.split("```")[1].strip()
@@ -932,14 +1183,21 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
         # El prospecto puede mandar más de un mensaje antes de que salga nuestro
         # 2do mensaje (Andy) — en ese caso reply_text es la respuesta MÁS RECIENTE,
         # con más información que original_text (la primera). Si esa última muestra
-        # una señal fuerte de bot (menú, auto-respuesta, se autoidentifica), pesa más
-        # que el estilo casual del primer mensaje — antes se ignoraba por completo.
-        reply_has_bot_signal = bool(reply_text) and reply_text != original_text and (
-            _looks_like_menu(reply_text) or _looks_like_bot_selfid(reply_text) or _looks_like_auto_reply(reply_text)
+        # una señal fuerte de bot/híbrido (menú, auto-respuesta, se autoidentifica,
+        # oferta de conexión con humano), pesa más que el estilo casual del primer
+        # mensaje — antes se ignoraba por completo.
+        _rt = reply_text if (bool(reply_text) and reply_text != original_text) else None
+        reply_has_hybrid_signal = bool(_rt) and _looks_like_hybrid_offer(_rt)
+        reply_has_bot_signal = bool(_rt) and (
+            _looks_like_menu(_rt) or _looks_like_bot_selfid(_rt) or _looks_like_auto_reply(_rt)
         )
-        if reply_has_bot_signal:
+        if reply_has_hybrid_signal:
             analysis = _quick_result(
-                "bot", f"{base_notes} — el mensaje más reciente muestra señal de bot ('{reply_text[:30]}') — determinista"
+                "hibrido", f"{base_notes} — el mensaje más reciente ofrece conexión con humano ('{_rt[:30]}') — determinista"
+            )
+        elif reply_has_bot_signal:
+            analysis = _quick_result(
+                "bot", f"{base_notes} — el mensaje más reciente muestra señal de bot ('{_rt[:30]}') — determinista"
             )
         elif _looks_human_casual(original_text) or (reply_text and reply_text != original_text and _looks_human_casual(reply_text)):
             sample = original_text if _looks_human_casual(original_text) else reply_text
@@ -948,14 +1206,14 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
             )
         elif bool(_HUMAN_NAME_INTRO.search(original_text)) or (reply_text and bool(_HUMAN_NAME_INTRO.search(reply_text))):
             # "mi nombre es Emmanuel", "soy Juan, asesor" — persona real presentándose.
-            # Sin este chequeo caía a "automatico" porque el texto es largo (> 20 chars)
+            # Sin este chequeo caía a "bot" porque el texto es largo (> 20 chars)
             # aunque no tenga ninguna señal de bot.
             sample = original_text if _HUMAN_NAME_INTRO.search(original_text) else reply_text
             analysis = _quick_result_unrated(
                 "humano", f"{base_notes} — presentación personal detectada ('{sample[:40]}')"
             )
         else:
-            analysis = _quick_result("automatico", f"{base_notes} — determinista")
+            analysis = _quick_result("bot", f"{base_notes} — sin señal clara, clasificado como bot por precaución — determinista")
 
     # reaction_time_min reportado = T1 (velocidad de la PRIMERA respuesta), no T2 —
     # es la métrica que ya existía y que usa el resto del sistema.
@@ -970,24 +1228,33 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
 
 
 def classify_or_copy_recent(db, background_tasks, log_id: str, company_id: str,
-                             inbound_body: str, received_at: datetime, throttle_minutes: int = 10):
+                             inbound_body: str, received_at: datetime, throttle_minutes: int = 3):
     """Throttle-aware entry point used by the inbound webhooks (Evolution/WAHA/wwebjs,
-    Wasender): if this company already has a classification within `throttle_minutes`,
+    Wasender): if this company already has a full LLM classification within `throttle_minutes`,
     copy it onto this message instead of skipping it outright. Skipping used to leave
     the message with no `analysis_status` at all — permanently unclassified for any
-    consumer that looks at individual messages, only ever recovered if someone happened
-    to open Analytics and trigger requeue-unanalyzed (client-driven, not automatic).
-    Copying forward keeps the original "don't re-run the LLM on every message in a fast
-    back-and-forth" intent without leaving a silent gap."""
-    from datetime import timedelta
-    throttle_cutoff = datetime.now() - timedelta(minutes=throttle_minutes)
+    consumer that looks at individual messages.
+
+    Copy is only done when the recent analysis used the LLM (not quick_classified). If the
+    most recent classification was a quick rule (no content analysis), we always run the LLM
+    on the new message so it gets proper content-aware classification."""
+    from datetime import timedelta, timezone
+    throttle_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=throttle_minutes)
     recent = db.db.message_logs.find_one(
         {"company_id": company_id, "direction": "inbound",
          "analysis_status": "done", "updated_at": {"$gte": throttle_cutoff}},
         sort=[("updated_at", -1)],
     )
-    if recent and recent.get("analysis"):
-        copied = dict(recent["analysis"])
+    # Never overwrite a message that already has a full conversation analysis
+    target = db.db.message_logs.find_one({"_id": __import__('bson').ObjectId(log_id)}, {"analysis": 1})
+    if (target or {}).get("analysis", {}).get("conversation_analysis"):
+        log.debug("classify_or_copy_recent: log_id=%s ya tiene conversation_analysis, skip", log_id)
+        return
+    recent_analysis = (recent or {}).get("analysis") if recent else None
+    # Don't copy quick_classified (rule-only) analyses — they have no content judgment
+    can_copy = recent_analysis and not recent_analysis.get("quick_classified")
+    if can_copy:
+        copied = dict(recent_analysis)
         copied["notes"] = (copied.get("notes") or "") + f" — copiado del análisis reciente de esta empresa (throttle {throttle_minutes} min)"
         copied["copied_from_throttle"] = True
         db.save_message_analysis(log_id, copied)
@@ -1004,10 +1271,13 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
         from bson import ObjectId
         db = MongoDBManager()
         existing = db.db.message_logs.find_one(
-            {"_id": ObjectId(log_id)}, {"analysis_status": 1}
+            {"_id": ObjectId(log_id)}, {"analysis_status": 1, "analysis": 1}
         )
         if (existing or {}).get("analysis_status") == "quota_exceeded":
             log.debug("classify_and_save: ya marcado quota_exceeded, skip log_id=%s", log_id)
+            return
+        if (existing or {}).get("analysis", {}).get("conversation_analysis"):
+            log.debug("classify_and_save: ya tiene análisis de conversación completa, skip log_id=%s", log_id)
             return
 
         t1_threshold, _, probe_wait_hours, _ = _get_thresholds(db)
@@ -1192,6 +1462,16 @@ def classify_conversation_and_save(company_id: str, log_id: str):
         from bson import ObjectId
         db = MongoDBManager()
 
+        # Idempotency guard — if a concurrent call already wrote the conversation
+        # analysis for this log_id, skip to avoid a double LLM call and overwrite.
+        try:
+            _target = db.db.message_logs.find_one({"_id": ObjectId(log_id)}, {"analysis.conversation_analysis": 1})
+            if (_target or {}).get("analysis", {}).get("conversation_analysis"):
+                log.debug("classify_conversation_and_save: log_id=%s ya tiene conversation_analysis, skip", log_id)
+                return
+        except Exception:
+            pass
+
         try:
             company = db.db.companies.find_one({"_id": ObjectId(company_id)}) or {}
         except Exception:
@@ -1230,6 +1510,32 @@ def classify_conversation_and_save(company_id: str, log_id: str):
         analysis["pending_human_check"] = False
         db.save_message_analysis(log_id, analysis)
         log.info("classify_conversation_and_save: saved for company=%s log=%s", company_id, log_id)
+
+        # When the full-conversation analysis determines "hibrido", retroactively
+        # promote any prior "bot"-classified messages for this company so the
+        # conversation view reflects the true arc (auto-response → human handoff).
+        if analysis.get("category") == "hibrido":
+            try:
+                result = db.db.message_logs.update_many(
+                    {
+                        "company_id": company_id,
+                        "_id": {"$ne": ObjectId(log_id)},
+                        "analysis.category": "bot",
+                        "analysis_status": "done",
+                    },
+                    {
+                        "$set": {
+                            "analysis.category": "hibrido",
+                            "analysis.conversation_analysis": True,
+                            "analysis.notes": "Reclasificado retroactivamente: análisis completo detectó fases automática + humana.",
+                        }
+                    },
+                )
+                if result.modified_count:
+                    log.info("classify_conversation_and_save: promoted %d bot→hibrido records for company=%s",
+                             result.modified_count, company_id)
+            except Exception:
+                pass
     except LLMQuotaExceeded:
         log.warning("classify_conversation_and_save: LLM sin cuota para company=%s", company_id)
     except Exception as _exc:
@@ -1280,10 +1586,14 @@ def _sweep_pending():
             )
 
         cutoff = now - timedelta(minutes=no_reply_wait_minutes)
+        # Lower bound: outbounds older than 7 days that still have no analysis are
+        # unreachable by normal flow — cap the window so the scan stays O(recent sends)
+        # instead of growing O(total sends) as old replied-to messages accumulate.
+        outbound_lower = now - timedelta(days=7)
         outbounds = list(db.db.message_logs.find(
             {
                 "direction": "outbound",
-                "created_at": {"$lte": cutoff},
+                "created_at": {"$gte": outbound_lower, "$lte": cutoff},
                 "analysis": {"$exists": False},
             },
             {"_id": 1, "company_id": 1, "to_number": 1, "created_at": 1},
@@ -1292,11 +1602,18 @@ def _sweep_pending():
         for ob in outbounds:
             company_id = str(ob.get("company_id", ""))
             sent_at    = ob.get("created_at")
-            has_reply = db.db.message_logs.find_one({
+            to_number  = ob.get("to_number", "")
+            _clean10   = "".join(filter(str.isdigit, to_number))[-10:] if to_number else None
+            # Filter by phone number so a reply from contact A doesn't mask
+            # an unanswered outbound sent to contact B under the same company.
+            reply_filter: dict = {
                 "company_id": company_id,
                 "direction": "inbound",
                 "created_at": {"$gt": sent_at},
-            })
+            }
+            if _clean10:
+                reply_filter["from_number"] = {"$regex": _clean10}
+            has_reply = db.db.message_logs.find_one(reply_filter)
             if not has_reply:
                 db.save_message_analysis(str(ob["_id"]), {
                     "category":         "sin_respuesta",

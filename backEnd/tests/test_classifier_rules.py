@@ -165,16 +165,8 @@ class TestHasRealText:
         assert _has_real_text(None) is False
         assert _has_real_text("") is False
 
-    def test_whitespace_only_is_currently_treated_as_real_text(self):
-        # Documents actual behavior, not necessarily desired behavior: `bool(body)`
-        # is checked on the UNSTRIPPED string, so "   " is truthy and passes, while
-        # the placeholder comparison uses the STRIPPED string. Net effect: a
-        # whitespace-only body slips through as "real" text and would reach the
-        # LLM as a blank message instead of being treated like an empty reply.
-        # Low real-world impact (WhatsApp doesn't let users send pure whitespace),
-        # but flagged here so a future change to this function doesn't silently
-        # move this pinned case without a conscious decision either way.
-        assert _has_real_text("   ") is True
+    def test_whitespace_only_is_not_real_text(self):
+        assert _has_real_text("   ") is False
 
     def test_actual_message_is_real_text(self):
         assert _has_real_text("hola, sí me interesa") is True
@@ -190,12 +182,11 @@ class TestQuickClassify:
         assert result["is_ai"] is False
         assert result["quick_classified"] is True
 
-    def test_instant_reply_under_10s_is_bot_regardless_of_content(self):
-        # Content here reads perfectly human, but 5s is physically impossible for a
-        # person to read + type — this is the hard deterministic floor.
+    def test_instant_reply_human_content_defers_to_llm(self):
+        # The blanket "T1<10s = bot" rule was intentionally removed — speed alone
+        # is a hint, not proof. Human-sounding casual content now defers to LLM.
         result = _quick_classify("hola que tal, en qué te puedo ayudar", reaction_time_min=5 / 60)
-        assert result is not None
-        assert result["category"] == "bot"
+        assert result is None
 
     def test_instant_auto_reply_template_is_bot(self):
         result = _quick_classify("Tu mensaje es importante para nosotros", reaction_time_min=3 / 60)
@@ -352,7 +343,7 @@ class TestResolveProbeT2Guard:
         db = FakeMongoDBManager(msg2_doc=None)
         received_at = T1_TIME + timedelta(seconds=8)
         result = _resolve_probe(db, _probe_doc(), "Aún no me han contactado por este tema", received_at)
-        assert result["category"] == "automatico"
+        assert result["category"] == "bot"
         assert "aún no enviado" in result["notes"]
 
     def test_andy_reply_logged_after_this_message_does_not_count_as_fast_bot(self):
@@ -370,8 +361,8 @@ class TestResolveProbeT2Guard:
         received_at = T1_TIME + timedelta(seconds=6)     # but this 2nd inbound came first
         db = FakeMongoDBManager(msg2_doc={"created_at": andy_sent_at})
         result = _resolve_probe(db, _probe_doc(), "No he recibido ninguna llamada de ustedes", received_at)
-        assert result["category"] == "automatico"
-        assert result["category"] != "bot"
+        assert result["category"] == "bot"
+        assert result["category"] != "humano"
 
     def test_genuine_fast_t2_within_window_is_still_detected(self):
         # Sanity check the fix didn't break the real positive-path case: Andy

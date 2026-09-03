@@ -183,6 +183,12 @@ def _run_scrape_job(job_id: str):
 
             results.extend(chunk_results)
             next_index += len(chunk_results)  # partial chunk if we broke early
+            # Dedup by URL — $push during the chunk loop and re-processing on resume
+            # can add the same URL twice. Keep the LAST occurrence (most up-to-date).
+            seen_urls: dict = {}
+            for r in results:
+                seen_urls[r.get("url", "")] = r
+            results = list(seen_urls.values())
             db.db.scrape_jobs.update_one(
                 {"_id": oid},
                 {"$set": {
@@ -238,24 +244,47 @@ def _claim_and_dispatch():
         log.exception("[ScrapeJobs] _claim_and_dispatch failed")
 
 
+_PAUSED_ABANDON_SEC = 6 * 3600  # 6 h without any heartbeat on a paused job → treat as abandoned
+
+
 def _sweep_stale_jobs():
     """Jobs stuck in 'running' with no progress in _STALE_AFTER_SEC are assumed to
     belong to a dead worker thread (backend crash/restart) and get reset to
     'pending' so the next tick re-claims and resumes them from next_index — safe
-    because re-scraping a URL has no irreversible side effect."""
+    because re-scraping a URL has no irreversible side effect.
+
+    Also catches paused jobs that were never resumed — if the backend restarted
+    while a job was paused the heartbeat stops, but paused=True keeps the stale
+    sweep from reclaiming it into a duplicate worker. After _PAUSED_ABANDON_SEC
+    of silence we treat them as abandoned: cancel them and stamp pending_urls_count
+    so the user can resume explicitly via the 'reanudar' action."""
     from app.database import MongoDBManager
 
     try:
         db = MongoDBManager()
-        cutoff = datetime.now() - timedelta(seconds=_STALE_AFTER_SEC)
-        # Exclude paused jobs — they legitimately make no progress while sleeping.
-        # A failed heartbeat on a paused job must not trigger a duplicate worker.
+        cutoff_stale    = datetime.now() - timedelta(seconds=_STALE_AFTER_SEC)
+        cutoff_abandoned = datetime.now() - timedelta(seconds=_PAUSED_ABANDON_SEC)
+
+        # 1) Crashed non-paused workers → reset to pending
         result = db.db.scrape_jobs.update_many(
-            {"status": "running", "paused": {"$ne": True}, "last_progress_at": {"$lt": cutoff}},
+            {"status": "running", "paused": {"$ne": True}, "last_progress_at": {"$lt": cutoff_stale}},
             {"$set": {"status": "pending"}, "$inc": {"recovered_count": 1}},
         )
         if result.modified_count:
             log.warning("[ScrapeJobs] recovered %d stale job(s)", result.modified_count)
+
+        # 2) Paused jobs with no heartbeat for _PAUSED_ABANDON_SEC → cancel + mark pending
+        abandoned = list(db.db.scrape_jobs.find(
+            {"status": "running", "paused": True, "last_progress_at": {"$lt": cutoff_abandoned}},
+        ))
+        for job in abandoned:
+            db.db.scrape_jobs.update_one(
+                {"_id": job["_id"]},
+                {"$set": {"status": "cancelled", "finished_at": datetime.now()}},
+            )
+            _mark_pending_urls(db, job)
+            log.warning("[ScrapeJobs] abandoned paused job %s → cancelled with %d pending URLs",
+                        str(job["_id"]), len((job.get("urls") or [])[job.get("next_index", 0):]))
     except Exception:
         log.exception("[ScrapeJobs] _sweep_stale_jobs failed")
 
@@ -288,6 +317,22 @@ def create_scrape_job(db, surface: str, urls: list, user: dict) -> dict:
     return doc
 
 
+def _mark_pending_urls(db, job: dict):
+    """For a cancelled/abandoned job, record how many URLs were not yet processed.
+    We only store the count — the full list is already in job['urls'][next_index:].
+    Also stamps pending_urls_count on the job document so the frontend can display it."""
+    oid = job["_id"]
+    urls      = job.get("urls") or []
+    next_idx  = job.get("next_index", 0)
+    pending   = urls[next_idx:]
+    if not pending:
+        return
+    db.db.scrape_jobs.update_one(
+        {"_id": oid},
+        {"$set": {"pending_urls_count": len(pending)}},
+    )
+
+
 def set_job_action(db, job_id: str, action: str) -> dict:
     from bson import ObjectId
     oid = ObjectId(job_id)
@@ -297,6 +342,26 @@ def set_job_action(db, job_id: str, action: str) -> dict:
         db.db.scrape_jobs.update_one({"_id": oid}, {"$set": {"paused": False, "last_progress_at": datetime.now()}})
     elif action == "cancel":
         db.db.scrape_jobs.update_one({"_id": oid}, {"$set": {"status": "cancelled", "finished_at": datetime.now()}})
+        # Re-fetch AFTER cancelling to get the latest next_index — the worker may
+        # have advanced it between our fetch and the status write.
+        job = db.db.scrape_jobs.find_one({"_id": oid})
+        if job:
+            _mark_pending_urls(db, job)
+    elif action == "reanudar":
+        # Resume a cancelled or paused-and-abandoned job from where it left off.
+        # The worker picks it up on the next _claim_and_dispatch tick.
+        result = db.db.scrape_jobs.update_one(
+            {"_id": oid, "status": {"$in": ["cancelled", "error"]}},
+            {"$set": {
+                "status": "pending",
+                "paused": False,
+                "finished_at": None,
+                "pending_urls_count": 0,
+                "last_progress_at": datetime.now(),
+            }},
+        )
+        if result.modified_count:
+            _claim_and_dispatch()
     return db.db.scrape_jobs.find_one({"_id": oid})
 
 

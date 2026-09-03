@@ -1191,6 +1191,8 @@ export const T = {
       warnBatchSlight:  'Lote algo grande (> 10 msgs) — monitorea el número después de enviar',
       warnBreakDanger:  'Pausa entre lotes muy corta (< 2 min) — riesgo de restricción inmediata',
       warnBreakSlight:  'Pausa algo corta (< 4 min) — recomendado: 5 min o más',
+      saveBtn:          'Guardar configuración',
+      savedBtn:         'Guardado ✓',
     },
 
     classification: {
@@ -2449,6 +2451,8 @@ export const T = {
       warnBatchSlight:  'Batch somewhat large (> 10 msgs) — monitor the number after sending',
       warnBreakDanger:  'Break between batches too short (< 2 min) — risk of immediate restriction',
       warnBreakSlight:  'Break somewhat short (< 4 min) — recommended: 5 min or more',
+      saveBtn:          'Save configuration',
+      savedBtn:         'Saved ✓',
     },
 
     classification: {

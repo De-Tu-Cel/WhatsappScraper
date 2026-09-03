@@ -128,7 +128,11 @@ def _nc_aware_pick(db, candidates: list, company_id: str) -> str | None:
     pool = available or candidates
 
     if not company_id or not is_new_contact(db, company_id):
-        return pool[0]  # existing contact: first available is fine
+        # Existing contact: load-balance across instances by daily send count.
+        if len(pool) == 1:
+            return pool[0]
+        scored_existing = sorted((get_daily_count(db, n), n) for n in pool)
+        return scored_existing[0][1]
 
     # New contact: rank by NC space left (descending).
     scored = []
@@ -499,20 +503,33 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
 
 
 def _send_message(db, company_id: str, to_number: str, message: str, job_id: str, delay_ms: int = 0,
-                   sent_by_username: str = "scheduler", sent_by_name: str = "Envio programado"):
+                   sent_by_username: str = "scheduler", sent_by_name: str = "Envio programado",
+                   user_id: str = ""):
     """Route to wwebjs, WasenderAPI, WAHA, or Evolution based on the company's assigned instance provider.
 
     sent_by_username/sent_by_name default to the scheduled-campaign attribution
     ("scheduler"/"Envio programado") but callers outside scheduler.py — e.g. the
     immediate send-now worker — pass the real acting user so message_logs
     attributes the send correctly instead of showing it as a scheduled campaign.
+
+    user_id: when provided (queue sends), instance candidates are scoped to the
+    instances owned by that user. This ensures each user always sends from their
+    own WA session instead of the globally-stamped assigned_instance.
     """
     try:
         from bson import ObjectId
+        # When user_id is given, restrict candidates to the user's own instances.
+        # This is the correct behaviour for queue sends: each user uses their instance.
+        user_instances: list[str] = []
+        if user_id:
+            _ui_docs = list(db.db.instances.find({"assigned_to": user_id}, {"name": 1}))
+            user_instances = [d["name"] for d in _ui_docs if d.get("name")]
+
         if company_id and len(company_id) == 24:
             co = db.db.companies.find_one({"_id": ObjectId(company_id)}, {"assigned_instance": 1})
             inst_name = (co or {}).get("assigned_instance")
-            if inst_name:
+            # If user_id is set, only honour assigned_instance when it belongs to this user.
+            if inst_name and (not user_id or inst_name in user_instances):
                 # Verify the assigned instance hasn't hit its daily cap OR its
                 # new-contact cap before committing to it.  If either is exceeded,
                 # fall through to the nc-aware pick so the message isn't silently
@@ -541,17 +558,25 @@ def _send_message(db, company_id: str, to_number: str, message: str, job_id: str
     if WWEBJS_URL:
         from app.whatsapp_wwebjs import get_all_connected_instances as _ww_all
         _ww_all_connected = _ww_all(db)
-        # Only use instances that are claimed (assigned_to is set) — avoids picking
-        # orphaned/test sessions that don't belong to any user's account.
-        _ww_candidates = [
-            n for n in _ww_all_connected
-            if (db.db.instances.find_one({"name": n}, {"assigned_to": 1}) or {}).get("assigned_to")
-        ]
+        if user_instances:
+            # Scope to the sender's own connected instances.
+            _ww_candidates = [n for n in _ww_all_connected if n in user_instances]
+        else:
+            # No user context: only use claimed (non-orphaned) instances.
+            _ww_candidates = [
+                n for n in _ww_all_connected
+                if (db.db.instances.find_one({"name": n}, {"assigned_to": 1}) or {}).get("assigned_to")
+            ]
         if _ww_candidates:
             _picked = _nc_aware_pick(db, _ww_candidates, company_id)
             if _picked:
                 return _send_via_wwebjs(db, company_id, to_number, message, job_id, delay_ms, session=_picked,
                                         sent_by_username=sent_by_username, sent_by_name=sent_by_name)
+        # When a user context is set and wwebjs had no valid candidate (all disconnected or
+        # at cap), stop here — never fall through to cross-user wasender/waha/evolution pools.
+        if user_instances:
+            log.warning("[SendMsg] no wwebjs candidate for user instances %s — skipping send", user_instances)
+            return None
     if WASENDER_PAT:
         return _send_via_wasender(db, company_id, to_number, message, job_id, delay_ms,
                                    sent_by_username=sent_by_username, sent_by_name=sent_by_name)
@@ -576,6 +601,7 @@ def _execute_send_job(job_id: str):
             return
 
         industry = job.get("industry", "")
+        job_user_id = job.get("user_id") or job.get("created_by") or ""
         company_ids = job.get("company_ids") or []
         selected_numbers = job.get("selected_numbers") or []
         messages = job.get("messages") or ([job["message"]] if job.get("message") else [])
@@ -703,7 +729,7 @@ def _execute_send_job(job_id: str):
                     message_variant, company_name,
                     num_info.get("industry", ""), num_info.get("city", ""), num_info.get("web", ""),
                 )
-                ok = _send_message(db, cid, to_number, message, job_id, delay_ms=typing_ms)
+                ok = _send_message(db, cid, to_number, message, job_id, delay_ms=typing_ms, user_id=job_user_id)
                 if ok is True:
                     sent_count += 1
                 elif ok == "skipped_nc_cap":
@@ -797,7 +823,7 @@ def _execute_send_job(job_id: str):
                 message_variant = _pick_message(messages, last_text)
                 last_text = message_variant
                 message = _render_message(message_variant, company_name, company_industry, company_city, company_web)
-                ok = _send_message(db, cid, to_number, message, job_id, delay_ms=typing_ms)
+                ok = _send_message(db, cid, to_number, message, job_id, delay_ms=typing_ms, user_id=job_user_id)
                 send_index += 1
                 if ok is True:
                     sent_count += 1

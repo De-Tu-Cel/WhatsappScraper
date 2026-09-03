@@ -32,6 +32,7 @@ import InboxIcon from '@mui/icons-material/Inbox'
 import MessageIcon from '@mui/icons-material/Message'
 import PauseIcon from '@mui/icons-material/Pause'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
+import ReplayIcon from '@mui/icons-material/Replay'
 import { getTemplates } from './singleUrlProcessor'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
@@ -45,6 +46,7 @@ import WhatsAppNumberSummary from './WhatsAppNumberSummary'
 import RecipientsBox from './RecipientsBox'
 import CapacityBanner from './CapacityBanner'
 import { dedupeByCompany } from '../lib/companyDedupe'
+import { HighlightedMessageInput } from './highlightedMessageInput'
 import Dialog from '@mui/material/Dialog'
 import DialogTitle from '@mui/material/DialogTitle'
 import DialogContent from '@mui/material/DialogContent'
@@ -232,16 +234,6 @@ function UrlPreviewList({ urlList }) {
   )
 }
 
-const VAR_COLORS = { nombre: '#818cf8', ciudad: '#38bdf8', industria: '#fb923c', web: '#a78bfa' }
-function highlightVars(text) {
-  return text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/\n/g, '<br>')
-    .replace(/\{\{(nombre|ciudad|industria|web)\}\}/g, (_, k) =>
-      `<span style="background:${VAR_COLORS[k]}28;color:${VAR_COLORS[k]};border-radius:4px;padding:0 3px;font-weight:700;">${k}</span>`
-    )
-}
-
 // ─── Main ─────────────────────────────────────────────────────────────────────
 function renderTemplate(text, scraped) {
   if (!text) return ''
@@ -256,7 +248,8 @@ function renderTemplate(text, scraped) {
 export default function BatchProcessor() {
   const { t, lang } = useLang()
   const TEMPLATES = getTemplates(t)
-  const [rawUrls,     setRawUrls]     = useState('')
+  const [rawUrls,          setRawUrls]          = useState('')
+  const [freshContactedMap, setFreshContactedMap] = useState({})
   const scrapeJob = useScrapeJob('batch')
   // El scraping en sí corre en el backend (useScrapeJob) — esto solo cubre el
   // estado optimista de envío por url, que el job no conoce.
@@ -267,41 +260,40 @@ export default function BatchProcessor() {
   const [sendError,   setSendError]   = useState('')
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
   const [sendCfg,     setSendCfg]     = useState(() => loadSendConfig())
-  const { addBatch, cancel: cancelQueue, active: queueActive } = useSendQueue()
+  const { addBatch, cancel: _cancelQueueRaw, active: queueActive } = useSendQueue()
+  const cancelledRef = useRef(false)
+  function cancelQueue() { cancelledRef.current = true; _cancelQueueRaw() }
   const { stats: capStats, refresh: refreshCapStats } = useDailyCapStats()
   const [confirmDialog,     setConfirmDialog]     = useState({ open: false, names: '', resolve: null })
   const [newContactsDialog, setNewContactsDialog] = useState({ open: false, trimCount: 0, newRemaining: 0, resolve: null })
   // Qué empresas (de las que tienen WhatsApp) quedan destildadas del envío masivo —
   // mismo patrón que ya usa searchProspects.jsx, portado aquí porque antes esto
   // era todo-o-nada.
-  const [waDeselected, setWaDeselected] = useState(new Set())
+  const [waSelected, setWaSelected] = useState(new Set())
   // Números EXTRA (además del principal) prendidos a mano al expandir el chip
   // de una empresa — clave `${company_id}::${number}`.
   const [extraSelected, setExtraSelected] = useState(new Set())
   const [expandedCo, setExpandedCo] = useState(new Set())
   const [localContactedIds, setLocalContactedIds] = useState(new Set())
   const msgRef       = useRef(null)
-  const highlightRef = useRef(null)
   const wasActiveRef = useRef(false)
-  function syncScroll() {
-    if (highlightRef.current && msgRef.current)
-      highlightRef.current.scrollTop = msgRef.current.scrollTop
-  }
   const urlsRef     = useRef(null)
 
   const loading      = scrapeJob.processing
   const pausing      = scrapeJob.pausing
   const paused       = scrapeJob.paused
   const scrapeActive = loading && !paused && !pausing   // running and not stopped
-  const done       = scrapeJob.done
-  const progress   = scrapeJob.progress
-  const doneCount  = scrapeJob.processed
-  const totalCount = scrapeJob.total
-  const currentUrl = scrapeJob.currentUrl
+  const done         = scrapeJob.done
+  const progress     = scrapeJob.progress
+  const doneCount    = scrapeJob.processed
+  const totalCount   = scrapeJob.total
+  const currentUrl   = scrapeJob.currentUrl
+  const pendingCount = scrapeJob.pendingCount
+  const isCancelled  = scrapeJob.job?.status === 'cancelled'
   const rows = useMemo(() => {
     const results = scrapeJob.results
     return Object.keys(sentOverlay).length
-      ? results.map(r => sentOverlay[r.url] ? { ...r, msg_status: sentOverlay[r.url] } : r)
+      ? results.map(r => sentOverlay[r.url] ? { ...r, ...sentOverlay[r.url] } : r)
       : results
   }, [scrapeJob.results, sentOverlay])
 
@@ -310,9 +302,16 @@ export default function BatchProcessor() {
       wasActiveRef.current = true
     } else if (wasActiveRef.current) {
       wasActiveRef.current = false
+      const wasCancelled = cancelledRef.current
+      cancelledRef.current = false
       setSentOverlay(prev => {
         const next = { ...prev }
-        for (const k in next) if (next[k] === 'queued') next[k] = 'sent'
+        for (const k in next) {
+          if (next[k]?.msg_status === 'queued') {
+            if (wasCancelled) delete next[k]
+            else next[k] = { ...next[k], msg_status: 'sent' }
+          }
+        }
         return next
       })
       refreshCapStats()
@@ -337,17 +336,36 @@ export default function BatchProcessor() {
   const waRowsUnique = useMemo(() =>
     dedupeByCompany(waRowsAll).map(r => ({
       ...r,
-      already_contacted: r.already_contacted
+      already_contacted: (r.company_id && freshContactedMap[r.company_id])
+        || r.already_contacted
         || (localContactedIds.has(r.company_id) ? { contacted: true } : null),
     })),
-  [waRowsAll, localContactedIds])
+  [waRowsAll, localContactedIds, freshContactedMap])
+
+  // Refresh already_contacted desde la API para que el conteo sea fresco
+  // incluso si la empresa fue contactada en una sesión anterior.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const ids = waRowsAll.map(r => r.company_id).filter(Boolean)
+    if (!ids.length) return
+    let cancelled = false
+    authFetch('/api/companies/check-contacted', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_ids: ids }),
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (!cancelled && data) setFreshContactedMap(data) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [waRowsAll.map(r => r.company_id).join(',')])
   // Los setState devuelven la MISMA referencia si ya estaban vacíos — evita que
   // este efecto re-dispare un render indefinidamente si `rows` llega a ser
   // referencialmente inestable entre renders (ver useScrapeJob.js EMPTY_RESULTS).
   // Reset selections only when a NEW scrape job starts (job _id changes),
   // not on every poll update — otherwise deselections get wiped every 3s.
   useEffect(() => {
-    setWaDeselected(prev => prev.size ? new Set() : prev)
+    setWaSelected(prev => prev.size ? new Set() : prev)
     setExtraSelected(prev => prev.size ? new Set() : prev)
     setExpandedCo(prev => prev.size ? new Set() : prev)
     setLocalContactedIds(new Set())
@@ -356,9 +374,9 @@ export default function BatchProcessor() {
   // scraping without having to manually uncheck the ones already processed.
   const effectiveWaSelected = useMemo(() =>
     new Set(waRowsUnique
-      .filter(r => !waDeselected.has(r.company_id) && r.msg_status !== 'sent' && r.msg_status !== 'failed')
+      .filter(r => waSelected.has(r.company_id) && r.msg_status !== 'sent' && r.msg_status !== 'failed')
       .map(r => r.company_id)),
-  [waRowsUnique, waDeselected])
+  [waRowsUnique, waSelected])
   // Only block if the CURRENT selection has already-sent rows (prevents in-flight
   // double-sends without blocking newly-scraped rows after a send completes).
   const alreadySent = rows.some(r =>
@@ -382,13 +400,33 @@ export default function BatchProcessor() {
   const capBlocked  = overBy > 0
   // Sending to 2+ contact points needs varied text (see MIN_TEMPLATES_FOR_BULK).
   // Uses totalContactPoints so selecting multiple numbers of a single company
-  // also triggers the template-library mode.
-  const isBulk = totalContactPoints > 1
+  // also triggers the template-library mode. Also force bulk when any selected
+  // company was already contacted so the picker stays visible on re-contact flow.
+  const _anySelectedContacted = waRowsUnique.some(r => effectiveWaSelected.has(r.company_id) && r.already_contacted?.contacted)
+  const isBulk = totalContactPoints > 1 || _anySelectedContacted
   const allVariants = useMemo(
     () => (extraVariants.length > 0 ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean),
     [msgText, extraVariants]
   )
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
+
+  // Variable availability for TemplateLibraryPicker warnings
+  const _selectedRows = useMemo(
+    () => waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id)),
+    [waRowsUnique, effectiveWaSelected]
+  )
+  const tplVarFlags = useMemo(() => ({
+    hasName:     _selectedRows.some(r => r.empresa),
+    hasCity:     _selectedRows.some(r => r.scraped_data?.city || r.scraped_data?.ciudad),
+    hasIndustry: _selectedRows.some(r => r.industria),
+    hasWeb:      _selectedRows.some(r => r.url),
+  }), [_selectedRows])
+  const tplVarCounts = useMemo(() => ({
+    nombre:    _selectedRows.filter(r => r.empresa).length,
+    ciudad:    _selectedRows.filter(r => r.scraped_data?.city || r.scraped_data?.ciudad).length,
+    industria: _selectedRows.filter(r => r.industria).length,
+    web:       _selectedRows.filter(r => r.url).length,
+  }), [_selectedRows])
 
   function handlePause() {
     if (pausing) return   // chunk still draining, button is disabled but guard anyway
@@ -409,7 +447,7 @@ export default function BatchProcessor() {
 
   async function handleSendAll() {
     let targets = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id))
-    if (!targets.length || belowMinTemplates || capBlocked) return
+    if (isSending || !targets.length || belowMinTemplates || capBlocked) return
 
     // New-contacts daily cap — per-instance aware pre-flight.
     // Backend enforces 5/day per warmup instance and 12/day per normal instance.
@@ -482,7 +520,7 @@ export default function BatchProcessor() {
       const message = renderTemplate(v, row.scraped_data)
       const messages = numbers.map(() => message)
       jobs.push({ numbers, messages, companyId: row.company_id, website: row.url })
-      queuedUrls[row.url] = 'queued'
+      queuedUrls[row.url] = { msg_status: 'queued', msgSent: message }
     }
     addBatch(jobs, lang === 'en' ? 'URL batch' : 'Lote de URLs')
     setSentOverlay(prev => ({ ...prev, ...queuedUrls }))
@@ -756,6 +794,38 @@ export default function BatchProcessor() {
         </Box>
       )}
 
+      {/* ── Cancelled + pending URLs banner ── */}
+      {done && isCancelled && pendingCount > 0 && (
+        <Box sx={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5,
+          px: 2, py: 1.5, borderRadius: 2,
+          bgcolor: 'rgba(251,191,36,0.05)',
+          border: '1px solid rgba(251,191,36,0.22)',
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <PauseIcon sx={{ fontSize: 15, color: '#fbbf24', flexShrink: 0 }} />
+            <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)' }}>
+              {lang === 'en'
+                ? <><span style={{ color: '#fbbf24', fontWeight: 700 }}>{pendingCount} URL{pendingCount !== 1 ? 's' : ''}</span> were not scraped — resume to continue</>
+                : <><span style={{ color: '#fbbf24', fontWeight: 700 }}>{pendingCount} URL{pendingCount !== 1 ? 's' : ''}</span> quedaron sin scrapear — reanuda para continuar</>}
+            </Typography>
+          </Box>
+          <Button
+            onClick={scrapeJob.reanudar}
+            startIcon={<ReplayIcon sx={{ fontSize: 15 }} />}
+            size="small"
+            sx={{
+              flexShrink: 0, fontSize: '0.78rem', fontWeight: 700, textTransform: 'none',
+              color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.1)',
+              border: '1px solid rgba(251,191,36,0.3)', borderRadius: 1.5, px: 1.5, py: 0.5,
+              '&:hover': { bgcolor: 'rgba(251,191,36,0.18)' },
+            }}
+          >
+            {lang === 'en' ? 'Resume' : 'Reanudar'}
+          </Button>
+        </Box>
+      )}
+
       {/* ── Post-scraping: template + send — visible también durante el
            scraping, para poder empezar a enviar a lo ya encontrado ── */}
       {(done || loading) && rows.length > 0 && (
@@ -780,7 +850,7 @@ export default function BatchProcessor() {
             )}
           </Box>
           {capStats && (
-            <CapacityBanner stats={capStats} selectionCount={totalContactPoints} sx={{ mb: 1.5 }} />
+            <CapacityBanner stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} sx={{ mb: 1.5 }} />
           )}
 
           <Box sx={{ display: 'flex', gap: 2.5 }}>
@@ -788,7 +858,7 @@ export default function BatchProcessor() {
               effectiveSelected={effectiveWaSelected}
               expandedCo={expandedCo}
               extraSelected={extraSelected}
-              setDeselected={setWaDeselected}
+              setSelected={setWaSelected}
               setExpandedCo={setExpandedCo}
               setExtraSelected={setExtraSelected}
               title={t.search.recipients}
@@ -802,9 +872,7 @@ export default function BatchProcessor() {
           <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.5 }}>
             {TEMPLATES.map(tpl => (
               <Chip key={tpl.id} label={tpl.label} size="small" onClick={() => {
-                setSelectedTpl(tpl.id)
-                const el = msgRef.current
-                if (el) { el.value = tpl.text; el.dispatchEvent(new Event('input', { bubbles: true })) }
+                setSelectedTpl(tpl.id); setMsgText(tpl.text)
               }} sx={{
                 fontSize: '0.7rem', height: 24, cursor: 'pointer',
                 bgcolor: selectedTpl === tpl.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
@@ -825,7 +893,7 @@ export default function BatchProcessor() {
                 <Box onClick={() => {
                   const el = msgRef.current; if (!el) return
                   el.setRangeText(v, el.selectionStart, el.selectionEnd, 'end')
-                  el.dispatchEvent(new Event('input', { bubbles: true }))
+                  setMsgText(el.value)
                   el.focus()
                 }} sx={{
                   px: 1, py: 0.25, borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700,
@@ -840,35 +908,8 @@ export default function BatchProcessor() {
             </Typography>
           </Box>
           {/* Textarea con highlight de variables */}
-          <Box sx={{
-            position: 'relative', mb: 0.5, borderRadius: 1.5,
-            border: '1px solid rgba(255,255,255,0.1)',
-            bgcolor: 'var(--sidebar-bg, #0d1117)',
-            '&:focus-within': { borderColor: 'rgba(34,197,94,0.4)' },
-          }}>
-            <Box
-              ref={highlightRef}
-              dangerouslySetInnerHTML={{ __html: highlightVars(msgText) + ' ' }}
-              sx={{
-                position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-                p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit',
-                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                overflowY: 'hidden', pointerEvents: 'none',
-                color: 'var(--text, #e2e8f0)', borderRadius: 1.5,
-              }}
-            />
-            <Box component="textarea" ref={msgRef} defaultValue={msgText}
-              onInput={e => { setMsgText(e.target.value); syncScroll() }}
-              onScroll={syncScroll}
-              sx={{
-                position: 'relative', zIndex: 1, display: 'block',
-                width: '100%', minHeight: 100, maxHeight: 200, resize: 'vertical',
-                bgcolor: 'transparent', color: 'transparent', caretColor: 'var(--text, #e2e8f0)',
-                border: 'none', outline: 'none', borderRadius: 1.5,
-                p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit',
-                boxSizing: 'border-box',
-              }}
-            />
+          <Box sx={{ mb: 0.5 }}>
+            <HighlightedMessageInput value={msgText} onChange={setMsgText} inputRef={msgRef} rows={5} maxLength={4096} lang={lang} />
           </Box>
           <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
             <Typography sx={{ fontSize: '0.65rem', color: msgText.length > 4000 ? '#f87171' : 'rgba(255,255,255,0.2)' }}>
@@ -876,9 +917,12 @@ export default function BatchProcessor() {
             </Typography>
           </Box>
           </>}
-          <Box sx={{ mt: 1.5, mb: 0.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
-            <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalNumbers} baseCount={0} />
-          </Box>
+          {isBulk && <Box sx={{ mt: 1.5, mb: 0.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
+            <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalNumbers} baseCount={0}
+                hasName={tplVarFlags.hasName} hasCity={tplVarFlags.hasCity}
+                hasIndustry={tplVarFlags.hasIndustry} hasWeb={tplVarFlags.hasWeb}
+                varCounts={tplVarCounts} totalSelected={_selectedRows.length} />
+          </Box>}
           {/* Send config */}
           <Box sx={{ mb: 1 }}>
             <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
@@ -887,26 +931,31 @@ export default function BatchProcessor() {
           <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
             <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} />
-            {isSending && (
-              <Tooltip title={t.search.cancelSend}>
-                <IconButton size="small" onClick={cancelQueue}
-                  sx={{ color: 'rgba(248,113,113,0.7)', '&:hover': { color: '#f87171' } }}>
-                  <HighlightOffIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-            )}
+          </Box>
+          {isSending && (
+            <Button fullWidth onClick={cancelQueue} startIcon={<HighlightOffIcon />}
+              sx={{
+                mb: 0.8, py: 0.8, textTransform: 'none', fontWeight: 600, fontSize: '0.82rem',
+                color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)',
+                border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5,
+                '&:hover': { bgcolor: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.45)' },
+              }}>
+              {t.search.cancelSend}
+            </Button>
+          )}
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
             <Button
               onClick={handleSendAll}
-              disabled={effectiveWaSelected.size === 0 || alreadySent || scrapeActive || isDisconnected || belowMinTemplates || capBlocked}
+              disabled={effectiveWaSelected.size === 0 || alreadySent || isSending || isDisconnected || belowMinTemplates || capBlocked}
               startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
               size="small"
               sx={{
                 fontSize: '0.78rem', fontWeight: 700, flexShrink: 0,
-                bgcolor: effectiveWaSelected.size > 0 && !alreadySent && !scrapeActive ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
-                color:   effectiveWaSelected.size > 0 && !alreadySent && !scrapeActive ? '#4ade80' : 'rgba(255,255,255,0.3)',
-                border:  `1px solid ${effectiveWaSelected.size > 0 && !alreadySent && !scrapeActive ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
+                bgcolor: effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
+                color:   effectiveWaSelected.size > 0 && !alreadySent ? '#4ade80' : 'rgba(255,255,255,0.3)',
+                border:  `1px solid ${effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
                 borderRadius: 1.5, px: 2, py: 0.6,
-                '&:hover': { bgcolor: effectiveWaSelected.size > 0 && !alreadySent && !scrapeActive ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
+                '&:hover': { bgcolor: effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
                 '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
               }}
             >

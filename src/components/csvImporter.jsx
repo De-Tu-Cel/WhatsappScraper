@@ -33,7 +33,8 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import MessageIcon from '@mui/icons-material/Message'
 import SendIcon from '@mui/icons-material/Send'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
-import Collapse from '@mui/material/Collapse'
+import ReplayIcon from '@mui/icons-material/Replay'
+import { authFetch } from '@/lib/api'
 import { getTemplates } from './singleUrlProcessor'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
@@ -49,6 +50,7 @@ import CapacityBanner from './CapacityBanner'
 import { dedupeByCompany } from '../lib/companyDedupe'
 import { useLang } from '../context/LangContext'
 import { isValidUrl } from '@/lib/validators'
+import { HighlightedMessageInput } from './highlightedMessageInput'
 import Dialog from '@mui/material/Dialog'
 import DialogTitle from '@mui/material/DialogTitle'
 import DialogContent from '@mui/material/DialogContent'
@@ -57,16 +59,6 @@ import DialogActions from '@mui/material/DialogActions'
 const URL_REGEX = /^https?:\/\//i
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024  // 5 MB — plenty for a text/xlsx list of URLs
 const MAX_CSV_URLS = 50  // same cap batchProcessor.jsx already enforces, kept consistent across bulk-import surfaces
-
-const VAR_COLORS = { nombre: '#818cf8', ciudad: '#38bdf8', industria: '#fb923c', web: '#a78bfa' }
-function highlightVars(text) {
-  return text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/\n/g, '<br>')
-    .replace(/\{\{(nombre|ciudad|industria|web)\}\}/g, (_, k) =>
-      `<span style="background:${VAR_COLORS[k]}28;color:${VAR_COLORS[k]};border-radius:4px;padding:0 3px;font-weight:700;">${k}</span>`
-    )
-}
 
 const TABLE_HEAD_CELL = {
   bgcolor: 'var(--card-bg)',
@@ -140,7 +132,8 @@ export default function CsvImporter() {
   const scrapeJob = useScrapeJob('csv')
   // El scraping en sí corre en el backend (useScrapeJob) — esto solo cubre el
   // estado optimista de envío por url, que el job no conoce.
-  const [sentOverlay, setSentOverlay] = useState({})
+  const [sentOverlay,       setSentOverlay]       = useState({})
+  const [freshContactedMap, setFreshContactedMap] = useState({})
 
   const [dragging,   setDragging]   = useState(false)
   const [fileName,   setFileName]   = useState('')
@@ -167,16 +160,18 @@ export default function CsvImporter() {
   const [msgText,    setMsgText]    = useState(TEMPLATES[0].text)
   const [extraVariants, setExtraVariants] = useState([])
   const [sendError,  setSendError]  = useState('')
-  const [showSend,   setShowSend]   = useState(false)
   const [showTiming, setShowTiming] = useState(false)
   const [sendCfg,    setSendCfg]    = useState(() => loadSendConfig())
-  const { addBatch, cancel: cancelQueue, active: queueActive } = useSendQueue()
+  const { addBatch, cancel: _cancelQueueRaw, active: queueActive } = useSendQueue()
+  const cancelledRef = useRef(false)
+  function cancelQueue() { cancelledRef.current = true; _cancelQueueRaw() }
   const { stats: capStats, refresh: refreshCapStats } = useDailyCapStats()
   const [confirmDialog, setConfirmDialog] = useState({ open: false, names: '', resolve: null })
+  const [newContactsDialog, setNewContactsDialog] = useState({ open: false, trimCount: 0, newRemaining: 0, resolve: null })
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
   // Qué empresas (de las que tienen WhatsApp) quedan destildadas del envío
   // masivo — mismo patrón que ya usa searchProspects.jsx.
-  const [waDeselected, setWaDeselected] = useState(new Set())
+  const [waSelected, setWaSelected] = useState(new Set())
   // Números EXTRA (además del principal) prendidos a mano al expandir el chip
   // de una empresa — clave `${company_id}::${number}`.
   const [extraSelected, setExtraSelected] = useState(new Set())
@@ -184,12 +179,7 @@ export default function CsvImporter() {
   const [filterContacted,  setFilterContacted]  = useState('all') // 'all' | 'new' | 'contacted'
   const [localContactedIds, setLocalContactedIds] = useState(new Set())
   const msgRef       = useRef(null)
-  const highlightRef = useRef(null)
   const wasActiveRef = useRef(false)
-  function syncScroll() {
-    if (highlightRef.current && msgRef.current)
-      highlightRef.current.scrollTop = msgRef.current.scrollTop
-  }
 
   function parseFile(file) {
     if (!file) return
@@ -266,9 +256,16 @@ export default function CsvImporter() {
       wasActiveRef.current = true
     } else if (wasActiveRef.current) {
       wasActiveRef.current = false
+      const wasCancelled = cancelledRef.current
+      cancelledRef.current = false
       setSentOverlay(prev => {
         const next = { ...prev }
-        for (const k in next) if (next[k] === 'queued') next[k] = 'sent'
+        for (const k in next) {
+          if (next[k] === 'queued') {
+            if (wasCancelled) delete next[k]
+            else next[k] = 'sent'
+          }
+        }
         return next
       })
       refreshCapStats()
@@ -289,7 +286,7 @@ export default function CsvImporter() {
     const csv = [
       headers.join(','),
       ...results.map(r => headers.map(h => {
-        if (h === 'estado') return r.duplicate ? 'duplicado' : r.ok ? 'ok' : 'error'
+        if (h === 'estado') return r.ok ? 'ok' : 'error'
         return r[h] || ''
       }).join(',')),
     ].join('\n')
@@ -307,15 +304,32 @@ export default function CsvImporter() {
   const waRowsUnique = useMemo(() =>
     dedupeByCompany(waRowsAll).map(r => ({
       ...r,
-      already_contacted: r.already_contacted
+      already_contacted: (r.company_id && freshContactedMap[r.company_id])
+        || r.already_contacted
         || (localContactedIds.has(r.company_id) ? { contacted: true } : null),
     })),
-  [waRowsAll, localContactedIds])
+  [waRowsAll, localContactedIds, freshContactedMap])
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const ids = waRowsAll.map(r => r.company_id).filter(Boolean)
+    if (!ids.length) return
+    let cancelled = false
+    authFetch('/api/companies/check-contacted', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_ids: ids }),
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (!cancelled && data) setFreshContactedMap(data) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [waRowsAll.map(r => r.company_id).join(',')])
   // Los setState devuelven la MISMA referencia si ya estaban vacíos — evita que
   // este efecto re-dispare un render indefinidamente si `results` llega a ser
   // referencialmente inestable entre renders (ver useScrapeJob.js EMPTY_RESULTS).
   useEffect(() => {
-    setWaDeselected(prev => prev.size ? new Set() : prev)
+    setWaSelected(prev => prev.size ? new Set() : prev)
     setExtraSelected(prev => prev.size ? new Set() : prev)
     setExpandedCo(prev => prev.size ? new Set() : prev)
   }, [results])
@@ -329,8 +343,8 @@ export default function CsvImporter() {
     return waRowsUnique
   }, [waRowsUnique, filterContacted])
   const effectiveWaSelected = useMemo(() =>
-    new Set(filteredWaRows.map(r => r.company_id).filter(id => !waDeselected.has(id))),
-  [filteredWaRows, waDeselected])
+    new Set(filteredWaRows.map(r => r.company_id).filter(id => waSelected.has(id))),
+  [filteredWaRows, waSelected])
   const alreadySent = results.some(r => r.msg_status === 'sent' || r.msg_status === 'failed' || r.msg_status === 'queued')
   const isSending   = queueActive !== null && alreadySent
   const sentCount   = results.filter(r => r.msg_status === 'sent').length
@@ -350,14 +364,71 @@ export default function CsvImporter() {
   const capBlocked = overBy > 0
   // Sending to 2+ contact points needs varied text (see MIN_TEMPLATES_FOR_BULK).
   // Uses totalContactPoints so selecting multiple numbers of a single company
-  // also triggers the template-library mode.
-  const isBulk = totalContactPoints > 1
+  // also triggers the template-library mode. Also force bulk when any selected
+  // company was already contacted so the picker stays visible on re-contact flow.
+  const _anySelectedContacted = waRowsUnique.some(r => effectiveWaSelected.has(r.company_id) && r.already_contacted?.contacted)
+  const isBulk = totalContactPoints > 1 || _anySelectedContacted
   const allVariants = (isBulk ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean)
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
+  const _selectedRows = useMemo(
+    () => waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id)),
+    [waRowsUnique, effectiveWaSelected]
+  )
+  const tplVarFlags = useMemo(() => ({
+    hasName:     _selectedRows.some(r => r.empresa),
+    hasCity:     _selectedRows.some(r => r.scraped_data?.city || r.scraped_data?.ciudad),
+    hasIndustry: _selectedRows.some(r => r.industria),
+    hasWeb:      _selectedRows.some(r => r.url),
+  }), [_selectedRows])
+  const tplVarCounts = useMemo(() => ({
+    nombre:    _selectedRows.filter(r => r.empresa).length,
+    ciudad:    _selectedRows.filter(r => r.scraped_data?.city || r.scraped_data?.ciudad).length,
+    industria: _selectedRows.filter(r => r.industria).length,
+    web:       _selectedRows.filter(r => r.url).length,
+  }), [_selectedRows])
+
   async function handleSendAll() {
-    const targets = filteredWaRows.filter(r => effectiveWaSelected.has(r.company_id))
-    if (!targets.length || belowMinTemplates || capBlocked) return
+    let targets = filteredWaRows.filter(r => effectiveWaSelected.has(r.company_id))
+    if (isSending || !targets.length || belowMinTemplates || capBlocked) return
+
+    // Per-instance daily cap trim
+    const newInBatch = targets.filter(r => !r.already_contacted?.contacted)
+    if (newInBatch.length > 0) {
+      const instCapMap = Object.fromEntries(
+        (capStats?.instances ?? []).map(inst => [inst.instance, inst.new_contacts_left ?? 0])
+      )
+      const globalPool = capStats?.new_contacts_capacity ?? Infinity
+      const byInstance = {}
+      const unassigned = []
+      for (const r of newInBatch) {
+        if (r.assigned_instance && instCapMap[r.assigned_instance] !== undefined) {
+          ;(byInstance[r.assigned_instance] ??= []).push(r)
+        } else {
+          unassigned.push(r)
+        }
+      }
+      const kept = []
+      let totalTrimmed = 0
+      for (const [inst, companies] of Object.entries(byInstance)) {
+        const cap = instCapMap[inst] ?? 0
+        kept.push(...companies.slice(0, cap))
+        totalTrimmed += Math.max(0, companies.length - cap)
+      }
+      const unassignedCap = Math.min(globalPool, unassigned.length)
+      kept.push(...unassigned.slice(0, unassignedCap))
+      totalTrimmed += Math.max(0, unassigned.length - unassignedCap)
+      if (totalTrimmed > 0) {
+        const newRemaining = newInBatch.length - totalTrimmed
+        const confirmed = await new Promise(resolve =>
+          setNewContactsDialog({ open: true, trimCount: totalTrimmed, newRemaining, resolve })
+        )
+        if (!confirmed) return
+        const existing = targets.filter(r => r.already_contacted?.contacted)
+        targets = [...existing, ...kept]
+      }
+    }
+
     const alreadyContacted = targets.filter(r => r.already_contacted?.contacted)
     if (alreadyContacted.length) {
       const names = alreadyContacted.map(r => r.empresa || r.url).join(', ')
@@ -392,21 +463,18 @@ export default function CsvImporter() {
   }
 
   const hasFile    = allUrls.length > 0
-  const okCount    = results.filter(r => r.ok && !r.duplicate).length
+  const okCount    = results.filter(r => r.ok).length
   const errCount   = results.filter(r => !r.ok).length
-  const dupCount   = results.filter(r => r.duplicate).length
-  const waCount    = results.filter(r => r.whatsapp).length
+  const waCount    = results.filter(r => r.all_whatsapp?.length > 0 || !!r.whatsapp).length
   const totalPages = Math.ceil(results.length / rowsPerPage)
   const pageRows   = results.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
 
   function rowBg(r) {
     if (!r.ok) return 'rgba(239,68,68,0.07)'
-    if (r.duplicate) return 'rgba(251,191,36,0.05)'
     return 'transparent'
   }
   function rowBorder(r) {
     if (!r.ok) return '1px solid rgba(239,68,68,0.15)'
-    if (r.duplicate) return '1px solid rgba(251,191,36,0.12)'
     return '1px solid rgba(255,255,255,0.04)'
   }
 
@@ -618,49 +686,52 @@ export default function CsvImporter() {
         </Box>
       )}
 
+      {/* ── Cancelled + pending URLs banner ── */}
+      {done && scrapeJob.job?.status === 'cancelled' && scrapeJob.pendingCount > 0 && (
+        <Box sx={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5,
+          px: 2, py: 1.5, borderRadius: 2,
+          bgcolor: 'rgba(251,191,36,0.05)', border: '1px solid rgba(251,191,36,0.22)',
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <PauseIcon sx={{ fontSize: 15, color: '#fbbf24', flexShrink: 0 }} />
+            <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)' }}>
+              {lang === 'en'
+                ? <><span style={{ color: '#fbbf24', fontWeight: 700 }}>{scrapeJob.pendingCount} URL{scrapeJob.pendingCount !== 1 ? 's' : ''}</span> were not scraped — resume to continue</>
+                : <><span style={{ color: '#fbbf24', fontWeight: 700 }}>{scrapeJob.pendingCount} URL{scrapeJob.pendingCount !== 1 ? 's' : ''}</span> quedaron sin scrapear — reanuda para continuar</>}
+            </Typography>
+          </Box>
+          <Button onClick={scrapeJob.reanudar} size="small" startIcon={<ReplayIcon sx={{ fontSize: '14px !important' }} />}
+            sx={{ flexShrink: 0, fontSize: '0.78rem', fontWeight: 700, textTransform: 'none', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 1.5, px: 1.5, py: 0.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.18)' } }}>
+            {lang === 'en' ? 'Resume' : 'Reanudar'}
+          </Button>
+        </Box>
+      )}
+
       {/* ── Stat cards ── */}
       {results.length > 0 && (
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
           <StatCard icon={<CheckCircleIcon sx={{ fontSize: 16, color: '#4ade80' }} />} label={t.csv.processed} value={okCount} color="#4ade80" bgColor="rgba(34,197,94,0.06)" borderColor="rgba(34,197,94,0.18)" />
           <StatCard icon={<WhatsAppIcon sx={{ fontSize: 16, color: 'var(--accent, #60a5fa)' }} />} label={t.csv.withWa} value={waCount} color="var(--accent, #60a5fa)" bgColor="rgba(var(--accent-rgb, 59,130,246), 0.06)" borderColor="rgba(var(--accent-rgb, 59,130,246), 0.18)" iconBg="rgba(var(--accent-rgb, 59,130,246), 0.13)" iconBorder="rgba(var(--accent-rgb, 59,130,246), 0.27)" />
-          <StatCard icon={<WarningAmberIcon sx={{ fontSize: 16, color: '#fbbf24' }} />} label={t.csv.duplicates} value={dupCount} color="#fbbf24" bgColor="rgba(251,191,36,0.06)" borderColor="rgba(251,191,36,0.18)" />
-          <StatCard icon={<ErrorIcon sx={{ fontSize: 16, color: '#f87171' }} />} label={t.csv.errors} value={errCount} color="#f87171" bgColor="rgba(239,68,68,0.06)" borderColor="rgba(239,68,68,0.18)" />
+<StatCard icon={<ErrorIcon sx={{ fontSize: 16, color: '#f87171' }} />} label={t.csv.errors} value={errCount} color="#f87171" bgColor="rgba(239,68,68,0.06)" borderColor="rgba(239,68,68,0.18)" />
         </Box>
       )}
 
-      {/* ── Toggle de envío masivo — visible cuando done o pausado (no durante pausing,
-           ya que los datos siguen cargando y el usuario no debe adelantarse) ── */}
-      {(done || (loading && !pausing)) && results.length > 0 && waRowsUnique.length > 0 && (
-        <Box sx={{ borderRadius: 2, border: `1px solid ${showSend ? 'rgba(34,197,94,0.25)' : 'rgba(34,197,94,0.12)'}`, bgcolor: showSend ? 'rgba(34,197,94,0.04)' : 'transparent', transition: 'all 0.2s' }}>
-          {/* Header toggle */}
-          <Box onClick={() => setShowSend(o => !o)} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2, py: 1.2, cursor: 'pointer', borderRadius: showSend ? '8px 8px 0 0' : 2, '&:hover': { bgcolor: 'rgba(34,197,94,0.06)' } }}>
+      {/* ── Toggle de envío masivo — visible mientras haya resultados, incluso
+           durante scraping activo, para poder enviar a lo ya encontrado ── */}
+      {(done || loading) && results.length > 0 && waRowsUnique.length > 0 && (
+        <Box sx={{ borderRadius: 2, border: '1px solid rgba(34,197,94,0.25)', bgcolor: 'rgba(34,197,94,0.04)' }}>
+          {/* Header */}
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2, py: 1.2 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <MessageIcon sx={{ fontSize: 15, color: '#4ade80' }} />
               <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>{t.csv.sendMessages}</Typography>
               <Chip icon={<WhatsAppIcon sx={{ fontSize: '11px !important' }} />} label={`${effectiveWaSelected.size} ${t.search.of} ${waRowsUnique.length} ${t.csv.withWhatsApp}`} size="small"
                 sx={{ fontSize: '0.68rem', height: 20, bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', '& .MuiChip-icon': { color: '#4ade80' } }} />
             </Box>
-            <Box sx={{ fontSize: 15, color: 'rgba(34,197,94,0.5)', transform: showSend ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', display: 'flex' }}>▾</Box>
           </Box>
 
-          {/* Panel colapsable */}
-          <Collapse in={showSend}>
-            <Box sx={{ px: 2, pb: 2, borderTop: '1px solid rgba(34,197,94,0.1)', maxHeight: '70vh', overflowY: 'auto' }}>
-              {/* Timing config toggle */}
-              <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1.2, mb: 1 }}>
-                <Tooltip title={t.sendConfig?.title || 'Timing de envío'} placement="left" arrow>
-                  <IconButton size="small" onClick={() => setShowTiming(o => !o)}
-                    sx={{ color: showTiming ? 'var(--accent,#3b82f6)' : 'var(--text-muted)', border: `1px solid ${showTiming ? 'rgba(var(--accent-rgb,59,130,246),0.35)' : 'var(--border)'}`, borderRadius: 1.5, p: 0.6, bgcolor: showTiming ? 'rgba(var(--accent-rgb,59,130,246),0.08)' : 'transparent', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', color: 'var(--accent,#3b82f6)' } }}>
-                    <AccessTimeIcon sx={{ fontSize: 15 }} />
-                  </IconButton>
-                </Tooltip>
-              </Box>
-              <Collapse in={showTiming}>
-                <Box sx={{ mb: 1.5 }}>
-                  <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
-                </Box>
-              </Collapse>
-
+          <Box sx={{ px: 2, pb: 2, borderTop: '1px solid rgba(34,197,94,0.1)', maxHeight: '70vh', overflowY: 'auto' }}>
               {/* Countdown + cancel during send */}
               {isSending && (
                 <Button
@@ -679,7 +750,7 @@ export default function CsvImporter() {
               )}
 
               {capStats && (
-                <CapacityBanner stats={capStats} selectionCount={totalContactPoints} sx={{ mb: 1.5 }} />
+                <CapacityBanner stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} sx={{ mb: 1.5 }} />
               )}
 
               {/* Filter tabs */}
@@ -706,7 +777,7 @@ export default function CsvImporter() {
                   effectiveSelected={effectiveWaSelected}
                   expandedCo={expandedCo}
                   extraSelected={extraSelected}
-                  setDeselected={setWaDeselected}
+                  setSelected={setWaSelected}
                   setExpandedCo={setExpandedCo}
                   setExtraSelected={setExtraSelected}
                   title={t.search.recipients}
@@ -718,9 +789,7 @@ export default function CsvImporter() {
               <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.5 }}>
                 {TEMPLATES.map(tpl => (
                   <Chip key={tpl.id} label={tpl.label} size="small" onClick={() => {
-                    setSelectedTpl(tpl.id)
-                    const el = msgRef.current
-                    if (el) { el.value = tpl.text; el.dispatchEvent(new Event('input', { bubbles: true })) }
+                    setSelectedTpl(tpl.id); setMsgText(tpl.text)
                   }} sx={{
                     fontSize: '0.7rem', height: 24, cursor: 'pointer',
                     bgcolor: selectedTpl === tpl.id ? 'rgba(34,197,94,0.18)' : 'var(--item-hover)',
@@ -740,19 +809,14 @@ export default function CsvImporter() {
                     <Box onClick={() => {
                       const el = msgRef.current; if (!el) return
                       el.setRangeText(v, el.selectionStart, el.selectionEnd, 'end')
-                      el.dispatchEvent(new Event('input', { bubbles: true }))
+                      setMsgText(el.value)
                       el.focus()
                     }} sx={{ px: 1, py: 0.25, borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace', bgcolor: `${color}22`, color, border: `1px solid ${color}40`, '&:hover': { bgcolor: `${color}38` } }}>{display}</Box>
                   </Tooltip>
                 ))}
               </Box>
-              <Box sx={{ position: 'relative', mb: 0.5, borderRadius: 1.5, border: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg)', '&:focus-within': { borderColor: 'rgba(34,197,94,0.4)' } }}>
-                <Box ref={highlightRef} dangerouslySetInnerHTML={{ __html: highlightVars(msgText) + ' ' }}
-                  sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit', whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowY: 'hidden', pointerEvents: 'none', color: 'var(--text)', borderRadius: 1.5 }} />
-                <Box component="textarea" ref={msgRef} defaultValue={msgText}
-                  onInput={e => { setMsgText(e.target.value); syncScroll() }}
-                  onScroll={syncScroll}
-                  sx={{ position: 'relative', zIndex: 1, display: 'block', width: '100%', minHeight: 100, maxHeight: 200, resize: 'vertical', bgcolor: 'transparent', color: 'transparent', caretColor: 'var(--text)', border: 'none', outline: 'none', borderRadius: 1.5, p: 1.5, fontSize: '0.8rem', lineHeight: 1.6, fontFamily: 'inherit', boxSizing: 'border-box' }} />
+              <Box sx={{ mb: 0.5 }}>
+                <HighlightedMessageInput value={msgText} onChange={setMsgText} inputRef={msgRef} rows={5} maxLength={4096} lang={lang} />
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
                 <Typography sx={{ fontSize: '0.65rem', color: msgText.length > 4000 ? '#f87171' : 'var(--text-muted)' }}>
@@ -763,10 +827,16 @@ export default function CsvImporter() {
 
               {isBulk && (
                 <Box sx={{ mt: 1.5, mb: 0.5, p: 1.2, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--item-hover)' }}>
-                  <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalNumbers} baseCount={0} />
+                  <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalNumbers} baseCount={0}
+                    hasName={tplVarFlags.hasName} hasCity={tplVarFlags.hasCity}
+                    hasIndustry={tplVarFlags.hasIndustry} hasWeb={tplVarFlags.hasWeb}
+                    varCounts={tplVarCounts} totalSelected={_selectedRows.length} />
                 </Box>
               )}
 
+              <Box sx={{ mt: 1, mb: 1 }}>
+                <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
+              </Box>
               <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />
               <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
 
@@ -774,7 +844,7 @@ export default function CsvImporter() {
                 <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} />
               </Box>
               <Button fullWidth onClick={handleSendAll}
-                disabled={effectiveWaSelected.size === 0 || alreadySent || isDisconnected || belowMinTemplates || capBlocked}
+                disabled={effectiveWaSelected.size === 0 || alreadySent || isSending || isDisconnected || belowMinTemplates || capBlocked}
                 startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
                 sx={{
                   fontSize: '0.82rem', fontWeight: 700, py: 1, textTransform: 'none', borderRadius: 1.5,
@@ -791,8 +861,7 @@ export default function CsvImporter() {
               )}
               </Box>
               </Box>
-            </Box>
-          </Collapse>
+          </Box>
         </Box>
       )}
 
@@ -860,9 +929,6 @@ export default function CsvImporter() {
                             <Chip label={t.csv.statusBlocked} size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
                               sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' }, cursor: 'help' }} />
                           </Tooltip>
-                        ) : r.duplicate ? (
-                          <Chip label={t.csv.statusDup} size="small" icon={<WarningAmberIcon sx={{ fontSize: '12px !important' }} />}
-                            sx={{ bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#fbbf24' } }} />
                         ) : r.ok && !r.whatsapp ? (
                           <Chip label={t.csv.statusEmpty} size="small" icon={<HighlightOffIcon sx={{ fontSize: '12px !important' }} />}
                             sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.12)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: 'rgba(255,255,255,0.4)' } }} />
@@ -935,6 +1001,38 @@ export default function CsvImporter() {
           <Button size="small" variant="contained" onClick={() => { confirmDialog.resolve?.(true); setConfirmDialog({ open: false, names: '', resolve: null }) }}
             sx={{ bgcolor: 'var(--accent, #3b82f6)', '&:hover': { bgcolor: 'var(--accent-hover, #2563eb)' }, textTransform: 'none', fontWeight: 600 }}>
             {t.search?.confirmContactedConfirm || (lang === 'en' ? 'Send anyway' : 'Enviar de todas formas')}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={newContactsDialog.open}
+        onClose={() => { newContactsDialog.resolve?.(false); setNewContactsDialog({ open: false, trimCount: 0, newRemaining: 0, resolve: null }) }}
+        slotProps={{ paper: { sx: { bgcolor: 'var(--bg-card, #1e293b)', border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 2, minWidth: 340 } } }}
+      >
+        <DialogTitle sx={{ color: '#fbbf24', fontSize: '0.95rem', fontWeight: 700, pb: 1 }}>
+          {lang === 'en' ? 'New-contact limit reached' : 'Límite de contactos nuevos'}
+        </DialogTitle>
+        <DialogContent sx={{ pt: '8px !important' }}>
+          <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.6))', fontSize: '0.85rem', lineHeight: 1.6 }}>
+            {lang === 'en'
+              ? `Your warmup limit allows ${newContactsDialog.newRemaining} new contacts today. ${newContactsDialog.trimCount} will be removed from the batch.`
+              : `Tu límite de calentamiento permite ${newContactsDialog.newRemaining} contactos nuevos hoy. Se eliminarán ${newContactsDialog.trimCount} del lote.`}
+          </Typography>
+          <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.5))', fontSize: '0.78rem', mt: 1.2 }}>
+            {lang === 'en'
+              ? 'Existing contacts (already messaged before) are not affected.'
+              : 'Los contactos existentes (ya enviados antes) no se ven afectados.'}
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 2, pb: 2, gap: 1 }}>
+          <Button size="small" onClick={() => { newContactsDialog.resolve?.(false); setNewContactsDialog({ open: false, trimCount: 0, newRemaining: 0, resolve: null }) }}
+            sx={{ color: 'var(--text-muted, rgba(255,255,255,0.5))', textTransform: 'none' }}>
+            {lang === 'en' ? 'Cancel' : 'Cancelar'}
+          </Button>
+          <Button size="small" variant="contained" onClick={() => { newContactsDialog.resolve?.(true); setNewContactsDialog({ open: false, trimCount: 0, newRemaining: 0, resolve: null }) }}
+            sx={{ bgcolor: '#d97706', '&:hover': { bgcolor: '#b45309' }, textTransform: 'none', fontWeight: 600 }}>
+            {lang === 'en' ? 'Send trimmed batch' : 'Enviar lote reducido'}
           </Button>
         </DialogActions>
       </Dialog>

@@ -68,6 +68,22 @@ def _get_client() -> MongoClient:
             db.message_logs.create_index([("instance_name", 1), ("created_at", -1)])
         except Exception:
             pass
+        try:
+            db.message_logs.create_index([("created_at", -1)])
+        except Exception:
+            pass
+        try:
+            db.message_logs.create_index([("company_id", 1), ("direction", 1), ("created_at", -1)])
+        except Exception:
+            pass
+        try:
+            db.contacts.create_index([("company_id", 1), ("type", 1)])
+        except Exception:
+            pass
+        try:
+            db.jid_map.create_index([("company_id", 1)])
+        except Exception:
+            pass
     return _mongo_client
 
 
@@ -248,7 +264,10 @@ class MongoDBManager:
     def get_distinct_values(self, field):
         return sorted([v for v in self.db.companies.distinct(field) if v])
 
-    def list_companies(self, page=1, page_size=10, search=None, industry=None, city=None, has_whatsapp=None):
+    def list_companies(self, page=1, page_size=10, search=None, industry=None, city=None, has_whatsapp=None, contacted=None):
+        from bson import ObjectId
+
+        # Build base query (without contacted filter — applied below after we know contacted_set)
         query = {}
         if search:
             query["$or"] = [
@@ -263,7 +282,47 @@ class MongoDBManager:
         if has_whatsapp is not None:
             query["has_whatsapp"] = has_whatsapp
 
+        # Fetch the full contacted ID set once (used for filter + global stats)
+        all_contacted_ids_str = set(self.db.message_logs.distinct("company_id", {"direction": "outbound"}))
+
+        # Apply contacted filter by narrowing the query
+        if contacted is True:
+            valid_oids = [ObjectId(cid) for cid in all_contacted_ids_str if ObjectId.is_valid(cid)]
+            if not valid_oids:
+                return {"total": 0, "companies": [], "total_wa": 0, "total_contacted": 0, "latest_scrape_at": None}
+            query["_id"] = {"$in": valid_oids}
+        elif contacted is False:
+            valid_oids = [ObjectId(cid) for cid in all_contacted_ids_str if ObjectId.is_valid(cid)]
+            if valid_oids:
+                query["_id"] = {"$nin": valid_oids}
+
         total = self.db.companies.count_documents(query)
+
+        # Global stats for the current filter (all pages, not just current)
+        total_wa = self.db.companies.count_documents({**query, "has_whatsapp": True})
+
+        # Total contacted — count companies matching query that are in the contacted set
+        if contacted is True:
+            # All results are contacted by definition
+            total_contacted = total
+        elif contacted is False:
+            total_contacted = 0
+        else:
+            # Intersect: count matching companies whose ID is in all_contacted_ids_str
+            contacted_oids = [ObjectId(cid) for cid in all_contacted_ids_str if ObjectId.is_valid(cid)]
+            if contacted_oids:
+                total_contacted = self.db.companies.count_documents({**query, "_id": {"$in": contacted_oids}})
+            else:
+                total_contacted = 0
+
+        # Most recent scrape date across all matching companies
+        latest_doc = self.db.companies.find_one(
+            {**query, "last_scraped_at": {"$exists": True, "$ne": None}},
+            sort=[("last_scraped_at", -1)],
+            projection={"last_scraped_at": 1},
+        )
+        latest_scrape_at = latest_doc["last_scraped_at"].isoformat() if latest_doc and latest_doc.get("last_scraped_at") else None
+
         companies = list(
             self.db.companies.find(
                 query,
@@ -273,18 +332,31 @@ class MongoDBManager:
             .skip((page - 1) * page_size)
             .limit(page_size)
         )
-        # Mark which companies have been contacted (any outbound message)
+        # Mark which companies on this page have been contacted and include contacted numbers
         if companies:
-            ids = [str(c["_id"]) for c in companies]
-            contacted_set = {
-                doc["company_id"] for doc in self.db.message_logs.find(
-                    {"company_id": {"$in": ids}, "direction": "outbound"},
-                    {"company_id": 1},
-                )
-            }
+            page_contacted = [str(c["_id"]) for c in companies if str(c["_id"]) in all_contacted_ids_str]
+            contacted_numbers_map = {}
+            if page_contacted:
+                for doc in self.db.message_logs.find(
+                    {"company_id": {"$in": page_contacted}, "direction": "outbound", "to_number": {"$exists": True, "$ne": None}},
+                    {"company_id": 1, "to_number": 1},
+                ):
+                    cid = doc["company_id"]
+                    num = doc.get("to_number")
+                    if num:
+                        contacted_numbers_map.setdefault(cid, set()).add(num)
             for c in companies:
-                c["contacted"] = str(c["_id"]) in contacted_set
-        return {"total": total, "companies": companies}
+                cid = str(c["_id"])
+                is_contacted = cid in all_contacted_ids_str
+                c["contacted"] = is_contacted
+                c["contacted_numbers"] = sorted(contacted_numbers_map.get(cid, set())) if is_contacted else []
+        return {
+            "total": total,
+            "companies": companies,
+            "total_wa": total_wa,
+            "total_contacted": total_contacted,
+            "latest_scrape_at": latest_scrape_at,
+        }
 
     def delete_companies(self, company_ids):
         from bson import ObjectId
@@ -400,8 +472,10 @@ class MongoDBManager:
         # Checked first because the same number can be a contact of multiple companies
         # (e.g. Oh Express scraped both as individual branches and as parent company).
         # jid_map is populated at send-time so it always points to the right conversation.
+        # Use .get() not [] — _verify_wa_number writes {jid, wa_valid} without company_id;
+        # if the send was later skipped (cap, NC cap) the doc exists but lacks company_id.
         jid_doc = self.db.jid_map.find_one({"jid": {"$in": [clean, clean_norm]}})
-        if jid_doc:
+        if jid_doc and jid_doc.get("company_id"):
             return jid_doc["company_id"]
         # 2. Registered contact fallback (exact last-10-digit match)
         contact = self.db.contacts.find_one({
@@ -410,11 +484,31 @@ class MongoDBManager:
         })
         if contact:
             return contact["company_id"]
-        # 3. Fallback only for delivery ACKs (messages.update), never for real
+        # 3. Outbound-log fallback (phone-number scoped, safe for inbound too).
+        # Catches the case where jid_map lost its company_id entry (e.g. the send
+        # was preceded by _verify_wa_number writing jid without company_id, then
+        # the send itself failed or was skipped before the second upsert ran).
+        # Filtered by the exact phone suffix so it cannot mis-attribute a random
+        # contact — unlike the ACK fallback below which uses any recent outbound.
+        from datetime import datetime, timedelta
+        _phone_log = self.db.message_logs.find_one(
+            {"direction": "outbound", "to_number": {"$regex": clean[-10:]}},
+            sort=[("created_at", -1)],
+            projection={"company_id": 1},
+        )
+        if _phone_log and _phone_log.get("company_id"):
+            # Heal jid_map so future lookups hit cache again.
+            self.db.jid_map.update_one(
+                {"jid": clean},
+                {"$set": {"company_id": _phone_log["company_id"], "updated_at": datetime.now()}},
+                upsert=True,
+            )
+            return _phone_log["company_id"]
+        # 4. Fallback only for delivery ACKs (messages.update), never for real
         # inbound messages — otherwise personal contacts get mis-attributed.
         if not allow_fallback:
             return None
-        from datetime import datetime, timedelta, timezone
+        from datetime import timezone
         cutoff = datetime.now() - timedelta(hours=1)
         recent = list(self.db.message_logs.find(
             {"direction": "outbound", "status": {"$ne": "failed"},
@@ -605,26 +699,21 @@ class MongoDBManager:
         """Returns one entry per company that has message activity, sorted by last message."""
         from bson import ObjectId
         pipeline = [
+            # Exclude noise records early to reduce docs sorted and grouped
+            {"$match": {"company_id": {"$nin": [None, "unknown", "manual"]}}},
             {"$sort": {"created_at": -1}},
             {"$group": {
                 "_id": "$company_id",
-                "last_message":       {"$first": "$message_body"},
-                "last_direction":     {"$first": "$direction"},
-                "last_at":            {"$first": "$created_at"},
-                "last_status":        {"$first": "$status"},
-                "total":              {"$sum": 1},
-                "unread":             {"$sum": {"$cond": [
+                "last_message":   {"$first": "$message_body"},
+                "last_direction": {"$first": "$direction"},
+                "last_at":        {"$first": "$created_at"},
+                "last_status":    {"$first": "$status"},
+                "total":          {"$sum": 1},
+                "unread": {"$sum": {"$cond": [
                     {"$and": [
                         {"$eq": ["$direction", "inbound"]},
                         {"$ne": ["$status", "read"]},
                     ]}, 1, 0
-                ]}},
-                # Who first contacted this company
-                "first_sent_by_name": {"$last": {"$cond": [
-                    {"$eq": ["$direction", "outbound"]}, "$sent_by_name", None
-                ]}},
-                "first_sent_by_user": {"$last": {"$cond": [
-                    {"$eq": ["$direction", "outbound"]}, "$sent_by_username", None
                 ]}},
                 "has_outbound": {"$sum": {"$cond": [{"$eq": ["$direction", "outbound"]}, 1, 0]}},
             }},
@@ -669,6 +758,59 @@ class MongoDBManager:
         }
         has_wa_cids = wa_contact_cids | jid_map_cids
 
+        # Outbound metadata per company — targeted aggregations replace the 4 $push arrays.
+        # Both use the (company_id, direction, created_at) compound index when available.
+        outbound_sender_map: dict = {}
+        outbound_instance_map: dict = {}
+        if all_cids:
+            for doc in self.db.message_logs.aggregate([
+                {"$match": {
+                    "direction": "outbound",
+                    "company_id": {"$in": all_cids},
+                    "sent_by_name": {"$nin": [None, "", "Andy"]},
+                }},
+                {"$sort": {"created_at": 1}},
+                {"$group": {
+                    "_id": "$company_id",
+                    "sent_by_name":     {"$first": "$sent_by_name"},
+                    "sent_by_username": {"$first": "$sent_by_username"},
+                }},
+            ]):
+                outbound_sender_map[doc["_id"]] = doc
+            for doc in self.db.message_logs.aggregate([
+                {"$match": {
+                    "direction": "outbound",
+                    "company_id": {"$in": all_cids},
+                    "instance_name": {"$nin": [None, ""]},
+                }},
+                {"$sort": {"created_at": -1}},
+                {"$group": {
+                    "_id": "$company_id",
+                    "via_instance":        {"$first": "$instance_name"},
+                    "via_instance_number": {"$first": "$instance_number"},
+                }},
+            ]):
+                outbound_instance_map[doc["_id"]] = doc
+
+            # Fill missing instance_numbers from the instances collection.
+            # Old outbound messages stored instance_name but not instance_number.
+            missing_inst_names = [
+                doc["via_instance"]
+                for doc in outbound_instance_map.values()
+                if not doc.get("via_instance_number") and doc.get("via_instance")
+            ]
+            if missing_inst_names:
+                inst_num_lookup = {
+                    i["name"]: i.get("number", "")
+                    for i in self.db.instances.find(
+                        {"name": {"$in": missing_inst_names}},
+                        {"_id": 0, "name": 1, "number": 1},
+                    )
+                }
+                for doc in outbound_instance_map.values():
+                    if not doc.get("via_instance_number") and doc.get("via_instance"):
+                        doc["via_instance_number"] = inst_num_lookup.get(doc["via_instance"], "")
+
         # Last analyzed inbound per company — one aggregation instead of N find_ones
         analyzed_map = {
             doc["_id"]: doc.get("analysis")
@@ -697,6 +839,8 @@ class MongoDBManager:
                 continue
             if company_id not in has_wa_cids:
                 continue
+            _sender = outbound_sender_map.get(company_id, {})
+            _instance = outbound_instance_map.get(company_id, {})
             results.append({
                 "company_id": company_id,
                 "company_name": company["name"],
@@ -709,8 +853,10 @@ class MongoDBManager:
                 "last_status":        g["last_status"],
                 "total":              g["total"],
                 "unread":             g["unread"],
-                "sent_by_name":       g.get("first_sent_by_name") or "",
-                "sent_by_username":   g.get("first_sent_by_user") or "",
+                "sent_by_name":        _sender.get("sent_by_name", ""),
+                "sent_by_username":    _sender.get("sent_by_username", ""),
+                "via_instance":        _instance.get("via_instance", ""),
+                "via_instance_number": _instance.get("via_instance_number", ""),
                 "last_analysis":      analyzed_map.get(company_id),
             })
         # Deduplicate: same domain+name scraped multiple times → keep the one with

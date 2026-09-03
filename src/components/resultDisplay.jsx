@@ -130,7 +130,7 @@ function MetricCard({ icon, title, value, color }) {
 
 // ─── Contact column ────────────────────────────────────────────────────────────
 const CONTACT_MAX = 8
-function ContactColumn({ icon, title, items, color, emptyMsg }) {
+function ContactColumn({ icon, title, items, color, emptyMsg, contactedNums, lang }) {
   const shown  = items?.slice(0, CONTACT_MAX) ?? []
   const extra  = (items?.length ?? 0) - CONTACT_MAX
   return (
@@ -147,11 +147,30 @@ function ContactColumn({ icon, title, items, color, emptyMsg }) {
           '&:hover::-webkit-scrollbar-track': { background: 'transparent' },
           '&:hover::-webkit-scrollbar-thumb': { background: `${color}55` },
         }}>
-          {shown.map((n, i) => (
-            <Typography key={`${n}-${i}`} variant="body2" sx={{ py: 0.3, color, fontWeight: 500, textAlign: 'center', fontSize: '0.82rem', wordBreak: 'break-all', overflowWrap: 'anywhere' }}>
-              {n}
-            </Typography>
-          ))}
+          {shown.map((n, i) => {
+            const wasContacted = contactedNums?.has(n)
+            return (
+              <Box key={`${n}-${i}`} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.6, py: 0.3 }}>
+                <Typography variant="body2" sx={{
+                  color: wasContacted ? '#fbbf24' : color,
+                  fontWeight: wasContacted ? 700 : 500,
+                  fontSize: '0.82rem', wordBreak: 'break-all', overflowWrap: 'anywhere', textAlign: 'center',
+                }}>
+                  {n}
+                </Typography>
+                {wasContacted && (
+                  <Box sx={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 0.25,
+                    bgcolor: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.35)',
+                    borderRadius: 0.8, px: 0.5, py: 0.1 }}>
+                    <Box component="span" sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: '#fbbf24', flexShrink: 0 }} />
+                    <Typography sx={{ fontSize: '0.55rem', color: '#fbbf24', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                      {lang === 'en' ? 'messaged' : 'contactado'}
+                    </Typography>
+                  </Box>
+                )}
+              </Box>
+            )
+          })}
           {extra > 0 && (
             <Typography variant="body2" sx={{ pt: 0.5, color: 'var(--text-muted, rgba(255,255,255,0.3))', textAlign: 'center', fontSize: '0.72rem', fontStyle: 'italic' }}>
               +{extra} más
@@ -319,7 +338,8 @@ export default function ResultDisplay({ result }) {
       <Section icon={<ContactsIcon fontSize="small" />} title={r.contactInfo} color="#34d399">
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
           <Box sx={{ flex: 1, minWidth: 140, p: 1.5, bgcolor: 'rgba(37,211,102,0.06)', borderRadius: 2, border: '1px solid rgba(37,211,102,0.12)' }}>
-            <ContactColumn icon={<WhatsAppIcon />} title={r.whatsapp} items={cr.all_whatsapp_numbers} color="#4ade80" emptyMsg={r.notFound} />
+            <ContactColumn icon={<WhatsAppIcon />} title={r.whatsapp} items={cr.all_whatsapp_numbers} color="#4ade80" emptyMsg={r.notFound}
+              contactedNums={contacted?.contacted_numbers?.length ? new Set(contacted.contacted_numbers) : null} lang={lang} />
           </Box>
           <Box sx={{ flex: 1, minWidth: 140, p: 1.5, bgcolor: 'rgba(59,130,246,0.06)', borderRadius: 2, border: '1px solid rgba(59,130,246,0.12)' }}>
             <ContactColumn icon={<PhoneIcon />} title="Teléfonos" items={cr.phone_numbers} color="#60a5fa" emptyMsg={r.notFoundPl} />
@@ -385,6 +405,27 @@ export default function ResultDisplay({ result }) {
                   hour: '2-digit', minute: '2-digit',
                 })}
               />
+            )}
+            {contacted.contacted_numbers?.length > 0 && (
+              <Box sx={{ mt: 0.2 }}>
+                <Typography variant="caption" sx={{ color: 'var(--text-muted, rgba(255,255,255,0.45))', fontSize: '0.67rem', textTransform: 'uppercase', letterSpacing: '0.05em', mb: 0.5, display: 'block' }}>
+                  {lang === 'en' ? 'Numbers messaged' : 'Números contactados'}
+                </Typography>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.3 }}>
+                  {contacted.contacted_numbers.map((num, i) => {
+                    let disp = num.replace(/^521(\d{10})$/, '52$1')
+                    if (!disp.startsWith('+')) disp = '+' + disp
+                    return (
+                      <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                        <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: '#fbbf24', flexShrink: 0 }} />
+                        <Typography variant="caption" sx={{ color: 'var(--text, rgba(255,255,255,0.85))', fontFamily: 'monospace', fontSize: '0.78rem' }}>
+                          {disp}
+                        </Typography>
+                      </Box>
+                    )
+                  })}
+                </Box>
+              </Box>
             )}
           </Box>
         </Section>

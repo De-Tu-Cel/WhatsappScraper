@@ -319,10 +319,11 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
 
 // ─── Filter bar ───────────────────────────────────────────────────────────────
 function FilterBar({ filters, onChange, industries, cities }) {
-  const { t } = useLang()
-  const [openIndustry, setOpenIndustry] = useState(false)
-  const [openCity,     setOpenCity]     = useState(false)
-  const [openWA,       setOpenWA]       = useState(false)
+  const { t, lang } = useLang()
+  const [openIndustry,  setOpenIndustry]  = useState(false)
+  const [openCity,      setOpenCity]      = useState(false)
+  const [openWA,        setOpenWA]        = useState(false)
+  const [openContacted, setOpenContacted] = useState(false)
 
   const whatsappOptions = getWhatsappOptions(t)
 
@@ -405,6 +406,25 @@ function FilterBar({ filters, onChange, industries, cities }) {
               {o.value === '' ? <em>{o.label}</em> : o.label}
             </MenuItem>
           ))}
+        </Select>
+      </FormControl>
+
+      <FormControl size="small" sx={{ minWidth: 145 }}>
+        <InputLabel id="filter-contacted-label" sx={LABEL_SX}>{lang === 'en' ? 'Contacted' : 'Contactadas'}</InputLabel>
+        <Select
+          labelId="filter-contacted-label"
+          open={openContacted}
+          onClose={() => setOpenContacted(false)}
+          onOpen={() => setOpenContacted(true)}
+          value={filters.contacted}
+          label={lang === 'en' ? 'Contacted' : 'Contactadas'}
+          onChange={(e) => onChange('contacted', e.target.value)}
+          sx={SELECT_SX}
+          MenuProps={MENU_PROPS}
+        >
+          <MenuItem value=""><em>{lang === 'en' ? 'All' : 'Todas'}</em></MenuItem>
+          <MenuItem value="true">{lang === 'en' ? 'Already contacted' : 'Ya contactadas'}</MenuItem>
+          <MenuItem value="false">{lang === 'en' ? 'Not contacted' : 'Sin contactar'}</MenuItem>
         </Select>
       </FormControl>
     </Box>
@@ -896,9 +916,38 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
   const [cdLabel,      setCdLabel]      = useState('msg')
   const [batchNum,     setBatchNum]     = useState(1)
 
+  const [contactedMap, setContactedMap] = useState({}) // company_id → contacted_numbers[]
+
   useEffect(() => {
-    if (!open) { setSending(false); setProgress(0); setResults([]); setDone(false); setCountdown(null); cancelRef.current = false }
+    if (!open) { setSending(false); setProgress(0); setResults([]); setDone(false); setCountdown(null); cancelRef.current = false; setContactedMap({}) }
   }, [open])
+
+  // Fetch contacted_numbers for selected companies when dialog opens
+  useEffect(() => {
+    if (!open || selectedRows.length === 0) return
+    const ids = selectedRows.map(r => r._id).filter(Boolean)
+    if (!ids.length) return
+    // Use contacted_numbers already in the row (from list_companies) when available
+    const fromRows = {}
+    selectedRows.forEach(r => { if (r.contacted && r.contacted_numbers?.length) fromRows[r._id] = r.contacted_numbers })
+    setContactedMap(fromRows)
+    // Also check for rows that are contacted but missing numbers (e.g. cross-page cache)
+    const needsFetch = selectedRows.filter(r => r.contacted && !r.contacted_numbers?.length).map(r => r._id)
+    if (needsFetch.length > 0) {
+      fetch('/api/companies/check-contacted', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_ids: needsFetch }),
+      }).then(r => r.json()).then(data => {
+        setContactedMap(prev => {
+          const next = { ...prev }
+          Object.entries(data).forEach(([id, info]) => {
+            if (info?.contacted_numbers?.length) next[id] = info.contacted_numbers
+          })
+          return next
+        })
+      }).catch(() => {})
+    }
+  }, [open, selectedRows])
 
   function applyTemplate(tpl) {
     setActiveTpl(tpl.id)
@@ -1090,6 +1139,43 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
           </Box>
         )}
 
+        {/* Recipients preview — with per-number contacted coloring */}
+        {!done && waRows.length > 0 && (() => {
+          const contactedRows = waRows.filter(r => contactedMap[r._id]?.length > 0)
+          if (!contactedRows.length) return null
+          return (
+            <Box sx={{ mb: 1.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(251,191,36,0.2)', bgcolor: 'rgba(251,191,36,0.04)' }}>
+              <Typography sx={{ fontSize: '0.63rem', color: '#fbbf24', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', mb: 0.8 }}>
+                {lang === 'en' ? `${contactedRows.length} already contacted` : `${contactedRows.length} ya contactada${contactedRows.length !== 1 ? 's' : ''}`}
+              </Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxHeight: 110, overflowY: 'auto',
+                scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent' }}>
+                {contactedRows.map(r => (
+                  <Box key={r._id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                    <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.7)', minWidth: 0, flex: 1,
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.name}
+                    </Typography>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, justifyContent: 'flex-end' }}>
+                      {contactedMap[r._id].map(num => {
+                        let disp = num.replace(/^521(\d{10})$/, '52$1')
+                        if (!disp.startsWith('+')) disp = '+' + disp
+                        return (
+                          <Chip key={num} label={disp} size="small"
+                            sx={{ height: 18, fontSize: '0.62rem', fontFamily: 'monospace',
+                              bgcolor: 'rgba(251,191,36,0.14)', color: '#fbbf24',
+                              border: '1px solid rgba(251,191,36,0.3)',
+                              '& .MuiChip-label': { px: 0.6 } }} />
+                        )
+                      })}
+                    </Box>
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+          )
+        })()}
+
         <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1.5 }} />
         <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1.5 }} />
 
@@ -1172,7 +1258,8 @@ export default function DatabaseViewer({ isActive }) {
   const [selected, setSelected] = useState([])
   const [rowCache, setRowCache] = useState({})  // id → row, acumula filas de todas las páginas
   const [filterOpen, setFilterOpen] = useState(false)
-  const [filters, setFilters] = useState({ search: '', industry: '', city: '', has_whatsapp: '' })
+  const [filters, setFilters] = useState({ search: '', industry: '', city: '', has_whatsapp: '', contacted: '' })
+  const [globalStats, setGlobalStats] = useState({ total_wa: null, total_contacted: null, latest_scrape_at: null })
   const [editTarget, setEditTarget] = useState(null)
   const [viewTarget, setViewTarget] = useState(null)
   const [viewData, setViewData] = useState(null)
@@ -1210,12 +1297,18 @@ export default function DatabaseViewer({ isActive }) {
         ...(filters.industry     && { industry: filters.industry }),
         ...(filters.city         && { city: filters.city }),
         ...(filters.has_whatsapp !== '' && { has_whatsapp: filters.has_whatsapp }),
+        ...(filters.contacted    !== '' && { contacted: filters.contacted }),
       })
       const res = await fetch(`/api/companies?${params}`)
       const data = await res.json()
       const companies = data.companies || []
       setRows(companies)
       setTotal(data.total || 0)
+      setGlobalStats({
+        total_wa:        data.total_wa        ?? null,
+        total_contacted: data.total_contacted ?? null,
+        latest_scrape_at: data.latest_scrape_at ?? null,
+      })
       // Acumular filas en caché para calcular selecciones cross-page
       setRowCache(prev => {
         const next = { ...prev }
@@ -1492,10 +1585,9 @@ export default function DatabaseViewer({ isActive }) {
                 </Box>{' '}{lang === 'en' ? (total === 1 ? 'company' : 'companies') : (total === 1 ? 'empresa' : 'empresas')}
               </Typography>
             </Box>
-            {/* WA ratio — current page */}
-            {rows.length > 0 && (() => {
-              const waCount = rows.filter(r => r.has_whatsapp).length
-              const pct = Math.round((waCount / rows.length) * 100)
+            {/* WA ratio — global across all pages */}
+            {globalStats.total_wa !== null && total > 0 && (() => {
+              const pct = Math.round((globalStats.total_wa / total) * 100)
               return (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
                   <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#22c55e', flexShrink: 0 }} />
@@ -1505,23 +1597,23 @@ export default function DatabaseViewer({ isActive }) {
                 </Box>
               )
             })()}
-            {/* Contacted — current page */}
-            {rows.length > 0 && (() => {
-              const c = rows.filter(r => r.contacted).length
-              if (!c) return null
-              return (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
-                  <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'var(--accent, #60a5fa)', flexShrink: 0 }} />
-                  <Typography sx={{ fontSize: '0.69rem', color: 'var(--text-muted)', fontWeight: 500 }}>
-                    <Box component="span" sx={{ color: 'var(--accent, #60a5fa)', fontWeight: 700 }}>{c}</Box>{' '}{lang === 'en' ? 'contacted' : 'contactadas'}
-                  </Typography>
-                </Box>
-              )
-            })()}
-            {/* Último scraping — most recent across current page */}
-            {rows.length > 0 && (() => {
-              const dates = rows.map(r => r.last_scraped_at).filter(Boolean)
-              if (!dates.length) return (
+            {/* Contacted — global across all pages */}
+            {globalStats.total_contacted !== null && globalStats.total_contacted > 0 && (
+              <Box
+                sx={{ display: 'flex', alignItems: 'center', gap: 0.8, cursor: 'pointer',
+                  '&:hover .contacted-label': { color: 'var(--accent, #60a5fa)' } }}
+                onClick={() => handleFilterChange('contacted', filters.contacted === 'true' ? '' : 'true')}
+                title={lang === 'en' ? 'Click to filter by contacted' : 'Click para filtrar contactadas'}
+              >
+                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: filters.contacted === 'true' ? 'var(--accent, #60a5fa)' : 'rgba(96,165,250,0.5)', flexShrink: 0 }} />
+                <Typography className="contacted-label" sx={{ fontSize: '0.69rem', color: 'var(--text-muted)', fontWeight: 500, transition: 'color 0.15s' }}>
+                  <Box component="span" sx={{ color: 'var(--accent, #60a5fa)', fontWeight: 700 }}>{globalStats.total_contacted}</Box>{' '}{lang === 'en' ? 'contacted' : 'contactadas'}
+                </Typography>
+              </Box>
+            )}
+            {/* Último scraping — global (most recent across all matching companies) */}
+            {(() => {
+              if (!globalStats.latest_scrape_at) return (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
                   <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'rgba(148,163,184,0.3)', flexShrink: 0 }} />
                   <Typography sx={{ fontSize: '0.69rem', color: 'rgba(148,163,184,0.4)', fontWeight: 500 }}>
@@ -1529,8 +1621,7 @@ export default function DatabaseViewer({ isActive }) {
                   </Typography>
                 </Box>
               )
-              const latest = dates.reduce((a, b) => a > b ? a : b)
-              const daysAgo = Math.floor((Date.now() - new Date(latest).getTime()) / 86_400_000)
+              const daysAgo = Math.max(0, Math.floor((Date.now() - new Date(globalStats.latest_scrape_at).getTime()) / 86_400_000))
               const label = lang === 'en'
                 ? (daysAgo === 0 ? 'today' : daysAgo === 1 ? 'yesterday' : `${daysAgo}d ago`)
                 : (daysAgo === 0 ? 'hoy' : daysAgo === 1 ? 'ayer' : `hace ${daysAgo}d`)
@@ -1547,7 +1638,7 @@ export default function DatabaseViewer({ isActive }) {
               )
             })()}
             {/* Active filter chips — right side */}
-            {(filters.search || filters.industry || filters.city || filters.has_whatsapp !== '') && (
+            {(filters.search || filters.industry || filters.city || filters.has_whatsapp !== '' || filters.contacted !== '') && (
               <Box sx={{ ml: 'auto', display: 'flex', gap: 0.7, flexWrap: 'wrap', alignItems: 'center' }}>
                 {filters.search && (
                   <Chip size="small" label={`"${filters.search}"`}
@@ -1578,6 +1669,16 @@ export default function DatabaseViewer({ isActive }) {
                       bgcolor: filters.has_whatsapp === 'true' ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
                       color: filters.has_whatsapp === 'true' ? '#22c55e' : '#f87171',
                       border: `1px solid ${filters.has_whatsapp === 'true' ? 'rgba(34,197,94,0.22)' : 'rgba(239,68,68,0.22)'}`,
+                      '& .MuiChip-deleteIcon': { color: 'inherit', fontSize: 12 } }} />
+                )}
+                {filters.contacted !== '' && (
+                  <Chip size="small"
+                    label={filters.contacted === 'true' ? (lang === 'en' ? 'Contacted' : 'Ya contactadas') : (lang === 'en' ? 'Not contacted' : 'Sin contactar')}
+                    onDelete={() => handleFilterChange('contacted', '')}
+                    sx={{ height: 20, fontSize: '0.63rem',
+                      bgcolor: filters.contacted === 'true' ? 'rgba(251,191,36,0.12)' : 'rgba(148,163,184,0.1)',
+                      color: filters.contacted === 'true' ? '#fbbf24' : 'rgba(148,163,184,0.7)',
+                      border: `1px solid ${filters.contacted === 'true' ? 'rgba(251,191,36,0.25)' : 'rgba(148,163,184,0.18)'}`,
                       '& .MuiChip-deleteIcon': { color: 'inherit', fontSize: 12 } }} />
                 )}
               </Box>
@@ -1686,15 +1787,36 @@ export default function DatabaseViewer({ isActive }) {
                             </Typography>
                           </Tooltip>
                           {row.contacted && (
-                            <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.3, flexShrink: 0,
-                              bgcolor: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.3)',
-                              borderRadius: 1, px: 0.6, py: 0.15 }}>
-                              <Box component="span" sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: '#4ade80', flexShrink: 0 }} />
-                              <Typography sx={{ fontSize: '0.6rem', color: '#4ade80', fontWeight: 700, whiteSpace: 'nowrap',
-                                '[data-theme-mode="light"] &': { color: '#16a34a' } }}>
-                                {t.campaign?.contacted || 'Contactada'}
-                              </Typography>
-                            </Box>
+                            <Tooltip
+                              placement="top"
+                              title={row.contacted_numbers?.length > 0 ? (
+                                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.8 }}>
+                                  <Typography sx={{ fontSize: '0.63rem', color: 'rgba(255,255,255,0.45)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                    {lang === 'en' ? 'Numbers messaged' : 'Números contactados'}
+                                  </Typography>
+                                  {row.contacted_numbers.map(n => {
+                                    // Normalise for display: ensure + prefix, strip 521→52 (WWEBJS Mexico mobile artifact)
+                                    let disp = n.replace(/^521(\d{10})$/, '52$1')
+                                    if (!disp.startsWith('+')) disp = '+' + disp
+                                    return (
+                                      <Typography key={n} sx={{ fontSize: '0.72rem', fontFamily: 'monospace', color: '#fbbf24', letterSpacing: '0.02em' }}>
+                                        {disp}
+                                      </Typography>
+                                    )
+                                  })}
+                                </Box>
+                              ) : ''}
+                            >
+                              <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.3, flexShrink: 0,
+                                bgcolor: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.3)',
+                                borderRadius: 1, px: 0.6, py: 0.15, cursor: row.contacted_numbers?.length > 0 ? 'default' : 'default' }}>
+                                <Box component="span" sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: '#4ade80', flexShrink: 0 }} />
+                                <Typography sx={{ fontSize: '0.6rem', color: '#4ade80', fontWeight: 700, whiteSpace: 'nowrap',
+                                  '[data-theme-mode="light"] &': { color: '#16a34a' } }}>
+                                  {t.campaign?.contacted || 'Contactada'}
+                                </Typography>
+                              </Box>
+                            </Tooltip>
                           )}
                         </Box>
                       </TableCell>

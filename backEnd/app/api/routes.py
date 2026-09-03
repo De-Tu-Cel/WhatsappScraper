@@ -28,6 +28,12 @@ def _require_user(x_user_token: Optional[str] = Header(None)):
         raise HTTPException(status_code=401, detail="Sesión inválida o expirada")
     return user
 
+def _require_admin(x_user_token: Optional[str] = Header(None)):
+    user = _require_user(x_user_token)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Se requiere rol de administrador")
+    return user
+
 # ── Auth endpoints ────────────────────────────────────────────────────────────
 
 @router.post("/auth/register")
@@ -198,13 +204,45 @@ def api_create_scrape_job(body: dict, x_user_token: Optional[str] = Header(None)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/scrape-jobs/latest")
+def api_get_latest_scrape_job(surface: str = "search", x_user_token: Optional[str] = Header(None)):
+    """Return the most recent active (pending/running) job for this surface, or the
+    most recent terminal job finished within the last 24h. Used by useScrapeJob to
+    recover a lost job reference after a transient error cleared localStorage."""
+    user = _require_user(x_user_token)
+    try:
+        from datetime import datetime, timedelta
+        db = MongoDBManager()
+        username = (user or {}).get("username", "")
+        base_filter = {"surface": surface, "created_by_username": username}
+        # Prefer an active job first (pending or running)
+        doc = db.db.scrape_jobs.find_one(
+            {**base_filter, "status": {"$in": ["pending", "running"]}},
+            sort=[("created_at", -1)],
+        )
+        if not doc:
+            # Fall back to a recently-finished job (within 24h) so results survive a refresh
+            cutoff = datetime.now() - timedelta(hours=24)
+            doc = db.db.scrape_jobs.find_one(
+                {**base_filter, "finished_at": {"$gte": cutoff}},
+                sort=[("finished_at", -1)],
+            )
+        if not doc:
+            raise HTTPException(status_code=404, detail="No recent job found")
+        return serialize(doc)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/scrape-jobs/{job_id}")
 def api_get_scrape_job(job_id: str, x_user_token: Optional[str] = Header(None)):
-    _require_user(x_user_token)
+    user = _require_user(x_user_token)
     try:
         from bson import ObjectId
         db = MongoDBManager()
-        doc = db.db.scrape_jobs.find_one({"_id": ObjectId(job_id)})
+        username = (user or {}).get("username", "")
+        doc = db.db.scrape_jobs.find_one({"_id": ObjectId(job_id), "created_by_username": username})
         if not doc:
             raise HTTPException(status_code=404, detail="Job no encontrado")
         return serialize(doc)
@@ -215,13 +253,17 @@ def api_get_scrape_job(job_id: str, x_user_token: Optional[str] = Header(None)):
 
 @router.patch("/scrape-jobs/{job_id}")
 def api_update_scrape_job(job_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
-    _require_user(x_user_token)
+    user = _require_user(x_user_token)
     try:
+        from bson import ObjectId
         from app.scrape_jobs import set_job_action
         action = body.get("action", "")
-        if action not in ("pause", "resume", "cancel"):
-            raise HTTPException(status_code=400, detail="action debe ser pause, resume o cancel")
+        if action not in ("pause", "resume", "cancel", "reanudar"):
+            raise HTTPException(status_code=400, detail="action debe ser pause, resume, cancel o reanudar")
         db = MongoDBManager()
+        username = (user or {}).get("username", "")
+        if not db.db.scrape_jobs.find_one({"_id": ObjectId(job_id), "created_by_username": username}):
+            raise HTTPException(status_code=404, detail="Job no encontrado")
         doc = set_job_action(db, job_id, action)
         if not doc:
             raise HTTPException(status_code=404, detail="Job no encontrado")
@@ -271,9 +313,22 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         instance = EVOLUTION_INSTANCE
         _all_disconnected = False
 
-        # If caller provides an explicit instance (e.g. conversation reply), use it directly
+        # If caller provides an explicit instance (e.g. conversation reply), use it directly.
+        # Validate ownership so no user can send from another user's instance.
         if req.instance:
             instance = req.instance
+            if x_user_token:
+                _req_user = get_user_by_token(x_user_token)
+                if _req_user:
+                    _req_user_id = _req_user.get("id") or str(_req_user.get("_id", ""))
+                    _owned = db.db.instances.find_one(
+                        {"name": instance, "assigned_to": _req_user_id}, {"_id": 1}
+                    )
+                    if not _owned:
+                        raise HTTPException(
+                            status_code=403,
+                            detail=f"Instancia '{instance}' no encontrada o no pertenece a tu cuenta.",
+                        )
             _log.info("[SendMsg] instance=explicit:%s", instance)
         elif x_user_token:
             user = get_user_by_token(x_user_token)
@@ -495,7 +550,8 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 _msg_type = "text"
             db.db.jid_map.update_one({"jid": _phone_digits_ww},
                 {"$set": {"company_id": req.company_id, "updated_at": _dt.now()}}, upsert=True)
-            message_id = _ww_result.get("messageId")
+            from bson import ObjectId as _ObjId
+            message_id = _ww_result.get("messageId") or str(_ObjId())
             status = "sent" if _ww_result.get("success") else "failed"
             send_to = _phone_digits_ww
             send_result = {"status_code": 200 if status == "sent" else 400}
@@ -583,7 +639,7 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
             sender = get_user_by_token(x_user_token)
             if sender:
                 log_doc["sent_by_username"] = sender.get("username", "")
-                log_doc["sent_by_name"]     = sender.get("display_name", "")
+                log_doc["sent_by_name"]     = sender.get("display_name", "") or sender.get("username", "")
         log_id = db.insert_message_log(log_doc)
         if status == "sent":
             increment_daily_count(db, instance, clean_digits(req.to_number))
@@ -612,7 +668,9 @@ def api_enqueue_send(body: dict, x_user_token: Optional[str] = Header(None)):
         db = MongoDBManager()
         count = enqueue_send_items(
             db, jobs, batch_id, body.get("label", ""), body.get("send_config") or {},
-            sent_by_username=user.get("username", ""), sent_by_name=user.get("display_name", ""),
+            sent_by_username=user.get("username", ""),
+            sent_by_name=user.get("display_name", "") or user.get("username", ""),
+            user_id=str(user.get("id") or user.get("_id") or ""),
         )
         return {"ok": True, "batch_id": batch_id, "queued": count}
     except HTTPException:
@@ -731,8 +789,8 @@ def api_search(req: SearchRequest):
         known = db.get_all_scraped_domains() | set(req.already_shown_domains or [])
         target = req.num_results or 10
         # Fetch 3× the target so that after filtering out already-known domains
-        # we still have enough fresh results. Cap at 90 to limit API spend.
-        fetch_count = min(target * 3, 90)
+        # we still have enough fresh results. Cap at 150 (supports target≤50 fully).
+        fetch_count = min(target * 3, 150)
         urls = search_prospects(
             req.industry, req.city or "", req.keywords or "",
             fetch_count, req.offset or 0,
@@ -809,6 +867,7 @@ def api_list_companies(
     industry: Optional[str] = None,
     city: Optional[str] = None,
     has_whatsapp: Optional[bool] = None,
+    contacted: Optional[bool] = None,
 ):
     try:
         db = MongoDBManager()
@@ -819,6 +878,7 @@ def api_list_companies(
             industry=industry or None,
             city=city or None,
             has_whatsapp=has_whatsapp,
+            contacted=contacted,
         )
         return serialize(result)
     except Exception as e:
@@ -1203,7 +1263,8 @@ def api_ai_toggle(company_id: str, body: dict):
                             )
                             ctx = _build_context(db, company_id, any_out or last_in)
                             if ctx:
-                                pref_max = int(update.get("max_turns", MAX_TURNS))
+                                _saved_prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
+                                pref_max = int(_saved_prefs.get("max_turns", MAX_TURNS))
                                 db.db.ai_followup_sessions.insert_one({
                                     "phone_number": number,
                                     "company_id": company_id,
@@ -1486,6 +1547,12 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
                                         )
                                         if _had_outbound:
                                             _should_enqueue = True
+                                            # Persist so subsequent messages from this contact are also enqueued
+                                            db.db.conversation_ai_prefs.update_one(
+                                                {"company_id": company_id},
+                                                {"$set": {"ai_enabled": True}},
+                                                upsert=True,
+                                            )
                                 if _should_enqueue:
                                     from app.followup_queue import enqueue as _ai_enqueue
                                     _ai_enqueue(number, company_id, message_body, log_id)
@@ -3805,6 +3872,12 @@ async def api_wwebjs_webhook(request: Request):
         if _sender_is_internal:
             return {"ok": True, "action": "ignored_internal"}
 
+        # True only when we just created a new company because this number was
+        # previously contacted (outbound exists) but wasn't in our contacts yet.
+        # Used below to bypass _is_pure_inbound and _had_outbound checks that
+        # both query message_logs by company_id — a company_id that didn't exist
+        # until seconds ago will never have outbound entries under its own id.
+        _auto_registered_from_outbound = False
         company_id = db.find_company_id_by_phone(number)
         if not company_id:
             # Only auto-register if the system previously contacted this number.
@@ -3816,6 +3889,7 @@ async def api_wwebjs_webhook(request: Request):
             ))
             if _was_contacted:
                 company_id = _waha_auto_register_inbound(db, number, instance_name)
+                _auto_registered_from_outbound = True
             else:
                 return {"ok": True, "action": "ignored_personal"}
 
@@ -3858,9 +3932,12 @@ async def api_wwebjs_webhook(request: Request):
                     daemon=True,
                 ).start()
 
-        # Block AI for contacts auto-registered from inbound with no outbound history
+        # Block AI for contacts auto-registered from inbound with no outbound history.
+        # Skip this check when _auto_registered_from_outbound=True: the outbound was
+        # sent to a different company_id (the original one) so message_logs will
+        # correctly show no outbound for this new company — but the contact IS known.
         _is_pure_inbound = False
-        if company_id not in ("unknown", "manual"):
+        if company_id not in ("unknown", "manual") and not _auto_registered_from_outbound:
             try:
                 from bson import ObjectId as _OId
                 _cmp_src = db.db.companies.find_one({"_id": _OId(company_id)}, {"source": 1})
@@ -3883,13 +3960,37 @@ async def api_wwebjs_webhook(request: Request):
                     _should_enqueue = _prefs.get("ai_enabled", False)
                     _user_explicitly_disabled = _prefs_doc is not None and not _prefs.get("ai_enabled", True)
                     if not _should_enqueue and not _ai_session_active and not _user_explicitly_disabled:
-                        _had_outbound = db.db.message_logs.find_one(
-                            {"company_id": company_id, "direction": "outbound",
-                             "created_at": {"$gte": datetime.now() - timedelta(days=7)}},
-                            projection={"_id": 1},
-                        )
-                        if _had_outbound:
-                            _should_enqueue = True
+                        if _auto_registered_from_outbound:
+                            # Outbound was sent to the original company_id (before this
+                            # number was in our contacts). Look up by phone number instead
+                            # of company_id because this new company_id has no logs yet.
+                            _clean10_ai = "".join(filter(str.isdigit, number))[-10:]
+                            _had_outbound_by_phone = db.db.message_logs.find_one(
+                                {"direction": "outbound",
+                                 "to_number": {"$regex": _clean10_ai},
+                                 "created_at": {"$gte": datetime.now() - timedelta(days=7)}},
+                                projection={"_id": 1},
+                            )
+                            if _had_outbound_by_phone:
+                                _should_enqueue = True
+                                db.db.conversation_ai_prefs.update_one(
+                                    {"company_id": company_id},
+                                    {"$set": {"ai_enabled": True}},
+                                    upsert=True,
+                                )
+                        else:
+                            _had_outbound = db.db.message_logs.find_one(
+                                {"company_id": company_id, "direction": "outbound",
+                                 "created_at": {"$gte": datetime.now() - timedelta(days=7)}},
+                                projection={"_id": 1},
+                            )
+                            if _had_outbound:
+                                _should_enqueue = True
+                                db.db.conversation_ai_prefs.update_one(
+                                    {"company_id": company_id},
+                                    {"$set": {"ai_enabled": True}},
+                                    upsert=True,
+                                )
                     if _should_enqueue:
                         from app.followup_queue import enqueue as _ai_enqueue
                         _ai_enqueue(number, company_id, message_body, log_id)
@@ -3945,22 +4046,48 @@ def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
         {"date": today},
         {"instance_a": 1, "instance_b": 1, "messages": 1},
     ))
-    stats = _dd(lambda: {"sent": 0, "received": 0})
+    stats = _dd(lambda: {"sent": 0, "received": 0, "last_msg_at": None})
+    partner_map = {}  # instance_name -> partner_name for today
     for sess in all_sessions:
         a, b = sess["instance_a"], sess["instance_b"]
+        partner_map[a] = b
+        partner_map[b] = a
         for msg in sess.get("messages", []):
             sender, receiver = (a, b) if msg.get("speaker") == "a" else (b, a)
             stats[sender]["sent"]     += 1
             stats[receiver]["received"] += 1
+            ts = msg.get("ts")
+            if ts:
+                for party in (sender, receiver):
+                    prev = stats[party]["last_msg_at"]
+                    if prev is None or ts > prev:
+                        stats[party]["last_msg_at"] = ts
 
-    # Global warmup enabled state
+    # Global warmup enabled state + daily limit for progress display
     cfg = db.db.warmup_config.find_one({"_id": "global"}) or {}
     global_enabled = cfg.get("enabled", True)
+    daily_limit = cfg.get("max_msgs_per_pair", 12)
 
     # Next rotation = tomorrow midnight MX
     now_mx = _warmup_now()
     tomorrow_mx = (now_mx + _td(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     next_rotation_at = tomorrow_mx.isoformat()
+
+    # Compute expected pairs from rotation algorithm.
+    # Overrides existing session partner when that partner is now disabled —
+    # this happens when an instance is removed from warmup mid-day and a new
+    # pair is formed that hasn't exchanged a message yet.
+    try:
+        from app.warmup_queue import _get_warmup_instances, _get_today_pairs
+        _disabled = {i["name"] for i in raw if i.get("peer_warmup_enabled") is False}
+        _live_insts = _get_warmup_instances(db)
+        _expected_pairs = _get_today_pairs(_live_insts)
+        for _ia, _ib in _expected_pairs:
+            for _self, _other in ((_ia["name"], _ib["name"]), (_ib["name"], _ia["name"])):
+                if _self not in partner_map or partner_map[_self] in _disabled:
+                    partner_map[_self] = _other
+    except Exception:
+        pass
 
     result = []
     for inst in raw:
@@ -3978,6 +4105,7 @@ def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
             warmup_status = "disconnected"
 
         st = stats[name]
+        last_ts = st["last_msg_at"]
         result.append({
             "name":         name,
             "label":        inst.get("label", name),
@@ -3985,9 +4113,12 @@ def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
             "enabled":      enabled,
             "paused":       paused,
             "warmup_status": warmup_status,
-            "msgs_today":   st["sent"] + st["received"],
-            "sent_today":   st["sent"],
+            "msgs_today":    st["sent"] + st["received"],
+            "sent_today":    st["sent"],
             "received_today": st["received"],
+            "daily_limit":   daily_limit,
+            "partner":       partner_map.get(name),
+            "last_msg_at":   last_ts.isoformat() if last_ts else None,
         })
 
     active_insts = [i for i in result if i["warmup_status"] == "active"]
@@ -4007,7 +4138,7 @@ def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
 
 @router.post("/warmup/instances/{name}/enable")
 def warmup_enable_instance(name: str, x_user_token: Optional[str] = Header(None)):
-    _require_user(x_user_token)
+    _require_admin(x_user_token)
     db = MongoDBManager()
     db.db.instances.update_one(
         {"name": name, "provider": "wwebjs"},
@@ -4018,7 +4149,7 @@ def warmup_enable_instance(name: str, x_user_token: Optional[str] = Header(None)
 
 @router.post("/warmup/instances/{name}/disable")
 def warmup_disable_instance(name: str, x_user_token: Optional[str] = Header(None)):
-    _require_user(x_user_token)
+    _require_admin(x_user_token)
     db = MongoDBManager()
     db.db.instances.update_one(
         {"name": name, "provider": "wwebjs"},
@@ -4029,7 +4160,7 @@ def warmup_disable_instance(name: str, x_user_token: Optional[str] = Header(None
 
 @router.post("/warmup/instances/{name}/pause")
 def warmup_pause_instance(name: str, x_user_token: Optional[str] = Header(None)):
-    _require_user(x_user_token)
+    _require_admin(x_user_token)
     db = MongoDBManager()
     db.db.instances.update_one(
         {"name": name, "provider": "wwebjs"},
@@ -4040,7 +4171,7 @@ def warmup_pause_instance(name: str, x_user_token: Optional[str] = Header(None))
 
 @router.post("/warmup/instances/{name}/resume")
 def warmup_resume_instance(name: str, x_user_token: Optional[str] = Header(None)):
-    _require_user(x_user_token)
+    _require_admin(x_user_token)
     db = MongoDBManager()
     db.db.instances.update_one(
         {"name": name, "provider": "wwebjs"},
@@ -4051,7 +4182,7 @@ def warmup_resume_instance(name: str, x_user_token: Optional[str] = Header(None)
 
 @router.post("/warmup/toggle")
 def warmup_toggle_global(x_user_token: Optional[str] = Header(None)):
-    _require_user(x_user_token)
+    _require_admin(x_user_token)
     db = MongoDBManager()
     cfg = db.db.warmup_config.find_one({"_id": "global"}) or {}
     new_state = not cfg.get("enabled", True)
@@ -4083,7 +4214,7 @@ def warmup_save_config(
     body: dict = Body(...),
     x_user_token: Optional[str] = Header(None),
 ):
-    _require_user(x_user_token)
+    _require_admin(x_user_token)
     allowed = {
         "business_hour_start", "business_hour_end",
         "min_msgs_per_pair", "max_msgs_per_pair",

@@ -65,14 +65,17 @@ def notify_cap_reached_once(db, instance_name: str) -> None:
     )
     if result.modified_count == 0:
         return  # already notified today for this instance
-    inst = db.db.instances.find_one({"name": instance_name}, {"label": 1}) or {}
-    db.db.app_notifications.insert_one({
+    inst = db.db.instances.find_one({"name": instance_name}, {"label": 1, "assigned_to": 1}) or {}
+    notif = {
         "type":       "cap_reached",
         "instance":   instance_name,
         "label":      inst.get("label") or instance_name,
         "cap":        get_instance_cap(db, instance_name),
         "created_at": datetime.now(),
-    })
+    }
+    if inst.get("assigned_to"):
+        notif["user_id"] = inst["assigned_to"]
+    db.db.app_notifications.insert_one(notif)
 
 
 def get_scheduled_count_for_date(db, target_date, exclude_id=None, user_id=None) -> int:

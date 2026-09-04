@@ -926,7 +926,7 @@ def _check_reminders():
                 "reminder_sent_at": {"$exists": False},
                 "scheduled_at": {"$gte": window_start, "$lte": window_end},
             },
-            {"_id": 1, "name": 1, "scheduled_at": 1},
+            {"_id": 1, "name": 1, "scheduled_at": 1, "user_id": 1, "created_by": 1},
         ))
 
         for job in due:
@@ -936,13 +936,17 @@ def _check_reminders():
             )
             if result.modified_count == 0:
                 continue  # another poll tick already claimed it
-            db.db.app_notifications.insert_one({
+            notif = {
                 "type": "schedule_reminder",
                 "scheduled_send_id": str(job["_id"]),
                 "name": job.get("name", ""),
                 "scheduled_at": job.get("scheduled_at"),
                 "created_at": now,
-            })
+            }
+            _reminder_user_id = job.get("user_id") or job.get("created_by")
+            if _reminder_user_id:
+                notif["user_id"] = _reminder_user_id
+            db.db.app_notifications.insert_one(notif)
             log.info("[Scheduler] Reminder queued for job %s", job["_id"])
 
     except Exception:

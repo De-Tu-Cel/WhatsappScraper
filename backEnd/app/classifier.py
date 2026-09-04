@@ -493,9 +493,12 @@ _MENU_MARKERS = re.compile(
 )
 # El separador tras el número también viene como guión ("1 - Autos nuevos"), no solo
 # punto/paréntesis ("1. Autos nuevos") — caso real (Nissan Vallejo) que se colaba
-# como "humano" porque ningún ítem de la lista hacía match.
+# como "humano" porque ningún ítem de la lista hacía match. Los menús con letra
+# ("A)Agua", sin espacio tras el paréntesis) también se colaban — a diferencia de los
+# numéricos, aquí el espacio es opcional para no perder ese caso (no hay ambigüedad
+# tipo "1.5" con letras).
 _MENU_LIST_ITEM = re.compile(
-    r'(?:^|\n)\s*(?:[0-9]{1,2}[.\)-]|[*_]?[A-H][*_]?\s*[.\)-])\s+\S',
+    r'(?:^|\n)\s*(?:[0-9]{1,2}[.\)-]\s+\S|[*_]?[A-H][*_]?\s*[.\)-]\s*\S)',
     re.MULTILINE,
 )
 # Listas numeradas inline — ítems en la misma línea, separador "." o ".-" o "-"
@@ -700,7 +703,8 @@ def _looks_like_auto_reply(text: str) -> bool:
 # literales cuando la respuesta es un audio/sticker/ubicación/contacto/plantilla sin
 # texto — nunca son el contenido real que escribió el prospecto. Sin este chequeo, se
 # le mandaba "[audio]" tal cual al regex de menú o al LLM como si fuera texto real.
-NON_TEXT_PLACEHOLDERS = {"[audio]", "[sticker]", "[location]", "[contact]", "[media]", "[template]"}
+NON_TEXT_PLACEHOLDERS = {"[audio]", "[sticker]", "[location]", "[contact]", "[media]", "[template]",
+                          "[image]", "[video]", "[document]"}
 
 
 def _has_real_text(body: str | None) -> bool:
@@ -909,13 +913,37 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
     )
     try:
         raw = _call_deepseek([{"role": "user", "content": prompt}], max_tokens=350)
-        return _parse_llm_response(raw)
+        result = _parse_llm_response(raw)
     except LLMQuotaExceeded:
         raise
     except Exception as e:
         import traceback
         log.error("classify_conversation failed for %s: %s\n%s", company_id, e, traceback.format_exc())
         return {"category": "humano", "response_quality": 3, "bot_quality": None, "notes": "Error al analizar conversación", "error": True}
+
+    # El prompt le pide explícitamente al LLM "is_ai=false sin excepción" cuando solo
+    # hubo bienvenida + silencio (ver _CONV_PROMPT_TEMPLATE), pero en producción se
+    # encontraron varios casos reales donde el LLM marcó is_ai=true de todas formas.
+    # Corrección determinista y barata (mismo patrón que el corrector de menú de
+    # arriba): un bot conversacional real necesita más de UN texto distinto del lado
+    # del negocio — si todo lo que mandó fue una sola plantilla (repetida o no), no
+    # hubo conversación real que evaluar como "IA".
+    if result.get("category") == "bot" and result.get("is_ai"):
+        outbound_texts = {
+            (m.get("message_body") or "").strip()
+            for m in messages
+            if m["direction"] == "outbound"
+            and (m.get("message_body") or "").strip()
+            and (m.get("message_body") or "").strip() not in NON_TEXT_PLACEHOLDERS
+        }
+        if len(outbound_texts) <= 1:
+            result["is_ai"] = False
+            result["notes"] = (
+                (result.get("notes") or "").strip()
+                + " — corregido: solo se detectó un mensaje de plantilla distinto del negocio "
+                  "(bienvenida sin respuesta de seguimiento), no hay base para is_ai=true."
+            ).strip(" —")
+    return result
 
 
 # ── Flujo determinista T1/T2 ────────────────────────────────────────────────

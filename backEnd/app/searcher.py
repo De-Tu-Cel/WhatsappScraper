@@ -1953,7 +1953,13 @@ def _search_via_google_maps(
                     "https://api.brightdata.com/request",
                     headers={"Authorization": f"Bearer {_brightdata_key()}", "Content-Type": "application/json"},
                     json={"zone": "serp_api1", "url": maps_url, "format": "raw", "country": bd_country},
-                    timeout=20,
+                    # Was 20s — a direct standalone test (2026-09-04) needed the
+                    # full 45s to succeed on a query that timed out at 20s, and
+                    # search_prospects() was observed returning maps=0 despite
+                    # the same query having real, extractable results when given
+                    # more time. 35s leaves headroom inside the 45s outer
+                    # _GLOBAL_DEADLINE for one retry attempt.
+                    timeout=35,
                 )
                 text = resp.text
                 if not _maps_logged:
@@ -1981,10 +1987,23 @@ def _search_via_google_maps(
                                 "title": item.get("name") or item.get("title", ""),
                                 "body": item.get("address") or item.get("description", ""),
                             }
+                # A response can be well-formed (status=200, valid JSON, real
+                # "organic" entries) and still yield zero URLs if none of the
+                # items have a website/link field — observed for real on
+                # 2026-09-04 for a batch of gas stations with no individual
+                # sites. Distinguishing this from a silent parsing failure
+                # needs to be visible per-query, not just in the one-time
+                # snippet above (which only ever shows the first query).
+                if not batch_urls:
+                    print(f"[maps-debug] q={q!r} → 0 urls from {len(results)} raw result(s) (no usable website/link field)")
                 return batch_urls, batch_snips
             except Exception as e:
-                if not _maps_logged:
-                    print(f"[maps-debug] exception: {e}")
+                # Always log — the old "only if not _maps_logged" guard meant
+                # an exception on any query OTHER than the very first one ever
+                # printed was swallowed completely silently, making a real
+                # failure indistinguishable from "this business just has no
+                # website" (see the branch above).
+                print(f"[maps-debug] q={q!r} exception on attempt {attempt}: {e!r}")
                 if attempt == 0:
                     time.sleep(0.5)
         return [], {}
@@ -2088,7 +2107,13 @@ def search_prospects(
         # Deadline global escalado a num_results: búsquedas pequeñas (≤20)
         # ya tienen suficientes URLs de BD+DDG+SA a los 22s; búsquedas grandes
         # necesitan Maps y OSM. Maps/OSM se descartan si llegan después del límite.
-        _GLOBAL_DEADLINE = 22 if num_results <= 20 else 30 if num_results <= 50 else 45
+        # >50 was 45s — raised to 70s (2026-09-04) after a live test showed BD/
+        # Maps hitting this exact deadline mid-retry: their own per-request
+        # timeout is 35s each, so a single retry (35s + 35s) never fit inside
+        # 45s, silently discarding a source that would have succeeded on the
+        # retry. Real results take longer here, but 0 results from a source
+        # that actually had data is worse than the extra wait.
+        _GLOBAL_DEADLINE = 22 if num_results <= 20 else 30 if num_results <= 50 else 70
         def _safe_result(f, label):
             try:
                 remaining = _GLOBAL_DEADLINE - (_time.monotonic() - _t0)
@@ -2469,7 +2494,11 @@ def _search_via_brightdata(
         "https://api.brightdata.com/request",
         headers={"Authorization": f"Bearer {_brightdata_key()}", "Content-Type": "application/json"},
         json=payload,
-        timeout=30,
+        # Was 30s — raised alongside the Maps timeout (see _fetch_maps) after a
+        # live test (2026-09-04) showed bd=0 / maps=0 for a query that BrightData
+        # could genuinely answer, most plausibly explained by the 40-worker fan-out
+        # in _search_via_brightdata_multi saturating the shared serp_api1 zone.
+        timeout=35,
     )
     resp.raise_for_status()
     # Bright Data wraps the parsed page in {"status_code":200,"body":"<json string>"}

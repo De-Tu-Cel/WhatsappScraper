@@ -680,21 +680,23 @@ def api_enqueue_send(body: dict, x_user_token: Optional[str] = Header(None)):
 
 @router.get("/send-queue/status")
 def api_send_queue_status(x_user_token: Optional[str] = Header(None)):
-    _require_user(x_user_token)
+    user = _require_user(x_user_token)
     try:
         from app.send_now_worker import get_status
         db = MongoDBManager()
-        return serialize(get_status(db))
+        user_id = str(user.get("id") or user.get("_id") or "")
+        return serialize(get_status(db, user_id))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/send-queue/cancel")
 def api_send_queue_cancel(x_user_token: Optional[str] = Header(None)):
-    _require_user(x_user_token)
+    user = _require_user(x_user_token)
     try:
         from app.send_now_worker import cancel_pending_send_items
         db = MongoDBManager()
-        cancelled = cancel_pending_send_items(db)
+        user_id = str(user.get("id") or user.get("_id") or "")
+        cancelled = cancel_pending_send_items(db, user_id)
         return {"ok": True, "cancelled": cancelled}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -789,8 +791,16 @@ def api_search(req: SearchRequest):
         known = db.get_all_scraped_domains() | set(req.already_shown_domains or [])
         target = req.num_results or 10
         # Fetch 3× the target so that after filtering out already-known domains
-        # we still have enough fresh results. Cap at 150 (supports target≤50 fully).
-        fetch_count = min(target * 3, 150)
+        # we still have enough fresh results. The old 150 cap made this
+        # mathematically impossible above target=50 (at target=200, the UI's
+        # own max, fetch_count was LESS than target itself) — Bright Data's
+        # organic search plateaus around fetch_count~150 on its own task
+        # budget regardless of this cap, but Sección Amarilla and Google Maps
+        # (searcher.py) keep scaling pages/synonyms with num_results well
+        # past that, so raising this ceiling to cover the UI's full range
+        # (200 × 3) still helps in practice. 600 also bounds any caller that
+        # bypasses the frontend's own 200 clamp.
+        fetch_count = min(target * 3, 600)
         urls = search_prospects(
             req.industry, req.city or "", req.keywords or "",
             fetch_count, req.offset or 0,
@@ -1155,12 +1165,13 @@ def api_get_ai_health():
 @router.get("/conversations/ai-global-config")
 def api_get_ai_global_config():
     try:
-        from app.ai_followup import _DEFAULT_SYSTEM_PROMPT
+        from app.ai_followup import _DEFAULT_SYSTEM_PROMPT, DEFAULT_IDLE_TIMEOUT_HOURS
         db = MongoDBManager()
         cfg = db.db.ai_global_config.find_one({"_id": "global"}) or {}
         return {
             "system_prompt":         cfg.get("system_prompt") or "",
             "default_system_prompt": _DEFAULT_SYSTEM_PROMPT,
+            "idle_timeout_hours":    cfg.get("idle_timeout_hours", DEFAULT_IDLE_TIMEOUT_HOURS),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1171,9 +1182,15 @@ def api_put_ai_global_config(body: dict):
         from datetime import datetime as _dt
         db = MongoDBManager()
         system_prompt = str(body.get("system_prompt") or "").strip()
+        update = {"system_prompt": system_prompt, "updated_at": _dt.now()}
+        if "idle_timeout_hours" in body:
+            # 1h-30d range — a session that never closes defeats the point of the
+            # timeout, one that closes in minutes would cut off normal slow replies.
+            idle_hours = max(1, min(720, int(body.get("idle_timeout_hours") or 0)))
+            update["idle_timeout_hours"] = idle_hours
         db.db.ai_global_config.update_one(
             {"_id": "global"},
-            {"$set": {"system_prompt": system_prompt, "updated_at": _dt.now()}},
+            {"$set": update},
             upsert=True,
         )
         return {"ok": True}
@@ -1380,6 +1397,15 @@ def _extract_body(message_obj: dict) -> str:
     """Extract readable text from any WhatsApp message type."""
     text, _ = _extract_body_and_interactive(message_obj)
     return text
+
+import re as _re_media
+_BASE64_BLOB_RE = _re_media.compile(r"^[A-Za-z0-9+/=]+$")
+
+def _looks_like_media_blob(body: str) -> bool:
+    """True when `body` looks like raw base64 media data rather than real typed text —
+    long, no whitespace, base64 alphabet only. See wwebjs webhook handler."""
+    b = (body or "").strip()
+    return len(b) > 100 and " " not in b and bool(_BASE64_BLOB_RE.match(b))
 
 def _extract_body_and_interactive(message_obj: dict) -> tuple:
     """Returns (text, interactive_data). interactive_data is None for plain text."""
@@ -3847,15 +3873,34 @@ async def api_wwebjs_webhook(request: Request):
         message_body = data.get("body", "")
         message_id = data.get("messageId", "")
 
+        # wwebjs's msg.body for a media message without a caption is sometimes the raw
+        # base64-encoded media data instead of an empty string (observed in prod: images
+        # leaking full base64 blobs into message_body, which then got fed to the classifier
+        # as if it were the prospect's real text). Swap it for the same kind of literal
+        # placeholder the Evolution provider already uses (see _extract_body_and_interactive).
+        if data.get("hasMedia") and _looks_like_media_blob(message_body):
+            _WWEBJS_MEDIA_PLACEHOLDERS = {
+                "image": "[image]", "video": "[video]", "audio": "[audio]", "ptt": "[audio]",
+                "sticker": "[sticker]", "document": "[document]", "vcard": "[contact]",
+                "location": "[location]",
+            }
+            message_body = _WWEBJS_MEDIA_PLACEHOLDERS.get(data.get("type", ""), "[media]")
+
         if from_me:
             if message_id:
                 db.update_evolution_message_status(message_id, "sent")
             return {"ok": True, "action": "outbound_echo"}
 
-        # Filter out WhatsApp status updates, stories, and replies to statuses.
-        # isStatus covers stories posted by others; @broadcast covers group/broadcast JIDs.
-        # isStatusReply covers reactions/replies to your own status (arrives from @c.us so
-        # isStatus is false, but wwebjs sets isStatusReply=true on the message object).
+        # Filter out WhatsApp status updates, stories, replies to statuses, and group
+        # chats. isStatus covers stories posted by others; @broadcast covers status/
+        # broadcast-list JIDs specifically (NOT regular groups — those are @g.us, a
+        # distinct suffix; group messages were previously unfiltered here and would
+        # flow into find_company_id_by_phone with a garbled group-JID "number").
+        # isStatusReply covers reactions/replies to your own status (arrives from @c.us
+        # so isStatus is false, but wwebjs sets isStatusReply=true on the message
+        # object) — isStatus/isStatusReply/chatId are only meaningful now that
+        # wwebjs-service actually forwards them (previously always undefined, so only
+        # the literal JID substring checks below could ever fire).
         _from_jid = data.get("from", "")
         _chat_jid = data.get("chatId", "")
         if (
@@ -3865,6 +3910,8 @@ async def api_wwebjs_webhook(request: Request):
             or "@broadcast" in _chat_jid
             or "status@broadcast" in _from_jid
             or "status@broadcast" in _chat_jid
+            or "@g.us" in _from_jid
+            or "@g.us" in _chat_jid
         ):
             return {"ok": True, "action": "ignored_status"}
 
@@ -4710,10 +4757,11 @@ def api_notifications_count(
     x_user_token: Optional[str] = Header(None),
     since: Optional[str] = None,
 ):
-    _require_user(x_user_token)
+    user = _require_user(x_user_token)
     try:
         from datetime import datetime, timedelta
         db = MongoDBManager()
+        requester_id = str(user.get("id") or user.get("_id") or "")
         window_cutoff = datetime.utcnow() - timedelta(hours=_NOTIFICATIONS_WINDOW_HOURS)
         cutoff = window_cutoff
         if since:
@@ -4731,8 +4779,12 @@ def api_notifications_count(
             # asociarlos, así que tampoco deberían generar ruido en la campanita.
             "company_id": {"$nin": [None, "", "unknown", "undefined", "manual"]},
         })
+        # Strictly per-user: every app_notifications writer now stamps user_id
+        # (see daily_cap.py, scheduler.py, send_now_worker.py) so an event never
+        # inflates another user's badge count.
         event_count = db.db.app_notifications.count_documents({
             "created_at": {"$gte": cutoff},
+            "user_id": requester_id,
         })
         return {"count": reply_count + event_count}
     except Exception as e:
@@ -4742,12 +4794,19 @@ def api_notifications_count(
 @router.get("/notifications")
 def api_notifications_list(x_user_token: Optional[str] = Header(None)):
     """List recent inbound replies + synthetic events (batch-complete, schedule
-    reminders) from the last _NOTIFICATIONS_WINDOW_HOURS, newest first."""
-    _require_user(x_user_token)
+    reminders) from the last _NOTIFICATIONS_WINDOW_HOURS, newest first.
+
+    Inbound replies stay team-shared by design (anyone may pick up a
+    conversation). Batch/campaign-completion events are personal — "your send
+    finished" — so those are scoped to the requesting user when they carry a
+    user_id; instance-wide events with no user_id (e.g. cap_reached) stay
+    visible to everyone since they were never tied to one person."""
+    user = _require_user(x_user_token)
     try:
         from datetime import datetime, timedelta
         from bson import ObjectId
         db = MongoDBManager()
+        requester_id = str(user.get("id") or user.get("_id") or "")
         cutoff = datetime.utcnow() - timedelta(hours=_NOTIFICATIONS_WINDOW_HOURS)
         msgs = list(db.db.message_logs.find(
             {
@@ -4785,7 +4844,10 @@ def api_notifications_list(x_user_token: Optional[str] = Header(None)):
             })
 
         events = list(db.db.app_notifications.find(
-            {"created_at": {"$gte": cutoff}},
+            {
+                "created_at": {"$gte": cutoff},
+                "user_id": requester_id,
+            },
             sort=[("created_at", -1)],
             limit=50,
         ))
@@ -4816,7 +4878,7 @@ def api_notifications_list(x_user_token: Optional[str] = Header(None)):
 def api_notifications_batch_complete(body: dict, x_user_token: Optional[str] = Header(None)):
     """Called by the frontend send queue once every job in a bulk-send batch
     (Lote de URLs / Importar CSV / Buscar prospectos) has finished."""
-    _require_user(x_user_token)
+    user = _require_user(x_user_token)
     try:
         from datetime import datetime
         db = MongoDBManager()
@@ -4826,6 +4888,7 @@ def api_notifications_batch_complete(body: dict, x_user_token: Optional[str] = H
             "failed": int(body.get("failed") or 0),
             "label": (body.get("label") or "")[:80],
             "created_at": datetime.utcnow(),
+            "user_id": str(user.get("id") or user.get("_id") or ""),
         })
         return {"ok": True}
     except Exception as e:

@@ -465,8 +465,19 @@ class MongoDBManager:
 
         return {url: (clean_domain(url) in scraped_domains) for url in urls}
 
-    def find_company_id_by_phone(self, phone_number, allow_fallback=False):
+    def find_company_id_by_phone(self, phone_number):
         clean = "".join(filter(str.isdigit, phone_number))
+        # A sender identifier with too few digits (e.g. "status@broadcast" → clean="",
+        # or a stray non-numeric JID) must never reach the regex fallbacks below:
+        # clean[-10:] would be "" or a too-short suffix too, and an unanchored regex
+        # built from a short/empty string can match EVERY document in the collection —
+        # silently attributing the event to whatever contact Mongo happens to return
+        # first. Confirmed live (2026-09-04): a synthetic status@broadcast webhook
+        # landed a message_logs doc on an unrelated real company; 8 real historical
+        # docs show this already happened in production. A real phone number always
+        # has well over 8 digits, so this can only reject genuinely non-phone input.
+        if len(clean) < 8:
+            return None
         clean_norm = ("52" + clean[3:]) if (len(clean) == 13 and clean.startswith("521")) else clean
         # 1. JID map — most authoritative: records which company we SENT to this number.
         # Checked first because the same number can be a contact of multiple companies
@@ -477,10 +488,13 @@ class MongoDBManager:
         jid_doc = self.db.jid_map.find_one({"jid": {"$in": [clean, clean_norm]}})
         if jid_doc and jid_doc.get("company_id"):
             return jid_doc["company_id"]
-        # 2. Registered contact fallback (exact last-10-digit match)
+        # 2. Registered contact fallback (exact last-10-digit match). Anchored to the
+        # end of the value ($) so it matches the actual phone suffix, not any 10-digit
+        # substring that might appear elsewhere in a longer, differently-shaped value.
+        _suffix = clean[-10:]
         contact = self.db.contacts.find_one({
             "type": "whatsapp",
-            "value": {"$regex": clean[-10:], "$options": "i"},
+            "value": {"$regex": f"{_suffix}$", "$options": "i"},
         })
         if contact:
             return contact["company_id"]
@@ -488,11 +502,11 @@ class MongoDBManager:
         # Catches the case where jid_map lost its company_id entry (e.g. the send
         # was preceded by _verify_wa_number writing jid without company_id, then
         # the send itself failed or was skipped before the second upsert ran).
-        # Filtered by the exact phone suffix so it cannot mis-attribute a random
-        # contact — unlike the ACK fallback below which uses any recent outbound.
+        # Filtered by the exact phone suffix (anchored, see above) so it cannot
+        # mis-attribute a random contact.
         from datetime import datetime, timedelta
         _phone_log = self.db.message_logs.find_one(
-            {"direction": "outbound", "to_number": {"$regex": clean[-10:]}},
+            {"direction": "outbound", "to_number": {"$regex": f"{_suffix}$"}},
             sort=[("created_at", -1)],
             projection={"company_id": 1},
         )
@@ -504,26 +518,18 @@ class MongoDBManager:
                 upsert=True,
             )
             return _phone_log["company_id"]
-        # 4. Fallback only for delivery ACKs (messages.update), never for real
-        # inbound messages — otherwise personal contacts get mis-attributed.
-        if not allow_fallback:
-            return None
-        from datetime import timezone
-        cutoff = datetime.now() - timedelta(hours=1)
-        recent = list(self.db.message_logs.find(
-            {"direction": "outbound", "status": {"$ne": "failed"},
-             "created_at": {"$gte": cutoff}},
-            {"company_id": 1},
-        ))
-        unique = {r["company_id"] for r in recent if r.get("company_id")}
-        if len(unique) == 1:
-            company_id = unique.pop()
-            self.db.jid_map.update_one(
-                {"jid": clean},
-                {"$set": {"company_id": company_id, "updated_at": datetime.now()}},
-                upsert=True,
-            )
-            return company_id
+        # NOTE: there used to be a step 4 here — an `allow_fallback` mode that, when no
+        # number-scoped match existed, attributed a jid to "whichever company was the
+        # SOLE sender of outbound messages in the last hour", system-wide, no number
+        # match required at all. It welded unrelated contacts (identified only by an
+        # opaque WhatsApp @lid, not a real number) to whatever campaign happened to be
+        # blasting on the same instance that hour — confirmed root cause of a real
+        # prod incident (2026-06-16: JARE Linda Vista, AURA Beauty Salon and Olga Salón
+        # permanently mis-attributed to an unrelated Oh Express campaign's company_id).
+        # Removed 2026-06-22 (commit 4c081f66) from its only call site; removed here
+        # entirely on 2026-09-04 so the mechanism can't be silently reintroduced by a
+        # future `allow_fallback=True` call — there is no number-scoped signal left to
+        # fall back to, so an unresolvable jid now correctly returns None.
         return None
 
     def replace_whatsapp_contacts(self, company_id: str, numbers: list):
@@ -956,8 +962,11 @@ class MongoDBManager:
         )
 
     def get_last_outbound_for_company(self, company_id: str, before_dt=None, to_number: str = None):
-        """Returns the most recent outbound message before before_dt (and optionally matching to_number)."""
-        query = {"company_id": company_id, "direction": "outbound"}
+        """Returns the most recent outbound message before before_dt (and optionally matching to_number).
+        Excludes status="failed": a message that never reached the prospect (e.g. instance
+        disconnected mid-send) can't be the reference point for a reaction-time measurement —
+        mirrors the same exclusion already applied in _resolve_probe's T2 lookup."""
+        query = {"company_id": company_id, "direction": "outbound", "status": {"$ne": "failed"}}
         if before_dt:
             query["created_at"] = {"$lte": before_dt}
         if to_number:

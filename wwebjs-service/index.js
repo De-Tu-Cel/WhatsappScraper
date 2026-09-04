@@ -192,6 +192,15 @@ function createClient(sessionId) {
         messageId: msg.id._serialized,
         timestamp: msg.timestamp,
         hasMedia: msg.hasMedia,
+        // The backend's status/broadcast filter checks these three fields, but
+        // until now they were never actually sent — only the literal "@broadcast"
+        // JID substring match could ever fire. Forwarding them makes that filter
+        // work as its own comment already claimed it did (e.g. a reply to your
+        // own status, which whatsapp-web.js flags via isStatusReply rather than
+        // a distinctive JID, was previously not caught at all).
+        isStatus: !!msg.isStatus,
+        isStatusReply: !!msg.isStatusReply,
+        chatId: msg.from,
       },
     })
   })

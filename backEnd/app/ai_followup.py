@@ -14,6 +14,7 @@ from app.database import MongoDBManager
 log = logging.getLogger(__name__)
 
 MAX_TURNS = 10  # safety net — Chat IA should close naturally via prompt rules before this
+DEFAULT_IDLE_TIMEOUT_HOURS = 48  # configurable from Settings > Chat IA (ai_global_config)
 RESPONSE_DELAY_MIN = 3    # seconds before responding (simulates reading time)
 RESPONSE_DELAY_MAX = 12
 RESPONSE_DELAY_MENU_MIN = 1  # much shorter delay for menu/IVR replies
@@ -261,12 +262,46 @@ def _is_business_hours() -> bool:
     return 8 <= now.hour < 21
 
 
+def _get_idle_timeout_hours(db: MongoDBManager) -> float:
+    """Configurable from Settings > Chat IA (ai_global_config) — hot-read, no cache,
+    same reasoning as get_classifier_settings: a change in the UI should apply to the
+    next reply without a redeploy."""
+    cfg = db.db.ai_global_config.find_one({"_id": "global"}) or {}
+    try:
+        return float(cfg.get("idle_timeout_hours", DEFAULT_IDLE_TIMEOUT_HOURS))
+    except (TypeError, ValueError):
+        return float(DEFAULT_IDLE_TIMEOUT_HOURS)
+
+
 def _get_or_create_session(db: MongoDBManager, phone_number: str, company_id: str):
     """Return the active/waiting session for this number, or create one if a prior outbound exists."""
     session = db.db.ai_followup_sessions.find_one(
         {"phone_number": phone_number, "status": {"$in": ["active", "waiting"]}},
     )
     if session:
+        # A session left "waiting" for too long (prospect went quiet for days) should
+        # NOT auto-resume the moment they finally reply — by then the conversation is
+        # cold and Andy picking it back up unsupervised is riskier than useful. Close
+        # it and turn off ai_enabled so this reply lands as a normal notification
+        # instead — same "ended" pattern used elsewhere in this file (farewell/auto-
+        # reply detection), just with a time-based trigger.
+        last_activity = session.get("last_activity") or session.get("created_at")
+        if last_activity:
+            idle_hours = (datetime.utcnow() - last_activity).total_seconds() / 3600
+            timeout_hours = _get_idle_timeout_hours(db)
+            if idle_hours > timeout_hours:
+                db.db.ai_followup_sessions.update_one(
+                    {"_id": session["_id"]},
+                    {"$set": {"status": "ended", "end_reason": "idle_timeout"}},
+                )
+                db.db.conversation_ai_prefs.update_one(
+                    {"company_id": company_id},
+                    {"$set": {"ai_enabled": False}},
+                    upsert=True,
+                )
+                log.info("[AIFollowup] session idle %.1fh > %.1fh timeout — ended, ai_enabled=False for company=%s",
+                          idle_hours, timeout_hours, company_id)
+                return None
         return session
 
     # Look for a prior outbound within the lookback window

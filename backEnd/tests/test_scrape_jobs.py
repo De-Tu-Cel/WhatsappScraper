@@ -16,6 +16,8 @@ Coverage:
 """
 from __future__ import annotations
 
+import re
+import time as _time_module
 from datetime import datetime
 from unittest.mock import patch
 import pytest
@@ -26,6 +28,8 @@ from app.scrape_jobs import (
     _run_scrape_job,
     set_job_action,
 )
+
+_REAL_SLEEP = _time_module.sleep  # captured before any test patches time.sleep
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -71,6 +75,17 @@ def _query_matches(doc: dict, query: dict) -> bool:
 
 
 def _fake_result(url: str) -> dict:
+    """_run_scrape_job submits one real ThreadPoolExecutor task per URL in a
+    chunk and reads them back via as_completed() — with an instant, zero-delay
+    fake, OS thread scheduling decides completion order, not list order. The
+    pause-timing tests assume URLs finish in list order (e.g. "pause after
+    the 2nd result" meaning s0, s1) — an index-proportional delay here makes
+    that ordering deterministic instead of racing on scheduler luck (this was
+    the source of a real, observed flaky-test failure: different assertions
+    failed on different runs of the same test)."""
+    m = re.search(r"s(\d+)\.com", url)
+    if m:
+        _REAL_SLEEP(int(m.group(1)) * 0.005)
     return {
         "url": url,
         "empresa": "Acme SA",

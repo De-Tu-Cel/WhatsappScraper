@@ -1,8 +1,14 @@
 """
 Test manual de WasenderClient.
-Ejecutar: python test_wasender.py
+Ejecutar: python wasender_manual_smoketest.py
 
 Edita las 4 variables de la sección CONFIG antes de correr.
+
+Renombrado desde test_wasender.py (2026-09-04): con los valores CONFIG en
+blanco como quedan committeados, require() dispara sys.exit(1) al importar el
+módulo — si el archivo se llamaba test_*.py, un `pytest backEnd/` sin acotar
+a tests/ rompía la colección entera. El prefijo test_ además invitaba a
+pensar que era seguro correrlo sin llenar el CONFIG (manda WhatsApp real).
 """
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────

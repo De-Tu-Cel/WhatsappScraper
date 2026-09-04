@@ -7,14 +7,19 @@ Ejecuta búsquedas reales para múltiples industrias y reporta:
   • Cuántas pasan el AI filter
   • Resultado final vs mínimo esperado
 
+Manual-run diagnostic script — deliberately NOT named test_*.py so pytest's
+default discovery never collects it (it makes real, costly BrightData/AI API
+calls at module scope; a plain `pytest` picking it up used to crash collection
+outright via the argparse call below, since pytest passes it no CLI args).
+
 Uso:
   cd backEnd
-  python tests/test_search_effectiveness.py              # todas las industrias
-  python tests/test_search_effectiveness.py --dry-run   # solo queries, sin API calls
+  python search_effectiveness_diagnostic.py              # todas las industrias
+  python search_effectiveness_diagnostic.py --dry-run   # solo queries, sin API calls
 """
 import sys, os, time, logging, io, argparse, re
 
-BACK = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BACK = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BACK)
 os.chdir(BACK)
 

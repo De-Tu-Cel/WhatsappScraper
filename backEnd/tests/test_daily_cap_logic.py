@@ -1,40 +1,11 @@
 """
 Tests para check_contacted (database.py) y la lógica de newContactPoints.
-Run: python -m pytest backEnd/test_daily_cap_logic.py -v
-  or: python backEnd/test_daily_cap_logic.py
+Run: python -m pytest tests/test_daily_cap_logic.py -v
+  or: python test_daily_cap_logic.py
 """
 from datetime import datetime
 from unittest.mock import MagicMock
-import sys, os, types
-
-# Stub de módulos que app.database necesita al importarse — sin ellos el import falla.
-# Se instalan ANTES del import real para que Python los encuentre en sys.modules.
-for _mod in ('config', 'pymongo', 'pymongo.errors', 'bson', 'bson.objectid'):
-    if _mod not in sys.modules:
-        sys.modules[_mod] = types.ModuleType(_mod)
-
-# Atributos mínimos que config.py expone
-_cfg = sys.modules['config']
-_cfg.MONGODB_URI = 'mongodb://localhost:27017'
-_cfg.DATABASE_NAME = 'test'
-_cfg.WAHA_API_URL = 'http://localhost:3001'
-_cfg.WAHA_API_KEY = ''
-_cfg.WWEBJS_URL = ''
-_cfg.EVOLUTION_API_URL = ''
-_cfg.EVOLUTION_API_KEY = ''
-_cfg.WASENDER_PAT = ''
-_cfg.WASENDER_BASE_URL = ''
-_cfg.DEEPSEEK_API_KEY = ''
-_cfg.OPENAI_API_KEY = ''
-_cfg.APP_TIMEZONE = 'America/Mexico_City'
-for _attr in ('get', '__getattr__'):
-    pass
-
-# pymongo stub mínimo
-_pymongo = sys.modules['pymongo']
-_pymongo.MongoClient = MagicMock
-
-sys.path.insert(0, os.path.dirname(__file__))
+import sys, os
 
 
 # ── Implementación inline de check_contacted (copia exacta de database.py) ──

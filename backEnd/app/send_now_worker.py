@@ -1,23 +1,32 @@
 # send_now_worker.py
-"""Backend-persisted FIFO queue for immediate WhatsApp sends ("Enviar Todos" and
+"""Backend-persisted queue for immediate WhatsApp sends ("Enviar Todos" and
 similar buttons across searchProspects/batchProcessor/csvImporter/sendCampaign/
 singleUrlProcessor/databaseViewer). Ports SendQueueContext.jsx's in-browser
-while-loop (queueRef + processNext) into a single global backend worker, so a
-page refresh no longer drops queued/in-flight messages.
+while-loop (queueRef + processNext) into a backend worker, so a page refresh
+never drops queued/in-flight messages.
 
-Unlike scrape_jobs.py, this is deliberately NOT a "many jobs run in parallel"
-model — reusing scheduled_sends' per-job-parallel-thread pattern here would let
-several rapid "Enviar Todos" clicks become independently-paced concurrent
-sends, multiplying the effective outbound rate and undermining the whole
-point of the anti-spam delays. Instead there is exactly one active sender at
-a time, processing send_queue_items strictly FIFO.
+Sends are partitioned by user_id and processed with one independent pacing
+thread PER PARTITION (mirrors scheduler.py's one-thread-per-scheduled-job
+model) — so a large campaign queued by one user never blocks another user's
+own instance from sending. The anti-spam delays that matter (protecting a
+single WhatsApp number from a ban) stay fully intact WITHIN each partition;
+they just no longer apply ACROSS unrelated partitions, since two different
+users' numbers are two different WhatsApp sessions and were never at risk of
+tripping each other's rate limiting in the first place.
+
+Items with no user_id (legacy/system-attributed sends) share one "legacy"
+partition and keep the old any-instance-connected gate — there's no per-user
+instance to scope them to.
 
 The backend runs with 2 uvicorn worker PROCESSES (Dockerfile.backend,
---workers 2) — each process starts its own copy of this module's worker
-thread. Without coordination, both would pull items independently and send
-in parallel. A short-TTL Mongo lease (send_worker_lease) elects exactly one
-process as the active sender at any moment, with automatic failover if that
-process dies (the lease simply expires and the other process picks it up).
+--workers 2) — each process starts its own copy of this module's dispatcher
+thread. Without coordination, both would spawn partition threads and send in
+parallel from the same process pair. A short-TTL Mongo lease
+(send_worker_lease) elects exactly one process as the dispatcher at any
+moment, with automatic failover if that process dies (the lease simply
+expires and the other process picks it up) — the elected process then owns
+ALL partition threads, so there is still only ever one sender per partition
+system-wide.
 
 A message that gets interrupted by a real backend crash (item stuck at
 "sending") is never auto-retried — a WhatsApp message can't be un-sent, so an
@@ -39,21 +48,23 @@ _WORKER_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
 _LEASE_SEC              = 45   # how long a lease lasts without renewal before another process may take over
 _LEASE_RENEW_TICK_SEC    = 15  # renew at least this often — comfortably inside _LEASE_SEC even during long waits
-_LEASE_POLL_SEC          = 3   # how often a non-leader (or idle leader) checks for work/leadership
+_LEASE_POLL_SEC          = 3   # how often the dispatcher checks for new/finished partitions
 _SENDING_STALE_AFTER_SEC = 300  # 5min stuck in "sending" with no resolution ⇒ assume a crash, mark "interrupted"
+_LEGACY_PARTITION        = "legacy"  # bucket for items with no user_id
 
 _wake_event = threading.Event()
 
-# Per-run counters, reset only when this process (re)acquires leadership — see
-# module docstring: this is the deliberate global-not-per-tab replacement for
-# SendQueueContext.jsx's batch-break counter.
-_msgs_in_batch = 0
-_next_break_at = 0
-_run_sent = 0
-_run_failed = 0
+# Which partitions currently have a live thread — guards against the dispatcher
+# double-spawning a thread for a partition whose previous thread hasn't
+# finished exiting yet.
+_partition_threads: dict[str, threading.Thread] = {}
+_partition_threads_lock = threading.Lock()
 
 
 # ─── Lease (leader election across the 2 uvicorn worker processes) ───────────
+# Still a single lease: exactly one PROCESS is elected to run the dispatcher
+# and therefore own every partition thread. The parallelism this module adds
+# is BETWEEN partitions within that one process, not across processes.
 
 def _ensure_lease_doc(db):
     db.db.send_worker_lease.update_one(
@@ -81,37 +92,96 @@ def _renew_lease(db) -> bool:
     return result.modified_count > 0
 
 
-# ─── Shared display state (send_queue_state) — any of the 2 processes may
-# serve the GET /api/send-queue/status request, so the truth must live in
-# Mongo, not in this process's memory. ─────────────────────────────────────
+# ─── Shared display state (send_queue_state) — one doc per partition, any of
+# the 2 processes may serve the GET /api/send-queue/status request, so the
+# truth must live in Mongo, not in this process's memory. get_status()
+# aggregates across partitions into the single-bubble shape the frontend has
+# always expected — SendQueueContext.jsx/SendBubble.jsx need no changes. ─────
 
-def _set_state(db, **fields):
+def _state_id(partition: str) -> str:
+    return f"partition_{partition}"
+
+
+def _set_state(db, partition: str, **fields):
     try:
-        db.db.send_queue_state.update_one({"_id": "singleton"}, {"$set": fields}, upsert=True)
+        db.db.send_queue_state.update_one({"_id": _state_id(partition)}, {"$set": fields}, upsert=True)
     except Exception:
-        log.exception("[SendQueue] _set_state failed")
+        log.exception("[SendQueue] _set_state failed for partition %s", partition)
 
 
-def get_status(db) -> dict:
+def get_status(db, user_id: str = "") -> dict:
+    """When user_id is given, returns ONLY that user's own partition — the
+    bubble shows your queue, not whatever another user happens to be sending.
+    Without a user_id (defensive default for callers outside the
+    authenticated route), falls back to an aggregate view across everyone."""
+    idle_default = {"phase": "idle", "active_total": None, "active_sent": None,
+                     "active_batch": False, "next_action_at": None,
+                     "queue_len": 0, "last_completed": None, "last_error": None}
+    if user_id:
+        try:
+            doc = db.db.send_queue_state.find_one({"_id": _state_id(user_id)}) or {}
+            queue_len = len(set(
+                i.get("job_key") for i in db.db.send_queue_items.find(
+                    {"status": "pending", "user_id": user_id}, {"job_key": 1})
+            ))
+        except Exception:
+            return idle_default
+        return {
+            "phase": doc.get("phase", "idle"),
+            "active_total": doc.get("active_total"),
+            "active_sent": doc.get("active_sent"),
+            "active_batch": doc.get("active_batch", False),
+            "next_action_at": doc.get("next_action_at"),
+            "queue_len": queue_len,
+            "last_completed": doc.get("last_completed"),
+            "last_error": doc.get("last_error"),
+        }
+
     try:
-        doc = db.db.send_queue_state.find_one({"_id": "singleton"}) or {}
+        partitions = list(db.db.send_queue_state.find({"_id": {"$regex": "^partition_"}}))
         queue_len = len(set(
             i.get("job_key") for i in db.db.send_queue_items.find({"status": "pending"}, {"job_key": 1})
         ))
     except Exception:
-        return {"phase": "idle", "active_total": None, "active_sent": None,
-                "active_batch": False, "next_action_at": None,
-                "queue_len": 0, "last_completed": None, "last_error": None}
+        return idle_default
+
+    # Prefer showing an actively-sending partition; else whichever waiting
+    # partition will act soonest; else idle. Only reached when no user_id is
+    # available to scope to.
+    sending = [p for p in partitions if p.get("phase") == "sending"]
+    waiting = [p for p in partitions if p.get("phase") == "waiting" and p.get("next_action_at")]
+    chosen = sending[0] if sending else (min(waiting, key=lambda p: p["next_action_at"]) if waiting else None)
+
+    completed_all = [p["last_completed"] for p in partitions if p.get("last_completed")]
+    errors_all    = [p["last_error"] for p in partitions if p.get("last_error")]
+    last_completed = max(completed_all, key=lambda x: x["at"], default=None)
+    last_error     = max(errors_all, key=lambda x: x["at"], default=None)
+
+    if not chosen:
+        return {**idle_default, "queue_len": queue_len, "last_completed": last_completed, "last_error": last_error}
     return {
-        "phase": doc.get("phase", "idle"),
-        "active_total": doc.get("active_total"),
-        "active_sent": doc.get("active_sent"),
-        "active_batch": doc.get("active_batch", False),
-        "next_action_at": doc.get("next_action_at"),
+        "phase": chosen.get("phase"),
+        "active_total": chosen.get("active_total"),
+        "active_sent": chosen.get("active_sent"),
+        "active_batch": chosen.get("active_batch", False),
+        "next_action_at": chosen.get("next_action_at"),
         "queue_len": queue_len,
-        "last_completed": doc.get("last_completed"),
-        "last_error": doc.get("last_error"),
+        "last_completed": last_completed,
+        "last_error": last_error,
     }
+
+
+def _config_id(partition: str) -> str:
+    return f"config_{partition}"
+
+
+def _get_send_config(db, partition: str) -> dict:
+    """Per-partition timing config — each user's own msgDelay/batchSize/
+    batchDelay choice, captured at enqueue time. Was a single shared doc
+    before per-user parallelism existed; kept global it would let one user's
+    campaign silently change another user's pacing mid-send."""
+    doc = db.db.send_queue_state.find_one({"_id": _config_id(partition)}) or {}
+    return doc.get("send_config") or {}
 
 
 # ─── Enqueue / cancel ─────────────────────────────────────────────────────────
@@ -145,16 +215,29 @@ def enqueue_send_items(db, jobs: list, batch_id: str, label: str, send_config: d
         return 0
     db.db.send_queue_items.insert_many(docs)
     if send_config:
-        _set_state(db, send_config=send_config)
+        partition = user_id or _LEGACY_PARTITION
+        db.db.send_queue_state.update_one({"_id": _config_id(partition)}, {"$set": {"send_config": send_config}}, upsert=True)
     _wake_event.set()  # instant wake if the leader happens to be in this same process
     return len(docs)
 
 
-def cancel_pending_send_items(db) -> int:
+def cancel_pending_send_items(db, user_id: str = "") -> int:
+    """When user_id is given, cancels only THAT user's own pending sends —
+    now that the bubble shows a single user's queue, cancel must not be able
+    to wipe out someone else's campaign they can't even see. Without a
+    user_id (defensive default), falls back to the old system-wide cancel."""
+    item_filter  = {"status": "pending", "user_id": user_id} if user_id else {"status": "pending"}
+    state_filter = {"_id": _state_id(user_id)} if user_id else {"_id": {"$regex": "^partition_"}}
+
     result = db.db.send_queue_items.update_many(
-        {"status": "pending"}, {"$set": {"status": "cancelled", "finished_at": datetime.now(timezone.utc)}},
+        item_filter, {"$set": {"status": "cancelled", "finished_at": datetime.now(timezone.utc)}},
     )
-    _set_state(db, phase="idle", active_total=None, active_sent=None, next_action_at=None, active_batch=False)
+    for p in db.db.send_queue_state.find(state_filter, {"_id": 1}):
+        db.db.send_queue_state.update_one(
+            {"_id": p["_id"]},
+            {"$set": {"phase": "idle", "active_total": None, "active_sent": None,
+                      "next_action_at": None, "active_batch": False}},
+        )
     return result.modified_count
 
 
@@ -179,7 +262,33 @@ def _check_send_allowed(db, company_id: str):
     return True, ""
 
 
-def _antispam_wait(db, is_batch_break: bool, seconds: float, active_total, active_sent) -> bool:
+def _user_has_connected_instance(db, user_id: str) -> bool:
+    """Is there a WhatsApp session this partition can actually send through?
+    For a real user_id, scope the check to THAT user's own instances — a
+    different user's connected number is irrelevant to this partition.
+    Legacy (no user_id) items keep the old any-instance-connected gate."""
+    from app import scheduler as _sched
+    if not user_id:
+        return _sched._any_instance_connected(db)
+    user_instances = [d["name"] for d in db.db.instances.find({"assigned_to": user_id}, {"name": 1}) if d.get("name")]
+    if not user_instances:
+        return False
+    try:
+        from app.whatsapp_wwebjs import get_all_connected_instances as _ww_all
+        if set(_ww_all(db)) & set(user_instances):
+            return True
+    except Exception:
+        pass
+    # Non-wwebjs providers (wasender/waha/evolution) aren't tracked per-instance
+    # the same way — fall back to the global check so those setups keep working
+    # exactly as before rather than getting incorrectly paused.
+    from app.config import WWEBJS_URL
+    if not WWEBJS_URL:
+        return _sched._any_instance_connected(db)
+    return False
+
+
+def _antispam_wait(db, partition: str, is_batch_break: bool, seconds: float, active_total, active_sent) -> bool:
     """Incremental sleep so the countdown shown to the user stays live and the
     lease gets renewed periodically even during a multi-minute batch break.
     Returns False if leadership was lost mid-wait (caller should stop)."""
@@ -188,7 +297,7 @@ def _antispam_wait(db, is_batch_break: bool, seconds: float, active_total, activ
         remaining = end - time.time()
         if remaining <= 0:
             return True
-        _set_state(db, phase="waiting", active_total=active_total, active_sent=active_sent,
+        _set_state(db, partition, phase="waiting", active_total=active_total, active_sent=active_sent,
                    active_batch=is_batch_break, next_action_at=datetime.now(timezone.utc) + timedelta(seconds=remaining))
         time.sleep(min(remaining, _LEASE_RENEW_TICK_SEC))
         if not _renew_lease(db):
@@ -214,25 +323,28 @@ def _maybe_finish_batch(db, batch_id: str):
         should_notify = False
     if not should_notify:
         return
-    items   = list(db.db.send_queue_items.find({"batch_id": batch_id}, {"status": 1, "label": 1}))
-    sent    = sum(1 for i in items if i.get("status") == "sent")
-    nc_skip = sum(1 for i in items if i.get("status") == "skipped_nc_cap")
-    failed  = len(items) - sent - nc_skip
-    label   = items[0].get("label", "") if items else ""
+    items    = list(db.db.send_queue_items.find({"batch_id": batch_id}, {"status": 1, "label": 1, "user_id": 1}))
+    sent     = sum(1 for i in items if i.get("status") == "sent")
+    nc_skip  = sum(1 for i in items if i.get("status") == "skipped_nc_cap")
+    failed   = len(items) - sent - nc_skip
+    label    = items[0].get("label", "") if items else ""
+    user_id  = items[0].get("user_id", "") if items else ""
     now = datetime.now(timezone.utc)
-    db.db.app_notifications.insert_one({
+    notif = {
         "type": "batch_complete", "sent": sent, "failed": failed,
         "skipped_nc_cap": nc_skip, "label": label, "created_at": now,
-    })
-    _set_state(db, last_completed={"sent": sent, "failed": failed, "skipped_nc_cap": nc_skip, "at": now})
+    }
+    if user_id:
+        notif["user_id"] = user_id
+    db.db.app_notifications.insert_one(notif)
+    return {"sent": sent, "failed": failed, "skipped_nc_cap": nc_skip, "at": now}
 
 
-def _process_item(db, item) -> bool:
-    """Returns False if leadership was lost mid-processing (caller should stop
-    being the active sender for now)."""
-    global _msgs_in_batch, _next_break_at, _run_sent, _run_failed
-    from app import scheduler as _sched
-
+def _process_item(db, partition: str, item, msgs_in_batch: int, next_break_at: int):
+    """Processes one item for this partition. Returns
+    (outcome, msgs_in_batch, next_break_at) where outcome is True (continue),
+    False (leadership lost — caller should stop this partition), "cap_paused",
+    or "disconnected_pause"."""
     item_id     = item["_id"]
     company_id  = item.get("company_id", "")
     to_number   = item.get("to_number", "")
@@ -240,82 +352,90 @@ def _process_item(db, item) -> bool:
     batch_id    = item.get("batch_id", "")
     job_size    = item.get("job_size", 1)
     job_index   = item.get("job_index", 0)
+    user_id     = item.get("user_id") or ""
 
     allowed, skip_status = _check_send_allowed(db, company_id)
     if not allowed:
         db.db.send_queue_items.update_one({"_id": item_id}, {"$set": {"status": skip_status, "finished_at": datetime.now(timezone.utc)}})
-        _run_failed += 1
-        _maybe_finish_batch(db, batch_id)
-        return True
+        finished = _maybe_finish_batch(db, batch_id)
+        if finished:
+            _set_state(db, partition, last_completed=finished)
+        return True, msgs_in_batch, next_break_at
 
-    if not _sched._any_instance_connected(db):
+    if not _user_has_connected_instance(db, user_id):
         db.db.send_queue_items.update_one({"_id": item_id}, {"$set": {"status": "pending", "started_at": None}})
-        _set_state(db, phase="idle", active_total=None, active_sent=None, next_action_at=None,
+        _set_state(db, partition, phase="idle", active_total=None, active_sent=None, next_action_at=None,
                    last_error={"message": "Sin instancia de WhatsApp conectada", "at": datetime.now(timezone.utc)})
-        return True  # not a crash — just no instance right now; retry on the next idle tick
+        # Not a crash — just no instance right now. A short pause here (unlike
+        # the True/continue this used to return) keeps a permanently-disconnected
+        # partition from busy-polling Mongo several times a second forever.
+        return "no_instance_pause", msgs_in_batch, next_break_at
 
-    _set_state(db, phase="sending", active_total=job_size, active_sent=job_index, active_batch=False, last_error=None)
+    _set_state(db, partition, phase="sending", active_total=job_size, active_sent=job_index, active_batch=False, last_error=None)
 
+    from app import scheduler as _sched
     typing_ms = random.randint(800, 1800)
     ok = _sched._send_message(
         db, company_id, to_number, message, batch_id, delay_ms=typing_ms,
         sent_by_username=item.get("sent_by_username") or "", sent_by_name=item.get("sent_by_name") or "",
-        user_id=item.get("user_id") or "",
+        user_id=user_id,
     )
     # Daily cap exhausted: reset item to pending so it retries tomorrow, then
-    # signal the worker loop to pause for 5 min before the next attempt.
+    # signal this partition to pause for 5 min before its next attempt —
+    # other partitions are untouched.
     if ok == "skipped_daily_cap":
         db.db.send_queue_items.update_one(
             {"_id": item_id},
             {"$set": {"status": "pending", "started_at": None}},
         )
-        _set_state(db, phase="idle", active_total=None, active_sent=None,
+        _set_state(db, partition, phase="idle", active_total=None, active_sent=None,
                    next_action_at=None, active_batch=False,
                    last_error={"message": "Límite diario alcanzado — envíos pendientes continuarán mañana al reiniciarse el cupo", "at": datetime.now(timezone.utc)})
-        log.warning("[SendQueue] Daily cap hit — pausing queue for 5 min, pending items will retry tomorrow")
-        return "cap_paused"
+        log.warning("[SendQueue] partition=%s daily cap hit — pausing 5 min, pending items retry tomorrow", partition)
+        return "cap_paused", msgs_in_batch, next_break_at
 
-    # _send_message returns True (sent), False (failed), or a string skip-reason.
+    # _send_message returns True (sent), False/None (failed), or a string skip-reason.
     # If it failed, distinguish between a disconnected instance vs. a genuine send
     # failure (blocked number, bad payload, etc.) so we don't permanently burn items
     # that just hit a momentarily dead session.
-    if ok is False:
-        from app.scheduler import _any_instance_connected as _inst_ok
-        if not _inst_ok(db):
+    if ok is False or ok is None:
+        if not _user_has_connected_instance(db, user_id):
             # Instance went down mid-campaign — reset item so it retries when the
-            # session reconnects, then pause the worker loop for 2 min.
+            # session reconnects, then pause this partition for 2 min.
             db.db.send_queue_items.update_one(
                 {"_id": item_id},
                 {"$set": {"status": "pending", "started_at": None}},
             )
-            _set_state(db, phase="idle", active_total=None, active_sent=None,
+            _set_state(db, partition, phase="idle", active_total=None, active_sent=None,
                        next_action_at=None, active_batch=False,
                        last_error={"message": "Instancia desconectada durante el envío — cola pausada, reintentará al reconectar", "at": datetime.now(timezone.utc)})
-            log.warning("[SendQueue] instance disconnected mid-campaign — resetting item %s to pending, pausing 2 min", item_id)
-            return "disconnected_pause"
+            log.warning("[SendQueue] partition=%s instance disconnected mid-campaign — resetting item %s, pausing 2 min", partition, item_id)
+            return "disconnected_pause", msgs_in_batch, next_break_at
 
     status = ok if isinstance(ok, str) else ("sent" if ok else "failed")
     db.db.send_queue_items.update_one(
         {"_id": item_id},
         {"$set": {"status": status, "finished_at": datetime.now(timezone.utc)}},
     )
-    if ok is True:
-        _run_sent += 1
-    elif status != "skipped_nc_cap":
-        _run_failed += 1
-    _maybe_finish_batch(db, batch_id)
+    finished = _maybe_finish_batch(db, batch_id)
+    if finished:
+        _set_state(db, partition, last_completed=finished)
 
-    # Anti-spam delay before the NEXT item — skip if nothing is waiting behind this one.
-    if db.db.send_queue_items.count_documents({"status": "pending"}) == 0:
-        return True
-    cfg = (db.db.send_queue_state.find_one({"_id": "singleton"}) or {}).get("send_config") or {}
+    # Anti-spam delay before the NEXT item in THIS partition — skip if nothing
+    # of this partition's own is waiting behind it.
+    pending_filter = {"status": "pending", "user_id": user_id if user_id else {"$in": [None, ""]}}
+    if db.db.send_queue_items.count_documents(pending_filter) == 0:
+        return True, msgs_in_batch, next_break_at
+    cfg = _get_send_config(db, partition)
     msg_d, batch_s, batch_d = cfg.get("msgDelay", [25, 55]), cfg.get("batchSize", [3, 8]), cfg.get("batchDelay", [3, 8])
-    _msgs_in_batch += 1
-    if _msgs_in_batch >= _next_break_at:
-        _msgs_in_batch = 0
-        _next_break_at = random.randint(int(batch_s[0]), int(batch_s[1]))
-        return _antispam_wait(db, True, random.uniform(int(batch_d[0]) * 60, int(batch_d[1]) * 60), job_size, job_index + 1)
-    return _antispam_wait(db, False, random.uniform(int(msg_d[0]), int(msg_d[1])), job_size, job_index + 1)
+    msgs_in_batch += 1
+    if msgs_in_batch >= next_break_at:
+        msgs_in_batch = 0
+        next_break_at = random.randint(int(batch_s[0]), int(batch_s[1]))
+        ok_lease = _antispam_wait(db, partition, True, random.uniform(int(batch_d[0]) * 60, int(batch_d[1]) * 60), job_size, job_index + 1)
+        return (ok_lease if ok_lease else False), msgs_in_batch, next_break_at
+    ok_lease = _antispam_wait(db, partition, False, random.uniform(int(msg_d[0]), int(msg_d[1])), job_size, job_index + 1)
+    return (ok_lease if ok_lease else False), msgs_in_batch, next_break_at
 
 
 def _sweep_interrupted_items(db):
@@ -328,8 +448,62 @@ def _sweep_interrupted_items(db):
         log.warning("[SendQueue] marked %d stuck item(s) as interrupted (never auto-retried)", result.modified_count)
 
 
-def _worker_loop():
-    global _msgs_in_batch, _next_break_at, _run_sent, _run_failed
+def _partition_worker(partition: str, user_id: str):
+    """Owns exactly one partition's queue until it's empty, then exits — the
+    dispatcher respawns it the next time an item shows up for this partition.
+    Mirrors scheduler.py's one-thread-per-job model: independent anti-spam
+    pacing, zero blocking on any other partition's activity."""
+    from app.database import MongoDBManager
+    db = MongoDBManager()
+    msgs_in_batch = 0
+    next_break_at = 0
+    pending_filter = {"status": "pending", "user_id": user_id if user_id else {"$in": [None, ""]}}
+
+    try:
+        while True:
+            item = db.db.send_queue_items.find_one_and_update(
+                pending_filter,
+                {"$set": {"status": "sending", "started_at": datetime.now(timezone.utc)}},
+                sort=[("_id", 1)],
+            )
+            if item is None:
+                _set_state(db, partition, phase="idle", active_total=None, active_sent=None,
+                           next_action_at=None, active_batch=False)
+                return
+
+            if next_break_at == 0:
+                cfg = _get_send_config(db, partition)
+                batch_s = cfg.get("batchSize", [3, 8])
+                next_break_at = random.randint(int(batch_s[0]), int(batch_s[1]))
+
+            if not _renew_lease(db):
+                return  # lost leadership — another process's dispatcher will take over
+
+            result, msgs_in_batch, next_break_at = _process_item(db, partition, item, msgs_in_batch, next_break_at)
+            if result == "cap_paused":
+                time.sleep(5 * 60)
+                msgs_in_batch, next_break_at = 0, 0
+                continue
+            if result == "disconnected_pause":
+                time.sleep(2 * 60)
+                msgs_in_batch, next_break_at = 0, 0
+                continue
+            if result == "no_instance_pause":
+                time.sleep(15)
+                continue
+            if not result:
+                return  # lost leadership mid-wait
+    except Exception:
+        log.exception("[SendQueue] partition %s worker crashed", partition)
+    finally:
+        with _partition_threads_lock:
+            _partition_threads.pop(partition, None)
+
+
+def _dispatcher_loop():
+    """Elected-leader loop: watches for partitions with pending work and keeps
+    exactly one worker thread alive per partition. Does no sending itself —
+    all sending happens inside _partition_worker threads."""
     from app.database import MongoDBManager
     db = MongoDBManager()
     _ensure_lease_doc(db)
@@ -343,50 +517,44 @@ def _worker_loop():
                     time.sleep(_LEASE_POLL_SEC)
                     continue
                 log.info("[SendQueue] %s acquired leadership", _WORKER_ID)
-                _msgs_in_batch = 0
-                _next_break_at = 0  # forces a fresh random pick on the first item below
+
+            if not _renew_lease(db):
+                is_leader = False
+                continue
 
             _sweep_interrupted_items(db)
 
-            item = db.db.send_queue_items.find_one_and_update(
-                {"status": "pending"},
-                {"$set": {"status": "sending", "started_at": datetime.now(timezone.utc)}},
-                sort=[("_id", 1)],
-            )
-            if item is None:
-                _set_state(db, phase="idle", active_total=None, active_sent=None, next_action_at=None, active_batch=False)
-                if _run_sent or _run_failed:
-                    _run_sent = _run_failed = 0  # already flushed via last_completed inside _maybe_finish_batch
-                _wake_event.wait(timeout=_LEASE_POLL_SEC)
-                _wake_event.clear()
-                if not _renew_lease(db):
-                    is_leader = False
-                continue
+            raw_user_ids = db.db.send_queue_items.distinct("user_id", {"status": "pending"})
+            partitions_needed = {(uid or _LEGACY_PARTITION): (uid or "") for uid in raw_user_ids}
+            # Also normalise any bare "" that distinct() may return alongside None
+            if "" in raw_user_ids or None in raw_user_ids:
+                partitions_needed[_LEGACY_PARTITION] = ""
 
-            if _next_break_at == 0:
-                cfg = (db.db.send_queue_state.find_one({"_id": "singleton"}) or {}).get("send_config") or {}
-                batch_s = cfg.get("batchSize", [3, 8])
-                _next_break_at = random.randint(int(batch_s[0]), int(batch_s[1]))
+            with _partition_threads_lock:
+                for partition, uid in partitions_needed.items():
+                    existing = _partition_threads.get(partition)
+                    if existing and existing.is_alive():
+                        continue
+                    t = threading.Thread(
+                        target=_partition_worker, args=(partition, uid),
+                        daemon=True, name=f"send-partition-{partition}",
+                    )
+                    _partition_threads[partition] = t
+                    t.start()
+                    log.info("[SendQueue] spawned worker for partition=%s", partition)
 
-            result = _process_item(db, item)
-            if result == "cap_paused":
-                time.sleep(5 * 60)
-                continue
-            if result == "disconnected_pause":
-                time.sleep(2 * 60)
-                continue
-            if not result:
-                is_leader = False
+            _wake_event.wait(timeout=_LEASE_POLL_SEC)
+            _wake_event.clear()
 
         except Exception:
-            log.exception("[SendQueue] worker loop error")
+            log.exception("[SendQueue] dispatcher loop error")
             time.sleep(_LEASE_POLL_SEC)
 
 
 def start_send_now_worker():
-    """Launch the send-now worker as a daemon thread. Call once at startup — safe
-    to call in every uvicorn worker process, since the lease ensures only one
-    of them is ever actually sending at a time."""
-    t = threading.Thread(target=_worker_loop, daemon=True, name="send-now-worker")
+    """Launch the send-now dispatcher as a daemon thread. Call once at startup
+    — safe to call in every uvicorn worker process, since the lease ensures
+    only one of them is ever actually dispatching partition workers at a time."""
+    t = threading.Thread(target=_dispatcher_loop, daemon=True, name="send-now-dispatcher")
     t.start()
-    log.info("Send-now worker started (id=%s)", _WORKER_ID)
+    log.info("Send-now dispatcher started (id=%s)", _WORKER_ID)

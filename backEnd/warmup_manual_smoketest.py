@@ -1,6 +1,12 @@
 """
 Test manual del sistema warmup.
-Ejecutar desde backEnd/:  python test_warmup.py
+Ejecutar desde backEnd/:  python warmup_manual_smoketest.py
+
+Renombrado desde test_warmup.py (2026-09-04): este script hace sys.exit(1) a
+nivel de módulo si faltan instancias/pares (líneas de abajo), y si TODO está
+listo llega a mandar un mensaje real de WhatsApp y una llamada real al LLM
+como efecto secundario de solo importarlo — con el prefijo test_*.py, un
+`pytest backEnd/` sin acotar a tests/ podía disparar cualquiera de los dos.
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))

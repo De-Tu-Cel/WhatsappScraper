@@ -8,22 +8,28 @@ const Joyride = dynamic(
   { ssr: false }
 )
 
-const TOUR_TARGETS = [
-  '#tour-sidebar',
-  '#tour-top-controls',
-  '#tour-nav-instances',
-  '#tour-nav-single',
-  '#tour-nav-batch',
-  '#tour-nav-csv',
-  '#tour-nav-database',
-  '#tour-nav-search',
-  '#tour-nav-blacklist',
-  '#tour-nav-convs',
-  '#tour-nav-schedule',
-  '#tour-nav-campaign',
-  '#tour-nav-analytics',
-  '#tour-nav-warmup',
-  '#tour-settings',
+// navKey gates a step to users who actually have that nav item in their sidebar
+// (visibleNavItems already filters admin-only items out for regular users, so
+// #tour-nav-instances/#tour-nav-warmup/#tour-nav-admin don't exist in the DOM for
+// them — without this gate Joyride would try to spotlight a target that isn't
+// there). Steps with no navKey (sidebar, top controls, settings) always show.
+const TOUR_STEPS_META = [
+  { target: '#tour-sidebar' },
+  { target: '#tour-top-controls' },
+  { target: '#tour-nav-instances', navKey: 'instances' },
+  { target: '#tour-nav-single',    navKey: 'single' },
+  { target: '#tour-nav-batch',     navKey: 'batch' },
+  { target: '#tour-nav-csv',       navKey: 'csv' },
+  { target: '#tour-nav-database',  navKey: 'database' },
+  { target: '#tour-nav-search',    navKey: 'search' },
+  { target: '#tour-nav-blacklist', navKey: 'blacklist' },
+  { target: '#tour-nav-convs',     navKey: 'convs' },
+  { target: '#tour-nav-schedule',  navKey: 'schedule' },
+  { target: '#tour-nav-campaign',  navKey: 'campaign' },
+  { target: '#tour-nav-analytics', navKey: 'analytics' },
+  { target: '#tour-nav-warmup',    navKey: 'warmup' },
+  { target: '#tour-nav-admin',     navKey: 'admin' },
+  { target: '#tour-settings' },
 ]
 
 const JOYRIDE_OPTIONS = {
@@ -101,10 +107,17 @@ export default function AppTour({ username, navigate, navKeys }) {
   const { t } = useLang()
   const tl = t.tour
 
-  const tourSteps = TOUR_TARGETS.map((target, i) => ({
+  // Zip metadata with translated content by original index BEFORE filtering, so
+  // step i's content always lines up with TOUR_STEPS_META[i] regardless of which
+  // steps get dropped for this user's role.
+  const tourMeta = TOUR_STEPS_META
+    .map((meta, i) => ({ ...meta, title: tl.steps[i]?.title, content: tl.steps[i]?.content }))
+    .filter(meta => !meta.navKey || (navKeys && navKeys.includes(meta.navKey)))
+
+  const tourSteps = tourMeta.map(({ target, title, content }) => ({
     target,
-    title:        tl.steps[i]?.title,
-    content:      tl.steps[i]?.content,
+    title,
+    content,
     placement:    'right',
     disableBeacon: true,
   }))
@@ -128,10 +141,9 @@ export default function AppTour({ username, navigate, navKeys }) {
       return
     }
     if (type === 'step:before') {
-      const target = TOUR_TARGETS[index]
-      if (target?.startsWith('#tour-nav-') && navigate && navKeys) {
-        const key = target.replace('#tour-nav-', '')
-        const navIndex = navKeys.indexOf(key)
+      const navKey = tourMeta[index]?.navKey
+      if (navKey && navigate && navKeys) {
+        const navIndex = navKeys.indexOf(navKey)
         if (navIndex !== -1) navigate(navIndex)
       }
     }

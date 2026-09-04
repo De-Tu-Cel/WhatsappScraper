@@ -55,6 +55,13 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
   const [locked,         setLocked]         = useState(true)
   const [unlockWarnOpen, setUnlockWarnOpen] = useState(false)
 
+  // Timeout de inactividad — también global, pero no requiere el candado (no es
+  // tan riesgoso de tocar como la instrucción base).
+  const [idleHours,   setIdleHours]   = useState(48)
+  const [idleSaving,  setIdleSaving]  = useState(false)
+  const [idleSaved,   setIdleSaved]   = useState(false)
+  const [idleError,   setIdleError]   = useState('')
+
   const loadConfig = useCallback(async () => {
     if (!companyId) return
     setLoading(true); setError(''); setSaved(false)
@@ -80,6 +87,7 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
       if (r.ok) {
         setGlobalDefault(d.default_system_prompt || '')
         setGlobalPrompt(d.system_prompt?.trim() ? d.system_prompt : (d.default_system_prompt || ''))
+        setIdleHours(d.idle_timeout_hours ?? 48)
       }
     } catch {
       // silencioso — la instrucción base es "avanzado", no bloquea el resto del diálogo
@@ -87,6 +95,25 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
       setGlobalLoading(false)
     }
   }, [companyId])
+
+  async function handleSaveIdleHours(hours) {
+    setIdleSaving(true); setIdleError('')
+    try {
+      const r = await fetch('/api/conversations/ai-global-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idle_timeout_hours: hours }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setIdleError(d.detail || `Error ${r.status}`); return }
+      setIdleSaved(true)
+      setTimeout(() => setIdleSaved(false), 2000)
+    } catch (e) {
+      setIdleError(e.message)
+    } finally {
+      setIdleSaving(false)
+    }
+  }
 
   async function handleSaveGlobalPrompt() {
     setGlobalSaving(true); setGlobalError('')
@@ -244,6 +271,61 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
               {error}
             </Alert>
           )}
+
+          <Divider sx={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+            <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, px: 1 }}>
+              {s.aiCfgIdleTitle}
+            </Typography>
+          </Divider>
+
+          <Box>
+            <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.72rem', lineHeight: 1.5, mb: 1.5 }}>
+              {s.aiCfgIdleHint}
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', mb: 1 }}>
+              <Box sx={{
+                px: 1.5, py: 0.25, borderRadius: 99,
+                bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.15)',
+                border: '1px solid rgba(var(--accent-rgb,99,102,241),0.3)',
+              }}>
+                <Typography sx={{ color: 'var(--accent,#a5b4fc)', fontWeight: 700, fontSize: '0.85rem' }}>
+                  {idleHours < 24 ? s.aiCfgIdleHours.replace('{h}', idleHours) : s.aiCfgIdleDays.replace('{d}', Math.round(idleHours / 24 * 10) / 10)}
+                </Typography>
+              </Box>
+            </Box>
+            <Slider
+              value={idleHours}
+              onChange={(_, v) => setIdleHours(v)}
+              onChangeCommitted={(_, v) => handleSaveIdleHours(v)}
+              min={6} max={168} step={6}
+              marks={[
+                { value: 6, label: '6h' },
+                { value: 24, label: '1d' },
+                { value: 48, label: '2d' },
+                { value: 168, label: '7d' },
+              ]}
+              disabled={idleSaving}
+              sx={{
+                color: 'var(--accent,#6366f1)',
+                '& .MuiSlider-markLabel': { color: 'rgba(255,255,255,0.25)', fontSize: '0.68rem' },
+                '& .MuiSlider-track': { border: 'none' },
+                '& .MuiSlider-thumb': {
+                  width: 18, height: 18,
+                  '&:hover, &.Mui-active': { boxShadow: '0 0 0 8px rgba(var(--accent-rgb,99,102,241),0.16)' },
+                },
+              }}
+            />
+            {idleSaved && (
+              <Typography sx={{ color: '#4ade80', fontSize: '0.72rem', mt: 0.5, display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <CheckCircleIcon sx={{ fontSize: 13 }} /> {s.aiCfgGlobalSaved}
+              </Typography>
+            )}
+            {idleError && (
+              <Alert severity="error" sx={{ mt: 1, bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', '& .MuiAlert-icon': { color: '#f87171' }, fontSize: '0.8rem' }}>
+                {idleError}
+              </Alert>
+            )}
+          </Box>
 
           <Divider sx={{ borderColor: 'rgba(255,255,255,0.07)' }}>
             <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, px: 1 }}>

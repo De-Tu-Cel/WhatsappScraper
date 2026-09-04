@@ -104,7 +104,7 @@ function CountSelector({ numResults, setNumResults, showCount, show, size = 'md'
           const v = e.target.value.replace(/\D/g, '')
           if (v === '') { setDraft(''); return }
           const n = parseInt(v, 10)
-          setDraft(n > 50 ? '50' : v)
+          setDraft(n > 200 ? '200' : v)
         }}
         onBlur={e => commitDraft(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitDraft(draft) } }}

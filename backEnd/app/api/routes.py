@@ -2416,6 +2416,8 @@ def _waha_auto_register_inbound(db, number: str, session_name: str = "") -> str:
     The company gets status='inbound' so it's visually distinct from scraped leads.
     """
     from datetime import datetime as _dt
+    from bson import ObjectId
+    from pymongo.errors import DuplicateKeyError
     clean = "".join(filter(str.isdigit, number))
     # Guard: another concurrent request may have just created this contact
     existing = db.find_company_id_by_phone(clean)
@@ -2429,13 +2431,25 @@ def _waha_auto_register_inbound(db, number: str, session_name: str = "") -> str:
         "source": "inbound_whatsapp",
         "via_instance": session_name,
     })
-    db.insert_contact({
-        "company_id": company_id,
-        "type": "whatsapp",
-        "value": clean,
-        "source": "inbound_whatsapp",
-        "is_primary": True,
-    })
+    try:
+        db.insert_contact({
+            "company_id": company_id,
+            "type": "whatsapp",
+            "value": clean,
+            "source": "inbound_whatsapp",
+            "is_primary": True,
+        })
+    except DuplicateKeyError:
+        # Lost the race — another concurrent webhook call already registered this
+        # exact number a moment earlier (see the unique index comment in
+        # database.py). Roll back the orphaned company we just created and defer
+        # to whichever one actually won.
+        db.db.companies.delete_one({"_id": ObjectId(company_id)})
+        winner = db.find_company_id_by_phone(clean)
+        if winner:
+            print(f"[WAHA Webhook] Lost auto-register race for {display} — deferring to {winner}")
+            return winner
+        raise
     db.db.jid_map.update_one(
         {"jid": clean},
         {"$set": {"company_id": company_id, "updated_at": _dt.now()}},
@@ -3037,6 +3051,8 @@ WASENDER_STATUS_MAP = {
 def _wasender_auto_register_inbound(db, number: str, instance_name: str = "") -> str:
     """Create a minimal company + contact record for an unknown inbound WasenderAPI number."""
     from datetime import datetime as _dt
+    from bson import ObjectId
+    from pymongo.errors import DuplicateKeyError
     clean = "".join(filter(str.isdigit, number))
     existing = db.find_company_id_by_phone(clean)
     if existing:
@@ -3049,13 +3065,22 @@ def _wasender_auto_register_inbound(db, number: str, instance_name: str = "") ->
         "source": "inbound_whatsapp",
         "via_instance": instance_name,
     })
-    db.insert_contact({
-        "company_id": company_id,
-        "type": "whatsapp",
-        "value": clean,
-        "source": "inbound_whatsapp",
-        "is_primary": True,
-    })
+    try:
+        db.insert_contact({
+            "company_id": company_id,
+            "type": "whatsapp",
+            "value": clean,
+            "source": "inbound_whatsapp",
+            "is_primary": True,
+        })
+    except DuplicateKeyError:
+        # Lost the race — see the matching comment in _waha_auto_register_inbound.
+        db.db.companies.delete_one({"_id": ObjectId(company_id)})
+        winner = db.find_company_id_by_phone(clean)
+        if winner:
+            print(f"[Wasender Webhook] Lost auto-register race for {display} — deferring to {winner}")
+            return winner
+        raise
     db.db.jid_map.update_one(
         {"jid": clean},
         {"$set": {"company_id": company_id, "updated_at": _dt.now()}},

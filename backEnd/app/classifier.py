@@ -1357,6 +1357,18 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
         # necesita esto: reaction_time_min está redondeado a 0.1 min (6s) para mostrar
         # en UI, y ese redondeo por sí solo puede mover una respuesta de 9.6s a "12s"
         # y hacerla cruzar el umbral incorrectamente.
+        # Cómo de viejo puede ser el outbound emparejado antes de que el hueco deje de
+        # significar "tiempo de reacción" y pase a ser solo ruido. Casos reales de
+        # producción confirmaron el problema: un company con 2 mensajes en total
+        # (outbound "Hola" el 6 de julio, inbound "Seguimos atentos a su proceso..."
+        # el 31 de agosto — 56 días después) reportaba reaction_time_min=80615.8
+        # (1343h36m), un valor matemáticamente correcto pero sin ningún sentido como
+        # métrica — ese inbound es una plantilla de seguimiento de CRM, no alguien
+        # reaccionando rápido al contacto original. Auditoría sobre 49 empresas: todo
+        # lo legítimo cae por debajo de ~9h; los únicos casos por encima de 24h (3 de
+        # 49) resultaron ser exactamente este tipo de emparejamiento sin sentido —
+        # hay margen limpio para cortar en 48h sin descartar ninguna reacción real.
+        _STALE_REACTION_CUTOFF_SECONDS = 48 * 3600
         if last_outbound:
             outbound_body = last_outbound.get("message_body") or last_outbound.get("message_text") or ""
             last_sent_at = last_outbound.get("created_at")
@@ -1364,7 +1376,7 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
                 delta = received_at - last_sent_at
                 raw_seconds = delta.total_seconds()
                 minutes = round(raw_seconds / 60, 1)
-                if minutes < 0:
+                if minutes < 0 or raw_seconds > _STALE_REACTION_CUTOFF_SECONDS:
                     reaction_time_min = None
                     raw_seconds = None
                 else:

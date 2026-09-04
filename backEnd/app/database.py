@@ -81,6 +81,23 @@ def _get_client() -> MongoClient:
         except Exception:
             pass
         try:
+            # Partial and scoped to source="inbound_whatsapp" only — a real scraped
+            # number CAN legitimately belong to multiple companies (e.g. a branch and
+            # its parent, both scraped separately; find_company_id_by_phone's own
+            # comment documents this), so a plain unique index on `value` would break
+            # that. This only guards the auto-registration path: two near-simultaneous
+            # webhook events for the same never-before-seen number (confirmed in
+            # production 72ms apart) both passing the find-then-insert check in
+            # _waha_auto_register_inbound/_wasender_auto_register_inbound before
+            # either finishes, creating two separate "+<number>" company docs for
+            # the same person. Mirrors the message_id unique-index fix above.
+            db.contacts.create_index(
+                "value", unique=True,
+                partialFilterExpression={"source": "inbound_whatsapp", "type": "whatsapp"},
+            )
+        except Exception:
+            pass  # ya existen duplicados — el índice se creará tras limpiarlos
+        try:
             db.jid_map.create_index([("company_id", 1)])
         except Exception:
             pass
@@ -608,12 +625,23 @@ class MongoDBManager:
             # entre el 23-jun y 6-jul de 2026, antes de este fix).
             # Skip personal-contact companies (.local domain) — they flood inbound messages
             # from personal WhatsApp chats and would keep the spinner permanently active.
+            # Also skip source="inbound_whatsapp" (an unrecognized number messaged us
+            # first, auto-registered as a company named after its own phone number) —
+            # explicit product decision: these aren't scraped commercial prospects, so
+            # the "rate this business's customer service" prompt makes no sense for them
+            # (confirmed in production: a message about "your month-end invoice"
+            # addressed to the account owner by name got scored as a prospect reply).
             if message_body and message_body != "[media]" and company_id not in (None, "unknown", "manual"):
                 _skip_analysis = False
                 try:
                     from bson import ObjectId
-                    _co = self.db.companies.find_one({"_id": ObjectId(company_id)}, {"domain": 1})
-                    _skip_analysis = bool(_co and str(_co.get("domain", "")).endswith(".local"))
+                    _co = self.db.companies.find_one({"_id": ObjectId(company_id)}, {"domain": 1, "source": 1})
+                    _skip_analysis = bool(
+                        _co and (
+                            str(_co.get("domain", "")).endswith(".local")
+                            or _co.get("source") == "inbound_whatsapp"
+                        )
+                    )
                 except Exception:
                     pass
                 if not _skip_analysis:

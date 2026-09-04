@@ -192,7 +192,7 @@ function ConversationItemSkeleton() {
 }
 
 // Comparator ignores onClick (it's always () => setSelected(conv), stable behavior)
-const ConversationItem = memo(function _ConversationItem({ conv, active, onClick }) {
+const ConversationItem = memo(function ConversationItemImpl({ conv, active, onClick }) {
   const { lang } = useLang()
   const isInbound = conv.last_direction === 'inbound'
   const domain = conv.domain || conv.website?.replace(/https?:\/\/(www\.)?/, '').split('/')[0] || ''
@@ -497,7 +497,7 @@ function VCardBubble({ text, isOut }) {
   )
 }
 
-const MessageBubble = memo(function _MessageBubble({ msg, onReply }) {
+const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
   const { lang } = useLang()
   const isOut  = msg.direction === 'outbound'
   const isAI   = Boolean(msg.ai_generated)
@@ -705,6 +705,13 @@ export default function Conversations({ isActive } = {}) {
       setLoading(false)
     }
   }, [])
+
+  const filtered = useMemo(() => convs.filter(c => {
+    if (myConvsOnly && c.sent_by_username !== user?.username) return false
+    const q = search.toLowerCase()
+    return (c.company_name || '').toLowerCase().includes(q) ||
+           (c.industry     || '').toLowerCase().includes(q)
+  }), [convs, myConvsOnly, user?.username, search])
 
   // When a notification card is clicked, auto-select the matching conversation
   useEffect(() => {
@@ -1044,13 +1051,6 @@ export default function Conversations({ isActive } = {}) {
     }
     finally { setSending(false) }
   }, [selectedNums, waNumbers, selected, fetchThread, dailyStats, fetchDailyStats, lang])
-
-  const filtered = useMemo(() => convs.filter(c => {
-    if (myConvsOnly && c.sent_by_username !== user?.username) return false
-    const q = search.toLowerCase()
-    return (c.company_name || '').toLowerCase().includes(q) ||
-           (c.industry     || '').toLowerCase().includes(q)
-  }), [convs, myConvsOnly, user?.username, search])
 
   // Stats per registered company number — O(N) with pre-built normMap
   const numStats = useMemo(() => {

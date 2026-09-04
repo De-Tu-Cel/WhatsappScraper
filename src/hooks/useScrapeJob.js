@@ -27,7 +27,10 @@ export function useScrapeJob(surface) {
   // (in-flight $inc) mientras el chunk termina de drenarse.
   const frozenCountRef = useRef(null)
 
-  const poll = useCallback(async (id) => {
+  // Named function expression so the recursive self-reference below resolves
+  // to this function's own binding instead of the outer `const poll` (still
+  // in its temporal dead zone from the closure's point of view).
+  const poll = useCallback(async function poll(id) {
     if (!id) return
     try {
       const res = await authFetch(`/api/scrape-jobs/${id}`)

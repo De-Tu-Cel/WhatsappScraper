@@ -2907,7 +2907,7 @@ export default function InstancesPanel() {
               {emuPreview.has_active_session && (
                 <Box sx={{ bgcolor: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', borderRadius: 1.5, p: 1.5, display: 'flex', gap: 1, alignItems: 'flex-start' }}>
                   <Typography sx={{ fontSize: '0.78rem', color: '#60a5fa', lineHeight: 1.5 }}>
-                    <strong>Sesión activa detectada</strong> — se retomará el número {emuPreview.session_phone} desde el paso "{emuPreview.session_step}" sin comprar uno nuevo.
+                    <strong>Sesión activa detectada</strong> — se retomará el número {emuPreview.session_phone} desde el paso &quot;{emuPreview.session_step}&quot; sin comprar uno nuevo.
                   </Typography>
                 </Box>
               )}

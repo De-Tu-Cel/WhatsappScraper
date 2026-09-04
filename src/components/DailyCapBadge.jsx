@@ -43,7 +43,7 @@ export default function DailyCapBadge({ stats, selectionCount = 0, newSelectionC
               ? <>Estimated for that day: {available} available of {cap} ({used} already scheduled)</>
               : <>Estimado para ese día: {available} disponibles de {cap} ({used} ya programados)</>)
           : (lang === 'en'
-              ? <>Today you can contact up to {available} of {cap} — you've used {used} ({stats.total_sent} sent{stats.scheduled_today ? ` + ${stats.scheduled_today} scheduled` : ''})</>
+              ? <>Today you can contact up to {available} of {cap} — you&apos;ve used {used} ({stats.total_sent} sent{stats.scheduled_today ? ` + ${stats.scheduled_today} scheduled` : ''})</>
               : <>Hoy puedes contactar hasta {available} de {cap} — ya usaste {used} ({stats.total_sent} enviados{stats.scheduled_today ? ` + ${stats.scheduled_today} programados` : ''})</>)}
       </Typography>
       {(stats.instances || []).map(r => (

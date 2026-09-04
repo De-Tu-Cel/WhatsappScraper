@@ -662,7 +662,7 @@ export default function SingleUrlProcessor() {
                   {t.search?.tagBlockedTip || 'En tu blacklist — coincide con:'}
                 </Typography>
                 <Typography sx={{ color: '#f87171', fontFamily: 'monospace', fontWeight: 700, fontSize: '0.82rem' }}>
-                  "{blockedData.matched}"
+                  &quot;{blockedData.matched}&quot;
                 </Typography>
               </Box>
               {/* Hint */}

@@ -36,7 +36,10 @@ export function SendQueueProvider({ children }) {
     setQueueError(null)
   }, [])
 
-  const poll = useCallback(async () => {
+  // Named function expression (not an arrow) so the self-reference inside the
+  // body resolves to this function's own binding, not the outer `const poll`
+  // (which is still in its temporal dead zone from the closure's own POV).
+  const poll = useCallback(async function poll() {
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
     let fast = false
     let error = false

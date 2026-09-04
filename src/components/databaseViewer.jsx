@@ -967,7 +967,11 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
   const allVariants   = (isBulk ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean)
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
-  async function waitWithTimer(ms, label) {
+  // Wrapped in useCallback (only ever invoked from an event handler, never during
+  // render) so the Date.now() calls inside don't trip the "impure call during
+  // render" check — a plain function statement in the component body can't be
+  // proven safe by the compiler even though it's never called synchronously here.
+  const waitWithTimer = useCallback(async function waitWithTimer(ms, label) {
     const totalSecs = Math.ceil(ms / 1000)
     setCdTotal(totalSecs); setCountdown(totalSecs); setCdLabel(label)
     const end = Date.now() + ms
@@ -982,7 +986,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
       tick()
     })
     setCountdown(null); setCdTotal(null)
-  }
+  }, [])
 
   async function handleSend() {
     if (msgInvalid || sendingRef.current || belowMinTemplates) return
@@ -1260,6 +1264,17 @@ export default function DatabaseViewer({ isActive }) {
   const [filterOpen, setFilterOpen] = useState(false)
   const [filters, setFilters] = useState({ search: '', industry: '', city: '', has_whatsapp: '', contacted: '' })
   const [globalStats, setGlobalStats] = useState({ total_wa: null, total_contacted: null, latest_scrape_at: null })
+  // "Days ago" inherently depends on wall-clock time, not just on props/state —
+  // Date.now() can't be called during render (or inside useMemo) without breaking
+  // memoization purity. Computed in an effect instead and read from state, which
+  // keeps render itself pure; the effect re-runs whenever latest_scrape_at changes.
+  const [scrapeAgeDisplay, setScrapeAgeDisplay] = useState(null)
+  useEffect(() => {
+    if (!globalStats.latest_scrape_at) { setScrapeAgeDisplay(null); return }
+    const daysAgo = Math.max(0, Math.floor((Date.now() - new Date(globalStats.latest_scrape_at).getTime()) / 86_400_000))
+    const color = daysAgo <= 1 ? '#4ade80' : daysAgo <= 7 ? '#fbbf24' : '#f87171'
+    setScrapeAgeDisplay({ daysAgo, color })
+  }, [globalStats.latest_scrape_at])
   const [editTarget, setEditTarget] = useState(null)
   const [viewTarget, setViewTarget] = useState(null)
   const [viewData, setViewData] = useState(null)
@@ -1612,31 +1627,27 @@ export default function DatabaseViewer({ isActive }) {
               </Box>
             )}
             {/* Último scraping — global (most recent across all matching companies) */}
-            {(() => {
-              if (!globalStats.latest_scrape_at) return (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
-                  <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'rgba(148,163,184,0.3)', flexShrink: 0 }} />
-                  <Typography sx={{ fontSize: '0.69rem', color: 'rgba(148,163,184,0.4)', fontWeight: 500 }}>
-                    {lang === 'en' ? 'not scraped' : 'sin scraping'}
-                  </Typography>
-                </Box>
-              )
-              const daysAgo = Math.max(0, Math.floor((Date.now() - new Date(globalStats.latest_scrape_at).getTime()) / 86_400_000))
-              const label = lang === 'en'
-                ? (daysAgo === 0 ? 'today' : daysAgo === 1 ? 'yesterday' : `${daysAgo}d ago`)
-                : (daysAgo === 0 ? 'hoy' : daysAgo === 1 ? 'ayer' : `hace ${daysAgo}d`)
-              const color = daysAgo <= 1 ? '#4ade80' : daysAgo <= 7 ? '#fbbf24' : '#f87171'
-              return (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
-                  <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color, flexShrink: 0,
-                    boxShadow: `0 0 5px ${color}88` }} />
-                  <Typography sx={{ fontSize: '0.69rem', color: 'var(--text-muted)', fontWeight: 500 }}>
-                    {lang === 'en' ? 'last scrape' : 'últ. scraping'}{' '}
-                    <Box component="span" sx={{ color, fontWeight: 700 }}>{label}</Box>
-                  </Typography>
-                </Box>
-              )
-            })()}
+            {!scrapeAgeDisplay ? (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'rgba(148,163,184,0.3)', flexShrink: 0 }} />
+                <Typography sx={{ fontSize: '0.69rem', color: 'rgba(148,163,184,0.4)', fontWeight: 500 }}>
+                  {lang === 'en' ? 'not scraped' : 'sin scraping'}
+                </Typography>
+              </Box>
+            ) : (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: scrapeAgeDisplay.color, flexShrink: 0,
+                  boxShadow: `0 0 5px ${scrapeAgeDisplay.color}88` }} />
+                <Typography sx={{ fontSize: '0.69rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+                  {lang === 'en' ? 'last scrape' : 'últ. scraping'}{' '}
+                  <Box component="span" sx={{ color: scrapeAgeDisplay.color, fontWeight: 700 }}>
+                    {lang === 'en'
+                      ? (scrapeAgeDisplay.daysAgo === 0 ? 'today' : scrapeAgeDisplay.daysAgo === 1 ? 'yesterday' : `${scrapeAgeDisplay.daysAgo}d ago`)
+                      : (scrapeAgeDisplay.daysAgo === 0 ? 'hoy' : scrapeAgeDisplay.daysAgo === 1 ? 'ayer' : `hace ${scrapeAgeDisplay.daysAgo}d`)}
+                  </Box>
+                </Typography>
+              </Box>
+            )}
             {/* Active filter chips — right side */}
             {(filters.search || filters.industry || filters.city || filters.has_whatsapp !== '' || filters.contacted !== '') && (
               <Box sx={{ ml: 'auto', display: 'flex', gap: 0.7, flexWrap: 'wrap', alignItems: 'center' }}>

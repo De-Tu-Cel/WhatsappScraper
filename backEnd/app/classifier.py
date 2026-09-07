@@ -807,11 +807,16 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
     Cheap rules resolve the obvious cases first (see _quick_classify) — only
     genuine ambiguity spends an LLM call."""
     if not _has_real_text(inbound_body):
-        # Audio/sticker/ubicación/contacto sin texto — no hay contenido que juzgar.
-        # No es "humano" con certeza, pero sin base para nada más determinista aquí
-        # (este es ya el fallback sin dato de tiempo) — no se manda al LLM un
-        # marcador literal como si fuera lo que escribió el prospecto.
-        return _quick_result_unrated("humano", "Respuesta multimedia sin texto — sin base para juzgar contenido")
+        stripped = (inbound_body or "").strip()
+        if stripped in NON_TEXT_PLACEHOLDERS:
+            # Audio/sticker/ubicación/contacto sin texto — un humano sí mandó algo real,
+            # solo que no hay contenido que juzgar.
+            return _quick_result_unrated("humano", "Respuesta multimedia sin texto — sin base para juzgar contenido")
+        # message_body vacío sin ningún placeholder — no es una respuesta real, es un
+        # registro fantasma (visto en prod: creado ms antes de nuestro propio outbound,
+        # artefacto del paso de verificación de número previo al envío). Antes se
+        # clasificaba "humano" por default, generando falsos positivos de "ya respondió".
+        return _quick_result_unrated("sin_respuesta", "Registro entrante sin contenido — no se considera una respuesta real")
 
     quick = _quick_classify(inbound_body, reaction_time_min)
     if quick is not None:

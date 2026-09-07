@@ -166,8 +166,18 @@ function createClient(sessionId) {
     }, delay)
   })
 
+  // whatsapp-web.js fires 'message' for protocol-level events too, not just real user
+  // text — e.g. 'e2e_notification' (the "encryption session established" system notice
+  // WhatsApp injects the first time a chat opens with a number, empty body). Forwarding
+  // these created phantom empty-body inbound records every time we contacted a new
+  // prospect, which the backend then logged and classified as if a human had replied.
+  const NON_CONTENT_MSG_TYPES = new Set([
+    'e2e_notification', 'notification_template', 'gp2', 'call_log', 'revoked', 'ciphertext', 'protocol',
+  ])
+
   client.on('message', async (msg) => {
     if (msg.fromMe) return
+    if (NON_CONTENT_MSG_TYPES.has(msg.type)) return
     let number = msg.from.replace('@s.whatsapp.net', '').replace('@c.us', '').replace('@lid', '')
     // @lid JIDs are Linked Device IDs (not real phone numbers) — resolve to the
     // actual contact number so the backend can match it to a known company.

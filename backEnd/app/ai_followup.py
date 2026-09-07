@@ -793,6 +793,12 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
     ai_wants_end = "[FIN]" in ai_text_raw
     ai_text = ai_text_raw.replace("[FIN]", "").strip()
 
+    # El prompt prohíbe los signos de apertura ¿/¡ (nadie los usa al escribir WhatsApp
+    # casual — es una de las señales anti-detección), pero DeepSeek no lo respeta de
+    # forma consistente (visto en prod: "¿tienen lo que busco?", "¿qué tiene de raro?").
+    # No hay forma de garantizarlo solo con el prompt, así que se refuerza aquí.
+    ai_text = ai_text.replace("¿", "").replace("¡", "")
+
     # Mark AI as typing (frontend polls this)
     db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": True}})
 

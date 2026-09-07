@@ -506,7 +506,7 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
   const media  = isVCard ? null : MEDIA_LABELS[raw.trim().toLowerCase()]
   const body   = raw || '—'
   const interactive = msg.interactive
-  const sentLabel = isOut ? (formatSenderNumber(msg.instance_number) || msg.instance_name || null) : null
+  const sentLabel = isOut ? (msg.instance_name || formatSenderNumber(msg.instance_number) || null) : null
   return (
     <Box sx={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start', mb: 0.8, px: 2 }}>
       <Box sx={{

@@ -3898,6 +3898,16 @@ async def api_wwebjs_webhook(request: Request):
         message_body = data.get("body", "")
         message_id = data.get("messageId", "")
 
+        # Defense-in-depth: wwebjs-service already filters these protocol-level event
+        # types before forwarding (e2e_notification is WhatsApp's "encryption session
+        # established" system notice, empty body, fired the first time a chat opens with
+        # a number — was getting saved and quick-classified as if a human had replied).
+        # Kept here too in case an older/unpatched service instance forwards one anyway.
+        _NON_CONTENT_MSG_TYPES = {"e2e_notification", "notification_template", "gp2",
+                                   "call_log", "revoked", "ciphertext", "protocol"}
+        if data.get("type") in _NON_CONTENT_MSG_TYPES:
+            return {"ok": True, "action": "ignored_protocol_event"}
+
         # wwebjs's msg.body for a media message without a caption is sometimes the raw
         # base64-encoded media data instead of an empty string (observed in prod: images
         # leaking full base64 blobs into message_body, which then got fed to the classifier

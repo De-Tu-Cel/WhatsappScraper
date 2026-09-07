@@ -143,6 +143,19 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup }) {
           }} />
         )}
       </Box>
+      {/* WhatsApp profile avatar — real photo when the provider exposed one (wwebjs),
+          initials fallback otherwise (also covers providers we don't fetch a photo for yet) */}
+      <Box sx={{
+        width: 26, height: 26, borderRadius: '50%', flexShrink: 0, overflow: 'hidden',
+        bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1.5px solid rgba(var(--accent-rgb,59,130,246),0.35)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        {inst.profile_pic_url
+          ? <Box component="img" src={inst.profile_pic_url} alt="" sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+          : <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, color: 'var(--accent,#60a5fa)' }}>
+              {(inst.profile_name || inst.label || inst.name || '?').slice(0, 2).toUpperCase()}
+            </Typography>}
+      </Box>
       {/* Name + number */}
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
@@ -167,8 +180,9 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup }) {
             </Typography>
           )}
         </Box>
-        <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', fontFamily: 'monospace', lineHeight: 1.2 }}>
-          {inst.number ? `+${inst.number}` : t.inst.noNumber}
+        <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', fontFamily: 'monospace', lineHeight: 1.2,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {inst.profile_name ? `${inst.profile_name} · ` : ''}{inst.number ? `+${inst.number}` : t.inst.noNumber}
         </Typography>
       </Box>
       {/* Right side: status label (resting) or action icons (hover) */}

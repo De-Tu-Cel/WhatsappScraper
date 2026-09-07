@@ -52,6 +52,7 @@ import PsychologyIcon from '@mui/icons-material/Psychology'
 import SyncAltIcon from '@mui/icons-material/SyncAlt'
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
 import CloseIcon from '@mui/icons-material/Close'
+import DownloadIcon from '@mui/icons-material/Download'
 import AndyBotBuilder from './AndyBotBuilder'
 import { isPlausibleLabel } from './scheduledSends'
 import GasBotModal from './GasBotModal'
@@ -250,6 +251,7 @@ export default function Analytics() {
   const [captureVisible, setCaptureVisible] = useState(false)
   const [expandedRows, setExpandedRows]     = useState(new Set())
   const [pendingReportConfirm, setPendingReportConfirm] = useState(null) // { row, filterNum, message, resolvesBy }
+  const [reportPreview, setReportPreview] = useState(null) // { url, fileName }
 
   function toggleExpand(company_id) {
     setExpandedRows(prev => {
@@ -422,16 +424,13 @@ export default function Analytics() {
         return
       }
 
-      // 5. Download
+      // 5. Preview in-app instead of downloading immediately — the download
+      // itself happens from the button inside the modal.
       const blob = await reportRes.blob()
       const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
       const name = (row.company_name || row.company_id || 'empresa').replace(/\s+/g, '_')
       const suffix = filterNum ? `_${filterNum.replace(/\D/g,'').slice(-4)}` : ''
-      a.href = url
-      a.download = `reporte-${name}${suffix}.pdf`
-      a.click()
-      URL.revokeObjectURL(url)
+      setReportPreview({ url, fileName: `reporte-${name}${suffix}.pdf` })
       notify('Reporte generado correctamente.', 'success')
     } catch (e) {
       notify(`Error inesperado: ${e?.message || 'intenta de nuevo'}`)
@@ -441,6 +440,22 @@ export default function Analytics() {
       setCaptureVisible(false)
     }
   }, [])
+
+  const closeReportPreview = useCallback(() => {
+    setReportPreview(prev => {
+      if (prev?.url) URL.revokeObjectURL(prev.url)
+      return null
+    })
+  }, [])
+
+  const downloadReportPreview = useCallback(() => {
+    if (!reportPreview) return
+    const a = document.createElement('a')
+    a.href = reportPreview.url
+    a.download = reportPreview.fileName
+    a.click()
+    closeReportPreview()
+  }, [reportPreview, closeReportPreview])
 
   // filterNum: si se pasa, filtra thread y contacto a ese número específico
   function openBotBuilder(row) {
@@ -1253,6 +1268,38 @@ export default function Analytics() {
             }}
             sx={{ bgcolor: '#f59e0b', color: '#000', textTransform: 'none', fontWeight: 700, '&:hover': { bgcolor: '#fbbf24' } }}>
             Descargar de todos modos
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!reportPreview} onClose={closeReportPreview} maxWidth="md" fullWidth
+        slotProps={{ paper: { sx: { bgcolor: 'var(--card-bg,#1e293b)', backgroundImage: 'none', color: 'var(--text,#f1f5f9)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 3, height: '90vh' } } }}>
+        <DialogTitle sx={{ pb: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, minWidth: 0 }}>
+            <PictureAsPdfIcon sx={{ fontSize: 20, color: '#ef4444' }} />
+            <Typography sx={{ fontWeight: 700, fontSize: '0.95rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {reportPreview?.fileName}
+            </Typography>
+          </Box>
+          <IconButton size="small" onClick={closeReportPreview} sx={{ color: 'var(--text-muted)' }}>
+            <CloseIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent sx={{ p: 0, flex: 1, display: 'flex' }}>
+          {reportPreview?.url && (
+            <embed src={reportPreview.url} type="application/pdf" style={{ width: '100%', height: '100%', border: 'none' }} />
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 1.5, gap: 1 }}>
+          <Button onClick={closeReportPreview} sx={{ color: 'var(--text-muted)', textTransform: 'none' }}>
+            Cerrar
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<DownloadIcon sx={{ fontSize: 18 }} />}
+            onClick={downloadReportPreview}
+            sx={{ bgcolor: 'var(--accent,#6366f1)', textTransform: 'none', fontWeight: 700 }}>
+            Descargar
           </Button>
         </DialogActions>
       </Dialog>

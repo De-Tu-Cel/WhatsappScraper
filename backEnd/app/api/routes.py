@@ -2734,6 +2734,8 @@ def api_waha_webhook(body: dict, background_tasks: BackgroundTasks):
                 timelock_active = reachout.get("isActive", False)
                 timelock_ends   = reachout.get("timeEnforcementEnds")
                 set_fields = {"number": me_id} if me_id else {}
+                if me.get("pushName"):
+                    set_fields["profile_name"] = me["pushName"]
                 set_fields["reachout_timelock"] = timelock_active
                 if timelock_ends:
                     set_fields["reachout_timelock_ends"] = timelock_ends
@@ -3863,6 +3865,13 @@ async def api_wwebjs_webhook(request: Request):
         )
         if data.get("phone"):
             db.db.instances.update_one({"name": instance_name}, {"$set": {"number": data["phone"]}})
+        _profile_fields = {}
+        if data.get("pushname"):
+            _profile_fields["profile_name"] = data["pushname"]
+        if data.get("profile_pic_url"):
+            _profile_fields["profile_pic_url"] = data["profile_pic_url"]
+        if _profile_fields:
+            db.db.instances.update_one({"name": instance_name}, {"$set": _profile_fields})
         return {"ok": True}
 
     if event == "message_ack":

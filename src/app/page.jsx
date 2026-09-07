@@ -337,7 +337,7 @@ function DashboardInner() {
           <Box sx={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
             {/* Settings panel */}
             <Box sx={{ display: settingsOpen ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-              <Settings />
+              <Settings settingsOpen={settingsOpen} />
             </Box>
             {/* Nav items — memo-wrapped so rightPanel state changes don't re-render the stack */}
             <NavContent items={visibleNavItems} active={active} settingsOpen={settingsOpen} mounted={mounted} />

@@ -369,17 +369,28 @@ function TimingSliderRow({ label, tooltip, value, onChange, min, max, step, unit
   )
 }
 
-function SendTimingSection() {
+function SendTimingSection({ settingsOpen }) {
   const { t } = useLang()
   const sc = t.sendConfig
   const [cfg, setCfg] = useState(() => loadSendConfig())
   const [tplOpen, setTplOpen] = useState(false)
   const [saved, setSaved] = useState(false)
+  const wasOpenRef = useRef(settingsOpen)
+
+  // Descartar cambios sin guardar al salir de la pantalla de Configuración —
+  // el tab sigue montado (el panel solo se oculta con display:none en page.jsx),
+  // así que sin esto el borrador quedaría "flotando" en memoria y reaparecería
+  // tal cual al volver a abrir Configuración.
+  useEffect(() => {
+    if (wasOpenRef.current && !settingsOpen) {
+      setCfg(loadSendConfig())
+    }
+    wasOpenRef.current = settingsOpen
+  }, [settingsOpen])
 
   function update(key, val) {
     const next = { ...cfg, [key]: val }
     setCfg(next)
-    saveSendConfig(next)
   }
 
   function handleSave() {
@@ -435,7 +446,7 @@ function SendTimingSection() {
 
 // Blacklist moved out to its own sidebar page — src/components/BlacklistPanel.jsx
 
-export default function Settings() {
+export default function Settings({ settingsOpen }) {
   const { user }                = useUser()
   const { t, lang }              = useLang()
   const [settings, setSettings] = useState(DEFAULT_SETTINGS)
@@ -750,7 +761,7 @@ export default function Settings() {
         </>}
 
         {/* ═══ TAB 2: Envíos ═══ */}
-        {activeTab === 2 && <SendTimingSection />}
+        {activeTab === 2 && <SendTimingSection settingsOpen={settingsOpen} />}
 
       </Box>
 

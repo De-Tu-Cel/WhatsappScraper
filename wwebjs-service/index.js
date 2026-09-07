@@ -113,14 +113,21 @@ function createClient(sessionId) {
     }, 90_000)
   })
 
-  client.on('ready', () => {
+  client.on('ready', async () => {
     clearTimeout(session.readyWatchdog)
     session.status = 'connected'
     session.qr = null
     session.phone = client.info?.wid?.user || null
     console.log(`[${sessionId}] Ready | phone=${session.phone}`)
     startPresenceHeartbeat(sessionId)
-    forwardWebhook({ event: 'session.status', sessionId, data: { status: 'connected', phone: session.phone } })
+
+    // Profile name + picture, shown in the Instances panel so it's clear who's
+    // behind each line — best-effort, never blocks the "connected" webhook.
+    const pushname = client.info?.pushname || null
+    let profilePicUrl = null
+    try { profilePicUrl = await client.getProfilePicUrl(client.info.wid._serialized) } catch (_) {}
+
+    forwardWebhook({ event: 'session.status', sessionId, data: { status: 'connected', phone: session.phone, pushname, profile_pic_url: profilePicUrl } })
   })
 
   client.on('auth_failure', (msg) => {

@@ -60,9 +60,15 @@ function startPresenceHeartbeat(sessionId) {
   }, (Math.random() * 30 + 15) * 60 * 1000)
 }
 
-function createClient(sessionId) {
+function createClient(sessionId, phoneNumber) {
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: sessionId, dataPath: SESSIONS_PATH }),
+    // Pairing-code linking instead of QR: whatsapp-web.js's initialize() branches on
+    // this option internally — when phoneNumber is set it never emits 'qr' at all,
+    // only 'code' (see requestPairingCode in the library). Default intervalMs (3min)
+    // gives a much wider window than a QR frame (~20s), useful when the phone being
+    // linked isn't in the same room as whoever's running this.
+    ...(phoneNumber ? { pairWithPhoneNumber: { phoneNumber, showNotification: true } } : {}),
     puppeteer: {
       puppeteer: puppeteerExtra,
       headless: true,
@@ -81,7 +87,7 @@ function createClient(sessionId) {
     },
   })
 
-  const session = { client, status: 'initializing', qr: null, phone: null, presenceTimer: null, reconnectTimer: null, readyWatchdog: null, ackFailStreak: 0, ackDegraded: false }
+  const session = { client, status: 'initializing', qr: null, pairingCode: null, phoneNumber, phone: null, presenceTimer: null, reconnectTimer: null, readyWatchdog: null, ackFailStreak: 0, ackDegraded: false }
   sessions.set(sessionId, session)
 
   client.on('qr', (qr) => {
@@ -90,9 +96,15 @@ function createClient(sessionId) {
     console.log(`[${sessionId}] QR ready`)
   })
 
+  client.on('code', (code) => {
+    session.status = 'need_scan'
+    session.pairingCode = code
+    console.log(`[${sessionId}] Pairing code ready: ${code}`)
+  })
+
   client.on('authenticated', () => {
     session.status = 'authenticated'
-    session.qr = null
+    session.qr = null; session.pairingCode = null
     clearTimeout(session.reconnectTimer)
     console.log(`[${sessionId}] Authenticated`)
 
@@ -109,14 +121,14 @@ function createClient(sessionId) {
       console.warn(`[${sessionId}] Stuck in "${s.status}" — never reached ready, recreating session`)
       try { s.client.destroy().catch(() => {}) } catch (_) {}
       sessions.delete(sessionId)
-      createClient(sessionId)
+      createClient(sessionId, session.phoneNumber)
     }, 90_000)
   })
 
   client.on('ready', async () => {
     clearTimeout(session.readyWatchdog)
     session.status = 'connected'
-    session.qr = null
+    session.qr = null; session.pairingCode = null
     session.phone = client.info?.wid?.user || null
     console.log(`[${sessionId}] Ready | phone=${session.phone}`)
     startPresenceHeartbeat(sessionId)
@@ -147,7 +159,7 @@ function createClient(sessionId) {
 
     if (needsReauth) {
       session.status = 'need_scan'
-      session.qr = null
+      session.qr = null; session.pairingCode = null
       console.log(`[${sessionId}] Logged out (${reason}) — needs QR re-scan`)
       forwardWebhook({ event: 'session.status', sessionId, data: { status: 'need_scan', reason } })
       // Destroy the browser so it doesn't consume RAM sitting idle
@@ -157,7 +169,7 @@ function createClient(sessionId) {
 
     // Network/conflict disconnects — safe to auto-reconnect
     session.status = 'disconnected'
-    session.qr = null
+    session.qr = null; session.pairingCode = null
     console.log(`[${sessionId}] Disconnected (${reason}) — reconnecting...`)
     forwardWebhook({ event: 'session.status', sessionId, data: { status: 'disconnected', reason } })
 
@@ -169,7 +181,7 @@ function createClient(sessionId) {
       console.log(`[${sessionId}] Auto-reconnecting...`)
       try { s.client.destroy().catch(() => {}) } catch (_) {}
       sessions.delete(sessionId)
-      createClient(sessionId)
+      createClient(sessionId, session.phoneNumber)
     }, delay)
   })
 
@@ -282,7 +294,9 @@ app.post('/session/:id/start', (req, res) => {
     const s = sessions.get(id)
     return res.json({ status: s.status, phone: s.phone })
   }
-  const session = createClient(id)
+  // Optional phoneNumber → pairing-code linking instead of QR (see createClient).
+  const phoneNumber = (req.body && req.body.phoneNumber) || undefined
+  const session = createClient(id, phoneNumber)
   res.json({ status: session.status })
 })
 
@@ -297,6 +311,14 @@ app.get('/session/:id/qr', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
+})
+
+app.get('/session/:id/pairing-code', (req, res) => {
+  const { id } = req.params
+  const session = sessions.get(id)
+  if (!session) return res.status(404).json({ error: 'Session not found' })
+  if (!session.pairingCode) return res.status(400).json({ error: 'No pairing code available', status: session.status })
+  res.json({ code: session.pairingCode, status: session.status })
 })
 
 app.get('/session/:id/status', (req, res) => {

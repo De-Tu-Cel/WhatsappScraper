@@ -12,6 +12,7 @@ import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
 import TravelExploreIcon from '@mui/icons-material/TravelExplore'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
 import BlockIcon from '@mui/icons-material/Block'
+import LightbulbIcon from '@mui/icons-material/Lightbulb'
 import ScheduleSendIcon from '@mui/icons-material/ScheduleSend'
 import HelpOutlinedIcon from '@mui/icons-material/HelpOutlined'
 import DevicesOtherIcon from '@mui/icons-material/DevicesOther'
@@ -173,6 +174,33 @@ const FAQ = {
         {
           q: 'Does blacklisting a domain affect companies I already scraped?',
           a: 'Yes — matching companies get flagged with a 🚫 badge wherever they appear (Database, batch results) and are skipped by future scraping and sending, even if they were already in your database before you blacklisted the domain.',
+        },
+      ],
+    },
+    {
+      key: 'ideas',
+      icon: LightbulbIcon,
+      cat: 'Ideas',
+      items: [
+        {
+          q: 'What is the Ideas section?',
+          a: "Every search result from Search Prospects that you don't select and process gets saved here automatically as pending, the moment the search responds — not just the ones you leave unchecked. Nothing from a search is ever lost, even if you close the tab right after searching.",
+        },
+        {
+          q: "What's the difference between the search-term label and industry?",
+          a: "It's literally the text you typed into Search Prospects (e.g. \"restaurants\", \"plumbers\") — not a verified industry. The real industry is only known once a site is actually scraped, so this label is just a way to group ideas by what search produced them.",
+        },
+        {
+          q: 'What happens to an idea once I process it?',
+          a: "It's removed from the pending list automatically as soon as it's actually scraped — whether you processed it from here or from Search Prospects directly. You never have to manually clean it up.",
+        },
+        {
+          q: "Why does an idea say 'Added by someone' instead of a name?",
+          a: "That means it was saved before attribution was working correctly for that search, or the search ran without a valid session. It doesn't affect anything functionally — you can still filter, process or discard it normally.",
+        },
+        {
+          q: 'Is Ideas shared between users?',
+          a: 'Yes — it\'s a shared, company-wide backlog. Anyone can see, filter, process or discard any pending idea, regardless of who originally searched for it.',
         },
       ],
     },
@@ -485,6 +513,33 @@ const FAQ = {
         {
           q: '¿Bloquear un dominio afecta a empresas que ya scrapeé antes?',
           a: 'Sí — las empresas que coinciden se marcan con un badge 🚫 donde aparezcan (Database, resultados de lote) y se omiten en futuros scraping y envíos, aunque ya estuvieran en tu base de datos antes de bloquear el dominio.',
+        },
+      ],
+    },
+    {
+      key: 'ideas',
+      icon: LightbulbIcon,
+      cat: 'Ideas',
+      items: [
+        {
+          q: '¿Qué es la sección de Ideas?',
+          a: 'Cada resultado de una búsqueda en Buscar Prospectos que no seleccionas y procesas queda guardado aquí automáticamente como pendiente, apenas responde la búsqueda — no solo los que dejas sin marcar. Nada de una búsqueda se pierde, aunque cierres la pestaña justo después de buscar.',
+        },
+        {
+          q: '¿Cuál es la diferencia entre la etiqueta de búsqueda y la industria?',
+          a: 'Es literalmente el texto que escribiste en Buscar Prospectos (ej. "restaurantes", "plomeros") — no una industria verificada. La industria real solo se sabe hasta que el sitio se scrapea de verdad, así que esta etiqueta solo agrupa las ideas por qué búsqueda las generó.',
+        },
+        {
+          q: '¿Qué pasa con una idea cuando la proceso?',
+          a: 'Se quita de la lista de pendientes automáticamente en cuanto se scrapea de verdad — sin importar si la procesaste desde aquí o desde Buscar Prospectos directamente. Nunca tienes que limpiarla a mano.',
+        },
+        {
+          q: "¿Por qué una idea dice 'Agregado por alguien' en vez de un nombre?",
+          a: 'Significa que se guardó antes de que la atribución funcionara bien para esa búsqueda, o que la búsqueda corrió sin una sesión válida. No afecta nada funcionalmente — igual puedes filtrarla, procesarla o descartarla con normalidad.',
+        },
+        {
+          q: '¿Ideas es compartido entre usuarios?',
+          a: 'Sí — es un backlog compartido de toda la empresa. Cualquiera puede ver, filtrar, procesar o descartar cualquier idea pendiente, sin importar quién la buscó originalmente.',
         },
       ],
     },

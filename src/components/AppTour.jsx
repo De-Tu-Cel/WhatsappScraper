@@ -23,6 +23,7 @@ const TOUR_STEPS_META = [
   { target: '#tour-nav-database',  navKey: 'database' },
   { target: '#tour-nav-search',    navKey: 'search' },
   { target: '#tour-nav-blacklist', navKey: 'blacklist' },
+  { target: '#tour-nav-ideas',     navKey: 'ideas' },
   { target: '#tour-nav-convs',     navKey: 'convs' },
   { target: '#tour-nav-schedule',  navKey: 'schedule' },
   { target: '#tour-nav-campaign',  navKey: 'campaign' },

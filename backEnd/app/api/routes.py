@@ -782,11 +782,14 @@ def api_toggle_warmup(instance_name: str, body: dict = {}, x_user_token: Optiona
 
 
 @router.post("/search")
-def api_search(req: SearchRequest):
+def api_search(req: SearchRequest, x_user_token: Optional[str] = Header(None)):
     try:
         from urllib.parse import urlparse
         from app.pipeline import _check_blacklist
+        from app.auth import get_user_by_token
+        from datetime import datetime
 
+        _searcher = get_user_by_token(x_user_token) if x_user_token else None
         db = MongoDBManager()
         known = db.get_all_scraped_domains() | set(req.already_shown_domains or [])
         target = req.num_results or 10
@@ -829,6 +832,27 @@ def api_search(req: SearchRequest):
         # que pida "cargar más" (paginación real de Bright Data, ver searcher.py).
         # Use fetch_count (not target) so the offset reflects actual BD pages consumed.
         next_offset = (req.offset or 0) + pages_per_query_for(fetch_count) * 10
+
+        # Guardar cada resultado no bloqueado como "idea" pendiente — así si el
+        # usuario no selecciona/procesa nada (o solo una parte), lo que quedó fuera
+        # no se pierde al cambiar de pantalla. Upsert por url (índice único la
+        # protege de duplicados); silencioso si ya existe.
+        for r in results:
+            if r["blocked"]:
+                continue
+            try:
+                db.db.search_ideas.update_one(
+                    {"url": r["url"]},
+                    {"$setOnInsert": {
+                        "url": r["url"], "domain": r["domain"], "industry": req.industry,
+                        "status": "pending",
+                        "created_by": (_searcher or {}).get("display_name") or (_searcher or {}).get("username"),
+                        "created_at": datetime.utcnow(),
+                    }},
+                    upsert=True,
+                )
+            except Exception:
+                pass
 
         return {"urls": urls, "results": results, "next_offset": next_offset}  # "urls" kept for now, not read by the frontend anymore
     except Exception as e:
@@ -1870,6 +1894,159 @@ def api_delete_blacklist(entry_id: str, x_user_token: Optional[str] = Header(Non
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Entry not found")
     return {"ok": True}
+
+
+# ── Ideas (búsquedas no procesadas, panel comunitario) ────────────────────────
+
+_UNATTRIBUTED = "__none__"  # sentinel para created_by=None en query params (URLs no llevan null real)
+
+@router.get("/ideas")
+def api_get_ideas(
+    search: str = "",
+    terms: str = "",
+    users: str = "",
+    sort: str = "desc",
+    page: int = 1,
+    limit: int = 20,
+    x_user_token: Optional[str] = Header(None),
+):
+    _require_user(x_user_token)
+    db = MongoDBManager()
+    query: dict = {"status": "pending"}
+    search = search.strip()
+    if search:
+        import re as _re
+        query["$or"] = [
+            {"domain": {"$regex": _re.escape(search), "$options": "i"}},
+            {"industry": {"$regex": _re.escape(search), "$options": "i"}},
+        ]
+    # "terms" = filtro exacto multi-selección por checkbox (el/los término(s) de
+    # búsqueda que generaron la idea, NO una industria verificada — eso solo se
+    # sabe tras scrapear). Distinto de "search", que es texto libre por substring
+    # sobre domain/industry. Coma-separado; vacío = sin filtrar por término.
+    term_list = [t.strip() for t in terms.split(",") if t.strip()]
+    if term_list:
+        query["industry"] = {"$in": term_list}
+
+    # "users" = filtro exacto multi-selección por quién trajo la idea (created_by).
+    user_list = [u.strip() for u in users.split(",") if u.strip()]
+    if user_list:
+        real_users = [u for u in user_list if u != _UNATTRIBUTED]
+        include_none = _UNATTRIBUTED in user_list
+        if include_none and real_users:
+            query["created_by"] = {"$in": [*real_users, None]}
+        elif include_none:
+            query["created_by"] = None
+        else:
+            query["created_by"] = {"$in": real_users}
+
+    page = max(1, page)
+    limit = max(1, min(limit, 100))
+    sort_dir = 1 if sort == "asc" else -1
+    total = db.db.search_ideas.count_documents(query)
+    items = list(db.db.search_ideas.find(
+        query, sort=[("created_at", sort_dir)],
+        skip=(page - 1) * limit, limit=limit,
+    ))
+    return {"items": serialize(items), "total": total, "page": page, "limit": limit}
+
+
+@router.get("/ideas/terms")
+def api_get_idea_terms(
+    search: str = "",
+    page: int = 1,
+    limit: int = 20,
+    x_user_token: Optional[str] = Header(None),
+):
+    """Términos de búsqueda distintos entre las ideas pendientes, con conteo —
+    para el dropdown de filtro (paginado, ya que con el tiempo puede haber
+    decenas de términos). Se llama 'terms', no 'industries', porque es
+    literalmente el texto que se buscó, no una industria confirmada."""
+    _require_user(x_user_token)
+    db = MongoDBManager()
+    page = max(1, page)
+    limit = max(1, min(limit, 100))
+    match: dict = {"status": "pending", "industry": {"$nin": [None, ""]}}
+    search = search.strip()
+    if search:
+        import re as _re
+        match["industry"]["$regex"] = _re.escape(search)
+        match["industry"]["$options"] = "i"
+
+    count_pipeline = [{"$match": match}, {"$group": {"_id": "$industry"}}, {"$count": "n"}]
+    count_rows = list(db.db.search_ideas.aggregate(count_pipeline))
+    total = count_rows[0]["n"] if count_rows else 0
+
+    pipeline = [
+        {"$match": match},
+        {"$group": {"_id": "$industry", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1, "_id": 1}},
+        {"$skip": (page - 1) * limit},
+        {"$limit": limit},
+    ]
+    rows = list(db.db.search_ideas.aggregate(pipeline))
+    return {"terms": [{"term": r["_id"], "count": r["count"]} for r in rows], "total": total, "page": page, "limit": limit}
+
+
+@router.get("/ideas/users")
+def api_get_idea_users(
+    search: str = "",
+    page: int = 1,
+    limit: int = 20,
+    x_user_token: Optional[str] = Header(None),
+):
+    """Quién trajo cada idea (created_by), con conteo — mismo patrón paginado
+    que /ideas/terms. Las ideas guardadas antes de que la atribución quedara
+    bien conectada (o por una búsqueda sin sesión) tienen created_by=None —
+    se agrupan bajo el sentinel _UNATTRIBUTED en vez de perderse del filtro."""
+    _require_user(x_user_token)
+    db = MongoDBManager()
+    page = max(1, page)
+    limit = max(1, min(limit, 100))
+    match: dict = {"status": "pending"}
+    search = search.strip()
+    if search:
+        import re as _re
+        match["created_by"] = {"$regex": _re.escape(search), "$options": "i"}
+
+    count_pipeline = [{"$match": match}, {"$group": {"_id": "$created_by"}}, {"$count": "n"}]
+    count_rows = list(db.db.search_ideas.aggregate(count_pipeline))
+    total = count_rows[0]["n"] if count_rows else 0
+
+    pipeline = [
+        {"$match": match},
+        {"$group": {"_id": "$created_by", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$skip": (page - 1) * limit},
+        {"$limit": limit},
+    ]
+    rows = list(db.db.search_ideas.aggregate(pipeline))
+    users_out = [{"user": r["_id"] or _UNATTRIBUTED, "count": r["count"]} for r in rows]
+    return {"users": users_out, "total": total, "page": page, "limit": limit}
+
+
+@router.delete("/ideas/{idea_id}")
+def api_delete_idea(idea_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    from bson import ObjectId
+    db = MongoDBManager()
+    result = db.db.search_ideas.delete_one({"_id": ObjectId(idea_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Idea not found")
+    return {"ok": True}
+
+
+@router.post("/ideas/bulk-delete")
+def api_bulk_delete_ideas(body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    from bson import ObjectId
+    ids = body.get("ids") or []
+    if not ids:
+        raise HTTPException(status_code=400, detail="ids required")
+    db = MongoDBManager()
+    result = db.db.search_ideas.delete_many({"_id": {"$in": [ObjectId(i) for i in ids]}})
+    return {"ok": True, "deleted_count": result.deleted_count}
+
 
 @router.put("/companies/{company_id}/contacts")
 def api_update_contacts(company_id: str, req: UpdateContactsRequest):
@@ -3593,10 +3770,11 @@ def api_sync_wwebjs_instances(x_user_token: Optional[str] = Header(None)):
 # ─── wwebjs endpoints ──────────────────────────────────────────────────────────
 
 @router.post("/wwebjs/session/{session_id}/start")
-def api_wwebjs_start(session_id: str):
+def api_wwebjs_start(session_id: str, body: dict = None):
     from app.whatsapp_wwebjs import start_session
+    phone_number = (body or {}).get("phone_number")
     try:
-        return start_session(session_id)
+        return start_session(session_id, phone_number)
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -3613,6 +3791,14 @@ def api_wwebjs_qr(session_id: str):
     from app.whatsapp_wwebjs import get_qr
     try:
         return get_qr(session_id)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@router.get("/wwebjs/session/{session_id}/pairing-code")
+def api_wwebjs_pairing_code(session_id: str):
+    from app.whatsapp_wwebjs import get_pairing_code
+    try:
+        return get_pairing_code(session_id)
     except Exception as e:
         raise HTTPException(400, str(e))
 
@@ -3700,8 +3886,12 @@ def api_wwebjs_create_session(body: dict):
     if _db.db.instances.find_one({"name": name}):
         raise HTTPException(status_code=409, detail=f"Ya existe una instancia con el nombre '{name}'")
 
+    # Optional phoneNumber → wwebjs-service switches to pairing-code linking
+    # instead of QR (see createClient in wwebjs-service/index.js).
+    phone_number = (body.get("phone_number") or "").strip()
+    start_body = {"phoneNumber": phone_number} if phone_number else {}
     try:
-        r = _req.post(f"{_ww_url}/session/{name}/start", timeout=15)
+        r = _req.post(f"{_ww_url}/session/{name}/start", json=start_body, timeout=15)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"No se pudo contactar wwebjs-service: {e}")
     if not r.ok:
@@ -4978,7 +5168,8 @@ def api_companies_with_numbers(x_user_token: Optional[str] = Header(None)):
         valid_oids = [ObjectId(cid) for cid in contacts_by_company if ObjectId.is_valid(cid)]
         companies_raw = list(db.db.companies.find(
             {"_id": {"$in": valid_oids}},
-            {"name": 1, "business_name": 1, "industry": 1, "domain": 1, "website": 1, "city": 1},
+            {"name": 1, "business_name": 1, "industry": 1, "domain": 1, "website": 1, "city": 1,
+             "last_scraped_at": 1, "created_at": 1},
             sort=[("name", 1)],
         ))
 
@@ -5002,8 +5193,11 @@ def api_companies_with_numbers(x_user_token: Optional[str] = Header(None)):
                 "website": c.get("website") or c.get("domain") or "",
                 "city": c.get("city", ""),
                 "numbers": numbers,
+                # Para el sort "más reciente scrapeado" — last_scraped_at si existe,
+                # si no created_at (empresas viejas antes de que existiera ese campo).
+                "last_scraped_at": c.get("last_scraped_at") or c.get("created_at"),
             })
-        return result
+        return serialize(result)
     except Exception as e:
         import logging as _log2
         _log2.getLogger(__name__).exception("[companies-with-numbers] error")

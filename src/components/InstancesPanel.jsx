@@ -682,6 +682,12 @@ export default function InstancesPanel() {
   const [wahaStatus,    setWahaStatus]    = useState('')     // STOPPED | STARTING | SCAN_QR_CODE | WORKING
   const wahaQrPollRef    = useRef(null)
   const wahaQrShownRef   = useRef(false)   // tracks if QR was ever displayed (avoids stale closure)
+  // Link method: QR (default, scan with camera) or pairing code (type 8 chars into
+  // WhatsApp manually — no camera/video call needed, ~3min window vs QR's ~20s,
+  // useful when the phone being linked isn't in the same room).
+  const [wahaLinkMethod, setWahaLinkMethod] = useState('qr') // 'qr' | 'code'
+  const [wahaPhone,       setWahaPhone]       = useState('')
+  const [wahaPairingCode, setWahaPairingCode] = useState(null)
 
   // ── Wasender create dialog ──
   const [wsOpen,      setWsOpen]      = useState(false)
@@ -751,28 +757,35 @@ export default function InstancesPanel() {
     if (wahaQrPollRef.current) clearInterval(wahaQrPollRef.current)
     setWahaOpen(false); setWahaName(''); setWahaQr(null)
     setWahaConnected(false); setWahaScanned(false); setWahaErr(''); setWahaLoading(false); setWahaStatus('')
+    setWahaLinkMethod('qr'); setWahaPhone(''); setWahaPairingCode(null)
     wahaQrShownRef.current = false
   }
 
   async function handleWahaCreate() {
     const name = wahaName.trim()
+    const isCode = wahaLinkMethod === 'code'
+    const phone = wahaPhone.replace(/\D/g, '')
     if (!name) { setWahaErr(lang === 'en' ? 'Name required' : 'El nombre es requerido'); return }
-    setWahaLoading(true); setWahaErr(''); setWahaQr(null); setWahaConnected(false); setWahaScanned(false)
+    if (isCode && !phone) {
+      setWahaErr(lang === 'en' ? 'Phone number required (e.g. 521234567890)' : 'Número requerido (ej. 521234567890)')
+      return
+    }
+    setWahaLoading(true); setWahaErr(''); setWahaQr(null); setWahaPairingCode(null); setWahaConnected(false); setWahaScanned(false)
     try {
       const r = await fetch('/api/wwebjs/session/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify(isCode ? { name, phone_number: phone } : { name }),
       })
       const d = await r.json()
       if (!r.ok) { setWahaErr(d.detail || 'Error al crear sesión'); setWahaLoading(false); return }
 
-      // Keep wahaLoading=true until QR arrives
+      // Keep wahaLoading=true until QR/code arrives
       if (wahaQrPollRef.current) clearInterval(wahaQrPollRef.current)
       wahaQrPollRef.current = setInterval(async () => {
         try {
-          const [qrRes, stRes] = await Promise.all([
-            fetch(`/api/wwebjs/session/${name}/qr`),
+          const [linkRes, stRes] = await Promise.all([
+            fetch(isCode ? `/api/wwebjs/session/${name}/pairing-code` : `/api/wwebjs/session/${name}/qr`),
             fetch(`/api/wwebjs/session/${name}/status`),
           ])
           if (stRes.ok) {
@@ -782,28 +795,33 @@ export default function InstancesPanel() {
             if (rawStatus === 'connected') {
               clearInterval(wahaQrPollRef.current)
               wahaQrShownRef.current = false
-              setWahaQr(null); setWahaScanned(false); setWahaConnected(true); setWahaLoading(false)
+              setWahaQr(null); setWahaPairingCode(null); setWahaScanned(false); setWahaConnected(true); setWahaLoading(false)
               fetchInstances()
               return
             }
-            // QR scanned → authenticated state → show "autenticando…"
+            // QR scanned / code entered → authenticated state → show "autenticando…"
             if (wahaQrShownRef.current && rawStatus === 'authenticated') {
-              setWahaQr(null)
+              setWahaQr(null); setWahaPairingCode(null)
               setWahaScanned(true)
             }
           }
-          if (qrRes.ok) {
-            const qd = await qrRes.json()
-            if (qd.qr) {
+          if (linkRes.ok) {
+            const ld = await linkRes.json()
+            if (isCode && ld.code) {
               wahaQrShownRef.current = true
-              setWahaQr(qd.qr)   // already a full data: URL
+              setWahaPairingCode(ld.code)
+              setWahaScanned(false)
+              setWahaLoading(false)
+            } else if (!isCode && ld.qr) {
+              wahaQrShownRef.current = true
+              setWahaQr(ld.qr)   // already a full data: URL
               setWahaScanned(false)
               setWahaLoading(false)
             }
           }
         } catch {}
       }, 2500)
-      // intentionally no finally — wahaLoading stays true until QR arrives
+      // intentionally no finally — wahaLoading stays true until QR/code arrives
     } catch (e) { setWahaErr(e.message); setWahaLoading(false) }
   }
 
@@ -1192,7 +1210,13 @@ export default function InstancesPanel() {
   function handleEditNumberClick(inst) {
     setEditNumberInst(inst)
     setEditNumberValue(inst?.number || '')
-    setEditLabelValue(inst?.label || '')
+    // Precargar con el nombre EFECTIVO que ya se ve en toda la app (inst.label si
+    // existe, si no inst.name — mismo fallback que usa la tabla) en vez de solo
+    // inst.label — antes, si la instancia nunca tuvo un label propio guardado,
+    // el campo se veía vacío pese a que la instancia claramente ya tenía un
+    // nombre visible en otras partes, dando la impresión de que no había nada
+    // que editar.
+    setEditLabelValue(inst?.label || inst?.name || '')
     setEditNumberErr('')
     setEditNumberOpen(true)
   }
@@ -1207,7 +1231,10 @@ export default function InstancesPanel() {
     setEditNumberSaving(true); setEditNumberErr('')
     const payload = {}
     if (num) payload.number = num
-    if (editLabelValue.trim() !== (editNumberInst?.label || '')) payload.label = editLabelValue.trim()
+    // Comparar contra el mismo valor efectivo (label || name) que se precargó —
+    // si no, con el fix de precarga de arriba, guardar sin tocar nada terminaría
+    // escribiendo label=name innecesariamente cada vez.
+    if (editLabelValue.trim() !== (editNumberInst?.label || editNumberInst?.name || '')) payload.label = editLabelValue.trim()
     if (!Object.keys(payload).length) { setEditNumberOpen(false); setEditNumberSaving(false); return }
     try {
       const res = await fetch(`/api/instances?name=${encodeURIComponent(editNumberInst.name)}`, {
@@ -1700,12 +1727,12 @@ export default function InstancesPanel() {
                 color: connected > 0 ? '#4ade80' : 'var(--text-muted)',
                 border: `1px solid ${connected > 0 ? 'rgba(34,197,94,0.25)' : 'var(--border)'}` }} />
             {disconnected > 0 && (
-              <Chip label={`${disconnected} desconectadas`} size="small"
+              <Chip label={`${disconnected} ${t.inst.statDisconnected}`} size="small"
                 sx={{ ...STAT_CHIP_SX, bgcolor: 'rgba(248,113,113,0.1)', color: '#f87171',
                   border: '1px solid rgba(248,113,113,0.25)' }} />
             )}
             {warmupCount > 0 && (
-              <Chip label={`${warmupCount} calentamiento`} size="small"
+              <Chip label={`${warmupCount} ${t.inst.statWarmup}`} size="small"
                 sx={{ ...STAT_CHIP_SX, bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24',
                   border: '1px solid rgba(251,191,36,0.25)' }} />
             )}
@@ -2249,15 +2276,24 @@ export default function InstancesPanel() {
         document.body
       )}
 
-      {/* ── Edit number dialog ── */}
-      <Dialog open={editNumberOpen} onClose={() => setEditNumberOpen(false)} sx={{
-        '& .MuiDialog-paper': {
-          bgcolor: 'var(--card-bg,#161d2e)',
-          border: '1px solid rgba(167,139,250,0.3)',
+      {/* ── Edit number dialog ──
+          slotProps.paper.sx (con !important) en vez de sx:{'& .MuiDialog-paper'} —
+          el tema global (MuiDialog.styleOverrides.paper en theme.js) gana por orden
+          de inyección de emotion y pisaba el bgcolor/border de este diálogo en
+          particular. Además, backgroundImage:'none' — MUI le pone a los Paper de
+          elevación alta un overlay blanco semitransparente encima (efecto "papel"
+          de tema oscuro, vía --Paper-overlay), que aclara CUALQUIER bgcolor que le
+          pongas sin ese override — mismo patrón ya usado en otros diálogos de este
+          archivo (ver databaseViewer.jsx) que sí se ven con el color correcto. */}
+      <Dialog open={editNumberOpen} onClose={() => setEditNumberOpen(false)}
+        slotProps={{ paper: { sx: {
+          bgcolor: 'var(--card-bg,#161d2e) !important',
+          background: 'var(--card-bg,#161d2e) !important',
+          backgroundImage: 'none !important',
+          border: '1px solid rgba(167,139,250,0.3) !important',
           borderRadius: 3, minWidth: 360, maxWidth: 420,
           boxShadow: '0 24px 64px rgba(0,0,0,0.7)',
-        },
-      }}>
+        } } }}>
         <DialogTitle sx={{ pb: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
             <Box sx={{
@@ -3405,7 +3441,9 @@ export default function InstancesPanel() {
                 {lang === 'en' ? 'Connect WhatsApp Number' : 'Conectar Número WhatsApp'}
               </Typography>
               <Typography sx={{ color: 'var(--text-muted,rgba(255,255,255,0.4))', fontSize: '0.72rem', mt: 0.2 }}>
-                {lang === 'en' ? 'Link a number via QR code (whatsapp-web.js)' : 'Vincula un número vía código QR'}
+                {wahaLinkMethod === 'code'
+                  ? (lang === 'en' ? 'Link a number via pairing code (whatsapp-web.js)' : 'Vincula un número vía código de emparejamiento')
+                  : (lang === 'en' ? 'Link a number via QR code (whatsapp-web.js)' : 'Vincula un número vía código QR')}
               </Typography>
             </Box>
           </Box>
@@ -3415,7 +3453,7 @@ export default function InstancesPanel() {
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, py: 2 }}>
               <CircularProgress size={40} thickness={3} sx={{ color: '#25d366' }} />
               <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.95rem' }}>
-                {lang === 'en' ? 'QR scanned — authenticating…' : 'QR escaneado — autenticando…'}
+                {lang === 'en' ? 'Confirmed — authenticating…' : 'Confirmado — autenticando…'}
               </Typography>
               <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>
                 {lang === 'en'
@@ -3449,8 +3487,51 @@ export default function InstancesPanel() {
                 </Typography>
               </Box>
             </Box>
+          ) : wahaPairingCode ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5, py: 1 }}>
+              <Box sx={{
+                px: 3, py: 2, borderRadius: 2, bgcolor: '#fff', border: '2px solid #334155',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <Typography sx={{
+                  fontFamily: 'monospace', fontWeight: 800, fontSize: '1.8rem', letterSpacing: '0.12em',
+                  color: '#111827',
+                }}>
+                  {wahaPairingCode.slice(0, 4)}-{wahaPairingCode.slice(4)}
+                </Typography>
+              </Box>
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>
+                {lang === 'en'
+                  ? 'On the phone → WhatsApp → Settings → Linked Devices → Link a Device → "Link with phone number instead" → type this code'
+                  : 'En el teléfono → WhatsApp → Ajustes → Dispositivos vinculados → Vincular dispositivo → "Vincular con número de teléfono" → escribe este código'}
+              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.6, borderRadius: 2, bgcolor: '#1e3a5f', border: '1px solid #3b82f6' }}>
+                <CircularProgress size={12} sx={{ color: '#60a5fa' }} />
+                <Typography sx={{ color: '#60a5fa', fontSize: '0.72rem', fontWeight: 600 }}>
+                  {lang === 'en' ? 'Waiting — code refreshes every ~3 min' : 'Esperando — el código se renueva cada ~3 min'}
+                </Typography>
+              </Box>
+            </Box>
           ) : (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                {[
+                  { key: 'qr',   label: lang === 'en' ? 'QR code' : 'Código QR' },
+                  { key: 'code', label: lang === 'en' ? 'Pairing code' : 'Código de emparejamiento' },
+                ].map(opt => (
+                  <Box key={opt.key} component="button" onClick={() => setWahaLinkMethod(opt.key)}
+                    sx={{
+                      flex: 1, cursor: 'pointer', border: '1px solid', borderRadius: 1.5,
+                      py: 0.9, fontSize: '0.78rem', fontWeight: 600, fontFamily: 'inherit',
+                      transition: 'all 0.15s',
+                      bgcolor: wahaLinkMethod === opt.key ? 'rgba(var(--accent-rgb,59,130,246),0.15)' : 'transparent',
+                      borderColor: wahaLinkMethod === opt.key ? 'rgba(var(--accent-rgb,59,130,246),0.5)' : 'rgba(255,255,255,0.12)',
+                      color: wahaLinkMethod === opt.key ? 'var(--accent,#60a5fa)' : 'var(--text-muted,rgba(255,255,255,0.45))',
+                      '&:hover': { bgcolor: wahaLinkMethod === opt.key ? 'rgba(var(--accent-rgb,59,130,246),0.2)' : 'rgba(255,255,255,0.05)' },
+                    }}
+                  >{opt.label}</Box>
+                ))}
+              </Box>
               <TextField label={lang === 'en' ? 'Session name' : 'Nombre de sesión'} value={wahaName}
                 onChange={e => setWahaName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
                 placeholder="mi-sesion-1" size="small" fullWidth autoFocus sx={FIELD_SX}
@@ -3458,6 +3539,15 @@ export default function InstancesPanel() {
                 helperText={<span style={{ color: 'var(--text-muted,rgba(255,255,255,0.3))', fontSize: '0.68rem' }}>
                   {lang === 'en' ? 'Lowercase letters, numbers and dashes only' : 'Solo minúsculas, números y guiones'}
                 </span>} />
+              {wahaLinkMethod === 'code' && (
+                <TextField label={lang === 'en' ? 'Phone number' : 'Número de teléfono'} value={wahaPhone}
+                  onChange={e => setWahaPhone(e.target.value)}
+                  placeholder="521234567890" size="small" fullWidth sx={FIELD_SX}
+                  onKeyDown={e => e.key === 'Enter' && !wahaLoading && wahaName.trim() && wahaPhone.trim() && handleWahaCreate()}
+                  helperText={<span style={{ color: 'var(--text-muted,rgba(255,255,255,0.3))', fontSize: '0.68rem' }}>
+                    {lang === 'en' ? 'Country code + number, no spaces or +' : 'Código de país + número, sin espacios ni +'}
+                  </span>} />
+              )}
               {wahaErr && (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1.5, py: 1, borderRadius: 1.5, bgcolor: '#450a0a', border: '1px solid #ef4444' }}>
                   <Typography sx={{ color: '#f87171', fontSize: '0.78rem' }}>{wahaErr}</Typography>
@@ -3467,7 +3557,9 @@ export default function InstancesPanel() {
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, p: 1.5, borderRadius: 1.5, bgcolor: '#1c2333', border: '1px solid #334155' }}>
                   <CircularProgress size={14} sx={{ color: '#60a5fa' }} />
                   <Typography sx={{ fontSize: '0.78rem', color: 'var(--text)', fontWeight: 600 }}>
-                    {lang === 'en' ? 'Starting session, generating QR…' : 'Iniciando sesión, generando QR…'}
+                    {wahaLinkMethod === 'code'
+                      ? (lang === 'en' ? 'Starting session, generating code…' : 'Iniciando sesión, generando código…')
+                      : (lang === 'en' ? 'Starting session, generating QR…' : 'Iniciando sesión, generando QR…')}
                   </Typography>
                 </Box>
               )}
@@ -3481,10 +3573,10 @@ export default function InstancesPanel() {
               {wahaConnected ? (lang === 'en' ? 'Close' : 'Cerrar') : (lang === 'en' ? 'Cancel' : 'Cancelar')}
             </Button>
           )}
-          {!wahaQr && !wahaConnected && !wahaScanned && (
+          {!wahaQr && !wahaPairingCode && !wahaConnected && !wahaScanned && (
             <Button
               onClick={handleWahaCreate}
-              disabled={wahaLoading || !wahaName.trim()}
+              disabled={wahaLoading || !wahaName.trim() || (wahaLinkMethod === 'code' && !wahaPhone.trim())}
               variant="contained"
               sx={{
                 bgcolor: '#3b82f6', textTransform: 'none', fontWeight: 700,

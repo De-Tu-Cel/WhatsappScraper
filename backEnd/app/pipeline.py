@@ -65,6 +65,14 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
     scraper = WebsiteScraper()  # Ya usa el nuevo scraper extenso
     wa = WhatAppClient(WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN)
 
+    # Si esta URL estaba guardada como "idea" pendiente (ver /api/search), ya se
+    # está procesando de verdad — quitarla de pendientes sin importar el resultado
+    # (blacklist/fallo/éxito), para que no se quede fantasma en el panel de Ideas.
+    try:
+        db.db.search_ideas.delete_one({"url": website})
+    except Exception:
+        pass
+
     # print(f"📸 Capturando screenshot de {website}...")
     # screenshot_path = capture_screenshot(website)
     screenshot_path = None

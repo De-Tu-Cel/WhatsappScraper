@@ -9,8 +9,9 @@ def _headers():
         h["x-api-secret"] = API_SECRET
     return h
 
-def start_session(session_id: str) -> dict:
-    r = _req.post(f"{WWEBJS_URL}/session/{session_id}/start", headers=_headers(), timeout=10)
+def start_session(session_id: str, phone_number: str = None) -> dict:
+    body = {"phoneNumber": phone_number} if phone_number else {}
+    r = _req.post(f"{WWEBJS_URL}/session/{session_id}/start", json=body, headers=_headers(), timeout=10)
     return r.json()
 
 def get_status(session_id: str) -> dict:
@@ -23,6 +24,12 @@ def get_info(session_id: str) -> dict:
 
 def get_qr(session_id: str) -> dict:
     r = _req.get(f"{WWEBJS_URL}/session/{session_id}/qr", headers=_headers(), timeout=5)
+    if not r.ok:
+        raise Exception(r.json().get("error", r.text))
+    return r.json()
+
+def get_pairing_code(session_id: str) -> dict:
+    r = _req.get(f"{WWEBJS_URL}/session/{session_id}/pairing-code", headers=_headers(), timeout=5)
     if not r.ok:
         raise Exception(r.json().get("error", r.text))
     return r.json()

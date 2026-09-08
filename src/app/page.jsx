@@ -89,7 +89,9 @@ import AppearancePanel from '../components/AppearancePanel'
 import NotificationsPanel from '../components/NotificationsPanel'
 import HelpPanel from '../components/HelpPanel'
 import BlacklistPanel from '../components/BlacklistPanel'
+import IdeasPanel from '../components/IdeasPanel'
 import BlockIcon from '@mui/icons-material/Block'
+import LightbulbIcon from '@mui/icons-material/Lightbulb'
 import { SendQueueProvider } from '../context/SendQueueContext'
 import SendBubble from '../components/SendBubble'
 import { NavigationProvider, useNavigation } from '../context/NavigationContext'
@@ -138,6 +140,7 @@ const NAV_KEYS = [
   { key: 'database',  icon: <StorageIcon />,            component: <DatabaseViewer /> },
   { key: 'search',    icon: <SearchIcon />,             component: <SearchProspects /> },
   { key: 'blacklist', icon: <BlockIcon />,              component: <BlacklistPanel /> },
+  { key: 'ideas',     icon: <LightbulbIcon />,          component: <IdeasPanel /> },
   { key: 'convs',     icon: <ForumIcon />,              component: <Conversations /> },
   { key: 'analytics', icon: <AnalyticsIcon />,          component: <Analytics /> },
   { key: 'schedule',  icon: <ScheduleSendIcon />,       component: <ScheduledSends /> },

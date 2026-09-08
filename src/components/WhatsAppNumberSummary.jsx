@@ -4,12 +4,14 @@ import Chip from '@mui/material/Chip'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
+import { useLang } from '../context/LangContext'
 
 // Vista de SOLO LECTURA de los números de una empresa, para la tabla/tarjetas
 // de resultados — la selección real vive en RecipientsBox (panel de envío), así
 // que esto ya no necesita checkbox ni ser clicable, solo informar de un vistazo
 // cuántos números tiene esa empresa. Al pasar el mouse, se ven todos.
 export default function WhatsAppNumberSummary({ row }) {
+  const { lang } = useLang()
   const allNumbers = row.all_whatsapp?.length > 0 ? row.all_whatsapp : (row.whatsapp ? [row.whatsapp] : [])
   const primary = allNumbers[0]
   if (!primary) return null
@@ -18,7 +20,9 @@ export default function WhatsAppNumberSummary({ row }) {
   const tooltip = (
     <Box sx={{ minWidth: 190, maxWidth: 240 }}>
       <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, color: 'rgba(255,255,255,0.55)', textTransform: 'uppercase', letterSpacing: '0.04em', px: 1, pt: 0.8, pb: 0.6 }}>
-        {allNumbers.length} número{allNumbers.length !== 1 ? 's' : ''} encontrado{allNumbers.length !== 1 ? 's' : ''}
+        {lang === 'en'
+          ? `${allNumbers.length} number${allNumbers.length !== 1 ? 's' : ''} found`
+          : `${allNumbers.length} número${allNumbers.length !== 1 ? 's' : ''} encontrado${allNumbers.length !== 1 ? 's' : ''}`}
       </Typography>
       <Box sx={{
         display: 'flex', flexDirection: 'column', gap: 0.2,

@@ -14,8 +14,10 @@ import Typography from '@mui/material/Typography'
 import Button from '@mui/material/Button'
 import TextField from '@mui/material/TextField'
 import Checkbox from '@mui/material/Checkbox'
+import Divider from '@mui/material/Divider'
 import IconButton from '@mui/material/IconButton'
 import CircularProgress from '@mui/material/CircularProgress'
+import Skeleton from '@mui/material/Skeleton'
 import Tooltip from '@mui/material/Tooltip'
 import Dialog from '@mui/material/Dialog'
 import DialogTitle from '@mui/material/DialogTitle'
@@ -183,7 +185,13 @@ export function TemplateManagerBody({ onChange, onCountChange }) {
           </Box>
           <Box sx={{ flex: 1, overflowY: 'auto', p: 0.8, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
             {loading ? (
-              <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}><CircularProgress size={16} sx={{ color: 'var(--accent)' }} /></Box>
+              Array.from({ length: 4 }).map((_, i) => (
+                <Box key={i} sx={{ borderRadius: 1.5, p: 1, border: '1px solid var(--border)' }}>
+                  <Skeleton variant="text" width="55%" height={16} sx={{ bgcolor: 'var(--item-hover)' }} />
+                  <Skeleton variant="text" width="90%" height={12} sx={{ bgcolor: 'var(--item-hover)', mt: 0.2 }} />
+                  <Skeleton variant="rounded" width={48} height={14} sx={{ bgcolor: 'var(--item-hover)', mt: 0.6, borderRadius: 0.8 }} />
+                </Box>
+              ))
             ) : templates.length === 0 ? (
               <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center', py: 3 }}>{t.tplLib.noTemplates}</Typography>
             ) : templates.map(tpl => {
@@ -351,6 +359,11 @@ export function TemplateLibraryPicker({
   onChange, recipientCount = 0, baseCount = 0, label,
   hasName = true, hasCity = true, hasIndustry = true, hasWeb = true,
   varCounts = null, totalSelected = 0,
+  // Con 1 solo destinatario real no hay nada que "rotar" — dejar marcar varias
+  // plantillas ahí sugiere que el sistema alterna entre ellas cuando en
+  // realidad solo una se va a usar. En ese caso el checklist se comporta como
+  // selección única (marcar otra reemplaza la anterior, no se acumulan).
+  singleSelect = false,
 }) {
   const { t, lang } = useLang()
   const [templates,   setTemplates]   = useState([])
@@ -409,10 +422,14 @@ export function TemplateLibraryPicker({
 
   function toggle(id, blocked) {
     if (blocked) return
+    if (singleSelect) {
+      setSelectedIds(prev => prev.includes(id) ? [] : [id])
+      return
+    }
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }
 
-  const needsMin = recipientCount > 1
+  const needsMin = recipientCount > 1 && !singleSelect
   const totalCount = baseCount + selectedIds.length
   const ok = totalCount >= MIN_TEMPLATES_FOR_BULK
 
@@ -430,7 +447,7 @@ export function TemplateLibraryPicker({
       </Box>
 
       <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', opacity: 0.75 }}>
-        {baseCount > 0 ? t.tplLib.pickHintWithBase : t.tplLib.pickHint}
+        {singleSelect ? t.tplLib.pickHintSingle : baseCount > 0 ? t.tplLib.pickHintWithBase : t.tplLib.pickHint}
       </Typography>
 
       {/* ── Min-templates progress: dots instead of big amber banner ── */}
@@ -458,6 +475,8 @@ export function TemplateLibraryPicker({
           </Typography>
         </Box>
       )}
+
+      <Divider sx={{ borderColor: 'var(--border)' }} />
 
       {/* ── Template list ── */}
       {loading ? (

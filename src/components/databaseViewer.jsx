@@ -60,6 +60,12 @@ import MessageIcon from '@mui/icons-material/Message'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import { visuallyHidden } from '@mui/utils'
 
+// Estable entre renders — CompanyCard está memoizado y compara activeSet por
+// referencia; un `new Set()` inline en cada render rompería esa memoización sin
+// necesidad (este diálogo no tiene el concepto de "número ya activo en otra
+// campaña" que sí maneja Send Campaign, así que siempre está vacío).
+const EMPTY_ACTIVE_SET = new Set()
+
 function cleanDomain(url) {
   if (!url) return null
   try {
@@ -68,10 +74,10 @@ function cleanDomain(url) {
   } catch { return url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] }
 }
 import ResultDisplay from './resultDisplay'
-import { MessageComposer, getTemplates } from './singleUrlProcessor'
+import { MessageComposer } from './singleUrlProcessor'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
-import { HighlightedMessageInput } from './highlightedMessageInput'
+import { fmtNumber, normPhone, displayCompanyName, CompanyCard } from './scheduledSends'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
 import { SendConfigPanel, CountdownBar } from './SendConfigPanel'
@@ -895,12 +901,9 @@ function SkeletonRows({ count }) {
 }
 
 // ─── Campaign dialog ──────────────────────────────────────────────────────────
-export const MAX_CAMPAIGN_MSG = 4096
 
 export function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus = 'unknown', isDisconnected = false, capStats = null }) {
   const { t, lang } = useLang()
-  const TEMPLATES_DATA = getTemplates(t)
-  const [msgText,      setMsgText]      = useState(TEMPLATES_DATA[0].text)
   const [extraVariants, setExtraVariants] = useState([])
   const [sending,      setSending]      = useState(false)
   const [sendError,    setSendError]    = useState('')
@@ -909,17 +912,23 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
   const [done,         setDone]         = useState(false)
   const sendingRef  = useRef(false)
   const cancelRef   = useRef(false)
-  const [activeTpl,    setActiveTpl]    = useState(TEMPLATES_DATA[0].id)
   const [sendCfg,      setSendCfg]      = useState(() => loadSendConfig())
   const [countdown,    setCountdown]    = useState(null)
   const [cdTotal,      setCdTotal]      = useState(null)
   const [cdLabel,      setCdLabel]      = useState('msg')
   const [batchNum,     setBatchNum]     = useState(1)
 
-  const [contactedMap, setContactedMap] = useState({}) // company_id → contacted_numbers[]
+  const [contactedMap,   setContactedMap]   = useState({}) // company_id → contacted_numbers[]
+  // company_id → [{number,label}] — todos los números de WhatsApp de cada empresa
+  // seleccionada, para poder MOSTRARLOS antes de enviar (antes no aparecían en
+  // ningún lado hasta que el envío ya estaba en curso) y dejar deseleccionar los
+  // que no se quieran contactar.
+  const [recipientsMap,  setRecipientsMap]  = useState({})
+  const [recipientsLoading, setRecipientsLoading] = useState(false)
+  const [selectedNums,   setSelectedNums]   = useState(() => new Set())
 
   useEffect(() => {
-    if (!open) { setSending(false); setProgress(0); setResults([]); setDone(false); setCountdown(null); cancelRef.current = false; setContactedMap({}) }
+    if (!open) { setSending(false); setProgress(0); setResults([]); setDone(false); setCountdown(null); cancelRef.current = false; setContactedMap({}); setRecipientsMap({}); setSelectedNums(new Set()) }
   }, [open])
 
   // Fetch contacted_numbers for selected companies when dialog opens
@@ -949,23 +958,73 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
     }
   }, [open, selectedRows])
 
-  function applyTemplate(tpl) {
-    setActiveTpl(tpl.id)
-    setMsgText(tpl.text)
-  }
+  const waRows = selectedRows.filter(r => r.has_whatsapp)
 
-  const waRows      = selectedRows.filter(r => r.has_whatsapp)
-  const capOverBy   = getOverBy(capStats, waRows.length)
+  // Trae los números reales de WhatsApp de las empresas seleccionadas EN UNA
+  // sola llamada (mismo endpoint que ya usa el picker de Send Campaign), en vez
+  // de que la única fuente de esos números fuera el fetch por-empresa que
+  // ocurría A MITAD del envío — así el usuario puede verlos y elegir cuáles
+  // contactar antes de confirmar, no después.
+  useEffect(() => {
+    if (!open || waRows.length === 0) return
+    let cancelled = false
+    setRecipientsLoading(true)
+    authFetch('/api/admin/companies-with-numbers')
+      .then(r => r.json())
+      .then(list => {
+        if (cancelled) return
+        const byId = new Map((Array.isArray(list) ? list : []).map(c => [c._id, c.numbers || []]))
+        const map = {}
+        const allNums = new Set()
+        waRows.forEach(row => {
+          const nums = byId.get(row._id) || []
+          map[row._id] = nums
+          nums.forEach(n => allNums.add(n.number))
+        })
+        setRecipientsMap(map)
+        setSelectedNums(allNums)
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setRecipientsLoading(false) })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, waRows.map(r => r._id).join(',')])
+
+  function toggleNum(num) {
+    setSelectedNums(prev => {
+      const next = new Set(prev)
+      next.has(num) ? next.delete(num) : next.add(num)
+      return next
+    })
+  }
+  function toggleCompany(company) {
+    setSelectedNums(prev => {
+      const next = new Set(prev)
+      const allSel = company.numbers.every(n => next.has(n.number))
+      company.numbers.forEach(n => allSel ? next.delete(n.number) : next.add(n.number))
+      return next
+    })
+  }
+  const capOverBy   = getOverBy(capStats, selectedNums.size)
   const sentCount   = results.filter(r => r.status === 'sent').length
   const failedCount = results.filter(r => r.status === 'failed').length
   const noWaCount   = results.filter(r => r.status === 'no_wa').length
-  const charCount   = msgText.length
-  const isBulk      = waRows.length > 1
   // En bulk, el mensaje base deja de usarse — solo se envían las plantillas
   // marcadas en la Biblioteca, para que lo enviado sea exactamente lo seleccionado.
-  const msgInvalid  = !isBulk && (!msgText.trim() || charCount > MAX_CAMPAIGN_MSG)
-  const allVariants   = (isBulk ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean)
-  const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
+  const allVariants   = extraVariants.map(v => v.trim()).filter(Boolean)
+  // selectedNums.size (no el total de números DISPONIBLES entre las empresas
+  // elegidas) — ese era el bug: con 7 empresas seleccionadas pero solo 1 número
+  // realmente marcado, seguía pidiendo 3 plantillas porque contaba el pool
+  // completo en vez de a cuántos números se les va a mandar el mensaje de verdad.
+  const belowMinTemplates = selectedNums.size > 1 && allVariants.length < MIN_TEMPLATES_FOR_BULK
+  const msgInvalid  = allVariants.length === 0 || selectedNums.size === 0
+  // Empresas con al menos un número seleccionado — deseleccionar todos los
+  // números de una empresa la saca del envío sin necesidad de quitarla de la
+  // tabla de fondo.
+  const targets = useMemo(
+    () => waRows.filter(row => (recipientsMap[row._id] || []).some(n => selectedNums.has(n.number))),
+    [waRows, recipientsMap, selectedNums]
+  )
 
   // Wrapped in useCallback (only ever invoked from an event handler, never during
   // render) so the Date.now() calls inside don't trip the "impure call during
@@ -989,7 +1048,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
   }, [])
 
   async function handleSend() {
-    if (msgInvalid || sendingRef.current || belowMinTemplates) return
+    if (msgInvalid || sendingRef.current || belowMinTemplates || targets.length === 0) return
     cancelRef.current = false
     sendingRef.current = true
     setSending(true); setProgress(0); setResults([]); setDone(false)
@@ -999,14 +1058,15 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
     let nextBreakAt = randBatchSize(sendCfg)
     let currentBatch = 1
     setBatchNum(1)
-    for (let i = 0; i < waRows.length; i++) {
+    for (let i = 0; i < targets.length; i++) {
       if (cancelRef.current) break
-      const row = waRows[i]
-      setProgress(Math.round(((i + 1) / waRows.length) * 100))
+      const row = targets[i]
+      setProgress(Math.round(((i + 1) / targets.length) * 100))
       try {
-        const compRes  = await fetch(`/api/companies/${row._id}`)
-        const data     = await compRes.json()
-        const contacts = data.contacts?.filter(c => c.type === 'whatsapp').map(c => c.value) || []
+        // Ya no se vuelve a pedir /api/companies/{id} a mitad del envío — los
+        // números ya se cargaron al abrir el diálogo (recipientsMap), que es
+        // también lo que el usuario vio y pudo deseleccionar antes de confirmar.
+        const contacts = (recipientsMap[row._id] || []).filter(n => selectedNums.has(n.number)).map(n => n.number)
         if (contacts.length === 0) {
           res.push({ name: row.name, status: 'no_wa' }); setResults([...res]); continue
         }
@@ -1044,7 +1104,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
       }
       setResults([...res])
       msgsInBatch++
-      if (i < waRows.length - 1) {
+      if (i < targets.length - 1) {
         if (msgsInBatch >= nextBreakAt) {
           msgsInBatch = 0
           nextBreakAt = randBatchSize(sendCfg)
@@ -1086,47 +1146,59 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
         </Box>
       </DialogTitle>
 
-      <DialogContent sx={{ px: 3, pt: 2.5, pb: 1, bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
-        {!isBulk && <>
-        {/* Plantillas como punto de partida */}
-        <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
-          {t.batch.baseTemplate}
-        </Typography>
-        <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.8 }}>
-          {TEMPLATES_DATA.map(tpl => (
-            <Chip key={tpl.id} label={tpl.label} size="small"
-              onClick={() => !sending && applyTemplate(tpl)}
-              sx={{
-                fontSize: '0.72rem', height: 26, cursor: sending ? 'default' : 'pointer',
-                bgcolor: activeTpl === tpl.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
-                color:   activeTpl === tpl.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
-                border:  `1px solid ${activeTpl === tpl.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
-                '&:hover': !sending ? { bgcolor: 'rgba(34,197,94,0.1)' } : {},
-              }} />
-          ))}
+      <DialogContent sx={{ px: 3, pt: 3.5, pb: 1, bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
+        <Box sx={{ mb: 1.5, p: 1.6, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
+          <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={selectedNums.size} baseCount={0} singleSelect={selectedNums.size <= 1} />
         </Box>
 
-        {/* Editor libre */}
-        <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
-          {lang === 'en' ? 'Message' : 'Mensaje'}
-        </Typography>
-        <HighlightedMessageInput value={msgText} onChange={setMsgText} disabled={sending} rows={5} maxLength={MAX_CAMPAIGN_MSG + 1} lang={lang} />
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 0.6, mb: 1.5 }}>
-          <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.25)' }}>
-            Variables: <Box component="span" sx={{ color: '#4ade80', fontFamily: 'monospace' }}>{'{{nombre}}'}</Box>{' '}
-            <Box component="span" sx={{ color: '#60a5fa', fontFamily: 'monospace' }}>{'{{ciudad}}'}</Box>{' '}
-            <Box component="span" sx={{ color: '#fbbf24', fontFamily: 'monospace' }}>{'{{industria}}'}</Box>{' '}
-            <Box component="span" sx={{ color: '#a78bfa', fontFamily: 'monospace' }}>{'{{web}}'}</Box>
-          </Typography>
-          <Typography sx={{ fontSize: '0.68rem', color: charCount > MAX_CAMPAIGN_MSG ? '#f87171' : charCount > MAX_CAMPAIGN_MSG * 0.9 ? '#fbbf24' : 'rgba(255,255,255,0.25)', fontVariantNumeric: 'tabular-nums' }}>
-            {charCount} / {MAX_CAMPAIGN_MSG}
-          </Typography>
-        </Box>
-        </>}
-
-        <Box sx={{ mb: 1.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
-          <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={waRows.length} baseCount={0} />
-        </Box>
+        {/* Recipients — TODAS las empresas seleccionadas con sus números reales de
+            WhatsApp, no solo las ya contactadas. Antes esto no existía: no había
+            forma de ver (mucho menos elegir) a qué números se les iba a mandar el
+            mensaje hasta que el envío ya estaba en curso. Reutiliza el MISMO
+            CompanyCard del picker de Send Campaign (checkbox de empresa completa +
+            chevron para expandir números + chip de estado) en vez de reinventar una
+            versión simplificada aparte — misma interacción, mismo aspecto en toda
+            la app. */}
+        {!done && waRows.length > 0 && (() => {
+          const companiesForCards = waRows.map(r => {
+            const contactedNums = contactedMap[r._id] || []
+            return {
+              _id: r._id, name: r.name, domain: r.domain, industry: r.industry, city: r.city, website: r.website,
+              contacted: contactedNums.length > 0,
+              numbers: recipientsMap[r._id] || [],
+            }
+          })
+          return (
+            <Box sx={{ mb: 1.5, p: 1.6, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.4 }}>
+                <Typography sx={{ fontSize: '0.63rem', color: 'rgba(255,255,255,0.4)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {lang === 'en' ? `Recipients — ${selectedNums.size} number${selectedNums.size !== 1 ? 's' : ''} selected` : `Destinatarios — ${selectedNums.size} número${selectedNums.size !== 1 ? 's' : ''} seleccionado${selectedNums.size !== 1 ? 's' : ''}`}
+                </Typography>
+                {recipientsLoading && <CircularProgress size={12} sx={{ color: 'rgba(255,255,255,0.3)' }} />}
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, mb: 1 }}>
+                <WhatsAppIcon sx={{ fontSize: 11, color: 'rgba(255,255,255,0.3)' }} />
+                <Typography sx={{ fontSize: '0.63rem', color: 'rgba(255,255,255,0.35)' }}>{t.campaign.pickerHint}</Typography>
+              </Box>
+              <Divider sx={{ borderColor: 'var(--border)', mb: 1 }} />
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6, maxHeight: 220, overflowY: 'auto', p: 0.2,
+                scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent' }}>
+                {companiesForCards.map(c => (
+                  <CompanyCard
+                    key={c._id}
+                    company={c}
+                    contactedNormed={new Set((contactedMap[c._id] || []).map(normPhone))}
+                    selectedNums={selectedNums}
+                    activeSet={EMPTY_ACTIVE_SET}
+                    onToggle={(num) => toggleNum(num)}
+                    onToggleCompany={toggleCompany}
+                    t={t}
+                  />
+                ))}
+              </Box>
+            </Box>
+          )
+        })()}
 
         {/* Send config */}
         <Box sx={{ mb: 1.5 }}>
@@ -1138,47 +1210,10 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
           <Box sx={{ mb: 1.5 }}>
             <CountdownBar
               countdown={countdown} total={cdTotal} label={cdLabel}
-              batchNum={batchNum} msgNum={results.length} msgTotal={waRows.length}
+              batchNum={batchNum} msgNum={results.length} msgTotal={targets.length}
             />
           </Box>
         )}
-
-        {/* Recipients preview — with per-number contacted coloring */}
-        {!done && waRows.length > 0 && (() => {
-          const contactedRows = waRows.filter(r => contactedMap[r._id]?.length > 0)
-          if (!contactedRows.length) return null
-          return (
-            <Box sx={{ mb: 1.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(251,191,36,0.2)', bgcolor: 'rgba(251,191,36,0.04)' }}>
-              <Typography sx={{ fontSize: '0.63rem', color: '#fbbf24', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', mb: 0.8 }}>
-                {lang === 'en' ? `${contactedRows.length} already contacted` : `${contactedRows.length} ya contactada${contactedRows.length !== 1 ? 's' : ''}`}
-              </Typography>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, maxHeight: 110, overflowY: 'auto',
-                scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent' }}>
-                {contactedRows.map(r => (
-                  <Box key={r._id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
-                    <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.7)', minWidth: 0, flex: 1,
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {r.name}
-                    </Typography>
-                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, justifyContent: 'flex-end' }}>
-                      {contactedMap[r._id].map(num => {
-                        let disp = num.replace(/^521(\d{10})$/, '52$1')
-                        if (!disp.startsWith('+')) disp = '+' + disp
-                        return (
-                          <Chip key={num} label={disp} size="small"
-                            sx={{ height: 18, fontSize: '0.62rem', fontFamily: 'monospace',
-                              bgcolor: 'rgba(251,191,36,0.14)', color: '#fbbf24',
-                              border: '1px solid rgba(251,191,36,0.3)',
-                              '& .MuiChip-label': { px: 0.6 } }} />
-                        )
-                      })}
-                    </Box>
-                  </Box>
-                ))}
-              </Box>
-            </Box>
-          )
-        })()}
 
         <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1.5 }} />
         <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1.5 }} />
@@ -1190,7 +1225,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
               <Box sx={{ mb: 1.5 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                   <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.78rem' }}>
-                    {lang === 'en' ? `Sending… ${results.length} of ${waRows.length}` : `Enviando… ${results.length} de ${waRows.length}`}
+                    {lang === 'en' ? `Sending… ${results.length} of ${targets.length}` : `Enviando… ${results.length} de ${targets.length}`}
                   </Typography>
                   <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>{progress}%</Typography>
                 </Box>
@@ -1217,8 +1252,8 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
       </DialogContent>
 
       <DialogActions sx={{ px: 3, pb: 3, pt: 2, gap: 1, bgcolor: 'var(--sidebar-bg, #0d1117)', borderTop: '1px solid rgba(255,255,255,0.06)', flexWrap: 'wrap' }}>
-        {capStats && waRows.length > 0 && (
-          <DailyCapBadge stats={capStats} selectionCount={waRows.length} sx={{ mr: 'auto' }} />
+        {capStats && selectedNums.size > 0 && (
+          <DailyCapBadge stats={capStats} selectionCount={selectedNums.size} sx={{ mr: 'auto' }} />
         )}
         <Button onClick={onClose} disabled={sending}
           sx={{ color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, px: 2.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.7)' } }}>
@@ -1227,18 +1262,18 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
         {!done && (
           <Button
             onClick={handleSend}
-            disabled={sending || waRows.length === 0 || msgInvalid || isDisconnected || belowMinTemplates || capOverBy > 0}
+            disabled={sending || msgInvalid || isDisconnected || belowMinTemplates || capOverBy > 0}
             startIcon={sending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 16 }} />}
             sx={{
-              bgcolor: !sending && waRows.length > 0 && !msgInvalid ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.05)',
-              color:   !sending && waRows.length > 0 && !msgInvalid ? '#4ade80' : 'rgba(255,255,255,0.3)',
-              border:  `1px solid ${!sending && waRows.length > 0 && !msgInvalid ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
+              bgcolor: !sending && !msgInvalid ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.05)',
+              color:   !sending && !msgInvalid ? '#4ade80' : 'rgba(255,255,255,0.3)',
+              border:  `1px solid ${!sending && !msgInvalid ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
               borderRadius: 2, px: 3, fontWeight: 600,
-              '&:hover': { bgcolor: !sending && waRows.length > 0 && !msgInvalid ? 'rgba(34,197,94,0.28)' : 'rgba(255,255,255,0.05)' },
+              '&:hover': { bgcolor: !sending && !msgInvalid ? 'rgba(34,197,94,0.28)' : 'rgba(255,255,255,0.05)' },
               '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.2)', border: '1px solid rgba(255,255,255,0.07)' },
             }}
           >
-            {sending ? (lang === 'en' ? 'Sending…' : 'Enviando…') : (lang === 'en' ? `Send to ${waRows.length} ${waRows.length !== 1 ? 'companies' : 'company'}` : `Enviar a ${waRows.length} empresa${waRows.length !== 1 ? 's' : ''}`)}
+            {sending ? (lang === 'en' ? 'Sending…' : 'Enviando…') : (lang === 'en' ? `Send to ${selectedNums.size} number${selectedNums.size !== 1 ? 's' : ''}` : `Enviar a ${selectedNums.size} número${selectedNums.size !== 1 ? 's' : ''}`)}
           </Button>
         )}
       </DialogActions>

@@ -31,9 +31,13 @@ export default function DailyCapBadge({ stats, selectionCount = 0, newSelectionC
   // falla del sistema (eso sí es rojo: instancia desconectada, error de envío).
   const color     = danger ? '#f59e0b' : warn ? '#fbbf24' : 'var(--text-muted)'
   const border    = danger ? 'rgba(245,158,11,0.3)' : warn ? 'rgba(251,191,36,0.25)' : 'var(--border)'
-  const bg        = danger ? 'rgba(245,158,11,0.06)' : warn ? 'rgba(251,191,36,0.05)' : 'var(--item-hover)'
+  // Antes usaba var(--item-hover) en reposo — esa variable está pensada para el
+  // resalte MOMENTÁNEO al pasar el mouse (un tinte blanco fijo), no como fondo
+  // permanente, así que el badge quedaba con un tono visiblemente distinto al
+  // fondo real detrás de él en vez de fundirse con la superficie de la barra.
+  const bg        = danger ? 'rgba(245,158,11,0.06)' : warn ? 'rgba(251,191,36,0.05)' : 'var(--surface)'
   const remaining = Math.max(0, available - selectionCount)
-  const recommendation = buildRecommendation(stats)
+  const recommendation = buildRecommendation(stats, lang)
 
   const tooltip = (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, py: 0.3, minWidth: 200 }}>

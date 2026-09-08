@@ -51,67 +51,6 @@ function ResultSkeleton() {
   )
 }
 
-// ── Plantillas de mensaje ────────────────────────────────────────────────────
-export function getTemplates(t) {
-  return [
-    {
-      id: 'general',
-      label: t.single.tplWith,
-      desc: t.single.tplWithDesc,
-      needs: ['nombre', 'ciudad'],
-      text: t.single.tplWithText,
-    },
-    {
-      id: 'sin_ciudad',
-      label: t.single.tplName,
-      desc: t.single.tplNameDesc,
-      needs: ['nombre'],
-      text: t.single.tplNameText,
-    },
-    {
-      id: 'industria',
-      label: t.single.tplIndustry,
-      desc: t.single.tplIndustryDesc,
-      needs: ['nombre', 'industria'],
-      text: t.single.tplIndustryText,
-    },
-  ]
-}
-
-// Static export kept for backwards-compatibility (uses Spanish strings)
-export const TEMPLATES = [
-  {
-    id: 'industria_ciudad',
-    label: 'Industria + ciudad',
-    desc: 'Menciona el giro del negocio y la ciudad — el más personalizado',
-    needs: ['nombre', 'industria', 'ciudad'],
-    text: 'Hola {{nombre}}, encontré tu negocio de {{industria}} en {{ciudad}} y me gustaría presentarte algo que puede ayudarte. ¿Tienes un momento? 😊',
-  },
-  {
-    id: 'industria',
-    label: 'Con giro del negocio',
-    desc: 'Menciona el tipo de negocio (salon, taller, restaurante…)',
-    needs: ['nombre', 'industria'],
-    text: 'Hola {{nombre}}, vi que tienes un negocio de {{industria}} y tengo algo que podría interesarte. ¿Tienes disponibilidad para platicar? 🙌',
-  },
-  {
-    id: 'general',
-    label: 'Solo con nombre',
-    desc: 'Para cuando no se detectó industria ni ciudad',
-    needs: ['nombre'],
-    text: 'Hola {{nombre}}, encontré tu negocio en línea y me gustaría presentarte una propuesta. ¿Tienes un momento? 😊',
-  },
-]
-
-function getVariables(t) {
-  return [
-    { key: '{{nombre}}',    field: 'nombre',    label: t.single.varNombre,    color: '#4ade80', bg: 'rgba(34,197,94,0.08)',  border: 'rgba(34,197,94,0.2)'  },
-    { key: '{{ciudad}}',    field: 'ciudad',    label: t.single.varCiudad,    color: '#60a5fa', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.2)' },
-    { key: '{{industria}}', field: 'industria', label: t.single.varIndustria, color: '#fbbf24', bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.2)' },
-    { key: '{{web}}',       field: 'web',       label: t.single.varWeb,       color: '#a78bfa', bg: 'rgba(139,92,246,0.08)', border: 'rgba(139,92,246,0.2)' },
-  ]
-}
-
 function extractValues(data) {
   const scraped = data?.scraped || {}
   return {
@@ -133,12 +72,7 @@ function renderWithValues(text, vals) {
 
 export function MessageComposer({ result, onSend, sending, disabled, capStats }) {
   const { t, lang } = useLang()
-  const inputRef = useRef(null)
   const vals = extractValues(result)
-  const [charCount, setCharCount] = useState(0)
-
-  const TEMPLATES_I18N = getTemplates(t)
-  const VARIABLES_I18N = getVariables(t)
 
   // All WA numbers found by the scraper
   const allNumbers = result?.scraped?._contacts_raw?.all_whatsapp_numbers || []
@@ -151,52 +85,18 @@ export function MessageComposer({ result, onSend, sending, disabled, capStats })
   const toggleNum = (n) => setSelectedNums(prev => prev.includes(n) ? prev.filter(x => x !== n) : [...prev, n])
   const [extraVariants, setExtraVariants] = useState([])
 
-  // Auto-select first available template
-  const firstAvailable = TEMPLATES_I18N.find(tpl => tpl.needs.every(n => vals[n]))
-  const [activeTemplate, setActiveTemplate] = useState(firstAvailable?.id || TEMPLATES_I18N[0].id)
-  const [defaultText, setDefaultText] = useState(() => renderWithValues((firstAvailable || TEMPLATES_I18N[0]).text, vals))
-
-  function applyTemplate(tpl) {
-    setActiveTemplate(tpl.id)
-    const newText = renderWithValues(tpl.text, vals)
-    setDefaultText(newText)
-    // Reset the uncontrolled textarea with the new template text via execCommand
-    const el = inputRef.current
-    if (el) {
-      el.focus()
-      el.select()
-      document.execCommand('insertText', false, newText)
-    }
-  }
-
-  function insertValue(varKey) {
-    const v = VARIABLES_I18N.find(v => v.key === varKey)
-    const realValue = vals[v?.field] || ''
-    if (!realValue) return
-    const el = inputRef.current
-    if (!el) return
-    el.focus()
-    document.execCommand('insertText', false, realValue)
-  }
-
-  function getCurrentText() {
-    return inputRef.current?.value ?? defaultText
-  }
-
-  // Sending to 2+ numbers at once is exactly the case that needs varied text
-  // (see MIN_TEMPLATES_FOR_BULK) — editing a single message stops making
-  // sense there, so the free-edit template flow only applies to a single
-  // recipient; picking 2+ numbers switches to picking 3+ saved templates.
+  // Mismo sistema de Message Templates que el envío masivo, en vez de un editor
+  // libre aparte solo para el caso de 1 número — evita tener dos formas
+  // distintas de redactar un mensaje en la app. Con 1 solo número, el propio
+  // TemplateLibraryPicker fuerza selección única (singleSelect); con 2+, pide
+  // 3+ plantillas para poder rotar el texto (ver MIN_TEMPLATES_FOR_BULK).
   const isBulk = selectedNums.length > 1
 
-  // The library holds generic templates (with {{nombre}}/{{industria}}/etc
-  // placeholders); resolve them against this company's real scraped values
-  // before treating them as send candidates, same as the starting-point chips do.
-  const allVariants = isBulk
-    ? extraVariants.map(v => renderWithValues(v, vals).trim()).filter(Boolean)
-    : [getCurrentText().trim()].filter(Boolean)
+  // La biblioteca guarda plantillas genéricas (con placeholders {{nombre}}/
+  // {{industria}}/etc); se resuelven contra los datos reales de esta empresa
+  // antes de tratarlas como candidatas de envío.
+  const allVariants = extraVariants.map(v => renderWithValues(v, vals).trim()).filter(Boolean)
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
-  const overLength = !isBulk && charCount > MAX_WA_MSG
   // Números que ya fueron contactados previamente (por número, no solo por empresa)
   const contactedNumbers = new Set(result?.already_contacted?.contacted_numbers || [])
   // Solo los números NUEVOS (no contactados antes) consumen cupo de nuevos contactos
@@ -205,8 +105,8 @@ export function MessageComposer({ result, onSend, sending, disabled, capStats })
   // aquí (aunque sean todos de la misma empresa) cuesta su propio slot de cupo.
   const overBy      = getOverBy(capStats, selectedNums.length, newCount)
   const capBlocked  = overBy > 0
-  const sendBlocked = sending || disabled || selectedNums.length === 0 || overLength || belowMinTemplates || capBlocked
-    || (isBulk && allVariants.some(v => v.length > MAX_WA_MSG))
+  const sendBlocked = sending || disabled || selectedNums.length === 0 || allVariants.length === 0 || belowMinTemplates || capBlocked
+    || allVariants.some(v => v.length > MAX_WA_MSG)
 
   function handleSendClick() {
     if (sendBlocked) return
@@ -228,7 +128,7 @@ export function MessageComposer({ result, onSend, sending, disabled, capStats })
 
       {/* Selector de número */}
       {numbers.length > 0 && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, flexWrap: 'wrap' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: numbers.length > 1 ? 0.5 : 2, flexWrap: 'wrap' }}>
           <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)' }}>
             {numbers.length > 1 ? t.single.sendTo : t.single.number}
           </Typography>
@@ -269,88 +169,26 @@ export function MessageComposer({ result, onSend, sending, disabled, capStats })
           })}
         </Box>
       )}
-
-      {/* Plantillas — solo tiene sentido editar UN mensaje cuando se manda a un solo número */}
-      {!isBulk && <>
-      <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.35)', mb: 0.8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-        {t.single.startingPoint}
-      </Typography>
-      <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 2 }}>
-        {TEMPLATES_I18N.map(tpl => {
-          const missingFields = tpl.needs.filter(n => !vals[n])
-          const disabled = missingFields.length > 0
-          const missingLabels = missingFields.map(f => VARIABLES_I18N.find(v => v.field === f)?.label).join(', ')
-          return (
-            <Tooltip key={tpl.id} title={disabled ? `${t.single.missing}${missingLabels}` : tpl.desc} placement="top">
-              <span>
-                <Chip label={tpl.label} size="small"
-                  onClick={() => !disabled && applyTemplate(tpl)}
-                  sx={{ fontSize: '0.7rem', height: 26,
-                    cursor: disabled ? 'not-allowed' : 'pointer',
-                    opacity: disabled ? 0.35 : 1,
-                    bgcolor: activeTemplate === tpl.id ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
-                    color:   activeTemplate === tpl.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
-                    border:  `1px solid ${activeTemplate === tpl.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
-                    '&:hover': !disabled ? { bgcolor: 'rgba(34,197,94,0.22)', border: '1px solid rgba(34,197,94,0.5)' } : {},
-                    '[data-theme-mode="light"] &': { bgcolor: activeTemplate === tpl.id ? 'rgba(34,197,94,0.2)' : 'rgba(0,0,0,0.05)', color: activeTemplate === tpl.id ? '#16a34a' : 'rgba(0,0,0,0.5)', border: `1px solid ${activeTemplate === tpl.id ? 'rgba(34,197,94,0.5)' : 'rgba(0,0,0,0.12)'}` },
-                    '[data-theme-mode="light"] &:hover': !disabled ? { bgcolor: 'rgba(34,197,94,0.45)', color: '#15803d', border: '1px solid rgba(34,197,94,0.7)' } : {},
-                  }} />
-              </span>
-            </Tooltip>
-          )
-        })}
-      </Box>
-
-      {/* Editor */}
-      <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.35)', mb: 0.8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-        {t.single.editMsg}
-      </Typography>
-      <TextField key={activeTemplate} fullWidth multiline rows={4} size="small"
-        defaultValue={defaultText} inputRef={inputRef}
-        onChange={e => setCharCount(e.target.value.length)}
-        error={charCount > MAX_WA_MSG}
-        sx={{ mb: 0.5, '& .MuiOutlinedInput-root': { fontSize: '0.85rem', bgcolor: 'var(--sidebar-bg, #0d1117)', lineHeight: 1.6,
-          '& fieldset': charCount > MAX_WA_MSG ? { borderColor: '#ef4444 !important' } : {} } }} />
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1, pr: 0.5 }}>
-        <Typography sx={{ fontSize: '0.68rem', color: charCount > MAX_WA_MSG ? '#f87171' : charCount > MAX_WA_MSG * 0.9 ? '#fbbf24' : 'rgba(255,255,255,0.25)' }}>
-          {charCount} / {MAX_WA_MSG}
-          {charCount > MAX_WA_MSG && ` ${t.single.tooLongSuffix}`}
+      {numbers.length > 1 && (
+        <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 2 }}>
+          {t.single.numbersHint}
         </Typography>
-      </Box>
-
-      {/* Variables insertables —deshabilitadas si no se encontró el dato */}
-      <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.35)', mb: 0.8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-        {t.single.insertData}
-      </Typography>
-      <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 2 }}>
-        {VARIABLES_I18N.map(v => {
-          const available = !!vals[v.field]
-          return (
-            <Tooltip key={v.key} title={available ? `${t.single.insert}${vals[v.field]}` : t.single.notFound} placement="top">
-              <span>
-                <Chip label={v.label} size="small"
-                  onClick={() => available && insertValue(v.key)}
-                  sx={{ fontSize: '0.7rem', height: 24,
-                    cursor: available ? 'pointer' : 'not-allowed',
-                    opacity: available ? 1 : 0.3,
-                    bgcolor: v.bg, color: v.color, border: `1px solid ${v.border}`,
-                    '&:hover': available ? { filter: 'brightness(1.15) saturate(1.3)' } : {},
-                    '[data-theme-mode="light"] &': { bgcolor: v.bg.replace(/[\d.]+\)$/, m => String(Math.min(1, parseFloat(m)*4) + ')')) },
-                    '[data-theme-mode="light"] &:hover': available ? { bgcolor: v.bg.replace(/[\d.]+\)$/, m => String(Math.min(1, parseFloat(m)*8) + ')')), filter: 'saturate(1.5)' } : {},
-                  }} />
-              </span>
-            </Tooltip>
-          )
-        })}
-      </Box>
-      </>}
-
-      {/* Plantillas — con 2+ números se manda texto rotado entre 3+ plantillas en vez de editar uno solo */}
-      {isBulk && (
-        <Box sx={{ mb: 2, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
-          <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={selectedNums.length} baseCount={0} />
-        </Box>
       )}
+
+      {/* Plantillas — mismo sistema para 1 o varios números; con 1 solo el propio
+          picker fuerza selección única en vez de dejar acumular varias sin sentido. */}
+      <Box sx={{ mb: 2, p: 1.6, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
+        <TemplateLibraryPicker
+          onChange={setExtraVariants}
+          recipientCount={selectedNums.length}
+          baseCount={0}
+          singleSelect={selectedNums.length <= 1}
+          hasName={!!vals.nombre}
+          hasCity={!!vals.ciudad}
+          hasIndustry={!!vals.industria}
+          hasWeb={!!vals.web}
+        />
+      </Box>
 
       {/* Botón enviar */}
       {selectedNums.length === 0 && numbers.length > 1 && (

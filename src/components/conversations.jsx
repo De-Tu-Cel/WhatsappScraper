@@ -506,7 +506,13 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
   const media  = isVCard ? null : MEDIA_LABELS[raw.trim().toLowerCase()]
   const body   = raw || '—'
   const interactive = msg.interactive
-  const sentLabel = isOut ? (msg.instance_name || formatSenderNumber(msg.instance_number) || null) : null
+  const senderNum = isOut ? formatSenderNumber(msg.instance_number) : null
+  // Nombre/foto real de WhatsApp de la instancia en vez del codename técnico
+  // interno — el codename sigue disponible en el tooltip de esta misma etiqueta.
+  const sentLabel = isOut ? (msg.instance_profile_name || senderNum || msg.instance_name || null) : null
+  const sentTooltip = isOut && msg.instance_name
+    ? (lang === 'en' ? `Sent from this number — instance: ${msg.instance_name}` : `Enviado desde este número — instancia: ${msg.instance_name}`)
+    : (lang === 'en' ? 'Sent from this number' : 'Enviado desde este número')
   return (
     <Box sx={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start', mb: 0.8, px: 2 }}>
       <Box sx={{
@@ -537,9 +543,12 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
           </Typography>
         )}
         {sentLabel && (
-          <Tooltip title={lang === 'en' ? 'Sent from this number' : 'Enviado desde este número'}>
+          <Tooltip title={sentTooltip}>
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 0.3, mt: 0.5, opacity: 0.55 }}>
-              <PhoneAndroidIcon sx={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }} />
+              {msg.instance_profile_pic_url
+                ? <Box component="img" src={msg.instance_profile_pic_url} alt=""
+                    sx={{ width: 10, height: 10, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
+                : <PhoneAndroidIcon sx={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }} />}
               <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.62rem', fontFamily: 'monospace', letterSpacing: '0.01em' }}>
                 {sentLabel}
               </Typography>
@@ -1098,11 +1107,18 @@ export default function Conversations({ isActive } = {}) {
     const rawNum = out.instance_number || selected?.via_instance_number || null
     const num    = rawNum ? formatSenderNumber(rawNum) : null
     const name   = out.instance_name || null
+    // Nombre/foto REAL de WhatsApp de la instancia (capturados del evento "ready"
+    // de wwebjs) en vez del codename técnico interno ("gely-test2") — ese nombre
+    // no le dice nada al usuario sobre quién contestó. Si aún no se capturó
+    // (instancia no ha reconectado desde que se agregó esto), cae al número.
+    const profileName = out.instance_profile_name || null
+    const profilePic   = out.instance_profile_pic_url || null
     // Use conversation-level sent_by_name (oldest outbound, same source as list chip)
     // instead of the most-recent outbound thread message, which may be the AI persona.
     const sentBy = selected?.sent_by_name || null
     const label = (name && num) ? `${name} (${num})` : (num || name)
-    return { num, name, sentBy, label }
+    const displayName = profileName || num || name
+    return { num, name, sentBy, label, profileName, profilePic, displayName }
   }, [visibleThread, activeNum, waNumbers, selected])
 
   return (
@@ -1303,12 +1319,25 @@ export default function Conversations({ isActive } = {}) {
               {(sendingInstance?.label || sendingInstance?.sentBy) && (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, mb: waNumbers.length > 0 ? 0.6 : 0, flexWrap: 'wrap' }}>
                   {sendingInstance.label && (
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
-                      <PhoneAndroidIcon sx={{ fontSize: 11, color: 'rgba(255,255,255,0.22)', flexShrink: 0 }} />
-                      <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.28)', fontFamily: 'monospace', letterSpacing: '0.04em' }}>
-                        {lang === 'en' ? 'via' : 'vía'}&nbsp;{sendingInstance.label}
-                      </Typography>
-                    </Box>
+                    <Tooltip title={sendingInstance.label} placement="top">
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
+                        {/* Foto/nombre real de WhatsApp de la instancia en vez del
+                            codename técnico ("gely-test2") — ese nombre no le dice
+                            nada al usuario sobre quién contestó. El codename sigue
+                            disponible en el tooltip para referencia. */}
+                        <Box sx={{
+                          width: 14, height: 14, borderRadius: '50%', flexShrink: 0, overflow: 'hidden',
+                          bgcolor: 'rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}>
+                          {sendingInstance.profilePic
+                            ? <Box component="img" src={sendingInstance.profilePic} alt="" sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                            : <PhoneAndroidIcon sx={{ fontSize: 9, color: 'rgba(255,255,255,0.3)' }} />}
+                        </Box>
+                        <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.28)', fontFamily: 'monospace', letterSpacing: '0.04em' }}>
+                          {lang === 'en' ? 'via' : 'vía'}&nbsp;{sendingInstance.displayName}
+                        </Typography>
+                      </Box>
+                    </Tooltip>
                   )}
                   {sendingInstance.sentBy && (
                     <Box sx={{

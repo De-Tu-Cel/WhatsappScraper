@@ -33,7 +33,6 @@ import MessageIcon from '@mui/icons-material/Message'
 import PauseIcon from '@mui/icons-material/Pause'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import ReplayIcon from '@mui/icons-material/Replay'
-import { getTemplates } from './singleUrlProcessor'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
 import { SendConfigPanel } from './SendConfigPanel'
@@ -46,7 +45,6 @@ import WhatsAppNumberSummary from './WhatsAppNumberSummary'
 import RecipientsBox from './RecipientsBox'
 import CapacityBanner from './CapacityBanner'
 import { dedupeByCompany } from '../lib/companyDedupe'
-import { HighlightedMessageInput } from './highlightedMessageInput'
 import Dialog from '@mui/material/Dialog'
 import DialogTitle from '@mui/material/DialogTitle'
 import DialogContent from '@mui/material/DialogContent'
@@ -247,20 +245,17 @@ function renderTemplate(text, scraped) {
 
 export default function BatchProcessor() {
   const { t, lang } = useLang()
-  const TEMPLATES = getTemplates(t)
   const [rawUrls,          setRawUrls]          = useState('')
   const [freshContactedMap, setFreshContactedMap] = useState({})
   const scrapeJob = useScrapeJob('batch')
   // El scraping en sí corre en el backend (useScrapeJob) — esto solo cubre el
   // estado optimista de envío por url, que el job no conoce.
   const [sentOverlay, setSentOverlay] = useState({})
-  const [selectedTpl, setSelectedTpl] = useState(TEMPLATES[0].id)
-  const [msgText,     setMsgText]     = useState(TEMPLATES[0].text)
   const [extraVariants, setExtraVariants] = useState([])
   const [sendError,   setSendError]   = useState('')
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
   const [sendCfg,     setSendCfg]     = useState(() => loadSendConfig())
-  const { addBatch, cancel: _cancelQueueRaw, active: queueActive } = useSendQueue()
+  const { addBatch, cancel: _cancelQueueRaw, active: queueActive, completedCount } = useSendQueue()
   const cancelledRef = useRef(false)
   function cancelQueue() { cancelledRef.current = true; _cancelQueueRaw() }
   const { stats: capStats, refresh: refreshCapStats } = useDailyCapStats()
@@ -275,7 +270,6 @@ export default function BatchProcessor() {
   const [extraSelected, setExtraSelected] = useState(new Set())
   const [expandedCo, setExpandedCo] = useState(new Set())
   const [localContactedIds, setLocalContactedIds] = useState(new Set())
-  const msgRef       = useRef(null)
   const wasActiveRef = useRef(false)
   const urlsRef     = useRef(null)
 
@@ -342,9 +336,12 @@ export default function BatchProcessor() {
     })),
   [waRowsAll, localContactedIds, freshContactedMap])
 
+  // ids como string estable — evita releer check-contacted en cada render solo
+  // porque waRowsAll cambió de referencia (misma lista de companies, objeto nuevo).
+  const waCompanyIdsKey = useMemo(() => waRowsAll.map(r => r.company_id).filter(Boolean).join(','), [waRowsAll])
+
   // Refresh already_contacted desde la API para que el conteo sea fresco
   // incluso si la empresa fue contactada en una sesión anterior.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const ids = waRowsAll.map(r => r.company_id).filter(Boolean)
     if (!ids.length) return
@@ -358,7 +355,30 @@ export default function BatchProcessor() {
       .then(data => { if (!cancelled && data) setFreshContactedMap(data) })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [waRowsAll.map(r => r.company_id).join(',')])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waCompanyIdsKey])
+
+  // Igual que arriba, pero disparado por completedCount (señal real de "un envío
+  // acaba de terminar", compartida por todos los flujos de envío de la app) en
+  // vez de por cambios en la lista de company_id — sin esto, contactar un
+  // número desde OTRA pantalla dejaba esta tabla desactualizada hasta el
+  // siguiente lote/refresh manual.
+  useEffect(() => {
+    if (completedCount === null) return
+    const ids = waRowsAll.map(r => r.company_id).filter(Boolean)
+    if (!ids.length) return
+    let cancelled = false
+    authFetch('/api/companies/check-contacted', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_ids: ids }),
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (!cancelled && data) setFreshContactedMap(data) })
+      .catch(() => {})
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [completedCount])
   // Los setState devuelven la MISMA referencia si ya estaban vacíos — evita que
   // este efecto re-dispare un render indefinidamente si `rows` llega a ser
   // referencialmente inestable entre renders (ver useScrapeJob.js EMPTY_RESULTS).
@@ -400,13 +420,11 @@ export default function BatchProcessor() {
   const capBlocked  = overBy > 0
   // Sending to 2+ contact points needs varied text (see MIN_TEMPLATES_FOR_BULK).
   // Uses totalContactPoints so selecting multiple numbers of a single company
-  // also triggers the template-library mode. Also force bulk when any selected
-  // company was already contacted so the picker stays visible on re-contact flow.
-  const _anySelectedContacted = waRowsUnique.some(r => effectiveWaSelected.has(r.company_id) && r.already_contacted?.contacted)
-  const isBulk = totalContactPoints > 1 || _anySelectedContacted
+  // also requires the 3+ minimum.
+  const isBulk = totalContactPoints > 1
   const allVariants = useMemo(
-    () => (extraVariants.length > 0 ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean),
-    [msgText, extraVariants]
+    () => extraVariants.map(v => v.trim()).filter(Boolean),
+    [extraVariants]
   )
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
@@ -865,64 +883,13 @@ export default function BatchProcessor() {
               sx={{ width: 260, flexShrink: 0 }} />
 
           <Box sx={{ flex: 1, minWidth: 0 }}>
-          {!isBulk && <>
-          <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
-            {t.batch.baseTemplate}
-          </Typography>
-          <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.5 }}>
-            {TEMPLATES.map(tpl => (
-              <Chip key={tpl.id} label={tpl.label} size="small" onClick={() => {
-                setSelectedTpl(tpl.id); setMsgText(tpl.text)
-              }} sx={{
-                fontSize: '0.7rem', height: 24, cursor: 'pointer',
-                bgcolor: selectedTpl === tpl.id ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
-                color:   selectedTpl === tpl.id ? '#4ade80' : 'rgba(255,255,255,0.45)',
-                border:  `1px solid ${selectedTpl === tpl.id ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.08)'}`,
-              }} />
-            ))}
-          </Box>
-          {/* Variable chips */}
-          <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 1 }}>
-            {[
-              ['{{nombre}}',   'nombre',    '#818cf8', t.single.varNombre],
-              ['{{ciudad}}',   'ciudad',    '#38bdf8', t.single.varCiudad],
-              ['{{industria}}','industria', '#fb923c', t.single.varIndustria],
-              ['{{web}}',      'web',       '#a78bfa', t.single.varWeb],
-            ].map(([v, display, color, tooltip]) => (
-              <Tooltip key={v} title={tooltip} placement="top" arrow>
-                <Box onClick={() => {
-                  const el = msgRef.current; if (!el) return
-                  el.setRangeText(v, el.selectionStart, el.selectionEnd, 'end')
-                  setMsgText(el.value)
-                  el.focus()
-                }} sx={{
-                  px: 1, py: 0.25, borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700,
-                  cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace',
-                  bgcolor: `${color}22`, color, border: `1px solid ${color}40`,
-                  '&:hover': { bgcolor: `${color}38` },
-                }}>{display}</Box>
-              </Tooltip>
-            ))}
-            <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.2)', alignSelf: 'center', ml: 0.5 }}>
-              {t.batch.clickInsert}
-            </Typography>
-          </Box>
-          {/* Textarea con highlight de variables */}
-          <Box sx={{ mb: 0.5 }}>
-            <HighlightedMessageInput value={msgText} onChange={setMsgText} inputRef={msgRef} rows={5} maxLength={4096} lang={lang} />
-          </Box>
-          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
-            <Typography sx={{ fontSize: '0.65rem', color: msgText.length > 4000 ? '#f87171' : 'rgba(255,255,255,0.2)' }}>
-              {msgText.length} / 4096
-            </Typography>
-          </Box>
-          </>}
-          {isBulk && <Box sx={{ mt: 1.5, mb: 0.5, p: 1.2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
-            <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalNumbers} baseCount={0}
+          <Box sx={{ mt: 1.5, mb: 0.5, p: 1.6, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
+            <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalContactPoints} baseCount={0}
+                singleSelect={totalContactPoints <= 1}
                 hasName={tplVarFlags.hasName} hasCity={tplVarFlags.hasCity}
                 hasIndustry={tplVarFlags.hasIndustry} hasWeb={tplVarFlags.hasWeb}
                 varCounts={tplVarCounts} totalSelected={_selectedRows.length} />
-          </Box>}
+          </Box>
           {/* Send config */}
           <Box sx={{ mb: 1 }}>
             <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />

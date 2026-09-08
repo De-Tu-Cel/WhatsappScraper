@@ -10,6 +10,8 @@ import TimerIcon from '@mui/icons-material/Timer'
 import DynamicFeedIcon from '@mui/icons-material/DynamicFeed'
 import LocalCafeIcon from '@mui/icons-material/LocalCafe'
 import RestartAltIcon from '@mui/icons-material/RestartAlt'
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
+import Tooltip from '@mui/material/Tooltip'
 import { saveSendConfig, DEFAULT_SEND_CONFIG } from '@/lib/sendConfig'
 import { useLang } from '../context/LangContext'
 
@@ -184,6 +186,12 @@ export function SendConfigPanel({ config, onChange, disabled = false }) {
           <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>
             {sc.title}
           </Typography>
+          <Tooltip title={sc.notRequired} placement="top" arrow>
+            <InfoOutlinedIcon
+              onClick={e => e.stopPropagation()}
+              sx={{ fontSize: 13, color: 'var(--text-muted)', cursor: 'help', opacity: 0.55, '&:hover': { opacity: 1 } }}
+            />
+          </Tooltip>
           {/* Inline summary chips */}
           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
             {[

@@ -40,11 +40,12 @@ export function HighlightedMessageInput({ value, onChange, rows = 3, maxLength =
   return (
     <Box sx={{
       position: 'relative', borderRadius: 1.5,
-      border: '1px solid rgba(255,255,255,0.12)',
-      bgcolor: 'rgba(255,255,255,0.05)',
+      // var(--surface)/var(--border) — antes usaba rgba(255,255,255,0.05) fijo,
+      // sin importar el tema/acento elegido, por eso siempre se veía gris genérico
+      // en vez de la paleta real de la UI.
+      border: '1px solid var(--border, rgba(255,255,255,0.12))',
+      bgcolor: 'var(--surface, rgba(255,255,255,0.05))',
       '&:focus-within': { borderColor: 'var(--accent,#3b82f6)' },
-      '[data-theme-mode="light"] &': { border: '1px solid rgba(0,0,0,0.23)', bgcolor: 'rgba(0,0,0,0.03)' },
-      '[data-theme-mode="light"] &:focus-within': { borderColor: 'var(--accent,#3b82f6)' },
     }}>
       <Box component="textarea" ref={el => { taRef.current = el; if (inputRef) inputRef.current = el }} value={value}
         onChange={e => onChange(e.target.value)}

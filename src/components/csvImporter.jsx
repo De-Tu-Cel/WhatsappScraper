@@ -35,7 +35,6 @@ import SendIcon from '@mui/icons-material/Send'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import ReplayIcon from '@mui/icons-material/Replay'
 import { authFetch } from '@/lib/api'
-import { getTemplates } from './singleUrlProcessor'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
 import { SendConfigPanel } from './SendConfigPanel'
@@ -50,7 +49,6 @@ import CapacityBanner from './CapacityBanner'
 import { dedupeByCompany } from '../lib/companyDedupe'
 import { useLang } from '../context/LangContext'
 import { isValidUrl } from '@/lib/validators'
-import { HighlightedMessageInput } from './highlightedMessageInput'
 import Dialog from '@mui/material/Dialog'
 import DialogTitle from '@mui/material/DialogTitle'
 import DialogContent from '@mui/material/DialogContent'
@@ -127,7 +125,6 @@ function downloadTemplate() {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function CsvImporter() {
   const { t, lang } = useLang()
-  const TEMPLATES = getTemplates(t)
   const inputRef   = useRef(null)
   const scrapeJob = useScrapeJob('csv')
   // El scraping en sí corre en el backend (useScrapeJob) — esto solo cubre el
@@ -156,13 +153,11 @@ export default function CsvImporter() {
   }, [scrapeJob.results, sentOverlay])
   const [page,       setPage]       = useState(0)
   const [rowsPerPage,setRowsPerPage]= useState(25)
-  const [selectedTpl,setSelectedTpl]= useState(TEMPLATES[0].id)
-  const [msgText,    setMsgText]    = useState(TEMPLATES[0].text)
   const [extraVariants, setExtraVariants] = useState([])
   const [sendError,  setSendError]  = useState('')
   const [showTiming, setShowTiming] = useState(false)
   const [sendCfg,    setSendCfg]    = useState(() => loadSendConfig())
-  const { addBatch, cancel: _cancelQueueRaw, active: queueActive } = useSendQueue()
+  const { addBatch, cancel: _cancelQueueRaw, active: queueActive, completedCount: sendCompletedCount } = useSendQueue()
   const cancelledRef = useRef(false)
   function cancelQueue() { cancelledRef.current = true; _cancelQueueRaw() }
   const { stats: capStats, refresh: refreshCapStats } = useDailyCapStats()
@@ -178,7 +173,6 @@ export default function CsvImporter() {
   const [expandedCo, setExpandedCo] = useState(new Set())
   const [filterContacted,  setFilterContacted]  = useState('all') // 'all' | 'new' | 'contacted'
   const [localContactedIds, setLocalContactedIds] = useState(new Set())
-  const msgRef       = useRef(null)
   const wasActiveRef = useRef(false)
 
   function parseFile(file) {
@@ -310,7 +304,10 @@ export default function CsvImporter() {
     })),
   [waRowsAll, localContactedIds, freshContactedMap])
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // ids como string estable — evita releer check-contacted en cada render solo
+  // porque waRowsAll cambió de referencia (misma lista de companies, objeto nuevo).
+  const waCompanyIdsKey = useMemo(() => waRowsAll.map(r => r.company_id).filter(Boolean).join(','), [waRowsAll])
+
   useEffect(() => {
     const ids = waRowsAll.map(r => r.company_id).filter(Boolean)
     if (!ids.length) return
@@ -324,7 +321,29 @@ export default function CsvImporter() {
       .then(data => { if (!cancelled && data) setFreshContactedMap(data) })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [waRowsAll.map(r => r.company_id).join(',')])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waCompanyIdsKey])
+
+  // Disparado por completedCount del SendQueue (señal real de "un envío acaba de
+  // terminar", compartida por todos los flujos de envío de la app) — sin esto,
+  // contactar un número desde OTRA pantalla dejaba esta tabla desactualizada
+  // hasta el siguiente refresh manual.
+  useEffect(() => {
+    if (sendCompletedCount === null) return
+    const ids = waRowsAll.map(r => r.company_id).filter(Boolean)
+    if (!ids.length) return
+    let cancelled = false
+    authFetch('/api/companies/check-contacted', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_ids: ids }),
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (!cancelled && data) setFreshContactedMap(data) })
+      .catch(() => {})
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sendCompletedCount])
   // Los setState devuelven la MISMA referencia si ya estaban vacíos — evita que
   // este efecto re-dispare un render indefinidamente si `results` llega a ser
   // referencialmente inestable entre renders (ver useScrapeJob.js EMPTY_RESULTS).
@@ -364,11 +383,9 @@ export default function CsvImporter() {
   const capBlocked = overBy > 0
   // Sending to 2+ contact points needs varied text (see MIN_TEMPLATES_FOR_BULK).
   // Uses totalContactPoints so selecting multiple numbers of a single company
-  // also triggers the template-library mode. Also force bulk when any selected
-  // company was already contacted so the picker stays visible on re-contact flow.
-  const _anySelectedContacted = waRowsUnique.some(r => effectiveWaSelected.has(r.company_id) && r.already_contacted?.contacted)
-  const isBulk = totalContactPoints > 1 || _anySelectedContacted
-  const allVariants = (isBulk ? extraVariants : [msgText]).map(v => v.trim()).filter(Boolean)
+  // also requires the 3+ minimum.
+  const isBulk = totalContactPoints > 1
+  const allVariants = extraVariants.map(v => v.trim()).filter(Boolean)
   const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
 
   const _selectedRows = useMemo(
@@ -784,55 +801,13 @@ export default function CsvImporter() {
                   sx={{ width: 260, flexShrink: 0 }} />
 
               <Box sx={{ flex: 1, minWidth: 0 }}>
-              {!isBulk && <>
-              <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted)', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>{t.csv.baseTemplate}</Typography>
-              <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', mb: 1.5 }}>
-                {TEMPLATES.map(tpl => (
-                  <Chip key={tpl.id} label={tpl.label} size="small" onClick={() => {
-                    setSelectedTpl(tpl.id); setMsgText(tpl.text)
-                  }} sx={{
-                    fontSize: '0.7rem', height: 24, cursor: 'pointer',
-                    bgcolor: selectedTpl === tpl.id ? 'rgba(34,197,94,0.18)' : 'var(--item-hover)',
-                    color:   selectedTpl === tpl.id ? '#4ade80' : 'var(--text-muted)',
-                    border:  `1px solid ${selectedTpl === tpl.id ? 'rgba(34,197,94,0.35)' : 'var(--border)'}`,
-                  }} />
-                ))}
+              <Box sx={{ mt: 1.5, mb: 0.5, p: 1.6, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--item-hover)' }}>
+                <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalContactPoints} baseCount={0}
+                  singleSelect={totalContactPoints <= 1}
+                  hasName={tplVarFlags.hasName} hasCity={tplVarFlags.hasCity}
+                  hasIndustry={tplVarFlags.hasIndustry} hasWeb={tplVarFlags.hasWeb}
+                  varCounts={tplVarCounts} totalSelected={_selectedRows.length} />
               </Box>
-              <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 1 }}>
-                {[
-                  ['{{nombre}}',   'nombre',    '#818cf8', t.single.varNombre],
-                  ['{{ciudad}}',   'ciudad',    '#38bdf8', t.single.varCiudad],
-                  ['{{industria}}','industria', '#fb923c', t.single.varIndustria],
-                  ['{{web}}',      'web',       '#a78bfa', t.single.varWeb],
-                ].map(([v, display, color, tooltip]) => (
-                  <Tooltip key={v} title={tooltip} placement="top" arrow>
-                    <Box onClick={() => {
-                      const el = msgRef.current; if (!el) return
-                      el.setRangeText(v, el.selectionStart, el.selectionEnd, 'end')
-                      setMsgText(el.value)
-                      el.focus()
-                    }} sx={{ px: 1, py: 0.25, borderRadius: '6px', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', userSelect: 'none', fontFamily: 'monospace', bgcolor: `${color}22`, color, border: `1px solid ${color}40`, '&:hover': { bgcolor: `${color}38` } }}>{display}</Box>
-                  </Tooltip>
-                ))}
-              </Box>
-              <Box sx={{ mb: 0.5 }}>
-                <HighlightedMessageInput value={msgText} onChange={setMsgText} inputRef={msgRef} rows={5} maxLength={4096} lang={lang} />
-              </Box>
-              <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
-                <Typography sx={{ fontSize: '0.65rem', color: msgText.length > 4000 ? '#f87171' : 'var(--text-muted)' }}>
-                  {msgText.length} / 4096
-                </Typography>
-              </Box>
-              </>}
-
-              {isBulk && (
-                <Box sx={{ mt: 1.5, mb: 0.5, p: 1.2, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--item-hover)' }}>
-                  <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalNumbers} baseCount={0}
-                    hasName={tplVarFlags.hasName} hasCity={tplVarFlags.hasCity}
-                    hasIndustry={tplVarFlags.hasIndustry} hasWeb={tplVarFlags.hasWeb}
-                    varCounts={tplVarCounts} totalSelected={_selectedRows.length} />
-                </Box>
-              )}
 
               <Box sx={{ mt: 1, mb: 1 }}>
                 <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />

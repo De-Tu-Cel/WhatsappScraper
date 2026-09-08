@@ -830,7 +830,7 @@ export default function Analytics() {
                   <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
                     <TableSortLabel active={sortField === 'last_at'} direction={sortField === 'last_at' ? sortDir : 'asc'}
                       onClick={() => handleSort('last_at')}
-                      sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
+                      sx={SORT_LABEL_CENTER_SX}>
                       {t.analytics.lastResp}
                     </TableSortLabel>
                   </TableCell>
@@ -942,7 +942,9 @@ export default function Analytics() {
                       <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
                         {!hasMultiple && (row.response_quality != null
                           ? <QualityDots score={row.response_quality} color={cat.color} />
-                          : <QualityDots score={0} color="rgba(255,255,255,0.1)" />)}
+                          : <Tooltip title={t.analytics.notRated} placement="top">
+                              <Box sx={{ display: 'inline-flex' }}><QualityDots score={0} color="rgba(255,255,255,0.1)" /></Box>
+                            </Tooltip>)}
                       </TableCell>
 
                       {/* T. Reacción */}
@@ -1090,7 +1092,11 @@ export default function Analytics() {
                           <TableCell sx={{ ...NSUB, textAlign: 'center' }}>
                             {replied && n.response_quality != null
                               ? <QualityDots score={n.response_quality} color={nCat.color} />
-                              : <QualityDots score={0} color="rgba(255,255,255,0.1)" />}
+                              : replied
+                                ? <Tooltip title={t.analytics.notRated} placement="top">
+                                    <Box sx={{ display: 'inline-flex' }}><QualityDots score={0} color="rgba(255,255,255,0.1)" /></Box>
+                                  </Tooltip>
+                                : <QualityDots score={0} color="rgba(255,255,255,0.1)" />}
                           </TableCell>
                           {/* T. Reacción */}
                           <TableCell sx={{ ...NSUB, textAlign: 'center' }}>

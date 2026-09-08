@@ -21,27 +21,38 @@ export function getOverBy(stats, selectionCount, newCount = selectionCount) {
 // Recomendación personalizada de cómo distribuir envíos, calculada con las
 // instancias reales del usuario — sin esto, el usuario no tiene forma de saber
 // qué tan repartido (o concentrado) está su riesgo entre sus números.
-export function buildRecommendation(stats) {
+export function buildRecommendation(stats, lang = 'es') {
+  const en = lang === 'en'
   if (!stats) return ''
   if (!stats.instances) {
-    return 'Cupo estimado combinado para esa fecha — no se puede desglosar por número hasta que llegue el día.'
+    return en
+      ? "Estimated combined capacity for that date — can't be broken down by number until the day arrives."
+      : 'Cupo estimado combinado para esa fecha — no se puede desglosar por número hasta que llegue el día.'
   }
   if (!stats.instances.length) {
-    return 'No tienes instancias de WhatsApp asignadas — conecta una para poder enviar.'
+    return en
+      ? "You don't have any WhatsApp instances assigned — connect one to be able to send."
+      : 'No tienes instancias de WhatsApp asignadas — conecta una para poder enviar.'
   }
   const warmup = stats.instances.filter(r => r.warmup_mode)
   const normal = stats.instances.filter(r => !r.warmup_mode)
   const tightest = [...stats.instances].sort((a, b) => a.available - b.available)[0]
 
   const parts = []
-  if (warmup.length) parts.push(`${warmup.length} en warmup (20/día c/u)`)
-  if (normal.length) parts.push(`${normal.length} normal${normal.length > 1 ? 'es' : ''} (200/día c/u)`)
-  let msg = `Tienes ${parts.join(' y ')}.`
+  if (warmup.length) parts.push(en ? `${warmup.length} in warmup (20/day each)` : `${warmup.length} en warmup (20/día c/u)`)
+  if (normal.length) parts.push(en
+    ? `${normal.length} normal${normal.length > 1 ? 's' : ''} (200/day each)`
+    : `${normal.length} normal${normal.length > 1 ? 'es' : ''} (200/día c/u)`)
+  let msg = en ? `You have ${parts.join(' and ')}.` : `Tienes ${parts.join(' y ')}.`
   if (stats.instances.length > 1) {
-    msg += ' Reparte tus envíos entre tus números en vez de concentrarlos en uno solo.'
+    msg += en
+      ? ' Spread your sends across your numbers instead of concentrating them on just one.'
+      : ' Reparte tus envíos entre tus números en vez de concentrarlos en uno solo.'
   }
   if (tightest && tightest.available < 30) {
-    msg += ` ${tightest.label} es el que menos cupo tiene hoy (${tightest.available} disponibles) — evita cargarle más.`
+    msg += en
+      ? ` ${tightest.label} has the least capacity left today (${tightest.available} available) — avoid loading it further.`
+      : ` ${tightest.label} es el que menos cupo tiene hoy (${tightest.available} disponibles) — evita cargarle más.`
   }
   return msg
 }

@@ -18,9 +18,11 @@ import Chip from '@mui/material/Chip'
 import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
 import LinearProgress from '@mui/material/LinearProgress'
+import Tooltip from '@mui/material/Tooltip'
 import SendIcon from '@mui/icons-material/Send'
 import CampaignIcon from '@mui/icons-material/Campaign'
 import GroupsIcon from '@mui/icons-material/Groups'
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 
 // Per-recipient variable check — TemplateLibraryPicker only blocks a template
 // when NONE of the selection has the data it needs, so a mixed selection (some
@@ -37,7 +39,16 @@ function templateFitsTarget(text, info) {
   return TARGET_VARS.every(v => !v.re.test(text) || !!v.get(info))
 }
 
-function StepHeader({ n, title }) {
+function StepHint({ hint }) {
+  if (!hint) return null
+  return (
+    <Tooltip title={hint} placement="top" arrow>
+      <InfoOutlinedIcon sx={{ fontSize: 14, color: 'var(--text-muted)', cursor: 'help', opacity: 0.55, '&:hover': { opacity: 1 } }} />
+    </Tooltip>
+  )
+}
+
+function StepHeader({ n, title, hint }) {
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
       <Box sx={{
@@ -52,11 +63,12 @@ function StepHeader({ n, title }) {
       <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.88rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
         {title}
       </Typography>
+      <StepHint hint={hint} />
     </Box>
   )
 }
 
-function StepSection({ n, title, children, isLast = false }) {
+function StepSection({ n, title, hint, children, isLast = false }) {
   return (
     <Box sx={{ display: 'flex', gap: 1.5 }}>
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0, width: 28 }}>
@@ -78,13 +90,15 @@ function StepSection({ n, title, children, isLast = false }) {
         )}
       </Box>
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography sx={{
-          color: 'var(--text)', fontWeight: 700, fontSize: '0.88rem',
-          textTransform: 'uppercase', letterSpacing: '0.05em',
-          mt: '2px', mb: 1, lineHeight: 1,
-        }}>
-          {title}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, mt: '2px', mb: 1 }}>
+          <Typography sx={{
+            color: 'var(--text)', fontWeight: 700, fontSize: '0.88rem',
+            textTransform: 'uppercase', letterSpacing: '0.05em', lineHeight: 1,
+          }}>
+            {title}
+          </Typography>
+          <StepHint hint={hint} />
+        </Box>
         {children}
       </Box>
     </Box>
@@ -105,7 +119,7 @@ function SectionCard({ children, sx }) {
 export default function SendCampaign() {
   const { t, lang } = useLang()
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
-  const { addBatch, active, queueLen } = useSendQueue()
+  const { addBatch, active, queueLen, completedCount } = useSendQueue()
 
   // ── Recipients (per-number selection, same shape CompanyPicker/CampaignForm use) ──
   const [selectedNums, setSelectedNums] = useState(() => new Set())
@@ -121,14 +135,20 @@ export default function SendCampaign() {
   const [contactedRefreshKey, setContactedRefreshKey] = useState(0)
   const { stats: capStats, refresh: refreshCapStats } = useDailyCapStats()
 
+  // active.phase never actually reaches 'success' for a real send — the backend
+  // queue reports 'sending'/'waiting' and then just goes back to 'idle' (active
+  // becomes null); 'success' only ever came from the local Shift+B debug preview.
+  // completedCount is the real "a send just finished" signal (same one SendBubble's
+  // toast uses) — watching active here meant contactedRefreshKey never bumped for
+  // a genuine campaign, so "already contacted" only updated on a manual page reload.
   useEffect(() => {
-    if (active?.phase === 'success') {
-      setDoneCount(active.sent)
+    if (completedCount !== null) {
+      setDoneCount(completedCount)
       setDone(true)
       refreshCapStats()
       setContactedRefreshKey(k => k + 1)
     }
-  }, [active, refreshCapStats])
+  }, [completedCount, refreshCapStats])
 
   // isSending is true while the global queue is processing this campaign
   const isSending = active !== null || queueLen > 0
@@ -196,7 +216,7 @@ export default function SendCampaign() {
         {/* Left — templates, timing, send */}
         <Box sx={{ flex: '1 1 420px', minWidth: 320, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1.8, pr: 0.5 }}>
-            <StepSection n={1} title={t.campaign.stepTemplates}>
+            <StepSection n={1} title={t.campaign.stepTemplates} hint={t.campaign.hintTemplates}>
               <SectionCard>
                 <TemplateLibraryPicker
                   onChange={setTemplateTexts}
@@ -210,7 +230,7 @@ export default function SendCampaign() {
               </SectionCard>
             </StepSection>
 
-            <StepSection n={2} title={t.campaign.stepTiming} isLast>
+            <StepSection n={2} title={t.campaign.stepTiming} hint={t.campaign.hintTiming} isLast>
               <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
             </StepSection>
 
@@ -300,7 +320,7 @@ export default function SendCampaign() {
         {/* Right — recipients table, ~half the screen */}
         <Box sx={{ flex: '1 1 480px', minWidth: 320, display: 'flex', flexDirection: 'column', minHeight: 0, gap: 1, overflowY: 'auto' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <StepHeader n={3} title={t.campaign.stepRecipients} />
+            <StepHeader n={3} title={t.campaign.stepRecipients} hint={t.campaign.hintRecipients} />
             {targets.length > 0 && (
               <Box sx={{
                 display: 'flex', alignItems: 'center', gap: 0.8,

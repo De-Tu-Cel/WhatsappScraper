@@ -15,6 +15,8 @@ import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Button from '@mui/material/Button'
 import TextField from '@mui/material/TextField'
+import InputAdornment from '@mui/material/InputAdornment'
+import Popover from '@mui/material/Popover'
 import Chip from '@mui/material/Chip'
 import LinearProgress from '@mui/material/LinearProgress'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -28,6 +30,9 @@ import DialogContent from '@mui/material/DialogContent'
 import DialogActions from '@mui/material/DialogActions'
 import Divider from '@mui/material/Divider'
 import ScheduleSendIcon from '@mui/icons-material/ScheduleSend'
+import FilterListIcon from '@mui/icons-material/FilterList'
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
+import SwapVertIcon from '@mui/icons-material/SwapVert'
 import CancelIcon from '@mui/icons-material/Cancel'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import ErrorIcon from '@mui/icons-material/Error'
@@ -249,7 +254,7 @@ function SendProgress({ sent, total }) {
 
 // Pure normalizer — lives at module scope so CompanyCard (memoized) can use it
 // without receiving it as a prop.
-function normPhone(n) {
+export function normPhone(n) {
   if (!n) return ''
   const s = String(n).replace(/^\+/, '')
   return s.replace(/^521(\d{10})$/, '52$1')
@@ -267,18 +272,38 @@ function _companyCardEqual(prev, next) {
   return true
 }
 
-const CompanyCard = memo(function CompanyCard({
+// Algunas empresas quedaron con un número de teléfono (o "+0") guardado como
+// nombre desde el scraping/import — mostrarlo tal cual confunde y parece un
+// bug. Si el "nombre" parece un teléfono, mostramos el dominio en su lugar;
+// si tampoco hay dominio, un placeholder explícito en vez de texto roto.
+// Cualquier "nombre" sin ni una sola letra (números de teléfono, "+0", "-", etc.)
+// no es un nombre real de empresa — el regex anterior solo atrapaba teléfonos
+// de 7+ caracteres y dejaba pasar basura corta como "+0" tal cual.
+export const looksLikePhone = s => !!(s && s.trim()) && !/[a-zA-Z]/.test(s)
+export function displayCompanyName(company, t) {
+  if (!looksLikePhone(company.name)) return company.name || company.domain || t.campaign.noName
+  return company.domain || t.campaign.noName
+}
+
+export const CompanyCard = memo(function CompanyCard({
   company, contactedNormed, selectedNums, activeSet, onToggle, onToggleCompany, t,
 }) {
+  const [expanded, setExpanded] = useState(false)
   const sc = company.numbers.filter(n => selectedNums.has(n.number)).length
   const total = company.numbers.length
   const allCompanySel = sc === total && total > 0
   const isNumContacted = n => contactedNormed.has(normPhone(n))
-  const countSx = allCompanySel
-    ? { bgcolor: 'rgba(34,197,94,0.15)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.35)' }
-    : sc > 0
-      ? { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', color: 'var(--accent,#60a5fa)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)' }
-      : { bgcolor: 'var(--item-hover)', color: 'var(--text-muted)', border: '1px solid var(--border)' }
+  // Con 1 solo número, el checkbox de la empresa YA es el checkbox de ese número
+  // — mostrar además la fila anidada y el badge de fracción era doble información
+  // para el mismo dato. Solo empresas con 2+ números tienen algo real que elegir,
+  // así que solo ahí vale la pena el desglose (colapsado por defecto).
+  const single = total <= 1
+  const statusSx = sc === 0
+    ? { bgcolor: 'var(--item-hover)', color: 'var(--text-muted)', border: '1px solid var(--border)' }
+    : allCompanySel
+      ? { bgcolor: 'rgba(34,197,94,0.15)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.35)' }
+      : { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', color: 'var(--accent,#60a5fa)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)' }
+  const statusLabel = sc === 0 ? t.campaign.statusNone : allCompanySel ? t.campaign.statusComplete : t.campaign.statusPartial(sc, total)
   return (
     <Box sx={{
       flexShrink: 0, borderRadius: 2, overflow: 'hidden',
@@ -289,7 +314,7 @@ const CompanyCard = memo(function CompanyCard({
         <Checkbox size="small" checked={allCompanySel} indeterminate={sc > 0 && sc < total} onChange={() => onToggleCompany(company)} sx={{ p: 0.3, color: 'var(--border)', '&.Mui-checked,&.MuiCheckbox-indeterminate': { color: 'var(--accent,#3b82f6)' } }} />
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-            <Typography sx={{ color: 'var(--text)', fontSize: '0.8rem', fontWeight: 600, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{company.name}</Typography>
+            <Typography sx={{ color: 'var(--text)', fontSize: '0.8rem', fontWeight: 600, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayCompanyName(company, t)}</Typography>
             {company.contacted && (
               <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.3, flexShrink: 0, bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 1, px: 0.6, py: 0.15 }}>
                 <CheckCircleIcon sx={{ fontSize: 9, color: '#fbbf24' }} />
@@ -299,37 +324,62 @@ const CompanyCard = memo(function CompanyCard({
           </Box>
           {company.domain && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>{company.domain}</Typography>}
         </Box>
-        <Chip label={`${sc}/${total}`} size="small" sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700, flexShrink: 0, ...countSx }} />
-      </Box>
-      <Box sx={{ bgcolor: 'rgba(0,0,0,0.14)', '[data-theme-mode="light"] &': { bgcolor: 'rgba(0,0,0,0.03)' } }}>
-        {company.numbers.map((n, ni) => {
+        {single && total === 1 && (() => {
+          const n = company.numbers[0]
           const isSel = selectedNums.has(n.number)
           const nCont = isNumContacted(n.number)
           return (
-            <Box key={`${company._id}::${n.number}::${ni}`}
-              onClick={() => onToggle(n.number, { number: n.number, company_id: company._id, company_name: company.name, label: n.label, industry: company.industry, city: company.city, web: company.website })}
-              sx={{
-                display: 'flex', alignItems: 'center', gap: 0.5, pl: 2.2, pr: 1.2, py: 0.45, minHeight: 32, cursor: 'pointer',
-                borderTop: ni > 0 ? '1px solid var(--border)' : 'none',
-                borderLeft: `2px solid ${isSel ? 'var(--accent,#3b82f6)' : nCont ? 'rgba(251,191,36,0.4)' : 'transparent'}`,
-                bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.12)' : nCont ? 'rgba(251,191,36,0.03)' : 'transparent',
-                '&:hover': { bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.16)' : nCont ? 'rgba(251,191,36,0.07)' : 'var(--item-hover)' },
-              }}>
-              <Checkbox size="small" checked={isSel} onChange={() => {}} sx={{ p: 0.25, color: nCont ? 'rgba(251,191,36,0.35)' : 'var(--border)', '&.Mui-checked': { color: nCont ? '#fbbf24' : 'var(--accent,#3b82f6)' } }} />
-              <WhatsAppIcon sx={{ fontSize: 11, color: isSel ? '#25d366' : nCont ? '#fbbf24' : 'var(--text-muted)', flexShrink: 0 }} />
-              <Typography sx={{ color: isSel ? 'var(--text)' : nCont ? 'rgba(251,191,36,0.75)' : 'var(--text-muted)', fontSize: '0.74rem', fontFamily: 'monospace', flex: 1 }}>{fmtNumber(n.number)}</Typography>
-              {n.active && (
-                <Tooltip title={t.sched.activeInCampaign}>
-                  <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.2, bgcolor: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 1, px: 0.5, py: 0.1 }}>
-                    <WarningAmberIcon sx={{ fontSize: 9, color: '#f59e0b' }} />
-                    <Typography sx={{ color: '#f59e0b', fontSize: '0.6rem', fontWeight: 600 }}>activa</Typography>
-                  </Box>
-                </Tooltip>
-              )}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, flexShrink: 0 }}>
+              <WhatsAppIcon sx={{ fontSize: 13, color: isSel ? '#25d366' : nCont ? '#fbbf24' : 'var(--text-muted)' }} />
+              <Typography sx={{ color: isSel ? 'var(--text)' : nCont ? 'rgba(251,191,36,0.75)' : 'var(--text-muted)', fontSize: '0.72rem', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                {fmtNumber(n.number)}
+              </Typography>
             </Box>
           )
-        })}
+        })()}
+        {!single && (
+          <Box onClick={() => setExpanded(v => !v)} sx={{ display: 'flex', alignItems: 'center', gap: 0.2, cursor: 'pointer', flexShrink: 0, px: 0.5, py: 0.2, borderRadius: 1, '&:hover': { bgcolor: 'var(--item-hover)' } }}>
+            <Typography sx={{ fontSize: '0.65rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{t.campaign.numbersCount(total)}</Typography>
+            <ChevronRightIcon sx={{ fontSize: 15, color: 'var(--text-muted)', transition: 'transform 0.15s', transform: expanded ? 'rotate(90deg)' : 'none' }} />
+          </Box>
+        )}
+        {!single && (
+          <Tooltip title={t.campaign.countTooltip(sc, total)} placement="top">
+            <Chip label={statusLabel} size="small" sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700, flexShrink: 0, ...statusSx }} />
+          </Tooltip>
+        )}
       </Box>
+      {!single && expanded && (
+        <Box sx={{ bgcolor: 'rgba(0,0,0,0.14)', '[data-theme-mode="light"] &': { bgcolor: 'rgba(0,0,0,0.03)' } }}>
+          {company.numbers.map((n, ni) => {
+            const isSel = selectedNums.has(n.number)
+            const nCont = isNumContacted(n.number)
+            return (
+              <Box key={`${company._id}::${n.number}::${ni}`}
+                onClick={() => onToggle(n.number, { number: n.number, company_id: company._id, company_name: company.name, label: n.label, industry: company.industry, city: company.city, web: company.website })}
+                sx={{
+                  display: 'flex', alignItems: 'center', gap: 0.5, pl: 2.2, pr: 1.2, py: 0.45, minHeight: 32, cursor: 'pointer',
+                  borderTop: ni > 0 ? '1px solid var(--border)' : 'none',
+                  borderLeft: `2px solid ${isSel ? 'var(--accent,#3b82f6)' : nCont ? 'rgba(251,191,36,0.4)' : 'transparent'}`,
+                  bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.12)' : nCont ? 'rgba(251,191,36,0.03)' : 'transparent',
+                  '&:hover': { bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.16)' : nCont ? 'rgba(251,191,36,0.07)' : 'var(--item-hover)' },
+                }}>
+                <Checkbox size="small" checked={isSel} onChange={() => {}} sx={{ p: 0.25, color: nCont ? 'rgba(251,191,36,0.35)' : 'var(--border)', '&.Mui-checked': { color: nCont ? '#fbbf24' : 'var(--accent,#3b82f6)' } }} />
+                <WhatsAppIcon sx={{ fontSize: 11, color: isSel ? '#25d366' : nCont ? '#fbbf24' : 'var(--text-muted)', flexShrink: 0 }} />
+                <Typography sx={{ color: isSel ? 'var(--text)' : nCont ? 'rgba(251,191,36,0.75)' : 'var(--text-muted)', fontSize: '0.74rem', fontFamily: 'monospace', flex: 1 }}>{fmtNumber(n.number)}</Typography>
+                {n.active && (
+                  <Tooltip title={t.sched.activeInCampaign}>
+                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.2, bgcolor: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 1, px: 0.5, py: 0.1 }}>
+                      <WarningAmberIcon sx={{ fontSize: 9, color: '#f59e0b' }} />
+                      <Typography sx={{ color: '#f59e0b', fontSize: '0.6rem', fontWeight: 600 }}>activa</Typography>
+                    </Box>
+                  </Tooltip>
+                )}
+              </Box>
+            )
+          })}
+        </Box>
+      )}
     </Box>
   )
 }, _companyCardEqual)
@@ -364,22 +414,41 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
   const [companies,          setCompanies]          = useState([])
   const [loadingCo,          setLoadingCo]          = useState(true)
   const [search,             setSearch]             = useState('')
-  const [industryFilter,     setIndustryFilter]     = useState('')
-  const [showAllIndustries,  setShowAllIndustries]  = useState(false)
+  const [industryFilters,    setIndustryFilters]    = useState(new Set())
+  const [filterContacted,    setFilterContacted]    = useState('all') // 'all' | 'new' | 'contacted'
+  const [sortRecent,         setSortRecent]         = useState(false)
+  const [industryAnchor,     setIndustryAnchor]     = useState(null)
+  const [industrySearch,     setIndustrySearch]     = useState('')
   const [page,               setPage]               = useState(0)
+  const [expandedSel,        setExpandedSel]        = useState(new Set())
   const MAX_IND = 4
   const companiesRef = useRef([])
 
-  useEffect(() => {
-    let cancelled = false
+  const fetchCompanies = useCallback((cancelledRef, silent = false) => {
+    if (!silent) setLoadingCo(true)
     authFetch('/api/admin/companies-with-numbers')
       .then(r => r.json())
       .then(d => {
         const list = Array.isArray(d) ? d : []
-        if (cancelled) return
-        setCompanies(list)
+        if (cancelledRef.current) return
         setLoadingCo(false)  // unblock UI immediately — don't wait for check-contacted
         if (!list.length) return
+        // El fetch base no trae already_contacted (eso solo lo agrega la llamada
+        // de check-contacted, un poco después) — sobreescribir companies aquí sin
+        // más borraba por un instante el badge "Already contacted" de TODA fila que
+        // ya lo tuviera, en cada poll silencioso de 30s, hasta que la segunda
+        // llamada regresaba: eso era el "salto" visible que se veía cada rato.
+        // Se lo cargamos de la lista previa mientras llega el dato fresco.
+        // También evita el re-render entero (setCompanies) cuando el poll no trajo
+        // ningún cambio real — el caso más común entre un poll y el siguiente.
+        setCompanies(prev => {
+          const prevById = new Map(prev.map(c => [c._id, c]))
+          const merged = list.map(c => {
+            const old = prevById.get(c._id)
+            return old?.already_contacted ? { ...c, contacted: old.contacted, already_contacted: old.already_contacted } : c
+          })
+          return JSON.stringify(prev) === JSON.stringify(merged) ? prev : merged
+        })
         // Overlay "already contacted" status — fire-and-forget, never blocks the spinner
         authFetch('/api/companies/check-contacted', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -387,17 +456,30 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
         })
           .then(r => r.json())
           .then(contactedMap => {
-            if (!cancelled) setCompanies(list.map(c => ({
-              ...c,
-              contacted: !!contactedMap[c._id]?.contacted,
-              already_contacted: contactedMap[c._id] || { contacted: false },
-            })))
+            if (cancelledRef.current) return
+            setCompanies(curr => {
+              const updated = curr.map(c => ({
+                ...c,
+                contacted: !!contactedMap[c._id]?.contacted,
+                already_contacted: contactedMap[c._id] || { contacted: false },
+              }))
+              return JSON.stringify(curr) === JSON.stringify(updated) ? curr : updated
+            })
           })
           .catch(() => {})
       })
-      .catch(() => { if (!cancelled) setLoadingCo(false) })
-    return () => { cancelled = true }
+      .catch(() => { if (!cancelledRef.current) setLoadingCo(false) })
   }, [])
+
+  useEffect(() => {
+    const cancelledRef = { current: false }
+    fetchCompanies(cancelledRef)
+    // Refresco silencioso — así la tabla va reflejando sola las empresas/números
+    // nuevos que otro usuario agregue (scraping, CSV, etc.) sin que haya que
+    // recargar la pantalla ni perder la selección/búsqueda/filtro en curso.
+    const interval = setInterval(() => fetchCompanies(cancelledRef, true), 30_000)
+    return () => { cancelledRef.current = true; clearInterval(interval) }
+  }, [fetchCompanies])
 
   // Keep ref in sync so the refresh effect always sees the current list
   useEffect(() => { companiesRef.current = companies }, [companies])
@@ -425,17 +507,38 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
   }, [contactedRefreshKey])
 
   const industries = useMemo(() => [...new Set(companies.map(c => c.industry).filter(Boolean))].sort(), [companies])
-  const filtered   = useMemo(() => companies.filter(c => {
-    if (industryFilter && c.industry !== industryFilter) return false
+  // Sin el filtro de contactados — usado para que los CONTEOS de "Todos/Sin
+  // contactar/Ya contactados" reflejen los otros filtros activos (industria,
+  // búsqueda) sin quedar atrapados por el propio filtro que están mostrando.
+  const industrySearchFiltered = useMemo(() => companies.filter(c => {
+    if (industryFilters.size > 0 && !industryFilters.has(c.industry)) return false
     if (search) { const q = search.toLowerCase(); return c.name.toLowerCase().includes(q) || (c.domain||'').toLowerCase().includes(q) }
     return true
-  }), [companies, industryFilter, search])
+  }), [companies, industryFilters, search])
+  const filtered   = useMemo(() => {
+    const list = industrySearchFiltered.filter(c => {
+      if (filterContacted === 'new' && c.already_contacted?.contacted) return false
+      if (filterContacted === 'contacted' && !c.already_contacted?.contacted) return false
+      return true
+    })
+    if (!sortRecent) return list
+    // Copia — el .filter() de arriba ya devuelve un array nuevo, pero explícito por claridad.
+    return [...list].sort((a, b) => new Date(b.last_scraped_at || 0) - new Date(a.last_scraped_at || 0))
+  }, [industrySearchFiltered, filterContacted, sortRecent])
+
+  function toggleIndustry(ind) {
+    setIndustryFilters(prev => {
+      const next = new Set(prev)
+      if (next.has(ind)) next.delete(ind); else next.add(ind)
+      return next
+    })
+  }
 
   // Paginated — rendering all matching companies (350+) with every number at once
   // is what was causing the borders/checkboxes to visually collapse into a mess of
   // overlapping lines and the scrollbar to disappear: too many DOM nodes for the
   // browser to lay out and paint reliably in one shot.
-  useEffect(() => { setPage(0) }, [industryFilter, search])
+  useEffect(() => { setPage(0) }, [industryFilters, filterContacted, search, sortRecent])
   const totalPages = Math.max(1, Math.ceil(filtered.length / PICKER_PAGE_SIZE))
   const pageSafe   = Math.min(page, totalPages - 1)
   const paged      = filtered.slice(pageSafe * PICKER_PAGE_SIZE, (pageSafe + 1) * PICKER_PAGE_SIZE)
@@ -517,16 +620,25 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
   const selCount = selectedNums.size
   const activeSelCount = [...selectedNums].filter(n => activeSet.has(n)).length
 
+  // Deliberadamente SIN azul de acento — ese color ya significa "estos números
+  // van a recibir la campaña" (fila resaltada, checkbox marcado, badge Complete).
+  // Estos chips son solo FILTROS de vista (industria, orden), un concepto distinto;
+  // usar el mismo azul para ambos hacía que todo se viera "igual de importante" y
+  // costaba distinguir un filtro activo de una selección real de destinatarios.
   const chipSx = active => ({
     fontSize: '0.68rem', height: 22, fontWeight: active ? 700 : 400,
-    bgcolor: active ? 'rgba(var(--accent-rgb,59,130,246),0.18)' : 'var(--item-hover)',
-    border: `1px solid ${active ? 'rgba(var(--accent-rgb,59,130,246),0.45)' : 'var(--border)'}`,
-    color: active ? 'var(--accent,#3b82f6)' : 'var(--text-muted)', cursor: 'pointer',
-    '&:hover': { bgcolor: active ? 'rgba(var(--accent-rgb,59,130,246),0.25)' : 'var(--item-hover)', opacity: active ? 1 : 0.85 }, transition: 'background-color 0.15s, border-color 0.15s',
+    bgcolor: active ? 'var(--item-hover)' : 'transparent',
+    border: `1px solid ${active ? 'var(--text-muted)' : 'var(--border)'}`,
+    color: active ? 'var(--text)' : 'var(--text-muted)', cursor: 'pointer',
+    '&:hover': { bgcolor: 'var(--item-hover)', opacity: active ? 1 : 0.85 }, transition: 'background-color 0.15s, border-color 0.15s',
   })
 
   return (
-    <Box sx={{ border: '1px solid var(--border)', borderRadius: 2, overflow: 'hidden' }}>
+    // flexShrink:0 — cuando este picker vive dentro de una columna flex (Send Campaign),
+    // sin esto flexbox lo encoge por debajo de su contenido real cuando la ventana baja
+    // de altura, y como el Box tiene overflow:hidden esa parte (paginación, resumen de
+    // selección) se recorta en silencio en vez de quedar accesible con scroll.
+    <Box sx={{ border: '1px solid var(--border)', borderRadius: 2, overflow: 'hidden', flexShrink: 0 }}>
       <Box sx={{ px: 1.5, py: 1, bgcolor: 'var(--surface)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 0.8, background: 'linear-gradient(90deg, rgba(var(--accent-rgb,59,130,246),0.06) 0%, transparent 60%)' }}>
         <Box sx={{ width: 3, height: 12, borderRadius: 2, bgcolor: 'var(--accent,#3b82f6)', opacity: 0.55, flexShrink: 0 }} />
         <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontWeight: 700, fontSize: '0.68rem', flex: 1, textTransform: 'uppercase', letterSpacing: '0.07em' }}>{t.sched.recipients}</Typography>
@@ -534,13 +646,12 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
       </Box>
 
       {selectedNums.size > 0 && (() => {
-        const looksLikePhone = s => /^[+\d\s\-().]{7,}$/.test(s || '')
         const selCosRaw = companies.filter(c => c.numbers.some(n => selectedNums.has(n.number)))
         const seen = new Set(); const selCos = selCosRaw.filter(c => seen.has(c._id) ? false : (seen.add(c._id), true))
         if (!selCos.length) return null
         return (
           <Box sx={{ borderBottom: '1px solid var(--border)', px: 1.2, pt: 0.8, pb: 0.9, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.02)', maxHeight: 168, overflowY: 'auto', scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.07) transparent' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.8 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.6 }}>
               <Typography sx={{ fontSize: '0.55rem', color: 'rgba(255,255,255,0.22)', textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>
                 Selected
               </Typography>
@@ -548,32 +659,61 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
                 {selCount} {selCount === 1 ? 'number' : 'numbers'} · {selCos.length} {selCos.length === 1 ? 'co.' : 'cos.'}
               </Typography>
             </Box>
+            {/* Leyenda — sin esto el color ámbar de "ya contactada" no se explica solo,
+                y con varias empresas seleccionadas se ve como un color al azar. */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.8 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3 }}>
+                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'var(--accent,#3b82f6)', flexShrink: 0 }} />
+                <Typography sx={{ fontSize: '0.55rem', color: 'rgba(255,255,255,0.3)' }}>nuevo</Typography>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3 }}>
+                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#fbbf24', flexShrink: 0 }} />
+                <Typography sx={{ fontSize: '0.55rem', color: 'rgba(255,255,255,0.3)' }}>ya contactada</Typography>
+              </Box>
+            </Box>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
               {selCos.map(c => {
                 const selNums = c.numbers.filter(n => selectedNums.has(n.number))
                 const cNormed = new Set((c.already_contacted?.contacted_numbers || []).map(normPhone))
-                const label = looksLikePhone(c.name) ? (c.domain || c.name) : c.name
+                const label = displayCompanyName(c, t)
                 const anyContacted = selNums.some(n => cNormed.has(normPhone(n.number)))
                 const accentC = anyContacted ? '#fbbf24' : 'var(--accent,#3b82f6)'
+                // Con 1 solo número seleccionado no hay nada que expandir — mostrarlo
+                // directo evita un clic extra para el caso más común. Con varios, se
+                // colapsa por default (nombre + conteo) para no volver la lista un
+                // bloque denso de chips cuando hay muchas empresas seleccionadas.
+                const single = selNums.length <= 1
+                const expanded = single || expandedSel.has(c._id)
                 return (
                   <Box key={c._id} sx={{ pl: 1, borderLeft: anyContacted ? '2px solid rgba(251,191,36,0.35)' : '2px solid rgba(var(--accent-rgb,59,130,246),0.22)', py: 0.2 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.35 }}>
+                    <Box
+                      onClick={single ? undefined : () => setExpandedSel(prev => {
+                        const next = new Set(prev)
+                        next.has(c._id) ? next.delete(c._id) : next.add(c._id)
+                        return next
+                      })}
+                      sx={{ display: 'flex', alignItems: 'center', gap: 0.4, mb: 0.35, cursor: single ? 'default' : 'pointer', borderRadius: 0.5, '&:hover': single ? {} : { bgcolor: 'var(--item-hover)' } }}>
+                      {!single && (
+                        <ChevronRightIcon sx={{ fontSize: 13, color: 'var(--text-muted)', flexShrink: 0, transition: 'transform 0.15s', transform: expanded ? 'rotate(90deg)' : 'none' }} />
+                      )}
                       <Typography sx={{ fontSize: '0.67rem', color: 'var(--text)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{label}</Typography>
                       <Typography sx={{ fontSize: '0.55rem', color: accentC, opacity: 0.7, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{selNums.length}</Typography>
                     </Box>
-                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.3 }}>
-                      {selNums.map((n, ni) => {
-                        const isCont = cNormed.has(normPhone(n.number))
-                        return (
-                          <Typography key={`${c._id}::${n.number}::${ni}`} sx={{
-                            fontSize: '0.58rem', fontFamily: 'monospace', px: 0.5, py: 0.1, borderRadius: 0.5,
-                            color: isCont ? '#fbbf24' : 'var(--accent,#60a5fa)',
-                            bgcolor: isCont ? 'rgba(251,191,36,0.08)' : 'rgba(59,130,246,0.08)',
-                            border: `1px solid ${isCont ? 'rgba(251,191,36,0.18)' : 'rgba(59,130,246,0.18)'}`,
-                          }}>{fmtNumber(n.number)}</Typography>
-                        )
-                      })}
-                    </Box>
+                    {expanded && (
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.3, pl: single ? 0 : 2 }}>
+                        {selNums.map((n, ni) => {
+                          const isCont = cNormed.has(normPhone(n.number))
+                          return (
+                            <Typography key={`${c._id}::${n.number}::${ni}`} sx={{
+                              fontSize: '0.58rem', fontFamily: 'monospace', px: 0.5, py: 0.1, borderRadius: 0.5,
+                              color: isCont ? '#fbbf24' : 'var(--accent,#60a5fa)',
+                              bgcolor: isCont ? 'rgba(251,191,36,0.08)' : 'rgba(59,130,246,0.08)',
+                              border: `1px solid ${isCont ? 'rgba(251,191,36,0.18)' : 'rgba(59,130,246,0.18)'}`,
+                            }}>{fmtNumber(n.number)}</Typography>
+                          )
+                        })}
+                      </Box>
+                    )}
                   </Box>
                 )
               })}
@@ -583,30 +723,118 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
       })()}
 
       <Box sx={{ px: 1.5, pt: 1.2, pb: 0.8, borderBottom: '1px solid var(--border)' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, bgcolor: 'var(--surface)', borderRadius: 1.5, border: '1px solid var(--border)', px: 1, py: 0.4, mb: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, bgcolor: 'var(--surface)', borderRadius: 1.5, border: '1px solid var(--border)', px: 1, py: 0.4, mb: 0.4 }}>
           <SearchIcon sx={{ fontSize: 13, color: 'var(--text-muted)' }} />
           <Box component="input" value={search} onChange={e => setSearch(e.target.value)} placeholder={t.sched.searchCo} sx={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: 'var(--text,#f1f5f9)', fontSize: '0.78rem', '&::placeholder': { color: 'var(--text-muted)' } }} />
           {search && <IconButton size="small" onClick={() => setSearch('')} sx={{ p: 0.2, color: 'var(--text-muted)' }}><CloseIcon sx={{ fontSize: 12 }} /></IconButton>}
         </Box>
-        {industries.length > 0 && (
+        {/* Conteo de EMPRESAS que coinciden con el filtro actual — distinto y
+            separado del conteo de NÚMEROS que muestra "Select all" más abajo,
+            para no mezclar dos unidades distintas bajo el mismo número. */}
+        <Typography sx={{ fontSize: '0.66rem', color: 'var(--text-muted)', mb: 1 }}>
+          {t.campaign.companiesFound(filtered.length)}
+        </Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center', justifyContent: 'space-between' }}>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
-            <Chip label={t.sched.allIndustries} size="small" onClick={() => setIndustryFilter('')} sx={chipSx(!industryFilter)} />
-            {(showAllIndustries ? industries : industries.slice(0, MAX_IND)).map(ind => (
-              <Chip key={ind} label={ind} size="small" onClick={() => setIndustryFilter(f => f === ind ? '' : ind)} sx={chipSx(industryFilter === ind)} />
-            ))}
-            {industries.length > MAX_IND && (
-              <Typography onClick={() => setShowAllIndustries(v => !v)} sx={{ color: 'var(--accent,#3b82f6)', fontSize: '0.68rem', fontWeight: 600, cursor: 'pointer', px: 0.5, '&:hover': { opacity: 0.8 } }}>
-                {showAllIndustries ? t.sched.showLess : `+${industries.length - MAX_IND} ${t.sched.showMore}`}
-              </Typography>
-            )}
+            {industries.length > 0 && (<>
+              <Chip label={t.sched.allIndustries} size="small" onClick={() => setIndustryFilters(new Set())} sx={chipSx(industryFilters.size === 0)} />
+              {industries.slice(0, MAX_IND).map(ind => (
+                <Chip key={ind} label={ind} size="small" onClick={() => toggleIndustry(ind)} sx={chipSx(industryFilters.has(ind))} />
+              ))}
+              {industries.length > MAX_IND && (() => {
+                const overflowSelected = [...industryFilters].filter(f => !industries.slice(0, MAX_IND).includes(f)).length
+                return (
+                  <Chip
+                    icon={<FilterListIcon sx={{ fontSize: 13 }} />}
+                    deleteIcon={<ArrowDropDownIcon />}
+                    onDelete={e => setIndustryAnchor(e.currentTarget)}
+                    onClick={e => setIndustryAnchor(e.currentTarget)}
+                    label={overflowSelected > 0 ? `+${industries.length - MAX_IND} (${overflowSelected})` : `+${industries.length - MAX_IND}`}
+                    size="small"
+                    sx={chipSx(overflowSelected > 0)}
+                  />
+                )
+              })()}
+              {industryFilters.size > 0 && (
+                <Chip
+                  icon={<CloseIcon sx={{ fontSize: 13 }} />}
+                  label={t.sched.clearFilters}
+                  size="small"
+                  onClick={() => setIndustryFilters(new Set())}
+                  sx={{
+                    fontSize: '0.68rem', height: 22, fontWeight: 600, cursor: 'pointer',
+                    bgcolor: 'transparent', color: 'var(--text-muted)', border: '1px dashed var(--border)',
+                    '&:hover': { color: 'var(--text)', borderColor: 'var(--text-muted)' },
+                  }}
+                />
+              )}
+              <Popover open={Boolean(industryAnchor)} anchorEl={industryAnchor} onClose={() => { setIndustryAnchor(null); setIndustrySearch('') }}
+                anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                slotProps={{ paper: { sx: {
+                  bgcolor: 'var(--card-bg,#1e293b) !important', color: 'var(--text, #f1f5f9)',
+                  border: '1px solid var(--border, rgba(255,255,255,0.1))',
+                  borderRadius: 2, width: 240, p: 1,
+                } } }}>
+                <TextField
+                  size="small" fullWidth autoFocus value={industrySearch} onChange={e => setIndustrySearch(e.target.value)}
+                  placeholder={t.sched.searchCo}
+                  slotProps={{ input: { startAdornment: (
+                    <InputAdornment position="start"><SearchIcon sx={{ fontSize: 14, color: 'var(--text-muted)' }} /></InputAdornment>
+                  ) } }}
+                  sx={{ mb: 0.8, '& .MuiOutlinedInput-root': { bgcolor: 'var(--surface, rgba(255,255,255,0.03)) !important', fontSize: '0.8rem' }, '& input': { color: 'var(--text)' } }}
+                />
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.3, maxHeight: 240, overflowY: 'auto' }}>
+                  {industries.filter(ind => ind.toLowerCase().includes(industrySearch.toLowerCase())).map(ind => (
+                    <Box key={ind}
+                      onClick={() => toggleIndustry(ind)}
+                      sx={{
+                        display: 'flex', alignItems: 'center', gap: 0.5, px: 0.6, py: 0.45, borderRadius: 1, cursor: 'pointer', fontSize: '0.78rem',
+                        color: industryFilters.has(ind) ? 'var(--text)' : 'var(--text-muted)',
+                        fontWeight: industryFilters.has(ind) ? 700 : 400,
+                        bgcolor: 'var(--surface, rgba(255,255,255,0.03)) !important',
+                        '&:hover': { bgcolor: 'var(--item-hover, rgba(255,255,255,0.06)) !important' },
+                      }}>
+                      <Checkbox size="small" checked={industryFilters.has(ind)} onClick={e => e.stopPropagation()} onChange={() => toggleIndustry(ind)}
+                        sx={{ p: 0.4, color: 'var(--text-muted)', '&.Mui-checked': { color: 'var(--text-muted)' } }} />
+                      {ind}
+                    </Box>
+                  ))}
+                </Box>
+              </Popover>
+            </>)}
           </Box>
-        )}
+          <Tooltip title={sortRecent ? t.campaign.sortRecentHintOn : t.campaign.sortRecentHintOff} arrow placement="top">
+            <Chip
+              icon={<SwapVertIcon sx={{ fontSize: 13 }} />}
+              label={sortRecent ? t.campaign.sortRecent : t.campaign.sortAlpha}
+              size="small"
+              onClick={() => setSortRecent(v => !v)}
+              sx={chipSx(sortRecent)}
+            />
+          </Tooltip>
+        </Box>
+      </Box>
+
+      <Box sx={{ display: 'flex', gap: 0.5, px: 1.5, py: 0.8, borderBottom: '1px solid var(--border)' }}>
+        {[
+          { key: 'all',       label: t.sched.filterAll(industrySearchFiltered.length) },
+          { key: 'new',       label: t.sched.filterNew(industrySearchFiltered.filter(c => !c.already_contacted?.contacted).length) },
+          { key: 'contacted', label: t.sched.filterContacted(industrySearchFiltered.filter(c => c.already_contacted?.contacted).length) },
+        ].map(f => (
+          <Chip key={f.key} label={f.label} size="small" onClick={() => setFilterContacted(f.key)} sx={chipSx(filterContacted === f.key)} />
+        ))}
       </Box>
 
       {filtered.length > 0 && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 0.5, borderBottom: '1px solid var(--border)', bgcolor: 'var(--surface)' }}>
-          <Checkbox size="small" checked={allSel} indeterminate={someSel} onChange={toggleAll} sx={{ p: 0.3, color: 'var(--border)', '&.Mui-checked,&.MuiCheckbox-indeterminate': { color: 'var(--accent,#3b82f6)' } }} />
-          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{t.sched.selectAll} ({allFilteredNums.length})</Typography>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.15, px: 1.5, py: 0.5, borderBottom: '1px solid var(--border)', bgcolor: 'var(--surface)' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Checkbox size="small" checked={allSel} indeterminate={someSel} onChange={toggleAll} sx={{ p: 0.3, color: 'var(--border)', '&.Mui-checked,&.MuiCheckbox-indeterminate': { color: 'var(--accent,#3b82f6)' } }} />
+            <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{t.sched.selectAll} ({allFilteredNums.length})</Typography>
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, pl: 3.6 }}>
+            <WhatsAppIcon sx={{ fontSize: 11, color: 'var(--text-muted)', opacity: 0.7 }} />
+            <Typography sx={{ fontSize: '0.63rem', color: 'var(--text-muted)', opacity: 0.85 }}>{t.campaign.pickerHint}</Typography>
+          </Box>
         </Box>
       )}
 

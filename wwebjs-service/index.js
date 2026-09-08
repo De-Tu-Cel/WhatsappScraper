@@ -60,6 +60,17 @@ function startPresenceHeartbeat(sessionId) {
   }, (Math.random() * 30 + 15) * 60 * 1000)
 }
 
+async function fetchProfilePicUrl(client, sessionId) {
+  try {
+    const url = await client.getProfilePicUrl(client.info.wid._serialized)
+    console.log(`[${sessionId}] getProfilePicUrl -> ${url ? 'ok (' + url.length + ' chars)' : 'empty/null'}`)
+    return url || null
+  } catch (e) {
+    console.log(`[${sessionId}] getProfilePicUrl failed: ${e.message}`)
+    return null
+  }
+}
+
 function createClient(sessionId, phoneNumber) {
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: sessionId, dataPath: SESSIONS_PATH }),
@@ -136,10 +147,30 @@ function createClient(sessionId, phoneNumber) {
     // Profile name + picture, shown in the Instances panel so it's clear who's
     // behind each line — best-effort, never blocks the "connected" webhook.
     const pushname = client.info?.pushname || null
-    let profilePicUrl = null
-    try { profilePicUrl = await client.getProfilePicUrl(client.info.wid._serialized) } catch (_) {}
+    const profilePicUrl = await fetchProfilePicUrl(client, sessionId)
 
     forwardWebhook({ event: 'session.status', sessionId, data: { status: 'connected', phone: session.phone, pushname, profile_pic_url: profilePicUrl } })
+
+    // getProfilePicUrl fetching OUR OWN profile pic fails consistently as of
+    // 2026-09 — a known, unresolved whatsapp-web.js issue where getChat() can't
+    // resolve a "chat" for yourself (see github.com/wwebjs/whatsapp-web.js
+    // issues #1277/#3005). Confirmed via 3 immediate retries all failing
+    // identically, so this is NOT a cache-warmup race — the retry below is kept
+    // as a cheap, non-blocking safety net in case a future WhatsApp Web/library
+    // update fixes it, not because it currently helps.
+    if (!profilePicUrl) {
+      ;(async () => {
+        for (const delayMs of [4000, 8000]) {
+          await new Promise(r => setTimeout(r, delayMs))
+          if (!sessions.has(sessionId)) return
+          const retryUrl = await fetchProfilePicUrl(client, sessionId)
+          if (retryUrl) {
+            forwardWebhook({ event: 'session.status', sessionId, data: { status: 'connected', phone: session.phone, pushname, profile_pic_url: retryUrl } })
+            return
+          }
+        }
+      })()
+    }
   })
 
   client.on('auth_failure', (msg) => {

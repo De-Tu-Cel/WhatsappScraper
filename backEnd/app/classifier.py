@@ -512,7 +512,8 @@ _INLINE_MENU_ITEM = re.compile(
 
 _AUTO_REPLY_MARKERS = re.compile(
     r'folio|tkt-|ticket\s*#|ref(?:erencia)?\s*[:#]|tu mensaje es importante|'
-    r'en breve (?:un asesor|te contactar)|hemos recibido tu (?:consulta|mensaje)|'
+    r'en breve (?:un asesor|te (?:contactar|responderemos|atenderemos|contestaremos))|'
+    r'hemos recibido tu (?:consulta|mensaje)|'
     r'nos comunicaremos a la brevedad|mensaje generado autom[aá]ticamente|'
     r'estimado cliente|apreciable cliente|horario de atenci[oó]n|'
     # "¿Sigues ahí?" / "Aquí sigo…" (nudge de continuidad de sesión) y mensajes de
@@ -526,7 +527,12 @@ _AUTO_REPLY_MARKERS = re.compile(
     # "(a)" es notación inclusiva ("bienvenido(a)") que rompe [oa] simple.
     r'bienvenid[oa]s?(?:\([ao]\))?\s+a\b|'
     r'gracias por (?:contactarnos|escribir(?:nos)?|comunicarte|comunicarse)|'
-    r'te (?:responderemos|atenderemos|contestaremos)\b|'
+    # Caso real de producción (Ferra, 2026-09-07): un agente humano real escribió
+    # "...con gusto te atenderemos" y esta marca lo clasificó "bot" por error — la
+    # frase suelta es una cortesía humana normal en México, NO exclusiva de
+    # plantilla. Solo es señal de bot cuando además trae el "en breve/pronto" que
+    # sí delata la plantilla de bienvenida automática de WhatsApp Business.
+    r'te (?:responderemos|atenderemos|contestaremos)\s*(?:en breve|pronto|lo antes posible|a la brevedad)\b|'
     # "Te comunicas a [Empresa]" / "Se comunica a [Empresa]" — variante de "has llegado a".
     # Un humano diría "te comunico con alguien", no "te comunicas a".
     r'(?:te|se)\s+comunica[sz]?\s+a\s+\w|'
@@ -775,7 +781,7 @@ def _quick_classify(inbound_body: str, reaction_time_min: float = None) -> dict 
     # Bot self-identification ("soy tu asistente virtual", 🤖, etc.) — always deterministic.
     if _looks_like_bot_selfid(text):
         _is_conversational_ai = bool(_AI_ASSISTANT_MARKERS.search(text))
-        return _quick_result("bot", "Se autoidentifica como bot/IA — señal determinista",
+        return _quick_result("bot", "El mensaje dice ser un bot o una IA",
                              is_ai=_is_conversational_ai)
 
     # Auto-reply template (folio, "tu mensaje es importante", "horario de atención", etc.)
@@ -1177,10 +1183,10 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
             # (T2 rápido = "bot"), pero no hay texto real que mandarle al LLM para
             # confirmar is_ai, así que se deja en el default seguro (True) sin gastar
             # una llamada con un marcador literal como "[audio]" de contenido.
-            analysis = _quick_result("bot", f"Respuesta multimedia sin texto en 2do mensaje (T2={t2_seconds:.0f}s) — is_ai sin confirmar")
+            analysis = _quick_result("bot", f"Respondió con audio/imagen sin texto en {t2_seconds:.0f}s — no se pudo confirmar si es Agente IA")
             analysis["is_ai"] = True
         elif _looks_like_menu(reply_body or ""):
-            analysis = _quick_result("bot", f"Menú detectado en 2do mensaje (T2={t2_seconds:.0f}s) — determinista, sin IA")
+            analysis = _quick_result("bot", f"Mandó un menú de opciones, respondió en {t2_seconds:.0f}s")
             analysis["is_ai"] = False
         else:
             # category="bot" ya es determinista (T2 rápido, sin menú) — is_ai se
@@ -1189,8 +1195,8 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
             is_ai = _confirm_is_ai(reply_body, t2_threshold)
             analysis = _quick_result(
                 "bot",
-                f"Respuesta rápida sin menú en 2do mensaje (T2={t2_seconds:.0f}s) — "
-                f"{'Agente IA' if is_ai else 'posible humano muy rápido'} (confirmado por IA)"
+                f"Respondió muy rápido ({t2_seconds:.0f}s) y sin menú — "
+                f"{'parece Agente IA' if is_ai else 'posible humano muy rápido'}"
             )
             analysis["is_ai"] = is_ai
     else:
@@ -1211,7 +1217,7 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
             # try/except de classify_and_save, dejando el mensaje sin clasificar).
             base_notes = "2do mensaje (seguimiento automático) aún no enviado cuando llegó esta respuesta"
         else:
-            base_notes = f"2do mensaje respondido en {t2_seconds:.0f}s (> {t2_threshold}s)"
+            base_notes = f"Respondió al mensaje de seguimiento en {t2_seconds:.0f}s"
 
         # El prospecto puede mandar más de un mensaje antes de que salga nuestro
         # 2do mensaje (Andy) — en ese caso reply_text es la respuesta MÁS RECIENTE,
@@ -1226,11 +1232,11 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
         )
         if reply_has_hybrid_signal:
             analysis = _quick_result(
-                "hibrido", f"{base_notes} — el mensaje más reciente ofrece conexión con humano ('{_rt[:30]}') — determinista"
+                "hibrido", f"{base_notes} — el mensaje más reciente ofrece conectar con un humano ('{_rt[:30]}')"
             )
         elif reply_has_bot_signal:
             analysis = _quick_result(
-                "bot", f"{base_notes} — el mensaje más reciente muestra señal de bot ('{_rt[:30]}') — determinista"
+                "bot", f"{base_notes} — el mensaje más reciente suena automático ('{_rt[:30]}')"
             )
         elif _looks_human_casual(original_text) or (reply_text and reply_text != original_text and _looks_human_casual(reply_text)):
             sample = original_text if _looks_human_casual(original_text) else reply_text
@@ -1246,7 +1252,7 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
                 "humano", f"{base_notes} — presentación personal detectada ('{sample[:40]}')"
             )
         else:
-            analysis = _quick_result("bot", f"{base_notes} — sin señal clara, clasificado como bot por precaución — determinista")
+            analysis = _quick_result("bot", f"{base_notes} — sin señal clara, se marcó como bot por precaución")
 
     # reaction_time_min reportado = T1 (velocidad de la PRIMERA respuesta), no T2 —
     # es la métrica que ya existía y que usa el resto del sistema.
@@ -1395,17 +1401,17 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
         elif raw_seconds <= t1_threshold and _looks_like_menu(inbound_body):
             # Menú numerado/con letra en el PRIMER mensaje — señal determinista
             # e instantánea, no tiene caso esperar 1h de probe para confirmarlo.
-            analysis = _quick_result("bot", "Menú de opciones detectado en el primer mensaje — determinista")
+            analysis = _quick_result("bot", "Mandó un menú de opciones desde el primer mensaje")
         elif raw_seconds <= t1_threshold and _looks_like_bot_selfid(inbound_body):
             # El propio texto se autoidentifica como bot/IA ("soy tu asistente
             # virtual", 🤖, etc.) — señal más fuerte y barata que esperar 1h a ver
             # si llega un T2. No tiene caso meterlo al probe: ya sabemos qué es.
-            analysis = _quick_result("bot", "Se autoidentifica como bot/asistente virtual en el propio mensaje — determinista")
+            analysis = _quick_result("bot", "El mensaje dice ser un bot o asistente virtual")
         elif raw_seconds <= t1_threshold and _looks_like_auto_reply(inbound_body):
             # Plantilla reconocible (folio, "tu mensaje es importante", horario de
             # atención, etc.) llegando casi al instante — mismo trato: determinista,
             # sin esperar al probe.
-            analysis = _quick_result("bot", "Plantilla de auto-respuesta detectada en el primer mensaje — determinista")
+            analysis = _quick_result("bot", "El primer mensaje es una plantilla de respuesta automática")
         elif raw_seconds <= t1_threshold:
             # Respuesta rápida — podría ser bot/agente IA/automatico. NO mandamos
             # nosotros un 2do mensaje aquí: el webhook (routes.py) ya activa a Andy
@@ -1438,7 +1444,7 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
             # varios pasos, delays de "escribiendo…", menús que llegan en un segundo
             # mensaje separado) y se colaban como "humano" pese a ser obviamente bot.
             analysis = _quick_result(
-                "bot", f"Señal de bot en el contenido pese a T1={raw_seconds:.0f}s > {t1_threshold}s — determinista"
+                "bot", f"Tardó {raw_seconds:.0f}s en responder, pero el mensaje suena automático"
             )
         else:
             # T1 > umbral y sin señal determinista de bot en el contenido.
@@ -1451,7 +1457,7 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
             from app.llm import active_provider
             if active_provider() == "none" or all_quota_exhausted():
                 analysis = _quick_result_unrated(
-                    "humano", f"T1={raw_seconds:.0f}s > {t1_threshold}s — LLM no disponible, fallback humano"
+                    "humano", f"Tardó {raw_seconds:.0f}s en responder — no se pudo analizar más a fondo, se asumió humano"
                 )
             else:
                 try:
@@ -1460,7 +1466,7 @@ def classify_and_save(log_id: str, company_id: str, inbound_body: str, received_
                     raise
                 except Exception:
                     analysis = _quick_result_unrated(
-                        "humano", f"T1={raw_seconds:.0f}s > {t1_threshold}s — error LLM, fallback humano"
+                        "humano", f"Tardó {raw_seconds:.0f}s en responder — hubo un error al analizarlo, se asumió humano"
                     )
 
         analysis["reaction_time_min"] = reaction_time_min
@@ -1545,8 +1551,8 @@ def classify_conversation_and_save(company_id: str, log_id: str):
                     analysis["is_ai"] = False
                     analysis["notes"] = (
                         (analysis.get("notes") or "").strip()
-                        + " — corregido: el último mensaje muestra una señal determinista de bot "
-                          "(menú/plantilla/autoidentificación) que contradice el veredicto de la IA."
+                        + " — corregido: el último mensaje tiene un menú, plantilla o se identifica "
+                          "como bot, lo que contradice el análisis anterior."
                     ).strip(" —")
             except Exception:
                 pass

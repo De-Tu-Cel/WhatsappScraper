@@ -1562,14 +1562,27 @@ class WebsiteScraper:
     # EXTRACCIÓN DE CONTACTOS
     # ========================================================================
 
+    # Palabras que por sí solas no distinguen nada ("contáctanos", "whatsapp", "w.app"...)
+    _WA_GENERIC_WORDS = {
+        "whatsapp", "wa", "wapp", "w.app", "contacto", "contactanos", "contáctanos",
+        "chat", "escribenos", "escríbenos", "comunicate", "comunícate", "envianos",
+        "envíanos", "enviar", "mensaje", "telefono", "teléfono", "llama", "llamanos",
+        "llámanos", "ubicacion", "ubicación", "direccion", "dirección", "horario",
+        "sucursal", "tienda", "local", "informacion", "información", "pedir",
+        "pide", "pídelo", "pidelo", "pedido", "ordenar", "ordena", "ordénalo",
+        "ordenalo", "cotizar", "cotiza", "cotizacion", "cotización", "reportar",
+        "reporta", "solicitar", "solicita", "consulta", "consultar", "aviso",
+        "reporte", "click", "clic",
+    }
+    # Palabras de relleno que no aportan ni quitan significado ("por", "vía", "un"...)
+    _WA_FILLER_WORDS = {
+        "por", "via", "vía", "un", "una", "tu", "de", "a", "el", "la", "los", "las",
+        "más", "mas", "aqui", "aquí", "ahora", "ya", "nos", "al", "y", "o",
+    }
+    _WA_TOKEN_RE = re.compile(r"[a-záéíóúñ0-9.]+")
+
     def _extract_wa_label(self, link_tag) -> str:
         """Extrae el nombre de sucursal/label del contexto cercano a un link wa.me."""
-        _GENERIC = re.compile(
-            r"^(whatsapp|wa|contacto|cont[aá]ctanos|chat|escr[ií]benos|com[uú]nicate|env[ií]anos|"
-            r"mensaje|enviar|tel[eé]fono|llama|llamanos|ll[aá]manos|escr[ií]benos|ubi[ck]aci[oó]n|"
-            r"direcci[oó]n|horario|sucursal|tienda|local)$",
-            re.IGNORECASE,
-        )
         _PHONE_RE = re.compile(r"[\d\s\(\)\-\+]{7,}")
 
         def _clean(raw: str) -> str:
@@ -1577,7 +1590,20 @@ class WebsiteScraper:
             return cleaned if 2 < len(cleaned) < 60 else ""
 
         def _is_generic(text: str) -> bool:
-            return bool(_GENERIC.match(text.strip()))
+            # Un texto es "genérico" (no sirve como label) si, al quitarle las
+            # palabras de relleno y las palabras típicas de CTA de WhatsApp
+            # ("contáctanos", "w.app", "pedir", ...), no queda ningún token que
+            # realmente distinga esta sucursal/uso de las demás.
+            # Ej: "Contáctanos por WhatsApp" → sin tokens restantes → genérico.
+            #     "Reportar fuga" → queda "fuga" → NO genérico, se conserva.
+            tokens = self._WA_TOKEN_RE.findall(text.strip().lower())
+            if not tokens:
+                return True
+            meaningful = [
+                tok for tok in tokens
+                if tok not in self._WA_GENERIC_WORDS and tok not in self._WA_FILLER_WORDS
+            ]
+            return len(meaningful) == 0
 
         # 1. Alt de imagen dentro del link (más específico que el texto del link)
         img = link_tag.find("img")
@@ -1591,10 +1617,25 @@ class WebsiteScraper:
         if link_text and not _is_generic(link_text):
             return link_text
 
+        def _has_multiple_wa_links(container) -> bool:
+            # Widgets tipo "todas nuestras ubicaciones" (Wix y similares) meten
+            # varias sucursales bajo un mismo contenedor padre. Si ese contenedor
+            # tiene más de un link de WhatsApp adentro, cualquier heading o texto
+            # que encontremos ahí puede pertenecer a OTRA sucursal, no a esta —
+            # es la causa de labels repetidos ("Valle" x9 en un caso real).
+            count = 0
+            for a in container.find_all("a", href=True):
+                h = a["href"]
+                if "wa.me/" in h or ("api.whatsapp.com/send" in h and "phone=" in h):
+                    count += 1
+                    if count > 1:
+                        return True
+            return False
+
         # 3. Buscar heading (h1-h6) más cercano — subir hasta 6 niveles en el DOM
         node = link_tag.parent
         for _ in range(6):
-            if node is None:
+            if node is None or _has_multiple_wa_links(node):
                 break
             # Buscar heading hermano previo o dentro del mismo contenedor
             heading = node.find_previous_sibling(re.compile(r"^h[1-6]$"))
@@ -1609,7 +1650,7 @@ class WebsiteScraper:
         # 4. Texto del contenedor más cercano con un solo fragmento significativo
         node = link_tag.parent
         for _ in range(4):
-            if node is None:
+            if node is None or _has_multiple_wa_links(node):
                 break
             container_text = _clean(node.get_text(" ", strip=True))
             for fragment in re.split(r"[|•·\n\r–—]", container_text):

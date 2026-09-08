@@ -20,6 +20,24 @@ CLASSIFIER_DEFAULTS = {
     "no_reply_wait_minutes": 60,
 }
 
+_MX_521_RE = re.compile(r"^521(\d{10})$")
+
+
+def _norm_phone(n) -> str:
+    """Misma normalización que el `normPhone` del frontend (scheduledSends.jsx) —
+    colapsa el "521" con el 1 extra que WhatsApp a veces antepone a números
+    mexicanos a la forma "52" normal, y quita el "+". Sin esto, el mismo número
+    real llega a message_logs.to_number en 2-3 formatos distintos ("5213338950637",
+    "+523338950637", "523338950637") y se deduplica como si fueran 3 contactos
+    distintos — caso real de producción (Ferra) donde el mismo número apareció
+    triplicado en el chip de "ya contactado"."""
+    if not n:
+        return ""
+    s = str(n).lstrip("+")
+    m = _MX_521_RE.match(s)
+    return ("52" + m.group(1)) if m else s
+
+
 def _get_client() -> MongoClient:
     global _mongo_client
     if _mongo_client is None:
@@ -99,6 +117,13 @@ def _get_client() -> MongoClient:
             pass  # ya existen duplicados — el índice se creará tras limpiarlos
         try:
             db.jid_map.create_index([("company_id", 1)])
+        except Exception:
+            pass
+        try:
+            # Ideas nav panel: un resultado de búsqueda no procesado se guarda como
+            # "pendiente" apenas /api/search responde — el índice único evita que la
+            # misma URL se guarde dos veces si el usuario repite una búsqueda similar.
+            db.search_ideas.create_index("url", unique=True)
         except Exception:
             pass
     return _mongo_client
@@ -352,6 +377,10 @@ class MongoDBManager:
         # Mark which companies on this page have been contacted and include contacted numbers
         if companies:
             page_contacted = [str(c["_id"]) for c in companies if str(c["_id"]) in all_contacted_ids_str]
+            # cid -> {forma_normalizada: valor_literal} — dedupea por número real en
+            # vez de por string exacto (ver _norm_phone: el mismo número llega en
+            # 2-3 formatos distintos y un set() de strings los cuenta como
+            # contactos distintos, triplicando el chip de "ya contactado").
             contacted_numbers_map = {}
             if page_contacted:
                 for doc in self.db.message_logs.find(
@@ -361,12 +390,12 @@ class MongoDBManager:
                     cid = doc["company_id"]
                     num = doc.get("to_number")
                     if num:
-                        contacted_numbers_map.setdefault(cid, set()).add(num)
+                        contacted_numbers_map.setdefault(cid, {}).setdefault(_norm_phone(num), num)
             for c in companies:
                 cid = str(c["_id"])
                 is_contacted = cid in all_contacted_ids_str
                 c["contacted"] = is_contacted
-                c["contacted_numbers"] = sorted(contacted_numbers_map.get(cid, set())) if is_contacted else []
+                c["contacted_numbers"] = sorted(contacted_numbers_map.get(cid, {}).values()) if is_contacted else []
         return {
             "total": total,
             "companies": companies,
@@ -433,27 +462,48 @@ class MongoDBManager:
         one and when. Extracted from routes.py's /companies/check-contacted so the
         scrape-jobs background worker can call it directly instead of doing an HTTP
         self-call from inside the same process."""
-        result = {}
-        for cid in company_ids:
-            first = self.db.message_logs.find_one(
-                {"company_id": cid, "direction": "outbound"},
-                sort=[("created_at", 1)],
-                projection={"sent_by_name": 1, "sent_by_username": 1, "created_at": 1}
-            )
-            if first:
-                contacted_nums = self.db.message_logs.distinct(
-                    "to_number",
-                    {"company_id": cid, "direction": "outbound"},
-                )
-                result[cid] = {
-                    "contacted": True,
-                    "by_name":     first.get("sent_by_name", ""),
-                    "by_username": first.get("sent_by_username", ""),
-                    "at":          first["created_at"].isoformat() if first.get("created_at") else None,
-                    "contacted_numbers": [n for n in contacted_nums if n],
-                }
-            else:
-                result[cid] = {"contacted": False}
+        # Single aggregation instead of 1-2 round-trips per company_id — with a few
+        # hundred companies in the picker, the old per-id loop meant hundreds of
+        # sequential Mongo queries and a very visible delay before "already contacted"
+        # badges appeared. $sort before $group makes $first pick the earliest doc
+        # per company, matching the old find_one(sort=[("created_at", 1)]) behavior.
+        result = {cid: {"contacted": False} for cid in company_ids}
+        pipeline = [
+            {"$match": {"company_id": {"$in": company_ids}, "direction": "outbound"}},
+            {"$sort": {"created_at": 1}},
+            {"$group": {
+                "_id": "$company_id",
+                "first_sent_by_name":     {"$first": "$sent_by_name"},
+                "first_sent_by_username": {"$first": "$sent_by_username"},
+                "first_created_at":       {"$first": "$created_at"},
+                "contacted_numbers":      {"$addToSet": "$to_number"},
+            }},
+        ]
+        for doc in self.db.message_logs.aggregate(pipeline):
+            first_created_at = doc.get("first_created_at")
+            # $addToSet dedupea por igualdad EXACTA de string, pero el mismo número
+            # real llega a to_number en varios formatos ("5213338950637",
+            # "+523338950637", "523338950637") — sin normalizar antes de dedupear,
+            # el mismo contacto aparece triplicado en el chip de "ya contactado"
+            # (caso real de producción: Ferra). Se dedupea aquí por forma normalizada,
+            # conservando el primer valor literal visto para no cambiar el formato
+            # que el frontend ya sabe mostrar.
+            seen_norm = set()
+            contacted_numbers = []
+            for n in doc.get("contacted_numbers", []):
+                if not n:
+                    continue
+                key = _norm_phone(n)
+                if key not in seen_norm:
+                    seen_norm.add(key)
+                    contacted_numbers.append(n)
+            result[doc["_id"]] = {
+                "contacted": True,
+                "by_name":     doc.get("first_sent_by_name") or "",
+                "by_username": doc.get("first_sent_by_username") or "",
+                "at":          first_created_at.isoformat() if first_created_at else None,
+                "contacted_numbers": contacted_numbers,
+            }
         return result
 
     def check_urls_scraped(self, urls: list) -> dict:
@@ -981,6 +1031,26 @@ class MongoDBManager:
                     continue
                 seen_ids[mid] = len(result)
             result.append(m)
+
+        # Adjunta la foto/nombre de perfil de WhatsApp de la instancia que mandó
+        # cada mensaje saliente — así el chat puede mostrar quién (qué número)
+        # respondió en vez de solo el nombre técnico interno de la instancia.
+        # Pocas instancias en total, así que un solo find() barato basta; no hace
+        # falta el endpoint /admin/instances (restringido a admins) para esto.
+        inst_names = {m["instance_name"] for m in result if m.get("direction") == "outbound" and m.get("instance_name")}
+        if inst_names:
+            profiles = {
+                doc["name"]: {"profile_name": doc.get("profile_name"), "profile_pic_url": doc.get("profile_pic_url")}
+                for doc in self.db.instances.find(
+                    {"name": {"$in": list(inst_names)}},
+                    {"name": 1, "profile_name": 1, "profile_pic_url": 1},
+                )
+            }
+            for m in result:
+                if m.get("direction") == "outbound" and m.get("instance_name") in profiles:
+                    p = profiles[m["instance_name"]]
+                    m["instance_profile_name"] = p.get("profile_name")
+                    m["instance_profile_pic_url"] = p.get("profile_pic_url")
         return result
 
     def mark_conversation_read(self, company_id: str):

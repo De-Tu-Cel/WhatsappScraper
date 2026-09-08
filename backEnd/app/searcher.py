@@ -662,6 +662,27 @@ _MX_STATE_CITIES: dict[str, list[str]] = {
     "cdmx":                ["Ciudad de México", "Iztapalapa", "Gustavo A. Madero", "Álvaro Obregón", "Coyoacán", "Tlalpan", "Xochimilco", "Benito Juárez"],
 }
 
+# Índice inverso: ciudad (normalizada) -> clave de estado. A diferencia del check
+# de "¿es la capital?" que ya existía en _build_variations, esto reconoce
+# CUALQUIER ciudad de _MX_STATE_CITIES, no solo la capital — necesario para poder
+# expandir la búsqueda a ciudades vecinas cuando el usuario buscó en una ciudad
+# que no es la capital de su estado (ej. "Tehuacán" en vez de "Puebla").
+_MX_CITY_TO_STATE: dict[str, str] = {
+    _norm_loc(city): state_key
+    for state_key, cities in _MX_STATE_CITIES.items()
+    for city in cities
+}
+# Alias del propio estado (ej. "CDMX", "Estado de México") — no siempre coincide
+# con el nombre normalizado de su capital ("Ciudad de México" ≠ "cdmx"), así que
+# sin esto una búsqueda tecleada como "zapaterias en CDMX" no encontraba estado.
+for _sk in _MX_STATE_CITIES:
+    _MX_CITY_TO_STATE.setdefault(_norm_loc(_sk), _sk)
+
+
+def _find_state_for_city(city: str) -> str | None:
+    """Returns the _MX_STATE_CITIES key for a given Mexican city, or None."""
+    return _MX_CITY_TO_STATE.get(_norm_loc(city))
+
 
 def _build_city_index() -> dict:
     """city/state (normalized, accent/case-insensitive) -> (canonical city name, country)."""
@@ -1146,7 +1167,7 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
     return base + city_queries + synonym_queries
 
 
-def _fetch_ddg(query: str, max_results: int = 80) -> list[dict]:
+def _fetch_ddg(query: str, max_results: int = 80, page: int = 1) -> list[dict]:
     import time
     import random
     from ddgs import DDGS
@@ -1158,7 +1179,7 @@ def _fetch_ddg(query: str, max_results: int = 80) -> list[dict]:
             with DDGS() as ddgs:
                 # wt-wt = worldwide, evita sesgo por IP del servidor
                 # safesearch=off da más resultados de negocios reales
-                for r in ddgs.text(query, region="wt-wt", safesearch="off", max_results=max_results):
+                for r in ddgs.text(query, region="wt-wt", safesearch="off", max_results=max_results, page=page):
                     href = r.get("href")
                     if href and _is_business_url(href):
                         results.append({"href": href, "title": r.get("title", ""), "body": r.get("body", "")})
@@ -1257,7 +1278,10 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
                 f'  ✗ Directorios (Yelp, Sección Amarilla, Hotfrog, Páginas Amarillas, Kompass, Foursquare)\n'
                 f'  ✗ Redes sociales, YouTube, Wikipedia, Quora, Reddit\n'
                 f'  ✗ Marketplaces (MercadoLibre, Amazon, Uber Eats, Rappi)\n'
-                f'  ✗ Franquicias o cadenas con decenas de sucursales\n'
+                f'  ✗ Cadenas grandes y ampliamente reconocidas con presencia en todo el país '
+                f'(franquicias tipo McDonald\'s, OXXO, AutoZone). NO excluir solo por mencionar '
+                f'"sucursales" — un negocio con unas cuantas ubicaciones en una misma ciudad/región '
+                f'sigue siendo un prospecto válido; excluir solo si es una cadena masiva y muy conocida.\n'
                 f'  ✗ Asociaciones gremiales, cámaras de comercio, federaciones del sector\n'
                 f'  ✗ Proveedores de software/SaaS para el sector\n'
                 f'  ✗ Páginas gubernamentales o educativas\n'
@@ -1284,6 +1308,17 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
             pass
         return batch  # fallback: LLM unavailable or parse error
 
+    # Industry keywords (computado ANTES de _wrong_sector_domain — ver por qué abajo).
+    # Pull keywords from the industry term itself AND from all its synonyms so that
+    # short stems ("gas" from "gaseras") are included even when the user typed the
+    # plural/variant form.
+    _kw_raw = re.sub(r'\b(de|del|en|la|el|los|las|y|o|con|para|por|a)\b', ' ', industry, flags=re.I)
+    _ind_kws_set: set[str] = {w.lower() for w in re.split(r'\s+', _kw_raw.strip()) if len(w) >= 3}
+    for syn in INDUSTRY_SYNONYMS.get(industry.lower().strip(), []):
+        syn_raw = re.sub(r'\b(de|del|en|la|el|los|las|y|o|con|para|por|a)\b', ' ', syn, flags=re.I)
+        _ind_kws_set.update(w.lower() for w in re.split(r'\s+', syn_raw.strip()) if len(w) >= 3)
+    _ind_kws = list(_ind_kws_set)
+
     # Keywords en el dominio que delatan que el negocio es de otro giro.
     # Si el dominio los contiene → nunca es del sector buscado, sin importar el snippet.
     _WRONG_SECTOR_DOMAIN_KWS = {
@@ -1298,6 +1333,18 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
         'zapateria', 'ropa',
         'noticia', 'noticias', 'informa', 'periodico', 'revista',
         'universidad', 'escuela', 'colegio', 'preparatoria',
+    }
+    # Bug real (encontrado 2026-09-08, "ferreterias León" solo aprobó 4 de 72):
+    # esta lista existe para rechazar negocios de OTRO giro que solo MENCIONAN el
+    # giro buscado (ej. una taquería que "cocina con gas" al buscar gaseras) — pero
+    # se aplicaba también cuando el giro BUSCADO es uno de estos mismos (ferretería,
+    # hospital, farmacia, hotel, salón...), rechazando negocios legítimos solo por
+    # tener el nombre de su propio giro en el dominio ("ferreterialeon.com"). Se
+    # excluyen de la lista las palabras que coinciden con el giro que se está
+    # buscando, para que sigan sirviendo de bloqueo cuando es un giro AJENO.
+    _WRONG_SECTOR_DOMAIN_KWS = {
+        kw for kw in _WRONG_SECTOR_DOMAIN_KWS
+        if not any(kw in ik or ik in kw for ik in _ind_kws_set)
     }
 
     def _wrong_sector_domain(u: str) -> bool:
@@ -1328,20 +1375,8 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
                     kept.append(u)
         return kept or [u for u in candidates if not _wrong_sector_domain(u)] or candidates
 
-    # Industry keywords used to rescue URLs the AI over-filtered.
-    # If a URL's domain contains an industry keyword and isn't a wrong-sector domain,
-    # it's kept regardless of the AI verdict — "gasnieto.com.mx" should never be
-    # discarded just because the AI was uncertain about it.
-    # Pull keywords from the industry term itself AND from all its synonyms so that
-    # short stems ("gas" from "gaseras") are included even when the user typed the
-    # plural/variant form.
-    _kw_raw = re.sub(r'\b(de|del|en|la|el|los|las|y|o|con|para|por|a)\b', ' ', industry, flags=re.I)
-    _ind_kws_set: set[str] = {w.lower() for w in re.split(r'\s+', _kw_raw.strip()) if len(w) >= 3}
-    # Add synonym terms (e.g. "gaseras" → synonyms include "gas lp", "distribuidora de gas" → "gas")
-    for syn in INDUSTRY_SYNONYMS.get(industry.lower().strip(), []):
-        syn_raw = re.sub(r'\b(de|del|en|la|el|los|las|y|o|con|para|por|a)\b', ' ', syn, flags=re.I)
-        _ind_kws_set.update(w.lower() for w in re.split(r'\s+', syn_raw.strip()) if len(w) >= 3)
-    _ind_kws = list(_ind_kws_set)
+    # (Industry keywords para el "rescate" de dominios — _ind_kws/_ind_kws_set ya
+    # se calcularon arriba, antes de construir _WRONG_SECTOR_DOMAIN_KWS.)
 
     def _domain_kw_rescue(all_urls: list[str], already_approved: set) -> list[str]:
         """Return URLs with an industry keyword in the domain that the AI missed."""
@@ -1599,13 +1634,27 @@ def _search_via_openstreetmap(
 
     south, west, north, east = bbox_tuple
     bbox = f"({south},{west},{north},{east})"
-    cap = min(num_results * 4, 300)
+    # Was min(num_results*4, 300) — saturated at num_results>=75, so targets of
+    # 50 and 500 got the exact same OSM output (confirmed empirically 2026-09-08:
+    # fetch_count=150 and fetch_count=300 both returned 49 OSM urls). 1200 pushes
+    # that saturation point out past the UI's practical range.
+    cap = min(num_results * 4, 1200)
 
-    # Match industry text to OSM tags (substring match against our keyword map)
-    ind_lower = industry.lower().strip()
+    # Match industry text to OSM tags (substring match against our keyword map).
+    # Bug real (encontrado 2026-09-08, "panaderias Queretaro" con OSM=68 resultó
+    # ser "todo negocio con sitio web en la bbox", no panaderías): la comparación
+    # era sensible a acentos, y la mayoría de las claves del diccionario SÍ llevan
+    # acento ("panadería", "ferretería", "peluquería"...) mientras que `industry`
+    # casi siempre llega sin acento (tipeo del usuario + singularización). Sin
+    # match, el código caía al fallback de "todos los negocios en la bbox", que
+    # es ruido puro para la industria buscada. Se normalizan ambos lados (quitar
+    # acentos) antes de comparar — probado contra 10 industrias, pasó de 1/10 a
+    # 10/10 con tag real encontrado.
+    ind_lower = _norm_loc(industry.lower().strip())
     tag_pairs: list[tuple[str, str]] = []
     for keyword, tags in _OSM_INDUSTRY_TAGS.items():
-        if keyword in ind_lower or ind_lower in keyword:
+        keyword_norm = _norm_loc(keyword.lower())
+        if keyword_norm in ind_lower or ind_lower in keyword_norm:
             for pair in tags:
                 if pair not in tag_pairs:
                     tag_pairs.append(pair)
@@ -1829,6 +1878,7 @@ def _search_via_seccion_amarilla(
     # SA solo cubre México — saltar si se detecta otro país
     _eff = _detect_effective_country(country, f"{industry} {city}")
     if _eff is not None and _eff != "México":
+        print(f"[sa-debug] skipped — detected country {_eff!r} != México")
         return [], {}
 
     industry_clean = re.sub(
@@ -1841,14 +1891,17 @@ def _search_via_seccion_amarilla(
     # Data) — se puede escalar bastante más que antes sin gastar créditos.
     if city.strip():
         city_slugs = [_slugify(city.strip())]
-        # ~20 resultados por página — para obtener num_results basta con ceil(num/20),
-        # con un mínimo de 2 y tope de 10 para no bloquear la búsqueda completa.
-        pages_per_city = min(10, max(2, (num_results + 19) // 20))
+        # ~20 resultados por página — para obtener num_results basta con ceil(num/15),
+        # con un mínimo de 3 y tope de 16. Subido de (÷20, tope 10) el 2026-09-08 al
+        # quitar Google Maps (vía BrightData) del fan-out — SA compensa parte de esa
+        # cobertura de negocios locales perdida, y es gratis (GET directo, sin BD).
+        pages_per_city = min(16, max(3, (num_results + 14) // 15))
     else:
         cfg = COUNTRY_CONFIG.get("México", {})
         cities = cfg.get("cities", [])  # todas las ciudades (32)
         city_slugs = [_slugify(c) for c in cities]
-        pages_per_city = 3
+        # Igual escalado que arriba, más conservador porque aquí se multiplica ×32 ciudades.
+        pages_per_city = min(6, max(3, num_results // 60))
 
     seen_domains: set[str] = set()
     all_urls: list[str] = []
@@ -1857,7 +1910,8 @@ def _search_via_seccion_amarilla(
     def _fetch_one(cslug: str) -> tuple[list, dict]:
         try:
             return _sa_fetch_city(ind_slug, cslug, max_pages=pages_per_city)
-        except Exception:
+        except Exception as e:
+            print(f"[sa-debug] city={cslug!r} exception: {e!r}")
             return [], {}
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(city_slugs), 16)) as ex:
@@ -2105,15 +2159,19 @@ def search_prospects(
         import time as _time
         _t0 = _time.monotonic()
         # Deadline global escalado a num_results: búsquedas pequeñas (≤20)
-        # ya tienen suficientes URLs de BD+DDG+SA a los 22s; búsquedas grandes
-        # necesitan Maps y OSM. Maps/OSM se descartan si llegan después del límite.
+        # ya tienen suficientes URLs de BD+DDG+SA a los 30s; búsquedas grandes
+        # necesitan más margen. Se descartan si llegan después del límite.
         # >50 was 45s — raised to 70s (2026-09-04) after a live test showed BD/
         # Maps hitting this exact deadline mid-retry: their own per-request
         # timeout is 35s each, so a single retry (35s + 35s) never fit inside
         # 45s, silently discarding a source that would have succeeded on the
         # retry. Real results take longer here, but 0 results from a source
         # that actually had data is worse than the extra wait.
-        _GLOBAL_DEADLINE = 22 if num_results <= 20 else 30 if num_results <= 50 else 70
+        # ≤20 raised 22→30s and ≤50 raised 30→40s (2026-09-08) after two
+        # back-to-back identical calls returned 68 vs 12 merged URLs — DDG/SA
+        # crossed the old deadline on the slower run even though nothing was
+        # actually wrong, just normal network variance.
+        _GLOBAL_DEADLINE = 30 if num_results <= 20 else 40 if num_results <= 50 else 80
         def _safe_result(f, label):
             try:
                 remaining = _GLOBAL_DEADLINE - (_time.monotonic() - _t0)
@@ -2127,9 +2185,11 @@ def search_prospects(
                 _log.warning("[search] %s error: %s", label, _e)
                 return [], {}
 
-        # No usar context manager: `with executor:` llama shutdown(wait=True) al salir
-        # y bloquea hasta que Maps termine (~40s extra). Con wait=False el hilo de
-        # Maps queda en background pero el thread principal no espera.
+        # Google Maps se quitó y se volvió a poner el mismo día (2026-09-08):
+        # una prueba real desde producción mostró que Maps por sí solo dio 8
+        # negocios reales (veterinarias en Puebla) contra 3 de OSM+SA juntos —
+        # es la fuente dominante de negocios locales, no un "extra" opcional.
+        # Se deja el _TASK_BUDGET/caps de OSM/SA subidos igual (no hacen daño).
         _ex = concurrent.futures.ThreadPoolExecutor(max_workers=5)
         bd_future   = _ex.submit(_search_via_brightdata_multi, industry_q, city, country, keywords, num_results, offset, state_cities)
         ddg_future  = _ex.submit(_search_via_duckduckgo, industry_q, city, exclude_domains or set(), country, num_results, state_cities)
@@ -2206,6 +2266,53 @@ def search_prospects(
     _log.info("[search] sending %d URLs to AI filter (industry=%r)", len(urls), _industry_singular)
     result = _ai_filter_urls(urls, _industry_singular, snippets, country=country)
     _log.info("[search] AI filter returned %d URLs (from %d)", len(result), len(urls))
+
+    # Si el resultado se quedó muy corto del target y se buscó en UNA ciudad
+    # específica (no un barrido de estado), probar ciudades vecinas del mismo
+    # estado antes de rendirse — solo con fuentes gratis (ddgs + OSM), sin
+    # repetir BD/Maps. No es garantía de alcanzar el target (puede que
+    # genuinamente no haya más oferta en la región), pero le da una oportunidad
+    # real antes de devolver menos de lo pedido.
+    _SHORTFALL_RATIO = 0.7
+    if offset == 0 and city.strip() and not state_cities and len(result) < num_results * _SHORTFALL_RATIO:
+        _state_key = _find_state_for_city(city)
+        _nearby = (
+            [c for c in _MX_STATE_CITIES.get(_state_key, []) if _norm_loc(c) != _norm_loc(city)][:3]
+            if _state_key else []
+        )
+        if _nearby:
+            _log.info("[search] shortfall (%d/%d) — probando %d ciudades vecinas de %s: %s",
+                       len(result), num_results, len(_nearby), _state_key, _nearby)
+            _expand_nr = min(num_results, 20)  # búsqueda ligera, no repetir el fan-out completo
+            _extra_urls: list[str] = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(_nearby) * 2, 8)) as _ex:
+                _futs = []
+                for _c in _nearby:
+                    _futs.append(_ex.submit(_search_via_duckduckgo, industry_q, _c, exclude_domains or set(), country, _expand_nr))
+                    _futs.append(_ex.submit(_search_via_openstreetmap, industry_q, _c, country, _expand_nr))
+                for _f in concurrent.futures.as_completed(_futs):
+                    try:
+                        _u, _s = _f.result()
+                        _extra_urls.extend(_u)
+                        snippets.update(_s)
+                    except Exception:
+                        pass
+
+            _seen_domains = {_get_domain(u) for u in urls if _get_domain(u)}
+            _seen_new: set[str] = set()
+            _dedup_new: list[str] = []
+            for u in _extra_urls:
+                d = _get_domain(u)
+                if d and d not in _seen_domains and d not in _seen_new:
+                    _seen_new.add(d)
+                    _dedup_new.append(u)
+
+            if _dedup_new:
+                _extra_result = _ai_filter_urls(_dedup_new, _industry_singular, snippets, country=country)
+                _log.info("[search] expansión geográfica: +%d candidatos → +%d aprobados",
+                           len(_dedup_new), len(_extra_result))
+                result = list(dict.fromkeys(result + _extra_result))
+
     return result
 
 
@@ -2426,10 +2533,15 @@ def _search_via_brightdata_multi(
     """Fan-out múltiples queries a Bright Data en paralelo, cada una a varias páginas de Google."""
     import time
     import random
-    # Task budget: 40 workers × ~30s deadline / ~3.5s per call ≈ 340 tasks max.
+    # Task budget: 40 workers × ~80s deadline (_GLOBAL_DEADLINE for num_results>50)
+    # / ~3.5s per call ≈ 914 tasks max. 750 leaves real margin below that ceiling.
     # Cap MAX_QUERIES so queries × pages stays within budget to avoid wasting BD credits
     # on tasks that get queued but never complete before the deadline.
-    _TASK_BUDGET = 320
+    # Was 320 (2026-09-08) — at pages=5 that capped MAX_QUERIES at 64, well below
+    # the 150 ceiling below it, meaning a target of 50 and a target of 500 ran
+    # BrightData identically. 750 lets MAX_QUERIES reach that same 150 ceiling
+    # instead of a lower one hidden inside this budget.
+    _TASK_BUDGET = 750
     pages = pages_per_query_for(num_results)
     _q_cap = max(30, _TASK_BUDGET // max(pages, 1))
     MAX_QUERIES = min(max(30, num_results * 2), 150, _q_cap)
@@ -2456,7 +2568,11 @@ def _search_via_brightdata_multi(
         for attempt in range(2):
             try:
                 return _search_via_brightdata(q, num_results=10, offset=start, gl=gl, hl=hl, bd_country=bd_country)
-            except Exception:
+            except Exception as e:
+                # Igual que Maps: loggear siempre, incluso el último intento —
+                # de lo contrario un fallo real (auth, cuota, IP bloqueada) es
+                # indistinguible de "la query genuinamente no tuvo resultados".
+                print(f"[bd-debug] q={q!r} start={start} exception on attempt {attempt}: {e!r}")
                 if attempt == 0:
                     time.sleep(0.5)
         return [], {}
@@ -2525,11 +2641,25 @@ def _search_via_duckduckgo(
     skip = exclude_domains or set()
 
     all_raw: list[dict] = []
+    # Las primeras variaciones (dork/broad/intitle) son las de mayor calidad —
+    # para esas también se pide página 2, 3 y 4 de la MISMA consulta, no solo la 1.
+    # Probado en vivo (2026-09-08): cada página extra aporta dominios nuevos, no
+    # repetidos, gratis, sin mandar ninguna consulta nueva — pero con rendimientos
+    # decrecientes claros: en una prueba de 6 páginas, casi todo el valor real
+    # estaba en las páginas 1-4 (+6/+0/+3/+1 dominios nuevos); páginas 5-6 casi
+    # no aportaron nada (+1/+0). Se corta en 4 por eso — ir más allá gasta más
+    # peticiones (más riesgo de bloqueo) por casi nada a cambio.
+    # No se aplica a TODAS las variaciones para no cuadruplicar el volumen total
+    # y empeorar el throttling que ya describe el comentario de abajo.
+    _EXTRA_PAGES_FOR = 3
+    tasks: list[tuple[str, int]] = [(v, 1) for v in variations]
+    tasks += [(v, p) for v in variations[:_EXTRA_PAGES_FOR] for p in (2, 3, 4)]
+
     # Kept below the point where DDG starts throttling/blocking (~10-15 simultaneous
     # requests), but higher than before since MAJOR_CITIES now covers all 32 state
     # capitals + big metros, nearly doubling the variation count per search.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(variations), 12)) as executor:
-        futures = {executor.submit(_fetch_ddg, v): v for v in variations}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), 12)) as executor:
+        futures = {executor.submit(_fetch_ddg, v, page=p): (v, p) for v, p in tasks}
         for future in concurrent.futures.as_completed(futures):
             try:
                 all_raw.extend(future.result())

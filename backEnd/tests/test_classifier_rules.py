@@ -147,9 +147,19 @@ class TestLooksLikeAutoReply:
     @pytest.mark.parametrize("text", [
         "Hola, sí tenemos disponible, ¿cuántos necesitas?",
         "gracias por todo, fue un placer trabajar contigo",  # "gracias por" sin verbo de contacto
+        # Caso real de producción (Ferra, 2026-09-07): un agente humano real escribió
+        # esto y se clasificó "bot" por error — es cortesía humana normal, no plantilla.
+        "Nosotros estamos en Tonalá, si gustas venir con gusto te atenderemos.",
     ])
     def test_normal_reply_is_not_flagged(self, text):
         assert _looks_like_auto_reply(text) is False
+
+    @pytest.mark.parametrize("text", [
+        "Gracias por tu mensaje, en breve te atenderemos",
+        "Te responderemos pronto, gracias por tu paciencia",
+    ])
+    def test_still_detects_auto_reply_with_time_qualifier(self, text):
+        assert _looks_like_auto_reply(text) is True
 
 
 # ── _has_real_text ──────────────────────────────────────────────────────────

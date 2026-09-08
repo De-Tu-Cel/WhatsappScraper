@@ -5,6 +5,7 @@ Continues conversations naturally when a contact replies, with anti-detection me
 """
 import logging
 import random
+import re
 import time
 from datetime import datetime, timezone, timedelta
 
@@ -218,24 +219,32 @@ Un humano que transfiere a otro número o departamento ES un resultado útil —
 
 [MENSAJE REPETIDO / LOOP]
 Señal crítica: el mensaje actual es idéntico o casi idéntico a uno anterior en esta conversación.
-Comportamiento: CIERRA INMEDIATAMENTE. "Entendido, cualquier cosa aquí estamos."[FIN]
+Comportamiento: CIERRA INMEDIATAMENTE con una frase corta de cierre, en tus propias palabras.[FIN]
 
 [RESPUESTA AMBIGUA]
 Señales: muy corta, genérica, no conecta con lo que dijiste.
 Comportamiento: UNA pregunta abierta para verificar si hay humano. Si sigue igual → [FIN].
 
+⚠️ Las frases entre comillas de abajo son solo ejemplos de TONO — jamás las copies
+literalmente. Dos conversaciones distintas NUNCA deben terminar con el mismo texto
+exacto; parafrasea cada cierre con tus propias palabras cada vez.
+
 CUÁNDO CERRAR — responde normal y añade [FIN] pegado al final:
-- Te preguntan precio → reacciona como consumidor interesado: "ay bueno, y cuánto sería más o menos?"
-  Si te dan el precio, muestra interés y cierra natural: "ah mira, déjame pensarlo y te aviso"[FIN]
-- Piden que los llames o agenden cita → "sí, con gusto. ¿A qué número te marco o cómo lo hacen?"[FIN]
-- Te preguntan QUÉ VENDES o qué ofreces TÚ → deja claro que eres cliente: "no, yo no vendo nada jaja,
-  solo busco el servicio. ¿Ustedes sí atienden en [city]?"[FIN]
+- Te preguntan precio → reacciona como consumidor interesado, algo como (no copies esto
+  textual): "ay bueno, y cuánto sería más o menos?"
+  Si te dan el precio, muestra interés y cierra natural con tus palabras, ej: "ah mira,
+  déjame pensarlo y te aviso"[FIN]
+- Piden que los llames o agenden cita → algo como "sí, con gusto. a qué número te marco
+  o cómo lo hacen?"[FIN]
+- Te preguntan QUÉ VENDES o qué ofreces TÚ → deja claro que eres cliente, con tus propias
+  palabras — nunca la misma frase que usaste en otra conversación — ej de tono: "no, yo
+  no vendo nada jaja, solo busco el servicio. ustedes sí atienden en [city]?"[FIN]
 - Sin interés, te piden que no escribas → cierra con respeto, sin insistir[FIN]
-- Bot ajeno detectado → "ok, cualquier cosa aquí ando"[FIN]
+- Bot ajeno detectado → cierra breve y casual, ej de tono: "ok, cualquier cosa aquí ando"[FIN]
 - Conversación llegó a cierre natural[FIN]
 - La empresa cierra con despedida ("buen día", "hasta luego", "con gusto") →
-  reconoce brevemente y cierra: "ok gracias, cualquier cosa aquí ando"[FIN] /
-  "gracias a ustedes"[FIN] — nunca dejes su despedida sin respuesta
+  reconoce brevemente y cierra con tus propias palabras — nunca dejes su despedida sin
+  respuesta[FIN]
 
 IMPORTANTE: [FIN] es señal interna, nunca llega al contacto. Ponlo pegado al texto sin espacio.
 {extra_block}"""
@@ -798,6 +807,11 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
     # forma consistente (visto en prod: "¿tienen lo que busco?", "¿qué tiene de raro?").
     # No hay forma de garantizarlo solo con el prompt, así que se refuerza aquí.
     ai_text = ai_text.replace("¿", "").replace("¡", "")
+
+    # Mismo problema con el punto final (prompt lo prohíbe, el modelo no siempre lo
+    # respeta) — se refuerza aquí en vez de confiar solo en el prompt. El lookbehind
+    # evita tocar puntos suspensivos ("...") que sí están permitidos como pausa natural.
+    ai_text = re.sub(r"(?<!\.)\.$", "", ai_text).rstrip()
 
     # Mark AI as typing (frontend polls this)
     db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": True}})

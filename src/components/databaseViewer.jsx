@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react'
 import { authFetch } from '@/lib/api'
 import { useSendQueue } from '../context/SendQueueContext'
 import { useDailyCapStats } from '../hooks/useDailyCapStats'
@@ -85,8 +85,10 @@ import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBan
 import { SendConfigPanel, CountdownBar } from './SendConfigPanel'
 import { loadSendConfig, randMsgDelayMs, randBatchBreakMs, randBatchSize } from '@/lib/sendConfig'
 
-// Big-number stat card (icon + value + label), same shape as the reference
-// invoice-list summary cards, adapted to this panel's dark card tokens.
+// One section of the shared stats card (icon + value + label) — no border of
+// its own; lives inside ONE outer card together with the others, separated by
+// vertical Dividers, matching the reference invoice-list summary card (a
+// single bordered strip with internal dividers, not separate boxes with gaps).
 function StatCard({ icon, color, value, label, subtitle, onClick, active }) {
   const clickable = !!onClick
   return (
@@ -94,27 +96,26 @@ function StatCard({ icon, color, value, label, subtitle, onClick, active }) {
       onClick={onClick}
       sx={{
         flex: '1 1 150px', minWidth: 140, display: 'flex', alignItems: 'center', gap: 1.1,
-        px: 1.4, py: 1, borderRadius: 2,
-        border: `1px solid ${active ? color : 'var(--border, rgba(255,255,255,0.08))'}`,
-        bgcolor: active ? `${color}0f` : 'var(--card-bg, rgba(255,255,255,0.02))',
+        px: 1.6, py: 0.3, borderRadius: 1.5,
         cursor: clickable ? 'pointer' : 'default',
-        transition: 'border-color 0.15s, background-color 0.15s',
-        '&:hover': clickable ? { borderColor: color, bgcolor: `${color}0f` } : {},
+        bgcolor: active ? `${color}14` : 'transparent',
+        transition: 'background-color 0.15s',
+        '&:hover': clickable ? { bgcolor: `${color}14` } : {},
       }}
     >
       <Box sx={{
-        width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
+        width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        bgcolor: `${color}1f`, border: `1px solid ${color}44`,
+        border: `1.5px solid ${color}55`,
       }}>
         {icon}
       </Box>
       <Box sx={{ minWidth: 0 }}>
-        <Typography sx={{ fontSize: '0.66rem', color: 'var(--text-muted)', fontWeight: 600, lineHeight: 1.2, whiteSpace: 'nowrap' }}>
+        <Typography sx={{ fontSize: '0.72rem', color: 'var(--text)', fontWeight: 700, lineHeight: 1.25, whiteSpace: 'nowrap' }}>
           {label}
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5 }}>
-          <Typography sx={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.3, fontVariantNumeric: 'tabular-nums' }}>
+          <Typography sx={{ fontSize: '0.98rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.3, fontVariantNumeric: 'tabular-nums' }}>
             {value}
           </Typography>
           {subtitle && (
@@ -1681,58 +1682,66 @@ export default function DatabaseViewer({ isActive }) {
           </Box>
         </Collapse>
 
-        {/* ── Stats cards ── */}
-        {!loading && (
-          <Box sx={{ px: 2, py: 1, display: 'flex', flexDirection: 'column', gap: 1,
-            borderBottom: '1px solid rgba(255,255,255,0.05)',
-            bgcolor: 'rgba(255,255,255,0.012)', position: 'relative', zIndex: 1,
-          }}>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-              <StatCard
-                icon={<StorageIcon sx={{ fontSize: 16, color: '#3b82f6' }} />}
-                color="#3b82f6"
-                value={total.toLocaleString()}
-                label={lang === 'en' ? (total === 1 ? 'Company' : 'Companies') : (total === 1 ? 'Empresa' : 'Empresas')}
-              />
-              {globalStats.total_wa !== null && (
-                <StatCard
-                  icon={<WhatsAppIcon sx={{ fontSize: 16, color: '#22c55e' }} />}
-                  color="#22c55e"
-                  value={globalStats.total_wa.toLocaleString()}
-                  subtitle={total > 0 ? `${Math.round((globalStats.total_wa / total) * 100)}%` : null}
-                  label={lang === 'en' ? 'With WhatsApp' : 'Con WhatsApp'}
-                />
-              )}
-              {globalStats.total_contacted !== null && (
-                <StatCard
-                  icon={<SendIcon sx={{ fontSize: 15, color: '#60a5fa' }} />}
-                  color="#60a5fa"
-                  value={globalStats.total_contacted.toLocaleString()}
-                  label={lang === 'en' ? 'Contacted' : 'Contactadas'}
-                  active={filters.contacted === 'true'}
-                  onClick={() => handleFilterChange('contacted', filters.contacted === 'true' ? '' : 'true')}
-                />
-              )}
-              {globalStats.total_contacted !== null && (
-                <StatCard
-                  icon={<HourglassEmptyIcon sx={{ fontSize: 15, color: '#fbbf24' }} />}
-                  color="#fbbf24"
-                  value={Math.max(0, total - globalStats.total_contacted).toLocaleString()}
-                  label={lang === 'en' ? 'Not contacted' : 'Sin contactar'}
-                  active={filters.contacted === 'false'}
-                  onClick={() => handleFilterChange('contacted', filters.contacted === 'false' ? '' : 'false')}
-                />
-              )}
-              <StatCard
-                icon={<AccessTimeIcon sx={{ fontSize: 15, color: scrapeAgeDisplay ? scrapeAgeDisplay.color : 'rgba(148,163,184,0.6)' }} />}
-                color={scrapeAgeDisplay ? scrapeAgeDisplay.color : 'rgba(148,163,184,0.6)'}
-                value={!scrapeAgeDisplay
-                  ? (lang === 'en' ? '—' : '—')
-                  : lang === 'en'
-                    ? (scrapeAgeDisplay.daysAgo === 0 ? 'Today' : scrapeAgeDisplay.daysAgo === 1 ? 'Yesterday' : `${scrapeAgeDisplay.daysAgo}d ago`)
-                    : (scrapeAgeDisplay.daysAgo === 0 ? 'Hoy' : scrapeAgeDisplay.daysAgo === 1 ? 'Ayer' : `Hace ${scrapeAgeDisplay.daysAgo}d`)}
-                label={lang === 'en' ? 'Last scrape' : 'Último scraping'}
-              />
+        {/* ── Stats card — ONE bordered strip with internal dividers between
+             sections, matching the reference invoice-list summary card,
+             instead of separate boxes with gaps between them. ── */}
+        {!loading && (() => {
+          const statCards = [
+            {
+              key: 'total',
+              icon: <StorageIcon sx={{ fontSize: 16, color: '#3b82f6' }} />, color: '#3b82f6',
+              value: total.toLocaleString(),
+              label: lang === 'en' ? (total === 1 ? 'Company' : 'Companies') : (total === 1 ? 'Empresa' : 'Empresas'),
+            },
+            globalStats.total_wa !== null && {
+              key: 'wa',
+              icon: <WhatsAppIcon sx={{ fontSize: 16, color: '#22c55e' }} />, color: '#22c55e',
+              value: globalStats.total_wa.toLocaleString(),
+              subtitle: total > 0 ? `${Math.round((globalStats.total_wa / total) * 100)}%` : null,
+              label: lang === 'en' ? 'With WhatsApp' : 'Con WhatsApp',
+            },
+            globalStats.total_contacted !== null && {
+              key: 'contacted',
+              icon: <SendIcon sx={{ fontSize: 15, color: '#60a5fa' }} />, color: '#60a5fa',
+              value: globalStats.total_contacted.toLocaleString(),
+              label: lang === 'en' ? 'Contacted' : 'Contactadas',
+              active: filters.contacted === 'true',
+              onClick: () => handleFilterChange('contacted', filters.contacted === 'true' ? '' : 'true'),
+            },
+            globalStats.total_contacted !== null && {
+              key: 'notContacted',
+              icon: <HourglassEmptyIcon sx={{ fontSize: 15, color: '#fbbf24' }} />, color: '#fbbf24',
+              value: Math.max(0, total - globalStats.total_contacted).toLocaleString(),
+              label: lang === 'en' ? 'Not contacted' : 'Sin contactar',
+              active: filters.contacted === 'false',
+              onClick: () => handleFilterChange('contacted', filters.contacted === 'false' ? '' : 'false'),
+            },
+            {
+              key: 'lastScrape',
+              icon: <AccessTimeIcon sx={{ fontSize: 15, color: scrapeAgeDisplay ? scrapeAgeDisplay.color : 'rgba(148,163,184,0.6)' }} />,
+              color: scrapeAgeDisplay ? scrapeAgeDisplay.color : 'rgba(148,163,184,0.6)',
+              value: !scrapeAgeDisplay
+                ? '—'
+                : lang === 'en'
+                  ? (scrapeAgeDisplay.daysAgo === 0 ? 'Today' : scrapeAgeDisplay.daysAgo === 1 ? 'Yesterday' : `${scrapeAgeDisplay.daysAgo}d ago`)
+                  : (scrapeAgeDisplay.daysAgo === 0 ? 'Hoy' : scrapeAgeDisplay.daysAgo === 1 ? 'Ayer' : `Hace ${scrapeAgeDisplay.daysAgo}d`),
+              label: lang === 'en' ? 'Last scrape' : 'Último scraping',
+            },
+          ].filter(Boolean)
+
+          return (
+          <Box sx={{ px: 2, py: 1, borderBottom: '1px solid rgba(255,255,255,0.05)', bgcolor: 'rgba(255,255,255,0.012)', position: 'relative', zIndex: 1 }}>
+            <Box sx={{
+              display: 'flex', flexWrap: 'wrap', mb: 1, overflow: 'hidden',
+              borderRadius: 2, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+              bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+            }}>
+              {statCards.map((c, i) => (
+                <Fragment key={c.key}>
+                  {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 1.2 }} />}
+                  <StatCard {...c} />
+                </Fragment>
+              ))}
             </Box>
             {/* Active filter chips — right side */}
             {(filters.search || filters.industry || filters.city || filters.has_whatsapp !== '' || filters.contacted !== '') && (
@@ -1781,7 +1790,8 @@ export default function DatabaseViewer({ isActive }) {
               </Box>
             )}
           </Box>
-        )}
+          )
+        })()}
 
         <TableContainer
           sx={{

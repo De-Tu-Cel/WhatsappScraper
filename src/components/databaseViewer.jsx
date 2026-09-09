@@ -1736,8 +1736,8 @@ export default function DatabaseViewer({ isActive }) {
               borderRadius: 2, border: '1px solid var(--border, rgba(255,255,255,0.08))',
               bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
             }}>
-              {statCards.map((c, i) => (
-                <Fragment key={c.key}>
+              {statCards.map(({ key, ...c }, i) => (
+                <Fragment key={key}>
                   {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 1.2 }} />}
                   <StatCard {...c} />
                 </Fragment>

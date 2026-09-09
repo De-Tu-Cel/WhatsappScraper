@@ -65,7 +65,13 @@ EXCLUDED_DOMAINS = {
     'wella.com', 'wella.com.mx',
     # Empleo
     'occ.com', 'occ.com.mx', 'indeed.com', 'indeed.com.mx',
-    'computrabajo.com', 'bumeran.com',
+    'computrabajo.com', 'bumeran.com', 'ofertasdetrabajosyempleos.com',
+    # Confirmado en producción 2026-09-09: 9 empresas reales guardadas desde
+    # sitios que nunca fueron un negocio real (0 mensajes enviados a ninguno) —
+    # rastreador de vuelos, boletos de autobús, directorios/listas en Excel,
+    # un blog, una cámara/asociación gremial, y un traductor de frases.
+    'flightview.com', 'checkmybus.com.mx', 'datomex.com',
+    'masterestaurant.com', 'criregjal.com.mx', 'indifferentlanguages.com',
     # Aerolíneas, cadenas nacionales (no prospectos locales)
     'aeromexico.com', 'volaris.com', 'vivaaerobus.com',
     'sephora.com.mx', 'maccosmetics.com', 'clinique.com',

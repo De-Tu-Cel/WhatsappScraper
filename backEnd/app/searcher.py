@@ -18,6 +18,15 @@ OPENAI_API_KEY     = os.getenv("OPENAI_API_KEY", "")
 def _brightdata_key() -> str:
     return os.getenv("BRIGHTDATA_SERP_KEY", "")
 
+def _dataforseo_auth() -> str:
+    """Basic-auth header value for DataForSEO, or '' if not configured."""
+    login = os.getenv("DATAFORSEO_LOGIN", "")
+    password = os.getenv("DATAFORSEO_PASSWORD", "")
+    if not login or not password:
+        return ""
+    import base64
+    return base64.b64encode(f"{login}:{password}".encode()).decode()
+
 EXCLUDED_DOMAINS = {
     # Enciclopedias
     'wikipedia.org', 'wikimedia.org', 'wikidata.org',
@@ -1932,7 +1941,13 @@ def _search_via_google_maps(
     industry: str, city: str = "", country: str = None,
     keywords: str = "", num_results: int = 10,
 ) -> tuple[list, dict]:
-    """Fan-out por ciudades en Google Maps via Bright Data — devuelve negocios locales con website."""
+    """Fan-out por ciudades en Google Maps via Bright Data — devuelve negocios locales con website.
+
+    Reemplazada por _search_via_dataforseo_maps() (2026-09-09) — prueba real
+    lado a lado, misma búsqueda ("veterinarias" en Puebla): esta vía BD dio 8
+    negocios reales; DataForSEO Maps SERP API dio ~15-17, a $0.002 por llamada.
+    Se deja la función por si se quiere reactivar como respaldo.
+    """
     effective_country = _detect_effective_country(country, f"{industry} {city}")
     cfg = COUNTRY_CONFIG.get(effective_country) if effective_country else None
     gl = cfg.get("gl", "mx") if cfg else "mx"
@@ -2081,6 +2096,108 @@ def _search_via_google_maps(
     return urls, snippets
 
 
+def _search_via_dataforseo_maps(
+    industry: str, city: str = "", country: str = None,
+    keywords: str = "", num_results: int = 10, offset: int = 0,
+) -> tuple[list, dict]:
+    """Google Maps local business search via DataForSEO's Maps SERP API (Live).
+    Replaced Bright Data's Maps scraping (2026-09-09) — same query side by
+    side gave ~15-17 real business sites here vs 8 via Bright Data, at
+    $0.002/call. See _search_via_google_maps's docstring for the comparison.
+    """
+    auth = _dataforseo_auth()
+    if not auth or not city.strip():
+        return [], {}
+
+    effective_country = _detect_effective_country(country, f"{industry} {city}") or "Mexico"
+    # DataForSEO necesita jerarquía completa "Ciudad,Estado,País" para resolver
+    # bien la ubicación — confirmado en vivo: "Leon,Mexico" (sin estado) dio
+    # error "Invalid Field: location_name", mientras que agregar el estado
+    # ("Leon,Guanajuato,Mexico") funcionó. Reusa el mismo mapeo ciudad→estado
+    # que ya existe para la expansión geográfica en search_prospects().
+    _state_key = _find_state_for_city(city.strip())
+    location_name = f"{city.strip()},{_state_key.title()},{effective_country}" if _state_key else f"{city.strip()},{effective_country}"
+    cfg = COUNTRY_CONFIG.get(effective_country)
+    language_code = cfg.get("hl", "es") if cfg else "es"
+
+    ind_clean = industry.strip()
+    kw = keywords.strip()
+    base_keyword = f"{kw} {ind_clean}".strip() if kw else ind_clean
+
+    static_synonyms = INDUSTRY_SYNONYMS.get(ind_clean.lower(), [])
+    # Un solo query ya trae hasta 100 resultados crudos — solo se agregan
+    # sinónimos extra para pedidos grandes.
+    max_syn = min(3, max(0, (num_results - 1) // 40))
+    query_keywords = [base_keyword] + static_synonyms[:max_syn]
+
+    # DataForSEO cobra un multiplicador extra por cada 100 resultados de más
+    # ("depth"), pero solo cobra por la profundidad REAL alcanzada — si Google
+    # Maps ya no tiene más resultados, pedir de más no cuesta más ni trae más
+    # (confirmado en vivo: depth=300 y depth=700 dieron exactamente lo mismo,
+    # 282 resultados/42 dominios, mismo costo $0.006 — 300 ya agotaba lo real).
+    # 300 (en vez de 100) casi duplicó los dominios únicos reales (17→42) para
+    # la misma búsqueda, por 3x el costo base (~medio centavo de diferencia) —
+    # pero también tarda más en responder (confirmado: un intento real superó
+    # los 25s). Para pedidos chicos, donde ni falta tanta profundidad, se usa
+    # depth=100 (rápido); solo los pedidos grandes pagan la espera extra.
+    base_depth = 100 if num_results <= 20 else 300
+    depth = base_depth if offset <= 0 else min(base_depth + offset, 700)
+
+    def _fetch_one(kw_variant: str) -> tuple[list, dict]:
+        payload = [{
+            "keyword": f"{kw_variant} en {city.strip()}",
+            "location_name": location_name,
+            "language_code": language_code,
+            "depth": depth,
+        }]
+        try:
+            resp = requests.post(
+                "https://api.dataforseo.com/v3/serp/google/maps/live/advanced",
+                headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
+                # depth=300 (3 páginas de Maps escaneadas del lado de DataForSEO)
+                # tarda más que el "~6s promedio" que documentan para depth=100 —
+                # confirmado en vivo: un intento real superó los 25s y truncó la
+                # respuesta a 0 resultados. 45s da margen real sin bloquear tanto
+                # como para chocar con el _GLOBAL_DEADLINE del pipeline (40-80s).
+                json=payload, timeout=45,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            task = (data.get("tasks") or [{}])[0]
+            results = task.get("result") or []
+            items = results[0].get("items", []) if results else []
+            batch_urls, batch_snips = [], {}
+            for item in items:
+                website = item.get("url") or (f"https://{item['domain']}" if item.get("domain") else None)
+                if website and _is_business_url(website) and website not in batch_urls:
+                    batch_urls.append(website)
+                    rating = item.get("rating") or {}
+                    batch_snips[website] = {
+                        "title": item.get("title", ""),
+                        "body": item.get("address") or (f"{rating.get('value')}★" if rating.get("value") else ""),
+                    }
+            return batch_urls, batch_snips
+        except Exception as e:
+            print(f"[dataforseo-maps] {kw_variant!r} error: {e!r}")
+            return [], {}
+
+    seen_domains: set[str] = set()
+    urls: list[str] = []
+    snippets: dict = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(query_keywords), 4)) as ex:
+        futures = [ex.submit(_fetch_one, kwv) for kwv in query_keywords]
+        for f in concurrent.futures.as_completed(futures):
+            batch_urls, batch_snips = f.result()
+            for u in batch_urls:
+                d = _get_domain(u)
+                if d and d not in seen_domains:
+                    seen_domains.add(d)
+                    urls.append(u)
+                    snippets[u] = batch_snips.get(u, {})
+
+    return urls, snippets
+
+
 def search_prospects(
     industry: str,
     city: str = "",
@@ -2145,33 +2262,22 @@ def search_prospects(
     # when we're doing a state-level fan-out so they have a city to geocode.
     geocode_city = (state_cities[0] if state_cities and not city else city)
 
-    _bd_key = _brightdata_key()
+    _dfs_ok = bool(_dataforseo_auth())
 
-    if _bd_key and offset:
-        # "Cargar más": la llamada anterior (offset=0) ya cubrió DDG/Maps/Sección
-        # Amarilla — ninguna de esas 3 fuentes soporta paginación real, repetirlas
-        # solo devolvería lo mismo. Sólo Bright Data pagina de verdad (páginas de
-        # Google), así que "cargar más" únicamente profundiza ahí.
-        urls, snippets = _search_via_brightdata_multi(industry_q, city, country, keywords, num_results, offset, state_cities=state_cities)
-
-    elif _bd_key:
-        # Correr 5 fuentes en paralelo: Bright Data + DuckDuckGo + Sección Amarilla + Maps + OSM
+    if _dfs_ok:
+        # Correr 4 fuentes en paralelo: DataForSEO Maps + DuckDuckGo + Sección Amarilla + OSM.
+        # BrightData se quitó por completo (2026-09-09): orgánico daba 0 resultados
+        # usables en pruebas reales (el SERP de Google para negocios locales está
+        # dominado por video/redes, no por links orgánicos — ddgs ya cubre eso
+        # gratis), y Maps vía BD daba 8 negocios reales contra ~15-17 de DataForSEO
+        # Maps SERP API para la misma búsqueda, a $0.002 por llamada.
         import time as _time
         _t0 = _time.monotonic()
-        # Deadline global escalado a num_results: búsquedas pequeñas (≤20)
-        # ya tienen suficientes URLs de BD+DDG+SA a los 30s; búsquedas grandes
-        # necesitan más margen. Se descartan si llegan después del límite.
-        # >50 was 45s — raised to 70s (2026-09-04) after a live test showed BD/
-        # Maps hitting this exact deadline mid-retry: their own per-request
-        # timeout is 35s each, so a single retry (35s + 35s) never fit inside
-        # 45s, silently discarding a source that would have succeeded on the
-        # retry. Real results take longer here, but 0 results from a source
-        # that actually had data is worse than the extra wait.
-        # ≤20 raised 22→30s and ≤50 raised 30→40s (2026-09-08) after two
-        # back-to-back identical calls returned 68 vs 12 merged URLs — DDG/SA
-        # crossed the old deadline on the slower run even though nothing was
-        # actually wrong, just normal network variance.
-        _GLOBAL_DEADLINE = 30 if num_results <= 20 else 40 if num_results <= 50 else 80
+        # Deadline global escalado a num_results. ≤20 subido 30→40s (2026-09-09):
+        # confirmado en vivo que DataForSEO Maps a veces tarda >30s incluso en
+        # depth=100 (variabilidad normal de red/servidor, igual que ya se vio
+        # antes con BD) — se descartan si llegan después del límite.
+        _GLOBAL_DEADLINE = 40 if num_results <= 50 else 80
         def _safe_result(f, label):
             try:
                 remaining = _GLOBAL_DEADLINE - (_time.monotonic() - _t0)
@@ -2185,39 +2291,32 @@ def search_prospects(
                 _log.warning("[search] %s error: %s", label, _e)
                 return [], {}
 
-        # Google Maps se quitó y se volvió a poner el mismo día (2026-09-08):
-        # una prueba real desde producción mostró que Maps por sí solo dio 8
-        # negocios reales (veterinarias en Puebla) contra 3 de OSM+SA juntos —
-        # es la fuente dominante de negocios locales, no un "extra" opcional.
-        # Se deja el _TASK_BUDGET/caps de OSM/SA subidos igual (no hacen daño).
-        _ex = concurrent.futures.ThreadPoolExecutor(max_workers=5)
-        bd_future   = _ex.submit(_search_via_brightdata_multi, industry_q, city, country, keywords, num_results, offset, state_cities)
+        _ex = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        maps_future = _ex.submit(_search_via_dataforseo_maps, industry_q, geocode_city, country, keywords, num_results, offset)
         ddg_future  = _ex.submit(_search_via_duckduckgo, industry_q, city, exclude_domains or set(), country, num_results, state_cities)
         sa_future   = _ex.submit(_search_via_seccion_amarilla, industry_q, geocode_city, country, num_results)
-        maps_future = _ex.submit(_search_via_google_maps, industry_q, geocode_city, country, keywords, num_results)
         osm_future  = _ex.submit(_search_via_openstreetmap, industry_q, geocode_city, country, num_results)
-        bd_urls,   bd_snips   = _safe_result(bd_future,   "BD")
+        maps_urls, maps_snips = _safe_result(maps_future, "Maps")
         ddg_urls,  ddg_snips  = _safe_result(ddg_future,  "DDG")
         sa_urls,   sa_snips   = _safe_result(sa_future,   "SA")
-        maps_urls, maps_snips = _safe_result(maps_future, "Maps")
         osm_urls,  osm_snips  = _safe_result(osm_future,  "OSM")
         _ex.shutdown(wait=False)
 
-        _log.info("[search] BD=%d DDG=%d SA=%d Maps=%d OSM=%d → merged=%d",
-                  len(bd_urls), len(ddg_urls), len(sa_urls), len(maps_urls), len(osm_urls),
-                  len(set(_get_domain(u) for u in maps_urls + bd_urls + ddg_urls + sa_urls + osm_urls if _get_domain(u))))
+        _log.info("[search] Maps=%d DDG=%d SA=%d OSM=%d → merged=%d",
+                  len(maps_urls), len(ddg_urls), len(sa_urls), len(osm_urls),
+                  len(set(_get_domain(u) for u in maps_urls + ddg_urls + sa_urls + osm_urls if _get_domain(u))))
 
-        # Mergear: Maps y BD primero (más calidad), luego DDG, SA, OSM
+        # Mergear: Maps primero (mayor calidad/densidad), luego DDG, SA, OSM
         # OSM va al final porque ya trae snippets ricos — el AI filter los aprovechará aunque lleguen últimos
         seen: set[str] = set()
         urls: list[str] = []
         snippets: dict = {}
-        for u in maps_urls + bd_urls + ddg_urls + sa_urls + osm_urls:
+        for u in maps_urls + ddg_urls + sa_urls + osm_urls:
             d = _get_domain(u)
             if d and d not in seen:
                 seen.add(d)
                 urls.append(u)
-                snippets[u] = (maps_snips.get(u) or bd_snips.get(u) or ddg_snips.get(u)
+                snippets[u] = (maps_snips.get(u) or ddg_snips.get(u)
                                or sa_snips.get(u) or osm_snips.get(u, {}))
 
     elif SERPAPI_KEY:

@@ -594,7 +594,10 @@ _BOT_SELFID_MARKERS = re.compile(
 # sí es evidencia real de mensaje automático de bienvenida, venga o no firmado por un
 # nombre real. Caso real: Stellantis Country (Clarissa Flores, "asesora digital BDC").
 _FORMAL_BDC_GREETING = re.compile(
-    r'le saluda\s+[\w\sáéíóúñ]{2,40}?(?:su\s+)?(?:asesor|ejecutiv|agente|representante)\w*'
+    # Coma incluida en el tramo del nombre — "Le saluda Clarissa, su asesora..." es la
+    # puntuación natural en español y el propio caso real (Stellantis Country) la lleva;
+    # sin la coma en la clase de caracteres el regex nunca hace match contra ese texto.
+    r'le saluda\s+[\w\s,áéíóúñ]{2,40}?(?:su\s+)?(?:asesor|ejecutiv|agente|representante)\w*'
     r'\s*(?:digital|virtual)?\s*(?:bdc)?\s+de\s+\w',
     re.IGNORECASE,
 )
@@ -973,6 +976,13 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
         log.error("classify_conversation failed for %s: %s\n%s", company_id, e, traceback.format_exc())
         return {"category": "humano", "response_quality": 3, "bot_quality": None, "notes": "Error al analizar conversación", "error": True}
 
+    return _apply_deterministic_corrections(result, messages, thread)
+
+
+def _apply_deterministic_corrections(result: dict, messages: list, thread: str) -> dict:
+    """Post-LLM safety net for classify_conversation() — pure function of the
+    LLM's parsed result plus the conversation data (no network/DB), so it's
+    directly unit-testable without mocking the LLM call itself."""
     # El prompt le pide explícitamente al LLM "is_ai=false sin excepción" cuando solo
     # hubo bienvenida + silencio (ver _CONV_PROMPT_TEMPLATE), pero en producción se
     # encontraron varios casos reales donde el LLM marcó is_ai=true de todas formas.

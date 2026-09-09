@@ -11,9 +11,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.classifier import (
+    _apply_deterministic_corrections,
     _has_real_text,
     _looks_like_auto_reply,
     _looks_like_bot_selfid,
+    _looks_like_formal_bdc_greeting,
     _looks_like_menu,
     _parse_llm_response,
     _quick_classify,
@@ -385,3 +387,118 @@ class TestResolveProbeT2Guard:
         result = _resolve_probe(db, _probe_doc(), "1. Ventas\n2. Soporte", received_at)
         assert result["category"] == "bot"
         assert result["is_ai"] is False
+
+
+# ── _looks_like_formal_bdc_greeting ──────────────────────────────────────────
+
+class TestLooksLikeFormalBdcGreeting:
+    @pytest.mark.parametrize("text", [
+        # Real prod case: Stellantis Country (Clarissa Flores) — a genuine
+        # automated welcome template, not a casual self-introduction.
+        "Le saluda Clarissa Flores, su asesora digital BDC de Stellantis Country.",
+        "Le saluda Juan Pérez su ejecutivo de ventas de Toyota Reforma",
+        "Le saluda María, agente virtual de Nissan Culiacán",
+        "Le saluda Roberto, representante de Volkswagen del Valle",
+    ])
+    def test_detects_formal_template_greeting(self, text):
+        assert _looks_like_formal_bdc_greeting(text) is True
+
+    @pytest.mark.parametrize("text", [
+        # Casual self-intro — must NOT be flagged (this is what the fix targets:
+        # the LLM was over-flagging these as bot evidence based on tone alone)
+        "Hola, soy Emmanuel, en qué le puedo ayudar",
+        "Mi nombre es Juan, coordinador de ventas",
+        "Reemplazaré a nuestro asistente virtual, soy Fernanda",
+        "1. Ventas\n2. Soporte",
+    ])
+    def test_does_not_flag_casual_intros(self, text):
+        assert _looks_like_formal_bdc_greeting(text) is False
+
+
+# ── _apply_deterministic_corrections ─────────────────────────────────────────
+# Pure post-LLM safety net — no network/DB, so these build minimal
+# messages/thread/result fixtures directly instead of mocking classify_conversation.
+
+def _msg(direction: str, body: str) -> dict:
+    return {"direction": direction, "message_body": body}
+
+
+class TestApplyDeterministicCorrections:
+    def test_hibrido_with_no_hard_signal_downgrades_to_humano(self):
+        # Real regression case (Ferra, Casacravioto — both 100% confirmed human):
+        # the LLM said "hibrido" based only on formal tone, but nothing in the
+        # actual thread is a hard bot signal.
+        messages = [
+            _msg("outbound", "Hola, ¿en qué le puedo ayudar?"),
+            _msg("inbound", "Hola, quería preguntar por el precio del servicio"),
+        ]
+        thread = "[Representante]: Hola\n[Prospecto]: Hola, quería preguntar por el precio"
+        result = {"category": "hibrido", "is_ai": True, "notes": ""}
+        out = _apply_deterministic_corrections(result, messages, thread)
+        assert out["category"] == "humano"
+        assert out["is_ai"] is False
+
+    def test_hibrido_with_formal_bdc_greeting_is_not_downgraded(self):
+        # Real case: Stellantis Country — a genuine automated greeting template
+        # arrived before the customer's real question, so this one IS a real bot
+        # and must survive the safety net instead of being downgraded.
+        messages = [
+            _msg("outbound", "Le saluda Clarissa, su asesora digital BDC de Stellantis Country."),
+            _msg("inbound", "Le saluda Clarissa, su asesora digital BDC de Stellantis Country."),
+        ]
+        thread = "no fast marker here"
+        result = {"category": "hibrido", "is_ai": True, "notes": ""}
+        out = _apply_deterministic_corrections(result, messages, thread)
+        assert out["category"] == "hibrido"
+
+    def test_hibrido_with_fast_reply_flag_is_not_downgraded(self):
+        messages = [
+            _msg("outbound", "Hola"),
+            _msg("inbound", "Hola, sí tenemos disponible"),
+        ]
+        thread = "[Representante]: Hola\n[Prospecto ⚡ 3s — posible autorespuesta automática]: Hola, sí tenemos disponible"
+        result = {"category": "hibrido", "is_ai": True, "notes": ""}
+        out = _apply_deterministic_corrections(result, messages, thread)
+        assert out["category"] == "hibrido"
+
+    def test_hibrido_with_repeated_inbound_text_is_not_downgraded(self):
+        messages = [
+            _msg("outbound", "Hola"),
+            _msg("inbound", "Sí, disponible"),
+            _msg("outbound", "Perfecto"),
+            _msg("inbound", "Sí, disponible"),  # exact repeat
+        ]
+        thread = "no fast marker here"
+        result = {"category": "hibrido", "is_ai": True, "notes": ""}
+        out = _apply_deterministic_corrections(result, messages, thread)
+        assert out["category"] == "hibrido"
+
+    def test_humano_category_is_untouched(self):
+        result = {"category": "humano", "is_ai": False, "notes": ""}
+        out = _apply_deterministic_corrections(result, [], "")
+        assert out["category"] == "humano"
+        assert out["is_ai"] is False
+
+    def test_bot_with_single_outbound_text_corrects_is_ai_false(self):
+        messages = [
+            _msg("outbound", "Bienvenido a Gas Flamazul"),
+            # no follow-up outbound message — silence after the welcome template
+        ]
+        result = {"category": "bot", "is_ai": True, "notes": ""}
+        out = _apply_deterministic_corrections(result, messages, "")
+        assert out["is_ai"] is False
+
+    def test_bot_with_multiple_distinct_outbound_texts_keeps_is_ai(self):
+        # category "bot" also runs through the hibrido/bot hard-signal safety
+        # net below, so this needs a real hard signal on the inbound side too
+        # (a business-account prospect with its own auto-reply/menu) to survive
+        # that check and isolate the is_ai correction being tested here.
+        messages = [
+            _msg("outbound", "Bienvenido a Gas Flamazul"),
+            _msg("inbound", "1. Ventas\n2. Soporte"),
+            _msg("outbound", "Gracias por tu interés, en breve un asesor te contacta"),
+        ]
+        result = {"category": "bot", "is_ai": True, "notes": ""}
+        out = _apply_deterministic_corrections(result, messages, "")
+        assert out["is_ai"] is True
+        assert out["category"] == "bot"

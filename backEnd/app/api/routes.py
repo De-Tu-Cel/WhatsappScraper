@@ -4149,6 +4149,18 @@ async def api_wwebjs_webhook(request: Request):
         ):
             return {"ok": True, "action": "ignored_status"}
 
+        # Phantom empty-body inbound guard: save_evolution_log() below had no check
+        # for this at all — any wwebjs event that survives the filters above (protocol
+        # type, media-without-caption, from_me, status/group) with a genuinely blank
+        # body still got logged as if the contact had sent something. Confirmed live
+        # 2026-09-09: 18 such records in the last 14 days, including one from
+        # yesterday — this earlier fix (commit a3b1189) covered specific triggers but
+        # never added this general guard. media_body was already swapped for a
+        # [image]/[video]/etc placeholder above when hasMedia — if it's STILL empty
+        # here, there's genuinely no content to attribute to the contact.
+        if not (message_body or "").strip():
+            return {"ok": True, "action": "ignored_empty_body"}
+
         _sender_is_internal = bool(db.db.instances.find_one({"number": number}))
         if _sender_is_internal:
             return {"ok": True, "action": "ignored_internal"}

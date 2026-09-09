@@ -1800,7 +1800,13 @@ export default function DatabaseViewer({ isActive }) {
           <Table stickyHeader size="small" aria-label="tabla de empresas">
             <TableHead>
               <TableRow>
-                <TableCell padding="checkbox" sx={{ bgcolor: 'var(--card-bg, #161d2e)', borderBottom: '1px solid rgba(255,255,255,0.08)', borderRight: '1px solid rgba(255,255,255,0.08)' }}>
+                <TableCell padding="checkbox" sx={{
+                  bgcolor: 'var(--card-bg, #161d2e)', borderBottom: '1px solid rgba(255,255,255,0.08)', position: 'relative',
+                  '&::after': {
+                    content: '""', position: 'absolute', top: 10, bottom: 10, right: 0,
+                    width: '1px', bgcolor: 'rgba(255,255,255,0.08)',
+                  },
+                }}>
                   <Checkbox
                     color="primary"
                     indeterminate={numSelected > 0 && numSelected < rowCount}
@@ -1816,8 +1822,13 @@ export default function DatabaseViewer({ isActive }) {
                     sortDirection={orderBy === hc.id ? order : false}
                     sx={{
                       bgcolor: 'var(--card-bg, #161d2e)', color: 'rgba(255,255,255,0.55)', fontWeight: 600, fontSize: '0.75rem', whiteSpace: 'nowrap',
-                      borderBottom: '1px solid rgba(255,255,255,0.08)',
-                      borderRight: i < headCells.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none',
+                      borderBottom: '1px solid rgba(255,255,255,0.08)', position: 'relative',
+                      ...(i < headCells.length - 1 ? {
+                        '&::after': {
+                          content: '""', position: 'absolute', top: 10, bottom: 10, right: 0,
+                          width: '1px', bgcolor: 'rgba(255,255,255,0.08)',
+                        },
+                      } : {}),
                     }}
                   >
                     {hc.sortable ? (

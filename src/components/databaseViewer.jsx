@@ -1002,6 +1002,22 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
   }, [open, selectedRows])
 
   const waRows = selectedRows.filter(r => r.has_whatsapp)
+  // Variable availability across the selected recipients — passed to
+  // TemplateLibraryPicker so it blocks/warns templates whose {{variable}}
+  // none of them have data for (same pattern as every other bulk-send
+  // surface; this dialog was missing it entirely before).
+  const tplVarFlags = {
+    hasName:     waRows.some(r => r.name),
+    hasCity:     waRows.some(r => r.city),
+    hasIndustry: waRows.some(r => r.industry),
+    hasWeb:      waRows.some(r => r.website || r.domain),
+  }
+  const tplVarCounts = {
+    nombre:    waRows.filter(r => r.name).length,
+    ciudad:    waRows.filter(r => r.city).length,
+    industria: waRows.filter(r => r.industry).length,
+    web:       waRows.filter(r => r.website || r.domain).length,
+  }
 
   // Trae los números reales de WhatsApp de las empresas seleccionadas EN UNA
   // sola llamada (mismo endpoint que ya usa el picker de Send Campaign), en vez
@@ -1191,7 +1207,10 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
 
       <DialogContent sx={{ px: 3, pt: 3.5, pb: 1, bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
         <Box sx={{ mb: 1.5, p: 1.6, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
-          <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={selectedNums.size} baseCount={0} singleSelect={selectedNums.size <= 1} />
+          <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={selectedNums.size} baseCount={0} singleSelect={selectedNums.size <= 1}
+            hasName={tplVarFlags.hasName} hasCity={tplVarFlags.hasCity}
+            hasIndustry={tplVarFlags.hasIndustry} hasWeb={tplVarFlags.hasWeb}
+            varCounts={tplVarCounts} totalSelected={waRows.length} />
         </Box>
 
         {/* Recipients — TODAS las empresas seleccionadas con sus números reales de

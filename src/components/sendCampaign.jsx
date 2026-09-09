@@ -223,6 +223,7 @@ export default function SendCampaign() {
                   onChange={setTemplateTexts}
                   recipientCount={targets.length}
                   baseCount={0}
+                  singleSelect={targets.length <= 1}
                   hasName={hasNameData}
                   hasCity={hasCityData}
                   hasIndustry={hasIndustryData}

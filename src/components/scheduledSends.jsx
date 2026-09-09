@@ -1043,6 +1043,7 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
           onChange={setMessages}
           recipientCount={selectedNums.size}
           baseCount={0}
+          singleSelect={selectedNums.size <= 1}
           label={t.sched.messagesLabel}
           hasName={tplVarFlags.hasName} hasCity={tplVarFlags.hasCity}
           hasIndustry={tplVarFlags.hasIndustry} hasWeb={tplVarFlags.hasWeb}

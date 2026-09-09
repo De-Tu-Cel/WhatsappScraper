@@ -24,28 +24,54 @@ _DEBOUNCE_SEC = 4.0
 _pending: dict = {}   # phone_number → {timer, messages[], log_ids[], company_id, manual}
 _pending_lock = threading.Lock()
 
-# Minimum pause between different conversations (after previous one finishes)
+# Minimum pause between different conversations on the SAME WhatsApp instance
+# (after the previous one on that instance finishes) — this is what WhatsApp
+# actually sees as multi-chat activity for a given number. Keyed by
+# assigned_instance instead of a single global timestamp: before this fix, one
+# shared clock made every instance/user in the whole app wait 45-90s behind
+# whichever conversation (on ANY number) happened to be processed last, even
+# when the two had nothing to do with each other.
 _MIN_INTER_CHAT_GAP = 45   # seconds
 _MAX_INTER_CHAT_GAP = 90
-_last_send_ts: float = 0.0
+_last_send_ts: dict = {}   # assigned_instance → epoch of its last processed reply
+_UNASSIGNED_KEY = "__unassigned__"  # fallback bucket while a company has no instance yet
 
 # Session idle timeout — if contact hasn't replied in this many hours, close and disable toggle
 SESSION_IDLE_TIMEOUT_HOURS = 4
 _CLEANUP_INTERVAL = 1800  # run cleanup every 30 min
 
 
+def _resolve_instance(company_id: str | None) -> str:
+    """Best-effort lookup of the WhatsApp instance that will actually send this
+    reply, so the inter-chat gap can be scoped to it. Falls back to a shared
+    bucket if the company has no instance assigned yet or the lookup fails —
+    same conservative pacing as before for that edge case."""
+    if not company_id:
+        return _UNASSIGNED_KEY
+    try:
+        from bson import ObjectId
+        from app.database import MongoDBManager
+        db = MongoDBManager()
+        co = db.db.companies.find_one({"_id": ObjectId(company_id)}, {"assigned_instance": 1})
+        return (co or {}).get("assigned_instance") or _UNASSIGNED_KEY
+    except Exception:
+        return _UNASSIGNED_KEY
+
+
 def _worker():
-    global _last_send_ts
     while True:
         item = _q.get()
         try:
-            # Enforce gap between different chats
+            instance = _resolve_instance(item.get("company_id"))
+
+            # Enforce gap between different chats on this same instance
             now = time.time()
-            elapsed = now - _last_send_ts
-            if _last_send_ts > 0 and elapsed < _MIN_INTER_CHAT_GAP:
+            last_ts = _last_send_ts.get(instance, 0.0)
+            elapsed = now - last_ts
+            if last_ts > 0 and elapsed < _MIN_INTER_CHAT_GAP:
                 wait = random.uniform(_MIN_INTER_CHAT_GAP, _MAX_INTER_CHAT_GAP) - elapsed
                 if wait > 0:
-                    log.info("[FollowupQ] inter-chat gap: waiting %.0fs", wait)
+                    log.info("[FollowupQ] inter-chat gap on %s: waiting %.0fs", instance, wait)
                     time.sleep(wait)
 
             from app.ai_followup import process_inbound_reply
@@ -57,7 +83,7 @@ def _worker():
                 manual_activation=item.get("manual_activation", False),
                 proactive=item.get("proactive", False),
             )
-            _last_send_ts = time.time()
+            _last_send_ts[instance] = time.time()
         except Exception as e:
             log.error("[FollowupQ] unhandled error: %s", e)
         finally:

@@ -5177,9 +5177,16 @@ def api_companies_with_numbers(x_user_token: Optional[str] = Header(None)):
                 contacts_by_company[cid].append(ct)
 
         # Step 2: fetch only companies that have WA contacts (uses _id index)
+        # Excludes source="inbound_whatsapp" — companies auto-registered because a
+        # number messaged one of our instances first (see _waha_auto_register_inbound),
+        # not real scraped prospects. Their "name" is literally the raw number
+        # ("+5218128607071", even "+0" for a malformed one) — showing up as campaign
+        # recipients let a Send Campaign message go out to someone who only ever
+        # contacted us, never a prospect we found. Confirmed live 2026-09-09: exactly
+        # 3 such phantom entries in the real recipient list.
         valid_oids = [ObjectId(cid) for cid in contacts_by_company if ObjectId.is_valid(cid)]
         companies_raw = list(db.db.companies.find(
-            {"_id": {"$in": valid_oids}},
+            {"_id": {"$in": valid_oids}, "source": {"$ne": "inbound_whatsapp"}},
             {"name": 1, "business_name": 1, "industry": 1, "domain": 1, "website": 1, "city": 1,
              "last_scraped_at": 1, "created_at": 1},
             sort=[("name", 1)],

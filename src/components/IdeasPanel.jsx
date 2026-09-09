@@ -823,85 +823,95 @@ export default function IdeasPanel({ isActive }) {
         </Box>
       </Box>
 
-      <TextField
-        size="small" fullWidth value={search} onChange={e => handleSearchChange(e.target.value)}
-        placeholder={it.searchPh}
-        slotProps={{ input: { startAdornment: (
-          <InputAdornment position="start">
-            <SearchIcon sx={{ fontSize: 16, color: 'var(--text-muted)' }} />
-          </InputAdornment>
-        ) } }}
-        sx={{ ...FIELD_SX, mb: 1.2, flexShrink: 0 }}
-      />
+      {/* Búsqueda/filtros de la cola — sin sentido mientras se muestra el feed
+         de resultados o el panel de envío (esa cola ya quedó en segundo plano). */}
+      {!showResultsView && (
+        <TextField
+          size="small" fullWidth value={search} onChange={e => handleSearchChange(e.target.value)}
+          placeholder={it.searchPh}
+          slotProps={{ input: { startAdornment: (
+            <InputAdornment position="start">
+              <SearchIcon sx={{ fontSize: 16, color: 'var(--text-muted)' }} />
+            </InputAdornment>
+          ) } }}
+          sx={{ ...FIELD_SX, mb: 1.2, flexShrink: 0 }}
+        />
+      )}
 
       {/* Filtros — dropdowns paginados (término / quién la trajo) + orden por fecha + chips de lo ya seleccionado */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7, mb: 1.4, flexShrink: 0, flexWrap: 'wrap' }}>
-        <FilterDropdown
-          selected={selectedTerms} onToggle={handleTermToggle}
-          label={it.filterByTerm} searchPh={it.termsSearchPh} noItemsLabel={it.noTerms}
-          endpoint="/api/ideas/terms" itemsKey="terms" valueField="term"
-        />
-        <FilterDropdown
-          selected={selectedUsers} onToggle={handleUserToggle}
-          label={it.filterByUser} searchPh={it.usersSearchPh} noItemsLabel={it.noUsers}
-          endpoint="/api/ideas/users" itemsKey="users" valueField="user"
-          formatValue={v => v === UNATTRIBUTED ? it.unknownUser : v}
-        />
-        <Tooltip title={sortDir === 'desc' ? it.sortNewestFirst : it.sortOldestFirst} placement="top">
-          <Button size="small" onClick={handleSortToggle}
-            startIcon={<SwapVertIcon sx={{ fontSize: 16 }} />}
-            sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, borderRadius: 1.5, color: 'var(--text-muted)',
-              border: '1px solid var(--border, rgba(255,255,255,0.14))' }}>
-            {sortDir === 'desc' ? it.sortNewestFirst : it.sortOldestFirst}
-          </Button>
-        </Tooltip>
-        {[...selectedTerms].map(term => (
-          <SelectedChip key={`t-${term}`} value={term} label={term} onRemove={() => handleTermToggle(term)} />
-        ))}
-        {[...selectedUsers].map(user => (
-          <SelectedChip key={`u-${user}`} value={user} label={user === UNATTRIBUTED ? it.unknownUser : user} onRemove={() => handleUserToggle(user)} />
-        ))}
-      </Box>
+      {!showResultsView && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7, mb: 1.4, flexShrink: 0, flexWrap: 'wrap' }}>
+          <FilterDropdown
+            selected={selectedTerms} onToggle={handleTermToggle}
+            label={it.filterByTerm} searchPh={it.termsSearchPh} noItemsLabel={it.noTerms}
+            endpoint="/api/ideas/terms" itemsKey="terms" valueField="term"
+          />
+          <FilterDropdown
+            selected={selectedUsers} onToggle={handleUserToggle}
+            label={it.filterByUser} searchPh={it.usersSearchPh} noItemsLabel={it.noUsers}
+            endpoint="/api/ideas/users" itemsKey="users" valueField="user"
+            formatValue={v => v === UNATTRIBUTED ? it.unknownUser : v}
+          />
+          <Tooltip title={sortDir === 'desc' ? it.sortNewestFirst : it.sortOldestFirst} placement="top">
+            <Button size="small" onClick={handleSortToggle}
+              startIcon={<SwapVertIcon sx={{ fontSize: 16 }} />}
+              sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, borderRadius: 1.5, color: 'var(--text-muted)',
+                border: '1px solid var(--border, rgba(255,255,255,0.14))' }}>
+              {sortDir === 'desc' ? it.sortNewestFirst : it.sortOldestFirst}
+            </Button>
+          </Tooltip>
+          {[...selectedTerms].map(term => (
+            <SelectedChip key={`t-${term}`} value={term} label={term} onRemove={() => handleTermToggle(term)} />
+          ))}
+          {[...selectedUsers].map(user => (
+            <SelectedChip key={`u-${user}`} value={user} label={user === UNATTRIBUTED ? it.unknownUser : user} onRemove={() => handleUserToggle(user)} />
+          ))}
+        </Box>
+      )}
 
-      {/* Bulk actions */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.4, flexShrink: 0, flexWrap: 'wrap' }}>
-        <Typography onClick={allSelectedOnPage ? clearSelection : selectAll}
-          sx={{ fontSize: '0.75rem', color: 'var(--text-muted)', cursor: 'pointer', '&:hover': { color: 'var(--text)' } }}>
-          {allSelectedOnPage ? it.clearSelection : it.selectAll}
-        </Typography>
-        {selectedCount > 0 && (
-          <Typography sx={{ fontSize: '0.75rem', color: ACCENT, fontWeight: 600 }}>
-            {it.selectedCount(selectedCount)}
+      {/* Bulk actions — se queda visible mientras corre el scraping (para Pausar/
+         Cancelar) pero desaparece del todo una vez terminado: "Descartar/Procesar
+         seleccionadas" ya no aplican, esa selección es de la cola de ideas. */}
+      {!scrapeJob.done && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.4, flexShrink: 0, flexWrap: 'wrap' }}>
+          <Typography onClick={allSelectedOnPage ? clearSelection : selectAll}
+            sx={{ fontSize: '0.75rem', color: 'var(--text-muted)', cursor: 'pointer', '&:hover': { color: 'var(--text)' } }}>
+            {allSelectedOnPage ? it.clearSelection : it.selectAll}
           </Typography>
-        )}
-        <Box sx={{ flex: 1 }} />
-        {scrapeJob.processing ? (
-          <>
-            <Button size="small" onClick={() => scrapeJob.paused ? scrapeJob.resume() : scrapeJob.pause()} disabled={scrapeJob.pausing}
-              startIcon={scrapeJob.pausing ? <CircularProgress size={13} sx={{ color: '#fbbf24' }} /> : scrapeJob.paused ? <PlayArrowIcon sx={{ fontSize: 15 }} /> : <PauseIcon sx={{ fontSize: 15 }} />}
-              sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' }, '&.Mui-disabled': { color: 'rgba(251,191,36,0.4)', bgcolor: 'rgba(251,191,36,0.04)', border: '1px solid rgba(251,191,36,0.12)' } }}>
-              {scrapeJob.paused ? t.batch.resume : scrapeJob.pausing ? (lang === 'en' ? 'Pausing…' : 'Pausando…') : t.batch.pause}
-            </Button>
-            <Button size="small" onClick={scrapeJob.cancel} startIcon={<HighlightOffIcon sx={{ fontSize: 15 }} />}
-              sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>
-              {lang === 'en' ? 'Cancel' : 'Cancelar'}
-            </Button>
-          </>
-        ) : (
-          <>
-            <Button size="small" disabled={selectedCount === 0} onClick={handleDiscardSelected}
-              startIcon={<DeleteOutlineIcon sx={{ fontSize: 15 }} />}
-              sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' }, '&.Mui-disabled': { opacity: 0.3, color: '#f87171' } }}>
-              {it.discardSelected}
-            </Button>
-            <Button size="small" variant="contained" disabled={selectedCount === 0} onClick={handleProcess}
-              startIcon={<PlayArrowIcon sx={{ fontSize: 16 }} />}
-              sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 700, bgcolor: ACCENT }}>
-              {it.process}
-            </Button>
-          </>
-        )}
-      </Box>
+          {selectedCount > 0 && (
+            <Typography sx={{ fontSize: '0.75rem', color: ACCENT, fontWeight: 600 }}>
+              {it.selectedCount(selectedCount)}
+            </Typography>
+          )}
+          <Box sx={{ flex: 1 }} />
+          {scrapeJob.processing ? (
+            <>
+              <Button size="small" onClick={() => scrapeJob.paused ? scrapeJob.resume() : scrapeJob.pause()} disabled={scrapeJob.pausing}
+                startIcon={scrapeJob.pausing ? <CircularProgress size={13} sx={{ color: '#fbbf24' }} /> : scrapeJob.paused ? <PlayArrowIcon sx={{ fontSize: 15 }} /> : <PauseIcon sx={{ fontSize: 15 }} />}
+                sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' }, '&.Mui-disabled': { color: 'rgba(251,191,36,0.4)', bgcolor: 'rgba(251,191,36,0.04)', border: '1px solid rgba(251,191,36,0.12)' } }}>
+                {scrapeJob.paused ? t.batch.resume : scrapeJob.pausing ? (lang === 'en' ? 'Pausing…' : 'Pausando…') : t.batch.pause}
+              </Button>
+              <Button size="small" onClick={scrapeJob.cancel} startIcon={<HighlightOffIcon sx={{ fontSize: 15 }} />}
+                sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>
+                {lang === 'en' ? 'Cancel' : 'Cancelar'}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button size="small" disabled={selectedCount === 0} onClick={handleDiscardSelected}
+                startIcon={<DeleteOutlineIcon sx={{ fontSize: 15 }} />}
+                sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' }, '&.Mui-disabled': { opacity: 0.3, color: '#f87171' } }}>
+                {it.discardSelected}
+              </Button>
+              <Button size="small" variant="contained" disabled={selectedCount === 0} onClick={handleProcess}
+                startIcon={<PlayArrowIcon sx={{ fontSize: 16 }} />}
+                sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 700, bgcolor: ACCENT }}>
+                {it.process}
+              </Button>
+            </>
+          )}
+        </Box>
+      )}
 
       {/* Progreso del scrape job en curso */}
       {scrapeJob.processing && (

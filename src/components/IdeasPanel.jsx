@@ -345,22 +345,32 @@ function IdeaResultRow({ result: r, index, lang, t }) {
   let domain = null
   try { domain = new URL(r.url).hostname.replace(/^www\./, '') } catch {}
   const waCount = r.all_whatsapp?.length || (r.whatsapp ? 1 : 0)
+  const hasWa = waCount > 0
+  const isError = r.blacklisted || !r.ok
+  // Franja de color a la izquierda — para leer el estado de un vistazo sin
+  // tener que ir hasta el chip del extremo derecho de cada fila.
+  const accent = isError ? '#f87171' : hasWa ? '#4ade80' : 'rgba(255,255,255,0.14)'
+  // Vacío/error se apagan (dominio y favicon menos brillantes) para que el ojo
+  // vaya directo a las filas que sí encontraron WhatsApp.
+  const domainColor = hasWa ? 'var(--text)' : 'var(--text-muted)'
+  const indColor = r.industria && r.industria !== '—' ? colorForTerm(r.industria) : null
   return (
     <Box sx={{
       display: 'flex', alignItems: 'center', gap: 1, px: 1.2, py: 1, borderRadius: 1.5,
       bgcolor: zebra ? 'var(--surface, rgba(255,255,255,0.02))' : 'transparent',
       border: '1px solid var(--border, rgba(255,255,255,0.07))',
+      borderLeft: `3px solid ${accent}`,
     }}>
       {domain ? (
         <Box component="img" src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`} alt=""
-          sx={{ width: 18, height: 18, borderRadius: 0.5, flexShrink: 0, opacity: 0.9 }} />
+          sx={{ width: 18, height: 18, borderRadius: 0.5, flexShrink: 0, opacity: hasWa ? 0.9 : 0.45 }} />
       ) : <Box sx={{ width: 18, height: 18, flexShrink: 0 }} />}
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
           <Typography
             component="a" href={r.url} target="_blank" rel="noopener noreferrer"
             sx={{
-              fontSize: '0.8rem', fontWeight: 600, color: 'var(--text)', lineHeight: 1.25,
+              fontSize: '0.8rem', fontWeight: 600, color: domainColor, lineHeight: 1.25,
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               textDecoration: 'none', '&:hover': { color: ACCENT, textDecoration: 'underline' },
             }}>
@@ -368,11 +378,20 @@ function IdeaResultRow({ result: r, index, lang, t }) {
           </Typography>
           <OpenInNewIcon sx={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0, opacity: 0.6 }} />
         </Box>
-        {r.ok && (r.empresa !== '—' || r.industria !== '—') && (
-          <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.3,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {[r.empresa !== '—' && r.empresa, r.industria !== '—' && r.industria].filter(Boolean).join(' · ')}
-          </Typography>
+        {r.ok && (r.empresa !== '—' || indColor) && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mt: 0.1 }}>
+            {indColor && (
+              <Box sx={{ px: 0.6, py: 0.05, borderRadius: 0.6, flexShrink: 0, bgcolor: `${indColor}1a`, border: `1px solid ${indColor}44` }}>
+                <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: indColor }}>{r.industria}</Typography>
+              </Box>
+            )}
+            {r.empresa !== '—' && (
+              <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.3,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {r.empresa}
+              </Typography>
+            )}
+          </Box>
         )}
       </Box>
       {r.blacklisted ? (
@@ -385,7 +404,7 @@ function IdeaResultRow({ result: r, index, lang, t }) {
           <Chip label={lang === 'en' ? 'Error' : 'Error'} size="small"
             sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', height: 20, fontSize: '0.62rem', flexShrink: 0 }} />
         </Tooltip>
-      ) : waCount > 0 ? (
+      ) : hasWa ? (
         <Chip icon={<CheckCircleIcon sx={{ fontSize: '12px !important' }} />}
           label={lang === 'en' ? `${waCount} WhatsApp` : `${waCount} WhatsApp`} size="small"
           sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.62rem', flexShrink: 0, '& .MuiChip-icon': { color: '#4ade80' } }} />

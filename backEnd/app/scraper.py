@@ -13,6 +13,30 @@ from pymongo import MongoClient
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
+def _soup_from_bytes(content: bytes) -> BeautifulSoup:
+    """Build a BeautifulSoup from raw response bytes, preferring a strict UTF-8
+    decode over BeautifulSoup's own encoding sniffing (UnicodeDammit).
+
+    Passing raw bytes with no from_encoding hint (the previous behavior) lets
+    UnicodeDammit guess from <meta charset>/BOM/statistical heuristics — for
+    pages with only a handful of non-ASCII bytes and no reliable declared
+    charset, that heuristic sometimes guesses Latin-1/CP1252 for content that
+    is actually valid UTF-8, producing double-encoded mojibake in the stored
+    name ("Ã©" instead of "é") that survives all the way to companies.name.
+    Confirmed live: 9 real companies had this exact corruption, fully
+    reversible (name.encode('latin-1').decode('utf-8')) proving the bytes
+    genuinely were UTF-8 all along. A strict UTF-8 decode either succeeds
+    (extremely low false-positive rate — UTF-8's multi-byte structure makes
+    it self-validating) or raises, so this is safe: try UTF-8 first, only
+    fall back to sniffing for pages that are genuinely not UTF-8.
+    """
+    try:
+        content.decode("utf-8")
+        return BeautifulSoup(content, "html.parser", from_encoding="utf-8")
+    except UnicodeDecodeError:
+        return BeautifulSoup(content, "html.parser")
+
+
 class WebsiteScraper:
     """
     Scraper extenso que extrae:
@@ -356,10 +380,10 @@ class WebsiteScraper:
         # que requests adivina de los headers HTTP, que cae en ISO-8859-1 por defecto
         # cuando el servidor no lo declara explícitamente, aunque la página real sea
         # UTF-8 (declarado en su <meta charset>). Eso corrompía nombres con acentos/
-        # signos ("¡", "—", "á") guardándolos ya rotos en la base — BeautifulSoup sobre
-        # los bytes crudos detecta el encoding real (mira el <meta> y hace su propio
-        # sniffing) en vez de heredar el default equivocado de requests.
-        soup = BeautifulSoup(response.content, "html.parser")
+        # signos ("¡", "—", "á") guardándolos ya rotos en la base — _soup_from_bytes
+        # sobre los bytes crudos prueba UTF-8 estricto primero (BeautifulSoup's propio
+        # sniffing por sí solo a veces adivinaba Latin-1 igual, ver su docstring).
+        soup = _soup_from_bytes(response.content)
         text = soup.get_text(" ", strip=True)
 
         # Datos adicionales de fuentes estáticas (JSON-LD, __NEXT_DATA__, script vars)
@@ -840,8 +864,9 @@ class WebsiteScraper:
             resp = self._get_page(url, timeout=10)
             if resp is not None and resp.status_code == 200:
                 # resp.content (bytes crudos) — mismo motivo que en scrape_site: no
-                # confiar en el encoding adivinado por requests.
-                sub_soup = BeautifulSoup(resp.content, "html.parser")
+                # confiar en el encoding adivinado por requests ni ciegamente en el
+                # sniffing de BeautifulSoup (ver _soup_from_bytes).
+                sub_soup = _soup_from_bytes(resp.content)
                 return sub_soup, sub_soup.get_text(" ", strip=True)
         except Exception:
             pass
@@ -972,6 +997,29 @@ class WebsiteScraper:
         re.IGNORECASE,
     )
 
+    # "en <Lugar>" (con o sin artículo/"centro de" en medio) — señal de que el
+    # texto es una descripción SEO ("Gas a domicilio en Sonora", "Restaurante de
+    # mariscos en Tepic") y no el nombre real de la marca. Confirmado en
+    # producción: 31 empresas reales con este patrón en vez de un nombre.
+    _SEO_LOCATION = re.compile(
+        r"\ben\s+(?:el\s+|la\s+|los\s+|las\s+|centro\s+de\s+)*[A-ZÁÉÍÓÚÑ]"
+    )
+
+    @staticmethod
+    def _looks_like_seo_description(text: str, domain_hint: str) -> bool:
+        """True si `text` tiene forma de frase SEO genérica en vez de un nombre
+        de marca real — solo se activa si además NINGUNA palabra significativa
+        (4+ letras) del texto aparece en el dominio, así una empresa real cuyo
+        nombre coincide con su propio dominio (ej. "Gas Chapultepec S.A." en
+        gaschapultepec.com) nunca se rechaza."""
+        if not WebsiteScraper._SEO_LOCATION.search(text):
+            return False
+        words = re.findall(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]{4,}", text)
+        stop = {"para", "como", "esta", "este", "unos", "unas", "con"}
+        words = [w for w in words if w.lower() not in stop]
+        dh = domain_hint.lower()
+        return not any(w.lower() in dh for w in words)
+
     def _extract_company_name(self, soup: BeautifulSoup, url: str) -> str:
         """Extrae nombre de la empresa"""
         domain_hint = urlparse(url).netloc.replace("www.", "").split(".")[0].lower()
@@ -1008,8 +1056,10 @@ class WebsiteScraper:
                         if len(p) <= 60 and not self._GENERIC_NAME.match(p):
                             return p
                     break
-            # Sin separadores: usar título si es corto y no genérico
-            if len(title) <= 60 and not self._GENERIC_NAME.match(title):
+            # Sin separadores: usar título si es corto, no genérico y no una
+            # descripción SEO sin marca real detectable.
+            if (len(title) <= 60 and not self._GENERIC_NAME.match(title)
+                    and not self._looks_like_seo_description(title, domain_hint)):
                 return title
 
         # 3. Logo alt text — más fiable que H1 para el nombre de marca
@@ -1023,7 +1073,8 @@ class WebsiteScraper:
         h1 = soup.find("h1")
         if h1:
             text = _norm(h1.get_text())
-            if text and len(text) <= 60:
+            if (text and len(text) <= 60
+                    and not self._looks_like_seo_description(text, domain_hint)):
                 return text
 
         # 5. Dominio como fallback

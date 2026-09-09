@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import pytest
 from unittest.mock import patch
 from bs4 import BeautifulSoup
-from scraper import WebsiteScraper
+from scraper import WebsiteScraper, _soup_from_bytes
 
 
 @pytest.fixture
@@ -50,6 +50,39 @@ class TestEncodingFix:
         soup = BeautifulSoup(html_bytes, "html.parser")
         name = scraper._extract_company_name(soup, "https://example.com")
         assert "Martínez" in name or "Gas" in name, f"Got: {name!r}"
+
+
+class TestSoupFromBytes:
+    """_soup_from_bytes — prefers a strict UTF-8 decode over BeautifulSoup's own
+    sniffing (UnicodeDammit), which was confirmed live to sometimes guess
+    Latin-1 for genuinely-UTF-8 pages with sparse/ambiguous accented content,
+    producing double-encoded mojibake ("Ã©" instead of "é") in companies.name
+    (9 real production cases fixed 2026-09-09, all fully reversible — proof
+    the underlying bytes were valid UTF-8 the whole time)."""
+
+    def test_utf8_bytes_decode_correctly(self):
+        html_bytes = "<title>Gas Chapultepec S.A. — Distribución de Gas LP en México</title>".encode("utf-8")
+        soup = _soup_from_bytes(html_bytes)
+        assert soup.title.string == "Gas Chapultepec S.A. — Distribución de Gas LP en México"
+
+    def test_sparse_accented_content_still_decodes_correctly(self):
+        # The real bug case: only ONE accented char in an otherwise plain-ASCII
+        # page — too little signal for a statistical sniffer to reliably guess
+        # UTF-8 over Latin-1/CP1252, but a strict UTF-8 decode attempt doesn't
+        # need statistics, only validity.
+        html_bytes = "<title>Expo Mecánico Automotriz Internacional</title>".encode("utf-8")
+        soup = _soup_from_bytes(html_bytes)
+        assert soup.title.string == "Expo Mecánico Automotriz Internacional"
+
+    def test_non_utf8_bytes_fall_back_to_sniffing(self):
+        # Genuinely Latin-1-encoded content (invalid as UTF-8, e.g. raw 0xE9
+        # for "é" instead of UTF-8's 2-byte 0xC3 0xA9) must not crash — falls
+        # through to BeautifulSoup's own sniffing instead of raising.
+        html_bytes = b"<title>Cafeter\xeda Mart\xednez</title>"
+        with pytest.raises(UnicodeDecodeError):
+            html_bytes.decode("utf-8")  # sanity: confirm these bytes are genuinely invalid UTF-8
+        soup = _soup_from_bytes(html_bytes)
+        assert soup.title is not None  # didn't raise; some text was extracted
 
 
 class TestDirectoryIdPrefix:
@@ -88,6 +121,56 @@ class TestDirectoryIdPrefix:
         soup = make_soup(html)
         name = scraper._extract_company_name(soup, "https://7-eleven.com.mx")
         assert name.startswith("7-Eleven"), f"Got: {name!r}"
+
+
+class TestSeoDescriptionRejection:
+    """Small/generic sites often render <title>/<h1> as a keyword-stuffed SEO
+    phrase ("Gas a domicilio en Sonora") instead of an actual brand name —
+    confirmed live: 31 real companies stored with this instead of a name. Only
+    rejected when NO word in the text overlaps the domain, so a real business
+    whose name matches its own domain (or contains "en <Lugar>" legitimately)
+    is never falsely rejected — falls through to the domain-derived fallback
+    (step 5 of _extract_company_name) instead."""
+
+    @pytest.mark.parametrize("title,domain", [
+        ("Gas a domicilio en Sonora", "hidrogaspedidos.com.mx"),
+        ("Gas Estacionario Cerca de ti en Campeche", "inmuebles10.com"),
+        ("Restaurante de Comida Mexicana en Benito Juárez", "elcharcodelasranasriomixcoac.com.mx"),
+        ("Restaurante en el centro de Querétaro", "lamariposaqueretaro.com.mx"),
+        ("Dictamen de instalación de gas en Puebla de Zaragoza", "cronoshare.com.mx"),
+        ("Gas LP a domicilio rápido y seguro en Monterrey y Saltillo", "gasideal.com"),
+        ("Clínica psiquiátrica en Guadalajara", "centrodelbosque.mx"),
+    ])
+    def test_rejects_generic_seo_title_falls_back_to_domain(self, scraper, title, domain):
+        html = f"<title>{title}</title>"
+        soup = make_soup(html)
+        name = scraper._extract_company_name(soup, f"https://{domain}")
+        assert name != title, f"SEO description was not rejected: {name!r}"
+        # Falls all the way through to the domain-derived fallback (no h1/logo present)
+        assert name.lower().startswith(domain.split(".")[0][:3].lower())
+
+    def test_keeps_real_name_matching_its_own_domain(self, scraper):
+        # The em-dash is a real separator (existing logic, unrelated to the
+        # new SEO check) so this splits into "Gas Chapultepec S.A." — the
+        # SEO-description rejection never even needs to run on this one.
+        html = "<title>Gas Chapultepec S.A. — Distribución de Gas LP en México</title>"
+        soup = make_soup(html)
+        name = scraper._extract_company_name(soup, "https://gaschapultepec.com")
+        assert name == "Gas Chapultepec S.A."
+
+    def test_keeps_brand_name_appended_after_seo_description(self, scraper):
+        # Real prod case: brand name tacked on at the END with no separator —
+        # must not be rejected just because the SEO phrase comes first.
+        html = "<title>Tacos y antojitos mexicanos en Ciudad de México EL GALLITO</title>"
+        soup = make_soup(html)
+        name = scraper._extract_company_name(soup, "https://elgallito.com.mx")
+        assert "GALLITO" in name
+
+    def test_h1_seo_description_also_rejected(self, scraper):
+        html = "<h1>Comida oriental en Tuxtla Gutiérrez</h1>"
+        soup = make_soup(html)
+        name = scraper._extract_company_name(soup, "https://dandanwok.mx")
+        assert name != "Comida oriental en Tuxtla Gutiérrez"
 
 
 # ─────────────────────────────────────────────────────────────

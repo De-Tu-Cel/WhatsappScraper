@@ -426,6 +426,7 @@ export default function IdeasPanel({ isActive }) {
   const [extraSelected, setExtraSelected] = useState(new Set())
   const [expandedCo, setExpandedCo] = useState(new Set())
   const [filterContacted, setFilterContacted] = useState('all') // 'all' | 'new' | 'contacted'
+  const [resultFilter, setResultFilter] = useState('all') // 'all' | 'wa' | 'none' — filtro del feed de resultados
   const [localContactedIds, setLocalContactedIds] = useState(new Set())
   const [sessionSentNums, setSessionSentNums] = useState({})
   const [freshContactedMap, setFreshContactedMap] = useState({})
@@ -459,6 +460,7 @@ export default function IdeasPanel({ isActive }) {
     setLocalContactedIds(new Set())
     setFreshContactedMap({})
     setSentOverlay({})
+    setResultFilter('all')
   }, [scrapeJob.job?._id])
 
   useEffect(() => {
@@ -789,6 +791,16 @@ export default function IdeasPanel({ isActive }) {
   // pierde el panel de envío en cuanto el scraping termina.
   const showResultsView = scrapeJob.processing || scrapeJob.done
 
+  // Conteos del feed — para el resumen y los chips de filtro rápido, sin tener
+  // que contar chip por chip en una lista larga.
+  const feedWaCount    = displayResults.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp)).length
+  const feedNoneCount  = displayResults.length - feedWaCount
+  const filteredResults = resultFilter === 'wa'
+    ? displayResults.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp))
+    : resultFilter === 'none'
+      ? displayResults.filter(r => !(r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp)))
+      : displayResults
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
       {/* Header */}
@@ -955,22 +967,10 @@ export default function IdeasPanel({ isActive }) {
                 <ArrowBackIcon sx={{ fontSize: 13 }} /> {lang === 'en' ? 'Back to ideas list' : 'Volver a la lista de ideas'}
               </Box>
             )}
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6 }}>
-              {displayResults.length === 0 ? (
-                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.8, py: 4 }}>
-                  <CircularProgress size={20} sx={{ color: ACCENT }} />
-                  <Typography sx={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic', textAlign: 'center' }}>
-                    {lang === 'en' ? 'Waiting for the first result…' : 'Esperando el primer resultado…'}
-                  </Typography>
-                </Box>
-              ) : (
-                displayResults.map((r, index) => (
-                  <IdeaResultRow key={`${r.url || 'row'}-${index}`} result={r} index={index} lang={lang} t={t} />
-                ))
-              )}
-            </Box>
-
-            {/* ── Panel de envío — mismo patrón que searchProspects.jsx ── */}
+            {/* ── Panel de envío — arriba del feed a propósito: si viviera abajo,
+               cada resultado nuevo que llega lo empuja más lejos justo mientras
+               el usuario está seleccionando destinatarios/plantilla ahí adentro.
+               Mismo patrón que searchProspects.jsx. ── */}
             {waRowsUnique.length > 0 && (
               <Box sx={{ borderRadius: 2.5, border: '1px solid rgba(34,197,94,0.2)', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
                 <Box sx={{ px: 2, py: 1.4, background: 'linear-gradient(180deg, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.02) 100%)', borderBottom: '1px solid rgba(34,197,94,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1057,6 +1057,45 @@ export default function IdeasPanel({ isActive }) {
                 </Box>
               </Box>
             )}
+
+            {/* ── Feed de resultados — encabezado con resumen + filtro rápido ── */}
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6 }}>
+              {displayResults.length > 0 && (
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 0.8, px: 0.2 }}>
+                  <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    {lang === 'en' ? 'Results' : 'Resultados'}
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap' }}>
+                    {[
+                      { key: 'all',  label: `${lang === 'en' ? 'All' : 'Todos'} (${displayResults.length})`, color: '#60a5fa', bg: 'rgba(59,130,246,0.1)', border: 'rgba(59,130,246,0.25)' },
+                      { key: 'wa',   label: `${lang === 'en' ? 'With WhatsApp' : 'Con WhatsApp'} (${feedWaCount})`, color: '#4ade80', bg: 'rgba(34,197,94,0.1)', border: 'rgba(34,197,94,0.25)' },
+                      { key: 'none', label: `${lang === 'en' ? 'No result' : 'Sin resultado'} (${feedNoneCount})`, color: 'rgba(255,255,255,0.4)', bg: 'rgba(255,255,255,0.05)', border: 'rgba(255,255,255,0.12)' },
+                    ].map(f => (
+                      <Chip key={f.key} label={f.label} size="small" onClick={() => setResultFilter(f.key)}
+                        sx={{ height: 22, fontSize: '0.66rem', cursor: 'pointer', bgcolor: resultFilter === f.key ? f.bg : 'var(--item-hover)', color: resultFilter === f.key ? f.color : 'var(--text-muted)', border: `1px solid ${resultFilter === f.key ? f.border : 'var(--border)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
+                    ))}
+                  </Box>
+                </Box>
+              )}
+              {displayResults.length === 0 ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.8, py: 4 }}>
+                  <CircularProgress size={20} sx={{ color: ACCENT }} />
+                  <Typography sx={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic', textAlign: 'center' }}>
+                    {lang === 'en' ? 'Waiting for the first result…' : 'Esperando el primer resultado…'}
+                  </Typography>
+                </Box>
+              ) : filteredResults.length === 0 ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.6, py: 3 }}>
+                  <Typography sx={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontStyle: 'italic', textAlign: 'center' }}>
+                    {lang === 'en' ? 'Nothing matches this filter' : 'Nada coincide con este filtro'}
+                  </Typography>
+                </Box>
+              ) : (
+                filteredResults.map((r, index) => (
+                  <IdeaResultRow key={`${r.url || 'row'}-${index}`} result={r} index={index} lang={lang} t={t} />
+                ))
+              )}
+            </Box>
           </>
         ) : loading ? (
           Array.from({ length: Math.min(rowsPerPage, 8) }).map((_, i) => <IdeaRowSkeleton key={i} index={i} />)

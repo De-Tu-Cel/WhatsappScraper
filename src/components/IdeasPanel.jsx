@@ -27,6 +27,9 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import HighlightOffIcon from '@mui/icons-material/HighlightOff'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
+import PauseIcon from '@mui/icons-material/Pause'
+import CheckCircleIcon from '@mui/icons-material/CheckCircle'
+import Chip from '@mui/material/Chip'
 import { useLang } from '../context/LangContext'
 import { authFetch } from '@/lib/api'
 import { useScrapeJob } from '../hooks/useScrapeJob'
@@ -299,6 +302,68 @@ function IdeaRowSkeleton({ index }) {
   )
 }
 
+// Misma forma visual que IdeaRow (favicon + dominio + línea secundaria) pero
+// para un resultado YA scrapeado — así el feed en vivo durante el procesamiento
+// se siente parte del mismo panel en vez de una tabla ajena pegada encima.
+// A diferencia de batchProcessor.jsx no hay columnas de mensaje/plantilla —
+// en Ideas todavía no se envía nada, solo se descubre la empresa.
+function IdeaResultRow({ result: r, index, lang, t }) {
+  const zebra = index % 2 === 1
+  let domain = null
+  try { domain = new URL(r.url).hostname.replace(/^www\./, '') } catch {}
+  const waCount = r.all_whatsapp?.length || (r.whatsapp ? 1 : 0)
+  return (
+    <Box sx={{
+      display: 'flex', alignItems: 'center', gap: 1, px: 1.2, py: 1, borderRadius: 1.5,
+      bgcolor: zebra ? 'var(--surface, rgba(255,255,255,0.02))' : 'transparent',
+      border: '1px solid var(--border, rgba(255,255,255,0.07))',
+    }}>
+      {domain ? (
+        <Box component="img" src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`} alt=""
+          sx={{ width: 18, height: 18, borderRadius: 0.5, flexShrink: 0, opacity: 0.9 }} />
+      ) : <Box sx={{ width: 18, height: 18, flexShrink: 0 }} />}
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          <Typography
+            component="a" href={r.url} target="_blank" rel="noopener noreferrer"
+            sx={{
+              fontSize: '0.8rem', fontWeight: 600, color: 'var(--text)', lineHeight: 1.25,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              textDecoration: 'none', '&:hover': { color: ACCENT, textDecoration: 'underline' },
+            }}>
+            {domain || r.url}
+          </Typography>
+          <OpenInNewIcon sx={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0, opacity: 0.6 }} />
+        </Box>
+        {r.ok && (r.empresa !== '—' || r.industria !== '—') && (
+          <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.3,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {[r.empresa !== '—' && r.empresa, r.industria !== '—' && r.industria].filter(Boolean).join(' · ')}
+          </Typography>
+        )}
+      </Box>
+      {r.blacklisted ? (
+        <Tooltip title={`🚫 ${r.blockReason || (lang === 'en' ? 'Blocked domain' : 'Dominio bloqueado')}`} placement="top" arrow>
+          <Chip label={t.batch.chipBlocked} size="small"
+            sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', height: 20, fontSize: '0.62rem', flexShrink: 0 }} />
+        </Tooltip>
+      ) : !r.ok ? (
+        <Tooltip title={r.errorReason || (lang === 'en' ? 'Unknown error' : 'Error desconocido')} placement="top" arrow>
+          <Chip label={lang === 'en' ? 'Error' : 'Error'} size="small"
+            sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', height: 20, fontSize: '0.62rem', flexShrink: 0 }} />
+        </Tooltip>
+      ) : waCount > 0 ? (
+        <Chip icon={<CheckCircleIcon sx={{ fontSize: '12px !important' }} />}
+          label={lang === 'en' ? `${waCount} WhatsApp` : `${waCount} WhatsApp`} size="small"
+          sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.62rem', flexShrink: 0, '& .MuiChip-icon': { color: '#4ade80' } }} />
+      ) : (
+        <Chip label={t.batch.chipEmpty} size="small"
+          sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.12)', height: 20, fontSize: '0.62rem', flexShrink: 0 }} />
+      )}
+    </Box>
+  )
+}
+
 export default function IdeasPanel({ isActive }) {
   const { t, lang } = useLang()
   const it = t.ideas
@@ -518,10 +583,17 @@ export default function IdeasPanel({ isActive }) {
         )}
         <Box sx={{ flex: 1 }} />
         {scrapeJob.processing ? (
-          <Button size="small" onClick={scrapeJob.cancel} startIcon={<HighlightOffIcon sx={{ fontSize: 15 }} />}
-            sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>
-            {lang === 'en' ? 'Cancel' : 'Cancelar'}
-          </Button>
+          <>
+            <Button size="small" onClick={() => scrapeJob.paused ? scrapeJob.resume() : scrapeJob.pause()} disabled={scrapeJob.pausing}
+              startIcon={scrapeJob.pausing ? <CircularProgress size={13} sx={{ color: '#fbbf24' }} /> : scrapeJob.paused ? <PlayArrowIcon sx={{ fontSize: 15 }} /> : <PauseIcon sx={{ fontSize: 15 }} />}
+              sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' }, '&.Mui-disabled': { color: 'rgba(251,191,36,0.4)', bgcolor: 'rgba(251,191,36,0.04)', border: '1px solid rgba(251,191,36,0.12)' } }}>
+              {scrapeJob.paused ? t.batch.resume : scrapeJob.pausing ? (lang === 'en' ? 'Pausing…' : 'Pausando…') : t.batch.pause}
+            </Button>
+            <Button size="small" onClick={scrapeJob.cancel} startIcon={<HighlightOffIcon sx={{ fontSize: 15 }} />}
+              sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>
+              {lang === 'en' ? 'Cancel' : 'Cancelar'}
+            </Button>
+          </>
         ) : (
           <>
             <Button size="small" disabled={selectedCount === 0} onClick={handleDiscardSelected}
@@ -540,25 +612,70 @@ export default function IdeasPanel({ isActive }) {
 
       {/* Progreso del scrape job en curso */}
       {scrapeJob.processing && (
-        <Box sx={{ px: 2, py: 1.5, mb: 1.6, flexShrink: 0, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.05)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.15)', borderRadius: 2 }}>
+        <Box sx={{
+          px: 2, py: 1.5, mb: 1.6, flexShrink: 0,
+          bgcolor: (scrapeJob.paused || scrapeJob.pausing) ? 'rgba(251,191,36,0.05)' : 'rgba(var(--accent-rgb,59,130,246),0.05)',
+          border: `1px solid ${(scrapeJob.paused || scrapeJob.pausing) ? 'rgba(251,191,36,0.2)' : 'rgba(var(--accent-rgb,59,130,246),0.15)'}`,
+          borderRadius: 2, transition: 'all 0.3s',
+        }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.8 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
-              <CircularProgress size={13} sx={{ color: ACCENT }} />
+              {scrapeJob.paused
+                ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} />
+                : <CircularProgress size={13} sx={{ color: scrapeJob.pausing ? '#fbbf24' : ACCENT }} />}
               <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                {lang === 'en' ? 'Processing' : 'Procesando'} {scrapeJob.processed} / {scrapeJob.total}
+                {scrapeJob.paused
+                  ? (lang === 'en' ? `Paused — ${scrapeJob.processed} of ${scrapeJob.total}` : `Pausado — ${scrapeJob.processed} de ${scrapeJob.total}`)
+                  : scrapeJob.pausing
+                    ? (lang === 'en' ? `Pausing… — ${scrapeJob.processed} of ${scrapeJob.total}` : `Pausando… — ${scrapeJob.processed} de ${scrapeJob.total}`)
+                    : (lang === 'en' ? `Processing ${scrapeJob.processed} / ${scrapeJob.total}` : `Procesando ${scrapeJob.processed} / ${scrapeJob.total}`)}
               </Typography>
             </Box>
-            <Typography sx={{ color: ACCENT, fontWeight: 700, fontSize: '0.82rem' }}>{scrapeJob.progress}%</Typography>
+            <Typography sx={{ color: (scrapeJob.paused || scrapeJob.pausing) ? '#fbbf24' : ACCENT, fontWeight: 700, fontSize: '0.82rem' }}>
+              {scrapeJob.progress}%
+            </Typography>
           </Box>
           <LinearProgress variant="determinate" value={scrapeJob.progress}
-            sx={{ borderRadius: 4, height: 6, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)',
-              '& .MuiLinearProgress-bar': { background: `linear-gradient(90deg, ${ACCENT}, var(--accent,#60a5fa))`, borderRadius: 4 } }} />
+            sx={{
+              borderRadius: 4, height: 6,
+              bgcolor: (scrapeJob.paused || scrapeJob.pausing) ? 'rgba(251,191,36,0.1)' : 'rgba(var(--accent-rgb,59,130,246),0.1)',
+              '& .MuiLinearProgress-bar': {
+                background: (scrapeJob.paused || scrapeJob.pausing)
+                  ? 'linear-gradient(90deg,#f59e0b,#fbbf24)'
+                  : `linear-gradient(90deg, ${ACCENT}, var(--accent,#60a5fa))`,
+                borderRadius: 4,
+              },
+            }} />
+          {scrapeJob.currentUrl && !scrapeJob.paused && (
+            <Typography sx={{
+              mt: 1, color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {scrapeJob.currentUrl}
+            </Typography>
+          )}
         </Box>
       )}
 
-      {/* Lista */}
+      {/* Lista — mientras corre un scrape job se reemplaza por el feed de
+         resultados en vivo, porque la cola de ideas de abajo ya quedó vieja
+         (el backend recién borra las procesadas cuando el job termina, ver
+         efecto de arriba) y ver ese feed es justo lo que se quiere seguir. */}
       <Box sx={{ flex: 1, overflowY: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column', gap: 0.6 }}>
-        {loading ? (
+        {scrapeJob.processing ? (
+          scrapeJob.results.length === 0 ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.8, py: 4 }}>
+              <CircularProgress size={20} sx={{ color: ACCENT }} />
+              <Typography sx={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic', textAlign: 'center' }}>
+                {lang === 'en' ? 'Waiting for the first result…' : 'Esperando el primer resultado…'}
+              </Typography>
+            </Box>
+          ) : (
+            scrapeJob.results.map((r, index) => (
+              <IdeaResultRow key={r.url || index} result={r} index={index} lang={lang} t={t} />
+            ))
+          )
+        ) : loading ? (
           Array.from({ length: Math.min(rowsPerPage, 8) }).map((_, i) => <IdeaRowSkeleton key={i} index={i} />)
         ) : loadError ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.6, py: 4 }}>
@@ -583,7 +700,7 @@ export default function IdeasPanel({ isActive }) {
         )}
       </Box>
 
-      {total > 0 && (
+      {!scrapeJob.processing && total > 0 && (
         <TablePagination
           rowsPerPageOptions={[12, 24, 50, 100]}
           component="div"

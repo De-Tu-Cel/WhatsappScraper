@@ -226,11 +226,23 @@ SEÑALES DE FASE AUTOMÁTICA / BOT (cualquiera de estas confirma fase automátic
     en WhatsApp Business, aunque tarde entre 10s y 2 minutos. Patrón:
     "¡Hola! [emoji] le saluda [Nombre] su [cargo] de [EMPRESA][emoji] Será un placer..."
     → fase automática aunque venga firmada por un nombre real de persona
+    ⚠️ NO confundir con un empleado real presentándose de forma simple y casual, sin la
+    estructura completa de arriba: "Hola, atiende [Nombre], ¿con quién tengo el gusto?" o
+    "Buenas tardes, le atiende [Nombre]" — SIN emoji decorativo, SIN mencionar un cargo, SIN
+    nombrar la empresa en el mismo bloque — es solo un empleado dándose a conocer, señal
+    HUMANA normal en México, no automática. Se necesita la combinación COMPLETA (emoji +
+    cargo + empresa, todo junto) para contar como auto-greeting, no solo un nombre.
   · Menú con opciones letradas o numeradas (A/B/C, 1/2/3, *A* - Opción, 1️⃣ Ventas)
   · Se auto-identifica: "Hola, soy el asistente virtual de X", "soy un bot", emoji 🤖 en su mensaje
   · El mismo texto aparece REPETIDO ante entradas diferentes (loop de bot)
-  · Frases de plantilla: "Antes de prestarle asistencia…", "Ahora está en la cola…",
-    "Hemos recibido tu consulta", "Un agente te contactará a la brevedad"
+  · Frases de plantilla GENÉRICAS que no dependen de lo preguntado: "Antes de prestarle
+    asistencia…", "Ahora está en la cola…", "Hemos recibido tu consulta", "Un agente te
+    contactará a la brevedad". ⚠️ NO cuenta como plantilla un redireccionamiento que SÍ entendió
+    la consulta y menciona el área correcta según lo preguntado (ej. "le paso con un agente de
+    ventas" cuando preguntaron precio/materiales) — eso es la señal HUMANA de "redirige con
+    comprensión del problema" (ver abajo), aunque suene un poco formal. La diferencia es si el
+    redireccionamiento es genérico/idéntico sin importar la pregunta, o si de verdad respondió
+    a lo que se preguntó.
   · BIENVENIDA GENÉRICA que no hace referencia al mensaje recibido: "Agradecemos su preferencia
     y le damos la más cordial bienvenida, siendo esta forma el inicio de una experiencia totalmente
     diferente…" — texto corporativo estándar idéntico sin importar lo enviado → bot de autorespuesta
@@ -289,7 +301,15 @@ ANTES de clasificar, identifica cada mensaje del Prospecto como "fase auto" o "f
 3. ¿Todo es fase-humana, sin auto-greeting ni bot al inicio?
    → "humano"
 
-REGLA DE ORO: ante la duda entre "humano" y "hibrido", elige "hibrido".
+REGLA DE ORO: ante la duda entre "humano" y "hibrido", elige "humano" — no al revés.
+Un saludo con tono formal (emoji + nombre + cargo) NO basta por sí solo para contar como
+"fase automática": muchos dueños/empleados de negocios pequeños en México usan esa misma
+frase como su apertura habitual, tecleada a mano. Solo cuenta como fase automática real si
+hay evidencia clara de automatización — etiqueta [⚡ Ns], autoidentificación como bot/sistema,
+el mismo texto repetido ante entradas distintas, o silencio total tras la bienvenida ante
+preguntas concretas. (Corregido 2026-09-09: la regla anterior, "ante la duda elige hibrido",
+combinada con este mismo criterio amplio de "fase automática", producía falsos "hibrido" en
+empresas confirmadas 100% humanas — verificado en producción con 3 casos reales.)
 
 ══ is_ai — REGLA EXPLÍCITA ══
 is_ai=true SOLO si category="bot" Y el sistema respondió al contenido específico del prospecto
@@ -561,6 +581,27 @@ _BOT_SELFID_MARKERS = re.compile(
     r'la sesi[oó]n ha finalizado|session (?:has )?ended',
     re.IGNORECASE,
 )
+
+# Plantilla de "auto-greeting" de WhatsApp Business en agencias automotrices/BDC:
+# "le saluda [Nombre] su asesor(a) [digital/virtual] [BDC] de [EMPRESA]" — estructura
+# en tercera persona ("le saluda", no "hola, soy" ni "atiende"), que es la forma real
+# en que se configuran estos mensajes automáticos, distinta de un empleado presentándose
+# casual en primera persona ("hola, atiende Fulanita, con quién tengo el gusto" —
+# eso SÍ es humano, ver nota en el prompt de classify_conversation). No requiere la
+# palabra "virtual" (a diferencia de _BOT_SELFID_MARKERS) porque "asesora digital BDC"
+# es el título real más común y NO debe tratarse como autoidentificación de IA — pero
+# la estructura completa de plantilla (saludo en tercera persona + puesto + empresa)
+# sí es evidencia real de mensaje automático de bienvenida, venga o no firmado por un
+# nombre real. Caso real: Stellantis Country (Clarissa Flores, "asesora digital BDC").
+_FORMAL_BDC_GREETING = re.compile(
+    r'le saluda\s+[\w\sáéíóúñ]{2,40}?(?:su\s+)?(?:asesor|ejecutiv|agente|representante)\w*'
+    r'\s*(?:digital|virtual)?\s*(?:bdc)?\s+de\s+\w',
+    re.IGNORECASE,
+)
+
+
+def _looks_like_formal_bdc_greeting(text: str) -> bool:
+    return bool(_FORMAL_BDC_GREETING.search(text or ""))
 
 # Anuncio de handoff bot→humano — el propio sistema documenta este patrón como
 # "hibrido" (ver _PROMPT_TEMPLATE), pero el mensaje suele MENCIONAR literalmente
@@ -953,6 +994,41 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
                 (result.get("notes") or "").strip()
                 + " — corregido: solo se detectó un mensaje de plantilla distinto del negocio "
                   "(bienvenida sin respuesta de seguimiento), no hay base para is_ai=true."
+            ).strip(" —")
+
+    # Corrección determinista adicional (2026-09-09): el LLM (DeepSeek) marca
+    # "hibrido"/"bot" con relativa frecuencia basándose solo en el TONO formal de
+    # un saludo inicial, aun con instrucciones explícitas en el prompt de no
+    # hacerlo — mismo patrón de no-cumplimiento ya documentado para otras reglas
+    # de este mismo prompt (ver REGLA DE ORO arriba). Si no hay NINGUNA evidencia
+    # dura de automatización en los mensajes del prospecto (los mismos detectores
+    # ya afinados para el flujo determinista T1/T2: menú, auto-respuesta,
+    # autoidentificación como bot, o texto exacto repetido), no hay base real para
+    # "hibrido"/"bot" — se corrige a "humano". Verificado en vivo (Ferra,
+    # Casacravioto, ambas 100% humanas confirmadas): el LLM seguía diciendo
+    # "hibrido" pese a que ninguna de estas señales aparece en el hilo real.
+    if result.get("category") in ("hibrido", "bot"):
+        inbound_bodies = [
+            (m.get("message_body") or "").strip()
+            for m in messages
+            if m["direction"] == "inbound" and (m.get("message_body") or "").strip()
+        ]
+        has_hard_signal = any(
+            _looks_like_menu(b) or _looks_like_auto_reply(b) or _looks_like_bot_selfid(b)
+            or _looks_like_formal_bdc_greeting(b)
+            for b in inbound_bodies
+        )
+        has_fast_reply_flag = "⚡" in thread
+        has_repeated_text = len(inbound_bodies) != len(set(inbound_bodies))
+        if not has_hard_signal and not has_fast_reply_flag and not has_repeated_text:
+            result["category"] = "humano"
+            result["is_ai"] = False
+            result["notes"] = (
+                (result.get("notes") or "").strip()
+                + " — corregido: el LLM marcó fase automática sin evidencia dura real "
+                  "(sin menú, sin autorespuesta detectada, sin autoidentificación de bot, "
+                  "sin texto repetido, sin respuesta ultrarrápida); el tono formal del saludo "
+                  "por sí solo no basta."
             ).strip(" —")
     return result
 

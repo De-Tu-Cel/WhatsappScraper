@@ -982,7 +982,7 @@ export default function IdeasPanel({ isActive }) {
                el usuario está seleccionando destinatarios/plantilla ahí adentro.
                Mismo patrón que searchProspects.jsx. ── */}
             {waRowsUnique.length > 0 && (
-              <Box sx={{ borderRadius: 2.5, border: '1px solid rgba(34,197,94,0.2)', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+              <Box sx={{ borderRadius: 2.5, border: '1px solid rgba(34,197,94,0.2)', display: 'flex', flexDirection: 'column', flexShrink: 0, overflow: 'hidden' }}>
                 <Box sx={{ px: 2, py: 1.4, background: 'linear-gradient(180deg, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.02) 100%)', borderBottom: '1px solid rgba(34,197,94,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
                     <Box sx={{ width: 30, height: 30, borderRadius: 1.5, bgcolor: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.28)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 12px rgba(34,197,94,0.12)', flexShrink: 0 }}>

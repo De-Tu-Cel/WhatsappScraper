@@ -58,32 +58,39 @@ def _resolve_instance(company_id: str | None) -> str:
         return _UNASSIGNED_KEY
 
 
+def _process_one(item: dict) -> None:
+    """Body of one queue iteration — pulled out of _worker()'s while-loop so
+    tests can drive it directly with fake items instead of spinning up the
+    real background thread/queue."""
+    instance = _resolve_instance(item.get("company_id"))
+
+    # Enforce gap between different chats on this same instance
+    now = time.time()
+    last_ts = _last_send_ts.get(instance, 0.0)
+    elapsed = now - last_ts
+    if last_ts > 0 and elapsed < _MIN_INTER_CHAT_GAP:
+        wait = random.uniform(_MIN_INTER_CHAT_GAP, _MAX_INTER_CHAT_GAP) - elapsed
+        if wait > 0:
+            log.info("[FollowupQ] inter-chat gap on %s: waiting %.0fs", instance, wait)
+            time.sleep(wait)
+
+    from app.ai_followup import process_inbound_reply
+    process_inbound_reply(
+        phone_number=item["phone_number"],
+        company_id=item["company_id"],
+        inbound_body=item.get("inbound_body"),
+        inbound_log_id=item.get("inbound_log_id"),
+        manual_activation=item.get("manual_activation", False),
+        proactive=item.get("proactive", False),
+    )
+    _last_send_ts[instance] = time.time()
+
+
 def _worker():
     while True:
         item = _q.get()
         try:
-            instance = _resolve_instance(item.get("company_id"))
-
-            # Enforce gap between different chats on this same instance
-            now = time.time()
-            last_ts = _last_send_ts.get(instance, 0.0)
-            elapsed = now - last_ts
-            if last_ts > 0 and elapsed < _MIN_INTER_CHAT_GAP:
-                wait = random.uniform(_MIN_INTER_CHAT_GAP, _MAX_INTER_CHAT_GAP) - elapsed
-                if wait > 0:
-                    log.info("[FollowupQ] inter-chat gap on %s: waiting %.0fs", instance, wait)
-                    time.sleep(wait)
-
-            from app.ai_followup import process_inbound_reply
-            process_inbound_reply(
-                phone_number=item["phone_number"],
-                company_id=item["company_id"],
-                inbound_body=item.get("inbound_body"),
-                inbound_log_id=item.get("inbound_log_id"),
-                manual_activation=item.get("manual_activation", False),
-                proactive=item.get("proactive", False),
-            )
-            _last_send_ts[instance] = time.time()
+            _process_one(item)
         except Exception as e:
             log.error("[FollowupQ] unhandled error: %s", e)
         finally:

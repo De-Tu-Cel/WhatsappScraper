@@ -672,7 +672,7 @@ export default function IdeasPanel({ isActive }) {
             </Box>
           ) : (
             scrapeJob.results.map((r, index) => (
-              <IdeaResultRow key={r.url || index} result={r} index={index} lang={lang} t={t} />
+              <IdeaResultRow key={`${r.url || 'row'}-${index}`} result={r} index={index} lang={lang} t={t} />
             ))
           )
         ) : loading ? (

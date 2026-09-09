@@ -977,8 +977,14 @@ class WebsiteScraper:
         domain_hint = urlparse(url).netloc.replace("www.", "").split(".")[0].lower()
 
         def _norm(s: str) -> str:
-            """Colapsa whitespace interno (saltos de línea, tabs, espacios múltiples)."""
-            return re.sub(r'\s+', ' ', s).strip()
+            """Colapsa whitespace interno (saltos de línea, tabs, espacios múltiples) y
+            quita un prefijo de ID de listado de directorio pegado sin espacio al nombre
+            (ej. adn.com.mx/miadn.mx: título/H1 = "409598822-MI GAS") — confirmado en
+            producción (86 empresas reales, prefijo siempre de 7-9 dígitos). Ningún
+            nombre real de empresa empieza con 4+ dígitos seguidos de un guion pegado."""
+            s = re.sub(r'\s+', ' ', s).strip()
+            s = re.sub(r'^\d{4,}-\s*', '', s)
+            return s.strip()
 
         # 1. og:site_name — diseñado específicamente para el nombre del sitio
         og_site = soup.find("meta", property="og:site_name")

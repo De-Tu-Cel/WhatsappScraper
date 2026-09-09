@@ -52,6 +52,44 @@ class TestEncodingFix:
         assert "Martínez" in name or "Gas" in name, f"Got: {name!r}"
 
 
+class TestDirectoryIdPrefix:
+    """adn.com.mx/miadn.mx directory listings render their title/H1 as
+    "<internal ID>-<business name>" with no space around the dash — confirmed
+    live in production: 86 real companies stored with this literal prefix
+    (e.g. "409598822-MI GAS", "4077776-EL CLAUSTRO DE SAN AGUSTIN"), 7-9 digits
+    every time. A real business name never starts with 4+ digits glued to a
+    dash, so this should always be stripped."""
+
+    def test_title_prefix_stripped(self, scraper):
+        html = "<title>409598822-MI GAS</title>"
+        soup = make_soup(html)
+        name = scraper._extract_company_name(soup, "https://gasqqro.com.mx")
+        assert name == "MI GAS", f"Got: {name!r}"
+
+    def test_h1_prefix_stripped_with_shorter_id(self, scraper):
+        html = "<h1>4077776-EL CLAUSTRO DE SAN AGUSTIN</h1>"
+        soup = make_soup(html)
+        name = scraper._extract_company_name(soup, "https://elclaustrodesanagustin.miadn.mx")
+        assert name == "EL CLAUSTRO DE SAN AGUSTIN", f"Got: {name!r}"
+
+    def test_prefix_stripped_before_separator_split(self, scraper):
+        # Title has BOTH the ID-dash artifact AND a real "|" separator —
+        # the prefix must not survive as part of the first split segment.
+        html = "<title>410344798-OPTIGAS CARBURACION S.A. DE C.V | Directorio ADN</title>"
+        soup = make_soup(html)
+        name = scraper._extract_company_name(soup, "https://optigasleon.com")
+        assert not name[0].isdigit(), f"Numeric ID prefix survived: {name!r}"
+        assert "OPTIGAS" in name
+
+    def test_legitimate_hyphenated_name_is_untouched(self, scraper):
+        # Must not over-strip: a real name with a leading number+dash-like
+        # shape but fewer than 4 digits, or a dash with spaces, is unaffected.
+        html = "<title>7-Eleven Sucursal Centro</title>"
+        soup = make_soup(html)
+        name = scraper._extract_company_name(soup, "https://7-eleven.com.mx")
+        assert name.startswith("7-Eleven"), f"Got: {name!r}"
+
+
 # ─────────────────────────────────────────────────────────────
 # 2. _extract_schema_address
 # ─────────────────────────────────────────────────────────────

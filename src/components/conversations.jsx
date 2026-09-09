@@ -773,7 +773,27 @@ export default function Conversations({ isActive } = {}) {
         })
         if (msgs.length > threadLenRef.current) {
           fetch(`/api/conversations/${companyId}`, { method: 'POST' }).catch(() => {})
-          setConvs(prev => prev.map(c => c.company_id === companyId ? { ...c, unread: 0 } : c))
+          // Bump this conversation to the top with the fresh last message right
+          // away — otherwise the chat you're currently looking at stayed frozen
+          // in its old list position (only its unread count changed) until the
+          // next full fetchConvs() poll, unlike every other conversation which
+          // already reorders on that same poll (the backend sorts by last_at).
+          const last = msgs[msgs.length - 1]
+          setConvs(prev => {
+            const idx = prev.findIndex(c => c.company_id === companyId)
+            if (idx === -1) return prev
+            const updated = {
+              ...prev[idx],
+              unread: 0,
+              last_message: last?.body ?? prev[idx].last_message,
+              last_direction: last?.direction ?? prev[idx].last_direction,
+              last_at: last?.created_at ?? prev[idx].last_at,
+            }
+            const next = [...prev]
+            next.splice(idx, 1)
+            next.unshift(updated)
+            return next
+          })
         }
       } else {
         setThread(msgs)
@@ -833,10 +853,14 @@ export default function Conversations({ isActive } = {}) {
   }, [])
 
   useEffect(() => {
+    // 5s (was 20s) so the list reorders close to live as new messages come in —
+    // matches the cadence already used elsewhere in this component (ai-status
+    // poll below runs every 4s) instead of leaving conversations feeling "stuck"
+    // for up to 20s before bubbling to the top.
     const id = setInterval(() => {
       fetchConvs()
       if (selected) fetchThread(selected.company_id, false, true, activeNum !== 'all' ? activeNum : null)
-    }, 20000)
+    }, 5000)
     return () => clearInterval(id)
   }, [fetchConvs, fetchThread, selected, activeNum])
 

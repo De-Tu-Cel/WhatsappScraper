@@ -53,10 +53,8 @@ import CalendarMonthIcon from '@mui/icons-material/CalendarMonth'
 import ViewWeekIcon from '@mui/icons-material/ViewWeek'
 import ViewListIcon from '@mui/icons-material/ViewList'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
-import HelpOutlineIcon from '@mui/icons-material/HelpOutlined'
-import { TemplateManagerDialog } from './messageTemplateLibrary'
+import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { MIN_TEMPLATES_FOR_BULK } from '@/lib/messageVariants'
-import { HighlightedMessageInput } from './highlightedMessageInput'
 import { loadSendConfig } from '@/lib/sendConfig'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -889,108 +887,13 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
   )
 }
 
-// ─── Message variants editor ───────────────────────────────────────────────────
-// Lets the user keep several worded variants of the same campaign message.
-// The scheduler picks one at random per recipient (see scheduler.py
+// ─── Message variants ───────────────────────────────────────────────────────
+// The scheduler picks one variant at random per recipient (see scheduler.py
 // _pick_message) so a bulk send doesn't repeat identical text — the pattern
-// WhatsApp flags as bot-like and that can get a number banned.
-
-export function MessageVariantsEditor({ messages, setMessages, recipientCount = 0, hasCityData = true }) {
-  const { t, lang } = useLang()
-  const [savedTemplates, setSavedTemplates] = useState([])
-  const [managerOpen,    setManagerOpen]    = useState(false)
-
-  const loadSaved = useCallback(() => {
-    authFetch(`/api/admin/message-templates?lang=${lang}`)
-      .then(r => r.json()).then(d => setSavedTemplates(Array.isArray(d) ? d : []))
-      .catch(() => {})
-  }, [lang])
-  useEffect(() => { loadSaved() }, [loadSaved])
-
-  function updateAt(i, val) { setMessages(prev => prev.map((m, idx) => idx === i ? val : m)) }
-  function removeAt(i) { setMessages(prev => prev.filter((_, idx) => idx !== i)) }
-  function addBlank() { setMessages(prev => [...prev, '']) }
-  function addFromTemplate(tpl) { setMessages(prev => (prev.length === 1 && !prev[0].trim()) ? [tpl.text] : [...prev, tpl.text]) }
-
-  const cleanCount = messages.map(m => m.trim()).filter(Boolean).length
-  const needsMin = recipientCount > 1
-  const okMin = cleanCount >= MIN_TEMPLATES_FOR_BULK
-
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, flex: 1 }}>
-          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem', fontWeight: 600 }}>{t.sched.messagesLabel}</Typography>
-          <Tooltip title={t.sched.messagesLabelHelp}>
-            <HelpOutlineIcon sx={{ fontSize: 13, color: 'var(--text-muted)', opacity: 0.6, cursor: 'help' }} />
-          </Tooltip>
-        </Box>
-        <Button variant="contained" size="small" onClick={() => setManagerOpen(true)} sx={{ bgcolor: 'var(--accent,#3b82f6)', color: '#fff', textTransform: 'none', fontSize: '0.72rem', fontWeight: 600, borderRadius: 1.5, px: 1.5, boxShadow: 'none', '&:hover': { bgcolor: 'var(--accent,#3b82f6)', filter: 'brightness(0.88)', boxShadow: 'none' } }}>
-          {t.sched.manageTemplates}
-        </Button>
-      </Box>
-
-      {needsMin && (
-        <Box sx={{ display: 'flex', gap: 0.6, alignItems: 'flex-start', borderRadius: 1.5, px: 1, py: 0.7,
-          bgcolor: okMin ? 'rgba(34,197,94,0.08)' : 'rgba(245,158,11,0.08)',
-          border: `1px solid ${okMin ? 'rgba(34,197,94,0.25)' : 'rgba(245,158,11,0.25)'}` }}>
-          <WarningAmberIcon sx={{ fontSize: 13, color: okMin ? '#4ade80' : '#f59e0b', mt: 0.2, flexShrink: 0 }} />
-          <Typography sx={{ color: okMin ? '#4ade80' : '#f59e0b', fontSize: '0.7rem', lineHeight: 1.4 }}>
-            {okMin ? t.tplLib.minRequiredOk(cleanCount) : t.tplLib.minRequiredBlock(MIN_TEMPLATES_FOR_BULK, cleanCount)}
-          </Typography>
-        </Box>
-      )}
-
-      {savedTemplates.length > 0 && (
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-          {savedTemplates.map(tpl => {
-            const needsCity = /\{\{ciudad\}\}/.test(tpl.text)
-            const blocked   = needsCity && !hasCityData
-            return (
-              <Tooltip key={tpl._id} title={blocked ? (lang === 'en' ? 'No city data for selected contacts' : 'Los contactos seleccionados no tienen ciudad') : ''} placement="top">
-                <span>
-                  <Chip label={tpl.name} size="small"
-                    onClick={blocked ? undefined : () => addFromTemplate(tpl)}
-                    sx={{ fontSize: '0.68rem', height: 22, cursor: blocked ? 'not-allowed' : 'pointer',
-                      bgcolor: 'var(--item-hover)', border: `1px solid ${blocked ? 'rgba(239,68,68,0.3)' : 'var(--border)'}`,
-                      color: blocked ? 'rgba(239,68,68,0.5)' : 'var(--text-muted)', opacity: blocked ? 0.6 : 1,
-                      '&:hover': blocked ? {} : { borderColor: 'var(--accent,#3b82f6)', color: 'var(--accent,#3b82f6)' },
-                    }} />
-                </span>
-              </Tooltip>
-            )
-          })}
-        </Box>
-      )}
-
-      {messages.map((m, i) => (
-        <Box key={i}>
-          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', mb: 0.4 }}>{t.sched.variantLabel} {i + 1}</Typography>
-          <Box sx={{ position: 'relative' }}>
-            <HighlightedMessageInput value={m} onChange={v => updateAt(i, v)} rows={3} maxLength={1000} lang={lang} />
-            <Typography sx={{ position: 'absolute', bottom: 6, right: 10, fontSize: '0.65rem', color: m.length > 900 ? '#ef4444' : 'var(--text-muted)', opacity: 0.6, pointerEvents: 'none' }}>
-              {m.length} / 1000
-            </Typography>
-            {messages.length > 1 && (
-              <IconButton size="small" onClick={() => removeAt(i)}
-                sx={{ position: 'absolute', top: 6, right: 6, zIndex: 2, p: 0.3, color: 'rgba(239,68,68,0.45)', bgcolor: 'rgba(239,68,68,0.06)', borderRadius: 1,
-                  '&:hover': { color: '#ef4444', bgcolor: 'rgba(239,68,68,0.14)' } }}>
-                <DeleteIcon sx={{ fontSize: 14 }} />
-              </IconButton>
-            )}
-          </Box>
-        </Box>
-      ))}
-
-      <Button variant="contained" size="small" onClick={addBlank}
-        sx={{ alignSelf: 'flex-end', bgcolor: 'var(--accent,#3b82f6)', color: '#fff', textTransform: 'none', fontSize: '0.75rem', fontWeight: 600, borderRadius: 1.5, px: 1.5, boxShadow: 'none', '&:hover': { bgcolor: 'var(--accent,#3b82f6)', filter: 'brightness(0.88)', boxShadow: 'none' } }}>
-        {t.sched.addVariant}
-      </Button>
-
-      <TemplateManagerDialog open={managerOpen} onClose={() => setManagerOpen(false)} onChange={loadSaved} />
-    </Box>
-  )
-}
+// WhatsApp flags as bot-like and that can get a number banned. Selection
+// itself is TemplateLibraryPicker (checkbox cards + preview + per-recipient
+// variable-availability checks) — same component Ideas/Buscar prospectos/
+// Lote de URLs already use, wired in directly inside CampaignForm below.
 
 // ─── Campaign form (create / edit / duplicate) ────────────────────────────────
 
@@ -1026,6 +929,23 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
 
   const cleanMessages = useMemo(() => messages.map(m => m.trim()).filter(Boolean), [messages])
   const belowMinTemplates = selectedNums.size > 1 && cleanMessages.length < MIN_TEMPLATES_FOR_BULK
+
+  // Variable availability across the CURRENTLY selected recipients — passed to
+  // TemplateLibraryPicker so it can block/warn templates whose {{variable}}
+  // none of them have data for (same pattern as searchProspects.jsx/IdeasPanel).
+  const selectedInfos = useMemo(() => [...numInfoMap.values()], [numInfoMap])
+  const tplVarFlags = useMemo(() => ({
+    hasName:     selectedInfos.some(c => c.company_name),
+    hasCity:     selectedInfos.some(c => c.city),
+    hasIndustry: selectedInfos.some(c => c.industry),
+    hasWeb:      selectedInfos.some(c => c.web),
+  }), [selectedInfos])
+  const tplVarCounts = useMemo(() => ({
+    nombre:    selectedInfos.filter(c => c.company_name).length,
+    ciudad:    selectedInfos.filter(c => c.city).length,
+    industria: selectedInfos.filter(c => c.industry).length,
+    web:       selectedInfos.filter(c => c.web).length,
+  }), [selectedInfos])
 
   // Cupo estimado para la fecha elegida — el backend deduplica por número real
   // contactado (no por empresa), así que el conteo aquí es 1 por número marcado.
@@ -1117,9 +1037,17 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
           ) : null
         })()}
       </Box>
-      <Box>
-        <MessageVariantsEditor messages={messages} setMessages={setMessages} recipientCount={selectedNums.size}
-          hasCityData={selectedNums.size > 0 && [...numInfoMap.values()].some(c => c.city)} />
+      <Box sx={{ p: 1.2, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--surface,rgba(255,255,255,0.02))' }}>
+        <TemplateLibraryPicker
+          onChange={setMessages}
+          recipientCount={selectedNums.size}
+          baseCount={0}
+          label={t.sched.messagesLabel}
+          hasName={tplVarFlags.hasName} hasCity={tplVarFlags.hasCity}
+          hasIndustry={tplVarFlags.hasIndustry} hasWeb={tplVarFlags.hasWeb}
+          varCounts={tplVarCounts} totalSelected={selectedNums.size}
+          initialTexts={origMessages || messages}
+        />
         {origMessages !== null && JSON.stringify(messages) !== JSON.stringify(origMessages) && (
           <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', mt: 0.6, px: 0.5, opacity: 0.7 }}>
             {t.sched.originalModified} ({origMessages.length})

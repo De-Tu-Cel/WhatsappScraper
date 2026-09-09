@@ -364,11 +364,20 @@ export function TemplateLibraryPicker({
   // realidad solo una se va a usar. En ese caso el checklist se comporta como
   // selección única (marcar otra reemplaza la anterior, no se acumulan).
   singleSelect = false,
+  // Textos a pre-marcar la primera vez que cargan las plantillas — para
+  // superficies que editan un envío YA GUARDADO (ej. Schedule Send: reabrir
+  // una campaña existente para editar debe mostrar sus mensajes ya
+  // seleccionados, no una selección vacía). Solo se lee en el montaje inicial
+  // (via ref), no en cada render — este picker es de otra forma 100%
+  // controlado por sus propios checkboxes.
+  initialTexts = null,
 }) {
   const { t, lang } = useLang()
   const [templates,   setTemplates]   = useState([])
   const [loading,      setLoading]     = useState(true)
   const [selectedIds,  setSelectedIds] = useState([])
+  const initialTextsRef = useRef(initialTexts)
+  const didInitRef = useRef(false)
   const [managerOpen,  setManagerOpen] = useState(false)
   const onChangeRef = useRef(onChange)
   useEffect(() => { onChangeRef.current = onChange })
@@ -405,7 +414,27 @@ export function TemplateLibraryPicker({
   }, [lang])
   useEffect(() => { load() }, [load])
 
+  // Pre-selección única al montar (ver initialTexts arriba) — empareja por
+  // texto exacto contra las plantillas guardadas ya cargadas. Si el mensaje
+  // original no coincide con ninguna (se editó libre, o la plantilla se borró
+  // desde entonces) simplemente no se preselecciona nada — no hay forma de
+  // reconstruir esa elección sin guardar el id de plantilla original.
   useEffect(() => {
+    if (didInitRef.current || templates.length === 0) return
+    didInitRef.current = true
+    const texts = initialTextsRef.current
+    if (!texts || !texts.length) return
+    const matchIds = templates.filter(tpl => texts.includes(tpl.text)).map(tpl => tpl._id)
+    if (matchIds.length) setSelectedIds(matchIds)
+  }, [templates])
+
+  useEffect(() => {
+    // While there's a pending initialTexts restore (edit mode) that hasn't
+    // been attempted yet, skip notifying — otherwise this fires with an empty
+    // selection on the very first render (before the templates fetch even
+    // resolves) and clobbers the caller's real initial messages before the
+    // pre-selection effect above gets a chance to run.
+    if (initialTextsRef.current?.length && !didInitRef.current) return
     const texts = templates.filter(tpl => selectedIds.includes(tpl._id)).map(tpl => tpl.text)
     onChangeRef.current?.(texts)
   }, [templates, selectedIds])

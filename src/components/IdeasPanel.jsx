@@ -1087,6 +1087,10 @@ export default function IdeasPanel({ isActive }) {
               </Box>
             )}
 
+            {waRowsUnique.length > 0 && (
+              <Box sx={{ height: 1, bgcolor: 'var(--border, rgba(255,255,255,0.1))', flexShrink: 0, my: 0.2 }} />
+            )}
+
             {/* ── Feed de resultados — encabezado con resumen + filtro rápido ── */}
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6 }}>
               {displayResults.length > 0 && (

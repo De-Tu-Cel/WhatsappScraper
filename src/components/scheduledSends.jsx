@@ -322,7 +322,12 @@ export const CompanyCard = memo(function CompanyCard({
               </Box>
             )}
           </Box>
-          {company.domain && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>{company.domain}</Typography>}
+          {/* Si el nombre está vacío o es un teléfono, el encabezado ya cayó al
+             dominio (ver displayCompanyName) — repetirlo aquí abajo se veía
+             como una entrada duplicada. Solo mostrar cuando aporta info nueva. */}
+          {company.domain && company.name && !looksLikePhone(company.name) && (
+            <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>{company.domain}</Typography>
+          )}
         </Box>
         {single && total === 1 && (() => {
           const n = company.numbers[0]

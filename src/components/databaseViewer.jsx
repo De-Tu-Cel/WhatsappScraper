@@ -58,6 +58,8 @@ import VisibilityIcon from '@mui/icons-material/Visibility'
 import SendIcon from '@mui/icons-material/Send'
 import MessageIcon from '@mui/icons-material/Message'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
+import AccessTimeIcon from '@mui/icons-material/AccessTime'
+import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
 import { visuallyHidden } from '@mui/utils'
 
 // Estable entre renders — CompanyCard está memoizado y compara activeSet por
@@ -82,6 +84,47 @@ import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
 import { SendConfigPanel, CountdownBar } from './SendConfigPanel'
 import { loadSendConfig, randMsgDelayMs, randBatchBreakMs, randBatchSize } from '@/lib/sendConfig'
+
+// Big-number stat card (icon + value + label), same shape as the reference
+// invoice-list summary cards, adapted to this panel's dark card tokens.
+function StatCard({ icon, color, value, label, subtitle, onClick, active }) {
+  const clickable = !!onClick
+  return (
+    <Box
+      onClick={onClick}
+      sx={{
+        flex: '1 1 150px', minWidth: 140, display: 'flex', alignItems: 'center', gap: 1.1,
+        px: 1.4, py: 1, borderRadius: 2,
+        border: `1px solid ${active ? color : 'var(--border, rgba(255,255,255,0.08))'}`,
+        bgcolor: active ? `${color}0f` : 'var(--card-bg, rgba(255,255,255,0.02))',
+        cursor: clickable ? 'pointer' : 'default',
+        transition: 'border-color 0.15s, background-color 0.15s',
+        '&:hover': clickable ? { borderColor: color, bgcolor: `${color}0f` } : {},
+      }}
+    >
+      <Box sx={{
+        width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        bgcolor: `${color}1f`, border: `1px solid ${color}44`,
+      }}>
+        {icon}
+      </Box>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography sx={{ fontSize: '0.66rem', color: 'var(--text-muted)', fontWeight: 600, lineHeight: 1.2, whiteSpace: 'nowrap' }}>
+          {label}
+        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5 }}>
+          <Typography sx={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.3, fontVariantNumeric: 'tabular-nums' }}>
+            {value}
+          </Typography>
+          {subtitle && (
+            <Typography sx={{ fontSize: '0.66rem', color, fontWeight: 700, whiteSpace: 'nowrap' }}>{subtitle}</Typography>
+          )}
+        </Box>
+      </Box>
+    </Box>
+  )
+}
 
 function getHeadCells(t) {
   return [
@@ -1619,70 +1662,59 @@ export default function DatabaseViewer({ isActive }) {
           </Box>
         </Collapse>
 
-        {/* ── Stats strip ── */}
+        {/* ── Stats cards ── */}
         {!loading && (
-          <Box sx={{ px: 2, py: 0.9, display: 'flex', alignItems: 'center', gap: 2.5, flexWrap: 'wrap',
+          <Box sx={{ px: 2, py: 1, display: 'flex', flexDirection: 'column', gap: 1,
             borderBottom: '1px solid rgba(255,255,255,0.05)',
             bgcolor: 'rgba(255,255,255,0.012)', position: 'relative', zIndex: 1,
           }}>
-            {/* Total count */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
-              <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'var(--accent,#3b82f6)', flexShrink: 0,
-                boxShadow: '0 0 5px rgba(var(--accent-rgb,59,130,246),0.5)' }} />
-              <Typography sx={{ fontSize: '0.69rem', color: 'var(--text-muted)', fontWeight: 500 }}>
-                <Box component="span" sx={{ color: 'var(--text)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
-                  {total.toLocaleString()}
-                </Box>{' '}{lang === 'en' ? (total === 1 ? 'company' : 'companies') : (total === 1 ? 'empresa' : 'empresas')}
-              </Typography>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+              <StatCard
+                icon={<StorageIcon sx={{ fontSize: 16, color: '#3b82f6' }} />}
+                color="#3b82f6"
+                value={total.toLocaleString()}
+                label={lang === 'en' ? (total === 1 ? 'Company' : 'Companies') : (total === 1 ? 'Empresa' : 'Empresas')}
+              />
+              {globalStats.total_wa !== null && (
+                <StatCard
+                  icon={<WhatsAppIcon sx={{ fontSize: 16, color: '#22c55e' }} />}
+                  color="#22c55e"
+                  value={globalStats.total_wa.toLocaleString()}
+                  subtitle={total > 0 ? `${Math.round((globalStats.total_wa / total) * 100)}%` : null}
+                  label={lang === 'en' ? 'With WhatsApp' : 'Con WhatsApp'}
+                />
+              )}
+              {globalStats.total_contacted !== null && (
+                <StatCard
+                  icon={<SendIcon sx={{ fontSize: 15, color: '#60a5fa' }} />}
+                  color="#60a5fa"
+                  value={globalStats.total_contacted.toLocaleString()}
+                  label={lang === 'en' ? 'Contacted' : 'Contactadas'}
+                  active={filters.contacted === 'true'}
+                  onClick={() => handleFilterChange('contacted', filters.contacted === 'true' ? '' : 'true')}
+                />
+              )}
+              {globalStats.total_contacted !== null && (
+                <StatCard
+                  icon={<HourglassEmptyIcon sx={{ fontSize: 15, color: '#fbbf24' }} />}
+                  color="#fbbf24"
+                  value={Math.max(0, total - globalStats.total_contacted).toLocaleString()}
+                  label={lang === 'en' ? 'Not contacted' : 'Sin contactar'}
+                  active={filters.contacted === 'false'}
+                  onClick={() => handleFilterChange('contacted', filters.contacted === 'false' ? '' : 'false')}
+                />
+              )}
+              <StatCard
+                icon={<AccessTimeIcon sx={{ fontSize: 15, color: scrapeAgeDisplay ? scrapeAgeDisplay.color : 'rgba(148,163,184,0.6)' }} />}
+                color={scrapeAgeDisplay ? scrapeAgeDisplay.color : 'rgba(148,163,184,0.6)'}
+                value={!scrapeAgeDisplay
+                  ? (lang === 'en' ? '—' : '—')
+                  : lang === 'en'
+                    ? (scrapeAgeDisplay.daysAgo === 0 ? 'Today' : scrapeAgeDisplay.daysAgo === 1 ? 'Yesterday' : `${scrapeAgeDisplay.daysAgo}d ago`)
+                    : (scrapeAgeDisplay.daysAgo === 0 ? 'Hoy' : scrapeAgeDisplay.daysAgo === 1 ? 'Ayer' : `Hace ${scrapeAgeDisplay.daysAgo}d`)}
+                label={lang === 'en' ? 'Last scrape' : 'Último scraping'}
+              />
             </Box>
-            {/* WA ratio — global across all pages */}
-            {globalStats.total_wa !== null && total > 0 && (() => {
-              const pct = Math.round((globalStats.total_wa / total) * 100)
-              return (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
-                  <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#22c55e', flexShrink: 0 }} />
-                  <Typography sx={{ fontSize: '0.69rem', color: 'var(--text-muted)', fontWeight: 500 }}>
-                    <Box component="span" sx={{ color: '#22c55e', fontWeight: 700 }}>{pct}%</Box>{' '}{lang === 'en' ? 'with WA' : 'con WA'}
-                  </Typography>
-                </Box>
-              )
-            })()}
-            {/* Contacted — global across all pages */}
-            {globalStats.total_contacted !== null && globalStats.total_contacted > 0 && (
-              <Box
-                sx={{ display: 'flex', alignItems: 'center', gap: 0.8, cursor: 'pointer',
-                  '&:hover .contacted-label': { color: 'var(--accent, #60a5fa)' } }}
-                onClick={() => handleFilterChange('contacted', filters.contacted === 'true' ? '' : 'true')}
-                title={lang === 'en' ? 'Click to filter by contacted' : 'Click para filtrar contactadas'}
-              >
-                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: filters.contacted === 'true' ? 'var(--accent, #60a5fa)' : 'rgba(96,165,250,0.5)', flexShrink: 0 }} />
-                <Typography className="contacted-label" sx={{ fontSize: '0.69rem', color: 'var(--text-muted)', fontWeight: 500, transition: 'color 0.15s' }}>
-                  <Box component="span" sx={{ color: 'var(--accent, #60a5fa)', fontWeight: 700 }}>{globalStats.total_contacted}</Box>{' '}{lang === 'en' ? 'contacted' : 'contactadas'}
-                </Typography>
-              </Box>
-            )}
-            {/* Último scraping — global (most recent across all matching companies) */}
-            {!scrapeAgeDisplay ? (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
-                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'rgba(148,163,184,0.3)', flexShrink: 0 }} />
-                <Typography sx={{ fontSize: '0.69rem', color: 'rgba(148,163,184,0.4)', fontWeight: 500 }}>
-                  {lang === 'en' ? 'not scraped' : 'sin scraping'}
-                </Typography>
-              </Box>
-            ) : (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
-                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: scrapeAgeDisplay.color, flexShrink: 0,
-                  boxShadow: `0 0 5px ${scrapeAgeDisplay.color}88` }} />
-                <Typography sx={{ fontSize: '0.69rem', color: 'var(--text-muted)', fontWeight: 500 }}>
-                  {lang === 'en' ? 'last scrape' : 'últ. scraping'}{' '}
-                  <Box component="span" sx={{ color: scrapeAgeDisplay.color, fontWeight: 700 }}>
-                    {lang === 'en'
-                      ? (scrapeAgeDisplay.daysAgo === 0 ? 'today' : scrapeAgeDisplay.daysAgo === 1 ? 'yesterday' : `${scrapeAgeDisplay.daysAgo}d ago`)
-                      : (scrapeAgeDisplay.daysAgo === 0 ? 'hoy' : scrapeAgeDisplay.daysAgo === 1 ? 'ayer' : `hace ${scrapeAgeDisplay.daysAgo}d`)}
-                  </Box>
-                </Typography>
-              </Box>
-            )}
             {/* Active filter chips — right side */}
             {(filters.search || filters.industry || filters.city || filters.has_whatsapp !== '' || filters.contacted !== '') && (
               <Box sx={{ ml: 'auto', display: 'flex', gap: 0.7, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1749,7 +1781,7 @@ export default function DatabaseViewer({ isActive }) {
           <Table stickyHeader size="small" aria-label="tabla de empresas">
             <TableHead>
               <TableRow>
-                <TableCell padding="checkbox" sx={{ bgcolor: 'var(--card-bg, #161d2e)', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                <TableCell padding="checkbox" sx={{ bgcolor: 'var(--card-bg, #161d2e)', borderBottom: '1px solid rgba(255,255,255,0.08)', borderRight: '1px solid rgba(255,255,255,0.08)' }}>
                   <Checkbox
                     color="primary"
                     indeterminate={numSelected > 0 && numSelected < rowCount}
@@ -1758,12 +1790,16 @@ export default function DatabaseViewer({ isActive }) {
                     sx={{ color: 'rgba(255,255,255,0.3)', '&.Mui-checked': { color: 'var(--accent, #3b82f6)' }, '&.MuiCheckbox-indeterminate': { color: 'var(--accent, #3b82f6)' } }}
                   />
                 </TableCell>
-                {headCells.map((hc) => (
+                {headCells.map((hc, i) => (
                   <TableCell
                     key={hc.id}
                     align={hc.align}
                     sortDirection={orderBy === hc.id ? order : false}
-                    sx={{ bgcolor: 'var(--card-bg, #161d2e)', color: 'rgba(255,255,255,0.55)', fontWeight: 600, fontSize: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.08)', whiteSpace: 'nowrap' }}
+                    sx={{
+                      bgcolor: 'var(--card-bg, #161d2e)', color: 'rgba(255,255,255,0.55)', fontWeight: 600, fontSize: '0.75rem', whiteSpace: 'nowrap',
+                      borderBottom: '1px solid rgba(255,255,255,0.08)',
+                      borderRight: i < headCells.length - 1 ? '1px solid rgba(255,255,255,0.08)' : 'none',
+                    }}
                   >
                     {hc.sortable ? (
                       <Box sx={{ display: 'flex', width: '100%', justifyContent: hc.align === 'center' ? 'center' : 'flex-start' }}>

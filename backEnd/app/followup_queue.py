@@ -180,6 +180,18 @@ def _ensure_worker():
             log.info("[FollowupQ] cleanup worker started")
 
 
+def start_followup_workers():
+    """Called from main.py's startup lifespan so the cleanup worker (proactive
+    follow-ups + idle-timeout expiry) runs continuously from process start,
+    instead of only after the first inbound message calls enqueue(). That lazy
+    start meant every backend restart silenced the 30-min cleanup cycle until
+    someone happened to message in again — harmless for idle-timeout (4h window,
+    easily caught on a later cycle) but fatal for proactive follow-ups (60-90min
+    window; confirmed live 2026-09-09: 13 real sessions qualified and 0 ever
+    got one)."""
+    _ensure_worker()
+
+
 def _flush_debounced(phone_number: str):
     """Timer callback — push accumulated messages to the worker queue as one item."""
     with _pending_lock:

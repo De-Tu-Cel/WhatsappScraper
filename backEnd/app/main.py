@@ -22,6 +22,7 @@ from app.scheduler import start_scheduler
 from app.scrape_jobs import start_scrape_worker
 from app.send_now_worker import start_send_now_worker
 from app.warmup_queue import start_warmup_worker
+from app.followup_queue import start_followup_workers
 
 
 @asynccontextmanager
@@ -86,6 +87,7 @@ async def lifespan(app: FastAPI):
     start_scheduler()
     start_scrape_worker()
     start_send_now_worker()
+    start_followup_workers()
     if os.getenv("WARMUP_ENABLED", "false").lower() == "true":
         start_warmup_worker()
     yield

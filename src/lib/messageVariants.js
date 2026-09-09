@@ -3,7 +3,19 @@
 // block accounts. Every bulk-send surface (Scheduled Sends, Batch URLs, CSV
 // Import, Database) rotates between several message templates instead.
 
+// Flat fallback for surfaces that can't easily compute a live recipient count
+// (rare) — everywhere else should use getMinTemplatesRequired(recipientCount).
 export const MIN_TEMPLATES_FOR_BULK = 3
+
+// More recipients means each variant repeats more times across the batch —
+// the anti-repetition minimum scales with it instead of staying flat at 3
+// regardless of whether the campaign has 2 recipients or 200.
+export function getMinTemplatesRequired(recipientCount) {
+  if (recipientCount <= 1)  return 1
+  if (recipientCount <= 10) return 3
+  if (recipientCount <= 30) return 5
+  return 8
+}
 
 // Pick a variant at random, avoiding an immediate repeat of `lastText` when
 // there's more than one option. Mirrors backEnd/app/scheduler.py's

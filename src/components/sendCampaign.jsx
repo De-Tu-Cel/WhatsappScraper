@@ -11,7 +11,7 @@ import { InstanceDisconnectedBanner } from './InstanceStatusBanner'
 import DailyCapBadge, { getOverBy } from './DailyCapBadge'
 import CapacityBanner from './CapacityBanner'
 import { loadSendConfig } from '@/lib/sendConfig'
-import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
+import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVariants'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Chip from '@mui/material/Chip'
@@ -163,7 +163,8 @@ export default function SendCampaign() {
   const hasIndustryData = targets.some(n => n.industry)
   const hasWebData      = targets.some(n => n.web)
   const cleanMessages = useMemo(() => templateTexts.map(m => m.trim()).filter(Boolean), [templateTexts])
-  const belowMinTemplates = targets.length > 1 && cleanMessages.length < MIN_TEMPLATES_FOR_BULK
+  const minTemplatesRequired = getMinTemplatesRequired(targets.length)
+  const belowMinTemplates = targets.length > 1 && cleanMessages.length < minTemplatesRequired
   const overBy      = getOverBy(capStats, targets.length)
   const capBlocked  = overBy > 0
   const canSend = targets.length > 0 && cleanMessages.length > 0 && !belowMinTemplates && !capBlocked && !isSending
@@ -308,7 +309,7 @@ export default function SendCampaign() {
                 <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', textAlign: 'center' }}>
                   {targets.length === 0 ? t.campaign.blockedNoRecipients
                     : cleanMessages.length === 0 ? t.campaign.blockedNoTemplate
-                    : belowMinTemplates ? t.tplLib.minRequiredBlock(MIN_TEMPLATES_FOR_BULK, cleanMessages.length)
+                    : belowMinTemplates ? t.tplLib.minRequiredBlock(minTemplatesRequired, cleanMessages.length)
                     : capBlocked ? (lang === 'en' ? `Deselect ${overBy} to fit today's quota` : `Desmarca ${overBy} para caber en tu cupo de hoy`)
                     : ''}
                 </Typography>

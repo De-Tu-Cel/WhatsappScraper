@@ -51,7 +51,7 @@ import RecipientsBox from './RecipientsBox'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { SendConfigPanel } from './SendConfigPanel'
 import { loadSendConfig } from '@/lib/sendConfig'
-import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
+import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVariants'
 import { dedupeByCompany } from '../lib/companyDedupe'
 
 // Mismo helper que ya vive (duplicado a propósito) en batchProcessor/csvImporter/
@@ -601,7 +601,7 @@ export default function IdeasPanel({ isActive }) {
 
   const isBulk = totalContactPoints > 1
   const allVariants = useMemo(() => extraVariants.map(v => v.trim()).filter(Boolean), [extraVariants])
-  const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
+  const belowMinTemplates = isBulk && allVariants.length < getMinTemplatesRequired(totalContactPoints)
 
   async function handleSendAll() {
     if (isSending || capBlocked) return

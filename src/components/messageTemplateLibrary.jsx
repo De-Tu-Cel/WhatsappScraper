@@ -3,9 +3,10 @@
 // message variants, and a picker that lets any bulk-send surface (Batch
 // URLs, CSV Import, Database, Scheduled Sends) select several of them for a
 // single send. Sending the exact same text to many WhatsApp numbers is a
-// common bot-detection signal, so any surface sending to 2+ recipients
-// should rotate between 3+ variants instead (see MIN_TEMPLATES_FOR_BULK in
-// @/lib/messageVariants and backEnd/app/scheduler.py's _pick_message).
+// common bot-detection signal, so any surface sending to 2+ recipients must
+// rotate between several variants — how many scales with recipient count
+// (see getMinTemplatesRequired in @/lib/messageVariants and
+// backEnd/app/scheduler.py's _pick_message).
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
@@ -29,7 +30,7 @@ import CloseIcon from '@mui/icons-material/Close'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import DescriptionIcon from '@mui/icons-material/Description'
-import { MIN_TEMPLATES_FOR_BULK } from '@/lib/messageVariants'
+import { getMinTemplatesRequired } from '@/lib/messageVariants'
 import { HighlightedMessageInput, HighlightedPreview } from './highlightedMessageInput'
 
 const FIELD_SX = {
@@ -337,7 +338,8 @@ export function TemplateManagerDialog({ open, onClose, onChange }) {
 // the selected raw texts back via onChange whenever the selection or the
 // underlying template list changes. `recipientCount` only affects the
 // hint/warning shown — enforcing the minimum before sending is the caller's
-// responsibility (compare the reported texts.length to MIN_TEMPLATES_FOR_BULK).
+// responsibility (compare the reported texts.length to
+// getMinTemplatesRequired(recipientCount)).
 
 // `baseCount`: how many variants the CALLER already has outside this picker
 // (almost always 1 — the free-edit "write or edit the message" box that
@@ -459,8 +461,9 @@ export function TemplateLibraryPicker({
   }
 
   const needsMin = recipientCount > 1 && !singleSelect
+  const minRequired = getMinTemplatesRequired(recipientCount)
   const totalCount = baseCount + selectedIds.length
-  const ok = totalCount >= MIN_TEMPLATES_FOR_BULK
+  const ok = totalCount >= minRequired
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -482,8 +485,8 @@ export function TemplateLibraryPicker({
       {/* ── Min-templates progress: dots instead of big amber banner ── */}
       {needsMin && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Box sx={{ display: 'flex', gap: 0.5 }}>
-            {Array.from({ length: MIN_TEMPLATES_FOR_BULK }).map((_, i) => {
+          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', maxWidth: 120 }}>
+            {Array.from({ length: minRequired }).map((_, i) => {
               const filled = i < totalCount
               const color  = ok ? '#4ade80' : filled ? 'var(--accent,#3b82f6)' : 'rgba(255,255,255,0.12)'
               return (
@@ -500,7 +503,7 @@ export function TemplateLibraryPicker({
           <Typography sx={{ fontSize: '0.67rem', color: ok ? '#4ade80' : 'rgba(255,255,255,0.35)', transition: 'color 0.2s' }}>
             {ok
               ? t.tplLib.minRequiredOk(totalCount)
-              : t.tplLib.minRequiredBlock(MIN_TEMPLATES_FOR_BULK, totalCount)}
+              : t.tplLib.minRequiredBlock(minRequired, totalCount)}
           </Typography>
         </Box>
       )}

@@ -54,7 +54,7 @@ import ViewWeekIcon from '@mui/icons-material/ViewWeek'
 import ViewListIcon from '@mui/icons-material/ViewList'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
-import { MIN_TEMPLATES_FOR_BULK } from '@/lib/messageVariants'
+import { getMinTemplatesRequired } from '@/lib/messageVariants'
 import { loadSendConfig } from '@/lib/sendConfig'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -928,7 +928,8 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
   }, [defaultDate]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const cleanMessages = useMemo(() => messages.map(m => m.trim()).filter(Boolean), [messages])
-  const belowMinTemplates = selectedNums.size > 1 && cleanMessages.length < MIN_TEMPLATES_FOR_BULK
+  const minTemplatesRequired = getMinTemplatesRequired(selectedNums.size)
+  const belowMinTemplates = selectedNums.size > 1 && cleanMessages.length < minTemplatesRequired
 
   // Variable availability across the CURRENTLY selected recipients — passed to
   // TemplateLibraryPicker so it can block/warn templates whose {{variable}}
@@ -961,7 +962,7 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
     if (noInstance) { setError(lang === 'en' ? 'No connected WhatsApp instance. Connect one from Instances before scheduling.' : 'Sin instancia WhatsApp conectada. Conéctala desde Instancias antes de programar.'); return }
     if (!name.trim() || cleanMessages.length === 0 || !dateVal || !timeVal) { setError(t.sched.fillAll); return }
     if (selectedNums.size === 0) { setError(t.sched.selectNum); return }
-    if (belowMinTemplates) { setError(t.tplLib.minRequiredBlock(MIN_TEMPLATES_FOR_BULK, cleanMessages.length)); return }
+    if (belowMinTemplates) { setError(t.tplLib.minRequiredBlock(minTemplatesRequired, cleanMessages.length)); return }
     if (capExhaustedToday) { setError(lang === 'en' ? 'Daily cap exhausted for today — sends will resume automatically tomorrow' : 'Cupo diario agotado para hoy — los envíos continuarán mañana automáticamente'); return }
     if (capBlocked) { setError(lang === 'en' ? `Deselect ${overBy} to fit the estimated quota for that day` : `Desmarca ${overBy} para caber en el cupo estimado de esa fecha`); return }
     setSubmitting(true)

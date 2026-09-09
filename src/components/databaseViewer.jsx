@@ -76,7 +76,7 @@ function cleanDomain(url) {
 import ResultDisplay from './resultDisplay'
 import { MessageComposer } from './singleUrlProcessor'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
-import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
+import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVariants'
 import { fmtNumber, normPhone, displayCompanyName, CompanyCard } from './scheduledSends'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
@@ -1016,7 +1016,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
   // elegidas) — ese era el bug: con 7 empresas seleccionadas pero solo 1 número
   // realmente marcado, seguía pidiendo 3 plantillas porque contaba el pool
   // completo en vez de a cuántos números se les va a mandar el mensaje de verdad.
-  const belowMinTemplates = selectedNums.size > 1 && allVariants.length < MIN_TEMPLATES_FOR_BULK
+  const belowMinTemplates = selectedNums.size > 1 && allVariants.length < getMinTemplatesRequired(selectedNums.size)
   const msgInvalid  = allVariants.length === 0 || selectedNums.size === 0
   // Empresas con al menos un número seleccionado — deseleccionar todos los
   // números de una empresa la saca del envío sin necesidad de quitarla de la

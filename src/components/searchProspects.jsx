@@ -52,7 +52,7 @@ import TableCell from '@mui/material/TableCell'
 import TableRow from '@mui/material/TableRow'
 import TableContainer from '@mui/material/TableContainer'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
-import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
+import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVariants'
 import { SendConfigPanel } from './SendConfigPanel'
 import { loadSendConfig } from '@/lib/sendConfig'
 
@@ -706,15 +706,15 @@ export default function SearchProspects() {
     web:       _selectedRows.filter(r => r.url      || r.website).length,
   }), [_selectedRows])
 
-  // Sending to 2+ contact points needs varied text (see MIN_TEMPLATES_FOR_BULK).
+  // Sending to 2+ contact points needs varied text (see getMinTemplatesRequired).
   // Uses totalContactPoints (not totalRecipients) so selecting multiple numbers
-  // of a single company also requires the 3+ minimum.
+  // of a single company also counts toward the minimum.
   const isBulk = totalContactPoints > 1
   const allVariants = useMemo(
     () => extraVariants.map(v => v.trim()).filter(Boolean),
     [extraVariants]
   )
-  const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
+  const belowMinTemplates = isBulk && allVariants.length < getMinTemplatesRequired(totalContactPoints)
 
   async function handleSendAll() {
     if (isSending || capBlocked) return

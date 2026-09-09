@@ -34,7 +34,7 @@ import PauseIcon from '@mui/icons-material/Pause'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import ReplayIcon from '@mui/icons-material/Replay'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
-import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
+import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVariants'
 import { SendConfigPanel } from './SendConfigPanel'
 import { loadSendConfig } from '@/lib/sendConfig'
 import { useSendQueue } from '../context/SendQueueContext'
@@ -418,15 +418,15 @@ export default function BatchProcessor() {
     [...extraSelected].filter(key => { const cid = key.split('::')[0]; return effectiveWaSelected.has(cid) && !_contactedCids.has(cid) }).length
   const overBy      = getOverBy(capStats, totalContactPoints, newContactPoints)
   const capBlocked  = overBy > 0
-  // Sending to 2+ contact points needs varied text (see MIN_TEMPLATES_FOR_BULK).
+  // Sending to 2+ contact points needs varied text (see getMinTemplatesRequired).
   // Uses totalContactPoints so selecting multiple numbers of a single company
-  // also requires the 3+ minimum.
+  // also counts toward the minimum.
   const isBulk = totalContactPoints > 1
   const allVariants = useMemo(
     () => extraVariants.map(v => v.trim()).filter(Boolean),
     [extraVariants]
   )
-  const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
+  const belowMinTemplates = isBulk && allVariants.length < getMinTemplatesRequired(totalContactPoints)
 
   // Variable availability for TemplateLibraryPicker warnings
   const _selectedRows = useMemo(

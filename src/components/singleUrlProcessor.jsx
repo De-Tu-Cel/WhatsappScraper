@@ -21,7 +21,7 @@ import ResultDisplay from './resultDisplay'
 import { isValidUrl, urlValidationMsg, MAX_WA_MSG } from '@/lib/validators'
 import { useLang } from '../context/LangContext'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
-import { MIN_TEMPLATES_FOR_BULK, pickMessageVariant } from '@/lib/messageVariants'
+import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVariants'
 
 const SKEL = { bgcolor: 'var(--skeleton-base,rgba(255,255,255,0.06))', '[data-theme-mode="light"] &': { bgcolor: 'rgba(0,0,0,0.08)' }, '&::after': { background: 'linear-gradient(90deg,transparent,rgba(255,255,255,0.04),transparent)', '[data-theme-mode="light"] &': { background: 'linear-gradient(90deg,transparent,rgba(0,0,0,0.04),transparent)' } } }
 
@@ -89,14 +89,14 @@ export function MessageComposer({ result, onSend, sending, disabled, capStats })
   // libre aparte solo para el caso de 1 número — evita tener dos formas
   // distintas de redactar un mensaje en la app. Con 1 solo número, el propio
   // TemplateLibraryPicker fuerza selección única (singleSelect); con 2+, pide
-  // 3+ plantillas para poder rotar el texto (ver MIN_TEMPLATES_FOR_BULK).
+  // plantillas suficientes para poder rotar el texto (ver getMinTemplatesRequired).
   const isBulk = selectedNums.length > 1
 
   // La biblioteca guarda plantillas genéricas (con placeholders {{nombre}}/
   // {{industria}}/etc); se resuelven contra los datos reales de esta empresa
   // antes de tratarlas como candidatas de envío.
   const allVariants = extraVariants.map(v => renderWithValues(v, vals).trim()).filter(Boolean)
-  const belowMinTemplates = isBulk && allVariants.length < MIN_TEMPLATES_FOR_BULK
+  const belowMinTemplates = isBulk && allVariants.length < getMinTemplatesRequired(selectedNums.length)
   // Números que ya fueron contactados previamente (por número, no solo por empresa)
   const contactedNumbers = new Set(result?.already_contacted?.contacted_numbers || [])
   // Solo los números NUEVOS (no contactados antes) consumen cupo de nuevos contactos

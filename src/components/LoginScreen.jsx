@@ -423,11 +423,14 @@ export default function LoginScreen({ hasUsers }) {
       {/* Partículas flotantes */}
       <Particles />
 
-      {/* Glow pulsante detrás del card */}
+      {/* Glow pulsante detrás del card — tamaño relativo al viewport en vez de
+         fijo, para que siga leyéndose como una atmósfera deliberada (no un
+         halo perdido) en monitores anchos, donde la tarjeta es una fracción
+         chica de la pantalla. */}
       <Box sx={{
         position: 'absolute', top: '50%', left: '50%',
-        width: 760, height: 640, pointerEvents: 'none',
-        background: 'radial-gradient(ellipse, rgba(21,87,245,0.30) 0%, rgba(22,101,52,0.14) 45%, transparent 70%)',
+        width: 'min(1400px, 130vw)', height: 'min(1100px, 100vh)', pointerEvents: 'none',
+        background: 'radial-gradient(ellipse, rgba(21,87,245,0.32) 0%, rgba(22,101,52,0.16) 45%, transparent 72%)',
         animation: `${glowPulse} 4s ease-in-out infinite`,
       }} />
 
@@ -529,18 +532,21 @@ export default function LoginScreen({ hasUsers }) {
             <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, animation: `${fadeUp} 0.3s ease` }}>
               <Box>
                 <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.62)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{t.login.user}</Typography>
-                <TextField fullWidth size="small" placeholder="marco.dominguez" autoFocus
+                <TextField fullWidth size="small" placeholder={lang === 'en' ? 'your username' : 'tu usuario'} autoFocus
                   value={username} onChange={e => setUsername(e.target.value.toLowerCase())}
                   autoComplete="username" sx={INPUT_SX} />
               </Box>
               <PinField label="PIN" value={pin} onChange={setPin} autoComplete="current-password" />
               {error && <ErrorBox msg={error} success={error.startsWith('✓')} />}
               <SubmitBtn loading={loading} label={`${t.login.enter} →`} />
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
-                {hasUsers && (
-                  <Typography onClick={() => reset('register')} sx={LINK_SX}>{t.login.createAcc}</Typography>
-                )}
-                <Typography onClick={() => reset('recover')} sx={{ ...LINK_SX, ml: 'auto', display: 'flex', alignItems: 'center', gap: 0.4 }}>
+              {/* No self-service "Create account" here anymore — this is an
+                 internal tool where every account belongs to a known DeTuCel
+                 employee, so new users get created by an admin from the
+                 Admin panel instead of anyone who reaches this page. The
+                 register form/mode below still exists for the one-time
+                 bootstrap case (no users at all yet). */}
+              <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 0.5 }}>
+                <Typography onClick={() => reset('recover')} sx={{ ...LINK_SX, display: 'flex', alignItems: 'center', gap: 0.4 }}>
                   <LockResetIcon sx={{ fontSize: 13 }} /> {t.login.forgotPin}
                 </Typography>
               </Box>
@@ -563,12 +569,12 @@ export default function LoginScreen({ hasUsers }) {
               </Box>
               <Box>
                 <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.62)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{t.login.fullName}</Typography>
-                <TextField fullWidth size="small" placeholder="Marco Domínguez"
+                <TextField fullWidth size="small" placeholder={lang === 'en' ? 'your full name' : 'tu nombre completo'}
                   value={displayName} onChange={e => setDisplayName(e.target.value)} sx={INPUT_SX} />
               </Box>
               <Box>
                 <Typography sx={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.62)', mb: 0.6, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>{t.login.user}</Typography>
-                <TextField fullWidth size="small" placeholder="marco"
+                <TextField fullWidth size="small" placeholder={lang === 'en' ? 'username' : 'usuario'}
                   value={username} onChange={e => setUsername(e.target.value.toLowerCase().replace(/\s/g,''))}
                   autoComplete="username" sx={INPUT_SX} />
               </Box>

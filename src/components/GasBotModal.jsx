@@ -28,10 +28,10 @@ const FIELD_SX = {
     bgcolor: 'rgba(255,255,255,0.04)', fontSize: '0.85rem', borderRadius: 2, color: 'white',
     '& fieldset': { borderColor: 'rgba(255,255,255,0.12)' },
     '&:hover fieldset': { borderColor: 'rgba(255,255,255,0.25)' },
-    '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' },
+    '&.Mui-focused fieldset': { borderColor: '#fb923c' },
   },
   '& .MuiInputLabel-root': { color: 'rgba(255,255,255,0.4)', fontSize: '0.85rem' },
-  '& .MuiInputLabel-root.Mui-focused': { color: 'var(--accent,#60a5fa)' },
+  '& .MuiInputLabel-root.Mui-focused': { color: '#fb923c' },
   '& .MuiInputBase-input': { color: 'white' },
 }
 

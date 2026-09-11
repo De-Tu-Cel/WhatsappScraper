@@ -25,6 +25,9 @@ import CampaignIcon from '@mui/icons-material/Campaign'
 import GroupsIcon from '@mui/icons-material/Groups'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
+import DescriptionIcon from '@mui/icons-material/Description'
+import AccessTimeIcon from '@mui/icons-material/AccessTime'
+import SpeedIcon from '@mui/icons-material/Speed'
 
 // Per-recipient variable check — TemplateLibraryPicker only blocks a template
 // when NONE of the selection has the data it needs, so a mixed selection (some
@@ -50,18 +53,39 @@ function StepHint({ hint }) {
   )
 }
 
-function StepHeader({ n, title, hint }) {
+// Ícono en caja degradada + número pequeño superpuesto en la esquina — mismo
+// lenguaje visual que Warmup/Instances/Performance en vez del círculo con
+// solo un número que se veía plano al lado de esos paneles ya renovados. El
+// número se conserva (superpuesto, no adentro) porque aquí sí es una
+// secuencia real de pasos, no solo decoración.
+function StepBadge({ n, icon }) {
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+    <Box sx={{ position: 'relative', flexShrink: 0 }}>
       <Box sx={{
-        width: 28, height: 28, borderRadius: '50%', flexShrink: 0,
-        background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.22), rgba(var(--accent-rgb,59,130,246),0.06))',
-        border: '1.5px solid rgba(var(--accent-rgb,59,130,246),0.5)',
-        boxShadow: '0 0 10px rgba(var(--accent-rgb,59,130,246),0.2)',
+        width: 28, height: 28, borderRadius: '9px', flexShrink: 0,
+        background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.28) 0%, rgba(var(--accent-rgb,59,130,246),0.1) 100%)',
+        border: '1px solid rgba(var(--accent-rgb,59,130,246),0.4)',
+        boxShadow: '0 0 10px rgba(var(--accent-rgb,59,130,246),0.18)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
-        <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--accent,#60a5fa)' }}>{n}</Typography>
+        {icon}
       </Box>
+      <Box sx={{
+        position: 'absolute', top: -5, right: -5,
+        width: 15, height: 15, borderRadius: '50%',
+        bgcolor: 'var(--accent, #3b82f6)', border: '1.5px solid var(--card-bg, #161d2e)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, color: '#fff', lineHeight: 1 }}>{n}</Typography>
+      </Box>
+    </Box>
+  )
+}
+
+function StepHeader({ n, title, hint, icon }) {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+      <StepBadge n={n} icon={icon} />
       <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.88rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
         {title}
       </Typography>
@@ -70,19 +94,11 @@ function StepHeader({ n, title, hint }) {
   )
 }
 
-function StepSection({ n, title, hint, children, isLast = false }) {
+function StepSection({ n, title, hint, icon, children, isLast = false }) {
   return (
-    <Box sx={{ display: 'flex', gap: 1.5 }}>
+    <Box sx={{ display: 'flex', gap: 1.2 }}>
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0, width: 28 }}>
-        <Box sx={{
-          width: 28, height: 28, borderRadius: '50%', flexShrink: 0,
-          background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.22), rgba(var(--accent-rgb,59,130,246),0.06))',
-          border: '1.5px solid rgba(var(--accent-rgb,59,130,246),0.5)',
-          boxShadow: '0 0 10px rgba(var(--accent-rgb,59,130,246),0.2)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--accent,#60a5fa)' }}>{n}</Typography>
-        </Box>
+        <StepBadge n={n} icon={icon} />
         {!isLast && (
           <Box sx={{
             flex: 1, width: 2, mt: 0.75,
@@ -246,8 +262,9 @@ export default function SendCampaign() {
       <Box sx={{ flex: 1, minHeight: 0, display: 'flex', gap: 2.5, overflow: 'hidden' }}>
         {/* Left — templates, timing, send */}
         <Box sx={{ flex: '1 1 420px', minWidth: 320, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1.8, pr: 0.5 }}>
-            <StepSection n={1} title={t.campaign.stepTemplates} hint={t.campaign.hintTemplates}>
+          <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1.8, pr: 0.5, pt: 1 }}>
+            <StepSection n={1} title={t.campaign.stepTemplates} hint={t.campaign.hintTemplates}
+              icon={<DescriptionIcon sx={{ fontSize: 14, color: 'var(--accent, #3b82f6)' }} />}>
               <SectionCard>
                 <TemplateLibraryPicker
                   onChange={setTemplateTexts}
@@ -262,7 +279,8 @@ export default function SendCampaign() {
               </SectionCard>
             </StepSection>
 
-            <StepSection n={2} title={t.campaign.stepTiming} hint={t.campaign.hintTiming} isLast>
+            <StepSection n={2} title={t.campaign.stepTiming} hint={t.campaign.hintTiming} isLast
+              icon={<AccessTimeIcon sx={{ fontSize: 14, color: 'var(--accent, #3b82f6)' }} />}>
               <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
             </StepSection>
 
@@ -430,9 +448,47 @@ export default function SendCampaign() {
             {capStats && capStats.total_available <= 0 && (
               <CapacityBanner stats={capStats} selectionCount={Math.max(targets.length, 1)} sx={{ mb: 0.5 }} />
             )}
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <DailyCapBadge stats={capStats} selectionCount={targets.length} />
-            </Box>
+            {/* Antes era solo texto gris chiquito flotando a la derecha, con
+               mucho menos peso visual que el botón grande de al lado. Ahora
+               tiene ícono en caja degradada (mismo lenguaje que el resto de
+               la app) + una barra de progreso real del cupo usado, coloreada
+               igual que ya hace DailyCapBadge internamente (normal/aviso/
+               agotado), en vez de solo números sueltos. */}
+            {capStats && (() => {
+              const used   = (capStats.total_sent || 0) + (capStats.scheduled_today || 0)
+              const cap    = capStats.total_cap || 0
+              const pct    = cap > 0 ? Math.min(100, (used / cap) * 100) : 0
+              const danger = capStats.total_available <= 0
+              const warn   = !danger && capStats.total_available < 30
+              const barRgb   = danger ? '245,158,11' : warn ? '251,191,36' : 'var(--accent-rgb,59,130,246)'
+              const barColor = danger ? '#f59e0b' : warn ? '#fbbf24' : 'var(--accent, #3b82f6)'
+              return (
+                <Box sx={{
+                  display: 'flex', flexDirection: 'column', gap: 0.8,
+                  px: 1.4, py: 1, borderRadius: 2,
+                  bgcolor: 'var(--surface, rgba(255,255,255,0.03))', border: '1px solid var(--border)',
+                }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.9 }}>
+                      <Box sx={{
+                        width: 22, height: 22, borderRadius: '7px', flexShrink: 0,
+                        background: `linear-gradient(135deg, rgba(${barRgb},0.3) 0%, rgba(${barRgb},0.1) 100%)`,
+                        border: `1px solid rgba(${barRgb},0.4)`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        <SpeedIcon sx={{ fontSize: 13, color: barColor }} />
+                      </Box>
+                      <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                        {lang === 'en' ? 'Daily quota' : 'Cupo diario'}
+                      </Typography>
+                    </Box>
+                    <DailyCapBadge stats={capStats} selectionCount={targets.length} />
+                  </Box>
+                  <LinearProgress variant="determinate" value={pct}
+                    sx={{ borderRadius: 4, height: 4, bgcolor: 'rgba(255,255,255,0.06)', '& .MuiLinearProgress-bar': { bgcolor: barColor, borderRadius: 4 } }} />
+                </Box>
+              )
+            })()}
             <Button
               fullWidth
               onClick={handleSend}
@@ -472,9 +528,10 @@ export default function SendCampaign() {
         </Box>
 
         {/* Right — recipients table, ~half the screen */}
-        <Box sx={{ flex: '1 1 480px', minWidth: 320, display: 'flex', flexDirection: 'column', minHeight: 0, gap: 1, overflowY: 'auto' }}>
+        <Box sx={{ flex: '1 1 480px', minWidth: 320, display: 'flex', flexDirection: 'column', minHeight: 0, gap: 1, overflowY: 'auto', pt: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <StepHeader n={3} title={t.campaign.stepRecipients} hint={t.campaign.hintRecipients} />
+            <StepHeader n={3} title={t.campaign.stepRecipients} hint={t.campaign.hintRecipients}
+              icon={<GroupsIcon sx={{ fontSize: 14, color: 'var(--accent, #3b82f6)' }} />} />
             {targets.length > 0 && (
               <Box sx={{
                 display: 'flex', alignItems: 'center', gap: 0.8,

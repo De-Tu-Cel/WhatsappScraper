@@ -1093,7 +1093,8 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
       <Box sx={{ display: 'flex', gap: 1, pt: 0.5 }}>
         <Tooltip title={noInstance ? (lang === 'en' ? 'Connect a WhatsApp instance first' : 'Conecta una instancia WhatsApp primero') : ''}>
         <span style={{ flex: 1, minWidth: 0 }}>
-        <Button type="submit" fullWidth variant="contained" disabled={submitting || belowMinTemplates || noInstance || capBlocked || capExhaustedToday}
+        <Button type="submit" fullWidth variant="contained" disabled={submitting || belowMinTemplates || noInstance || capBlocked || capExhaustedToday
+          || !name.trim() || cleanMessages.length === 0 || !dateVal || !timeVal || selectedNums.size === 0}
           startIcon={submitting ? <CircularProgress size={13} sx={{ color: 'inherit' }} /> : <SendIcon />}
           sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.85)', boxShadow: '0 0 18px rgba(var(--accent-rgb,59,130,246),0.35)' }, '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.2)' }, textTransform: 'none', fontWeight: 700, fontSize: '0.85rem', borderRadius: 2, py: 1, boxShadow: 'none', transition: 'all 0.2s' }}>
           {submitting ? t.sched.saving : (isEdit ? t.sched.saveLbl : (duplicateFrom ? t.sched.duplicateLbl : t.sched.scheduleLbl))}
@@ -1457,7 +1458,12 @@ function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicat
   const isEdit = panel?.mode === 'edit'
   const isReadOnly = isEdit && panel?.job?.status !== 'pending'
   const modeColor  = panel?.mode === 'duplicate' ? '#a78bfa' : (isEdit ? '#4ade80' : 'var(--accent,#3b82f6)')
-  const modeRgb    = panel?.mode === 'duplicate' ? '167,139,250' : (isEdit ? '74,222,128' : '59,130,246')
+  // Duplicate/edit get their own fixed signal color (distinct from whatever
+  // accent the user picked in Settings — they mean something specific: "this
+  // is a copy" / "this is an edit"). Create is just the normal case, so it
+  // should follow the real --accent-rgb instead of a hardcoded blue that
+  // clashed with a non-default accent (e.g. pink) everywhere else in this panel.
+  const modeRgb    = panel?.mode === 'duplicate' ? '167,139,250' : (isEdit ? '74,222,128' : 'var(--accent-rgb,59,130,246)')
   const [industryMap, setIndustryMap] = useState({})
 
   useEffect(() => {
@@ -1485,8 +1491,20 @@ function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicat
     }}>
       {isOpen && (
         <Box sx={{ width: 'min(390px, 55vw)', display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2.5, py: 1.8, borderBottom: '1px solid rgba(255,255,255,0.07)', background: `linear-gradient(180deg, rgba(${modeRgb},0.07) 0%, transparent 100%)`, flexShrink: 0 }}>
-            <Box sx={{ width: 32, height: 32, borderRadius: 1.5, flexShrink: 0, bgcolor: `rgba(${modeRgb},0.12)`, border: `1px solid rgba(${modeRgb},0.3)`, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `0 0 14px rgba(${modeRgb},0.2)` }}>
+          {/* Mismo lenguaje de header que Warmup/Performance/Instances: fondo
+             en degradado diagonal de 3 paradas + línea de brillo inferior
+             centrada, en vez del degradado plano de arriba-a-abajo sin ese
+             detalle que se veía apagado al lado de esos paneles ya renovados. */}
+          <Box sx={{
+            display: 'flex', alignItems: 'center', gap: 1, px: 2.5, py: 1.8, position: 'relative', flexShrink: 0,
+            background: `linear-gradient(135deg, rgba(${modeRgb},0.14) 0%, rgba(${modeRgb},0.04) 60%, transparent 100%)`,
+            borderBottom: `1px solid rgba(${modeRgb},0.15)`,
+            '&::after': {
+              content: '""', position: 'absolute', bottom: 0, left: 16, right: 16, height: '1px',
+              background: `linear-gradient(90deg, transparent, rgba(${modeRgb},0.4) 40%, rgba(${modeRgb},0.4) 60%, transparent)`,
+            },
+          }}>
+            <Box sx={{ width: 32, height: 32, borderRadius: '9px', flexShrink: 0, background: `linear-gradient(135deg, rgba(${modeRgb},0.28) 0%, rgba(${modeRgb},0.1) 100%)`, border: `1px solid rgba(${modeRgb},0.35)`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               {panel.mode === 'duplicate' ? <ContentCopyIcon sx={{ fontSize: 14, color: modeColor }} /> : isEdit ? <EditIcon sx={{ fontSize: 14, color: modeColor }} /> : <ScheduleSendIcon sx={{ fontSize: 15, color: modeColor }} />}
             </Box>
             <Box sx={{ flex: 1, minWidth: 0 }}>

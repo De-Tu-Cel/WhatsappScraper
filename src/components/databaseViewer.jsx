@@ -6,6 +6,21 @@ import { useDailyCapStats } from '../hooks/useDailyCapStats'
 import { getOverBy } from '../lib/dailyCap'
 import DailyCapBadge from './DailyCapBadge'
 const display = v => (!v || ['null','none','undefined','n/a'].includes(String(v).trim().toLowerCase())) ? '—' : v
+
+// Deterministic per-value color (same palette/hash as IdeasPanel.jsx's
+// colorForTerm) — the Industry/City filter checklist and its "active filter"
+// chips use this instead of one flat accent color for every checked value,
+// so a multi-select with several picked terms reads as distinct, colorful
+// choices rather than a wall of identical blue.
+const FILTER_TERM_COLORS = [
+  '#60a5fa', '#34d399', '#fbbf24', '#f472b6', '#a78bfa',
+  '#fb923c', '#4ade80', '#22d3ee', '#c084fc', '#93c5fd',
+]
+function colorForTerm(term) {
+  let hash = 0
+  for (let i = 0; i < term.length; i++) hash = (hash * 31 + term.charCodeAt(i)) >>> 0
+  return FILTER_TERM_COLORS[hash % FILTER_TERM_COLORS.length]
+}
 import { useLang } from '../context/LangContext'
 import { isValidUrl, urlValidationMsg, isValidWhatsAppNumber, waNumberValidationMsg } from '@/lib/validators'
 import Box from '@mui/material/Box'
@@ -60,6 +75,8 @@ import MessageIcon from '@mui/icons-material/Message'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
+import Popover from '@mui/material/Popover'
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import { visuallyHidden } from '@mui/utils'
 
 // Estable entre renders — CompanyCard está memoizado y compara activeSet por
@@ -85,18 +102,19 @@ import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBan
 import { SendConfigPanel, CountdownBar } from './SendConfigPanel'
 import { loadSendConfig, randMsgDelayMs, randBatchBreakMs, randBatchSize } from '@/lib/sendConfig'
 
-// One section of the shared stats card (icon + value + label) — no border of
+// One section of the shared stats card (icon + label + value) — no border of
 // its own; lives inside ONE outer card together with the others, separated by
-// vertical Dividers, matching the reference invoice-list summary card (a
-// single bordered strip with internal dividers, not separate boxes with gaps).
+// vertical Dividers, matching the reference invoice-list summary card. Sized
+// generously (bigger icon circle, real spacing, clear label/value hierarchy)
+// instead of cramming everything onto one tight row.
 function StatCard({ icon, color, value, label, subtitle, onClick, active }) {
   const clickable = !!onClick
   return (
     <Box
       onClick={onClick}
       sx={{
-        flex: '1 1 150px', minWidth: 140, display: 'flex', alignItems: 'center', gap: 1.1,
-        px: 1.6, py: 0.3, borderRadius: 1.5,
+        flex: '1 1 0', minWidth: 160, display: 'flex', alignItems: 'center', gap: 1.6,
+        px: 2.4, py: 2, borderRadius: 2,
         cursor: clickable ? 'pointer' : 'default',
         bgcolor: active ? `${color}14` : 'transparent',
         transition: 'background-color 0.15s',
@@ -104,26 +122,127 @@ function StatCard({ icon, color, value, label, subtitle, onClick, active }) {
       }}
     >
       <Box sx={{
-        width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+        width: 46, height: 46, borderRadius: '50%', flexShrink: 0,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        border: `1.5px solid ${color}55`,
+        border: `2px solid ${color}55`,
       }}>
         {icon}
       </Box>
       <Box sx={{ minWidth: 0 }}>
-        <Typography sx={{ fontSize: '0.72rem', color: 'var(--text)', fontWeight: 700, lineHeight: 1.25, whiteSpace: 'nowrap' }}>
+        <Typography sx={{ fontSize: '0.85rem', color: 'var(--text)', fontWeight: 700, lineHeight: 1.3, whiteSpace: 'nowrap' }}>
           {label}
         </Typography>
-        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5 }}>
-          <Typography sx={{ fontSize: '0.98rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.3, fontVariantNumeric: 'tabular-nums' }}>
-            {value}
+        {subtitle && (
+          <Typography sx={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 500, lineHeight: 1.4, whiteSpace: 'nowrap' }}>
+            {subtitle}
           </Typography>
-          {subtitle && (
-            <Typography sx={{ fontSize: '0.66rem', color, fontWeight: 700, whiteSpace: 'nowrap' }}>{subtitle}</Typography>
-          )}
-        </Box>
+        )}
+        <Typography sx={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.4, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+          {value}
+        </Typography>
       </Box>
     </Box>
+  )
+}
+
+// Checkbox multi-select filter (Industria/Ciudad) — same dark-Popover pattern
+// already proven in IdeasPanel.jsx's FilterDropdown, instead of the native
+// MUI Select+Menu whose dark styling wasn't rendering correctly and which
+// only ever supported picking one value at a time. `options` is the full
+// list (already loaded via /api/companies/meta, no need to paginate/fetch).
+function MultiSelectFilter({ label, options, selected, onChange, allLabel, searchPh, noItemsLabel }) {
+  const [anchorEl, setAnchorEl] = useState(null)
+  const [search, setSearch] = useState('')
+  const open = Boolean(anchorEl)
+  const filtered = search ? options.filter(o => o.toLowerCase().includes(search.toLowerCase())) : options
+  const allSelected = options.length > 0 && selected.size === options.length
+
+  function toggle(v) {
+    const next = new Set(selected)
+    next.has(v) ? next.delete(v) : next.add(v)
+    onChange(next)
+  }
+  function toggleAll() {
+    onChange(allSelected ? new Set() : new Set(options))
+  }
+  function handleOpen(e) { setAnchorEl(e.currentTarget); setSearch('') }
+
+  return (
+    <>
+      <Button onClick={handleOpen}
+        endIcon={<ArrowDropDownIcon sx={{ fontSize: 18 }} />}
+        sx={{
+          textTransform: 'none', fontSize: '0.82rem', fontWeight: 600, borderRadius: 1.5,
+          height: 40, px: 1.5, minWidth: 140, justifyContent: 'space-between',
+          color: selected.size > 0 ? 'var(--accent, #60a5fa)' : 'var(--text-muted, rgba(255,255,255,0.5))',
+          border: '1px solid', borderColor: selected.size > 0 ? 'rgba(var(--accent-rgb,59,130,246),0.4)' : 'var(--border, rgba(255,255,255,0.12))',
+          bgcolor: selected.size > 0 ? 'rgba(var(--accent-rgb,59,130,246),0.08)' : 'var(--surface, #0d1117)',
+          '&:hover': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.5)', bgcolor: selected.size > 0 ? 'rgba(var(--accent-rgb,59,130,246),0.12)' : 'var(--surface, #0d1117)' },
+        }}>
+        {label}{selected.size > 0 ? ` (${selected.size})` : ''}
+      </Button>
+      <Popover open={open} anchorEl={anchorEl} onClose={() => setAnchorEl(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        slotProps={{ paper: { sx: {
+          bgcolor: 'var(--card-bg,#1e293b) !important', color: 'var(--text, #f1f5f9)',
+          border: '1px solid var(--border, rgba(255,255,255,0.1))',
+          borderRadius: 2, width: 260, p: 1.2, mt: 0.5,
+        } } }}>
+        <TextField
+          size="small" fullWidth autoFocus value={search} onChange={e => setSearch(e.target.value)}
+          placeholder={searchPh}
+          slotProps={{ input: { startAdornment: (
+            <InputAdornment position="start"><SearchIcon sx={{ fontSize: 14, color: 'var(--text-muted)' }} /></InputAdornment>
+          ) } }}
+          sx={{
+            mb: 1,
+            '& .MuiInputBase-root': { bgcolor: 'var(--surface, rgba(255,255,255,0.03)) !important', fontSize: '0.82rem', color: 'var(--text)' },
+            '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--border, rgba(255,255,255,0.1))' },
+          }}
+        />
+        <Box onClick={toggleAll} sx={{
+          display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', borderRadius: 1,
+          px: 0.6, py: 0.4, mb: 0.3,
+          '&:hover': { bgcolor: 'var(--item-hover, rgba(255,255,255,0.06))' },
+        }}>
+          <Checkbox size="small" checked={allSelected} indeterminate={selected.size > 0 && !allSelected}
+            onClick={e => e.stopPropagation()} onChange={toggleAll}
+            sx={{ p: 0.4, color: 'var(--text-muted)', '&.Mui-checked, &.MuiCheckbox-indeterminate': { color: 'var(--accent, #3b82f6)' } }} />
+          <Typography sx={{ fontSize: '0.78rem', color: 'var(--text)', fontWeight: 600 }}>{allLabel}</Typography>
+        </Box>
+        <Divider sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', mb: 0.4 }} />
+        <Box sx={{
+          display: 'flex', flexDirection: 'column', maxHeight: 260, overflowY: 'auto',
+          scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.15) transparent',
+          '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.15)', borderRadius: 2 },
+        }}>
+          {filtered.length === 0 ? (
+            <Typography sx={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', py: 2, fontStyle: 'italic' }}>
+              {noItemsLabel}
+            </Typography>
+          ) : filtered.map(v => {
+            const checked = selected.has(v)
+            const color = colorForTerm(v)
+            return (
+              <Box key={v} onClick={() => toggle(v)} sx={{
+                display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', borderRadius: 1,
+                px: 0.6, py: 0.4, mb: 0.2,
+                bgcolor: checked ? `${color}1a` : 'var(--surface, rgba(255,255,255,0.03)) !important',
+                border: `1px solid ${checked ? `${color}55` : 'transparent'}`,
+                '&:hover': { bgcolor: checked ? `${color}2a` : 'var(--item-hover, rgba(255,255,255,0.07)) !important' },
+              }}>
+                <Checkbox size="small" checked={checked} onClick={e => e.stopPropagation()} onChange={() => toggle(v)}
+                  sx={{ p: 0.4, color: 'var(--text-muted)', '&.Mui-checked': { color } }} />
+                <Typography sx={{ fontSize: '0.78rem', color: checked ? color : 'var(--text)', fontWeight: checked ? 700 : 400, flex: 1,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {v}
+                </Typography>
+              </Box>
+            )
+          })}
+        </Box>
+      </Popover>
+    </>
   )
 }
 
@@ -370,8 +489,6 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
 // ─── Filter bar ───────────────────────────────────────────────────────────────
 function FilterBar({ filters, onChange, industries, cities }) {
   const { t, lang } = useLang()
-  const [openIndustry,  setOpenIndustry]  = useState(false)
-  const [openCity,      setOpenCity]      = useState(false)
   const [openWA,        setOpenWA]        = useState(false)
   const [openContacted, setOpenContacted] = useState(false)
 
@@ -402,41 +519,25 @@ function FilterBar({ filters, onChange, industries, cities }) {
         }}
       />
 
-      <FormControl size="small" sx={{ minWidth: 160 }}>
-        <InputLabel id="filter-industry-label" sx={LABEL_SX}>{t.db.industry}</InputLabel>
-        <Select
-          labelId="filter-industry-label"
-          open={openIndustry}
-          onClose={() => setOpenIndustry(false)}
-          onOpen={() => setOpenIndustry(true)}
-          value={filters.industry}
-          label={t.db.industry}
-          onChange={(e) => onChange('industry', e.target.value)}
-          sx={SELECT_SX}
-          MenuProps={MENU_PROPS}
-        >
-          <MenuItem value=""><em>{t.db.allF}</em></MenuItem>
-          {industries.map((v) => <MenuItem key={v} value={v}>{v}</MenuItem>)}
-        </Select>
-      </FormControl>
+      <MultiSelectFilter
+        label={t.db.industry}
+        options={industries}
+        selected={new Set(filters.industry)}
+        onChange={(next) => onChange('industry', [...next])}
+        allLabel={t.db.allF}
+        searchPh={lang === 'en' ? 'Search industry...' : 'Buscar industria...'}
+        noItemsLabel={lang === 'en' ? 'No industries' : 'No hay industrias'}
+      />
 
-      <FormControl size="small" sx={{ minWidth: 140 }}>
-        <InputLabel id="filter-city-label" sx={LABEL_SX}>{t.db.city}</InputLabel>
-        <Select
-          labelId="filter-city-label"
-          open={openCity}
-          onClose={() => setOpenCity(false)}
-          onOpen={() => setOpenCity(true)}
-          value={filters.city}
-          label={t.db.city}
-          onChange={(e) => onChange('city', e.target.value)}
-          sx={SELECT_SX}
-          MenuProps={MENU_PROPS}
-        >
-          <MenuItem value=""><em>{t.db.allF}</em></MenuItem>
-          {cities.map((v) => <MenuItem key={v} value={v}>{v}</MenuItem>)}
-        </Select>
-      </FormControl>
+      <MultiSelectFilter
+        label={t.db.city}
+        options={cities}
+        selected={new Set(filters.city)}
+        onChange={(next) => onChange('city', [...next])}
+        allLabel={t.db.allF}
+        searchPh={lang === 'en' ? 'Search city...' : 'Buscar ciudad...'}
+        noItemsLabel={lang === 'en' ? 'No cities' : 'No hay ciudades'}
+      />
 
       <FormControl size="small" sx={{ minWidth: 120 }}>
         <InputLabel id="filter-wa-label" sx={LABEL_SX}>{t.db.whatsapp}</InputLabel>
@@ -944,6 +1045,33 @@ function SkeletonRows({ count }) {
   ))
 }
 
+// Same shape as the real stats card (outer bordered strip, N sections split
+// by vertical dividers, icon circle + 2 text lines each) so the stats area
+// doesn't just vanish and pop back in — matching StatCard's layout keeps the
+// page height stable while /api/companies is loading.
+function StatsCardSkeleton() {
+  return (
+    <Box sx={{
+      display: 'flex', flexWrap: 'wrap', mb: 1.2, overflow: 'hidden',
+      borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+      bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+    }}>
+      {Array.from({ length: 5 }).map((_, i) => (
+        <Fragment key={i}>
+          {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 2 }} />}
+          <Box sx={{ flex: '1 1 0', minWidth: 160, display: 'flex', alignItems: 'center', gap: 1.6, px: 2.4, py: 2 }}>
+            <Skeleton variant="circular" width={46} height={46} sx={{ ...SKEL_SX, flexShrink: 0 }} />
+            <Box sx={{ minWidth: 0, flex: 1 }}>
+              <Skeleton variant="text" width="70%" sx={{ ...SKEL_SX, fontSize: '0.85rem' }} />
+              <Skeleton variant="text" width="50%" sx={{ ...SKEL_SX, fontSize: '1.4rem' }} />
+            </Box>
+          </Box>
+        </Fragment>
+      ))}
+    </Box>
+  )
+}
+
 // ─── Campaign dialog ──────────────────────────────────────────────────────────
 
 export function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus = 'unknown', isDisconnected = false, capStats = null }) {
@@ -1360,7 +1488,9 @@ export default function DatabaseViewer({ isActive }) {
   const [selected, setSelected] = useState([])
   const [rowCache, setRowCache] = useState({})  // id → row, acumula filas de todas las páginas
   const [filterOpen, setFilterOpen] = useState(false)
-  const [filters, setFilters] = useState({ search: '', industry: '', city: '', has_whatsapp: '', contacted: '' })
+  // industry/city are arrays now (multi-select checklist) — search/has_whatsapp/
+  // contacted stay single values, those dropdowns are still Yes/No/All.
+  const [filters, setFilters] = useState({ search: '', industry: [], city: [], has_whatsapp: '', contacted: '' })
   const [globalStats, setGlobalStats] = useState({ total_wa: null, total_contacted: null, latest_scrape_at: null })
   // "Days ago" inherently depends on wall-clock time, not just on props/state —
   // Date.now() can't be called during render (or inside useMemo) without breaking
@@ -1406,9 +1536,9 @@ export default function DatabaseViewer({ isActive }) {
       const params = new URLSearchParams({
         page: page + 1,
         page_size: rowsPerPage,
-        ...(filters.search       && { search: filters.search }),
-        ...(filters.industry     && { industry: filters.industry }),
-        ...(filters.city         && { city: filters.city }),
+        ...(filters.search          && { search: filters.search }),
+        ...(filters.industry.length > 0 && { industry: filters.industry.join(',') }),
+        ...(filters.city.length     > 0 && { city: filters.city.join(',') }),
         ...(filters.has_whatsapp !== '' && { has_whatsapp: filters.has_whatsapp }),
         ...(filters.contacted    !== '' && { contacted: filters.contacted }),
       })
@@ -1682,6 +1812,15 @@ export default function DatabaseViewer({ isActive }) {
           </Box>
         </Collapse>
 
+        {/* ── Stats card skeleton — same outer wrapper as the real card below,
+             shown while /api/companies is loading so the area doesn't just
+             disappear and pop back in once data arrives. ── */}
+        {loading && (
+          <Box sx={{ px: 2, py: 1.5, borderBottom: '1px solid rgba(255,255,255,0.05)', bgcolor: 'rgba(255,255,255,0.012)', position: 'relative', zIndex: 1 }}>
+            <StatsCardSkeleton />
+          </Box>
+        )}
+
         {/* ── Stats card — ONE bordered strip with internal dividers between
              sections, matching the reference invoice-list summary card,
              instead of separate boxes with gaps between them. ── */}
@@ -1689,20 +1828,20 @@ export default function DatabaseViewer({ isActive }) {
           const statCards = [
             {
               key: 'total',
-              icon: <StorageIcon sx={{ fontSize: 16, color: '#3b82f6' }} />, color: '#3b82f6',
+              icon: <StorageIcon sx={{ fontSize: 22, color: '#3b82f6' }} />, color: '#3b82f6',
               value: total.toLocaleString(),
               label: lang === 'en' ? (total === 1 ? 'Company' : 'Companies') : (total === 1 ? 'Empresa' : 'Empresas'),
             },
             globalStats.total_wa !== null && {
               key: 'wa',
-              icon: <WhatsAppIcon sx={{ fontSize: 16, color: '#22c55e' }} />, color: '#22c55e',
+              icon: <WhatsAppIcon sx={{ fontSize: 22, color: '#22c55e' }} />, color: '#22c55e',
               value: globalStats.total_wa.toLocaleString(),
               subtitle: total > 0 ? `${Math.round((globalStats.total_wa / total) * 100)}%` : null,
               label: lang === 'en' ? 'With WhatsApp' : 'Con WhatsApp',
             },
             globalStats.total_contacted !== null && {
               key: 'contacted',
-              icon: <SendIcon sx={{ fontSize: 15, color: '#60a5fa' }} />, color: '#60a5fa',
+              icon: <SendIcon sx={{ fontSize: 20, color: '#60a5fa' }} />, color: '#60a5fa',
               value: globalStats.total_contacted.toLocaleString(),
               label: lang === 'en' ? 'Contacted' : 'Contactadas',
               active: filters.contacted === 'true',
@@ -1710,7 +1849,7 @@ export default function DatabaseViewer({ isActive }) {
             },
             globalStats.total_contacted !== null && {
               key: 'notContacted',
-              icon: <HourglassEmptyIcon sx={{ fontSize: 15, color: '#fbbf24' }} />, color: '#fbbf24',
+              icon: <HourglassEmptyIcon sx={{ fontSize: 20, color: '#fbbf24' }} />, color: '#fbbf24',
               value: Math.max(0, total - globalStats.total_contacted).toLocaleString(),
               label: lang === 'en' ? 'Not contacted' : 'Sin contactar',
               active: filters.contacted === 'false',
@@ -1718,7 +1857,7 @@ export default function DatabaseViewer({ isActive }) {
             },
             {
               key: 'lastScrape',
-              icon: <AccessTimeIcon sx={{ fontSize: 15, color: scrapeAgeDisplay ? scrapeAgeDisplay.color : 'rgba(148,163,184,0.6)' }} />,
+              icon: <AccessTimeIcon sx={{ fontSize: 20, color: scrapeAgeDisplay ? scrapeAgeDisplay.color : 'rgba(148,163,184,0.6)' }} />,
               color: scrapeAgeDisplay ? scrapeAgeDisplay.color : 'rgba(148,163,184,0.6)',
               value: !scrapeAgeDisplay
                 ? '—'
@@ -1730,21 +1869,21 @@ export default function DatabaseViewer({ isActive }) {
           ].filter(Boolean)
 
           return (
-          <Box sx={{ px: 2, py: 1, borderBottom: '1px solid rgba(255,255,255,0.05)', bgcolor: 'rgba(255,255,255,0.012)', position: 'relative', zIndex: 1 }}>
+          <Box sx={{ px: 2, py: 1.5, borderBottom: '1px solid rgba(255,255,255,0.05)', bgcolor: 'rgba(255,255,255,0.012)', position: 'relative', zIndex: 1 }}>
             <Box sx={{
-              display: 'flex', flexWrap: 'wrap', mb: 1, overflow: 'hidden',
-              borderRadius: 2, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+              display: 'flex', flexWrap: 'wrap', mb: 1.2, overflow: 'hidden',
+              borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
               bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
             }}>
               {statCards.map(({ key, ...c }, i) => (
                 <Fragment key={key}>
-                  {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 1.2 }} />}
+                  {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 2 }} />}
                   <StatCard {...c} />
                 </Fragment>
               ))}
             </Box>
             {/* Active filter chips — right side */}
-            {(filters.search || filters.industry || filters.city || filters.has_whatsapp !== '' || filters.contacted !== '') && (
+            {(filters.search || filters.industry.length > 0 || filters.city.length > 0 || filters.has_whatsapp !== '' || filters.contacted !== '') && (
               <Box sx={{ ml: 'auto', display: 'flex', gap: 0.7, flexWrap: 'wrap', alignItems: 'center' }}>
                 {filters.search && (
                   <Chip size="small" label={`"${filters.search}"`}
@@ -1753,20 +1892,26 @@ export default function DatabaseViewer({ isActive }) {
                       border: '1px solid rgba(var(--accent-rgb, 96,165,250), 0.22)',
                       '& .MuiChip-deleteIcon': { color: 'var(--accent, #60a5fa)', fontSize: 12, '&:hover': { color: 'var(--accent, #93c5fd)' } } }} />
                 )}
-                {filters.industry && (
-                  <Chip size="small" label={filters.industry}
-                    onDelete={() => handleFilterChange('industry', '')}
-                    sx={{ height: 20, fontSize: '0.63rem', bgcolor: 'rgba(167,139,250,0.1)', color: '#a78bfa',
-                      border: '1px solid rgba(167,139,250,0.22)',
-                      '& .MuiChip-deleteIcon': { color: '#a78bfa', fontSize: 12, '&:hover': { color: '#c4b5fd' } } }} />
-                )}
-                {filters.city && (
-                  <Chip size="small" label={filters.city}
-                    onDelete={() => handleFilterChange('city', '')}
-                    sx={{ height: 20, fontSize: '0.63rem', bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24',
-                      border: '1px solid rgba(251,191,36,0.22)',
-                      '& .MuiChip-deleteIcon': { color: '#fbbf24', fontSize: 12, '&:hover': { color: '#fcd34d' } } }} />
-                )}
+                {filters.industry.map((v) => {
+                  const color = colorForTerm(v)
+                  return (
+                    <Chip key={`ind-${v}`} size="small" label={v}
+                      onDelete={() => handleFilterChange('industry', filters.industry.filter((x) => x !== v))}
+                      sx={{ height: 20, fontSize: '0.63rem', bgcolor: `${color}1a`, color,
+                        border: `1px solid ${color}38`,
+                        '& .MuiChip-deleteIcon': { color, fontSize: 12, '&:hover': { opacity: 0.75 } } }} />
+                  )
+                })}
+                {filters.city.map((v) => {
+                  const color = colorForTerm(v)
+                  return (
+                    <Chip key={`city-${v}`} size="small" label={v}
+                      onDelete={() => handleFilterChange('city', filters.city.filter((x) => x !== v))}
+                      sx={{ height: 20, fontSize: '0.63rem', bgcolor: `${color}1a`, color,
+                        border: `1px solid ${color}38`,
+                        '& .MuiChip-deleteIcon': { color, fontSize: 12, '&:hover': { opacity: 0.75 } } }} />
+                  )
+                })}
                 {filters.has_whatsapp !== '' && (
                   <Chip size="small"
                     label={filters.has_whatsapp === 'true' ? (lang === 'en' ? 'Has WA' : 'Con WA') : (lang === 'en' ? 'No WA' : 'Sin WA')}

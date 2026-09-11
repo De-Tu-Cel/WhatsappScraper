@@ -302,6 +302,15 @@ export default function SendCampaign() {
                   boxShadow: canSend ? '0 4px 20px rgba(34,197,94,0.35), 0 1px 8px rgba(34,197,94,0.15)' : 'none',
                   transition: 'all 0.25s ease',
                   '&:hover': { bgcolor: canSend ? '#22c55e' : 'rgba(255,255,255,0.05)', boxShadow: canSend ? '0 6px 28px rgba(34,197,94,0.5)' : 'none' },
+                  // MUI's own .Mui-disabled base style otherwise overrides the
+                  // custom border/background above with its generic light-gray
+                  // default, producing a bright outline that clashes with the
+                  // dark theme — force ours to actually win.
+                  '&.Mui-disabled': {
+                    bgcolor: 'var(--item-hover) !important',
+                    color: 'var(--text-muted) !important',
+                    border: '1px solid var(--border) !important',
+                  },
                 }}
               >
                 {isSending ? t.campaign.sending : `${t.campaign.sendBtn}${targets.length ? ` (${targets.length})` : ''}`}

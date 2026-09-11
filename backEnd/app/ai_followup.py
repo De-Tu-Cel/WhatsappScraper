@@ -597,6 +597,31 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
         return None
 
 
+def _is_blocked_or_blacklisted(db, company_id: str) -> bool:
+    """Same check /send-message (routes.py) already does before a manual send —
+    ai_followup.py had no equivalent anywhere, so a company blocked/blacklisted
+    AFTER Andy's session started was never actually protected."""
+    if not company_id or len(company_id) != 24:
+        return False
+    try:
+        from bson import ObjectId
+        from app.pipeline import _check_blacklist
+        company = db.db.companies.find_one(
+            {"_id": ObjectId(company_id)},
+            {"domain": 1, "industry": 1, "blocked": 1},
+        )
+        if not company:
+            return False
+        if company.get("blocked"):
+            return True
+        domain = company.get("domain") or ""
+        industry = company.get("industry") or ""
+        return bool(_check_blacklist(domain, industry)) if domain else False
+    except Exception as exc:
+        log.warning("[AIFollowup] blacklist check failed (failing safe, allowing send): %s", exc)
+        return False
+
+
 def _send_typing_presence(phone_number: str, instance: str):
     """Signal WhatsApp that the contact is typing via Evolution API."""
     try:
@@ -631,6 +656,16 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         return
 
     db = MongoDBManager()
+
+    # Bloqueo por blacklist / chat bloqueado — el endpoint de envío manual
+    # (/send-message, routes.py) ya revisaba esto, pero el flujo automático de
+    # seguimiento (este archivo) no lo revisaba en NINGÚN punto: si una empresa
+    # se bloquea o se agrega a blacklist DESPUÉS de que Andy ya tiene una sesión
+    # activa con ella, nada lo detenía — seguía mandándole mensajes a alguien
+    # que ya se marcó como "no contactar".
+    if _is_blocked_or_blacklisted(db, company_id):
+        print(f"[AIFollowup] EXIT: empresa bloqueada/en blacklist — {company_id}")
+        return
 
     # Skip messages that are older than 2 hours — prevents the IA from responding
     # to stale webhook re-deliveries or messages from closed sessions.
@@ -732,6 +767,24 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
     # Re-fetch session with complete turns list
     session = db.db.ai_followup_sessions.find_one({"_id": sid})
     if not session:
+        return
+
+    # A human can disable the AI toggle (or the session can end for any other
+    # reason — max_turns, idle sweep) WHILE this reply is sleeping through its
+    # anti-detection delay above. Without this check, that sleep was the only
+    # thing standing between "human just took over" and Andy sending a message
+    # anyway seconds later — the toggle only ever updated Mongo, it never
+    # actually interrupted a reply already in flight.
+    if session.get("status") != "active":
+        log.info("[AIFollowup] session %s status changed to %r during read delay — aborting send for %s",
+                  sid, session.get("status"), phone_number)
+        print(f"[AIFollowup] EXIT: session ended during delay (status={session.get('status')!r})")
+        return
+
+    # Same blacklist/blocked re-check as above, for the same reason as the status
+    # re-check above it: the company can get blocked/blacklisted DURING the delay.
+    if _is_blocked_or_blacklisted(db, company_id):
+        print(f"[AIFollowup] EXIT: empresa bloqueada/en blacklist durante el delay — {company_id}")
         return
 
     # Hard-coded bot detection: if the contact has sent the same message before,
@@ -871,11 +924,18 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
             except Exception:
                 pass
 
-    # Daily cap guard — Andy respects the same limit as campaigns
+    # Daily cap guard — Andy respects the same limit as campaigns. Reserved
+    # atomically BEFORE sending (not checked-then-incremented-after) so a
+    # concurrent campaign/queue send hitting the same instance can't both
+    # pass a stale "under cap" read — see daily_cap.reserve_daily_slot.
+    _cap_reserved_new = False
     try:
-        from app.daily_cap import get_daily_count as _gdc, get_instance_cap as _gcap, notify_cap_reached_once as _ncr
+        from app.daily_cap import get_instance_cap as _gcap, notify_cap_reached_once as _ncr, reserve_daily_slot as _reserve_daily
+        from app.phone_utils import clean_digits as _clean_ai
+        _phone_digits_cap = _clean_ai(phone_number)
         _DCAP = _gcap(db, instance)
-        if _gdc(db, instance) >= _DCAP:
+        _cap_reserved, _cap_reserved_new = _reserve_daily(db, instance, _DCAP, _phone_digits_cap)
+        if not _cap_reserved:
             log.warning("[AIFollowup] daily cap %d reached for %s — skipping Andy reply to %s", _DCAP, instance, phone_number)
             _ncr(db, instance)
             db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": False}})
@@ -967,10 +1027,10 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
             message_id = resp_json.get("key", {}).get("id") or resp_json.get("id")
             status = "sent" if send_result.get("status_code") in (200, 201) else "failed"
 
-        if status == "sent":
-            from app.daily_cap import increment_daily_count as _incr_daily
+        if status != "sent" and _cap_reserved_new:
+            from app.daily_cap import release_daily_slot as _release_daily
             from app.phone_utils import clean_digits as _clean_ai
-            _incr_daily(db, instance, _clean_ai(phone_number))
+            _release_daily(db, instance, _clean_ai(phone_number))
 
         # Persist AI message in message_logs
         from datetime import datetime as _dt

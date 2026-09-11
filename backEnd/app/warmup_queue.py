@@ -6,10 +6,13 @@ by the active LLM (OpenAI / DeepSeek) and sent via wwebjs.  Runs as a
 single daemon background thread that polls every _POLL_INTERVAL seconds.
 """
 import logging
+import os
 import random
+import socket
 import threading
 import time
-from datetime import datetime, timedelta
+import uuid
+from datetime import datetime, timedelta, timezone
 
 try:
     from zoneinfo import ZoneInfo as _ZoneInfo
@@ -25,6 +28,49 @@ log = logging.getLogger(__name__)
 
 _thread: threading.Thread | None = None
 _lock = threading.Lock()
+
+# ─── Lease (leader election across the 2 uvicorn worker processes) ───────────
+# Dockerfile.backend runs `uvicorn --workers 2` — each process starts its own
+# copy of this module's daemon thread via start_warmup_worker(). Without this,
+# both processes independently run _warmup_loop → _get_or_create_session (plain
+# find_one, non-atomic) → _process_pair, and can both decide "this pair's turn,
+# not at the daily cap yet" for the same pair at nearly the same instant —
+# sending the same peer-warmup message twice almost simultaneously. That's
+# exactly the bursty/duplicate pattern that looks bot-like to WhatsApp, on
+# precisely the fragile, newly-registered numbers this system exists to
+# protect. send_now_worker.py already solved this identical problem with a
+# short-TTL Mongo lease; this is the same pattern, just for warmup's own
+# collection so the two leases never collide.
+_WORKER_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+_LEASE_SEC = 45  # how long a lease lasts without renewal before another process may take over
+_LEASE_POLL_SEC = 10  # how often a non-leader process re-checks whether the lease is free
+
+
+def _ensure_lease_doc(db):
+    db.db.warmup_worker_lease.update_one(
+        {"_id": "singleton"},
+        {"$setOnInsert": {"holder": None, "expires_at": datetime.min}},
+        upsert=True,
+    )
+
+
+def _try_acquire_lease(db) -> bool:
+    now = datetime.now(timezone.utc)
+    result = db.db.warmup_worker_lease.update_one(
+        {"_id": "singleton", "expires_at": {"$lte": now}},
+        {"$set": {"holder": _WORKER_ID, "expires_at": now + timedelta(seconds=_LEASE_SEC)}},
+    )
+    return result.modified_count > 0
+
+
+def _renew_lease(db) -> bool:
+    now = datetime.now(timezone.utc)
+    result = db.db.warmup_worker_lease.update_one(
+        {"_id": "singleton", "holder": _WORKER_ID},
+        {"$set": {"expires_at": now + timedelta(seconds=_LEASE_SEC)}},
+    )
+    return result.modified_count > 0
+
 
 _POLL_INTERVAL       = 300   # seconds between checks
 _MAX_MSGS_PER_PAIR   = 12   # messages per pair per day
@@ -44,6 +90,12 @@ _TOPICS = [
     "están hablando de películas de terror y de culto — El resplandor, It, Hereditary, El exorcista, Annihilation, etc. Comparten cuáles los asustaron de verdad o cuáles son sobrevaloradas",
     "están hablando de tecnología y gadgets — algún celular nuevo, inteligencia artificial, si los robots van a quitarles el trabajo, algún gadget cool que vieron",
     "están hablando de música — pueden hablar de metal, rock alternativo, electrónica, rap, o lo que sea. Comparten canciones, artistas o conciertos a los que quieren ir",
+    "están hablando de fútbol y deportes — el partido de ayer, su equipo favorito, un gol increíble, algo de la selección mexicana, o si van a ir al estadio",
+    "están hablando de comida y antojitos — tacos, algún puesto callejero que descubrieron, qué se les antoja ahorita, o alguna receta que hicieron",
+    "están hablando de viajes — un lugar al que quieren ir, algo de un viaje pasado, planes para un puente o vacaciones, playa vs ciudad",
+    "están hablando de chismes del trabajo o la escuela — algo que pasó con el jefe o el maestro, un compañero pesado, ganas de que sea viernes, un proyecto pendiente",
+    "están hablando de series que están viendo (Netflix, HBO, Prime, etc.) — algún estreno, un final que los dejó en shock, o recomendándose qué ver",
+    "están hablando de carros o motos — algún carro que vieron, ganas de cambiar de coche, el tráfico, o alguna anécdota manejando",
 ]
 
 
@@ -416,10 +468,26 @@ def _process_pair(db, inst_a: dict, inst_b: dict, session: dict, config: dict | 
 # ── main loop ─────────────────────────────────────────────────────────────────
 
 def _warmup_loop() -> None:
+    from app.database import MongoDBManager
+    db = MongoDBManager()
+    _ensure_lease_doc(db)
+    is_leader = False
+
     while True:
         try:
-            from app.database import MongoDBManager
-            db = MongoDBManager()
+            # Leader election — only the process holding the lease actually sends;
+            # the other process just polls, ready to take over if the leader dies
+            # (lease simply expires, no manual failover needed).
+            if not is_leader:
+                is_leader = _try_acquire_lease(db)
+                if not is_leader:
+                    time.sleep(_LEASE_POLL_SEC)
+                    continue
+                log.info("[Warmup] %s acquired leadership", _WORKER_ID)
+
+            if not _renew_lease(db):
+                is_leader = False
+                continue
 
             config = _load_config(db)
 
@@ -441,6 +509,12 @@ def _warmup_loop() -> None:
             today = _mx_now().strftime("%Y-%m-%d")
 
             for inst_a, inst_b in pairs:
+                # Re-check on every pair, not just once per tick — a long pairs
+                # list could outlast the lease TTL, and losing leadership mid-tick
+                # must stop new sends immediately, not just on the next tick.
+                if not _renew_lease(db):
+                    is_leader = False
+                    break
                 session = _get_or_create_session(db, inst_a, inst_b, today)
                 _process_pair(db, inst_a, inst_b, session, config)
                 time.sleep(random.uniform(2, 5))

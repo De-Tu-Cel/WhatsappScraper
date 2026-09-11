@@ -317,10 +317,18 @@ class MongoDBManager:
                 {"website": {"$regex": search, "$options": "i"}},
                 {"domain": {"$regex": search, "$options": "i"}},
             ]
+        # industry/city: comma-separated list of exact values from the filter
+        # checklist (multi-select) — was a single $regex substring match before;
+        # $in against the exact meta-list values is both correct for multiple
+        # selections and more precise than a partial-text regex for one.
         if industry:
-            query["industry"] = {"$regex": industry, "$options": "i"}
+            industry_list = [v.strip() for v in industry.split(",") if v.strip()]
+            if industry_list:
+                query["industry"] = {"$in": industry_list}
         if city:
-            query["city"] = {"$regex": city, "$options": "i"}
+            city_list = [v.strip() for v in city.split(",") if v.strip()]
+            if city_list:
+                query["city"] = {"$in": city_list}
         if has_whatsapp is not None:
             query["has_whatsapp"] = has_whatsapp
 

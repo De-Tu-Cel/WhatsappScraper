@@ -572,10 +572,16 @@ class SummaryBar(Flowable):
 
 # ─── Page callbacks ───────────────────────────────────────────────────────────
 
-_report_company_name = ""  # set at generate time, used in footer
-
-
-def _page_bg(canv, doc):
+def _page_bg(canv, doc, company_name: str = ""):
+    """company_name is passed in per-call (via a closure at the doc.build() call
+    site) rather than read from a module-level global — POST /reports/{company_id}
+    is a sync endpoint, so FastAPI runs it in the shared threadpool: two users
+    generating reports for two different companies at the same moment could race
+    on a shared global, with one thread's build() reading the OTHER thread's
+    company name in the footer. A module has exactly one copy of its globals no
+    matter how many threads call into it — there's no way to make that safe
+    without either a lock (needless serialization) or just not sharing the state,
+    which is what this does."""
     canv.saveState()
     canv.setFillColor(C["bg"])
     canv.rect(0, 0, W, H, fill=1, stroke=0)
@@ -584,7 +590,7 @@ def _page_bg(canv, doc):
     canv.line(LM, 14 * mm, W - RM, 14 * mm)
     canv.setFillColor(C["muted"])
     canv.setFont("Helvetica", 7)
-    left_text = _safe(_report_company_name) if _report_company_name else "De Tu Cel"
+    left_text = _safe(company_name) if company_name else "De Tu Cel"
     canv.drawString(LM, 10 * mm, left_text)
     canv.drawRightString(W - RM, 10 * mm,
                          f"Analisis de Canal WhatsApp · {_mx_now().strftime('%d/%m/%Y %H:%M')}")
@@ -694,8 +700,6 @@ def _suggestions(analytics: dict, industry: str, avg_response_min=None) -> list[
 # ─── Main generator ───────────────────────────────────────────────────────────
 
 def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64: str | None) -> io.BytesIO:
-    global _report_company_name
-
     def _safe_dict(d):
         if isinstance(d, dict):  return {k: _safe_dict(v) for k, v in d.items()}
         if isinstance(d, list):  return [_safe_dict(i) for i in d]
@@ -714,7 +718,6 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     now_str = _date_es()
 
     company_name = _safe(company.get("name") or company.get("domain") or "Empresa")
-    _report_company_name = company_name
     industry     = _safe(company.get("industry") or analytics.get("industry") or "-")
     domain       = _safe(company.get("domain") or "")
     wa_number    = ""
@@ -1002,6 +1005,9 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
             Canvas.drawCentredString = _orig_dcs
 
     doc.build = _safe_build
-    doc.build(story, onFirstPage=_page_bg, onLaterPages=_page_bg)
+    # Closure over this call's own company_name — see _page_bg's docstring for
+    # why this isn't read from a shared module-level global instead.
+    _page_bg_bound = lambda canv, doc: _page_bg(canv, doc, company_name)
+    doc.build(story, onFirstPage=_page_bg_bound, onLaterPages=_page_bg_bound)
     buf.seek(0)
     return buf

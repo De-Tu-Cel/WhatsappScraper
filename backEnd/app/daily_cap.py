@@ -41,13 +41,80 @@ def increment_daily_count(db, instance_name: str, phone_digits: str = None) -> N
     digits) — sending a 2nd message to the same number today (a repeat, or an Andy
     follow-up reply) never grows the count. Callers with no resolvable number
     (shouldn't happen — you can't send without a destination) still get counted,
-    just not deduped against anything."""
+    just not deduped against anything.
+
+    NOTE: this alone does NOT close the daily-cap race — see reserve_daily_slot()
+    below, which is what actually gates a send. This function still exists for
+    the couple of call sites that only ever run after a send already succeeded
+    and don't need the atomic reserve/release pair (nothing else could have
+    raced them by that point)."""
     import uuid
     key = phone_digits or f"_no_number_{uuid.uuid4().hex[:8]}"
     db.db.instance_daily_sends.update_one(
         {"instance": instance_name, "date": _today()},
         {"$addToSet": {"companies": key}},  # field name kept as-is, only key semantics changed
         upsert=True,
+    )
+
+
+def reserve_daily_slot(db, instance_name: str, cap: int, phone_digits: str = None) -> tuple[bool, bool]:
+    """Atomically claims today's slot for phone_digits BEFORE sending, closing the
+    check-then-act race that let two concurrent senders (manual send + scheduled
+    campaign + queued batch all hit the same instance) both read "under cap" and
+    both send, exceeding DAILY_CAP/WARMUP_CAP by however many raced. The old
+    pattern was `if get_daily_count(...) >= cap: skip` followed by
+    `increment_daily_count(...)` only after a real network send completed —
+    two separate round trips with a real HTTP call in between, wide open to
+    exactly that race.
+
+    The $addToSet itself is what's atomic (MongoDB serializes writes to the same
+    document) — there's no separate "check" step left to race against.
+
+    Returns (allowed, was_new_reservation):
+      allowed=False           → cap is full, nothing was changed, do not send.
+      allowed=True,  new=False → phone_digits already had a slot from an earlier
+                                  send today (a repeat) — this call didn't
+                                  consume anything, never release it.
+      allowed=True,  new=True  → a slot was freshly claimed for phone_digits. If
+                                  the send this was reserved for ultimately
+                                  fails, call release_daily_slot with the SAME
+                                  phone_digits so a failed send doesn't cost
+                                  real quota (matching the old increment-only
+                                  -on-success behavior)."""
+    import uuid
+    from pymongo import ReturnDocument
+    key = phone_digits or f"_no_number_{uuid.uuid4().hex[:8]}"
+    today = _today()
+    before = db.db.instance_daily_sends.find_one_and_update(
+        {"instance": instance_name, "date": today},
+        {"$addToSet": {"companies": key}},
+        upsert=True,
+        return_document=ReturnDocument.BEFORE,
+    )
+    if key in ((before or {}).get("companies") or []):
+        return True, False  # repeat contact — already had a slot, didn't consume a new one
+
+    after = db.db.instance_daily_sends.find_one({"instance": instance_name, "date": today}, {"companies": 1})
+    if len((after or {}).get("companies", [])) > cap:
+        # This reservation is the one that pushed it over — give it back.
+        db.db.instance_daily_sends.update_one(
+            {"instance": instance_name, "date": today},
+            {"$pull": {"companies": key}},
+        )
+        return False, False
+    return True, True
+
+
+def release_daily_slot(db, instance_name: str, phone_digits: str) -> None:
+    """Gives back a slot from reserve_daily_slot() when the send it was reserved
+    for ultimately failed. Only call this when that call returned
+    was_new_reservation=True — releasing a repeat's slot would incorrectly free
+    up capacity an EARLIER successful send today is still legitimately using."""
+    if not phone_digits:
+        return
+    db.db.instance_daily_sends.update_one(
+        {"instance": instance_name, "date": _today()},
+        {"$pull": {"companies": phone_digits}},
     )
 
 

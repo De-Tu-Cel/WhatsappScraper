@@ -156,6 +156,8 @@ const SORT_LABEL_CENTER_SX = {
   '&.Mui-active': { color: 'white !important' },
 }
 
+// Short vertical divider between header columns (inset from top/bottom, not
+// touching the cell's edges) — same pattern as the Prospects table header.
 const HEADER_CELL_SX = {
   bgcolor: 'var(--card-bg, #161d2e)',
   borderBottom: '1px solid rgba(255,255,255,0.07)',
@@ -166,7 +168,16 @@ const HEADER_CELL_SX = {
   letterSpacing: '0.05em',
   py: 1.2,
   px: 1.5,
+  position: 'relative',
+  '&::after': {
+    content: '""', position: 'absolute', top: 10, bottom: 10, right: 0,
+    width: '1px', bgcolor: 'rgba(255,255,255,0.08)',
+  },
 }
+
+// Last column in each header row — no divider needed after it (nothing to
+// separate from the table's own edge).
+const HEADER_CELL_LAST_SX = { ...HEADER_CELL_SX, '&::after': { display: 'none' } }
 
 // Hidden conversation renderer for html2canvas
 // Must be in the viewport (not left:-9999) so html2canvas can read it
@@ -709,8 +720,8 @@ export default function Analytics() {
               <TableHead>
                 <TableRow>
                   {/* anchos espejo de la tabla real: expand, empresa, número, industria, categoría, calidad, reacción, última resp, notas, chatIA, modBot, reporte */}
-                  {[32, '22%', 115, 130, 100, 60, 55, 65, 220, 45, 65, 45].map((w, i) => (
-                    <TableCell key={i} sx={{ ...HEADER_CELL_SX, width: i === 0 ? 32 : undefined, px: i === 0 ? 0.5 : undefined }}>
+                  {[32, '22%', 115, 130, 100, 60, 55, 65, 220, 45, 65, 45].map((w, i, arr) => (
+                    <TableCell key={i} sx={{ ...(i === arr.length - 1 ? HEADER_CELL_LAST_SX : HEADER_CELL_SX), width: i === 0 ? 32 : undefined, px: i === 0 ? 0.5 : undefined }}>
                       {i > 0 && (
                         <Skeleton variant="text" width={typeof w === 'number' ? Math.min(w * 0.55, 70) : 55} height={11}
                           sx={{ bgcolor: 'rgba(255,255,255,0.1)',
@@ -851,7 +862,7 @@ export default function Analytics() {
                       </Tooltip>
                     </Box>
                   </TableCell>
-                  <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>{t.analytics.report}</TableCell>
+                  <TableCell sx={{ ...HEADER_CELL_LAST_SX, textAlign: 'center' }}>{t.analytics.report}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>

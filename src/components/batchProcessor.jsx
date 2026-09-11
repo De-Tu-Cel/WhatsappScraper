@@ -1,9 +1,10 @@
 'use client'
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, Fragment } from 'react'
 import { isValidUrl } from '@/lib/validators'
 import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
+import { keyframes } from '@mui/system'
 import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
@@ -19,6 +20,7 @@ import IconButton from '@mui/material/IconButton'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
 import Tooltip from '@mui/material/Tooltip'
+import Divider from '@mui/material/Divider'
 import SendIcon from '@mui/icons-material/Send'
 import DownloadIcon from '@mui/icons-material/Download'
 import ListAltIcon from '@mui/icons-material/ListAlt'
@@ -33,6 +35,8 @@ import MessageIcon from '@mui/icons-material/Message'
 import PauseIcon from '@mui/icons-material/Pause'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import ReplayIcon from '@mui/icons-material/Replay'
+import TravelExploreIcon from '@mui/icons-material/TravelExplore'
+import CheckBoxIcon from '@mui/icons-material/CheckBox'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVariants'
 import { SendConfigPanel } from './SendConfigPanel'
@@ -95,37 +99,10 @@ function useTypewriter(strings, active) {
   return display
 }
 
-// ─── Stat card ────────────────────────────────────────────────────────────────
-function StatCard({ icon, label, value, color, bgColor, borderColor }) {
-  return (
-    <Box sx={{
-      flex: 1, minWidth: 0,
-      display: 'flex', alignItems: 'center', gap: 1.5,
-      px: 2, py: 1.5,
-      bgcolor: bgColor,
-      border: `1px solid ${borderColor}`,
-      borderRadius: 2,
-    }}>
-      <Box sx={{
-        width: 32, height: 32, flexShrink: 0,
-        bgcolor: `${color}22`,
-        border: `1px solid ${color}44`,
-        borderRadius: 1.5,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        {icon}
-      </Box>
-      <Box>
-        <Typography sx={{ color, fontWeight: 700, fontSize: '1.1rem', lineHeight: 1.2 }}>
-          {value}
-        </Typography>
-        <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.7rem' }}>
-          {label}
-        </Typography>
-      </Box>
-    </Box>
-  )
-}
+const fadeSlideIn = keyframes`
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+`
 
 // ─── Empty state ──────────────────────────────────────────────────────────────
 function EmptyState({ t }) {
@@ -270,6 +247,9 @@ export default function BatchProcessor() {
   const [extraSelected, setExtraSelected] = useState(new Set())
   const [expandedCo, setExpandedCo] = useState(new Set())
   const [localContactedIds, setLocalContactedIds] = useState(new Set())
+  // Filtro "ya contactados" — mismo patrón que searchProspects.jsx/csvImporter.jsx,
+  // faltaba aquí (Batch mandaba waRowsUnique sin filtrar al RecipientsBox).
+  const [filterContacted, setFilterContacted] = useState('all') // 'all' | 'new' | 'contacted'
   const wasActiveRef = useRef(false)
   const urlsRef     = useRef(null)
 
@@ -322,6 +302,10 @@ export default function BatchProcessor() {
   const duplicateUrls = useMemo(() => urlList.filter((u, i) => urlList.indexOf(u) !== i), [urlList])
   const overLimit     = urlList.length > 50
   const canBatch      = urlList.length > 0 && !overLimit && invalidUrls.length === 0 && duplicateUrls.length === 0
+  // El textarea antes tenía 9 filas fijas sin importar cuánto se hubiera
+  // pegado — con 1 sola URL se veía como un formulario a medio llenar en
+  // vez de ajustarse a lo que realmente hay escrito.
+  const textareaRows  = Math.min(9, Math.max(4, urlList.length + 2))
 
 
   // waRowsUnique deduplicado por company_id — dos URLs distintas del lote pueden
@@ -390,13 +374,20 @@ export default function BatchProcessor() {
     setExpandedCo(prev => prev.size ? new Set() : prev)
     setLocalContactedIds(new Set())
   }, [scrapeJob.job?._id])
+  // Filtro de "ya contactados": se aplica sobre waRowsUnique antes de calcular la selección
+  const filteredWaRows = useMemo(() => {
+    if (filterContacted === 'all') return waRowsUnique
+    if (filterContacted === 'contacted') return waRowsUnique.filter(r => r.already_contacted?.contacted)
+    return waRowsUnique.filter(r => !r.already_contacted?.contacted)
+  }, [waRowsUnique, filterContacted])
+
   // Sent/failed rows auto-deselect so the user can send to new rows from resumed
   // scraping without having to manually uncheck the ones already processed.
   const effectiveWaSelected = useMemo(() =>
-    new Set(waRowsUnique
+    new Set(filteredWaRows
       .filter(r => waSelected.has(r.company_id) && r.msg_status !== 'sent' && r.msg_status !== 'failed')
       .map(r => r.company_id)),
-  [waRowsUnique, waSelected])
+  [filteredWaRows, waSelected])
   // Only block if the CURRENT selection has already-sent rows (prevents in-flight
   // double-sends without blocking newly-scraped rows after a send completes).
   const alreadySent = rows.some(r =>
@@ -571,10 +562,10 @@ export default function BatchProcessor() {
 
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, height: '100%', overflowY: 'auto', pb: 2, pr: 0.5 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, height: '100%', minHeight: 0, overflowY: 'auto', pb: 2, pr: 0.5 }}>
 
       {/* ── Header ── */}
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2 }}>
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <Box sx={{
             width: 38, height: 38, flexShrink: 0,
@@ -615,16 +606,25 @@ export default function BatchProcessor() {
       </Box>
 
       {/* ── Textarea ── */}
-      <Box sx={{ position: 'relative' }}>
+      <Box sx={{ position: 'relative', flexShrink: 0 }}>
         {/* Contador + limpiar — esquina superior derecha */}
         {rawUrls && (
           <Box sx={{
             position: 'absolute', top: 10, right: 10, zIndex: 1,
-            display: 'flex', alignItems: 'center', gap: 0.5,
+            display: 'flex', alignItems: 'center', gap: 0.6,
           }}>
-            <Typography sx={{ color: overLimit ? '#f87171' : 'rgba(255,255,255,0.2)', fontSize: '0.7rem', fontWeight: overLimit ? 700 : 400, userSelect: 'none' }}>
-              {urlList.length} / 50
-            </Typography>
+            <Box sx={{
+              display: 'flex', alignItems: 'center', gap: 0.4, userSelect: 'none',
+              px: 1, py: 0.3, borderRadius: 999,
+              bgcolor: overLimit ? 'rgba(239,68,68,0.12)' : 'rgba(var(--accent-rgb, 59,130,246), 0.12)',
+              border: `1px solid ${overLimit ? 'rgba(239,68,68,0.35)' : 'rgba(var(--accent-rgb, 59,130,246), 0.3)'}`,
+            }}>
+              <LinkIcon sx={{ fontSize: 12, color: overLimit ? '#f87171' : 'var(--accent, #60a5fa)' }} />
+              <Typography sx={{ fontSize: '0.74rem', fontWeight: 800, color: overLimit ? '#f87171' : 'var(--accent, #60a5fa)', fontVariantNumeric: 'tabular-nums' }}>
+                {urlList.length}
+                <Box component="span" sx={{ fontWeight: 600, color: overLimit ? 'rgba(248,113,113,0.65)' : 'rgba(255,255,255,0.35)' }}>/50</Box>
+              </Typography>
+            </Box>
             {!loading && (
               <Tooltip title={t.batch.clear}>
                 <IconButton
@@ -646,7 +646,7 @@ export default function BatchProcessor() {
           onInput={e => setRawUrls(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && e.ctrlKey && handleBatch()}
           placeholder={placeholder || ''}
-          rows={9}
+          rows={textareaRows}
           disabled={loading}
           sx={{
             width: '100%',
@@ -745,7 +745,7 @@ export default function BatchProcessor() {
 
       {/* ── Progress ── */}
       {loading && (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
           <Box sx={{
             px: 2.5, py: 2,
             bgcolor: (paused || pausing) ? 'rgba(251,191,36,0.05)' : 'rgba(var(--accent-rgb, 59,130,246), 0.05)',
@@ -816,7 +816,7 @@ export default function BatchProcessor() {
       {done && isCancelled && pendingCount > 0 && (
         <Box sx={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5,
-          px: 2, py: 1.5, borderRadius: 2,
+          px: 2, py: 1.5, borderRadius: 2, flexShrink: 0,
           bgcolor: 'rgba(251,191,36,0.05)',
           border: '1px solid rgba(251,191,36,0.22)',
         }}>
@@ -844,19 +844,142 @@ export default function BatchProcessor() {
         </Box>
       )}
 
+      {/* ── Stat cards — una tira con dividers en vez de cards sueltas.
+           Va ANTES del panel de envío (como en Búsqueda) — antes vivía
+           después y la estructura no coincidía entre pantallas. ── */}
+      {rows.length > 0 && (
+        <Box sx={{
+          display: 'flex', flexWrap: 'wrap', overflow: 'hidden', flexShrink: 0,
+          borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+          bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+        }}>
+          {[
+            { icon: <CheckCircleIcon sx={{ fontSize: 18 }} />, label: t.batch.processed, value: okCount,  color: '#4ade80' },
+            { icon: <WhatsAppIcon    sx={{ fontSize: 18 }} />, label: t.batch.withWa,    value: waCount,  color: '#60a5fa' },
+            ...(alreadySent ? [{ icon: <SendIcon sx={{ fontSize: 18 }} />, label: t.batch.msgSent, value: sentCount, color: '#a78bfa' }] : []),
+            { icon: <ErrorIcon       sx={{ fontSize: 18 }} />, label: t.batch.errors,    value: errCount, color: '#f87171' },
+          ].map((c, i) => (
+            <Fragment key={c.label}>
+              {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 2 }} />}
+              <Box sx={{ flex: '1 1 0', minWidth: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.6, px: 2.4, py: 2 }}>
+                <Box sx={{
+                  width: 40, height: 40, borderRadius: 2, flexShrink: 0, color: c.color,
+                  background: `linear-gradient(135deg, ${c.color}28 0%, ${c.color}0a 100%)`,
+                  border: `1px solid ${c.color}4d`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  {c.icon}
+                </Box>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography sx={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.2, fontVariantNumeric: 'tabular-nums' }}>
+                    {c.value}
+                  </Typography>
+                  <Typography sx={{ fontSize: '0.74rem', color: 'var(--text-muted, rgba(255,255,255,0.4))', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                    {c.label}
+                  </Typography>
+                </Box>
+              </Box>
+            </Fragment>
+          ))}
+        </Box>
+      )}
+
+      {/* ── Funnel de conversión: Scrapeadas → Con WhatsApp → Seleccionadas →
+           Enviadas — mismo widget que Búsqueda, portado para que ambas
+           pantallas midan igual dónde se pierden prospectos. ── */}
+      {rows.length > 0 && (() => {
+        // "Seleccionadas" mide NÚMEROS de WhatsApp (no empresas): el número
+        // grande y su % son totalContactPoints/totalAvailableNumbers — cuánto
+        // de lo disponible para enviar ya está marcado, en vez de contar
+        // empresas (donde marcar 1 de 4 números de una sola empresa ya salía
+        // "100%", sin reflejar lo que realmente se iba a enviar).
+        const totalAvailableNumbers = waRowsUnique.reduce((sum, r) => sum + (r.all_whatsapp?.length || (r.whatsapp ? 1 : 0)), 0)
+        const selectedPct = totalAvailableNumbers > 0 ? Math.round((totalContactPoints / totalAvailableNumbers) * 100) : 0
+        const stages = [
+          { key: 'scraped',  label: lang === 'en' ? 'Scraped'       : 'Scrapeadas',    value: rows.length,               color: '#60a5fa', icon: <TravelExploreIcon sx={{ fontSize: 22 }} /> },
+          { key: 'wa',       label: lang === 'en' ? 'With WhatsApp' : 'Con WhatsApp',  value: waCount,                   color: '#4ade80', icon: <WhatsAppIcon      sx={{ fontSize: 22 }} /> },
+          { key: 'selected', label: lang === 'en' ? 'Selected'      : 'Seleccionadas', value: totalContactPoints,        color: '#a78bfa', icon: <CheckBoxIcon      sx={{ fontSize: 22 }} />,
+            pctOverride: selectedPct },
+          { key: 'sent',     label: lang === 'en' ? 'Sent'          : 'Enviadas',      value: sentCount,                 color: '#fbbf24', icon: <SendIcon          sx={{ fontSize: 22 }} /> },
+        ]
+        return (
+          <Box sx={{
+            display: 'flex', flexWrap: 'wrap', overflow: 'hidden', flexShrink: 0,
+            borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+            bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+          }}>
+            {stages.map((s, i) => {
+              const prev = i > 0 ? stages[i - 1] : null
+              const convRate = s.pctOverride !== undefined ? s.pctOverride : (prev && prev.value > 0 ? Math.round((s.value / prev.value) * 100) : null)
+              const pct = i === 0 ? 100 : (s.value === 0 ? 0 : Math.max(4, convRate ?? 0))
+              return (
+                <Fragment key={s.key}>
+                  {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))' }} />}
+                  <Box sx={{ flex: '1 1 0', minWidth: 190, position: 'relative', overflow: 'hidden' }}>
+                    <Box sx={{
+                      position: 'absolute', inset: 0, left: 0, width: `${pct}%`,
+                      background: `linear-gradient(90deg, ${s.color}40 0%, ${s.color}12 100%)`,
+                      transition: 'width 0.4s ease', pointerEvents: 'none',
+                    }} />
+                    <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.8, px: 2.6, py: 2.2 }}>
+                      <Box sx={{
+                        width: 46, height: 46, borderRadius: 2.5, flexShrink: 0, color: s.color,
+                        background: `linear-gradient(135deg, ${s.color}28 0%, ${s.color}0a 100%)`,
+                        border: `1px solid ${s.color}4d`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        {s.icon}
+                      </Box>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography sx={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.15, fontVariantNumeric: 'tabular-nums' }}>
+                          {s.value}
+                        </Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                          <Typography sx={{ fontSize: '0.76rem', color: 'var(--text-muted, rgba(255,255,255,0.45))', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                            {s.label}
+                          </Typography>
+                          {convRate !== null && (
+                            <Box sx={{
+                              px: 0.7, py: 0.1, borderRadius: 999, whiteSpace: 'nowrap',
+                              bgcolor: `${s.color}18`, border: `1px solid ${s.color}40`,
+                            }}>
+                              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: s.color }}>
+                                {convRate}%
+                              </Typography>
+                            </Box>
+                          )}
+                        </Box>
+                      </Box>
+                    </Box>
+                  </Box>
+                </Fragment>
+              )
+            })}
+          </Box>
+        )
+      })()}
+
       {/* ── Post-scraping: template + send — visible también durante el
            scraping, para poder empezar a enviar a lo ya encontrado ── */}
       {(done || loading) && rows.length > 0 && (
-        <Box sx={{ p: 2, borderRadius: 2, border: '1px solid rgba(34,197,94,0.15)', bgcolor: 'rgba(34,197,94,0.03)' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.2 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <MessageIcon sx={{ fontSize: 16, color: '#4ade80' }} />
-              <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>{t.batch.sendMessages}</Typography>
+        <Box sx={{ borderRadius: 2.5, border: '1px solid rgba(34,197,94,0.2)', overflow: 'hidden', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+          {/* Panel header */}
+          <Box sx={{ px: 2, py: 1.4, background: 'linear-gradient(180deg, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.02) 100%)', borderBottom: '1px solid rgba(34,197,94,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+              <Box sx={{ width: 30, height: 30, borderRadius: 1.5, bgcolor: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.28)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 12px rgba(34,197,94,0.12)', flexShrink: 0 }}>
+                <MessageIcon sx={{ fontSize: 14, color: '#4ade80' }} />
+              </Box>
+              <Box>
+                <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.84rem', lineHeight: 1.2 }}>{t.batch.sendMessages}</Typography>
+                {waRowsUnique.length > 0 && (
+                  <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.62rem' }}>{waRowsUnique.length} {t.search.withWa}</Typography>
+                )}
+              </Box>
             </Box>
             {waRowsUnique.length > 0 && (
               <Chip
                 icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />}
-                label={`${effectiveWaSelected.size} ${t.search.of} ${waRowsUnique.length} ${t.batch.withWa}`}
+                label={`${effectiveWaSelected.size} ${t.search.of} ${filteredWaRows.length} ${t.batch.withWa}`}
                 size="small"
                 sx={{
                   fontSize: '0.7rem', height: 22,
@@ -867,12 +990,43 @@ export default function BatchProcessor() {
               />
             )}
           </Box>
+          {/* Body — scrollea internamente en vez de crecer sin límite y empujar
+              lo que sigue (resultados) fuera de la vista. */}
+          <Box sx={{
+            p: 2, maxHeight: 'clamp(420px, 70vh, 760px)', overflowY: 'auto',
+            scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.12) transparent',
+            '&::-webkit-scrollbar': { width: 6 },
+            '&::-webkit-scrollbar-track': { background: 'transparent' },
+            '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.14)', borderRadius: 3 },
+            '&::-webkit-scrollbar-thumb:hover': { background: 'rgba(255,255,255,0.28)' },
+          }}>
+          {/* Instancia desconectada bloquea el envío entero — debe ser lo PRIMERO
+              que se ve en el panel, no una barra roja más al fondo. */}
+          <InstanceDisconnectedBanner status={instanceStatus} sx={{
+            mb: 1.5, px: 2, py: 1.3, borderRadius: 2, borderWidth: '1.5px',
+            boxShadow: '0 0 0 1px rgba(239,68,68,0.15), 0 4px 16px rgba(239,68,68,0.12)',
+            '& svg':  { fontSize: '19px !important' },
+            '& p':    { fontSize: '0.82rem !important', fontWeight: 600 },
+          }} />
           {capStats && (
             <CapacityBanner stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} sx={{ mb: 1.5 }} />
           )}
 
-          <Box sx={{ display: 'flex', gap: 2.5 }}>
-            <RecipientsBox rows={waRowsUnique}
+          {waRowsUnique.length > 0 && (
+            <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 1 }}>
+              {[
+                { key: 'all',       label: `Todos (${waRowsUnique.length})`,                                                     color: '#60a5fa', bg: 'rgba(59,130,246,0.1)',  border: 'rgba(59,130,246,0.25)' },
+                { key: 'new',       label: `Sin contactar (${waRowsUnique.filter(r => !r.already_contacted?.contacted).length})`, color: '#4ade80', bg: 'rgba(34,197,94,0.1)',   border: 'rgba(34,197,94,0.25)'  },
+                { key: 'contacted', label: `Ya contactados (${waRowsUnique.filter(r => r.already_contacted?.contacted).length})`, color: '#fbbf24', bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.25)' },
+              ].map(f => (
+                <Chip key={f.key} label={f.label} size="small" onClick={() => setFilterContacted(f.key)}
+                  sx={{ height: 22, fontSize: '0.68rem', cursor: 'pointer', bgcolor: filterContacted === f.key ? f.bg : 'var(--item-hover)', color: filterContacted === f.key ? f.color : 'var(--text-muted)', border: `1px solid ${filterContacted === f.key ? f.border : 'var(--border)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
+              ))}
+            </Box>
+          )}
+
+          <Box sx={{ display: 'flex', gap: 2.5, alignItems: 'flex-start' }}>
+            <RecipientsBox rows={filteredWaRows}
               effectiveSelected={effectiveWaSelected}
               expandedCo={expandedCo}
               extraSelected={extraSelected}
@@ -880,10 +1034,11 @@ export default function BatchProcessor() {
               setExpandedCo={setExpandedCo}
               setExtraSelected={setExtraSelected}
               title={t.search.recipients}
+              maxHeight={320}
               sx={{ width: 260, flexShrink: 0 }} />
 
-          <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Box sx={{ mt: 1.5, mb: 0.5, p: 1.6, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
+          <Box sx={{ flex: 1, minWidth: 0, opacity: filteredWaRows.length === 0 ? 0.35 : 1, pointerEvents: filteredWaRows.length === 0 ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
+          <Box sx={{ mb: 1.5, p: 1.6, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
             <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalContactPoints} baseCount={0}
                 singleSelect={totalContactPoints <= 1}
                 hasName={tplVarFlags.hasName} hasCity={tplVarFlags.hasCity}
@@ -891,14 +1046,10 @@ export default function BatchProcessor() {
                 varCounts={tplVarCounts} totalSelected={_selectedRows.length} />
           </Box>
           {/* Send config */}
-          <Box sx={{ mb: 1 }}>
+          <Box sx={{ mb: 1.5 }}>
             <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
           </Box>
-          <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />
           <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 1 }}>
-            <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} />
-          </Box>
           {isSending && (
             <Button fullWidth onClick={cancelQueue} startIcon={<HighlightOffIcon />}
               sx={{
@@ -910,19 +1061,23 @@ export default function BatchProcessor() {
               {t.search.cancelSend}
             </Button>
           )}
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+          {/* Cupo + botón en una sola fila, en vez de un badge alineado a la
+              derecha ARRIBA de un botón fullWidth separado. */}
+          <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1.5 }}>
+            <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} sx={{ flexShrink: 0 }} />
             <Button
               onClick={handleSendAll}
               disabled={effectiveWaSelected.size === 0 || alreadySent || isSending || isDisconnected || belowMinTemplates || capBlocked}
               startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
-              size="small"
               sx={{
-                fontSize: '0.78rem', fontWeight: 700, flexShrink: 0,
-                bgcolor: effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.04)',
+                flex: 1, fontSize: '0.84rem', fontWeight: 700,
+                py: 1.1, borderRadius: 1.8,
+                bgcolor: effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
                 color:   effectiveWaSelected.size > 0 && !alreadySent ? '#4ade80' : 'rgba(255,255,255,0.3)',
-                border:  `1px solid ${effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.35)' : 'rgba(255,255,255,0.1)'}`,
-                borderRadius: 1.5, px: 2, py: 0.6,
-                '&:hover': { bgcolor: effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.04)' },
+                border:  `1px solid ${effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.38)' : 'rgba(255,255,255,0.1)'}`,
+                textTransform: 'none',
+                transition: 'all 0.2s',
+                '&:hover': effectiveWaSelected.size > 0 && !alreadySent ? { bgcolor: 'rgba(34,197,94,0.28)', borderColor: 'rgba(34,197,94,0.6)', boxShadow: '0 0 18px rgba(34,197,94,0.18)' } : {},
                 '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
               }}
             >
@@ -942,46 +1097,7 @@ export default function BatchProcessor() {
           )}
           </Box>
           </Box>
-        </Box>
-      )}
-
-      {/* ── Stat cards ── */}
-      {rows.length > 0 && (
-        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-          <StatCard
-            icon={<CheckCircleIcon sx={{ fontSize: 16, color: '#4ade80' }} />}
-            label={t.batch.processed}
-            value={okCount}
-            color="#4ade80"
-            bgColor="rgba(34,197,94,0.06)"
-            borderColor="rgba(34,197,94,0.18)"
-          />
-          <StatCard
-            icon={<WhatsAppIcon sx={{ fontSize: 16, color: '#60a5fa' }} />}
-            label={t.batch.withWa}
-            value={waCount}
-            color="#60a5fa"
-            bgColor="rgba(59,130,246,0.06)"
-            borderColor="rgba(59,130,246,0.18)"
-          />
-          {alreadySent && (
-            <StatCard
-              icon={<SendIcon sx={{ fontSize: 16, color: '#a78bfa' }} />}
-              label={t.batch.msgSent}
-              value={sentCount}
-              color="#a78bfa"
-              bgColor="rgba(167,139,250,0.06)"
-              borderColor="rgba(167,139,250,0.18)"
-            />
-          )}
-          <StatCard
-            icon={<ErrorIcon sx={{ fontSize: 16, color: '#f87171' }} />}
-            label={t.batch.errors}
-            value={errCount}
-            color="#f87171"
-            bgColor="rgba(239,68,68,0.06)"
-            borderColor="rgba(239,68,68,0.18)"
-          />
+          </Box>
         </Box>
       )}
 
@@ -991,7 +1107,7 @@ export default function BatchProcessor() {
       ) : rows.length === 0 && !loading && urlList.length > 0 ? (
         <UrlPreviewList urlList={urlList} />
       ) : rows.length > 0 ? (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, flexShrink: 0 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.75rem', fontWeight: 600, letterSpacing: 0.5 }}>
               {t.batch.results}
@@ -1044,38 +1160,63 @@ export default function BatchProcessor() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {rows.map((r, i) => (
+                {rows.map((r, i) => {
+                  const hasWa     = r.all_whatsapp?.length > 0 || !!r.whatsapp
+                  const isBlocked = r.blacklisted
+                  // Mismo criterio de color que Búsqueda: rojo=error, ámbar=bloqueado,
+                  // verde=WA encontrado, gris=OK sin WA — para que ambas tablas se
+                  // lean igual de un vistazo en vez de depender solo del chip final.
+                  const dotColor = !r.ok
+                    ? '#f87171'
+                    : isBlocked ? '#f59e0b'
+                    : hasWa     ? '#4ade80'
+                    :              'rgba(255,255,255,0.2)'
+                  return (
                   <TableRow key={i} sx={{
                     '&:hover': { bgcolor: 'rgba(255,255,255,0.025)' },
                     '& td': { borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: '0.8rem' },
+                    animation: `${fadeSlideIn} 0.22s ease both`,
+                    animationDelay: `${i * 0.025}s`,
                   }}>
-                    <TableCell sx={{ maxWidth: 200 }}>
+                    <TableCell sx={{ maxWidth: 200, borderLeft: `3px solid ${dotColor}` }}>
                       {(() => {
                         let domain = null
                         try { domain = new URL(r.url).hostname.replace(/^www\./, '') } catch {}
                         return (
-                          <Box component="a" href={r.url} target="_blank" rel="noopener"
-                            sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, textDecoration: 'none', '&:hover .bt': { textDecoration: 'underline' } }}>
-                            {domain && (
-                              <Box component="img"
-                                src={`https://www.google.com/s2/favicons?domain=${domain}&sz=16`}
-                                width={13} height={13}
-                                sx={{ borderRadius: '2px', flexShrink: 0 }}
-                                onError={e => { e.target.style.display = 'none' }}
-                              />
-                            )}
-                            <Typography component="span" className="bt"
-                              sx={{ fontSize: '0.78rem', color: '#60a5fa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>
-                              {domain || (r.url.length > 28 ? r.url.slice(0, 28) + '…' : r.url)}
-                            </Typography>
+                          <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.8 }}>
+                            <Box sx={{
+                              width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                              bgcolor: dotColor,
+                              boxShadow: r.ok && hasWa ? `0 0 4px ${dotColor}90` : 'none',
+                            }} />
+                            <Box component="a" href={r.url} target="_blank" rel="noopener"
+                              sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, textDecoration: 'none', '&:hover .bt': { textDecoration: 'underline' } }}>
+                              {domain && (
+                                <Box component="img"
+                                  src={`https://www.google.com/s2/favicons?domain=${domain}&sz=16`}
+                                  width={13} height={13}
+                                  sx={{ borderRadius: '2px', flexShrink: 0 }}
+                                  onError={e => { e.target.style.display = 'none' }}
+                                />
+                              )}
+                              <Typography component="span" className="bt"
+                                sx={{ fontSize: '0.78rem', color: '#60a5fa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>
+                                {domain || (r.url.length > 28 ? r.url.slice(0, 28) + '…' : r.url)}
+                              </Typography>
+                            </Box>
                           </Box>
                         )
                       })()}
                     </TableCell>
                     <TableCell sx={{ color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{r.empresa}</TableCell>
-                    <TableCell sx={{ color: 'rgba(255,255,255,0.55)' }}>{r.industria}</TableCell>
+                    <TableCell sx={{ color: 'rgba(255,255,255,0.55)' }}>
+                      {r.industria && r.industria !== '—'
+                        ? <Chip label={r.industria} size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(139,92,246,0.1)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.2)' }} />
+                        : <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>
+                      }
+                    </TableCell>
                     <TableCell>
-                      {(r.all_whatsapp?.length > 0 || r.whatsapp) ? (
+                      {hasWa ? (
                         <WhatsAppNumberSummary row={r} />
                       ) : (
                         <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>
@@ -1123,7 +1264,8 @@ export default function BatchProcessor() {
                       )}
                     </TableCell>
                   </TableRow>
-                ))}
+                  )
+                })}
               </TableBody>
             </Table>
           </TableContainer>

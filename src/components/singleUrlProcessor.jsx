@@ -14,42 +14,13 @@ import Alert from '@mui/material/Alert'
 import Typography from '@mui/material/Typography'
 import SearchIcon from '@mui/icons-material/Search'
 import HighlightOffIcon from '@mui/icons-material/HighlightOff'
-import Skeleton from '@mui/material/Skeleton'
 import Chip from '@mui/material/Chip'
 import Tooltip from '@mui/material/Tooltip'
-import ResultDisplay from './resultDisplay'
+import ResultDisplay, { ResultSkeleton } from './resultDisplay'
 import { isValidUrl, urlValidationMsg, MAX_WA_MSG } from '@/lib/validators'
 import { useLang } from '../context/LangContext'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVariants'
-
-const SKEL = { bgcolor: 'var(--skeleton-base,rgba(255,255,255,0.06))', '[data-theme-mode="light"] &': { bgcolor: 'rgba(0,0,0,0.08)' }, '&::after': { background: 'linear-gradient(90deg,transparent,rgba(255,255,255,0.04),transparent)', '[data-theme-mode="light"] &': { background: 'linear-gradient(90deg,transparent,rgba(0,0,0,0.04),transparent)' } } }
-
-function ResultSkeleton() {
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      {/* Banner */}
-      <Box sx={{ p: 2.5, borderRadius: 3, border: '1px solid rgba(255,255,255,0.07)', bgcolor: 'rgba(255,255,255,0.02)' }}>
-        <Skeleton variant="text" width={220} height={36} sx={SKEL} />
-        <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
-          <Skeleton variant="rounded" width={90} height={22} sx={{ ...SKEL, borderRadius: 10 }} />
-          <Skeleton variant="rounded" width={120} height={22} sx={{ ...SKEL, borderRadius: 10 }} />
-        </Box>
-      </Box>
-      {/* Métricas */}
-      <Box sx={{ display: 'flex', gap: 1.5 }}>
-        {[1,2,3,4].map(i => <Skeleton key={i} variant="rounded" sx={{ ...SKEL, flex: 1, height: 80, borderRadius: 2 }} />)}
-      </Box>
-      {/* Cards */}
-      {[140, 180, 120].map((h, i) => (
-        <Box key={i} sx={{ p: 2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.06)', bgcolor: 'rgba(255,255,255,0.02)' }}>
-          <Skeleton variant="text" width={140} height={22} sx={{ ...SKEL, mb: 1.5 }} />
-          <Skeleton variant="rounded" height={h} sx={SKEL} />
-        </Box>
-      ))}
-    </Box>
-  )
-}
 
 function extractValues(data) {
   const scraped = data?.scraped || {}
@@ -464,7 +435,7 @@ export default function SingleUrlProcessor() {
           <Box sx={{
             borderRadius: 3, overflow: 'hidden',
             border: '1px solid rgba(239,68,68,0.25)',
-            background: 'linear-gradient(160deg, rgba(239,68,68,0.08) 0%, rgba(239,68,68,0.03) 40%, var(--card-bg,#161d2e) 70%)',
+            background: 'linear-gradient(160deg, rgba(239,68,68,0.08) 0%, rgba(239,68,68,0.03) 40%, transparent 70%), var(--card-bg,#161d2e)',
           }}>
             {/* Franja roja superior */}
             <Box sx={{ height: 3, background: 'linear-gradient(90deg, #ef4444, #f87171, transparent)' }} />

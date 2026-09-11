@@ -29,6 +29,10 @@ export function SendQueueProvider({ children }) {
   const dismissedErrorAtRef  = useRef(null)
   const isFirstPollRef       = useRef(true)   // suppress toast on initial page load
   const debugActiveRef       = useRef(false)  // true while the Shift+B fake preview is running
+  const recentEnqueueAtRef   = useRef(0)      // set on addJob/addBatch — keeps polling fast for a
+                                               // few seconds so a single fast item (no anti-spam
+                                               // gap needed) can't finish between one slow 4s poll
+                                               // and the next without the bubble ever catching it
 
   const clearCompleted  = useCallback(() => setCompletedCount(null), [])
   const clearQueueError = useCallback(() => {
@@ -85,7 +89,8 @@ export function SendQueueProvider({ children }) {
         }
       } catch { error = true }
     }
-    const delay = document.hidden ? POLL_IDLE : (fast ? POLL_ACTIVE : error ? POLL_ERROR : POLL_IDLE)
+    const justEnqueued = Date.now() - recentEnqueueAtRef.current < 6000
+    const delay = document.hidden ? POLL_IDLE : ((fast || justEnqueued) ? POLL_ACTIVE : error ? POLL_ERROR : POLL_IDLE)
     timerRef.current = setTimeout(poll, delay)
   }, [])
 
@@ -96,6 +101,7 @@ export function SendQueueProvider({ children }) {
 
   // Single job (e.g. "Enviar" a una sola empresa/URL, posiblemente a varios números).
   const addJob = useCallback(async (job, label = '') => {
+    recentEnqueueAtRef.current = Date.now()
     try {
       await authFetch('/api/send-queue', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -109,6 +115,7 @@ export function SendQueueProvider({ children }) {
   // single batch_id so the completion notification fires once for the whole group.
   const addBatch = useCallback(async (jobs, label = '') => {
     if (!jobs?.length) return
+    recentEnqueueAtRef.current = Date.now()
     try {
       await authFetch('/api/send-queue', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },

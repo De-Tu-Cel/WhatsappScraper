@@ -1,4 +1,5 @@
 'use client'
+import { useEffect, useRef, useState } from 'react'
 import { useLang } from '../context/LangContext'
 import Box from '@mui/material/Box'
 import Grid from '@mui/material/Grid'
@@ -7,6 +8,7 @@ import CardContent from '@mui/material/CardContent'
 import Typography from '@mui/material/Typography'
 import Chip from '@mui/material/Chip'
 import Divider from '@mui/material/Divider'
+import Skeleton from '@mui/material/Skeleton'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import PhoneIcon from '@mui/icons-material/Phone'
 import EmailIcon from '@mui/icons-material/Email'
@@ -23,10 +25,100 @@ import StoreIcon from '@mui/icons-material/Store'
 import PersonIcon from '@mui/icons-material/Person'
 import BadgeIcon from '@mui/icons-material/Badge'
 import CheckIcon from '@mui/icons-material/Check'
-import CloseIcon from '@mui/icons-material/Close'
 import LinkIcon from '@mui/icons-material/Link'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import CancelIcon from '@mui/icons-material/Cancel'
+
+// ─── Loading skeleton — mirrors the real layout below (banner, metrics, ────────
+// description, 3-column contact info) so the modal doesn't pop content in with
+// a layout shift; shown wherever ResultDisplay's data is still being fetched.
+const SKEL = { bgcolor: 'var(--skeleton-base,rgba(255,255,255,0.06))', '[data-theme-mode="light"] &': { bgcolor: 'rgba(0,0,0,0.08)' }, '&::after': { background: 'linear-gradient(90deg,transparent,rgba(255,255,255,0.04),transparent)', '[data-theme-mode="light"] &': { background: 'linear-gradient(90deg,transparent,rgba(0,0,0,0.04),transparent)' } } }
+
+export function ResultSkeleton() {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {/* Banner */}
+      <Box sx={{ p: 3, borderRadius: 3, border: '1px solid var(--border, rgba(255,255,255,0.07))', display: 'flex', alignItems: 'center', gap: 2.5 }}>
+        <Skeleton variant="rounded" width={56} height={56} sx={{ ...SKEL, borderRadius: 2.5, flexShrink: 0 }} />
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Skeleton variant="text" width={180} height={30} sx={SKEL} />
+          <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+            <Skeleton variant="rounded" width={80} height={20} sx={{ ...SKEL, borderRadius: 10 }} />
+            <Skeleton variant="rounded" width={110} height={20} sx={{ ...SKEL, borderRadius: 10 }} />
+          </Box>
+        </Box>
+        <Skeleton variant="rounded" width={130} height={48} sx={{ ...SKEL, borderRadius: 2, flexShrink: 0 }} />
+      </Box>
+
+      {/* Metrics */}
+      <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+        {[1, 2, 3, 4].map(i => (
+          <Skeleton key={i} variant="rounded" sx={{ ...SKEL, flex: 1, minWidth: 100, height: 84, borderRadius: 2 }} />
+        ))}
+      </Box>
+
+      {/* Description */}
+      <Box sx={{ p: 2, borderRadius: 2, border: '1px solid var(--border, rgba(255,255,255,0.06))' }}>
+        <Skeleton variant="text" width={110} height={22} sx={{ ...SKEL, mb: 1.5 }} />
+        <Skeleton variant="text" sx={SKEL} />
+        <Skeleton variant="text" sx={SKEL} />
+        <Skeleton variant="text" width="70%" sx={SKEL} />
+      </Box>
+
+      {/* Contact info — 3 columns, matching the real WhatsApp/Teléfonos/Emails layout */}
+      <Box sx={{ p: 2, borderRadius: 2, border: '1px solid var(--border, rgba(255,255,255,0.06))' }}>
+        <Skeleton variant="text" width={140} height={22} sx={{ ...SKEL, mb: 1.5 }} />
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+          {[1, 2, 3].map(i => (
+            <Box key={i} sx={{ flex: 1, minWidth: 140, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+              <Skeleton variant="circular" width={20} height={20} sx={SKEL} />
+              <Skeleton variant="text" width={70} height={18} sx={SKEL} />
+              <Skeleton variant="text" width={90} height={16} sx={SKEL} />
+            </Box>
+          ))}
+        </Box>
+      </Box>
+
+      {/* One more generic section (location / business data) */}
+      <Box sx={{ p: 2, borderRadius: 2, border: '1px solid var(--border, rgba(255,255,255,0.06))' }}>
+        <Skeleton variant="text" width={120} height={22} sx={{ ...SKEL, mb: 1.5 }} />
+        <Skeleton variant="rounded" height={60} sx={SKEL} />
+      </Box>
+    </Box>
+  )
+}
+
+// ─── Scroll area with a bottom fade when there's more content to see ───────────
+function ScrollFade({ children, maxHeight, fadeColor, scrollbarColor, deps }) {
+  const ref = useRef(null)
+  const [overflowing, setOverflowing] = useState(false)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    setOverflowing(el.scrollHeight > el.clientHeight + 1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+  return (
+    <Box sx={{ position: 'relative' }}>
+      <Box ref={ref} sx={{ maxHeight, overflowY: 'auto', pr: 0.5,
+        '&::-webkit-scrollbar': { width: 0 },
+        '&::-webkit-scrollbar-thumb': { borderRadius: 4 },
+        '&:hover::-webkit-scrollbar': { width: 4 },
+        '&:hover::-webkit-scrollbar-track': { background: 'transparent' },
+        '&:hover::-webkit-scrollbar-thumb': { background: scrollbarColor },
+      }}>
+        {children}
+      </Box>
+      {overflowing && (
+        <Box sx={{
+          position: 'absolute', left: 0, right: 8, bottom: 0, height: 28,
+          background: `linear-gradient(to bottom, transparent, ${fadeColor})`,
+          pointerEvents: 'none',
+        }} />
+      )}
+    </Box>
+  )
+}
 
 // ─── JSON syntax highlight ─────────────────────────────────────────────────────
 function JsonHighlight({ data }) {
@@ -129,10 +221,10 @@ function MetricCard({ icon, title, value, color }) {
 }
 
 // ─── Contact column ────────────────────────────────────────────────────────────
-const CONTACT_MAX = 8
+// Renders every item — the box already scrolls (maxHeight: 160), so there's no
+// need for a "+N más" cutoff that hid the rest with no way to actually see them.
 function ContactColumn({ icon, title, items, color, emptyMsg, contactedNums, lang }) {
-  const shown  = items?.slice(0, CONTACT_MAX) ?? []
-  const extra  = (items?.length ?? 0) - CONTACT_MAX
+  const shown = items ?? []
   return (
     <Box sx={{ flex: 1, minWidth: 0 }}>
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5, mb: 1.5 }}>
@@ -171,11 +263,6 @@ function ContactColumn({ icon, title, items, color, emptyMsg, contactedNums, lan
               </Box>
             )
           })}
-          {extra > 0 && (
-            <Typography variant="body2" sx={{ pt: 0.5, color: 'var(--text-muted, rgba(255,255,255,0.3))', textAlign: 'center', fontSize: '0.72rem', fontStyle: 'italic' }}>
-              +{extra} más
-            </Typography>
-          )}
         </Box>
       ) : (
         <Typography variant="body2" sx={{ color: 'var(--text-muted, rgba(255,255,255,0.25))', textAlign: 'center', fontSize: '0.78rem' }}>{emptyMsg}</Typography>
@@ -191,7 +278,7 @@ export default function ResultDisplay({ result }) {
   const s  = result?.scraped || {}
   const sx = s._extra || {}
   const cr = s._contacts_raw || {}
-  const totalContacts = (cr.emails?.length || 0) + (cr.phone_numbers?.length || 0)
+  const totalContacts = (cr.all_whatsapp_numbers?.length || 0) + (cr.phone_numbers?.length || 0) + (cr.emails?.length || 0)
   const domain = s.domain || s.website?.replace(/https?:\/\/(www\.)?/, '').split('/')[0] || ''
   const contacted = result?.already_contacted
 
@@ -320,17 +407,11 @@ export default function ResultDisplay({ result }) {
       {/* ── DESCRIPCIÓN ── */}
       {s.description && s.description !== r.descNA && (
         <Section icon={<NotesIcon fontSize="small" />} title={r.description} color="#a78bfa">
-          <Box sx={{ maxHeight: 120, overflowY: 'auto', pr: 0.5,
-            '&::-webkit-scrollbar': { width: 0 },
-            '&::-webkit-scrollbar-thumb': { borderRadius: 4 },
-            '&:hover::-webkit-scrollbar': { width: 4 },
-            '&:hover::-webkit-scrollbar-track': { background: 'transparent' },
-            '&:hover::-webkit-scrollbar-thumb': { background: 'rgba(167,139,250,0.4)' },
-          }}>
+          <ScrollFade maxHeight={120} fadeColor="var(--card-bg, #161d2e)" scrollbarColor="rgba(167,139,250,0.4)" deps={[s.description]}>
             <Typography sx={{ color: 'var(--text, rgba(255,255,255,0.6))', fontSize: '0.85rem', lineHeight: 1.7 }}>
               {s.description}
             </Typography>
-          </Box>
+          </ScrollFade>
         </Section>
       )}
 
@@ -374,11 +455,11 @@ export default function ResultDisplay({ result }) {
                 {[
                   { label: r.contactForm, val: s.metadata.has_contact_form },
                   { label: r.ecommerce,   val: s.metadata.has_ecommerce },
-                ].map(({ label, val }) => (
+                ].filter(({ val }) => val).map(({ label }) => (
                   <Chip key={label} size="small"
-                    icon={val ? <CheckIcon sx={{ fontSize: '13px !important' }} /> : <CloseIcon sx={{ fontSize: '13px !important' }} />}
+                    icon={<CheckIcon sx={{ fontSize: '13px !important' }} />}
                     label={label}
-                    sx={{ bgcolor: val ? 'rgba(34,197,94,0.1)' : 'var(--surface, rgba(255,255,255,0.04))', color: val ? '#4ade80' : 'var(--text-muted, rgba(255,255,255,0.35))', border: `1px solid ${val ? 'rgba(34,197,94,0.2)' : 'var(--border, rgba(255,255,255,0.08))'}`, '& .MuiChip-icon': { color: 'inherit' } }}
+                    sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', '& .MuiChip-icon': { color: 'inherit' } }}
                   />
                 ))}
                 {s.metadata.language && (

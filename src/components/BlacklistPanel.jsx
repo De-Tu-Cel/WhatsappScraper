@@ -21,6 +21,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import LanguageIcon from '@mui/icons-material/Language'
 import CategoryIcon from '@mui/icons-material/Category'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import Divider from '@mui/material/Divider'
 import { useLang } from '../context/LangContext'
 import { authFetch } from '@/lib/api'
@@ -92,13 +93,22 @@ function EntryRow({ entry, onDelete, onSave, dupError, genericError }) {
 
   return (
     <Box sx={{
-      display: 'flex', alignItems: 'center', gap: 0.8, px: 1.2, py: 0.8, borderRadius: 1.5,
+      display: 'flex', alignItems: 'center', gap: 1, px: 1.2, py: 0.7, borderRadius: 1.5,
       bgcolor: 'rgba(239,68,68,0.03)', border: '1px solid rgba(239,68,68,0.12)',
       borderLeft: '3px solid rgba(239,68,68,0.32)',
       transition: 'all 0.15s',
       '&:hover': { bgcolor: 'rgba(239,68,68,0.055)', borderLeftColor: 'rgba(239,68,68,0.55)' },
     }}>
-      <BlockIcon sx={{ fontSize: 13, color: DANGER, flexShrink: 0 }} />
+      {/* Ícono suelto reemplazado por el mismo detalle de caja con degradado
+         que usa el resto de la app, en vez de un ícono flotando solo. */}
+      <Box sx={{
+        width: 22, height: 22, borderRadius: '7px', flexShrink: 0,
+        background: 'linear-gradient(135deg, rgba(239,68,68,0.22) 0%, rgba(239,68,68,0.08) 100%)',
+        border: '1px solid rgba(239,68,68,0.3)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <BlockIcon sx={{ fontSize: 12, color: DANGER }} />
+      </Box>
       {editing ? (
         <TextField
           size="small" autoFocus fullWidth value={val}
@@ -273,16 +283,25 @@ function BlacklistList({ type, icon, label, placeholder, tip, bl }) {
       )}
 
       {total > PAGE_SIZE && (
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, mt: 1.4 }}>
+        // Antes eran botones + texto sueltos flotando en el centro — ahora
+        // es una sola "pastilla" (mismo lenguaje de segmented control que
+        // ya usa Performance), con el conteo como su propio chip en vez de
+        // texto plano.
+        <Box sx={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.3, mt: 1.4,
+          alignSelf: 'center', mx: 'auto', p: 0.3, borderRadius: 2,
+          bgcolor: 'var(--surface, rgba(255,255,255,0.03))', border: '1px solid var(--border, rgba(255,255,255,0.1))',
+          width: 'fit-content',
+        }}>
           <IconButton size="small" disabled={page <= 1} onClick={() => goPage(page - 1)}
-            sx={{ color: 'var(--text-muted)', '&.Mui-disabled': { opacity: 0.25 } }}>
+            sx={{ color: 'var(--text-muted)', '&:hover': { color: DANGER, bgcolor: DANGER_SOFT }, '&.Mui-disabled': { opacity: 0.25 } }}>
             <ChevronLeftIcon sx={{ fontSize: 18 }} />
           </IconButton>
-          <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+          <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, px: 1, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
             {page} / {totalPages} · {total}
           </Typography>
           <IconButton size="small" disabled={page >= totalPages} onClick={() => goPage(page + 1)}
-            sx={{ color: 'var(--text-muted)', '&.Mui-disabled': { opacity: 0.25 } }}>
+            sx={{ color: 'var(--text-muted)', '&:hover': { color: DANGER, bgcolor: DANGER_SOFT }, '&.Mui-disabled': { opacity: 0.25 } }}>
             <ChevronRightIcon sx={{ fontSize: 18 }} />
           </IconButton>
         </Box>
@@ -342,7 +361,14 @@ function SystemBlacklist({ bl }) {
         bgcolor: 'var(--card-bg, #161d2e)', border: `1px solid ${SYS_BORDER}`,
         borderRadius: 999, px: 1.3, py: 0.4,
       }}>
-        <LockIcon sx={{ fontSize: 12, color: SYS_COLOR }} />
+        <Box sx={{
+          width: 18, height: 18, borderRadius: '6px', flexShrink: 0,
+          background: 'linear-gradient(135deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.04) 100%)',
+          border: '1px solid rgba(255,255,255,0.2)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <LockIcon sx={{ fontSize: 11, color: SYS_COLOR }} />
+        </Box>
         <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: SYS_COLOR, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
           {bl.systemLabel}
         </Typography>
@@ -356,18 +382,23 @@ function SystemBlacklist({ bl }) {
         <Box
           onClick={handleExpand}
           sx={{
-            display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', flexShrink: 0,
-            px: 1.2, py: 0.4, borderRadius: 1.5, border: `1px solid ${SYS_BORDER}`,
-            bgcolor: 'rgba(255,255,255,0.03)', transition: 'all 0.15s',
-            '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' },
+            display: 'flex', alignItems: 'center', gap: 0.7, cursor: 'pointer', flexShrink: 0,
+            pl: 1.3, pr: 1, py: 0.45, borderRadius: 999, border: `1px solid ${SYS_BORDER}`,
+            bgcolor: 'rgba(255,255,255,0.04)', transition: 'all 0.15s',
+            '&:hover': { bgcolor: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.18)' },
           }}
         >
-          <Typography sx={{ fontSize: '0.72rem', color: SYS_COLOR, whiteSpace: 'nowrap' }}>
+          <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: SYS_COLOR, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
             {loading ? '…' : `${all.length} ${bl.systemCount}`}
           </Typography>
-          <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', ml: 0.5 }}>
-            {expanded ? '▲' : '▼'}
-          </Typography>
+          <Box sx={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 14, height: 14, borderRadius: '50%',
+            bgcolor: 'rgba(255,255,255,0.06)', transition: 'transform 0.2s',
+            transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)',
+          }}>
+            <ExpandMoreIcon sx={{ fontSize: 12, color: 'rgba(255,255,255,0.45)' }} />
+          </Box>
         </Box>
       </Box>
 
@@ -440,6 +471,12 @@ function SystemBlacklist({ bl }) {
 export default function BlacklistPanel({ isActive }) {
   const { t } = useLang()
   const bl = t.blacklist
+  const [activeTab, setActiveTab] = useState(0)
+
+  const TABS = [
+    { icon: <LanguageIcon sx={{ fontSize: 15 }} />, label: bl.domains },
+    { icon: <CategoryIcon sx={{ fontSize: 15 }} />, label: bl.industries },
+  ]
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -463,12 +500,54 @@ export default function BlacklistPanel({ isActive }) {
         </Box>
       </Box>
 
+      {/* Tab bar — mismo lenguaje que el de Configuración (Cuenta/WhatsApp/
+         Envíos), en el acento rojo propio de Blacklist, para elegir un
+         apartado a la vez en vez de tener Dominios e Industrias siempre
+         apiladas una debajo de la otra. */}
+      <Box sx={{
+        display: 'flex', gap: 0.5, mb: 2, flexShrink: 0,
+        p: 0.5, borderRadius: 2.5,
+        bgcolor: 'var(--surface, rgba(255,255,255,0.03))',
+        border: '1px solid var(--border, rgba(255,255,255,0.06))',
+      }}>
+        {TABS.map((tab, i) => {
+          const active = activeTab === i
+          return (
+            <Box key={i} onClick={() => setActiveTab(i)} sx={{
+              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.6,
+              py: 0.9, px: 0.5, borderRadius: 2, cursor: 'pointer',
+              bgcolor: active ? DANGER_SOFT : 'transparent',
+              border: active ? `1px solid ${DANGER_BORDER}` : '1px solid transparent',
+              boxShadow: active ? '0 0 12px rgba(239,68,68,0.12)' : 'none',
+              transition: 'all 0.15s',
+              '&:hover': !active ? { bgcolor: 'var(--item-hover, rgba(255,255,255,0.06))', border: '1px solid var(--border, rgba(255,255,255,0.1))' } : {},
+            }}>
+              <Box sx={{ color: active ? DANGER : 'var(--text-muted, rgba(255,255,255,0.4))', display: 'flex' }}>
+                {tab.icon}
+              </Box>
+              <Typography sx={{
+                fontSize: '0.78rem', fontWeight: active ? 700 : 400,
+                color: active ? DANGER : 'var(--text-muted, rgba(255,255,255,0.4))',
+                transition: 'color 0.15s',
+              }}>
+                {tab.label}
+              </Typography>
+            </Box>
+          )
+        })}
+      </Box>
+
       <Box sx={{ flex: 1, overflowY: 'auto', minHeight: 0, pr: 0.5, display: 'flex', flexDirection: 'column', gap: 3.5 }}>
-        <BlacklistList type="domain" icon={<LanguageIcon sx={{ fontSize: 13, color: DANGER }} />}
-          label={bl.domains} placeholder={bl.domainPh} tip={bl.domainTip} bl={bl} />
-        <BlacklistList type="industry" icon={<CategoryIcon sx={{ fontSize: 13, color: DANGER }} />}
-          label={bl.industries} placeholder={bl.industryPh} tip={bl.industryTip} bl={bl} />
-        <SystemBlacklist bl={bl} />
+        {activeTab === 0 ? (
+          <>
+            <BlacklistList type="domain" icon={<LanguageIcon sx={{ fontSize: 13, color: DANGER }} />}
+              label={bl.domains} placeholder={bl.domainPh} tip={bl.domainTip} bl={bl} />
+            <SystemBlacklist bl={bl} />
+          </>
+        ) : (
+          <BlacklistList type="industry" icon={<CategoryIcon sx={{ fontSize: 13, color: DANGER }} />}
+            label={bl.industries} placeholder={bl.industryPh} tip={bl.industryTip} bl={bl} />
+        )}
       </Box>
     </Box>
   )

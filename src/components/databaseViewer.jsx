@@ -75,6 +75,7 @@ import MessageIcon from '@mui/icons-material/Message'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
+import PhoneDisabledIcon from '@mui/icons-material/PhoneDisabled'
 import Popover from '@mui/material/Popover'
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import { visuallyHidden } from '@mui/utils'
@@ -92,7 +93,7 @@ function cleanDomain(url) {
     return u.hostname.replace(/^www\./, '')
   } catch { return url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] }
 }
-import ResultDisplay from './resultDisplay'
+import ResultDisplay, { ResultSkeleton } from './resultDisplay'
 import { MessageComposer } from './singleUrlProcessor'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVariants'
@@ -106,14 +107,18 @@ import { loadSendConfig, randMsgDelayMs, randBatchBreakMs, randBatchSize } from 
 // its own; lives inside ONE outer card together with the others, separated by
 // vertical Dividers, matching the reference invoice-list summary card. Sized
 // generously (bigger icon circle, real spacing, clear label/value hierarchy)
-// instead of cramming everything onto one tight row.
-function StatCard({ icon, color, value, label, subtitle, onClick, active }) {
+// instead of cramming everything onto one tight row. The icon ring is a
+// conic-gradient progress ring showing `percent` (0-100) of the total company
+// count this stat represents, instead of a flat solid-color outline — same
+// pattern as Analytics' StatCard.
+function StatCard({ icon, color, value, label, subtitle, onClick, active, percent }) {
   const clickable = !!onClick
+  const pct = percent == null ? 100 : Math.max(0, Math.min(100, percent))
   return (
     <Box
       onClick={onClick}
       sx={{
-        flex: '1 1 0', minWidth: 160, display: 'flex', alignItems: 'center', gap: 1.6,
+        flex: '1 1 0', minWidth: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.6,
         px: 2.4, py: 2, borderRadius: 2,
         cursor: clickable ? 'pointer' : 'default',
         bgcolor: active ? `${color}14` : 'transparent',
@@ -122,11 +127,16 @@ function StatCard({ icon, color, value, label, subtitle, onClick, active }) {
       }}
     >
       <Box sx={{
-        width: 46, height: 46, borderRadius: '50%', flexShrink: 0,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        border: `2px solid ${color}55`,
+        width: 46, height: 46, borderRadius: '50%', flexShrink: 0, p: '3px',
+        background: `conic-gradient(${color} ${pct}%, var(--border, rgba(255,255,255,0.12)) ${pct}% 100%)`,
       }}>
-        {icon}
+        <Box sx={{
+          width: '100%', height: '100%', borderRadius: '50%',
+          bgcolor: active ? `${color}14` : 'var(--card-bg, rgba(255,255,255,0.02))',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          {icon}
+        </Box>
       </Box>
       <Box sx={{ minWidth: 0 }}>
         <Typography sx={{ fontSize: '0.85rem', color: 'var(--text)', fontWeight: 700, lineHeight: 1.3, whiteSpace: 'nowrap' }}>
@@ -279,14 +289,14 @@ const MENU_PROPS = {
   slotProps: {
     paper: {
       sx: {
-        bgcolor: 'var(--sidebar-bg, #0d1117)',
+        bgcolor: 'var(--card-bg, #1e293b) !important',
         border: '1px solid var(--border, rgba(255,255,255,0.1))',
         borderRadius: 2,
         mt: 0.5,
         '& .MuiMenuItem-root': {
           fontSize: '0.82rem',
           color: 'var(--text-muted, rgba(255,255,255,0.75))',
-          '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.12)' },
+          '&:hover': { bgcolor: 'var(--item-hover, rgba(255,255,255,0.06))' },
           '&.Mui-selected': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.18)', color: 'var(--text, white)' },
           '&.Mui-selected:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.25)' },
         },
@@ -338,9 +348,29 @@ const SKEL_SX = {
   '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.04), transparent)' },
 }
 
-function formatDate(iso) {
-  if (!iso) return '—'
-  return new Date(iso).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
+// Insignia de fecha (mes abreviado arriba + día grande abajo) — mismo diseño
+// que en la tabla de Ideas, para columnas de fecha de una sola línea.
+function MiniDateBadge({ iso, lang }) {
+  if (!iso) return <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>
+  const d = new Date(iso)
+  const month = d.toLocaleDateString(lang === 'en' ? 'en-US' : 'es-MX', { month: 'short' }).replace('.', '').toUpperCase()
+  const fullDate = d.toLocaleDateString(lang === 'en' ? 'en-US' : 'es-MX', { day: '2-digit', month: 'long', year: 'numeric' })
+  return (
+    <Tooltip title={fullDate} placement="top">
+      <Box sx={{
+        display: 'inline-flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        width: 38, height: 38, borderRadius: 1.4,
+        bgcolor: 'var(--surface, rgba(255,255,255,0.04))', border: '1px solid var(--border, rgba(255,255,255,0.1))',
+      }}>
+        <Typography sx={{ fontSize: '0.52rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.03em', lineHeight: 1.3 }}>
+          {month}
+        </Typography>
+        <Typography sx={{ fontSize: '0.92rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.1 }}>
+          {d.getDate()}
+        </Typography>
+      </Box>
+    </Tooltip>
+  )
 }
 
 function truncate(str, n = 32) {
@@ -639,24 +669,28 @@ function AddCompanyDialog({ open, onClose, onCreated, onNotify }) {
         </Box>
       </DialogTitle>
 
-      <DialogContent sx={{ px: 3, pt: 2.5, pb: 1, display: 'flex', flexDirection: 'column', gap: 1.8, bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
-        <TextField label={t.db.nameLabel} size="small" fullWidth sx={{ ...FIELD_SX, mt: 1 }}
-          value={form.name} onChange={e => set('name', e.target.value)}
-          error={nameErr} helperText={nameErr ? t.db.nameRequired : ''} />
-        <TextField label={t.db.websiteLabel} size="small" fullWidth sx={FIELD_SX}
-          value={form.website} onChange={e => set('website', e.target.value)}
-          error={!!webErr} helperText={webErr || t.db.websiteEx} />
-        <Box sx={{ display: 'flex', gap: 1.5 }}>
-          <TextField label={t.db.industryLabel2} size="small" fullWidth sx={FIELD_SX} value={form.industry} onChange={e => set('industry', e.target.value)} />
-          <TextField label={t.db.cityLabel2} size="small" fullWidth sx={FIELD_SX} value={form.city} onChange={e => set('city', e.target.value)} />
+      <DialogContent sx={{ px: 3, pt: 2, pb: 1, bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, pt: 0.5 }}>
+          <TextField label={t.db.nameLabel} size="small" fullWidth sx={FIELD_SX}
+            value={form.name} onChange={e => set('name', e.target.value)}
+            error={nameErr} helperText={nameErr ? t.db.nameRequired : ''} />
+          <TextField label={t.db.websiteLabel} size="small" fullWidth sx={FIELD_SX}
+            value={form.website} onChange={e => set('website', e.target.value)}
+            error={!!webErr} helperText={webErr || t.db.websiteEx} />
+          <Box sx={{ display: 'flex', gap: 1.5 }}>
+            <TextField label={t.db.industryLabel2} size="small" fullWidth sx={FIELD_SX} value={form.industry} onChange={e => set('industry', e.target.value)} />
+            <TextField label={t.db.cityLabel2} size="small" fullWidth sx={FIELD_SX} value={form.city} onChange={e => set('city', e.target.value)} />
+          </Box>
+          <TextField label={t.db.stateLabel} size="small" fullWidth sx={FIELD_SX} value={form.state} onChange={e => set('state', e.target.value)} />
+          <TextField label={t.db.whatsappNumLabel} size="small" fullWidth sx={FIELD_SX}
+            placeholder="+52 55 1234 5678" value={form.whatsapp_number} onChange={e => set('whatsapp_number', e.target.value)}
+            error={!!waErr} helperText={waErr || t.db.whatsappNumHint} />
+          <TextField label={t.db.descLabel} size="small" fullWidth multiline rows={2} sx={FIELD_SX}
+            placeholder={t.db.descPh} value={form.description} onChange={e => set('description', e.target.value)} />
         </Box>
-        <TextField label={t.db.stateLabel} size="small" fullWidth sx={FIELD_SX} value={form.state} onChange={e => set('state', e.target.value)} />
-        <TextField label={t.db.whatsappNumLabel} size="small" fullWidth sx={FIELD_SX}
-          placeholder="+52 55 1234 5678" value={form.whatsapp_number} onChange={e => set('whatsapp_number', e.target.value)}
-          error={!!waErr} helperText={waErr || t.db.whatsappNumHint} />
-        <TextField label={t.db.descLabel} size="small" fullWidth multiline rows={2} sx={FIELD_SX}
-          placeholder={t.db.descPh} value={form.description} onChange={e => set('description', e.target.value)} />
       </DialogContent>
+
+      <Divider sx={{ borderColor: 'rgba(255,255,255,0.07)' }} />
 
       <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5, gap: 1 }}>
         <Button onClick={onClose} disabled={saving} sx={{ color: 'rgba(255,255,255,0.5)', borderRadius: 2, textTransform: 'none' }}>
@@ -914,7 +948,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
                 </Typography>
                 <Tooltip title={t.db.editBtn}>
                   <IconButton size="small" onClick={() => startEdit(i)}
-                    sx={{ color: 'rgba(255,255,255,0.2)', p: 0.3, '&:hover': { color: '#3b82f6' } }}>
+                    sx={{ color: 'rgba(255,255,255,0.2)', p: 0.3, '&:hover': { color: 'var(--accent, #60a5fa)' } }}>
                     <EditIcon sx={{ fontSize: 13 }} />
                   </IconButton>
                 </Tooltip>
@@ -1026,12 +1060,12 @@ function SkeletonRows({ count }) {
       </TableCell>
       <TableCell align="center">
         <Box sx={{ display: 'flex', justifyContent: 'center' }}>
-          <Skeleton variant="text" width={80} sx={{ ...SKEL_SX, fontSize: '0.82rem' }} />
+          <Skeleton variant="rounded" width={38} height={38} sx={SKEL_SX} />
         </Box>
       </TableCell>
       <TableCell align="center">
         <Box sx={{ display: 'flex', justifyContent: 'center' }}>
-          <Skeleton variant="text" width={80} sx={{ ...SKEL_SX, fontSize: '0.82rem' }} />
+          <Skeleton variant="rounded" width={38} height={38} sx={SKEL_SX} />
         </Box>
       </TableCell>
       <TableCell align="right" sx={{ pr: 1 }}>
@@ -1052,14 +1086,14 @@ function SkeletonRows({ count }) {
 function StatsCardSkeleton() {
   return (
     <Box sx={{
-      display: 'flex', flexWrap: 'wrap', mb: 1.2, overflow: 'hidden',
+      display: 'flex', flexWrap: 'wrap', overflow: 'hidden',
       borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
       bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
     }}>
-      {Array.from({ length: 5 }).map((_, i) => (
+      {Array.from({ length: 6 }).map((_, i) => (
         <Fragment key={i}>
           {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 2 }} />}
-          <Box sx={{ flex: '1 1 0', minWidth: 160, display: 'flex', alignItems: 'center', gap: 1.6, px: 2.4, py: 2 }}>
+          <Box sx={{ flex: '1 1 0', minWidth: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.6, px: 2.4, py: 2 }}>
             <Skeleton variant="circular" width={46} height={46} sx={{ ...SKEL_SX, flexShrink: 0 }} />
             <Box sx={{ minWidth: 0, flex: 1 }}>
               <Skeleton variant="text" width="70%" sx={{ ...SKEL_SX, fontSize: '0.85rem' }} />
@@ -1816,7 +1850,7 @@ export default function DatabaseViewer({ isActive }) {
              shown while /api/companies is loading so the area doesn't just
              disappear and pop back in once data arrives. ── */}
         {loading && (
-          <Box sx={{ px: 2, py: 1.5, borderBottom: '1px solid rgba(255,255,255,0.05)', bgcolor: 'rgba(255,255,255,0.012)', position: 'relative', zIndex: 1 }}>
+          <Box sx={{ px: 2, py: 1, borderBottom: '1px solid rgba(255,255,255,0.05)', bgcolor: 'rgba(255,255,255,0.012)', position: 'relative', zIndex: 1 }}>
             <StatsCardSkeleton />
           </Box>
         )}
@@ -1825,35 +1859,49 @@ export default function DatabaseViewer({ isActive }) {
              sections, matching the reference invoice-list summary card,
              instead of separate boxes with gaps between them. ── */}
         {!loading && (() => {
+          const waPct = total > 0 && globalStats.total_wa !== null ? Math.round((globalStats.total_wa / total) * 100) : 0
+          const noWaPct = total > 0 && globalStats.total_wa !== null ? Math.round((Math.max(0, total - globalStats.total_wa) / total) * 100) : 0
+          const contactedPct = total > 0 && globalStats.total_contacted !== null ? Math.round((globalStats.total_contacted / total) * 100) : 0
+          const notContactedPct = total > 0 && globalStats.total_contacted !== null ? Math.round((Math.max(0, total - globalStats.total_contacted) / total) * 100) : 0
           const statCards = [
             {
               key: 'total',
-              icon: <StorageIcon sx={{ fontSize: 22, color: '#3b82f6' }} />, color: '#3b82f6',
+              icon: <StorageIcon sx={{ fontSize: 20, color: '#3b82f6' }} />, color: '#3b82f6',
               value: total.toLocaleString(),
               label: lang === 'en' ? (total === 1 ? 'Company' : 'Companies') : (total === 1 ? 'Empresa' : 'Empresas'),
+              percent: 100,
             },
             globalStats.total_wa !== null && {
               key: 'wa',
-              icon: <WhatsAppIcon sx={{ fontSize: 22, color: '#22c55e' }} />, color: '#22c55e',
+              icon: <WhatsAppIcon sx={{ fontSize: 20, color: '#22c55e' }} />, color: '#22c55e',
               value: globalStats.total_wa.toLocaleString(),
-              subtitle: total > 0 ? `${Math.round((globalStats.total_wa / total) * 100)}%` : null,
+              subtitle: total > 0 ? `${waPct}%` : null,
               label: lang === 'en' ? 'With WhatsApp' : 'Con WhatsApp',
+              percent: waPct,
+            },
+            globalStats.total_wa !== null && {
+              key: 'noWa',
+              icon: <PhoneDisabledIcon sx={{ fontSize: 20, color: '#f87171' }} />, color: '#f87171',
+              value: Math.max(0, total - globalStats.total_wa).toLocaleString(),
+              subtitle: total > 0 ? `${noWaPct}%` : null,
+              label: lang === 'en' ? 'Without WhatsApp' : 'Sin WhatsApp',
+              percent: noWaPct,
             },
             globalStats.total_contacted !== null && {
               key: 'contacted',
               icon: <SendIcon sx={{ fontSize: 20, color: '#60a5fa' }} />, color: '#60a5fa',
               value: globalStats.total_contacted.toLocaleString(),
+              subtitle: total > 0 ? `${contactedPct}%` : null,
               label: lang === 'en' ? 'Contacted' : 'Contactadas',
-              active: filters.contacted === 'true',
-              onClick: () => handleFilterChange('contacted', filters.contacted === 'true' ? '' : 'true'),
+              percent: contactedPct,
             },
             globalStats.total_contacted !== null && {
               key: 'notContacted',
               icon: <HourglassEmptyIcon sx={{ fontSize: 20, color: '#fbbf24' }} />, color: '#fbbf24',
               value: Math.max(0, total - globalStats.total_contacted).toLocaleString(),
+              subtitle: total > 0 ? `${notContactedPct}%` : null,
               label: lang === 'en' ? 'Not contacted' : 'Sin contactar',
-              active: filters.contacted === 'false',
-              onClick: () => handleFilterChange('contacted', filters.contacted === 'false' ? '' : 'false'),
+              percent: notContactedPct,
             },
             {
               key: 'lastScrape',
@@ -1865,13 +1913,14 @@ export default function DatabaseViewer({ isActive }) {
                   ? (scrapeAgeDisplay.daysAgo === 0 ? 'Today' : scrapeAgeDisplay.daysAgo === 1 ? 'Yesterday' : `${scrapeAgeDisplay.daysAgo}d ago`)
                   : (scrapeAgeDisplay.daysAgo === 0 ? 'Hoy' : scrapeAgeDisplay.daysAgo === 1 ? 'Ayer' : `Hace ${scrapeAgeDisplay.daysAgo}d`),
               label: lang === 'en' ? 'Last scrape' : 'Último scraping',
+              percent: 100,
             },
           ].filter(Boolean)
 
           return (
-          <Box sx={{ px: 2, py: 1.5, borderBottom: '1px solid rgba(255,255,255,0.05)', bgcolor: 'rgba(255,255,255,0.012)', position: 'relative', zIndex: 1 }}>
+          <Box sx={{ px: 2, py: 1, borderBottom: '1px solid rgba(255,255,255,0.05)', bgcolor: 'rgba(255,255,255,0.012)', position: 'relative', zIndex: 1 }}>
             <Box sx={{
-              display: 'flex', flexWrap: 'wrap', mb: 1.2, overflow: 'hidden',
+              display: 'flex', flexWrap: 'wrap', overflow: 'hidden',
               borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
               bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
             }}>
@@ -1884,7 +1933,7 @@ export default function DatabaseViewer({ isActive }) {
             </Box>
             {/* Active filter chips — right side */}
             {(filters.search || filters.industry.length > 0 || filters.city.length > 0 || filters.has_whatsapp !== '' || filters.contacted !== '') && (
-              <Box sx={{ ml: 'auto', display: 'flex', gap: 0.7, flexWrap: 'wrap', alignItems: 'center' }}>
+              <Box sx={{ ml: 'auto', mt: 1, display: 'flex', gap: 0.7, flexWrap: 'wrap', alignItems: 'center' }}>
                 {filters.search && (
                   <Chip size="small" label={`"${filters.search}"`}
                     onDelete={() => handleFilterChange('search', '')}
@@ -2011,7 +2060,13 @@ export default function DatabaseViewer({ isActive }) {
                     ) : hc.label}
                   </TableCell>
                 ))}
-                <TableCell sx={{ bgcolor: 'var(--card-bg, #161d2e)', borderBottom: '1px solid rgba(255,255,255,0.08)' }} />
+                {/* A las demás celdas del encabezado se les puso position:
+                   'relative' (para el divisor ::after) — a esta, la vacía de
+                   la columna de acciones, se le olvidó, y quedaba fuera de
+                   ese mismo "stacking context" que el resto del header
+                   sticky sí tiene, viéndose como un recuadro aparte al
+                   hacer scroll. */}
+                <TableCell sx={{ bgcolor: 'var(--card-bg, #161d2e)', borderBottom: '1px solid rgba(255,255,255,0.08)', position: 'relative' }} />
               </TableRow>
             </TableHead>
             <TableBody>
@@ -2138,12 +2193,18 @@ export default function DatabaseViewer({ isActive }) {
                             sx={{ bgcolor: 'rgba(239,68,68,0.08)', color: 'rgba(248,113,113,0.55)', border: '1px solid rgba(239,68,68,0.18)', height: 22, fontSize: '0.7rem', fontWeight: 600, px: 0.3 }} />
                         )}
                       </TableCell>
-                      <TableCell align="center" onClick={() => handleSelectRow(row._id)}>{formatDate(row.created_at)}</TableCell>
-                      <TableCell align="center" onClick={() => handleSelectRow(row._id)}>{formatDate(row.last_scraped_at)}</TableCell>
+                      <TableCell align="center" onClick={() => handleSelectRow(row._id)}>
+                        <MiniDateBadge iso={row.created_at} lang={lang} />
+                      </TableCell>
+                      <TableCell align="center" onClick={() => handleSelectRow(row._id)}>
+                        <MiniDateBadge iso={row.last_scraped_at} lang={lang} />
+                      </TableCell>
                       <TableCell align="right" sx={{ pr: 1 }}>
+                        {/* Hover antes iba en morado/azul fijos, sin relación
+                           con el color de paleta elegido en Ajustes. */}
                         <Tooltip title={t.db.viewInfo}>
                           <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenView(row) }}
-                            sx={{ color: 'rgba(255,255,255,0.35)', '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.45)' }, '&:hover': { color: '#a78bfa', bgcolor: 'rgba(167,139,250,0.1)' } }}>
+                            sx={{ color: 'rgba(255,255,255,0.35)', '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.45)' }, '&:hover': { color: 'var(--accent, #60a5fa)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' } }}>
                             <VisibilityIcon sx={{ fontSize: 15 }} />
                           </IconButton>
                         </Tooltip>
@@ -2163,7 +2224,7 @@ export default function DatabaseViewer({ isActive }) {
                         </Tooltip>
                         <Tooltip title={t.db.editBtn}>
                           <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenEdit(row) }}
-                            sx={{ color: 'rgba(255,255,255,0.35)', '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.45)' }, '&:hover': { color: '#3b82f6', bgcolor: 'rgba(59,130,246,0.1)' } }}>
+                            sx={{ color: 'rgba(255,255,255,0.35)', '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.45)' }, '&:hover': { color: 'var(--accent, #60a5fa)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' } }}>
                             <EditIcon sx={{ fontSize: 15 }} />
                           </IconButton>
                         </Tooltip>
@@ -2202,12 +2263,7 @@ export default function DatabaseViewer({ isActive }) {
       <Dialog open={!!viewTarget} onClose={() => setViewTarget(null)} maxWidth="lg" fullWidth
         slotProps={{ paper: { sx: { bgcolor: 'var(--bg, #080c14)', backgroundImage: 'none', background: 'var(--bg, #080c14)', borderRadius: 3, border: '1px solid rgba(255,255,255,0.08)', p: 0 } } }}>
         <DialogContent sx={{ p: 2.5, bgcolor: 'var(--bg, #080c14)', '&:first-of-type': { pt: 2.5 } }}>
-          {viewLoading && (
-            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', py: 6, gap: 2 }}>
-              <CircularProgress size={36} sx={{ color: '#6366f1' }} />
-              <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.82rem' }}>{t.db.loadingInfo}</Typography>
-            </Box>
-          )}
+          {viewLoading && <ResultSkeleton />}
           {!viewLoading && viewData && <ResultDisplay result={viewData} />}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2, bgcolor: 'var(--bg, #080c14)' }}>

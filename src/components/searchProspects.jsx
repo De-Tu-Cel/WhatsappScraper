@@ -30,6 +30,7 @@ import LinearProgress from '@mui/material/LinearProgress'
 import Slider from '@mui/material/Slider'
 import CircularProgress from '@mui/material/CircularProgress'
 import Skeleton from '@mui/material/Skeleton'
+import Divider from '@mui/material/Divider'
 import SearchIcon from '@mui/icons-material/Search'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import PauseIcon from '@mui/icons-material/Pause'
@@ -932,7 +933,7 @@ export default function SearchProspects() {
 
       {/* ── Barra compacta cuando hay resultados ── */}
       {hasResults && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', p: 1.5, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', p: 1.5, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)', flexShrink: 0 }}>
           <SearchBarForm compact={true} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !scrapeJob.processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancelSearch} defaultIndustry={lastIndustry} />
           <CountSelector size="sm" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} disabled={searching || scrapeJob.processing} />
         </Box>
@@ -1161,7 +1162,7 @@ export default function SearchProspects() {
       {scrapeJob.done && scrapeJob.job?.status === 'cancelled' && scrapeJob.pendingCount > 0 && (
         <Box sx={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5,
-          px: 2, py: 1.5, borderRadius: 2,
+          px: 2, py: 1.5, borderRadius: 2, flexShrink: 0,
           bgcolor: 'rgba(251,191,36,0.05)', border: '1px solid rgba(251,191,36,0.22)',
         }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -1179,28 +1180,143 @@ export default function SearchProspects() {
         </Box>
       )}
 
-      {/* ── Stat cards ── */}
+      {/* ── Stat cards — one bordered strip with inset dividers, same pattern
+           as Prospects' summary strip, instead of 3 separate floating pills.
+           flexShrink: 0 here (and on every fixed-content sibling below, down
+           to the results header) — without it, this flex column's default
+           flex-shrink:1 lets a short browser window squash these boxes well
+           below their own content height instead of just scrolling past them
+           at full size; combined with their own overflow:hidden, that squash
+           read as the content getting silently cropped. ── */}
       {results.length > 0 && (
-        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+        <Box sx={{
+          display: 'flex', flexWrap: 'wrap', overflow: 'hidden', flexShrink: 0,
+          borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+          bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+        }}>
           {[
-            { icon: <CheckCircleIcon sx={{ fontSize: 16, color: '#4ade80' }} />, label: t.batch.processed, value: okCount,  color: '#4ade80', bg: 'rgba(34,197,94,0.06)',   border: 'rgba(34,197,94,0.18)'  },
-            { icon: <WhatsAppIcon    sx={{ fontSize: 16, color: '#60a5fa' }} />, label: t.batch.withWa,    value: waCount,  color: '#60a5fa', bg: 'rgba(59,130,246,0.06)',  border: 'rgba(59,130,246,0.18)' },
-            { icon: <ErrorIcon       sx={{ fontSize: 16, color: '#f87171' }} />, label: t.batch.errors,    value: errCount, color: '#f87171', bg: 'rgba(239,68,68,0.06)',   border: 'rgba(239,68,68,0.18)'  },
-          ].map(c => (
-            <Box key={c.label} sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.5, bgcolor: c.bg, border: `1px solid ${c.border}`, borderRadius: 2 }}>
-              <Box sx={{ width: 32, height: 32, flexShrink: 0, bgcolor: `${c.color}22`, border: `1px solid ${c.color}44`, borderRadius: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{c.icon}</Box>
-              <Box>
-                <Typography sx={{ color: c.color, fontWeight: 700, fontSize: '1.1rem', lineHeight: 1.2 }}>{c.value}</Typography>
-                <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.7rem' }}>{c.label}</Typography>
+            { icon: <CheckCircleIcon sx={{ fontSize: 18 }} />, label: t.batch.processed, value: okCount,  color: '#4ade80' },
+            { icon: <WhatsAppIcon    sx={{ fontSize: 18 }} />, label: t.batch.withWa,    value: waCount,  color: '#60a5fa' },
+            { icon: <ErrorIcon       sx={{ fontSize: 18 }} />, label: t.batch.errors,    value: errCount, color: '#f87171' },
+          ].map((c, i) => (
+            <React.Fragment key={c.label}>
+              {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 2 }} />}
+              <Box sx={{ flex: '1 1 0', minWidth: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.6, px: 2.4, py: 2 }}>
+                <Box sx={{
+                  width: 40, height: 40, borderRadius: 2, flexShrink: 0, color: c.color,
+                  background: `linear-gradient(135deg, ${c.color}28 0%, ${c.color}0a 100%)`,
+                  border: `1px solid ${c.color}4d`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  {c.icon}
+                </Box>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography sx={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.2, fontVariantNumeric: 'tabular-nums' }}>
+                    {c.value}
+                  </Typography>
+                  <Typography sx={{ fontSize: '0.74rem', color: 'var(--text-muted, rgba(255,255,255,0.4))', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                    {c.label}
+                  </Typography>
+                </Box>
               </Box>
-            </Box>
+            </React.Fragment>
           ))}
         </Box>
       )}
 
+      {/* ── Funnel de conversión: Scrapeadas → Con WhatsApp → Seleccionadas → Enviadas —
+           prototipo de la idea #1 (idea sesión: "qué más podemos hacerle a resultados"),
+           para ver de un vistazo dónde se pierden prospectos en vez de solo 3 contadores
+           sueltos. El relleno de fondo de cada etapa (y su chip de %) representan lo
+           MISMO: cuánto de la etapa anterior se retuvo — así un 100% de conversión real
+           siempre se ve lleno, sin importar qué tan chica sea esa etapa frente al total
+           scrapeado. La primera etapa siempre se ve llena: es la referencia. ── */}
+      {results.length > 0 && (() => {
+        // "Seleccionadas" mide NÚMEROS de WhatsApp (no empresas): el número
+        // grande y su % son totalContactPoints/totalAvailableNumbers — cuánto
+        // de lo disponible para enviar ya está marcado. Antes contaba empresas
+        // (misma unidad que las otras 3 etapas) y una empresa con 4 números
+        // marcando solo 1 igual salía "100%", que no reflejaba lo que
+        // realmente se iba a enviar.
+        const totalAvailableNumbers = waRowsUnique.reduce((sum, r) => sum + (r.all_whatsapp?.length || (r.whatsapp ? 1 : 0)), 0)
+        const selectedPct = totalAvailableNumbers > 0 ? Math.round((totalContactPoints / totalAvailableNumbers) * 100) : 0
+        const stages = [
+          { key: 'scraped',  label: lang === 'en' ? 'Scraped'       : 'Scrapeadas',    value: results.length,            color: '#60a5fa', icon: <TravelExploreIcon sx={{ fontSize: 22 }} /> },
+          { key: 'wa',       label: lang === 'en' ? 'With WhatsApp' : 'Con WhatsApp',  value: waCount,                   color: '#4ade80', icon: <WhatsAppIcon      sx={{ fontSize: 22 }} /> },
+          { key: 'selected', label: lang === 'en' ? 'Selected'      : 'Seleccionadas', value: totalContactPoints,        color: '#a78bfa', icon: <CheckBoxIcon      sx={{ fontSize: 22 }} />,
+            pctOverride: selectedPct },
+          { key: 'sent',     label: lang === 'en' ? 'Sent'          : 'Enviadas',      value: sentCids.size,             color: '#fbbf24', icon: <SendIcon          sx={{ fontSize: 22 }} /> },
+        ]
+        return (
+          <Box sx={{
+            display: 'flex', flexWrap: 'wrap', overflow: 'hidden', flexShrink: 0,
+            borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+            bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+          }}>
+            {stages.map((s, i) => {
+              const prev = i > 0 ? stages[i - 1] : null
+              // pctOverride ("Seleccionadas") es un % propio (números marcados vs.
+              // disponibles), no una tasa de conversión contra la etapa anterior —
+              // esa etapa tiene otra unidad (empresas), comparar directo no tendría sentido.
+              const convRate = s.pctOverride !== undefined ? s.pctOverride : (prev && prev.value > 0 ? Math.round((s.value / prev.value) * 100) : null)
+              // El relleno usa la MISMA base que el chip de % junto a la etiqueta
+              // (conversión vs. la etapa anterior) — antes usaba el % contra la
+              // primera etapa, y un 100% de conversión real (ej. "seleccioné
+              // todo lo disponible") se veía como una barra casi vacía porque
+              // esa etapa era chica frente al total scrapeado. La primera etapa
+              // siempre se ve llena: es la referencia, no hay "anterior" que la achique.
+              const pct = i === 0 ? 100 : (s.value === 0 ? 0 : Math.max(4, convRate ?? 0))
+              return (
+                <React.Fragment key={s.key}>
+                  {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))' }} />}
+                  <Box sx={{ flex: '1 1 0', minWidth: 190, position: 'relative', overflow: 'hidden' }}>
+                    {/* Relleno de fondo == tasa de conversión vs. la etapa anterior (mismo % que el chip) */}
+                    <Box sx={{
+                      position: 'absolute', inset: 0, left: 0, width: `${pct}%`,
+                      background: `linear-gradient(90deg, ${s.color}40 0%, ${s.color}12 100%)`,
+                      transition: 'width 0.4s ease', pointerEvents: 'none',
+                    }} />
+                    <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.8, px: 2.6, py: 2.2 }}>
+                      <Box sx={{
+                        width: 46, height: 46, borderRadius: 2.5, flexShrink: 0, color: s.color,
+                        background: `linear-gradient(135deg, ${s.color}28 0%, ${s.color}0a 100%)`,
+                        border: `1px solid ${s.color}4d`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        {s.icon}
+                      </Box>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography sx={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.15, fontVariantNumeric: 'tabular-nums' }}>
+                          {s.value}
+                        </Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                          <Typography sx={{ fontSize: '0.76rem', color: 'var(--text-muted, rgba(255,255,255,0.45))', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                            {s.label}
+                          </Typography>
+                          {convRate !== null && (
+                            <Box sx={{
+                              px: 0.7, py: 0.1, borderRadius: 999, whiteSpace: 'nowrap',
+                              bgcolor: `${s.color}18`, border: `1px solid ${s.color}40`,
+                            }}>
+                              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: s.color }}>
+                                {convRate}%
+                              </Typography>
+                            </Box>
+                          )}
+                        </Box>
+                      </Box>
+                    </Box>
+                  </Box>
+                </React.Fragment>
+              )
+            })}
+          </Box>
+        )
+      })()}
+
       {/* ── Panel de envío masivo ── */}
       {(scrapeJob.done || scrapeJob.processing) && results.length > 0 && (
-        <Box sx={{ borderRadius: 2.5, border: '1px solid rgba(34,197,94,0.2)', display: 'flex', flexDirection: 'column' }}>
+        <Box sx={{ borderRadius: 2.5, border: '1px solid rgba(34,197,94,0.2)', overflow: 'hidden', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
           {/* Panel header */}
           <Box sx={{ px: 2, py: 1.4, background: 'linear-gradient(180deg, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.02) 100%)', borderBottom: '1px solid rgba(34,197,94,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
@@ -1219,8 +1335,25 @@ export default function SearchProspects() {
                 sx={{ fontSize: '0.7rem', height: 22, bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', '& .MuiChip-icon': { color: '#4ade80' } }} />
             )}
           </Box>
-          {/* Body */}
-          <Box sx={{ p: 2 }}>
+          {/* Body — scrollea internamente en vez de crecer sin límite y empujar
+              todo lo que sigue (resultados) fuera de la vista. */}
+          <Box sx={{
+            p: 2, maxHeight: 'clamp(420px, 70vh, 760px)', overflowY: 'auto',
+            scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.12) transparent',
+            '&::-webkit-scrollbar': { width: 6 },
+            '&::-webkit-scrollbar-track': { background: 'transparent' },
+            '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.14)', borderRadius: 3 },
+            '&::-webkit-scrollbar-thumb:hover': { background: 'rgba(255,255,255,0.28)' },
+          }}>
+          {/* Instancia desconectada bloquea el envío entero — debe ser lo PRIMERO
+              que se ve en el panel, no una barra roja más casi al fondo antes del
+              footer. sx aquí solo afecta esta instancia del banner compartido. */}
+          <InstanceDisconnectedBanner status={instanceStatus} sx={{
+            mb: 1.5, px: 2, py: 1.3, borderRadius: 2, borderWidth: '1.5px',
+            boxShadow: '0 0 0 1px rgba(239,68,68,0.15), 0 4px 16px rgba(239,68,68,0.12)',
+            '& svg':  { fontSize: '19px !important' },
+            '& p':    { fontSize: '0.82rem !important', fontWeight: 600 },
+          }} />
           {capStats && (
             <CapacityBanner stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} sx={{ mb: 1.5 }} />
           )}
@@ -1237,7 +1370,13 @@ export default function SearchProspects() {
               ))}
             </Box>
           )}
-          <Box sx={{ display: 'flex', gap: 2.5 }}>
+          {/* alignItems: flex-start — antes el row usaba el stretch por default de
+              flex, así que Destinatarios se estiraba a la altura de su hermano
+              (Plantillas) aunque su propio contenido fuera mucho más corto. Con
+              varias empresas seleccionadas, la lista ya tiene su propio scroll
+              interno (maxHeight en RecipientsBox), así que no necesita ese alto
+              extra prestado — debe medirse por su propio contenido. */}
+          <Box sx={{ display: 'flex', gap: 2.5, alignItems: 'flex-start' }}>
             <RecipientsBox rows={filteredWaRows}
               effectiveSelected={effectiveWaSelected}
               expandedCo={expandedCo}
@@ -1246,6 +1385,7 @@ export default function SearchProspects() {
               setExpandedCo={setExpandedCo}
               setExtraSelected={setExtraSelected}
               title={t.search.recipients}
+              maxHeight={320}
               sx={{ width: 260, flexShrink: 0 }} />
 
           <Box sx={{ flex: 1, minWidth: 0, opacity: filteredWaRows.length === 0 ? 0.35 : 1, pointerEvents: filteredWaRows.length === 0 ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
@@ -1260,11 +1400,7 @@ export default function SearchProspects() {
           <Box sx={{ mb: 1.5 }}>
             <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
           </Box>
-          <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />
           <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
-          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 0.6 }}>
-            <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} />
-          </Box>
           {isSending && (
             <Button fullWidth onClick={cancelQueue} startIcon={<HighlightOffIcon />}
               sx={{
@@ -1276,14 +1412,17 @@ export default function SearchProspects() {
               {t.search.cancelSend}
             </Button>
           )}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {/* Cupo + botón en una sola fila — antes el badge vivía en su propia
+              fila alineada a la derecha ARRIBA del botón, dejando 3 líneas de
+              texto secundario apiladas antes de llegar a la acción principal. */}
+          <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1.5 }}>
+            <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} sx={{ flexShrink: 0 }} />
             <Button
-              fullWidth
               onClick={handleSendAll}
               disabled={effectiveWaSelected.size === 0 || allSelectedSent || isSending || isDisconnected || belowMinTemplates || capBlocked}
               startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 15 }} />}
               sx={{
-                fontSize: '0.84rem', fontWeight: 700,
+                flex: 1, fontSize: '0.84rem', fontWeight: 700,
                 py: 1.1, borderRadius: 1.8,
                 bgcolor: unsentSelectedCount > 0 ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
                 color:   unsentSelectedCount > 0 ? '#4ade80' : 'rgba(255,255,255,0.3)',
@@ -1310,7 +1449,7 @@ export default function SearchProspects() {
 
       {/* ── Tarjetas de resultados ── */}
       {results.length > 0 && (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, flexShrink: 0 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem', fontWeight: 600, letterSpacing: 0.5 }}>{t.search.results.toUpperCase()}</Typography>
             <Box sx={{ display: 'flex', gap: 1 }}>
@@ -1388,7 +1527,7 @@ export default function SearchProspects() {
                       animationDelay: `${i * 0.025}s`,
                       transition: 'background-color 0.15s',
                     }}>
-                      <TableCell sx={{ maxWidth: 200 }}>
+                      <TableCell sx={{ maxWidth: 200, borderLeft: `3px solid ${dotColor}` }}>
                         <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.8 }}>
                           {/* Scrape status dot */}
                           <Tooltip title={dotTip} placement="top" arrow>

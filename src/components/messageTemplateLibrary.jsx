@@ -30,6 +30,7 @@ import CloseIcon from '@mui/icons-material/Close'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import DescriptionIcon from '@mui/icons-material/Description'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import { getMinTemplatesRequired } from '@/lib/messageVariants'
 import { HighlightedMessageInput, HighlightedPreview } from './highlightedMessageInput'
 
@@ -381,6 +382,7 @@ export function TemplateLibraryPicker({
   const initialTextsRef = useRef(initialTexts)
   const didInitRef = useRef(false)
   const [managerOpen,  setManagerOpen] = useState(false)
+  const [expandedId,   setExpandedId]  = useState(null)
   const onChangeRef = useRef(onChange)
   useEffect(() => { onChangeRef.current = onChange })
 
@@ -522,13 +524,14 @@ export function TemplateLibraryPicker({
         }}>
           {templates.map(tpl => {
             const isSel    = selectedIds.includes(tpl._id)
+            const isExpanded = expandedId === tpl._id
             const missing  = missingVarsFor(tpl.text)
             const blocked  = missing.length > 0
             const usedVars = VAR_CHECKS.filter(v => v.re.test(tpl.text))
             const row = (
               <Box key={tpl._id} onClick={() => toggle(tpl._id, blocked)} sx={{
                 display: 'flex', alignItems: 'flex-start', gap: 0.6, cursor: blocked ? 'not-allowed' : 'pointer',
-                borderRadius: 1.5, p: 0.8,
+                borderRadius: 1.5, p: 0.7,
                 border: `1px solid ${blocked ? 'rgba(239,68,68,0.2)' : isSel ? 'rgba(var(--accent-rgb,59,130,246),0.35)' : 'var(--border)'}`,
                 borderLeft: `3px solid ${blocked ? 'rgba(239,68,68,0.4)' : isSel ? 'var(--accent,#3b82f6)' : 'transparent'}`,
                 bgcolor: blocked ? 'rgba(239,68,68,0.03)' : isSel ? 'rgba(var(--accent-rgb,59,130,246),0.07)' : 'transparent',
@@ -544,12 +547,20 @@ export function TemplateLibraryPicker({
                   onChange={() => toggle(tpl._id, blocked)} onClick={e => e.stopPropagation()}
                   sx={{ p: 0.3, mt: 0.1, color: 'var(--border)', '&.Mui-checked': { color: 'var(--accent,#3b82f6)' } }} />
                 <Box sx={{ minWidth: 0, flex: 1 }}>
-                  <Typography sx={{ color: isSel ? 'var(--text)' : 'var(--text-muted)', fontWeight: isSel ? 700 : 600, fontSize: '0.78rem', lineHeight: 1.3, transition: 'color 0.15s' }}>
-                    {tpl.name}
-                  </Typography>
-                  {/* 2-line preview with variable highlighting */}
-                  <HighlightedPreview text={tpl.text} lang={lang} sx={{
-                    display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden',
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
+                    <Typography sx={{ color: isSel ? 'var(--text)' : 'var(--text-muted)', fontWeight: isSel ? 700 : 600, fontSize: '0.78rem', lineHeight: 1.3, transition: 'color 0.15s', flex: 1 }}>
+                      {tpl.name}
+                    </Typography>
+                    <IconButton size="small" onClick={e => { e.stopPropagation(); setExpandedId(id => id === tpl._id ? null : tpl._id) }}
+                      sx={{ p: 0.2, color: 'var(--text-muted)', transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
+                      <ExpandMoreIcon sx={{ fontSize: 15 }} />
+                    </IconButton>
+                  </Box>
+                  {/* Preview — 1-line clamp collapsed, full text expanded */}
+                  <HighlightedPreview text={tpl.text} lang={lang} sx={isExpanded ? {
+                    color: 'var(--text-muted)', fontSize: '0.68rem', mt: 0.3, lineHeight: 1.4,
+                  } : {
+                    display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 1, overflow: 'hidden',
                     color: 'var(--text-muted)', fontSize: '0.68rem', mt: 0.3, lineHeight: 1.4,
                   }} />
                   {/* Variable pills */}

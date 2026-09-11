@@ -37,20 +37,44 @@ def _require_admin(x_user_token: Optional[str] = Header(None)):
 # ── Auth endpoints ────────────────────────────────────────────────────────────
 
 @router.post("/auth/register")
-def api_register(body: dict):
+def api_register(body: dict, x_user_token: Optional[str] = Header(None)):
     try:
         from app.auth import create_user, list_users, ADMIN_EMAILS
         existing = list_users()
+        # Bootstrap (no users yet) stays open — someone has to be able to
+        # create the first admin account. Once any user exists, this used to
+        # still be reachable by anyone who could hit the endpoint directly
+        # (the frontend's "@detucel.mx" suffix was just a UI convenience, not
+        # real email verification or an invite gate) — now only an admin can
+        # create further accounts, matching an internal-team-only tool where
+        # every user is a known DeTuCel employee, not self-service signup.
+        if existing:
+            _require_admin(x_user_token)
         email = body.get("email", "").strip().lower()
         role = "admin" if (not existing or email in ADMIN_EMAILS) else "agent"
+        pin = body.get("pin", "")
         user = create_user(
             username     = body.get("username", ""),
             display_name = body.get("display_name", body.get("username", "")),
-            pin          = body.get("pin", ""),
+            pin          = pin,
             email        = email,
             role         = role,
         )
+        # Only for admin-created accounts (existing=True path above) — the
+        # bootstrap first user is the person typing their own PIN in, so
+        # there's no one else to notify. The plaintext PIN only exists here,
+        # right before create_user hashes it — this is the one chance to
+        # send it. Best-effort: a dead SMTP config shouldn't block account
+        # creation, the admin can still relay the PIN manually if this fails.
+        if existing and email:
+            try:
+                from app.email_service import send_welcome_email
+                send_welcome_email(email, user.get("display_name", ""), user.get("username", ""), pin)
+            except Exception as e:
+                _log.warning("[Register] welcome email failed for %s: %s", email, e)
         return user
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:

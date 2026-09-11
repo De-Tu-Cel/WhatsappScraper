@@ -471,10 +471,16 @@ class WebsiteScraper:
             print(f"⚠️  Sitio JS/SPA detectado (0 links en HTML) — probando {len(all_links)} rutas comunes")
 
         sub_urls = self._ai_rank_subpages(all_links, result.get("industry", ""))
-        print(f"🔗 {len(all_links)} links encontrados → crawleando top {min(12, len(sub_urls))} en paralelo")
+        # 12→16: _ai_rank_subpages ya no descarta nada (las páginas "must-crawl" de
+        # contacto siempre van primero y el resto solo se reordena) — lo único que
+        # de verdad recorta resultados es este slice de cuántas se llegan a
+        # crawlear. Con 4 workers en paralelo, 4 fetches extra cuestan poco y dan
+        # margen en sitios con más de 12 candidatas razonables.
+        _SUBPAGE_CRAWL_CAP = 16
+        print(f"🔗 {len(all_links)} links encontrados → crawleando top {min(_SUBPAGE_CRAWL_CAP, len(sub_urls))} en paralelo")
         _existing_wa = {c["number"] for c in result["_contacts_raw"]["whatsapp_contacts"]}
         with ThreadPoolExecutor(max_workers=4) as pool:
-            futures = {pool.submit(self._fetch_sub, u): u for u in sub_urls[:12]}
+            futures = {pool.submit(self._fetch_sub, u): u for u in sub_urls[:_SUBPAGE_CRAWL_CAP]}
             for future in as_completed(futures):
                 data = future.result()
                 if not data:
@@ -520,13 +526,19 @@ class WebsiteScraper:
             result["_contacts_raw"]["whatsapp_numbers"] = result["_contacts_raw"]["all_whatsapp_numbers"]
             result["has_whatsapp"] = True
 
-        # ── Fallback Playwright: si el scraping estático no encontró ningún contacto ──
-        no_contacts_found = (
-            not result["_contacts_raw"]["all_whatsapp_numbers"] and
-            not result["_contacts_raw"]["phone_numbers"]
-        )
-        if no_contacts_found:
-            print(f"🎭 Sin contactos en HTML estático — intentando Playwright para {url}")
+        # ── Fallback Playwright: si el scraping estático no encontró WhatsApp ──
+        # Antes solo se activaba si NO había NINGÚN contacto (ni teléfono ni
+        # WhatsApp) — pero muchos sitios de PyMEs exponen un teléfono estático
+        # en el pie de página mientras su botón de WhatsApp (widget de
+        # Elementor/WordPress/Wix) se inyecta por JavaScript. Con la condición
+        # vieja, "ya encontramos un teléfono" apagaba Playwright justo en el
+        # caso donde el WhatsApp real solo vive en el DOM renderizado — el
+        # candidato más probable a estar costando resultados con número.
+        already_had_phone = bool(result["_contacts_raw"]["phone_numbers"])
+        no_whatsapp_found = not result["_contacts_raw"]["all_whatsapp_numbers"]
+        if no_whatsapp_found:
+            reason = "sin contactos en HTML estático" if not already_had_phone else "teléfono encontrado pero sin WhatsApp"
+            print(f"🎭 {reason} — intentando Playwright para {url}")
             # Intentar primero la página de contacto directamente
             contact_candidates = [
                 url.rstrip("/") + "/contactanos",
@@ -576,7 +588,12 @@ class WebsiteScraper:
                         for n in found_tel:
                             if n not in result["_contacts_raw"]["phone_numbers"]:
                                 result["_contacts_raw"]["phone_numbers"].append(n)
-                        if found_wa or found_tel:
+                        # Si ya teníamos teléfono antes de entrar aquí, el objetivo de este
+                        # fallback era específicamente el WhatsApp — encontrar OTRO teléfono
+                        # de nuevo no es progreso real, así que seguimos probando candidatas
+                        # hasta encontrar WA o agotarlas. Si no teníamos nada, cualquier
+                        # contacto (tel o WA) ya es una mejora y sí vale la pena frenar ahí.
+                        if found_wa or (found_tel and not already_had_phone):
                             print(f"🎭 Playwright encontró contactos en {pw_url}")
                             # Re-detectar industria con el texto completo renderizado
                             if result.get("industry") in ("No detectada", "", None):
@@ -825,10 +842,26 @@ class WebsiteScraper:
         navegador otra vez cuando se prueban varias URLs candidatas seguidas.
         Devuelve el HTML como string o None si Playwright no está disponible/falla.
         """
+        def _render(pg) -> str:
+            # wait_until="networkidle" exige ~500ms sin más de 2 conexiones activas —
+            # muchos sitios con widgets de chat, analytics o ads NUNCA llegan a ese
+            # silencio de red, así que goto() hacía timeout completo (nada de HTML)
+            # aunque el DOM (widget de WhatsApp incluido) ya estuviera listo hace rato.
+            # "load" es un umbral mucho más alcanzable; el sleep corto después le da
+            # tiempo al widget de inyectarse sin depender de que la red se calle del todo.
+            try:
+                pg.goto(url, wait_until="load", timeout=timeout * 1000)
+            except Exception as e:
+                print(f"⚠️  Playwright: 'load' no se alcanzó en {url} ({e}) — usando el DOM que haya cargado hasta ahora")
+            try:
+                pg.wait_for_timeout(2000)
+            except Exception:
+                pass
+            return pg.content()
+
         if page is not None:
             try:
-                page.goto(url, wait_until="networkidle", timeout=timeout * 1000)
-                html = page.content()
+                html = _render(page)
                 print(f"🎭 Playwright renderizó {url} ({len(html)} chars)")
                 return html
             except Exception as e:
@@ -849,8 +882,7 @@ class WebsiteScraper:
                     viewport={"width": 1280, "height": 800},
                 )
                 page = ctx.new_page()
-                page.goto(url, wait_until="networkidle", timeout=timeout * 1000)
-                html = page.content()
+                html = _render(page)
                 browser.close()
                 print(f"🎭 Playwright renderizó {url} ({len(html)} chars)")
                 return html
@@ -895,6 +927,20 @@ class WebsiteScraper:
     # ========================================================================
     # EXTRACCIÓN DESDE SCRIPTS (JSON-LD, __NEXT_DATA__, vars inline)
     # ========================================================================
+
+    # wa.me/api.whatsapp.com dentro del VALOR de cualquier atributo (onclick,
+    # data-href, data-url…), no solo dentro de un <a href>.
+    _WA_LINK_IN_ATTR_RE = re.compile(
+        r'(?:api\.whatsapp\.com/send\?phone=|wa\.me/)(\+?\d{7,15})'
+    )
+    # Nombres de atributo que los widgets de "click to chat" más comunes
+    # (Elementor WhatsApp Chat, plugins de WordPress, apps de Wix, Joinchat,
+    # Elfsight, Tidio…) usan para guardar el número en texto plano.
+    _WA_WIDGET_ATTR_NAMES = {
+        "data-phone", "data-number", "data-whatsapp", "data-wa",
+        "data-wanumber", "data-wa-number", "data-telefono", "data-telephone",
+        "wa-number", "data-phone-number",
+    }
 
     def _extract_from_scripts(self, soup: BeautifulSoup):
         """
@@ -979,6 +1025,27 @@ class WebsiteScraper:
 
             # 3. Cualquier script inline — buscar patrones de teléfono
             _harvest(content)
+
+        # 4. Atributos de widgets de "click to chat" — Elementor, plugins de
+        # WordPress, apps de Wix, Joinchat/Elfsight/Tidio, etc. suelen poner el
+        # número en un data-* del propio botón/div (o un wa.me/api.whatsapp.com
+        # dentro de un onclick/href de un <div>/<button>, no de un <a>) en vez de
+        # un <a href="wa.me/...">  plano — lo único que _extract_whatsapp_with_labels
+        # sabe leer. Nada de esto se escaneaba antes.
+        for tag in soup.find_all(True):
+            for attr_name, attr_val in tag.attrs.items():
+                if not isinstance(attr_val, str) or not attr_val:
+                    continue
+                m = self._WA_LINK_IN_ATTR_RE.search(attr_val)
+                if m:
+                    clean = self._normalize_phone(m.group(1))
+                    if clean and clean not in wa_numbers:
+                        wa_numbers.append(clean)
+                    continue
+                if attr_name.lower() in self._WA_WIDGET_ATTR_NAMES:
+                    clean = self._normalize_phone(attr_val)
+                    if clean and clean not in wa_numbers:
+                        wa_numbers.append(clean)
 
         if phones or wa_numbers:
             print(f"📜 Scripts: {len(phones)} teléfonos, {len(wa_numbers)} WhatsApps encontrados")
@@ -1807,7 +1874,9 @@ class WebsiteScraper:
         """
         Normaliza número telefónico al país configurado en scrape_site (default MX
         si no se seteó — self._default_country_code/_default_local_digits). Descarta
-        números con código de país distinto al configurado para esta búsqueda.
+        números con código de país distinto al configurado para esta búsqueda —
+        pero ya no en silencio: todo descarte queda impreso para poder medir cuánto
+        cuesta esto realmente (antes era un hueco invisible, sin ninguna señal).
         """
         code = default_country_code or getattr(self, "_default_country_code", "+52")
         calling_code = code.lstrip("+")
@@ -1826,6 +1895,12 @@ class WebsiteScraper:
         if calling_code == "52" and len(digits) == local_digits + len(calling_code) + 1 and digits.startswith("521"):
             return f"+52{digits[3:]}"
 
+        # Prefijo celular viejo de México "044"/"045" (obligatorio para llamar a
+        # celulares hasta ~2019, sigue apareciendo en directorios/sitios viejos) —
+        # antes esto no calzaba con ningún patrón de arriba y se perdía en silencio.
+        if calling_code == "52" and len(digits) == local_digits + 3 and digits[:3] in ("044", "045"):
+            return f"+52{digits[3:]}"
+
         # Número explícito con + al inicio: acepta el país configurado para esta
         # búsqueda, o cualquier otro país conocido de COUNTRY_CONFIG — la búsqueda
         # ya no fuerza un solo país (puede cubrir toda Latinoamérica a la vez), así
@@ -1842,8 +1917,24 @@ class WebsiteScraper:
                 _cc_local = _cfg["local_digits"]
                 if digits.startswith(_cc_code) and len(digits) in (_cc_local + len(_cc_code), _cc_local + len(_cc_code) + 1):
                     return f"+{digits}"
-            return None  # código de país no reconocido — descartar
+            # País fuera de COUNTRY_CONFIG (la búsqueda solo cubre LatAm+Norteamérica,
+            # pero un sitio real puede listar un número de cualquier otro país — un
+            # proveedor, una franquicia extranjera, etc.). En vez de descartar todo
+            # número "+" no reconocido, aceptarlo si al menos tiene una longitud
+            # plausible de E.164 (código de país 1-3 dígitos + número real: 8-15
+            # dígitos totales) — sigue siendo mejor que tirarlo sin más.
+            if 8 <= len(digits) <= 15:
+                print(f"📞 Número '+' con país fuera de COUNTRY_CONFIG, aceptado por longitud E.164 plausible: +{digits}")
+                return f"+{digits}"
+            print(f"📞 Número descartado — formato irreconocible incluso con '+': {raw_number!r}")
+            return None
 
+        # Sin '+' y sin calzar ningún patrón de arriba: NO se imprime aquí a propósito
+        # — este mismo método también se llama sobre cualquier string corto encontrado
+        # al recorrer JSON-LD/__NEXT_DATA__ (_walk_json), que puede ser cualquier cosa
+        # (IDs, fechas, códigos), no solo candidatos ya reconocidos como teléfono. Un
+        # print por cada uno inundaría el log sin aportar nada — el descarte que sí
+        # vale la pena ver es el de arriba (algo que ya se declaró como número con "+").
         return None
 
     def _extract_emails(self, text: str) -> List[str]:

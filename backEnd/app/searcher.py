@@ -75,8 +75,6 @@ EXCLUDED_DOMAINS = {
     # Aerolíneas, cadenas nacionales (no prospectos locales)
     'aeromexico.com', 'volaris.com', 'vivaaerobus.com',
     'sephora.com.mx', 'maccosmetics.com', 'clinique.com',
-    # Generadores de páginas de negocio (miadn crea subdominios por empresa, no son sitios oficiales)
-    'miadn.mx',
     # Directorios generales adicionales
     'directorioempresas.mx', 'lasempresas.com.mx',
     'viamichelin.es', 'viamichelin.com',
@@ -181,6 +179,16 @@ EXCLUDED_DOMAINS = {
     'gnp.com.mx', 'axa.com.mx', 'zurich.com.mx', 'qualitas.com.mx',
     'hdi.com.mx', 'mapfre.com.mx', 'ana.com.mx', 'chubb.com',
     'comparaseguros.mx', 'rastreator.mx', 'seguros.com.mx',
+}
+
+# Plataformas de "generador de micrositios" donde el dominio pelón (sin
+# subdominio) es la página de marketing de la plataforma — sí hay que excluirla
+# — pero cada SUBDOMINIO es el micrositio de UNA empresa real y distinta, con
+# su propio teléfono/WhatsApp. Excluir por sufijo (como EXCLUDED_DOMAINS) tira
+# TODOS esos negocios a la basura solo por compartir plataforma; aquí solo se
+# excluye el dominio exacto, nunca sus subdominios.
+EXACT_ONLY_EXCLUDED_DOMAINS = {
+    'miadn.mx',
 }
 
 
@@ -302,6 +310,8 @@ def _is_business_url(url: str) -> bool:
         if not domain or "." not in domain:
             return False
         if any(domain == ex or domain.endswith('.' + ex) for ex in EXCLUDED_DOMAINS):
+            return False
+        if domain in EXACT_ONLY_EXCLUDED_DOMAINS:
             return False
         if any(domain.endswith(tld) for tld in EXCLUDED_TLD_PATTERNS):
             return False
@@ -1854,13 +1864,24 @@ def _sa_fetch_city(industry_slug: str, city_slug: str, max_pages: int = 3) -> tu
             pass
 
         if not html or html.count("class=") < 10:
+            # wait_until="networkidle" podía comerse el timeout completo de 10s por
+            # página (Sección Amarilla mete analytics/trackers que nunca dejan la
+            # red en silencio) — con hasta 4 páginas secuenciales por ciudad, eso
+            # es hasta 40s solo en esta llamada, chocando de lleno con el deadline
+            # global de la búsqueda (mismo problema ya visto y arreglado en
+            # scraper.py `_get_page_js`). "load" + una espera corta es mucho más
+            # alcanzable y deja tiempo real para las páginas siguientes.
             try:
                 from playwright.sync_api import sync_playwright
                 with sync_playwright() as pw:
                     browser = pw.chromium.launch(headless=True)
                     page_obj = browser.new_page()
                     page_obj.set_extra_http_headers({"Accept-Language": "es-MX,es;q=0.9"})
-                    page_obj.goto(page_url, wait_until="networkidle", timeout=10000)
+                    try:
+                        page_obj.goto(page_url, wait_until="load", timeout=8000)
+                    except Exception:
+                        pass
+                    page_obj.wait_for_timeout(1500)
                     html = page_obj.content()
                     browser.close()
             except Exception:

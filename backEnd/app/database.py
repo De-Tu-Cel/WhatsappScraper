@@ -277,29 +277,48 @@ class MongoDBManager:
     def get_company_full_data(self, company_id):
         """Obtiene todos los datos de una empresa incluyendo contactos"""
         from bson import ObjectId
+        from concurrent.futures import ThreadPoolExecutor
 
         company = self.db.companies.find_one({"_id": ObjectId(company_id)})
         if not company:
             return None
 
-        # Agregar contactos ordenados para que el número más reciente quede primero
-        company["contacts"] = list(
-            self.db.contacts.find({"company_id": company_id}).sort([
-                ("updated_at", -1),
-                ("is_primary", -1),
-                ("created_at", -1),
-                ("_id", -1),
-            ])
-        )
-        company["person_contacts"] = list(self.db.person_contacts.find({"company_id": company_id}))
-        company["social_media"] = self.db.social_media.find_one({"company_id": company_id})
+        # The 4 lookups below are independent of each other — running them
+        # sequentially just stacks up round trips for no reason. Fired
+        # concurrently instead (each round trip overlaps the others).
+        def _contacts():
+            return list(
+                self.db.contacts.find({"company_id": company_id}).sort([
+                    ("updated_at", -1),
+                    ("is_primary", -1),
+                    ("created_at", -1),
+                    ("_id", -1),
+                ])
+            )
 
-        last_log = self.db.message_logs.find_one(
-            {"company_id": company_id, "direction": "outbound"},
-            sort=[("created_at", -1)],
-            projection={"_id": 1},
-        )
-        company["last_message_log_id"] = str(last_log["_id"]) if last_log else None
+        def _person_contacts():
+            return list(self.db.person_contacts.find({"company_id": company_id}))
+
+        def _social_media():
+            return self.db.social_media.find_one({"company_id": company_id})
+
+        def _last_message_log_id():
+            last_log = self.db.message_logs.find_one(
+                {"company_id": company_id, "direction": "outbound"},
+                sort=[("created_at", -1)],
+                projection={"_id": 1},
+            )
+            return str(last_log["_id"]) if last_log else None
+
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            f_contacts        = ex.submit(_contacts)
+            f_person_contacts = ex.submit(_person_contacts)
+            f_social_media    = ex.submit(_social_media)
+            f_last_log_id     = ex.submit(_last_message_log_id)
+            company["contacts"] = f_contacts.result()
+            company["person_contacts"] = f_person_contacts.result()
+            company["social_media"] = f_social_media.result()
+            company["last_message_log_id"] = f_last_log_id.result()
 
         return company
 

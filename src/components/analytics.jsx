@@ -456,8 +456,14 @@ export default function Analytics() {
       setReportThread(threadArr)
       setCaptureVisible(true)
 
-      // 3. Wait for React to render the messages into the DOM
-      await new Promise(r => setTimeout(r, 800))
+      // 3. Wait for the browser to actually paint the newly-rendered thread —
+      // a blind 800ms guessed long enough for the worst case and added that
+      // same delay to every report regardless of thread length. The capture
+      // is plain text (no images, no webfonts to wait on — see
+      // ConversationCapture above), so a double rAF is enough: the first
+      // fires once React's DOM update has committed, the second confirms the
+      // browser has actually painted it before html2canvas runs.
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
 
       // 4. Capture with html2canvas
       let screenshotB64 = null

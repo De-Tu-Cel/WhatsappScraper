@@ -574,7 +574,18 @@ function InstanceCard({ inst, token, onRefresh, pairColor }) {
               sx={{ bgcolor: cfg.bg, color: cfg.color, fontWeight: 600, fontSize: 11, height: 20, border: `1px solid ${cfg.color}33` }}
             />
           </Box>
-          <Typography variant="caption" color="text.secondary">{inst.number ? `+${inst.number}` : inst.name}</Typography>
+          {/* Divider corto (no de ancho completo) + número como tag, en vez
+             del texto plano de antes que se veía muy simple al lado del
+             nombre en negritas. */}
+          <Box sx={{ width: 26, height: '1px', bgcolor: 'rgba(255,255,255,0.12)', my: 0.7 }} />
+          <Box sx={{
+            display: 'inline-flex', alignItems: 'center', px: 0.9, py: 0.3, borderRadius: 1,
+            bgcolor: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+          }}>
+            <Typography sx={{ fontSize: 11, fontFamily: 'monospace', fontWeight: 600, letterSpacing: '0.02em', color: 'var(--text-muted, rgba(255,255,255,0.5))' }}>
+              {inst.number ? `+${inst.number}` : inst.name}
+            </Typography>
+          </Box>
 
           {/* Partner indicator */}
           {!isDisconnected && (
@@ -763,17 +774,29 @@ function InstanceCard({ inst, token, onRefresh, pairColor }) {
 
 // ── WarmupConfigDialog ────────────────────────────────────────────────────────
 
+// Los value numéricos ('0'-'13') deben coincidir uno a uno con el orden de
+// _TOPICS en backEnd/app/warmup_queue.py — ahí vive el prompt real que usa
+// la IA para generar la conversación de cada tema, esto solo es la etiqueta.
 function getWarmupTopics(w) {
+  const fixedTopics = [
+    { value: '0',  label: w.topicVideogames },
+    { value: '1',  label: w.topicClassicMovies },
+    { value: '2',  label: w.topicConspiracy },
+    { value: '3',  label: w.topicAnime },
+    { value: '4',  label: w.topicGeekCulture },
+    { value: '5',  label: w.topicHorrorMovies },
+    { value: '6',  label: w.topicTech },
+    { value: '7',  label: w.topicMusic },
+    { value: '8',  label: w.topicFootball },
+    { value: '9',  label: w.topicFood },
+    { value: '10', label: w.topicTravel },
+    { value: '11', label: w.topicWorkSchool },
+    { value: '12', label: w.topicSeries },
+    { value: '13', label: w.topicCars },
+  ]
   return [
-    { value: 'auto', label: w.topicAuto },
-    { value: '0', label: w.topicVideogames },
-    { value: '1', label: w.topicClassicMovies },
-    { value: '2', label: w.topicConspiracy },
-    { value: '3', label: w.topicAnime },
-    { value: '4', label: w.topicGeekCulture },
-    { value: '5', label: w.topicHorrorMovies },
-    { value: '6', label: w.topicTech },
-    { value: '7', label: w.topicMusic },
+    { value: 'auto', label: w.topicAuto.replace('{n}', fixedTopics.length) },
+    ...fixedTopics,
   ]
 }
 
@@ -805,6 +828,10 @@ function NumStepper({ value, onChange, min = 0, max = 99, step = 1 }) {
       display: 'flex', alignItems: 'center', width: '100%',
       border: '1px solid rgba(255,255,255,0.1)',
       borderRadius: 1.5, bgcolor: 'rgba(255,255,255,0.03)', overflow: 'hidden',
+      transition: 'border-color 0.15s',
+      // No daba ninguna señal visual al enfocar el campo — un detalle extra
+      // ya que estamos afinando esta ventana.
+      '&:focus-within': { borderColor: 'rgba(225,29,104,0.4)' },
     }}>
       <Box component="button" onClick={() => onChange(Math.max(min, value - step))} sx={{ ...btnSx, borderRight: '1px solid rgba(255,255,255,0.07)' }}>
         <RemoveIcon sx={{ fontSize: 13 }} />
@@ -835,7 +862,7 @@ const presetChipSx = {
   border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.03)',
   color: 'rgba(255,255,255,0.45)', borderRadius: 1.5,
   cursor: 'pointer', px: 1.25, py: 0.4, fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
-  '&:hover': { bgcolor: 'rgba(59,130,246,0.1)', borderColor: 'rgba(59,130,246,0.3)', color: '#93bbfd' },
+  '&:hover': { bgcolor: 'rgba(225,29,104,0.1)', borderColor: 'rgba(225,29,104,0.3)', color: '#f472b6' },
   transition: 'all 0.15s',
 }
 
@@ -900,14 +927,24 @@ function WarmupConfigDialog({ open, onClose, token }) {
   const SafetyIcon = safety.Icon
   const warmupTopics = getWarmupTopics(w)
 
+  // bgcolor fijo (#111827) no seguía el color de fondo dinámico
+  // (var(--card-bg)) que usa el resto de la UI — se veía como un panel
+  // de otro color al lado de todo lo de alrededor.
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth
-      slotProps={{ paper: { sx: { bgcolor: '#111827', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 3, backgroundImage: 'none' } } }}
+      slotProps={{ paper: { sx: { bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 3, backgroundImage: 'none' } } }}
     >
-      {/* ── Header ── */}
+      {/* ── Header — mismo rosa/rojo (#e11d68) que ya usan el título de
+         Warmup, el switch y la barra de rotación, en vez del azul que no
+         tenía relación con el resto de la página. ── */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2.5, pt: 2.5, pb: 2, borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-        <Box sx={{ width: 34, height: 34, borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #3b82f6 0%, #6366f1 100%)', flexShrink: 0 }}>
-          <TuneIcon sx={{ fontSize: 17, color: '#fff' }} />
+        <Box sx={{
+          width: 34, height: 34, borderRadius: '10px', flexShrink: 0,
+          background: 'linear-gradient(135deg, rgba(225,29,104,0.28) 0%, rgba(225,29,104,0.1) 100%)',
+          border: '1px solid rgba(225,29,104,0.35)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <TuneIcon sx={{ fontSize: 17, color: '#e11d68' }} />
         </Box>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography fontWeight={700} fontSize={14} color="text.primary" sx={{ lineHeight: 1.3 }}>{w.configTitle}</Typography>
@@ -950,6 +987,10 @@ function WarmupConfigDialog({ open, onClose, token }) {
               </Box>
             </Box>
 
+            {/* Dividers cortos (con margen lateral, no de borde a borde) entre
+               cada sección, en vez de solo el espaciado en blanco de antes. */}
+            <Divider sx={{ borderColor: 'rgba(255,255,255,0.08)', mx: 1.5, mb: 2 }} />
+
             {/* ── Messages per pair ── */}
             <SectionLabel icon={TextsmsOutlinedIcon}>{w.sectionMsgsPerPair}</SectionLabel>
             <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, mb: 1 }}>
@@ -974,6 +1015,8 @@ function WarmupConfigDialog({ open, onClose, token }) {
                 >{p.label}</Box>
               ))}
             </Box>
+
+            <Divider sx={{ borderColor: 'rgba(255,255,255,0.08)', mx: 1.5, mb: 2 }} />
 
             {/* ── Delay between turns ── */}
             <SectionLabel icon={HourglassEmptyIcon}>{w.sectionDelay}</SectionLabel>
@@ -1000,6 +1043,8 @@ function WarmupConfigDialog({ open, onClose, token }) {
               ))}
             </Box>
 
+            <Divider sx={{ borderColor: 'rgba(255,255,255,0.08)', mx: 1.5, mb: 2 }} />
+
             {/* ── Topic ── */}
             <SectionLabel icon={TopicIcon}>{w.sectionTopic}</SectionLabel>
             <Select
@@ -1011,7 +1056,7 @@ function WarmupConfigDialog({ open, onClose, token }) {
                 slotProps: {
                   paper: {
                     sx: {
-                      bgcolor: '#111827',
+                      bgcolor: 'var(--card-bg, #161d2e)',
                       backgroundImage: 'none',
                       border: '1px solid rgba(255,255,255,0.08)',
                       borderRadius: 2,
@@ -1019,8 +1064,8 @@ function WarmupConfigDialog({ open, onClose, token }) {
                       '& .MuiMenuItem-root': {
                         fontSize: 13,
                         py: 1,
-                        '&:hover':    { bgcolor: 'rgba(59,130,246,0.12)' },
-                        '&.Mui-selected': { bgcolor: 'rgba(59,130,246,0.18)', color: '#93bbfd', '&:hover': { bgcolor: 'rgba(59,130,246,0.24)' } },
+                        '&:hover':    { bgcolor: 'rgba(225,29,104,0.12)' },
+                        '&.Mui-selected': { bgcolor: 'rgba(225,29,104,0.18)', color: '#f472b6', '&:hover': { bgcolor: 'rgba(225,29,104,0.24)' } },
                       },
                     },
                   },
@@ -1030,7 +1075,7 @@ function WarmupConfigDialog({ open, onClose, token }) {
                 fontSize: 13,
                 '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.1)' },
                 '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.2)' },
-                '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(59,130,246,0.5)', borderWidth: 1 },
+                '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(225,29,104,0.5)', borderWidth: 1 },
                 '& .MuiSelect-select': { py: 0.9, color: 'rgba(255,255,255,0.75)' },
                 '& .MuiSvgIcon-root': { color: 'rgba(255,255,255,0.3)' },
                 bgcolor: 'rgba(255,255,255,0.03)',
@@ -1058,12 +1103,14 @@ function WarmupConfigDialog({ open, onClose, token }) {
         }}>{w.cancel}</Box>
         <Box component="button" onClick={handleSave} disabled={saving || saved} sx={{
           border: 'none',
-          bgcolor: saved ? 'rgba(34,197,94,0.15)' : '#3b82f6',
+          // Antes iba en azul (#3b82f6) sin relación con el resto de Warmup
+          // — ahora usa el mismo rosa/rojo (#e11d68) del ícono de arriba.
+          bgcolor: saved ? 'rgba(34,197,94,0.15)' : '#e11d68',
           color: saved ? '#22c55e' : '#fff',
           borderRadius: 1.5, cursor: saving || saved ? 'default' : 'pointer',
           px: 2.5, py: 0.7, fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
           opacity: saving ? 0.65 : 1,
-          '&:hover': { bgcolor: saved ? 'rgba(34,197,94,0.15)' : '#2563eb' },
+          '&:hover': { bgcolor: saved ? 'rgba(34,197,94,0.15)' : '#c81760' },
           transition: 'all 0.15s',
         }}>
           {saved ? w.savedCheck : saving ? w.saving : w.save}
@@ -1075,6 +1122,46 @@ function WarmupConfigDialog({ open, onClose, token }) {
 
 
 // ── Main panel ────────────────────────────────────────────────────────────────
+// Mismo patrón de ícono + anillo conic-gradient + label + valor que ya usan
+// Prospects/Analytics/Instances, para que los indicadores de arriba (antes
+// chips sueltos flotando en el banner) vivan en su propio recuadro con
+// Dividers verticales en vez de ir pegados al título.
+function WarmupStatCard({ icon, color, value, label, subtitle, percent }) {
+  const pct = percent == null ? 100 : Math.max(0, Math.min(100, percent))
+  return (
+    <Box sx={{
+      flex: '1 1 0', minWidth: 130, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.4,
+      px: 2, py: 1.6,
+    }}>
+      <Box sx={{
+        width: 40, height: 40, borderRadius: '50%', flexShrink: 0, p: '3px',
+        background: `conic-gradient(${color} ${pct}%, var(--border, rgba(255,255,255,0.12)) ${pct}% 100%)`,
+      }}>
+        <Box sx={{
+          width: '100%', height: '100%', borderRadius: '50%',
+          bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          {icon}
+        </Box>
+      </Box>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography sx={{ fontSize: '0.76rem', color: 'var(--text)', fontWeight: 700, lineHeight: 1.3, whiteSpace: 'nowrap' }}>
+          {label}
+        </Typography>
+        {subtitle && (
+          <Typography sx={{ fontSize: '0.66rem', color: 'var(--text-muted)', fontWeight: 500, lineHeight: 1.3, whiteSpace: 'nowrap' }}>
+            {subtitle}
+          </Typography>
+        )}
+        <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.3, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+          {value}
+        </Typography>
+      </Box>
+    </Box>
+  )
+}
+
 export default function WarmupPanel() {
   const { user } = useUser()
   const { t, lang } = useLang()
@@ -1129,79 +1216,122 @@ export default function WarmupPanel() {
   return (
     <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 960, mx: 'auto', width: '100%' }}>
 
-      {/* ── Header ── */}
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, mb: 2.5, flexWrap: 'wrap' }}>
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <LocalFireDepartmentIcon sx={{ color: '#e11d68', fontSize: 26 }} />
-            <Typography id="tour-nav-warmup" variant="h6" fontWeight={800} sx={{ lineHeight: 1.2 }}>{w.title}</Typography>
+      {/* ── Header — mismo lenguaje de banner (ícono en caja degradada +
+         línea de brillo inferior) que ya usan Performance e Instances, en el
+         rosa/rojo que ya era el acento propio de Warmup, en vez del ícono +
+         texto plano de antes que se veía apagado al lado de esas otras
+         secciones ya renovadas. ── */}
+      <Box sx={{
+        borderRadius: 3, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+        bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))', overflow: 'hidden', mb: 2.5,
+      }}>
+        <Box sx={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, flexWrap: 'wrap',
+          px: 2, py: 1.6, position: 'relative',
+          background: 'linear-gradient(135deg, rgba(225,29,104,0.14) 0%, rgba(225,29,104,0.04) 60%, transparent 100%)',
+          borderBottom: '1px solid rgba(225,29,104,0.15)',
+          '&::after': {
+            content: '""', position: 'absolute', bottom: 0, left: 16, right: 16, height: '1px',
+            background: 'linear-gradient(90deg, transparent, rgba(225,29,104,0.4) 40%, rgba(225,29,104,0.4) 60%, transparent)',
+          },
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
+            <Box sx={{
+              width: 32, height: 32, borderRadius: '9px', flexShrink: 0,
+              background: 'linear-gradient(135deg, rgba(225,29,104,0.28) 0%, rgba(225,29,104,0.1) 100%)',
+              border: '1px solid rgba(225,29,104,0.35)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <LocalFireDepartmentIcon sx={{ color: '#e11d68', fontSize: 17 }} />
+            </Box>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography id="tour-nav-warmup" sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2 }}>
+                {w.title}
+              </Typography>
+              <Typography sx={{ fontSize: '0.65rem', color: 'var(--text-muted, rgba(255,255,255,0.3))', lineHeight: 1, mt: 0.2 }}>
+                {w.subtitle}
+              </Typography>
+            </Box>
           </Box>
-          <Typography variant="caption" color="text.secondary">{w.subtitle}</Typography>
+
+          {/* Controles — el estado on/off, config y refresh se quedan en el
+             banner; los conteos (antes chips sueltos aquí mismo) ahora viven
+             en su propio recuadro con anillos abajo. */}
+          {!loading && data && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Tooltip title={globalOn ? w.systemOnTooltip : w.systemOffTooltip} placement="bottom">
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <Typography variant="caption" color={globalOn ? 'text.primary' : 'text.disabled'} fontWeight={600}>
+                    {globalOn ? w.systemOn : w.systemOff}
+                  </Typography>
+                  <Switch
+                    checked={globalOn}
+                    onChange={handleToggle}
+                    disabled={toggling}
+                    size="small"
+                    sx={{
+                      '& .MuiSwitch-thumb': { bgcolor: globalOn ? '#e11d68' : undefined },
+                      '& .MuiSwitch-track': { bgcolor: globalOn ? 'rgba(225,29,104,0.4) !important' : undefined },
+                    }}
+                  />
+                </Box>
+              </Tooltip>
+              <Tooltip title={w.configTooltip}>
+                <IconButton size="small" onClick={() => setConfigOpen(true)} sx={{ color: 'var(--text-muted)', '&:hover': { color: '#e11d68' } }}>
+                  <TuneIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title={w.refreshTooltip}>
+                <IconButton size="small" onClick={load} disabled={loading} sx={{ color: 'var(--text-muted)', '&:hover': { color: '#e11d68' } }}>
+                  {loading ? <CircularProgress size={16} /> : <RefreshIcon fontSize="small" />}
+                </IconButton>
+              </Tooltip>
+            </Box>
+          )}
         </Box>
 
-        {/* Stats + controls */}
-        {!loading && data && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-            {activeCount > 0 && (
-              <Tooltip title={w.activeTooltip} placement="bottom">
-                <Chip
-                  size="small" label={w.activeChip.replace('{n}', activeCount)}
-                  icon={<Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#22c55e', ml: '6px !important' }} />}
-                  sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 600, fontSize: 11, border: '1px solid rgba(34,197,94,0.2)', cursor: 'default' }}
-                />
-              </Tooltip>
-            )}
-            {discCount > 0 && (
-              <Tooltip title={w.offlineTooltip} placement="bottom">
-                <Chip
-                  size="small" label={w.offlineChip.replace('{n}', discCount)}
-                  icon={<Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#ef4444', ml: '6px !important' }} />}
-                  sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#ef4444', fontWeight: 600, fontSize: 11, border: '1px solid rgba(239,68,68,0.2)', cursor: 'default' }}
-                />
-              </Tooltip>
-            )}
-            {(sentTotal > 0 || recvTotal > 0) && (
-              <Tooltip title={w.sentRecvTooltip.replace('{sent}', sentTotal).replace('{recv}', recvTotal)} placement="bottom">
-                <Chip
-                  size="small"
-                  label={
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                      <ArrowUpwardIcon sx={{ fontSize: 11 }} />{sentTotal}
-                      <ArrowDownwardIcon sx={{ fontSize: 11, ml: 0.5 }} />{recvTotal}
-                      <Box component="span" sx={{ ml: 0.25, color: 'text.disabled' }}>{w.todaySuffix}</Box>
-                    </Box>
-                  }
-                  sx={{ bgcolor: 'rgba(255,255,255,0.05)', fontWeight: 600, fontSize: 11, border: '1px solid rgba(255,255,255,0.1)', cursor: 'default' }}
-                />
-              </Tooltip>
-            )}
-            <Tooltip title={globalOn ? w.systemOnTooltip : w.systemOffTooltip} placement="bottom">
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <Typography variant="caption" color={globalOn ? 'text.primary' : 'text.disabled'} fontWeight={600}>
-                  {globalOn ? w.systemOn : w.systemOff}
-                </Typography>
-                <Switch
-                  checked={globalOn}
-                  onChange={handleToggle}
-                  disabled={toggling}
-                  size="small"
-                  sx={{
-                    '& .MuiSwitch-thumb': { bgcolor: globalOn ? '#e11d68' : undefined },
-                    '& .MuiSwitch-track': { bgcolor: globalOn ? 'rgba(225,29,104,0.4) !important' : undefined },
-                  }}
-                />
-              </Box>
-            </Tooltip>
-            <Tooltip title={w.configTooltip}>
-              <IconButton size="small" onClick={() => setConfigOpen(true)}>
-                <TuneIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-            <Tooltip title={w.refreshTooltip}>
-              <IconButton size="small" onClick={load} disabled={loading}>
-                {loading ? <CircularProgress size={16} /> : <RefreshIcon fontSize="small" />}
-              </IconButton>
-            </Tooltip>
+        {/* Conteos — mismo patrón de ícono + anillo + label + valor que
+           Prospects/Analytics/Instances, en vez de los 3 chips sueltos que
+           antes flotaban dentro del banner junto al título. */}
+        {!loading && data && instances.length > 0 && (
+          <Box sx={{ p: 2 }}>
+            <Box sx={{
+              display: 'flex', flexWrap: 'wrap', overflow: 'hidden',
+              borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+              bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+            }}>
+              {[
+                {
+                  key: 'active', color: '#4ade80',
+                  icon: <PlayCircleIcon sx={{ fontSize: 18, color: '#4ade80' }} />,
+                  value: activeCount.toLocaleString(), label: w.activeChip.replace('{n}', '').trim() || (lang === 'en' ? 'active' : 'activas'),
+                  subtitle: instances.length > 0 ? `${Math.round((activeCount / instances.length) * 100)}%` : null,
+                  percent: instances.length > 0 ? Math.round((activeCount / instances.length) * 100) : 0,
+                },
+                discCount > 0 && {
+                  key: 'offline', color: '#ef4444',
+                  icon: <SignalWifiOffIcon sx={{ fontSize: 18, color: '#ef4444' }} />,
+                  value: discCount.toLocaleString(), label: w.offlineChip.replace('{n}', '').trim() || (lang === 'en' ? 'offline' : 'sin conexión'),
+                  subtitle: instances.length > 0 ? `${Math.round((discCount / instances.length) * 100)}%` : null,
+                  percent: instances.length > 0 ? Math.round((discCount / instances.length) * 100) : 0,
+                },
+                {
+                  key: 'sent', color: '#60a5fa',
+                  icon: <ArrowUpwardIcon sx={{ fontSize: 18, color: '#60a5fa' }} />,
+                  value: sentTotal.toLocaleString(), label: lang === 'en' ? 'Sent today' : 'Enviados hoy',
+                },
+                {
+                  key: 'received', color: '#a78bfa',
+                  icon: <ArrowDownwardIcon sx={{ fontSize: 18, color: '#a78bfa' }} />,
+                  value: recvTotal.toLocaleString(), label: lang === 'en' ? 'Received today' : 'Recibidos hoy',
+                },
+              ].filter(Boolean).map(({ key, ...c }, i) => (
+                <React.Fragment key={key}>
+                  {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 1.4 }} />}
+                  <WarmupStatCard {...c} />
+                </React.Fragment>
+              ))}
+            </Box>
           </Box>
         )}
       </Box>
@@ -1212,17 +1342,26 @@ export default function WarmupPanel() {
         <Box sx={{ display: 'flex', justifyContent: 'center', pt: 6 }}><CircularProgress /></Box>
       ) : (
         <>
-          {/* ── Rotation banner ── */}
+          {/* ── Rotation banner — mismo acento rosa/rojo del resto de la
+             página (ícono en caja degradada) en vez del recuadro gris plano
+             de antes, que no tenía ninguna relación visual con el resto. ── */}
           {nextRot && (
             <Box sx={{
-              display: 'flex', alignItems: 'flex-start', gap: 1.5, mb: 3,
-              px: 2, py: 1.5, borderRadius: 2,
-              bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)',
+              display: 'flex', alignItems: 'center', gap: 1.5, mb: 3,
+              px: 2, py: 1.4, borderRadius: 2,
+              bgcolor: 'rgba(225,29,104,0.05)', border: '1px solid rgba(225,29,104,0.15)',
             }}>
-              <SyncIcon sx={{ fontSize: 16, color: 'text.disabled', mt: 0.25, flexShrink: 0 }} />
-              <Typography variant="caption" color="text.secondary">
+              <Box sx={{
+                width: 26, height: 26, borderRadius: '8px', flexShrink: 0,
+                background: 'linear-gradient(135deg, rgba(225,29,104,0.25) 0%, rgba(225,29,104,0.08) 100%)',
+                border: '1px solid rgba(225,29,104,0.3)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <SyncIcon sx={{ fontSize: 14, color: '#e11d68' }} />
+              </Box>
+              <Typography variant="caption" sx={{ color: 'var(--text-muted)' }}>
                 {w.nextRotationLabel}{' '}
-                <Box component="span" fontWeight={700} color="text.primary">{formatNextRotation(nextRot, lang, w)}</Box>
+                <Box component="span" fontWeight={700} sx={{ color: 'var(--text)' }}>{formatNextRotation(nextRot, lang, w)}</Box>
                 {discNames.length > 0 && (
                   <>{' · '}<Box component="span" sx={{ color: '#f87171' }}>{(discNames.length !== 1 ? w.disconnectedCountPlural : w.disconnectedCountSingular).replace('{n}', discNames.length)}</Box> {w.willReconnect}</>
                 )}
@@ -1235,15 +1374,17 @@ export default function WarmupPanel() {
             <Alert severity="info">{w.noInstancesRegistered}</Alert>
           ) : (
             <>
-              {/* Buscador */}
+              {/* Buscador — mismo lenguaje de input (var(--surface)/var(--border)
+                 con foco en el acento propio de la página) que ya usan
+                 Instances/Prospects, en vez de los grises fijos de antes. */}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
                 <Box sx={{
                   flex: 1, display: 'flex', alignItems: 'center', gap: 1,
                   px: 1.5, py: 0.75, borderRadius: 2,
-                  bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)',
-                  '&:focus-within': { borderColor: 'rgba(255,255,255,0.2)' }, transition: 'border-color 0.15s',
+                  bgcolor: 'var(--surface, rgba(255,255,255,0.03))', border: '1px solid var(--border, rgba(255,255,255,0.1))',
+                  '&:focus-within': { borderColor: 'rgba(225,29,104,0.4)' }, transition: 'border-color 0.15s',
                 }}>
-                  <SearchIcon sx={{ fontSize: 16, color: 'text.disabled', flexShrink: 0 }} />
+                  <SearchIcon sx={{ fontSize: 16, color: 'var(--text-muted)', flexShrink: 0 }} />
                   <Box
                     component="input"
                     value={search}
@@ -1251,15 +1392,15 @@ export default function WarmupPanel() {
                     placeholder={w.searchPlaceholder}
                     sx={{
                       flex: 1, border: 'none', outline: 'none', bgcolor: 'transparent',
-                      color: 'text.primary', fontSize: 13,
-                      '&::placeholder': { color: 'rgba(255,255,255,0.25)' },
+                      color: 'var(--text)', fontSize: 13,
+                      '&::placeholder': { color: 'var(--text-muted)', opacity: 0.7 },
                     }}
                   />
                   {search && (
                     <Box
                       component="button"
                       onClick={() => setSearch('')}
-                      sx={{ border: 'none', bgcolor: 'transparent', cursor: 'pointer', color: 'rgba(255,255,255,0.3)', p: 0, lineHeight: 1, fontSize: 14, '&:hover': { color: 'text.secondary' } }}
+                      sx={{ border: 'none', bgcolor: 'transparent', cursor: 'pointer', color: 'var(--text-muted)', p: 0, lineHeight: 1, fontSize: 14, '&:hover': { color: 'var(--text)' } }}
                     ><CloseIcon sx={{ fontSize: 14 }} /></Box>
                   )}
                 </Box>
@@ -1272,14 +1413,14 @@ export default function WarmupPanel() {
                     label={w.pairsFilterLabel}
                     sx={{
                       flexShrink: 0, fontSize: 11, fontWeight: 600,
-                      bgcolor: groupByPair ? 'rgba(59,130,246,0.15)' : 'rgba(255,255,255,0.05)',
-                      color: groupByPair ? '#60a5fa' : 'text.secondary',
-                      border: `1px solid ${groupByPair ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.1)'}`,
-                      '&:hover': { bgcolor: groupByPair ? 'rgba(59,130,246,0.22)' : 'rgba(255,255,255,0.08)' },
+                      bgcolor: groupByPair ? 'rgba(225,29,104,0.15)' : 'var(--item-hover, rgba(255,255,255,0.05))',
+                      color: groupByPair ? '#e11d68' : 'var(--text-muted)',
+                      border: `1px solid ${groupByPair ? 'rgba(225,29,104,0.4)' : 'var(--border, rgba(255,255,255,0.1))'}`,
+                      '&:hover': { bgcolor: groupByPair ? 'rgba(225,29,104,0.22)' : 'var(--item-hover, rgba(255,255,255,0.08))' },
                     }}
                   />
                 </Tooltip>
-                <Typography variant="caption" color="text.disabled" sx={{ letterSpacing: '0.08em', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>
+                <Typography variant="caption" sx={{ color: 'var(--text-muted)', letterSpacing: '0.08em', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>
                   {(instances.length !== 1 ? w.instanceCountPlural : w.instanceCountSingular).replace('{n}', instances.length)}
                 </Typography>
               </Box>

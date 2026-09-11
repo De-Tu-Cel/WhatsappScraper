@@ -18,6 +18,7 @@ import TablePagination from '@mui/material/TablePagination'
 import TableSortLabel from '@mui/material/TableSortLabel'
 import Tooltip from '@mui/material/Tooltip'
 import IconButton from '@mui/material/IconButton'
+import Divider from '@mui/material/Divider'
 import BarChartIcon from '@mui/icons-material/BarChart'
 import SearchIcon from '@mui/icons-material/Search'
 import PersonIcon from '@mui/icons-material/Person'
@@ -178,6 +179,79 @@ const HEADER_CELL_SX = {
 // Last column in each header row — no divider needed after it (nothing to
 // separate from the table's own edge).
 const HEADER_CELL_LAST_SX = { ...HEADER_CELL_SX, '&::after': { display: 'none' } }
+
+// One section of the shared stats card (icon + label + value) — no border of
+// its own; lives inside ONE outer card together with the others, separated by
+// vertical Dividers. Same pattern as Prospects' StatCard (databaseViewer.jsx),
+// replacing the loose separate-chip pills this screen used to render. The
+// icon ring is a conic-gradient progress ring (like the reference invoice
+// card's Paid/Pending/Overdue rings) showing `percent` (0-100) of the total
+// that this stat represents, instead of a flat solid-color outline.
+function StatCard({ icon, color, value, label, subtitle, percent }) {
+  const pct = percent == null ? 100 : Math.max(0, Math.min(100, percent))
+  return (
+    <Box sx={{
+      flex: '1 1 0', minWidth: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.6,
+      px: 2.4, py: 2,
+    }}>
+      <Box sx={{
+        width: 46, height: 46, borderRadius: '50%', flexShrink: 0, p: '3px',
+        background: `conic-gradient(${color} ${pct}%, var(--border, rgba(255,255,255,0.12)) ${pct}% 100%)`,
+      }}>
+        <Box sx={{
+          width: '100%', height: '100%', borderRadius: '50%',
+          bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          {icon}
+        </Box>
+      </Box>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography sx={{ fontSize: '0.85rem', color: 'var(--text)', fontWeight: 700, lineHeight: 1.3, whiteSpace: 'nowrap' }}>
+          {label}
+        </Typography>
+        {subtitle && (
+          <Typography sx={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 500, lineHeight: 1.4, whiteSpace: 'nowrap' }}>
+            {subtitle}
+          </Typography>
+        )}
+        <Typography sx={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.4, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+          {value}
+        </Typography>
+      </Box>
+    </Box>
+  )
+}
+
+// Same shape as the real stats card (outer bordered strip, 7 sections split
+// by vertical dividers, icon-ring circle + 2 text lines each) so the stats
+// row doesn't just vanish and pop back in — matching StatCard's layout keeps
+// the page height stable while analytics data is loading.
+function StatsCardSkeleton() {
+  return (
+    <Box sx={{
+      display: 'flex', flexWrap: 'wrap', overflow: 'hidden', flexShrink: 0,
+      borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+      bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+    }}>
+      {Array.from({ length: 7 }).map((_, i) => (
+        <Fragment key={i}>
+          {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 2 }} />}
+          <Box sx={{ flex: '1 1 0', minWidth: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.6, px: 2.4, py: 2 }}>
+            <Skeleton variant="circular" width={46} height={46} sx={{ bgcolor: 'rgba(255,255,255,0.1)', flexShrink: 0,
+              '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent)' } }} />
+            <Box sx={{ minWidth: 0, flex: 1 }}>
+              <Skeleton variant="text" width="70%" sx={{ bgcolor: 'rgba(255,255,255,0.1)', fontSize: '0.85rem',
+                '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent)' } }} />
+              <Skeleton variant="text" width="50%" sx={{ bgcolor: 'rgba(255,255,255,0.1)', fontSize: '1.4rem',
+                '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent)' } }} />
+            </Box>
+          </Box>
+        </Fragment>
+      ))}
+    </Box>
+  )
+}
 
 // Hidden conversation renderer for html2canvas
 // Must be in the viewport (not left:-9999) so html2canvas can read it
@@ -516,9 +590,10 @@ export default function Analytics() {
   const hibridoPct = pct('hibrido')
   const botPct     = pct('bot')
   const botIaPct   = pct('bot_ia')
-  const avgQuality = data.length
-    ? (data.reduce((acc, d) => acc + (d.response_quality || 0), 0) / data.length).toFixed(1)
-    : '—'
+  const avgQualityNum = data.length
+    ? data.reduce((acc, d) => acc + (d.response_quality || 0), 0) / data.length
+    : 0
+  const avgQuality = data.length ? avgQualityNum.toFixed(1) : '—'
 
   const { t } = useLang()
 
@@ -589,51 +664,33 @@ export default function Analytics() {
         </Box>
       </Box>
 
-      {/* Summary chips */}
-      <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', flexShrink: 0 }}>
+      {/* Summary stats — one bordered strip with internal dividers between
+          sections, matching Prospects' StatCard/Divider pattern, instead of
+          loose separate chips with gaps between them. */}
+      {loading ? (
+        <StatsCardSkeleton />
+      ) : (
         <Box sx={{
-          display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
-          bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid var(--border)', borderRadius: 2,
+          display: 'flex', flexWrap: 'wrap', overflow: 'hidden', flexShrink: 0,
+          borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+          bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
         }}>
-          <StarIcon sx={{ fontSize: 15, color: 'var(--text-muted)' }} />
-          <Typography sx={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{t.analytics.total}:</Typography>
-          <Typography sx={{ fontSize: '0.85rem', color: 'var(--text)', fontWeight: 700 }}>{globalTotal}</Typography>
+          {[
+            { key: 'total',     icon: <StarIcon sx={{ fontSize: 20, color: 'var(--text-muted)' }} />, color: 'rgba(148,163,184,0.6)', value: globalTotal, label: t.analytics.total, percent: 100 },
+            { key: 'human',     icon: <PersonIcon sx={{ fontSize: 20, color: '#4ade80' }} />, color: '#4ade80', value: `${humanPct}%`, label: t.analytics.pctHuman, percent: humanPct },
+            { key: 'automatic', icon: <FlashOnIcon sx={{ fontSize: 20, color: '#facc15' }} />, color: '#facc15', value: `${autoPct}%`, label: t.analytics.automatic, percent: autoPct },
+            { key: 'hibrido',   icon: <SyncAltIcon sx={{ fontSize: 20, color: '#38bdf8' }} />, color: '#38bdf8', value: `${hibridoPct}%`, label: t.analytics.hybrid, percent: hibridoPct },
+            { key: 'bot',       icon: <SmartToyIcon sx={{ fontSize: 20, color: '#a78bfa' }} />, color: '#a78bfa', value: `${botPct}%`, label: t.analytics.bot, percent: botPct },
+            { key: 'botIa',     icon: <PsychologyIcon sx={{ fontSize: 20, color: '#c084fc' }} />, color: '#c084fc', value: `${botIaPct}%`, label: t.analytics.botAi, percent: botIaPct },
+            { key: 'quality',   icon: <StarIcon sx={{ fontSize: 20, color: '#facc15' }} />, color: '#facc15', value: avgQuality, label: t.analytics.avgQuality, percent: (avgQualityNum / 5) * 100 },
+          ].map(({ key, ...c }, i) => (
+            <Fragment key={key}>
+              {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 2 }} />}
+              <StatCard {...c} />
+            </Fragment>
+          ))}
         </Box>
-
-        <Box sx={{
-          display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
-          bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid var(--border)', borderRadius: 2,
-        }}>
-          <PersonIcon sx={{ fontSize: 15, color: '#4ade80' }} />
-          <Typography sx={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{t.analytics.pctHuman}:</Typography>
-          <Typography sx={{ fontSize: '0.85rem', color: '#4ade80', fontWeight: 700 }}>{humanPct}%</Typography>
-        </Box>
-
-        {[
-          { icon: FlashOnIcon,  color: '#facc15', label: t.analytics.automatic, value: autoPct    },
-          { icon: SyncAltIcon,  color: '#38bdf8', label: t.analytics.hybrid,    value: hibridoPct },
-          { icon: SmartToyIcon, color: '#a78bfa', label: t.analytics.bot,       value: botPct     },
-          { icon: PsychologyIcon, color: '#c084fc', label: t.analytics.botAi,   value: botIaPct   },
-        ].map(({ icon: Icon, color, label, value }) => (
-          <Box key={label} sx={{
-            display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
-            bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2,
-          }}>
-            <Icon sx={{ fontSize: 15, color }} />
-            <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>{label}:</Typography>
-            <Typography sx={{ fontSize: '0.85rem', color, fontWeight: 700 }}>{value}%</Typography>
-          </Box>
-        ))}
-
-        <Box sx={{
-          display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1,
-          bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 2,
-        }}>
-          <StarIcon sx={{ fontSize: 15, color: '#facc15' }} />
-          <Typography sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>{t.analytics.avgQuality}:</Typography>
-          <Typography sx={{ fontSize: '0.85rem', color: '#facc15', fontWeight: 700 }}>{avgQuality}</Typography>
-        </Box>
-      </Box>
+      )}
 
       {/* ── Filtros ── */}
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', flexShrink: 0 }}>
@@ -646,6 +703,8 @@ export default function Analytics() {
             </InputAdornment>
           )}}}
           sx={{ width: 220, '& .MuiOutlinedInput-root': { fontSize: '0.8rem', bgcolor: 'var(--card-bg,#161d2e)', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(255,255,255,0.2)' } }, '& input': { color: 'white', py: 0.7 } }} />
+
+        <Divider orientation="vertical" flexItem sx={{ borderColor: 'rgba(255,255,255,0.08)', height: 20, alignSelf: 'center', display: { xs: 'none', sm: 'block' } }} />
 
         {/* Chips de categoría */}
         {[
@@ -685,25 +744,26 @@ export default function Analytics() {
           )
         })}
 
-        {/* Limpiar filtros */}
+        {/* Estado de filtro activo — Limpiar + contador, agrupados aparte */}
         {(filterCat !== 'all' || searchText) && (
-          <Box onClick={() => { setFilterCat('all'); setSearchText(''); setPage(1) }} sx={{
-            display: 'flex', alignItems: 'center', gap: 0.4,
-            px: 1, py: 0.45, borderRadius: 99, cursor: 'pointer',
-            border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.35)',
-            fontSize: '0.72rem', transition: 'all 0.15s',
-            '&:hover': { color: '#f87171', borderColor: 'rgba(248,113,113,0.3)' },
-          }}>
-            <CloseIcon sx={{ fontSize: 13, color: 'inherit' }} />
-            <Typography sx={{ fontSize: '0.72rem', color: 'inherit' }}>Limpiar</Typography>
-          </Box>
-        )}
-
-        {/* Contador de resultados cuando hay filtro activo */}
-        {(filterCat !== 'all' || searchText) && (
-          <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.25)', ml: 'auto' }}>
-            {sortedData.length} {t.analytics.of} {data.length} {t.analytics.companies}
-          </Typography>
+          <>
+            <Divider orientation="vertical" flexItem sx={{ borderColor: 'rgba(255,255,255,0.08)', height: 20, alignSelf: 'center', ml: 'auto', display: { xs: 'none', sm: 'block' } }} />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: { xs: 'auto', sm: 0 } }}>
+              <Box onClick={() => { setFilterCat('all'); setSearchText(''); setPage(1) }} sx={{
+                display: 'flex', alignItems: 'center', gap: 0.4,
+                px: 1, py: 0.45, borderRadius: 99, cursor: 'pointer',
+                border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.35)',
+                fontSize: '0.72rem', transition: 'all 0.15s',
+                '&:hover': { color: '#f87171', borderColor: 'rgba(248,113,113,0.3)' },
+              }}>
+                <CloseIcon sx={{ fontSize: 13, color: 'inherit' }} />
+                <Typography sx={{ fontSize: '0.72rem', color: 'inherit' }}>Limpiar</Typography>
+              </Box>
+              <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.25)', whiteSpace: 'nowrap' }}>
+                {sortedData.length} {t.analytics.of} {data.length} {t.analytics.companies}
+              </Typography>
+            </Box>
+          </>
         )}
       </Box>
 
@@ -721,7 +781,7 @@ export default function Analytics() {
                 <TableRow>
                   {/* anchos espejo de la tabla real: expand, empresa, número, industria, categoría, calidad, reacción, última resp, notas, chatIA, modBot, reporte */}
                   {[32, '22%', 115, 130, 100, 60, 55, 65, 220, 45, 65, 45].map((w, i, arr) => (
-                    <TableCell key={i} sx={{ ...(i === arr.length - 1 ? HEADER_CELL_LAST_SX : HEADER_CELL_SX), width: i === 0 ? 32 : undefined, px: i === 0 ? 0.5 : undefined }}>
+                    <TableCell key={i} sx={{ ...(i === 0 || i === arr.length - 1 ? HEADER_CELL_LAST_SX : HEADER_CELL_SX), width: i === 0 ? 32 : undefined, px: i === 0 ? 0.5 : undefined }}>
                       {i > 0 && (
                         <Skeleton variant="text" width={typeof w === 'number' ? Math.min(w * 0.55, 70) : 55} height={11}
                           sx={{ bgcolor: 'rgba(255,255,255,0.1)',
@@ -792,7 +852,7 @@ export default function Analytics() {
               <TableHead>
                 <TableRow>
                   {/* Columna expand — sin label */}
-                  <TableCell sx={{ ...HEADER_CELL_SX, width: 32, px: 0.5 }} />
+                  <TableCell sx={{ ...HEADER_CELL_LAST_SX, width: 32, px: 0.5 }} />
                   {/* Empresa */}
                   <TableCell sx={HEADER_CELL_SX}>
                     <TableSortLabel active={sortField === 'company_name'} direction={sortField === 'company_name' ? sortDir : 'asc'}
@@ -802,8 +862,8 @@ export default function Analytics() {
                     </TableSortLabel>
                   </TableCell>
                   {/* Número */}
-                  <TableCell sx={{ ...HEADER_CELL_SX, whiteSpace: 'nowrap' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <TableCell sx={{ ...HEADER_CELL_SX, whiteSpace: 'nowrap', textAlign: 'center' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
                       <WhatsAppIcon sx={{ fontSize: 12 }} /> {t.analytics.phoneNum}
                     </Box>
                   </TableCell>
@@ -921,13 +981,13 @@ export default function Analytics() {
                       </TableCell>
 
                       {/* Número */}
-                      <TableCell sx={CELL_SX}>
+                      <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
                         {!hasMultiple && validNumbers[0] && (() => {
                           const n0 = validNumbers[0]
                           const sn = (n0.number || '').replace(/\D/g,'').slice(-10).replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')
                           const replied0 = n0.responses > 0
                           return (
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
                               <WhatsAppIcon sx={{ fontSize: 12, color: replied0 ? '#4ade80' : 'rgba(255,255,255,0.18)', filter: replied0 ? 'drop-shadow(0 0 3px #4ade8066)' : 'grayscale(1)', flexShrink: 0 }} />
                               <Typography sx={{ fontSize: '0.72rem', fontFamily: 'monospace', color: replied0 ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.35)' }}>{sn}</Typography>
                             </Box>
@@ -1068,8 +1128,8 @@ export default function Analytics() {
                             </Box>
                           </TableCell>
                           {/* Número */}
-                          <TableCell sx={NSUB}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                          <TableCell sx={{ ...NSUB, textAlign: 'center' }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
                               <WhatsAppIcon sx={{
                                 fontSize: 12,
                                 color: replied ? '#4ade80' : 'rgba(255,255,255,0.18)',

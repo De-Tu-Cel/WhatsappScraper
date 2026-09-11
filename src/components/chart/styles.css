@@ -1,0 +1,92 @@
+/* Ported from minimal-ui-kit/material-kit-react's src/components/chart/styles.css
+   — tooltip/legend polish ApexCharts doesn't apply on its own even with a
+   dark `theme.tooltip.theme`. Adapted from their MUI CSS-variables tokens
+   (--palette-*, --customShadows-dropdown) to this app's own theme vars
+   (--card-bg, --text, --border), since this app doesn't run MUI's
+   CSS-variables mode. */
+/* SVGs clip anything outside their own viewBox by default — the hover
+   highlight on a pie/donut slice expands slightly past the resting radius,
+   and on a small chart (like the 150x150 pie) that expansion runs right up
+   against the viewBox edge and visibly gets cut off there. */
+.apexcharts-canvas svg {
+  overflow: visible;
+}
+/* min-width/padding/font-size venían del tamaño default de ApexCharts
+   (~14px) y se veían enormes al lado del resto de la UI (que va en su
+   mayoría en 10-12px) — todo el bloque se compacta aquí. */
+.apexcharts-canvas .apexcharts-tooltip {
+  min-width: 60px;
+  border-radius: 7px;
+  backdrop-filter: blur(6px);
+  color: var(--text, #f1f5f9);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  background-color: rgba(22, 29, 46, 0.92);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  font-size: 11px;
+  line-height: 1.35;
+}
+/* ApexCharts' own default styles add a light-theme divider between rows
+   (multi-series tooltips) and extra bottom padding per row — both bleed
+   through unstyled since we only overrode the group's own padding, not
+   these nested pieces, and looked like leftover light-mode chrome inside
+   an otherwise dark tooltip. */
+.apexcharts-canvas .apexcharts-tooltip-series-group {
+  border-bottom-color: var(--border, rgba(255, 255, 255, 0.08));
+}
+.apexcharts-canvas .apexcharts-tooltip-y-group {
+  padding: 0;
+}
+.apexcharts-canvas .apexcharts-xaxistooltip {
+  border-radius: 8px;
+  border-color: transparent;
+  backdrop-filter: blur(6px);
+  color: var(--text, #f1f5f9);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  background-color: rgba(22, 29, 46, 0.92);
+  font-size: 10px;
+  padding: 2px 6px;
+}
+.apexcharts-canvas .apexcharts-xaxistooltip::before {
+  border-bottom-color: rgba(148, 163, 184, 0.16);
+}
+.apexcharts-canvas .apexcharts-xaxistooltip::after {
+  border-bottom-color: rgba(22, 29, 46, 0.92);
+}
+.apexcharts-canvas .apexcharts-tooltip-title {
+  font-weight: 700;
+  font-size: 10px;
+  text-align: center;
+  padding: 4px 8px;
+  color: var(--text-muted, rgba(255, 255, 255, 0.5));
+  background-color: rgba(255, 255, 255, 0.04);
+}
+.apexcharts-canvas .apexcharts-tooltip-series-group {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.apexcharts-canvas .apexcharts-tooltip-marker {
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+}
+.apexcharts-canvas .apexcharts-legend {
+  padding: 0;
+}
+.apexcharts-canvas .apexcharts-legend-marker {
+  margin-right: 6px;
+}
+.apexcharts-canvas .apexcharts-legend-text {
+  margin-left: 0;
+  padding-left: 0;
+  line-height: 18px;
+  color: var(--text, #f1f5f9) !important;
+}
+/* Pie/donut data-label text sits directly on top of each slice's hover
+   path; without this, moving the cursor off a slice and onto its own
+   label first skips the slice's mouseleave, so the tooltip never gets
+   told to close and stays stuck on screen. Making the label text itself
+   transparent to the pointer lets mouseleave always reach the slice. */
+.apexcharts-canvas .apexcharts-datalabels,
+.apexcharts-canvas .apexcharts-pie-label {
+  pointer-events: none;
+}

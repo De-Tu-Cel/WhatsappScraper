@@ -733,25 +733,58 @@ class MongoDBManager:
 
     def get_instance_uptime(self, instance_names: list, hours: int = 24) -> dict:
         """Calculate uptime % per instance over the last N hours.
-        Returns {instance_name: {"uptime_pct": float, "last_event": str, "last_ts": datetime, "last_reason": str}}"""
+        Returns {instance_name: {"uptime_pct": float, "last_event": str, "last_ts": datetime, "last_reason": str}}
+
+        Batched into exactly 2 queries total (one for the in-window logs, one
+        for each instance's last state before the window) regardless of how
+        many instance_names are passed — the previous version ran 2 queries
+        PER instance in a loop (2*N round trips; 42 for the 21 real
+        instances), which measured at 9+ seconds end to end against the
+        production DB. Same output shape, same math, just no longer
+        re-querying per instance."""
         cutoff = datetime.utcnow() - timedelta(hours=hours)
         result = {}
+        if not instance_names:
+            return result
 
+        logs_by_name = {name: [] for name in instance_names}
+        for log in self.db.instance_health_logs.find(
+            {"instance_name": {"$in": instance_names}, "ts": {"$gte": cutoff}},
+            {"_id": 0, "instance_name": 1, "event": 1, "ts": 1, "reason": 1, "reason_label": 1},
+        ).sort("ts", 1):
+            logs_by_name.setdefault(log["instance_name"], []).append(log)
+
+        # Latest event per instance strictly before the window, in one
+        # aggregation instead of one find_one() per name — sorting desc then
+        # grouping with $first picks the most recent doc per instance_name.
+        before_by_name = {
+            b["_id"]: b for b in self.db.instance_health_logs.aggregate([
+                {"$match": {"instance_name": {"$in": instance_names}, "ts": {"$lt": cutoff}}},
+                {"$sort": {"ts": -1}},
+                {"$group": {"_id": "$instance_name", "event": {"$first": "$event"}}},
+            ])
+        }
+
+        now = datetime.utcnow()
+        window_secs = hours * 3600
         for name in instance_names:
-            logs = list(self.db.instance_health_logs.find(
-                {"instance_name": name, "ts": {"$gte": cutoff}},
-                {"_id": 0, "event": 1, "ts": 1, "reason": 1, "reason_label": 1},
-            ).sort("ts", 1))
+            logs = logs_by_name.get(name, [])
+            before = before_by_name.get(name)
 
-            # Get the state just BEFORE the window to know the starting state
-            before = self.db.instance_health_logs.find_one(
-                {"instance_name": name, "ts": {"$lt": cutoff}},
-                {"_id": 0, "event": 1},
-                sort=[("ts", -1)],
-            )
+            # No health-log event ever seen for this instance (none before the
+            # window, none inside it) — most likely its connect/disconnect
+            # webhook has simply never fired (e.g. no reconnect since this
+            # logging shipped), not that it was actually down 100% of the
+            # window. Reporting a confident 0% here would be worse than
+            # admitting there's no data: confirmed against production, every
+            # wwebjs instance currently in use has zero rows in
+            # instance_health_logs despite sending real messages.
+            if before is None and not logs:
+                result[name] = {"uptime_pct": None, "last_event": None, "last_ts": None, "last_reason": None}
+                continue
+
             current_state = (before["event"] if before else "unknown")
 
-            window_secs = hours * 3600
             connected_secs = 0.0
             prev_ts = cutoff
 
@@ -763,7 +796,6 @@ class MongoDBManager:
                 prev_ts = log["ts"]
 
             # Remaining time up to now
-            now = datetime.utcnow()
             seg = (now - prev_ts).total_seconds()
             if current_state == "connected":
                 connected_secs += seg
@@ -774,7 +806,7 @@ class MongoDBManager:
             result[name] = {
                 "uptime_pct":  uptime_pct,
                 "last_event":  last_log["event"] if last_log else None,
-                "last_ts":     last_log["ts"].isoformat() if last_log else None,
+                "last_ts":     last_log["ts"].isoformat() if last_log and "ts" in last_log else None,
                 "last_reason": last_log.get("reason_label") if last_log else None,
             }
 

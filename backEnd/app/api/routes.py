@@ -85,7 +85,34 @@ def api_list_users(x_user_token: Optional[str] = Header(None)):
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Solo admins")
     from app.auth import list_users
-    return list_users()
+    users = list_users()
+
+    # connected_number is just a field stored once when the instance was first
+    # linked — it never gets cleared on disconnect, so it doesn't reflect real
+    # status. Check each user's assigned wwebjs session live instead (same
+    # per-instance check the warmup endpoint uses).
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        from app.whatsapp_wwebjs import get_status as _ww_get_status
+
+        def _check(u):
+            inst = u.get("evolution_instance")
+            if not inst:
+                return u["id"], False
+            try:
+                return u["id"], _ww_get_status(inst).get("status") == "connected"
+            except Exception:
+                return u["id"], False
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            live = dict(ex.map(_check, users))
+        for u in users:
+            u["is_connected"] = live.get(u["id"], False)
+    except Exception:
+        for u in users:
+            u["is_connected"] = False
+
+    return users
 
 @router.get("/auth/recovery-code")
 def api_get_recovery_code(x_user_token: Optional[str] = Header(None)):
@@ -4053,6 +4080,19 @@ async def api_wwebjs_webhook(request: Request):
                 "disconnect_reason_label": label_map.get(status, status),
             }},
         )
+        # wwebjs-service solo emite session.status en transiciones reales del
+        # cliente (ready/disconnected/auth_failure), no en un polling — igual
+        # que Evolution/WAHA/Wasender más abajo, cada evento aquí ya es una
+        # transición real, así que se registra sin comparar contra el estado
+        # anterior. "need_scan" es transitorio (esperando escaneo de QR, no
+        # una caída real) y no se registra, igual que WAHA no registra su
+        # SCAN_QR_CODE — evita ensuciar el uptime con el intervalo normal de
+        # conexión inicial.
+        if status == "connected":
+            db.save_instance_health_log(instance_name, "connected")
+        elif status in ("disconnected", "auth_failure"):
+            db.save_instance_health_log(instance_name, "disconnected",
+                                         reason=status, reason_label=label_map.get(status, status))
         if data.get("phone"):
             db.db.instances.update_one({"name": instance_name}, {"$set": {"number": data["phone"]}})
         _profile_fields = {}
@@ -5538,6 +5578,132 @@ def api_instances_health(x_user_token: Optional[str] = Header(None),
     db = MongoDBManager()
     names = [i["name"] for i in db.db.instances.find({}, {"_id": 0, "name": 1})]
     return db.get_instance_uptime(names, hours=hours)
+
+
+@router.get("/admin/instances/metrics")
+def api_instances_metrics(x_user_token: Optional[str] = Header(None), range: str = "week"):
+    """Messages sent + distinct contacts reached per instance, admin-wide, over a
+    lookback window — built entirely from message_logs (already indexed on
+    instance_name+created_at), no new tracking. `range` is a lookback bucket
+    (day/week/month/year), not a calendar-aligned period."""
+    user = _require_user(x_user_token)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Solo admins")
+
+    from datetime import datetime, timedelta
+    days_by_range = {"day": 1, "week": 7, "month": 30, "year": 365}
+    days = days_by_range.get(range, 7)
+    since = datetime.utcnow() - timedelta(days=days)
+
+    db = MongoDBManager()
+    match = {"direction": "outbound", "created_at": {"$gte": since}, "instance_name": {"$exists": True, "$ne": None}}
+    # A chunk of outbound logs have no company_id (not every send path stamps
+    # one) — without this filter $addToSet would count that gap itself as a
+    # bogus extra "contact" per instance that has any such message.
+    match_with_company = {**match, "company_id": {"$exists": True, "$ne": None}}
+
+    by_instance = list(db.db.message_logs.aggregate([
+        {"$match": match},
+        {"$group": {
+            "_id": "$instance_name",
+            "messages_sent": {"$sum": 1},
+            "contacts": {"$addToSet": {"$cond": [{"$ifNull": ["$company_id", False]}, "$company_id", "$$REMOVE"]}},
+        }},
+        {"$project": {"_id": 0, "instance_name": "$_id", "messages_sent": 1, "contacts_reached": {"$size": {"$ifNull": ["$contacts", []]}}}},
+    ]))
+    by_instance_map = {r["instance_name"]: r for r in by_instance}
+
+    names = [i["name"] for i in db.db.instances.find({}, {"_id": 0, "name": 1})]
+    instances = [
+        {
+            "instance_name": name,
+            "messages_sent": by_instance_map.get(name, {}).get("messages_sent", 0),
+            "contacts_reached": by_instance_map.get(name, {}).get("contacts_reached", 0),
+        }
+        for name in names
+    ]
+    instances.sort(key=lambda r: r["messages_sent"], reverse=True)
+
+    total_messages = db.db.message_logs.count_documents(match)
+    contacted_ids = set(db.db.message_logs.distinct("company_id", match_with_company))
+    total_contacts = len(contacted_ids)
+
+    # Response rate — % of contacted companies that replied at least once,
+    # the one thing "messages sent"/"contacts reached" don't answer: whether
+    # people actually engage back, not just how much gets sent. Deliberately
+    # NOT "inbound messages ÷ outbound messages" — verified against real
+    # production data that raw ratio comes out to 115%-245% (a contact can
+    # reply many times to one message, or send unprompted follow-ups), which
+    # would read as a broken "over 100%" rate. Counting distinct companies
+    # instead keeps it a real, boundable percentage.
+    # Inbound docs never carry `instance_name` (confirmed against production:
+    # 0 of ~2.8k inbound docs have it) — they record which instance received
+    # the reply under `received_on_instance` instead.
+    match_in = {
+        "direction": "inbound",
+        "created_at": match["created_at"],
+        "received_on_instance": {"$exists": True, "$ne": None},
+        "company_id": {"$exists": True, "$ne": None},
+    }
+    replied_ids = set(db.db.message_logs.distinct("company_id", match_in))
+    replied_of_contacted = len(replied_ids & contacted_ids)
+    response_rate = round(replied_of_contacted / total_contacts * 100, 1) if total_contacts > 0 else None
+
+    # Same-length prior window immediately before `since`, for real (not
+    # invented) percent-change badges on the summary cards.
+    prev_since = since - timedelta(days=days)
+    prev_match = {"direction": "outbound", "created_at": {"$gte": prev_since, "$lt": since}, "instance_name": {"$exists": True, "$ne": None}}
+    prev_match_with_company = {**prev_match, "company_id": {"$exists": True, "$ne": None}}
+    prev_total_messages = db.db.message_logs.count_documents(prev_match)
+    prev_contacted_ids = set(db.db.message_logs.distinct("company_id", prev_match_with_company))
+    prev_total_contacts = len(prev_contacted_ids)
+    prev_match_in = {
+        "direction": "inbound",
+        "created_at": prev_match["created_at"],
+        "received_on_instance": {"$exists": True, "$ne": None},
+        "company_id": {"$exists": True, "$ne": None},
+    }
+    prev_replied_ids = set(db.db.message_logs.distinct("company_id", prev_match_in))
+    prev_replied_of_contacted = len(prev_replied_ids & prev_contacted_ids)
+    prev_response_rate = round(prev_replied_of_contacted / prev_total_contacts * 100, 1) if prev_total_contacts > 0 else None
+
+    def _pct_change(curr, prev):
+        if prev == 0:
+            return None if curr == 0 else 100.0
+        return round((curr - prev) / prev * 100, 1)
+
+    uptime = db.get_instance_uptime(names, hours=days * 24)
+
+    # Time series for the trend chart — bucketed by hour for "day" (otherwise
+    # a single-day lookback would only ever be one point), by day for
+    # week/month, by month for year, so the chart always has enough points to
+    # actually read as a trend.
+    bucket_format = {"day": "%Y-%m-%d %H:00", "week": "%Y-%m-%d", "month": "%Y-%m-%d", "year": "%Y-%m"}.get(range, "%Y-%m-%d")
+    timeseries_rows = list(db.db.message_logs.aggregate([
+        {"$match": match},
+        {"$group": {
+            "_id": {"$dateToString": {"format": bucket_format, "date": "$created_at"}},
+            "messages_sent": {"$sum": 1},
+            "contacts": {"$addToSet": {"$cond": [{"$ifNull": ["$company_id", False]}, "$company_id", "$$REMOVE"]}},
+        }},
+        {"$project": {"_id": 0, "bucket": "$_id", "messages_sent": 1, "contacts_reached": {"$size": {"$ifNull": ["$contacts", []]}}}},
+        {"$sort": {"bucket": 1}},
+    ]))
+
+    return {
+        "range": range,
+        "since": since.isoformat(),
+        "total_messages": total_messages,
+        "total_contacts": total_contacts,
+        "replied_contacts": replied_of_contacted,
+        "response_rate": response_rate,
+        "messages_pct_change": _pct_change(total_messages, prev_total_messages),
+        "contacts_pct_change": _pct_change(total_contacts, prev_total_contacts),
+        "response_rate_pct_change": _pct_change(response_rate, prev_response_rate) if response_rate is not None and prev_response_rate is not None else None,
+        "instances": instances,
+        "uptime": uptime,
+        "timeseries": timeseries_rows,
+    }
 
 
 @router.get("/admin/instances")

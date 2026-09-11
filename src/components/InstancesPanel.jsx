@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { INSTANCES_CHANGED_EVENT } from '../hooks/useDailyCapStats'
 import Box from '@mui/material/Box'
@@ -33,6 +33,18 @@ import LinkOffIcon from '@mui/icons-material/LinkOff'
 import SmartphoneIcon from '@mui/icons-material/Smartphone'
 import EditIcon from '@mui/icons-material/Edit'
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
+import TrendingUpIcon from '@mui/icons-material/TrendingUp'
+import InsightsIcon from '@mui/icons-material/Insights'
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
+import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment'
+import DonutLargeIcon from '@mui/icons-material/DonutLarge'
+import BarChartIcon from '@mui/icons-material/BarChart'
+import ShowChartIcon from '@mui/icons-material/ShowChart'
+import TrendingDownIcon from '@mui/icons-material/TrendingDown'
+import { alpha } from '@mui/material/styles'
+import { Chart } from './chart/Chart'
+import { ChartLegends } from './chart/ChartLegends'
+import { useApexChart } from './chart/useApexChart'
 import { useLang } from '../context/LangContext'
 
 const token = () => typeof window !== 'undefined' ? localStorage.getItem('user_token') : ''
@@ -88,6 +100,560 @@ const STAT_CHIP_SX = {
   color: 'var(--text-muted, rgba(255,255,255,0.5))',
   border: '1px solid var(--border, rgba(255,255,255,0.1))',
   fontSize: '0.68rem', fontWeight: 600, height: 22,
+}
+
+// Same pattern as Prospects/Analytics' stats row (icon + conic-gradient
+// ring showing % of the total + label + value), reused here instead of
+// plain chips + a separate segmented bar — that combo repeated the same
+// "connected/disconnected" counts twice (once as chips, once as the bar's
+// legend) and didn't match the rest of the app's stat-card language.
+function InstStatCard({ icon, color, value, label, subtitle, percent }) {
+  const pct = percent == null ? 100 : Math.max(0, Math.min(100, percent))
+  return (
+    <Box sx={{
+      flex: '1 1 0', minWidth: 130, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.4,
+      px: 2, py: 1.6,
+    }}>
+      <Box sx={{
+        width: 40, height: 40, borderRadius: '50%', flexShrink: 0, p: '3px',
+        background: `conic-gradient(${color} ${pct}%, var(--border, rgba(255,255,255,0.12)) ${pct}% 100%)`,
+      }}>
+        <Box sx={{
+          width: '100%', height: '100%', borderRadius: '50%',
+          bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          {icon}
+        </Box>
+      </Box>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography sx={{ fontSize: '0.76rem', color: 'var(--text)', fontWeight: 700, lineHeight: 1.3, whiteSpace: 'nowrap' }}>
+          {label}
+        </Typography>
+        {subtitle && (
+          <Typography sx={{ fontSize: '0.66rem', color: 'var(--text-muted)', fontWeight: 500, lineHeight: 1.3, whiteSpace: 'nowrap' }}>
+            {subtitle}
+          </Typography>
+        )}
+        <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.3, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+          {value}
+        </Typography>
+      </Box>
+    </Box>
+  )
+}
+
+// Header for each chart sub-card (pie/bar/trend) — a colored icon in a
+// small gradient box next to the title, same visual language as the
+// Performance banner's own icon box, instead of plain flat text that read
+// dull/washed-out next to the rest of the panel's more designed sections.
+function ChartCardHeader({ icon, color, title }) {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.2 }}>
+      <Box sx={{
+        width: 24, height: 24, borderRadius: '7px', flexShrink: 0,
+        background: `linear-gradient(135deg, ${alpha(color, 0.24)} 0%, ${alpha(color, 0.08)} 100%)`,
+        border: `1px solid ${alpha(color, 0.32)}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        {icon}
+      </Box>
+      <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text)' }}>
+        {title}
+      </Typography>
+    </Box>
+  )
+}
+
+// Gradient stat card ported from minimal-ui-kit/material-kit-react's
+// AnalyticsWidgetSummary (icon + real %-change badge + value + sparkline),
+// adapted to our theme tokens and real backend fields instead of their mock data.
+// "vs prior" por sí solo no decía prior QUÉ (el usuario lo reportó confuso)
+// — como cada tarjeta ya sabe qué rango está activo (day/week/month/year),
+// se puede nombrar exactamente el periodo con el que se compara en vez de
+// un genérico "anterior".
+const RANGE_COMPARE_LABEL = {
+  day:   { en: 'vs previous day',   es: 'vs día anterior' },
+  week:  { en: 'vs previous week',  es: 'vs semana anterior' },
+  month: { en: 'vs previous month', es: 'vs mes anterior' },
+  year:  { en: 'vs previous year',  es: 'vs año anterior' },
+}
+
+function DashStatCard({ color, value, title, pctChange, sparkData, categories, range, lang }) {
+  const chartOptions = useApexChart({
+    chart: { sparkline: { enabled: true } },
+    colors: [color],
+    stroke: { width: 2 },
+    fill: { opacity: 1, gradient: { opacityFrom: 0.4, opacityTo: 0 } },
+    // Antes tooltip:false dejaba la curva puramente decorativa — no se
+    // podía saber qué valor representaba cada punto. Ahora sí muestra el
+    // valor real (y la fecha del bucket, si se pasó) al pasar el mouse.
+    // followCursor:true se quitó — en sparklines minúsculos (44x26) que se
+    // vuelven a montar en cada cambio de rango, ese modo se quedaba con el
+    // tooltip pegado en pantalla tras salir con el mouse; el anclaje fijo
+    // (default de ApexCharts) sí se oculta bien en mouseleave.
+    // fixed.position lo ancla arriba a la derecha en vez de flotar justo
+    // sobre el cursor — en un espacio tan chico, el tooltip por defecto
+    // terminaba tapando el número grande de al lado en vez de solo indicar
+    // el punto de la curva.
+    tooltip: {
+      enabled: true,
+      x: { show: !!categories },
+      y: { formatter: (v) => v == null ? '' : v.toLocaleString() },
+      fixed: { enabled: true, position: 'topRight', offsetX: 6, offsetY: -32 },
+    },
+    markers: { size: 0, hover: { size: 4 } },
+    // La base comparte yaxis.tickAmount y xaxis.tooltip/crosshairs con las
+    // gráficas grandes (que sí muestran eje) — en sparkline mode ApexCharts
+    // no siempre suprime los ticks solo, dejando unos numeritos diminutos
+    // pegados a la izquierda del mini-gráfico; y la "pill" flotante de
+    // categoría (xaxis.tooltip) no cabe en 44px de ancho — ambos se apagan
+    // aquí, dejando el crosshair + punto de color como única señal de "aquí
+    // está el mouse" en un espacio tan chico.
+    xaxis: {
+      categories, labels: { show: false }, axisBorder: { show: false }, axisTicks: { show: false },
+      tooltip: { enabled: false },
+    },
+    yaxis: { labels: { show: false } },
+  })
+  const up = (pctChange ?? 0) >= 0
+  return (
+    <Box sx={{
+      minWidth: 0, p: 1.2, borderRadius: 2.5,
+      bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+      border: '1px solid var(--border, rgba(255,255,255,0.08))',
+    }}>
+      <Typography sx={{ fontSize: '0.66rem', fontWeight: 600, color: 'var(--text-muted)', mb: 0.6,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.6 }}>
+        <Typography sx={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.1 }}>{value}</Typography>
+        {sparkData && sparkData.length > 1 && (
+          <Chart type="line" series={[{ name: title, data: sparkData }]} options={chartOptions} height={26} width={44} sx={{ mr: 0.8 }} />
+        )}
+      </Box>
+      {pctChange != null && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.8 }}>
+          <Box sx={{
+            width: 15, height: 15, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            bgcolor: up ? 'rgba(74,222,128,0.15)' : 'rgba(248,113,113,0.15)',
+          }}>
+            {up ? <TrendingUpIcon sx={{ fontSize: 10, color: '#4ade80' }} /> : <TrendingDownIcon sx={{ fontSize: 10, color: '#f87171' }} />}
+          </Box>
+          <Typography sx={{ fontSize: '0.65rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <Box component="span" sx={{ fontWeight: 700, color: up ? '#4ade80' : '#f87171' }}>{up ? '+' : ''}{pctChange}%</Box>
+            <Box component="span" sx={{ color: 'var(--text-muted)' }}>
+              {' '}{(RANGE_COMPARE_LABEL[range] ?? RANGE_COMPARE_LABEL.week)[lang === 'en' ? 'en' : 'es']}
+            </Box>
+          </Typography>
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+// Wide card, different shape from DashStatCard on purpose — a gauge for the
+// combined average (real aggregate over the range) next to a per-instance
+// breakdown (real per-instance %, same instance_health_logs data, just not
+// collapsed into one number) so the extra width is actually used for more
+// information instead of the same small card just stretched out.
+function InstanceHealthCard({ avgUptime, uptimeMap, instances, lang }) {
+  const gaugeOptions = useApexChart({
+    chart: { sparkline: { enabled: true } },
+    colors: ['#f59e0b'],
+    // 'round' line caps draw a filled dot at the arc's start even at 0% —
+    // with real uptime data still at 0% for these instances, that floating
+    // dot was the only visible thing on the ring, reading as a stray
+    // ornament instead of "no progress yet". 'butt' caps draw nothing when
+    // the arc length is zero, which is the honest empty state.
+    stroke: { lineCap: 'butt' },
+    plotOptions: {
+      radialBar: {
+        hollow: { size: '48%' },
+        track: { background: 'rgba(255,255,255,0.12)', strokeWidth: '100%', margin: 0 },
+        dataLabels: {
+          // ApexCharts' radialBar shows a "name" sub-label ("Total" by
+          // default) alongside the value unless explicitly turned off —
+          // that stray "Total" text overlapping the number was the bug.
+          name: { show: false },
+          value: { show: true, offsetY: 2, fontSize: '0.72rem', fontWeight: 800, color: 'var(--text)', formatter: (v) => `${v}%` },
+        },
+      },
+    },
+    tooltip: { enabled: false },
+  })
+  // El detalle por instancia ya no vive siempre expandido en la tarjeta
+  // (con varias instancias crecía hacia abajo sin control) — ahora vive en
+  // un tooltip informativo al pasar el mouse, para que la tarjeta se quede
+  // del mismo tamaño que sus vecinas sin importar cuántas instancias haya.
+  const breakdown = (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6, py: 0.3, minWidth: 170 }}>
+      {instances.map(inst => {
+        // uptime_pct is null (not 0) when this instance has NO connect/
+        // disconnect log at all — e.g. its webhook never fired since this
+        // logging was added. That's "no data", not "was down all week";
+        // showing a confident 0% there would be actively misleading.
+        const raw = uptimeMap[inst.instance_name]?.uptime_pct
+        const pct = raw == null ? null : Math.round(raw)
+        return (
+          <Box key={inst.instance_name} sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+            <Typography sx={{ flex: 1, minWidth: 0, fontSize: '0.68rem', fontWeight: 600, color: '#fff',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {inst.instance_name}
+            </Typography>
+            <Box sx={{ width: 50, height: 4, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.18)', overflow: 'hidden', flexShrink: 0 }}>
+              <Box sx={{ width: `${pct ?? 0}%`, height: '100%', bgcolor: '#f59e0b', borderRadius: 2 }} />
+            </Box>
+            <Typography sx={{ width: 28, flexShrink: 0, textAlign: 'right', fontSize: '0.68rem', fontWeight: 700, color: pct == null ? 'var(--text-muted)' : '#f59e0b' }}>
+              {pct == null ? '—' : `${pct}%`}
+            </Typography>
+          </Box>
+        )
+      })}
+    </Box>
+  )
+  return (
+    <Box sx={{
+      minWidth: 0, height: '100%', p: 1.2, borderRadius: 2.5, bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+      border: '1px solid var(--border, rgba(255,255,255,0.08))',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    }}>
+      {/* La fila (gauge + texto) antes se estiraba a todo el ancho de la
+         tarjeta (heredado del alignItems:stretch de arriba) y el texto
+         quedaba pegado a la izquierda con un hueco vacío a la derecha; ahora
+         el contenedor centra la fila como bloque en vez de estirarla. */}
+      <Tooltip title={instances.length > 0 ? breakdown : ''} arrow placement="bottom-start">
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: instances.length > 0 ? 'help' : 'default' }}>
+          <Chart type="radialBar" series={[avgUptime == null ? 0 : Math.round(avgUptime)]} options={gaugeOptions} height={58} width={58} />
+          <Box sx={{ minWidth: 0 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
+              <Typography sx={{ fontSize: '0.66rem', fontWeight: 600, color: 'var(--text-muted)',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {lang === 'en' ? 'Avg. uptime' : 'Uptime prom.'}
+              </Typography>
+              {instances.length > 0 && <InfoOutlinedIcon sx={{ fontSize: 11, color: 'var(--text-muted)', opacity: 0.7, flexShrink: 0 }} />}
+            </Box>
+            <Typography sx={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.1 }}>
+              {avgUptime == null ? '—' : `${avgUptime}%`}
+            </Typography>
+          </Box>
+        </Box>
+      </Tooltip>
+    </Box>
+  )
+}
+
+// Real, non-invented metrics: messages sent + distinct contacts reached per
+// instance (from message_logs, GET /admin/instances/metrics), real period-
+// over-period %-change, and uptime % (from instance_health_logs, reused from
+// the existing health endpoint). Chart components ported from
+// minimal-ui-kit/material-kit-react (ApexCharts + its theming), adapted to
+// this app's own theme tokens and data.
+// chartsReady=false keeps every chart in its skeleton state even once data
+// has loaded — needed because page.jsx's tab system pre-mounts every panel
+// in the background a few seconds after boot (kept alive forever via
+// display:none instead of unmounting), so this dashboard's 6 ApexCharts
+// instances were rendering into a still-hidden, zero-size container the
+// very first time. ApexCharts can't measure a display:none container and
+// throws deep inside its own render pipeline ("Cannot read properties of
+// undefined (reading 'filter')", no app stack frame — confirmed by testing:
+// it reproduced with the tab never opened, in a burst of exactly 6, one per
+// chart instance). Real charts only render once this tab has genuinely been
+// activated at least once; until then they show the same loading skeleton.
+function InstancesDashboard({ metrics, loading, range, onRangeChange, lang, chartsReady = true }) {
+  const showCharts = !loading && chartsReady
+  const RANGES = [
+    { key: 'day',   label: lang === 'en' ? 'Today' : 'Hoy' },
+    { key: 'week',  label: lang === 'en' ? 'Week' : 'Semana' },
+    { key: 'month', label: lang === 'en' ? 'Month' : 'Mes' },
+    { key: 'year',  label: lang === 'en' ? 'Year' : 'Año' },
+  ]
+  const rows = metrics?.instances ?? []
+  const uptimeMap = metrics?.uptime ?? {}
+  const withActivity = rows.filter(r => r.messages_sent > 0)
+  // Solo promedia instancias con dato REAL de uptime — antes un `?? 0`
+  // trataba "sin ningún log de conexión" igual que "confirmado 0% conectado",
+  // arrastrando el promedio hacia abajo con instancias de las que en
+  // realidad no sabemos nada (ver InstanceHealthCard más abajo).
+  const uptimeValues = withActivity
+    .map(r => uptimeMap[r.instance_name]?.uptime_pct)
+    .filter(v => v != null)
+  const avgUptime = uptimeValues.length
+    ? Math.round(uptimeValues.reduce((sum, v) => sum + v, 0) / uptimeValues.length)
+    : null
+  const timeseries = metrics?.timeseries ?? []
+
+  // Leyendas clicleables (mostrar/ocultar serie) para el bar y el trend —
+  // el pastel no la necesita, cada slice ya es su propia serie visual.
+  // toggleSeries() es imperativo (ApexCharts no expone esto por props), de
+  // ahí la ref hacia la instancia real detrás de nuestro wrapper <Chart>.
+  const barChartRef = useRef(null)
+  const trendChartRef = useRef(null)
+  const [hiddenBarSeries, setHiddenBarSeries] = useState(() => new Set())
+  const [hiddenTrendSeries, setHiddenTrendSeries] = useState(() => new Set())
+  const toggleSeries = (chartRef, hiddenSet, setHiddenSet) => (label) => {
+    // Este react-apexcharts (2.1.1, la reescritura basada en hooks) asigna
+    // la instancia directo a chartRef.current, sin el wrapper `.chart` que
+    // sí tenía la versión de clase anterior.
+    chartRef.current?.toggleSeries(label)
+    setHiddenSet(prev => {
+      const next = new Set(prev)
+      next.has(label) ? next.delete(label) : next.add(label)
+      return next
+    })
+  }
+
+  const pieOptions = useApexChart({
+    chart: { sparkline: { enabled: true } },
+    colors: ['#3b82f6', '#22c55e', '#f59e0b', '#8b5cf6', '#ef4444', '#60a5fa'],
+    labels: withActivity.map(r => r.instance_name),
+    stroke: { width: 0 },
+    dataLabels: { enabled: true, dropShadow: { enabled: false } },
+    tooltip: { y: { formatter: (v) => `${v.toLocaleString()} ${lang === 'en' ? 'messages' : 'mensajes'}` } },
+    plotOptions: { pie: { donut: { labels: { show: false } } } },
+  })
+
+  // legend:false en ambas — la leyenda nativa de ApexCharts incrusta un
+  // <foreignObject><style>...</style></foreignObject> con el CSS del layout
+  // de su leyenda directamente en el SVG; en ciertos hovers ese bloque se
+  // renderizaba como texto plano visible en vez de aplicarse como estilo
+  // (el bug de CSS crudo apareciendo en pantalla). El pie ya usaba nuestro
+  // propio <ChartLegends> en DOM normal en vez de la leyenda nativa — se
+  // hace lo mismo aquí para bar/trend, evitando el bug de raíz en vez de
+  // parchar el renderer interno de la librería.
+  const barOptions = useApexChart({
+    colors: [alpha('#3b82f6', 0.85), alpha('#22c55e', 0.85)],
+    stroke: { width: 2, colors: ['transparent'] },
+    plotOptions: { bar: { borderRadius: 6, borderRadiusApplication: 'end', columnWidth: '55%' } },
+    xaxis: { categories: withActivity.map(r => r.instance_name), labels: { style: { fontSize: '10px' }, rotate: -35 } },
+    legend: { show: false },
+    tooltip: { y: { formatter: (v) => v.toLocaleString() } },
+  })
+
+  const trendOptions = useApexChart({
+    colors: ['#3b82f6', '#22c55e'],
+    xaxis: { categories: timeseries.map(r => r.bucket), labels: { style: { fontSize: '10px' } } },
+    legend: { show: false },
+    tooltip: { y: { formatter: (v) => v.toLocaleString() } },
+  })
+
+  const emptyState = (msg) => (
+    <Box sx={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <Typography sx={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>{msg}</Typography>
+    </Box>
+  )
+  const noActivityMsg = lang === 'en' ? 'No activity in this range' : 'Sin actividad en este rango'
+
+  return (
+    <Box sx={{
+      borderRadius: 3, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+      bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))', overflow: 'hidden', flexShrink: 0,
+    }}>
+      {/* Mismo banner de encabezado (glow + ícono en caja degradada) que usa
+         el título de Prospects, en vez del texto plano de antes que se veía
+         apagado comparado con el resto de la app. */}
+      <Box sx={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap',
+        px: 2, py: 1.6, position: 'relative',
+        background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.12) 0%, rgba(var(--accent-rgb,59,130,246),0.04) 60%, transparent 100%)',
+        borderBottom: '1px solid rgba(var(--accent-rgb,59,130,246),0.15)',
+        '&::after': {
+          content: '""', position: 'absolute', bottom: 0, left: 16, right: 16, height: '1px',
+          background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.4) 40%, rgba(var(--accent-rgb,59,130,246),0.4) 60%, transparent)',
+        },
+      }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <Box sx={{
+            width: 32, height: 32, borderRadius: '9px', flexShrink: 0,
+            background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.25) 0%, rgba(var(--accent-rgb,59,130,246),0.1) 100%)',
+            border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <InsightsIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 16 }} />
+          </Box>
+          <Box>
+            <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2 }}>
+              {lang === 'en' ? 'Performance' : 'Desempeño'}
+            </Typography>
+            <Typography sx={{ fontSize: '0.65rem', color: 'var(--text-muted, rgba(255,255,255,0.3))', lineHeight: 1, mt: 0.2 }}>
+              {lang === 'en' ? 'Messages, contacts & uptime by instance' : 'Mensajes, contactos y uptime por instancia'}
+            </Typography>
+          </Box>
+        </Box>
+        {/* Segmented control — un solo contenedor "pastilla" donde el rango
+           activo lleva su propio fondo sólido (con sombra sutil), en vez de
+           chips sueltos todos con el mismo peso visual. */}
+        <Box sx={{
+          display: 'flex', gap: 0.2, p: 0.3, borderRadius: 2,
+          bgcolor: 'var(--surface, rgba(255,255,255,0.03))', border: '1px solid var(--border, rgba(255,255,255,0.1))',
+        }}>
+          {RANGES.map(r => {
+            const active = range === r.key
+            return (
+              <Box key={r.key} onClick={() => onRangeChange(r.key)}
+                sx={{
+                  px: 1.5, py: 0.5, borderRadius: 1.6, cursor: 'pointer', userSelect: 'none',
+                  fontSize: '0.7rem', fontWeight: 700, lineHeight: 1.8,
+                  color: active ? '#fff' : 'var(--text-muted)',
+                  bgcolor: active ? 'var(--accent, #3b82f6)' : 'transparent',
+                  boxShadow: active ? '0 2px 8px rgba(var(--accent-rgb,59,130,246),0.4)' : 'none',
+                  transition: 'background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease',
+                  '&:hover': active ? {} : { bgcolor: 'var(--item-hover, rgba(255,255,255,0.06))', color: 'var(--text)' },
+                }}>
+                {r.label}
+              </Box>
+            )
+          })}
+        </Box>
+      </Box>
+
+      <Box sx={{ p: 2 }}>
+
+      {!showCharts ? (
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 1.5, mb: 2 }}>
+          <Skeleton variant="rounded" sx={{ height: 110, bgcolor: 'var(--border)', borderRadius: 3 }} />
+          <Skeleton variant="rounded" sx={{ height: 110, bgcolor: 'var(--border)', borderRadius: 3 }} />
+          <Skeleton variant="rounded" sx={{ height: 110, bgcolor: 'var(--border)', borderRadius: 3 }} />
+          <Skeleton variant="rounded" sx={{ height: 110, bgcolor: 'var(--border)', borderRadius: 3 }} />
+        </Box>
+      ) : (
+        // Grid fijo de 4 columnas — las cuatro tarjetas (mensajes, contactos,
+        // tasa de respuesta, uptime) reducidas y compactadas para caber
+        // juntas en una sola fila.
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 1.5, mb: 2 }}>
+          <DashStatCard range={range} color="#3b82f6" lang={lang}
+            value={(metrics?.total_messages ?? 0).toLocaleString()} title={lang === 'en' ? 'Messages sent' : 'Mensajes enviados'}
+            pctChange={metrics?.messages_pct_change} sparkData={timeseries.map(r => r.messages_sent)}
+            categories={timeseries.map(r => r.bucket)} />
+          <DashStatCard range={range} color="#22c55e" lang={lang}
+            value={(metrics?.total_contacts ?? 0).toLocaleString()} title={lang === 'en' ? 'Contacts reached' : 'Contactos alcanzados'}
+            pctChange={metrics?.contacts_pct_change} sparkData={timeseries.map(r => r.contacts_reached)}
+            categories={timeseries.map(r => r.bucket)} />
+          {/* % de contactos que respondieron al menos una vez — no
+             "mensajes entrantes ÷ salientes" (verificado contra producción:
+             ese conteo crudo daba 115%-245%, ya que un contacto puede
+             responder varias veces al mismo envío). Contar contactos
+             distintos mantiene un porcentaje real y acotado. */}
+          <DashStatCard range={range} color="#a78bfa" lang={lang}
+            value={metrics?.response_rate != null ? `${metrics.response_rate}%` : '—'}
+            title={lang === 'en' ? 'Response rate' : 'Tasa de respuesta'}
+            pctChange={metrics?.response_rate_pct_change} />
+          <InstanceHealthCard avgUptime={avgUptime} uptimeMap={uptimeMap} instances={withActivity} lang={lang} />
+        </Box>
+      )}
+
+      {/* Pie (share of volume by instance) + trend over time, side by side —
+         skeleton placeholders match each real section's shape (circle for
+         the pie, rectangle for the line chart) instead of just disappearing
+         until the data lands. */}
+      {/* Pastel + barras conviven en una fila (los dos son "reparto por
+         instancia", pero en formas distintas) para que quepan cómodos en la
+         columna angosta; la de tendencia en el tiempo, que necesita ancho
+         real para las fechas del eje X, va sola abajo a todo lo ancho. Así
+         los tres no terminan apilados uno igual al otro (repetitivo). */}
+      {!showCharts ? (
+        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'flex-start', mb: 1.5 }}>
+          <Box sx={{ flex: '1 1 190px', minWidth: 180, borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))', p: 1.5 }}>
+            <Skeleton variant="text" width="65%" sx={{ mb: 1, bgcolor: 'var(--border)', fontSize: '0.8rem' }} />
+            <Skeleton variant="circular" width={140} height={140} sx={{ my: 1.5, mx: 'auto', bgcolor: 'var(--border)' }} />
+          </Box>
+          <Box sx={{ flex: '1 1 220px', minWidth: 200, borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))', p: 1.5 }}>
+            <Skeleton variant="text" width="50%" sx={{ mb: 1, bgcolor: 'var(--border)', fontSize: '0.8rem' }} />
+            <Skeleton variant="rounded" height={220} sx={{ bgcolor: 'var(--border)' }} />
+          </Box>
+        </Box>
+      ) : (
+        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'flex-start', mb: 1.5 }}>
+          <Box sx={{ flex: '1 1 190px', minWidth: 180, borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))', p: 1.5 }}>
+            <ChartCardHeader icon={<DonutLargeIcon sx={{ fontSize: 14, color: '#8b5cf6' }} />} color="#8b5cf6"
+              title={lang === 'en' ? 'Share by instance' : 'Reparto por instancia'} />
+            {withActivity.length === 0 ? emptyState(noActivityMsg) : (
+              <>
+                {/* width/height van como props reales (no solo dentro de sx)
+                   — sx solo estilaba el div contenedor; el <ReactApexChart>
+                   interno recibía width='100%' (default) y height
+                   undefined, lo que puede dejar el SVG sin altura real. */}
+                <Chart type="pie" width={150} height={150} series={withActivity.map(r => r.messages_sent)} options={pieOptions}
+                  sx={{ my: 1.5, mx: 'auto' }} />
+                <Divider sx={{ borderStyle: 'dashed', mb: 1.2 }} />
+                {/* Con varias instancias esta leyenda crecía sin límite hacia
+                   abajo (una fila por cada una); ahora tiene una altura fija
+                   con scroll propio, así no importa cuántas instancias
+                   tengan actividad, la tarjeta no crece con ellas. */}
+                <Box sx={{
+                  maxHeight: 64, overflowY: 'auto', pr: 0.5,
+                  '&::-webkit-scrollbar': { width: 4 },
+                  '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(100,116,139,0.3)', borderRadius: 4 },
+                  '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
+                }}>
+                  <ChartLegends
+                    labels={pieOptions.labels}
+                    colors={pieOptions.colors}
+                    values={withActivity.map(r => r.messages_sent.toLocaleString())}
+                    sx={{ justifyContent: 'center', flexWrap: 'wrap' }}
+                  />
+                </Box>
+              </>
+            )}
+          </Box>
+          {/* Per-instance breakdown — solo instancias con actividad real en
+             el rango: con 21+ instancias registradas (la mayoría inactivas
+             en cualquier rango dado), listarlas todas sería una pared de
+             barras en cero que no dice nada y no escala. */}
+          <Box sx={{ flex: '1 1 220px', minWidth: 200, borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))', p: 1.5 }}>
+            <ChartCardHeader icon={<BarChartIcon sx={{ fontSize: 14, color: '#3b82f6' }} />} color="#3b82f6"
+              title={lang === 'en' ? 'Per-instance breakdown' : 'Detalle por instancia'} />
+            {withActivity.length === 0 ? emptyState(noActivityMsg) : (
+              <>
+                <ChartLegends
+                  labels={[lang === 'en' ? 'Messages sent' : 'Mensajes enviados', lang === 'en' ? 'Contacts reached' : 'Contactos alcanzados']}
+                  colors={[alpha('#3b82f6', 0.85), alpha('#22c55e', 0.85)]}
+                  hidden={hiddenBarSeries}
+                  onToggle={toggleSeries(barChartRef, hiddenBarSeries, setHiddenBarSeries)}
+                  sx={{ mb: 1 }}
+                />
+                <Chart chartRef={barChartRef} type="bar" height={Math.max(180, Math.min(260, withActivity.length * 40))}
+                  series={[
+                    { name: lang === 'en' ? 'Messages sent' : 'Mensajes enviados', data: withActivity.map(r => r.messages_sent) },
+                    { name: lang === 'en' ? 'Contacts reached' : 'Contactos alcanzados', data: withActivity.map(r => r.contacts_reached) },
+                  ]}
+                  options={barOptions} />
+              </>
+            )}
+          </Box>
+        </Box>
+      )}
+
+      {!showCharts ? (
+        <Box sx={{ borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))', p: 1.5 }}>
+          <Skeleton variant="text" width="45%" sx={{ mb: 1, bgcolor: 'var(--border)', fontSize: '0.8rem' }} />
+          <Skeleton variant="rounded" height={240} sx={{ bgcolor: 'var(--border)' }} />
+        </Box>
+      ) : (
+        <Box sx={{ borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))', p: 1.5 }}>
+          <ChartCardHeader icon={<ShowChartIcon sx={{ fontSize: 14, color: '#22c55e' }} />} color="#22c55e"
+            title={lang === 'en' ? 'Messages & contacts over time' : 'Mensajes y contactos en el tiempo'} />
+          {timeseries.length === 0 ? emptyState(noActivityMsg) : (
+            <>
+              <ChartLegends
+                labels={[lang === 'en' ? 'Messages' : 'Mensajes', lang === 'en' ? 'Contacts' : 'Contactos']}
+                colors={['#3b82f6', '#22c55e']}
+                hidden={hiddenTrendSeries}
+                onToggle={toggleSeries(trendChartRef, hiddenTrendSeries, setHiddenTrendSeries)}
+                sx={{ mb: 1 }}
+              />
+              <Chart chartRef={trendChartRef} type="area" height={240}
+                series={[
+                  { name: lang === 'en' ? 'Messages' : 'Mensajes', data: timeseries.map(r => r.messages_sent) },
+                  { name: lang === 'en' ? 'Contacts' : 'Contactos', data: timeseries.map(r => r.contacts_reached) },
+                ]}
+                options={trendOptions} />
+            </>
+          )}
+        </Box>
+      )}
+      </Box>
+    </Box>
+  )
 }
 
 const STATUS_LABEL_ES = { open: 'Conectada', connected: 'Conectada', connecting: 'Conectando', close: 'Desconectada', disconnected: 'Desconectada', WORKING: 'Conectada', SCAN_QR_CODE: 'Escanear QR', STARTING: 'Iniciando', STOPPED: 'Detenida', FAILED: 'Error', unknown: 'Desconocida', initializing: 'Iniciando', authenticated: 'Autenticando', need_scan: 'Escanear QR', auth_failure: 'Error auth', error: 'Error', not_found: 'No iniciada' }
@@ -202,13 +768,15 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup }) {
           </Tooltip>
           <Tooltip title={t.inst.connectQr} placement="top">
             <IconButton size="small" onClick={() => onQr(inst)}
-              sx={{ color: 'var(--accent,#60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(59,130,246,0.15)' } }}>
+              sx={{ color: 'var(--accent,#60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)' } }}>
               <QrCodeIcon sx={{ fontSize: 14 }} />
             </IconButton>
           </Tooltip>
+          {/* Antes iba en morado fijo (#a78bfa) en vez de seguir el acento
+             elegido en Ajustes, igual que el ícono de QR de al lado. */}
           <Tooltip title={lang === 'en' ? 'Edit phone number' : 'Editar número'} placement="top">
             <IconButton size="small" onClick={() => onEditNumber(inst)}
-              sx={{ color: '#a78bfa', p: 0.4, '&:hover': { bgcolor: 'rgba(167,139,250,0.15)' } }}>
+              sx={{ color: 'var(--accent,#60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)' } }}>
               <EditIcon sx={{ fontSize: 14 }} />
             </IconButton>
           </Tooltip>
@@ -249,23 +817,33 @@ function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, on
   const { t, lang } = useLang()
   const connectedCount = instances.filter(i => ['open', 'connected'].includes(i.live_status)).length
   const isAdmin = user.role === 'admin'
-  const roleColor   = isAdmin ? '#a78bfa' : '#60a5fa'
-  const avatarBg    = isAdmin ? 'rgba(167,139,250,0.18)' : 'rgba(59,130,246,0.18)'
-  const avatarBorder= isAdmin ? 'rgba(167,139,250,0.55)' : 'rgba(59,130,246,0.5)'
+  // Derivados de var(--accent) en vez de morado/azul fijos — misma fórmula
+  // que ya usan las tarjetas de usuario en Admin: Admin usa el acento tal
+  // cual, Agent una versión mezclada con gris (misma familia, distinguible,
+  // y ambos cambian solos si cambia el color base elegido en Ajustes).
+  // roleAlpha(a) reemplaza el truco de "${roleColor}NN" (sufijo hex de
+  // alpha) que solo funciona con strings hex planos, no con var()/color-mix().
+  const roleSolid = isAdmin ? 'var(--accent, #3b82f6)' : 'color-mix(in srgb, var(--accent, #3b82f6) 55%, #94a3b8 45%)'
+  const roleAlpha = (a) => isAdmin
+    ? `rgba(var(--accent-rgb, 59,130,246), ${a})`
+    : `color-mix(in srgb, ${roleSolid} ${Math.round(a * 100)}%, transparent)`
+  const roleColor    = roleSolid
+  const avatarBg     = roleAlpha(0.18)
+  const avatarBorder = roleAlpha(0.55)
   const initials = (user.display_name || user.username || '?').slice(0, 2).toUpperCase()
   const slots = 5
   const emptySlots = Math.max(0, slots - instances.length)
   const hasRotation = connectedCount >= 2
   const roleLabel = isAdmin ? 'Admin' : (lang === 'en' ? 'Agent' : 'Agente')
   const connectedWord = connectedCount === 1 ? t.inst.connectedSingular : t.inst.connectedPlural
-  const glowColor = isAdmin ? 'rgba(167,139,250,0.22)' : 'rgba(59,130,246,0.22)'
+  const glowColor = roleAlpha(0.22)
   return (
     <Box sx={{
       bgcolor: 'var(--card-bg)', borderRadius: 3, p: 2,
       display: 'flex', flexDirection: 'column', gap: 0,
       border: '1px solid var(--border)',
       transition: 'border-color 0.25s, box-shadow 0.25s',
-      '&:hover': { borderColor: roleColor, boxShadow: `0 0 0 1px ${roleColor}28, 0 8px 28px ${glowColor}` },
+      '&:hover': { borderColor: roleColor, boxShadow: `0 0 0 1px ${roleAlpha(0.157)}, 0 8px 28px ${glowColor}` },
       '@keyframes fadeUp': {
         '0%':   { opacity: 0, transform: 'translateY(14px)' },
         '100%': { opacity: 1, transform: 'translateY(0)' },
@@ -305,15 +883,15 @@ function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, on
         <Box onClick={onAddSlot} sx={{
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
           py: 2, gap: 1, cursor: 'pointer', borderRadius: 2, mt: 1,
-          border: `1px dashed ${roleColor}30`,
-          bgcolor: avatarBg.replace('0.18)', '0.05)'),
+          border: `1px dashed ${roleAlpha(0.188)}`,
+          bgcolor: roleAlpha(0.05),
           transition: 'all 0.18s',
-          '&:hover': { bgcolor: avatarBg.replace('0.18)', '0.12)'), borderColor: `${roleColor}60` },
+          '&:hover': { bgcolor: roleAlpha(0.12), borderColor: roleAlpha(0.376) },
         }}>
           <Box sx={{ display: 'flex', gap: 0.7 }}>
             {Array(5).fill(null).map((_, i) => (
               <Box key={i} sx={{ width: 9, height: 9, borderRadius: '50%',
-                border: `1.5px dashed ${roleColor}45`, transition: 'all 0.18s' }} />
+                border: `1.5px dashed ${roleAlpha(0.271)}`, transition: 'all 0.18s' }} />
             ))}
           </Box>
           <Typography sx={{ fontSize: '0.68rem', color: roleColor, fontWeight: 600, opacity: 0.75 }}>
@@ -321,7 +899,7 @@ function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, on
           </Typography>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
             px: 1.4, py: 0.45, borderRadius: 1.5, fontSize: '0.63rem', fontWeight: 700,
-            bgcolor: `${roleColor}18`, color: roleColor, border: `1px solid ${roleColor}28` }}>
+            bgcolor: roleAlpha(0.094), color: roleColor, border: `1px solid ${roleAlpha(0.157)}` }}>
             <AddIcon sx={{ fontSize: 12 }} />
             {lang === 'en' ? 'Assign from sidebar' : 'Asignar del sidebar'}
           </Box>
@@ -401,8 +979,8 @@ function InlineUserPicker({ instanceName, users, instances, onAssign, t, lang })
     <Box>
       {/* Header */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1,
-        borderBottom: '1px solid var(--border)', bgcolor: 'rgba(59,130,246,0.04)' }}>
-        <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: '#60a5fa',
+        borderBottom: '1px solid var(--border)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.04)' }}>
+        <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: 'var(--accent, #60a5fa)',
           textTransform: 'uppercase', letterSpacing: '0.08em', flex: 1 }}>
           {lang === 'en' ? 'Assign to' : 'Asignar a'}
         </Typography>
@@ -424,7 +1002,7 @@ function InlineUserPicker({ instanceName, users, instances, onAssign, t, lang })
               bgcolor: 'var(--item-hover)', border: '1px solid var(--border)',
               borderRadius: 1.5, py: 0.5, px: 1.2, color: 'var(--text)', fontSize: '0.75rem',
               outline: 'none', fontFamily: 'inherit',
-              '&:focus': { borderColor: 'rgba(59,130,246,0.5)' } }}
+              '&:focus': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.5)' } }}
           />
         </Box>
       )}
@@ -438,9 +1016,13 @@ function InlineUserPicker({ instanceName, users, instances, onAssign, t, lang })
         {filtered.map((u, idx) => {
           const uid      = u._id || u.id || u.username
           const uAdmin   = u.role === 'admin'
-          const uColor   = uAdmin ? '#a78bfa' : '#60a5fa'
-          const uBg      = uAdmin ? 'rgba(167,139,250,0.18)' : 'rgba(59,130,246,0.18)'
-          const uBorder  = uAdmin ? 'rgba(167,139,250,0.45)' : 'rgba(59,130,246,0.4)'
+          // Derivados de var(--accent) en vez de morado/azul fijos, misma
+          // fórmula que ya usan las tarjetas de usuario en Admin — Admin
+          // usa el acento tal cual, Agent una versión mezclada con gris.
+          const uRoleSolid = uAdmin ? 'var(--accent, #3b82f6)' : 'color-mix(in srgb, var(--accent, #3b82f6) 55%, #94a3b8 45%)'
+          const uColor   = uRoleSolid
+          const uBg      = uAdmin ? 'rgba(var(--accent-rgb,59,130,246),0.18)' : `color-mix(in srgb, ${uRoleSolid} 18%, transparent)`
+          const uBorder  = uAdmin ? 'rgba(var(--accent-rgb,59,130,246),0.45)' : `color-mix(in srgb, ${uRoleSolid} 45%, transparent)`
           const uInitials = (u.display_name || u.username || '?').slice(0, 2).toUpperCase()
           const uSlots   = instances.filter(i => i.assigned_to === uid).length
           const isFull   = uSlots >= 5
@@ -455,7 +1037,7 @@ function InlineUserPicker({ instanceName, users, instances, onAssign, t, lang })
                 cursor: isFull ? 'not-allowed' : 'pointer',
                 opacity: isFull ? 0.45 : 1,
                 transition: 'background 0.12s',
-                '&:hover': isFull ? {} : { bgcolor: 'rgba(59,130,246,0.07)' },
+                '&:hover': isFull ? {} : { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.07)' },
               }}>
               {/* Avatar */}
               <Box sx={{ width: 32, height: 32, borderRadius: 1.5, flexShrink: 0,
@@ -602,12 +1184,25 @@ function BulkPickDialog({ open, onClose, selectedNames, users, instances, onAssi
 }
 
 // ── Main panel ───────────────────────────────────────────────────────────────
-export default function InstancesPanel() {
+export default function InstancesPanel({ isActive } = {}) {
   const { t, lang } = useLang()
+  // page.jsx's tab system mounts every panel in the background a few
+  // seconds after boot (kept alive via display:none once "visited", never
+  // truly unmounted) — isActive is only true while THIS tab is the one on
+  // screen. Once it's been true at least once, keep it true from then on:
+  // switching away and back shouldn't re-hide charts that already rendered
+  // safely. See chartsReady on InstancesDashboard for why this matters.
+  const everActiveRef = useRef(isActive)
+  if (isActive) everActiveRef.current = true
   const [instances,    setInstances]    = useState([])
   const [loading,      setLoading]      = useState(true)
   const [users,        setUsers]        = useState([])
   const skeletonCounts = useRef({ users: [], unassigned: 3 })
+
+  // ── Dashboard (messages sent / contacts reached / uptime per instance) ──
+  const [metrics,        setMetrics]        = useState(null)
+  const [metricsLoading, setMetricsLoading] = useState(true)
+  const [metricsRange,   setMetricsRange]   = useState('week')
 
   // ── Create dialog ──
   const [createOpen,   setCreateOpen]   = useState(false)
@@ -716,6 +1311,24 @@ export default function InstancesPanel() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [userSearch,       setUserSearch]       = useState('')
   const sidebarRowRefs = useRef({})
+
+  // La columna de tarjetas de usuario no debe crecer sin límite conforme se
+  // agreguen más usuarios (eso empujaba toda la página hacia abajo) — se
+  // mide en vivo la altura real de Performance (su vecino en la misma fila)
+  // y esa misma altura se le aplica como tope, con su propio scroll interno,
+  // en vez de un número fijo adivinado que se desalinearía apenas cambiara
+  // el contenido de Performance (idioma, rango, cantidad de instancias).
+  const perfColRef = useRef(null)
+  const [perfHeight, setPerfHeight] = useState(null)
+  useEffect(() => {
+    const el = perfColRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) setPerfHeight(entry.contentRect.height)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   // ── Multi-select assign ──
   const [selectedInsts, setSelectedInsts] = useState(new Set())
@@ -902,7 +1515,16 @@ export default function InstancesPanel() {
     } catch {}
   }, [])
 
+  const fetchMetrics = useCallback(async (range) => {
+    setMetricsLoading(true)
+    try {
+      const r = await fetch(`/api/admin/instances/metrics?range=${range}`, { headers: { 'x-user-token': token() } })
+      if (r.ok) setMetrics(await r.json())
+    } catch {} finally { setMetricsLoading(false) }
+  }, [])
+
   useEffect(() => { fetchInstances(); fetchUsers() }, [fetchInstances, fetchUsers])
+  useEffect(() => { fetchMetrics(metricsRange) }, [fetchMetrics, metricsRange])
   // Cleanup QR polls on unmount / hot reload
   useEffect(() => () => { if (wahaQrPollRef.current) clearInterval(wahaQrPollRef.current) }, [])
   useEffect(() => () => { if (wsQrPollRef.current) clearInterval(wsQrPollRef.current) }, [])
@@ -1712,98 +2334,172 @@ export default function InstancesPanel() {
   const warmupCount  = instances.filter(i => i.warmup_mode).length
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 2 }}>
+    <Box sx={{
+      display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 2,
+      overflowY: 'auto', overflowX: 'hidden', pr: 0.5,
+      '&::-webkit-scrollbar': { width: 4 },
+      '&::-webkit-scrollbar-button': { display: 'none' },
+      '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(100,116,139,0.3)', borderRadius: 4 },
+      '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
+    }}>
 
-      {/* Header */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <Box>
-          <Typography sx={{ color: 'var(--text)', fontWeight: 800, fontSize: '1.3rem', lineHeight: 1.2 }}>
-            {t.inst.title}
-          </Typography>
-          <Box sx={{ display: 'flex', gap: 1, mt: 0.5 }}>
-            <Chip label={`${instances.length} ${t.inst.statInstances}`} size="small" sx={STAT_CHIP_SX} />
-            <Chip label={`${connected} ${t.inst.statConnected}`} size="small"
-              sx={{ ...STAT_CHIP_SX, bgcolor: connected > 0 ? 'rgba(34,197,94,0.1)' : 'var(--item-hover)',
-                color: connected > 0 ? '#4ade80' : 'var(--text-muted)',
-                border: `1px solid ${connected > 0 ? 'rgba(34,197,94,0.25)' : 'var(--border)'}` }} />
-            {disconnected > 0 && (
-              <Chip label={`${disconnected} ${t.inst.statDisconnected}`} size="small"
-                sx={{ ...STAT_CHIP_SX, bgcolor: 'rgba(248,113,113,0.1)', color: '#f87171',
-                  border: '1px solid rgba(248,113,113,0.25)' }} />
-            )}
-            {warmupCount > 0 && (
-              <Chip label={`${warmupCount} ${t.inst.statWarmup}`} size="small"
-                sx={{ ...STAT_CHIP_SX, bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24',
-                  border: '1px solid rgba(251,191,36,0.25)' }} />
-            )}
-            <Chip label={`${users.length} ${t.inst.statUsers}`} size="small" sx={STAT_CHIP_SX} />
-          </Box>
-        </Box>
-        <Box sx={{ display: 'flex', gap: 1, ml: 'auto', alignItems: 'center' }}>
-          <Tooltip title={lang === 'en' ? 'Refresh session status' : 'Actualizar estado de sesiones'}>
-            <IconButton size="small" onClick={handleSyncWaha} disabled={wahaSyncing}
-              sx={{ color: 'var(--text-muted)', '&:hover': { color: '#60a5fa' } }}>
-              {wahaSyncing ? <CircularProgress size={16} sx={{ color: '#60a5fa' }} />
-                : <RefreshIcon fontSize="small" />}
-            </IconButton>
-          </Tooltip>
-          <Tooltip title={lang === 'en' ? 'Connect a new WhatsApp number via QR code' : 'Conectar un nuevo número de WhatsApp con código QR'} placement="bottom">
-            <Button variant="outlined" startIcon={<AddIcon sx={{ fontSize: 15 }} />}
-              onClick={() => { setWahaOpen(true); setWahaName(''); setWahaErr(''); setWahaQr(null); setWahaConnected(false); setWahaScanned(false); setWahaStatus('') }}
-              sx={{ color: '#60a5fa', borderColor: 'rgba(59,130,246,0.4)', fontWeight: 700,
-                fontSize: '0.82rem', borderRadius: 2, textTransform: 'none', px: 2,
-                '&:hover': { borderColor: '#60a5fa', bgcolor: 'rgba(59,130,246,0.08)' } }}>
-              {lang === 'en' ? 'Connect number' : 'Conectar número'}
-            </Button>
-          </Tooltip>
-        </Box>
-      </Box>
-
-      {/* ── System health bar ── */}
-      {!loading && instances.length > 0 && (() => {
-        const total = instances.length
-        const connPct  = Math.round((connected / total) * 100)
-        const warmPct  = Math.round((warmupCount / total) * 100)
-        const discPct  = Math.round((disconnected / total) * 100)
-        const restPct  = Math.max(0, 100 - connPct - warmPct - discPct)
-        return (
-          <Box sx={{ mb: 0.5 }}>
-            {/* Segmented bar */}
-            <Box sx={{ height: 5, borderRadius: 4, overflow: 'hidden', display: 'flex',
-              bgcolor: 'rgba(255,255,255,0.06)', gap: '1px' }}>
-              {connPct  > 0 && <Box sx={{ width: `${connPct}%`,  bgcolor: '#4ade80', transition: 'width 0.6s ease' }} />}
-              {warmPct  > 0 && <Box sx={{ width: `${warmPct}%`,  bgcolor: '#fbbf24', transition: 'width 0.6s ease' }} />}
-              {discPct  > 0 && <Box sx={{ width: `${discPct}%`,  bgcolor: '#f87171', transition: 'width 0.6s ease' }} />}
-              {restPct  > 0 && <Box sx={{ width: `${restPct}%`,  bgcolor: 'rgba(148,163,184,0.3)' }} />}
+      {/* Header — mismo banner (glow + ícono en caja degradada) que usa
+         Performance, para que ambos títulos hagan juego en vez de que este
+         se vea como texto plano al lado del otro con banner. */}
+      <Box sx={{
+        borderRadius: 3, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+        bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))', overflow: 'hidden', flexShrink: 0,
+      }}>
+        <Box sx={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap',
+          px: 2, py: 1.6, position: 'relative',
+          background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.12) 0%, rgba(var(--accent-rgb,59,130,246),0.04) 60%, transparent 100%)',
+          borderBottom: '1px solid rgba(var(--accent-rgb,59,130,246),0.15)',
+          '&::after': {
+            content: '""', position: 'absolute', bottom: 0, left: 16, right: 16, height: '1px',
+            background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.4) 40%, rgba(var(--accent-rgb,59,130,246),0.4) 60%, transparent)',
+          },
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Box sx={{
+              width: 32, height: 32, borderRadius: '9px', flexShrink: 0,
+              background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.25) 0%, rgba(var(--accent-rgb,59,130,246),0.1) 100%)',
+              border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <PhoneAndroidIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 16 }} />
             </Box>
-            {/* Legend */}
-            <Box sx={{ display: 'flex', gap: 2, mt: 0.8, flexWrap: 'wrap' }}>
-              {[
-                { color: '#4ade80', label: lang === 'en' ? `${connected} connected` : `${connected} conectadas`, show: connected > 0 },
-                { color: '#fbbf24', label: lang === 'en' ? `${warmupCount} warmup` : `${warmupCount} calentamiento`, show: warmupCount > 0 },
-                { color: '#f87171', label: lang === 'en' ? `${disconnected} disconnected` : `${disconnected} desconectadas`, show: disconnected > 0 },
-              ].filter(i => i.show).map(({ color, label }) => (
-                <Box key={label} sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-                  <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
-                  <Typography sx={{ fontSize: '0.62rem', color: 'var(--text-muted)', fontWeight: 500 }}>{label}</Typography>
-                </Box>
-              ))}
-              <Typography sx={{ fontSize: '0.62rem', color: 'rgba(148,163,184,0.5)', ml: 'auto' }}>
-                {connPct}% {lang === 'en' ? 'online' : 'en línea'}
+            <Box>
+              <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2 }}>
+                {t.inst.title}
+              </Typography>
+              <Typography sx={{ fontSize: '0.65rem', color: 'var(--text-muted, rgba(255,255,255,0.3))', lineHeight: 1, mt: 0.2 }}>
+                {lang === 'en' ? 'Connected sessions & user assignment' : 'Sesiones conectadas y asignación de usuarios'}
               </Typography>
             </Box>
           </Box>
-        )
-      })()}
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <Tooltip title={lang === 'en' ? 'Refresh session status' : 'Actualizar estado de sesiones'}>
+              <IconButton size="small" onClick={handleSyncWaha} disabled={wahaSyncing}
+                sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--accent, #60a5fa)' } }}>
+                {wahaSyncing ? <CircularProgress size={16} sx={{ color: 'var(--accent, #60a5fa)' }} />
+                  : <RefreshIcon fontSize="small" />}
+              </IconButton>
+            </Tooltip>
+            <Tooltip title={lang === 'en' ? 'Connect a new WhatsApp number via QR code' : 'Conectar un nuevo número de WhatsApp con código QR'} placement="bottom">
+              {/* Antes iba en azul fijo (#60a5fa) sin importar el color de
+                 paleta elegido en Ajustes, igual que el botón "Create" del
+                 diálogo que abre — ahora ambos siguen var(--accent). */}
+              <Button variant="outlined" startIcon={<AddIcon sx={{ fontSize: 15 }} />}
+                onClick={() => { setWahaOpen(true); setWahaName(''); setWahaErr(''); setWahaQr(null); setWahaConnected(false); setWahaScanned(false); setWahaStatus('') }}
+                sx={{ color: 'var(--accent, #60a5fa)', borderColor: 'rgba(var(--accent-rgb,59,130,246),0.4)', fontWeight: 700,
+                  fontSize: '0.82rem', borderRadius: 2, textTransform: 'none', px: 2,
+                  '&:hover': { borderColor: 'var(--accent, #60a5fa)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.08)' } }}>
+                {lang === 'en' ? 'Connect number' : 'Conectar número'}
+              </Button>
+            </Tooltip>
+          </Box>
+        </Box>
 
-      {/* User cards grid + unassigned sidebar */}
-      <Box sx={{ flex: 1, display: 'flex', gap: 2, minHeight: 0, overflow: 'hidden' }}>
-        {/* Left: scrollable content */}
-        <Box sx={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', pr: 0.5,
-          '&::-webkit-scrollbar': { width: 4 },
-          '&::-webkit-scrollbar-button': { display: 'none' },
-          '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(100,116,139,0.3)', borderRadius: 4 },
-          '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
+        <Box sx={{ p: 2 }}>
+          {/* Stat cards — mismo patrón de ícono + anillo conic-gradient +
+             label + valor que Prospects/Analytics, en una sola fila con
+             Dividers verticales, en vez de chips sueltos + una barra
+             segmentada aparte que repetía los mismos conteos dos veces.
+             Antes esta fila no tenía skeleton propio: mientras `instances`
+             seguía vacío durante la carga, se veían los conteos reales en
+             cero (0 instancias, 0 conectadas...) en vez de un placeholder. */}
+          {loading ? (
+            <Box sx={{
+              display: 'flex', flexWrap: 'wrap', overflow: 'hidden',
+              borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+              bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+            }}>
+              {[0, 1, 2, 3].map(i => (
+                <Fragment key={i}>
+                  {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 1.4 }} />}
+                  <Box sx={{ flex: '1 1 0', minWidth: 130, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.4, px: 2, py: 1.6 }}>
+                    <Skeleton variant="circular" width={40} height={40} sx={{ flexShrink: 0, bgcolor: 'var(--border)' }} />
+                    <Box sx={{ minWidth: 0 }}>
+                      <Skeleton variant="text" width={62} height={12} sx={{ mb: 0.5, bgcolor: 'var(--border)' }} />
+                      <Skeleton variant="text" width={32} height={20} sx={{ bgcolor: 'var(--border)' }} />
+                    </Box>
+                  </Box>
+                </Fragment>
+              ))}
+            </Box>
+          ) : (
+          <Box sx={{
+            display: 'flex', flexWrap: 'wrap', overflow: 'hidden',
+            borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+            bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+          }}>
+            {[
+              {
+                key: 'total', color: 'rgba(148,163,184,0.7)',
+                icon: <PhoneAndroidIcon sx={{ fontSize: 18, color: 'var(--text-muted)' }} />,
+                value: instances.length.toLocaleString(), label: t.inst.statInstances,
+              },
+              {
+                key: 'connected', color: '#4ade80',
+                icon: <CheckCircleIcon sx={{ fontSize: 18, color: '#4ade80' }} />,
+                value: connected.toLocaleString(), label: t.inst.statConnected,
+                subtitle: instances.length > 0 ? `${Math.round((connected / instances.length) * 100)}%` : null,
+                percent: instances.length > 0 ? Math.round((connected / instances.length) * 100) : 0,
+              },
+              {
+                key: 'disconnected', color: '#f87171',
+                icon: <LinkOffIcon sx={{ fontSize: 18, color: '#f87171' }} />,
+                value: disconnected.toLocaleString(), label: t.inst.statDisconnected,
+                subtitle: instances.length > 0 ? `${Math.round((disconnected / instances.length) * 100)}%` : null,
+                percent: instances.length > 0 ? Math.round((disconnected / instances.length) * 100) : 0,
+              },
+              warmupCount > 0 && {
+                key: 'warmup', color: '#fbbf24',
+                icon: <LocalFireDepartmentIcon sx={{ fontSize: 18, color: '#fbbf24' }} />,
+                value: warmupCount.toLocaleString(), label: t.inst.statWarmup,
+                subtitle: instances.length > 0 ? `${Math.round((warmupCount / instances.length) * 100)}%` : null,
+                percent: instances.length > 0 ? Math.round((warmupCount / instances.length) * 100) : 0,
+              },
+              {
+                key: 'users', color: 'rgba(148,163,184,0.7)',
+                icon: <PersonAddIcon sx={{ fontSize: 18, color: 'var(--text-muted)' }} />,
+                value: users.length.toLocaleString(), label: t.inst.statUsers,
+              },
+            ].filter(Boolean).map(({ key, ...c }, i) => (
+              <Fragment key={key}>
+                {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 1.4 }} />}
+                <InstStatCard {...c} />
+              </Fragment>
+            ))}
+          </Box>
+          )}
+        </Box>
+      </Box>
+
+      {/* Performance al lado de la gestión de instancias, no arriba a todo el
+         ancho — el apretujamiento anterior venía de que la columna era
+         demasiado angosta (minWidth 360), no de estar al lado; ahora tiene
+         más espacio mínimo (520) para que las gráficas respiren. */}
+      <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <Box ref={perfColRef} sx={{ flex: '1 1 520px', minWidth: 480 }}>
+          <InstancesDashboard metrics={metrics} loading={metricsLoading} range={metricsRange} onRangeChange={setMetricsRange} lang={lang} chartsReady={everActiveRef.current} />
+        </Box>
+
+        {/* User cards grid + unassigned sidebar */}
+        <Box sx={{ flex: '1 1 560px', minWidth: 0, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+        {/* Left: user cards — con más usuarios de los que caben en la altura
+           de Performance, esta columna hace su propio scroll interno en vez
+           de estirar la página entera hacia abajo. */}
+        <Box sx={{
+          flex: '1 1 480px', minWidth: 0,
+          ...(perfHeight ? {
+            maxHeight: perfHeight, overflowY: 'auto', pr: 0.5,
+            '&::-webkit-scrollbar': { width: 4 },
+            '&::-webkit-scrollbar-button': { display: 'none' },
+            '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(100,116,139,0.3)', borderRadius: 4 },
+            '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
+          } : {}),
         }}>
           {/* User search filter */}
           {!loading && users.length > 0 && (
@@ -1837,7 +2533,7 @@ export default function InstancesPanel() {
             </Box>
           )}
         {loading ? (
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 2 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 2 }}>
             {(skeletonCounts.current.users.length ? skeletonCounts.current.users : [2, 3, 1, 2, 0, 1]).map((rowCount, i) => (
               <Box key={i} sx={{
                 bgcolor: 'var(--card-bg)', borderRadius: 3, p: 2,
@@ -1939,7 +2635,7 @@ export default function InstancesPanel() {
           </Box>
 
         ) : (
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 2 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 2 }}>
             {users
               .filter(u => {
                 if (!userSearch.trim()) return true
@@ -1973,14 +2669,22 @@ export default function InstancesPanel() {
             '@keyframes skCardIn': { '0%': { opacity: 0, transform: 'translateY(12px)' }, '100%': { opacity: 1, transform: 'translateY(0)' } },
             animation: 'skCardIn 0.35s ease both', animationDelay: '0.3s',
           }}>
-            {/* Header: amber dot + "Sin asignar" + count + arrow */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.2,
-              borderBottom: '1px solid rgba(245,158,11,0.12)' }}>
-              <Skeleton variant="circular" width={7} height={7} sx={{ bgcolor: 'rgba(245,158,11,0.45)', flexShrink: 0 }} />
-              <Skeleton variant="text" width="52%" height={14} sx={{ flex: 1,
-                bgcolor: 'rgba(255,255,255,0.1)',
-                '&::after': { background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.12), transparent)' } }} />
-              <Skeleton variant="rounded" width={22} height={16} sx={{ borderRadius: 10, bgcolor: 'rgba(245,158,11,0.12)' }} />
+            {/* Header: mismo lenguaje de ícono-en-caja-degradada que Performance
+               e Instances, en tono ámbar (mismo acento que ya usaba esta
+               barra) en vez del punto + texto plano de antes. */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 1.6, py: 1.4,
+              background: 'linear-gradient(135deg, rgba(245,158,11,0.14) 0%, rgba(245,158,11,0.04) 60%, transparent 100%)',
+              borderBottom: '1px solid rgba(245,158,11,0.15)' }}>
+              <Skeleton variant="rounded" width={26} height={26} sx={{ borderRadius: '8px', flexShrink: 0,
+                bgcolor: 'rgba(245,158,11,0.16)',
+                '&::after': { background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.15), transparent)' } }} />
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Skeleton variant="text" width="60%" height={13} sx={{ mb: 0.2,
+                  bgcolor: 'rgba(255,255,255,0.1)',
+                  '&::after': { background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.12), transparent)' } }} />
+                <Skeleton variant="text" width="80%" height={9} sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
+              </Box>
+              <Skeleton variant="rounded" width={22} height={16} sx={{ borderRadius: 10, bgcolor: 'rgba(245,158,11,0.12)', flexShrink: 0 }} />
               <Skeleton variant="circular" width={12} height={12} sx={{ bgcolor: 'rgba(255,255,255,0.06)', flexShrink: 0 }} />
             </Box>
             {/* Group label row — mirrors the "SIN CONEXIÓN" section header */}
@@ -2042,25 +2746,45 @@ export default function InstancesPanel() {
               maxHeight: 'calc(100vh - 200px)',
               overflow: 'hidden',
             }}>
-              {/* Sidebar header — fixed, click to collapse/expand (lives outside the scroll area) */}
+              {/* Sidebar header — fixed, click to collapse/expand (lives outside
+                 the scroll area). Mismo lenguaje de ícono-en-caja-degradada que
+                 usan Performance e Instances, en tono ámbar (el acento que ya
+                 traía esta barra), en vez del punto + texto plano de antes. */}
               <Box onClick={() => setSidebarCollapsed(c => !c)}
-                sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.2,
-                  borderBottom: sidebarCollapsed ? 'none' : '1px solid rgba(245,158,11,0.12)',
-                  cursor: 'pointer', userSelect: 'none',
-                  flexShrink: 0,
-                  bgcolor: 'var(--card-bg)', borderRadius: '10px 10px 0 0',
-                  '&:hover': { bgcolor: 'rgba(245,158,11,0.04)' }, transition: 'background 0.12s',
+                sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 1.6, py: 1.4, position: 'relative',
+                  cursor: 'pointer', userSelect: 'none', flexShrink: 0,
+                  background: 'linear-gradient(135deg, rgba(245,158,11,0.14) 0%, rgba(245,158,11,0.04) 60%, transparent 100%)',
+                  borderBottom: sidebarCollapsed ? 'none' : '1px solid rgba(245,158,11,0.15)',
+                  borderRadius: '10px 10px 0 0',
+                  '&:hover': { background: 'linear-gradient(135deg, rgba(245,158,11,0.2) 0%, rgba(245,158,11,0.06) 60%, transparent 100%)' },
+                  transition: 'background 0.15s',
+                  ...(!sidebarCollapsed && { '&::after': {
+                    content: '""', position: 'absolute', bottom: 0, left: 14, right: 14, height: '1px',
+                    background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.4) 40%, rgba(245,158,11,0.4) 60%, transparent)',
+                  } }),
                 }}>
-                <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#f59e0b', flexShrink: 0, boxShadow: '0 0 6px #f59e0b88' }} />
-                <Typography sx={{ color: 'var(--text)', fontSize: '0.82rem', fontWeight: 700, flex: 1 }}>
-                  {lang === 'en' ? 'Unassigned' : 'Sin asignar'}
-                </Typography>
-                <Typography sx={{ fontSize: '0.67rem', color: 'rgba(245,158,11,0.7)',
-                  bgcolor: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)',
-                  px: 1, py: 0.2, borderRadius: 10, fontWeight: 600, mr: 0.5 }}>
+                <Box sx={{
+                  width: 26, height: 26, borderRadius: '8px', flexShrink: 0,
+                  background: 'linear-gradient(135deg, rgba(245,158,11,0.28) 0%, rgba(245,158,11,0.1) 100%)',
+                  border: '1px solid rgba(245,158,11,0.35)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <SmartphoneIcon sx={{ color: '#f59e0b', fontSize: 14 }} />
+                </Box>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography sx={{ color: 'var(--text)', fontSize: '0.8rem', fontWeight: 700, lineHeight: 1.2 }}>
+                    {lang === 'en' ? 'Unassigned' : 'Sin asignar'}
+                  </Typography>
+                  <Typography sx={{ fontSize: '0.6rem', color: 'var(--text-muted, rgba(255,255,255,0.35))', lineHeight: 1, mt: 0.2, whiteSpace: 'nowrap' }}>
+                    {lang === 'en' ? 'Instances without a user' : 'Instancias sin usuario'}
+                  </Typography>
+                </Box>
+                <Typography sx={{ fontSize: '0.67rem', color: 'rgba(245,158,11,0.85)',
+                  bgcolor: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)',
+                  px: 1, py: 0.2, borderRadius: 10, fontWeight: 700, flexShrink: 0 }}>
                   {unassigned.length}
                 </Typography>
-                <KeyboardArrowDownIcon sx={{ fontSize: 15, color: 'rgba(245,158,11,0.6)',
+                <KeyboardArrowDownIcon sx={{ fontSize: 15, color: 'rgba(245,158,11,0.6)', flexShrink: 0,
                   transition: 'transform 0.2s', transform: sidebarCollapsed ? 'rotate(-90deg)' : 'none' }} />
               </Box>
 
@@ -2142,10 +2866,36 @@ export default function InstancesPanel() {
                             )}
                           </Box>
                           <Box sx={{ flex: 1, minWidth: 0 }}>
-                            <Typography sx={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text)',
-                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {inst.label || inst.name}
-                            </Typography>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                              <Typography sx={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text)', lineHeight: 1.2,
+                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {inst.label || inst.name}
+                              </Typography>
+                              {/* Badge de proveedor — mismo detalle que ya tienen las
+                                 instancias asignadas dentro de las tarjetas de usuario
+                                 (InstanceRow); aquí faltaba, y se veían más "en blanco"
+                                 en comparación. */}
+                              {inst.provider === 'waha' && (
+                                <Typography sx={{ fontSize: '0.5rem', fontWeight: 700, color: '#60a5fa',
+                                  bgcolor: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.25)',
+                                  px: 0.45, borderRadius: 0.8, lineHeight: 1.5, flexShrink: 0, letterSpacing: '0.03em' }}>
+                                  WAHA
+                                </Typography>
+                              )}
+                              {inst.provider === 'wwebjs' && (
+                                <Typography sx={{ fontSize: '0.5rem', fontWeight: 700, color: '#34d399',
+                                  bgcolor: 'rgba(52,211,153,0.12)', px: 0.5, py: 0.1, borderRadius: 0.5, flexShrink: 0 }}>
+                                  WWEBJS
+                                </Typography>
+                              )}
+                              {inst.provider === 'wasender' && (
+                                <Typography sx={{ fontSize: '0.5rem', fontWeight: 700, color: '#a78bfa',
+                                  bgcolor: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.25)',
+                                  px: 0.45, borderRadius: 0.8, lineHeight: 1.5, flexShrink: 0, letterSpacing: '0.03em' }}>
+                                  WS
+                                </Typography>
+                              )}
+                            </Box>
                             <Typography sx={{ fontSize: '0.65rem', fontFamily: 'monospace', lineHeight: 1.2,
                               color: reasonLabel && !isConn ? dotColor : 'var(--text-muted)' }}>
                               {reasonLabel && !isConn ? reasonLabel : (inst.number ? `+${inst.number}` : t.inst.noNumber)}
@@ -2154,7 +2904,7 @@ export default function InstancesPanel() {
                           <Box sx={{ display: 'flex', gap: 0.2, alignItems: 'center', flexShrink: 0 }}>
                             <Tooltip title={t.inst.connectQr}>
                               <IconButton size="small" onClick={() => handleQrClick(inst)}
-                                sx={{ color: '#60a5fa', p: 0.4, '&:hover': { bgcolor: 'rgba(59,130,246,0.1)' } }}>
+                                sx={{ color: 'var(--accent, #60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' } }}>
                                 <QrCodeIcon sx={{ fontSize: 13 }} />
                               </IconButton>
                             </Tooltip>
@@ -2171,15 +2921,17 @@ export default function InstancesPanel() {
                                     setSidebarAnchor(rect ? { top: rect.bottom + 2, left: rect.left, width: rect.width } : null)
                                   }
                                 }}
-                                sx={{ color: '#60a5fa', p: 0.4, ...(isExp && { bgcolor: 'rgba(59,130,246,0.08)' }),
-                                  '&:hover': { bgcolor: 'rgba(59,130,246,0.1)' } }}>
+                                sx={{ color: 'var(--accent, #60a5fa)', p: 0.4, ...(isExp && { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.08)' }),
+                                  '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' } }}>
                                 <KeyboardArrowDownIcon sx={{ fontSize: 14, transition: 'transform 0.2s',
                                   transform: isExp ? 'rotate(180deg)' : 'none' }} />
                               </IconButton>
                             </Tooltip>
+                            {/* Antes iba en morado fijo (#a78bfa), no en el
+                               acento elegido en Ajustes. */}
                             <Tooltip title={lang === 'en' ? 'Edit number' : 'Editar número'}>
                               <IconButton size="small" onClick={() => handleEditNumberClick(inst)}
-                                sx={{ color: '#a78bfa', p: 0.4, '&:hover': { bgcolor: 'rgba(167,139,250,0.1)' } }}>
+                                sx={{ color: 'var(--accent, #60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' } }}>
                                 <EditIcon sx={{ fontSize: 13 }} />
                               </IconButton>
                             </Tooltip>
@@ -2241,6 +2993,7 @@ export default function InstancesPanel() {
             </Box>
           )
         })()}
+        </Box>
       </Box>
 
       {/* Bulk assign dialog */}
@@ -2367,8 +3120,10 @@ export default function InstancesPanel() {
             disabled={editNumberSaving || !editNumberValue.trim()}
             startIcon={editNumberSaving ? null : <CheckCircleIcon sx={{ fontSize: '15px !important' }} />}
             sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2,
-              bgcolor: '#7c3aed', '&:hover': { bgcolor: '#6d28d9' },
-              '&.Mui-disabled': { bgcolor: 'rgba(124,58,237,0.25)', color: 'rgba(255,255,255,0.3)' } }}>
+              // Antes iba en morado fijo (#7c3aed) en vez del acento elegido
+              // en Ajustes, igual que el ícono de lápiz que abre este diálogo.
+              bgcolor: 'var(--accent, #3b82f6)', '&:hover': { bgcolor: 'color-mix(in srgb, var(--accent, #3b82f6) 82%, black)' },
+              '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.3)' } }}>
             {editNumberSaving
               ? <><CircularProgress size={13} sx={{ color: 'white', mr: 1 }} />{lang === 'en' ? 'Saving…' : 'Guardando…'}</>
               : lang === 'en' ? 'Save' : 'Guardar'}
@@ -2380,7 +3135,7 @@ export default function InstancesPanel() {
       <Dialog open={pickOpen} onClose={closePick} sx={{
         '& .MuiDialog-paper': {
           bgcolor: 'var(--card-bg,#161d2e)',
-          background: 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.09) 0%, var(--card-bg,#161d2e) 55%)',
+          background: 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.09) 0%, transparent 55%), var(--card-bg,#161d2e)',
           border: '1px solid rgba(var(--accent-rgb,59,130,246),0.22)',
           borderRadius: 3, minWidth: 390, maxWidth: 460,
           boxShadow: '0 24px 64px rgba(0,0,0,0.65)',
@@ -2559,7 +3314,7 @@ export default function InstancesPanel() {
       {/* ── Create dialog ── */}
       <Dialog open={createOpen} onClose={() => !creating && setCreateOpen(false)} sx={{
         '& .MuiDialog-paper': {
-          background: 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.1) 0%, var(--card-bg,#161d2e) 55%)',
+          background: 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.1) 0%, transparent 55%), var(--card-bg,#161d2e)',
           border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)',
           borderRadius: 3, minWidth: 380,
           boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
@@ -3191,7 +3946,7 @@ export default function InstancesPanel() {
       {/* ── Assign dialog ── */}
       <Dialog open={assignOpen} onClose={() => setAssignOpen(false)} sx={{
         '& .MuiDialog-paper': {
-          background: 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.07) 0%, var(--card-bg,#161d2e) 60%)',
+          background: 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.07) 0%, transparent 60%), var(--card-bg,#161d2e)',
           border: '1px solid var(--border,rgba(255,255,255,0.08))',
           borderRadius: 3, minWidth: 400, maxWidth: 440,
         },
@@ -3420,7 +4175,13 @@ export default function InstancesPanel() {
       {/* ── wwebjs session dialog ── */}
       <Dialog open={wahaOpen} onClose={() => !wahaLoading && setWahaOpen(false)} sx={{
         '& .MuiDialog-paper': {
-          background: 'linear-gradient(160deg, rgba(96,165,250,0.1) 0%, var(--card-bg,#161d2e) 55%)',
+          // El primer stop del gradiente empezaba en 10% de opacidad — el
+          // fondo real (var(--card-bg)) no llegaba sólido hasta el 55% de
+          // la caja, dejando la parte de arriba del diálogo casi transparente
+          // y mostrando la página detrás. Ahora --card-bg es una capa sólida
+          // propia (segundo layer) y el degradado azul es solo un tinte
+          // encima, nunca deja de haber un fondo opaco.
+          background: 'linear-gradient(160deg, rgba(96,165,250,0.12) 0%, transparent 55%), var(--card-bg, #161d2e)',
           border: '1px solid rgba(96,165,250,0.2)',
           borderRadius: 3, minWidth: 380,
           boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
@@ -3448,7 +4209,8 @@ export default function InstancesPanel() {
             </Box>
           </Box>
         </DialogTitle>
-        <DialogContent sx={{ pt: '4px !important', px: 3 }}>
+        <Divider sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))' }} />
+        <DialogContent sx={{ pt: '16px !important', px: 3 }}>
           {wahaScanned && !wahaConnected ? (
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, py: 2 }}>
               <CircularProgress size={40} thickness={3} sx={{ color: '#25d366' }} />
@@ -3532,6 +4294,7 @@ export default function InstancesPanel() {
                   >{opt.label}</Box>
                 ))}
               </Box>
+              <Divider sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))' }} />
               <TextField label={lang === 'en' ? 'Session name' : 'Nombre de sesión'} value={wahaName}
                 onChange={e => setWahaName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
                 placeholder="mi-sesion-1" size="small" fullWidth autoFocus sx={FIELD_SX}
@@ -3566,7 +4329,8 @@ export default function InstancesPanel() {
             </Box>
           )}
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
+        <Divider sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', mt: 1 }} />
+        <DialogActions sx={{ px: 3, pt: 1.5, pb: 2.5, gap: 1 }}>
           {!(wahaScanned && !wahaConnected) && (
             <Button onClick={wahaClose}
               sx={{ color: 'var(--text-muted,rgba(255,255,255,0.4))', textTransform: 'none', fontSize: '0.82rem', borderRadius: 2 }}>
@@ -3579,9 +4343,12 @@ export default function InstancesPanel() {
               disabled={wahaLoading || !wahaName.trim() || (wahaLinkMethod === 'code' && !wahaPhone.trim())}
               variant="contained"
               sx={{
-                bgcolor: '#3b82f6', textTransform: 'none', fontWeight: 700,
+                // Antes iba en azul fijo (#3b82f6) sin importar el color de
+                // paleta elegido en Ajustes — ahora sigue var(--accent) como
+                // el resto de los botones "contained" de la app.
+                bgcolor: 'var(--accent, #3b82f6)', textTransform: 'none', fontWeight: 700,
                 fontSize: '0.82rem', borderRadius: 2, minWidth: 130,
-                '&:hover': { bgcolor: '#2563eb' },
+                '&:hover': { bgcolor: 'color-mix(in srgb, var(--accent, #3b82f6) 82%, black)' },
                 '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.2)' },
               }}
             >
@@ -3596,7 +4363,7 @@ export default function InstancesPanel() {
       {/* ── Wasender create session dialog ── */}
       <Dialog open={wsOpen} onClose={() => !wsLoading && wsClose()} sx={{
         '& .MuiDialog-paper': {
-          background: 'linear-gradient(160deg, rgba(167,139,250,0.1) 0%, var(--card-bg,#161d2e) 55%)',
+          background: 'linear-gradient(160deg, rgba(167,139,250,0.1) 0%, transparent 55%), var(--card-bg,#161d2e)',
           border: '1px solid rgba(167,139,250,0.2)',
           borderRadius: 3, minWidth: 380,
           boxShadow: '0 24px 64px rgba(0,0,0,0.6)',

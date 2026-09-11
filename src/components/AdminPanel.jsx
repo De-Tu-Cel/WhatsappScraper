@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Fragment } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -7,12 +7,15 @@ import Skeleton from '@mui/material/Skeleton'
 import Tooltip from '@mui/material/Tooltip'
 import Chip from '@mui/material/Chip'
 import Dialog from '@mui/material/Dialog'
+import DialogTitle from '@mui/material/DialogTitle'
 import DialogContent from '@mui/material/DialogContent'
+import DialogActions from '@mui/material/DialogActions'
+import Button from '@mui/material/Button'
+import Divider from '@mui/material/Divider'
 import TextField from '@mui/material/TextField'
 import IconButton from '@mui/material/IconButton'
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
 import LockResetIcon from '@mui/icons-material/LockReset'
-import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever'
@@ -53,12 +56,56 @@ function FieldIcon({ children }) {
   return <Box sx={{ display: 'flex', mr: 0.8, color: 'rgba(255,255,255,0.3)' }}>{children}</Box>
 }
 
-function StatChip({ icon, label, value, color }) {
+// Misma tarjeta unificada (anillo de progreso + label/valor) que ya usan
+// Prospects y Analytics — reemplaza las 3 cajitas planas de antes, que se
+// veían apagadas comparadas con el resto de la app.
+function StatCard({ icon, color, value, label, percent }) {
+  const pct = percent == null ? 100 : Math.max(0, Math.min(100, percent))
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, px: 1.2, py: 0.5, borderRadius: 2, bgcolor: `${color}12`, border: `1px solid ${color}30` }}>
-      <Box sx={{ color, display: 'flex', alignItems: 'center' }}>{icon}</Box>
-      <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, color, fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
-      <Typography sx={{ fontSize: '0.68rem', color: `${color}99` }}>{label}</Typography>
+    <Box sx={{ flex: '1 1 0', minWidth: 130, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.4, px: 2, py: 1.6 }}>
+      <Box sx={{
+        width: 40, height: 40, borderRadius: '50%', flexShrink: 0, p: '3px',
+        background: `conic-gradient(${color} ${pct}%, var(--border, rgba(255,255,255,0.12)) ${pct}% 100%)`,
+      }}>
+        <Box sx={{
+          width: '100%', height: '100%', borderRadius: '50%',
+          bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          {icon}
+        </Box>
+      </Box>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.2, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+          {value}
+        </Typography>
+        <Typography sx={{ fontSize: '0.66rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
+          {label}
+        </Typography>
+      </Box>
+    </Box>
+  )
+}
+
+function StatsBarSkeleton() {
+  return (
+    <Box sx={{
+      display: 'flex', overflow: 'hidden',
+      borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+      bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+    }}>
+      {[1, 2, 3].map(i => (
+        <Fragment key={i}>
+          {i > 1 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 1.6 }} />}
+          <Box sx={{ flex: '1 1 0', minWidth: 130, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.4, px: 2, py: 1.6 }}>
+            <Skeleton variant="circular" width={40} height={40} sx={SKEL_SX} />
+            <Box sx={{ minWidth: 0 }}>
+              <Skeleton variant="text" width={30} sx={{ ...SKEL_SX, fontSize: '1.15rem' }} />
+              <Skeleton variant="text" width={50} sx={{ ...SKEL_SX, fontSize: '0.66rem' }} />
+            </Box>
+          </Box>
+        </Fragment>
+      ))}
     </Box>
   )
 }
@@ -76,15 +123,36 @@ function UserCardSkeleton() {
       border: '1px solid rgba(255,255,255,0.06)',
       display: 'flex', flexDirection: 'column',
     }}>
-      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', pt: 2.5, pb: 1.5, px: 1.5, gap: 0.8 }}>
-        <Skeleton variant="circular" width={56} height={56} sx={SKEL_SX} />
-        <Skeleton variant="text" width={90} sx={{ ...SKEL_SX, fontSize: '0.87rem' }} />
-        <Skeleton variant="text" width={65} sx={{ ...SKEL_SX, fontSize: '0.68rem' }} />
-        <Skeleton variant="rounded" width={70} height={20} sx={{ ...SKEL_SX, mt: 0.5, borderRadius: 2 }} />
+      <Box sx={{ position: 'relative', flexShrink: 0 }}>
+        <Skeleton variant="rectangular" height={130} sx={SKEL_SX} />
+        <Box component="svg" viewBox="0 0 144 62" preserveAspectRatio="none"
+          sx={{ position: 'absolute', bottom: -1, left: 0, width: '100%', height: 60, color: 'var(--card-bg, #161d2e)' }}>
+          <path
+            d="m111.34 23.88c-10.62-10.46-18.5-23.88-38.74-23.88h-1.2c-20.24 0-28.12 13.42-38.74 23.88-7.72 9.64-19.44 11.74-32.66 12.12v26h144v-26c-13.22-.38-24.94-2.48-32.66-12.12z"
+            fill="currentColor" fillRule="evenodd" />
+        </Box>
+        <Skeleton variant="circular" width={88} height={88} sx={{
+          ...SKEL_SX, border: '4px solid rgba(226,232,240,0.9)',
+          position: 'absolute', bottom: -44, left: '50%', transform: 'translateX(-50%)', zIndex: 2,
+        }} />
       </Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5, px: 1, py: 0.8, borderTop: '1px solid rgba(255,255,255,0.06)', mt: 'auto' }}>
-        <Skeleton variant="circular" width={22} height={22} sx={SKEL_SX} />
-        <Skeleton variant="circular" width={22} height={22} sx={SKEL_SX} />
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', pt: 6.5, pb: 2, px: 2, gap: 1 }}>
+        <Skeleton variant="text" width={120} sx={{ ...SKEL_SX, fontSize: '1.05rem' }} />
+        <Skeleton variant="text" width={60} sx={{ ...SKEL_SX, fontSize: '0.85rem' }} />
+        <Skeleton variant="text" width={80} sx={{ ...SKEL_SX, fontSize: '0.78rem' }} />
+        <Box sx={{ display: 'flex', gap: 1.5, mt: 0.5 }}>
+          <Skeleton variant="circular" width={26} height={26} sx={SKEL_SX} />
+          <Skeleton variant="circular" width={26} height={26} sx={SKEL_SX} />
+        </Box>
+      </Box>
+      <Divider sx={{ borderStyle: 'dashed', borderColor: 'rgba(255,255,255,0.08)', mx: 2.5 }} />
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2.5, py: 1.8 }}>
+        {[1, 2, 3].map(i => (
+          <Box key={i} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+            <Skeleton variant="text" width={44} sx={{ ...SKEL_SX, fontSize: '0.7rem' }} />
+            <Skeleton variant="text" width={38} sx={{ ...SKEL_SX, fontSize: '1.02rem' }} />
+          </Box>
+        ))}
       </Box>
     </Box>
   )
@@ -92,7 +160,7 @@ function UserCardSkeleton() {
 
 export default function AdminPanel() {
   const { user } = useUser()
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const [users,        setUsers]        = useState([])
   const [loading,      setLoading]      = useState(true)
   const [resetTarget,  setResetTarget]  = useState(null)
@@ -245,21 +313,27 @@ export default function AdminPanel() {
       </Box>
 
       {/* ── Stats bar ── */}
-      <Box sx={{ display: 'flex', gap: 1, mb: 2, flexShrink: 0 }}>
-        {[
-          { icon: <GroupIcon sx={{ fontSize: 16 }} />,  value: users.length, label: t.admin.statTotal,  color: '#60a5fa', bg: 'rgba(96,165,250,0.08)',  border: 'rgba(96,165,250,0.18)'  },
-          { icon: <ShieldIcon sx={{ fontSize: 16 }} />, value: adminsCount,  label: t.admin.statAdmins, color: '#a78bfa', bg: 'rgba(167,139,250,0.08)', border: 'rgba(167,139,250,0.18)' },
-          { icon: <PersonIcon sx={{ fontSize: 16 }} />, value: agentsCount,  label: t.admin.statAgents, color: '#34d399', bg: 'rgba(52,211,153,0.08)',  border: 'rgba(52,211,153,0.18)'  },
-        ].map(({ icon, value, label, color, bg, border }) => (
-          <Box key={label} sx={{ flex: 1, display: 'flex', alignItems: 'center', gap: 1.2,
-            px: 1.6, py: 1, borderRadius: 2.5, bgcolor: bg, border: `1px solid ${border}` }}>
-            <Box sx={{ color, display: 'flex', opacity: 0.8 }}>{icon}</Box>
-            <Box>
-              <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{value}</Typography>
-              <Typography sx={{ fontSize: '0.6rem', color: `${color}99`, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', mt: 0.2 }}>{label}</Typography>
-            </Box>
+      <Box sx={{ mb: 2, flexShrink: 0 }}>
+        {loading ? (
+          <StatsBarSkeleton />
+        ) : (
+          <Box sx={{
+            display: 'flex', overflow: 'hidden',
+            borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+            bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+          }}>
+            {[
+              { key: 'total',  icon: <GroupIcon sx={{ fontSize: 18, color: '#60a5fa' }} />,  color: '#60a5fa', value: users.length, label: t.admin.statTotal,  percent: 100 },
+              { key: 'admins', icon: <ShieldIcon sx={{ fontSize: 18, color: '#a78bfa' }} />, color: '#a78bfa', value: adminsCount,  label: t.admin.statAdmins, percent: users.length ? (adminsCount / users.length) * 100 : 0 },
+              { key: 'agents', icon: <PersonIcon sx={{ fontSize: 18, color: '#34d399' }} />, color: '#34d399', value: agentsCount,  label: t.admin.statAgents, percent: users.length ? (agentsCount / users.length) * 100 : 0 },
+            ].map(({ key, ...c }, i) => (
+              <Fragment key={key}>
+                {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 1.6 }} />}
+                <StatCard {...c} />
+              </Fragment>
+            ))}
           </Box>
-        ))}
+        )}
       </Box>
 
       {/* ── Búsqueda ── */}
@@ -293,7 +367,7 @@ export default function AdminPanel() {
         '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(100,116,139,0.3)', borderRadius: 4 },
       }}>
         {loading ? (
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 210px))', gap: 1.5 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))', gap: 2.5 }}>
             {Array.from({ length: 8 }).map((_, i) => <UserCardSkeleton key={i} />)}
           </Box>
         ) : users.length === 0 ? (
@@ -307,111 +381,141 @@ export default function AdminPanel() {
             <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.85rem' }}>{t.admin.noSearchResults || 'Sin resultados'}</Typography>
           </Box>
         ) : (
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 210px))', gap: 1.5 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))', gap: 2.5 }}>
             {visibleUsers.map(u => {
               const isMe    = u.id === user?.id
               const isAdmin = u.role === 'admin'
+              const isConnected = !!u.is_connected
               const initial = (u.display_name || u.username || '?')[0].toUpperCase()
-              const glowColor = isAdmin ? '#a78bfa' : isMe ? '#22d3ee' : '#64748b'
+              // Derivados del acento elegido en Ajustes (var(--accent)/--accent-rgb)
+              // en vez de colores sueltos (morado/cian/verde) que no cambiaban con
+              // el theme — Admin usa el acento tal cual, User una versión mezclada
+              // con gris (misma familia, pero distinguible), así los dos se
+              // actualizan solos si cambia el color base elegido en Ajustes.
+              // "isMe" ya se distingue aparte con el chip "You".
+              const roleSolid = isAdmin ? 'var(--accent, #3b82f6)' : 'color-mix(in srgb, var(--accent, #3b82f6) 55%, #94a3b8 45%)'
+              const roleColor = (alpha) => isAdmin
+                ? `rgba(var(--accent-rgb, 59,130,246), ${alpha})`
+                : `color-mix(in srgb, ${roleSolid} ${Math.round(alpha * 100)}%, transparent)`
+              const since = u.created_at
+                ? new Date(u.created_at).toLocaleDateString(lang === 'en' ? 'en-US' : 'es-MX', { month: 'short', year: 'numeric' })
+                : '—'
               return (
                 <Box key={u.id} sx={{
                   borderRadius: 3, overflow: 'hidden',
                   bgcolor: 'var(--card-bg, rgba(255,255,255,0.025))',
-                  border: `1px solid ${glowColor}44`,
-                  boxShadow: `0 0 18px ${glowColor}18, 0 2px 10px rgba(0,0,0,0.15)`,
+                  border: `1px solid ${roleColor(0.27)}`,
+                  boxShadow: `0 0 18px ${roleColor(0.09)}, 0 2px 10px rgba(0,0,0,0.15)`,
                   display: 'flex', flexDirection: 'column',
-                  position: 'relative',
                   transition: 'box-shadow 0.2s, border-color 0.2s',
                   '&:hover': {
-                    borderColor: `${glowColor}77`,
-                    boxShadow: `0 0 28px ${glowColor}30, 0 6px 20px rgba(0,0,0,0.2)`,
+                    borderColor: roleColor(0.47),
+                    boxShadow: `0 0 28px ${roleColor(0.19)}, 0 6px 20px rgba(0,0,0,0.2)`,
                   },
                 }}>
-                  {/* Radial glow de fondo */}
-                  <Box sx={{
-                    position: 'absolute', top: -20, left: '50%', transform: 'translateX(-50%)',
-                    width: 140, height: 100, pointerEvents: 'none',
-                    background: `radial-gradient(ellipse, ${glowColor}18 0%, transparent 70%)`,
-                  }} />
-
-                  {/* Avatar + info */}
-                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', pt: 2.5, pb: 1.5, px: 1.5, gap: 0.3, position: 'relative' }}>
+                  {/* Cover + avatar viven en el mismo contenedor relative, con el
+                     avatar posicionado absolute (no con margin negativo) y un
+                     z-index explícito — así queda garantizado que el avatar se
+                     dibuja completo y por encima del cover, sin depender de que
+                     el orden de flujo/overflow lo recorte a la mitad. */}
+                  <Box sx={{ position: 'relative', flexShrink: 0 }}>
                     <Box sx={{
-                      width: 56, height: 56, borderRadius: '50%', mb: 0.8,
-                      background: `linear-gradient(135deg, ${glowColor}30 0%, ${glowColor}10 100%)`,
-                      border: `2px solid ${glowColor}66`,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      boxShadow: `0 0 12px ${glowColor}33`,
+                      height: 130, overflow: 'hidden',
+                      background: `linear-gradient(160deg, ${roleColor(0.27)} 0%, rgba(10,14,22,0.95) 80%)`,
                     }}>
-                      <Typography sx={{ fontWeight: 800, fontSize: '1.2rem', color: glowColor, textTransform: 'uppercase' }}>
+                      {/* "Ola" (mismo path que el template de referencia) — pinta
+                         de var(--card-bg) la franja donde se asienta el avatar,
+                         así no importa qué tan brillante sea el degradado de
+                         arriba, esa franja siempre da el mismo color que el
+                         contenido de la tarjeta. */}
+                      <Box component="svg" viewBox="0 0 144 62" preserveAspectRatio="none"
+                        sx={{ position: 'absolute', bottom: -1, left: 0, width: '100%', height: 60, color: 'var(--card-bg, #161d2e)' }}>
+                        <path
+                          d="m111.34 23.88c-10.62-10.46-18.5-23.88-38.74-23.88h-1.2c-20.24 0-28.12 13.42-38.74 23.88-7.72 9.64-19.44 11.74-32.66 12.12v26h144v-26c-13.22-.38-24.94-2.48-32.66-12.12z"
+                          fill="currentColor" fillRule="evenodd" />
+                      </Box>
+                    </Box>
+
+                    <Box sx={{
+                      position: 'absolute', bottom: -44, left: '50%', transform: 'translateX(-50%)', zIndex: 2,
+                      width: 88, height: 88, borderRadius: '50%',
+                      background: `linear-gradient(135deg, ${roleColor(0.21)} 0%, ${roleColor(0.07)} 100%)`,
+                      border: '4px solid rgba(226,232,240,0.9)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
+                    }}>
+                      <Typography sx={{ fontWeight: 800, fontSize: '1.8rem', color: roleSolid, textTransform: 'uppercase' }}>
                         {initial}
                       </Typography>
                     </Box>
+                  </Box>
 
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', justifyContent: 'center' }}>
-                      <Typography sx={{ color: 'var(--text, white)', fontWeight: 700, fontSize: '0.87rem', textAlign: 'center', lineHeight: 1.3 }}>
+                  {/* Info — con suficiente padding arriba para dejar libre el
+                     espacio que ocupa el avatar sobresaliendo del cover. */}
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', pt: 6.5, pb: 2, px: 2, gap: 0.4 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, flexWrap: 'wrap', justifyContent: 'center' }}>
+                      <Typography sx={{ color: 'var(--text, white)', fontWeight: 700, fontSize: '1.05rem', textAlign: 'center', lineHeight: 1.3 }}>
                         {u.display_name}
                       </Typography>
                       {isMe && (
-                        <Chip label={t.admin.you} size="small" sx={{ height: 15, fontSize: '0.57rem', fontWeight: 700, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', color: 'var(--accent,#60a5fa)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)', '& .MuiChip-label': { px: 0.6 } }} />
+                        <Chip label={t.admin.you} size="small" sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', color: 'var(--accent,#60a5fa)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)', '& .MuiChip-label': { px: 0.7 } }} />
                       )}
                     </Box>
 
-                    <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.45))', fontSize: '0.68rem', textAlign: 'center' }}>
-                      @{u.username}
-                    </Typography>
-                    {u.email && (
-                      <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.3))', fontSize: '0.63rem', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
-                        {u.email}
-                      </Typography>
-                    )}
-
-                    {/* Role badge — clickeable */}
+                    {/* Rol — clickeable, funciona como el subtítulo tipo "CEO"/"CTO" */}
                     <Tooltip title={isMe ? t.admin.unchangeable : `${t.admin.changeTo} ${isAdmin ? t.admin.user : t.admin.admin}`}>
-                      <Box onClick={() => !isMe && toggleRole(u)} sx={{
-                        display: 'flex', alignItems: 'center', gap: 0.5, mt: 1,
-                        px: 1, py: 0.35, borderRadius: 2,
-                        cursor: isMe ? 'default' : 'pointer',
-                        bgcolor: `${glowColor}10`,
-                        border: `1px solid ${glowColor}35`,
-                        opacity: isMe ? 0.7 : 1,
-                        transition: 'background 0.15s',
-                        '&:hover': !isMe ? { bgcolor: `${glowColor}20` } : {},
+                      <Typography onClick={() => !isMe && toggleRole(u)} sx={{
+                        fontSize: '0.85rem', fontWeight: 600, color: roleSolid,
+                        cursor: isMe ? 'default' : 'pointer', opacity: isMe ? 0.75 : 1,
+                        '&:hover': !isMe ? { textDecoration: 'underline' } : {},
                       }}>
-                        {isAdmin
-                          ? <ShieldIcon sx={{ fontSize: 12, color: glowColor }} />
-                          : <PersonIcon sx={{ fontSize: 12, color: glowColor }} />}
-                        <Typography sx={{ fontSize: '0.68rem', fontWeight: 600, color: glowColor }}>
-                          {isAdmin ? t.admin.admin : t.admin.user}
-                        </Typography>
-                      </Box>
+                        {isAdmin ? t.admin.admin : t.admin.user}
+                      </Typography>
                     </Tooltip>
 
-                    {/* Número conectado */}
-                    {u.connected_number && (
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.7, px: 0.8, py: 0.25, borderRadius: 1, bgcolor: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.18)' }}>
-                        <PhoneAndroidIcon sx={{ fontSize: 11, color: '#4ade80' }} />
-                        <Typography sx={{ color: '#4ade80', fontSize: '0.66rem', fontFamily: 'monospace', fontWeight: 600 }}>{u.connected_number}</Typography>
-                      </Box>
-                    )}
-                  </Box>
-
-                  {/* Footer de acciones */}
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5, px: 1, py: 0.8, borderTop: `1px solid ${glowColor}18`, mt: 'auto' }}>
-                    <Tooltip title={t.admin.resetPinBtn}>
-                      <IconButton size="small" onClick={() => { setResetTarget(u); setNewPin(''); setMsg('') }}
-                        sx={{ color: 'rgba(251,191,36,0.5)', borderRadius: 1.5, '&:hover': { color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.12)' } }}>
-                        <LockResetIcon sx={{ fontSize: 16 }} />
-                      </IconButton>
+                    <Tooltip title={u.email || ''} placement="top" disableHoverListener={!u.email}>
+                      <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.45))', fontSize: '0.78rem', textAlign: 'center' }}>
+                        @{u.username}
+                      </Typography>
                     </Tooltip>
-                    {!isMe && (
-                      <Tooltip title={t.admin.deleteTitle}>
-                        <IconButton size="small" onClick={() => { setDeleteTarget(u); setDeleteMsg('') }}
-                          sx={{ color: 'rgba(239,68,68,0.45)', borderRadius: 1.5, '&:hover': { color: '#f87171', bgcolor: 'rgba(239,68,68,0.12)' } }}>
-                          <DeleteForeverIcon sx={{ fontSize: 16 }} />
+
+                    {/* Acciones — fila de íconos, mismo lugar que ocuparían los íconos sociales */}
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 1.2 }}>
+                      <Tooltip title={t.admin.resetPinBtn}>
+                        <IconButton onClick={() => { setResetTarget(u); setNewPin(''); setMsg('') }}
+                          sx={{ color: 'rgba(251,191,36,0.55)', borderRadius: 1.5, '&:hover': { color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.12)' } }}>
+                          <LockResetIcon sx={{ fontSize: 20 }} />
                         </IconButton>
                       </Tooltip>
-                    )}
+                      {!isMe && (
+                        <Tooltip title={t.admin.deleteTitle}>
+                          <IconButton onClick={() => { setDeleteTarget(u); setDeleteMsg('') }}
+                            sx={{ color: 'rgba(239,68,68,0.5)', borderRadius: 1.5, '&:hover': { color: '#f87171', bgcolor: 'rgba(239,68,68,0.12)' } }}>
+                            <DeleteForeverIcon sx={{ fontSize: 20 }} />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                    </Box>
+                  </Box>
+
+                  <Divider sx={{ borderStyle: 'dashed', borderColor: roleColor(0.15), mx: 2.5 }} />
+
+                  {/* Footer — datos reales del usuario en vez de métricas inventadas */}
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2.5, py: 1.8, mt: 'auto' }}>
+                    <Box sx={{ textAlign: 'center', flex: 1 }}>
+                      <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-muted, rgba(255,255,255,0.4))' }}>{t.admin.role}</Typography>
+                      <Typography sx={{ fontSize: '1.02rem', fontWeight: 700, color: 'var(--text)' }}>{isAdmin ? t.admin.admin : t.admin.user}</Typography>
+                    </Box>
+                    <Box sx={{ textAlign: 'center', flex: 1 }}>
+                      <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-muted, rgba(255,255,255,0.4))' }}>{t.admin.connected}</Typography>
+                      <Typography sx={{ fontSize: '1.02rem', fontWeight: 700, color: isConnected ? '#4ade80' : 'var(--text-muted, rgba(255,255,255,0.35))' }}>
+                        {isConnected ? t.common.yes : t.common.no}
+                      </Typography>
+                    </Box>
+                    <Box sx={{ textAlign: 'center', flex: 1 }}>
+                      <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-muted, rgba(255,255,255,0.4))' }}>{t.admin.since}</Typography>
+                      <Typography sx={{ fontSize: '1.02rem', fontWeight: 700, color: 'var(--text)' }}>{since}</Typography>
+                    </Box>
                   </Box>
                 </Box>
               )
@@ -492,18 +596,23 @@ export default function AdminPanel() {
 
       {/* ── Modal crear usuario ── */}
       <Dialog open={createOpen} onClose={handleCloseCreate} maxWidth="xs" fullWidth
-        slotProps={{ paper: { sx: { bgcolor: 'var(--sidebar-bg,#0d1117)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.15)', borderRadius: 3 } } }}>
-        <DialogContent sx={{ py: 3 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, mb: 2.5 }}>
-            <Box sx={{ width: 36, height: 36, borderRadius: 2, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <PersonAddIcon sx={{ color: 'var(--accent,#60a5fa)', fontSize: 18 }} />
+        slotProps={{ paper: { sx: {
+          background: 'var(--sidebar-bg, #0d1117)', border: '1px solid rgba(255,255,255,0.1)',
+          borderRadius: 3, boxShadow: '0 24px 64px rgba(0,0,0,0.85)', overflow: 'hidden',
+        } } }}>
+        <DialogTitle sx={{ p: 0, bgcolor: 'var(--surface, #111827)', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+          <Box sx={{ px: 3, pt: 3, pb: 2.5, display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Box sx={{ width: 44, height: 44, borderRadius: 2, flexShrink: 0, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <PersonAddIcon sx={{ color: 'var(--accent, #60a5fa)', fontSize: 22 }} />
             </Box>
-            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.95rem', flex: 1 }}>{t.admin.createTitle}</Typography>
+            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', flex: 1 }}>{t.admin.createTitle}</Typography>
             <IconButton size="small" onClick={handleCloseCreate} sx={{ color: 'rgba(255,255,255,0.25)', '&:hover': { color: 'rgba(255,255,255,0.6)' } }}>
               <CloseIcon sx={{ fontSize: 18 }} />
             </IconButton>
           </Box>
+        </DialogTitle>
 
+        <DialogContent sx={{ px: 3, pt: 3.5, pb: 1, bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
           {/* Sección: datos personales */}
           <Typography sx={SECTION_LABEL_SX}>{t.admin.sectionPersonal}</Typography>
           <Box sx={{ mb: 1.2 }}>
@@ -553,7 +662,7 @@ export default function AdminPanel() {
               }}
               sx={FIELD_SX} />
           </Box>
-          <Typography sx={{ fontSize: '0.68rem', color: pin2Touched && !pinsMatch ? '#f87171' : 'rgba(255,255,255,0.25)', mb: 2 }}>
+          <Typography sx={{ fontSize: '0.68rem', color: pin2Touched && !pinsMatch ? '#f87171' : 'rgba(255,255,255,0.25)', mb: 1 }}>
             {pin2Touched && !pinsMatch ? t.admin.pinMismatch : t.admin.pinHint}
           </Typography>
 
@@ -562,22 +671,20 @@ export default function AdminPanel() {
               <Typography sx={{ fontSize: '0.75rem', color: '#f87171' }}>{createMsg}</Typography>
             </Box>
           )}
-          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', mt: 1 }}>
-            <Box onClick={handleCloseCreate} sx={{ px: 2, py: 0.7, borderRadius: 2, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.1)', '&:hover': { bgcolor: 'rgba(255,255,255,0.06)' } }}>
-              <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.82rem' }}>{t.admin.cancelBtn}</Typography>
-            </Box>
-            <Box onClick={creating || !canSubmit ? undefined : handleCreateUser} sx={{
-              px: 2, py: 0.7, borderRadius: 2,
-              cursor: canSubmit && !creating ? 'pointer' : 'not-allowed',
-              opacity: canSubmit ? 1 : 0.4,
-              bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)',
-              transition: 'opacity 0.15s',
-              '&:hover': canSubmit && !creating ? { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.25)' } : undefined,
-            }}>
-              {creating ? <CircularProgress size={14} sx={{ color: 'var(--accent,#60a5fa)' }} /> : <Typography sx={{ color: 'var(--accent,#60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>{t.admin.createBtn}</Typography>}
-            </Box>
-          </Box>
         </DialogContent>
+
+        <Divider sx={{ borderColor: 'rgba(255,255,255,0.07)' }} />
+
+        <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5, gap: 1 }}>
+          <Button onClick={handleCloseCreate} disabled={creating} sx={{ color: 'rgba(255,255,255,0.5)', borderRadius: 2, textTransform: 'none' }}>
+            {t.admin.cancelBtn}
+          </Button>
+          <Button onClick={handleCreateUser} disabled={creating || !canSubmit} variant="contained"
+            startIcon={creating ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <PersonAddIcon sx={{ fontSize: '16px !important' }} />}
+            sx={{ bgcolor: 'var(--accent,#3b82f6)', borderRadius: 2, fontWeight: 700, textTransform: 'none', '&:hover': { bgcolor: 'var(--accent,#3b82f6)', filter: 'brightness(0.9)' } }}>
+            {t.admin.createBtn}
+          </Button>
+        </DialogActions>
       </Dialog>
     </Box>
   )

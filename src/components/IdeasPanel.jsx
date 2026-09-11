@@ -26,6 +26,13 @@ import LightbulbIcon from '@mui/icons-material/Lightbulb'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined'
 import SearchIcon from '@mui/icons-material/Search'
 import TablePagination from '@mui/material/TablePagination'
+import TableContainer from '@mui/material/TableContainer'
+import Table from '@mui/material/Table'
+import TableHead from '@mui/material/TableHead'
+import TableBody from '@mui/material/TableBody'
+import TableRow from '@mui/material/TableRow'
+import TableCell from '@mui/material/TableCell'
+import Paper from '@mui/material/Paper'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
@@ -90,6 +97,30 @@ const FIELD_SX = {
     '&.Mui-focused fieldset': { borderColor: 'var(--accent, #3b82f6)' },
   },
   '& input': { color: 'var(--text, #f1f5f9)' },
+}
+
+// Estilo de encabezado de tabla — mismo patrón de divisor inset (no toca el
+// borde superior/inferior de la celda) usado en Prospects/Analytics.
+const IDEAS_HEADER_CELL_SX = {
+  bgcolor: 'var(--card-bg, #161d2e)',
+  borderBottom: '1px solid rgba(255,255,255,0.07)',
+  color: 'rgba(255,255,255,0.4)',
+  fontSize: '0.7rem',
+  fontWeight: 600,
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+  py: 1,
+  px: 1.5,
+  position: 'relative',
+  '&::after': {
+    content: '""', position: 'absolute', top: 10, bottom: 10, right: 0,
+    width: '1px', bgcolor: 'rgba(255,255,255,0.08)',
+  },
+}
+const IDEAS_HEADER_CELL_LAST_SX = { ...IDEAS_HEADER_CELL_SX, '&::after': { display: 'none' } }
+const IDEAS_CELL_SX = {
+  borderBottom: '1px solid var(--border, rgba(255,255,255,0.06))',
+  py: 0.8, px: 1.5,
 }
 
 function relativeTime(iso, lang) {
@@ -179,7 +210,8 @@ function FilterDropdown({ selected, onToggle, label, searchPh, noItemsLabel, end
           textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, borderRadius: 1.5,
           color: selected.size > 0 ? ACCENT : 'var(--text-muted)',
           border: '1px solid', borderColor: selected.size > 0 ? ACCENT : 'var(--border, rgba(255,255,255,0.14))',
-          bgcolor: selected.size > 0 ? 'rgba(var(--accent-rgb,59,130,246),0.08)' : 'transparent',
+          bgcolor: selected.size > 0 ? 'rgba(var(--accent-rgb,59,130,246),0.08)' : 'var(--surface, #0d1117)',
+          '&:hover': { borderColor: ACCENT, bgcolor: selected.size > 0 ? 'rgba(var(--accent-rgb,59,130,246),0.12)' : 'var(--surface, #0d1117)' },
         }}>
         {label}
       </Button>
@@ -250,59 +282,97 @@ function FilterDropdown({ selected, onToggle, label, searchPh, noItemsLabel, end
   )
 }
 
+// Insignia de fecha (mes abreviado arriba + día grande abajo) — mismo diseño
+// que la referencia de la tabla de órdenes, adaptado a los tokens oscuros.
+function MiniDateBadge({ iso, lang }) {
+  if (!iso) return null
+  const d = new Date(iso)
+  const month = d.toLocaleDateString(lang === 'en' ? 'en-US' : 'es-MX', { month: 'short' }).replace('.', '').toUpperCase()
+  const fullDate = d.toLocaleDateString(lang === 'en' ? 'en-US' : 'es-MX', { day: '2-digit', month: 'long', year: 'numeric' })
+  return (
+    <Tooltip title={fullDate} placement="top">
+      <Box sx={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        width: 38, height: 38, borderRadius: 1.4, flexShrink: 0,
+        bgcolor: 'var(--surface, rgba(255,255,255,0.04))', border: '1px solid var(--border, rgba(255,255,255,0.1))',
+      }}>
+        <Typography sx={{ fontSize: '0.52rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.03em', lineHeight: 1.3 }}>
+          {month}
+        </Typography>
+        <Typography sx={{ fontSize: '0.92rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.1 }}>
+          {d.getDate()}
+        </Typography>
+      </Box>
+    </Tooltip>
+  )
+}
+
 function IdeaRow({ idea, checked, onToggle, onDiscard, lang, it, index }) {
   const termColor = idea.industry ? colorForTerm(idea.industry) : null
   const zebra = index % 2 === 1
   return (
-    <Box sx={{
-      display: 'flex', alignItems: 'center', gap: 1, px: 1.2, py: 1, borderRadius: 1.5,
+    <TableRow sx={{
       bgcolor: checked ? 'rgba(var(--accent-rgb,59,130,246),0.06)' : zebra ? 'var(--surface, rgba(255,255,255,0.02))' : 'transparent',
-      border: '1px solid', borderColor: checked ? 'rgba(var(--accent-rgb,59,130,246),0.25)' : 'var(--border, rgba(255,255,255,0.07))',
-      transition: 'all 0.15s',
+      transition: 'background-color 0.15s',
       '&:hover': { bgcolor: checked ? 'rgba(var(--accent-rgb,59,130,246),0.09)' : 'var(--item-hover, rgba(255,255,255,0.03))' },
     }}>
-      <Checkbox size="small" checked={checked} onChange={() => onToggle(idea._id)}
-        sx={{ p: 0.5, color: 'var(--text-muted)', '&.Mui-checked': { color: ACCENT } }} />
-      <Box component="img" src={`https://www.google.com/s2/favicons?domain=${idea.domain}&sz=32`} alt=""
-        sx={{ width: 18, height: 18, borderRadius: 0.5, flexShrink: 0, opacity: 0.9 }} />
-      <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+      <TableCell padding="checkbox" sx={IDEAS_CELL_SX}>
+        <Checkbox size="small" checked={checked} onChange={() => onToggle(idea._id)}
+          sx={{ p: 0.5, color: 'var(--text-muted)', '&.Mui-checked': { color: ACCENT } }} />
+      </TableCell>
+      <TableCell sx={IDEAS_CELL_SX}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+          <Box component="img" src={`https://www.google.com/s2/favicons?domain=${idea.domain}&sz=32`} alt=""
+            sx={{ width: 18, height: 18, borderRadius: 0.5, flexShrink: 0, opacity: 0.9 }} />
           <Typography
             component="a" href={idea.url} target="_blank" rel="noopener noreferrer"
             onClick={e => e.stopPropagation()}
             sx={{
               fontSize: '0.8rem', fontWeight: 600, color: 'var(--text)', lineHeight: 1.25,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              textDecoration: 'none', '&:hover': { color: ACCENT, textDecoration: 'underline' },
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+              textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 0.5,
+              '&:hover': { color: ACCENT, textDecoration: 'underline' },
             }}>
-            {idea.domain}
-          </Typography>
-          <OpenInNewIcon sx={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0, opacity: 0.6 }} />
-        </Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
-          {idea.industry && (
-            <Box sx={{
-              px: 0.6, py: 0.05, borderRadius: 0.6, flexShrink: 0,
-              bgcolor: `${termColor}1a`, border: `1px solid ${termColor}44`,
-            }}>
-              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: termColor }}>
-                {idea.industry}
-              </Typography>
-            </Box>
-          )}
-          <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.3,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {it.addedBy(idea.created_by || it.unknownUser)} · {relativeTime(idea.created_at, lang)}
+            <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{idea.domain}</Box>
+            <OpenInNewIcon sx={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0, opacity: 0.6 }} />
           </Typography>
         </Box>
-      </Box>
-      <Tooltip title={it.discard} placement="top">
-        <IconButton size="small" onClick={() => onDiscard(idea._id)}
-          sx={{ p: 0.4, color: 'var(--text-muted)', '&:hover': { color: '#f87171', bgcolor: 'rgba(248,113,113,0.1)' } }}>
-          <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-        </IconButton>
-      </Tooltip>
-    </Box>
+      </TableCell>
+      <TableCell sx={{ ...IDEAS_CELL_SX, textAlign: 'center' }}>
+        {idea.industry && (
+          <Box sx={{
+            display: 'inline-block', px: 0.6, py: 0.05, borderRadius: 0.6,
+            bgcolor: `${termColor}1a`, border: `1px solid ${termColor}44`,
+          }}>
+            <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, color: termColor }}>
+              {idea.industry}
+            </Typography>
+          </Box>
+        )}
+      </TableCell>
+      <TableCell sx={{ ...IDEAS_CELL_SX, textAlign: 'center' }}>
+        <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 1, textAlign: 'left' }}>
+          <MiniDateBadge iso={idea.created_at} lang={lang} />
+          <Box sx={{ minWidth: 0 }}>
+            <Typography sx={{ fontSize: '0.72rem', color: 'var(--text)', fontWeight: 600, lineHeight: 1.3,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {it.addedBy(idea.created_by || it.unknownUser)}
+            </Typography>
+            <Typography sx={{ fontSize: '0.65rem', color: 'var(--text-muted)', lineHeight: 1.3 }}>
+              {relativeTime(idea.created_at, lang)}
+            </Typography>
+          </Box>
+        </Box>
+      </TableCell>
+      <TableCell sx={{ ...IDEAS_CELL_SX, textAlign: 'center', width: 48 }}>
+        <Tooltip title={it.discard} placement="top">
+          <IconButton size="small" onClick={() => onDiscard(idea._id)}
+            sx={{ p: 0.4, color: 'var(--text-muted)', '&:hover': { color: '#f87171', bgcolor: 'rgba(248,113,113,0.1)' } }}>
+            <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+      </TableCell>
+    </TableRow>
   )
 }
 
@@ -316,22 +386,29 @@ const SKEL_SX = {
 function IdeaRowSkeleton({ index }) {
   const zebra = index % 2 === 1
   return (
-    <Box sx={{
-      display: 'flex', alignItems: 'center', gap: 1, px: 1.2, py: 1, borderRadius: 1.5,
-      bgcolor: zebra ? 'var(--surface, rgba(255,255,255,0.02))' : 'transparent',
-      border: '1px solid', borderColor: 'var(--border, rgba(255,255,255,0.07))',
-    }}>
-      <Skeleton variant="rounded" width={18} height={18} sx={SKEL_SX} />
-      <Skeleton variant="rounded" width={18} height={18} sx={{ ...SKEL_SX, flexShrink: 0 }} />
-      <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Skeleton variant="text" width="35%" sx={{ ...SKEL_SX, fontSize: '0.8rem' }} />
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, mt: 0.2 }}>
-          <Skeleton variant="rounded" width={62} height={16} sx={SKEL_SX} />
-          <Skeleton variant="text" width={120} sx={{ ...SKEL_SX, fontSize: '0.68rem' }} />
+    <TableRow sx={{ bgcolor: zebra ? 'var(--surface, rgba(255,255,255,0.02))' : 'transparent' }}>
+      <TableCell padding="checkbox" sx={IDEAS_CELL_SX}>
+        <Skeleton variant="rounded" width={18} height={18} sx={{ ...SKEL_SX, ml: 1.2 }} />
+      </TableCell>
+      <TableCell sx={IDEAS_CELL_SX}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Skeleton variant="rounded" width={18} height={18} sx={{ ...SKEL_SX, flexShrink: 0 }} />
+          <Skeleton variant="text" width="45%" sx={{ ...SKEL_SX, fontSize: '0.8rem' }} />
         </Box>
-      </Box>
-      <Skeleton variant="circular" width={16} height={16} sx={{ ...SKEL_SX, flexShrink: 0 }} />
-    </Box>
+      </TableCell>
+      <TableCell sx={{ ...IDEAS_CELL_SX, textAlign: 'center' }}>
+        <Skeleton variant="rounded" width={62} height={16} sx={{ ...SKEL_SX, display: 'inline-block' }} />
+      </TableCell>
+      <TableCell sx={{ ...IDEAS_CELL_SX, textAlign: 'center' }}>
+        <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 1 }}>
+          <Skeleton variant="rounded" width={38} height={38} sx={{ ...SKEL_SX, flexShrink: 0 }} />
+          <Skeleton variant="text" width={90} sx={{ ...SKEL_SX, fontSize: '0.72rem' }} />
+        </Box>
+      </TableCell>
+      <TableCell sx={{ ...IDEAS_CELL_SX, textAlign: 'center', width: 48 }}>
+        <Skeleton variant="circular" width={16} height={16} sx={{ ...SKEL_SX, display: 'inline-block' }} />
+      </TableCell>
+    </TableRow>
   )
 }
 
@@ -821,7 +898,15 @@ export default function IdeasPanel({ isActive }) {
       : displayResults
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+    <Paper sx={{
+      width: '100%', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
+      border: '1px solid rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'hidden', position: 'relative',
+      background: 'var(--sidebar-bg, #0d1117)',
+      boxShadow: '0 8px 40px rgba(0,0,0,0.55), 0 2px 12px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04) inset',
+    }}>
+      {/* brillo radial */}
+      <Box sx={{ position: 'absolute', top: -50, left: -50, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle, rgba(var(--accent-rgb, 99,102,241), 0.07) 0%, transparent 70%)', pointerEvents: 'none', zIndex: 0 }} />
+      <Box sx={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden', p: 2 }}>
       {/* Header */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2, flexShrink: 0, px: 2, py: 1.5, borderRadius: 2, background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.08) 0%, transparent 60%)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.12)' }}>
         <Box sx={{
@@ -842,93 +927,21 @@ export default function IdeasPanel({ isActive }) {
         </Box>
       </Box>
 
-      {/* Búsqueda/filtros de la cola — sin sentido mientras se muestra el feed
-         de resultados o el panel de envío (esa cola ya quedó en segundo plano). */}
-      {!showResultsView && (
-        <TextField
-          size="small" fullWidth value={search} onChange={e => handleSearchChange(e.target.value)}
-          placeholder={it.searchPh}
-          slotProps={{ input: { startAdornment: (
-            <InputAdornment position="start">
-              <SearchIcon sx={{ fontSize: 16, color: 'var(--text-muted)' }} />
-            </InputAdornment>
-          ) } }}
-          sx={{ ...FIELD_SX, mb: 1.2, flexShrink: 0 }}
-        />
-      )}
-
-      {/* Filtros — dropdowns paginados (término / quién la trajo) + orden por fecha + chips de lo ya seleccionado */}
-      {!showResultsView && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7, mb: 1.4, flexShrink: 0, flexWrap: 'wrap' }}>
-          <FilterDropdown
-            selected={selectedTerms} onToggle={handleTermToggle}
-            label={it.filterByTerm} searchPh={it.termsSearchPh} noItemsLabel={it.noTerms}
-            endpoint="/api/ideas/terms" itemsKey="terms" valueField="term"
-          />
-          <FilterDropdown
-            selected={selectedUsers} onToggle={handleUserToggle}
-            label={it.filterByUser} searchPh={it.usersSearchPh} noItemsLabel={it.noUsers}
-            endpoint="/api/ideas/users" itemsKey="users" valueField="user"
-            formatValue={v => v === UNATTRIBUTED ? it.unknownUser : v}
-          />
-          <Tooltip title={sortDir === 'desc' ? it.sortNewestFirst : it.sortOldestFirst} placement="top">
-            <Button size="small" onClick={handleSortToggle}
-              startIcon={<SwapVertIcon sx={{ fontSize: 16 }} />}
-              sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, borderRadius: 1.5, color: 'var(--text-muted)',
-                border: '1px solid var(--border, rgba(255,255,255,0.14))' }}>
-              {sortDir === 'desc' ? it.sortNewestFirst : it.sortOldestFirst}
-            </Button>
-          </Tooltip>
-          {[...selectedTerms].map(term => (
-            <SelectedChip key={`t-${term}`} value={term} label={term} onRemove={() => handleTermToggle(term)} />
-          ))}
-          {[...selectedUsers].map(user => (
-            <SelectedChip key={`u-${user}`} value={user} label={user === UNATTRIBUTED ? it.unknownUser : user} onRemove={() => handleUserToggle(user)} />
-          ))}
-        </Box>
-      )}
-
-      {/* Bulk actions — se queda visible mientras corre el scraping (para Pausar/
-         Cancelar) pero desaparece del todo una vez terminado: "Descartar/Procesar
-         seleccionadas" ya no aplican, esa selección es de la cola de ideas. */}
-      {!scrapeJob.done && (
+      {/* Pausar/Cancelar — solo mientras corre el scraping en vivo (feed de
+         resultados); "Descartar/Procesar seleccionadas" vive dentro de la
+         tabla de la cola, ver más abajo, y solo aparece con selección activa. */}
+      {scrapeJob.processing && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.4, flexShrink: 0, flexWrap: 'wrap' }}>
-          <Typography onClick={allSelectedOnPage ? clearSelection : selectAll}
-            sx={{ fontSize: '0.75rem', color: 'var(--text-muted)', cursor: 'pointer', '&:hover': { color: 'var(--text)' } }}>
-            {allSelectedOnPage ? it.clearSelection : it.selectAll}
-          </Typography>
-          {selectedCount > 0 && (
-            <Typography sx={{ fontSize: '0.75rem', color: ACCENT, fontWeight: 600 }}>
-              {it.selectedCount(selectedCount)}
-            </Typography>
-          )}
           <Box sx={{ flex: 1 }} />
-          {scrapeJob.processing ? (
-            <>
-              <Button size="small" onClick={() => scrapeJob.paused ? scrapeJob.resume() : scrapeJob.pause()} disabled={scrapeJob.pausing}
-                startIcon={scrapeJob.pausing ? <CircularProgress size={13} sx={{ color: '#fbbf24' }} /> : scrapeJob.paused ? <PlayArrowIcon sx={{ fontSize: 15 }} /> : <PauseIcon sx={{ fontSize: 15 }} />}
-                sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' }, '&.Mui-disabled': { color: 'rgba(251,191,36,0.4)', bgcolor: 'rgba(251,191,36,0.04)', border: '1px solid rgba(251,191,36,0.12)' } }}>
-                {scrapeJob.paused ? t.batch.resume : scrapeJob.pausing ? (lang === 'en' ? 'Pausing…' : 'Pausando…') : t.batch.pause}
-              </Button>
-              <Button size="small" onClick={scrapeJob.cancel} startIcon={<HighlightOffIcon sx={{ fontSize: 15 }} />}
-                sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>
-                {lang === 'en' ? 'Cancel' : 'Cancelar'}
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button size="small" disabled={selectedCount === 0} onClick={handleDiscardSelected}
-                startIcon={<DeleteOutlineIcon sx={{ fontSize: 15 }} />}
-                sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' }, '&.Mui-disabled': { opacity: 0.3, color: '#f87171' } }}>
-                {it.discardSelected}
-              </Button>
-              <Button size="small" variant="contained" disabled={selectedCount === 0} onClick={handleProcess}
-                startIcon={<PlayArrowIcon sx={{ fontSize: 16 }} />}
-                sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 700, bgcolor: ACCENT }}>
-                {it.process}
-              </Button>
-            </>
-          )}
+          <Button size="small" onClick={() => scrapeJob.paused ? scrapeJob.resume() : scrapeJob.pause()} disabled={scrapeJob.pausing}
+            startIcon={scrapeJob.pausing ? <CircularProgress size={13} sx={{ color: '#fbbf24' }} /> : scrapeJob.paused ? <PlayArrowIcon sx={{ fontSize: 15 }} /> : <PauseIcon sx={{ fontSize: 15 }} />}
+            sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' }, '&.Mui-disabled': { color: 'rgba(251,191,36,0.4)', bgcolor: 'rgba(251,191,36,0.04)', border: '1px solid rgba(251,191,36,0.12)' } }}>
+            {scrapeJob.paused ? t.batch.resume : scrapeJob.pausing ? (lang === 'en' ? 'Pausing…' : 'Pausando…') : t.batch.pause}
+          </Button>
+          <Button size="small" onClick={scrapeJob.cancel} startIcon={<HighlightOffIcon sx={{ fontSize: 15 }} />}
+            sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>
+            {lang === 'en' ? 'Cancel' : 'Cancelar'}
+          </Button>
         </Box>
       )}
 
@@ -984,9 +997,8 @@ export default function IdeasPanel({ isActive }) {
          envío, porque la cola de ideas de abajo ya quedó vieja (el backend
          recién borra las procesadas cuando el job termina, ver efecto de
          arriba) y ver ese feed + poder enviar es justo lo que se quiere seguir. */}
-      <Box sx={{ flex: 1, overflowY: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column', gap: 1.4 }}>
-        {showResultsView ? (
-          <>
+      {showResultsView ? (
+        <Box sx={{ flex: 1, overflowY: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column', gap: 1.4 }}>
             {scrapeJob.done && (
               <Box onClick={() => scrapeJob.reset()} sx={{
                 display: 'inline-flex', alignItems: 'center', gap: 0.4, alignSelf: 'flex-start',
@@ -1129,31 +1141,149 @@ export default function IdeasPanel({ isActive }) {
                 ))
               )}
             </Box>
-          </>
-        ) : loading ? (
-          Array.from({ length: Math.min(rowsPerPage, 8) }).map((_, i) => <IdeaRowSkeleton key={i} index={i} />)
-        ) : loadError ? (
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.6, py: 4 }}>
-            <Typography sx={{ fontSize: '0.8rem', color: '#f87171', fontWeight: 600, textAlign: 'center' }}>
-              {loadError}
-            </Typography>
-            <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)', textAlign: 'center' }}>
-              {lang === 'en' ? 'Try logging out and back in.' : 'Intenta cerrar sesión y volver a entrar.'}
-            </Typography>
+        </Box>
+      ) : (
+        <Box sx={{
+          flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
+          borderRadius: 2, border: '1px solid var(--border, rgba(255,255,255,0.08))', overflow: 'hidden',
+        }}>
+          {/* Búsqueda */}
+          <Box sx={{ px: 2, pt: 1.6, pb: 1.2, flexShrink: 0 }}>
+            <TextField
+              size="small" fullWidth value={search} onChange={e => handleSearchChange(e.target.value)}
+              placeholder={it.searchPh}
+              slotProps={{ input: { startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon sx={{ fontSize: 16, color: 'var(--text-muted)' }} />
+                </InputAdornment>
+              ) } }}
+              sx={FIELD_SX}
+            />
           </Box>
-        ) : items.length === 0 ? (
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.8, py: 4 }}>
-            <LightbulbIcon sx={{ fontSize: 26, color: 'rgba(var(--accent-rgb,59,130,246),0.2)' }} />
-            <Typography sx={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic', textAlign: 'center' }}>
-              {search || selectedTerms.size > 0 || selectedUsers.size > 0 ? it.noResults : it.empty}
-            </Typography>
+
+          {/* Filtros — dropdowns paginados (término / quién la trajo) + orden por fecha + chips de lo ya seleccionado */}
+          <Box sx={{
+            display: 'flex', alignItems: 'center', gap: 0.7, flexWrap: 'wrap', flexShrink: 0,
+            px: 2, pb: 1.4, borderBottom: '1px solid rgba(255,255,255,0.07)',
+          }}>
+            <FilterDropdown
+              selected={selectedTerms} onToggle={handleTermToggle}
+              label={it.filterByTerm} searchPh={it.termsSearchPh} noItemsLabel={it.noTerms}
+              endpoint="/api/ideas/terms" itemsKey="terms" valueField="term"
+            />
+            <FilterDropdown
+              selected={selectedUsers} onToggle={handleUserToggle}
+              label={it.filterByUser} searchPh={it.usersSearchPh} noItemsLabel={it.noUsers}
+              endpoint="/api/ideas/users" itemsKey="users" valueField="user"
+              formatValue={v => v === UNATTRIBUTED ? it.unknownUser : v}
+            />
+            <Tooltip title={sortDir === 'desc' ? it.sortNewestFirst : it.sortOldestFirst} placement="top">
+              <Button size="small" onClick={handleSortToggle}
+                startIcon={<SwapVertIcon sx={{ fontSize: 16 }} />}
+                sx={{ textTransform: 'none', fontSize: '0.78rem', fontWeight: 600, borderRadius: 1.5, color: 'var(--text-muted)',
+                  border: '1px solid var(--border, rgba(255,255,255,0.14))', bgcolor: 'var(--surface, #0d1117)',
+                  '&:hover': { borderColor: ACCENT, bgcolor: 'var(--surface, #0d1117)' } }}>
+                {sortDir === 'desc' ? it.sortNewestFirst : it.sortOldestFirst}
+              </Button>
+            </Tooltip>
+            {[...selectedTerms].map(term => (
+              <SelectedChip key={`t-${term}`} value={term} label={term} onRemove={() => handleTermToggle(term)} />
+            ))}
+            {[...selectedUsers].map(user => (
+              <SelectedChip key={`u-${user}`} value={user} label={user === UNATTRIBUTED ? it.unknownUser : user} onRemove={() => handleUserToggle(user)} />
+            ))}
           </Box>
-        ) : (
-          items.map((idea, index) => (
-            <IdeaRow key={idea._id} idea={idea} index={index} checked={selected.has(idea._id)} onToggle={toggle} onDiscard={handleDiscard} lang={lang} it={it} />
-          ))
-        )}
-      </Box>
+
+          {/* Barra de selección — solo aparece con algo seleccionado, pegada
+             a la tabla en vez de flotar arriba desconectada de todo. */}
+          {selectedCount > 0 && (
+            <Box sx={{
+              display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap',
+              px: 2, py: 1, borderBottom: '1px solid rgba(255,255,255,0.07)',
+              bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.05)',
+            }}>
+              <Typography sx={{ fontSize: '0.75rem', color: ACCENT, fontWeight: 600 }}>
+                {it.selectedCount(selectedCount)}
+              </Typography>
+              <Box sx={{ flex: 1 }} />
+              <Button onClick={handleDiscardSelected}
+                startIcon={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
+                sx={{
+                  textTransform: 'none', fontSize: '0.8rem', fontWeight: 600, borderRadius: 2,
+                  px: 1.8, py: 0.7, color: '#f87171',
+                  bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
+                  transition: 'all 0.2s ease',
+                  '&:hover': { bgcolor: 'rgba(239,68,68,0.16)', borderColor: 'rgba(239,68,68,0.45)', boxShadow: '0 2px 12px rgba(239,68,68,0.15)' },
+                }}>
+                {it.discardSelected}
+              </Button>
+              <Button onClick={handleProcess}
+                startIcon={<PlayArrowIcon sx={{ fontSize: 17 }} />}
+                sx={{
+                  textTransform: 'none', fontSize: '0.8rem', fontWeight: 700, borderRadius: 2,
+                  px: 2.2, py: 0.7, color: '#fff',
+                  bgcolor: 'rgba(59,130,246,0.9)', border: '1px solid rgba(59,130,246,0.9)',
+                  boxShadow: '0 3px 16px rgba(59,130,246,0.3), 0 1px 6px rgba(59,130,246,0.15)',
+                  transition: 'all 0.2s ease',
+                  '&:hover': { bgcolor: '#3b82f6', boxShadow: '0 4px 20px rgba(59,130,246,0.45)' },
+                }}>
+                {it.process}
+              </Button>
+            </Box>
+          )}
+
+          <TableContainer sx={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+            <Table size="small" stickyHeader>
+              <TableHead>
+                <TableRow>
+                  <TableCell padding="checkbox" sx={IDEAS_HEADER_CELL_SX}>
+                    <Checkbox size="small" checked={allSelectedOnPage} indeterminate={selectedCount > 0 && !allSelectedOnPage}
+                      onChange={() => allSelectedOnPage ? clearSelection() : selectAll()}
+                      sx={{ p: 0.5, color: 'var(--text-muted)', '&.Mui-checked, &.MuiCheckbox-indeterminate': { color: ACCENT } }} />
+                  </TableCell>
+                  <TableCell sx={{ ...IDEAS_HEADER_CELL_SX, width: 'auto' }}>{lang === 'en' ? 'Site' : 'Sitio'}</TableCell>
+                  <TableCell sx={{ ...IDEAS_HEADER_CELL_SX, textAlign: 'center', width: 160 }}>{lang === 'en' ? 'Industry' : 'Industria'}</TableCell>
+                  <TableCell sx={{ ...IDEAS_HEADER_CELL_SX, textAlign: 'center', width: 210 }}>{lang === 'en' ? 'Added' : 'Agregado'}</TableCell>
+                  <TableCell sx={{ ...IDEAS_HEADER_CELL_LAST_SX, width: 48 }} />
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {loading ? (
+                  Array.from({ length: Math.min(rowsPerPage, 8) }).map((_, i) => <IdeaRowSkeleton key={i} index={i} />)
+                ) : loadError ? (
+                  <TableRow>
+                    <TableCell colSpan={5} sx={{ border: 'none', py: 4 }}>
+                      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.6 }}>
+                        <Typography sx={{ fontSize: '0.8rem', color: '#f87171', fontWeight: 600, textAlign: 'center' }}>
+                          {loadError}
+                        </Typography>
+                        <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+                          {lang === 'en' ? 'Try logging out and back in.' : 'Intenta cerrar sesión y volver a entrar.'}
+                        </Typography>
+                      </Box>
+                    </TableCell>
+                  </TableRow>
+                ) : items.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} sx={{ border: 'none', py: 4 }}>
+                      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.8 }}>
+                        <LightbulbIcon sx={{ fontSize: 26, color: 'rgba(var(--accent-rgb,59,130,246),0.2)' }} />
+                        <Typography sx={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic', textAlign: 'center' }}>
+                          {search || selectedTerms.size > 0 || selectedUsers.size > 0 ? it.noResults : it.empty}
+                        </Typography>
+                      </Box>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  items.map((idea, index) => (
+                    <IdeaRow key={idea._id} idea={idea} index={index} checked={selected.has(idea._id)} onToggle={toggle} onDiscard={handleDiscard} lang={lang} it={it} />
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Box>
+      )}
 
       {!showResultsView && total > 0 && (
         <TablePagination
@@ -1257,6 +1387,7 @@ export default function IdeasPanel({ isActive }) {
           {snack.message}
         </Alert>
       </Snackbar>
-    </Box>
+      </Box>
+    </Paper>
   )
 }

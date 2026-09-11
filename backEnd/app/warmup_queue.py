@@ -125,8 +125,15 @@ def _is_business_hours() -> bool:
     return _BUSINESS_HOUR_START <= now.hour < _BUSINESS_HOUR_END
 
 
-def _get_warmup_instances(db) -> list[dict]:
-    """Return connected wwebjs instances that have peer warmup enabled."""
+def _get_warmup_instances(db, session_status: dict | None = None) -> list[dict]:
+    """Return connected wwebjs instances that have peer warmup enabled.
+
+    Pass session_status (name -> wwebjs /status response) when the caller
+    already fetched it moments ago — e.g. warmup_get_instances in routes.py
+    checks every instance's live status itself first, and calling this
+    without passing that along used to trigger a second, fully redundant
+    round of the same HTTP probes against wwebjs-service right after,
+    roughly doubling that endpoint's slowest part for no reason."""
     candidates = list(db.db.instances.find(
         {"provider": "wwebjs", "peer_warmup_enabled": {"$ne": False}},
         {"name": 1, "number": 1, "label": 1, "peer_warmup_paused": 1, "created_at": 1},
@@ -134,25 +141,26 @@ def _get_warmup_instances(db) -> list[dict]:
     if not candidates:
         return []
 
-    # Check live connection status — call each session individually, same
-    # pattern as user-status endpoint (bulk /sessions is unreliable in prod).
-    try:
-        import requests
-        from concurrent.futures import ThreadPoolExecutor
-        from app.config import WWEBJS_URL
-        from app.whatsapp_wwebjs import _headers
+    if session_status is None:
+        # Check live connection status — call each session individually, same
+        # pattern as user-status endpoint (bulk /sessions is unreliable in prod).
+        try:
+            import requests
+            from concurrent.futures import ThreadPoolExecutor
+            from app.config import WWEBJS_URL
+            from app.whatsapp_wwebjs import _headers
 
-        def _check(inst):
-            try:
-                r = requests.get(f"{WWEBJS_URL}/session/{inst['name']}/status", headers=_headers(), timeout=3)
-                return inst["name"], r.json() if r.ok else {}
-            except Exception:
-                return inst["name"], {}
+            def _check(inst):
+                try:
+                    r = requests.get(f"{WWEBJS_URL}/session/{inst['name']}/status", headers=_headers(), timeout=3)
+                    return inst["name"], r.json() if r.ok else {}
+                except Exception:
+                    return inst["name"], {}
 
-        with ThreadPoolExecutor(max_workers=8) as ex:
-            session_status = dict(ex.map(_check, candidates))
-    except Exception:
-        session_status = {}
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                session_status = dict(ex.map(_check, candidates))
+        except Exception:
+            session_status = {}
 
     _MIN_AGE_DAYS = 7
     age_cutoff = datetime.utcnow() - timedelta(days=_MIN_AGE_DAYS)

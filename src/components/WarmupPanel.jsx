@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Chip from '@mui/material/Chip'
+import Skeleton from '@mui/material/Skeleton'
 import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -169,9 +170,14 @@ function SessionDetail({ sessionId, token }) {
   const bottomRef = useRef(null)
 
   useEffect(() => {
-    setLoading(true)
+    setLoading(true); setSession(null)
+    // A failed request (401, etc.) still resolves r.json() fine — its error
+    // body ({"detail": "..."}) would pass the `!session` null-check below and
+    // render as a session with an empty message list instead of the error
+    // state, since fetch() doesn't reject on a non-2xx status.
     fetch(API(`/warmup/sessions/${sessionId}/messages`), { headers: authHeaders(token) })
-      .then(r => r.json()).then(setSession).catch(() => {}).finally(() => setLoading(false))
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(setSession).catch(() => setSession(null)).finally(() => setLoading(false))
   }, [sessionId, token])
 
   useEffect(() => {
@@ -321,6 +327,7 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
   const w = t.warmup
   const [sessions, setSessions] = useState([])
   const [loading, setLoading]   = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [selected, setSelected] = useState(null)
   const [viewedIds, setViewedIds] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem(`wmup_viewed_${instanceName}`)) || []) } catch { return new Set() }
@@ -328,9 +335,15 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
 
   useEffect(() => {
     if (!open) return
-    setSelected(null); setLoading(true)
+    setSelected(null); setLoading(true); setLoadError(false)
+    // fetch() only rejects on a network failure, never on a non-2xx status —
+    // an unchecked r.json() on a 401 ({"detail": "..."}) was setting sessions
+    // to that error OBJECT instead of an array, crashing sessions.map() below.
     fetch(API(`/warmup/chats/${instanceName}`), { headers: authHeaders(token) })
-      .then(r => r.json()).then(setSessions).catch(() => {}).finally(() => setLoading(false))
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(data => setSessions(Array.isArray(data) ? data : []))
+      .catch(() => { setSessions([]); setLoadError(true) })
+      .finally(() => setLoading(false))
   }, [open, instanceName, token])
 
   const peer = s => s.instance_a === instanceName ? s.instance_b : s.instance_a
@@ -420,8 +433,10 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
           <SessionDetail sessionId={selected} onBack={() => setSelected(null)} token={token} />
         ) : sessions.length === 0 ? (
           <Box sx={{ textAlign: 'center', py: 8, px: 3 }}>
-            <ChatBubbleOutlinedIcon sx={{ fontSize: 52, color: 'rgba(255,255,255,0.1)', mb: 1.5 }} />
-            <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.35)' }}>{w.noConvsYet}</Typography>
+            <ChatBubbleOutlinedIcon sx={{ fontSize: 52, color: loadError ? 'rgba(239,68,68,0.25)' : 'rgba(255,255,255,0.1)', mb: 1.5 }} />
+            <Typography variant="body2" sx={{ color: loadError ? '#f87171' : 'rgba(255,255,255,0.35)' }}>
+              {loadError ? (lang === 'en' ? 'Could not load conversations — try again.' : 'No se pudieron cargar las conversaciones — intenta de nuevo.') : w.noConvsYet}
+            </Typography>
           </Box>
         ) : (
           <List disablePadding sx={{ bgcolor: 'transparent' }}>
@@ -892,7 +907,7 @@ function WarmupConfigDialog({ open, onClose, token }) {
     if (!open) return
     setLoading(true); setErr(null); setSaved(false)
     fetch(API('/warmup/config'), { headers: authHeaders(token) })
-      .then(r => r.json())
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then(d => { setCfg(d); setLoading(false) })
       .catch(() => { setCfg(DEFAULT_CFG); setLoading(false) })
   }, [open, token])
@@ -1121,6 +1136,60 @@ function WarmupConfigDialog({ open, onClose, token }) {
 }
 
 
+// ── Loading skeletons ────────────────────────────────────────────────────────
+// Mismo shimmer que ya usa ResultSkeleton (resultDisplay.jsx) — antes esta
+// pantalla solo mostraba un CircularProgress centrado sin ninguna forma real,
+// mientras que el resto de la app ya usa recuadros con la silueta real del
+// contenido que está por llegar.
+const WSKEL = { bgcolor: 'var(--skeleton-base,rgba(255,255,255,0.06))', '[data-theme-mode="light"] &': { bgcolor: 'rgba(0,0,0,0.08)' }, '&::after': { background: 'linear-gradient(90deg,transparent,rgba(255,255,255,0.04),transparent)', '[data-theme-mode="light"] &': { background: 'linear-gradient(90deg,transparent,rgba(0,0,0,0.04),transparent)' } } }
+
+function WarmupStatsRowSkeleton() {
+  return (
+    <Box sx={{ p: 2 }}>
+      <Box sx={{
+        display: 'flex', flexWrap: 'wrap', overflow: 'hidden',
+        borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+        bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+      }}>
+        {[1, 2, 3, 4].map(i => (
+          <React.Fragment key={i}>
+            {i > 1 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 1.4 }} />}
+            <Box sx={{ flex: '1 1 0', minWidth: 130, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.4, px: 2, py: 1.6 }}>
+              <Skeleton variant="circular" width={40} height={40} sx={WSKEL} />
+              <Box sx={{ minWidth: 0 }}>
+                <Skeleton variant="text" width={60} height={18} sx={WSKEL} />
+                <Skeleton variant="text" width={40} height={24} sx={WSKEL} />
+              </Box>
+            </Box>
+          </React.Fragment>
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+function WarmupCardsSkeleton() {
+  return (
+    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1fr 1fr 1fr' }, gap: 2 }}>
+      {[1, 2, 3, 4, 5, 6].map(i => (
+        <Box key={i} sx={{
+          borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+          borderTop: '3px solid var(--border, rgba(255,255,255,0.15))',
+          bgcolor: 'rgba(255,255,255,0.025)', p: 2, display: 'flex', flexDirection: 'column', gap: 1,
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Skeleton variant="text" width={110} height={22} sx={WSKEL} />
+            <Skeleton variant="rounded" width={64} height={20} sx={{ ...WSKEL, borderRadius: 10 }} />
+          </Box>
+          <Skeleton variant="rounded" width={90} height={20} sx={{ ...WSKEL, borderRadius: 1 }} />
+          <Skeleton variant="text" width={100} height={16} sx={WSKEL} />
+          <Skeleton variant="rounded" height={6} sx={{ ...WSKEL, borderRadius: 3, mt: 0.5 }} />
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
 // ── Main panel ────────────────────────────────────────────────────────────────
 // Mismo patrón de ícono + anillo conic-gradient + label + valor que ya usan
 // Prospects/Analytics/Instances, para que los indicadores de arriba (antes
@@ -1293,6 +1362,7 @@ export default function WarmupPanel() {
         {/* Conteos — mismo patrón de ícono + anillo + label + valor que
            Prospects/Analytics/Instances, en vez de los 3 chips sueltos que
            antes flotaban dentro del banner junto al título. */}
+        {loading && <WarmupStatsRowSkeleton />}
         {!loading && data && instances.length > 0 && (
           <Box sx={{ p: 2 }}>
             <Box sx={{
@@ -1339,7 +1409,7 @@ export default function WarmupPanel() {
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
       {loading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', pt: 6 }}><CircularProgress /></Box>
+        <WarmupCardsSkeleton />
       ) : (
         <>
           {/* ── Rotation banner — mismo acento rosa/rojo del resto de la

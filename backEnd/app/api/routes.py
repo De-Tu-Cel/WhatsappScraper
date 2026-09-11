@@ -4437,7 +4437,9 @@ def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
     try:
         from app.warmup_queue import _get_warmup_instances, _get_today_pairs
         _disabled = {i["name"] for i in raw if i.get("peer_warmup_enabled") is False}
-        _live_insts = _get_warmup_instances(db)
+        # Reuse _st (already fetched above) instead of letting this trigger a
+        # second full round of the same per-instance wwebjs status HTTP calls.
+        _live_insts = _get_warmup_instances(db, session_status=_st)
         _expected_pairs = _get_today_pairs(_live_insts)
         for _ia, _ib in _expected_pairs:
             for _self, _other in ((_ia["name"], _ib["name"]), (_ib["name"], _ia["name"])):

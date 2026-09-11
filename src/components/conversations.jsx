@@ -1151,11 +1151,24 @@ export default function Conversations({ isActive } = {}) {
 
       {/* ── Lista de conversaciones ── */}
       <Box sx={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
-        {/* Header */}
-        <Box sx={{ px: 2, pt: 2, pb: 1.5, borderBottom: '1px solid var(--border)' }}>
+        {/* Header — mismo verde difuminado que usa el fondo del título de
+           Ideas, pero sin encerrarlo en su propio recuadro con borde: aquí
+           el degradado cubre todo este bloque (título, aviso de IA,
+           buscador y el toggle de abajo) como un solo fondo compartido. */}
+        <Box sx={{
+          px: 2, pt: 2, pb: 1.5, borderBottom: '1px solid var(--border)',
+          background: 'linear-gradient(135deg, rgba(74,222,128,0.08) 0%, transparent 60%)',
+        }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <WhatsAppIcon sx={{ color: '#4ade80', fontSize: 20 }} />
+              <Box sx={{
+                width: 26, height: 26, borderRadius: '8px', flexShrink: 0,
+                background: 'linear-gradient(135deg, rgba(74,222,128,0.28) 0%, rgba(74,222,128,0.1) 100%)',
+                border: '1px solid rgba(74,222,128,0.35)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <WhatsAppIcon sx={{ color: '#4ade80', fontSize: 15 }} />
+              </Box>
               <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.95rem' }}>{t.convs.title}</Typography>
             </Box>
             <Tooltip title={t.common.refresh}>

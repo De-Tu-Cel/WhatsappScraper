@@ -53,6 +53,7 @@ import CalendarMonthIcon from '@mui/icons-material/CalendarMonth'
 import ViewWeekIcon from '@mui/icons-material/ViewWeek'
 import ViewListIcon from '@mui/icons-material/ViewList'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
+import EventIcon from '@mui/icons-material/Event'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { getMinTemplatesRequired } from '@/lib/messageVariants'
 import { loadSendConfig } from '@/lib/sendConfig'
@@ -1009,9 +1010,18 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
           </Typography>
         )}
       </Box>
+      {/* Antes era solo una barrita de color + texto — mismo detalle de
+         ícono en caja degradada que ya usa el resto de la app en vez de eso. */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mt: -0.5 }}>
-        <Box sx={{ width: 3, height: 13, borderRadius: 2, bgcolor: 'var(--accent,#3b82f6)', opacity: 0.55, flexShrink: 0 }} />
-        <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>
+        <Box sx={{
+          width: 20, height: 20, borderRadius: '6px', flexShrink: 0,
+          background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.26) 0%, rgba(var(--accent-rgb,59,130,246),0.08) 100%)',
+          border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <EventIcon sx={{ fontSize: 12, color: 'var(--accent, #3b82f6)' }} />
+        </Box>
+        <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.5))', fontSize: '0.66rem', textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>
           {t.sched.dateLabel} · {t.sched.timeLabel}
         </Typography>
       </Box>

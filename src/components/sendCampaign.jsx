@@ -15,6 +15,7 @@ import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVarian
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Chip from '@mui/material/Chip'
+import Divider from '@mui/material/Divider'
 import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
 import LinearProgress from '@mui/material/LinearProgress'
@@ -23,6 +24,7 @@ import SendIcon from '@mui/icons-material/Send'
 import CampaignIcon from '@mui/icons-material/Campaign'
 import GroupsIcon from '@mui/icons-material/Groups'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
+import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 
 // Per-recipient variable check — TemplateLibraryPicker only blocks a template
 // when NONE of the selection has the data it needs, so a mixed selection (some
@@ -163,6 +165,23 @@ export default function SendCampaign() {
   const hasIndustryData = targets.some(n => n.industry)
   const hasWebData      = targets.some(n => n.web)
   const cleanMessages = useMemo(() => templateTexts.map(m => m.trim()).filter(Boolean), [templateTexts])
+  // Preview of what the first selected recipient could actually receive —
+  // same eligible-template filtering + variable substitution handleSend()
+  // uses at send time. Shows EVERY eligible variant, not just one: with
+  // several templates selected, pickMessageVariant() picks one at random
+  // per send, so previewing only the first one hid which other messages
+  // could just as likely go out.
+  const previewTarget = targets[0] ?? null
+  const previewMessages = useMemo(() => {
+    if (!previewTarget || cleanMessages.length === 0) return []
+    const eligible = cleanMessages.filter(m => templateFitsTarget(m, previewTarget))
+    const pool = eligible.length ? eligible : cleanMessages
+    return pool.map(m => m
+      .replace(/\{\{nombre\}\}/g,    previewTarget.company_name || '')
+      .replace(/\{\{ciudad\}\}/g,    previewTarget.city || '')
+      .replace(/\{\{industria\}\}/g, previewTarget.industry || '')
+      .replace(/\{\{web\}\}/g,       previewTarget.web || ''))
+  }, [previewTarget, cleanMessages])
   const minTemplatesRequired = getMinTemplatesRequired(targets.length)
   const belowMinTemplates = targets.length > 1 && cleanMessages.length < minTemplatesRequired
   const overBy      = getOverBy(capStats, targets.length)
@@ -197,15 +216,26 @@ export default function SendCampaign() {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {/* Header */}
-      <Box sx={{ flexShrink: 0, mb: 2 }}>
+      {/* Header — mismo detalle de ícono en caja degradada + línea de brillo
+         inferior que ya usan Performance/Instances/Warmup, en vez del ícono
+         de fondo plano y sin glow de antes. */}
+      <Box sx={{ flexShrink: 0, mb: 2, pb: 1.4, position: 'relative' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, mb: 0.4 }}>
-          <Box sx={{ width: 34, height: 34, borderRadius: 2, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Box sx={{
+            width: 34, height: 34, borderRadius: 2, flexShrink: 0,
+            background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.28) 0%, rgba(var(--accent-rgb,59,130,246),0.1) 100%)',
+            border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
             <CampaignIcon sx={{ color: 'var(--accent)', fontSize: 18 }} />
           </Box>
           <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '1.05rem' }}>{t.campaign.title}</Typography>
         </Box>
         <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{t.campaign.subtitle}</Typography>
+        <Box sx={{
+          position: 'absolute', bottom: 0, left: 0, right: '40%', height: '1px',
+          background: 'linear-gradient(90deg, rgba(var(--accent-rgb,59,130,246),0.4), transparent)',
+        }} />
       </Box>
 
       {/* Two columns: message+timing / recipients table.
@@ -235,6 +265,116 @@ export default function SendCampaign() {
             <StepSection n={2} title={t.campaign.stepTiming} hint={t.campaign.hintTiming} isLast>
               <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
             </StepSection>
+
+            {/* Vista previa — antes este hueco entre "Send timing" y la barra
+               de enviar se quedaba vacío hasta que una campaña estuviera en
+               curso; ahora muestra el mensaje real (con variables ya
+               sustituidas) que recibiría el primer destinatario seleccionado.
+               Con varias plantillas elegidas se muestran TODAS las variantes
+               elegibles, no solo una — pickMessageVariant() elige al azar
+               entre ellas al enviar, así que mostrar solo la primera
+               escondía cuáles otros mensajes podían salir igual de probable. */}
+            <SectionCard>
+              {/* Header — mismo detalle de ícono en caja degradada que el
+                 resto de la app, en vez del label plano de antes. */}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Box sx={{
+                  width: 26, height: 26, borderRadius: '8px', flexShrink: 0,
+                  background: 'linear-gradient(135deg, rgba(34,197,94,0.26) 0%, rgba(34,197,94,0.1) 100%)',
+                  border: '1px solid rgba(34,197,94,0.32)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <WhatsAppIcon sx={{ fontSize: 14, color: '#4ade80' }} />
+                </Box>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.8rem', lineHeight: 1.2 }}>
+                    {lang === 'en' ? 'Preview' : 'Vista previa'}
+                  </Typography>
+                  <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem', lineHeight: 1.2 }}>
+                    {lang === 'en' ? 'Real example, variables already filled in' : 'Ejemplo real, con variables ya sustituidas'}
+                  </Typography>
+                </Box>
+              </Box>
+
+              {previewMessages.length > 0 ? (
+                <>
+                  {/* Chip del destinatario de ejemplo — antes el texto solo
+                     nombraba ese número sin dejar claro que es apenas UNO de
+                     varios seleccionados, lo que sonaba como si la vista
+                     previa fuera solo sobre ese contacto. */}
+                  <Box sx={{
+                    display: 'inline-flex', alignSelf: 'flex-start', alignItems: 'center', gap: 0.7,
+                    px: 1.1, py: 0.45, borderRadius: 10,
+                    bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)',
+                  }}>
+                    <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#4ade80', flexShrink: 0 }} />
+                    <Typography sx={{ fontSize: '0.72rem', color: 'var(--text)', fontWeight: 600 }}>
+                      {previewTarget.company_name || previewTarget.number}
+                    </Typography>
+                    {targets.length > 1 && (
+                      <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                        · {lang === 'en' ? `example 1 of ${targets.length} recipients` : `ejemplo 1 de ${targets.length} destinatarios`}
+                      </Typography>
+                    )}
+                  </Box>
+                  <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
+                    {previewMessages.length > 1
+                      ? (lang === 'en' ? `Any of these ${previewMessages.length} variants could be picked at random:` : `Cualquiera de estas ${previewMessages.length} variantes puede tocarle al azar:`)
+                      : (lang === 'en' ? 'Would receive:' : 'Recibiría:')}
+                  </Typography>
+                  {/* Con más de 3 templates elegidos esta lista escala su
+                     propio scroll en vez de empujar toda la página hacia
+                     abajo. Cada burbuja ahora usa la misma forma/color que
+                     los mensajes salientes reales en Conversaciones
+                     (esquina inferior derecha recta + var(--accent)) en vez
+                     de un verde WhatsApp genérico sin relación con el resto
+                     de la app — y un divider separa cada variante de la
+                     siguiente. */}
+                  <Box sx={{
+                    display: 'flex', flexDirection: 'column', gap: 1.2,
+                    maxHeight: 300, overflowY: 'auto', pr: 0.5,
+                    '&::-webkit-scrollbar': { width: 4 },
+                    '&::-webkit-scrollbar-button': { display: 'none' },
+                    '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(100,116,139,0.3)', borderRadius: 4 },
+                    '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
+                  }}>
+                    {previewMessages.map((msg, i) => (
+                      <Box key={i} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                        {i > 0 && <Divider sx={{ borderColor: 'var(--border)', mb: 0.7 }} />}
+                        {previewMessages.length > 1 && (
+                          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontWeight: 700 }}>
+                            {lang === 'en' ? `Variant ${i + 1}` : `Variante ${i + 1}`}
+                          </Typography>
+                        )}
+                        <Box sx={{
+                          alignSelf: 'flex-start', maxWidth: '85%', position: 'relative',
+                          bgcolor: 'var(--accent, #6366f1)', color: 'rgba(255,255,255,0.9)',
+                          borderRadius: '14px 14px 4px 14px', px: 1.4, py: 0.9,
+                          border: '1px solid rgba(0,0,0,0.15)',
+                          fontSize: '0.82rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                          boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+                        }}>
+                          {msg}
+                        </Box>
+                      </Box>
+                    ))}
+                  </Box>
+                  {targets.length > 1 && (
+                    <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.68rem', fontStyle: 'italic' }}>
+                      {lang === 'en'
+                        ? `Each of the other ${targets.length - 1} selected recipient${targets.length - 1 !== 1 ? 's' : ''} gets their own variables substituted the same way.`
+                        : `Cada uno de los otros ${targets.length - 1} destinatario${targets.length - 1 !== 1 ? 's' : ''} seleccionados recibe sus propias variables sustituidas de la misma forma.`}
+                    </Typography>
+                  )}
+                </>
+              ) : (
+                <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem', fontStyle: 'italic' }}>
+                  {lang === 'en'
+                    ? 'Pick a template and at least one recipient to preview the actual message.'
+                    : 'Elige un template y al menos un destinatario para ver el mensaje real.'}
+                </Typography>
+              )}
+            </SectionCard>
 
             <InstanceDisconnectedBanner status={instanceStatus} />
 
@@ -266,65 +406,68 @@ export default function SendCampaign() {
                 )}
               </Box>
             )}
+          </Box>
 
-            {/* Sticky send bar — lives INSIDE the scrollable area with position:sticky
-                instead of relying on a flexShrink:0 sibling + a perfectly-bounded
-                ancestor flex chain (that kept breaking as content above grew). Sticky
-                only needs this box's own scrolling ancestor, which is much more
-                resilient. mt:'auto' pins it to the bottom when content is short. */}
-            <Box sx={{
-              position: 'sticky', bottom: -1, mt: 'auto', pt: 1.5, pb: 0.5,
-              borderTop: '1px solid var(--border)',
-              bgcolor: 'var(--card-bg, #161d2e)',
-              display: 'flex', flexDirection: 'column', gap: 0.6,
-            }}>
-              {capStats && capStats.total_available <= 0 && (
-                <CapacityBanner stats={capStats} selectionCount={Math.max(targets.length, 1)} sx={{ mb: 0.5 }} />
-              )}
-              <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <DailyCapBadge stats={capStats} selectionCount={targets.length} />
-              </Box>
-              {canSend && !isSending && (
-                <Typography sx={{ fontSize: '0.67rem', color: '#4ade80', textAlign: 'center', opacity: 0.75, fontVariantNumeric: 'tabular-nums' }}>
-                  {cleanMessages.length} variante{cleanMessages.length !== 1 ? 's' : ''} → {targets.length} destinatario{targets.length !== 1 ? 's' : ''}
-                </Typography>
-              )}
-              <Button
-                fullWidth
-                onClick={handleSend}
-                disabled={!canSend || isDisconnected}
-                startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 16 }} />}
-                sx={{
-                  bgcolor: canSend ? 'rgba(34,197,94,0.85)' : 'var(--item-hover)',
-                  color:   canSend ? '#fff' : 'var(--text-muted)',
-                  border:  `1px solid ${canSend ? 'rgba(34,197,94,0.9)' : 'var(--border)'}`,
-                  borderRadius: 2, px: 3, py: 1.1, fontWeight: 700, textTransform: 'none', fontSize: '0.9rem',
-                  boxShadow: canSend ? '0 4px 20px rgba(34,197,94,0.35), 0 1px 8px rgba(34,197,94,0.15)' : 'none',
-                  transition: 'all 0.25s ease',
-                  '&:hover': { bgcolor: canSend ? '#22c55e' : 'rgba(255,255,255,0.05)', boxShadow: canSend ? '0 6px 28px rgba(34,197,94,0.5)' : 'none' },
-                  // MUI's own .Mui-disabled base style otherwise overrides the
-                  // custom border/background above with its generic light-gray
-                  // default, producing a bright outline that clashes with the
-                  // dark theme — force ours to actually win.
-                  '&.Mui-disabled': {
-                    bgcolor: 'var(--item-hover) !important',
-                    color: 'var(--text-muted) !important',
-                    border: '1px solid var(--border) !important',
-                  },
-                }}
-              >
-                {isSending ? t.campaign.sending : `${t.campaign.sendBtn}${targets.length ? ` (${targets.length})` : ''}`}
-              </Button>
-              {!canSend && !isSending && (
-                <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', textAlign: 'center' }}>
-                  {targets.length === 0 ? t.campaign.blockedNoRecipients
-                    : cleanMessages.length === 0 ? t.campaign.blockedNoTemplate
-                    : belowMinTemplates ? t.tplLib.minRequiredBlock(minTemplatesRequired, cleanMessages.length)
-                    : capBlocked ? (lang === 'en' ? `Deselect ${overBy} to fit today's quota` : `Desmarca ${overBy} para caber en tu cupo de hoy`)
-                    : ''}
-                </Typography>
-              )}
+          {/* Send bar — antes vivía DENTRO del área con scroll usando
+             position:sticky, lo que forzaba trucos de blur/degradado para
+             que no se viera como un parche sobre el contenido que pasaba
+             detrás. Ahora es un hermano fuera del Box con overflowY:auto:
+             solo el scroll de arriba (templates/timing/vista previa) se
+             mueve, esta barra se queda fija como un tope real, con fondo
+             sólido normal, sin necesitar ningún truco de transparencia. */}
+          <Box sx={{
+            flexShrink: 0, pt: 1.5, pb: 0.5, mt: 1,
+            borderTop: '1px solid var(--border)',
+            // Cualquier color fijo (var(--bg), var(--card-bg), lo que sea)
+            // es una adivinanza que puede desalinearse del fondo real
+            // configurado dinámicamente. Ya no hay nada scrolleando detrás
+            // de esta barra (vive fuera del área con scroll), así que ya no
+            // necesita ningún color propio — transparent simplemente hereda
+            // el fondo real de su contenedor, sea cual sea, sin adivinar.
+            bgcolor: 'transparent',
+            display: 'flex', flexDirection: 'column', gap: 0.6,
+          }}>
+            {capStats && capStats.total_available <= 0 && (
+              <CapacityBanner stats={capStats} selectionCount={Math.max(targets.length, 1)} sx={{ mb: 0.5 }} />
+            )}
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <DailyCapBadge stats={capStats} selectionCount={targets.length} />
             </Box>
+            <Button
+              fullWidth
+              onClick={handleSend}
+              disabled={!canSend || isDisconnected}
+              startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 16 }} />}
+              sx={{
+                bgcolor: canSend ? 'rgba(34,197,94,0.85)' : 'var(--item-hover)',
+                color:   canSend ? '#fff' : 'var(--text-muted)',
+                border:  `1px solid ${canSend ? 'rgba(34,197,94,0.9)' : 'var(--border)'}`,
+                borderRadius: 2, px: 3, py: 1.1, fontWeight: 700, textTransform: 'none', fontSize: '0.9rem',
+                boxShadow: 'none',
+                transition: 'all 0.25s ease',
+                '&:hover': { bgcolor: canSend ? '#22c55e' : 'rgba(255,255,255,0.05)', boxShadow: 'none' },
+                // MUI's own .Mui-disabled base style otherwise overrides the
+                // custom border/background above with its generic light-gray
+                // default, producing a bright outline that clashes with the
+                // dark theme — force ours to actually win.
+                '&.Mui-disabled': {
+                  bgcolor: 'var(--item-hover) !important',
+                  color: 'var(--text-muted) !important',
+                  border: '1px solid var(--border) !important',
+                },
+              }}
+            >
+              {isSending ? t.campaign.sending : `${t.campaign.sendBtn}${targets.length ? ` (${targets.length})` : ''}`}
+            </Button>
+            {!canSend && !isSending && (
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', textAlign: 'center' }}>
+                {targets.length === 0 ? t.campaign.blockedNoRecipients
+                  : cleanMessages.length === 0 ? t.campaign.blockedNoTemplate
+                  : belowMinTemplates ? t.tplLib.minRequiredBlock(minTemplatesRequired, cleanMessages.length)
+                  : capBlocked ? (lang === 'en' ? `Deselect ${overBy} to fit today's quota` : `Desmarca ${overBy} para caber en tu cupo de hoy`)
+                  : ''}
+              </Typography>
+            )}
           </Box>
         </Box>
 

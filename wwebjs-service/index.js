@@ -60,8 +60,42 @@ function startPresenceHeartbeat(sessionId) {
   }, (Math.random() * 30 + 15) * 60 * 1000)
 }
 
+// client.getProfilePicUrl() (whatsapp-web.js/src/Client.js) resolves a Chat via
+// WWebJS.getChat(contactId) BEFORE it ever asks the server for the picture —
+// and there is normally no chat thread with your own number (WhatsApp only
+// creates one if "Message Yourself" has been used at least once), so getChat()
+// throws for the exact contactId this function is always called with. That's
+// the whole bug (github.com/wwebjs/whatsapp-web.js issues #1277/#3005): the
+// profile-pic bridge itself never receives anything, so no reachability/CDN
+// issue would explain the failure — it's a resolution failure one step earlier.
+// Workaround, UNTESTED against a live session (no session available in dev to
+// verify against): skip getChat() entirely and hand the profile-pic bridge a
+// bare `{ id: wid }` built straight from WAWebWidFactory — requestProfilePicFromServer
+// only needs `.id` off whatever it's given, a Chat model is just the caller's
+// convention, not a hard requirement enforced by the bridge itself (per its
+// signature; unverified live). Falls back to the original (broken-for-self)
+// call if this throws or returns nothing, so behavior can only get better, never worse.
 async function fetchProfilePicUrl(client, sessionId) {
   try {
+    const ownId = client.info?.wid?._serialized
+    if (ownId) {
+      try {
+        const url = await client.pupPage.evaluate(async (contactId) => {
+          const wid = window.require('WAWebWidFactory').createWid(contactId)
+          const profilePic = await window
+            .require('WAWebContactProfilePicThumbBridge')
+            .requestProfilePicFromServer({ id: wid })
+          return profilePic ? profilePic.eurl : null
+        }, ownId)
+        if (url) {
+          console.log(`[${sessionId}] getProfilePicUrl (direct-wid workaround) -> ok (${url.length} chars)`)
+          return url
+        }
+        console.log(`[${sessionId}] getProfilePicUrl (direct-wid workaround) -> empty/null, falling back`)
+      } catch (workaroundErr) {
+        console.log(`[${sessionId}] getProfilePicUrl (direct-wid workaround) failed: ${workaroundErr.message} — falling back`)
+      }
+    }
     const url = await client.getProfilePicUrl(client.info.wid._serialized)
     console.log(`[${sessionId}] getProfilePicUrl -> ${url ? 'ok (' + url.length + ' chars)' : 'empty/null'}`)
     return url || null
@@ -391,15 +425,25 @@ app.post('/session/:id/send', async (req, res) => {
     const numberId = await session.client.getNumberId(digits).catch(() => null)
     if (!numberId) return res.status(400).json({ error: `Number ${digits} not found on WhatsApp` })
 
-    // Human-like typing delay
+    // Human-like typing delay. Goes straight through window.WWebJS.sendChatstate()
+    // instead of chat.sendStateTyping() — confirmed against whatsapp-web.js's own
+    // source (util/Injected/Utils.js) that sendStateTyping() itself does nothing
+    // but forward the chat's raw id to that same bridge call, so resolving a full
+    // Chat object via getChatById() first was an unnecessary step, and one that
+    // throws for a brand-new contact with no existing chat thread yet (confirmed
+    // live: silently ate the error and skipped the typing bubble for every
+    // first-ever message to a number — exactly the "single send never shows the
+    // bubble" case, same family of bug as the getChat()-can't-resolve-self issue
+    // fixed above for fetchProfilePicUrl). This bypasses that resolution entirely.
     const delay = typingMs !== undefined ? typingMs : humanTypingMs(message)
     if (delay > 0) {
       try {
-        const chat = await session.client.getChatById(numberId._serialized)
-        await chat.sendStateTyping()
+        await session.client.pupPage.evaluate((chatId) => window.WWebJS.sendChatstate('typing', chatId), numberId._serialized)
         await new Promise(r => setTimeout(r, delay))
-        await chat.clearState()
-      } catch (_) {}
+        await session.client.pupPage.evaluate((chatId) => window.WWebJS.sendChatstate('stop', chatId), numberId._serialized)
+      } catch (typingErr) {
+        console.log(`[${id}] typing indicator failed for ${digits}: ${typingErr.message}`)
+      }
     }
 
     const msg = await session.client.sendMessage(numberId._serialized, message)

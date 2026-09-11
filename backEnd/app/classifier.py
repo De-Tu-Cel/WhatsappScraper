@@ -529,6 +529,16 @@ _INLINE_MENU_ITEM = re.compile(
     r'(?<![0-9])\b[1-9][0-9]?\s*[-.)]{1,2}\s+\S',
     re.MULTILINE,
 )
+# IVR de opción por letra, todo en una sola línea — "Escribe *A* para Ventas o
+# *B* para Soporte" no calzaba con _MENU_LIST_ITEM (exige la letra al INICIO de
+# línea) ni con _INLINE_MENU_ITEM (exige número, no letra), así que un menú
+# rígido de este tipo se le pasaba de largo a la reglas y terminaba en el LLM
+# — que a veces lo juzga "IA conversacional" (is_ai=True) cuando en realidad es
+# un flujo fijo sin nada de IA. Requiere ≥2 letras marcadas para no disparar
+# con una sola mención suelta de "opción A" en prosa normal.
+_INLINE_LETTER_MENU_ITEM = re.compile(
+    r'[*_]?\b[A-H]\b[*_]?\s*(?:para|[-.):])\s*\S',
+)
 
 _AUTO_REPLY_MARKERS = re.compile(
     r'folio|tkt-|ticket\s*#|ref(?:erencia)?\s*[:#]|tu mensaje es importante|'
@@ -614,10 +624,15 @@ def _looks_like_formal_bdc_greeting(text: str) -> bool:
 # este texto. No hay atajo determinista a "hibrido" (solo el LLM decide esa
 # categoría) — lo único que hace este chequeo es evitar clasificar como "bot"
 # con falsa certeza algo que en realidad anuncia lo contrario.
+# "en lugar de"/"en vez de" nuestro asistente virtual: misma idea de reemplazo
+# que "reemplazaré a", solo con otra preposición — caso real de auditoría:
+# "soy Diana... en lugar de nuestro asistente virtual" se clasificaba como bot
+# por _looks_like_bot_selfid al no calzar con ningún patrón de arriba.
 _HANDOFF_MARKERS = re.compile(
     r'reemplazar[eé] a (?:nuestro|nuestra)|se est[aá] comunicando con (?:un|una) agente|'
     r'te atender[aá] (?:un|una) (?:asesor|agente|persona)|lo atender[aá] (?:un|una) (?:asesor|agente)|'
-    r'la atender[aá] (?:un|una) (?:asesor|agente)|un agente (?:humano|real)',
+    r'la atender[aá] (?:un|una) (?:asesor|agente)|un agente (?:humano|real)|'
+    r'en (?:lugar|vez) de (?:nuestro|nuestra) (?:asistente|bot)',
     re.IGNORECASE,
 )
 
@@ -742,7 +757,10 @@ def _looks_like_menu(text: str) -> bool:
     if len(_MENU_LIST_ITEM.findall(text)) >= 2:
         return True
     # Inline numbered list: "1.- Solicitar  2.- Conocer" o "1. 🔬 Cotizar  2. 🏠 Solicitar"
-    return len(_INLINE_MENU_ITEM.findall(text)) >= 2
+    if len(_INLINE_MENU_ITEM.findall(text)) >= 2:
+        return True
+    # IVR de letras en una sola línea: "Escribe *A* para Ventas o *B* para Soporte"
+    return len(_INLINE_LETTER_MENU_ITEM.findall(text)) >= 2
 
 
 def _looks_like_auto_reply(text: str) -> bool:
@@ -756,9 +774,33 @@ def _looks_like_auto_reply(text: str) -> bool:
 NON_TEXT_PLACEHOLDERS = {"[audio]", "[sticker]", "[location]", "[contact]", "[media]", "[template]",
                           "[image]", "[video]", "[document]"}
 
+# Caso real de auditoría: un mensaje de imagen llegó con el JPEG en base64 crudo
+# metido directo en message_body (en vez de uno de los placeholders de arriba —
+# el bug real está en cómo el webhook arma ese campo, no aquí), y el LLM lo
+# clasificó como si fuera texto real, inventando una nota "coherente" sobre
+# contenido que ni siquiera podía leer. Esta es una última barrera defensiva en
+# el clasificador: cualquier bloque largo sin espacios que sea puro alfabeto
+# base64, o un data URI explícito, se trata igual que un placeholder de no-texto.
+_DATA_URI_RE = re.compile(r'^data:[\w/+.-]+;base64,', re.IGNORECASE)
+_BASE64_BLOB_RE = re.compile(r'^[A-Za-z0-9+/]{80,}={0,2}$')
+
+
+def _looks_like_binary_blob(body: str) -> bool:
+    stripped = (body or "").strip()
+    if not stripped:
+        return False
+    if _DATA_URI_RE.match(stripped):
+        return True
+    # Un mensaje real, aunque sea largo, casi siempre tiene espacios o
+    # puntuación — un blob base64 es una sola "palabra" gigante sin espacios.
+    return " " not in stripped and bool(_BASE64_BLOB_RE.match(stripped))
+
 
 def _has_real_text(body: str | None) -> bool:
-    return bool(body and body.strip()) and body.strip() not in NON_TEXT_PLACEHOLDERS
+    if not body or not body.strip():
+        return False
+    stripped = body.strip()
+    return stripped not in NON_TEXT_PLACEHOLDERS and not _looks_like_binary_blob(stripped)
 
 
 def _response_quality_from_svc(svc_scores: dict) -> int | None:
@@ -845,6 +887,28 @@ def _quick_classify(inbound_body: str, reaction_time_min: float = None) -> dict 
             and _BIFURCATED_AI_CLOSE.search(text)
             and not _HUMAN_PERSONALITY_MARKERS.search(text)):
         return _quick_result("bot", "Cierre bifurcado de IA en mensaje sustancial — sin IA", is_ai=True)
+
+    # Velocidad de tecleo imposible para un humano — cierre NO bifurcado (la regla
+    # de arriba no lo atrapa) pero el mensaje es largo, específico (sin "déjame
+    # verificar"/"creo que", sin coloquialismos) Y llegó implausiblemente rápido
+    # para su longitud. Caso real de auditoría: 244 caracteres con precio exacto
+    # en 15s = ~16 car/seg sostenido — ni el tecleo humano más rápido sostiene eso,
+    # ni copiando/pegando una respuesta guardada (antes hay que leer el mensaje
+    # entrante, decidir cuál pegar, y eso ya consume varios segundos). El umbral
+    # (8 car/seg) se dejó deliberadamente holgado para no atrapar a un vendedor
+    # humano rápido pegando una respuesta corta — solo dispara con mensajes largos
+    # Y rápidos a la vez, la combinación que un humano no puede sostener.
+    _MAX_HUMAN_CHARS_PER_SEC = 8.0
+    if (reaction_time_min is not None
+            and len(text) >= 80
+            and not _HUMAN_PERSONALITY_MARKERS.search(text)):
+        reaction_seconds = max(reaction_time_min * 60, 0.1)
+        if len(text) / reaction_seconds > _MAX_HUMAN_CHARS_PER_SEC:
+            return _quick_result(
+                "bot",
+                f"Velocidad de tecleo imposible para humano ({len(text)} caracteres en {reaction_seconds:.0f}s) — sin IA",
+                is_ai=True,
+            )
 
     # ── Timing-only signal: never enough alone, LLM evaluates content ─────────
     # T1<10s was previously a blanket bot rule — removed. Speed is a hint, not proof.
@@ -946,7 +1010,7 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
         prev_ts = cur_ts
         prev_dir = m["direction"]
 
-        if body in NON_TEXT_PLACEHOLDERS:
+        if body in NON_TEXT_PLACEHOLDERS or _looks_like_binary_blob(body):
             lines.append(f"[{role}{timing_note}]: (mensaje sin texto — audio/sticker/ubicación/contacto)")
             continue
         # vCards: el prospecto comparte un contacto — señal HUMANA, no de bot.

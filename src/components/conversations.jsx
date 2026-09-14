@@ -37,6 +37,8 @@ import AttachFileIcon from '@mui/icons-material/AttachFile'
 import ArticleIcon from '@mui/icons-material/Article'
 import Popover from '@mui/material/Popover'
 import EmojiEmotionsIcon from '@mui/icons-material/EmojiEmotions'
+import HotelClassIcon from '@mui/icons-material/HotelClass'
+import AddIcon from '@mui/icons-material/Add'
 import TuneIcon from '@mui/icons-material/Tune'
 import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined'
 import { List, useListRef } from 'react-window'
@@ -229,7 +231,7 @@ const ConversationItem = memo(function ConversationItemImpl({ conv, active, onCl
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.3 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0, flex: 1 }}>
             <Typography sx={{ color: conv.unread ? 'white' : 'rgba(255,255,255,0.8)', fontWeight: conv.unread ? 700 : 500, fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
-              {conv.company_name || conv.company_id}
+              {conv.company_name || 'Sin nombre'}
             </Typography>
             {conv.ai_active && (
               <Tooltip title={conv.ai_typing ? (lang === 'en' ? 'AI Chat is typing...' : 'Chat IA está redactando...') : (lang === 'en' ? 'AI Chat active' : 'Chat IA en conversación')}>
@@ -267,19 +269,42 @@ const ConversationItem = memo(function ConversationItemImpl({ conv, active, onCl
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
-          {conv.sent_by_name && (
-            <Box sx={{
-              display: 'flex', alignItems: 'center', gap: 0.3, flexShrink: 0,
-              bgcolor: agentColor(conv.sent_by_name) + '18',
-              border: `1px solid ${agentColor(conv.sent_by_name)}44`,
-              borderRadius: 1, px: 0.6, py: 0.1,
-            }}>
-              <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: agentColor(conv.sent_by_name), flexShrink: 0 }} />
-              <Typography sx={{ fontSize: '0.62rem', color: agentColor(conv.sent_by_name), fontWeight: 700, lineHeight: 1.4 }}>
-                {conv.sent_by_name.split(' ')[0]}
-              </Typography>
-            </Box>
-          )}
+          {conv.handled_by?.length > 0 && (() => {
+            // Company can have been messaged by more than one agent over time
+            // (handoff, shared line) — show each with its own color dot, joined
+            // by "/", instead of silently collapsing to just the first one.
+            const shown = conv.handled_by.slice(0, 2)
+            const extra = conv.handled_by.length - shown.length
+            return (
+              <Tooltip title={conv.handled_by.map(h => h.name).join(', ')}>
+                <Box sx={{
+                  display: 'flex', alignItems: 'center', gap: 0.35, flexShrink: 0,
+                  bgcolor: 'rgba(255,255,255,0.04)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: 1, px: 0.6, py: 0.1,
+                }}>
+                  {shown.map((h, i) => (
+                    <Fragment key={h.username}>
+                      {i > 0 && (
+                        <Typography sx={{ fontSize: '0.6rem', color: 'rgba(255,255,255,0.25)', lineHeight: 1.4 }}>/</Typography>
+                      )}
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3 }}>
+                        <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: agentColor(h.name), flexShrink: 0 }} />
+                        <Typography sx={{ fontSize: '0.62rem', color: agentColor(h.name), fontWeight: 700, lineHeight: 1.4 }}>
+                          {h.name.split(' ')[0]}
+                        </Typography>
+                      </Box>
+                    </Fragment>
+                  ))}
+                  {extra > 0 && (
+                    <Typography sx={{ fontSize: '0.6rem', color: 'rgba(255,255,255,0.35)', fontWeight: 700, lineHeight: 1.4 }}>
+                      +{extra}
+                    </Typography>
+                  )}
+                </Box>
+              </Tooltip>
+            )
+          })()}
           <Typography sx={{
             color: isInbound ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.3)',
             fontSize: '0.73rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -504,6 +529,12 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
   const raw    = msg.body || msg.message_body || ''
   const isVCard = raw.includes('BEGIN:VCARD')
   const media  = isVCard ? null : MEDIA_LABELS[raw.trim().toLowerCase()]
+  // Real bytes downloaded from wwebjs and stored in GridFS (see the webhook
+  // handler in routes.py) — when present, show the actual picture instead of
+  // just the icon+label placeholder chip above. Scoped to images/stickers for
+  // now, matching what wwebjs-service actually downloads.
+  const hasRealImage = Boolean(msg.media_url) && (msg.media_content_type || '').startsWith('image/')
+  const isSticker = raw.trim().toLowerCase() === '[sticker]'
   const body   = raw || '—'
   const interactive = msg.interactive
   const senderNum = isOut ? formatSenderNumber(msg.instance_number) : null
@@ -530,6 +561,15 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
           <InteractiveMessage interactive={interactive} isOut={isOut} onReply={onReply} />
         ) : isVCard ? (
           <VCardBubble text={raw} isOut={isOut} />
+        ) : hasRealImage && isSticker ? (
+          <Box component="img" src={msg.media_url} alt="sticker" loading="lazy"
+            onClick={() => window.open(msg.media_url, '_blank')}
+            sx={{ width: 112, height: 112, objectFit: 'contain', display: 'block', cursor: 'pointer' }} />
+        ) : hasRealImage ? (
+          <Box component="img" src={msg.media_url} alt="imagen" loading="lazy"
+            onClick={() => window.open(msg.media_url, '_blank')}
+            sx={{ maxWidth: 260, maxHeight: 320, width: '100%', borderRadius: '10px', display: 'block',
+                  objectFit: 'cover', cursor: 'pointer' }} />
         ) : media ? (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
             <media.Icon sx={{ fontSize: 18, color: isOut ? 'rgba(var(--accent-rgb, 99,102,241), 0.9)' : 'rgba(255,255,255,0.5)' }} />
@@ -647,8 +687,10 @@ export default function Conversations({ isActive } = {}) {
   replyValueRef.current = reply
   const [sending, setSending]       = useState(false)
   const [attachedFile, setAttachedFile] = useState(null) // {file, name, type}
+  const [asSticker, setAsSticker]   = useState(false)  // send the attached image as a WhatsApp sticker (wwebjs only)
   const [uploading, setUploading]   = useState(false)
   const fileInputRef = useRef(null)
+  const stickerInputRef = useRef(null)
   const [waNumbers, setWaNumbers]       = useState([])
   const [selectedNums, setSelectedNums] = useState([])
   const [activeNum, setActiveNum]       = useState('all')
@@ -656,6 +698,11 @@ export default function Conversations({ isActive } = {}) {
   const [syncing, setSyncing]           = useState(false)
   const [emojiAnchor, setEmojiAnchor]   = useState(null)
   const [emojiGroup, setEmojiGroup]     = useState(0)
+  const [stickerAnchor, setStickerAnchor] = useState(null)
+  const [stickerLibrary, setStickerLibrary] = useState(null) // null = not loaded yet
+  const [stickerLibLoading, setStickerLibLoading] = useState(false)
+  const [stickerSendingUrl, setStickerSendingUrl] = useState(null)
+  const [stickerUploadErr, setStickerUploadErr] = useState('')
   const syncingRef                      = useRef(false)
   const lastSyncedRef                   = useRef(null)  // evita re-sync al mismo company
   const { stats: dailyStats, refresh: fetchDailyStats } = useDailyCapStats()
@@ -716,7 +763,10 @@ export default function Conversations({ isActive } = {}) {
   }, [])
 
   const filtered = useMemo(() => convs.filter(c => {
-    if (myConvsOnly && c.sent_by_username !== user?.username) return false
+    // Matches ANY agent who ever sent to this company, not just the chronologically
+    // first one — a company handed off from one agent to another still counts as
+    // "mine" for the second agent too.
+    if (myConvsOnly && !(c.handled_by || []).some(h => h.username === user?.username)) return false
     const q = search.toLowerCase()
     return (c.company_name || '').toLowerCase().includes(q) ||
            (c.industry     || '').toLowerCase().includes(q)
@@ -978,10 +1028,14 @@ export default function Conversations({ isActive } = {}) {
     }
   }, [selected, fetchThread, fetchCompanyNumbers, handleSync])
 
-  const handleSendReply = useCallback(async function handleSendReply(overrideText = null) {
+  // overrideMedia lets a sticker picked from the library (see stickerLibrary
+  // below) skip the upload branch entirely — it's already hosted, we just need
+  // its URL — while still going through the same targeting/send/optimistic-
+  // update logic as a normal attached-file send.
+  const handleSendReply = useCallback(async function handleSendReply(overrideText = null, overrideMedia = null) {
     const text   = overrideText ?? replyValueRef.current
     const toSend = selectedNums.length > 0 ? selectedNums : waNumbers.slice(0, 1)
-    if (!text.trim() && !attachedFile) return
+    if (!text.trim() && !attachedFile && !overrideMedia) return
     if (!selected || toSend.length === 0) return
     if (dailyStats && dailyStats.total_available <= 0) {
       setSendError(lang === 'en'
@@ -996,7 +1050,14 @@ export default function Conversations({ isActive } = {}) {
     let mediaUrl = null
     let mediaField = null
     let mediaFileName = null
-    if (attachedFile) {
+    let mediaContentType = null
+    let sendAsSticker = asSticker
+    if (overrideMedia) {
+      mediaUrl = overrideMedia.url
+      mediaField = 'image_url'
+      mediaContentType = overrideMedia.contentType
+      sendAsSticker = true
+    } else if (attachedFile) {
       setUploading(true)
       try {
         const fd = new FormData()
@@ -1010,6 +1071,7 @@ export default function Conversations({ isActive } = {}) {
         mediaUrl = upData.url
         mediaField = attachedFile.type.startsWith('image/') ? 'image_url' : 'document_url'
         mediaFileName = attachedFile.name
+        mediaContentType = upData.content_type || attachedFile.type
       } catch (e) {
         setSendError(e.message)
         setSending(false)
@@ -1034,6 +1096,8 @@ export default function Conversations({ isActive } = {}) {
         if (mediaUrl) {
           payload[mediaField] = mediaUrl
           if (mediaField === 'document_url' && mediaFileName) payload.file_name = mediaFileName
+          if (mediaContentType) payload.content_type = mediaContentType
+          if (mediaField === 'image_url' && sendAsSticker) payload.as_sticker = true
         }
         const res = await authFetch('/api/send-message', {
           method: 'POST',
@@ -1052,8 +1116,10 @@ export default function Conversations({ isActive } = {}) {
         ...toSend.map(num => ({
           _id: `opt-${Date.now()}-${num}`,
           direction: 'outbound',
-          message_body: text.trim(),
-          body: text.trim(),
+          message_body: sendAsSticker ? '[sticker]' : text.trim(),
+          body: sendAsSticker ? '[sticker]' : text.trim(),
+          media_url: overrideMedia?.url || null,
+          media_content_type: overrideMedia?.contentType || null,
           to_number: num,
           status: 'pending',
           created_at: now,
@@ -1065,6 +1131,7 @@ export default function Conversations({ isActive } = {}) {
       setReply('')
       if (replyRef._textarea) replyRef._textarea.value = ''
       setAttachedFile(null)
+      setAsSticker(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
       fetchDailyStats()
       const cid = selected.company_id
@@ -1084,6 +1151,49 @@ export default function Conversations({ isActive } = {}) {
     }
     finally { setSending(false) }
   }, [selectedNums, waNumbers, selected, fetchThread, dailyStats, fetchDailyStats, lang])
+
+  // ── Sticker tray — a small shared library so picking one is a click (like
+  // the emoji picker), instead of browsing the filesystem every time. ────────
+  const fetchStickerLibrary = useCallback(async () => {
+    setStickerLibLoading(true)
+    try {
+      const res = await authFetch('/api/stickers')
+      const data = await res.json().catch(() => ({}))
+      setStickerLibrary(Array.isArray(data.stickers) ? data.stickers : [])
+    } catch { setStickerLibrary([]) }
+    setStickerLibLoading(false)
+  }, [])
+
+  const openStickerTray = e => {
+    setStickerAnchor(e.currentTarget)
+    if (stickerLibrary === null) fetchStickerLibrary()
+  }
+
+  async function sendLibrarySticker(sticker) {
+    setStickerAnchor(null)
+    setStickerSendingUrl(sticker.url)
+    await handleSendReply('', { url: sticker.url, contentType: sticker.content_type })
+    setStickerSendingUrl(null)
+  }
+
+  async function handleNewStickerFile(file) {
+    if (!file) return
+    setStickerUploadErr('')
+    setStickerSendingUrl('uploading')
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await authFetch('/api/stickers', { method: 'POST', body: fd })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) { setStickerUploadErr(data.detail || (lang === 'en' ? 'Error uploading sticker' : 'Error al subir el sticker')); setStickerSendingUrl(null); return }
+      setStickerLibrary(prev => [{ url: data.url, content_type: data.content_type }, ...(prev || [])])
+      setStickerAnchor(null)
+      await handleSendReply('', { url: data.url, contentType: data.content_type })
+    } catch {
+      setStickerUploadErr(lang === 'en' ? 'Network error' : 'Error de red')
+    }
+    setStickerSendingUrl(null)
+  }
 
   // Stats per registered company number — O(N) with pre-built normMap
   const numStats = useMemo(() => {
@@ -1583,30 +1693,114 @@ export default function Conversations({ isActive } = {}) {
               onClose={() => setEmojiAnchor(null)}
               anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
               transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-              slotProps={{ paper: { sx: { bgcolor: 'var(--sidebar-bg,#0d1117)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, p: 1.5, width: 300 } } }}
+              slotProps={{ paper: { sx: {
+                bgcolor: 'var(--card-bg,#161d2e)', border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 3, p: 1.5, width: 300, boxShadow: '0 12px 32px rgba(0,0,0,0.5)',
+              } } }}
             >
-              <Box sx={{ display: 'flex', gap: 0.5, mb: 1 }}>
+              <Box sx={{
+                display: 'flex', gap: 0.5, mb: 1, pb: 1,
+                borderBottom: '1px solid rgba(255,255,255,0.06)',
+                overflowX: 'auto', scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' },
+              }}>
                 {EMOJI_GROUPS.map((g, i) => (
                   <Box key={g.label.es} onClick={() => setEmojiGroup(i)} sx={{
-                    px: 1, py: 0.3, borderRadius: 1.5, cursor: 'pointer', fontSize: '0.65rem',
-                    bgcolor: emojiGroup === i ? 'rgba(var(--accent-rgb,99,102,241),0.2)' : 'rgba(255,255,255,0.05)',
+                    px: 1.1, py: 0.35, borderRadius: 1.5, cursor: 'pointer', fontSize: '0.65rem',
+                    fontWeight: 600, flexShrink: 0, transition: 'all 0.15s',
+                    bgcolor: emojiGroup === i ? 'rgba(var(--accent-rgb,99,102,241),0.2)' : 'transparent',
                     color: emojiGroup === i ? 'var(--accent,#a5b4fc)' : 'rgba(255,255,255,0.4)',
                     border: `1px solid ${emojiGroup === i ? 'rgba(var(--accent-rgb,99,102,241),0.35)' : 'transparent'}`,
+                    '&:hover': { bgcolor: emojiGroup === i ? 'rgba(var(--accent-rgb,99,102,241),0.2)' : 'rgba(255,255,255,0.05)' },
                   }}>{g.label[lang] || g.label.es}</Box>
                 ))}
               </Box>
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.3 }}>
+              <Box sx={{
+                display: 'flex', flexWrap: 'wrap', gap: 0.2, maxHeight: 200, overflowY: 'auto',
+                scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.15) transparent',
+                '&::-webkit-scrollbar': { width: 5 },
+                '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.15)', borderRadius: 3 },
+              }}>
                 {EMOJI_GROUPS[emojiGroup].emojis.map(e => (
                   <Box key={e} onClick={() => {
                     setReply(prev => prev + e)
                     replyRef.current?.querySelector('textarea')?.focus()
                   }} sx={{
-                    fontSize: '1.35rem', cursor: 'pointer', p: 0.4, borderRadius: 1,
-                    lineHeight: 1, transition: 'transform 0.1s',
-                    '&:hover': { bgcolor: 'rgba(255,255,255,0.08)', transform: 'scale(1.25)' },
+                    width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: '1.3rem', cursor: 'pointer', borderRadius: 1.5,
+                    lineHeight: 1, transition: 'transform 0.12s, background-color 0.12s',
+                    '&:hover': { bgcolor: 'rgba(255,255,255,0.08)', transform: 'scale(1.2)' },
                   }}>{e}</Box>
                 ))}
               </Box>
+            </Popover>
+
+            {/* Sticker tray popover */}
+            <Popover
+              open={Boolean(stickerAnchor)} anchorEl={stickerAnchor}
+              onClose={() => setStickerAnchor(null)}
+              anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
+              transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+              slotProps={{ paper: { sx: {
+                bgcolor: 'var(--card-bg,#161d2e)', border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 3, p: 1.5, width: 288, boxShadow: '0 12px 32px rgba(0,0,0,0.5)',
+              } } }}
+            >
+              <Typography sx={{
+                fontSize: '0.7rem', fontWeight: 700, color: 'rgba(255,255,255,0.4)', mb: 1, pb: 1,
+                textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid rgba(255,255,255,0.06)',
+              }}>
+                {lang === 'en' ? 'Stickers' : 'Stickers'}
+              </Typography>
+              {stickerLibLoading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
+                  <CircularProgress size={22} sx={{ color: 'var(--accent, #a5b4fc)' }} />
+                </Box>
+              ) : (
+                <Box sx={{
+                  display: 'flex', flexWrap: 'wrap', gap: 0.6, maxHeight: 220, overflowY: 'auto',
+                  scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.15) transparent',
+                  '&::-webkit-scrollbar': { width: 5 },
+                  '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.15)', borderRadius: 3 },
+                }}>
+                  {/* Add-new tile */}
+                  <Box onClick={() => stickerInputRef.current?.click()} sx={{
+                    width: 60, height: 60, borderRadius: 2, flexShrink: 0, cursor: 'pointer',
+                    border: '1.5px dashed rgba(255,255,255,0.2)', transition: 'all 0.15s',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    '&:hover': { borderColor: 'var(--accent, #a5b4fc)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.08)' },
+                  }}>
+                    {stickerSendingUrl === 'uploading'
+                      ? <CircularProgress size={18} sx={{ color: 'var(--accent, #a5b4fc)' }} />
+                      : <AddIcon sx={{ fontSize: 22, color: 'rgba(255,255,255,0.3)' }} />}
+                  </Box>
+                  {(stickerLibrary || []).map(s => (
+                    <Box key={s.url} onClick={() => sendLibrarySticker(s)} sx={{
+                      width: 60, height: 60, borderRadius: 2, flexShrink: 0, cursor: 'pointer',
+                      overflow: 'hidden', position: 'relative',
+                      bgcolor: 'rgba(255,255,255,0.03)',
+                      border: '1px solid rgba(255,255,255,0.08)',
+                      transition: 'transform 0.12s, border-color 0.15s',
+                      '&:hover': { transform: 'scale(1.08)', borderColor: 'rgba(var(--accent-rgb,99,102,241),0.5)' },
+                    }}>
+                      <Box component="img" src={s.url} alt="" loading="lazy"
+                        sx={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
+                      {stickerSendingUrl === s.url && (
+                        <Box sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <CircularProgress size={16} sx={{ color: 'white' }} />
+                        </Box>
+                      )}
+                    </Box>
+                  ))}
+                  {stickerLibrary?.length === 0 && (
+                    <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.3)', py: 1 }}>
+                      {lang === 'en' ? 'No stickers yet — add one with the + tile' : 'Aún no hay stickers — agrega uno con el +'}
+                    </Typography>
+                  )}
+                </Box>
+              )}
+              {stickerUploadErr && (
+                <Typography sx={{ fontSize: '0.7rem', color: '#f87171', mt: 1 }}>{stickerUploadErr}</Typography>
+              )}
             </Popover>
 
             {/* Input de respuesta */}
@@ -1620,12 +1814,27 @@ export default function Conversations({ isActive } = {}) {
                     size="small"
                     icon={attachedFile.type.startsWith('image/') ? <ImageIcon sx={{ fontSize: 14 }} /> : <InsertDriveFileIcon sx={{ fontSize: 14 }} />}
                     label={attachedFile.name}
-                    onDelete={() => { setAttachedFile(null); if (fileInputRef.current) fileInputRef.current.value = '' }}
+                    onDelete={() => { setAttachedFile(null); setAsSticker(false); if (fileInputRef.current) fileInputRef.current.value = '' }}
                     sx={{ bgcolor: 'rgba(99,102,241,0.15)', color: 'rgba(255,255,255,0.8)', border: '1px solid rgba(99,102,241,0.3)',
                       fontSize: '0.72rem', maxWidth: 240,
                       '& .MuiChip-deleteIcon': { color: 'rgba(255,255,255,0.4)', '&:hover': { color: '#ef4444' } } }}
                   />
                   {uploading && <CircularProgress size={12} sx={{ color: 'var(--accent, #a5b4fc)' }} />}
+                  {attachedFile.type.startsWith('image/') && (
+                    <Tooltip title={lang === 'en' ? 'Only works on wwebjs-connected numbers' : 'Solo funciona en números conectados por wwebjs'}>
+                      <Chip
+                        size="small"
+                        onClick={() => setAsSticker(v => !v)}
+                        label={lang === 'en' ? 'Send as sticker' : 'Enviar como sticker'}
+                        sx={{
+                          fontSize: '0.68rem', cursor: 'pointer',
+                          bgcolor: asSticker ? 'rgba(var(--accent-rgb,99,102,241),0.2)' : 'rgba(255,255,255,0.05)',
+                          color: asSticker ? 'var(--accent, #a5b4fc)' : 'rgba(255,255,255,0.4)',
+                          border: `1px solid ${asSticker ? 'rgba(var(--accent-rgb,99,102,241),0.5)' : 'rgba(255,255,255,0.1)'}`,
+                        }}
+                      />
+                    </Tooltip>
+                  )}
                 </Box>
               )}
 
@@ -1635,7 +1844,7 @@ export default function Conversations({ isActive } = {}) {
                   accept="image/jpeg,image/png,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                   onChange={e => {
                     const f = e.target.files?.[0]
-                    if (f) setAttachedFile({ file: f, name: f.name, type: f.type })
+                    if (f) { setAttachedFile({ file: f, name: f.name, type: f.type }); setAsSticker(false) }
                   }}
                 />
                 <Tooltip title={lang === 'en' ? 'Attach image or document' : 'Adjuntar imagen o documento'}>
@@ -1643,6 +1852,19 @@ export default function Conversations({ isActive } = {}) {
                     sx={{ color: attachedFile ? 'var(--accent, #a5b4fc)' : 'rgba(255,255,255,0.3)',
                       flexShrink: 0, mb: 0.5, '&:hover': { color: 'var(--accent, #a5b4fc)' } }}>
                     <AttachFileIcon sx={{ fontSize: 20 }} />
+                  </IconButton>
+                </Tooltip>
+                {/* Sticker button — opens a tray of previously-sent stickers to pick from
+                    with one click, same idea as the emoji picker next to it, instead of
+                    browsing the filesystem every time. wwebjs only. */}
+                <input ref={stickerInputRef} type="file" hidden accept="image/jpeg,image/png"
+                  onChange={e => { const f = e.target.files?.[0]; if (f) handleNewStickerFile(f); e.target.value = '' }}
+                />
+                <Tooltip title="Sticker">
+                  <IconButton size="small" onClick={openStickerTray}
+                    sx={{ color: Boolean(stickerAnchor) ? 'var(--accent, #a5b4fc)' : 'rgba(255,255,255,0.3)',
+                      flexShrink: 0, mb: 0.5, '&:hover': { color: 'var(--accent, #a5b4fc)' } }}>
+                    <HotelClassIcon sx={{ fontSize: 20 }} />
                   </IconButton>
                 </Tooltip>
                 <Tooltip title="Emojis">

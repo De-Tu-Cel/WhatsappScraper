@@ -273,6 +273,22 @@ function createClient(sessionId, phoneNumber) {
       } catch (_) {}
     }
     console.log(`[${sessionId}] ← ${number}: ${String(msg.body).substring(0, 60)}`)
+
+    // Actually fetch image/sticker bytes so the backend can store and show them —
+    // previously hasMedia was forwarded but the real content was never downloaded,
+    // so a shared photo/sticker only ever showed up as a "[image]"/"[sticker]"
+    // placeholder chip, never the real picture. Scoped to images+stickers for now
+    // (not video/audio/document) — those are the two the app can actually render.
+    let media = null
+    if (msg.hasMedia && (msg.type === 'image' || msg.type === 'sticker')) {
+      try {
+        const m = await msg.downloadMedia()
+        if (m && m.data) media = { data: m.data, mimetype: m.mimetype, filename: m.filename || null }
+      } catch (e) {
+        console.error(`[${sessionId}] downloadMedia failed:`, e.message)
+      }
+    }
+
     forwardWebhook({
       event: 'messages.received',
       sessionId,
@@ -286,6 +302,7 @@ function createClient(sessionId, phoneNumber) {
         messageId: msg.id._serialized,
         timestamp: msg.timestamp,
         hasMedia: msg.hasMedia,
+        media,
         // The backend's status/broadcast filter checks these three fields, but
         // until now they were never actually sent — only the literal "@broadcast"
         // JID substring match could ever fire. Forwarding them makes that filter
@@ -462,7 +479,7 @@ app.post('/session/:id/send-media', async (req, res) => {
   if (!session) return res.status(404).json({ error: 'Session not found' })
   if (session.status !== 'connected') return res.status(400).json({ error: `Not connected: ${session.status}` })
 
-  const { to, mediaUrl, filename, caption, typingMs } = req.body
+  const { to, mediaUrl, filename, caption, typingMs, asSticker } = req.body
   if (!to || !mediaUrl) return res.status(400).json({ error: 'to and mediaUrl required' })
 
   const digits = to.replace(/\D/g, '')
@@ -494,10 +511,10 @@ app.post('/session/:id/send-media', async (req, res) => {
     const media = await MessageMedia.fromUrl(mediaUrl, { unsafeMime: true })
     if (filename) media.filename = filename
 
-    const msg = await session.client.sendMessage(numberId._serialized, media, {
-      caption: caption || '',
-      sendMediaAsDocument: !media.mimetype.startsWith('image/'),
-    })
+    const msg = await session.client.sendMessage(numberId._serialized, media, asSticker
+      ? { sendMediaAsSticker: true }
+      : { caption: caption || '', sendMediaAsDocument: !media.mimetype.startsWith('image/') },
+    )
     session.lastSendAt = Date.now()
 
     console.log(`[${id}] ✓ media sent → ${digits} (${media.mimetype}) ${filename || ''}`)
@@ -604,6 +621,44 @@ app.post('/session/:id/profile/status', async (req, res) => {
   if (typeof status !== 'string') return res.status(400).json({ error: 'status string required' })
   try {
     await session.client.setStatus(status)
+    res.json({ success: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Set the real WhatsApp profile name (pushname) — this is the account's
+// actual display name, distinct from the app's own internal instance label
+// (which InstancesPanel.jsx already lets you edit) and from Andy's
+// conversation persona name (which now reads THIS value so it never claims a
+// name that doesn't match the connected profile).
+app.post('/session/:id/profile/name', async (req, res) => {
+  const { id } = req.params
+  const session = sessions.get(id)
+  if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected' })
+  const { name } = req.body
+  if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'name string required' })
+  try {
+    const ok = await session.client.setDisplayName(name.trim())
+    if (!ok) return res.status(409).json({ error: 'WhatsApp refused the name change (rate-limited or not permitted right now)' })
+    res.json({ success: true, name: name.trim() })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Set the real WhatsApp profile picture from a public image URL.
+app.post('/session/:id/profile/picture', async (req, res) => {
+  const { id } = req.params
+  const session = sessions.get(id)
+  if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected' })
+  const { imageUrl } = req.body
+  if (typeof imageUrl !== 'string' || !imageUrl.trim()) return res.status(400).json({ error: 'imageUrl string required' })
+  try {
+    const media = await MessageMedia.fromUrl(imageUrl, { unsafeMime: true })
+    if (!media.mimetype.startsWith('image/')) return res.status(400).json({ error: `URL is not an image (${media.mimetype})` })
+    const ok = await session.client.setProfilePicture(media)
+    if (!ok) return res.status(409).json({ error: 'WhatsApp refused the picture change' })
     res.json({ success: true })
   } catch (e) {
     res.status(500).json({ error: e.message })

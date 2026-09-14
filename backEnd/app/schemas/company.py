@@ -17,6 +17,8 @@ class SendMessageRequest(BaseModel):
     image_url: Optional[str] = None      # send image via public URL (JPEG/PNG, max 5MB)
     document_url: Optional[str] = None  # send document via public URL (PDF/DOCX/etc, max 100MB)
     file_name: Optional[str] = None     # display name for document
+    as_sticker: Optional[bool] = False  # wwebjs only — send image_url as a WhatsApp sticker
+    content_type: Optional[str] = None  # MIME type of image_url/document_url, for rendering it back in the thread
 
 class SearchRequest(BaseModel):
     industry: str

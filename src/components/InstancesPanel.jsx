@@ -24,6 +24,7 @@ import AddIcon from '@mui/icons-material/Add'
 import SearchIcon from '@mui/icons-material/Search'
 import QrCodeIcon from '@mui/icons-material/QrCode'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
+import GroupsIcon from '@mui/icons-material/Groups'
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import RefreshIcon from '@mui/icons-material/Refresh'
@@ -32,6 +33,8 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import LinkOffIcon from '@mui/icons-material/LinkOff'
 import SmartphoneIcon from '@mui/icons-material/Smartphone'
 import EditIcon from '@mui/icons-material/Edit'
+import BadgeIcon from '@mui/icons-material/Badge'
+import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
 import TrendingUpIcon from '@mui/icons-material/TrendingUp'
 import InsightsIcon from '@mui/icons-material/Insights'
@@ -663,7 +666,7 @@ const DISCONNECT_LABEL_ES = { banned: 'Baneado por WhatsApp', logged_out: 'Cerr�
 const DISCONNECT_LABEL_EN = { banned: 'Banned by WhatsApp', logged_out: 'Logged out', conflict: 'Device conflict', multidevice: 'Multi-device conflict', server_error: 'Internal error', restart: 'Restart required', replaced: 'Session replaced', timeout: 'Connection timeout', closed: 'Connection closed', disconnected: 'Disconnected', failed: 'Connection error' }
 
 // ── InstanceRow ──────────────────────────────────────────────────────────────
-function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup }) {
+function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile }) {
   const { t, lang } = useLang()
   const [hover, setHover] = useState(false)
   const status = inst.live_status || 'unknown'
@@ -780,6 +783,14 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup }) {
               <EditIcon sx={{ fontSize: 14 }} />
             </IconButton>
           </Tooltip>
+          {inst.provider === 'wwebjs' && onWaProfile && (
+            <Tooltip title={lang === 'en' ? 'WhatsApp profile' : 'Perfil de WhatsApp'} placement="top">
+              <IconButton size="small" onClick={() => onWaProfile(inst)}
+                sx={{ color: 'var(--accent,#60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)' } }}>
+                <BadgeIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </Tooltip>
+          )}
           <Tooltip title={lang === 'en' ? 'Remove from user' : 'Quitar de este usuario'} placement="top">
             <IconButton size="small" onClick={() => onRemove(inst)}
               sx={{ color: 'var(--text-muted)', p: 0.4, '&:hover': { color: '#f87171', bgcolor: 'rgba(248,113,113,0.1)' } }}>
@@ -813,7 +824,7 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup }) {
 }
 
 // ── UserCard ─────────────────────────────────────────────────────────────────
-function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, onWarmup, cardIndex = 0 }) {
+function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, onWarmup, onWaProfile, cardIndex = 0 }) {
   const { t, lang } = useLang()
   const connectedCount = instances.filter(i => ['open', 'connected'].includes(i.live_status)).length
   const isAdmin = user.role === 'admin'
@@ -906,10 +917,17 @@ function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, on
         </Box>
       ) : (
         <>
-          {/* Instance rows */}
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.2, mb: 1.2 }}>
+          {/* Instance rows — capped height + scroll so a user with many instances
+              doesn't stretch their card taller than everyone else's in the grid. */}
+          <Box sx={{
+            display: 'flex', flexDirection: 'column', gap: 0.2, mb: 1.2,
+            maxHeight: 180, overflowY: instances.length > 3 ? 'auto' : 'visible', pr: 0.3,
+            scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.15) transparent',
+            '&::-webkit-scrollbar': { width: 5 },
+            '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.15)', borderRadius: 3 },
+          }}>
             {instances.map(inst => (
-              <InstanceRow key={inst.name} inst={inst} onQr={onQr} onEditNumber={onEditNumber} onRemove={onRemove} onWarmup={onWarmup} />
+              <InstanceRow key={inst.name} inst={inst} onQr={onQr} onEditNumber={onEditNumber} onRemove={onRemove} onWarmup={onWarmup} onWaProfile={onWaProfile} />
             ))}
           </Box>
           {/* Capacity bar — 5 slot dots + add button */}
@@ -1829,6 +1847,92 @@ export default function InstancesPanel({ isActive } = {}) {
   const [editNumberSaving, setEditNumberSaving] = useState(false)
   const [editNumberErr,    setEditNumberErr]    = useState('')
 
+  // ── WhatsApp profile editor (real account name/photo — wwebjs only) ──
+  // Distinct from the internal label above: this changes what the CONTACT
+  // actually sees on WhatsApp (the real pushname/photo), not just how the
+  // instance shows up inside our own app.
+  const [waProfileOpen,    setWaProfileOpen]    = useState(false)
+  const [waProfileInst,    setWaProfileInst]    = useState(null)
+  const [waProfileName,    setWaProfileName]    = useState('')
+  const [waProfileImgUrl,  setWaProfileImgUrl]  = useState('')
+  const [waProfileSaving,  setWaProfileSaving]  = useState(false)
+  const [waProfileErr,     setWaProfileErr]     = useState('')
+  const [waProfileOk,      setWaProfileOk]      = useState('')
+
+  const [waProfilePhotoEditing, setWaProfilePhotoEditing] = useState(false)
+  const [waProfileUploading, setWaProfileUploading] = useState(false)
+  const [waProfileImgLoaded, setWaProfileImgLoaded] = useState(false)
+  const waProfileFileRef = useRef(null)
+  const waProfileAvatarSrc = waProfileImgUrl.trim() || waProfileInst?.profile_pic_url || ''
+  // Shimmer skeleton while the photo itself is loading (a real profile pic can
+  // take a moment over the network) — reset it every time the source changes
+  // (new upload, new URL pasted, or a different instance's dialog opened).
+  useEffect(() => { setWaProfileImgLoaded(false) }, [waProfileAvatarSrc])
+
+  async function handleWaProfileFilePicked(file) {
+    if (!file) return
+    setWaProfileUploading(true); setWaProfileErr('')
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/files/upload', { method: 'POST', headers: { 'x-user-token': token() }, body: fd })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) { setWaProfileErr(data.detail || (lang === 'en' ? 'Error uploading image' : 'Error al subir la imagen')); return }
+      setWaProfileImgUrl(data.url)
+    } catch { setWaProfileErr(lang === 'en' ? 'Network error' : 'Error de red') }
+    setWaProfileUploading(false)
+  }
+
+  function handleWaProfileClick(inst) {
+    setWaProfileInst(inst)
+    setWaProfileName(inst?.profile_name || '')
+    setWaProfileImgUrl('')
+    setWaProfilePhotoEditing(false)
+    setWaProfileUploading(false)
+    setWaProfileErr('')
+    setWaProfileOk('')
+    setWaProfileOpen(true)
+  }
+
+  // One combined save — WhatsApp's own edit-profile screen has a single button
+  // too, not a separate one per field. Saves whichever of name/photo actually
+  // changed; if both changed, both requests fire and either failing surfaces.
+  async function handleWaProfileSaveAll() {
+    if (!waProfileInst) return
+    const nameChanged = waProfileName.trim() && waProfileName.trim() !== (waProfileInst.profile_name || '')
+    const picChanged = waProfileImgUrl.trim().length > 0
+    if (!nameChanged && !picChanged) { setWaProfileOpen(false); return }
+    setWaProfileSaving(true); setWaProfileErr(''); setWaProfileOk('')
+    const errors = []
+    if (nameChanged) {
+      try {
+        const res = await fetch(`/api/wwebjs/session/${encodeURIComponent(waProfileInst.name)}/profile/name`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
+          body: JSON.stringify({ name: waProfileName.trim() }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) errors.push(data.detail || data.error || (lang === 'en' ? 'Name: error saving' : 'Nombre: error al guardar'))
+        else setInstances(prev => prev.map(i => i.name === waProfileInst.name ? { ...i, profile_name: waProfileName.trim() } : i))
+      } catch { errors.push(lang === 'en' ? 'Name: network error' : 'Nombre: error de red') }
+    }
+    if (picChanged) {
+      try {
+        const res = await fetch(`/api/wwebjs/session/${encodeURIComponent(waProfileInst.name)}/profile/picture`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
+          body: JSON.stringify({ image_url: waProfileImgUrl.trim() }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) errors.push(data.detail || data.error || (lang === 'en' ? 'Photo: error saving' : 'Foto: error al guardar'))
+      } catch { errors.push(lang === 'en' ? 'Photo: network error' : 'Foto: error de red') }
+    }
+    setWaProfileSaving(false)
+    if (errors.length) { setWaProfileErr(errors.join(' · ')); return }
+    setWaProfileOk(lang === 'en' ? 'Profile updated' : 'Perfil actualizado')
+    setTimeout(() => setWaProfileOpen(false), 900)
+  }
+
   function handleEditNumberClick(inst) {
     setEditNumberInst(inst)
     setEditNumberValue(inst?.number || '')
@@ -2488,19 +2592,58 @@ export default function InstancesPanel({ isActive } = {}) {
 
         {/* User cards grid + unassigned sidebar */}
         <Box sx={{ flex: '1 1 560px', minWidth: 0, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-        {/* Left: user cards — con más usuarios de los que caben en la altura
-           de Performance, esta columna hace su propio scroll interno en vez
-           de estirar la página entera hacia abajo. */}
+        {/* Left: user cards — enclosed in the same bordered panel frame as
+           Performance next to it (border/bg/radius), so both read as two
+           self-contained panels side by side instead of Performance looking
+           "boxed" and this one just floating loose in open space. With more
+           users than fit in Performance's own height, this panel scrolls
+           internally instead of stretching the whole page downward. */}
         <Box sx={{
           flex: '1 1 480px', minWidth: 0,
-          ...(perfHeight ? {
-            maxHeight: perfHeight, overflowY: 'auto', pr: 0.5,
+          borderRadius: 3, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+          bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))', overflow: 'hidden',
+          display: 'flex', flexDirection: 'column',
+          ...(perfHeight ? { maxHeight: perfHeight } : {}),
+        }}>
+          {/* Header — same icon-in-gradient-box banner as Performance next to it,
+             so this panel reads as its own titled panel instead of a bare box. */}
+          <Box sx={{
+            display: 'flex', alignItems: 'center', gap: 1.5, flexShrink: 0,
+            px: 2, py: 1.6, position: 'relative',
+            background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.12) 0%, rgba(var(--accent-rgb,59,130,246),0.04) 60%, transparent 100%)',
+            borderBottom: '1px solid rgba(var(--accent-rgb,59,130,246),0.15)',
+            '&::after': {
+              content: '""', position: 'absolute', bottom: 0, left: 16, right: 16, height: '1px',
+              background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.4) 40%, rgba(var(--accent-rgb,59,130,246),0.4) 60%, transparent)',
+            },
+          }}>
+            <Box sx={{
+              width: 32, height: 32, borderRadius: '9px', flexShrink: 0,
+              background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.25) 0%, rgba(var(--accent-rgb,59,130,246),0.1) 100%)',
+              border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <GroupsIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 16 }} />
+            </Box>
+            <Box>
+              <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2 }}>
+                {lang === 'en' ? 'Team' : 'Equipo'}
+              </Typography>
+              <Typography sx={{ fontSize: '0.65rem', color: 'var(--text-muted, rgba(255,255,255,0.3))', lineHeight: 1, mt: 0.2 }}>
+                {lang === 'en' ? 'Users and their assigned instances' : 'Usuarios y sus instancias asignadas'}
+              </Typography>
+            </Box>
+          </Box>
+
+          {/* Content — scrolls internally within the header when there are more
+             users than fit in Performance's own height. */}
+          <Box sx={{
+            flex: 1, minHeight: 0, overflowY: 'auto', p: 2,
             '&::-webkit-scrollbar': { width: 4 },
             '&::-webkit-scrollbar-button': { display: 'none' },
             '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(100,116,139,0.3)', borderRadius: 4 },
             '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
-          } : {}),
-        }}>
+          }}>
           {/* User search filter */}
           {!loading && users.length > 0 && (
             <Box sx={{ mb: 1.5, display: 'flex', alignItems: 'center', gap: 1,
@@ -2653,18 +2796,20 @@ export default function InstancesPanel({ isActive } = {}) {
                     onEditNumber={inst => handleEditNumberClick(inst)}
                     onRemove={handleQuickUnassign}
                     onWarmup={handleWarmupToggle}
+                    onWaProfile={inst => handleWaProfileClick(inst)}
                   />
                 )
               })}
           </Box>
         )}
+        </Box>{/* end scrollable content */}
         </Box>{/* end left panel */}
 
         {/* Right sidebar: unassigned instances */}
         {loading ? (
           <Box sx={{
             width: 240, flexShrink: 0,
-            border: '1px solid rgba(245,158,11,0.2)', borderRadius: 2.5,
+            border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)', borderRadius: 2.5,
             bgcolor: 'var(--card-bg)', alignSelf: 'flex-start', overflow: 'hidden',
             '@keyframes skCardIn': { '0%': { opacity: 0, transform: 'translateY(12px)' }, '100%': { opacity: 1, transform: 'translateY(0)' } },
             animation: 'skCardIn 0.35s ease both', animationDelay: '0.3s',
@@ -2673,18 +2818,18 @@ export default function InstancesPanel({ isActive } = {}) {
                e Instances, en tono ámbar (mismo acento que ya usaba esta
                barra) en vez del punto + texto plano de antes. */}
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 1.6, py: 1.4,
-              background: 'linear-gradient(135deg, rgba(245,158,11,0.14) 0%, rgba(245,158,11,0.04) 60%, transparent 100%)',
-              borderBottom: '1px solid rgba(245,158,11,0.15)' }}>
+              background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.14) 0%, rgba(var(--accent-rgb,59,130,246),0.04) 60%, transparent 100%)',
+              borderBottom: '1px solid rgba(var(--accent-rgb,59,130,246),0.15)' }}>
               <Skeleton variant="rounded" width={26} height={26} sx={{ borderRadius: '8px', flexShrink: 0,
-                bgcolor: 'rgba(245,158,11,0.16)',
-                '&::after': { background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.15), transparent)' } }} />
+                bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.16)',
+                '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.15), transparent)' } }} />
               <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Skeleton variant="text" width="60%" height={13} sx={{ mb: 0.2,
                   bgcolor: 'rgba(255,255,255,0.1)',
-                  '&::after': { background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.12), transparent)' } }} />
+                  '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.12), transparent)' } }} />
                 <Skeleton variant="text" width="80%" height={9} sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
               </Box>
-              <Skeleton variant="rounded" width={22} height={16} sx={{ borderRadius: 10, bgcolor: 'rgba(245,158,11,0.12)', flexShrink: 0 }} />
+              <Skeleton variant="rounded" width={22} height={16} sx={{ borderRadius: 10, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)', flexShrink: 0 }} />
               <Skeleton variant="circular" width={12} height={12} sx={{ bgcolor: 'rgba(255,255,255,0.06)', flexShrink: 0 }} />
             </Box>
             {/* Group label row — mirrors the "SIN CONEXIÓN" section header */}
@@ -2709,7 +2854,7 @@ export default function InstancesPanel({ isActive } = {}) {
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Skeleton variant="text" width={`${42 + (r * 13) % 28}%`} height={11} sx={{ mb: 0.2,
                     bgcolor: 'rgba(255,255,255,0.09)',
-                    '&::after': { background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.08), transparent)' } }} />
+                    '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.08), transparent)' } }} />
                   <Skeleton variant="text" width={`${52 + (r * 9) % 24}%`} height={9} sx={{ bgcolor: 'rgba(255,255,255,0.06)' }} />
                 </Box>
                 {/* Action buttons: QR, assign, edit, delete */}
@@ -2740,7 +2885,7 @@ export default function InstancesPanel({ isActive } = {}) {
           return (
             <Box sx={{
               width: 240, flexShrink: 0,
-              border: '1px solid rgba(245,158,11,0.2)', borderRadius: 2.5,
+              border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)', borderRadius: 2.5,
               bgcolor: 'var(--card-bg)', alignSelf: 'flex-start',
               display: 'flex', flexDirection: 'column',
               maxHeight: 'calc(100vh - 200px)',
@@ -2753,23 +2898,23 @@ export default function InstancesPanel({ isActive } = {}) {
               <Box onClick={() => setSidebarCollapsed(c => !c)}
                 sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 1.6, py: 1.4, position: 'relative',
                   cursor: 'pointer', userSelect: 'none', flexShrink: 0,
-                  background: 'linear-gradient(135deg, rgba(245,158,11,0.14) 0%, rgba(245,158,11,0.04) 60%, transparent 100%)',
-                  borderBottom: sidebarCollapsed ? 'none' : '1px solid rgba(245,158,11,0.15)',
+                  background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.14) 0%, rgba(var(--accent-rgb,59,130,246),0.04) 60%, transparent 100%)',
+                  borderBottom: sidebarCollapsed ? 'none' : '1px solid rgba(var(--accent-rgb,59,130,246),0.15)',
                   borderRadius: '10px 10px 0 0',
-                  '&:hover': { background: 'linear-gradient(135deg, rgba(245,158,11,0.2) 0%, rgba(245,158,11,0.06) 60%, transparent 100%)' },
+                  '&:hover': { background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.2) 0%, rgba(var(--accent-rgb,59,130,246),0.06) 60%, transparent 100%)' },
                   transition: 'background 0.15s',
                   ...(!sidebarCollapsed && { '&::after': {
                     content: '""', position: 'absolute', bottom: 0, left: 14, right: 14, height: '1px',
-                    background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.4) 40%, rgba(245,158,11,0.4) 60%, transparent)',
+                    background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.4) 40%, rgba(var(--accent-rgb,59,130,246),0.4) 60%, transparent)',
                   } }),
                 }}>
                 <Box sx={{
                   width: 26, height: 26, borderRadius: '8px', flexShrink: 0,
-                  background: 'linear-gradient(135deg, rgba(245,158,11,0.28) 0%, rgba(245,158,11,0.1) 100%)',
-                  border: '1px solid rgba(245,158,11,0.35)',
+                  background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.28) 0%, rgba(var(--accent-rgb,59,130,246),0.1) 100%)',
+                  border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                 }}>
-                  <SmartphoneIcon sx={{ color: '#f59e0b', fontSize: 14 }} />
+                  <SmartphoneIcon sx={{ color: 'var(--accent,#3b82f6)', fontSize: 14 }} />
                 </Box>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Typography sx={{ color: 'var(--text)', fontSize: '0.8rem', fontWeight: 700, lineHeight: 1.2 }}>
@@ -2779,12 +2924,12 @@ export default function InstancesPanel({ isActive } = {}) {
                     {lang === 'en' ? 'Instances without a user' : 'Instancias sin usuario'}
                   </Typography>
                 </Box>
-                <Typography sx={{ fontSize: '0.67rem', color: 'rgba(245,158,11,0.85)',
-                  bgcolor: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)',
+                <Typography sx={{ fontSize: '0.67rem', color: 'rgba(var(--accent-rgb,59,130,246),0.85)',
+                  bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)',
                   px: 1, py: 0.2, borderRadius: 10, fontWeight: 700, flexShrink: 0 }}>
                   {unassigned.length}
                 </Typography>
-                <KeyboardArrowDownIcon sx={{ fontSize: 15, color: 'rgba(245,158,11,0.6)', flexShrink: 0,
+                <KeyboardArrowDownIcon sx={{ fontSize: 15, color: 'rgba(var(--accent-rgb,59,130,246),0.6)', flexShrink: 0,
                   transition: 'transform 0.2s', transform: sidebarCollapsed ? 'rotate(-90deg)' : 'none' }} />
               </Box>
 
@@ -2794,7 +2939,7 @@ export default function InstancesPanel({ isActive } = {}) {
                 flex: 1, minHeight: 0, overflowY: 'auto',
                 '&::-webkit-scrollbar': { width: 4 },
                 '&::-webkit-scrollbar-button': { display: 'none' },
-                '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(245,158,11,0.25)', borderRadius: 4 },
+                '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.25)', borderRadius: 4 },
                 '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
               }}>
               {grouped.map(({ _group, color: gColor, items }) => (
@@ -2935,6 +3080,18 @@ export default function InstancesPanel({ isActive } = {}) {
                                 <EditIcon sx={{ fontSize: 13 }} />
                               </IconButton>
                             </Tooltip>
+                            {/* Real WhatsApp profile name/photo — only possible for wwebjs
+                               sessions (setDisplayName/setProfilePicture aren't exposed by
+                               the other providers' APIs). Separate from "Edit number" above,
+                               which only touches our own internal label. */}
+                            {inst.provider === 'wwebjs' && (
+                              <Tooltip title={lang === 'en' ? 'WhatsApp profile' : 'Perfil de WhatsApp'}>
+                                <IconButton size="small" onClick={() => handleWaProfileClick(inst)}
+                                  sx={{ color: 'var(--accent,#60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' } }}>
+                                  <BadgeIcon sx={{ fontSize: 13 }} />
+                                </IconButton>
+                              </Tooltip>
+                            )}
                             <Tooltip title={t.inst.delete}>
                               <IconButton size="small" onClick={() => handleDeleteClick(inst)}
                                 sx={{ color: '#f87171', p: 0.4, '&:hover': { bgcolor: 'rgba(248,113,133,0.1)' } }}>
@@ -3125,6 +3282,178 @@ export default function InstancesPanel({ isActive } = {}) {
               bgcolor: 'var(--accent, #3b82f6)', '&:hover': { bgcolor: 'color-mix(in srgb, var(--accent, #3b82f6) 82%, black)' },
               '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.3)' } }}>
             {editNumberSaving
+              ? <><CircularProgress size={13} sx={{ color: 'white', mr: 1 }} />{lang === 'en' ? 'Saving…' : 'Guardando…'}</>
+              : lang === 'en' ? 'Save' : 'Guardar'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── WhatsApp profile editor (real account name/photo) ── */}
+      <Dialog open={waProfileOpen} onClose={() => setWaProfileOpen(false)}
+        slotProps={{ paper: { sx: {
+          bgcolor: 'var(--card-bg,#161d2e) !important',
+          background: 'var(--card-bg,#161d2e) !important',
+          backgroundImage: 'none !important',
+          border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3) !important',
+          borderRadius: 3, minWidth: 360, maxWidth: 420,
+          boxShadow: '0 24px 64px rgba(0,0,0,0.7)',
+        } } }}>
+        <DialogTitle sx={{ pb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+            <Box sx={{
+              width: 34, height: 34, borderRadius: 2, flexShrink: 0,
+              bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)',
+              border: '1px solid rgba(var(--accent-rgb,59,130,246),0.28)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <BadgeIcon sx={{ fontSize: 17, color: 'var(--accent,#60a5fa)' }} />
+            </Box>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2 }}>
+                {lang === 'en' ? 'WhatsApp profile' : 'Perfil de WhatsApp'}
+              </Typography>
+              <Typography sx={{ color: 'var(--text-muted,rgba(255,255,255,0.38))', fontSize: '0.7rem', fontFamily: 'monospace', mt: 0.2,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {waProfileInst?.name}
+              </Typography>
+            </Box>
+            <IconButton size="small" onClick={() => setWaProfileOpen(false)}
+              sx={{ color: 'var(--text-muted,rgba(255,255,255,0.25))', '&:hover': { color: 'var(--text,white)', bgcolor: 'rgba(255,255,255,0.06)' }, flexShrink: 0 }}>
+              <CloseIcon sx={{ fontSize: 17 }} />
+            </IconButton>
+          </Box>
+        </DialogTitle>
+
+        <DialogContent sx={{ pt: '8px !important', pb: 0, display: 'flex', flexDirection: 'column', gap: 1.6 }}>
+          <Typography sx={{ color: 'var(--text-muted,rgba(255,255,255,0.4))', fontSize: '0.72rem', lineHeight: 1.5, textAlign: 'center' }}>
+            {lang === 'en'
+              ? 'This changes the REAL name/photo the contact sees on WhatsApp.'
+              : 'Esto cambia el nombre/foto REAL que ve el contacto en WhatsApp.'}
+          </Typography>
+
+          {/* WhatsApp-style circular avatar with camera-overlay to change the photo — mirrors
+              WhatsApp's own "Edit profile" screen (big round photo, name underneath, one save).
+              Tapping the camera opens the device's file picker directly (like WhatsApp itself),
+              instead of asking for a URL up front — a manual-URL fallback stays one tap away. */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.2, py: 1 }}>
+            <input ref={waProfileFileRef} type="file" hidden accept="image/jpeg,image/png"
+              onChange={e => handleWaProfileFilePicked(e.target.files?.[0])} />
+            <Box sx={{ position: 'relative', width: 116, height: 116 }}>
+              {/* Soft glow ring behind the photo, same accent as the header icon */}
+              <Box sx={{
+                position: 'absolute', inset: -6, borderRadius: '50%',
+                background: 'radial-gradient(circle, rgba(var(--accent-rgb,59,130,246),0.25) 0%, transparent 70%)',
+              }} />
+              <Box onClick={() => waProfileFileRef.current?.click()} sx={{
+                position: 'relative', width: 116, height: 116, borderRadius: '50%', overflow: 'hidden',
+                bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)',
+                border: '3px solid rgba(var(--accent-rgb,59,130,246),0.4)',
+                boxShadow: '0 6px 20px rgba(0,0,0,0.35)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                cursor: 'pointer', transition: 'border-color 0.15s',
+                '&:hover': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.7)' },
+              }}>
+                {waProfileAvatarSrc ? (
+                  <>
+                    {!waProfileImgLoaded && (
+                      <Skeleton variant="circular" width="100%" height="100%"
+                        sx={{ position: 'absolute', inset: 0, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)',
+                          '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.15), transparent)' } }} />
+                    )}
+                    <Box component="img" src={waProfileAvatarSrc} alt=""
+                      onLoad={() => setWaProfileImgLoaded(true)}
+                      onError={e => { e.currentTarget.style.display = 'none'; setWaProfileImgLoaded(true) }}
+                      sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block',
+                        opacity: waProfileImgLoaded ? 1 : 0, transition: 'opacity 0.25s ease' }} />
+                  </>
+                ) : (
+                  <Typography sx={{ fontSize: '2rem', fontWeight: 800, color: 'var(--accent,#60a5fa)', userSelect: 'none' }}>
+                    {(waProfileName || waProfileInst?.name || '?').slice(0, 2).toUpperCase()}
+                  </Typography>
+                )}
+                {waProfileUploading && (
+                  <Box sx={{
+                    position: 'absolute', inset: 0, bgcolor: 'rgba(22,29,46,0.65)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <CircularProgress size={26} sx={{ color: 'var(--accent,#60a5fa)' }} />
+                  </Box>
+                )}
+              </Box>
+              <IconButton size="small" onClick={() => waProfileFileRef.current?.click()}
+                sx={{
+                  position: 'absolute', bottom: -2, right: -2, width: 34, height: 34,
+                  bgcolor: 'var(--accent,#3b82f6)', color: 'white',
+                  border: '3px solid var(--card-bg,#161d2e)',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+                  '&:hover': { bgcolor: 'color-mix(in srgb, var(--accent,#3b82f6) 82%, black)' },
+                }}>
+                <PhotoCameraIcon sx={{ fontSize: 16 }} />
+              </IconButton>
+            </Box>
+
+            {waProfilePhotoEditing ? (
+              <TextField
+                placeholder={lang === 'en' ? 'Paste image URL…' : 'Pega la URL de la imagen…'}
+                size="small" fullWidth autoFocus
+                value={waProfileImgUrl}
+                onChange={e => setWaProfileImgUrl(e.target.value)}
+                sx={{ ...FIELD_SX, mt: 0.2 }}
+              />
+            ) : (
+              <Typography onClick={() => setWaProfilePhotoEditing(true)} sx={{
+                fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', cursor: 'pointer',
+                textDecoration: 'underline', textUnderlineOffset: 2,
+                '&:hover': { color: 'var(--accent,#60a5fa)' },
+              }}>
+                {lang === 'en' ? 'or paste an image URL' : 'o pega una URL de imagen'}
+              </Typography>
+            )}
+
+            {/* Name — WhatsApp shows it as plain editable text under the photo, not a boxed field */}
+            <TextField
+              variant="standard"
+              placeholder="Marco"
+              value={waProfileName}
+              onChange={e => setWaProfileName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && !waProfileSaving && handleWaProfileSaveAll()}
+              slotProps={{ input: { disableUnderline: false } }}
+              sx={{
+                width: '100%', mt: 0.5,
+                '& .MuiInput-input': { textAlign: 'center', color: 'var(--text,#f1f5f9)', fontSize: '1.1rem', fontWeight: 600 },
+                '& .MuiInput-underline:before': { borderBottomColor: 'rgba(255,255,255,0.15)' },
+                '& .MuiInput-underline:hover:before': { borderBottomColor: 'rgba(var(--accent-rgb,59,130,246),0.5)' },
+                '& .MuiInput-underline:after': { borderBottomColor: 'var(--accent,#60a5fa)' },
+              }}
+            />
+            <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.25)', mt: -0.4 }}>
+              {lang === 'en' ? 'WhatsApp profile name' : 'Nombre de perfil de WhatsApp'}
+            </Typography>
+          </Box>
+
+          {(waProfileErr || waProfileOk) && (
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
+              {waProfileOk && <CheckCircleIcon sx={{ fontSize: 15, color: '#4ade80' }} />}
+              <Typography sx={{ fontSize: '0.75rem', color: waProfileErr ? '#f87171' : '#4ade80', textAlign: 'center' }}>
+                {waProfileErr || waProfileOk}
+              </Typography>
+            </Box>
+          )}
+        </DialogContent>
+
+        <DialogActions sx={{ px: 2.5, pb: 2.5, pt: 1.5, gap: 1, borderTop: '1px solid rgba(255,255,255,0.05)', mt: 1 }}>
+          <Button size="small" onClick={() => setWaProfileOpen(false)}
+            sx={{ textTransform: 'none', color: 'var(--text-muted,rgba(255,255,255,0.4))', fontSize: '0.82rem',
+              '&:hover': { color: 'var(--text,white)', bgcolor: 'rgba(255,255,255,0.05)' } }}>
+            {lang === 'en' ? 'Cancel' : 'Cancelar'}
+          </Button>
+          <Button size="small" variant="contained" onClick={handleWaProfileSaveAll}
+            disabled={waProfileSaving}
+            sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.82rem', borderRadius: 2, px: 2, flex: 1,
+              bgcolor: 'var(--accent,#3b82f6)', color: 'white',
+              '&:hover': { bgcolor: 'color-mix(in srgb, var(--accent,#3b82f6) 82%, black)' },
+              '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.3)' } }}>
+            {waProfileSaving
               ? <><CircularProgress size={13} sx={{ color: 'white', mr: 1 }} />{lang === 'en' ? 'Saving…' : 'Guardando…'}</>
               : lang === 'en' ? 'Save' : 'Guardar'}
           </Button>

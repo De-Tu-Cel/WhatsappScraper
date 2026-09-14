@@ -52,10 +52,13 @@ def send_message(session_id: str, to: str, message: str, typing_ms: int = 0,
     return r.json()
 
 def send_media(session_id: str, to: str, media_url: str,
-               caption: str = "", filename: str = "", typing_ms: int = 0) -> dict:
+               caption: str = "", filename: str = "", typing_ms: int = 0,
+               as_sticker: bool = False) -> dict:
     payload = {"to": to, "mediaUrl": media_url, "caption": caption, "typingMs": typing_ms}
     if filename:
         payload["filename"] = filename
+    if as_sticker:
+        payload["asSticker"] = True
     r = _req.post(
         f"{WWEBJS_URL}/session/{session_id}/send-media",
         json=payload,
@@ -94,6 +97,34 @@ def set_profile_status(session_id: str, status_text: str) -> dict:
         json={"status": status_text},
         headers=_headers(),
         timeout=10,
+    )
+    if not r.ok:
+        raise Exception(r.json().get("error", r.text))
+    return r.json()
+
+def set_profile_name(session_id: str, name: str) -> dict:
+    """Changes the REAL WhatsApp profile name (pushname), not the app's own
+    internal instance label — that's a separate field, already editable from
+    InstancesPanel.jsx. Andy's conversation persona name reads THIS value
+    (instances.profile_name), so changing it here also changes what Andy
+    introduces itself as, the next time that field gets re-synced."""
+    r = _req.post(
+        f"{WWEBJS_URL}/session/{session_id}/profile/name",
+        json={"name": name},
+        headers=_headers(),
+        timeout=10,
+    )
+    if not r.ok:
+        raise Exception(r.json().get("error", r.text))
+    return r.json()
+
+def set_profile_picture(session_id: str, image_url: str) -> dict:
+    """Changes the real WhatsApp profile picture from a public image URL."""
+    r = _req.post(
+        f"{WWEBJS_URL}/session/{session_id}/profile/picture",
+        json={"imageUrl": image_url},
+        headers=_headers(),
+        timeout=30,
     )
     if not r.ok:
         raise Exception(r.json().get("error", r.text))

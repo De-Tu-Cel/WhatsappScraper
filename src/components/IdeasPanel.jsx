@@ -242,7 +242,7 @@ function FilterDropdown({ selected, onToggle, label, searchPh, noItemsLabel, end
             {noItemsLabel}
           </Typography>
         ) : (
-          <Box sx={{ display: 'flex', flexDirection: 'column', maxHeight: 260, overflowY: 'auto' }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4, maxHeight: 260, overflowY: 'auto' }}>
             {rows.map(row => {
               const value = row[valueField]
               const displayLabel = formatValue ? formatValue(value) : value
@@ -250,8 +250,8 @@ function FilterDropdown({ selected, onToggle, label, searchPh, noItemsLabel, end
               const checked = selected.has(value)
               return (
                 <Box key={value} onClick={() => onToggle(value)} sx={{
-                  display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', borderRadius: 1,
-                  px: 0.6, py: 0.4, bgcolor: 'var(--surface, rgba(255,255,255,0.03)) !important',
+                  display: 'flex', alignItems: 'center', gap: 0.9, cursor: 'pointer', borderRadius: 1,
+                  px: 0.8, py: 0.6, bgcolor: 'var(--surface, rgba(255,255,255,0.03)) !important',
                   '&:hover': { bgcolor: 'var(--item-hover, rgba(255,255,255,0.06)) !important' },
                 }}>
                   <Checkbox size="small" checked={checked} onClick={e => e.stopPropagation()} onChange={() => onToggle(value)}

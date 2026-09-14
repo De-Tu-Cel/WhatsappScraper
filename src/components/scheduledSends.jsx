@@ -654,28 +654,28 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
         const seen = new Set(); const selCos = selCosRaw.filter(c => seen.has(c._id) ? false : (seen.add(c._id), true))
         if (!selCos.length) return null
         return (
-          <Box sx={{ borderBottom: '1px solid var(--border)', px: 1.2, pt: 0.8, pb: 0.9, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.02)', maxHeight: 168, overflowY: 'auto', scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.07) transparent' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.6 }}>
-              <Typography sx={{ fontSize: '0.55rem', color: 'rgba(255,255,255,0.22)', textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>
+          <Box sx={{ borderBottom: '1px solid var(--border)', px: 1.3, pt: 0.9, pb: 1, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.02)', maxHeight: 190, overflowY: 'auto', scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.07) transparent' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.7 }}>
+              <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>
                 Selected
               </Typography>
-              <Typography sx={{ fontSize: '0.58rem', color: 'rgba(255,255,255,0.3)', fontVariantNumeric: 'tabular-nums' }}>
+              <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', fontVariantNumeric: 'tabular-nums' }}>
                 {selCount} {selCount === 1 ? 'number' : 'numbers'} · {selCos.length} {selCos.length === 1 ? 'co.' : 'cos.'}
               </Typography>
             </Box>
             {/* Leyenda — sin esto el color ámbar de "ya contactada" no se explica solo,
                 y con varias empresas seleccionadas se ve como un color al azar. */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.8 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, mb: 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
                 <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'var(--accent,#3b82f6)', flexShrink: 0 }} />
-                <Typography sx={{ fontSize: '0.55rem', color: 'rgba(255,255,255,0.3)' }}>nuevo</Typography>
+                <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.4)' }}>nuevo</Typography>
               </Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
                 <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#fbbf24', flexShrink: 0 }} />
-                <Typography sx={{ fontSize: '0.55rem', color: 'rgba(255,255,255,0.3)' }}>ya contactada</Typography>
+                <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.4)' }}>ya contactada</Typography>
               </Box>
             </Box>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.7 }}>
               {selCos.map(c => {
                 const selNums = c.numbers.filter(n => selectedNums.has(n.number))
                 const cNormed = new Set((c.already_contacted?.contacted_numbers || []).map(normPhone))
@@ -689,27 +689,27 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
                 const single = selNums.length <= 1
                 const expanded = single || expandedSel.has(c._id)
                 return (
-                  <Box key={c._id} sx={{ pl: 1, borderLeft: anyContacted ? '2px solid rgba(251,191,36,0.35)' : '2px solid rgba(var(--accent-rgb,59,130,246),0.22)', py: 0.2 }}>
+                  <Box key={c._id} sx={{ pl: 1, borderLeft: anyContacted ? '2px solid rgba(251,191,36,0.35)' : '2px solid rgba(var(--accent-rgb,59,130,246),0.22)', py: 0.3 }}>
                     <Box
                       onClick={single ? undefined : () => setExpandedSel(prev => {
                         const next = new Set(prev)
                         next.has(c._id) ? next.delete(c._id) : next.add(c._id)
                         return next
                       })}
-                      sx={{ display: 'flex', alignItems: 'center', gap: 0.4, mb: 0.35, cursor: single ? 'default' : 'pointer', borderRadius: 0.5, '&:hover': single ? {} : { bgcolor: 'var(--item-hover)' } }}>
+                      sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.4, cursor: single ? 'default' : 'pointer', borderRadius: 0.5, '&:hover': single ? {} : { bgcolor: 'var(--item-hover)' } }}>
                       {!single && (
-                        <ChevronRightIcon sx={{ fontSize: 13, color: 'var(--text-muted)', flexShrink: 0, transition: 'transform 0.15s', transform: expanded ? 'rotate(90deg)' : 'none' }} />
+                        <ChevronRightIcon sx={{ fontSize: 14, color: 'var(--text-muted)', flexShrink: 0, transition: 'transform 0.15s', transform: expanded ? 'rotate(90deg)' : 'none' }} />
                       )}
-                      <Typography sx={{ fontSize: '0.67rem', color: 'var(--text)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{label}</Typography>
-                      <Typography sx={{ fontSize: '0.55rem', color: accentC, opacity: 0.7, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{selNums.length}</Typography>
+                      <Typography sx={{ fontSize: '0.74rem', color: 'var(--text)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{label}</Typography>
+                      <Typography sx={{ fontSize: '0.62rem', color: accentC, opacity: 0.8, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{selNums.length}</Typography>
                     </Box>
                     {expanded && (
-                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.3, pl: single ? 0 : 2 }}>
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, pl: single ? 0 : 2 }}>
                         {selNums.map((n, ni) => {
                           const isCont = cNormed.has(normPhone(n.number))
                           return (
                             <Typography key={`${c._id}::${n.number}::${ni}`} sx={{
-                              fontSize: '0.58rem', fontFamily: 'monospace', px: 0.5, py: 0.1, borderRadius: 0.5,
+                              fontSize: '0.65rem', fontFamily: 'monospace', px: 0.6, py: 0.15, borderRadius: 0.5,
                               color: isCont ? '#fbbf24' : 'var(--accent,#60a5fa)',
                               bgcolor: isCont ? 'rgba(251,191,36,0.08)' : 'rgba(59,130,246,0.08)',
                               border: `1px solid ${isCont ? 'rgba(251,191,36,0.18)' : 'rgba(59,130,246,0.18)'}`,

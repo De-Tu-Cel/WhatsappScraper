@@ -52,6 +52,7 @@ import TuneIcon from '@mui/icons-material/Tune'
 import PsychologyIcon from '@mui/icons-material/Psychology'
 import SyncAltIcon from '@mui/icons-material/SyncAlt'
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
+import SpeakerNotesOffIcon from '@mui/icons-material/SpeakerNotesOff'
 import CloseIcon from '@mui/icons-material/Close'
 import DownloadIcon from '@mui/icons-material/Download'
 import AndyBotBuilder from './AndyBotBuilder'
@@ -720,6 +721,12 @@ export default function Analytics() {
           { value: 'hibrido',       icon: SyncAltIcon,      label: t.analytics.hybrid,  color: '#38bdf8',                bg: 'rgba(56,189,248,0.1)'    },
           { value: 'bot',           icon: SmartToyIcon,     label: t.analytics.bot,     color: '#a78bfa',                bg: 'rgba(167,139,250,0.1)'   },
           { value: 'bot_ia',        icon: PsychologyIcon,   label: t.analytics.botAi,   color: '#c084fc',                bg: 'rgba(192,132,252,0.1)'   },
+          // "sin_respuesta" (confirmado, ya se cumplió el tiempo de espera y
+          // nunca contestaron) no tenía chip propio — antes no había forma de
+          // ver esas empresas aisladas, se confundía con "sin_clasificar"
+          // (que es un estado distinto: contactada pero AÚN dentro de la
+          // ventana de espera, sin confirmar todavía si va a responder).
+          { value: 'sin_respuesta', icon: SpeakerNotesOffIcon, label: t.analytics.noReply, color: '#f87171',            bg: 'rgba(248,113,113,0.08)' },
           { value: 'sin_clasificar',icon: HourglassEmptyIcon, label: t.analytics.noClass, color: '#94a3b8',              bg: 'rgba(148,163,184,0.08)'  },
         ].map(f => {
           const isActive = filterCat === f.value

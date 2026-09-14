@@ -36,8 +36,6 @@ _MAX_INTER_CHAT_GAP = 90
 _last_send_ts: dict = {}   # assigned_instance → epoch of its last processed reply
 _UNASSIGNED_KEY = "__unassigned__"  # fallback bucket while a company has no instance yet
 
-# Session idle timeout — if contact hasn't replied in this many hours, close and disable toggle
-SESSION_IDLE_TIMEOUT_HOURS = 4
 _CLEANUP_INTERVAL = 1800  # run cleanup every 30 min
 
 
@@ -101,6 +99,104 @@ _MIN_PROACTIVE_TURNS = 3   # minimum Andy messages before we stop proactive nudg
 _PROACTIVE_WAIT_MIN = 60   # minutes of silence before sending a proactive follow-up
 
 
+def _run_proactive_followups(db) -> None:
+    """Phase 1: queue a proactive nudge for low-turn 'waiting' sessions that
+    haven't heard back in a while."""
+    proactive_cutoff = datetime.utcnow() - timedelta(minutes=_PROACTIVE_WAIT_MIN)
+    needs_followup = list(db.db.ai_followup_sessions.find({
+        "status": "waiting",
+        "turn_count": {"$lt": _MIN_PROACTIVE_TURNS},
+        "last_activity": {"$lt": proactive_cutoff},
+        "proactive_sent": {"$ne": True},
+    }, {"_id": 1, "company_id": 1, "phone_number": 1}))
+
+    for sess in needs_followup:
+        # Mark immediately to prevent double-queueing across cleanup cycles
+        db.db.ai_followup_sessions.update_one(
+            {"_id": sess["_id"]}, {"$set": {"proactive_sent": True}}
+        )
+        log.info("[FollowupQ] proactive follow-up queued for %s (company=%s)",
+                 sess["phone_number"], sess["company_id"])
+        _q.put({
+            "phone_number": sess["phone_number"],
+            "company_id": sess["company_id"],
+            "inbound_body": None,
+            "inbound_log_id": None,
+            "proactive": True,
+        })
+
+
+def _expire_idle_sessions(db) -> None:
+    """Phase 2: close 'active'/'waiting' sessions the contact has gone silent on,
+    for longer than the configured idle timeout.
+
+    Was a hardcoded 4h here, completely separate from ai_followup.py's own
+    _get_idle_timeout_hours (configurable via Settings > Chat IA, defaults to
+    48h) — production actually has it set to 48h, but this independent sweep
+    ran every 30 min regardless and closed sessions at the 4h mark anyway,
+    silently overriding whatever the admin configured before the 48h window
+    could ever matter. Reads the same configured value now."""
+    from app.ai_followup import _get_idle_timeout_hours
+    idle_timeout_hours = _get_idle_timeout_hours(db)
+    cutoff = datetime.utcnow() - timedelta(hours=idle_timeout_hours)
+    stale = list(db.db.ai_followup_sessions.find({
+        "status": {"$in": ["active", "waiting"]},
+        "last_activity": {"$lt": cutoff},
+    }, {"_id": 1, "company_id": 1, "phone_number": 1}))
+
+    if not stale:
+        return
+
+    ids = [s["_id"] for s in stale]
+    db.db.ai_followup_sessions.update_many(
+        {"_id": {"$in": ids}},
+        {"$set": {"status": "ended", "end_reason": "idle_timeout"}},
+    )
+    # Disable AI toggle for each affected conversation
+    company_ids = list({s["company_id"] for s in stale})
+    db.db.conversation_ai_prefs.update_many(
+        {"company_id": {"$in": company_ids}},
+        {"$set": {"ai_enabled": False}},
+    )
+    log.info("[FollowupQ] expired %d idle session(s) after %.1fh silence", len(stale), idle_timeout_hours)
+
+    # Trigger full-conversation analysis for each expired session
+    try:
+        from app.llm import active_provider as _ap
+        from app.classifier import classify_conversation_and_save
+        if _ap() != "none":
+            for cid in company_ids:
+                last_in = db.db.message_logs.find_one(
+                    {"company_id": cid, "direction": "inbound"},
+                    sort=[("created_at", -1)],
+                )
+                if last_in:
+                    import threading
+                    threading.Thread(
+                        target=classify_conversation_and_save,
+                        args=(cid, str(last_in["_id"])),
+                        daemon=True,
+                    ).start()
+    except Exception as _ae:
+        log.warning("[FollowupQ] conversation analysis on expire failed: %s", _ae)
+    # Clear stale pending analysis records for personal-contact (.local) companies
+    # so their analytics spinner doesn't stay on indefinitely.
+    try:
+        local_companies = list(db.db.companies.find(
+            {"domain": {"$regex": r"\.local$"}}, {"_id": 1}
+        ))
+        if local_companies:
+            local_ids = [str(c["_id"]) for c in local_companies]
+            cleared = db.db.message_logs.update_many(
+                {"company_id": {"$in": local_ids}, "analysis_status": "pending"},
+                {"$set": {"analysis_status": "skipped"}, "$unset": {"pending_since": ""}},
+            ).modified_count
+            if cleared:
+                log.info("[FollowupQ] cleared %d stale pending records for .local companies", cleared)
+    except Exception as _pe:
+        log.warning("[FollowupQ] .local pending cleanup failed: %s", _pe)
+
+
 def _cleanup_worker():
     """Periodically expire sessions where the contact went silent, and send proactive follow-ups
     for sessions with too few turns that haven't heard back."""
@@ -109,89 +205,8 @@ def _cleanup_worker():
         try:
             from app.database import MongoDBManager
             db = MongoDBManager()
-
-            # ── Phase 1: proactive follow-up for low-turn waiting sessions ──────────────
-            proactive_cutoff = datetime.utcnow() - timedelta(minutes=_PROACTIVE_WAIT_MIN)
-            needs_followup = list(db.db.ai_followup_sessions.find({
-                "status": "waiting",
-                "turn_count": {"$lt": _MIN_PROACTIVE_TURNS},
-                "last_activity": {"$lt": proactive_cutoff},
-                "proactive_sent": {"$ne": True},
-            }, {"_id": 1, "company_id": 1, "phone_number": 1}))
-
-            for sess in needs_followup:
-                # Mark immediately to prevent double-queueing across cleanup cycles
-                db.db.ai_followup_sessions.update_one(
-                    {"_id": sess["_id"]}, {"$set": {"proactive_sent": True}}
-                )
-                log.info("[FollowupQ] proactive follow-up queued for %s (company=%s)",
-                         sess["phone_number"], sess["company_id"])
-                _q.put({
-                    "phone_number": sess["phone_number"],
-                    "company_id": sess["company_id"],
-                    "inbound_body": None,
-                    "inbound_log_id": None,
-                    "proactive": True,
-                })
-
-            # ── Phase 2: idle expiry ───────────────────────────────────────────────────
-            cutoff = datetime.utcnow() - timedelta(hours=SESSION_IDLE_TIMEOUT_HOURS)
-            stale = list(db.db.ai_followup_sessions.find({
-                "status": {"$in": ["active", "waiting"]},
-                "last_activity": {"$lt": cutoff},
-            }, {"_id": 1, "company_id": 1, "phone_number": 1}))
-
-            if not stale:
-                continue
-
-            ids = [s["_id"] for s in stale]
-            db.db.ai_followup_sessions.update_many(
-                {"_id": {"$in": ids}},
-                {"$set": {"status": "ended", "end_reason": "idle_timeout"}},
-            )
-            # Disable AI toggle for each affected conversation
-            company_ids = list({s["company_id"] for s in stale})
-            db.db.conversation_ai_prefs.update_many(
-                {"company_id": {"$in": company_ids}},
-                {"$set": {"ai_enabled": False}},
-            )
-            log.info("[FollowupQ] expired %d idle session(s) after %dh silence", len(stale), SESSION_IDLE_TIMEOUT_HOURS)
-
-            # Trigger full-conversation analysis for each expired session
-            try:
-                from app.llm import active_provider as _ap
-                from app.classifier import classify_conversation_and_save
-                if _ap() != "none":
-                    for cid in company_ids:
-                        last_in = db.db.message_logs.find_one(
-                            {"company_id": cid, "direction": "inbound"},
-                            sort=[("created_at", -1)],
-                        )
-                        if last_in:
-                            import threading
-                            threading.Thread(
-                                target=classify_conversation_and_save,
-                                args=(cid, str(last_in["_id"])),
-                                daemon=True,
-                            ).start()
-            except Exception as _ae:
-                log.warning("[FollowupQ] conversation analysis on expire failed: %s", _ae)
-            # Clear stale pending analysis records for personal-contact (.local) companies
-            # so their analytics spinner doesn't stay on indefinitely.
-            try:
-                local_companies = list(db.db.companies.find(
-                    {"domain": {"$regex": r"\.local$"}}, {"_id": 1}
-                ))
-                if local_companies:
-                    local_ids = [str(c["_id"]) for c in local_companies]
-                    cleared = db.db.message_logs.update_many(
-                        {"company_id": {"$in": local_ids}, "analysis_status": "pending"},
-                        {"$set": {"analysis_status": "skipped"}, "$unset": {"pending_since": ""}},
-                    ).modified_count
-                    if cleared:
-                        log.info("[FollowupQ] cleared %d stale pending records for .local companies", cleared)
-            except Exception as _pe:
-                log.warning("[FollowupQ] .local pending cleanup failed: %s", _pe)
+            _run_proactive_followups(db)
+            _expire_idle_sessions(db)
         except Exception as e:
             log.error("[FollowupQ] cleanup error: %s", e)
 

@@ -763,7 +763,27 @@ def _looks_like_menu(text: str) -> bool:
     return len(_INLINE_LETTER_MENU_ITEM.findall(text)) >= 2
 
 
+# A "gracias por comunicarte/escribir..." greeting is usually a static ACK worth
+# staying silent for — but when the SAME message also asks a real qualifying
+# question (name / business / location), it's a lead-qualification bot, not a
+# dead-end ticket. Going silent there just kills the lead before Andy ever gets
+# a chance to answer and get through to a human. Real case (Doctor Restaurant,
+# "Alondra" bot): "Gracias por comunicarte... Cuál es tu nombre? Cómo se llama
+# tu negocio? Dónde está ubicado?" — Andy should play along (persona name/negocio
+# falso, per the [IA CONVERSACIONAL DE OTRA EMPRESA] rules in the system prompt),
+# not go silent forever.
+_ONBOARDING_QUESTION_RE = re.compile(
+    r'cu[aá]l es (?:tu|su) nombre|c[oó]mo te llamas|c[oó]mo se llama|'
+    r'(?:proporcionar|compartir|decirnos|darnos)(?:nos)?\s+(?:su|tu)\s+nombre|'
+    r'd[oó]nde (?:est[aá]s?|se encuentra|ubicad[oa])|(?:me|nos)\s+puede[sn]?\s+compartir|'
+    r'plat[ií]came (?:un poco )?(?:de|sobre) tu negocio|cu[eé]ntame (?:un poco )?(?:de|sobre) tu negocio',
+    re.IGNORECASE,
+)
+
+
 def _looks_like_auto_reply(text: str) -> bool:
+    if _ONBOARDING_QUESTION_RE.search(text or ""):
+        return False
     return bool(_AUTO_REPLY_MARKERS.search(text))
 
 

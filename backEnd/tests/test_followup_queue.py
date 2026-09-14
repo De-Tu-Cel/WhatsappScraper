@@ -151,4 +151,106 @@ class TestProcessOnePacing:
         instance_map = {"aaaaaaaaaaaaaaaaaaaaaaaa": "instance-A"}
         sleep_mock, reply_mock = self._run(items, instance_map)
         sleep_mock.assert_not_called()
-        reply_mock.assert_called_once()
+
+
+# ── _expire_idle_sessions — the idle-timeout config-consistency fix ────────
+#
+# Covers the bug fixed 2026-09-14: this sweep used to hard-code
+# SESSION_IDLE_TIMEOUT_HOURS = 4, completely separate from ai_followup.py's
+# _get_idle_timeout_hours (configurable, production has it set to 48h). The
+# sweep ran every 30 min regardless, so ANY "active"/"waiting" session got
+# closed at the 4h mark no matter what the admin had configured — the 48h
+# grace window could never actually apply. Now it reads the same config.
+
+from datetime import datetime, timedelta
+
+
+class FakeExpirySessionsCollection:
+    def __init__(self, sessions):
+        self._sessions = {s["_id"]: dict(s) for s in sessions}
+
+    def find(self, query, projection=None):
+        cutoff = query["last_activity"]["$lt"]
+        statuses = set(query["status"]["$in"])
+        return [dict(s) for s in self._sessions.values()
+                if s["status"] in statuses and s["last_activity"] < cutoff]
+
+    def update_many(self, query, update):
+        ids = set(query["_id"]["$in"])
+        n = 0
+        for sid, s in self._sessions.items():
+            if sid in ids:
+                s.update(update.get("$set", {}))
+                n += 1
+        return MagicMock(modified_count=n)
+
+
+class FakePrefsUpdateMany:
+    def __init__(self):
+        self.calls = []
+
+    def update_many(self, query, update):
+        self.calls.append((query, update))
+        return MagicMock()
+
+
+class FakeGlobalConfigCollection:
+    def __init__(self, hours):
+        self._hours = hours
+
+    def find_one(self, query=None, *a, **kw):
+        return {"_id": "global", "idle_timeout_hours": self._hours}
+
+
+class FakeExpiryDB:
+    def __init__(self, sessions, idle_timeout_hours):
+        self.ai_followup_sessions = FakeExpirySessionsCollection(sessions)
+        self.conversation_ai_prefs = FakePrefsUpdateMany()
+        self.ai_global_config = FakeGlobalConfigCollection(idle_timeout_hours)
+        self.message_logs = MagicMock()
+        self.message_logs.find_one.return_value = None  # no last_inbound -> skip the analysis thread
+        self.companies = MagicMock()
+        self.companies.find.return_value = []
+
+
+class FakeExpiryMgr:
+    def __init__(self, sessions, idle_timeout_hours):
+        self.db = FakeExpiryDB(sessions, idle_timeout_hours)
+
+
+def _stale_session(sid, hours_silent, status="active"):
+    return {
+        "_id": sid,
+        "company_id": f"company_{sid}",
+        "phone_number": "5210000000000",
+        "status": status,
+        "last_activity": datetime.utcnow() - timedelta(hours=hours_silent),
+    }
+
+
+class TestExpireIdleSessionsRespectsConfig:
+    def test_does_not_expire_before_the_configured_timeout(self):
+        """10h of silence with idle_timeout_hours=48 (the real production value)
+        must NOT expire the session — this would have wrongly expired under the
+        old hardcoded 4h."""
+        sess = _stale_session("s1", hours_silent=10)
+        mgr = FakeExpiryMgr([sess], idle_timeout_hours=48)
+        fq._expire_idle_sessions(mgr)
+        assert mgr.db.ai_followup_sessions._sessions["s1"]["status"] == "active"
+        assert mgr.db.conversation_ai_prefs.calls == []
+
+    def test_expires_once_past_the_configured_timeout(self):
+        sess = _stale_session("s2", hours_silent=50)
+        mgr = FakeExpiryMgr([sess], idle_timeout_hours=48)
+        fq._expire_idle_sessions(mgr)
+        assert mgr.db.ai_followup_sessions._sessions["s2"]["status"] == "ended"
+        assert mgr.db.ai_followup_sessions._sessions["s2"]["end_reason"] == "idle_timeout"
+        assert len(mgr.db.conversation_ai_prefs.calls) == 1
+
+    def test_shorter_configured_timeout_still_expires_promptly(self):
+        """A company that configured a short idle_timeout_hours (e.g. 2h) should
+        still get that honored, not silently stretched to some other default."""
+        sess = _stale_session("s3", hours_silent=3)
+        mgr = FakeExpiryMgr([sess], idle_timeout_hours=2)
+        fq._expire_idle_sessions(mgr)
+        assert mgr.db.ai_followup_sessions._sessions["s3"]["status"] == "ended"

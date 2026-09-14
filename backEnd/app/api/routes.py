@@ -588,8 +588,9 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 _co_name_ww = ""
             if req.image_url:
                 _ww_result = _ww_send_media(instance, req.to_number, req.image_url,
-                                            caption=req.message or "", typing_ms=_typing_ms)
-                _msg_type = "image"
+                                            caption=req.message or "", typing_ms=_typing_ms,
+                                            as_sticker=bool(req.as_sticker))
+                _msg_type = "sticker" if req.as_sticker else "image"
             elif req.document_url:
                 _ww_result = _ww_send_media(instance, req.to_number, req.document_url,
                                             caption=req.message or "", filename=req.file_name or "",
@@ -670,7 +671,10 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
 
         sender_instance = db.db.instances.find_one({"name": instance}, {"_id": 0, "number": 1})
 
-        _msg_body = req.message or ""
+        # Stickers never carry a caption on WhatsApp — force the placeholder so the
+        # thread renders it at sticker size, not full-photo size (see conversations.jsx's
+        # isSticker check, which matches on this exact literal text).
+        _msg_body = "[sticker]" if req.as_sticker else (req.message or "")
         _media_url = req.image_url or req.document_url or ""
         log_doc = {
             "channel": "whatsapp", "platform": _platform, "direction": "outbound",
@@ -679,6 +683,7 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
             "message_text": _msg_body or _media_url,
             "message_type": locals().get("_msg_type", "text"),
             "media_url": _media_url or None,
+            "media_content_type": req.content_type or None,
             "message_id": message_id,
             "status_code": send_result.get("status_code"),
             "api_response": resp_json, "status": status,
@@ -4019,6 +4024,36 @@ def api_wwebjs_profile_status(session_id: str, body: dict):
     except Exception as e:
         raise HTTPException(500, str(e))
 
+@router.post("/wwebjs/session/{session_id}/profile/name")
+def api_wwebjs_profile_name(session_id: str, body: dict):
+    """Changes the real WhatsApp profile name (pushname) — distinct from the
+    app's own instance label (already editable via InstancesPanel). Also
+    updates instances.profile_name so Andy's conversation persona (which reads
+    that field) reflects the change on the next reply, instead of only
+    updating on whatever background sync normally refreshes it."""
+    from app.whatsapp_wwebjs import set_profile_name
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name string required")
+    try:
+        result = set_profile_name(session_id, name)
+        db = MongoDBManager()
+        db.db.instances.update_one({"name": session_id}, {"$set": {"profile_name": name}})
+        return result
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@router.post("/wwebjs/session/{session_id}/profile/picture")
+def api_wwebjs_profile_picture(session_id: str, body: dict):
+    from app.whatsapp_wwebjs import set_profile_picture
+    image_url = (body.get("image_url") or "").strip()
+    if not image_url:
+        raise HTTPException(400, "image_url string required")
+    try:
+        return set_profile_picture(session_id, image_url)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
 @router.post("/wwebjs/session/{session_id}/react")
 def api_wwebjs_react(session_id: str, body: dict):
     from app.whatsapp_wwebjs import send_reaction
@@ -4184,6 +4219,25 @@ async def api_wwebjs_webhook(request: Request):
             }
             message_body = _WWEBJS_MEDIA_PLACEHOLDERS.get(data.get("type", ""), "[media]")
 
+        # Real image/sticker bytes, when wwebjs-service downloaded them (see its
+        # message handler) — stored in the same GridFS bucket /api/files/{id} already
+        # serves for outbound uploads, so the frontend can render the actual picture
+        # instead of just the "[image]"/"[sticker]" placeholder chip above.
+        _media_url = None
+        _media_content_type = None
+        _media = data.get("media")
+        if _media and _media.get("data"):
+            try:
+                import base64 as _b64
+                from app.config import APP_PUBLIC_URL
+                _media_bytes = _b64.b64decode(_media["data"])
+                _media_ct = _media.get("mimetype") or "application/octet-stream"
+                _media_file_id = db.fs.put(_media_bytes, filename=_media.get("filename") or "media", content_type=_media_ct)
+                _media_url = f"{APP_PUBLIC_URL.rstrip('/')}/api/files/{_media_file_id}"
+                _media_content_type = _media_ct
+            except Exception as _media_err:
+                print(f"[wwebjs Webhook] media store failed: {_media_err}")
+
         if from_me:
             if message_id:
                 db.update_evolution_message_status(message_id, "sent")
@@ -4269,6 +4323,8 @@ async def api_wwebjs_webhook(request: Request):
             message_type="conversation",
             status="received",
             instance_name=instance_name,
+            media_url=_media_url,
+            media_content_type=_media_content_type,
         )
         print(f"[wwebjs Webhook] inbound saved log_id={log_id} company={company_id} from={number}")
 
@@ -4713,6 +4769,53 @@ def api_serve_file(file_id: str):
     )
 
 
+# ── Sticker library — small shared tray of previously-sent stickers, so picking
+# one is a click (like the emoji picker) instead of browsing the filesystem
+# every time. Backed by the same GridFS store as /files/upload above. ─────────
+
+_STICKER_MIME = {"image/jpeg", "image/png", "image/webp"}
+_STICKER_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+
+@router.get("/stickers")
+def api_list_stickers(x_user_token: Optional[str] = Header(None)):
+    from datetime import datetime
+    _require_user(x_user_token)
+    db = MongoDBManager()
+    docs = list(db.db.stickers.find({}, {"_id": 0}).sort("created_at", -1).limit(60))
+    for d in docs:
+        if isinstance(d.get("created_at"), datetime):
+            d["created_at"] = d["created_at"].isoformat()
+    return {"stickers": docs}
+
+@router.post("/stickers")
+async def api_upload_sticker(file: UploadFile = File(...), x_user_token: Optional[str] = Header(None)):
+    from datetime import datetime
+    user = _require_user(x_user_token)
+    from app.config import APP_PUBLIC_URL
+    content_type = (file.content_type or "").split(";")[0].strip()
+    if content_type not in _STICKER_MIME:
+        raise HTTPException(400, f"Tipo de archivo no soportado para sticker: {content_type or 'desconocido'}")
+    data = await file.read()
+    if len(data) > _STICKER_MAX_BYTES:
+        raise HTTPException(413, "Archivo demasiado grande — máximo 5 MB")
+    db = MongoDBManager()
+    file_id = db.fs.put(data, filename=file.filename or "sticker", content_type=content_type)
+    url = f"{APP_PUBLIC_URL.rstrip('/')}/api/files/{file_id}"
+    doc = {
+        "url": url, "content_type": content_type,
+        "created_at": datetime.utcnow(), "created_by": user.get("username", ""),
+    }
+    db.db.stickers.insert_one(doc)
+    return {"url": url, "content_type": content_type}
+
+@router.delete("/stickers")
+def api_delete_sticker(url: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    db = MongoDBManager()
+    db.db.stickers.delete_one({"url": url})
+    return {"ok": True}
+
+
 # ── Analytics ─────────────────────────────────────────────────────────────────
 
 @router.get("/analytics/stream")
@@ -4747,10 +4850,12 @@ def api_get_analytics(
     page:      int = Query(1,  ge=1),
     page_size: int = Query(20, ge=1, le=100),
     category:  str | None = Query(None),
+    agents:    str | None = Query(None),  # comma-separated usernames
 ):
     try:
         db = MongoDBManager()
-        return serialize(db.get_analytics(page=page, page_size=page_size, category=category))
+        agent_list = [a for a in (agents or "").split(",") if a] or None
+        return serialize(db.get_analytics(page=page, page_size=page_size, category=category, agents=agent_list))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -5136,14 +5241,30 @@ def api_notifications_list(x_user_token: Optional[str] = Header(None)):
                 safe_ids.append(ObjectId(m.get("company_id", "")))
             except Exception:
                 pass
+        _companies_docs = list(db.db.companies.find(
+            {"_id": {"$in": safe_ids}}, {"name": 1, "business_name": 1, "source": 1, "domain": 1}
+        ))
         companies = {
             str(c["_id"]): (c.get("name") or c.get("business_name") or "")
-            for c in db.db.companies.find({"_id": {"$in": safe_ids}}, {"name": 1, "business_name": 1})
+            for c in _companies_docs
+        }
+        # Personal WhatsApp contacts (someone who messaged the connected number
+        # directly, auto-registered as a company named after their own phone
+        # number) aren't a real prospect reply worth notifying about — same
+        # exclusion get_conversations() and the idle-timeout sweep already apply.
+        # Confirmed live: a personal chat ("ya te agregué como Rento") showed up
+        # here as "+52... replied to your message" because this endpoint never
+        # had that check.
+        _personal_cids = {
+            str(c["_id"]) for c in _companies_docs
+            if c.get("source") == "inbound_whatsapp" or (c.get("domain") or "").endswith(".local")
         }
 
         result = []
         for m in msgs:
             cid = str(m.get("company_id", ""))
+            if cid in _personal_cids:
+                continue
             created_at = m.get("created_at")
             result.append({
                 "_id": str(m["_id"]),

@@ -22,6 +22,31 @@ CLASSIFIER_DEFAULTS = {
 
 _MX_521_RE = re.compile(r"^521(\d{10})$")
 
+_DOMAIN_TLD_RE = re.compile(
+    r"\.(com\.mx|co\.mx|com\.ar|com\.co|com\.br|com|mx|net|org|info|biz|io)$", re.IGNORECASE
+)
+
+
+def _display_name_from_domain(domain: str) -> str:
+    """Best-effort human-readable name from a bare domain (e.g. 'doctor-restaurant.com.mx'
+    -> 'Doctor Restaurant'), used as a fallback when a scraped company never got its
+    `name` field filled in — showing the raw domain (let alone the Mongo _id) as the
+    chat's display name looks broken to the user."""
+    base = _DOMAIN_TLD_RE.sub("", (domain or "").strip().lower())
+    base = base.split(".")[0]  # drop any remaining subdomain/TLD segments
+    words = re.split(r"[-_]+", base)
+    return " ".join(w.capitalize() for w in words if w)
+
+
+def _sort_handled_by(handled_by: list) -> list:
+    """Deterministic order for the 'handled_by' agent chips — always the same
+    regardless of chronological send order. Without this, whether the bot chip
+    landed before or after a human's name chip depended on who happened to send
+    first, so the same UI slot showed a different order row to row (confusing —
+    reported as 'el orden va muy desordenado'). Humans first (alphabetical by
+    name), the AI persona always last."""
+    return sorted(handled_by, key=lambda h: (h.get("username") == "ai_andy", (h.get("name") or "").lower()))
+
 
 def _norm_phone(n) -> str:
     """Misma normalización que el `normPhone` del frontend (scheduledSends.jsx) —
@@ -653,7 +678,9 @@ class MongoDBManager:
                            interactive: dict = None,
                            related_to_number: str = None,
                            instance_name: str = None,
-                           created_at: datetime = None):
+                           created_at: datetime = None,
+                           media_url: str = None,
+                           media_content_type: str = None):
         # Dedup: if this message_id already exists, avoid duplicate entries.
         # If the existing record has company_id="unknown" and we now know the real
         # company, upgrade it in place (handles the race: inbound before JID learned).
@@ -682,6 +709,9 @@ class MongoDBManager:
             # correcto porque el mensaje se procesa casi al instante de llegar.
             "created_at": created_at or datetime.utcnow(),
         }
+        if media_url:
+            doc["media_url"] = media_url
+            doc["media_content_type"] = media_content_type
         if interactive:
             doc["interactive"] = interactive
         if direction == "outbound":
@@ -841,6 +871,7 @@ class MongoDBManager:
     def get_conversations(self):
         """Returns one entry per company that has message activity, sorted by last message."""
         from bson import ObjectId
+        from collections import defaultdict
         pipeline = [
             # Exclude noise records early to reduce docs sorted and grouped
             {"$match": {"company_id": {"$nin": [None, "unknown", "manual"]}}},
@@ -903,9 +934,17 @@ class MongoDBManager:
 
         # Outbound metadata per company — targeted aggregations replace the 4 $push arrays.
         # Both use the (company_id, direction, created_at) compound index when available.
+        # A company can have been messaged by more than one agent over time (handoff,
+        # shared line) — collect every distinct sender, not just the first, so the
+        # sidebar can show "Gilad / Marco" instead of silently dropping whoever sent
+        # later messages. sent_by_name/sent_by_username (singular, chronologically
+        # first) are kept for backward compat — "Mis convs" and the old chip both
+        # still read them.
         outbound_sender_map: dict = {}
+        outbound_senders_all: dict = {}
         outbound_instance_map: dict = {}
         if all_cids:
+            _senders_by_cid = defaultdict(list)
             for doc in self.db.message_logs.aggregate([
                 {"$match": {
                     "direction": "outbound",
@@ -914,12 +953,21 @@ class MongoDBManager:
                 }},
                 {"$sort": {"created_at": 1}},
                 {"$group": {
-                    "_id": "$company_id",
-                    "sent_by_name":     {"$first": "$sent_by_name"},
-                    "sent_by_username": {"$first": "$sent_by_username"},
+                    "_id": {"cid": "$company_id", "username": "$sent_by_username"},
+                    "sent_by_name": {"$first": "$sent_by_name"},
+                    "first_seen":   {"$first": "$created_at"},
                 }},
             ]):
-                outbound_sender_map[doc["_id"]] = doc
+                _senders_by_cid[doc["_id"]["cid"]].append({
+                    "username": doc["_id"]["username"],
+                    "name": doc.get("sent_by_name") or doc["_id"]["username"],
+                    "first_seen": doc.get("first_seen"),
+                })
+            for cid, senders in _senders_by_cid.items():
+                senders.sort(key=lambda s: s["first_seen"] or datetime.min)
+                outbound_senders_all[cid] = [{"username": s["username"], "name": s["name"]} for s in senders]
+                first = senders[0]
+                outbound_sender_map[cid] = {"sent_by_name": first["name"], "sent_by_username": first["username"]}
             for doc in self.db.message_logs.aggregate([
                 {"$match": {
                     "direction": "outbound",
@@ -986,7 +1034,11 @@ class MongoDBManager:
             _instance = outbound_instance_map.get(company_id, {})
             results.append({
                 "company_id": company_id,
-                "company_name": company["name"],
+                # Some scraped companies never got a "name" filled in (empty string,
+                # not a missing field) — without this fallback the frontend's own
+                # `company_name || company_id` ends up displaying the raw Mongo
+                # ObjectId as the chat's name in the sidebar.
+                "company_name": company.get("name") or _display_name_from_domain(company.get("domain", "")) or "Sin nombre",
                 "domain": company.get("domain", ""),
                 "website": company.get("website", ""),
                 "industry": company.get("industry", ""),
@@ -998,6 +1050,7 @@ class MongoDBManager:
                 "unread":             g["unread"],
                 "sent_by_name":        _sender.get("sent_by_name", ""),
                 "sent_by_username":    _sender.get("sent_by_username", ""),
+                "handled_by":          outbound_senders_all.get(company_id, []),
                 "via_instance":        _instance.get("via_instance", ""),
                 "via_instance_number": _instance.get("via_instance_number", ""),
                 "last_analysis":      analyzed_map.get(company_id),
@@ -1068,7 +1121,8 @@ class MongoDBManager:
              "status": 1, "created_at": 1, "sent_at": 1, "platform": 1,
              "to_number": 1, "from_number": 1, "message_id": 1, "interactive": 1,
              "related_to_number": 1, "ai_generated": 1, "sent_by_name": 1,
-             "instance_name": 1, "instance_number": 1, "received_on_instance": 1}
+             "instance_name": 1, "instance_number": 1, "received_on_instance": 1,
+             "media_url": 1, "media_content_type": 1}
         ).sort("created_at", 1))
 
         # Deduplicate: if same message_id exists as both outbound and inbound, keep outbound only
@@ -1141,7 +1195,8 @@ class MongoDBManager:
             {"$set": {"analysis": analysis, "analysis_status": "done"}},
         )
 
-    def get_analytics(self, page: int = 1, page_size: int = 20, category: str | None = None, company_id: str | None = None):
+    def get_analytics(self, page: int = 1, page_size: int = 20, category: str | None = None, company_id: str | None = None,
+                       agents: list[str] | None = None):
         """Aggregate response analysis data per company for the dashboard.
         Pass company_id to fetch analytics for a single company (e.g. for report generation)
         — drastically faster than loading all companies and filtering in Python."""
@@ -1243,10 +1298,34 @@ class MongoDBManager:
             )
         }
 
+        # Which user(s) actually sent outbound messages to each company — shown as a
+        # detail in the row and used to power the "filter by agent" checkboxes. A
+        # company can have been worked by more than one agent over time (handoff,
+        # shared line), so this keeps every distinct sender instead of just the first.
+        agents_by_cid = defaultdict(dict)  # cid -> {username: name}
+        for doc in self.db.message_logs.aggregate([
+            {"$match": {
+                "direction": "outbound",
+                "company_id": {"$in": _all_cids},
+                "sent_by_username": {"$nin": [None, ""]},
+            }},
+            {"$group": {"_id": {"cid": "$company_id", "username": "$sent_by_username"},
+                        "name": {"$first": "$sent_by_name"}}},
+        ]):
+            cid = doc["_id"]["cid"]
+            username = doc["_id"]["username"]
+            agents_by_cid[cid][username] = doc.get("name") or username
+        all_agents = {}
+        for _by_username in agents_by_cid.values():
+            for username, name in _by_username.items():
+                all_agents.setdefault(username, name)
+        agents_filter_set = set(agents) if agents else None
+
         _msgs_all = list(self.db.message_logs.find(
             {"company_id": {"$in": _all_cids}},
             {"direction": 1, "to_number": 1, "from_number": 1, "number": 1,
-             "analysis": 1, "created_at": 1, "company_id": 1}
+             "analysis": 1, "created_at": 1, "company_id": 1,
+             "sent_by_username": 1, "sent_by_name": 1}
         ))
         _msgs_by_cid = defaultdict(list)
         for _m in _msgs_all:
@@ -1304,12 +1383,15 @@ class MongoDBManager:
                 if not n:
                     continue
                 if n not in num_map:
-                    num_map[n] = {"sent": 0, "inbound": [], "outbound_sin_respuesta": False}
+                    num_map[n] = {"sent": 0, "inbound": [], "outbound_sin_respuesta": False, "agents": {}}
                     num_raw[n] = raw  # keep first seen raw value for display
                 if direction == "outbound":
                     num_map[n]["sent"] += 1
                     if (m.get("analysis") or {}).get("category") == "sin_respuesta":
                         num_map[n]["outbound_sin_respuesta"] = True
+                    _uname = m.get("sent_by_username")
+                    if _uname:
+                        num_map[n]["agents"][_uname] = m.get("sent_by_name") or _uname
                 else:
                     num_map[n]["inbound"].append(m)
 
@@ -1384,6 +1466,7 @@ class MongoDBManager:
                     "source": re.sub(r"^https?://(www\.)?", "", _src).rstrip("/") if _src else "",
                     "sent": data["sent"],
                     "responses": len(data["inbound"]),
+                    "handled_by": _sort_handled_by([{"username": u, "name": nm} for u, nm in data["agents"].items()]),
                     "category": None, "is_ai": None, "response_quality": None,
                     "reaction_time_min": None, "business_hours": None,
                     "notes": "Sin respuesta",
@@ -1460,11 +1543,13 @@ class MongoDBManager:
             # análisis real, no un "todavía no sabemos" — sin este OR, la línea de abajo lo
             # volvía a pisar con None pese al fix en el merge de outbound_groups arriba.
             has_real_analysis = (g["total_responses"] > 0 and g["category"]) or g["category"] == "sin_respuesta"
+            handled_by = _sort_handled_by([{"username": u, "name": n} for u, n in agents_by_cid.get(company_id, {}).items()])
             results.append({
                 "company_id": company_id,
-                "company_name": company["name"],
+                "company_name": company.get("name") or _display_name_from_domain(company.get("domain", "")) or "Sin nombre",
                 "industry": company.get("industry", ""),
                 "domain": company.get("domain", ""),
+                "handled_by": handled_by,
                 "category": g["category"] if has_real_analysis else None,
                 "is_ai": g.get("is_ai") if has_real_analysis else None,
                 "response_quality": round(g["response_quality"] or 0, 1) if has_real_analysis else None,
@@ -1501,6 +1586,12 @@ class MongoDBManager:
         # Apply server-side category filter after computing global counts
         if category and category != "all":
             results = [r for r in results if _eff_cat(r) == category]
+        # Same treatment for the agent filter — applied after category_counts so the
+        # summary chips at the top keep showing totals for the whole dataset, not just
+        # whoever is currently selected (matches how the category filter already behaves).
+        if agents_filter_set:
+            results = [r for r in results
+                       if agents_filter_set & {h["username"] for h in r["handled_by"]}]
         total = len(results)
         start = (page - 1) * page_size
         return {
@@ -1508,6 +1599,7 @@ class MongoDBManager:
             "page":            page,
             "page_size":       page_size,
             "pages":           (total + page_size - 1) // page_size,
+            "agents":          [{"username": u, "name": n} for u, n in sorted(all_agents.items(), key=lambda kv: kv[1].lower())],
             "items":           results[start: start + page_size],
             "category_counts": category_counts,
         }

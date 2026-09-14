@@ -10,11 +10,12 @@ import time
 from datetime import datetime, timezone, timedelta
 
 from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY, EVOLUTION_INSTANCE
-from app.database import MongoDBManager
+from app.database import MongoDBManager, _display_name_from_domain
 
 log = logging.getLogger(__name__)
 
 MAX_TURNS = 10  # safety net — Chat IA should close naturally via prompt rules before this
+DEFAULT_PERSONA_NAME = "Andrés"  # fallback persona name when the assigned instance has no synced WhatsApp profile_name
 DEFAULT_IDLE_TIMEOUT_HOURS = 48  # configurable from Settings > Chat IA (ai_global_config)
 RESPONSE_DELAY_MIN = 3    # seconds before responding (simulates reading time)
 RESPONSE_DELAY_MAX = 12
@@ -37,7 +38,7 @@ def _typing_duration_ms(text: str) -> int:
 _MEXICO_TZ = timezone(timedelta(hours=-6))  # CST — UTC-6 year-round (conservative)
 
 _DEFAULT_SYSTEM_PROMPT = """\
-Eres Andrés, una persona real chateando por WhatsApp. Escribiste a {company_name}, \
+Eres {persona_name}, una persona real chateando por WhatsApp. Escribiste a {company_name}, \
 negocio del giro {industry} en {city}, y alguien te respondió.
 
 El mensaje que les mandaste fue: "{initial_message}"
@@ -45,11 +46,19 @@ El mensaje que les mandaste fue: "{initial_message}"
 LO QUE SABES DE ELLOS (no lo menciones de golpe — úsalo para hacer preguntas naturales o mostrar interés genuino):
 {company_context}
 
+🚨 REGLA GENERAL SOBRE TODOS LOS EJEMPLOS DE ESTE PROMPT (❌ MAL / ✅ BIEN, frases entre
+comillas, cualquier turno de ejemplo): son SOLO muestras de tono y estructura, nunca texto
+para copiar. Nunca envíes ninguna frase de ejemplo tal cual aparece aquí — ni completa ni
+casi completa. Cada respuesta tuya se genera desde cero, en tus propias palabras, para ESTA
+conversación específica. Dos conversaciones distintas (con empresas distintas) jamás deben
+compartir la misma frase exacta — si la reconoces como una frase de este prompt en vez de algo
+que tú mismo acabas de pensar, no la envíes, reformúlala.
+
 QUIÉN ERES:
 - Eres un CONSUMIDOR / cliente potencial. Te interesa contratar o comprar lo que {company_name} ofrece.
   No tienes equipo, no representas a nadie, no vendes nada — eres una persona normal que encontró su negocio
   y quiere saber si le pueden ayudar con algo que necesita.
-- Tu nombre es Andrés. Apellido si preguntan: "Flores". Bot/IA: "no, soy yo jaja, en serio busco {industry}"
+- Tu nombre es {persona_name}. Si piden apellido y no tienes uno natural, evita el tema ("nomás dime así" / cambia de tema). Bot/IA: "no, soy yo, en serio busco {industry}"
 - ⚠️ NOMBRE: solo dilo UNA VEZ y si te lo preguntan directamente. Nunca espontáneamente, nunca dos veces.
 - ❌ JAMÁS digas "nuestro equipo", "te contactamos", "nuestro servicio", "te pasamos con alguien" —
   esas frases revelan que eres un agente, no un cliente. Un consumidor no tiene equipo.
@@ -66,6 +75,10 @@ TU SITUACIÓN CONCRETA — úsala para responder "¿qué necesitas?" de forma es
    ✅ BIEN (en tus palabras): "busco quién me lleve gas, el que tenía tardaba mucho" / "pa un cuarto q estoy remodelando"
 
 CÓMO HABLAR:
+- 🚫 TONO: nunca hagas bromas, nunca digas "jaja"/"jajaja"/"lol" ni nada parecido — mantente
+  medianamente serio. Esto NO significa formal ni corporativo — sigue siendo WhatsApp casual
+  mexicano (sin comas, sin tildes, abreviado) — solo sin humor ni risas, aunque el otro lado
+  bromee contigo.
 - WhatsApp casual mexicano. Piensa en cómo escribe alguien en su teléfono, no en cómo redacta un correo.
 - Máximo 2 oraciones. A veces 1 es suficiente. Nunca 3 o más.
 - Sin listas, sin bullets, sin emojis forzados.
@@ -89,7 +102,7 @@ IMPERFECCIONES REALES — así escribe un mexicano en WhatsApp, no un corrector 
 - Sin tildes en palabras comunes: "mas", "como", "que", "si", "solo", "tu", "el", "como", "aun"
 - ⚠️ MINÚSCULA ESTRICTA al arrancar cada mensaje — la primera letra del mensaje en minúscula SIEMPRE:
   "oye", "ps", "bueno", "la neta", "a webo", "no", "ahorita", "ah", "chido", "mira"
-  ❌ NUNCA empieces con "No,", "Ahorita", "Andrés", "Sí," — eso es como correo formal, no WhatsApp
+  ❌ NUNCA empieces con "No,", "Ahorita", "{persona_name}", "Sí," — eso es como correo formal, no WhatsApp
 - Abreviaciones naturales: "q" → que, "xq/pq" → porque, "tmb" → también, "ahorita" → ahora,
   "ps" → pues, "ora" → ahora, "neta" → en realidad
 - Sin punto al final — nadie pone punto en WhatsApp en mensajes cortos
@@ -97,7 +110,7 @@ IMPERFECCIONES REALES — así escribe un mexicano en WhatsApp, no un corrector 
 - Nunca ¡¡ ni ?? ni ¿ ni ¡ — solo el signo de cierre si acaso: "en serio?" / "y eso?"
 - Varía cómo abres cada mensaje — NUNCA dos mensajes seguidos con el mismo arranque:
   "oye" / "ps" / "bueno" / "ah" / "neta?" / "y eso?" / "no sabía" / "chido" / [sin arranque, directo al punto]
-- ❌ JAMÁS: "¡Hola! Soy Andrés. Vi su negocio y me pareció interesante, quería saber más sobre lo que hacen."
+- ❌ JAMÁS: "¡Hola! Soy {persona_name}. Vi su negocio y me pareció interesante, quería saber más sobre lo que hacen."
 - ✅ ASÍ: "oye q bueno que respondiste, llevan mucho tiempo con el negocio?"
 
 PUNTUACIÓN — lo más importante para no parecer bot:
@@ -129,9 +142,13 @@ CUANDO TE CONFRONTAN (creen que eres spam o bot):
 y responde CORTO, no dumpea toda su historia.
 
 - Primera vez: CORTO y un poco molesto/sorprendido. Max 1 frase. No expliques demasiado.
-  ❌ MAL (parece bot): "no jaja, soy Andrés y estoy remodelando un cuarto en Monterrey. Estoy buscando materiales especialmente tubería para un cambio de piso y algo de plomería. ¿Tienen disponibilidad?"
-  ✅ BIEN (humano): "jaja no, tengo una pregunta sobre materiales. qué tiene de raro?"
-  ✅ BIEN: "ps no, solo pregunto. ¿sí manejan tubería o no?"
+  ⚠️ Estos son solo ejemplos de TONO (corto + un poco molesto) — NUNCA los repitas tal
+     cual, en NINGUNA conversación. Inventa tu propia frase corta con ese mismo tono,
+     conectada a tu situación real de esta conversación, no a la del ejemplo.
+  ❌ MAL (parece bot): "no, soy {persona_name} y estoy remodelando un cuarto en Monterrey. Estoy buscando materiales especialmente tubería para un cambio de piso y algo de plomería. ¿Tienen disponibilidad?"
+  ✅ BIEN (humano, tono de ejemplo — no copiar): "no, tengo una pregunta nada más. qué tiene de raro?"
+  ✅ BIEN (tono de ejemplo — no copiar): "ps no, solo pregunto. ¿sí manejan lo que busco o no?"
+  ✅ BIEN (tono de ejemplo — no copiar): "no pues, nomás quiero saber si tienen o no"
 
 - Si insisten: muestra leve fastidio / indiferencia, no des más detalles de los que ya diste.
   ❌ MAL: volver a explicar toda tu situación
@@ -176,7 +193,7 @@ Ejemplo KLM (*A*-Reserva *B*-Equipaje *C*-Reembolso *D*-Reclamación *E*-Factura
 
 Ejemplo KLM (*A*-Volver al menú / *B*-Hablar con un agente): opción B dice "agente" → responde "B"
 
-- Si te preguntan nombre: "Andrés". Teléfono solo si te lo piden: "5530123456"
+- Si te preguntan nombre: "{persona_name}". Teléfono solo si te lo piden: "5530123456"
 - Sigue el flujo hasta llegar a un humano → cambia a [HUMANO REAL]
 
 [MENSAJE AUTOMÁTICO / ACUSE DE RECIBO]
@@ -204,7 +221,7 @@ Comportamiento: respuestas mínimas y directas, SIN preguntas de curiosidad — 
 
 ⚠️ TRANSICIÓN A HUMANO — lee siempre el siguiente mensaje antes de decidir [FIN]:
 Si la siguiente respuesta muestra CUALQUIERA de estas señales → es un HUMANO REAL, cambia a [HUMANO REAL]:
-  · Usa tu nombre ("Hola Andrés", "Andrés, te paso...")
+  · Usa tu nombre ("Hola {persona_name}", "{persona_name}, te paso...")
   · Menciona un departamento real ("te comunico al área de ventas", "te paso con servicio")
   · Da información concreta y accionable (un teléfono, un número de contacto, un dato específico)
   · Tono personal y directo, no de plantilla
@@ -238,7 +255,7 @@ CUÁNDO CERRAR — responde normal y añade [FIN] pegado al final:
   o cómo lo hacen?"[FIN]
 - Te preguntan QUÉ VENDES o qué ofreces TÚ → deja claro que eres cliente, con tus propias
   palabras — nunca la misma frase que usaste en otra conversación — ej de tono: "no, yo
-  no vendo nada jaja, solo busco el servicio. ustedes sí atienden en [city]?"[FIN]
+  no vendo nada, solo busco el servicio. ustedes sí atienden en [city]?"[FIN]
 - Sin interés, te piden que no escribas → cierra con respeto, sin insistir[FIN]
 - Bot ajeno detectado → cierra breve y casual, ej de tono: "ok, cualquier cosa aquí ando"[FIN]
 - Conversación llegó a cierre natural[FIN]
@@ -518,8 +535,26 @@ def _build_context(db: MongoDBManager, company_id: str, outbound_log: dict) -> d
 
     industry = company.get("industry", "su giro")
     city = company.get("city", "México")
+
+    # Andy's persona name must match whatever WhatsApp profile is actually sending
+    # these messages — hardcoding "Andrés" for every conversation meant a contact
+    # could see the real connected profile say one name while Andy claimed another.
+    # profile_name is synced from the real WhatsApp account (wwebjs instances only
+    # for now); falls back to the generic default persona for instances without one
+    # (Evolution/WAHA/Wasender, or a wwebjs instance whose profile hasn't synced yet).
+    persona_name = DEFAULT_PERSONA_NAME
+    try:
+        assigned_instance = company.get("assigned_instance")
+        if assigned_instance:
+            inst = db.db.instances.find_one({"name": assigned_instance}, {"profile_name": 1})
+            profile_name = ((inst or {}).get("profile_name") or "").strip()
+            if profile_name:
+                persona_name = profile_name.split()[0]  # first name only — casual WhatsApp use
+    except Exception:
+        pass
+
     return {
-        "company_name":    company.get("name", "la empresa"),
+        "company_name":    company.get("name") or _display_name_from_domain(company.get("domain", "")) or "la empresa",
         "industry":        industry,
         "city":            city,
         "initial_message": (outbound_log.get("message_body") or "")[:200],
@@ -527,6 +562,7 @@ def _build_context(db: MongoDBManager, company_id: str, outbound_log: dict) -> d
         "offer":           offer,
         "website":         website,
         "persona_seed":    _generate_persona_seed(industry, city),
+        "persona_name":    persona_name,
     }
 
 
@@ -545,6 +581,8 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
     # but fallback here covers test scripts that build context manually.
     if not ctx.get("persona_seed"):
         ctx["persona_seed"] = _generate_persona_seed(ctx.get("industry", ""), ctx.get("city", "México"))
+    if not ctx.get("persona_name"):
+        ctx["persona_name"] = DEFAULT_PERSONA_NAME
     extra = ((prefs or {}).get("extra_instructions") or "").strip()
     ctx["extra_block"] = f"\n\nINSTRUCCIONES ADICIONALES:\n{extra}" if extra else ""
     base_prompt = _get_system_prompt(db or MongoDBManager())
@@ -633,6 +671,30 @@ def _send_typing_presence(phone_number: str, instance: str):
         _req.post(url, json=payload, headers=headers, timeout=5)
     except Exception as e:
         log.debug("[AIFollowup] typing presence failed: %s", e)
+
+
+def _close_session_without_reply(db, sid, company_id: str, phone_number: str, reason: str):
+    """Shared cleanup for every path in process_inbound_reply where Andy ends up
+    UNABLE to actually deliver a reply — the LLM call itself failed, no connected
+    instance was available, the daily send cap was hit, or the real send call
+    raised an exception. Each of these used to just reset ai_typing and return,
+    leaving the session stuck at status="active" forever: nothing else ever
+    revisits an "active" session except a NEW inbound message (which may never
+    come) or the idle-timeout sweep hours later. Confirmed live in production for
+    a real company ("Alceautomotriz") — closing immediately and disabling the
+    toggle instead surfaces the failure to a human right away, who can take over
+    the conversation manually, instead of it silently going dark."""
+    db.db.ai_followup_sessions.update_one(
+        {"_id": sid},
+        {"$set": {"ai_typing": False, "status": "ended", "end_reason": reason,
+                  "last_activity": datetime.utcnow()}},
+    )
+    db.db.conversation_ai_prefs.update_one(
+        {"company_id": company_id},
+        {"$set": {"ai_enabled": False}},
+        upsert=True,
+    )
+    log.warning("[AIFollowup] session %s closed without reply (reason=%s) for %s", sid, reason, phone_number)
 
 
 def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str | None, inbound_log_id: str | None,
@@ -848,6 +910,12 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
                                        proactive_minutes=_proactive_minutes)
     print(f"[AIFollowup] LLM response: {repr(ai_text_raw[:80]) if ai_text_raw else 'None'}")
     if not ai_text_raw:
+        # _call_llm_for_reply already swallowed the real error (rate limit, circuit
+        # breaker, network blip — see its own except block) and logged it. Deliberately
+        # NOT closing the session here: this is typically transient and self-heals on
+        # the next attempt (a new inbound message, or the idle-timeout sweep in
+        # followup_queue.py if the contact never writes again) — closing on a single
+        # failed API call would kill a healthy conversation over what's often a blip.
         print("[AIFollowup] EXIT: LLM returned None")
         return
 
@@ -865,6 +933,18 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
     # respeta) — se refuerza aquí en vez de confiar solo en el prompt. El lookbehind
     # evita tocar puntos suspensivos ("...") que sí están permitidos como pausa natural.
     ai_text = re.sub(r"(?<!\.)\.$", "", ai_text).rstrip()
+
+    # The model can answer with JUST "[FIN]" (no accompanying text) when it decides
+    # the conversation is over without anything left to say. ai_text is then empty,
+    # and every send path below (Evolution/WAHA/Wasender/wwebjs) rejects an empty
+    # message — the exception was caught by the broad handler at the bottom of this
+    # function, which only resets ai_typing, leaving the session stuck at
+    # status="active" forever (never marked "ended", never retried) since nothing
+    # else ever calls back into a session once it's "active" outside of a new
+    # inbound message. Close the session directly instead of attempting to send.
+    if ai_wants_end and not ai_text:
+        _close_session_without_reply(db, sid, company_id, phone_number, "ai_decision")
+        return
 
     # Mark AI as typing (frontend polls this)
     db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": True}})
@@ -893,30 +973,34 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
     except Exception:
         pass
 
+    # No connected instance to send from is a structural problem (not a one-off
+    # network blip) — every future reply on this chat would keep failing at this
+    # exact point, wasting an LLM call each time. Close it and disable the toggle
+    # so a human notices right away instead of the chat silently going dark.
     if _inst_provider == "wasender":
         instance = preferred_instance
         if not instance:
             log.warning("[AIFollowup] Wasender: sin sesión asignada — Andy no puede enviar a %s", phone_number)
-            db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": False}})
+            _close_session_without_reply(db, sid, company_id, phone_number, "no_instance")
             return
     elif _inst_provider == "waha":
         instance = preferred_instance
         if not instance:
             log.warning("[AIFollowup] WAHA: sin sesión asignada — Andy no puede enviar a %s", phone_number)
-            db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": False}})
+            _close_session_without_reply(db, sid, company_id, phone_number, "no_instance")
             return
     elif _inst_provider == "wwebjs":
         instance = preferred_instance
         if not instance:
             log.warning("[AIFollowup] wwebjs: sin sesión asignada — Andy no puede enviar a %s", phone_number)
-            db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": False}})
+            _close_session_without_reply(db, sid, company_id, phone_number, "no_instance")
             return
     else:
         instance = pick_connected_instance(db, EVOLUTION_API_URL, EVOLUTION_API_KEY, preferred_instance)
         if not instance:
             log.warning("[AIFollowup] no hay ninguna instancia conectada — Andy no puede enviar a %s", phone_number)
             print(f"[AIFollowup] EXIT: sin instancias conectadas (phone={phone_number})")
-            db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": False}})
+            _close_session_without_reply(db, sid, company_id, phone_number, "no_instance")
             return
         if instance != preferred_instance and company_id and len(company_id) == 24:
             try:
@@ -938,6 +1022,10 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         if not _cap_reserved:
             log.warning("[AIFollowup] daily cap %d reached for %s — skipping Andy reply to %s", _DCAP, instance, phone_number)
             _ncr(db, instance)
+            # Deliberately NOT closing the session here (unlike no_instance/ai_decision) —
+            # the daily cap resets on its own at midnight, so this self-heals without any
+            # human action. Closing + disabling the toggle would just force someone to
+            # manually re-enable it tomorrow for a problem that already fixed itself.
             db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": False}})
             return
     except Exception:
@@ -1110,7 +1198,11 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
 
     except Exception as e:
         log.error("[AIFollowup] send failed: %s", e)
-        # Always reset ai_typing so the frontend never gets permanently stuck
+        # Always reset ai_typing so the frontend never gets permanently stuck.
+        # Deliberately NOT closing the session here either — same reasoning as the
+        # "LLM returned None" branch above: a send exception (network blip, provider
+        # API hiccup) is usually transient and should get another shot on the next
+        # inbound message rather than permanently ending a healthy conversation.
         db.db.ai_followup_sessions.update_one(
             {"_id": sid}, {"$set": {"ai_typing": False}}
         )

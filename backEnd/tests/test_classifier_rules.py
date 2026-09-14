@@ -139,7 +139,6 @@ class TestLooksLikeAutoReply:
         "Nuestro horario de atención es Lun-Vie 9am-6pm",
         # Prod cases added in 2026-08
         "Bienvenido(a) a Laboratorio Médico del Chopo. Con 75 años de experiencia.",
-        "Gracias por escribir a Gas Flamazul, ¿nos puede proporcionar su nombre?",
         "Por el momento nuestro equipo se encuentra fuera del horario laboral.",
         "Por el momento nos encontramos fuera de nuestro horario de atención.",
     ])
@@ -152,6 +151,15 @@ class TestLooksLikeAutoReply:
         # Caso real de producción (Ferra, 2026-09-07): un agente humano real escribió
         # esto y se clasificó "bot" por error — es cortesía humana normal, no plantilla.
         "Nosotros estamos en Tonalá, si gustas venir con gusto te atenderemos.",
+        # Decisión de producto (2026-09-14): un saludo de bienvenida que TAMBIÉN pide
+        # datos de calificación (nombre/negocio/ubicación) ya no se trata como ACK
+        # silencioso — es un bot de calificación de leads, y Andy debe seguirle la
+        # corriente (dar nombre/negocio falso) para intentar llegar a un humano real,
+        # en vez de quedarse callado para siempre y perder el lead. Antes esta misma
+        # frase estaba en test_detects_template_markers esperando True; caso real que
+        # motivó el cambio: "Doctor Restaurant" / bot "Alondra" con las mismas 3
+        # preguntas (nombre, negocio, ubicación) dejó la sesión atorada sin responder.
+        "Gracias por escribir a Gas Flamazul, ¿nos puede proporcionar su nombre?",
     ])
     def test_normal_reply_is_not_flagged(self, text):
         assert _looks_like_auto_reply(text) is False

@@ -627,6 +627,137 @@ app.post('/session/:id/profile/status', async (req, res) => {
   }
 })
 
+// WhatsApp Web lazy-loads the WAWebSetPushnameConnAction module (used by
+// setDisplayName() internally) only after a human opens the "You" profile
+// drawer at least once — a headless session never does, so the call throws
+// "Cannot read properties of undefined (reading 'setPushname')" on a fresh
+// connection. Confirmed live (2026-09-14): the module reports as unloaded on
+// a freshly (re)connected session, and the profile nav item is the LAST
+// [data-navbar-item="true"] entry, currently aria-label="You" (WhatsApp's own
+// label for it, not literally "Profile"). Clicking it once forces the same
+// lazy-load a human triggers, then Escape closes the drawer back out — no
+// visible WhatsApp-side change either way.
+// setProfilePicture() uses a different set of modules (WAWebCollections /
+// WAWebContactProfilePicThumbBridge) that haven't actually been confirmed to
+// need this same nudge — reusing this helper there is a reasonable bet
+// (opening the drawer plausibly loads the whole profile-related chunk
+// together) but is UNVERIFIED until tested against a real picture change.
+async function ensureProfileModuleLoaded(page) {
+  const check = () => page.evaluate(() => {
+    try { return !!window.require('WAWebSetPushnameConnAction') } catch { return false }
+  })
+
+  const alreadyLoaded = await check()
+  if (alreadyLoaded) return { ok: true, alreadyLoaded: true }
+
+  // A generic "What's new on WhatsApp Web" announcement modal shows up on
+  // every fresh page load (confirmed live, 2026-09-14) and sits on top of
+  // whatever we open next — it was the ONLY [role="dialog"] our debug capture
+  // ever found, meaning the real profile drawer was never what we were
+  // reading. Dismiss it first so it's not in the way of the actual click.
+  const dismissed = await page.evaluate(() => {
+    const dialog = document.querySelector('[role="dialog"]')
+    if (!dialog) return false
+    const btn = [...dialog.querySelectorAll('button, div[role="button"]')]
+      .find(b => /continue|got it|ok/i.test(b.textContent || ''))
+    if (btn) { btn.click(); return true }
+    return false
+  })
+  if (dismissed) await new Promise(r => setTimeout(r, 500))
+  await page.keyboard.press('Escape').catch(() => {})
+  await new Promise(r => setTimeout(r, 300))
+
+  const clickInfo = await page.evaluate(() => {
+    const items = [...document.querySelectorAll('[data-navbar-item="true"]')]
+    const profileItem = items[items.length - 1]
+    if (!profileItem) return { clicked: false, navCount: items.length }
+    profileItem.click()
+    return { clicked: true, navCount: items.length, ariaLabel: profileItem.getAttribute('aria-label') }
+  })
+
+  // The "You" nav item opens WhatsApp's SETTINGS menu, not the profile editor
+  // directly (confirmed via a real screenshot, 2026-09-14) — it's a list with
+  // its own "Profile" row ("Name, profile picture, username") that has to be
+  // clicked next to reach the actual editor where the lazy module loads.
+  await new Promise(r => setTimeout(r, 800))
+  const profileRowClicked = await page.evaluate(() => {
+    const leaf = [...document.querySelectorAll('div, span')]
+      .find(el => el.children.length === 0 && el.textContent.trim() === 'Profile')
+    if (!leaf) return false
+    leaf.click()
+    return true
+  })
+
+  // Give the panel real time to mount and its lazy chunk to import — 1.5s
+  // wasn't enough on the first live attempt (2026-09-14), try a longer wait
+  // and poll instead of a single fixed sleep. Confirmed live: the drawer
+  // itself (data-testid="drawer-fullscreen") opens correctly but can still be
+  // empty (no text, no editable fields) several iterations in — poll until it
+  // actually has content, not just until the module check flips.
+  let loaded = false
+  let panelHasContent = false
+  for (let i = 0; i < 14; i++) {
+    await new Promise(r => setTimeout(r, 500))
+    loaded = await check()
+    if (loaded) break
+    panelHasContent = await page.evaluate(() => {
+      const p = document.querySelector('[data-testid="drawer-fullscreen"], [data-testid*="drawer" i]')
+      return !!p && (p.innerText || '').trim().length > 0
+    })
+    if (panelHasContent) {
+      // Content showed up but module still isn't registered yet — a couple
+      // more polls give the lazy chunk time to finish importing now that we
+      // know we're looking at the right panel.
+      for (let j = 0; j < 4; j++) {
+        await new Promise(r => setTimeout(r, 500))
+        loaded = await check()
+        if (loaded) break
+      }
+      break
+    }
+  }
+
+  // Didn't load from just opening the "You" tab — capture what's actually
+  // rendered so the next iteration can target the real element instead of
+  // guessing again (WhatsApp likely lazy-loads the edit action per-field,
+  // e.g. only once you click into the name field itself, not just the tab).
+  let panelDebug = null
+  let screenshot = null
+  if (!loaded) {
+    panelDebug = await page.evaluate(() => {
+      const editable = [...document.querySelectorAll('[contenteditable="true"], [data-icon*="pencil" i], [data-icon*="edit" i]')]
+        .slice(0, 15)
+        .map(el => ({
+          tag: el.tagName, dataIcon: el.getAttribute('data-icon'),
+          ariaLabel: el.getAttribute('aria-label'), title: el.getAttribute('title'),
+          text: (el.textContent || '').slice(0, 40),
+        }))
+      const panel = document.querySelector('[data-testid*="drawer" i], [role="dialog"], #app > div > span > div')
+      return {
+        editable,
+        panelTestId: panel ? panel.getAttribute('data-testid') : null,
+        panelText: panel ? panel.innerText.slice(0, 2500) : 'no panel/dialog found',
+      }
+    })
+    // Text-scraping guesses have gone in circles for a while now — a real
+    // screenshot of what's actually on screen settles it in one shot instead
+    // of another blind iteration.
+    try {
+      screenshot = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 60 })
+    } catch (e) {
+      screenshot = null
+    }
+  }
+
+  // Two levels deep now (You -> Profile) — one Escape per level to fully
+  // back out instead of leaving the Settings menu open behind us.
+  await page.keyboard.press('Escape').catch(() => {})
+  await new Promise(r => setTimeout(r, 200))
+  await page.keyboard.press('Escape').catch(() => {})
+
+  return { ok: loaded, ...clickInfo, profileRowClicked, polledLoaded: loaded, panelHasContent, panelDebug, screenshot }
+}
+
 // Set the real WhatsApp profile name (pushname) — this is the account's
 // actual display name, distinct from the app's own internal instance label
 // (which InstancesPanel.jsx already lets you edit) and from Andy's
@@ -639,6 +770,8 @@ app.post('/session/:id/profile/name', async (req, res) => {
   const { name } = req.body
   if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'name string required' })
   try {
+    const moduleStatus = await ensureProfileModuleLoaded(session.client.pupPage)
+    if (!moduleStatus.ok) return res.status(503).json({ error: 'WhatsApp Web profile module did not load — try again in a moment', debug: moduleStatus })
     const ok = await session.client.setDisplayName(name.trim())
     if (!ok) return res.status(409).json({ error: 'WhatsApp refused the name change (rate-limited or not permitted right now)' })
     res.json({ success: true, name: name.trim() })
@@ -657,6 +790,8 @@ app.post('/session/:id/profile/picture', async (req, res) => {
   try {
     const media = await MessageMedia.fromUrl(imageUrl, { unsafeMime: true })
     if (!media.mimetype.startsWith('image/')) return res.status(400).json({ error: `URL is not an image (${media.mimetype})` })
+    const moduleStatus = await ensureProfileModuleLoaded(session.client.pupPage)
+    if (!moduleStatus.ok) return res.status(503).json({ error: 'WhatsApp Web profile module did not load — try again in a moment', debug: moduleStatus })
     const ok = await session.client.setProfilePicture(media)
     if (!ok) return res.status(409).json({ error: 'WhatsApp refused the picture change' })
     res.json({ success: true })

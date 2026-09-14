@@ -1120,29 +1120,41 @@ export default function Conversations({ isActive } = {}) {
 
   // Instance that sent the most recent outbound message for the ACTIVE number tab.
   // Only shown when a specific number is selected (not "all") or when there's only one number.
-  const sendingInstance = useMemo(() => {
+  // Cadena de TODAS las instancias que han mandado un saliente en este hilo,
+  // en orden de primer uso — no solo la más reciente. Antes, si la conversación
+  // empezaba con una instancia que después se desconectó y el sistema
+  // reasignaba el número a otra, el header mostraba solo la nueva ("vía X"),
+  // borrando silenciosamente el rastro de que Richie (o quien sea) fue quien
+  // realmente arrancó la plática con ese contacto.
+  const sendingInstances = useMemo(() => {
     const showSingle = waNumbers.length <= 1 || (activeNum && activeNum !== 'all')
-    if (!showSingle) return null
-    let out = null
-    for (let i = visibleThread.length - 1; i >= 0; i--) {
-      if (visibleThread[i].direction === 'outbound') { out = visibleThread[i]; break }
+    if (!showSingle) return []
+    const seen = new Set()
+    const list = []
+    for (const m of visibleThread) {
+      if (m.direction !== 'outbound' || !m.instance_name || seen.has(m.instance_name)) continue
+      seen.add(m.instance_name)
+      const rawNum = m.instance_number || selected?.via_instance_number || null
+      const num    = rawNum ? formatSenderNumber(rawNum) : null
+      const name   = m.instance_name
+      // Nombre/foto REAL de WhatsApp de la instancia (capturados del evento "ready"
+      // de wwebjs) en vez del codename técnico interno ("gely-test2") — ese nombre
+      // no le dice nada al usuario sobre quién contestó. Si aún no se capturó
+      // (instancia no ha reconectado desde que se agregó esto), cae al número.
+      const profileName = m.instance_profile_name || null
+      const profilePic   = m.instance_profile_pic_url || null
+      const label = (name && num) ? `${name} (${num})` : (num || name)
+      const displayName = profileName || num || name
+      // Quién mandó ESE primer mensaje desde ESTA instancia en particular —
+      // no un remitente global de toda la conversación. Si el chat cambió de
+      // número en el camino, es muy probable que también haya cambiado de
+      // agente (cada quien manda desde su propio número), así que amarrar el
+      // "enviado por" a la instancia correcta evita atribuirle a la persona
+      // equivocada lo que mandó la otra.
+      const sentBy = m.sent_by_name || null
+      list.push({ num, name, label, profileName, profilePic, displayName, sentBy })
     }
-    if (!out) return null
-    const rawNum = out.instance_number || selected?.via_instance_number || null
-    const num    = rawNum ? formatSenderNumber(rawNum) : null
-    const name   = out.instance_name || null
-    // Nombre/foto REAL de WhatsApp de la instancia (capturados del evento "ready"
-    // de wwebjs) en vez del codename técnico interno ("gely-test2") — ese nombre
-    // no le dice nada al usuario sobre quién contestó. Si aún no se capturó
-    // (instancia no ha reconectado desde que se agregó esto), cae al número.
-    const profileName = out.instance_profile_name || null
-    const profilePic   = out.instance_profile_pic_url || null
-    // Use conversation-level sent_by_name (oldest outbound, same source as list chip)
-    // instead of the most-recent outbound thread message, which may be the AI persona.
-    const sentBy = selected?.sent_by_name || null
-    const label = (name && num) ? `${name} (${num})` : (num || name)
-    const displayName = profileName || num || name
-    return { num, name, sentBy, label, profileName, profilePic, displayName }
+    return list
   }, [visibleThread, activeNum, waNumbers, selected])
 
   return (
@@ -1283,7 +1295,18 @@ export default function Conversations({ isActive } = {}) {
             <Box sx={{ px: 2.5, py: 1.5, borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
               {/* Fila superior: nombre + link + refresh */}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: waNumbers.length > 0 ? 1 : 0 }}>
-                <BusinessIcon sx={{ fontSize: 18, color: 'rgba(255,255,255,0.4)', flexShrink: 0 }} />
+                {/* Mismo ícono-en-caja-degradada verde que ya usa el header
+                   de la lista de Conversaciones, en vez del ícono plano y
+                   suelto de antes — era el único lugar de este archivo sin
+                   ese tratamiento. */}
+                <Box sx={{
+                  width: 28, height: 28, borderRadius: '9px', flexShrink: 0,
+                  background: 'linear-gradient(135deg, rgba(74,222,128,0.28) 0%, rgba(74,222,128,0.1) 100%)',
+                  border: '1px solid rgba(74,222,128,0.35)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <BusinessIcon sx={{ fontSize: 15, color: '#4ade80' }} />
+                </Box>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.9rem' }}>
                     {selected.company_name}
@@ -1352,43 +1375,84 @@ export default function Conversations({ isActive } = {}) {
                 </Tooltip>
               </Box>
 
-              {/* Instancia origen + agente que envió */}
-              {(sendingInstance?.label || sendingInstance?.sentBy) && (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, mb: waNumbers.length > 0 ? 0.6 : 0, flexWrap: 'wrap' }}>
-                  {sendingInstance.label && (
-                    <Tooltip title={sendingInstance.label} placement="top">
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
-                        {/* Foto/nombre real de WhatsApp de la instancia en vez del
-                            codename técnico ("gely-test2") — ese nombre no le dice
-                            nada al usuario sobre quién contestó. El codename sigue
-                            disponible en el tooltip para referencia. */}
-                        <Box sx={{
-                          width: 14, height: 14, borderRadius: '50%', flexShrink: 0, overflow: 'hidden',
-                          bgcolor: 'rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        }}>
-                          {sendingInstance.profilePic
-                            ? <Box component="img" src={sendingInstance.profilePic} alt="" sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-                            : <PhoneAndroidIcon sx={{ fontSize: 9, color: 'rgba(255,255,255,0.3)' }} />}
+              {/* Separador suave entre la identidad del negocio (arriba) y
+                 los datos operativos (instancia/agente/números, abajo) — se
+                 desvanece en los extremos en vez de una línea sólida de
+                 borde a borde, para que no compita con el borde del propio
+                 recuadro del header. Ya estamos dentro de la rama "hay un
+                 chat seleccionado" en este punto del JSX, así que se muestra
+                 siempre aquí — antes dependía de sendingInstances, que se
+                 vacía a propósito cuando el chat tiene 2+ números y la
+                 pestaña activa es "Todos" (lógica ya existente, no nueva),
+                 haciendo que el separador desapareciera junto con ella. */}
+              <Box sx={{
+                height: '2px', my: 0.9,
+                background: 'linear-gradient(90deg, transparent, rgba(74,222,128,0.55) 15%, rgba(74,222,128,0.55) 85%, transparent)',
+              }} />
+
+              {/* Instancia origen + agente que envió — antes era una fila
+                 más apilada con el mismo peso visual que el nombre de la
+                 empresa arriba; ahora vive en su propio recuadro contenido,
+                 para que se lea claramente como dato secundario ("quién
+                 atiende"), no como parte de la identidad principal del chat.
+                 El chip de agente va PEGADO a cada instancia de la cadena
+                 (no uno solo al final): si el chat cambió de número, lo más
+                 probable es que también haya cambiado de quién lo atiende
+                 (cada quien manda desde su propio número), así que había que
+                 amarrar "enviado por" a la instancia correcta, no a uno solo
+                 global que le atribuía a la persona equivocada lo que mandó
+                 la otra. */}
+              {sendingInstances.length > 0 && (
+                <Box sx={{
+                  display: 'inline-flex', alignItems: 'center', gap: 0.6, flexWrap: 'wrap',
+                  mt: 0.5, mb: waNumbers.length > 0 ? 0.8 : 0.2,
+                  px: 0.8, py: 0.4, borderRadius: 1.5,
+                  bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+                }}>
+                  {sendingInstances.map((inst, i) => (
+                    <Box key={inst.name} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      {/* "→" entre cada instancia distinta que ha mandado un
+                         saliente en este hilo — si el contacto empezó con una
+                         instancia que luego se reasignó a otra, se ve la
+                         secuencia completa en vez de perder el rastro de la
+                         primera. */}
+                      {i > 0 && (
+                        <Typography component="span" sx={{ fontSize: '0.6rem', color: 'rgba(255,255,255,0.2)' }}>→</Typography>
+                      )}
+                      <Tooltip title={inst.label} placement="top">
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
+                          {/* Foto/nombre real de WhatsApp de la instancia en vez del
+                              codename técnico ("gely-test2") — ese nombre no le dice
+                              nada al usuario sobre quién contestó. El codename sigue
+                              disponible en el tooltip para referencia. */}
+                          <Box sx={{
+                            width: 14, height: 14, borderRadius: '50%', flexShrink: 0, overflow: 'hidden',
+                            bgcolor: 'rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}>
+                            {inst.profilePic
+                              ? <Box component="img" src={inst.profilePic} alt="" sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                              : <PhoneAndroidIcon sx={{ fontSize: 9, color: 'rgba(255,255,255,0.3)' }} />}
+                          </Box>
+                          <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.28)', fontFamily: 'monospace', letterSpacing: '0.04em' }}>
+                            {lang === 'en' ? 'via' : 'vía'}&nbsp;{inst.displayName}
+                          </Typography>
                         </Box>
-                        <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.28)', fontFamily: 'monospace', letterSpacing: '0.04em' }}>
-                          {lang === 'en' ? 'via' : 'vía'}&nbsp;{sendingInstance.displayName}
-                        </Typography>
-                      </Box>
-                    </Tooltip>
-                  )}
-                  {sendingInstance.sentBy && (
-                    <Box sx={{
-                      display: 'flex', alignItems: 'center', gap: 0.3,
-                      bgcolor: agentColor(sendingInstance.sentBy) + '18',
-                      border: `1px solid ${agentColor(sendingInstance.sentBy)}44`,
-                      borderRadius: 1, px: 0.6, py: 0.1,
-                    }}>
-                      <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: agentColor(sendingInstance.sentBy), flexShrink: 0 }} />
-                      <Typography sx={{ fontSize: '0.62rem', color: agentColor(sendingInstance.sentBy), fontWeight: 700, lineHeight: 1.4 }}>
-                        {sendingInstance.sentBy.split(' ')[0]}
-                      </Typography>
+                      </Tooltip>
+                      {inst.sentBy && (
+                        <Box sx={{
+                          display: 'flex', alignItems: 'center', gap: 0.3,
+                          bgcolor: agentColor(inst.sentBy) + '18',
+                          border: `1px solid ${agentColor(inst.sentBy)}44`,
+                          borderRadius: 1, px: 0.6, py: 0.1,
+                        }}>
+                          <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: agentColor(inst.sentBy), flexShrink: 0 }} />
+                          <Typography sx={{ fontSize: '0.62rem', color: agentColor(inst.sentBy), fontWeight: 700, lineHeight: 1.4 }}>
+                            {inst.sentBy.split(' ')[0]}
+                          </Typography>
+                        </Box>
+                      )}
                     </Box>
-                  )}
+                  ))}
                 </Box>
               )}
 

@@ -18,11 +18,13 @@ import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
 import AccountCircleIcon from '@mui/icons-material/AccountCircle'
 import Slider from '@mui/material/Slider'
 import TimerIcon from '@mui/icons-material/Timer'
+import SpeedIcon from '@mui/icons-material/Speed'
 import SaveIcon from '@mui/icons-material/Save'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import Chip from '@mui/material/Chip'
 import IconButton from '@mui/material/IconButton'
 import DescriptionIcon from '@mui/icons-material/Description'
+import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import { useUser } from '../context/UserContext'
 import { useLang } from '../context/LangContext'
 import { loadSendConfig, saveSendConfig, DEFAULT_SEND_CONFIG } from '@/lib/sendConfig'
@@ -188,89 +190,168 @@ function AccountSection({ user }) {
   }
 
   const masked = code ? code.slice(0,3) + '·'.repeat(6) + code.slice(-3) : '············'
+  const connCount = myInst.filter(i => ['open','connected'].includes(i.live_status)).length
 
   return (
     <Section icon={<AccountCircleIcon />} title={t.settings.account}>
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.2 }}>
+      {/* Un solo recuadro que encasilla todo en orden — nada de banners con
+         avatar sobrepuesto (eso seguía recortándose de forma rara); cada
+         bloque es una sección con su propio encabezado dentro de la MISMA
+         tarjeta, separadas por líneas, en vez de tarjetas sueltas apiladas. */}
+      <Box sx={{
+        borderRadius: 3, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+        bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))', overflow: 'hidden',
+      }}>
 
-        {/* Perfil */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1.5, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
-          <Box sx={{ width: 40, height: 40, borderRadius: '50%', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1.5px solid rgba(var(--accent-rgb,59,130,246),0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <Typography sx={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--accent,#60a5fa)', textTransform: 'uppercase' }}>{(user?.display_name || '?')[0]}</Typography>
-          </Box>
-          <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.88rem' }}>{user?.display_name}</Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem' }}>
-              {user?.email || `@${user?.username}`} · {user?.role === 'admin' ? t.settings.adminRole : t.settings.agentRole}
+        {/* Identidad — avatar simple (sin banner, sin sobreposición) + datos,
+           con un leve tinte de color de fondo para no perder el detalle de
+           color que sí funcionó. Stats a la derecha. */}
+        <Box sx={{
+          display: 'flex', alignItems: 'center', gap: 2, p: 2.2, flexWrap: 'wrap',
+          background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.12) 0%, rgba(var(--accent-rgb,59,130,246),0.03) 55%, transparent 100%)',
+          borderBottom: '1px solid var(--border, rgba(255,255,255,0.08))',
+        }}>
+          <Box sx={{
+            width: 64, height: 64, borderRadius: '50%', flexShrink: 0,
+            bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)',
+            border: '2px solid rgba(var(--accent-rgb,59,130,246),0.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <Typography sx={{ fontWeight: 800, fontSize: '1.4rem', color: 'var(--accent,#60a5fa)', textTransform: 'uppercase' }}>
+              {(user?.display_name || '?')[0]}
             </Typography>
           </Box>
+          <Box sx={{ flex: '1 1 180px', minWidth: 0 }}>
+            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.25 }}>
+              {user?.display_name}
+            </Typography>
+            <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.78rem', mt: 0.2 }}>
+              {user?.role === 'admin' ? t.settings.adminRole : t.settings.agentRole} · {user?.email || `@${user?.username}`}
+            </Typography>
+          </Box>
+          {myInst.length > 0 && (
+            <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
+              <Box sx={{ textAlign: 'center', px: 1.6, py: 0.7, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1.05rem', lineHeight: 1 }}>{myInst.length}</Typography>
+                <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.58rem', mt: 0.3, textTransform: 'uppercase' }}>
+                  {lang === 'en' ? 'Instances' : 'Instancias'}
+                </Typography>
+              </Box>
+              <Box sx={{ textAlign: 'center', px: 1.6, py: 0.7, borderRadius: 2, bgcolor: 'rgba(74,222,128,0.06)', border: '1px solid rgba(74,222,128,0.15)' }}>
+                <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '1.05rem', lineHeight: 1 }}>{connCount}</Typography>
+                <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.58rem', mt: 0.3, textTransform: 'uppercase' }}>
+                  {lang === 'en' ? 'Connected' : 'Conectadas'}
+                </Typography>
+              </Box>
+            </Box>
+          )}
         </Box>
 
-        {/* WhatsApp instances */}
+        {/* WhatsApp instances — sección dentro de la misma tarjeta */}
         {myInst.length > 0 && (() => {
-          const connCount = myInst.filter(i => ['open','connected'].includes(i.live_status)).length
           const hasRotation = connCount >= 2
           return (
-            <Box sx={{ p: 1.2, borderRadius: 2, bgcolor: 'rgba(37,211,102,0.04)', border: '1px solid rgba(37,211,102,0.12)' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.8 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-                  <PhoneAndroidIcon sx={{ fontSize: 13, color: '#4ade80' }} />
-                  <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            <Box sx={{ borderBottom: '1px solid var(--border, rgba(255,255,255,0.07))' }}>
+              <Box sx={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 2, py: 1.2, position: 'relative', flexWrap: 'wrap',
+                background: 'linear-gradient(135deg, rgba(37,211,102,0.1) 0%, rgba(37,211,102,0.03) 60%, transparent 100%)',
+                '&::after': {
+                  content: '""', position: 'absolute', bottom: 0, left: 14, right: 14, height: '1px',
+                  background: 'linear-gradient(90deg, transparent, rgba(37,211,102,0.35) 40%, rgba(37,211,102,0.35) 60%, transparent)',
+                },
+              }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Box sx={{
+                    width: 26, height: 26, borderRadius: '8px', flexShrink: 0,
+                    background: 'linear-gradient(135deg, rgba(37,211,102,0.25) 0%, rgba(37,211,102,0.1) 100%)',
+                    border: '1px solid rgba(37,211,102,0.3)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <PhoneAndroidIcon sx={{ fontSize: 14, color: '#4ade80' }} />
+                  </Box>
+                  <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.8rem' }}>
                     {lang === 'en' ? 'WhatsApp Instances' : 'Instancias WhatsApp'}
+                  </Typography>
+                  <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted, rgba(255,255,255,0.3))' }}>
+                    ({myInst.length} {lang === 'en' ? (myInst.length === 1 ? 'number' : 'numbers') : (myInst.length === 1 ? 'número' : 'números')})
                   </Typography>
                 </Box>
                 {hasRotation && (
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, px: 0.8, py: 0.2, borderRadius: 1,
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, px: 0.8, py: 0.25, borderRadius: 10,
                     bgcolor: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)' }}>
                     <Box sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: '#4ade80' }} />
-                    <Typography sx={{ fontSize: '0.58rem', color: '#4ade80', fontWeight: 700 }}>
+                    <Typography sx={{ fontSize: '0.6rem', color: '#4ade80', fontWeight: 700, whiteSpace: 'nowrap' }}>
                       {lang === 'en' ? 'rotation active' : 'rotación activa'}
                     </Typography>
                   </Box>
                 )}
               </Box>
-              {myInst.map(inst => {
-                const s = inst.live_status || 'unknown'
-                const isConn = ['open','connected'].includes(s)
-                const isConnecting = s === 'connecting'
-                const dot = isConn ? '#22c55e' : isConnecting ? '#f59e0b' : '#64748b'
-                const label = isConn
-                  ? (lang === 'en' ? 'Connected' : 'Conectada')
-                  : isConnecting
-                    ? (lang === 'en' ? 'Connecting' : 'Conectando')
-                    : (lang === 'en' ? 'Disconnected' : 'Desconectada')
-                return (
-                  <Box key={inst.name} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.35 }}>
-                    <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: dot, flexShrink: 0,
-                      boxShadow: isConn ? `0 0 4px ${dot}88` : 'none' }} />
-                    <Typography sx={{ fontSize: '0.77rem', fontWeight: 600, color: '#4ade80', fontFamily: 'monospace',
-                      flex: '0 0 auto', minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {inst.name}
-                    </Typography>
-                    <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', fontFamily: 'monospace', flex: 1,
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {inst.number ? `+${inst.number}` : (lang === 'en' ? 'No number' : 'Sin número')}
-                    </Typography>
-                    <Typography sx={{ fontSize: '0.64rem', fontWeight: 600, color: dot, flexShrink: 0 }}>
-                      {label}
-                    </Typography>
-                  </Box>
-                )
-              })}
+              <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 0.6 }}>
+                {myInst.map(inst => {
+                  const s = inst.live_status || 'unknown'
+                  const isConn = ['open','connected'].includes(s)
+                  const isConnecting = s === 'connecting'
+                  const dot = isConn ? '#22c55e' : isConnecting ? '#f59e0b' : '#64748b'
+                  const label = isConn
+                    ? (lang === 'en' ? 'Connected' : 'Conectada')
+                    : isConnecting
+                      ? (lang === 'en' ? 'Connecting' : 'Conectando')
+                      : (lang === 'en' ? 'Disconnected' : 'Desconectada')
+                  return (
+                    <Box key={inst.name} sx={{
+                      display: 'flex', alignItems: 'center', gap: 1, px: 1.2, py: 0.7, borderRadius: 1.5,
+                      bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)',
+                    }}>
+                      <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: dot, flexShrink: 0,
+                        boxShadow: isConn ? `0 0 4px ${dot}88` : 'none' }} />
+                      <Typography sx={{ fontSize: '0.77rem', fontWeight: 600, color: '#4ade80', fontFamily: 'monospace',
+                        flex: '0 0 auto', minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {inst.name}
+                      </Typography>
+                      <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', fontFamily: 'monospace', flex: 1,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {inst.number ? `+${inst.number}` : (lang === 'en' ? 'No number' : 'Sin número')}
+                      </Typography>
+                      <Typography sx={{ fontSize: '0.64rem', fontWeight: 600, color: dot, flexShrink: 0 }}>
+                        {label}
+                      </Typography>
+                    </Box>
+                  )
+                })}
+              </Box>
             </Box>
           )
         })()}
 
-        {/* Código de recuperación */}
-        <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'rgba(250,204,21,0.05)', border: '1px solid rgba(250,204,21,0.15)' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-            <Typography sx={{ color: '#facc15', fontSize: '0.72rem', fontWeight: 700 }}>🔑 {t.settings.recoveryCode}</Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.65rem' }}>
+        {/* Código de recuperación — misma tarjeta, última sección */}
+        <Box>
+          <Box sx={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 2, py: 1.2, position: 'relative', flexWrap: 'wrap',
+            background: 'linear-gradient(135deg, rgba(250,204,21,0.1) 0%, rgba(250,204,21,0.03) 60%, transparent 100%)',
+            '&::after': {
+              content: '""', position: 'absolute', bottom: 0, left: 14, right: 14, height: '1px',
+              background: 'linear-gradient(90deg, transparent, rgba(250,204,21,0.35) 40%, rgba(250,204,21,0.35) 60%, transparent)',
+            },
+          }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Box sx={{
+                width: 26, height: 26, borderRadius: '8px', flexShrink: 0,
+                background: 'linear-gradient(135deg, rgba(250,204,21,0.25) 0%, rgba(250,204,21,0.1) 100%)',
+                border: '1px solid rgba(250,204,21,0.3)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <span style={{ fontSize: 13, lineHeight: 1 }}>🔑</span>
+              </Box>
+              <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.8rem' }}>
+                {t.settings.recoveryCode}
+              </Typography>
+            </Box>
+            <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.65rem' }}>
               {t.settings.recoveryHint}
             </Typography>
           </Box>
 
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
             {/* Código */}
             <Box sx={{ flex: 1, py: 0.8, px: 1.2, borderRadius: 1.5, bgcolor: 'rgba(0,0,0,0.25)', border: '1px solid rgba(250,204,21,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Typography sx={{ fontFamily: 'monospace', fontSize: '0.95rem', fontWeight: 700, letterSpacing: '0.18em', color: revealed && code ? '#facc15' : 'rgba(255,255,255,0.25)' }}>
@@ -319,7 +400,8 @@ function AccountSection({ user }) {
 const SETTINGS_SLIDER_SX = {
   color: 'var(--accent, #3b82f6)',
   height: 4,
-  px: 1,
+  pl: 1,
+  pr: 2.75,
   py: 1.5,
   '& .MuiSlider-thumb': {
     width: 16, height: 16,
@@ -370,7 +452,7 @@ function TimingSliderRow({ label, tooltip, value, onChange, min, max, step, unit
 }
 
 function SendTimingSection({ settingsOpen }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const sc = t.sendConfig
   const [cfg, setCfg] = useState(() => loadSendConfig())
   const [tplOpen, setTplOpen] = useState(false)
@@ -401,43 +483,102 @@ function SendTimingSection({ settingsOpen }) {
 
   return (
     <Section icon={<TimerIcon />} title={sc.title}>
-      <TimingSliderRow label={sc.msgDelay}   tooltip={sc.tipMsgDelay}   value={cfg.msgDelay}   onChange={v => update('msgDelay', v)}   min={5}  max={300} step={5}  unit={sc.seconds} minDist={5}
-        marks={[5,30,60,120,180,240,300].map(v => ({ value: v, label: v >= 60 ? `${v/60}m` : `${v}s` }))} />
-      <TimingSliderRow label={sc.batchSize}  tooltip={sc.tipBatchSize}  value={cfg.batchSize}  onChange={v => update('batchSize', v)}  min={1}  max={20}  step={1}  unit={sc.msgs}    minDist={1}
-        marks={[1,5,10,15,20].map(v => ({ value: v, label: String(v) }))} />
-      <TimingSliderRow label={sc.batchDelay} tooltip={sc.tipBatchDelay} value={cfg.batchDelay} onChange={v => update('batchDelay', v)} min={1}  max={30}  step={1}  unit={sc.minutes} minDist={1}
-        marks={[1,5,10,15,20,30].map(v => ({ value: v, label: `${v}m` }))} />
-      <RiskBadge config={cfg} />
-
-      {/* Save button */}
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1.5 }}>
-        <Box
-          onClick={handleSave}
-          sx={{
-            display: 'flex', alignItems: 'center', gap: 0.75,
-            px: 1.6, py: 0.6, borderRadius: 1.5, cursor: 'pointer',
-            border: `1px solid ${saved ? 'rgba(34,197,94,0.5)' : 'rgba(59,130,246,0.4)'}`,
-            bgcolor: saved ? 'rgba(34,197,94,0.1)' : 'rgba(59,130,246,0.1)',
-            transition: 'all 0.25s',
-            '&:hover': { bgcolor: saved ? 'rgba(34,197,94,0.18)' : 'rgba(59,130,246,0.18)' },
-          }}
-        >
-          {saved
-            ? <CheckIcon sx={{ fontSize: 14, color: '#4ade80' }} />
-            : <SaveIcon  sx={{ fontSize: 14, color: '#60a5fa' }} />}
-          <Typography sx={{ fontSize: '0.75rem', fontWeight: 700, color: saved ? '#4ade80' : '#60a5fa', transition: 'color 0.25s' }}>
-            {saved ? sc.savedBtn : sc.saveBtn}
-          </Typography>
-        </Box>
-      </Box>
-
-      <Box onClick={() => setTplOpen(true)} sx={{
-        mt: 2.5, display: 'flex', alignItems: 'center', gap: 1, py: 1, px: 1.2, borderRadius: 2, cursor: 'pointer',
-        bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.06)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.18)',
-        '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)' },
+      {/* Una sola tarjeta que encasilla ritmo de envío + guardar + plantillas,
+         mismo lenguaje visual que "Mi cuenta": header icon-in-gradient-box + glow-line
+         por bloque, en vez de controles sueltos flotando sobre el fondo. */}
+      <Box sx={{
+        borderRadius: 3, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+        bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))', overflow: 'hidden',
       }}>
-        <DescriptionIcon sx={{ fontSize: 16, color: 'var(--accent,#60a5fa)' }} />
-        <Typography sx={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--accent,#60a5fa)' }}>{t.tplLib.manageBtn}</Typography>
+
+        {/* Ritmo de envío — sliders + nivel de riesgo */}
+        <Box sx={{ borderBottom: '1px solid var(--border, rgba(255,255,255,0.07))' }}>
+          <Box sx={{
+            display: 'flex', alignItems: 'center', gap: 1, px: 2, py: 1.2, position: 'relative',
+            background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.1) 0%, rgba(var(--accent-rgb,59,130,246),0.03) 60%, transparent 100%)',
+            '&::after': {
+              content: '""', position: 'absolute', bottom: 0, left: 14, right: 14, height: '1px',
+              background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.4) 40%, rgba(var(--accent-rgb,59,130,246),0.4) 60%, transparent)',
+            },
+          }}>
+            <Box sx={{
+              width: 26, height: 26, borderRadius: '8px', flexShrink: 0,
+              background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.25) 0%, rgba(var(--accent-rgb,59,130,246),0.1) 100%)',
+              border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <SpeedIcon sx={{ fontSize: 14, color: 'var(--accent,#60a5fa)' }} />
+            </Box>
+            <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.8rem' }}>
+              {lang === 'en' ? 'Sending pace' : 'Ritmo de envío'}
+            </Typography>
+          </Box>
+
+          <Box sx={{ p: 2 }}>
+            <TimingSliderRow label={sc.msgDelay}   tooltip={sc.tipMsgDelay}   value={cfg.msgDelay}   onChange={v => update('msgDelay', v)}   min={5}  max={300} step={5}  unit={sc.seconds} minDist={5}
+              marks={[5,30,60,120,180,240,300].map(v => ({ value: v, label: v >= 60 ? `${v/60}m` : `${v}s` }))} />
+            <TimingSliderRow label={sc.batchSize}  tooltip={sc.tipBatchSize}  value={cfg.batchSize}  onChange={v => update('batchSize', v)}  min={1}  max={20}  step={1}  unit={sc.msgs}    minDist={1}
+              marks={[1,5,10,15,20].map(v => ({ value: v, label: String(v) }))} />
+            <TimingSliderRow label={sc.batchDelay} tooltip={sc.tipBatchDelay} value={cfg.batchDelay} onChange={v => update('batchDelay', v)} min={1}  max={30}  step={1}  unit={sc.minutes} minDist={1}
+              marks={[1,5,10,15,20,30].map(v => ({ value: v, label: `${v}m` }))} />
+            <Box sx={{ mt: 1 }}>
+              <RiskBadge config={cfg} />
+            </Box>
+          </Box>
+        </Box>
+
+        {/* Guardar — barra de acción dentro de la misma tarjeta, no flotando debajo */}
+        <Box sx={{
+          display: 'flex', justifyContent: 'flex-end', px: 2, py: 1.3,
+          borderBottom: '1px solid var(--border, rgba(255,255,255,0.07))',
+          bgcolor: 'rgba(255,255,255,0.015)',
+        }}>
+          <Box
+            onClick={handleSave}
+            sx={{
+              display: 'flex', alignItems: 'center', gap: 0.75,
+              px: 1.6, py: 0.6, borderRadius: 1.5, cursor: 'pointer',
+              border: `1px solid ${saved ? 'rgba(34,197,94,0.5)' : 'rgba(var(--accent-rgb,59,130,246),0.4)'}`,
+              bgcolor: saved ? 'rgba(34,197,94,0.1)' : 'rgba(var(--accent-rgb,59,130,246),0.1)',
+              transition: 'all 0.25s',
+              '&:hover': { bgcolor: saved ? 'rgba(34,197,94,0.18)' : 'rgba(var(--accent-rgb,59,130,246),0.18)' },
+            }}
+          >
+            {saved
+              ? <CheckIcon sx={{ fontSize: 14, color: '#4ade80' }} />
+              : <SaveIcon  sx={{ fontSize: 14, color: 'var(--accent,#60a5fa)' }} />}
+            <Typography sx={{ fontSize: '0.75rem', fontWeight: 700, color: saved ? '#4ade80' : 'var(--accent,#60a5fa)', transition: 'color 0.25s' }}>
+              {saved ? sc.savedBtn : sc.saveBtn}
+            </Typography>
+          </Box>
+        </Box>
+
+        {/* Plantillas — última sección, mismo patrón que "Código de recuperación" pero clicable como fila completa */}
+        <Box onClick={() => setTplOpen(true)} sx={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 2, py: 1.2,
+          cursor: 'pointer', transition: 'background 0.2s',
+          '&:hover': { bgcolor: 'rgba(168,85,247,0.05)' },
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Box sx={{
+              width: 26, height: 26, borderRadius: '8px', flexShrink: 0,
+              background: 'linear-gradient(135deg, rgba(168,85,247,0.25) 0%, rgba(168,85,247,0.1) 100%)',
+              border: '1px solid rgba(168,85,247,0.3)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <DescriptionIcon sx={{ fontSize: 14, color: '#c084fc' }} />
+            </Box>
+            <Box>
+              <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.8rem' }}>
+                {t.tplLib.title}
+              </Typography>
+              <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.65rem' }}>
+                {t.tplLib.manageBtn}
+              </Typography>
+            </Box>
+          </Box>
+          <ChevronRightIcon sx={{ fontSize: 18, color: 'rgba(255,255,255,0.25)' }} />
+        </Box>
       </Box>
       <TemplateManagerDialog open={tplOpen} onClose={() => setTplOpen(false)} />
     </Section>

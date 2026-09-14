@@ -222,6 +222,10 @@ export const T = {
       notGasIndustry:  'Solo disponible para industrias de gas',
       chatIaHelp:      'Envía la conversación de esta empresa a nuestro Chat IA (Andy) para crear o actualizar un bot de atención automática.',
       modifyBotHelp:   'Precarga el nombre, teléfono y horario del bot demo con los datos de esta empresa. Solo disponible para industrias de gas (Gas / LP, Gas LP / Energía, Gaseras).',
+      agent:           'Agente',
+      noAgents:        'Sin agentes con actividad',
+      handledByTooltip:'Quién le escribió a esta empresa',
+      aiHandled:       'El Chat IA también participó en esta conversación',
     },
     convs: {
       title:        'Conversaciones',
@@ -1664,6 +1668,10 @@ export const T = {
       notGasIndustry:  'Only available for gas industries',
       chatIaHelp:      'Send this company\'s conversation to our Chat IA (Andy) to create or update an automated support bot.',
       modifyBotHelp:   'Preload the demo bot\'s name, phone and schedule with this company\'s data. Only available for gas industries (Gas / LP, Gas LP / Energy, Gas stations).',
+      agent:           'Agent',
+      noAgents:        'No agents with activity',
+      handledByTooltip:'Who wrote to this company',
+      aiHandled:       'Chat AI also took part in this conversation',
     },
     convs: {
       title:        'Conversations',

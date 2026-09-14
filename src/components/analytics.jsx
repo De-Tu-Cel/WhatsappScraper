@@ -55,11 +55,28 @@ import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
 import SpeakerNotesOffIcon from '@mui/icons-material/SpeakerNotesOff'
 import CloseIcon from '@mui/icons-material/Close'
 import DownloadIcon from '@mui/icons-material/Download'
+import Menu from '@mui/material/Menu'
+import MenuItem from '@mui/material/MenuItem'
+import Checkbox from '@mui/material/Checkbox'
+import GroupIcon from '@mui/icons-material/Group'
 import AndyBotBuilder from './AndyBotBuilder'
 import { isPlausibleLabel } from './scheduledSends'
 import GasBotModal from './GasBotModal'
 import ClassificationSettingsModal from './ClassificationSettingsModal'
 import { CATEGORY_CONFIG, normCategory, matchesCategory, getCategoryConfig } from '@/lib/categoryConfig'
+
+// Same palette/hash as conversations.jsx's agentColor — an agent's dot in the
+// conversation list and their avatar here end up the same color.
+const AGENT_COLORS = [
+  '#60a5fa', '#4ade80', '#f472b6', '#fb923c',
+  '#a78bfa', '#34d399', '#f87171', '#facc15',
+]
+function agentColor(name) {
+  if (!name) return 'rgba(255,255,255,0.35)'
+  let hash = 0
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash)
+  return AGENT_COLORS[Math.abs(hash) % AGENT_COLORS.length]
+}
 
 const GAS_INDUSTRY_KEYWORDS = ['gas', 'lp', 'gasera', 'gaseras', 'energia']
 
@@ -315,11 +332,12 @@ export default function Analytics() {
   const [page, setPage] = useState(1)
   const PAGE_SIZE = 20
   const [filterCat, setFilterCat] = useState('all')
+  const [filterAgents, setFilterAgents] = useState([])  // selected usernames
   const [searchText, setSearchText] = useState('')
   const _swrFetcher = url => fetch(url).then(r => r.json())
-  const _swrKey = filterCat !== 'all'
-    ? `/api/analytics?page=${page}&page_size=${PAGE_SIZE}&category=${filterCat}`
-    : `/api/analytics?page=${page}&page_size=${PAGE_SIZE}`
+  const _swrKey = `/api/analytics?page=${page}&page_size=${PAGE_SIZE}`
+    + (filterCat !== 'all' ? `&category=${filterCat}` : '')
+    + (filterAgents.length ? `&agents=${filterAgents.join(',')}` : '')
   const { data: _analyticsData, isLoading: loading, mutate: mutateAnalytics } = useSWR(
     _swrKey,
     _swrFetcher,
@@ -328,6 +346,15 @@ export default function Analytics() {
   const data           = _analyticsData?.items           || []
   const totalPages     = _analyticsData?.pages           || 1
   const totalItems     = _analyticsData?.total           || 0
+  // Persist last known agent list so the filter menu doesn't flicker empty while loading
+  const _agentsRef = useRef([])
+  if (_analyticsData?.agents) _agentsRef.current = _analyticsData.agents
+  const allAgents = _agentsRef.current
+  const [agentMenuAnchor, setAgentMenuAnchor] = useState(null)
+  const toggleAgentFilter = (username) => {
+    setFilterAgents(prev => prev.includes(username) ? prev.filter(u => u !== username) : [...prev, username])
+    setPage(1)
+  }
   // Persist last known counts so filter chips never flicker to 0 while a new page/filter loads
   const _ccRef = useRef({})
   if (_analyticsData?.category_counts) _ccRef.current = _analyticsData.category_counts
@@ -757,12 +784,85 @@ export default function Analytics() {
           )
         })}
 
+        <Divider orientation="vertical" flexItem sx={{ borderColor: 'rgba(255,255,255,0.08)', height: 20, alignSelf: 'center', display: { xs: 'none', sm: 'block' } }} />
+
+        {/* Filtro por agente — quién le respondió/escribió a la empresa. Checkbox
+            multi-select en vez de un solo valor porque una empresa puede haber
+            pasado por más de un agente (relevo, línea compartida). */}
+        <Box onClick={e => setAgentMenuAnchor(e.currentTarget)} sx={{
+          display: 'flex', alignItems: 'center', gap: 0.5,
+          px: 1.2, py: 0.45, borderRadius: 99, cursor: 'pointer',
+          bgcolor: filterAgents.length ? 'rgba(165,180,252,0.1)' : 'transparent',
+          border: `1px solid ${filterAgents.length ? 'var(--accent, #a5b4fc)66' : 'rgba(255,255,255,0.08)'}`,
+          transition: 'background-color 0.15s ease, border-color 0.15s ease',
+          WebkitTapHighlightColor: 'transparent',
+          '&:hover': { bgcolor: 'rgba(165,180,252,0.1)', borderColor: 'var(--accent, #a5b4fc)44' },
+        }}>
+          <GroupIcon sx={{ fontSize: 14, color: filterAgents.length ? 'var(--accent, #a5b4fc)' : 'rgba(255,255,255,0.4)' }} />
+          <Typography sx={{ fontSize: '0.75rem', fontWeight: filterAgents.length ? 700 : 400, color: filterAgents.length ? 'var(--accent, #a5b4fc)' : 'rgba(255,255,255,0.45)', whiteSpace: 'nowrap' }}>
+            {t.analytics.agent}
+          </Typography>
+          {filterAgents.length > 0 && (
+            <Box sx={{ bgcolor: 'var(--accent, #a5b4fc)33', borderRadius: 99, px: 0.6, minWidth: 18, textAlign: 'center' }}>
+              <Typography sx={{ fontSize: '0.6rem', color: 'var(--accent, #a5b4fc)', fontWeight: 700, lineHeight: 1.6 }}>{filterAgents.length}</Typography>
+            </Box>
+          )}
+        </Box>
+        <Menu anchorEl={agentMenuAnchor} open={!!agentMenuAnchor} onClose={() => setAgentMenuAnchor(null)}
+          slotProps={{
+            paper: { sx: {
+              bgcolor: 'var(--card-bg, #161d2e)', border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 2.5, mt: 0.6, minWidth: 220, maxHeight: 340, overflowY: 'auto',
+              scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.15) transparent',
+              '&::-webkit-scrollbar': { width: 5 },
+              '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.15)', borderRadius: 4 },
+            } },
+            list: { sx: { py: 0.6, px: 0.6 } },
+          }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1, py: 0.7, mb: 0.4 }}>
+            <GroupIcon sx={{ fontSize: 13, color: 'rgba(255,255,255,0.35)' }} />
+            <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              {t.analytics.agent}
+            </Typography>
+          </Box>
+          {allAgents.length === 0 && (
+            <MenuItem disabled sx={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.35)', borderRadius: 1.5 }}>{t.analytics.noAgents}</MenuItem>
+          )}
+          {allAgents.map(a => {
+            const isBot = a.username === 'ai_andy'
+            const checked = filterAgents.includes(a.username)
+            const color = isBot ? '#c084fc' : agentColor(a.name)
+            return (
+              <MenuItem key={a.username} onClick={() => toggleAgentFilter(a.username)} sx={{
+                py: 0.5, px: 0.8, mb: 0.2, borderRadius: 1.5, gap: 0.9,
+                bgcolor: checked ? `${color}14` : 'transparent',
+                '&:hover': { bgcolor: checked ? `${color}20` : 'rgba(255,255,255,0.05)' },
+              }}>
+                <Checkbox size="small" checked={checked}
+                  sx={{ p: 0, color: 'rgba(255,255,255,0.25)', '&.Mui-checked': { color } }} />
+                <Box sx={{
+                  width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  bgcolor: `${color}22`, border: `1px solid ${color}44`,
+                }}>
+                  {isBot
+                    ? <SmartToyIcon sx={{ fontSize: 12, color }} />
+                    : <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, color, textTransform: 'uppercase' }}>{(a.name || '?')[0]}</Typography>}
+                </Box>
+                <Typography sx={{ fontSize: '0.8rem', fontWeight: checked ? 700 : 500, color: checked ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.7)' }}>
+                  {isBot ? t.analytics.botAi : a.name}
+                </Typography>
+              </MenuItem>
+            )
+          })}
+        </Menu>
+
         {/* Estado de filtro activo — Limpiar + contador, agrupados aparte */}
-        {(filterCat !== 'all' || searchText) && (
+        {(filterCat !== 'all' || searchText || filterAgents.length > 0) && (
           <>
             <Divider orientation="vertical" flexItem sx={{ borderColor: 'rgba(255,255,255,0.08)', height: 20, alignSelf: 'center', ml: 'auto', display: { xs: 'none', sm: 'block' } }} />
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: { xs: 'auto', sm: 0 } }}>
-              <Box onClick={() => { setFilterCat('all'); setSearchText(''); setPage(1) }} sx={{
+              <Box onClick={() => { setFilterCat('all'); setSearchText(''); setFilterAgents([]); setPage(1) }} sx={{
                 display: 'flex', alignItems: 'center', gap: 0.4,
                 px: 1, py: 0.45, borderRadius: 99, cursor: 'pointer',
                 border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.35)',
@@ -991,6 +1091,36 @@ export default function Analytics() {
                             {row.domain}
                           </Typography>
                         )}
+                        {row.handled_by?.length > 0 && (
+                          <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.4, mt: 0.3 }}>
+                            {row.handled_by.map(h => {
+                              const isBot = h.username === 'ai_andy'
+                              // The AI's own conversational persona name now varies per WhatsApp
+                              // instance (Marco / Richie / etc.) — showing it here as "Andy" next
+                              // to real agent names is both redundant and confusing. A bot icon
+                              // marks "the AI was in this conversation too" without a name at all.
+                              return (
+                                <Tooltip key={h.username} title={isBot ? t.analytics.aiHandled : t.analytics.handledByTooltip}>
+                                  <Box sx={{
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.35,
+                                    height: 18, px: isBot ? 0 : 0.7, minWidth: 18, boxSizing: 'border-box', borderRadius: 99,
+                                    bgcolor: isBot ? 'rgba(192,132,252,0.12)' : 'rgba(255,255,255,0.06)',
+                                    border: `1px solid ${isBot ? 'rgba(192,132,252,0.3)' : 'rgba(255,255,255,0.1)'}`,
+                                  }}>
+                                    {isBot
+                                      ? <SmartToyIcon sx={{ fontSize: 10, color: '#c084fc' }} />
+                                      : <PersonIcon sx={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', flexShrink: 0 }} />}
+                                    {!isBot && (
+                                      <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.65rem', fontWeight: 500, lineHeight: 1 }}>
+                                        {h.name}
+                                      </Typography>
+                                    )}
+                                  </Box>
+                                </Tooltip>
+                              )
+                            })}
+                          </Box>
+                        )}
                       </TableCell>
 
                       {/* Número */}
@@ -1137,6 +1267,36 @@ export default function Analytics() {
                                 <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.22)', lineHeight: 1.2 }}>
                                   {n.source}
                                 </Typography>
+                              )}
+                              {/* Quién atendió ESTE número específico — antes solo se veía a
+                                 nivel empresa, mezclando agentes de números distintos en una
+                                 empresa con varias líneas ("no especifica que user se comunico
+                                 con el" para cada número). */}
+                              {n.handled_by?.length > 0 && (
+                                <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.35, mt: 0.3 }}>
+                                  {n.handled_by.map(h => {
+                                    const isBotNum = h.username === 'ai_andy'
+                                    return (
+                                      <Tooltip key={h.username} title={isBotNum ? t.analytics.aiHandled : t.analytics.handledByTooltip}>
+                                        <Box sx={{
+                                          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.3,
+                                          height: 16, px: isBotNum ? 0 : 0.6, minWidth: 16, boxSizing: 'border-box', borderRadius: 99,
+                                          bgcolor: isBotNum ? 'rgba(192,132,252,0.12)' : 'rgba(255,255,255,0.05)',
+                                          border: `1px solid ${isBotNum ? 'rgba(192,132,252,0.3)' : 'rgba(255,255,255,0.09)'}`,
+                                        }}>
+                                          {isBotNum
+                                            ? <SmartToyIcon sx={{ fontSize: 9, color: '#c084fc' }} />
+                                            : <PersonIcon sx={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', flexShrink: 0 }} />}
+                                          {!isBotNum && (
+                                            <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.6rem', fontWeight: 500, lineHeight: 1 }}>
+                                              {h.name}
+                                            </Typography>
+                                          )}
+                                        </Box>
+                                      </Tooltip>
+                                    )
+                                  })}
+                                </Box>
                               )}
                             </Box>
                           </TableCell>

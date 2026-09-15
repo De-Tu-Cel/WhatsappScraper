@@ -106,34 +106,48 @@ function startProfileSyncPoll(sessionId) {
 // convention, not a hard requirement enforced by the bridge itself (per its
 // signature; unverified live). Falls back to the original (broken-for-self)
 // call if this throws or returns nothing, so behavior can only get better, never worse.
+// Both paths below fail intermittently (not permanently) with terse, unhelpful
+// errors — confirmed live: the same session succeeds on one poll and fails
+// with "failed: r" on the next with nothing else changed. That "r" is a
+// minified WhatsApp Web internal identifier losing its real message crossing
+// the Puppeteer evaluate() boundary, not a real diagnostic. Since retrying
+// the SAME poll a couple of times resolves it most of the time, do that
+// before giving up for this tick — cheap, and turns "occasionally misses a
+// real change" into "very rarely misses one".
+const _PROFILE_PIC_RETRIES = 2
+const _PROFILE_PIC_RETRY_DELAY_MS = 1500
+
 async function fetchProfilePicUrl(client, sessionId) {
-  try {
-    const ownId = client.info?.wid?._serialized
-    if (ownId) {
-      try {
-        const url = await client.pupPage.evaluate(async (contactId) => {
-          const wid = window.require('WAWebWidFactory').createWid(contactId)
-          const profilePic = await window
-            .require('WAWebContactProfilePicThumbBridge')
-            .requestProfilePicFromServer({ id: wid })
-          return profilePic ? profilePic.eurl : null
-        }, ownId)
-        if (url) {
-          console.log(`[${sessionId}] getProfilePicUrl (direct-wid workaround) -> ok (${url.length} chars)`)
-          return url
+  for (let attempt = 0; attempt <= _PROFILE_PIC_RETRIES; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, _PROFILE_PIC_RETRY_DELAY_MS))
+    try {
+      const ownId = client.info?.wid?._serialized
+      if (ownId) {
+        try {
+          const url = await client.pupPage.evaluate(async (contactId) => {
+            const wid = window.require('WAWebWidFactory').createWid(contactId)
+            const profilePic = await window
+              .require('WAWebContactProfilePicThumbBridge')
+              .requestProfilePicFromServer({ id: wid })
+            return profilePic ? profilePic.eurl : null
+          }, ownId)
+          if (url) {
+            console.log(`[${sessionId}] getProfilePicUrl (direct-wid workaround) -> ok (${url.length} chars)${attempt > 0 ? ` [retry ${attempt}]` : ''}`)
+            return url
+          }
+          console.log(`[${sessionId}] getProfilePicUrl (direct-wid workaround) -> empty/null, falling back`)
+        } catch (workaroundErr) {
+          console.log(`[${sessionId}] getProfilePicUrl (direct-wid workaround) failed: ${workaroundErr.message} — falling back`)
         }
-        console.log(`[${sessionId}] getProfilePicUrl (direct-wid workaround) -> empty/null, falling back`)
-      } catch (workaroundErr) {
-        console.log(`[${sessionId}] getProfilePicUrl (direct-wid workaround) failed: ${workaroundErr.message} — falling back`)
       }
+      const url = await client.getProfilePicUrl(client.info.wid._serialized)
+      console.log(`[${sessionId}] getProfilePicUrl -> ${url ? 'ok (' + url.length + ' chars)' : 'empty/null'}${attempt > 0 ? ` [retry ${attempt}]` : ''}`)
+      if (url) return url
+    } catch (e) {
+      console.log(`[${sessionId}] getProfilePicUrl failed: ${e.message}`)
     }
-    const url = await client.getProfilePicUrl(client.info.wid._serialized)
-    console.log(`[${sessionId}] getProfilePicUrl -> ${url ? 'ok (' + url.length + ' chars)' : 'empty/null'}`)
-    return url || null
-  } catch (e) {
-    console.log(`[${sessionId}] getProfilePicUrl failed: ${e.message}`)
-    return null
   }
+  return null
 }
 
 function createClient(sessionId, phoneNumber) {

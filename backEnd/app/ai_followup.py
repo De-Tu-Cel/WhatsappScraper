@@ -654,7 +654,12 @@ def _is_blocked_or_blacklisted(db, company_id: str) -> bool:
             return True
         domain = company.get("domain") or ""
         industry = company.get("industry") or ""
-        return bool(_check_blacklist(domain, industry)) if domain else False
+        # NOT gated on `domain` being set — _check_blacklist already handles an
+        # empty domain fine (it just checks industry on its own), and gating here
+        # meant a company with no stored domain (WhatsApp-only businesses, or a
+        # site that failed to scrape) skipped the industry check entirely, even
+        # with a real, non-empty blacklisted industry on file.
+        return bool(_check_blacklist(domain, industry))
     except Exception as exc:
         log.warning("[AIFollowup] blacklist check failed (failing safe, allowing send): %s", exc)
         return False

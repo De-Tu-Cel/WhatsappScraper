@@ -378,19 +378,41 @@ class MongoDBManager:
 
         # Fetch the full contacted ID set once (used for filter + global stats)
         all_contacted_ids_str = set(self.db.message_logs.distinct("company_id", {"direction": "outbound"}))
+        _contacted_oids_all = [ObjectId(cid) for cid in all_contacted_ids_str if ObjectId.is_valid(cid)]
+
+        # Snapshot of the query BEFORE the contacted filter narrows it — needed
+        # below to compute a contacted-vs-not percentage that stays meaningful
+        # once that filter is actually applied. Confirmed live: clicking
+        # "Contacted" narrowed `query` to only contacted companies, then
+        # total_contacted/total both collapsed to the SAME number by
+        # definition — every stat card read "100%" for whichever side was
+        # currently selected, since dividing a set by itself is always 100%.
+        _query_before_contacted = dict(query)
 
         # Apply contacted filter by narrowing the query
         if contacted is True:
-            valid_oids = [ObjectId(cid) for cid in all_contacted_ids_str if ObjectId.is_valid(cid)]
-            if not valid_oids:
-                return {"total": 0, "companies": [], "total_wa": 0, "total_contacted": 0, "latest_scrape_at": None}
-            query["_id"] = {"$in": valid_oids}
+            if not _contacted_oids_all:
+                return {
+                    "total": 0, "companies": [], "total_wa": 0, "total_contacted": 0, "latest_scrape_at": None,
+                    "total_for_contacted_pct": self.db.companies.count_documents(_query_before_contacted),
+                    "total_contacted_for_pct": 0,
+                }
+            query["_id"] = {"$in": _contacted_oids_all}
         elif contacted is False:
-            valid_oids = [ObjectId(cid) for cid in all_contacted_ids_str if ObjectId.is_valid(cid)]
-            if valid_oids:
-                query["_id"] = {"$nin": valid_oids}
+            if _contacted_oids_all:
+                query["_id"] = {"$nin": _contacted_oids_all}
 
         total = self.db.companies.count_documents(query)
+
+        # Stable denominator for the contacted/not-contacted split — always
+        # against the search/industry/city filters WITHOUT the contacted
+        # narrowing itself, so the percentage stays a real partition (the two
+        # sides sum to 100%) no matter which side is currently selected.
+        total_for_contacted_pct = self.db.companies.count_documents(_query_before_contacted)
+        total_contacted_for_pct = (
+            self.db.companies.count_documents({**_query_before_contacted, "_id": {"$in": _contacted_oids_all}})
+            if _contacted_oids_all else 0
+        )
 
         # Global stats for the current filter (all pages, not just current)
         total_wa = self.db.companies.count_documents({**query, "has_whatsapp": True})
@@ -402,10 +424,9 @@ class MongoDBManager:
         elif contacted is False:
             total_contacted = 0
         else:
-            # Intersect: count matching companies whose ID is in all_contacted_ids_str
-            contacted_oids = [ObjectId(cid) for cid in all_contacted_ids_str if ObjectId.is_valid(cid)]
-            if contacted_oids:
-                total_contacted = self.db.companies.count_documents({**query, "_id": {"$in": contacted_oids}})
+            # Intersect: count matching companies whose ID is in _contacted_oids_all
+            if _contacted_oids_all:
+                total_contacted = self.db.companies.count_documents({**query, "_id": {"$in": _contacted_oids_all}})
             else:
                 total_contacted = 0
 
@@ -454,6 +475,8 @@ class MongoDBManager:
             "total_wa": total_wa,
             "total_contacted": total_contacted,
             "latest_scrape_at": latest_scrape_at,
+            "total_for_contacted_pct": total_for_contacted_pct,
+            "total_contacted_for_pct": total_contacted_for_pct,
         }
 
     def delete_companies(self, company_ids):
@@ -1002,6 +1025,25 @@ class MongoDBManager:
                     if not doc.get("via_instance_number") and doc.get("via_instance"):
                         doc["via_instance_number"] = inst_num_lookup.get(doc["via_instance"], "")
 
+        # Distinct real numbers contacted per company — lets the sidebar search bar
+        # match by phone number, not just company name/industry (there was no number
+        # data in this result at all before, so searching one was never possible).
+        numbers_by_cid: dict = defaultdict(set)
+        if all_cids:
+            for doc in self.db.message_logs.aggregate([
+                {"$match": {"company_id": {"$in": all_cids}}},
+                {"$project": {
+                    "company_id": 1,
+                    "num": {"$cond": [
+                        {"$eq": ["$direction", "outbound"]}, "$to_number",
+                        {"$ifNull": ["$from_number", "$number"]},
+                    ]},
+                }},
+                {"$match": {"num": {"$nin": [None, ""]}}},
+                {"$group": {"_id": {"cid": "$company_id", "num": "$num"}}},
+            ]):
+                numbers_by_cid[doc["_id"]["cid"]].add(doc["_id"]["num"])
+
         # Last analyzed inbound per company — one aggregation instead of N find_ones
         analyzed_map = {
             doc["_id"]: doc.get("analysis")
@@ -1054,6 +1096,7 @@ class MongoDBManager:
                 "via_instance":        _instance.get("via_instance", ""),
                 "via_instance_number": _instance.get("via_instance_number", ""),
                 "last_analysis":      analyzed_map.get(company_id),
+                "numbers":            sorted(numbers_by_cid.get(company_id, [])),
             })
         # Deduplicate: same domain+name scraped multiple times → keep the one with
         # the most recent activity. Companies with no domain are deduped by name alone.
@@ -1196,7 +1239,7 @@ class MongoDBManager:
         )
 
     def get_analytics(self, page: int = 1, page_size: int = 20, category: str | None = None, company_id: str | None = None,
-                       agents: list[str] | None = None):
+                       agents: list[str] | None = None, search: str | None = None):
         """Aggregate response analysis data per company for the dashboard.
         Pass company_id to fetch analytics for a single company (e.g. for report generation)
         — drastically faster than loading all companies and filtering in Python."""
@@ -1421,7 +1464,21 @@ class MongoDBManager:
                 return max(num_map, key=lambda k: num_map[k]["sent"], default=None)
 
             primary = _primary_num()
-            if primary:
+            # Merging unmatched inbound noise (bot senders, malformed IDs from some
+            # webhook payloads) into "the" primary number only makes sense when
+            # there's genuinely ONE real line for this company — that's the classic
+            # case this merge was built for (a central WhatsApp Business number that
+            # replies from a different internal ID than the one we messaged).
+            # A company with several DISTINCT real registered numbers, each with its
+            # own real outbound sent (e.g. multiple branches), has no such single
+            # "the" number — picking one via set iteration to dump every stray inbound
+            # into is arbitrary, and confirmed live to mislabel a branch that never
+            # got a real reply as answered "humano" using another branch's noise
+            # (Hidrogaspedidos, 2026-09-15: "Cd. Obregón" inherited a malformed
+            # 15-digit sender's analysis this way). Only merge when there's at most
+            # one real candidate; otherwise drop the noise rather than misattribute it.
+            _real_candidates = [rn for rn in registered_norms if rn in num_map and num_map[rn]["sent"] > 0]
+            if primary and len(_real_candidates) <= 1:
                 for n in list(num_map.keys()):
                     if n == primary:
                         continue
@@ -1436,9 +1493,21 @@ class MongoDBManager:
 
             # Company-level fallback analysis — used for numbers we sent to but
             # whose response came from a central WA Business number (different from_number).
+            # Only trust this for a plausible real MSISDN (a registered contact, or a raw
+            # sender with a realistic digit count) — some webhook payloads capture a
+            # malformed 14-15 digit internal id as from_number instead of a real phone
+            # number, and normalizing that to its last 10 digits makes it LOOK like a
+            # real number even though it never was one. Feeding those into the fallback
+            # let a totally unrelated sender's analysis get inherited by a real branch
+            # number that was never actually replied to (Hidrogaspedidos, 2026-09-15).
+            def _plausible_msisdn(raw):
+                digits = "".join(c for c in (raw or "") if c.isdigit())
+                return 8 <= len(digits) <= 13
+
             company_analyzed = []
-            for data in num_map.values():
-                company_analyzed.extend([m for m in data["inbound"] if m.get("analysis")])
+            for n, data in num_map.items():
+                if n in registered_norms or _plausible_msisdn(num_raw.get(n)):
+                    company_analyzed.extend([m for m in data["inbound"] if m.get("analysis")])
 
             # Skip companies where we never actually sent a message
             total_sent = sum(d["sent"] for d in num_map.values())
@@ -1505,8 +1574,14 @@ class MongoDBManager:
                     with_reaction = [m for m in analyzed if m["analysis"].get("reaction_time_min") is not None]
                     first_analyzed = min(with_reaction, key=lambda m: m.get("created_at") or datetime.max) if with_reaction else None
                     entry["reaction_time_min"] = first_analyzed["analysis"]["reaction_time_min"] if first_analyzed else None
-                elif company_analyzed:
+                elif company_analyzed and len(_real_candidates) <= 1:
                     # No direct match — inherit company-level analysis (central WA Business number).
+                    # Gated to companies with at most one real line with outbound sent: with
+                    # several distinct real branch numbers (Hidrogaspedidos' 8 Sonora
+                    # branches), one branch's own genuine reply is just as wrong to bleed
+                    # into a totally different sibling branch as the garbled-sender noise
+                    # this fallback was built to absorb — there's no single "the" number
+                    # to inherit from when every branch is independently real.
                     _conv = next((m for m in company_analyzed
                                   if m["analysis"].get("conversation_analysis")), None)
                     most_recent = max(company_analyzed, key=lambda m: m.get("created_at") or datetime.min)
@@ -1592,8 +1667,25 @@ class MongoDBManager:
         if agents_filter_set:
             results = [r for r in results
                        if agents_filter_set & {h["username"] for h in r["handled_by"]}]
+        # Search used to only ever run against the current page's 20 rows (the
+        # frontend filtered `data`, which was already the paginated slice from the
+        # server) — same bug as "Avg. quality" below. Applied here, before
+        # pagination, it works the same way category/agents already do: over the
+        # whole filtered set, not just whatever page happens to be showing.
+        if search and search.strip():
+            _q = search.strip().lower()
+            results = [r for r in results if
+                       _q in (r.get("company_name") or "").lower() or
+                       _q in (r.get("industry") or "").lower() or
+                       _q in (r.get("domain") or "").lower()]
         total = len(results)
         start = (page - 1) * page_size
+        # Same bug, same fix as search: this was computed client-side from just the
+        # current page's 20 rows. Computed here over the full filtered set instead.
+        avg_quality = (
+            round(sum(r.get("response_quality") or 0 for r in results) / total, 1)
+            if total else None
+        )
         return {
             "total":           total,
             "page":            page,
@@ -1602,4 +1694,5 @@ class MongoDBManager:
             "agents":          [{"username": u, "name": n} for u, n in sorted(all_agents.items(), key=lambda kv: kv[1].lower())],
             "items":           results[start: start + page_size],
             "category_counts": category_counts,
+            "avg_quality":     avg_quality,
         }

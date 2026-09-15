@@ -257,7 +257,9 @@ def _check_send_allowed(db, company_id: str):
     if company.get("blocked"):
         return False, "skipped_blocked"
     domain = company.get("domain") or ""
-    if domain and _check_blacklist(domain, company.get("industry") or ""):
+    # NOT gated on `domain` — see ai_followup.py's _is_blocked_or_blacklisted for
+    # why: a company with no stored domain still needs its industry checked.
+    if _check_blacklist(domain, company.get("industry") or ""):
         return False, "skipped_blacklisted"
     return True, ""
 

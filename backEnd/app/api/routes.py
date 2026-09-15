@@ -349,7 +349,9 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                     raise HTTPException(status_code=403, detail="No se puede enviar: este chat está bloqueado")
                 domain = company.get("domain") or ""
                 industry = company.get("industry") or ""
-                bl = _check_blacklist(domain, industry) if domain else None
+                # NOT gated on `domain` — see ai_followup.py's _is_blocked_or_blacklisted
+                # for why: a company with no stored domain still needs its industry checked.
+                bl = _check_blacklist(domain, industry)
                 if bl:
                     raise HTTPException(
                         status_code=403,
@@ -4045,12 +4047,22 @@ def api_wwebjs_profile_name(session_id: str, body: dict):
 
 @router.post("/wwebjs/session/{session_id}/profile/picture")
 def api_wwebjs_profile_picture(session_id: str, body: dict):
+    """Changes the real WhatsApp profile picture. Also updates
+    instances.profile_pic_url — same reasoning as the /profile/name route
+    above: without this, the app kept showing the OLD photo after a real,
+    confirmed-successful change, since the only other place that field gets
+    synced is the session.status webhook, which only fires on a real
+    connect/reconnect, not on an in-place profile edit."""
     from app.whatsapp_wwebjs import set_profile_picture
     image_url = (body.get("image_url") or "").strip()
     if not image_url:
         raise HTTPException(400, "image_url string required")
     try:
-        return set_profile_picture(session_id, image_url)
+        result = set_profile_picture(session_id, image_url)
+        if result.get("profile_pic_url"):
+            db = MongoDBManager()
+            db.db.instances.update_one({"name": session_id}, {"$set": {"profile_pic_url": result["profile_pic_url"]}})
+        return result
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -4154,6 +4166,23 @@ async def api_wwebjs_webhook(request: Request):
                                          reason=status, reason_label=label_map.get(status, status))
         if data.get("phone"):
             db.db.instances.update_one({"name": instance_name}, {"$set": {"number": data["phone"]}})
+        _profile_fields = {}
+        if data.get("pushname"):
+            _profile_fields["profile_name"] = data["pushname"]
+        if data.get("profile_pic_url"):
+            _profile_fields["profile_pic_url"] = data["profile_pic_url"]
+        if _profile_fields:
+            db.db.instances.update_one({"name": instance_name}, {"$set": _profile_fields})
+        return {"ok": True}
+
+    if event == "profile.updated":
+        # Name/photo changed OUTSIDE this app (straight from the phone) —
+        # wwebjs-service polls for this every 30min since whatsapp-web.js has
+        # no real-time event for it (see startProfileSyncPoll). Reuses the same
+        # sync fields as session.status above, deliberately NOT touching
+        # save_instance_health_log — this isn't a real connect/disconnect, and
+        # logging one here would falsely pollute the uptime history with a
+        # "reconnection" that never happened.
         _profile_fields = {}
         if data.get("pushname"):
             _profile_fields["profile_name"] = data["pushname"]
@@ -4685,13 +4714,16 @@ def warmup_get_messages(session_id: str, x_user_token: Optional[str] = Header(No
 
 @router.get("/warmup/chats/{instance_name}")
 def warmup_get_instance_chats(instance_name: str, x_user_token: Optional[str] = Header(None)):
-    """All warmup sessions involving an instance, newest first."""
+    """All warmup sessions involving an instance, newest first. One doc per
+    day per pair (the daily message cap needs that), so the frontend merges
+    every day's `messages` for the same peer into one continuous thread —
+    it needs the full array here, not just the last message, or that merge
+    would only ever recover one message per day."""
     _require_user(x_user_token)
     db = MongoDBManager()
     sessions = list(db.db.warmup_sessions.find(
         {"$or": [{"instance_a": instance_name}, {"instance_b": instance_name}]},
-        {"instance_a": 1, "instance_b": 1, "date": 1, "total_messages_today": 1,
-         "messages": {"$slice": -1}},
+        {"instance_a": 1, "instance_b": 1, "date": 1, "total_messages_today": 1, "messages": 1},
         sort=[("date", -1)],
         limit=30,
     ))
@@ -4851,11 +4883,12 @@ def api_get_analytics(
     page_size: int = Query(20, ge=1, le=100),
     category:  str | None = Query(None),
     agents:    str | None = Query(None),  # comma-separated usernames
+    search:    str | None = Query(None),
 ):
     try:
         db = MongoDBManager()
         agent_list = [a for a in (agents or "").split(",") if a] or None
-        return serialize(db.get_analytics(page=page, page_size=page_size, category=category, agents=agent_list))
+        return serialize(db.get_analytics(page=page, page_size=page_size, category=category, agents=agent_list, search=search))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -5738,9 +5771,33 @@ def api_instances_metrics(x_user_token: Optional[str] = Header(None), range: str
         raise HTTPException(403, "Solo admins")
 
     from datetime import datetime, timedelta
-    days_by_range = {"day": 1, "week": 7, "month": 30, "year": 365}
-    days = days_by_range.get(range, 7)
-    since = datetime.utcnow() - timedelta(days=days)
+    import pytz
+    # "day"/"week"/etc. previously meant a rolling lookback (last 24h, last 7
+    # days) measured in raw UTC — NOT the calendar day/week a user opening a
+    # tab labeled "Hoy"/"Semana" would expect. At 1am that gave a "today" that
+    # was mostly yesterday, and the boundary itself drifted by up to 6h from
+    # the real Mexico City calendar day (this app's established business-day
+    # timezone everywhere else — see daily_cap.py's _today(), warmup_queue.py).
+    # Real calendar boundaries, Monday-start week (matches getWeekStart in
+    # scheduledSends.jsx), computed in that timezone then converted to naive
+    # UTC for comparison against created_at (stored as naive UTC throughout).
+    _tz = pytz.timezone("America/Mexico_City")
+    _now_mx = datetime.now(_tz)
+    if range == "day":
+        _start_mx = _now_mx.replace(hour=0, minute=0, second=0, microsecond=0)
+        _prev_start_mx = _start_mx - timedelta(days=1)
+    elif range == "month":
+        _start_mx = _now_mx.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        _prev_start_mx = (_start_mx - timedelta(days=1)).replace(day=1)
+    elif range == "year":
+        _start_mx = _now_mx.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        _prev_start_mx = _start_mx.replace(year=_start_mx.year - 1)
+    else:  # "week" (default)
+        range = "week"
+        _start_mx = (_now_mx - timedelta(days=_now_mx.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        _prev_start_mx = _start_mx - timedelta(days=7)
+    since = _start_mx.astimezone(pytz.utc).replace(tzinfo=None)
+    _prev_since_bound = _prev_start_mx.astimezone(pytz.utc).replace(tzinfo=None)
 
     db = MongoDBManager()
     match = {"direction": "outbound", "created_at": {"$gte": since}, "instance_name": {"$exists": True, "$ne": None}}
@@ -5796,9 +5853,9 @@ def api_instances_metrics(x_user_token: Optional[str] = Header(None), range: str
     replied_of_contacted = len(replied_ids & contacted_ids)
     response_rate = round(replied_of_contacted / total_contacts * 100, 1) if total_contacts > 0 else None
 
-    # Same-length prior window immediately before `since`, for real (not
-    # invented) percent-change badges on the summary cards.
-    prev_since = since - timedelta(days=days)
+    # Equivalent PRIOR calendar period (previous day/week/month/year), for real
+    # (not invented) percent-change badges on the summary cards.
+    prev_since = _prev_since_bound
     prev_match = {"direction": "outbound", "created_at": {"$gte": prev_since, "$lt": since}, "instance_name": {"$exists": True, "$ne": None}}
     prev_match_with_company = {**prev_match, "company_id": {"$exists": True, "$ne": None}}
     prev_total_messages = db.db.message_logs.count_documents(prev_match)
@@ -5819,7 +5876,8 @@ def api_instances_metrics(x_user_token: Optional[str] = Header(None), range: str
             return None if curr == 0 else 100.0
         return round((curr - prev) / prev * 100, 1)
 
-    uptime = db.get_instance_uptime(names, hours=days * 24)
+    _elapsed_hours = max(1, (datetime.utcnow() - since).total_seconds() / 3600)
+    uptime = db.get_instance_uptime(names, hours=_elapsed_hours)
 
     # Time series for the trend chart — bucketed by hour for "day" (otherwise
     # a single-day lookback would only ever be one point), by day for

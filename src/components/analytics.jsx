@@ -334,10 +334,22 @@ export default function Analytics() {
   const [filterCat, setFilterCat] = useState('all')
   const [filterAgents, setFilterAgents] = useState([])  // selected usernames
   const [searchText, setSearchText] = useState('')
+  // Debounced separately from searchText — the input needs to feel instant while
+  // typing, but searching now hits the server on every change (it has to: search
+  // used to just filter the current page's 20 already-fetched rows, which is why
+  // it never found matches outside whatever page happened to be open). Without
+  // this, every keystroke would fire its own request instead of one per pause.
+  const [searchQuery, setSearchQuery] = useState('')
+  useEffect(() => {
+    const id = setTimeout(() => setSearchQuery(searchText), 350)
+    return () => clearTimeout(id)
+  }, [searchText])
+  useEffect(() => { setPage(1) }, [searchQuery])
   const _swrFetcher = url => fetch(url).then(r => r.json())
   const _swrKey = `/api/analytics?page=${page}&page_size=${PAGE_SIZE}`
     + (filterCat !== 'all' ? `&category=${filterCat}` : '')
     + (filterAgents.length ? `&agents=${filterAgents.join(',')}` : '')
+    + (searchQuery.trim() ? `&search=${encodeURIComponent(searchQuery.trim())}` : '')
   const { data: _analyticsData, isLoading: loading, mutate: mutateAnalytics } = useSWR(
     _swrKey,
     _swrFetcher,
@@ -346,6 +358,12 @@ export default function Analytics() {
   const data           = _analyticsData?.items           || []
   const totalPages     = _analyticsData?.pages           || 1
   const totalItems     = _analyticsData?.total           || 0
+  // Same "persist last known value while loading" treatment as categoryCounts
+  // below — computed over the WHOLE filtered set server-side now, not just
+  // whatever page's 20 rows happened to already be fetched client-side.
+  const _avgQRef = useRef(null)
+  if (_analyticsData && 'avg_quality' in _analyticsData) _avgQRef.current = _analyticsData.avg_quality
+  const avgQualityServer = _avgQRef.current
   // Persist last known agent list so the filter menu doesn't flicker empty while loading
   const _agentsRef = useRef([])
   if (_analyticsData?.agents) _agentsRef.current = _analyticsData.agents
@@ -597,18 +615,11 @@ export default function Analytics() {
     setGasBotOpen(true)
   }
 
-  const filteredData = data.filter(row => {
-    // filterCat is now server-side — backend returns only matching items
-    if (searchText.trim()) {
-      const q = searchText.toLowerCase()
-      if (!(row.company_name || '').toLowerCase().includes(q) &&
-          !(row.industry    || '').toLowerCase().includes(q) &&
-          !(row.domain      || '').toLowerCase().includes(q)) return false
-    }
-    return true
-  })
-
-  const sortedData = [...filteredData].sort((a, b) => {
+  // filterCat, filterAgents and now search are all server-side — the backend
+  // already returns only matching items for the current page, so `data` needs
+  // no further client-side filtering (it used to redundantly re-filter by text
+  // here, which only ever searched whatever page was already loaded).
+  const sortedData = [...data].sort((a, b) => {
     let av = a[sortField] ?? '', bv = b[sortField] ?? ''
     if (typeof av === 'string') av = av.toLowerCase()
     if (typeof bv === 'string') bv = bv.toLowerCase()
@@ -624,10 +635,8 @@ export default function Analytics() {
   const hibridoPct = pct('hibrido')
   const botPct     = pct('bot')
   const botIaPct   = pct('bot_ia')
-  const avgQualityNum = data.length
-    ? data.reduce((acc, d) => acc + (d.response_quality || 0), 0) / data.length
-    : 0
-  const avgQuality = data.length ? avgQualityNum.toFixed(1) : '—'
+  const avgQualityNum = avgQualityServer ?? 0
+  const avgQuality = avgQualityServer != null ? avgQualityServer.toFixed(1) : '—'
 
   const { t } = useLang()
 
@@ -1091,7 +1100,13 @@ export default function Analytics() {
                             {row.domain}
                           </Typography>
                         )}
-                        {row.handled_by?.length > 0 && (
+                        {/* Solo se muestra a nivel empresa cuando hay UN número — con
+                           varios números mezclaba en un solo badge a quien de verdad
+                           contactó a cada uno, dando a entender que un agente/bot habló
+                           con TODOS los números de la empresa cuando en realidad pudo
+                           haber sido solo uno. Con varios números, la atribución real
+                           ya vive en cada fila expandida (una por número). */}
+                        {!hasMultiple && row.handled_by?.length > 0 && (
                           <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.4, mt: 0.3 }}>
                             {row.handled_by.map(h => {
                               const isBot = h.username === 'ai_andy'

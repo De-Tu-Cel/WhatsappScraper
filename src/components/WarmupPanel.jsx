@@ -162,34 +162,19 @@ function buildPairColorMap(instances) {
 }
 
 // ── Session detail dialog ─────────────────────────────────────────────────────
-function SessionDetail({ sessionId, token }) {
+function SessionDetail({ instanceA, instanceB, messages }) {
   const { t, lang } = useLang()
   const w = t.warmup
-  const [session, setSession] = useState(null)
-  const [loading, setLoading] = useState(true)
   const bottomRef = useRef(null)
 
   useEffect(() => {
-    setLoading(true); setSession(null)
-    // A failed request (401, etc.) still resolves r.json() fine — its error
-    // body ({"detail": "..."}) would pass the `!session` null-check below and
-    // render as a session with an empty message list instead of the error
-    // state, since fetch() doesn't reject on a non-2xx status.
-    fetch(API(`/warmup/sessions/${sessionId}/messages`), { headers: authHeaders(token) })
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then(setSession).catch(() => setSession(null)).finally(() => setLoading(false))
-  }, [sessionId, token])
-
-  useEffect(() => {
-    if (session && bottomRef.current) {
+    if (bottomRef.current) {
       bottomRef.current.scrollIntoView({ behavior: 'instant' })
     }
-  }, [session])
+  }, [messages])
 
-  if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4 }}><CircularProgress size={28} /></Box>
-  if (!session) return <Alert severity="error">{w.sessionLoadError}</Alert>
-
-  const msgs = session.messages || []
+  const session = { instance_a: instanceA, instance_b: instanceB }
+  const msgs = messages || []
 
   // Agrupar con detección de mensajes consecutivos del mismo speaker
   const grouped = []
@@ -348,16 +333,44 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
 
   const peer = s => s.instance_a === instanceName ? s.instance_b : s.instance_a
 
-  const selectedSession = selected ? sessions.find(s => s._id === selected) : null
-  const selectedPeer = selectedSession ? peer(selectedSession) : null
+  // The backend keeps one warmup_sessions doc PER DAY per pair (it needs that
+  // to enforce daily message caps) — so the same peer showed up as a separate
+  // "conversation" row for every day they'd exchanged messages, when really
+  // it's one ongoing relationship. Group by peer here and merge every day's
+  // messages into a single continuous thread, same as any real chat app.
+  const peerGroups = useMemo(() => {
+    const byPeer = new Map()
+    for (const s of sessions) {
+      const p = peer(s)
+      if (!byPeer.has(p)) byPeer.set(p, [])
+      byPeer.get(p).push(s)
+    }
+    return [...byPeer.entries()].map(([peerName, sess]) => {
+      const sorted = [...sess].sort((a, b) => (a.date < b.date ? 1 : -1))
+      const latest = sorted[0]
+      const allMessages = sess.flatMap(s => s.messages || [])
+        .sort((a, b) => new Date(a.ts || 0) - new Date(b.ts || 0))
+      const totalToday = latest.total_messages_today || 0
+      const ids = sess.map(s => s._id)
+      return {
+        peerName, latest, allMessages, totalToday, ids,
+        date: latest.date,
+        lastMsg: allMessages[allMessages.length - 1]?.content,
+        hasUnread: totalToday > 0 && !viewedIds.has(latest._id),
+      }
+    }).sort((a, b) => (a.date < b.date ? 1 : -1))
+  }, [sessions, instanceName, viewedIds])
 
-  const handleSelect = (id) => {
+  const selectedGroup = selected ? peerGroups.find(g => g.peerName === selected) : null
+
+  const handleSelect = (peerName, ids) => {
     setViewedIds(prev => {
-      const next = new Set(prev); next.add(id)
+      const next = new Set(prev)
+      ids.forEach(id => next.add(id))
       try { localStorage.setItem(`wmup_viewed_${instanceName}`, JSON.stringify([...next])) } catch {}
       return next
     })
-    setSelected(id)
+    setSelected(peerName)
   }
 
   const instGradient = avatarGradientFor(instanceName)
@@ -391,16 +404,16 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
           fontWeight: 800, fontSize: 13, color: '#fff',
           boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
         }}>
-          {selected ? (selectedPeer?.slice(0, 2).toUpperCase() ?? '??') : instInitials}
+          {selected ? (selected?.slice(0, 2).toUpperCase() ?? '??') : instInitials}
         </Box>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="body1" fontWeight={700} noWrap
             sx={{ color: '#f1f5f9', lineHeight: 1.25, letterSpacing: '-0.01em' }}>
-            {selectedPeer || instanceName}
+            {selected || instanceName}
           </Typography>
-          {selected && selectedSession ? (
+          {selected && selectedGroup ? (
             <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, lineHeight: 1 }}>
-              {selectedSession.total_messages_today} {w.msgsTodaySuffix} · {selectedSession.instance_a} ↔ {selectedSession.instance_b}
+              {selectedGroup.allMessages.length} {w.msgsAbbrev} · {selectedGroup.latest.instance_a} ↔ {selectedGroup.latest.instance_b}
             </Typography>
           ) : (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, mt: 0.1 }}>
@@ -430,7 +443,11 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
             <CircularProgress size={28} />
           </Box>
         ) : selected ? (
-          <SessionDetail sessionId={selected} onBack={() => setSelected(null)} token={token} />
+          <SessionDetail
+            instanceA={selectedGroup?.latest.instance_a}
+            instanceB={selectedGroup?.latest.instance_b}
+            messages={selectedGroup?.allMessages}
+          />
         ) : sessions.length === 0 ? (
           <Box sx={{ textAlign: 'center', py: 8, px: 3 }}>
             <ChatBubbleOutlinedIcon sx={{ fontSize: 52, color: loadError ? 'rgba(239,68,68,0.25)' : 'rgba(255,255,255,0.1)', mb: 1.5 }} />
@@ -440,20 +457,17 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
           </Box>
         ) : (
           <List disablePadding sx={{ bgcolor: 'transparent' }}>
-            {sessions.map((s, i) => {
-              const peerName = peer(s)
-              const initials = peerName.slice(0, 2).toUpperCase()
-              const lastMsg = s.messages?.[s.messages.length - 1]?.content
-              const hasUnread = s.total_messages_today > 0 && !viewedIds.has(s._id)
-              const avatarGrad = avatarGradientFor(s._id || peerName + i)
+            {peerGroups.map((g, i) => {
+              const initials = g.peerName.slice(0, 2).toUpperCase()
+              const avatarGrad = avatarGradientFor(g.peerName)
               return (
-                <React.Fragment key={s._id}>
+                <React.Fragment key={g.peerName}>
                   {i > 0 && <Divider component="li" sx={{ borderColor: 'rgba(255,255,255,0.05)', ml: 9 }} />}
                   <ListItemButton
-                    onClick={() => handleSelect(s._id)}
+                    onClick={() => handleSelect(g.peerName, g.ids)}
                     sx={{
                       px: 2, py: 1.25, gap: 1.5,
-                      borderLeft: hasUnread ? '3px solid #22c55e' : '3px solid transparent',
+                      borderLeft: g.hasUnread ? '3px solid #22c55e' : '3px solid transparent',
                       bgcolor: 'rgba(13,20,33,0.55)',
                       backdropFilter: 'blur(2px)',
                       '&:hover': { bgcolor: 'rgba(30,40,64,0.75)' },
@@ -476,36 +490,36 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
                     </Box>
                     <Box sx={{ flex: 1, minWidth: 0 }}>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.35 }}>
-                        <Typography variant="body2" fontWeight={hasUnread ? 700 : 500} noWrap
-                          sx={{ flex: 1, mr: 1, color: hasUnread ? '#f1f5f9' : 'rgba(255,255,255,0.72)' }}>
-                          {peerName}
+                        <Typography variant="body2" fontWeight={g.hasUnread ? 700 : 500} noWrap
+                          sx={{ flex: 1, mr: 1, color: g.hasUnread ? '#f1f5f9' : 'rgba(255,255,255,0.72)' }}>
+                          {g.peerName}
                         </Typography>
                         <Typography variant="caption"
-                          sx={{ flexShrink: 0, fontSize: 11, color: hasUnread ? '#22c55e' : 'rgba(255,255,255,0.28)' }}>
-                          {formatItemDate(s.date, w)}
+                          sx={{ flexShrink: 0, fontSize: 11, color: g.hasUnread ? '#22c55e' : 'rgba(255,255,255,0.28)' }}>
+                          {formatItemDate(g.date, w)}
                         </Typography>
                       </Box>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
                         <Typography variant="caption" noWrap sx={{
                           flex: 1, fontSize: 12,
-                          color: hasUnread ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.28)',
-                          fontStyle: lastMsg ? 'normal' : 'italic',
+                          color: g.hasUnread ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.28)',
+                          fontStyle: g.lastMsg ? 'normal' : 'italic',
                         }}>
-                          {lastMsg || w.noMessagesFallback}
+                          {g.lastMsg || w.noMessagesFallback}
                         </Typography>
-                        {s.total_messages_today > 0 && !hasUnread && (
+                        {g.totalToday > 0 && !g.hasUnread && (
                           <Typography variant="caption" sx={{ flexShrink: 0, fontSize: 10, color: 'rgba(255,255,255,0.22)' }}>
-                            {s.total_messages_today} {w.msgsAbbrev}
+                            {g.totalToday} {w.msgsAbbrev}
                           </Typography>
                         )}
-                        {hasUnread && (
+                        {g.hasUnread && (
                           <Box sx={{
                             minWidth: 20, height: 20, px: 0.75, borderRadius: 10, flexShrink: 0,
                             bgcolor: '#22c55e', color: '#fff',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
                             fontSize: 11, fontWeight: 700,
                           }}>
-                            {s.total_messages_today}
+                            {g.totalToday}
                           </Box>
                         )}
                       </Box>

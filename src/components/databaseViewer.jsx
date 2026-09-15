@@ -126,12 +126,19 @@ function StatCard({ icon, color, value, label, subtitle, onClick, active, percen
         '&:hover': clickable ? { bgcolor: `${color}14` } : {},
       }}
     >
-      <Box sx={{
-        width: 46, height: 46, borderRadius: '50%', flexShrink: 0, p: '3px',
-        background: `conic-gradient(${color} ${pct}%, var(--border, rgba(255,255,255,0.12)) ${pct}% 100%)`,
-      }}>
+      {/* Stroke-based ring (track + fill, rounded caps) instead of a
+         conic-gradient wedge — at high percentages the wedge filled almost
+         the whole disc with barely any visible "hole" for the icon, reading
+         as a solid pie slice ("como un queso") instead of a progress ring.
+         This is the same look as any circular loading indicator: a thin
+         track always visible behind a colored arc on top. */}
+      <Box sx={{ position: 'relative', width: 46, height: 46, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <CircularProgress variant="determinate" value={100} size={46} thickness={3.6}
+          sx={{ position: 'absolute', color: 'var(--border, rgba(255,255,255,0.12))' }} />
+        <CircularProgress variant="determinate" value={pct} size={46} thickness={3.6}
+          sx={{ position: 'absolute', color, '& .MuiCircularProgress-circle': { strokeLinecap: 'round' } }} />
         <Box sx={{
-          width: '100%', height: '100%', borderRadius: '50%',
+          width: 34, height: 34, borderRadius: '50%',
           bgcolor: active ? `${color}14` : 'var(--card-bg, rgba(255,255,255,0.02))',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
@@ -1585,6 +1592,12 @@ export default function DatabaseViewer({ isActive }) {
         total_wa:        data.total_wa        ?? null,
         total_contacted: data.total_contacted ?? null,
         latest_scrape_at: data.latest_scrape_at ?? null,
+        // Stable partition for the Contacted/Not-contacted cards specifically —
+        // NOT filtered by the `contacted` toggle itself (see the backend
+        // comment in list_companies), so the two sides keep summing to 100%
+        // and showing the real counts regardless of which one is selected.
+        total_for_contacted_pct:   data.total_for_contacted_pct   ?? null,
+        total_contacted_for_pct:   data.total_contacted_for_pct   ?? null,
       })
       // Acumular filas en caché para calcular selecciones cross-page
       setRowCache(prev => {
@@ -1861,8 +1874,14 @@ export default function DatabaseViewer({ isActive }) {
         {!loading && (() => {
           const waPct = total > 0 && globalStats.total_wa !== null ? Math.round((globalStats.total_wa / total) * 100) : 0
           const noWaPct = total > 0 && globalStats.total_wa !== null ? Math.round((Math.max(0, total - globalStats.total_wa) / total) * 100) : 0
-          const contactedPct = total > 0 && globalStats.total_contacted !== null ? Math.round((globalStats.total_contacted / total) * 100) : 0
-          const notContactedPct = total > 0 && globalStats.total_contacted !== null ? Math.round((Math.max(0, total - globalStats.total_contacted) / total) * 100) : 0
+          // Uses the stable (contacted-filter-independent) denominator — `total`
+          // collapses to whichever side is currently selected once that filter
+          // is active, which made both sides read "100%" (see comment above
+          // total_for_contacted_pct in list_companies).
+          const contactedBase = globalStats.total_for_contacted_pct
+          const contactedCount = globalStats.total_contacted_for_pct
+          const contactedPct = contactedBase > 0 && contactedCount !== null ? Math.round((contactedCount / contactedBase) * 100) : 0
+          const notContactedPct = contactedBase > 0 && contactedCount !== null ? Math.round((Math.max(0, contactedBase - contactedCount) / contactedBase) * 100) : 0
           const statCards = [
             {
               key: 'total',
@@ -1887,19 +1906,23 @@ export default function DatabaseViewer({ isActive }) {
               label: lang === 'en' ? 'Without WhatsApp' : 'Sin WhatsApp',
               percent: noWaPct,
             },
-            globalStats.total_contacted !== null && {
+            // Read-only, like every other card in this row — filtering by
+            // contacted/not-contacted stays exclusively in the FilterBar's
+            // "Contactadas" dropdown above (explicit request: these icons
+            // should not double as filter buttons).
+            contactedCount !== null && {
               key: 'contacted',
               icon: <SendIcon sx={{ fontSize: 20, color: '#60a5fa' }} />, color: '#60a5fa',
-              value: globalStats.total_contacted.toLocaleString(),
-              subtitle: total > 0 ? `${contactedPct}%` : null,
+              value: contactedCount.toLocaleString(),
+              subtitle: contactedBase > 0 ? `${contactedPct}%` : null,
               label: lang === 'en' ? 'Contacted' : 'Contactadas',
               percent: contactedPct,
             },
-            globalStats.total_contacted !== null && {
+            contactedCount !== null && {
               key: 'notContacted',
               icon: <HourglassEmptyIcon sx={{ fontSize: 20, color: '#fbbf24' }} />, color: '#fbbf24',
-              value: Math.max(0, total - globalStats.total_contacted).toLocaleString(),
-              subtitle: total > 0 ? `${notContactedPct}%` : null,
+              value: Math.max(0, contactedBase - contactedCount).toLocaleString(),
+              subtitle: contactedBase > 0 ? `${notContactedPct}%` : null,
               label: lang === 'en' ? 'Not contacted' : 'Sin contactar',
               percent: notContactedPct,
             },

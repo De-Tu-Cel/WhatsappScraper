@@ -768,8 +768,13 @@ export default function Conversations({ isActive } = {}) {
     // "mine" for the second agent too.
     if (myConvsOnly && !(c.handled_by || []).some(h => h.username === user?.username)) return false
     const q = search.toLowerCase()
-    return (c.company_name || '').toLowerCase().includes(q) ||
-           (c.industry     || '').toLowerCase().includes(q)
+    if ((c.company_name || '').toLowerCase().includes(q) ||
+        (c.industry     || '').toLowerCase().includes(q)) return true
+    // Phone number search — strip everything but digits from both sides so
+    // "22 2113 1901", "+52 22 2113 1901" and "2221131901" all match the same way.
+    const qDigits = search.replace(/\D/g, '')
+    if (qDigits.length < 4) return false
+    return (c.numbers || []).some(n => n.replace(/\D/g, '').includes(qDigits))
   }), [convs, myConvsOnly, user?.username, search])
 
   // When a notification card is clicked, auto-select the matching conversation

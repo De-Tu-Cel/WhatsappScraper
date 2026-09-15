@@ -1323,7 +1323,11 @@ def api_ai_toggle(company_id: str, body: dict):
         from datetime import datetime as _dt
         db = MongoDBManager()
         enabled = bool(body.get("enabled", False))
-        update = {"ai_enabled": enabled, "updated_at": _dt.now()}
+        # A real user flipping this switch is always a deliberate decision —
+        # clear auto_disabled so a prior automatic close (bot detected, ai_decision,
+        # etc.) doesn't keep masquerading as this. See _user_explicitly_disabled
+        # in the webhook handlers below.
+        update = {"ai_enabled": enabled, "auto_disabled": False, "updated_at": _dt.now()}
         if "max_turns" in body:
             update["max_turns"] = max(1, int(body["max_turns"]))
         db.db.conversation_ai_prefs.update_one(
@@ -1638,7 +1642,7 @@ def api_evolution_webhook(req: EvolutionWebhookRequest, background_tasks: Backgr
                                 # (no prefs document = virgin conversation, first reply to a batch send).
                                 # If the user manually disabled AI (_prefs_doc exists with ai_enabled=False),
                                 # respect that decision — never override it automatically.
-                                _user_explicitly_disabled = _prefs_doc is not None and not _prefs.get("ai_enabled", True)
+                                _user_explicitly_disabled = _prefs_doc is not None and not _prefs.get("ai_enabled", True) and not _prefs.get("auto_disabled", False)
                                 if not _should_enqueue and not _ai_session_active and not _user_explicitly_disabled:
                                     from datetime import timedelta
                                     _recent_ended = db.db.ai_followup_sessions.find_one({
@@ -2923,7 +2927,7 @@ def api_waha_webhook(body: dict, background_tasks: BackgroundTasks):
                             _prefs_doc = db.db.conversation_ai_prefs.find_one({"company_id": company_id})
                             _prefs = _prefs_doc or {}
                             _should_enqueue = _prefs.get("ai_enabled", False)
-                            _user_explicitly_disabled = _prefs_doc is not None and not _prefs.get("ai_enabled", True)
+                            _user_explicitly_disabled = _prefs_doc is not None and not _prefs.get("ai_enabled", True) and not _prefs.get("auto_disabled", False)
                             if not _should_enqueue and not _ai_session_active and not _user_explicitly_disabled:
                                 from datetime import timedelta
                                 _recent_ended = db.db.ai_followup_sessions.find_one({
@@ -3438,7 +3442,7 @@ async def api_wasender_webhook(request: Request, background_tasks: BackgroundTas
                         _prefs_doc = db.db.conversation_ai_prefs.find_one({"company_id": company_id})
                         _prefs = _prefs_doc or {}
                         _should_enqueue = _prefs.get("ai_enabled", False)
-                        _user_explicitly_disabled = _prefs_doc is not None and not _prefs.get("ai_enabled", True)
+                        _user_explicitly_disabled = _prefs_doc is not None and not _prefs.get("ai_enabled", True) and not _prefs.get("auto_disabled", False)
                         if not _should_enqueue and not _ai_session_active and not _user_explicitly_disabled:
                             from datetime import timedelta
                             _recent_ended = db.db.ai_followup_sessions.find_one({
@@ -4400,7 +4404,7 @@ async def api_wwebjs_webhook(request: Request):
                     _prefs_doc = db.db.conversation_ai_prefs.find_one({"company_id": company_id})
                     _prefs = _prefs_doc or {}
                     _should_enqueue = _prefs.get("ai_enabled", False)
-                    _user_explicitly_disabled = _prefs_doc is not None and not _prefs.get("ai_enabled", True)
+                    _user_explicitly_disabled = _prefs_doc is not None and not _prefs.get("ai_enabled", True) and not _prefs.get("auto_disabled", False)
                     if not _should_enqueue and not _ai_session_active and not _user_explicitly_disabled:
                         if _auto_registered_from_outbound:
                             # Outbound was sent to the original company_id (before this

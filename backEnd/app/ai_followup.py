@@ -694,9 +694,21 @@ def _close_session_without_reply(db, sid, company_id: str, phone_number: str, re
         {"$set": {"ai_typing": False, "status": "ended", "end_reason": reason,
                   "last_activity": datetime.utcnow()}},
     )
+    # "ai_decision" here means the LLM itself decided there was nothing worth
+    # saying (bare [FIN], e.g. a cold-start reply it read as not needing a
+    # response) — a content judgment, not a technical failure, so a genuine
+    # reply arriving later should still be able to auto-reactivate (see
+    # auto_disabled in ai_followup.py's other quick-close paths and
+    # _user_explicitly_disabled in the webhook handlers). The other reasons
+    # this gets called with (no_instance, send failures, daily cap) ARE real
+    # operational failures that need a human to notice and fix — those keep
+    # blocking auto-reactivation until a person re-enables it themselves.
+    prefs_update = {"ai_enabled": False}
+    if reason == "ai_decision":
+        prefs_update["auto_disabled"] = True
     db.db.conversation_ai_prefs.update_one(
         {"company_id": company_id},
-        {"$set": {"ai_enabled": False}},
+        {"$set": prefs_update},
         upsert=True,
     )
     log.warning("[AIFollowup] session %s closed without reply (reason=%s) for %s", sid, reason, phone_number)
@@ -871,7 +883,7 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
             )
             db.db.conversation_ai_prefs.update_one(
                 {"company_id": company_id},
-                {"$set": {"ai_enabled": False}},
+                {"$set": {"ai_enabled": False, "auto_disabled": True}},
                 upsert=True,
             )
             return
@@ -891,14 +903,27 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
                 )
                 db.db.conversation_ai_prefs.update_one(
                     {"company_id": company_id},
-                    {"$set": {"ai_enabled": False}},
+                    {"$set": {"ai_enabled": False, "auto_disabled": True}},
                     upsert=True,
                 )
                 return
         except Exception:
             pass  # si el classifier falla, deja que el LLM lo maneje
 
-    is_cold_start = session.get("turn_count", 0) == 0 and not proactive
+    # "Cold start" must reflect the REAL conversation, not this session doc —
+    # a manual reactivation (toggle) always creates a fresh ai_followup_sessions
+    # doc with turn_count=0, which made every reactivation look like "the very
+    # first reply ever" to the LLM, even deep into an already multi-message
+    # thread. That mattered a lot: the cold-start prompt addendum tells the LLM
+    # to bare-[FIN] anything that LOOKS like an automated ACK — a real person's
+    # opener ("te atiende Fulano de [empresa], en que puedo ayudarte") reads
+    # structurally just like one, and got closed out instead of answered.
+    # Count real inbound messages for this company instead: only the very
+    # first one is a genuine cold start.
+    _real_inbound_count = db.db.message_logs.count_documents(
+        {"company_id": company_id, "direction": "inbound"}
+    )
+    is_cold_start = _real_inbound_count <= 1 and not proactive
 
     # In proactive mode, inject a synthetic "[Sin respuesta]" user turn so the LLM
     # has the right alternating user/assistant pattern and knows to continue.
@@ -1170,11 +1195,15 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
             },
         )
 
-        # Auto-disable AI toggle when conversation closes naturally
+        # Auto-disable AI toggle when conversation closes naturally. Marked
+        # auto_disabled=True (not a real user decision) so a genuine reply that
+        # arrives later on this same company can still auto-reactivate — see
+        # _user_explicitly_disabled in the webhook handlers, which only treats
+        # a *manual* disable (via the toggle UI) as a real "never again" signal.
         if is_ended:
             db.db.conversation_ai_prefs.update_one(
                 {"company_id": company_id},
-                {"$set": {"ai_enabled": False}},
+                {"$set": {"ai_enabled": False, "auto_disabled": True}},
                 upsert=True,
             )
             log.info("[AIFollowup] conversation closed (%s), toggle disabled for %s", end_reason, company_id)

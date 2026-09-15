@@ -64,6 +64,12 @@ class FakeDB:
         self.conversation_ai_prefs = FakePrefsCollection()
         self.ai_global_config = FakeGlobalConfigCollection()
         self.message_logs = MagicMock()
+        # is_cold_start now counts real inbound message_logs docs (see
+        # ai_followup.py) instead of the session's own turn_count — default to
+        # 1 (a genuine cold start) so existing tests keep their prior behavior
+        # unless a test overrides this to exercise the "mid-conversation
+        # reactivation" case specifically.
+        self.message_logs.count_documents.return_value = 1
 
 
 class FakeMgr:
@@ -148,6 +154,11 @@ class TestBareFinClosesWithoutSending:
                 inbound_log_id="log1",
             )
         assert mgr.db.conversation_ai_prefs.updates[-1]["$set"]["ai_enabled"] is False
+        # A bare [FIN] is the LLM's own content judgment, not a technical failure —
+        # a genuine reply arriving later on this same company must still be able
+        # to auto-reactivate (see _user_explicitly_disabled in routes.py's webhook
+        # handlers, which only treats a real MANUAL disable as a permanent block).
+        assert mgr.db.conversation_ai_prefs.updates[-1]["$set"]["auto_disabled"] is True
 
 
 class TestFinWithRealTextStillSends:
@@ -194,6 +205,10 @@ class TestNoConnectedInstanceClosesSession:
         assert mgr.db.ai_followup_sessions._doc["status"] == "ended"
         assert mgr.db.ai_followup_sessions._doc["end_reason"] == "no_instance"
         assert mgr.db.conversation_ai_prefs.updates[-1]["$set"]["ai_enabled"] is False
+        # A disconnected instance / send failure is a real operational problem —
+        # a human needs to notice and fix it, so this must stay a hard block
+        # (unlike the "ai_decision" / bare-[FIN] case, see auto_disabled tests below).
+        assert "auto_disabled" not in mgr.db.conversation_ai_prefs.updates[-1]["$set"]
 
 
 class TestTransientFailuresDoNotKillTheSession:
@@ -251,6 +266,50 @@ class TestTransientFailuresDoNotKillTheSession:
         assert mgr.db.ai_followup_sessions._doc["status"] == "active"
         assert mgr.db.ai_followup_sessions._doc["ai_typing"] is False
         assert mgr.db.conversation_ai_prefs.updates == []
+
+
+class TestColdStartReflectsRealHistory:
+    """Bug fixed 2026-09-15: a manual AI-toggle reactivation always creates a
+    brand-new ai_followup_sessions doc (turn_count=0), which used to make
+    is_cold_start=True even deep into an already multi-message WhatsApp thread.
+    That mattered because the cold-start prompt addendum tells the LLM to
+    bare-[FIN] anything resembling an automated ACK — and a real person's
+    opener ("te atiende Fulano de la empresa, en que puedo ayudarte") reads
+    structurally just like one. Confirmed live in production: "Come Bien"
+    reactivated after a real human ("Ale") took over from the company's bot,
+    and Andy closed with a bare [FIN] instead of answering.
+
+    Fix: is_cold_start now counts real inbound message_logs docs for the
+    company instead of trusting the fresh session's own turn_count."""
+
+    def test_manual_reactivation_mid_conversation_is_not_cold_start(self, _common_patches):
+        mgr = FakeMgr(_session_doc())
+        mgr.db.message_logs.count_documents.return_value = 3  # 3 real replies already in this thread
+        with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
+             patch("app.ai_followup._call_llm_for_reply", return_value="ah ok, gracias") as mock_llm, \
+             patch("app.whatsapp_evolution.pick_connected_instance", return_value=None):
+            af.process_inbound_reply(
+                phone_number="5214428079840",
+                company_id="aabbccddeeff001122334455",
+                inbound_body="Hola, buenas tardes\nTe atiende Ale de come bien, en que te puedo ayudar?",
+                inbound_log_id="log1",
+                manual_activation=True,
+            )
+        assert mock_llm.call_args.kwargs["is_cold_start"] is False
+
+    def test_first_ever_reply_is_still_cold_start(self, _common_patches):
+        mgr = FakeMgr(_session_doc())
+        mgr.db.message_logs.count_documents.return_value = 1  # only this reply exists
+        with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
+             patch("app.ai_followup._call_llm_for_reply", return_value="ah ok, gracias") as mock_llm, \
+             patch("app.whatsapp_evolution.pick_connected_instance", return_value=None):
+            af.process_inbound_reply(
+                phone_number="5214428079840",
+                company_id="aabbccddeeff001122334455",
+                inbound_body="Buenas tardes",
+                inbound_log_id="log1",
+            )
+        assert mock_llm.call_args.kwargs["is_cold_start"] is True
 
 
 class FakeCompaniesForContext:

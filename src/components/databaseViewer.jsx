@@ -1532,7 +1532,10 @@ export default function DatabaseViewer({ isActive }) {
   // industry/city are arrays now (multi-select checklist) — search/has_whatsapp/
   // contacted stay single values, those dropdowns are still Yes/No/All.
   const [filters, setFilters] = useState({ search: '', industry: [], city: [], has_whatsapp: '', contacted: '' })
-  const [globalStats, setGlobalStats] = useState({ total_wa: null, total_contacted: null, latest_scrape_at: null })
+  const [globalStats, setGlobalStats] = useState({
+    total_wa: null, total_contacted: null, latest_scrape_at: null,
+    total_for_contacted_pct: null, total_contacted_for_pct: null,
+  })
   // "Days ago" inherently depends on wall-clock time, not just on props/state —
   // Date.now() can't be called during render (or inside useMemo) without breaking
   // memoization purity. Computed in an effect instead and read from state, which

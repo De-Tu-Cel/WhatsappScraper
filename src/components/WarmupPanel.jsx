@@ -41,6 +41,7 @@ import TopicIcon from '@mui/icons-material/Topic'
 import AddIcon from '@mui/icons-material/Add'
 import RemoveIcon from '@mui/icons-material/Remove'
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz'
+import VerifiedUserOutlinedIcon from '@mui/icons-material/VerifiedUserOutlined'
 import { useUser } from '../context/UserContext'
 import { useLang } from '../context/LangContext'
 
@@ -910,7 +911,7 @@ function SectionLabel({ icon: Icon, children }) {
 function WarmupConfigDialog({ open, onClose, token }) {
   const { t } = useLang()
   const w = t.warmup
-  const DEFAULT_CFG = { business_hour_start: 9, business_hour_end: 21, min_msgs_per_pair: 6, max_msgs_per_pair: 10, min_delay_min: 8, max_delay_min: 25, topic: 'auto' }
+  const DEFAULT_CFG = { business_hour_start: 9, business_hour_end: 21, min_msgs_per_pair: 6, max_msgs_per_pair: 10, min_delay_min: 8, max_delay_min: 25, topic: 'auto', min_age_hours: 1 }
   const [cfg, setCfg]         = useState(DEFAULT_CFG)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving]   = useState(false)
@@ -942,6 +943,7 @@ function WarmupConfigDialog({ open, onClose, token }) {
           min_delay_min:       cfg.min_delay_min,
           max_delay_min:       cfg.max_delay_min,
           topic:               cfg.topic,
+          min_age_hours:       cfg.min_age_hours,
         }),
       })
       if (!r.ok) throw new Error(r.status)
@@ -1071,6 +1073,16 @@ function WarmupConfigDialog({ open, onClose, token }) {
                 >{p.label}</Box>
               ))}
             </Box>
+
+            <Divider sx={{ borderColor: 'rgba(255,255,255,0.08)', mx: 1.5, mb: 2 }} />
+
+            {/* ── Minimum age before joining rotation ── */}
+            <SectionLabel icon={VerifiedUserOutlinedIcon}>{w.sectionEligibility}</SectionLabel>
+            <Box sx={{ mb: 1 }}>
+              <Typography fontSize={11} color="rgba(255,255,255,0.35)" sx={{ mb: 0.5 }}>{w.minAgeHours}</Typography>
+              <NumStepper value={cfg.min_age_hours} onChange={set('min_age_hours')} min={0} max={168} />
+            </Box>
+            <Typography fontSize={11} color="text.disabled" sx={{ mb: 2.5, lineHeight: 1.4 }}>{w.minAgeHoursHint}</Typography>
 
             <Divider sx={{ borderColor: 'rgba(255,255,255,0.08)', mx: 1.5, mb: 2 }} />
 

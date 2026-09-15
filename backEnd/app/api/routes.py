@@ -4650,6 +4650,7 @@ def warmup_get_config(x_user_token: Optional[str] = Header(None)):
         "min_delay_min":       cfg.get("min_delay_min", 8),
         "max_delay_min":       cfg.get("max_delay_min", 25),
         "topic":               cfg.get("topic", "auto"),
+        "min_age_hours":       cfg.get("min_age_hours", 1),
     }
 
 
@@ -4663,6 +4664,7 @@ def warmup_save_config(
         "business_hour_start", "business_hour_end",
         "min_msgs_per_pair", "max_msgs_per_pair",
         "min_delay_min", "max_delay_min", "topic",
+        "min_age_hours",
     }
     update = {k: v for k, v in body.items() if k in allowed}
     if update:

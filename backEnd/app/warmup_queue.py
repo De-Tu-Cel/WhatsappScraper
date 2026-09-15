@@ -79,6 +79,7 @@ _MAX_DELAY_MIN       = 45   # max minutes between turns
 _BUSINESS_HOUR_START = 7    # 07:00 hora México
 _BUSINESS_HOUR_END   = 18   # 18:00 hora México
 _BUSY_WINDOW_SECS    = 180   # si la instancia envió/recibió msg real en los últimos 3 min, skip warmup
+_MIN_AGE_HOURS       = 1    # default hours an instance must be connected before joining warmup rotation
 
 # Temas rotativos para la conversación
 _TOPICS = [
@@ -162,8 +163,8 @@ def _get_warmup_instances(db, session_status: dict | None = None) -> list[dict]:
         except Exception:
             session_status = {}
 
-    _MIN_AGE_DAYS = 7
-    age_cutoff = datetime.utcnow() - timedelta(days=_MIN_AGE_DAYS)
+    min_age_hours = _load_config(db).get("min_age_hours", _MIN_AGE_HOURS)
+    age_cutoff = datetime.utcnow() - timedelta(hours=min_age_hours)
 
     connected = []
     for inst in candidates:
@@ -178,7 +179,7 @@ def _get_warmup_instances(db, session_status: dict | None = None) -> list[dict]:
             except Exception:
                 created_at = None
         if created_at and created_at > age_cutoff:
-            log.debug("[Warmup] skip %s — instance < %d days old (created %s)", name, _MIN_AGE_DAYS, created_at)
+            log.debug("[Warmup] skip %s — instance < %s hours old (created %s)", name, min_age_hours, created_at)
             continue
         st = session_status.get(name, {})
         number = inst.get("number") or st.get("phone", "")
@@ -377,14 +378,15 @@ def _load_config(db) -> dict:
     """Read warmup settings from MongoDB, falling back to module-level constants."""
     cfg = db.db.warmup_config.find_one({"_id": "global"}) or {}
     return {
-        "enabled":    cfg.get("enabled", True),
-        "hour_start": cfg.get("business_hour_start", 9),
-        "hour_end":   cfg.get("business_hour_end", 21),
-        "min_msgs":   cfg.get("min_msgs_per_pair", 6),
-        "max_msgs":   cfg.get("max_msgs_per_pair", _MAX_MSGS_PER_PAIR),
-        "min_delay":  cfg.get("min_delay_min", _MIN_DELAY_MIN),
-        "max_delay":  cfg.get("max_delay_min", _MAX_DELAY_MIN),
-        "topic":      cfg.get("topic", "auto"),
+        "enabled":       cfg.get("enabled", True),
+        "hour_start":    cfg.get("business_hour_start", 9),
+        "hour_end":      cfg.get("business_hour_end", 21),
+        "min_msgs":      cfg.get("min_msgs_per_pair", 6),
+        "max_msgs":      cfg.get("max_msgs_per_pair", _MAX_MSGS_PER_PAIR),
+        "min_delay":     cfg.get("min_delay_min", _MIN_DELAY_MIN),
+        "max_delay":     cfg.get("max_delay_min", _MAX_DELAY_MIN),
+        "topic":         cfg.get("topic", "auto"),
+        "min_age_hours": cfg.get("min_age_hours", _MIN_AGE_HOURS),
     }
 
 

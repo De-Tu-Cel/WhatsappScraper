@@ -60,6 +60,37 @@ function startPresenceHeartbeat(sessionId) {
   }, (Math.random() * 30 + 15) * 60 * 1000)
 }
 
+// Catch a name/photo change made OUTSIDE this app (straight from the phone).
+// whatsapp-web.js exposes no real-time event for it — `contact_changed` only
+// fires for a phone NUMBER change, not name/photo. The WhatsApp Web page
+// itself DOES receive this live over multi-device sync (that's why the name
+// updates on screen if you have Web open when you rename yourself from the
+// phone), but the library never wires a public event to it, and hooking the
+// same fragile internal module used for the write side (see
+// ensureProfileModuleLoaded) isn't worth it just to read a value — so poll
+// instead: every 30min, compare against what we last saw and only forward a
+// webhook when something actually changed.
+function startProfileSyncPoll(sessionId) {
+  const session = sessions.get(sessionId)
+  if (!session) return
+  clearInterval(session.profileSyncTimer)
+  session.profileSyncTimer = setInterval(async () => {
+    const s = sessions.get(sessionId)
+    if (!s || s.status !== 'connected') return
+    try {
+      const pushname = s.client.info?.pushname || null
+      const profilePicUrl = await fetchProfilePicUrl(s.client, sessionId)
+      const changed = pushname !== s.lastPushname || (profilePicUrl && profilePicUrl !== s.lastProfilePicUrl)
+      if (changed) {
+        console.log(`[${sessionId}] profile change detected outside the app — syncing`)
+        s.lastPushname = pushname
+        if (profilePicUrl) s.lastProfilePicUrl = profilePicUrl
+        forwardWebhook({ event: 'profile.updated', sessionId, data: { pushname, profile_pic_url: profilePicUrl } })
+      }
+    } catch (_) {}
+  }, 30 * 60 * 1000)
+}
+
 // client.getProfilePicUrl() (whatsapp-web.js/src/Client.js) resolves a Chat via
 // WWebJS.getChat(contactId) BEFORE it ever asks the server for the picture —
 // and there is normally no chat thread with your own number (WhatsApp only
@@ -132,7 +163,7 @@ function createClient(sessionId, phoneNumber) {
     },
   })
 
-  const session = { client, status: 'initializing', qr: null, pairingCode: null, phoneNumber, phone: null, presenceTimer: null, reconnectTimer: null, readyWatchdog: null, ackFailStreak: 0, ackDegraded: false }
+  const session = { client, status: 'initializing', qr: null, pairingCode: null, phoneNumber, phone: null, presenceTimer: null, reconnectTimer: null, readyWatchdog: null, ackFailStreak: 0, ackDegraded: false, profileSyncTimer: null, lastPushname: null, lastProfilePicUrl: null }
   sessions.set(sessionId, session)
 
   client.on('qr', (qr) => {
@@ -177,11 +208,14 @@ function createClient(sessionId, phoneNumber) {
     session.phone = client.info?.wid?.user || null
     console.log(`[${sessionId}] Ready | phone=${session.phone}`)
     startPresenceHeartbeat(sessionId)
+    startProfileSyncPoll(sessionId)
 
     // Profile name + picture, shown in the Instances panel so it's clear who's
     // behind each line — best-effort, never blocks the "connected" webhook.
     const pushname = client.info?.pushname || null
     const profilePicUrl = await fetchProfilePicUrl(client, sessionId)
+    session.lastPushname = pushname
+    if (profilePicUrl) session.lastProfilePicUrl = profilePicUrl
 
     forwardWebhook({ event: 'session.status', sessionId, data: { status: 'connected', phone: session.phone, pushname, profile_pic_url: profilePicUrl } })
 
@@ -199,6 +233,7 @@ function createClient(sessionId, phoneNumber) {
           if (!sessions.has(sessionId)) return
           const retryUrl = await fetchProfilePicUrl(client, sessionId)
           if (retryUrl) {
+            session.lastProfilePicUrl = retryUrl
             forwardWebhook({ event: 'session.status', sessionId, data: { status: 'connected', phone: session.phone, pushname, profile_pic_url: retryUrl } })
             return
           }
@@ -211,6 +246,7 @@ function createClient(sessionId, phoneNumber) {
     clearTimeout(session.readyWatchdog)
     session.status = 'auth_failure'
     clearInterval(session.presenceTimer)
+    clearInterval(session.profileSyncTimer)
     console.error(`[${sessionId}] Auth failure:`, msg)
     forwardWebhook({ event: 'session.status', sessionId, data: { status: 'auth_failure' } })
   })
@@ -218,6 +254,7 @@ function createClient(sessionId, phoneNumber) {
   client.on('disconnected', (reason) => {
     clearTimeout(session.readyWatchdog)
     clearInterval(session.presenceTimer)
+    clearInterval(session.profileSyncTimer)
 
     // Reasons that mean credentials are gone — need a new QR scan, NOT a reconnect
     const needsReauth = ['LOGOUT', 'UNPAIRED', 'UNPAIRED_IDLE', 'TOS_BLOCK', 'SMB_TOS_BLOCK'].includes(reason)
@@ -774,6 +811,10 @@ app.post('/session/:id/profile/name', async (req, res) => {
     if (!moduleStatus.ok) return res.status(503).json({ error: 'WhatsApp Web profile module did not load — try again in a moment', debug: moduleStatus })
     const ok = await session.client.setDisplayName(name.trim())
     if (!ok) return res.status(409).json({ error: 'WhatsApp refused the name change (rate-limited or not permitted right now)' })
+    // Keep the periodic outside-the-app poll's baseline in sync with a change
+    // WE just made — otherwise its next tick sees this as an "external" change
+    // and fires a redundant webhook for something already synced above.
+    session.lastPushname = name.trim()
     res.json({ success: true, name: name.trim() })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -794,7 +835,15 @@ app.post('/session/:id/profile/picture', async (req, res) => {
     if (!moduleStatus.ok) return res.status(503).json({ error: 'WhatsApp Web profile module did not load — try again in a moment', debug: moduleStatus })
     const ok = await session.client.setProfilePicture(media)
     if (!ok) return res.status(409).json({ error: 'WhatsApp refused the picture change' })
-    res.json({ success: true })
+    // Confirmed live (2026-09-15): the change lands on WhatsApp's side, but our
+    // own backend only ever synced instances.profile_pic_url from the
+    // session.status webhook, which only fires on a real connect/reconnect —
+    // never right after an in-place picture change. Fetch the fresh URL here
+    // and hand it back so the caller can sync it immediately instead of
+    // waiting for the account to reconnect.
+    const profile_pic_url = await fetchProfilePicUrl(session.client, id)
+    if (profile_pic_url) session.lastProfilePicUrl = profile_pic_url
+    res.json({ success: true, profile_pic_url })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -820,6 +869,7 @@ app.delete('/session/:id', async (req, res) => {
   const session = sessions.get(id)
   if (!session) return res.status(404).json({ error: 'Session not found' })
   clearInterval(session.presenceTimer)
+  clearInterval(session.profileSyncTimer)
   clearTimeout(session.reconnectTimer)
   try { await session.client.destroy() } catch (_) {}
   sessions.delete(id)

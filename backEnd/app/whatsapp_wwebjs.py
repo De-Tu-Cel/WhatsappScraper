@@ -45,7 +45,15 @@ def send_message(session_id: str, to: str, message: str, typing_ms: int = 0,
         f"{WWEBJS_URL}/session/{session_id}/send",
         json=payload,
         headers=_headers(),
-        timeout=30,
+        # wwebjs-service's own /send waits up to 30s (anti-ban idle gap between
+        # sends) BEFORE even starting the typingMs delay (up to another ~18s
+        # from ai_followup.py's _typing_duration_ms) — worst case ~48s of
+        # deliberate pacing before it ever touches the WhatsApp API. A 30s
+        # client timeout here fires on that pacing alone, not a real hang.
+        # Confirmed live in production (Come Bien, 2026-09-15): "Read timed
+        # out (read timeout=30)" while wwebjs-service itself was healthy and
+        # responsive to other requests seconds later.
+        timeout=75,
     )
     if not r.ok:
         raise Exception(r.json().get("error", r.text))

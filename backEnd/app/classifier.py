@@ -581,10 +581,13 @@ _AUTO_REPLY_MARKERS = re.compile(
 # "soy...virtual" (sin exigir la palabra exacta "asistente") cubre variantes
 # reales encontradas en producción como "Soy Bell, el reclutador virtual de
 # Smart Fit" — la redacción literal "asistente virtual" no las detectaba.
+# "consultor digital" (SEAT Furia, 2026-09-16) mostró que "digital" es tan
+# fuerte como "virtual" para este patrón — ningún humano se presenta así por
+# WhatsApp — así que ambos modificadores aplican a toda la lista de puestos.
 _BOT_SELFID_MARKERS = re.compile(
     # "asistente virtual/digital", "ejecutivo virtual" (HSBC Leo), "reclutador virtual" (Smart Fit)
     r'asistente (?:virtual|digital)|'
-    r'\b(?:asesor|agente|ejecutivo|operador|reclutador|coordinador)\s+virtual\b|'
+    r'\b(?:asesor|agente|ejecutivo|operador|reclutador|coordinador|consultor)\s+(?:virtual|digital)\b|'
     r'soy (?:un|una)?\s*bot\b|chatbot|soy\s+\w+[,.]?\s*tu\s+asistente|'
     r'\bsoy\b[^.!?\n]{0,45}\bvirtual\b|'
     r'inteligencia artificial|🤖|envía\s*["\']?hola["\']?\s*para\s+(?:comenzar|empezar)|'

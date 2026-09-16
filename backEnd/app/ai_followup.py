@@ -942,106 +942,19 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         except Exception:
             pass  # si el classifier falla, deja que el LLM lo maneje
 
-    # "Cold start" must reflect the REAL conversation, not this session doc —
-    # a manual reactivation (toggle) always creates a fresh ai_followup_sessions
-    # doc with turn_count=0, which made every reactivation look like "the very
-    # first reply ever" to the LLM, even deep into an already multi-message
-    # thread. That mattered a lot: the cold-start prompt addendum tells the LLM
-    # to bare-[FIN] anything that LOOKS like an automated ACK — a real person's
-    # opener ("te atiende Fulano de [empresa], en que puedo ayudarte") reads
-    # structurally just like one, and got closed out instead of answered.
-    # Count real inbound messages for this company instead: only the very
-    # first one is a genuine cold start.
-    _real_inbound_count = db.db.message_logs.count_documents(
-        {"company_id": company_id, "direction": "inbound"}
-    )
-    is_cold_start = _real_inbound_count <= 1 and not proactive
-
-    # In proactive mode, inject a synthetic "[Sin respuesta]" user turn so the LLM
-    # has the right alternating user/assistant pattern and knows to continue.
-    _llm_turns = list(session.get("turns", []))
-    _proactive_minutes = None
-    if proactive:
-        last_act = session.get("last_activity") or session.get("created_at") or datetime.utcnow()
-        _proactive_minutes = max(1, int((datetime.utcnow() - last_act).total_seconds() / 60))
-        _llm_turns.append({"role": "user", "content": "[Sin respuesta]"})
-
-    _prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
-    ai_text_raw = _call_llm_for_reply(_llm_turns, session.get("context", {}),
-                                       is_cold_start=is_cold_start, prefs=_prefs, db=db,
-                                       proactive_minutes=_proactive_minutes)
-    print(f"[AIFollowup] LLM response: {repr(ai_text_raw[:80]) if ai_text_raw else 'None'}")
-    if not ai_text_raw:
-        # _call_llm_for_reply already swallowed the real error (rate limit, circuit
-        # breaker, network blip — see its own except block) and logged it. Deliberately
-        # NOT closing the session here: this is typically transient and self-heals on
-        # the next attempt (a new inbound message, or the idle-timeout sweep in
-        # followup_queue.py if the contact never writes again) — closing on a single
-        # failed API call would kill a healthy conversation over what's often a blip.
-        print("[AIFollowup] EXIT: LLM returned None")
-        return
-
-    # Detect AI-initiated close signal and strip it before sending
-    ai_wants_end = "[FIN]" in ai_text_raw
-    ai_text = ai_text_raw.replace("[FIN]", "").strip()
-
-    # El prompt prohíbe los signos de apertura ¿/¡ (nadie los usa al escribir WhatsApp
-    # casual — es una de las señales anti-detección), pero DeepSeek no lo respeta de
-    # forma consistente (visto en prod: "¿tienen lo que busco?", "¿qué tiene de raro?").
-    # No hay forma de garantizarlo solo con el prompt, así que se refuerza aquí.
-    ai_text = ai_text.replace("¿", "").replace("¡", "")
-
-    # Mismo problema con el punto final (prompt lo prohíbe, el modelo no siempre lo
-    # respeta) — se refuerza aquí en vez de confiar solo en el prompt. El lookbehind
-    # evita tocar puntos suspensivos ("...") que sí están permitidos como pausa natural.
-    ai_text = re.sub(r"(?<!\.)\.$", "", ai_text).rstrip()
-
-    # Guard against the LLM copying one of the prompt's own tone examples
-    # verbatim instead of generating something contextual (see
-    # _looks_copied_from_prompt) — confirmed live in production ("Come Bien"):
-    # it sent a CUANDO TE CONFRONTAN example even though nobody had accused it
-    # of being a bot. One retry with an explicit correction; if it happens
-    # again (or the retry itself fails), close without sending rather than
-    # deliver something that doesn't match the actual conversation.
-    if ai_text and _looks_copied_from_prompt(ai_text):
-        log.warning("[AIFollowup] LLM copied a prompt example verbatim — retrying: %r", ai_text[:80])
-        print(f"[AIFollowup] LLM copied a prompt example — retrying: {ai_text[:80]!r}")
-        ai_text_raw_retry = _call_llm_for_reply(
-            _llm_turns, session.get("context", {}), is_cold_start=is_cold_start, prefs=_prefs, db=db,
-            proactive_minutes=_proactive_minutes,
-            correction="tu respuesta anterior fue una de las frases de ejemplo de este prompt, copiada tal "
-                       "cual — eso está prohibido. genera una respuesta distinta y original, en tus propias "
-                       "palabras, que reaccione específicamente a lo que la otra persona te acaba de escribir.",
-        )
-        ai_wants_end = bool(ai_text_raw_retry) and "[FIN]" in ai_text_raw_retry
-        ai_text = (ai_text_raw_retry or "").replace("[FIN]", "").strip()
-        ai_text = ai_text.replace("¿", "").replace("¡", "")
-        ai_text = re.sub(r"(?<!\.)\.$", "", ai_text).rstrip()
-        if not ai_text_raw_retry or _looks_copied_from_prompt(ai_text):
-            log.warning("[AIFollowup] LLM copied a prompt example again after retry — closing without sending")
-            print("[AIFollowup] EXIT: copied example persisted after retry")
-            _close_session_without_reply(db, sid, company_id, phone_number, "ai_decision")
-            return
-
-    # The model can answer with JUST "[FIN]" (no accompanying text) when it decides
-    # the conversation is over without anything left to say. ai_text is then empty,
-    # and every send path below (Evolution/WAHA/Wasender/wwebjs) rejects an empty
-    # message — the exception was caught by the broad handler at the bottom of this
-    # function, which only resets ai_typing, leaving the session stuck at
-    # status="active" forever (never marked "ended", never retried) since nothing
-    # else ever calls back into a session once it's "active" outside of a new
-    # inbound message. Close the session directly instead of attempting to send.
-    if ai_wants_end and not ai_text:
-        _close_session_without_reply(db, sid, company_id, phone_number, "ai_decision")
-        return
-
-    # Mark AI as typing (frontend polls this)
-    db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": True}})
-
     # Pick a CONNECTED instance to send from — same rotation/preferred-instance
     # concept as routes.py's /send-message, instead of always the single
     # hardcoded EVOLUTION_INSTANCE. Without this, Andy goes permanently silent
-    # the moment that one specific instance disconnects, even if others are healthy.
+    # the moment that one specific instance disconnects, even if others are
+    # healthy. Resolved BEFORE calling the LLM (not just before sending) so
+    # persona_name can be corrected to whichever instance actually ends up
+    # sending this reply — see the persona_name fix below. Confirmed live in
+    # production ("SEAT Furia"): the session's frozen context said
+    # persona_name="Andrés" (the generic fallback, baked in back when
+    # assigned_instance was still unset), but by send time the fallback here
+    # picked "sender4", whose real WhatsApp profile name is "Marco Adrian" —
+    # Andy would have introduced himself with a name that doesn't match the
+    # account actually messaging the prospect.
     from app.whatsapp_evolution import EvolutionClient, pick_connected_instance
     preferred_instance = None
     _inst_provider = "evolution"
@@ -1112,6 +1025,121 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
                 db.db.companies.update_one({"_id": ObjectId(company_id)}, {"$set": {"assigned_instance": instance}})
             except Exception:
                 pass
+
+    # "Cold start" must reflect the REAL conversation, not this session doc —
+    # a manual reactivation (toggle) always creates a fresh ai_followup_sessions
+    # doc with turn_count=0, which made every reactivation look like "the very
+    # first reply ever" to the LLM, even deep into an already multi-message
+    # thread. That mattered a lot: the cold-start prompt addendum tells the LLM
+    # to bare-[FIN] anything that LOOKS like an automated ACK — a real person's
+    # opener ("te atiende Fulano de [empresa], en que puedo ayudarte") reads
+    # structurally just like one, and got closed out instead of answered.
+    # Count real inbound messages for this company instead: only the very
+    # first one is a genuine cold start.
+    _real_inbound_count = db.db.message_logs.count_documents(
+        {"company_id": company_id, "direction": "inbound"}
+    )
+    is_cold_start = _real_inbound_count <= 1 and not proactive
+
+    # In proactive mode, inject a synthetic "[Sin respuesta]" user turn so the LLM
+    # has the right alternating user/assistant pattern and knows to continue.
+    _llm_turns = list(session.get("turns", []))
+    _proactive_minutes = None
+    if proactive:
+        last_act = session.get("last_activity") or session.get("created_at") or datetime.utcnow()
+        _proactive_minutes = max(1, int((datetime.utcnow() - last_act).total_seconds() / 60))
+        _llm_turns.append({"role": "user", "content": "[Sin respuesta]"})
+
+    _prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
+
+    # persona_name in session.context was frozen in at session-creation time —
+    # possibly before assigned_instance was even set, or from one that's since
+    # changed. Correct it here against the instance resolved above, the one
+    # actually about to send this message, so Andy never claims a name that
+    # doesn't match the WhatsApp account the prospect is really talking to.
+    _llm_context = dict(session.get("context", {}))
+    if _inst_provider == "wwebjs" and instance:
+        try:
+            _inst_doc_persona = db.db.instances.find_one({"name": instance}, {"profile_name": 1})
+            _real_profile_name = ((_inst_doc_persona or {}).get("profile_name") or "").strip()
+            if _real_profile_name:
+                _llm_context["persona_name"] = _real_profile_name.split()[0]
+        except Exception:
+            pass
+
+    # Mark AI as typing (frontend polls this) — now that we know there's an
+    # instance to actually send through, not before (a "no_instance" close
+    # above would otherwise flash ai_typing=True for a message that was never
+    # going anywhere).
+    db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": True}})
+
+    ai_text_raw = _call_llm_for_reply(_llm_turns, _llm_context,
+                                       is_cold_start=is_cold_start, prefs=_prefs, db=db,
+                                       proactive_minutes=_proactive_minutes)
+    print(f"[AIFollowup] LLM response: {repr(ai_text_raw[:80]) if ai_text_raw else 'None'}")
+    if not ai_text_raw:
+        # _call_llm_for_reply already swallowed the real error (rate limit, circuit
+        # breaker, network blip — see its own except block) and logged it. Deliberately
+        # NOT closing the session here: this is typically transient and self-heals on
+        # the next attempt (a new inbound message, or the idle-timeout sweep in
+        # followup_queue.py if the contact never writes again) — closing on a single
+        # failed API call would kill a healthy conversation over what's often a blip.
+        print("[AIFollowup] EXIT: LLM returned None")
+        return
+
+    # Detect AI-initiated close signal and strip it before sending
+    ai_wants_end = "[FIN]" in ai_text_raw
+    ai_text = ai_text_raw.replace("[FIN]", "").strip()
+
+    # El prompt prohíbe los signos de apertura ¿/¡ (nadie los usa al escribir WhatsApp
+    # casual — es una de las señales anti-detección), pero DeepSeek no lo respeta de
+    # forma consistente (visto en prod: "¿tienen lo que busco?", "¿qué tiene de raro?").
+    # No hay forma de garantizarlo solo con el prompt, así que se refuerza aquí.
+    ai_text = ai_text.replace("¿", "").replace("¡", "")
+
+    # Mismo problema con el punto final (prompt lo prohíbe, el modelo no siempre lo
+    # respeta) — se refuerza aquí en vez de confiar solo en el prompt. El lookbehind
+    # evita tocar puntos suspensivos ("...") que sí están permitidos como pausa natural.
+    ai_text = re.sub(r"(?<!\.)\.$", "", ai_text).rstrip()
+
+    # Guard against the LLM copying one of the prompt's own tone examples
+    # verbatim instead of generating something contextual (see
+    # _looks_copied_from_prompt) — confirmed live in production ("Come Bien"):
+    # it sent a CUANDO TE CONFRONTAN example even though nobody had accused it
+    # of being a bot. One retry with an explicit correction; if it happens
+    # again (or the retry itself fails), close without sending rather than
+    # deliver something that doesn't match the actual conversation.
+    if ai_text and _looks_copied_from_prompt(ai_text):
+        log.warning("[AIFollowup] LLM copied a prompt example verbatim — retrying: %r", ai_text[:80])
+        print(f"[AIFollowup] LLM copied a prompt example — retrying: {ai_text[:80]!r}")
+        ai_text_raw_retry = _call_llm_for_reply(
+            _llm_turns, _llm_context, is_cold_start=is_cold_start, prefs=_prefs, db=db,
+            proactive_minutes=_proactive_minutes,
+            correction="tu respuesta anterior fue una de las frases de ejemplo de este prompt, copiada tal "
+                       "cual — eso está prohibido. genera una respuesta distinta y original, en tus propias "
+                       "palabras, que reaccione específicamente a lo que la otra persona te acaba de escribir.",
+        )
+        ai_wants_end = bool(ai_text_raw_retry) and "[FIN]" in ai_text_raw_retry
+        ai_text = (ai_text_raw_retry or "").replace("[FIN]", "").strip()
+        ai_text = ai_text.replace("¿", "").replace("¡", "")
+        ai_text = re.sub(r"(?<!\.)\.$", "", ai_text).rstrip()
+        if not ai_text_raw_retry or _looks_copied_from_prompt(ai_text):
+            log.warning("[AIFollowup] LLM copied a prompt example again after retry — closing without sending")
+            print("[AIFollowup] EXIT: copied example persisted after retry")
+            _close_session_without_reply(db, sid, company_id, phone_number, "ai_decision")
+            return
+
+    # The model can answer with JUST "[FIN]" (no accompanying text) when it decides
+    # the conversation is over without anything left to say. ai_text is then empty,
+    # and every send path below (Evolution/WAHA/Wasender/wwebjs) rejects an empty
+    # message — the exception was caught by the broad handler at the bottom of this
+    # function, which only resets ai_typing, leaving the session stuck at
+    # status="active" forever (never marked "ended", never retried) since nothing
+    # else ever calls back into a session once it's "active" outside of a new
+    # inbound message. Close the session directly instead of attempting to send.
+    if ai_wants_end and not ai_text:
+        _close_session_without_reply(db, sid, company_id, phone_number, "ai_decision")
+        return
 
     # Daily cap guard — Andy respects the same limit as campaigns. Reserved
     # atomically BEFORE sending (not checked-then-incremented-after) so a

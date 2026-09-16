@@ -106,17 +106,21 @@ def _common_patches():
     """Everything process_inbound_reply touches before/around the LLM call,
     stubbed to a known-good state so the test isolates the [FIN]-handling path.
 
-    get_all_connected_instances is mocked to [] (no wwebjs sessions up) by
-    default — without this, a company with no assigned_instance would hit a
-    REAL network call out to wwebjs-service during the test (see ai_followup.py:
-    the "no assigned_instance" fallback checks wwebjs before falling back to
-    Evolution). Tests that specifically exercise the wwebjs-fallback path
-    override this themselves."""
+    get_all_connected_instances defaults to ["sender666"] — instance
+    resolution now happens BEFORE the LLM call (see ai_followup.py: persona_name
+    must be corrected to the real sending instance before the LLM generates
+    text), so every test needs a resolvable instance to even reach the LLM,
+    not just the ones that exercise sending. Without this, every test would
+    also hit a REAL network call out to wwebjs-service via the un-mocked
+    default. Tests that specifically exercise "no instance connected" override
+    this to []."""
     with patch("app.llm.active_provider", return_value="openai"), \
          patch("app.ai_followup._is_business_hours", return_value=True), \
          patch("app.ai_followup._is_blocked_or_blacklisted", return_value=False), \
          patch("app.classifier._looks_like_auto_reply", return_value=False), \
-         patch("app.whatsapp_wwebjs.get_all_connected_instances", return_value=[]):
+         patch("app.whatsapp_wwebjs.get_all_connected_instances", return_value=["sender666"]), \
+         patch("app.whatsapp_wwebjs.WWebjsClient"), \
+         patch("app.whatsapp_wwebjs.mark_read"):
         yield
 
 
@@ -229,19 +233,21 @@ class TestFinWithRealTextStillSends:
 
     def test_fin_with_text_does_not_take_the_early_return(self, _common_patches):
         mgr = FakeMgr(_session_doc())
+        fake_ww_client = MagicMock()
+        fake_ww_client.send.return_value = {"success": True, "messageId": "abc123"}
         with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
              patch("app.ai_followup._call_llm_for_reply", return_value="ah ok, luego te aviso[FIN]"), \
-             patch("app.whatsapp_evolution.pick_connected_instance", return_value=None) as mock_pick:
+             patch("app.whatsapp_wwebjs.WWebjsClient", return_value=fake_ww_client):
             af.process_inbound_reply(
                 phone_number="5214428079840",
                 company_id="aabbccddeeff001122334455",
                 inbound_body="Mande",
                 inbound_log_id="log1",
             )
-        # pick_connected_instance IS reached this time (returns None here only to
-        # short-circuit the rest of the real send code, which needs a live wwebjs
-        # client this test isn't set up to fake).
-        mock_pick.assert_called_once()
+        # The real send path IS reached this time (unlike the bare-[FIN] case) —
+        # proven by the actual send call going through, not just by inspecting
+        # the early-return's absence.
+        fake_ww_client.send.assert_called_once()
 
 
 class TestNoConnectedInstanceClosesSession:
@@ -256,6 +262,7 @@ class TestNoConnectedInstanceClosesSession:
         mgr = FakeMgr(_session_doc())
         with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
              patch("app.ai_followup._call_llm_for_reply", return_value="ah ok, gracias"), \
+             patch("app.whatsapp_wwebjs.get_all_connected_instances", return_value=[]), \
              patch("app.whatsapp_evolution.pick_connected_instance", return_value=None):
             af.process_inbound_reply(
                 phone_number="5214428079840",
@@ -320,6 +327,64 @@ class TestWwebjsCheckedBeforeEvolutionFallback:
             )
         mock_evo_pick.assert_called_once()
         assert mgr.db.ai_followup_sessions._doc["end_reason"] == "no_instance"
+
+
+class TestPersonaNameCorrectedToActualSendingInstance:
+    """Bug fixed 2026-09-15: session.context.persona_name is frozen in at
+    session-creation time (via _build_context — see
+    TestPersonaNameFromWhatsappProfile below), but the instance that actually
+    ends up SENDING a given reply can be resolved later and differently — e.g.
+    when assigned_instance was unset at creation time and the wwebjs fallback
+    later picks whichever session happens to be connected. Confirmed live in
+    production ("SEAT Furia"): the frozen context said persona_name="Andrés"
+    (the generic default), but the reply ended up sending through "sender4",
+    whose real WhatsApp profile name is "Marco Adrian" — Andy would have
+    introduced himself with a name that doesn't match the account the
+    prospect was actually talking to."""
+
+    def test_overrides_stale_persona_name_with_the_resolved_instance_profile(self, _common_patches):
+        mgr = FakeMgr(_session_doc(context={"persona_name": "Andrés", "company_name": "Acme"}))
+        mgr.db.instances = MagicMock()
+        mgr.db.instances.find_one.return_value = {"profile_name": "Marco Adrian"}
+        captured = {}
+
+        def _fake_llm(turns, context, **kwargs):
+            captured["persona_name"] = context.get("persona_name")
+            return "ah ok, gracias"
+
+        with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
+             patch("app.ai_followup._call_llm_for_reply", side_effect=_fake_llm), \
+             patch("app.whatsapp_wwebjs.get_all_connected_instances", return_value=["sender4"]):
+            af.process_inbound_reply(
+                phone_number="5214428079840",
+                company_id="aabbccddeeff001122334455",
+                inbound_body="Mande",
+                inbound_log_id="log1",
+            )
+        assert captured["persona_name"] == "Marco"
+
+    def test_keeps_context_persona_name_when_instance_has_no_synced_profile(self, _common_patches):
+        """Sanity check: if the resolved instance has no profile_name synced yet,
+        don't blank out whatever persona_name was already in context."""
+        mgr = FakeMgr(_session_doc(context={"persona_name": "Andrés", "company_name": "Acme"}))
+        mgr.db.instances = MagicMock()
+        mgr.db.instances.find_one.return_value = {}  # no profile_name synced
+        captured = {}
+
+        def _fake_llm(turns, context, **kwargs):
+            captured["persona_name"] = context.get("persona_name")
+            return "ah ok, gracias"
+
+        with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
+             patch("app.ai_followup._call_llm_for_reply", side_effect=_fake_llm), \
+             patch("app.whatsapp_wwebjs.get_all_connected_instances", return_value=["sender4"]):
+            af.process_inbound_reply(
+                phone_number="5214428079840",
+                company_id="aabbccddeeff001122334455",
+                inbound_body="Mande",
+                inbound_log_id="log1",
+            )
+        assert captured["persona_name"] == "Andrés"
 
 
 class TestTransientFailuresDoNotKillTheSession:

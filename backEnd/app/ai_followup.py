@@ -626,9 +626,13 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
     if is_cold_start:
         system += (
             "\n\n⚠️ PRIMER MENSAJE DE ESTA SESIÓN: es tu primera respuesta a esta persona. "
-            "EXCEPCIÓN CRÍTICA: si el mensaje recibido es un acuse de recibo / ticket automático, "
-            "aplica la regla de [MENSAJE AUTOMÁTICO] — output SOLO [FIN], sin texto alguno. "
-            "Si NO es un ACK: puedes saludar brevemente si encaja — SIN ¡Hola! ni signos invertidos. "
+            "EXCEPCIÓN CRÍTICA: si el mensaje recibido es un acuse de recibo / ticket automático "
+            "SIN opciones de menú, aplica la regla de [MENSAJE AUTOMÁTICO] — output SOLO [FIN], sin texto alguno. "
+            "⚠️ ESTO NO APLICA A MENÚS: si el mensaje trae un menú (números, letras, botones, "
+            "'[Opciones: ...]', o pide elegir una opción), esta excepción NO es un ACK — ignórala "
+            "por completo y sigue la regla normal de [BOT CON MENÚS / IVR] (responde SOLO la letra "
+            "o número correcto, nunca [FIN] sin haber intentado navegar). "
+            "Si NO es un ACK ni un menú: puedes saludar brevemente si encaja — SIN ¡Hola! ni signos invertidos. "
             "Usa algo como \"hey\", \"buenas\", \"oye\" — o ve directo al punto. Nunca más de 2-3 palabras."
         )
     if proactive_minutes is not None:

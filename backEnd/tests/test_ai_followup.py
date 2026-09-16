@@ -170,6 +170,58 @@ class TestBareFinClosesWithoutSending:
         assert mgr.db.conversation_ai_prefs.updates[-1]["$set"]["auto_disabled"] is True
 
 
+class TestCopiedPromptExampleTriggersRetry:
+    """Bug fixed 2026-09-15: confirmed live in production ("Come Bien") — the
+    LLM sent "no, tengo una pregunta nada más. qué tiene de raro?", a CUANDO TE
+    CONFRONTAN example lifted verbatim from its own prompt, even though nobody
+    had accused it of being a bot. The prompt already says never to copy its
+    examples; this catches it anyway and gives the model one corrected retry
+    before giving up."""
+
+    _COPIED_EXAMPLE = "no, tengo una pregunta nada más. qué tiene de raro?"
+
+    def test_retries_once_and_sends_the_corrected_reply(self, _common_patches):
+        mgr = FakeMgr(_session_doc())
+        fake_ww_client = MagicMock()
+        fake_ww_client.send.return_value = {"success": True, "messageId": "abc123"}
+        with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
+             patch("app.ai_followup._call_llm_for_reply",
+                   side_effect=[self._COPIED_EXAMPLE, "oye que bien que ya me contestas, tienen servicio a domicilio?"]) as mock_llm, \
+             patch("app.whatsapp_wwebjs.get_all_connected_instances", return_value=["sender666"]), \
+             patch("app.whatsapp_wwebjs.WWebjsClient", return_value=fake_ww_client), \
+             patch("app.whatsapp_wwebjs.mark_read"), \
+             patch("app.whatsapp_evolution.pick_connected_instance") as mock_evo_pick:
+            af.process_inbound_reply(
+                phone_number="5214428079840",
+                company_id="aabbccddeeff001122334455",
+                inbound_body="Mande",
+                inbound_log_id="log1",
+            )
+        assert mock_llm.call_count == 2
+        assert "copiada" in mock_llm.call_args_list[1].kwargs["correction"]
+        mock_evo_pick.assert_not_called()
+        fake_ww_client.send.assert_called_once()
+        sent_text = fake_ww_client.send.call_args.args[1]
+        assert sent_text == "oye que bien que ya me contestas, tienen servicio a domicilio?"
+        assert mgr.db.ai_followup_sessions._doc.get("end_reason") != "ai_decision"
+
+    def test_closes_without_sending_if_retry_also_copies(self, _common_patches):
+        mgr = FakeMgr(_session_doc())
+        with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
+             patch("app.ai_followup._call_llm_for_reply", return_value=self._COPIED_EXAMPLE) as mock_llm, \
+             patch("app.whatsapp_evolution.pick_connected_instance") as mock_evo_pick:
+            af.process_inbound_reply(
+                phone_number="5214428079840",
+                company_id="aabbccddeeff001122334455",
+                inbound_body="Mande",
+                inbound_log_id="log1",
+            )
+        assert mock_llm.call_count == 2
+        mock_evo_pick.assert_not_called()  # never even reached instance-picking
+        assert mgr.db.ai_followup_sessions._doc["status"] == "ended"
+        assert mgr.db.ai_followup_sessions._doc["end_reason"] == "ai_decision"
+
+
 class TestFinWithRealTextStillSends:
     """Sanity check the fix is scoped correctly: "[FIN]" attached to REAL text
     (the normal, working case — e.g. "ah ok déjame pensarlo[FIN]") must still

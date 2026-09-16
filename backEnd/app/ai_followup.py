@@ -271,6 +271,31 @@ CUÁNDO CERRAR — responde normal y añade [FIN] pegado al final:
 IMPORTANTE: [FIN] es señal interna, nunca llega al contacto. Ponlo pegado al texto sin espacio.
 {extra_block}"""
 
+# Every quoted string in the prompt above is a tone/style EXAMPLE the model is
+# explicitly told never to send verbatim (see the prompt's own rule at the
+# top: "nunca envíes ninguna frase de ejemplo tal cual"). Extracted
+# automatically instead of a manually-maintained list, so this can't go stale
+# as the prompt changes. Confirmed live in production ("Come Bien",
+# 2026-09-15): the model sent "no, tengo una pregunta nada más. qué tiene de
+# raro?" — a CUANDO TE CONFRONTAN example — completely out of context; nobody
+# had accused it of being a bot. Entries containing "{" are skipped (they're
+# templated, e.g. "Hola {persona_name}", and can't be verbatim-matched against
+# real generated text anyway).
+_PROMPT_EXAMPLE_PHRASES = [
+    m.strip().lower().rstrip("?!.") for m in re.findall(r'"([^"\n]{10,90})"', _DEFAULT_SYSTEM_PROMPT)
+    if " " in m.strip() and "{" not in m
+]
+
+
+def _looks_copied_from_prompt(text: str) -> bool:
+    """True if `text` is (near-)identical to one of the prompt's own tone
+    examples — the model copying a sample verbatim instead of generating an
+    original, contextual reply."""
+    norm = (text or "").strip().lower().rstrip("?!.")
+    if not norm:
+        return False
+    return any(norm == ex or (len(ex) >= 15 and ex in norm) for ex in _PROMPT_EXAMPLE_PHRASES)
+
 
 def _get_system_prompt(db) -> str:
     """
@@ -572,7 +597,7 @@ def _build_context(db: MongoDBManager, company_id: str, outbound_log: dict) -> d
 
 
 def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False, prefs: dict = None, db=None,
-                         proactive_minutes: int = None) -> str | None:
+                         proactive_minutes: int = None, correction: str = "") -> str | None:
     ctx = dict(context)
     parts = []
     if ctx.get("description"):
@@ -615,6 +640,8 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
             "REGLAS: nunca digas que estás esperando respuesta; nunca uses el mismo arranque que en "
             "tu último mensaje (si empezaste con 'oye', empieza diferente); 1 frase máxima, casual, sin puntos."
         )
+    if correction:
+        system += f"\n\n⚠️ CORRECCIÓN: {correction}"
     messages = []
     for t in turns:
         messages.append({
@@ -968,6 +995,33 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
     # respeta) — se refuerza aquí en vez de confiar solo en el prompt. El lookbehind
     # evita tocar puntos suspensivos ("...") que sí están permitidos como pausa natural.
     ai_text = re.sub(r"(?<!\.)\.$", "", ai_text).rstrip()
+
+    # Guard against the LLM copying one of the prompt's own tone examples
+    # verbatim instead of generating something contextual (see
+    # _looks_copied_from_prompt) — confirmed live in production ("Come Bien"):
+    # it sent a CUANDO TE CONFRONTAN example even though nobody had accused it
+    # of being a bot. One retry with an explicit correction; if it happens
+    # again (or the retry itself fails), close without sending rather than
+    # deliver something that doesn't match the actual conversation.
+    if ai_text and _looks_copied_from_prompt(ai_text):
+        log.warning("[AIFollowup] LLM copied a prompt example verbatim — retrying: %r", ai_text[:80])
+        print(f"[AIFollowup] LLM copied a prompt example — retrying: {ai_text[:80]!r}")
+        ai_text_raw_retry = _call_llm_for_reply(
+            _llm_turns, session.get("context", {}), is_cold_start=is_cold_start, prefs=_prefs, db=db,
+            proactive_minutes=_proactive_minutes,
+            correction="tu respuesta anterior fue una de las frases de ejemplo de este prompt, copiada tal "
+                       "cual — eso está prohibido. genera una respuesta distinta y original, en tus propias "
+                       "palabras, que reaccione específicamente a lo que la otra persona te acaba de escribir.",
+        )
+        ai_wants_end = bool(ai_text_raw_retry) and "[FIN]" in ai_text_raw_retry
+        ai_text = (ai_text_raw_retry or "").replace("[FIN]", "").strip()
+        ai_text = ai_text.replace("¿", "").replace("¡", "")
+        ai_text = re.sub(r"(?<!\.)\.$", "", ai_text).rstrip()
+        if not ai_text_raw_retry or _looks_copied_from_prompt(ai_text):
+            log.warning("[AIFollowup] LLM copied a prompt example again after retry — closing without sending")
+            print("[AIFollowup] EXIT: copied example persisted after retry")
+            _close_session_without_reply(db, sid, company_id, phone_number, "ai_decision")
+            return
 
     # The model can answer with JUST "[FIN]" (no accompanying text) when it decides
     # the conversation is over without anything left to say. ai_text is then empty,

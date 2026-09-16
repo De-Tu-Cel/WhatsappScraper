@@ -325,16 +325,60 @@ function createClient(sessionId, phoneNumber) {
     }
     console.log(`[${sessionId}] ← ${number}: ${String(msg.body).substring(0, 60)}`)
 
-    // DIAGNOSTIC (temporary): native WhatsApp list/button menus never reach Andy
-    // with their actual option text — msg.body only carries the header/preamble
-    // (confirmed live in prod: "Selecciona una opción:" with nothing to pick
-    // from). Log the raw shape once so the real extraction can be written
-    // against the actual field names instead of a guess. Remove once done.
+    // DIAGNOSTIC (temporary): kept alongside the extraction below as a safety
+    // net — if the field paths guessed from whatsapp-web.js's own OUTGOING
+    // list-message code (Injected/Utils.js) turn out wrong for an INCOMING
+    // one, this still captures the real shape to fix it properly. Remove once
+    // the extraction below has been confirmed against a real example.
     if (msg.type === 'list' || msg.type === 'buttons' || msg.type === 'template_button_reply') {
       try {
         console.log(`[${sessionId}] DIAG list/buttons msg.type=${msg.type} rawData=${JSON.stringify(msg.rawData).slice(0, 2000)}`)
       } catch (e) {
         console.log(`[${sessionId}] DIAG list/buttons stringify failed: ${e.message}`)
+      }
+    }
+
+    // Native WhatsApp list/button menus never reached Andy with their actual
+    // option text — msg.body only carries the header/preamble (confirmed live
+    // in prod: "Selecciona una opción:" with nothing to pick from). Andy's
+    // prompt already knows how to act on a "[Opciones: A | B | C]" suffix (the
+    // same format Evolution/WAHA/Wasender already produce via
+    // _extract_body_and_interactive on the backend) — appending it here once
+    // means the backend doesn't need a wwebjs-specific parser at all.
+    // Field paths below come from whatsapp-web.js's own OUTGOING list/buttons
+    // send code (Injected/Utils.js: rawData.list.sections[].rows[].title,
+    // rawData.dynamicReplyButtons[].buttonText.displayText) — unverified
+    // against a live INCOMING example (none seen yet), so this best-effort
+    // extraction can only ever add options, never remove msg.body — if the
+    // shape doesn't match, behavior is identical to before (no options, same
+    // as today).
+    let messageBody = msg.body
+    if (msg.type === 'list' || msg.type === 'buttons') {
+      try {
+        const raw = msg.rawData || {}
+        const titles = []
+        if (raw.list && Array.isArray(raw.list.sections)) {
+          for (const section of raw.list.sections) {
+            for (const row of (section.rows || [])) {
+              if (row.title) titles.push(row.title)
+            }
+          }
+        }
+        for (const key of ['dynamicReplyButtons', 'replyButtons', 'buttons']) {
+          if (titles.length) break
+          if (Array.isArray(raw[key])) {
+            for (const btn of raw[key]) {
+              const label = btn.buttonText?.displayText || btn.displayText || btn.body
+              if (label) titles.push(label)
+            }
+          }
+        }
+        if (titles.length) {
+          messageBody = `${msg.body}\n[Opciones: ${titles.join(' | ')}]`
+          console.log(`[${sessionId}] extracted ${titles.length} menu option(s) from ${msg.type} message`)
+        }
+      } catch (e) {
+        console.log(`[${sessionId}] menu option extraction failed: ${e.message}`)
       }
     }
 
@@ -361,7 +405,7 @@ function createClient(sessionId, phoneNumber) {
         to: msg.to,
         fromMe: false,
         number,
-        body: msg.body,
+        body: messageBody,
         type: msg.type,
         messageId: msg.id._serialized,
         timestamp: msg.timestamp,
@@ -912,6 +956,35 @@ app.get('/sessions', (req, res) => {
 })
 
 app.get('/health', (_req, res) => res.json({ ok: true, sessions: sessions.size }))
+
+// Graceful shutdown — without this, `docker stop` SIGKILLs the process after
+// its grace period with no warning to Puppeteer/Chromium, which can leave a
+// session's LocalAuth profile (the IndexedDB/LevelDB files under
+// /app/sessions) mid-write and corrupted. Confirmed live in prod
+// (tania-sesion-3, 2026-09-16): no disconnect/logout event was ever recorded
+// for it — it simply failed to restore its saved session on the next start
+// and fell back to needing a fresh QR scan, right after a routine restart.
+// client.destroy() only closes the browser cleanly and lets Chromium flush
+// its profile to disk — confirmed against whatsapp-web.js's own source that
+// this can only help, never wipe anything: LocalAuth doesn't override
+// destroy() (inherits a no-op from BaseAuthStrategy), only logout() — a
+// separate, explicit method that deletes the session files and is never
+// called here.
+let _shuttingDown = false
+async function _gracefulShutdown(signal) {
+  if (_shuttingDown) return
+  _shuttingDown = true
+  console.log(`[shutdown] ${signal} received — closing ${sessions.size} session(s) cleanly`)
+  const closes = Array.from(sessions.values()).map(s => (s.client?.destroy() || Promise.resolve()).catch(() => {}))
+  await Promise.race([
+    Promise.all(closes),
+    new Promise((r) => setTimeout(r, 8000)), // don't hang forever if a browser is stuck
+  ])
+  console.log('[shutdown] done')
+  process.exit(0)
+}
+process.on('SIGTERM', () => _gracefulShutdown('SIGTERM'))
+process.on('SIGINT', () => _gracefulShutdown('SIGINT'))
 
 app.listen(PORT, () => {
   console.log(`wwebjs-service on port ${PORT}`)

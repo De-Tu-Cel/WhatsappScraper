@@ -325,6 +325,19 @@ function createClient(sessionId, phoneNumber) {
     }
     console.log(`[${sessionId}] ← ${number}: ${String(msg.body).substring(0, 60)}`)
 
+    // DIAGNOSTIC (temporary): native WhatsApp list/button menus never reach Andy
+    // with their actual option text — msg.body only carries the header/preamble
+    // (confirmed live in prod: "Selecciona una opción:" with nothing to pick
+    // from). Log the raw shape once so the real extraction can be written
+    // against the actual field names instead of a guess. Remove once done.
+    if (msg.type === 'list' || msg.type === 'buttons' || msg.type === 'template_button_reply') {
+      try {
+        console.log(`[${sessionId}] DIAG list/buttons msg.type=${msg.type} rawData=${JSON.stringify(msg.rawData).slice(0, 2000)}`)
+      } catch (e) {
+        console.log(`[${sessionId}] DIAG list/buttons stringify failed: ${e.message}`)
+      }
+    }
+
     // Actually fetch image/sticker bytes so the backend can store and show them —
     // previously hasMedia was forwarded but the real content was never downloaded,
     // so a shared photo/sticker only ever showed up as a "[image]"/"[sticker]"

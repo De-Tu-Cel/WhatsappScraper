@@ -611,6 +611,25 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
             send_result = {"status_code": 200 if status == "sent" else 400}
             resp_json = _ww_result
             _platform = "wwebjs"
+            # When req.instance was given explicitly, the rotation logic above
+            # (which stamps assigned_instance itself) never ran — without this,
+            # a company contacted only through an explicit-instance send never
+            # gets assigned_instance set, and Andy's later replies fall through
+            # to a broken default that only checks the (unused) Evolution API
+            # for a connected session, so they silently never send. Confirmed
+            # live in production ("Come Bien", "Fenix El Super de Casa"): the
+            # LLM generated a real reply, but it was dropped at the instance
+            # picker with "no hay ninguna instancia conectada". Same
+            # only-if-unset guard as scheduler.py's _stamp_assigned_instance.
+            if status == "sent" and req.company_id and len(req.company_id) == 24:
+                try:
+                    from bson import ObjectId as _ObjIdStamp
+                    db.db.companies.update_one(
+                        {"_id": _ObjIdStamp(req.company_id), "assigned_instance": {"$in": [None, ""]}},
+                        {"$set": {"assigned_instance": instance}},
+                    )
+                except Exception:
+                    pass
         elif _inst_provider_send == "wasender":
             from app.whatsapp_wasender import WasenderClient, _clean_digits as _ws_clean
             _inst_doc_ws = db.db.instances.find_one({"name": instance}, {"wasender_api_key": 1, "number": 1}) or {}

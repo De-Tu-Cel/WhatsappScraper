@@ -70,6 +70,7 @@ class FakeDB:
         # unless a test overrides this to exercise the "mid-conversation
         # reactivation" case specifically.
         self.message_logs.count_documents.return_value = 1
+        self.jid_map = MagicMock()
 
 
 class FakeMgr:
@@ -103,11 +104,19 @@ def _no_real_sleep(monkeypatch):
 @pytest.fixture
 def _common_patches():
     """Everything process_inbound_reply touches before/around the LLM call,
-    stubbed to a known-good state so the test isolates the [FIN]-handling path."""
+    stubbed to a known-good state so the test isolates the [FIN]-handling path.
+
+    get_all_connected_instances is mocked to [] (no wwebjs sessions up) by
+    default — without this, a company with no assigned_instance would hit a
+    REAL network call out to wwebjs-service during the test (see ai_followup.py:
+    the "no assigned_instance" fallback checks wwebjs before falling back to
+    Evolution). Tests that specifically exercise the wwebjs-fallback path
+    override this themselves."""
     with patch("app.llm.active_provider", return_value="openai"), \
          patch("app.ai_followup._is_business_hours", return_value=True), \
          patch("app.ai_followup._is_blocked_or_blacklisted", return_value=False), \
-         patch("app.classifier._looks_like_auto_reply", return_value=False):
+         patch("app.classifier._looks_like_auto_reply", return_value=False), \
+         patch("app.whatsapp_wwebjs.get_all_connected_instances", return_value=[]):
         yield
 
 
@@ -209,6 +218,56 @@ class TestNoConnectedInstanceClosesSession:
         # a human needs to notice and fix it, so this must stay a hard block
         # (unlike the "ai_decision" / bare-[FIN] case, see auto_disabled tests below).
         assert "auto_disabled" not in mgr.db.conversation_ai_prefs.updates[-1]["$set"]
+
+
+class TestWwebjsCheckedBeforeEvolutionFallback:
+    """Bug fixed 2026-09-15: when a company has no assigned_instance (e.g. it
+    was only ever contacted via /send-message with an explicit `instance`,
+    which never stamps assigned_instance — see routes.py), the code defaulted
+    to _inst_provider="evolution" and only ever asked the Evolution API whether
+    anything was connected. Evolution isn't a live provider in this project
+    anymore, so that check always came back empty and Andy's reply was silently
+    dropped — confirmed live in production ("Come Bien", "Fenix El Super de
+    Casa"): the LLM generated a real reply, but "no hay ninguna instancia
+    conectada" ate it. Now wwebjs (the only provider actually in use) is
+    checked first, before ever asking Evolution."""
+
+    def test_uses_a_connected_wwebjs_session_without_asking_evolution(self, _common_patches):
+        mgr = FakeMgr(_session_doc())
+        fake_ww_client = MagicMock()
+        fake_ww_client.send.return_value = {"success": True, "messageId": "abc123"}
+        with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
+             patch("app.ai_followup._call_llm_for_reply", return_value="ah ok, gracias"), \
+             patch("app.whatsapp_wwebjs.get_all_connected_instances", return_value=["sender666"]), \
+             patch("app.whatsapp_wwebjs.WWebjsClient", return_value=fake_ww_client), \
+             patch("app.whatsapp_wwebjs.mark_read"), \
+             patch("app.whatsapp_evolution.pick_connected_instance") as mock_evo_pick:
+            af.process_inbound_reply(
+                phone_number="5214428079840",
+                company_id="aabbccddeeff001122334455",
+                inbound_body="Mande",
+                inbound_log_id="log1",
+            )
+        mock_evo_pick.assert_not_called()
+        fake_ww_client.send.assert_called_once()
+        assert mgr.db.ai_followup_sessions._doc.get("end_reason") != "no_instance"
+
+    def test_falls_back_to_evolution_when_wwebjs_has_nothing_connected(self, _common_patches):
+        """Sanity check the fix is scoped correctly — Evolution is still consulted
+        (not abandoned entirely) when wwebjs genuinely has no session up."""
+        mgr = FakeMgr(_session_doc())
+        with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
+             patch("app.ai_followup._call_llm_for_reply", return_value="ah ok, gracias"), \
+             patch("app.whatsapp_wwebjs.get_all_connected_instances", return_value=[]), \
+             patch("app.whatsapp_evolution.pick_connected_instance", return_value=None) as mock_evo_pick:
+            af.process_inbound_reply(
+                phone_number="5214428079840",
+                company_id="aabbccddeeff001122334455",
+                inbound_body="Mande",
+                inbound_log_id="log1",
+            )
+        mock_evo_pick.assert_called_once()
+        assert mgr.db.ai_followup_sessions._doc["end_reason"] == "no_instance"
 
 
 class TestTransientFailuresDoNotKillTheSession:

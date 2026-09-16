@@ -1026,7 +1026,23 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
             _close_session_without_reply(db, sid, company_id, phone_number, "no_instance")
             return
     else:
-        instance = pick_connected_instance(db, EVOLUTION_API_URL, EVOLUTION_API_KEY, preferred_instance)
+        # No assigned_instance (or one whose provider we couldn't resolve) means
+        # we don't actually know which provider this company uses — this used to
+        # assume Evolution unconditionally, but Evolution isn't a live provider
+        # in this project anymore (wwebjs is the only one in active use), so that
+        # assumption always found "nothing connected" and silently dropped the
+        # reply. Confirmed live in production ("Come Bien", "Fenix El Super de
+        # Casa"): the LLM generated a real reply that never got sent because of
+        # this. Check wwebjs directly first — only fall back to the Evolution
+        # check (kept for whatever legacy instances might still exist) if wwebjs
+        # genuinely has nothing connected either.
+        from app.whatsapp_wwebjs import get_all_connected_instances as _ww_all_connected
+        _ww_candidates = _ww_all_connected(db)
+        if _ww_candidates:
+            instance = preferred_instance if preferred_instance in _ww_candidates else _ww_candidates[0]
+            _inst_provider = "wwebjs"
+        else:
+            instance = pick_connected_instance(db, EVOLUTION_API_URL, EVOLUTION_API_KEY, preferred_instance)
         if not instance:
             log.warning("[AIFollowup] no hay ninguna instancia conectada — Andy no puede enviar a %s", phone_number)
             print(f"[AIFollowup] EXIT: sin instancias conectadas (phone={phone_number})")

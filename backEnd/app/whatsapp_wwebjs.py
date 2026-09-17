@@ -53,7 +53,17 @@ def send_message(session_id: str, to: str, message: str, typing_ms: int = 0,
         # Confirmed live in production (Come Bien, 2026-09-15): "Read timed
         # out (read timeout=30)" while wwebjs-service itself was healthy and
         # responsive to other requests seconds later.
-        timeout=75,
+        #
+        # 75s still wasn't enough margin: /send makes TWO real Puppeteer calls
+        # after the ~48s of pacing above — getNumberId() then sendMessage()
+        # (each a CDP round-trip into the WhatsApp Web page) — and under host
+        # contention (several sessions' own presence/profile-sync polling
+        # competing for the same Chromium processes) those routinely take
+        # 30s+ EACH on their own, independent of pacing. Confirmed live
+        # 2026-09-17: real sends timed out at 75s with wwebjs-service's CPU
+        # sitting at 31% — not maxed, just individual CDP calls running slow.
+        # 150s gives ~100s of margin on top of the ~48s of deliberate pacing.
+        timeout=150,
     )
     if not r.ok:
         raise Exception(r.json().get("error", r.text))

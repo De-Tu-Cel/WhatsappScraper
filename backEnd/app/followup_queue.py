@@ -22,11 +22,14 @@ _lock = threading.Lock()
 # then pass the whole burst to the AI as a single combined message.
 # Was 4.0s — too tight for how people actually split a thought across WhatsApp
 # bubbles (e.g. "sí, te paso el número" followed by the contact card itself a
-# few seconds later): gaps of 5-30s between bubbles from the SAME person are
-# routine, so each bubble was missing the window and getting its own separate
-# reply — producing two near-duplicate, back-to-back messages for what the
-# human considered one turn (observed live: Volkswagen del Centro, 2026-09-17).
-_DEBOUNCE_SEC = 12.0
+# few seconds later): gaps of up to ~30s between bubbles from the SAME person
+# are routine (real gaps observed: 4.7s, 17.6s, 29s), so each bubble was
+# missing the window and getting its own separate reply — producing two
+# near-duplicate, back-to-back messages for what the human considered one
+# turn (observed live: Volkswagen del Centro, 2026-09-17). 45s covers all
+# three observed gaps with margin, at the cost of every message — not just
+# bursts — waiting up to 45s before Andy starts replying.
+_DEBOUNCE_SEC = 45.0
 _pending: dict = {}   # phone_number → {timer, messages[], log_ids[], company_id, manual}
 _pending_lock = threading.Lock()
 

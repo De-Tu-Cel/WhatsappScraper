@@ -22,7 +22,7 @@ import Switch from '@mui/material/Switch'
 import CloseIcon from '@mui/icons-material/Close'
 import AddIcon from '@mui/icons-material/Add'
 import SearchIcon from '@mui/icons-material/Search'
-import QrCodeIcon from '@mui/icons-material/QrCode'
+import PhonelinkRingIcon from '@mui/icons-material/PhonelinkRing'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
 import GroupsIcon from '@mui/icons-material/Groups'
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever'
@@ -772,7 +772,7 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile
           <Tooltip title={t.inst.connectQr} placement="top">
             <IconButton size="small" onClick={() => onQr(inst)}
               sx={{ color: 'var(--accent,#60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)' } }}>
-              <QrCodeIcon sx={{ fontSize: 14 }} />
+              <PhonelinkRingIcon sx={{ fontSize: 14 }} />
             </IconButton>
           </Tooltip>
           {/* Antes iba en morado fijo (#a78bfa) en vez de seguir el acento
@@ -1581,6 +1581,11 @@ export default function InstancesPanel({ isActive } = {}) {
   }, [wizardCountdown])
 
   const [qrStatus, setQrStatus] = useState('loading') // loading | retrying | ready | error
+  // Reconnecting an existing (wwebjs) instance can use a QR scan or a pairing
+  // code — only wwebjs supports the latter (WasenderAPI/WAHA/Evolution don't
+  // expose it for reconnection the same way).
+  const [qrLinkMethod, setQrLinkMethod] = useState('qr') // qr | code
+  const [pairingCode,  setPairingCode]  = useState(null)
 
   // ── QR polling ──────────────────────────────────────────────────────────────
   const fetchQrOnce = useCallback(async (name, provider, wasenderId) => {
@@ -1629,9 +1634,29 @@ export default function InstancesPanel({ isActive } = {}) {
     return false
   }, [qrTarget])
 
-  const startQrPoll = useCallback(async (name, withLogout = false, provider, wasenderId) => {
+  // Pairing-code equivalent of fetchQrOnce — wwebjs only (see api_wwebjs_pairing_code).
+  const fetchPairingCodeOnce = useCallback(async (name) => {
+    try {
+      const r = await fetch(`/api/wwebjs/session/${name}/pairing-code`)
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}))
+        if (d?.status === 'connected') return 'scanned'
+        return false
+      }
+      const d = await r.json()
+      if (d?.status === 'connected') return 'scanned'
+      if (d?.code) { setPairingCode(d.code); return true }
+    } catch {}
+    return false
+  }, [])
+
+  const startQrPoll = useCallback(async (name, withLogout = false, provider, wasenderId, linkMethod) => {
     if (qrPollRef.current) clearTimeout(qrPollRef.current)
-    setQrImage(null); setQrStatus(withLogout ? 'retrying' : 'loading')
+    setQrImage(null); setPairingCode(null); setQrStatus(withLogout ? 'retrying' : 'loading')
+    // linkMethod is passed explicitly by callers that just changed the QR/Code
+    // tab (setQrLinkMethod hasn't committed yet in that same tick) — falls back
+    // to current state for the initial-open / retry-button call sites.
+    const usingCode = (linkMethod ?? qrLinkMethod) === 'code' && (provider ?? qrTarget?.provider) === 'wwebjs'
 
     if (withLogout) {
       try {
@@ -1643,8 +1668,17 @@ export default function InstancesPanel({ isActive } = {}) {
         } else if (resolvedProvider === 'waha') {
           await fetch(`/api/waha/session/logout/${name}`, { method: 'POST' })
         } else if (resolvedProvider === 'wwebjs') {
-          // Re-start the session so it generates a fresh QR
-          await fetch(`/api/wwebjs/session/${name}/start`, { method: 'POST' }).catch(() => {})
+          // Re-start the session so it generates a fresh QR — or, if reconnecting
+          // via pairing code, pass the instance's own number so the backend
+          // recreates the client with pairWithPhoneNumber set (see
+          // wwebjs-service's /session/:id/start: an existing session ignores a
+          // phoneNumber unless it's actually recreated).
+          const body = usingCode ? { phone_number: (qrTarget?.number || '').replace(/\D/g, '') } : {}
+          await fetch(`/api/wwebjs/session/${name}/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          }).catch(() => {})
         } else {
           await fetch(`/api/evolution/instance/${name}?action=logout`, { method: 'POST' })
         }
@@ -1656,13 +1690,13 @@ export default function InstancesPanel({ isActive } = {}) {
     let attempts = 0
     const poll = async () => {
       attempts++
-      const ok = await fetchQrOnce(name, provider, wasenderId)
+      const ok = usingCode ? await fetchPairingCodeOnce(name) : await fetchQrOnce(name, provider, wasenderId)
       if (ok === 'scanned') {
-        // User scanned QR — show connecting state and stop; connPoll closes dialog on WORKING/open
+        // Code entered / QR scanned — show connecting state and stop; connPoll closes dialog on WORKING/open
         setQrStatus('connecting')
         return
       } else if (ok) {
-        // QR shown — re-poll to catch rotation (~60s for WAHA, shorter for wasender)
+        // QR/code shown — re-poll to catch rotation
         attempts = 0
         qrPollRef.current = setTimeout(poll, 300)
       } else {
@@ -1671,12 +1705,13 @@ export default function InstancesPanel({ isActive } = {}) {
       }
     }
     poll()
-  }, [fetchQrOnce, qrTarget])
+  }, [fetchQrOnce, fetchPairingCodeOnce, qrTarget, qrLinkMethod])
 
   function closeQr() {
     if (qrPollRef.current)   clearTimeout(qrPollRef.current)
     if (connPollRef.current) clearInterval(connPollRef.current)
     setQrOpen(false); setQrTarget(null); setQrImage(null); setQrStatus('loading')
+    setQrLinkMethod('qr'); setPairingCode(null)
   }
 
   const startConnPoll = useCallback((name, provider, wasenderId) => {
@@ -3050,7 +3085,7 @@ export default function InstancesPanel({ isActive } = {}) {
                             <Tooltip title={t.inst.connectQr}>
                               <IconButton size="small" onClick={() => handleQrClick(inst)}
                                 sx={{ color: 'var(--accent, #60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' } }}>
-                                <QrCodeIcon sx={{ fontSize: 13 }} />
+                                <PhonelinkRingIcon sx={{ fontSize: 13 }} />
                               </IconButton>
                             </Tooltip>
                             <Tooltip title={isExp ? (lang === 'en' ? 'Close' : 'Cerrar') : t.inst.assignUser}>
@@ -4216,7 +4251,72 @@ export default function InstancesPanel({ isActive } = {}) {
             ))}
           </Box>
 
+          {/* QR/Code tab toggle — pairing-code reconnection is wwebjs-only */}
+          {qrTarget?.provider === 'wwebjs' && qrStatus !== 'connecting' && (
+            <Box sx={{ display: 'flex', gap: 1, width: '100%' }}>
+              {[
+                { key: 'qr',   label: lang === 'en' ? 'QR code' : 'Código QR' },
+                { key: 'code', label: lang === 'en' ? 'Pairing code' : 'Código de emparejamiento' },
+              ].map(opt => (
+                <Box key={opt.key} component="button"
+                  onClick={() => {
+                    if (qrLinkMethod === opt.key || !qrTarget) return
+                    setQrLinkMethod(opt.key)
+                    startQrPoll(qrTarget.name, true, qrTarget.provider, null, opt.key)
+                  }}
+                  sx={{
+                    flex: 1, cursor: 'pointer', border: '1px solid', borderRadius: 1.5,
+                    py: 0.7, fontSize: '0.75rem', fontWeight: 600, fontFamily: 'inherit',
+                    transition: 'all 0.15s',
+                    bgcolor: qrLinkMethod === opt.key ? 'rgba(var(--accent-rgb,59,130,246),0.15)' : 'transparent',
+                    borderColor: qrLinkMethod === opt.key ? 'rgba(var(--accent-rgb,59,130,246),0.5)' : 'rgba(255,255,255,0.12)',
+                    color: qrLinkMethod === opt.key ? 'var(--accent,#60a5fa)' : 'var(--text-muted,rgba(255,255,255,0.45))',
+                    '&:hover': { bgcolor: qrLinkMethod === opt.key ? 'rgba(var(--accent-rgb,59,130,246),0.2)' : 'rgba(255,255,255,0.05)' },
+                  }}
+                >{opt.label}</Box>
+              ))}
+            </Box>
+          )}
+
           {/* QR box */}
+          {qrLinkMethod === 'code' && qrTarget?.provider === 'wwebjs' ? (
+            <Box sx={{
+              width: 230, minHeight: 230,
+              borderRadius: 2.5,
+              bgcolor: 'white',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1.5,
+              overflow: 'hidden', p: 2,
+              boxShadow: '0 0 0 6px rgba(var(--accent-rgb,59,130,246),0.12), 0 8px 32px rgba(0,0,0,0.4)',
+            }}>
+              {qrStatus === 'ready' && pairingCode ? (
+                <>
+                  <Box sx={{ px: 2.5, py: 1.5, borderRadius: 2, border: '2px solid #334155' }}>
+                    <Typography sx={{ fontFamily: 'monospace', fontWeight: 800, fontSize: '1.6rem', letterSpacing: '0.12em', color: '#111827' }}>
+                      {pairingCode.slice(0, 4)}-{pairingCode.slice(4)}
+                    </Typography>
+                  </Box>
+                  <Typography sx={{ color: '#555', fontSize: '0.68rem', textAlign: 'center', lineHeight: 1.4 }}>
+                    {lang === 'en'
+                      ? 'WhatsApp → Settings → Linked Devices → Link a Device → "Link with phone number instead"'
+                      : 'WhatsApp → Ajustes → Dispositivos vinculados → Vincular dispositivo → "Vincular con número de teléfono"'}
+                  </Typography>
+                </>
+              ) : (
+                <>
+                  <CircularProgress size={32} sx={{ color: qrStatus === 'connecting' ? '#22c55e' : '#3b82f6' }} />
+                  <Typography sx={{ color: '#666', fontSize: '0.72rem', textAlign: 'center', lineHeight: 1.4 }}>
+                    {qrStatus === 'retrying'
+                      ? t.inst.qrRetrying
+                      : qrStatus === 'error'
+                        ? t.inst.qrError
+                        : qrStatus === 'connecting'
+                          ? t.inst.qrConnecting
+                          : (lang === 'en' ? 'Generating code…' : 'Generando código…')}
+                  </Typography>
+                </>
+              )}
+            </Box>
+          ) : (
           <Box sx={{
             width: 230, height: 230,
             borderRadius: 2.5,
@@ -4244,6 +4344,7 @@ export default function InstancesPanel({ isActive } = {}) {
               )
             }
           </Box>
+          )}
 
           {/* Retry button — hidden while connecting */}
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>

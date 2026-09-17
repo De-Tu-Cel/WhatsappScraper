@@ -478,14 +478,31 @@ function autoRestoreSessions() {
 
 // ─── Routes ────────────────────────────────────────────────────────────────
 
-app.post('/session/:id/start', (req, res) => {
+app.post('/session/:id/start', async (req, res) => {
   const { id } = req.params
-  if (sessions.has(id)) {
-    const s = sessions.get(id)
-    return res.json({ status: s.status, phone: s.phone })
-  }
-  // Optional phoneNumber → pairing-code linking instead of QR (see createClient).
   const phoneNumber = (req.body && req.body.phoneNumber) || undefined
+  const existing = sessions.get(id)
+  if (existing) {
+    if (!phoneNumber) {
+      // No phone number given — same as before: just report current status.
+      return res.json({ status: existing.status, phone: existing.phone })
+    }
+    // A phone number WAS given for an ALREADY-REGISTERED session — the caller
+    // wants to switch it into pairing-code mode (e.g. reconnecting a
+    // disconnected instance via code instead of QR). That existing client was
+    // created without pairWithPhoneNumber, so it can never expose a pairing
+    // code (session.pairingCode stays null forever, GET /pairing-code always
+    // 400s) — recreate it fresh with the phone number this time. Same
+    // teardown as DELETE /session/:id (client.destroy() only closes the
+    // browser cleanly, confirmed against whatsapp-web.js's own source — it
+    // never touches the saved LocalAuth files).
+    clearInterval(existing.presenceTimer)
+    clearInterval(existing.profileSyncTimer)
+    clearTimeout(existing.reconnectTimer)
+    clearTimeout(existing.readyWatchdog)
+    try { await existing.client.destroy() } catch (_) {}
+    sessions.delete(id)
+  }
   const session = createClient(id, phoneNumber)
   res.json({ status: session.status })
 })

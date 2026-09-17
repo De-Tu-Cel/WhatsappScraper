@@ -335,12 +335,54 @@ class MongoDBManager:
             )
             return str(last_log["_id"]) if last_log else None
 
-        with ThreadPoolExecutor(max_workers=4) as ex:
+        # The conversations UI only shows chat threads for contacts with
+        # type="whatsapp" (numbers scraped from an actual WhatsApp click-to-chat
+        # link on the site) — but the number that ACTUALLY replies is often just
+        # a plain type="phone" contact never flagged as WhatsApp during scraping
+        # (real case: Grupo Hakkasan, 2026-09-17 — replies came from
+        # +525591045621, listed only as type="phone"; the two contacts tagged
+        # type="whatsapp" were different numbers that never responded at all).
+        # Without this, a real, active conversation is invisible in the UI —
+        # the number selector never lists it. Fix: any number that actually
+        # appears in this company's message_logs gets synthesized as a
+        # type="whatsapp" contact if it isn't already represented by one
+        # (matched on the last 10 digits, same normalization the frontend
+        # itself uses for these chips).
+        def _conversation_numbers():
+            nums = set()
+            for m in self.db.message_logs.find(
+                {"company_id": company_id, "direction": {"$in": ["inbound", "outbound"]}},
+                {"from_number": 1, "to_number": 1, "number": 1},
+            ):
+                for field in ("from_number", "to_number", "number"):
+                    v = m.get(field)
+                    if v:
+                        nums.add(str(v))
+            return nums
+
+        with ThreadPoolExecutor(max_workers=5) as ex:
             f_contacts        = ex.submit(_contacts)
             f_person_contacts = ex.submit(_person_contacts)
             f_social_media    = ex.submit(_social_media)
             f_last_log_id     = ex.submit(_last_message_log_id)
-            company["contacts"] = f_contacts.result()
+            f_conv_numbers    = ex.submit(_conversation_numbers)
+            contacts = f_contacts.result()
+            conv_numbers = f_conv_numbers.result()
+
+            def _last10(v):
+                return "".join(ch for ch in str(v) if ch.isdigit())[-10:]
+
+            existing_wa_last10 = {
+                _last10(c["value"]) for c in contacts
+                if c.get("type") == "whatsapp" and c.get("value")
+            }
+            for num in conv_numbers:
+                last10 = _last10(num)
+                if last10 and len(last10) == 10 and last10 not in existing_wa_last10:
+                    contacts.append({"type": "whatsapp", "value": num, "source": "message_logs"})
+                    existing_wa_last10.add(last10)
+
+            company["contacts"] = contacts
             company["person_contacts"] = f_person_contacts.result()
             company["social_media"] = f_social_media.result()
             company["last_message_log_id"] = f_last_log_id.result()

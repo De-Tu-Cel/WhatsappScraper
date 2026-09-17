@@ -942,7 +942,7 @@ def _quick_classify(inbound_body: str, reaction_time_min: float = None) -> dict 
     if (len(text) >= 80
             and _BIFURCATED_AI_CLOSE.search(text)
             and not _HUMAN_PERSONALITY_MARKERS.search(text)):
-        return _quick_result("bot", "Cierre bifurcado de IA en mensaje sustancial — sin IA", is_ai=True)
+        return _quick_result("bot", "Cierre bifurcado de IA en mensaje sustancial — parece IA", is_ai=True)
 
     # Velocidad de tecleo imposible para un humano — cierre NO bifurcado (la regla
     # de arriba no lo atrapa) pero el mensaje es largo, específico (sin "déjame
@@ -962,7 +962,7 @@ def _quick_classify(inbound_body: str, reaction_time_min: float = None) -> dict 
         if len(text) / reaction_seconds > _MAX_HUMAN_CHARS_PER_SEC:
             return _quick_result(
                 "bot",
-                f"Velocidad de tecleo imposible para humano ({len(text)} caracteres en {reaction_seconds:.0f}s) — sin IA",
+                f"Velocidad de tecleo imposible para humano ({len(text)} caracteres en {reaction_seconds:.0f}s) — parece IA",
                 is_ai=True,
             )
 

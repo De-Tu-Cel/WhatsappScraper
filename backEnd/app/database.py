@@ -1367,13 +1367,15 @@ class MongoDBManager:
             cats = {m.get("category") for m in msgs}
             if not (g.get("category") in ("bot", "humano", "automatico") and "humano" in cats and ("bot" in cats or "automatico" in cats)):
                 continue
-            # Same soft_signal carve-out as _mixed_signal_category above: a bot-like
-            # signal caused ONLY by content-shape heuristics (typing speed, phrasing)
-            # can't rule out a human who typed fast or pasted a saved reply — trust a
-            # clearly human-paced reply elsewhere in the same conversation instead of
-            # forcing "hibrido" (real case: Grupo Hakkasan, 2026-09-17).
+            # Same carve-out as _mixed_signal_category above: only a genuine bot
+            # fingerprint ("bot" without soft_signal) is hard evidence — "automatico"
+            # and a soft-signal "bot" are both just "no confirmed signal either way",
+            # and neither should alone outweigh a clearly human-paced reply elsewhere
+            # in the same conversation (real cases: Grupo Hakkasan, Volkswagen del
+            # Centro — 2026-09-17).
             bot_like = [m for m in msgs if m.get("category") in ("bot", "automatico")]
-            if bot_like and all(m.get("soft_signal") for m in bot_like):
+            has_hard_bot = any(m.get("category") == "bot" and not m.get("soft_signal") for m in bot_like)
+            if not has_hard_bot:
                 HUMAN_PACED_MIN = 2.0
                 has_human_pace = any(
                     m.get("category") == "humano" and (m.get("reaction_time_min") or 0) >= HUMAN_PACED_MIN
@@ -1613,15 +1615,22 @@ class MongoDBManager:
                 has_humano = any(m["analysis"].get("category") == "humano" for m in analyzed_msgs)
                 if not (bot_like and has_humano):
                     return computed_category
-                # A bot-like signal caused ONLY by soft-signal rules (typing speed,
-                # bifurcated-question phrasing) can't rule out a real person who typed
-                # fast or pasted a saved reply — a menu/template/self-id match can rule
-                # that out, a content-shape heuristic can't. If the SAME conversation
-                # also shows a clearly human-paced reply elsewhere, trust the timing
-                # over the shape heuristic instead of forcing "hibrido" (real case:
-                # Grupo Hakkasan, 2026-09-17 — 22-min reply gap on one message, a fast
-                # pasted-looking brochure on another, same person).
-                if all(m["analysis"].get("soft_signal") for m in bot_like):
+                # Only a genuine bot fingerprint (menu/template/self-id — a "bot" call
+                # that ISN'T just a soft-signal content-shape guess) is hard evidence a
+                # machine authored a message. "automatico" is explicitly the "no
+                # confirmed signal either way" label, and a soft-signal "bot" (typing
+                # speed, bifurcated-question phrasing) can't rule out a human who typed
+                # fast or pasted a saved reply either — neither should alone outweigh a
+                # conversation that shows a clearly human-paced reply elsewhere (real
+                # cases: Grupo Hakkasan — a fast pasted-looking brochure; Volkswagen del
+                # Centro — a probe fallback that couldn't confirm a casual-greeting or
+                # name-intro pattern on an otherwise plainly human reply — both
+                # 2026-09-17).
+                has_hard_bot = any(
+                    m["analysis"].get("category") == "bot" and not m["analysis"].get("soft_signal")
+                    for m in bot_like
+                )
+                if not has_hard_bot:
                     HUMAN_PACED_MIN = 2.0
                     has_human_pace = any(
                         m["analysis"].get("category") == "humano"

@@ -763,6 +763,26 @@ def _looks_human_casual(text: str) -> bool:
     return starts_lowercase or is_casual_greeting
 
 
+_FILE_SHARE_RE = re.compile(
+    r'\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|webp|mp4|mp3|ogg|opus)(\s*\(\d+\))?\s*$',
+    re.IGNORECASE,
+)
+
+
+def _is_vcard_or_file_share(text: str) -> bool:
+    """A prospect sharing a contact card or a file — always a human action, no
+    matter how machine-generated the raw text looks (a vCard's structured
+    fields, a bare filename). Shared by every path that judges a message from
+    its raw text: the per-message quick-classifier AND the probe-resolution
+    fallback both saw this text and needed the same carve-out (observed live:
+    Volkswagen del Centro's vCard, La Casona del Arco's PDF filename, and
+    Grupo Hakkasan's probe-resolved vCard reply — all on 2026-09-17)."""
+    t = text.strip()
+    if not t:
+        return False
+    return "BEGIN:VCARD" in t.upper() or bool(_FILE_SHARE_RE.search(t))
+
+
 def _looks_like_menu(text: str) -> bool:
     if _MENU_MARKERS.search(text):
         return True
@@ -904,26 +924,17 @@ def _quick_classify(inbound_body: str, reaction_time_min: float = None) -> dict 
 
     # ── Content-driven rules (timing irrelevant) ──────────────────────────────
 
-    # vCard share (prospect sends a WhatsApp contact card) — always a human
-    # action, no matter how machine-generated the raw vCard fields look.
-    # classify_conversation()'s thread-builder already treats this as a human
-    # signal (see its own "BEGIN:VCARD" check above), but this per-message path
-    # had no equivalent — the LLM saw raw "BEGIN:VCARD\nVERSION:3.0\n..." text
-    # and guessed "bot"/is_ai=true from its structured-looking fields (observed
-    # live: Volkswagen del Centro, 2026-09-17 — a prospect sharing a contact's
-    # phone number got classified as an AI bot response).
-    if "BEGIN:VCARD" in text.upper():
-        return _quick_result_unrated(
-            "humano", "El prospecto compartió un contacto de WhatsApp (vCard) — acción humana, sin texto que evaluar"
-        )
-
-    # File/document share — some ingestion paths put the raw filename in
-    # message_body instead of the "[document]" placeholder (observed live: La
-    # Casona del Arco sent a PDF menu, body was literally
-    # "1o-menu-casona-11-ago-2026 (1).pdf") — same problem as vCards: the LLM saw
-    # a filename and guessed "bot"/is_ai=true from how machine-generated it looks,
-    # when sharing a file is just as human an action as sharing a contact.
-    if re.search(r'\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|webp|mp4|mp3|ogg|opus)(\s*\(\d+\))?\s*$', text, re.IGNORECASE):
+    # vCard/file share (prospect sends a WhatsApp contact card or a document) —
+    # always a human action, no matter how machine-generated the raw text looks.
+    # The LLM used to see raw "BEGIN:VCARD\nVERSION:3.0\n..." or a bare filename
+    # and guess "bot"/is_ai=true from how structured/machine-generated it looks
+    # (observed live: Volkswagen del Centro's vCard, La Casona del Arco's PDF
+    # filename — both 2026-09-17).
+    if _is_vcard_or_file_share(text):
+        if "BEGIN:VCARD" in text.upper():
+            return _quick_result_unrated(
+                "humano", "El prospecto compartió un contacto de WhatsApp (vCard) — acción humana, sin texto que evaluar"
+            )
         return _quick_result_unrated(
             "humano", "El prospecto compartió un archivo — acción humana, sin texto que evaluar"
         )
@@ -1460,46 +1471,57 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
         else:
             base_notes = f"Respondió al mensaje de seguimiento en {t2_seconds:.0f}s"
 
-        # El prospecto puede mandar más de un mensaje antes de que salga nuestro
-        # 2do mensaje (Andy) — en ese caso reply_text es la respuesta MÁS RECIENTE,
-        # con más información que original_text (la primera). Si esa última muestra
-        # una señal fuerte de bot/híbrido (menú, auto-respuesta, se autoidentifica,
-        # oferta de conexión con humano), pesa más que el estilo casual del primer
-        # mensaje — antes se ignoraba por completo.
-        _rt = reply_text if (bool(reply_text) and reply_text != original_text) else None
-        reply_has_hybrid_signal = bool(_rt) and _looks_like_hybrid_offer(_rt)
-        reply_has_bot_signal = bool(_rt) and (
-            _looks_like_menu(_rt) or _looks_like_bot_selfid(_rt) or _looks_like_auto_reply(_rt)
-        )
-        if reply_has_hybrid_signal:
-            analysis = _quick_result(
-                "hibrido", f"{base_notes} — el mensaje más reciente ofrece conectar con un humano ('{_rt[:30]}')"
-            )
-        elif reply_has_bot_signal:
-            analysis = _quick_result(
-                "bot", f"{base_notes} — el mensaje más reciente suena automático ('{_rt[:30]}')"
-            )
-        elif _looks_human_casual(original_text) or (reply_text and reply_text != original_text and _looks_human_casual(reply_text)):
-            sample = original_text if _looks_human_casual(original_text) else reply_text
+        # A vCard/file share is always a human action regardless of timing —
+        # check it before any bot/hybrid signal so it can't be outweighed by how
+        # "machine-generated" the raw text looks (same carve-out as
+        # _quick_classify; this path had been missing it — real case: Grupo
+        # Hakkasan's probe-resolved vCard reply, 2026-09-17).
+        _probe_vcard_sample = reply_text if (reply_text and reply_text != original_text) else original_text
+        if _is_vcard_or_file_share(_probe_vcard_sample):
             analysis = _quick_result_unrated(
-                "humano", f"{base_notes} — sin señal de bot, estilo humano informal ('{sample[:30]}')"
-            )
-        elif bool(_HUMAN_NAME_INTRO.search(original_text)) or (reply_text and bool(_HUMAN_NAME_INTRO.search(reply_text))):
-            # "mi nombre es Emmanuel", "soy Juan, asesor" — persona real presentándose.
-            # Sin este chequeo caía a "bot" porque el texto es largo (> 20 chars)
-            # aunque no tenga ninguna señal de bot.
-            sample = original_text if _HUMAN_NAME_INTRO.search(original_text) else reply_text
-            analysis = _quick_result_unrated(
-                "humano", f"{base_notes} — presentación personal detectada ('{sample[:40]}')"
+                "humano", f"{base_notes} — el prospecto compartió un contacto o archivo, acción humana"
             )
         else:
-            # No hard bot signal (menu/template/self-id) AND no human signal (casual
-            # style, name intro) either — we genuinely don't have a fingerprint of an
-            # actual chatbot mechanism here, so calling it "bot" ("Chatbot") overstates
-            # what was actually detected. "automatico" is the honest label: doesn't
-            # look human-driven, but we don't know what it actually is. Unrated (not
-            # _quick_result) since there's no real content basis to score quality on.
-            analysis = _quick_result_unrated("automatico", f"{base_notes} — sin señal clara de bot ni de humano")
+            # El prospecto puede mandar más de un mensaje antes de que salga nuestro
+            # 2do mensaje (Andy) — en ese caso reply_text es la respuesta MÁS RECIENTE,
+            # con más información que original_text (la primera). Si esa última muestra
+            # una señal fuerte de bot/híbrido (menú, auto-respuesta, se autoidentifica,
+            # oferta de conexión con humano), pesa más que el estilo casual del primer
+            # mensaje — antes se ignoraba por completo.
+            _rt = reply_text if (bool(reply_text) and reply_text != original_text) else None
+            reply_has_hybrid_signal = bool(_rt) and _looks_like_hybrid_offer(_rt)
+            reply_has_bot_signal = bool(_rt) and (
+                _looks_like_menu(_rt) or _looks_like_bot_selfid(_rt) or _looks_like_auto_reply(_rt)
+            )
+            if reply_has_hybrid_signal:
+                analysis = _quick_result(
+                    "hibrido", f"{base_notes} — el mensaje más reciente ofrece conectar con un humano ('{_rt[:30]}')"
+                )
+            elif reply_has_bot_signal:
+                analysis = _quick_result(
+                    "bot", f"{base_notes} — el mensaje más reciente suena automático ('{_rt[:30]}')"
+                )
+            elif _looks_human_casual(original_text) or (reply_text and reply_text != original_text and _looks_human_casual(reply_text)):
+                sample = original_text if _looks_human_casual(original_text) else reply_text
+                analysis = _quick_result_unrated(
+                    "humano", f"{base_notes} — sin señal de bot, estilo humano informal ('{sample[:30]}')"
+                )
+            elif bool(_HUMAN_NAME_INTRO.search(original_text)) or (reply_text and bool(_HUMAN_NAME_INTRO.search(reply_text))):
+                # "mi nombre es Emmanuel", "soy Juan, asesor" — persona real presentándose.
+                # Sin este chequeo caía a "bot" porque el texto es largo (> 20 chars)
+                # aunque no tenga ninguna señal de bot.
+                sample = original_text if _HUMAN_NAME_INTRO.search(original_text) else reply_text
+                analysis = _quick_result_unrated(
+                    "humano", f"{base_notes} — presentación personal detectada ('{sample[:40]}')"
+                )
+            else:
+                # No hard bot signal (menu/template/self-id) AND no human signal (casual
+                # style, name intro) either — we genuinely don't have a fingerprint of an
+                # actual chatbot mechanism here, so calling it "bot" ("Chatbot") overstates
+                # what was actually detected. "automatico" is the honest label: doesn't
+                # look human-driven, but we don't know what it actually is. Unrated (not
+                # _quick_result) since there's no real content basis to score quality on.
+                analysis = _quick_result_unrated("automatico", f"{base_notes} — sin señal clara de bot ni de humano")
 
     # reaction_time_min reportado = T1 (velocidad de la PRIMERA respuesta), no T2 —
     # es la métrica que ya existía y que usa el resto del sistema.

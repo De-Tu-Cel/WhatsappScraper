@@ -532,33 +532,57 @@ function sweepIdleReconnectSessions() {
 
 // ─── Routes ────────────────────────────────────────────────────────────────
 
+// Serializes concurrent /session/:id/start calls for the SAME id — switching
+// the QR/Pairing-code tab quickly fires teardown-then-recreate more than
+// once, and without this a second call could read `existing` before the
+// first call's destroy()+delete finished, launching a second Chromium for
+// the same session (real user report: 2026-09-17, both a QR and a
+// pairing-code client appeared to be alive at once after rapid tab
+// switching). Each call now waits for the previous one on that id to fully
+// settle before doing its own teardown/recreate, so only ever one client
+// exists per session id.
+const _startLocks = new Map() // sessionId -> Promise (settles when that call is done)
+
 app.post('/session/:id/start', async (req, res) => {
   const { id } = req.params
   const phoneNumber = (req.body && req.body.phoneNumber) || undefined
-  const existing = sessions.get(id)
-  if (existing) {
-    if (!phoneNumber) {
-      // No phone number given — same as before: just report current status.
-      return res.json({ status: existing.status, phone: existing.phone })
+  const prior = _startLocks.get(id) || Promise.resolve()
+  const thisCall = prior.then(async () => {
+    const existing = sessions.get(id)
+    if (existing) {
+      if (!phoneNumber) {
+        // No phone number given — same as before: just report current status.
+        return { status: existing.status, phone: existing.phone }
+      }
+      // A phone number WAS given for an ALREADY-REGISTERED session — the caller
+      // wants to switch it into pairing-code mode (e.g. reconnecting a
+      // disconnected instance via code instead of QR). That existing client was
+      // created without pairWithPhoneNumber, so it can never expose a pairing
+      // code (session.pairingCode stays null forever, GET /pairing-code always
+      // 400s) — recreate it fresh with the phone number this time. Same
+      // teardown as DELETE /session/:id (client.destroy() only closes the
+      // browser cleanly, confirmed against whatsapp-web.js's own source — it
+      // never touches the saved LocalAuth files).
+      clearInterval(existing.presenceTimer)
+      clearInterval(existing.profileSyncTimer)
+      clearTimeout(existing.reconnectTimer)
+      clearTimeout(existing.readyWatchdog)
+      try { await existing.client.destroy() } catch (_) {}
+      sessions.delete(id)
     }
-    // A phone number WAS given for an ALREADY-REGISTERED session — the caller
-    // wants to switch it into pairing-code mode (e.g. reconnecting a
-    // disconnected instance via code instead of QR). That existing client was
-    // created without pairWithPhoneNumber, so it can never expose a pairing
-    // code (session.pairingCode stays null forever, GET /pairing-code always
-    // 400s) — recreate it fresh with the phone number this time. Same
-    // teardown as DELETE /session/:id (client.destroy() only closes the
-    // browser cleanly, confirmed against whatsapp-web.js's own source — it
-    // never touches the saved LocalAuth files).
-    clearInterval(existing.presenceTimer)
-    clearInterval(existing.profileSyncTimer)
-    clearTimeout(existing.reconnectTimer)
-    clearTimeout(existing.readyWatchdog)
-    try { await existing.client.destroy() } catch (_) {}
-    sessions.delete(id)
+    const session = createClient(id, phoneNumber)
+    return { status: session.status }
+  })
+  // Chain continues (success or failure) so the NEXT call always waits for
+  // this one, but this route's own response reflects only its own outcome.
+  _startLocks.set(id, thisCall.catch(() => {}))
+  let result
+  try {
+    result = await thisCall
+  } catch (e) {
+    return res.status(500).json({ error: e.message })
   }
-  const session = createClient(id, phoneNumber)
-  res.json({ status: session.status })
+  res.json(result)
 })
 
 app.get('/session/:id/qr', async (req, res) => {

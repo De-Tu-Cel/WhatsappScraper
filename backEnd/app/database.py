@@ -1350,7 +1350,11 @@ class MongoDBManager:
                 {"$match": {"direction": "inbound", "analysis": {"$exists": True}, **_cid_filter}},
                 {"$group": {
                     "_id": "$company_id",
-                    "cats": {"$addToSet": "$analysis.category"},
+                    "msgs": {"$push": {
+                        "category": "$analysis.category",
+                        "soft_signal": "$analysis.soft_signal",
+                        "reaction_time_min": "$analysis.reaction_time_min",
+                    }},
                     "has_conv": {"$max": {"$cond": ["$analysis.conversation_analysis", 1, 0]}},
                 }},
             ])
@@ -1359,9 +1363,26 @@ class MongoDBManager:
             cset = _category_sets.get(cid)
             if not cset or cset.get("has_conv"):
                 continue
-            cats = set(cset.get("cats") or [])
-            if g.get("category") in ("bot", "humano", "automatico") and "humano" in cats and ("bot" in cats or "automatico" in cats):
-                g["category"] = "hibrido"
+            msgs = cset.get("msgs") or []
+            cats = {m.get("category") for m in msgs}
+            if not (g.get("category") in ("bot", "humano", "automatico") and "humano" in cats and ("bot" in cats or "automatico" in cats)):
+                continue
+            # Same soft_signal carve-out as _mixed_signal_category above: a bot-like
+            # signal caused ONLY by content-shape heuristics (typing speed, phrasing)
+            # can't rule out a human who typed fast or pasted a saved reply — trust a
+            # clearly human-paced reply elsewhere in the same conversation instead of
+            # forcing "hibrido" (real case: Grupo Hakkasan, 2026-09-17).
+            bot_like = [m for m in msgs if m.get("category") in ("bot", "automatico")]
+            if bot_like and all(m.get("soft_signal") for m in bot_like):
+                HUMAN_PACED_MIN = 2.0
+                has_human_pace = any(
+                    m.get("category") == "humano" and (m.get("reaction_time_min") or 0) >= HUMAN_PACED_MIN
+                    for m in msgs
+                )
+                if has_human_pace:
+                    g["category"] = "humano"
+                    continue
+            g["category"] = "hibrido"
         # Companies with outbound messages only (no analyzed inbound yet)
         outbound_groups = {
             g["_id"]: g
@@ -1588,10 +1609,28 @@ class MongoDBManager:
                 confirmed chatbot fingerprint (menu/template/self-id)."""
                 if computed_category not in ("bot", "humano", "automatico"):
                     return computed_category
-                cats = {m["analysis"].get("category") for m in analyzed_msgs}
-                if ("bot" in cats or "automatico" in cats) and "humano" in cats:
-                    return "hibrido"
-                return computed_category
+                bot_like = [m for m in analyzed_msgs if m["analysis"].get("category") in ("bot", "automatico")]
+                has_humano = any(m["analysis"].get("category") == "humano" for m in analyzed_msgs)
+                if not (bot_like and has_humano):
+                    return computed_category
+                # A bot-like signal caused ONLY by soft-signal rules (typing speed,
+                # bifurcated-question phrasing) can't rule out a real person who typed
+                # fast or pasted a saved reply — a menu/template/self-id match can rule
+                # that out, a content-shape heuristic can't. If the SAME conversation
+                # also shows a clearly human-paced reply elsewhere, trust the timing
+                # over the shape heuristic instead of forcing "hibrido" (real case:
+                # Grupo Hakkasan, 2026-09-17 — 22-min reply gap on one message, a fast
+                # pasted-looking brochure on another, same person).
+                if all(m["analysis"].get("soft_signal") for m in bot_like):
+                    HUMAN_PACED_MIN = 2.0
+                    has_human_pace = any(
+                        m["analysis"].get("category") == "humano"
+                        and (m["analysis"].get("reaction_time_min") or 0) >= HUMAN_PACED_MIN
+                        for m in analyzed_msgs
+                    )
+                    if has_human_pace:
+                        return "humano"
+                return "hibrido"
 
             def _plausible_msisdn(raw):
                 digits = "".join(c for c in (raw or "") if c.isdigit())

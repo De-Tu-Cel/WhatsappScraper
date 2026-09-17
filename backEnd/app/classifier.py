@@ -849,10 +849,20 @@ def _response_quality_from_svc(svc_scores: dict) -> int | None:
     return max(1, min(5, round(sum(values) / len(values))))
 
 
-def _quick_result(category: str, notes: str, is_ai: bool = False) -> dict:
+def _quick_result(category: str, notes: str, is_ai: bool = False, soft_signal: bool = False) -> dict:
     """Same shape as _parse_llm_response's output — low/None across the board,
     matching the prompt's own rule: menu/bot(non-AI) always score 1-2.
-    Pass is_ai=True when the bot self-identifies as a conversational AI assistant."""
+    Pass is_ai=True when the bot self-identifies as a conversational AI assistant.
+    Pass soft_signal=True for rules that infer "bot" purely from CONTENT SHAPE
+    (typing speed, closing-question phrasing) rather than an actual bot
+    fingerprint (menu, template, self-identification) — a human pasting a
+    saved reply produces the exact same shape, so these rules can't rule out
+    a genuine person the way a real menu/template match can. Used by the
+    hibrido mixed-signal aggregation in database.py to avoid promoting a
+    conversation to "hibrido" off a single soft-signal message when the same
+    conversation already shows clearly human-paced timing elsewhere (real
+    case: Grupo Hakkasan, 2026-09-17 — a 22-minute reply gap on one message,
+    a fast pasted-looking brochure on another, same person)."""
     return {
         "category": category,
         "is_ai": is_ai,
@@ -865,6 +875,7 @@ def _quick_result(category: str, notes: str, is_ai: bool = False) -> dict:
         "notes": notes,
         "conversation_analysis": False,
         "quick_classified": True,  # marks that this skipped the LLM, for auditing
+        "soft_signal": soft_signal,
     }
 
 
@@ -942,7 +953,7 @@ def _quick_classify(inbound_body: str, reaction_time_min: float = None) -> dict 
     if (len(text) >= 80
             and _BIFURCATED_AI_CLOSE.search(text)
             and not _HUMAN_PERSONALITY_MARKERS.search(text)):
-        return _quick_result("bot", "Cierre bifurcado de IA en mensaje sustancial — parece IA", is_ai=True)
+        return _quick_result("bot", "Cierre bifurcado de IA en mensaje sustancial — parece IA", is_ai=True, soft_signal=True)
 
     # Velocidad de tecleo imposible para un humano — cierre NO bifurcado (la regla
     # de arriba no lo atrapa) pero el mensaje es largo, específico (sin "déjame
@@ -964,6 +975,7 @@ def _quick_classify(inbound_body: str, reaction_time_min: float = None) -> dict 
                 "bot",
                 f"Velocidad de tecleo imposible para humano ({len(text)} caracteres en {reaction_seconds:.0f}s) — parece IA",
                 is_ai=True,
+                soft_signal=True,
             )
 
     # ── Timing-only signal: never enough alone, LLM evaluates content ─────────

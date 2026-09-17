@@ -167,6 +167,37 @@ async function fetchProfilePicUrl(client, sessionId) {
   return null
 }
 
+// client.destroy() (whatsapp-web.js) only does `await browser.close()` — a
+// graceful CDP request with no timeout and no verification that the
+// underlying OS Chrome process actually exited. Under host contention
+// (several sessions competing for CPU/Puppeteer) that close can hang or
+// silently fail, leaving an ORPHANED Chrome process still holding the
+// session's userDataDir — the next createClient() for that same session then
+// fails with "The browser is already running for .../userDataDir" or
+// "Target closed", and since the orphan was never added back to `sessions`,
+// nothing in our own bookkeeping even knows it's there to retry cleaning up
+// (confirmed live 2026-09-17: gely-test2 stuck exactly like this, only fixed
+// by manually `pkill -9 -f user-data-dir=...` over SSH). This wraps
+// destroy() with a hard timeout and a fallback SIGKILL on the actual OS
+// process, so every teardown site (DELETE, /start's recreate, the idle
+// sweep) reliably frees the profile directory instead of sometimes leaving
+// a zombie behind for the next attempt to trip over.
+async function destroySessionClient(client, sessionId) {
+  const proc = client.pupBrowser?.process ? client.pupBrowser.process() : null
+  try {
+    await Promise.race([
+      client.destroy(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('destroy() timed out')), 8000)),
+    ])
+  } catch (e) {
+    console.log(`[${sessionId}] destroy() didn't finish cleanly (${e.message}) — checking for a leftover process`)
+  }
+  if (proc && proc.exitCode === null && !proc.killed) {
+    console.log(`[${sessionId}] Chrome process ${proc.pid} still alive after destroy() — force-killing it`)
+    try { proc.kill('SIGKILL') } catch (_) {}
+  }
+}
+
 function createClient(sessionId, phoneNumber) {
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: sessionId, dataPath: SESSIONS_PATH }),
@@ -554,7 +585,7 @@ function sweepIdleReconnectSessions() {
       clearInterval(current.profileSyncTimer)
       clearTimeout(current.reconnectTimer)
       clearTimeout(current.readyWatchdog)
-      try { await current.client.destroy() } catch (_) {}
+      await destroySessionClient(current.client, id)
       sessions.delete(id)
     }).catch(() => {})
     _startLocks.set(id, teardown)
@@ -590,14 +621,15 @@ app.post('/session/:id/start', async (req, res) => {
       // created without pairWithPhoneNumber, so it can never expose a pairing
       // code (session.pairingCode stays null forever, GET /pairing-code always
       // 400s) — recreate it fresh with the phone number this time. Same
-      // teardown as DELETE /session/:id (client.destroy() only closes the
-      // browser cleanly, confirmed against whatsapp-web.js's own source — it
-      // never touches the saved LocalAuth files).
+      // teardown as DELETE /session/:id — never touches the saved LocalAuth
+      // files, and now goes through destroySessionClient() so a slow/stuck
+      // browser.close() can't leave an orphaned Chrome process holding this
+      // same userDataDir for the createClient() call right below.
       clearInterval(existing.presenceTimer)
       clearInterval(existing.profileSyncTimer)
       clearTimeout(existing.reconnectTimer)
       clearTimeout(existing.readyWatchdog)
-      try { await existing.client.destroy() } catch (_) {}
+      await destroySessionClient(existing.client, id)
       sessions.delete(id)
     }
     const session = createClient(id, phoneNumber)
@@ -1082,7 +1114,7 @@ app.delete('/session/:id', async (req, res) => {
     clearInterval(session.profileSyncTimer)
     clearTimeout(session.reconnectTimer)
     clearTimeout(session.readyWatchdog)
-    try { await session.client.destroy() } catch (_) {}
+    await destroySessionClient(session.client, id)
     sessions.delete(id)
     return { notFound: false }
   })

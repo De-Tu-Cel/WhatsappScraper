@@ -1645,7 +1645,7 @@ export default function InstancesPanel({ isActive } = {}) {
       }
       const d = await r.json()
       if (d?.status === 'connected') return 'scanned'
-      if (d?.code) { setPairingCode(d.code); return true }
+      if (d?.code) { setPairingCode(d.code); setQrStatus('ready'); return true }
     } catch {}
     return false
   }, [])

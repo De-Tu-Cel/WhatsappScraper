@@ -1291,6 +1291,34 @@ class MongoDBManager:
             first = first_response_groups.get(cid, {})
             g["reaction_time_min"] = first.get("reaction_time_min")
             g["reaction_time_seconds"] = first.get("reaction_time_seconds")
+        # The $group above picks the category of a single message (the holistic
+        # conversation_analysis if one exists, else just the most recent inbound) —
+        # for a company whose conversation is still open, that's whatever the LAST
+        # message happened to look like, which flips the displayed category back
+        # and forth (a contact-card share right after a genuine human reply reads
+        # as "bot" even though a person is clearly driving it). A conversation that
+        # has BOTH a bot-authored and a human-authored inbound anywhere in its
+        # history is "hibrido" regardless of which one is most recent — this is
+        # what a holistic re-analysis would conclude anyway, just computed cheaply
+        # while the session is still open (real cases: Volkswagen del Centro,
+        # Come Bien — 2026-09-17).
+        _category_sets = {
+            g["_id"]: g
+            for g in self.db.message_logs.aggregate([
+                {"$match": {"direction": "inbound", "analysis": {"$exists": True}, **_cid_filter}},
+                {"$group": {
+                    "_id": "$company_id",
+                    "cats": {"$addToSet": "$analysis.category"},
+                    "has_conv": {"$max": {"$cond": ["$analysis.conversation_analysis", 1, 0]}},
+                }},
+            ])
+        }
+        for cid, g in inbound_groups.items():
+            cset = _category_sets.get(cid)
+            if not cset or cset.get("has_conv"):
+                continue
+            if g.get("category") in ("bot", "humano") and {"bot", "humano"} <= set(cset.get("cats") or []):
+                g["category"] = "hibrido"
         # Companies with outbound messages only (no analyzed inbound yet)
         outbound_groups = {
             g["_id"]: g
@@ -1500,6 +1528,25 @@ class MongoDBManager:
             # real number even though it never was one. Feeding those into the fallback
             # let a totally unrelated sender's analysis get inherited by a real branch
             # number that was never actually replied to (Hidrogaspedidos, 2026-09-15).
+            def _mixed_signal_category(analyzed_msgs, computed_category):
+                """A conversation that has BOTH a bot-authored and a human-authored
+                inbound message anywhere in its history is 'hibrido', even when the
+                single most-recent message happens to be one or the other — using
+                just the latest message's category flips the whole conversation's
+                displayed label back and forth depending on what kind of message
+                arrived last (e.g. a contact-card share right after a genuine human
+                reply gets read as "bot", even though a person is clearly driving
+                the conversation). This is what a holistic conversation_analysis
+                would resolve to "hibrido" for anyway — only used as a stand-in
+                while the session is still open and no conversation_analysis exists
+                yet (real cases: Volkswagen del Centro, Come Bien — 2026-09-17)."""
+                if computed_category not in ("bot", "humano"):
+                    return computed_category
+                cats = {m["analysis"].get("category") for m in analyzed_msgs}
+                if "bot" in cats and "humano" in cats:
+                    return "hibrido"
+                return computed_category
+
             def _plausible_msisdn(raw):
                 digits = "".join(c for c in (raw or "") if c.isdigit())
                 return 8 <= len(digits) <= 13
@@ -1556,6 +1603,8 @@ class MongoDBManager:
                     most_recent = max(analyzed, key=lambda m: m.get("created_at") or datetime.min)
                     best = _conv or most_recent
                     entry["category"]       = best["analysis"].get("category")
+                    if not _conv:
+                        entry["category"] = _mixed_signal_category(analyzed, entry["category"])
                     entry["is_ai"]          = best["analysis"].get("is_ai")
                     entry["notes"]          = best["analysis"].get("notes") or ""
                     entry["business_hours"] = best["analysis"].get("business_hours")
@@ -1587,6 +1636,8 @@ class MongoDBManager:
                     most_recent = max(company_analyzed, key=lambda m: m.get("created_at") or datetime.min)
                     best = _conv or most_recent
                     entry["category"]          = best["analysis"].get("category")
+                    if not _conv:
+                        entry["category"] = _mixed_signal_category(company_analyzed, entry["category"])
                     entry["is_ai"]             = best["analysis"].get("is_ai")
                     entry["notes"]             = best["analysis"].get("notes") or ""
                     entry["business_hours"]    = best["analysis"].get("business_hours")

@@ -515,18 +515,38 @@ function autoRestoreSessions() {
 // then sees "not_found", which the frontend already handles by calling
 // /start again (fresh boot, on demand) exactly like a never-started session.
 const IDLE_RECONNECT_TIMEOUT_MS = 3 * 60 * 1000
+
+// Serializes teardown/recreate for a given session id across BOTH this sweep
+// and the /session/:id/start route below — without sharing one lock, the
+// sweep could destroy a session at the exact moment a fresh /start call for
+// it was already in flight, and the two would fight over the same Chromium
+// userDataDir ("The browser is already running for ... Use a different
+// userDataDir or stop the running browser first" — real case: gely-test2,
+// 2026-09-17, stuck cycling that error after the sweep and a reconnect
+// attempt landed back to back).
+const _startLocks = new Map() // sessionId -> Promise (settles when the last queued op on it is done)
+
 function sweepIdleReconnectSessions() {
   const now = Date.now()
   for (const [id, session] of sessions) {
     if (session.status !== 'need_scan') continue
     if (now - (session.lastPolledAt || 0) < IDLE_RECONNECT_TIMEOUT_MS) continue
-    console.log(`[${id}] idle reconnect (no poll in ${Math.round(IDLE_RECONNECT_TIMEOUT_MS / 60000)}min) — stopping QR/code generation until requested again`)
-    clearInterval(session.presenceTimer)
-    clearInterval(session.profileSyncTimer)
-    clearTimeout(session.reconnectTimer)
-    clearTimeout(session.readyWatchdog)
-    try { session.client.destroy().catch(() => {}) } catch (_) {}
-    sessions.delete(id)
+    const prior = _startLocks.get(id) || Promise.resolve()
+    const teardown = prior.then(async () => {
+      // Re-check under the lock — a queued /start may have already replaced
+      // or refreshed this session while we were waiting our turn.
+      const current = sessions.get(id)
+      if (!current || current !== session) return
+      if (Date.now() - (current.lastPolledAt || 0) < IDLE_RECONNECT_TIMEOUT_MS) return
+      console.log(`[${id}] idle reconnect (no poll in ${Math.round(IDLE_RECONNECT_TIMEOUT_MS / 60000)}min) — stopping QR/code generation until requested again`)
+      clearInterval(current.presenceTimer)
+      clearInterval(current.profileSyncTimer)
+      clearTimeout(current.reconnectTimer)
+      clearTimeout(current.readyWatchdog)
+      try { await current.client.destroy() } catch (_) {}
+      sessions.delete(id)
+    }).catch(() => {})
+    _startLocks.set(id, teardown)
   }
 }
 
@@ -540,9 +560,8 @@ function sweepIdleReconnectSessions() {
 // pairing-code client appeared to be alive at once after rapid tab
 // switching). Each call now waits for the previous one on that id to fully
 // settle before doing its own teardown/recreate, so only ever one client
-// exists per session id.
-const _startLocks = new Map() // sessionId -> Promise (settles when that call is done)
-
+// exists per session id. (_startLocks itself is declared above, shared with
+// sweepIdleReconnectSessions() so the two never race each other either.)
 app.post('/session/:id/start', async (req, res) => {
   const { id } = req.params
   const phoneNumber = (req.body && req.body.phoneNumber) || undefined
@@ -1041,13 +1060,29 @@ app.post('/session/:id/react', async (req, res) => {
 
 app.delete('/session/:id', async (req, res) => {
   const { id } = req.params
-  const session = sessions.get(id)
-  if (!session) return res.status(404).json({ error: 'Session not found' })
-  clearInterval(session.presenceTimer)
-  clearInterval(session.profileSyncTimer)
-  clearTimeout(session.reconnectTimer)
-  try { await session.client.destroy() } catch (_) {}
-  sessions.delete(id)
+  // Same lock as /start and the idle sweep — without it, this could race a
+  // concurrent /start for the same id and both end up fighting over the same
+  // Chromium userDataDir.
+  const prior = _startLocks.get(id) || Promise.resolve()
+  const thisCall = prior.then(async () => {
+    const session = sessions.get(id)
+    if (!session) return { notFound: true }
+    clearInterval(session.presenceTimer)
+    clearInterval(session.profileSyncTimer)
+    clearTimeout(session.reconnectTimer)
+    clearTimeout(session.readyWatchdog)
+    try { await session.client.destroy() } catch (_) {}
+    sessions.delete(id)
+    return { notFound: false }
+  })
+  _startLocks.set(id, thisCall.catch(() => {}))
+  let result
+  try {
+    result = await thisCall
+  } catch (e) {
+    return res.status(500).json({ error: e.message })
+  }
+  if (result.notFound) return res.status(404).json({ error: 'Session not found' })
   res.json({ success: true })
 })
 

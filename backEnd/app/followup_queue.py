@@ -20,7 +20,13 @@ _lock = threading.Lock()
 # Debounce: accumulate rapid-fire messages from the same number before processing.
 # When someone sends 5 messages in 30 seconds we wait until they stop typing,
 # then pass the whole burst to the AI as a single combined message.
-_DEBOUNCE_SEC = 4.0
+# Was 4.0s — too tight for how people actually split a thought across WhatsApp
+# bubbles (e.g. "sí, te paso el número" followed by the contact card itself a
+# few seconds later): gaps of 5-30s between bubbles from the SAME person are
+# routine, so each bubble was missing the window and getting its own separate
+# reply — producing two near-duplicate, back-to-back messages for what the
+# human considered one turn (observed live: Volkswagen del Centro, 2026-09-17).
+_DEBOUNCE_SEC = 12.0
 _pending: dict = {}   # phone_number → {timer, messages[], log_ids[], company_id, manual}
 _pending_lock = threading.Lock()
 

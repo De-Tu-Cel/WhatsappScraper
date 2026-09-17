@@ -239,6 +239,18 @@ function createClient(sessionId, phoneNumber) {
 
   client.on('ready', async () => {
     clearTimeout(session.readyWatchdog)
+    // whatsapp-web.js's own "ready" event can fire a beat before its internal
+    // comms channel (startComms) has actually finished initializing — under
+    // host contention (several sessions competing for the same Puppeteer/CDP
+    // resources) that window widens enough for an immediate API call
+    // (getProfilePicUrl, sendMessage, getNumberId — anything using sendIq
+    // under the hood) to hit "[comms] sendIq called before startComms", a
+    // known whatsapp-web.js issue that recurs across versions/years
+    // (github.com/pedroslopez/whatsapp-web.js issues #3804, #1037) — not
+    // something wrong in our own code. A short settle delay here, before
+    // marking the session usable for real sends OR making our own first API
+    // call (the profile-pic fetch below), gives that window room to close.
+    await new Promise(r => setTimeout(r, 2000))
     session.status = 'connected'
     session.qr = null; session.pairingCode = null
     session.phone = client.info?.wid?.user || null

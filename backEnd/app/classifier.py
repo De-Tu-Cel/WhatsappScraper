@@ -545,7 +545,7 @@ _AUTO_REPLY_MARKERS = re.compile(
     r'en breve (?:un asesor|te (?:contactar|responderemos|atenderemos|contestaremos))|'
     r'hemos recibido tu (?:consulta|mensaje)|'
     r'nos comunicaremos a la brevedad|mensaje generado autom[aá]ticamente|'
-    r'estimado cliente|apreciable cliente|horario de atenci[oó]n|'
+    r'estimado cliente|apreciable cliente|horarios? de atenci[oó]n|'
     # "¿Sigues ahí?" / "Aquí sigo…" (nudge de continuidad de sesión) y mensajes de
     # cola/espera ("está en la cola", "buscando un agente disponible") — encontrados
     # repetidos en producción en varias empresas distintas (HSBC "Leo", KLM, Nissan
@@ -555,14 +555,23 @@ _AUTO_REPLY_MARKERS = re.compile(
     r'espera un momento por favor|volver cuando quieras|'
     # Mensaje de "saludo automático" de WhatsApp Business — patrón real muy común.
     # "(a)" es notación inclusiva ("bienvenido(a)") que rompe [oa] simple.
-    r'bienvenid[oa]s?(?:\([ao]\))?\s+a\b|'
+    # "\s+al?\b" cubre tanto "bienvenido a X" como la contracción "bienvenido al
+    # WhatsApp de X" — sin el "l?" opcional, "al" nunca hacía match porque "a\b"
+    # exige un límite de palabra justo después de la "a", que "al" no tiene
+    # (caso real: Grupo Alden / Audi Center Satélite, 2026-08-12).
+    r'bienvenid[oa]s?(?:\([ao]\))?\s+al?\b|'
     r'gracias por (?:contactarnos|escribir(?:nos)?|comunicarte|comunicarse)|'
     # Caso real de producción (Ferra, 2026-09-07): un agente humano real escribió
     # "...con gusto te atenderemos" y esta marca lo clasificó "bot" por error — la
     # frase suelta es una cortesía humana normal en México, NO exclusiva de
     # plantilla. Solo es señal de bot cuando además trae el "en breve/pronto" que
     # sí delata la plantilla de bienvenida automática de WhatsApp Business.
-    r'te (?:responderemos|atenderemos|contestaremos)\s*(?:en breve|pronto|lo antes posible|a la brevedad)\b|'
+    r'te (?:responderemos|atenderemos|contestaremos)\s*(?:lo más\s+)?(?:en breve|pronto|lo antes posible|a la brevedad)\b|'
+    # "Gracias por tu mensaje. En este momento no podemos responder..." — variante
+    # de auto-ausencia real (Barbaro, 2026-09-01) que ninguna de las frases de
+    # arriba cubría ("gracias por tu mensaje" no está en la lista de "gracias por
+    # contactarnos/escribirnos/...", y "no podemos responder" es una frase nueva).
+    r'gracias por tu mensaje|no podemos responder|'
     # "Te comunicas a [Empresa]" / "Se comunica a [Empresa]" — variante de "has llegado a".
     # Un humano diría "te comunico con alguien", no "te comunicas a".
     r'(?:te|se)\s+comunica[sz]?\s+a\s+\w|'
@@ -897,6 +906,17 @@ def _quick_classify(inbound_body: str, reaction_time_min: float = None) -> dict 
             "humano", "El prospecto compartió un contacto de WhatsApp (vCard) — acción humana, sin texto que evaluar"
         )
 
+    # File/document share — some ingestion paths put the raw filename in
+    # message_body instead of the "[document]" placeholder (observed live: La
+    # Casona del Arco sent a PDF menu, body was literally
+    # "1o-menu-casona-11-ago-2026 (1).pdf") — same problem as vCards: the LLM saw
+    # a filename and guessed "bot"/is_ai=true from how machine-generated it looks,
+    # when sharing a file is just as human an action as sharing a contact.
+    if re.search(r'\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|webp|mp4|mp3|ogg|opus)(\s*\(\d+\))?\s*$', text, re.IGNORECASE):
+        return _quick_result_unrated(
+            "humano", "El prospecto compartió un archivo — acción humana, sin texto que evaluar"
+        )
+
     if _looks_like_menu(text):
         return _quick_result("bot", "Menú de opciones detectado por reglas — sin IA")
 
@@ -1056,6 +1076,15 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
             desc = f"(compartió contacto de WhatsApp: '{vcard_label}')" if vcard_label else "(compartió un contacto de WhatsApp)"
             lines.append(f"[{role}{timing_note}]: {desc}")
             continue
+        # Mismo caso que el vCard, pero con archivos — algunos canales guardan el
+        # nombre del archivo tal cual en vez del placeholder "[document]" (real:
+        # La Casona del Arco mandó un PDF de menú, el body era literalmente
+        # "1o-menu-casona-11-ago-2026 (1).pdf") — sin este chequeo el LLM lo leía
+        # como texto y adivinaba "bot" por lo estructurado que se ve un nombre de
+        # archivo.
+        if re.search(r'\.(pdf|docx?|xlsx?|pptx?|jpe?g|png|gif|webp|mp4|mp3|ogg|opus)(\s*\(\d+\))?\s*$', body, re.IGNORECASE):
+            lines.append(f"[{role}{timing_note}]: (compartió un archivo: '{body}')")
+            continue
         lines.append(f"[{role}{timing_note}]: {body}")
     thread = "\n".join(lines)
 
@@ -1087,23 +1116,37 @@ def _apply_deterministic_corrections(result: dict, messages: list, thread: str) 
     # hubo bienvenida + silencio (ver _CONV_PROMPT_TEMPLATE), pero en producción se
     # encontraron varios casos reales donde el LLM marcó is_ai=true de todas formas.
     # Corrección determinista y barata (mismo patrón que el corrector de menú de
-    # arriba): un bot conversacional real necesita más de UN texto distinto del lado
-    # del negocio — si todo lo que mandó fue una sola plantilla (repetida o no), no
-    # hubo conversación real que evaluar como "IA".
+    # abajo): un bot conversacional real necesita más de UN texto distinto del lado
+    # del NEGOCIO (direction="inbound" — ver el thread-builder de arriba: "inbound"
+    # son las respuestas recibidas del negocio, "outbound" es lo que nosotros
+    # mandamos; este filtro decía "outbound" y contaba nuestros propios mensajes de
+    # sondeo, que casi siempre varían — por eso este corrector casi nunca disparaba
+    # en producción pese a existir) — si todo lo que mandó el negocio fue una sola
+    # plantilla (repetida o no), no hubo conversación real que evaluar como "IA".
     if result.get("category") == "bot" and result.get("is_ai"):
-        outbound_texts = {
+        business_texts = {
             (m.get("message_body") or "").strip()
             for m in messages
-            if m["direction"] == "outbound"
+            if m["direction"] == "inbound"
             and (m.get("message_body") or "").strip()
             and (m.get("message_body") or "").strip() not in NON_TEXT_PLACEHOLDERS
         }
-        if len(outbound_texts) <= 1:
+        # Aun con varios mensajes DISTINTOS del negocio, si TODOS son plantillas
+        # reconocibles (auto-respuesta/ausencia) o demasiado cortos para mostrar
+        # comprensión real ("diga", "Buenas tardes!") no hay evidencia de IA
+        # conversacional — casos reales: Anuto, Grupo Alden, Gas Elena, Barbaro
+        # (2026-09), todos con is_ai=true sobre plantillas de una o dos palabras.
+        _MIN_SUBSTANTIVE_LEN = 20
+        all_templated = bool(business_texts) and all(
+            _looks_like_menu(t) or _looks_like_auto_reply(t) or len(t) < _MIN_SUBSTANTIVE_LEN
+            for t in business_texts
+        )
+        if len(business_texts) <= 1 or all_templated:
             result["is_ai"] = False
             result["notes"] = (
                 (result.get("notes") or "").strip()
-                + " — corregido: solo se detectó un mensaje de plantilla distinto del negocio "
-                  "(bienvenida sin respuesta de seguimiento), no hay base para is_ai=true."
+                + " — corregido: no se detectó más de un mensaje sustantivo y no genérico "
+                  "del negocio, no hay base para is_ai=true."
             ).strip(" —")
 
     # Corrección determinista adicional (2026-09-09): el LLM (DeepSeek) marca

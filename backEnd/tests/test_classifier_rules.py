@@ -487,26 +487,53 @@ class TestApplyDeterministicCorrections:
         assert out["category"] == "humano"
         assert out["is_ai"] is False
 
-    def test_bot_with_single_outbound_text_corrects_is_ai_false(self):
+    def test_bot_with_single_business_text_corrects_is_ai_false(self):
+        # "inbound" = the business's own reply (see the thread-builder above:
+        # "[Representante]" = mensajes enviados (nosotros/outbound), "[Prospecto]"
+        # = respuestas recibidas (el negocio/inbound)) — this check used to filter
+        # "outbound" (our own probe messages, which almost always vary), so it
+        # essentially never fired in production despite existing.
         messages = [
-            _msg("outbound", "Bienvenido a Gas Flamazul"),
-            # no follow-up outbound message — silence after the welcome template
+            _msg("inbound", "Bienvenido a Gas Flamazul"),
+            # no follow-up business message — silence after the welcome template
         ]
         result = {"category": "bot", "is_ai": True, "notes": ""}
         out = _apply_deterministic_corrections(result, messages, "")
         assert out["is_ai"] is False
 
-    def test_bot_with_multiple_distinct_outbound_texts_keeps_is_ai(self):
+    def test_bot_with_multiple_distinct_substantive_business_texts_keeps_is_ai(self):
         # category "bot" also runs through the hibrido/bot hard-signal safety
-        # net below, so this needs a real hard signal on the inbound side too
-        # (a business-account prospect with its own auto-reply/menu) to survive
-        # that check and isolate the is_ai correction being tested here.
+        # net below, so this needs a real hard signal (a menu) to survive that
+        # check and isolate the is_ai correction being tested here. The second
+        # business message must be long and non-templated — otherwise the
+        # "all business texts are templated/too short" branch of this same
+        # correction would still zero out is_ai even with 2 distinct texts
+        # (real cases: Anuto, Grupo Alden, Gas Elena, Barbaro — is_ai=true on
+        # one/two-word templates like "diga" or "Buenas tardes!").
         messages = [
-            _msg("outbound", "Bienvenido a Gas Flamazul"),
+            _msg("outbound", "Hola"),
             _msg("inbound", "1. Ventas\n2. Soporte"),
-            _msg("outbound", "Gracias por tu interés, en breve un asesor te contacta"),
+            _msg("outbound", "2"),
+            _msg("inbound", "Claro, para soporte técnico necesito el número de serie de tu equipo y una breve descripción de la falla que presenta"),
         ]
         result = {"category": "bot", "is_ai": True, "notes": ""}
         out = _apply_deterministic_corrections(result, messages, "")
         assert out["is_ai"] is True
         assert out["category"] == "bot"
+
+    def test_bot_with_multiple_distinct_but_all_templated_business_texts_corrects_is_ai_false(self):
+        # Real regression: several distinct business messages exist, but ALL of
+        # them are a menu/template/too short — no evidence of genuine
+        # conversational AI, even though the old "len <= 1" check alone would
+        # have missed this. The menu also keeps category="bot" alive through
+        # the separate hard-signal safety net below, isolating the is_ai
+        # correction under test instead of confounding it with a category
+        # downgrade to "humano".
+        messages = [
+            _msg("inbound", "1. Ventas\n2. Refacciones\n3. Servicio"),
+            _msg("inbound", "Buenas tardes!"),
+        ]
+        result = {"category": "bot", "is_ai": True, "notes": ""}
+        out = _apply_deterministic_corrections(result, messages, "")
+        assert out["category"] == "bot"
+        assert out["is_ai"] is False

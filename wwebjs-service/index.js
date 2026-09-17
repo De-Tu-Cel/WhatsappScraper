@@ -18,6 +18,23 @@ const SESSIONS_PATH = process.env.SESSIONS_PATH || '/app/sessions'
 // sessionId → { client, status, qr, phone, presenceTimer, reconnectTimer }
 const sessions = new Map()
 
+// A single flaky Chromium target (protocol timeout, "Execution context was
+// destroyed", etc. — routine when several sessions boot concurrently and
+// compete for CPU) can throw from deep inside whatsapp-web.js/puppeteer on a
+// code path that ISN'T part of the promise client.initialize().catch(...)
+// already guards below — Node then treats it as an uncaught exception /
+// unhandled rejection and kills the WHOLE process, taking down every other
+// already-connected session with it. Observed live: gely-test2/tania-* sessions
+// timing out during startup crashed sender4/sender666 mid-conversation.
+// Logging and continuing is far safer than letting one bad target restart
+// everything.
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err && err.message, err && err.stack)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason)
+})
+
 app.use((req, res, next) => {
   if (API_SECRET && req.headers['x-api-secret'] !== API_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' })
@@ -472,7 +489,7 @@ function autoRestoreSessions() {
     setTimeout(() => {
       console.log(`[startup] Restoring session: ${sessionId}`)
       createClient(sessionId)
-    }, i * 8000)
+    }, i * 15000)
   })
 }
 

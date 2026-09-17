@@ -259,23 +259,22 @@ function createClient(sessionId, phoneNumber) {
     // 2026-09 — a known, unresolved whatsapp-web.js issue where getChat() can't
     // resolve a "chat" for yourself (see github.com/wwebjs/whatsapp-web.js
     // issues #1277/#3005). Confirmed via 3 immediate retries all failing
-    // identically, so this is NOT a cache-warmup race — the retry below is kept
-    // as a cheap, non-blocking safety net in case a future WhatsApp Web/library
-    // update fixes it, not because it currently helps.
-    if (!profilePicUrl) {
-      ;(async () => {
-        for (const delayMs of [4000, 8000]) {
-          await new Promise(r => setTimeout(r, delayMs))
-          if (!sessions.has(sessionId)) return
-          const retryUrl = await fetchProfilePicUrl(client, sessionId)
-          if (retryUrl) {
-            session.lastProfilePicUrl = retryUrl
-            forwardWebhook({ event: 'session.status', sessionId, data: { status: 'connected', phone: session.phone, pushname, profile_pic_url: retryUrl } })
-            return
-          }
-        }
-      })()
-    }
+    // identically, so this is NOT a cache-warmup race.
+    //
+    // REMOVED (2026-09-17): this used to retry twice more (4s, 8s later), each
+    // retry itself running fetchProfilePicUrl's own 3-attempt loop — up to 12
+    // MORE guaranteed-to-fail Puppeteer/CDP evaluate() calls per connection,
+    // by this comment's own admission ("not because it currently helps").
+    // Confirmed live: with several sessions reconnecting close together
+    // (during a redeploy, or several idle sessions restoring at once), all
+    // of them firing this cascade at the same time saturates the CDP
+    // channel enough to make REAL operations — most importantly actual
+    // message sends — hang for 150s+ waiting their turn. startProfileSyncPoll
+    // (every 15-45min, in an already-stable connection) still retries
+    // fetchProfilePicUrl's internal loop for the cases where that genuinely
+    // helps (intermittent failures, not this permanent one); this one-off
+    // connection-time attempt no longer piles more guaranteed failures on
+    // top of it.
   })
 
   client.on('auth_failure', (msg) => {

@@ -6,6 +6,8 @@ import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
+import ContentCopyIcon from '@mui/icons-material/ContentCopy'
+import CheckIcon from '@mui/icons-material/Check'
 import TextField from '@mui/material/TextField'
 import Dialog from '@mui/material/Dialog'
 import DialogContent from '@mui/material/DialogContent'
@@ -1586,6 +1588,7 @@ export default function InstancesPanel({ isActive } = {}) {
   // expose it for reconnection the same way).
   const [qrLinkMethod, setQrLinkMethod] = useState('qr') // qr | code
   const [pairingCode,  setPairingCode]  = useState(null)
+  const [codeCopied,   setCodeCopied]   = useState(false)
 
   // ── QR polling ──────────────────────────────────────────────────────────────
   const fetchQrOnce = useCallback(async (name, provider, wasenderId) => {
@@ -1723,7 +1726,7 @@ export default function InstancesPanel({ isActive } = {}) {
       fetch(`/api/wwebjs/session/${qrTarget.name}`, { method: 'DELETE' }).catch(() => {})
     }
     setQrOpen(false); setQrTarget(null); setQrImage(null); setQrStatus('loading')
-    setQrLinkMethod('qr'); setPairingCode(null)
+    setQrLinkMethod('qr'); setPairingCode(null); setCodeCopied(false)
   }
 
   const startConnPoll = useCallback((name, provider, wasenderId) => {
@@ -4302,16 +4305,46 @@ export default function InstancesPanel({ isActive } = {}) {
             }}>
               {qrStatus === 'ready' && pairingCode ? (
                 <>
-                  <Box sx={{ px: 2.5, py: 1.5, borderRadius: 2, border: '2px solid #334155' }}>
-                    <Typography sx={{ fontFamily: 'monospace', fontWeight: 800, fontSize: '1.6rem', letterSpacing: '0.12em', color: '#111827' }}>
-                      {pairingCode.slice(0, 4)}-{pairingCode.slice(4)}
+                  <Tooltip title={codeCopied ? (lang === 'en' ? 'Copied!' : '¡Copiado!') : (lang === 'en' ? 'Copy code' : 'Copiar código')}>
+                    <Box
+                      component="button"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(pairingCode).then(() => {
+                          setCodeCopied(true)
+                          setTimeout(() => setCodeCopied(false), 1500)
+                        }).catch(() => {})
+                      }}
+                      sx={{
+                        display: 'flex', alignItems: 'center', gap: 1.2,
+                        px: 3, py: 1.8, borderRadius: 2.5,
+                        bgcolor: '#f1f5f9', border: '1.5px solid', borderColor: codeCopied ? '#22c55e' : '#cbd5e1',
+                        cursor: 'pointer', fontFamily: 'inherit', transition: 'border-color 0.15s',
+                        '&:hover': { borderColor: codeCopied ? '#22c55e' : '#94a3b8' },
+                      }}
+                    >
+                      <Typography sx={{
+                        fontFamily: 'monospace', fontWeight: 800, fontSize: '1.9rem',
+                        letterSpacing: '0.06em', color: '#0f172a', whiteSpace: 'nowrap',
+                      }}>
+                        {pairingCode.slice(0, 4)}
+                        <Box component="span" sx={{ color: '#94a3b8', mx: '0.15em' }}>-</Box>
+                        {pairingCode.slice(4)}
+                      </Typography>
+                      {codeCopied
+                        ? <CheckIcon sx={{ fontSize: 20, color: '#22c55e' }} />
+                        : <ContentCopyIcon sx={{ fontSize: 16, color: '#94a3b8' }} />}
+                    </Box>
+                  </Tooltip>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, px: 1 }}>
+                    <Typography sx={{ color: '#64748b', fontSize: '0.7rem', textAlign: 'center', lineHeight: 1.5 }}>
+                      {lang === 'en'
+                        ? 'WhatsApp → Settings → Linked Devices → Link a Device'
+                        : 'WhatsApp → Ajustes → Dispositivos vinculados → Vincular dispositivo'}
+                    </Typography>
+                    <Typography sx={{ color: '#0f172a', fontSize: '0.74rem', fontWeight: 700, textAlign: 'center' }}>
+                      {lang === 'en' ? '“Link with phone number instead”' : '“Vincular con número de teléfono”'}
                     </Typography>
                   </Box>
-                  <Typography sx={{ color: '#555', fontSize: '0.68rem', textAlign: 'center', lineHeight: 1.4 }}>
-                    {lang === 'en'
-                      ? 'WhatsApp → Settings → Linked Devices → Link a Device → "Link with phone number instead"'
-                      : 'WhatsApp → Ajustes → Dispositivos vinculados → Vincular dispositivo → "Vincular con número de teléfono"'}
-                  </Typography>
                 </>
               ) : (
                 <>

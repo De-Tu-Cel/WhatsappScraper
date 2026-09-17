@@ -194,7 +194,12 @@ function createClient(sessionId, phoneNumber) {
     },
   })
 
-  const session = { client, status: 'initializing', qr: null, pairingCode: null, phoneNumber, phone: null, presenceTimer: null, reconnectTimer: null, readyWatchdog: null, ackFailStreak: 0, ackDegraded: false, profileSyncTimer: null, lastPushname: null, lastProfilePicUrl: null }
+  // lastPolledAt: bumped by /status, /qr and /pairing-code whenever this
+  // session is awaiting a scan/code — lets sweepIdleReconnectSessions() below
+  // tell "someone has the reconnect dialog open" from "nobody's watching, stop
+  // burning CPU generating QR/codes forever" (see that function's own comment
+  // for the real incident this fixes).
+  const session = { client, status: 'initializing', qr: null, pairingCode: null, phoneNumber, phone: null, presenceTimer: null, reconnectTimer: null, readyWatchdog: null, ackFailStreak: 0, ackDegraded: false, profileSyncTimer: null, lastPushname: null, lastProfilePicUrl: null, lastPolledAt: Date.now() }
   sessions.set(sessionId, session)
 
   client.on('qr', (qr) => {
@@ -493,6 +498,38 @@ function autoRestoreSessions() {
   })
 }
 
+// A session sitting in "need_scan" keeps its Chromium instance alive
+// indefinitely, regenerating a fresh QR/pairing code forever — whatsapp-web.js
+// has no built-in "nobody's watching" concept. That's fine right after a
+// scan-worthy state starts, but a session that never gets scanned (or whose
+// LocalAuth was invalid on restore, so it never even had a real disconnect
+// event to trigger the OTHER "destroy on logout" cleanup below) burns real
+// CPU/memory forever, competing with the OTHER, actually-connected sessions
+// for the same host (observed live 2026-09-17: tania-sesion-3 and gely-test2
+// generating fresh QR/codes non-stop for hours with nobody reconnecting them,
+// while sender4/sender666's own presence/profile-sync calls started timing
+// out from the contention). Fix: track the last time /status, /qr or
+// /pairing-code was actually polled (the reconnect dialog does this on a tight
+// loop while open); once it's been idle for IDLE_RECONNECT_TIMEOUT_MS with no
+// poll, destroy the browser and drop the session entirely — the NEXT poll
+// then sees "not_found", which the frontend already handles by calling
+// /start again (fresh boot, on demand) exactly like a never-started session.
+const IDLE_RECONNECT_TIMEOUT_MS = 3 * 60 * 1000
+function sweepIdleReconnectSessions() {
+  const now = Date.now()
+  for (const [id, session] of sessions) {
+    if (session.status !== 'need_scan') continue
+    if (now - (session.lastPolledAt || 0) < IDLE_RECONNECT_TIMEOUT_MS) continue
+    console.log(`[${id}] idle reconnect (no poll in ${Math.round(IDLE_RECONNECT_TIMEOUT_MS / 60000)}min) — stopping QR/code generation until requested again`)
+    clearInterval(session.presenceTimer)
+    clearInterval(session.profileSyncTimer)
+    clearTimeout(session.reconnectTimer)
+    clearTimeout(session.readyWatchdog)
+    try { session.client.destroy().catch(() => {}) } catch (_) {}
+    sessions.delete(id)
+  }
+}
+
 // ─── Routes ────────────────────────────────────────────────────────────────
 
 app.post('/session/:id/start', async (req, res) => {
@@ -528,6 +565,7 @@ app.get('/session/:id/qr', async (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)
   if (!session) return res.status(404).json({ error: 'Session not found' })
+  session.lastPolledAt = Date.now()
   if (!session.qr) return res.status(400).json({ error: 'No QR available', status: session.status })
   try {
     const qrImage = await QRCode.toDataURL(session.qr)
@@ -541,6 +579,7 @@ app.get('/session/:id/pairing-code', (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)
   if (!session) return res.status(404).json({ error: 'Session not found' })
+  session.lastPolledAt = Date.now()
   if (!session.pairingCode) return res.status(400).json({ error: 'No pairing code available', status: session.status })
   res.json({ code: session.pairingCode, status: session.status })
 })
@@ -549,6 +588,13 @@ app.get('/session/:id/status', (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)
   if (!session) return res.json({ status: 'not_found' })
+  // Only counts as "someone's watching" while a reconnect is actually pending —
+  // a connected session's dashboard/health polling shouldn't count toward its
+  // own idle timer (that timer only applies to need_scan/initializing anyway,
+  // see sweepIdleReconnectSessions(), but keep this scoped defensively).
+  if (session.status === 'need_scan' || session.status === 'initializing') {
+    session.lastPolledAt = Date.now()
+  }
   res.json({ status: session.status, phone: session.phone })
 })
 
@@ -1023,4 +1069,5 @@ process.on('SIGINT', () => _gracefulShutdown('SIGINT'))
 app.listen(PORT, () => {
   console.log(`wwebjs-service on port ${PORT}`)
   autoRestoreSessions()
+  setInterval(sweepIdleReconnectSessions, 60 * 1000)
 })

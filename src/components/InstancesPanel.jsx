@@ -1710,6 +1710,12 @@ export default function InstancesPanel({ isActive } = {}) {
   function closeQr() {
     if (qrPollRef.current)   clearTimeout(qrPollRef.current)
     if (connPollRef.current) clearInterval(connPollRef.current)
+    // Closing without having actually connected — stop the wwebjs browser
+    // right away instead of leaving it generating QR/codes nobody's watching
+    // until the server's own idle sweep catches it later (~3min safety net).
+    if (qrTarget?.provider === 'wwebjs' && qrStatus !== 'connecting') {
+      fetch(`/api/wwebjs/session/${qrTarget.name}`, { method: 'DELETE' }).catch(() => {})
+    }
     setQrOpen(false); setQrTarget(null); setQrImage(null); setQrStatus('loading')
     setQrLinkMethod('qr'); setPairingCode(null)
   }

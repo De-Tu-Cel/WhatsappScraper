@@ -1700,7 +1700,13 @@ export default function InstancesPanel({ isActive } = {}) {
         attempts = 0
         qrPollRef.current = setTimeout(poll, 300)
       } else {
-        if (attempts >= 10) { setQrStatus('error'); return }
+        // 60 attempts * 1.5s = 90s — a cold Puppeteer boot after /start (fresh
+        // client recreated for pairing-code mode, or a container under load)
+        // routinely takes longer than the old 15s window gave it, which made
+        // the dialog give up right before the code/QR actually became
+        // available (real case: gely-test2, 2026-09-17 — the code was ready
+        // seconds after the dialog already showed "error").
+        if (attempts >= 60) { setQrStatus('error'); return }
         qrPollRef.current = setTimeout(poll, 1500)
       }
     }

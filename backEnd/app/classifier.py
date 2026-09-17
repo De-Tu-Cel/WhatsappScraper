@@ -884,6 +884,19 @@ def _quick_classify(inbound_body: str, reaction_time_min: float = None) -> dict 
 
     # ── Content-driven rules (timing irrelevant) ──────────────────────────────
 
+    # vCard share (prospect sends a WhatsApp contact card) — always a human
+    # action, no matter how machine-generated the raw vCard fields look.
+    # classify_conversation()'s thread-builder already treats this as a human
+    # signal (see its own "BEGIN:VCARD" check above), but this per-message path
+    # had no equivalent — the LLM saw raw "BEGIN:VCARD\nVERSION:3.0\n..." text
+    # and guessed "bot"/is_ai=true from its structured-looking fields (observed
+    # live: Volkswagen del Centro, 2026-09-17 — a prospect sharing a contact's
+    # phone number got classified as an AI bot response).
+    if "BEGIN:VCARD" in text.upper():
+        return _quick_result_unrated(
+            "humano", "El prospecto compartió un contacto de WhatsApp (vCard) — acción humana, sin texto que evaluar"
+        )
+
     if _looks_like_menu(text):
         return _quick_result("bot", "Menú de opciones detectado por reglas — sin IA")
 
@@ -1425,7 +1438,13 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
                 "humano", f"{base_notes} — presentación personal detectada ('{sample[:40]}')"
             )
         else:
-            analysis = _quick_result("bot", f"{base_notes} — sin señal clara, se marcó como bot por precaución")
+            # No hard bot signal (menu/template/self-id) AND no human signal (casual
+            # style, name intro) either — we genuinely don't have a fingerprint of an
+            # actual chatbot mechanism here, so calling it "bot" ("Chatbot") overstates
+            # what was actually detected. "automatico" is the honest label: doesn't
+            # look human-driven, but we don't know what it actually is. Unrated (not
+            # _quick_result) since there's no real content basis to score quality on.
+            analysis = _quick_result_unrated("automatico", f"{base_notes} — sin señal clara de bot ni de humano")
 
     # reaction_time_min reportado = T1 (velocidad de la PRIMERA respuesta), no T2 —
     # es la métrica que ya existía y que usa el resto del sistema.

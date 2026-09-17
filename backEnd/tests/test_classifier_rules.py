@@ -363,7 +363,7 @@ class TestResolveProbeT2Guard:
         db = FakeMongoDBManager(msg2_doc=None)
         received_at = T1_TIME + timedelta(seconds=8)
         result = _resolve_probe(db, _probe_doc(), "Aún no me han contactado por este tema", received_at)
-        assert result["category"] == "bot"
+        assert result["category"] == "automatico"
         assert "aún no enviado" in result["notes"]
 
     def test_andy_reply_logged_after_this_message_does_not_count_as_fast_bot(self):
@@ -381,7 +381,7 @@ class TestResolveProbeT2Guard:
         received_at = T1_TIME + timedelta(seconds=6)     # but this 2nd inbound came first
         db = FakeMongoDBManager(msg2_doc={"created_at": andy_sent_at})
         result = _resolve_probe(db, _probe_doc(), "No he recibido ninguna llamada de ustedes", received_at)
-        assert result["category"] == "bot"
+        assert result["category"] == "automatico"
         assert result["category"] != "humano"
 
     def test_genuine_fast_t2_within_window_is_still_detected(self):

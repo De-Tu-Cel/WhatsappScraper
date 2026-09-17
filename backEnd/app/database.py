@@ -1317,7 +1317,8 @@ class MongoDBManager:
             cset = _category_sets.get(cid)
             if not cset or cset.get("has_conv"):
                 continue
-            if g.get("category") in ("bot", "humano") and {"bot", "humano"} <= set(cset.get("cats") or []):
+            cats = set(cset.get("cats") or [])
+            if g.get("category") in ("bot", "humano", "automatico") and "humano" in cats and ("bot" in cats or "automatico" in cats):
                 g["category"] = "hibrido"
         # Companies with outbound messages only (no analyzed inbound yet)
         outbound_groups = {
@@ -1539,11 +1540,14 @@ class MongoDBManager:
                 the conversation). This is what a holistic conversation_analysis
                 would resolve to "hibrido" for anyway — only used as a stand-in
                 while the session is still open and no conversation_analysis exists
-                yet (real cases: Volkswagen del Centro, Come Bien — 2026-09-17)."""
-                if computed_category not in ("bot", "humano"):
+                yet (real cases: Volkswagen del Centro, Come Bien — 2026-09-17).
+                "automatico" counts as a bot-like signal here too — it means no
+                human-driven style was detected, same as "bot", just without a
+                confirmed chatbot fingerprint (menu/template/self-id)."""
+                if computed_category not in ("bot", "humano", "automatico"):
                     return computed_category
                 cats = {m["analysis"].get("category") for m in analyzed_msgs}
-                if "bot" in cats and "humano" in cats:
+                if ("bot" in cats or "automatico" in cats) and "humano" in cats:
                     return "hibrido"
                 return computed_category
 

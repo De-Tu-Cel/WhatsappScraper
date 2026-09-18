@@ -1859,9 +1859,9 @@ def classify_conversation_and_save(company_id: str, log_id: str):
             try:
                 last_msg = db.db.message_logs.find_one({"_id": ObjectId(log_id)}, {"message_body": 1})
                 last_body = (last_msg or {}).get("message_body") or ""
-                has_bot_signal = (
-                    _looks_like_menu(last_body) or _looks_like_bot_selfid(last_body) or _looks_like_auto_reply(last_body)
-                )
+                is_menu_or_template = _looks_like_menu(last_body) or _looks_like_auto_reply(last_body)
+                is_ai_selfid = _looks_like_bot_selfid(last_body) and bool(_AI_ASSISTANT_MARKERS.search(last_body))
+                has_bot_signal = is_menu_or_template or _looks_like_bot_selfid(last_body)
                 has_human_signal = _looks_human_casual(last_body) or bool(_HUMAN_NAME_INTRO.search(last_body))
                 if not has_bot_signal and has_human_signal:
                     analysis["category"] = "humano"
@@ -1870,6 +1870,20 @@ def classify_conversation_and_save(company_id: str, log_id: str):
                         (analysis.get("notes") or "").strip()
                         + " — corregido: el último mensaje es un saludo/respuesta corta y casual sin ninguna "
                           "señal de bot, lo que contradice el análisis anterior."
+                    ).strip(" —")
+                elif analysis.get("is_ai") and is_menu_or_template and not is_ai_selfid:
+                    # The LLM called it "Bot AI" but the message is just a deterministic
+                    # menu/template match, not a self-identified conversational AI — the
+                    # per-message quick rule for this exact text would say is_ai=False.
+                    # Real cases (all plain auto-reply templates flagged "Bot AI" by the
+                    # holistic call, 2026-09-18): Barbaro ("Gracias por tu mensaje... no
+                    # podemos responder"), Daltontoyota ("agradecemos su preferencia..."),
+                    # Gas Elena ("Gracias por comunicarte con Pipgas...").
+                    analysis["is_ai"] = False
+                    analysis["notes"] = (
+                        (analysis.get("notes") or "").strip()
+                        + " — corregido: el último mensaje es una plantilla/menú determinista sin "
+                          "autoidentificarse como asistente de IA conversacional."
                     ).strip(" —")
             except Exception:
                 pass

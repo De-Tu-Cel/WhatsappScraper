@@ -1488,18 +1488,32 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
             # una señal fuerte de bot/híbrido (menú, auto-respuesta, se autoidentifica,
             # oferta de conexión con humano), pesa más que el estilo casual del primer
             # mensaje — antes se ignoraba por completo.
+            #
+            # But the message BEING probed (original_text) needs the same check too —
+            # this used to only look at _rt, so a single-message probe (no distinct
+            # second reply, _rt is None) never got its OWN text checked for an obvious
+            # auto-reply template/menu/self-id, even when it plainly was one ("¡Hola!
+            # Bienvenido a *Mazda Acueducto*...", "Horarios de atención: Lunes a...").
+            # Found auditing today's classifier changes against production data — 9
+            # real messages (BPartes, Diesgas, Mazda Acueducto, ISUZU Plasencia
+            # Abastos, Audi Center Satélite, KIA Satélite, Fábricas Fermon) fell
+            # through to the generic "automatico" fallback instead, 2026-09-17.
             _rt = reply_text if (bool(reply_text) and reply_text != original_text) else None
-            reply_has_hybrid_signal = bool(_rt) and _looks_like_hybrid_offer(_rt)
-            reply_has_bot_signal = bool(_rt) and (
-                _looks_like_menu(_rt) or _looks_like_bot_selfid(_rt) or _looks_like_auto_reply(_rt)
+            _hybrid_sample = original_text if _looks_like_hybrid_offer(original_text) else (
+                _rt if (_rt and _looks_like_hybrid_offer(_rt)) else None
             )
-            if reply_has_hybrid_signal:
+            _bot_sample = original_text if (
+                _looks_like_menu(original_text) or _looks_like_bot_selfid(original_text) or _looks_like_auto_reply(original_text)
+            ) else (
+                _rt if (_rt and (_looks_like_menu(_rt) or _looks_like_bot_selfid(_rt) or _looks_like_auto_reply(_rt))) else None
+            )
+            if _hybrid_sample is not None:
                 analysis = _quick_result(
-                    "hibrido", f"{base_notes} — el mensaje más reciente ofrece conectar con un humano ('{_rt[:30]}')"
+                    "hibrido", f"{base_notes} — un mensaje ofrece conectar con un humano ('{_hybrid_sample[:30]}')"
                 )
-            elif reply_has_bot_signal:
+            elif _bot_sample is not None:
                 analysis = _quick_result(
-                    "bot", f"{base_notes} — el mensaje más reciente suena automático ('{_rt[:30]}')"
+                    "bot", f"{base_notes} — un mensaje suena automático ('{_bot_sample[:30]}')"
                 )
             elif _looks_human_casual(original_text) or (reply_text and reply_text != original_text and _looks_human_casual(reply_text)):
                 sample = original_text if _looks_human_casual(original_text) else reply_text

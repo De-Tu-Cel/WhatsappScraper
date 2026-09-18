@@ -581,7 +581,13 @@ _AUTO_REPLY_MARKERS = re.compile(
     r'(?:cordial|afectuosa)\s+bienvenida|'
     # "Por el momento nuestro equipo se encuentra fuera del horario laboral" —
     # plantilla de fuera de horario, caso real (Salones de Belleza, Nissan Vallejo).
-    r'fuera de(?:l| nuestro)?\s+horario',
+    r'fuera de(?:l| nuestro)?\s+horario|'
+    # Mensaje de cierre de sesión por inactividad de WhatsApp Business — caso real
+    # (Rivera Gas, 2026-07-30): "En este momento finalizaremos la sesión por
+    # inactividad" fue evaluado por el LLM como una respuesta humana genérica,
+    # sin ninguna regla determinista que lo atrapara. Ningún humano avisa que va
+    # a "finalizar la sesión por inactividad" — es lenguaje de sistema.
+    r'por inactividad\b',
     re.IGNORECASE,
 )
 
@@ -1836,6 +1842,34 @@ def classify_conversation_and_save(company_id: str, log_id: str):
                         (analysis.get("notes") or "").strip()
                         + " — corregido: el último mensaje tiene un menú, plantilla o se identifica "
                           "como bot, lo que contradice el análisis anterior."
+                    ).strip(" —")
+            except Exception:
+                pass
+
+        # Mirror-image of the correction above: the LLM's holistic read of the
+        # whole thread can also err the other way, calling it "bot" off a
+        # generically terse/repetitive-looking exchange even though the message
+        # this verdict attaches to is a short, casual, unsigned human reply with
+        # no bot fingerprint at all. Real case: Anuto, 2026-08-12 — the prospect
+        # first hit the wrong business's auto-greeting bot, then a person replied
+        # "hola" / "buenas tardes" / "digame" / "diga", and the holistic call
+        # judged the whole thread "comportamiento automatizado... no hay
+        # interacción humana clara" off that brevity alone.
+        elif analysis.get("category") == "bot":
+            try:
+                last_msg = db.db.message_logs.find_one({"_id": ObjectId(log_id)}, {"message_body": 1})
+                last_body = (last_msg or {}).get("message_body") or ""
+                has_bot_signal = (
+                    _looks_like_menu(last_body) or _looks_like_bot_selfid(last_body) or _looks_like_auto_reply(last_body)
+                )
+                has_human_signal = _looks_human_casual(last_body) or bool(_HUMAN_NAME_INTRO.search(last_body))
+                if not has_bot_signal and has_human_signal:
+                    analysis["category"] = "humano"
+                    analysis["is_ai"] = False
+                    analysis["notes"] = (
+                        (analysis.get("notes") or "").strip()
+                        + " — corregido: el último mensaje es un saludo/respuesta corta y casual sin ninguna "
+                          "señal de bot, lo que contradice el análisis anterior."
                     ).strip(" —")
             except Exception:
                 pass

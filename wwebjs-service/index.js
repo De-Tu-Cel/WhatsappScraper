@@ -220,6 +220,26 @@ function createClient(sessionId, phoneNumber) {
         '--no-first-run',
         '--no-zygote',
         '--disable-gpu',
+        // Memory-reduction flags added 2026-09-18 after a host-wide Docker daemon
+        // freeze (dozens of unrelated containers hit simultaneous health-check
+        // timeouts/exec failures) that correlated with 6 concurrent Chrome
+        // instances on a server with 0 swap and ~1.4GB RAM headroom. These trim
+        // per-session overhead without touching shared server config (swap,
+        // daemon.json) — that's a separate, deliberately-deferred conversation.
+        '--disable-breakpad',           // one fewer crashpad_handler child process per session
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-component-update',
+        '--disable-default-apps',
+        '--disable-domain-reliability',
+        '--disable-hang-monitor',
+        '--disable-sync',
+        '--metrics-recording-only',
+        '--mute-audio',
+        '--js-flags=--max-old-space-size=256',
       ],
       defaultViewport: { width: 1280, height: 800 },
     },

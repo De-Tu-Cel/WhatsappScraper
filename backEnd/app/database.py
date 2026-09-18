@@ -1354,6 +1354,7 @@ class MongoDBManager:
                         "category": "$analysis.category",
                         "soft_signal": "$analysis.soft_signal",
                         "reaction_time_min": "$analysis.reaction_time_min",
+                        "is_ai": "$analysis.is_ai",
                     }},
                     "has_conv": {"$max": {"$cond": ["$analysis.conversation_analysis", 1, 0]}},
                 }},
@@ -1365,7 +1366,23 @@ class MongoDBManager:
                 continue
             msgs = cset.get("msgs") or []
             cats = {m.get("category") for m in msgs}
-            if not (g.get("category") in ("bot", "humano", "automatico") and "humano" in cats and ("bot" in cats or "automatico" in cats)):
+            cur_cat = g.get("category")
+            if cur_cat not in ("bot", "humano", "automatico"):
+                continue
+            if "humano" not in cats:
+                # No human signal anywhere in the thread — same promotion as
+                # _mixed_signal_category's Whirlpool case: a hard bot fingerprint
+                # earlier in the burst should win over whatever the single LAST
+                # message happened to be, instead of diluting to "automatico".
+                if cur_cat != "bot":
+                    hard_bot = next(
+                        (m for m in msgs if m.get("category") == "bot" and not m.get("soft_signal")), None
+                    )
+                    if hard_bot is not None:
+                        g["category"] = "bot"
+                        g["is_ai"] = hard_bot.get("is_ai")
+                continue
+            if not ("bot" in cats or "automatico" in cats):
                 continue
             # Same carve-out as _mixed_signal_category above: only a genuine bot
             # fingerprint ("bot" without soft_signal) is hard evidence — "automatico"
@@ -1626,7 +1643,25 @@ class MongoDBManager:
                     return computed_category, None
                 bot_like = [m for m in analyzed_msgs if m["analysis"].get("category") in ("bot", "automatico")]
                 has_humano = any(m["analysis"].get("category") == "humano" for m in analyzed_msgs)
-                if not (bot_like and has_humano):
+                if not has_humano:
+                    # No human signal anywhere — but if an earlier message in the same
+                    # burst showed a genuine hard bot fingerprint (self-id/menu/template)
+                    # and the displayed category is just whatever the single LAST message
+                    # happened to be (often a low-signal follow-up like "¿Estás de
+                    # acuerdo?"), that hard evidence should win instead of silently
+                    # diluting to "automatico" (real case: Whirlpool México, 2026-09-15 —
+                    # "Hola, soy *Mateo* tu asistente virtual" two messages earlier than
+                    # the displayed "automatico").
+                    if computed_category != "bot":
+                        hard_bot_msg = next(
+                            (m for m in bot_like
+                             if m["analysis"].get("category") == "bot" and not m["analysis"].get("soft_signal")),
+                            None,
+                        )
+                        if hard_bot_msg is not None:
+                            return "bot", hard_bot_msg["analysis"].get("is_ai")
+                    return computed_category, None
+                if not bot_like:
                     return computed_category, None
                 # Only a genuine bot fingerprint (menu/template/self-id — a "bot" call
                 # that ISN'T just a soft-signal content-shape guess) is hard evidence a

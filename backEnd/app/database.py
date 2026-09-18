@@ -1382,7 +1382,12 @@ class MongoDBManager:
                     for m in msgs
                 )
                 if has_human_pace:
+                    # Same fix as _mixed_signal_category: g["is_ai"] otherwise still
+                    # comes from whichever single message the $first grouping picked,
+                    # so downgrading the category to "humano" without also clearing
+                    # is_ai left the two contradicting each other on screen.
                     g["category"] = "humano"
+                    g["is_ai"] = False
                     continue
             g["category"] = "hibrido"
         # Companies with outbound messages only (no analyzed inbound yet)
@@ -1608,13 +1613,21 @@ class MongoDBManager:
                 yet (real cases: Volkswagen del Centro, Come Bien — 2026-09-17).
                 "automatico" counts as a bot-like signal here too — it means no
                 human-driven style was detected, same as "bot", just without a
-                confirmed chatbot fingerprint (menu/template/self-id)."""
+                confirmed chatbot fingerprint (menu/template/self-id).
+
+                Returns (category, is_ai_override) — is_ai_override is None unless
+                this downgrades to "humano", in which case it's False: the entry's
+                is_ai otherwise still comes from whichever single message happened
+                to sort first, so a downgrade to "humano" was showing is_ai=True
+                right next to it — self-contradictory (real case: Grupo Hakkasan's
+                brochure message kept is_ai=True after its category was corrected
+                to "humano", 2026-09-17)."""
                 if computed_category not in ("bot", "humano", "automatico"):
-                    return computed_category
+                    return computed_category, None
                 bot_like = [m for m in analyzed_msgs if m["analysis"].get("category") in ("bot", "automatico")]
                 has_humano = any(m["analysis"].get("category") == "humano" for m in analyzed_msgs)
                 if not (bot_like and has_humano):
-                    return computed_category
+                    return computed_category, None
                 # Only a genuine bot fingerprint (menu/template/self-id — a "bot" call
                 # that ISN'T just a soft-signal content-shape guess) is hard evidence a
                 # machine authored a message. "automatico" is explicitly the "no
@@ -1638,8 +1651,8 @@ class MongoDBManager:
                         for m in analyzed_msgs
                     )
                     if has_human_pace:
-                        return "humano"
-                return "hibrido"
+                        return "humano", False
+                return "hibrido", None
 
             def _plausible_msisdn(raw):
                 digits = "".join(c for c in (raw or "") if c.isdigit())
@@ -1697,9 +1710,11 @@ class MongoDBManager:
                     most_recent = max(analyzed, key=lambda m: m.get("created_at") or datetime.min)
                     best = _conv or most_recent
                     entry["category"]       = best["analysis"].get("category")
-                    if not _conv:
-                        entry["category"] = _mixed_signal_category(analyzed, entry["category"])
                     entry["is_ai"]          = best["analysis"].get("is_ai")
+                    if not _conv:
+                        entry["category"], _is_ai_override = _mixed_signal_category(analyzed, entry["category"])
+                        if _is_ai_override is not None:
+                            entry["is_ai"] = _is_ai_override
                     entry["notes"]          = best["analysis"].get("notes") or ""
                     entry["business_hours"] = best["analysis"].get("business_hours")
                     if _conv:
@@ -1730,9 +1745,11 @@ class MongoDBManager:
                     most_recent = max(company_analyzed, key=lambda m: m.get("created_at") or datetime.min)
                     best = _conv or most_recent
                     entry["category"]          = best["analysis"].get("category")
-                    if not _conv:
-                        entry["category"] = _mixed_signal_category(company_analyzed, entry["category"])
                     entry["is_ai"]             = best["analysis"].get("is_ai")
+                    if not _conv:
+                        entry["category"], _is_ai_override = _mixed_signal_category(company_analyzed, entry["category"])
+                        if _is_ai_override is not None:
+                            entry["is_ai"] = _is_ai_override
                     entry["notes"]             = best["analysis"].get("notes") or ""
                     entry["business_hours"]    = best["analysis"].get("business_hours")
                     entry["response_quality"]  = best["analysis"].get("response_quality")

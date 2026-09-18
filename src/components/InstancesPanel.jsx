@@ -1691,6 +1691,8 @@ export default function InstancesPanel({ isActive } = {}) {
     }
 
     let attempts = 0
+    let shownAt = null
+    const MAX_SHOWN_MS = 5 * 60 * 1000
     const poll = async () => {
       attempts++
       const ok = usingCode ? await fetchPairingCodeOnce(name) : await fetchQrOnce(name, provider, wasenderId)
@@ -1699,7 +1701,16 @@ export default function InstancesPanel({ isActive } = {}) {
         setQrStatus('connecting')
         return
       } else if (ok) {
-        // QR/code shown — re-poll to catch rotation
+        // QR/code shown — re-poll to catch rotation, but only for a bounded
+        // window. This branch used to loop every 300ms forever with no cap —
+        // a dialog left open/forgotten (or a stray duplicate tab) kept polling
+        // for over 30 minutes straight, which kept the session's lastPolledAt
+        // fresh and defeated the server's own idle sweep (3min), leaving a
+        // zombie browser that later collided with the next reconnect attempt
+        // ("browser already running") — real case: tania-sesion-2, 2026-09-17.
+        // Stopping here lets that sweep reclaim it shortly after.
+        if (shownAt == null) shownAt = Date.now()
+        if (Date.now() - shownAt >= MAX_SHOWN_MS) { setQrStatus('error'); return }
         attempts = 0
         qrPollRef.current = setTimeout(poll, 300)
       } else {

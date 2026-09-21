@@ -4,8 +4,9 @@
 // los mismos íconos de MUI en vez de duplicar/desincronizar emojis.
 import PersonIcon from '@mui/icons-material/Person'
 import FlashOnIcon from '@mui/icons-material/FlashOn'
-import SyncAltIcon from '@mui/icons-material/SyncAlt'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
+import SupportAgentIcon from '@mui/icons-material/SupportAgent'
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz'
 import PsychologyIcon from '@mui/icons-material/Psychology'
 import SpeakerNotesOffIcon from '@mui/icons-material/SpeakerNotesOff'
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
@@ -13,7 +14,19 @@ import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
 export const CATEGORY_CONFIG = {
   humano:     { tKey: 'human',     color: '#4ade80', bg: 'rgba(34,197,94,0.12)',   icon: PersonIcon },
   automatico: { tKey: 'automatic', color: '#facc15', bg: 'rgba(250,204,21,0.12)',  icon: FlashOnIcon },
-  hibrido:    { tKey: 'hybrid',    color: '#38bdf8', bg: 'rgba(56,189,248,0.12)',  icon: SyncAltIcon },
+  // "hibrido" solía cubrir dos situaciones muy distintas bajo una sola etiqueta:
+  // un bot CONFIRMADO (menú/plantilla/autoidentificación) mezclado con un humano,
+  // vs. una señal automática ambigua mezclada con un humano — separadas en dos
+  // categorías el 2026-09-18 para que la etiqueta ya no encasille ambas por igual.
+  // Íconos propios (no heredados de "bot"/"automatico") — reusar el mismo ícono
+  // que la categoría pura y solo cambiar el color no se distinguía lo suficiente
+  // a simple vista (reporte 2026-09-18).
+  // "hibrido" a secas se conserva solo para análisis viejos guardados antes del
+  // split (y para el veredicto holístico del LLM, que aún no distingue los dos
+  // casos) — se muestra igual que "hibrido_bot".
+  hibrido:            { tKey: 'hybridBot',  color: '#38bdf8', bg: 'rgba(56,189,248,0.12)', icon: SupportAgentIcon },
+  hibrido_bot:        { tKey: 'hybridBot',  color: '#38bdf8', bg: 'rgba(56,189,248,0.12)', icon: SupportAgentIcon },
+  hibrido_automatico: { tKey: 'hybridAuto', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)', icon: SwapHorizIcon },
   bot:        { tKey: 'bot',       color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', icon: SmartToyIcon },
   // "menu" ya no la produce el clasificador (se fusionó con "bot") — se mantiene aquí
   // solo para que análisis viejos guardados con esa categoría se muestren igual que "bot".

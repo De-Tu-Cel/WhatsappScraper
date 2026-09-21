@@ -44,7 +44,16 @@ C = {
 CATEGORY_INFO = {
     "humano":         ("Persona real",        C["humano"]),
     "automatico":     ("Resp. automatica",    C["amber"]),
-    "hibrido":        ("Bot + asesor",        C["primary"]),
+    # "hibrido" separado en dos categorías el 2026-09-18: un bot CONFIRMADO
+    # (menú/plantilla/autoidentificación) mezclado con un humano ("hibrido_bot")
+    # vs. una señal automática ambigua mezclada con un humano ("hibrido_automatico") —
+    # antes ambas caían en una sola etiqueta "Auto+Humano" que las encasillaba igual.
+    # "hibrido" a secas se conserva para análisis viejos guardados antes del split
+    # (y para el veredicto holístico del LLM, que aún no distingue los dos casos) —
+    # se muestra igual que "hibrido_bot", mismo patrón que categoryConfig.js.
+    "hibrido":            ("Bot+Humano",         C["primary"]),
+    "hibrido_bot":        ("Bot+Humano",         C["primary"]),
+    "hibrido_automatico": ("Automático+Humano",  C["amber"]),
     "bot":            ("Chatbot",             C["bot"]),
     # "menu" ya no es categoría propia en el reporte — un IVR numérico se fusionó con
     # "bot" (mismo label/color), así los reportes viejos con esa categoría no quedan
@@ -57,7 +66,9 @@ CATEGORY_INFO = {
 CATEGORY_DESCRIPTIONS = {
     "humano":         "El canal es atendido por una persona real que responde manualmente a cada mensaje.",
     "automatico":     "El canal responde de forma automatica sin intervencion humana detectada.",
-    "hibrido":        "El canal combina respuestas automaticas iniciales con atencion humana posterior.",
+    "hibrido":        "El canal combina un bot confirmado (menu/plantilla/autoidentificacion) con atencion humana posterior.",
+    "hibrido_bot":        "El canal combina un bot confirmado (menu/plantilla/autoidentificacion) con atencion humana posterior.",
+    "hibrido_automatico": "El canal combina una senal automatica ambigua (sin confirmar bot) con atencion humana posterior.",
     "bot":            "El canal usa un chatbot o sistema automatizado (con o sin IA conversacional) para gestionar las conversaciones.",
     "menu":           "El canal usa un chatbot o sistema automatizado (con o sin IA conversacional) para gestionar las conversaciones.",
     "bot_ia":         "El canal usa un asistente de inteligencia artificial conversacional.",
@@ -219,8 +230,8 @@ def _composite_score(analytics: dict, category: str, quality: float, reaction_mi
       Tipo de atención 30%  Calidad comercial 50%  Velocidad 20%
     """
     cat_scores = {
-        "humano": 100, "hibrido": 55, "automatico": 35,
-        "bot_ia": 25, "bot": 15, "menu": 15, "sin_respuesta": 0,
+        "humano": 100, "hibrido": 55, "hibrido_bot": 55, "hibrido_automatico": 70,
+        "automatico": 35, "bot_ia": 25, "bot": 15, "menu": 15, "sin_respuesta": 0,
     }
     cat_s  = cat_scores.get(category, 50)
     qual_s = (float(quality or 0) / 5) * 100
@@ -894,26 +905,6 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
             ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
         ]))
         right_items.append(desc_tbl)
-        right_items.append(Spacer(1, 3 * mm))
-
-    # — Classifier diagnostic notes —
-    if notes:
-        right_items.append(Paragraph("Diagnostico del clasificador", _st("notesh",
-            fontSize=7, fontName="Helvetica-Bold", textColor=C["muted"], leading=9, spaceAfter=2)))
-        notes_tbl = Table(
-            [[Paragraph(notes, _st("notes", fontSize=8, textColor=C["text"], leading=12))]],
-            colWidths=[RIGHT_W],
-        )
-        notes_tbl.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, -1), HexColor("#f8faff")),
-            ("BOX",           (0, 0), (-1, -1), 0.5, C["border"]),
-            ("LINEBEFORE",    (0, 0), (0, -1),  3,   C["muted"]),
-            ("LEFTPADDING",   (0, 0), (-1, -1), 10),
-            ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
-            ("TOPPADDING",    (0, 0), (-1, -1), 6),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-        ]))
-        right_items.append(notes_tbl)
         right_items.append(Spacer(1, 3 * mm))
 
     # — Supporting context: reaction time + message counts —

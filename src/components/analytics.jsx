@@ -24,6 +24,8 @@ import SearchIcon from '@mui/icons-material/Search'
 import PersonIcon from '@mui/icons-material/Person'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
 import FlashOnIcon from '@mui/icons-material/FlashOn'
+import SupportAgentIcon from '@mui/icons-material/SupportAgent'
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz'
 import StarIcon from '@mui/icons-material/Star'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import RefreshIcon from '@mui/icons-material/Refresh'
@@ -50,7 +52,6 @@ import LocalGasStationIcon from '@mui/icons-material/LocalGasStation'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlined'
 import TuneIcon from '@mui/icons-material/Tune'
 import PsychologyIcon from '@mui/icons-material/Psychology'
-import SyncAltIcon from '@mui/icons-material/SyncAlt'
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
 import SpeakerNotesOffIcon from '@mui/icons-material/SpeakerNotesOff'
 import CloseIcon from '@mui/icons-material/Close'
@@ -207,13 +208,19 @@ const HEADER_CELL_LAST_SX = { ...HEADER_CELL_SX, '&::after': { display: 'none' }
 // that this stat represents, instead of a flat solid-color outline.
 function StatCard({ icon, color, value, label, subtitle, percent }) {
   const pct = percent == null ? 100 : Math.max(0, Math.min(100, percent))
+  // minWidth kept low (vs. the old 150px floor) and every text node gets
+  // overflow+ellipsis instead of a bare nowrap — a flex item's automatic
+  // min-width is its content's min-content size unless overflow isn't
+  // "visible", so a bare nowrap label ("Automático+Humano" etc.) silently
+  // forced every card to at least that wide, and the row only ever grew to
+  // wrap onto extra lines instead of actually shrinking with the tab.
   return (
     <Box sx={{
-      flex: '1 1 0', minWidth: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.6,
-      px: 2.4, py: 2,
+      flex: '1 1 0', minWidth: 96, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.2,
+      px: 1.6, py: 1.6, overflow: 'hidden',
     }}>
       <Box sx={{
-        width: 46, height: 46, borderRadius: '50%', flexShrink: 0, p: '3px',
+        width: 40, height: 40, borderRadius: '50%', flexShrink: 0, p: '3px',
         background: `conic-gradient(${color} ${pct}%, var(--border, rgba(255,255,255,0.12)) ${pct}% 100%)`,
       }}>
         <Box sx={{
@@ -225,15 +232,15 @@ function StatCard({ icon, color, value, label, subtitle, percent }) {
         </Box>
       </Box>
       <Box sx={{ minWidth: 0 }}>
-        <Typography sx={{ fontSize: '0.85rem', color: 'var(--text)', fontWeight: 700, lineHeight: 1.3, whiteSpace: 'nowrap' }}>
+        <Typography title={label} sx={{ fontSize: '0.85rem', color: 'var(--text)', fontWeight: 700, lineHeight: 1.3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {label}
         </Typography>
         {subtitle && (
-          <Typography sx={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 500, lineHeight: 1.4, whiteSpace: 'nowrap' }}>
+          <Typography title={subtitle} sx={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 500, lineHeight: 1.4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {subtitle}
           </Typography>
         )}
-        <Typography sx={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.4, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+        <Typography sx={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.4, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {value}
         </Typography>
       </Box>
@@ -241,7 +248,7 @@ function StatCard({ icon, color, value, label, subtitle, percent }) {
   )
 }
 
-// Same shape as the real stats card (outer bordered strip, 7 sections split
+// Same shape as the real stats card (outer bordered strip, 8 sections split
 // by vertical dividers, icon-ring circle + 2 text lines each) so the stats
 // row doesn't just vanish and pop back in — matching StatCard's layout keeps
 // the page height stable while analytics data is loading.
@@ -252,11 +259,11 @@ function StatsCardSkeleton() {
       borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
       bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
     }}>
-      {Array.from({ length: 7 }).map((_, i) => (
+      {Array.from({ length: 8 }).map((_, i) => (
         <Fragment key={i}>
           {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 2 }} />}
-          <Box sx={{ flex: '1 1 0', minWidth: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.6, px: 2.4, py: 2 }}>
-            <Skeleton variant="circular" width={46} height={46} sx={{ bgcolor: 'rgba(255,255,255,0.1)', flexShrink: 0,
+          <Box sx={{ flex: '1 1 0', minWidth: 96, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.2, px: 1.6, py: 1.6, overflow: 'hidden' }}>
+            <Skeleton variant="circular" width={40} height={40} sx={{ bgcolor: 'rgba(255,255,255,0.1)', flexShrink: 0,
               '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent)' } }} />
             <Box sx={{ minWidth: 0, flex: 1 }}>
               <Skeleton variant="text" width="70%" sx={{ bgcolor: 'rgba(255,255,255,0.1)', fontSize: '0.85rem',
@@ -632,7 +639,8 @@ export default function Analytics() {
   const pct = cat  => globalTotal ? Math.round(((categoryCounts[cat] || 0) / globalTotal) * 100) : 0
   const humanPct   = pct('humano')
   const autoPct    = pct('automatico')
-  const hibridoPct = pct('hibrido')
+  const hibridoBotPct  = pct('hibrido_bot')
+  const hibridoAutoPct = pct('hibrido_automatico')
   const botPct     = pct('bot')
   const botIaPct   = pct('bot_ia')
   const avgQualityNum = avgQualityServer ?? 0
@@ -722,7 +730,8 @@ export default function Analytics() {
             { key: 'total',     icon: <StarIcon sx={{ fontSize: 20, color: 'var(--text-muted)' }} />, color: 'rgba(148,163,184,0.6)', value: globalTotal, label: t.analytics.total, percent: 100 },
             { key: 'human',     icon: <PersonIcon sx={{ fontSize: 20, color: '#4ade80' }} />, color: '#4ade80', value: `${humanPct}%`, label: t.analytics.pctHuman, percent: humanPct },
             { key: 'automatic', icon: <FlashOnIcon sx={{ fontSize: 20, color: '#facc15' }} />, color: '#facc15', value: `${autoPct}%`, label: t.analytics.automatic, percent: autoPct },
-            { key: 'hibrido',   icon: <SyncAltIcon sx={{ fontSize: 20, color: '#38bdf8' }} />, color: '#38bdf8', value: `${hibridoPct}%`, label: t.analytics.hybrid, percent: hibridoPct },
+            { key: 'hibridoBot',  icon: <SupportAgentIcon sx={{ fontSize: 20, color: '#38bdf8' }} />, color: '#38bdf8', value: `${hibridoBotPct}%`, label: t.analytics.hybridBot, percent: hibridoBotPct },
+            { key: 'hibridoAuto', icon: <SwapHorizIcon sx={{ fontSize: 20, color: '#f59e0b' }} />, color: '#f59e0b', value: `${hibridoAutoPct}%`, label: t.analytics.hybridAuto, percent: hibridoAutoPct },
             { key: 'bot',       icon: <SmartToyIcon sx={{ fontSize: 20, color: '#a78bfa' }} />, color: '#a78bfa', value: `${botPct}%`, label: t.analytics.bot, percent: botPct },
             { key: 'botIa',     icon: <PsychologyIcon sx={{ fontSize: 20, color: '#c084fc' }} />, color: '#c084fc', value: `${botIaPct}%`, label: t.analytics.botAi, percent: botIaPct },
             { key: 'quality',   icon: <StarIcon sx={{ fontSize: 20, color: '#facc15' }} />, color: '#facc15', value: avgQuality, label: t.analytics.avgQuality, percent: (avgQualityNum / 5) * 100 },
@@ -754,7 +763,8 @@ export default function Analytics() {
           { value: 'all',           icon: null,             label: t.analytics.all,     color: 'rgba(255,255,255,0.6)',  bg: 'rgba(255,255,255,0.06)'  },
           { value: 'humano',        icon: PersonIcon,       label: t.analytics.human,   color: '#4ade80',                bg: 'rgba(74,222,128,0.1)'    },
           { value: 'automatico',    icon: FlashOnIcon,      label: t.analytics.automatic, color: '#facc15',              bg: 'rgba(250,204,21,0.1)'    },
-          { value: 'hibrido',       icon: SyncAltIcon,      label: t.analytics.hybrid,  color: '#38bdf8',                bg: 'rgba(56,189,248,0.1)'    },
+          { value: 'hibrido_bot',      icon: SupportAgentIcon,   label: t.analytics.hybridBot,  color: '#38bdf8',             bg: 'rgba(56,189,248,0.1)'    },
+          { value: 'hibrido_automatico', icon: SwapHorizIcon, label: t.analytics.hybridAuto, color: '#f59e0b',             bg: 'rgba(245,158,11,0.1)'    },
           { value: 'bot',           icon: SmartToyIcon,     label: t.analytics.bot,     color: '#a78bfa',                bg: 'rgba(167,139,250,0.1)'   },
           { value: 'bot_ia',        icon: PsychologyIcon,   label: t.analytics.botAi,   color: '#c084fc',                bg: 'rgba(192,132,252,0.1)'   },
           // "sin_respuesta" (confirmado, ya se cumplió el tiempo de espera y

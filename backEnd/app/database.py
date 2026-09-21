@@ -48,6 +48,100 @@ def _sort_handled_by(handled_by: list) -> list:
     return sorted(handled_by, key=lambda h: (h.get("username") == "ai_andy", (h.get("name") or "").lower()))
 
 
+def _mixed_signal_category(analyzed_msgs, computed_category):
+    """A conversation that has BOTH a bot-authored and a human-authored
+    inbound message anywhere in its history is a hibrido variant, even when
+    the single most-recent message happens to be one or the other — using
+    just the latest message's category flips the whole conversation's
+    displayed label back and forth depending on what kind of message
+    arrived last (e.g. a contact-card share right after a genuine human
+    reply gets read as "bot", even though a person is clearly driving
+    the conversation). This is what a holistic conversation_analysis
+    would resolve to for anyway — only used as a stand-in while the
+    session is still open and no conversation_analysis exists yet (real
+    cases: Volkswagen del Centro, Come Bien — 2026-09-17).
+    "automatico" counts as a bot-like signal here too — it means no
+    human-driven style was detected, same as "bot", just without a
+    confirmed chatbot fingerprint (menu/template/self-id).
+
+    Returns TWO distinct hibrido flavors, not one generic label (2026-09-18):
+    "hibrido_bot" when a genuine bot fingerprint (menu/template/self-id) is
+    mixed with a human message, "hibrido_automatico" when only an unclear/
+    ambiguous automated signal is mixed with one — these are different
+    enough claims that one generic "Auto+Humano" chip was hiding real
+    information the report/Analytics could otherwise show.
+
+    Returns (category, is_ai_override) — is_ai_override is None unless
+    this downgrades to "humano", in which case it's False: the entry's
+    is_ai otherwise still comes from whichever single message happened
+    to sort first, so a downgrade to "humano" was showing is_ai=True
+    right next to it — self-contradictory (real case: Grupo Hakkasan's
+    brochure message kept is_ai=True after its category was corrected
+    to "humano", 2026-09-17).
+
+    Module-level (not nested in get_analytics) so get_conversations() can
+    reuse it too — the Conversations sidebar used to read the raw category
+    of just the last inbound message with none of this logic applied, so
+    it kept showing "automatico" for Volkswagen del Centro and Whirlpool
+    México after Analytics had already been corrected to "humano"/"bot"
+    (reported live, 2026-09-18)."""
+    if computed_category not in ("bot", "humano", "automatico"):
+        return computed_category, None
+    bot_like = [m for m in analyzed_msgs if m["analysis"].get("category") in ("bot", "automatico")]
+    has_humano = any(m["analysis"].get("category") == "humano" for m in analyzed_msgs)
+    if not has_humano:
+        # No human signal anywhere — but if an earlier message in the same
+        # burst showed a genuine hard bot fingerprint (self-id/menu/template)
+        # and the displayed category is just whatever the single LAST message
+        # happened to be (often a low-signal follow-up like "¿Estás de
+        # acuerdo?"), that hard evidence should win instead of silently
+        # diluting to "automatico" (real case: Whirlpool México, 2026-09-15 —
+        # "Hola, soy *Mateo* tu asistente virtual" two messages earlier than
+        # the displayed "automatico").
+        if computed_category != "bot":
+            hard_bot_msg = next(
+                (m for m in bot_like
+                 if m["analysis"].get("category") == "bot" and not m["analysis"].get("soft_signal")),
+                None,
+            )
+            if hard_bot_msg is not None:
+                return "bot", hard_bot_msg["analysis"].get("is_ai")
+        return computed_category, None
+    if not bot_like:
+        return computed_category, None
+    # Only a genuine bot fingerprint (menu/template/self-id — a "bot" call
+    # that ISN'T just a soft-signal content-shape guess) is hard evidence a
+    # machine authored a message. "automatico" is explicitly the "no
+    # confirmed signal either way" label, and a soft-signal "bot" (typing
+    # speed, bifurcated-question phrasing) can't rule out a human who typed
+    # fast or pasted a saved reply either — neither should alone outweigh a
+    # conversation that shows a clearly human-paced reply elsewhere (real
+    # cases: Grupo Hakkasan — a fast pasted-looking brochure; Volkswagen del
+    # Centro — a probe fallback that couldn't confirm a casual-greeting or
+    # name-intro pattern on an otherwise plainly human reply — both
+    # 2026-09-17).
+    has_hard_bot = any(
+        m["analysis"].get("category") == "bot" and not m["analysis"].get("soft_signal")
+        for m in bot_like
+    )
+    if not has_hard_bot:
+        HUMAN_PACED_MIN = 2.0
+        has_human_pace = any(
+            m["analysis"].get("category") == "humano"
+            and (m["analysis"].get("reaction_time_min") or 0) >= HUMAN_PACED_MIN
+            for m in analyzed_msgs
+        )
+        if has_human_pace:
+            return "humano", False
+        # A confirmed bot fingerprint mixed with a real human message ("Bot+Humano")
+        # is a stronger, more specific claim than an unclear/ambiguous automated
+        # signal mixed with a human one ("Automático+Humano") — showing both under
+        # one generic "hibrido" label lost that distinction (real ask, 2026-09-18:
+        # "Auto+Human" encasillaba dos situaciones distintas bajo la misma etiqueta).
+        return "hibrido_automatico", None
+    return "hibrido_bot", None
+
+
 def _norm_phone(n) -> str:
     """Misma normalización que el `normPhone` del frontend (scheduledSends.jsx) —
     colapsa el "521" con el 1 extra que WhatsApp a veces antepone a números
@@ -1124,10 +1218,43 @@ class MongoDBManager:
                     "direction": "inbound",
                     "analysis": {"$exists": True},
                 }},
-                {"$sort": {"created_at": -1}},
+                # Conversation-level analyses (conversation_analysis=true) go first,
+                # matching get_analytics()'s own sort — without this a holistic verdict
+                # earlier in the thread lost to whatever the chronologically last
+                # message happened to be, even though the holistic call already looked
+                # at the whole conversation (real case: Whato CRM, 2026-09-18 — showed
+                # "humano" here from the final "👍" while Analytics correctly showed
+                # "hibrido" from an earlier holistic verdict).
+                {"$sort": {"analysis.conversation_analysis": -1, "created_at": -1}},
                 {"$group": {"_id": "$company_id", "analysis": {"$first": "$analysis"}}},
             ])
         }
+        # Same soft-signal-aware carve-out get_analytics() applies — without this,
+        # the sidebar showed just the last message's raw category, which kept
+        # displaying "automatico" for Volkswagen del Centro/Whirlpool México even
+        # after Analytics had already been corrected to "humano"/"bot" (real
+        # report, 2026-09-18 — two different screens disagreeing on the same
+        # company's category).
+        _all_analyzed_map = defaultdict(list)
+        for doc in self.db.message_logs.aggregate([
+            {"$match": {
+                "company_id": {"$in": all_cids},
+                "direction": "inbound",
+                "analysis": {"$exists": True},
+                "analysis.conversation_analysis": {"$ne": True},
+            }},
+            {"$project": {"company_id": 1, "analysis": 1}},
+        ]):
+            _all_analyzed_map[doc["company_id"]].append(doc)
+        for cid, _analysis in analyzed_map.items():
+            if not _analysis or _analysis.get("conversation_analysis"):
+                continue
+            _new_cat, _is_ai_override = _mixed_signal_category(_all_analyzed_map.get(cid, []), _analysis.get("category"))
+            if _new_cat != _analysis.get("category"):
+                _analysis = {**_analysis, "category": _new_cat}
+                if _is_ai_override is not None:
+                    _analysis["is_ai"] = _is_ai_override
+                analyzed_map[cid] = _analysis
 
         results = []
         for g in groups:
@@ -1435,7 +1562,10 @@ class MongoDBManager:
                     g["category"] = "humano"
                     g["is_ai"] = False
                     continue
-            g["category"] = "hibrido"
+                # Same "hibrido_bot" vs "hibrido_automatico" split as _mixed_signal_category.
+                g["category"] = "hibrido_automatico"
+                continue
+            g["category"] = "hibrido_bot"
         # Companies with outbound messages only (no analyzed inbound yet)
         outbound_groups = {
             g["_id"]: g
@@ -1645,78 +1775,8 @@ class MongoDBManager:
             # real number even though it never was one. Feeding those into the fallback
             # let a totally unrelated sender's analysis get inherited by a real branch
             # number that was never actually replied to (Hidrogaspedidos, 2026-09-15).
-            def _mixed_signal_category(analyzed_msgs, computed_category):
-                """A conversation that has BOTH a bot-authored and a human-authored
-                inbound message anywhere in its history is 'hibrido', even when the
-                single most-recent message happens to be one or the other — using
-                just the latest message's category flips the whole conversation's
-                displayed label back and forth depending on what kind of message
-                arrived last (e.g. a contact-card share right after a genuine human
-                reply gets read as "bot", even though a person is clearly driving
-                the conversation). This is what a holistic conversation_analysis
-                would resolve to "hibrido" for anyway — only used as a stand-in
-                while the session is still open and no conversation_analysis exists
-                yet (real cases: Volkswagen del Centro, Come Bien — 2026-09-17).
-                "automatico" counts as a bot-like signal here too — it means no
-                human-driven style was detected, same as "bot", just without a
-                confirmed chatbot fingerprint (menu/template/self-id).
-
-                Returns (category, is_ai_override) — is_ai_override is None unless
-                this downgrades to "humano", in which case it's False: the entry's
-                is_ai otherwise still comes from whichever single message happened
-                to sort first, so a downgrade to "humano" was showing is_ai=True
-                right next to it — self-contradictory (real case: Grupo Hakkasan's
-                brochure message kept is_ai=True after its category was corrected
-                to "humano", 2026-09-17)."""
-                if computed_category not in ("bot", "humano", "automatico"):
-                    return computed_category, None
-                bot_like = [m for m in analyzed_msgs if m["analysis"].get("category") in ("bot", "automatico")]
-                has_humano = any(m["analysis"].get("category") == "humano" for m in analyzed_msgs)
-                if not has_humano:
-                    # No human signal anywhere — but if an earlier message in the same
-                    # burst showed a genuine hard bot fingerprint (self-id/menu/template)
-                    # and the displayed category is just whatever the single LAST message
-                    # happened to be (often a low-signal follow-up like "¿Estás de
-                    # acuerdo?"), that hard evidence should win instead of silently
-                    # diluting to "automatico" (real case: Whirlpool México, 2026-09-15 —
-                    # "Hola, soy *Mateo* tu asistente virtual" two messages earlier than
-                    # the displayed "automatico").
-                    if computed_category != "bot":
-                        hard_bot_msg = next(
-                            (m for m in bot_like
-                             if m["analysis"].get("category") == "bot" and not m["analysis"].get("soft_signal")),
-                            None,
-                        )
-                        if hard_bot_msg is not None:
-                            return "bot", hard_bot_msg["analysis"].get("is_ai")
-                    return computed_category, None
-                if not bot_like:
-                    return computed_category, None
-                # Only a genuine bot fingerprint (menu/template/self-id — a "bot" call
-                # that ISN'T just a soft-signal content-shape guess) is hard evidence a
-                # machine authored a message. "automatico" is explicitly the "no
-                # confirmed signal either way" label, and a soft-signal "bot" (typing
-                # speed, bifurcated-question phrasing) can't rule out a human who typed
-                # fast or pasted a saved reply either — neither should alone outweigh a
-                # conversation that shows a clearly human-paced reply elsewhere (real
-                # cases: Grupo Hakkasan — a fast pasted-looking brochure; Volkswagen del
-                # Centro — a probe fallback that couldn't confirm a casual-greeting or
-                # name-intro pattern on an otherwise plainly human reply — both
-                # 2026-09-17).
-                has_hard_bot = any(
-                    m["analysis"].get("category") == "bot" and not m["analysis"].get("soft_signal")
-                    for m in bot_like
-                )
-                if not has_hard_bot:
-                    HUMAN_PACED_MIN = 2.0
-                    has_human_pace = any(
-                        m["analysis"].get("category") == "humano"
-                        and (m["analysis"].get("reaction_time_min") or 0) >= HUMAN_PACED_MIN
-                        for m in analyzed_msgs
-                    )
-                    if has_human_pace:
-                        return "humano", False
-                return "hibrido", None
+            # (_mixed_signal_category is now module-level — see its own docstring —
+            # so get_conversations() can reuse it too.)
 
             def _plausible_msisdn(raw):
                 digits = "".join(c for c in (raw or "") if c.isdigit())
@@ -1870,19 +1930,27 @@ class MongoDBManager:
         def _eff_cat(r):
             rc = r.get("category")
             nc = "bot" if rc == "menu" else rc
+            # Bare "hibrido" only ever comes from a raw LLM holistic verdict, which
+            # doesn't yet distinguish a confirmed bot fingerprint from an unclear
+            # automated one the way the deterministic aggregation does — treat it
+            # as the "confirmed" variant rather than adding a third bucket nobody
+            # filters by.
+            if nc == "hibrido":
+                nc = "hibrido_bot"
             if nc == "bot":
                 return "bot_ia" if r.get("is_ai") else "bot"
             return nc if nc is not None else "sin_clasificar"
         cat_counts = Counter(_eff_cat(r) for r in results)
         category_counts = {
-            "humano":         cat_counts.get("humano", 0),
-            "automatico":     cat_counts.get("automatico", 0),
-            "hibrido":        cat_counts.get("hibrido", 0),
-            "bot":            cat_counts.get("bot", 0),
-            "bot_ia":         cat_counts.get("bot_ia", 0),
-            "sin_respuesta":  cat_counts.get("sin_respuesta", 0),
-            "sin_clasificar": cat_counts.get("sin_clasificar", 0),
-            "total":          len(results),
+            "humano":             cat_counts.get("humano", 0),
+            "automatico":         cat_counts.get("automatico", 0),
+            "hibrido_bot":        cat_counts.get("hibrido_bot", 0),
+            "hibrido_automatico": cat_counts.get("hibrido_automatico", 0),
+            "bot":                cat_counts.get("bot", 0),
+            "bot_ia":             cat_counts.get("bot_ia", 0),
+            "sin_respuesta":      cat_counts.get("sin_respuesta", 0),
+            "sin_clasificar":     cat_counts.get("sin_clasificar", 0),
+            "total":              len(results),
         }
         # Apply server-side category filter after computing global counts
         if category and category != "all":

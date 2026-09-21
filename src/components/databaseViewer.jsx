@@ -1708,6 +1708,11 @@ export default function DatabaseViewer({ isActive }) {
           industry: data.industry,
           description: data.description,
           domain: data.domain,
+          // ResultDisplay reads s.website (result.scraped.website) for the
+          // domain chip's href — it was only set one level up (result.website,
+          // unused by ResultDisplay), so the chip showed the right domain text
+          // but the link itself was href=undefined and did nothing on click.
+          website: data.website,
           _extra: {
             city: data.city,
             state: data.state,

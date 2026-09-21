@@ -1285,6 +1285,12 @@ export default function InstancesPanel({ isActive } = {}) {
   const [syncing,      setSyncing]      = useState(false)
   const [snack,        setSnack]        = useState({ open: false, msg: '' })
 
+  // ── Unassign ("remove from user") confirmation — this used to fire straight
+  // from the icon click with no confirmation at all, unlike delete which
+  // already had one (real report: 2026-09-18). ──
+  const [unassignTarget, setUnassignTarget] = useState(null)
+  const [unassigning,    setUnassigning]    = useState(false)
+
   // ── WAHA session dialog ──
   const [wahaOpen,      setWahaOpen]      = useState(false)
   const [wahaName,      setWahaName]      = useState('')
@@ -2422,15 +2428,23 @@ export default function InstancesPanel({ isActive } = {}) {
     setSnack({ open: true, msg: `${instanceName} → ${userName}` })
   }
 
-  async function handleQuickUnassign(inst) {
+  async function confirmUnassign() {
+    if (!unassignTarget) return
+    const inst = unassignTarget
+    setUnassigning(true)
     setInstances(prev => prev.map(i => i.name === inst.name ? { ...i, assigned_to: null, assigned_name: null } : i))
-    const r = await fetch(`/api/instances/${inst.name}?action=unassign`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
-      body: JSON.stringify({}),
-    })
-    if (!r.ok) fetchInstances()
-    else setSnack({ open: true, msg: `${inst.name} ${t.inst.quickUnassignDone}` })
+    try {
+      const r = await fetch(`/api/instances/${inst.name}?action=unassign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
+        body: JSON.stringify({}),
+      })
+      if (!r.ok) fetchInstances()
+      else setSnack({ open: true, msg: `${inst.name} ${t.inst.quickUnassignDone}` })
+    } finally {
+      setUnassigning(false)
+      setUnassignTarget(null)
+    }
   }
 
   function toggleSelectInst(name) {
@@ -2855,7 +2869,7 @@ export default function InstancesPanel({ isActive } = {}) {
                     onAddSlot={() => openPickForUser(user)}
                     onQr={inst => handleQrClick(inst)}
                     onEditNumber={inst => handleEditNumberClick(inst)}
-                    onRemove={handleQuickUnassign}
+                    onRemove={setUnassignTarget}
                     onWarmup={handleWarmupToggle}
                     onWaProfile={inst => handleWaProfileClick(inst)}
                   />
@@ -4653,6 +4667,66 @@ export default function InstancesPanel({ isActive } = {}) {
             <Button fullWidth onClick={handleDelete} disabled={deleting}
               sx={{ textTransform: 'none', fontSize: '0.82rem', fontWeight: 700, color: '#fff', bgcolor: '#ef4444', borderRadius: 2, py: 0.9, gap: 0.5, '&:hover': { bgcolor: '#dc2626' }, '&:disabled': { bgcolor: 'rgba(239,68,68,0.4)', color: 'rgba(255,255,255,0.5)' } }}>
               {deleting ? <CircularProgress size={14} sx={{ color: 'white' }} /> : <><DeleteForeverIcon sx={{ fontSize: 15 }} />{t.inst.delete}</>}
+            </Button>
+          </Box>
+        </Box>
+      </Dialog>
+
+      {/* ── Unassign ("remove from user") confirmation — used to fire straight
+         from the icon click with no confirmation at all (real report: 2026-09-18).
+         Amber, not red: this isn't destructive, the instance stays connected.
+         Uses #fbbf24 — the warning color this component already uses everywhere
+         else (warmup badge, warn log lines, pending switches) — not #f59e0b,
+         which here is reserved for the "connecting" status dot. ── */}
+      <Dialog open={Boolean(unassignTarget)} onClose={() => !unassigning && setUnassignTarget(null)}
+        slotProps={{ paper: { sx: {
+          width: 360, maxWidth: '90vw', borderRadius: 3,
+          background: 'var(--card-bg, #161d2e)',
+          border: '1px solid rgba(251,191,36,0.22)',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.7)',
+        }}}}>
+        <Box sx={{ p: 2.5 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+              <Box sx={{ width: 36, height: 36, borderRadius: 2, bgcolor: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <LinkOffIcon sx={{ fontSize: 18, color: '#fbbf24' }} />
+              </Box>
+              <Typography sx={{ color: '#fff', fontWeight: 700, fontSize: '0.95rem' }}>
+                {t.inst.unassignTitle}
+              </Typography>
+            </Box>
+            <IconButton size="small" onClick={() => setUnassignTarget(null)} disabled={unassigning}
+              sx={{ color: 'rgba(255,255,255,0.2)', '&:hover': { color: 'rgba(255,255,255,0.5)', bgcolor: 'rgba(255,255,255,0.05)' } }}>
+              <CloseIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Box>
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 1.5, py: 1.2, mb: 1.5, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
+            <SmartphoneIcon sx={{ fontSize: 15, color: 'rgba(255,255,255,0.3)', flexShrink: 0 }} />
+            <Typography sx={{ color: '#fff', fontWeight: 600, fontSize: '0.88rem', flex: 1 }}>
+              {unassignTarget?.name}
+            </Typography>
+            {unassignTarget?.number && (
+              <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.75rem', fontFamily: 'monospace' }}>
+                +{unassignTarget.number}
+              </Typography>
+            )}
+          </Box>
+
+          <Typography sx={{ color: 'rgba(251,191,36,0.75)', fontSize: '0.75rem', mb: 2.5 }}>
+            {t.inst.unassignWarn}
+          </Typography>
+
+          <Divider sx={{ borderColor: 'rgba(255,255,255,0.08)', mb: 1.5 }} />
+
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button fullWidth onClick={() => setUnassignTarget(null)} disabled={unassigning}
+              sx={{ textTransform: 'none', fontSize: '0.82rem', fontWeight: 500, color: 'rgba(255,255,255,0.45)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 2, py: 0.9, '&:hover': { bgcolor: 'rgba(255,255,255,0.05)', borderColor: 'rgba(255,255,255,0.18)' } }}>
+              {t.inst.cancel}
+            </Button>
+            <Button fullWidth onClick={confirmUnassign} disabled={unassigning}
+              sx={{ textTransform: 'none', fontSize: '0.82rem', fontWeight: 700, color: '#1e293b', bgcolor: '#fbbf24', borderRadius: 2, py: 0.9, gap: 0.5, '&:hover': { bgcolor: '#f59e0b' }, '&:disabled': { bgcolor: 'rgba(251,191,36,0.4)', color: 'rgba(30,41,59,0.5)' } }}>
+              {unassigning ? <CircularProgress size={14} sx={{ color: '#1e293b' }} /> : <><LinkOffIcon sx={{ fontSize: 15 }} />{t.inst.unassignTitle}</>}
             </Button>
           </Box>
         </Box>

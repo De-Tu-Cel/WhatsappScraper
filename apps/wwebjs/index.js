@@ -4,6 +4,7 @@ const puppeteerExtra = require('puppeteer-extra')
 const StealthPlugin  = require('puppeteer-extra-plugin-stealth')
 const QRCode = require('qrcode')
 const fs = require('fs')
+const path = require('path')
 
 puppeteerExtra.use(StealthPlugin())
 
@@ -614,6 +615,18 @@ function createClient(sessionId, phoneNumber) {
 function autoRestoreSessions() {
   if (!fs.existsSync(SESSIONS_PATH)) return
   const dirs = fs.readdirSync(SESSIONS_PATH).filter(d => d.startsWith('session-'))
+  // A container that's just booting can never have a legitimate live process
+  // holding these — Chrome's SingletonLock/-Cookie/-Socket only survive an
+  // unclean shutdown (e.g. a redeploy that recreates the container without
+  // Chromium exiting cleanly first), and a stale one makes the NEXT launch
+  // refuse to start ("profile in use by another Chromium process"). Clearing
+  // them unconditionally on boot is safe — no other process can hold them.
+  for (const dir of dirs) {
+    for (const lockFile of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+      const p = path.join(SESSIONS_PATH, dir, lockFile)
+      if (fs.existsSync(p)) fs.rmSync(p, { force: true })
+    }
+  }
   dirs.forEach((dir, i) => {
     const sessionId = dir.replace('session-', '')
     setTimeout(() => {

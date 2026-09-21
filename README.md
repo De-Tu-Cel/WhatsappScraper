@@ -310,7 +310,7 @@ WhatsappScraper/
 │       ├── index.js
 │       ├── package.json
 │       └── Dockerfile
-├── docker-compose.yml                    ← Frontend + Backend + wwebjs + WAHA
+├── docker-compose.yml                    ← Frontend + Backend + wwebjs
 ├── env.example
 └── README.md
 ```
@@ -332,18 +332,16 @@ El script imprime el **recovery code** — guárdalo en un lugar seguro. Si pier
 
 > Solo dos emails tienen rol admin garantizado por código: `marco@detucel.mx` y `gilad@detucel.mx` (definidos en `auth.py → ALLOWED_DOMAIN` y `ADMIN_EMAILS`). Cualquier otro email se registra con el rol que se le asigne en `create_user.py`.
 
-### 2. Importar sesiones WAHA existentes
+### 2. Importar sesiones wwebjs existentes
 
-Si WAHA ya tiene sesiones creadas (de un setup anterior), hay que importarlas a MongoDB para que aparezcan en el panel de Instancias:
+Si el microservicio wwebjs ya tiene sesiones creadas (de un setup anterior), hay que importarlas a MongoDB para que aparezcan en el panel de Instancias — desde el panel de Instancias → botón **Sync wwebjs**, o:
 
 ```bash
-curl -X POST http://localhost:8000/api/admin/instances/sync-waha \
+curl -X POST http://localhost:8000/api/admin/instances/sync-wwebjs \
   -H "x-user-token: TU_SESSION_TOKEN"
 ```
 
-O desde el panel de Instancias → botón **Sync WAHA**.
-
-Esto crea los documentos en la colección `instances` con `provider: "waha"`. Sin este paso las instancias de WAHA no aparecen en el dashboard.
+Esto crea los documentos en la colección `instances` con `provider: "wwebjs"`. Sin este paso las instancias no aparecen en el dashboard.
 
 ### 3. Escanear QR
 
@@ -379,33 +377,10 @@ Crea `apps/api/app/.env` (ver sección [Variables de entorno](#variables-de-ento
 ```env
 MONGODB_URI=mongodb://localhost:27017
 DATABASE_NAME=commercial
-
-WAHA_API_URL=http://localhost:3001
-WAHA_API_KEY=tu_api_key_de_waha
 APP_PUBLIC_URL=https://tu-dominio.com
 
 OPENAI_API_KEY=sk-...
 ```
-
-### 3. WAHA
-
-```bash
-docker-compose up -d waha
-```
-
-O manualmente:
-
-```bash
-docker run -d \
-  --name waha \
-  -p 3001:3000 \
-  -e WHATSAPP_DEFAULT_ENGINE=NOWEB \
-  -e WAHA_API_KEY=tu_api_key \
-  -v waha_sessions:/app/.sessions \
-  devlikeapro/waha:noweb
-```
-
-> **Webhook:** en producción el backend debe ser accesible públicamente. WAHA envía eventos a `{APP_PUBLIC_URL}/api/waha/webhook`. En desarrollo local usa ngrok: `ngrok http 8000` y pon la URL generada en `APP_PUBLIC_URL`.
 
 ---
 
@@ -414,18 +389,15 @@ docker run -d \
 ### Desarrollo
 
 ```bash
-# 1. WAHA
-docker-compose up -d waha
-
-# 2. Backend (desde apps/api/)
+# 1. Backend (desde apps/api/)
 cd apps/api
 uvicorn app.main:app --reload --port 8000
 
-# 3. Frontend (desde apps/web/)
+# 2. Frontend (desde apps/web/)
 cd apps/web
 npm run dev
 
-# 4. wwebjs (opcional — solo si vas a usar el provider whatsapp-web.js)
+# 3. wwebjs (opcional — solo si vas a usar el provider whatsapp-web.js)
 cd apps/wwebjs
 npm install
 PORT=3002 FASTAPI_URL=http://localhost:8000 node index.js
@@ -436,10 +408,9 @@ PORT=3002 FASTAPI_URL=http://localhost:8000 node index.js
 | Frontend / Dashboard | http://localhost:3000 |
 | Backend API | http://localhost:8000 |
 | Swagger / Docs | http://localhost:8000/docs |
-| WAHA | http://localhost:3001 |
 | wwebjs | http://localhost:3002 (opcional) |
 
-> **wwebjs fuera de Docker:** `FASTAPI_URL` viene por default en `http://backend:8000` (hostname de Docker Compose) y `PORT` en `3001` — mismo puerto que WAHA. En desarrollo local (fuera de compose) hay que pasar ambos explícitamente como arriba, o el webhook nunca llega al backend y el puerto choca con WAHA. Ver [Errores comunes](#errores-comunes).
+> **wwebjs fuera de Docker:** `FASTAPI_URL` viene por default en `http://backend:8000` (hostname de Docker Compose) y `PORT` en `3001`. En desarrollo local (fuera de compose) hay que pasar ambos explícitamente como arriba, o el webhook nunca llega al backend. Ver [Errores comunes](#errores-comunes).
 
 ### Producción con Docker Compose
 
@@ -447,7 +418,7 @@ PORT=3002 FASTAPI_URL=http://localhost:8000 node index.js
 docker-compose up -d
 ```
 
-El `docker-compose.yml` levanta frontend (`:3000`), backend (`:8000`), wwebjs (`:3002` en el host, `:3001` interno) y WAHA (`:3001` en el host, `:3000` interno).
+El `docker-compose.yml` levanta frontend (`:3000`), backend (`:8000`) y wwebjs (`:3002` en el host, `:3001` interno).
 
 ---
 
@@ -465,9 +436,10 @@ El `docker-compose.yml` levanta frontend (`:3000`), backend (`:8000`), wwebjs (`
 |---|---|---|
 | `MONGODB_URI` | URI de conexión MongoDB | ✅ |
 | `DATABASE_NAME` | Nombre de la base de datos | ✅ (default: `commercial`) |
-| `WAHA_API_URL` | URL de WAHA | ✅ |
-| `WAHA_API_KEY` | API Key de WAHA | ✅ |
+| `WWEBJS_URL` | URL del microservicio wwebjs | ✅ |
+| `WWEBJS_API_SECRET` | Secreto compartido con wwebjs | Opcional pero recomendado |
 | `APP_PUBLIC_URL` | URL pública del backend (para webhooks) | ✅ en producción |
+| `WAHA_API_URL` / `WAHA_API_KEY` | Provider legacy, ya no desplegado — el código sigue en `providers/legacy/waha.py` | Opcional |
 | `OPENAI_API_KEY` | API Key de OpenAI | Al menos uno de los dos LLM |
 | `DEEPSEEK_API_KEY` | API Key de DeepSeek (más económico) | Al menos uno de los dos LLM |
 | `SMTP_HOST` | Servidor SMTP para reset de PIN | Opcional (default: `smtp.hostinger.com`) |

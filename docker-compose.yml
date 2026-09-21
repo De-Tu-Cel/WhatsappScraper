@@ -27,8 +27,6 @@ services:
     environment:
       - MONGODB_URI=${MONGODB_URI}
       - DATABASE_NAME=commercial
-      - WAHA_API_URL=http://waha:3000
-      - WAHA_API_KEY=${WAHA_API_KEY}
       - APP_PUBLIC_URL=${APP_PUBLIC_URL}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
@@ -37,7 +35,6 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - waha
       - wwebjs
     restart: unless-stopped
     logging:
@@ -66,29 +63,5 @@ services:
         max-size: 100m
         max-file: "10"
 
-  # ── WAHA (WhatsApp HTTP API — NOWEB engine, legacy) ───────────
-  waha:
-    image: devlikeapro/waha:noweb
-    dns:
-      - 1.1.1.1
-      - 8.8.8.8
-    volumes:
-      - waha_sessions:/app/.sessions
-      - waha_media:/app/.media
-    environment:
-      - WHATSAPP_DEFAULT_ENGINE=NOWEB
-      - WAHA_API_KEY=${WAHA_API_KEY}
-      - WAHA_PRINT_QR=false
-    ports:
-      - "3001:3000"
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: 100m
-        max-file: "10"
-
 volumes:
-  waha_sessions:
-  waha_media:
   wwebjs_sessions:

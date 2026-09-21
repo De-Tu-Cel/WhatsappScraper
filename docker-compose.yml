@@ -8,8 +8,8 @@ services:
     environment:
       - BACKEND_URL=http://backend:8000
       - NODE_ENV=production
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     depends_on:
       - backend
     restart: unless-stopped
@@ -32,8 +32,8 @@ services:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - WWEBJS_URL=http://wwebjs:3001
       - WWEBJS_API_SECRET=${WWEBJS_API_SECRET}
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     depends_on:
       - wwebjs
     restart: unless-stopped
@@ -54,8 +54,6 @@ services:
       - API_SECRET=${WWEBJS_API_SECRET}
     volumes:
       - wwebjs_sessions:/app/sessions
-    ports:
-      - "3002:3001"
     restart: unless-stopped
     logging:
       driver: json-file

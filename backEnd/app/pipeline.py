@@ -182,17 +182,68 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
     # ========================================================================
     # GUARDAR TELÉFONOS (cap: 20 por empresa)
     # ========================================================================
+    # Un número listado como "teléfono" en el sitio (sin ícono/link de WhatsApp)
+    # puede tener WhatsApp de todos modos — isRegisteredUser() lo confirma con
+    # una consulta real a WhatsApp (sin mandar mensaje), el mismo mecanismo que
+    # ya se usa antes de cada envío real (getNumberId()). Antes esto nunca se
+    # verificaba: cualquier teléfono sin marca explícita de WhatsApp se perdía
+    # como oportunidad de contacto aunque sí tuviera cuenta (2026-09-18).
     MAX_PHONES = 20
     MAX_EMAILS = 10
+    _MAX_PHONES_TO_VERIFY = 5  # no estancar el scraping en empresas con muchos números listados
     all_wa = _cr.get("all_whatsapp_numbers", [])
-    for phone in _cr.get("phone_numbers", [])[:MAX_PHONES]:
-        if phone not in all_wa:
+    _verify_instance = None
+    try:
+        from whatsapp_wwebjs import get_all_connected_instances
+        _connected = get_all_connected_instances(db)
+        _verify_instance = _connected[0] if _connected else None
+    except Exception:
+        _verify_instance = None
+
+    _verified_wa_found = False
+    for _pidx, phone in enumerate(_cr.get("phone_numbers", [])[:MAX_PHONES]):
+        if phone in all_wa:
+            continue
+        _is_wa = None
+        if _verify_instance and _pidx < _MAX_PHONES_TO_VERIFY:
+            try:
+                from whatsapp_wwebjs import verify_number
+                _is_wa = bool(verify_number(_verify_instance, phone).get("registered"))
+            except Exception as _verify_err:
+                print(f"⚠️  No se pudo verificar WhatsApp para {phone}: {_verify_err}")
+                _is_wa = None
+        if _is_wa:
+            print(f"📱 Teléfono {phone} sí tiene WhatsApp — guardado como contacto de WhatsApp")
+            db.insert_contact({
+                "company_id": company_id,
+                "type": "whatsapp",
+                "value": phone,
+                "source": website,
+                "is_primary": False,
+                "detected_via": "phone_verification",
+            })
+            all_wa.append(phone)
+            _verified_wa_found = True
+        else:
             db.insert_contact({
                 "company_id": company_id,
                 "type": "phone",
                 "value": phone,
                 "source": website,
+                # Only a real negative check (not "verification unavailable") should
+                # be recorded — otherwise a re-scrape with no connected instance
+                # would wrongly stamp verified=False and the backlog script would
+                # skip a number that was actually never checked.
+                **({"verified": False} if _is_wa is False else {}),
             })
+
+    # has_whatsapp was computed above from the scraper's own whatsapp_numbers
+    # BEFORE this verification loop ran — a company whose only WhatsApp-capable
+    # number was listed as a plain "phone" would otherwise stay flagged
+    # has_whatsapp=False forever despite now having a verified WA contact.
+    if _verified_wa_found and not has_whatsapp:
+        db.update_company(company_id, {"has_whatsapp": True})
+        has_whatsapp = True
 
     # ========================================================================
     # GUARDAR EMAILS (cap: 10 por empresa)

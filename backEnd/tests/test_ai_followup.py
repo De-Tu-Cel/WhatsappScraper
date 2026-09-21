@@ -226,6 +226,27 @@ class TestCopiedPromptExampleTriggersRetry:
         assert mgr.db.ai_followup_sessions._doc["end_reason"] == "ai_decision"
 
 
+class TestPartialCopyOfPromptExampleIsDetected:
+    """Real production case ("Ferra", 2026-09-07): the model didn't copy the
+    CUANDO TE CONFRONTAN example whole — it wrote its own opening ("jaja no,
+    tengo una pregunta sobre materiales.") but reused the example's exact
+    tail ("qué tiene de raro?") verbatim. A plain full-phrase substring check
+    misses this since the middle words differ from the example. Business had
+    said something completely benign (offered to pass the contact to a sales
+    agent) — nothing that should have triggered a "confronted" response at
+    all, on top of the verbatim leak."""
+
+    def test_fresh_opening_with_copied_tail_is_flagged(self):
+        assert af._looks_copied_from_prompt(
+            "jaja no, tengo una pregunta sobre materiales. qué tiene de raro?"
+        ) is True
+
+    def test_independently_written_short_reply_is_not_flagged(self):
+        assert af._looks_copied_from_prompt(
+            "ah perfecto, entonces me pasas el numero del area de servicio?"
+        ) is False
+
+
 class TestFinWithRealTextStillSends:
     """Sanity check the fix is scoped correctly: "[FIN]" attached to REAL text
     (the normal, working case — e.g. "ah ok déjame pensarlo[FIN]") must still

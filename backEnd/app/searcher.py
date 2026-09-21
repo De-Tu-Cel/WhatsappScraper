@@ -661,7 +661,10 @@ _MX_STATE_CITIES: dict[str, list[str]] = {
     "chihuahua":           ["Chihuahua", "Ciudad Juárez", "Delicias", "Cuauhtémoc", "Hidalgo del Parral", "Nuevo Casas Grandes"],
     "coahuila":            ["Saltillo", "Torreón", "Monclova", "Piedras Negras", "Acuña", "Sabinas"],
     "colima":              ["Colima", "Manzanillo", "Tecomán", "Villa de Álvarez"],
-    "durango":             ["Durango", "Gómez Palacio", "Lerdo", "Hidalgo del Parral", "El Salto"],
+    # "Hidalgo del Parral" quitado de aquí (2026-09-18): es una ciudad de Chihuahua
+    # (ya está en esa lista abajo), estaba duplicada en Durango por error — hacía que
+    # _MX_CITY_TO_STATE la resolviera de forma ambigua/inconsistente entre los dos estados.
+    "durango":             ["Durango", "Gómez Palacio", "Lerdo", "El Salto"],
     "guanajuato":          ["León", "Guanajuato", "Irapuato", "Celaya", "Salamanca", "Silao", "San Miguel de Allende", "Acámbaro", "Pénjamo"],
     "guerrero":            ["Acapulco", "Chilpancingo", "Zihuatanejo", "Iguala", "Taxco", "Chilapa"],
     "hidalgo":             ["Pachuca", "Tulancingo", "Tula", "Tepeji del Río", "Huejutla", "Actopan"],
@@ -692,11 +695,31 @@ _MX_STATE_CITIES: dict[str, list[str]] = {
 # CUALQUIER ciudad de _MX_STATE_CITIES, no solo la capital — necesario para poder
 # expandir la búsqueda a ciudades vecinas cuando el usuario buscó en una ciudad
 # que no es la capital de su estado (ej. "Tehuacán" en vez de "Puebla").
-_MX_CITY_TO_STATE: dict[str, str] = {
-    _norm_loc(city): state_key
-    for state_key, cities in _MX_STATE_CITIES.items()
-    for city in cities
-}
+#
+# Un nombre de ciudad que aparece en la lista de MÁS DE UN estado (ej.
+# "Guadalupe" — hay una en Nuevo León y otra en Zacatecas, ambas reales) se
+# excluye del índice a propósito en vez de quedarse con la que gane por orden
+# de iteración del dict: adivinar mal el estado aquí alimenta tanto el fan-out
+# a ciudades vecinas como el filtro de ubicación en dos pasadas (ver
+# _reject_wrong_state) — mejor no resolver el estado que resolverlo mal y
+# rechazar un resultado legítimo por "estar en otro estado" (auditoría real,
+# 2026-09-18).
+def _build_city_to_state() -> dict[str, str]:
+    index: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for state_key, cities in _MX_STATE_CITIES.items():
+        for city in cities:
+            city_norm = _norm_loc(city)
+            if city_norm in index and index[city_norm] != state_key:
+                ambiguous.add(city_norm)
+            else:
+                index[city_norm] = state_key
+    for city_norm in ambiguous:
+        index.pop(city_norm, None)
+    return index
+
+
+_MX_CITY_TO_STATE: dict[str, str] = _build_city_to_state()
 # Alias del propio estado (ej. "CDMX", "Estado de México") — no siempre coincide
 # con el nombre normalizado de su capital ("Ciudad de México" ≠ "cdmx"), así que
 # sin esto una búsqueda tecleada como "zapaterias en CDMX" no encontraba estado.
@@ -1263,6 +1286,13 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     Approved URLs are returned in relevance order; unapproved ones are dropped.
     If the LLM approves nothing from a batch (possible false-negative), the full
     batch is kept as a fallback so we never silently discard valid prospects.
+
+    Location (city/state) is deliberately NOT checked here — tried folding a
+    location rule into this same prompt (2026-09-18) and it got outvoted by
+    attention dilution from the other ~13 industry exclusion rules, confirmed
+    live with a real Monterrey business surviving every reorder/emphasis
+    attempt for a Hermosillo/Sonora search. See _reject_wrong_state(), a
+    separate short/focused pass run after this one in search_prospects().
     """
     if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not urls:
         return urls
@@ -1434,6 +1464,69 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     if not ranked and urls:
         return _keyword_fallback(urls)
     return ranked
+
+
+def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: str = "") -> list[str]:
+    """Second, focused LLM pass — drops URLs whose address/LADA/content shows
+    CLEAR evidence of being in a Mexican state DIFFERENT from state_key. Kept
+    deliberately separate from _ai_filter_urls(): folding this into that much
+    longer industry prompt let attention dilution outvote the location rule —
+    confirmed live, 2026-09-18, a real Monterrey dentist survived every
+    reorder/emphasis attempt inside the combined prompt for a Hermosillo/Sonora
+    search, but a short prompt with just this one job caught it immediately.
+    Same-state results (e.g. Ciudad Obregón for a Sonora search) are
+    intentionally kept — that's the existing same-state fan-out/shortfall
+    feature, not something to filter here.
+    """
+    if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not urls or not state_key:
+        return urls
+    state_label = state_key.title()
+
+    def _check_batch(batch: list[str]) -> list[str]:
+        try:
+            lines = []
+            for i, u in enumerate(batch):
+                s = snippets.get(u, {})
+                title = (s.get("title") or "").strip()
+                body = (s.get("body") or "").strip()[:150]
+                line = f"{i+1}. {u}"
+                if title:
+                    line += f"\n   Título: {title}"
+                if body:
+                    line += f"\n   Resumen: {body}"
+                lines.append(line)
+            prompt = (
+                f'Se buscan negocios ubicados en {city or state_label} o cualquier otra ciudad DENTRO '
+                f'del estado de {state_label}, México.\n\n'
+                f'Tu ÚNICA tarea: de la siguiente lista, señala cuáles tienen evidencia CLARA Y EXPLÍCITA '
+                f'(dirección, LADA telefónico, o texto explícito) de estar ubicados en un estado MEXICANO '
+                f'DISTINTO a {state_label} (ej. Nuevo León/Monterrey, Jalisco/Guadalajara, CDMX, etc.). '
+                f'No marques nada por duda o ambigüedad — solo evidencia clara y explícita de otro estado.\n\n'
+                f'URLs:\n' + '\n'.join(lines) + '\n\n'
+                f'Responde ÚNICAMENTE un array JSON con los números de las que SÍ tienen evidencia clara '
+                f'de estar en OTRO estado (para excluirlas). Si ninguna aplica, responde []. '
+                f'Ejemplo: [2] o []'
+            )
+            from app.llm import call_llm
+            content = call_llm([{"role": "user", "content": prompt}], max_tokens=200, temperature=0)
+            m = re.search(r'\[[\d,\s]*\]', content)
+            if m:
+                indices = json.loads(m.group(0))
+                reject_idx = {i for i in indices if 1 <= i <= len(batch)}
+                return [u for i, u in enumerate(batch, 1) if i not in reject_idx]
+        except Exception:
+            pass
+        return batch  # fallback: LLM unavailable or parse error — keep everything
+
+    batch_size = 60
+    batches = [urls[i:i + batch_size] for i in range(0, len(urls), batch_size)]
+    if len(batches) <= 1:
+        return _check_batch(urls)
+    kept: list[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(batches), 3)) as ex:
+        for batch_result in ex.map(_check_batch, batches):
+            kept.extend(batch_result)
+    return kept
 
 
 def _shallow_fetch_meta(urls: list[str], timeout: int = 3, max_bytes: int = 4096) -> dict:
@@ -2253,6 +2346,12 @@ def search_prospects(
     import logging as _logging
     _log = _logging.getLogger("searcher")
 
+    # Estado objetivo de la búsqueda (normalizado, ej. "sonora") — se usa como
+    # pista geográfica para el filtro de IA (ver _ai_filter_urls) para rechazar
+    # resultados de OTRO estado sin bloquear el fan-out/expansión intencional a
+    # ciudades vecinas del mismo estado.
+    _target_state_key: str | None = None
+
     if not city.strip():
         # Continue state-level detection after _log is defined so we can log it
         if _llm_result and _llm_result.get("industry"):
@@ -2261,6 +2360,7 @@ def search_prospects(
                 state_key = _norm_loc(state_raw)
                 state_cities = _MX_STATE_CITIES.get(state_key)
                 if state_cities:
+                    _target_state_key = state_key
                     _log.info("[search] state fan-out: %s → %d cities", state_raw, len(state_cities))
                 else:
                     _log.info("[search] state %r not in _MX_STATE_CITIES, using country fan-out", state_raw)
@@ -2272,6 +2372,9 @@ def search_prospects(
                 industry = clean_industry
                 city     = extracted_city
                 country  = country or extracted_country
+
+    if not _target_state_key and city:
+        _target_state_key = _find_state_for_city(city)
 
     _log.info("[search] industry=%r city=%r country=%r num=%d offset=%d",
               industry, city, country, num_results, offset)
@@ -2392,6 +2495,11 @@ def search_prospects(
     _log.info("[search] sending %d URLs to AI filter (industry=%r)", len(urls), _industry_singular)
     result = _ai_filter_urls(urls, _industry_singular, snippets, country=country)
     _log.info("[search] AI filter returned %d URLs (from %d)", len(result), len(urls))
+    if _target_state_key:
+        _before_geo = len(result)
+        result = _reject_wrong_state(result, snippets, _target_state_key, city=city)
+        if len(result) != _before_geo:
+            _log.info("[search] geo filter: %d → %d URLs (estado distinto a %s)", _before_geo, len(result), _target_state_key)
 
     # Si el resultado se quedó muy corto del target y se buscó en UNA ciudad
     # específica (no un barrido de estado), probar ciudades vecinas del mismo
@@ -2435,6 +2543,8 @@ def search_prospects(
 
             if _dedup_new:
                 _extra_result = _ai_filter_urls(_dedup_new, _industry_singular, snippets, country=country)
+                if _state_key:
+                    _extra_result = _reject_wrong_state(_extra_result, snippets, _state_key, city=city)
                 _log.info("[search] expansión geográfica: +%d candidatos → +%d aprobados",
                            len(_dedup_new), len(_extra_result))
                 result = list(dict.fromkeys(result + _extra_result))

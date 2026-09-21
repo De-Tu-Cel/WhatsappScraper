@@ -420,6 +420,13 @@ class WebsiteScraper:
             "state":   _addr.get("state", ""),
             "country": _addr.get("country", ""),
             "address": _addr.get("address", ""),
+            # Solo presente cuando el sitio lista más de una sucursal (JSON-LD con
+            # varios nodos LocalBusiness) — city/state de arriba son la PRIMERA
+            # encontrada, no necesariamente la que se buscaba; esto guarda todas
+            # las detectadas para poder confirmar después si el negocio sí tiene
+            # presencia en la ciudad buscada aunque no sea la que quedó como
+            # principal.
+            "all_locations": _addr.get("all_locations", []),
 
             # Campos extra (no van a companies)
             "_extra": {
@@ -633,7 +640,7 @@ class WebsiteScraper:
                 }
                 if force:
                     for field in ("name","industry","description","city","state","country",
-                                  "address","phone_numbers","whatsapp_numbers","all_whatsapp_numbers",
+                                  "address","all_locations","phone_numbers","whatsapp_numbers","all_whatsapp_numbers",
                                   "social_media","business_hours","services","products"):
                         if field in result:
                             update_fields[field] = result[field]
@@ -928,10 +935,14 @@ class WebsiteScraper:
     # EXTRACCIÓN DESDE SCRIPTS (JSON-LD, __NEXT_DATA__, vars inline)
     # ========================================================================
 
-    # wa.me/api.whatsapp.com dentro del VALOR de cualquier atributo (onclick,
-    # data-href, data-url…), no solo dentro de un <a href>.
+    # wa.me/api.whatsapp.com/web.whatsapp.com dentro del VALOR de cualquier
+    # atributo (onclick, data-href, data-url…), no solo dentro de un <a href>.
+    # web.whatsapp.com/send?phone=... es el mismo patrón de click-to-chat que
+    # api.whatsapp.com, solo que apunta a la versión de escritorio — caso real
+    # (dentalion.mx, 2026-09-18): el botón de la página abría exactamente esa
+    # URL y no se reconocía en ningún lado.
     _WA_LINK_IN_ATTR_RE = re.compile(
-        r'(?:api\.whatsapp\.com/send\?phone=|wa\.me/)(\+?\d{7,15})'
+        r'(?:(?:api|web)\.whatsapp\.com/send\?phone=|wa\.me/)(\+?\d{7,15})'
     )
     # Nombres de atributo que los widgets de "click to chat" más comunes
     # (Elementor WhatsApp Chat, plugins de WordPress, apps de Wix, Joinchat,
@@ -974,6 +985,19 @@ class WebsiteScraper:
                             wa_numbers.append(clean)
                     else:
                         phones.append(clean)
+
+        def _joinchat_telephone(data):
+            """El plugin JoinChat (WordPress) no expone el número en texto/atributo
+            plano — lo guarda en un JSON embebido: o el atributo `data-settings`
+            del propio `<div class="joinchat">`, o (versión Lite / más vieja) un
+            `var joinchat_obj = {"settings": {"telephone": "..."}}` inline. En
+            ambos casos la forma es {"telephone": ...} o {"settings": {"telephone": ...}}."""
+            if not isinstance(data, dict):
+                return None
+            tel = data.get("telephone")
+            if not tel and isinstance(data.get("settings"), dict):
+                tel = data["settings"].get("telephone")
+            return tel
 
         def _walk_json(obj):
             """Recorre recursivamente un dict/list buscando campos de teléfono."""
@@ -1023,6 +1047,20 @@ class WebsiteScraper:
                     pass
                 continue
 
+            # 2b. Objeto de configuración inline del plugin JoinChat (versión que
+            # inyecta `var joinchat_obj = {...};` en vez del atributo data-settings).
+            if "joinchat_obj" in content:
+                _jm = re.search(r'joinchat_obj\s*=\s*(\{.*?\});', content, re.S)
+                if _jm:
+                    try:
+                        _tel = _joinchat_telephone(_json.loads(_jm.group(1)))
+                        if _tel:
+                            clean = self._normalize_phone(str(_tel))
+                            if clean and clean not in wa_numbers:
+                                wa_numbers.append(clean)
+                    except Exception:
+                        pass
+
             # 3. Cualquier script inline — buscar patrones de teléfono
             _harvest(content)
 
@@ -1046,6 +1084,20 @@ class WebsiteScraper:
                     clean = self._normalize_phone(attr_val)
                     if clean and clean not in wa_numbers:
                         wa_numbers.append(clean)
+                    continue
+                # JoinChat's own wrapper (<div class="joinchat" data-settings='{"telephone":"...",...}'>)
+                # stores the number inside a JSON blob, not a plain phone string —
+                # not caught by _WA_WIDGET_ATTR_NAMES above, which only handles
+                # attributes whose value IS the number.
+                if attr_name.lower() == "data-settings" and attr_val.strip().startswith("{"):
+                    try:
+                        _tel = _joinchat_telephone(_json.loads(attr_val))
+                        if _tel:
+                            clean = self._normalize_phone(str(_tel))
+                            if clean and clean not in wa_numbers:
+                                wa_numbers.append(clean)
+                    except Exception:
+                        pass
 
         if phones or wa_numbers:
             print(f"📜 Scripts: {len(phones)} teléfonos, {len(wa_numbers)} WhatsApps encontrados")
@@ -1292,8 +1344,32 @@ class WebsiteScraper:
                     if isinstance(svs, list) and svs:
                         result["services"] = svs[:8]
                 if need_city and _val(data.get("ciudad")):
-                    result["_extra"]["city"] = data["ciudad"]
-                    result["city"] = data["ciudad"]
+                    ai_city = data["ciudad"]
+                    # Ningún municipio mexicano se llama IGUAL que uno de los 32 estados
+                    # (Morelos, Hidalgo, Guerrero...) — si la IA devuelve exactamente eso
+                    # como "ciudad", casi seguro leyó un nombre de calle de la dirección y
+                    # lo confundió con la ciudad, el mismo problema de fondo que
+                    # _extract_state() (ver su docstring). Caso real (fergusa.com.mx,
+                    # 2026-09-20): el snippet enviado a la IA traía "...Morelos Nº 121 Col.
+                    # Centro..." (dirección real en Guadalajara, Jalisco) y la IA respondió
+                    # "ciudad": "Morelos" — mejor no guardar nada que guardar una ciudad que
+                    # sabemos con certeza que no es un lugar real.
+                    if self._norm_state_key(ai_city) in self._STATE_KEY_TO_DISPLAY:
+                        pass
+                    else:
+                        result["_extra"]["city"] = ai_city
+                        result["city"] = ai_city
+                        # Re-derivar el estado desde la ciudad que acaba de rellenar la IA —
+                        # el estado ya calculado por _extract_address_structured() se hizo SIN
+                        # conocer esta ciudad (por eso need_city era True) y puede venir del
+                        # mismo escaneo crudo de _extract_state() que confunde nombres de
+                        # estado con nombres de calle. Solo se sobreescribe cuando SÍ hay un
+                        # estado confiable para esa ciudad — si es ambigua (ver
+                        # _infer_state_from_city) se deja el valor anterior tal cual.
+                        inferred_state = self._infer_state_from_city(ai_city)
+                        if inferred_state:
+                            result["_extra"]["state"] = inferred_state
+                            result["state"] = inferred_state
         except Exception:
             pass  # DeepSeek falló — no bloquear el scraping
 
@@ -1404,10 +1480,25 @@ class WebsiteScraper:
 
     def _extract_schema_address(self, soup: BeautifulSoup) -> dict:
         """Extrae dirección desde JSON-LD (Schema.org LocalBusiness/Organization/Store).
-        Fuente más fiable: datos SEO ya estructurados por la empresa."""
+        Fuente más fiable: datos SEO ya estructurados por la empresa.
+
+        Una cadena/franquicia describe cada sucursal como su propio nodo
+        LocalBusiness dentro del mismo @graph — antes esto devolvía la
+        dirección de la PRIMERA sucursal encontrada como si fuera la única,
+        sin ninguna señal de que había más. La ciudad "correcta" para un
+        negocio con varias sucursales depende de cuál buscabas, algo que esta
+        función no sabe — pero al menos ahora expone TODAS las ubicaciones
+        encontradas en `all_locations`, para que un consumidor que sí sepa la
+        ciudad buscada (o una revisión manual) pueda confirmar si el negocio
+        realmente tiene sucursal ahí en vez de descartarlo o aceptarlo a
+        ciegas basado solo en la primera sucursal listada.
+        """
         import json as _json
         _TYPES = {"LocalBusiness", "Organization", "Store", "Restaurant",
                   "Hotel", "MedicalBusiness", "ProfessionalService"}
+        primary: dict | None = None
+        all_locations: list[dict] = []
+        seen_locations: set[tuple] = set()
         for script in soup.find_all("script", type="application/ld+json"):
             try:
                 raw = script.string
@@ -1430,18 +1521,30 @@ class WebsiteScraper:
                         continue
                     adr = item.get("address") or item.get("location", {})
                     if isinstance(adr, str) and len(adr) > 5:
-                        return {"address": adr, "city": "", "state": "", "postal_code": "", "country": ""}
+                        if primary is None:
+                            primary = {"address": adr, "city": "", "state": "", "postal_code": "", "country": ""}
+                        continue
                     if isinstance(adr, dict):
-                        return {
+                        loc = {
                             "address":     adr.get("streetAddress") or "",
                             "city":        adr.get("addressLocality") or "",
                             "state":       adr.get("addressRegion") or "",
                             "postal_code": adr.get("postalCode") or "",
                             "country":     adr.get("addressCountry") or "",
                         }
+                        if primary is None:
+                            primary = loc
+                        key = (loc["city"].lower().strip(), loc["state"].lower().strip())
+                        if loc["city"] and key not in seen_locations:
+                            seen_locations.add(key)
+                            all_locations.append({"city": loc["city"], "state": loc["state"]})
             except Exception:
                 continue
-        return {}
+        if primary is None:
+            return {}
+        if len(all_locations) > 1:
+            primary = {**primary, "all_locations": all_locations}
+        return primary
 
     def _extract_map_iframe_text(self, soup: BeautifulSoup) -> str:
         """Extrae el query 'q=' de un iframe de Google Maps embebido.
@@ -1530,25 +1633,56 @@ class WebsiteScraper:
 
         return city
 
+    # Estado (clave normalizada, sin acentos/minúscula) -> nombre para mostrar.
+    # Construido a partir de la misma lista de 32 estados que usa _extract_state,
+    # para no mantener dos fuentes de nombres de estado que se desincronicen.
+    _STATE_KEY_TO_DISPLAY = {
+        _s.lower()
+        .replace("á", "a").replace("é", "e").replace("í", "i")
+        .replace("ó", "o").replace("ú", "u"): _s
+        for _s in [
+            "Ciudad de México", "Estado de México", "Jalisco", "Nuevo León",
+            "Veracruz", "Puebla", "Guanajuato", "Chihuahua", "Michoacán",
+            "Oaxaca", "Tamaulipas", "Sinaloa", "Coahuila", "Guerrero",
+            "Baja California", "Sonora", "Hidalgo", "San Luis Potosí",
+            "Tabasco", "Yucatán", "Querétaro", "Morelos", "Aguascalientes",
+            "Tlaxcala", "Quintana Roo", "Nayarit", "Campeche", "Zacatecas",
+            "Colima", "Durango", "Chiapas", "Baja California Sur",
+        ]
+    }
+    # Alias de estado -> misma clave que usa searcher._find_state_for_city
+    # ("estado de mexico", "cdmx", etc. no siempre calzan letra por letra).
+    _STATE_KEY_TO_DISPLAY["cdmx"] = "Ciudad de México"
+    _STATE_KEY_TO_DISPLAY["estado de mexico"] = "Estado de México"
+
+    @staticmethod
+    def _norm_state_key(name: str) -> str:
+        """Misma normalización usada para construir _STATE_KEY_TO_DISPLAY —
+        factorizada para poder comparar un nombre arbitrario (ej. lo que
+        devolvió la IA en "ciudad") contra la lista de los 32 estados."""
+        return (
+            (name or "").lower()
+            .replace("á", "a").replace("é", "e").replace("í", "i")
+            .replace("ó", "o").replace("ú", "u")
+            .strip()
+        )
+
     def _infer_state_from_city(self, city: str) -> str:
-        """Si la ciudad implica un estado, lo devuelve."""
-        _MAP = {
-            "querétaro": "Querétaro", "santiago de querétaro": "Querétaro",
-            "guadalajara": "Jalisco", "zapopan": "Jalisco", "tlaquepaque": "Jalisco",
-            "monterrey": "Nuevo León", "san pedro garza garcía": "Nuevo León",
-            "puebla": "Puebla", "heroica puebla": "Puebla",
-            "tijuana": "Baja California", "mexicali": "Baja California",
-            "ciudad de méxico": "Ciudad de México", "cdmx": "Ciudad de México",
-            "mérida": "Yucatán", "cancún": "Quintana Roo",
-            "hermosillo": "Sonora", "culiacán": "Sinaloa",
-            "chihuahua": "Chihuahua", "saltillo": "Coahuila",
-            "san luis potosí": "San Luis Potosí", "morelia": "Michoacán",
-            "toluca": "Estado de México", "ecatepec": "Estado de México",
-            "oaxaca": "Oaxaca", "villahermosa": "Tabasco",
-            "veracruz": "Veracruz", "xalapa": "Veracruz",
-            "tuxtla gutiérrez": "Chiapas", "aguascalientes": "Aguascalientes",
-        }
-        return _MAP.get(city.lower().strip(), "")
+        """Si la ciudad implica un estado, lo devuelve.
+
+        Reusa el índice ciudad→estado de searcher.py (~180 ciudades, la misma
+        tabla que ya corregimos hoy para el filtro de búsqueda) en vez de una
+        lista propia de ~24 ciudades — evitar mantener dos tablas fue lo que
+        dejó "Ciudad Obregón" sin mapear a Sonora aquí mientras searcher.py sí
+        la conocía.
+        """
+        if not city:
+            return ""
+        from searcher import _find_state_for_city
+        state_key = _find_state_for_city(city)
+        if not state_key:
+            return ""
+        return self._STATE_KEY_TO_DISPLAY.get(state_key, "")
 
     def _extract_address_structured(self, soup: BeautifulSoup, text: str) -> dict:
         """Cascade de 4 estrategias para extraer dirección estructurada.
@@ -1591,11 +1725,17 @@ class WebsiteScraper:
         state_from_text = self._extract_state(text)
 
         city  = city_from_addr  or city_from_text
-        state = state_from_addr or state_from_text
 
-        # Inferir estado desde ciudad si regex no lo encontró
-        if city and not state:
-            state = self._infer_state_from_city(city)
+        # Preferir el estado INFERIDO desde una ciudad ya validada por encima de
+        # cualquier match crudo de _extract_state (búsqueda de substring de los
+        # 32 nombres de estado en texto libre) — varios nombres de estado son
+        # también nombres de calle comunísimos ("Morelos", "Hidalgo"), así que un
+        # texto con "Morelos Nº 121 Col. Centro" (una dirección real en
+        # Guadalajara) hacía perder la ciudad correctamente inferida contra un
+        # "estado" que en realidad era el nombre de la calle (caso real:
+        # fergusa.com.mx, ciudad=Guadalajara pero estado=Morelos, 2026-09-18).
+        state_inferred = self._infer_state_from_city(city) if city else ""
+        state = state_inferred or state_from_addr or state_from_text
 
         result = {**empty, "address": raw_addr, "city": self._clean_city(city),
                   "state": state, "postal_code": cp, "country": country}
@@ -1652,7 +1792,17 @@ class WebsiteScraper:
         return ""
 
     def _extract_state(self, text: str) -> str:
-        """Extrae estado — los 32 estados de México."""
+        """Extrae estado — los 32 estados de México.
+
+        Varios nombres de estado ("Morelos", "Hidalgo", "Guerrero", "México",
+        "Colima"...) son también nombres de calle comunísimos en México — un
+        match ciego de substring los confunde con el estado real. Caso real
+        (fergusa.com.mx, 2026-09-20): la dirección "Morelos Nº 121 Col. Centro"
+        (una sucursal en Guadalajara, Jalisco) se leía como estado="Morelos".
+        Se descarta un match si el contexto inmediato se ve como una dirección
+        (nombre de calle seguido de número/"Nº", o precedido de "Calle"/"Av."/
+        "Blvd."/"Col.") y se sigue buscando otra ocurrencia antes de rendirse.
+        """
         states = [
             "Ciudad de México", "Estado de México", "Jalisco", "Nuevo León",
             "Veracruz", "Puebla", "Guanajuato", "Chihuahua", "Michoacán",
@@ -1663,9 +1813,20 @@ class WebsiteScraper:
             "Colima", "Durango", "Chiapas", "Baja California Sur",
         ]
         tl = text.lower()
+        _STREET_AFTER_RE  = re.compile(r'^\s*(n[º°o]\.?\s*\d|#\s*\d|\d)')
+        _STREET_BEFORE_RE = re.compile(r'(calle|av\.|avenida|blvd\.?|boulevard|colonia|col\.)\s*$')
         for state in states:
-            if state.lower() in tl:
-                return state
+            s_low = state.lower()
+            start = 0
+            while True:
+                pos = tl.find(s_low, start)
+                if pos == -1:
+                    break
+                after  = tl[pos + len(s_low): pos + len(s_low) + 12]
+                before = tl[max(0, pos - 12): pos]
+                if not (_STREET_AFTER_RE.search(after) or _STREET_BEFORE_RE.search(before)):
+                    return state
+                start = pos + len(s_low)
         return ""
 
     def _extract_country(self, text: str) -> str:
@@ -1750,7 +1911,7 @@ class WebsiteScraper:
             count = 0
             for a in container.find_all("a", href=True):
                 h = a["href"]
-                if "wa.me/" in h or ("api.whatsapp.com/send" in h and "phone=" in h):
+                if "wa.me/" in h or (("api.whatsapp.com/send" in h or "web.whatsapp.com/send" in h) and "phone=" in h):
                     count += 1
                     if count > 1:
                         return True
@@ -1795,7 +1956,7 @@ class WebsiteScraper:
             raw_num = None
             if "wa.me/" in href:
                 raw_num = href.split("wa.me/")[-1].split("?")[0].split("/")[0]
-            elif "api.whatsapp.com/send" in href and "phone=" in href:
+            elif ("api.whatsapp.com/send" in href or "web.whatsapp.com/send" in href) and "phone=" in href:
                 raw_num = href.split("phone=")[-1].split("&")[0]
             if not raw_num:
                 continue
@@ -1823,7 +1984,7 @@ class WebsiteScraper:
             href = link["href"].strip()
             if "wa.me/" in href:
                 candidates.append(href.split("wa.me/")[-1].split("?")[0].split("/")[0])
-            elif "api.whatsapp.com/send" in href and "phone=" in href:
+            elif ("api.whatsapp.com/send" in href or "web.whatsapp.com/send" in href) and "phone=" in href:
                 candidates.append(href.split("phone=")[-1].split("&")[0])
 
         candidates.extend(re.findall(

@@ -235,6 +235,64 @@ class TestSchemaAddress:
         result = scraper._extract_schema_address(make_soup("<html></html>"))
         assert result == {}
 
+    def test_multi_branch_chain_exposes_all_locations(self, scraper):
+        # Real gap (2026-09-20): a chain/franchise describes each branch as its
+        # own LocalBusiness node in the same @graph — this used to silently
+        # return only the FIRST branch's address as if it were the only one,
+        # with no signal at all that the business has other locations too.
+        payload = {
+            "@graph": [
+                {"@type": "WebPage"},
+                {"@type": "LocalBusiness",
+                 "address": {"streetAddress": "Suc. Centro 1", "addressLocality": "Hermosillo",
+                             "addressRegion": "Sonora", "postalCode": "83000", "addressCountry": "MX"}},
+                {"@type": "LocalBusiness",
+                 "address": {"streetAddress": "Suc. Norte 2", "addressLocality": "Ciudad Obregón",
+                             "addressRegion": "Sonora", "postalCode": "85000", "addressCountry": "MX"}},
+                {"@type": "LocalBusiness",
+                 "address": {"streetAddress": "Suc. Sur 3", "addressLocality": "Guaymas",
+                             "addressRegion": "Sonora", "postalCode": "85400", "addressCountry": "MX"}},
+            ]
+        }
+        html = f'<script type="application/ld+json">{json.dumps(payload)}</script>'
+        result = scraper._extract_schema_address(make_soup(html))
+        # Primary (first-found) address is unchanged — backward compatible.
+        assert result["city"] == "Hermosillo"
+        # But now all three branches are exposed, not just the first.
+        assert result["all_locations"] == [
+            {"city": "Hermosillo", "state": "Sonora"},
+            {"city": "Ciudad Obregón", "state": "Sonora"},
+            {"city": "Guaymas", "state": "Sonora"},
+        ]
+
+    def test_single_location_has_no_all_locations_key(self, scraper):
+        # Backward compatibility: a normal single-address page must not grow
+        # a noisy all_locations key that every existing caller now has to
+        # account for.
+        html = '''<script type="application/ld+json">
+        {"@type": "LocalBusiness",
+         "address": {"streetAddress": "Av. Juárez 123", "addressLocality": "Querétaro",
+                     "addressRegion": "Querétaro", "postalCode": "76000", "addressCountry": "MX"}}
+        </script>'''
+        result = scraper._extract_schema_address(make_soup(html))
+        assert "all_locations" not in result
+
+    def test_duplicate_branch_addresses_are_not_double_counted(self, scraper):
+        # Some sites repeat the SAME address across multiple schema blocks
+        # (header + footer) rather than genuinely listing different branches —
+        # must not be misread as a multi-location chain.
+        payload = {
+            "@graph": [
+                {"@type": "LocalBusiness",
+                 "address": {"streetAddress": "A", "addressLocality": "Puebla", "addressRegion": "Puebla"}},
+                {"@type": "Organization",
+                 "address": {"streetAddress": "A", "addressLocality": "Puebla", "addressRegion": "Puebla"}},
+            ]
+        }
+        html = f'<script type="application/ld+json">{json.dumps(payload)}</script>'
+        result = scraper._extract_schema_address(make_soup(html))
+        assert "all_locations" not in result
+
 
 # ─────────────────────────────────────────────────────────────
 # 3. _extract_map_iframe_text
@@ -300,6 +358,18 @@ class TestAddressStructuredCascade:
         for key in ("address", "city", "state", "postal_code", "country", "lat", "lon"):
             assert key in result
 
+    def test_state_name_street_does_not_beat_real_city_state(self, scraper):
+        # Real bug (fergusa.com.mx, 2026-09-18): "Morelos" is both a Mexican
+        # state AND one of the most common street names in the country. The
+        # old code picked whichever _extract_state's blind 32-state substring
+        # scan found first, so an address on Calle Morelos in Guadalajara
+        # (Jalisco) came back with state="Morelos" instead of "Jalisco".
+        text = ("Dirección: Teléfono: E-Mail: Mensaje: ENVIAR Morelos Nº 121 Col. Centro "
+                "Guadalajara, Jalisco Tel: 36136211 Ir a mapa SUCURSALES")
+        result = scraper._extract_address_structured(make_soup("<html></html>"), text)
+        assert result["city"] == "Guadalajara"
+        assert result["state"] == "Jalisco"
+
 
 # ─────────────────────────────────────────────────────────────
 # 5. _detect_industry  — name-based pre-classification (no LLM)
@@ -344,6 +414,70 @@ class TestIndustryDetection:
 
 
 # ─────────────────────────────────────────────────────────────
+# 5b. _extract_state — street-name-vs-state-name disambiguation
+# ─────────────────────────────────────────────────────────────
+
+class TestExtractStateStreetNameGuard:
+    """Real bug (fergusa.com.mx, 2026-09-20): several state names ("Morelos",
+    "Hidalgo", "Guerrero"...) are also extremely common Mexican street names.
+    A blind substring scan read "Morelos Nº 121 Col. Centro" (a real branch
+    address in Guadalajara, Jalisco) as state="Morelos"."""
+
+    def test_state_name_used_as_street_is_skipped(self, scraper):
+        text = "Visítanos en Morelos Nº 121 Col. Centro, Guadalajara, Jalisco"
+        assert scraper._extract_state(text) == "Jalisco"
+
+    def test_state_name_used_as_street_with_hash_number(self, scraper):
+        text = "Sucursal en Hidalgo #45 Col. Centro"
+        assert scraper._extract_state(text) == ""
+
+    def test_state_name_preceded_by_calle_is_skipped(self, scraper):
+        text = "Oficinas en Calle Guerrero, cerca del centro. Atendemos en Jalisco todo el año."
+        assert scraper._extract_state(text) == "Jalisco"
+
+    def test_genuine_state_mention_still_works(self, scraper):
+        text = "Contamos con sucursales en todo Jalisco, visítanos pronto"
+        assert scraper._extract_state(text) == "Jalisco"
+
+    def test_no_state_mentioned_returns_empty(self, scraper):
+        assert scraper._extract_state("Bienvenido a nuestra tienda en línea") == ""
+
+
+# ─────────────────────────────────────────────────────────────
+# 5c. _deepseek_enrich_result — AI-filled city must not be a state name
+# ─────────────────────────────────────────────────────────────
+
+class TestEnrichResultCityValidation:
+    """Same root problem as TestExtractStateStreetNameGuard, but for the AI
+    enrichment fallback: no real Mexican municipality is named exactly like
+    one of the 32 states, so the LLM returning e.g. "ciudad": "Morelos" means
+    it almost certainly read a street name out of context, not an actual
+    city. Real case (fergusa.com.mx, 2026-09-20): the snippet included
+    "...Morelos Nº 121 Col. Centro..." and the LLM answered "ciudad": "Morelos"."""
+
+    def _run_enrich(self, scraper, ai_city, monkeypatch_llm=True):
+        result = {"description": "Descripción no disponible", "services": [], "city": "", "state": "",
+                  "_extra": {"business_hours": None, "city": "", "state": ""}}
+        with (
+            patch("app.llm.OPENAI_API_KEY", "fake-key"),
+            patch("app.llm.DEEPSEEK_API_KEY", ""),
+            patch("app.llm.call_llm", return_value=f'{{"ciudad": "{ai_city}"}}'),
+        ):
+            scraper._deepseek_enrich_result(result, "algún texto de la página")
+        return result
+
+    def test_state_name_returned_as_city_is_rejected(self, scraper):
+        result = self._run_enrich(scraper, "Morelos")
+        assert result["city"] == ""
+        assert result["state"] == ""
+
+    def test_genuine_city_is_accepted_and_infers_state(self, scraper):
+        result = self._run_enrich(scraper, "Guadalajara")
+        assert result["city"] == "Guadalajara"
+        assert result["state"] == "Jalisco"
+
+
+# ─────────────────────────────────────────────────────────────
 # 6. _clean_city / _infer_state_from_city
 # ─────────────────────────────────────────────────────────────
 
@@ -374,7 +508,86 @@ class TestCityNormalization:
         assert scraper._infer_state_from_city("Querétaro") == "Querétaro"
 
     def test_infer_state_unknown_city(self, scraper):
-        assert scraper._infer_state_from_city("Apizaco") == ""
+        # "Apizaco" used to be this test's example — it's now a known city
+        # (Tlaxcala) since _infer_state_from_city started reusing searcher.py's
+        # much larger city→state table (2026-09-18) instead of its own ~24-city
+        # list, so it needs a genuinely made-up name to test the empty case.
+        assert scraper._infer_state_from_city("Pueblorrandominventado") == ""
+
+    def test_infer_state_now_covers_more_cities_than_before(self, scraper):
+        # Real bug (2026-09-18): the old hardcoded ~24-city MAP didn't know
+        # "Ciudad Obregón", so a company scraped there ended up with
+        # city="Ciudad Obregón" / state="Sinaloa" (wrong — picked up from an
+        # unrelated substring match elsewhere on the page instead of being
+        # correctly inferred as Sonora).
+        assert scraper._infer_state_from_city("Ciudad Obregón") == "Sonora"
+        assert scraper._infer_state_from_city("Apizaco") == "Tlaxcala"
+
+    def test_infer_state_ambiguous_city_returns_empty(self, scraper):
+        # "Guadalupe" is a real city in BOTH Nuevo León and Zacatecas — better to
+        # not guess than to confidently return the wrong one.
+        assert scraper._infer_state_from_city("Guadalupe") == ""
 
     def test_infer_state_case_insensitive(self, scraper):
         assert scraper._infer_state_from_city("GUADALAJARA") == "Jalisco"
+
+
+# ─────────────────────────────────────────────────────────────
+# 8. JoinChat widget — number lives in a JSON blob (data-settings attr or an
+#    inline `joinchat_obj` script var), not in visible text/href like the
+#    other WhatsApp click-to-chat widgets _extract_from_scripts already knew
+#    how to read (real case, 2026-09-18).
+# ─────────────────────────────────────────────────────────────
+class TestJoinchatWidget:
+    def test_data_settings_attribute_is_parsed(self, scraper):
+        html = '''
+        <div class="joinchat" data-settings='{"telephone":"5215512345678","message_text":"hola"}'>
+          <div class="joinchat__button"></div>
+        </div>
+        '''
+        phones, wa_numbers = scraper._extract_from_scripts(make_soup(html))
+        assert "+525512345678" in wa_numbers
+
+    def test_settings_nested_under_settings_key(self, scraper):
+        html = '''<div class="joinchat" data-settings='{"settings":{"telephone":"5215512345678"}}'></div>'''
+        phones, wa_numbers = scraper._extract_from_scripts(make_soup(html))
+        assert "+525512345678" in wa_numbers
+
+    def test_inline_joinchat_obj_script_var_is_parsed(self, scraper):
+        html = '''
+        <script>
+        var joinchat_obj = {"settings": {"telephone": "5215512345678", "position": "right"}};
+        </script>
+        '''
+        phones, wa_numbers = scraper._extract_from_scripts(make_soup(html))
+        assert "+525512345678" in wa_numbers
+
+    def test_malformed_data_settings_does_not_crash(self, scraper):
+        html = '''<div class="joinchat" data-settings='not valid json'></div>'''
+        phones, wa_numbers = scraper._extract_from_scripts(make_soup(html))
+        assert wa_numbers == []
+
+
+# ─────────────────────────────────────────────────────────────
+# 9. web.whatsapp.com/send?phone= click-to-chat links — same shape as
+#    api.whatsapp.com/send?phone= but pointing at the desktop app instead of
+#    the mobile deep link. Real case, 2026-09-18: a button on dentalion.mx
+#    opened exactly this URL and it wasn't recognized anywhere.
+# ─────────────────────────────────────────────────────────────
+class TestWebWhatsappComLink:
+    REAL_URL = ("https://web.whatsapp.com/send?phone=5216621276964&text=Hola%20me%20"
+                "gustar%C3%ADa%20tener%20mas%20informaci%C3%B3n%20a%20cerca%20de%20sus%20servicios.")
+
+    def test_extract_whatsapp_with_labels(self, scraper):
+        html = f'<a href="{self.REAL_URL}">Abrir chat</a>'
+        result = scraper._extract_whatsapp_with_labels(make_soup(html), "")
+        assert result == [{"number": "+526621276964", "label": "Abrir chat"}]
+
+    def test_extract_whatsapp_numbers(self, scraper):
+        html = f'<a href="{self.REAL_URL}">Abrir chat</a>'
+        result = scraper._extract_whatsapp_numbers(make_soup(html), "")
+        assert result == ["+526621276964"]
+
+    def test_link_in_attribute_regex(self, scraper):
+        m = scraper._WA_LINK_IN_ATTR_RE.search(self.REAL_URL)
+        assert m and m.group(1) == "5216621276964"

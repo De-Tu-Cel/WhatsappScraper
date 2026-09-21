@@ -142,6 +142,7 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
                 "state": _extra.get("state"),
                 "country": _extra.get("country"),
                 "postal_code": _extra.get("postal_code"),
+                "all_locations": _extra.get("all_locations") or [],
                 "business_hours": _extra.get("business_hours"),
                 "services": _extra.get("services"),
                 "products": _extra.get("products"),

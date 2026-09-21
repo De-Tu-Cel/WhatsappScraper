@@ -668,7 +668,12 @@ function autoRestoreSessions() {
   for (const dir of dirs) {
     for (const lockFile of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
       const p = path.join(SESSIONS_PATH, dir, lockFile)
-      if (fs.existsSync(p)) fs.rmSync(p, { force: true })
+      // SingletonLock is a symlink whose "target" is just a hostname-pid marker,
+      // not a real path — fs.existsSync() follows symlinks and resolves that
+      // target, so it reports false (file "missing") for a lock that's very
+      // much still there. rmSync with force:true removes the directory entry
+      // itself regardless, and silently no-ops if it's genuinely absent.
+      try { fs.rmSync(p, { force: true }) } catch (_) {}
     }
   }
   dirs.forEach((dir, i) => {

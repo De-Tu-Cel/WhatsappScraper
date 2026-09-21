@@ -12,6 +12,29 @@ from pymongo import MongoClient
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Same memory-reduction flags added to wwebjs-service (2026-09-18, after a
+# host-wide Docker daemon freeze that correlated with several concurrent
+# Chrome instances on a server with 0 swap headroom) — this scraper's own
+# Playwright launches shared that same host, uncapped, without them. A bulk
+# scrape job can run up to 4 of these concurrently (scrape_jobs._CONCURRENCY),
+# on top of whatever wwebjs-service sessions are already connected.
+_PLAYWRIGHT_LAUNCH_ARGS = [
+    "--disable-breakpad",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-component-update",
+    "--disable-default-apps",
+    "--disable-domain-reliability",
+    "--disable-hang-monitor",
+    "--disable-sync",
+    "--metrics-recording-only",
+    "--mute-audio",
+    "--js-flags=--max-old-space-size=256",
+]
+
 
 def _soup_from_bytes(content: bytes) -> BeautifulSoup:
     """Build a BeautifulSoup from raw response bytes, preferring a strict UTF-8
@@ -563,7 +586,7 @@ class WebsiteScraper:
                 # Chromium desde cero (~1-2s) en cada intento era el principal costo,
                 # no la carga de la página en sí.
                 with sync_playwright() as pw:
-                    browser = pw.chromium.launch(headless=True)
+                    browser = pw.chromium.launch(headless=True, args=_PLAYWRIGHT_LAUNCH_ARGS)
                     ctx = browser.new_context(
                         user_agent=self.headers["User-Agent"],
                         locale="es-MX",
@@ -882,7 +905,7 @@ class WebsiteScraper:
 
         try:
             with sync_playwright() as pw:
-                browser = pw.chromium.launch(headless=True)
+                browser = pw.chromium.launch(headless=True, args=_PLAYWRIGHT_LAUNCH_ARGS)
                 ctx = browser.new_context(
                     user_agent=self.headers["User-Agent"],
                     locale="es-MX",

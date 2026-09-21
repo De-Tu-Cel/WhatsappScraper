@@ -192,6 +192,25 @@ class MongoDBManager:
                 if new_label and not existing.get("label"):
                     self.db.contacts.update_one({"_id": existing["_id"]}, {"$set": {"label": new_label}})
                 return str(existing["_id"])
+            # A phone-verification promotion (pipeline.py's re-scrape path) can find
+            # this same number already saved as type="phone" from an earlier visit —
+            # without this check it would insert a second, parallel "whatsapp" doc
+            # instead of upgrading the existing one in place, leaving a stale
+            # duplicate "phone" contact behind for the same real number.
+            existing_phone = self.db.contacts.find_one({
+                "company_id": cid, "type": "phone",
+                "value": {"$regex": clean10, "$options": "i"},
+            })
+            if existing_phone:
+                self.db.contacts.update_one(
+                    {"_id": existing_phone["_id"]},
+                    {"$set": {
+                        "type": "whatsapp",
+                        "verified": True,
+                        "detected_via": contact_data.get("detected_via", "phone_verification"),
+                    }},
+                )
+                return str(existing_phone["_id"])
 
         elif ctype == "phone":
             value   = contact_data.get("value", "")
@@ -202,6 +221,16 @@ class MongoDBManager:
                     "value": {"$regex": clean10, "$options": "i"},
                 })
                 if existing:
+                    # Persist a fresh verification result (True/False) onto the
+                    # existing record instead of silently no-op'ing — otherwise a
+                    # re-scrape's verification check ran for nothing, and the
+                    # backlog script would keep re-checking the same number forever
+                    # since "verified" never got set (found live, 2026-09-18).
+                    if "verified" in contact_data:
+                        self.db.contacts.update_one(
+                            {"_id": existing["_id"]},
+                            {"$set": {"verified": contact_data["verified"]}},
+                        )
                     return str(existing["_id"])
 
         elif ctype == "email":

@@ -5682,6 +5682,63 @@ def _build_requeue_filter():
         ],
     }
 
+@router.post("/admin/verify-phone-contacts")
+def api_verify_phone_contacts(limit: int = 10):
+    """Check 'phone' contacts (scraped without an explicit WhatsApp icon/link)
+    against real WhatsApp registration via isRegisteredUser() — the same
+    lookup already done before every real send (getNumberId()), no message
+    sent. Promotes a match to type='whatsapp' so it stops being a wasted
+    contact opportunity (real ask, 2026-09-18: numbers scraped as "just a
+    phone" that turn out to have WhatsApp too). Processes at most `limit` per
+    call; use `remaining` to know if another call is needed — same
+    claim-then-process pattern as /admin/requeue-unanalyzed, so concurrent
+    calls don't double-check the same contact."""
+    from app.whatsapp_wwebjs import get_all_connected_instances, verify_number
+    db = MongoDBManager()
+    connected = get_all_connected_instances(db)
+    if not connected:
+        return {"ok": True, "checked": 0, "promoted": 0, "remaining": 0, "paused": True,
+                "reason": "No hay ninguna sesión de WhatsApp conectada para verificar."}
+    instance = connected[0]
+
+    _filter = {"type": "phone", "verified": {"$exists": False}}
+    claimed = []
+    for _ in range(limit):
+        doc = db.db.contacts.find_one_and_update(
+            _filter,
+            {"$set": {"verified": "checking"}},
+            projection={"_id": 1, "company_id": 1, "value": 1},
+        )
+        if not doc:
+            break
+        claimed.append(doc)
+
+    promoted = 0
+    for doc in claimed:
+        try:
+            is_wa = bool(verify_number(instance, doc["value"]).get("registered"))
+        except Exception as e:
+            print(f"[verify-phone-contacts] check failed for {doc['value']}: {e}")
+            is_wa = None
+
+        if is_wa is True:
+            db.db.contacts.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {"type": "whatsapp", "verified": True, "detected_via": "phone_verification"}},
+            )
+            db.update_company(str(doc["company_id"]), {"has_whatsapp": True})
+            promoted += 1
+        elif is_wa is False:
+            db.db.contacts.update_one({"_id": doc["_id"]}, {"$set": {"verified": False}})
+        else:
+            # Verification itself failed (network blip, instance disconnected mid-batch)
+            # — release the claim instead of permanently marking verified=False, so this
+            # contact gets retried on the next call rather than being wrongly skipped forever.
+            db.db.contacts.update_one({"_id": doc["_id"]}, {"$unset": {"verified": ""}})
+
+    remaining = db.db.contacts.count_documents(_filter)
+    return {"ok": True, "checked": len(claimed), "promoted": promoted, "remaining": remaining}
+
 @router.post("/admin/requeue-unanalyzed")
 def api_requeue_unanalyzed(background_tasks: BackgroundTasks, limit: int = 20):
     """Find inbound messages with no valid analysis and re-run the classifier.

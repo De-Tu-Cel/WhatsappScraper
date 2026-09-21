@@ -153,9 +153,14 @@ Si el mensaje cumple LAS DOS condiciones siguientes → SIEMPRE "bot" is_ai=true
 ══ PASO 2: CALIDAD DE SERVICIO (escala 1-5) ══
 Mide CÓMO atendió la empresa al prospecto. Independiente del interés de compra del lead.
 Automáticos/bots que ignoran la consulta: 1-2 en TODAS las dimensiones sin excepción.
-Acuse de recibo o cortesía vacía sin abordar el tema ("gracias", "ok", "entendido",
-"gracias por su mensaje", emoji solo, 1-4 palabras sin sustancia) — sea humano o bot —
+Acuse de recibo o cortesía vacía que EVADE el tema ya planteado ("gracias", "ok", "entendido",
+"gracias por su mensaje", emoji solo como única respuesta a una pregunta) — sea humano o bot —
 TODAS las dimensiones en 1-2. El tono amable no compensa la falta de contenido real.
+⚠️ UN SALUDO DE APERTURA NO ES "CORTESÍA VACÍA": "hola", "buen día", "buenas tardes" como
+PRIMER mensaje de la conversación (antes de que exista una pregunta que evadir) es atención
+profesional normal, no un esquive — no lo califiques igual que un "ok" que ignora algo ya
+preguntado. Evalúalo con lo poco que hay (normalmente 3, ni mal ni excepcional) en vez de
+forzarlo a 1-2 solo por ser corto.
 
 svc_prof   (Profesionalismo) — 1-2: errores graves o tono cortante/inapropiado · 4-5: impecable, tono cálido y consistente
 svc_comp   (Completitud) — 1-2: ignora la pregunta o da algo genérico que no aplica · 4-5: responde punto por punto, sin dejar nada sin cubrir
@@ -469,6 +474,16 @@ def _parse_llm_response(raw: str) -> dict:
         except (TypeError, ValueError):
             return None
 
+    # El prompt le pide al LLM "Automáticos/bots = 1 siempre" para la señal
+    # comercial (PASO 3) — no siempre lo respeta (mismo patrón de incumplimiento
+    # ya documentado para otras reglas de este prompt, ver REGLA DE ORO arriba).
+    # Caso real: "Estrena tu próximo SEAT en SEAT FURIA" — category=bot con
+    # lead_signal=3 pese a la instrucción explícita. Se refuerza aquí en vez
+    # de confiar solo en el prompt, mismo patrón que is_ai unas líneas arriba.
+    lead_signal = _svc("lead_signal")
+    if category == "bot" and lead_signal is not None:
+        lead_signal = 1
+
     return {
         "category": category,
         "is_ai": is_ai,
@@ -476,7 +491,7 @@ def _parse_llm_response(raw: str) -> dict:
         **svc_scores,
         "response_quality": _response_quality_from_svc(svc_scores),
         "bot_quality": _bq(result.get("bot_quality")),
-        "lead_signal": _svc("lead_signal"),
+        "lead_signal": lead_signal,
         "notes": result.get("notes") or "",
         "conversation_analysis": bool(result.get("conversation_analysis", False)),
     }
@@ -764,6 +779,15 @@ def _looks_human_casual(text: str) -> bool:
         return False
     if _looks_like_menu(t) or _looks_like_auto_reply(t) or _looks_like_bot_selfid(t):
         return False
+    # Muy corto (<=15) y sin ninguna señal de bot (ya descartada arriba) — casi
+    # seguro humano tecleado rápido sin importar mayúscula inicial. Ningún
+    # auto-reply/plantilla real visto en producción es esto de corto (el más
+    # breve, "Gracias por tu mensaje...", ya pasa de 20). Caso real: "Grcs a ti"
+    # (abreviatura de "gracias" con mayúscula inicial) clasificado "bot"/is_ai=True
+    # por el LLM de classify_response — no atrapaba antes por empezar en
+    # mayúscula y no calzar el patrón exacto de saludo casual (2026-09-18).
+    if len(t) <= 15:
+        return True
     starts_lowercase = t[0].islower()
     is_casual_greeting = bool(_CASUAL_HUMAN_GREETING.match(t))
     return starts_lowercase or is_casual_greeting
@@ -955,9 +979,12 @@ def _quick_classify(inbound_body: str, reaction_time_min: float = None) -> dict 
                              is_ai=_is_conversational_ai)
 
     # Auto-reply template (folio, "tu mensaje es importante", "horario de atención", etc.)
-    # combined with an active human-connection offer → hybrid.
+    # combined with an active human-connection offer → hybrid. A confirmed template
+    # match (not just a shape-based guess) is hard evidence, so this is the
+    # "hibrido_bot" flavor, not the ambiguous "hibrido_automatico" one (split
+    # 2026-09-18 — see database.py's _mixed_signal_category for the full rationale).
     if _looks_like_auto_reply(text) and _looks_like_hybrid_offer(text):
-        return _quick_result("hibrido", "ACK automático + oferta activa de conexión con humano — sin IA")
+        return _quick_result("hibrido_bot", "ACK automático + oferta activa de conexión con humano — sin IA")
 
     # Plain auto-reply template with no hybrid offer → bot.
     if _looks_like_auto_reply(text):
@@ -984,8 +1011,17 @@ def _quick_classify(inbound_body: str, reaction_time_min: float = None) -> dict 
     # Y rápidos a la vez, la combinación que un humano no puede sostener.
     _MAX_HUMAN_CHARS_PER_SEC = 8.0
     if (reaction_time_min is not None
+            and reaction_time_min >= 0
             and len(text) >= 80
             and not _HUMAN_PERSONALITY_MARKERS.search(text)):
+        # A negative reaction_time_min means the timing data itself is broken
+        # (clock skew, or an outbound/inbound pairing race) — classify_and_save
+        # already filters this to None before calling in, but that guard lives
+        # in the one caller, not here. Without this >= 0 check, `max(x*60, 0.1)`
+        # turns a NEGATIVE time into the FASTEST possible bucket (0.1s), which
+        # makes this rule fire on ANY message >=80 chars regardless of content —
+        # broken timing becoming the strongest possible "it's a bot" signal
+        # instead of "we don't actually know the timing, skip this rule."
         reaction_seconds = max(reaction_time_min * 60, 0.1)
         if len(text) / reaction_seconds > _MAX_HUMAN_CHARS_PER_SEC:
             return _quick_result(
@@ -1033,7 +1069,8 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
     prompt = _build_prompt(inbound_body, outbound_body, reaction_time_min)
     try:
         raw = _call_deepseek([{"role": "user", "content": prompt}])
-        return _parse_llm_response(raw)
+        result = _parse_llm_response(raw)
+        return _apply_response_deterministic_corrections(result, inbound_body)
     except LLMQuotaExceeded:
         raise
     except Exception as e:
@@ -1045,6 +1082,31 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
         if reaction_time_min is not None and reaction_time_min * 60 < 30:
             result["category"] = "bot"
         return result
+
+
+def _apply_response_deterministic_corrections(result: dict, inbound_body: str) -> dict:
+    """Post-LLM safety net for classify_response() — this per-message path had
+    none before, unlike classify_conversation()/classify_conversation_and_save()
+    which already correct the mirror-image mistake. Real production cases,
+    2026-09-18 (company 6a919d3341a1232f02f0159a, all same day): "Grcs a ti",
+    "va", "ya" all judged category=bot/is_ai=True with notes like "la respuesta
+    fue automática... no hay interacción humana" — the LLM read terse, off-topic
+    brevity as proof of automation even with zero actual bot fingerprint in the
+    text (no menu, no template, no self-identification)."""
+    if result.get("category") == "bot":
+        text = (inbound_body or "").strip()
+        has_bot_signal = _looks_like_menu(text) or _looks_like_auto_reply(text) or _looks_like_bot_selfid(text)
+        has_human_signal = _looks_human_casual(text) or bool(_HUMAN_NAME_INTRO.search(text))
+        if not has_bot_signal and has_human_signal:
+            result = dict(result)
+            result["category"] = "humano"
+            result["is_ai"] = False
+            result["notes"] = (
+                (result.get("notes") or "").strip()
+                + " — corregido: la respuesta es corta y casual sin ninguna señal de bot, "
+                  "lo que contradice el análisis anterior."
+            ).strip(" —")
+    return result
 
 
 def classify_conversation(company_id: str, company_name: str = "", industry: str = "") -> dict:
@@ -1514,8 +1576,10 @@ def _resolve_probe(db, probe_doc: dict, reply_body: str | None, received_at: dat
                 _rt if (_rt and (_looks_like_menu(_rt) or _looks_like_bot_selfid(_rt) or _looks_like_auto_reply(_rt))) else None
             )
             if _hybrid_sample is not None:
+                # Confirmed hybrid-offer pattern match (hard evidence) — "hibrido_bot"
+                # flavor, same rationale as the equivalent rule in _quick_classify.
                 analysis = _quick_result(
-                    "hibrido", f"{base_notes} — un mensaje ofrece conectar con un humano ('{_hybrid_sample[:30]}')"
+                    "hibrido_bot", f"{base_notes} — un mensaje ofrece conectar con un humano ('{_hybrid_sample[:30]}')"
                 )
             elif _bot_sample is not None:
                 analysis = _quick_result(
@@ -1907,7 +1971,10 @@ def classify_conversation_and_save(company_id: str, log_id: str):
                     },
                     {
                         "$set": {
-                            "analysis.category": "hibrido",
+                            # Promoting confirmed "bot" records specifically — hard
+                            # evidence, so "hibrido_bot", not the ambiguous
+                            # "hibrido_automatico" flavor (split 2026-09-18).
+                            "analysis.category": "hibrido_bot",
                             "analysis.conversation_analysis": True,
                             "analysis.notes": "Reclasificado retroactivamente: análisis completo detectó fases automática + humana.",
                         }

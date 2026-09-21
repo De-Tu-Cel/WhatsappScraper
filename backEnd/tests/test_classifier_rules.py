@@ -12,7 +12,9 @@ import pytest
 
 from app.classifier import (
     _apply_deterministic_corrections,
+    _apply_response_deterministic_corrections,
     _has_real_text,
+    _looks_human_casual,
     _looks_like_auto_reply,
     _looks_like_bot_selfid,
     _looks_like_formal_bdc_greeting,
@@ -227,6 +229,49 @@ class TestQuickClassify:
         assert _quick_classify("   ", reaction_time_min=3.0) is None
 
 
+# ── Typing-speed rule (_MAX_HUMAN_CHARS_PER_SEC inside _quick_classify) ─────
+# A message >=80 chars that arrived implausibly fast for its length gets
+# flagged "bot" even with no menu/template/self-id signal — but only when the
+# timing itself is trustworthy.
+class TestTypingSpeedRule:
+    def test_exactly_at_8_chars_per_sec_does_not_flag(self):
+        # 80 chars in exactly 10s = 8.0 char/s — the boundary itself must NOT
+        # trigger (strict >, not >=): the threshold is deliberately loose so a
+        # fast human isn't caught, only content clearly faster than the limit.
+        text = "x" * 80
+        assert _quick_classify(text, reaction_time_min=10 / 60) is None
+
+    def test_just_over_the_boundary_flags_bot(self):
+        text = "x" * 81  # 81 chars / 10s = 8.1 char/s
+        result = _quick_classify(text, reaction_time_min=10 / 60)
+        assert result is not None
+        assert result["category"] == "bot"
+
+    def test_under_80_chars_never_flags_regardless_of_speed(self):
+        text = "x" * 79
+        assert _quick_classify(text, reaction_time_min=1 / 60) is None
+
+    def test_negative_reaction_time_does_not_flag(self):
+        # Real bug found 2026-09-18: `max(reaction_time_min * 60, 0.1)` turned a
+        # NEGATIVE reaction time (broken/unreliable timing data — clock skew, or
+        # an outbound/inbound pairing race) into the FASTEST possible bucket
+        # (0.1s), which made this rule fire on ANY long message regardless of
+        # content. classify_and_save() already filters negative deltas to None
+        # before calling in, but _quick_classify() must not silently misread a
+        # negative value as "impossibly fast" if some other caller ever passes
+        # one through directly.
+        text = "x" * 200
+        assert _quick_classify(text, reaction_time_min=-1) is None
+
+    def test_zero_reaction_time_still_flags(self):
+        # A genuinely instant (0s) reply to an 80+ char message is still real
+        # signal, unlike a negative value — must not be swept up by the same fix.
+        text = "x" * 80
+        result = _quick_classify(text, reaction_time_min=0)
+        assert result is not None
+        assert result["category"] == "bot"
+
+
 # ── _quick_result / _quick_result_unrated shape ─────────────────────────────
 
 class TestQuickResultShapes:
@@ -302,6 +347,24 @@ class TestParseLlmResponse:
         assert result["svc_prof"] is None
         result = _parse_llm_response(self._raw(svc_comp="not-a-number"))
         assert result["svc_comp"] is None
+
+    def test_lead_signal_forced_to_1_for_bot_category(self):
+        # The prompt explicitly says "Automáticos/bots = 1 siempre" for the
+        # commercial signal (PASO 3), but the LLM doesn't always comply — real
+        # case: "Estrena tu próximo SEAT en SEAT FURIA" came back category=bot
+        # with lead_signal=3. Enforced here the same way is_ai already is.
+        result = _parse_llm_response(self._raw(category="bot", lead_signal=4))
+        assert result["lead_signal"] == 1
+
+    def test_lead_signal_kept_as_is_outside_bot_category(self):
+        result = _parse_llm_response(self._raw(category="humano", lead_signal=4))
+        assert result["lead_signal"] == 4
+        result = _parse_llm_response(self._raw(category="hibrido", lead_signal=4))
+        assert result["lead_signal"] == 4
+
+    def test_lead_signal_none_stays_none_for_bot_category(self):
+        result = _parse_llm_response(self._raw(category="bot", lead_signal=None))
+        assert result["lead_signal"] is None
 
 
 # ── _resolve_probe (T1→T2 probe resolution) ─────────────────────────────────
@@ -395,6 +458,106 @@ class TestResolveProbeT2Guard:
         result = _resolve_probe(db, _probe_doc(), "1. Ventas\n2. Soporte", received_at)
         assert result["category"] == "bot"
         assert result["is_ai"] is False
+
+
+# ── _resolve_probe: content-based branching when T2 is NOT fast (timed out,
+#    not-yet-sent, or slow) — TestResolveProbeT2Guard above only covers the
+#    FAST-T2 guard mechanics; these test the "else" branch's own content
+#    fingerprinting (vCard/hybrid-offer/bot-template/casual/name-intro/
+#    fallback), previously exercised only indirectly via production data. ──
+
+class TestResolveProbeContentBranching:
+    def _probe_doc_with_body(self, body: str):
+        return {**_probe_doc(), "message_body": body}
+
+    def test_vcard_share_is_humano_regardless_of_timing(self):
+        db = FakeMongoDBManager(msg2_doc=None)
+        received_at = T1_TIME + timedelta(hours=1, seconds=1)
+        result = _resolve_probe(
+            db, self._probe_doc_with_body("hola"),
+            "BEGIN:VCARD\nVERSION:3.0\nFN:Juan Perez\nEND:VCARD",
+            received_at, timed_out=True,
+        )
+        assert result["category"] == "humano"
+        assert "contacto o archivo" in result["notes"]
+
+    def test_hybrid_offer_in_original_text_is_hibrido_bot(self):
+        db = FakeMongoDBManager(msg2_doc=None)
+        received_at = T1_TIME + timedelta(hours=1, seconds=1)
+        result = _resolve_probe(
+            db, self._probe_doc_with_body("Responde SÍ y te conectamos con un asesor humano"),
+            None, received_at, timed_out=True,
+        )
+        assert result["category"] == "hibrido_bot"
+
+    def test_menu_in_original_text_is_bot(self):
+        db = FakeMongoDBManager(msg2_doc=None)
+        received_at = T1_TIME + timedelta(hours=1, seconds=1)
+        result = _resolve_probe(
+            db, self._probe_doc_with_body("1. Ventas\n2. Soporte"),
+            None, received_at, timed_out=True,
+        )
+        assert result["category"] == "bot"
+
+    def test_auto_reply_in_second_message_outweighs_casual_first_message(self):
+        # First message looked human-casual, but the SECOND (more recent) reply
+        # is an unambiguous auto-reply template — the template must win (see the
+        # 2026-09-17 real-case comment in the source for why this ordering matters).
+        db = FakeMongoDBManager(msg2_doc=None)
+        received_at = T1_TIME + timedelta(hours=1, seconds=1)
+        result = _resolve_probe(
+            db, self._probe_doc_with_body("hola que tal"),
+            "Tu mensaje es importante para nosotros, en breve te contactaremos",
+            received_at, timed_out=True,
+        )
+        assert result["category"] == "bot"
+
+    def test_casual_human_style_with_no_bot_signal_is_humano(self):
+        # _looks_human_casual only trusts SHORT text (<=20 chars, see its own
+        # docstring) — a longer casual-sounding sentence falls through to the
+        # honest "automatico" fallback instead, which is correct, not a bug.
+        db = FakeMongoDBManager(msg2_doc=None)
+        received_at = T1_TIME + timedelta(hours=1, seconds=1)
+        result = _resolve_probe(
+            db, self._probe_doc_with_body("hola que tal"),
+            None, received_at, timed_out=True,
+        )
+        assert result["category"] == "humano"
+
+    def test_human_name_introduction_is_humano(self):
+        db = FakeMongoDBManager(msg2_doc=None)
+        received_at = T1_TIME + timedelta(hours=1, seconds=1)
+        result = _resolve_probe(
+            db, self._probe_doc_with_body("Mi nombre es Fernanda, coordinadora de ventas, en que le ayudo"),
+            None, received_at, timed_out=True,
+        )
+        assert result["category"] == "humano"
+        assert "presentación personal" in result["notes"]
+
+    def test_no_signal_either_way_falls_back_to_automatico(self):
+        # Long enough to skip _looks_human_casual (>20 chars, capitalized start,
+        # no greeting match) and with no menu/template/self-id/name-intro
+        # anywhere — genuinely ambiguous, must land on the honest "automatico"
+        # label rather than overclaiming "bot" or "humano" without a fingerprint.
+        db = FakeMongoDBManager(msg2_doc=None)
+        received_at = T1_TIME + timedelta(hours=1, seconds=1)
+        result = _resolve_probe(
+            db, self._probe_doc_with_body("Contamos con servicio de entrega a domicilio en toda la zona metropolitana"),
+            None, received_at, timed_out=True,
+        )
+        assert result["category"] == "automatico"
+
+    def test_second_message_not_yet_sent_note_when_not_timed_out(self):
+        # timed_out=False and t2_seconds stays None (msg2/Andy hasn't been
+        # logged yet) — distinct base_notes wording from the timed_out case.
+        db = FakeMongoDBManager(msg2_doc=None)
+        received_at = T1_TIME + timedelta(seconds=8)
+        result = _resolve_probe(
+            db, self._probe_doc_with_body("hola buenas tardes"),
+            None, received_at, timed_out=False,
+        )
+        assert result["category"] == "humano"
+        assert "aún no enviado" in result["notes"]
 
 
 # ── _looks_like_formal_bdc_greeting ──────────────────────────────────────────
@@ -500,6 +663,58 @@ class TestApplyDeterministicCorrections:
         result = {"category": "bot", "is_ai": True, "notes": ""}
         out = _apply_deterministic_corrections(result, messages, "")
         assert out["is_ai"] is False
+
+
+# ── _looks_human_casual ─────────────────────────────────────────────────────
+class TestLooksHumanCasual:
+    @pytest.mark.parametrize("text", ["va", "ya", "hola", "ok", "sí", "no", "Grcs a ti"])
+    def test_short_casual_replies_are_human(self, text):
+        assert _looks_human_casual(text) is True
+
+    def test_capitalized_but_very_short_still_human(self):
+        # "Grcs a ti" (9 chars, capitalized abbreviation of "gracias") — real
+        # case, 2026-09-18: missed before because it neither starts lowercase
+        # nor matches the exact "gracias" greeting pattern.
+        assert _looks_human_casual("Grcs a ti") is True
+
+    def test_menu_text_is_never_casual_even_if_short(self):
+        assert _looks_human_casual("1. Sí  2. No") is False
+
+    def test_long_formal_template_is_not_casual(self):
+        assert _looks_human_casual("Gracias por tu mensaje, en breve un asesor te contactará") is False
+
+
+# ── _apply_response_deterministic_corrections (classify_response's post-LLM
+#    safety net) ──────────────────────────────────────────────────────────
+class TestApplyResponseDeterministicCorrections:
+    def test_short_casual_reply_misjudged_as_bot_is_corrected_to_humano(self):
+        # Real production cases, 2026-09-18 (company 6a919d3341a1232f02f0159a):
+        # "Grcs a ti", "va", "ya" all came back category=bot/is_ai=True with an
+        # LLM note like "la respuesta fue automática... no hay interacción
+        # humana" — pure brevity mistaken for automation, no bot fingerprint at
+        # all in the text. classify_response() had no post-LLM safety net for
+        # this (classify_conversation()/classify_conversation_and_save() already
+        # did) until this fix.
+        for text in ("va", "ya", "Grcs a ti"):
+            result = {"category": "bot", "is_ai": True, "notes": "La respuesta fue automática y no abordó el tema."}
+            out = _apply_response_deterministic_corrections(result, text)
+            assert out["category"] == "humano", f"{text!r} should be corrected to humano"
+            assert out["is_ai"] is False
+
+    def test_genuine_menu_reply_is_not_downgraded(self):
+        result = {"category": "bot", "is_ai": False, "notes": "Menú detectado"}
+        out = _apply_response_deterministic_corrections(result, "1. Ventas  2. Soporte")
+        assert out["category"] == "bot"
+
+    def test_genuine_bot_selfid_is_not_downgraded(self):
+        result = {"category": "bot", "is_ai": True, "notes": "Autoidentificación"}
+        out = _apply_response_deterministic_corrections(result, "Hola, soy Mateo tu asistente virtual")
+        assert out["category"] == "bot"
+
+    def test_humano_category_is_untouched(self):
+        result = {"category": "humano", "is_ai": False, "notes": ""}
+        out = _apply_response_deterministic_corrections(result, "cualquier texto largo aquí")
+        assert out["category"] == "humano"
 
     def test_bot_with_multiple_distinct_substantive_business_texts_keeps_is_ai(self):
         # category "bot" also runs through the hibrido/bot hard-signal safety

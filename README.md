@@ -167,10 +167,10 @@ Lógica en `daily_cap.py`.
 
   | Provider | Cliente backend | Vinculación | Notas |
   |---|---|---|---|
-  | **WAHA** (motor NOWEB) | `whatsapp_waha.py` | QR o código de emparejamiento | El más documentado abajo — endpoints completos en [Integraciones externas](#integraciones-externas) |
-  | **whatsapp-web.js** | `whatsapp_wwebjs.py` → microservicio Node `wwebjs-service/` | QR (se refresca solo) | Sesión persistida en disco vía `LocalAuth`, sobrevive reinicios del microservicio |
-  | **Wasender** | `whatsapp_wasender.py` (SDK oficial `wasenderapi`) | QR o passkey | Auth de dos niveles: PAT para gestión de sesiones, API key por sesión para mensajería |
-  | **Evolution API** | `whatsapp_evolution.py` | QR o código | Legacy — primer provider probado, reemplazado por los anteriores pero aún soportado |
+  | **WAHA** (motor NOWEB) | `providers/legacy/waha.py` | QR o código de emparejamiento | El más documentado abajo — endpoints completos en [Integraciones externas](#integraciones-externas) |
+  | **whatsapp-web.js** | `whatsapp_wwebjs.py` → microservicio Node `apps/wwebjs/` | QR (se refresca solo) | Sesión persistida en disco vía `LocalAuth`, sobrevive reinicios del microservicio — **provider activo, único en uso hoy** |
+  | **Wasender** | `providers/legacy/wasender.py` (SDK oficial `wasenderapi`) | QR o passkey | Auth de dos niveles: PAT para gestión de sesiones, API key por sesión para mensajería |
+  | **Evolution API** | `providers/legacy/evolution.py` | QR o código | Legacy — primer provider probado, reemplazado por los anteriores pero aún soportado |
 
 - Vinculación por QR o por código de emparejamiento según el provider.
 - Estados en tiempo real: `STARTING`/`SCAN_QR_CODE`/`connecting` → amarillo, `WORKING`/`connected` → verde, `STOPPED`/`FAILED`/`disconnected` → rojo. Un tag `⚠ ACK` aparte indica que los mensajes salen pero WhatsApp no confirma la entrega — problema distinto a estar desconectado.
@@ -218,90 +218,101 @@ Lógica en `daily_cap.py`.
 
 ```
 WhatsappScraper/
-├── src/
-│   ├── app/
-│   │   ├── page.jsx                      ← Página principal (sidebar + tabs)
-│   │   └── api/                          ← Proxies hacia FastAPI
-│   │       ├── instances/                ← CRUD instancias WhatsApp
-│   │       ├── waha/                     ← Gestión sesiones WAHA (QR, status, restart)
-│   │       ├── wwebjs/                   ← Proxy hacia el microservicio whatsapp-web.js
-│   │       ├── admin/instances/          ← Sync WAHA/wwebjs → MongoDB
-│   │       ├── scrape-jobs/              ← Poll de progreso de jobs de scraping en background
-│   │       ├── send-queue/               ← Estado de la cola global de envío (backend)
-│   │       ├── process-url/
-│   │       ├── companies/
-│   │       ├── conversations/
-│   │       ├── analytics/
-│   │       └── send-message/
-│   ├── components/
-│   │   ├── singleUrlProcessor.jsx
-│   │   ├── batchProcessor.jsx
-│   │   ├── csvImporter.jsx
-│   │   ├── databaseViewer.jsx
-│   │   ├── searchProspects.jsx
-│   │   ├── sendCampaign.jsx
-│   │   ├── scheduledSends.jsx
-│   │   ├── conversations.jsx
-│   │   ├── analytics.jsx
-│   │   ├── messageTemplateLibrary.jsx    ← Biblioteca y picker de plantillas
-│   │   ├── InstancesPanel.jsx            ← Gestión instancias (WAHA/wwebjs/Wasender/Evolution)
-│   │   ├── InstanceStatusBanner.jsx      ← Banner de estado de conexión
-│   │   ├── SendBubble.jsx                ← Burbuja flotante de progreso
-│   │   ├── DailyCapBadge.jsx             ← Badge de cupo restante + recomendación
-│   │   ├── CapacityBanner.jsx            ← Banner de cupo agotado/próximo a agotarse
-│   │   ├── WhatsAppNumberPicker.jsx      ← Selector de números por empresa (checkbox + expandir)
-│   │   ├── Settings.jsx                  ← Config global + exports de temas/accents
-│   │   ├── AppearancePanel.jsx           ← Panel lateral de apariencia
-│   │   ├── NotificationsPanel.jsx        ← Panel lateral de notificaciones
-│   │   ├── HelpPanel.jsx                 ← FAQ / ayuda
-│   │   ├── AndyBotBuilder.jsx            ← Despliegue de chatbot Andy
-│   │   ├── AppTour.jsx                   ← Tour de onboarding (react-joyride)
-│   │   └── resultDisplay.jsx
-│   ├── context/
-│   │   ├── SendQueueContext.jsx          ← Cliente de la cola global de envíos (persistida en backend)
-│   │   ├── UserContext.jsx
-│   │   └── LangContext.jsx
-│   └── hooks/
-│       ├── useInstanceStatus.js          ← Polling estado de conexión
-│       └── useDailyCapStats.js           ← Polling de cupo diario por instancia
-├── backEnd/
-│   └── app/
-│       ├── main.py                       ← Entry point FastAPI
-│       ├── pipeline.py                   ← Flujo principal de scraping
-│       ├── scraper.py                    ← Extracción de datos del sitio web
-│       ├── searcher.py                   ← Búsqueda de prospectos
-│       ├── classifier.py                 ← Clasificación de respuestas con IA
-│       ├── scheduler.py                  ← Envíos programados + ping de sesiones
-│       ├── scrape_jobs.py                ← Worker en background para scraping en lote (Búsqueda/Lote/CSV)
-│       ├── send_now_worker.py            ← Worker FIFO en background para envío inmediato
-│       ├── daily_cap.py                  ← Cupo diario / modo warmup / límite de contactos nuevos
-│       ├── phone_utils.py                ← Normalizador de números compartido por los 4 providers
-│       ├── ai_followup.py                ← Seguimiento automático Andy
-│       ├── followup_queue.py             ← Cola serial para mensajes entrantes
-│       ├── llm.py                        ← Router OpenAI/DeepSeek
-│       ├── llm_guard.py                  ← Circuit breaker + retry + semáforo
-│       ├── auth.py                       ← Autenticación y sesiones
-│       ├── email_service.py              ← Envío de email para reset de PIN
-│       ├── otp_manager.py                ← Registro de números vía OTP + ADB
-│       ├── config.py                     ← Variables de entorno
-│       ├── database.py                   ← Operaciones MongoDB
-│       ├── whatsapp_waha.py              ← Cliente WAHA
-│       ├── whatsapp_wwebjs.py            ← Cliente del microservicio whatsapp-web.js
-│       ├── whatsapp_wasender.py          ← Cliente WasenderAPI (SDK oficial)
-│       ├── whatsapp_evolution.py         ← Cliente Evolution API (legacy)
-│       ├── report_generator.py           ← Generación de PDFs
-│       ├── api/routes.py                 ← Endpoints REST
-│       ├── schemas/company.py            ← Modelos Pydantic
-│       ├── create_user.py                ← Script CLI para crear el primer admin
-│       └── .env                          ← Variables de entorno backend
-├── wwebjs-service/
-│   ├── index.js                          ← Microservicio Node — whatsapp-web.js + Puppeteer (stealth)
-│   └── package.json
-├── Dockerfile.frontend
-├── backEnd/Dockerfile.backend
-├── docker-compose.yml                    ← Frontend + Backend + WAHA (wwebjs-service NO está en el compose todavía — ver Errores comunes)
-├── .env.local                            ← Variables de entorno frontend
-└── package.json
+├── apps/
+│   ├── web/                               ← Next.js
+│   │   ├── src/
+│   │   │   ├── app/
+│   │   │   │   ├── page.jsx                      ← Página principal (sidebar + tabs)
+│   │   │   │   └── api/                          ← Proxies hacia FastAPI
+│   │   │   │       ├── instances/                ← CRUD instancias WhatsApp
+│   │   │   │       ├── waha/                     ← Gestión sesiones WAHA (QR, status, restart)
+│   │   │   │       ├── wwebjs/                   ← Proxy hacia el microservicio whatsapp-web.js
+│   │   │   │       ├── admin/instances/          ← Sync WAHA/wwebjs → MongoDB
+│   │   │   │       ├── scrape-jobs/              ← Poll de progreso de jobs de scraping en background
+│   │   │   │       ├── send-queue/               ← Estado de la cola global de envío (backend)
+│   │   │   │       ├── process-url/
+│   │   │   │       ├── companies/
+│   │   │   │       ├── conversations/
+│   │   │   │       ├── analytics/
+│   │   │   │       └── send-message/
+│   │   │   ├── components/
+│   │   │   │   ├── singleUrlProcessor.jsx
+│   │   │   │   ├── batchProcessor.jsx
+│   │   │   │   ├── csvImporter.jsx
+│   │   │   │   ├── databaseViewer.jsx
+│   │   │   │   ├── searchProspects.jsx
+│   │   │   │   ├── sendCampaign.jsx
+│   │   │   │   ├── scheduledSends.jsx
+│   │   │   │   ├── conversations.jsx
+│   │   │   │   ├── analytics.jsx
+│   │   │   │   ├── messageTemplateLibrary.jsx    ← Biblioteca y picker de plantillas
+│   │   │   │   ├── InstancesPanel.jsx            ← Gestión instancias (WAHA/wwebjs/Wasender/Evolution)
+│   │   │   │   ├── InstanceStatusBanner.jsx      ← Banner de estado de conexión
+│   │   │   │   ├── SendBubble.jsx                ← Burbuja flotante de progreso
+│   │   │   │   ├── DailyCapBadge.jsx             ← Badge de cupo restante + recomendación
+│   │   │   │   ├── CapacityBanner.jsx            ← Banner de cupo agotado/próximo a agotarse
+│   │   │   │   ├── WhatsAppNumberPicker.jsx      ← Selector de números por empresa (checkbox + expandir)
+│   │   │   │   ├── Settings.jsx                  ← Config global + exports de temas/accents
+│   │   │   │   ├── AppearancePanel.jsx           ← Panel lateral de apariencia
+│   │   │   │   ├── NotificationsPanel.jsx        ← Panel lateral de notificaciones
+│   │   │   │   ├── HelpPanel.jsx                 ← FAQ / ayuda
+│   │   │   │   ├── AndyBotBuilder.jsx            ← Despliegue de chatbot Andy
+│   │   │   │   ├── AppTour.jsx                   ← Tour de onboarding (react-joyride)
+│   │   │   │   └── resultDisplay.jsx
+│   │   │   ├── context/
+│   │   │   │   ├── SendQueueContext.jsx          ← Cliente de la cola global de envíos (persistida en backend)
+│   │   │   │   ├── UserContext.jsx
+│   │   │   │   └── LangContext.jsx
+│   │   │   └── hooks/
+│   │   │       ├── useInstanceStatus.js          ← Polling estado de conexión
+│   │   │       └── useDailyCapStats.js           ← Polling de cupo diario por instancia
+│   │   ├── Dockerfile
+│   │   ├── package.json
+│   │   └── .env.local                    ← Variables de entorno frontend
+│   ├── api/                               ← FastAPI
+│   │   ├── app/
+│   │   │   ├── main.py                       ← Entry point FastAPI
+│   │   │   ├── pipeline.py                   ← Flujo principal de scraping
+│   │   │   ├── scraper.py                    ← Extracción de datos del sitio web
+│   │   │   ├── searcher.py                   ← Búsqueda de prospectos
+│   │   │   ├── classifier.py                 ← Clasificación de respuestas con IA
+│   │   │   ├── scheduler.py                  ← Envíos programados + ping de sesiones
+│   │   │   ├── scrape_jobs.py                ← Worker en background para scraping en lote (Búsqueda/Lote/CSV)
+│   │   │   ├── send_now_worker.py            ← Worker FIFO en background para envío inmediato
+│   │   │   ├── daily_cap.py                  ← Cupo diario / modo warmup / límite de contactos nuevos
+│   │   │   ├── phone_utils.py                ← Normalizador de números compartido por los 4 providers
+│   │   │   ├── ai_followup.py                ← Seguimiento automático Andy
+│   │   │   ├── followup_queue.py             ← Cola serial para mensajes entrantes
+│   │   │   ├── llm.py                        ← Router OpenAI/DeepSeek
+│   │   │   ├── llm_guard.py                  ← Circuit breaker + retry + semáforo
+│   │   │   ├── auth.py                       ← Autenticación y sesiones
+│   │   │   ├── email_service.py              ← Envío de email para reset de PIN
+│   │   │   ├── otp_manager.py                ← Registro de números vía OTP + ADB
+│   │   │   ├── config.py                     ← Variables de entorno
+│   │   │   ├── database.py                   ← Operaciones MongoDB
+│   │   │   ├── whatsapp_wwebjs.py            ← Cliente del microservicio whatsapp-web.js — provider activo
+│   │   │   ├── providers/legacy/             ← Providers en desuso, agrupados (no se usan en producción hoy)
+│   │   │   │   ├── waha.py                       ← Cliente WAHA
+│   │   │   │   ├── wasender.py                   ← Cliente WasenderAPI (SDK oficial)
+│   │   │   │   └── evolution.py                  ← Cliente Evolution API
+│   │   │   ├── report_generator.py           ← Generación de PDFs
+│   │   │   ├── api/routes.py                 ← Endpoints REST
+│   │   │   ├── schemas/company.py            ← Modelos Pydantic
+│   │   │   └── .env                          ← Variables de entorno backend
+│   │   ├── scripts/                       ← Utilidades sueltas
+│   │   │   ├── user_management/create_user.py    ← Script CLI para crear el primer admin
+│   │   │   ├── db_fixes/                         ← Migraciones/fixes puntuales ya aplicados (referencia)
+│   │   │   └── report_patches/                   ← Parches puntuales ya aplicados a report_generator.py (referencia)
+│   │   ├── tests/
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   └── wwebjs/                            ← Microservicio Node — whatsapp-web.js + Puppeteer (stealth)
+│       ├── index.js
+│       ├── package.json
+│       └── Dockerfile
+├── docker-compose.yml                    ← Frontend + Backend + wwebjs + WAHA
+├── env.example
+└── README.md
 ```
 
 ---
@@ -310,11 +321,11 @@ WhatsappScraper/
 
 ### 1. Crear el primer usuario admin
 
-Antes de poder entrar al sistema hay que crear al menos un usuario admin. Edita `backEnd/app/create_user.py` con el username, nombre y PIN deseados, luego ejecuta:
+Antes de poder entrar al sistema hay que crear al menos un usuario admin. Edita `apps/api/scripts/user_management/create_user.py` con el username, nombre y PIN deseados, luego ejecuta (con el `.env` ya creado en `apps/api/app/.env`):
 
 ```bash
-cd backEnd/app
-python create_user.py
+cd apps/api
+python scripts/user_management/create_user.py
 ```
 
 El script imprime el **recovery code** — guárdalo en un lugar seguro. Si pierdes el PIN es la única forma de recuperar la cuenta sin acceso a la base de datos.
@@ -345,10 +356,11 @@ Después del sync, las instancias aparecen en el panel en estado `SCAN_QR_CODE` 
 ### 1. Frontend
 
 ```bash
+cd apps/web
 npm install
 ```
 
-Crea `.env.local` en la raíz:
+Crea `apps/web/.env.local`:
 
 ```env
 BACKEND_URL=http://localhost:8000
@@ -357,12 +369,12 @@ BACKEND_URL=http://localhost:8000
 ### 2. Backend
 
 ```bash
-cd backEnd
+cd apps/api
 pip install -r requirements.txt
 playwright install chromium --with-deps
 ```
 
-Crea `backEnd/app/.env` (ver sección [Variables de entorno](#variables-de-entorno) para la lista completa):
+Crea `apps/api/app/.env` (ver sección [Variables de entorno](#variables-de-entorno) para la lista completa):
 
 ```env
 MONGODB_URI=mongodb://localhost:27017
@@ -405,15 +417,16 @@ docker run -d \
 # 1. WAHA
 docker-compose up -d waha
 
-# 2. Backend (desde backEnd/)
-cd backEnd
+# 2. Backend (desde apps/api/)
+cd apps/api
 uvicorn app.main:app --reload --port 8000
 
-# 3. Frontend (desde la raíz)
+# 3. Frontend (desde apps/web/)
+cd apps/web
 npm run dev
 
-# 4. wwebjs-service (opcional — solo si vas a usar el provider whatsapp-web.js)
-cd wwebjs-service
+# 4. wwebjs (opcional — solo si vas a usar el provider whatsapp-web.js)
+cd apps/wwebjs
 npm install
 PORT=3002 FASTAPI_URL=http://localhost:8000 node index.js
 ```
@@ -424,9 +437,9 @@ PORT=3002 FASTAPI_URL=http://localhost:8000 node index.js
 | Backend API | http://localhost:8000 |
 | Swagger / Docs | http://localhost:8000/docs |
 | WAHA | http://localhost:3001 |
-| wwebjs-service | http://localhost:3002 (opcional) |
+| wwebjs | http://localhost:3002 (opcional) |
 
-> **wwebjs-service fuera de Docker:** `FASTAPI_URL` viene por default en `http://backend:8000` (hostname de Docker Compose) y `PORT` en `3001` — mismo puerto que WAHA. En desarrollo local (fuera de compose) hay que pasar ambos explícitamente como arriba, o el webhook nunca llega al backend y el puerto choca con WAHA. Ver [Errores comunes](#errores-comunes).
+> **wwebjs fuera de Docker:** `FASTAPI_URL` viene por default en `http://backend:8000` (hostname de Docker Compose) y `PORT` en `3001` — mismo puerto que WAHA. En desarrollo local (fuera de compose) hay que pasar ambos explícitamente como arriba, o el webhook nunca llega al backend y el puerto choca con WAHA. Ver [Errores comunes](#errores-comunes).
 
 ### Producción con Docker Compose
 
@@ -434,19 +447,19 @@ PORT=3002 FASTAPI_URL=http://localhost:8000 node index.js
 docker-compose up -d
 ```
 
-El `docker-compose.yml` levanta frontend (`:3000`), backend (`:8000`) y WAHA (`:3001` en el host, `:3000` interno). **`wwebjs-service` todavía no está en el `docker-compose.yml`** — si lo vas a usar en producción hay que agregarlo a mano (mismo patrón que el servicio `waha`, con `FASTAPI_URL=http://backend:8000` que sí funciona dentro de la red de Compose) o correrlo aparte con las variables explícitas de arriba.
+El `docker-compose.yml` levanta frontend (`:3000`), backend (`:8000`), wwebjs (`:3002` en el host, `:3001` interno) y WAHA (`:3001` en el host, `:3000` interno).
 
 ---
 
 ## Variables de entorno
 
-### Frontend — `.env.local`
+### Frontend — `apps/web/.env.local`
 
 | Variable | Descripción | Ejemplo |
 |---|---|---|
 | `BACKEND_URL` | URL del backend FastAPI | `http://localhost:8000` |
 
-### Backend — `backEnd/app/.env`
+### Backend — `apps/api/app/.env`
 
 | Variable | Descripción | Requerida |
 |---|---|---|
@@ -465,7 +478,7 @@ El `docker-compose.yml` levanta frontend (`:3000`), backend (`:8000`) y WAHA (`:
 | `EVOLUTION_API_KEY` | API Key de Evolution (legacy) | Opcional |
 | `SMSFAST_API_KEY` | API Key de SMSFast (números virtuales) | Opcional |
 | `WWEBJS_URL` | URL del microservicio whatsapp-web.js | Necesaria si usas ese provider (default: `http://wwebjs:3001`, hostname de Docker — override a `http://localhost:3002` fuera de compose) |
-| `WWEBJS_API_SECRET` | Secreto compartido entre el backend y `wwebjs-service` (header `x-api-secret`) | Opcional pero recomendado |
+| `WWEBJS_API_SECRET` | Secreto compartido entre el backend y `apps/wwebjs` (header `x-api-secret`) | Opcional pero recomendado |
 | `WASENDER_PAT` | Personal Access Token de WasenderAPI — gestión de sesiones | Necesaria si usas ese provider |
 | `WASENDER_BASE_URL` | URL base de WasenderAPI | Opcional (default: `https://www.wasenderapi.com`) |
 | `WASENDER_SESSION_ID` | ID de sesión usado por `start_proxy.ps1` para actualizar el `proxy_url` de Wasender | Opcional — solo si usas el proxy SOCKS5 dedicado (ver [Runbook operacional](#runbook-operacional)) |
@@ -517,7 +530,7 @@ Si no hay API key de LLM:
 | API | Para qué sirve | Requerida | Dónde se configura |
 |---|---|---|---|
 | **WAHA** | Sesiones WhatsApp, envío de mensajes, recepción de webhooks, QR | Uno de los 4 providers | `WAHA_API_URL`, `WAHA_API_KEY` en `.env` |
-| **whatsapp-web.js** (`wwebjs-service/`) | Mismo rol que WAHA — sesiones vía Puppeteer + `whatsapp-web.js`, corre como microservicio Node aparte | Uno de los 4 providers | `WWEBJS_URL`, `WWEBJS_API_SECRET` en `.env`; `PORT`/`FASTAPI_URL`/`SESSIONS_PATH`/`API_SECRET` en el propio microservicio |
+| **whatsapp-web.js** (`apps/wwebjs/`) | Mismo rol que WAHA — sesiones vía Puppeteer + `whatsapp-web.js`, corre como microservicio Node aparte | Uno de los 4 providers | `WWEBJS_URL`, `WWEBJS_API_SECRET` en `.env`; `PORT`/`FASTAPI_URL`/`SESSIONS_PATH`/`API_SECRET` en el propio microservicio |
 | **WasenderAPI** | Mismo rol, vía servicio de terceros con SDK oficial (`wasenderapi`) | Uno de los 4 providers | `WASENDER_PAT`, `WASENDER_BASE_URL` en `.env` |
 | **OpenAI** | Clasificación de respuestas, seguimiento Andy, enriquecimiento de scraping | Al menos uno | `OPENAI_API_KEY` en `.env` |
 | **DeepSeek** | Mismas funciones que OpenAI, más económico | Al menos uno | `DEEPSEEK_API_KEY` en `.env` |
@@ -590,7 +603,7 @@ Cuando llega un mensaje inbound, el backend ejecuta en automático:
 |---|---|---|---|
 | `/api/{session}/chats/{chatId}/messages` | GET | `WAHAClient.fetch_messages()` / `fetch_messages_by_jid()` | Sincronizar historial de chat — usado en `/conversations/{id}/sync` para traer mensajes que llegaron mientras el backend estaba caído |
 
-### whatsapp-web.js (`wwebjs-service/`) — endpoints utilizados
+### whatsapp-web.js (`apps/wwebjs/`) — endpoints utilizados
 
 Microservicio Node separado (`whatsapp-web.js` + Puppeteer con `puppeteer-extra-plugin-stealth`). Cada sesión persiste su login en disco vía `LocalAuth` (`SESSIONS_PATH`, default `/app/sessions`), así que un reinicio del microservicio no obliga a re-escanear QR. Auth entre el backend y el microservicio: header `x-api-secret` si `WWEBJS_API_SECRET`/`API_SECRET` están configurados.
 
@@ -621,7 +634,7 @@ Servicio de terceros con SDK oficial (`wasenderapi`, paquete Python). Auth de do
 | LID lookup, mark-read | `requests` directo (no cubierto por el SDK) | Mismo propósito que en WAHA |
 | ACK de entrega | Mapeo `WASENDER_ACK_MAP` (0-5 → `failed`/`pending`/`sent`/`delivered`/`read`) | Actualiza el estado de entrega en `message_logs` |
 
-> **Proxy SOCKS5 dedicado (opcional, `backEnd/start_proxy.ps1` + `socks5_proxy.py`):** levanta un proxy SOCKS5 local, lo expone públicamente vía un túnel `bore.pub`, y actualiza automáticamente el `proxy_url` de la sesión de Wasender vía la API — para que ese número de WhatsApp salga siempre desde la misma IP dedicada en vez de compartir salida con otras sesiones (ver [Por qué el outbound masivo no es viable](#por-qué-el-outbound-masivo-por-whatsapp-no-es-viable) — IP compartida es uno de los vectores de detección de Meta). Requiere `WASENDER_PAT` y `WASENDER_SESSION_ID` en `backEnd/.env` y el binario `bore.exe` (gitignored, no se distribuye en el repo) junto al script.
+> **Proxy SOCKS5 dedicado (opcional, `apps/api/scripts/start_proxy.ps1` + `socks5_proxy.py`):** levanta un proxy SOCKS5 local, lo expone públicamente vía un túnel `bore.pub`, y actualiza automáticamente el `proxy_url` de la sesión de Wasender vía la API — para que ese número de WhatsApp salga siempre desde la misma IP dedicada en vez de compartir salida con otras sesiones (ver [Por qué el outbound masivo no es viable](#por-qué-el-outbound-masivo-por-whatsapp-no-es-viable) — IP compartida es uno de los vectores de detección de Meta). Requiere `WASENDER_PAT` y `WASENDER_SESSION_ID` en `apps/api/app/.env` y el binario `bore.exe` (gitignored, no se distribuye en el repo) junto al script.
 
 ### Bright Data — endpoints utilizados
 
@@ -764,7 +777,7 @@ Para tener una oportunidad real con 50 números necesitaría: WAHA versión de p
 
 | Error | Causa | Solución |
 |---|---|---|
-| `ModuleNotFoundError: config` | uvicorn iniciado desde la raíz | Ejecutar desde `backEnd/` |
+| `ModuleNotFoundError: config` | uvicorn iniciado desde la raíz | Ejecutar desde `apps/api/` |
 | `Error 500` al procesar URL | Backend no activo | Verificar uvicorn en puerto 8000 |
 | `Cannot find module '@mui/...'` | Dependencias no instaladas | `npm install` en la raíz |
 | Página en blanco | `.env.local` faltante | Crear con `BACKEND_URL=http://localhost:8000` |
@@ -777,10 +790,10 @@ Para tener una oportunidad real con 50 números necesitaría: WAHA versión de p
 | Email de reset no llega | SMTP sin configurar o credenciales incorrectas | Verificar `SMTP_USER` y `SMTP_PASSWORD` en `.env` |
 | `RuntimeError: No LLM` | Ningún provider configurado | Configurar al menos uno de los dos en `.env` |
 | `UnicodeEncodeError` al enviar por wwebjs (consola de Windows) | La consola usa cp1252 y algún `print()` trae un carácter no-ASCII (ej. `→`) | Ya mitigado en `main.py` (reconfigura stdout/stderr a UTF-8 al arrancar) — si reaparece, es un `print()` nuevo con caracteres especiales |
-| `wwebjs-service` no recibe webhooks / `[Webhook forward error] fetch failed` | `FASTAPI_URL` quedó en el default de Docker (`http://backend:8000`), inalcanzable fuera de Compose | Arrancar con `FASTAPI_URL=http://localhost:8000` explícito (ver [Ejecución](#ejecución)) |
-| `wwebjs-service` no arranca / puerto ocupado | Su `PORT` default (3001) choca con el de WAHA | Arrancar con `PORT=3002` (o el que sea) y actualizar `WWEBJS_URL` en `backEnd/.env` |
-| `Cannot find module 'puppeteer-extra'` en `wwebjs-service` | Faltan dependencias del microservicio | `npm install` dentro de `wwebjs-service/` |
-| Sesión de wwebjs atascada en "Attempted to use detached Frame" | Desincronización interna de Puppeteer tras un error de red | Reiniciar el proceso de `wwebjs-service` — las sesiones se restauran solas desde `SESSIONS_PATH`, sin re-escanear QR |
+| `apps/wwebjs` no recibe webhooks / `[Webhook forward error] fetch failed` | `FASTAPI_URL` quedó en el default de Docker (`http://backend:8000`), inalcanzable fuera de Compose | Arrancar con `FASTAPI_URL=http://localhost:8000` explícito (ver [Ejecución](#ejecución)) |
+| `apps/wwebjs` no arranca / puerto ocupado | Su `PORT` default (3001) choca con el de WAHA | Arrancar con `PORT=3002` (o el que sea) y actualizar `WWEBJS_URL` en `apps/api/app/.env` |
+| `Cannot find module 'puppeteer-extra'` en `apps/wwebjs` | Faltan dependencias del microservicio | `npm install` dentro de `apps/wwebjs/` |
+| Sesión de wwebjs atascada en "Attempted to use detached Frame" | Desincronización interna de Puppeteer tras un error de red | Reiniciar el proceso de `apps/wwebjs` — las sesiones se restauran solas desde `SESSIONS_PATH`, sin re-escanear QR |
 | Tiempo de primera respuesta absurdo (>120 min) en Analytics/PDF | `get_last_outbound_for_company` puede emparejar la respuesta con el saliente equivocado en empresas con más de un número de WhatsApp | Ya mitigado — valores fuera de 0-120 min se guardan como `null` en vez de mostrarse; si aparece uno viejo de antes de este fix, no hay endpoint de limpieza automática, corregir a mano en `message_logs.analysis.reaction_time_min` |
 
 ---
@@ -814,7 +827,7 @@ Las sesiones de WAHA persisten en el volumen Docker (`waha_sessions`) — son in
 ### Sesión de wwebjs atascada o que no conecta
 
 1. Si se queda en `authenticated` sin pasar a `ready`, esperar hasta 90s — el watchdog interno la destruye y recrea sola (log: `Stuck in "authenticated" — never reached ready, recreating session`).
-2. Si sigue sin conectar o tira "Attempted to use detached Frame", reiniciar el proceso de `wwebjs-service` completo — las sesiones se restauran solas desde `SESSIONS_PATH` (con ~8s de espacio entre cada una), sin necesidad de re-escanear QR.
+2. Si sigue sin conectar o tira "Attempted to use detached Frame", reiniciar el proceso de `apps/wwebjs` completo — las sesiones se restauran solas desde `SESSIONS_PATH` (con ~8s de espacio entre cada una), sin necesidad de re-escanear QR.
 3. Si de plano no hay QR ni sesión previa, crear una nueva desde el panel de Instancias como con cualquier otro provider.
 
 ### Renovar el proxy dedicado de una sesión Wasender
@@ -822,7 +835,7 @@ Las sesiones de WAHA persisten en el volumen Docker (`waha_sessions`) — son in
 Si una sesión de Wasender necesita salir siempre desde la misma IP (ver [WasenderAPI — endpoints utilizados](#wasenderapi--endpoints-utilizados)):
 
 ```powershell
-cd backEnd
+cd apps/api
 .\start_proxy.ps1
 ```
 

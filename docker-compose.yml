@@ -3,8 +3,8 @@ services:
   # ── Frontend (Next.js) ────────────────────────────────────────
   frontend:
     build:
-      context: .
-      dockerfile: Dockerfile.frontend
+      context: ./apps/web
+      dockerfile: Dockerfile
     environment:
       - BACKEND_URL=http://backend:8000
       - NODE_ENV=production
@@ -22,8 +22,8 @@ services:
   # ── Backend (FastAPI) ─────────────────────────────────────────
   backend:
     build:
-      context: ./backEnd
-      dockerfile: Dockerfile.backend
+      context: ./apps/api
+      dockerfile: Dockerfile
     environment:
       - MONGODB_URI=${MONGODB_URI}
       - DATABASE_NAME=commercial
@@ -32,10 +32,13 @@ services:
       - APP_PUBLIC_URL=${APP_PUBLIC_URL}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - WWEBJS_URL=http://wwebjs:3001
+      - WWEBJS_API_SECRET=${WWEBJS_API_SECRET}
     ports:
       - "8000:8000"
     depends_on:
       - waha
+      - wwebjs
     restart: unless-stopped
     logging:
       driver: json-file
@@ -43,7 +46,27 @@ services:
         max-size: 100m
         max-file: "10"
 
-  # ── WAHA (WhatsApp HTTP API — NOWEB engine) ───────────────────
+  # ── wwebjs (WhatsApp personal number — active provider) ───────
+  wwebjs:
+    build:
+      context: ./apps/wwebjs
+      dockerfile: Dockerfile
+    environment:
+      - PORT=3001
+      - FASTAPI_URL=http://backend:8000
+      - API_SECRET=${WWEBJS_API_SECRET}
+    volumes:
+      - wwebjs_sessions:/app/sessions
+    ports:
+      - "3002:3001"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 100m
+        max-file: "10"
+
+  # ── WAHA (WhatsApp HTTP API — NOWEB engine, legacy) ───────────
   waha:
     image: devlikeapro/waha:noweb
     dns:
@@ -68,3 +91,4 @@ services:
 volumes:
   waha_sessions:
   waha_media:
+  wwebjs_sessions:

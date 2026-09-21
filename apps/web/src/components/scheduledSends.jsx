@@ -1,0 +1,1842 @@
+'use client'
+import { useState, useEffect, useCallback, useMemo, useRef, memo } from 'react'
+import { authFetch } from '@/lib/api'
+import { useLang } from '../context/LangContext'
+import { useInstanceStatus } from '../hooks/useInstanceStatus'
+import { useDailyCapForDate } from '../hooks/useDailyCapStats'
+import DailyCapBadge, { getOverBy } from './DailyCapBadge'
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
+import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
+import { DatePicker } from '@mui/x-date-pickers/DatePicker'
+import { TimePicker } from '@mui/x-date-pickers/TimePicker'
+import dayjs from 'dayjs'
+import 'dayjs/locale/es'
+import Box from '@mui/material/Box'
+import Typography from '@mui/material/Typography'
+import Button from '@mui/material/Button'
+import TextField from '@mui/material/TextField'
+import InputAdornment from '@mui/material/InputAdornment'
+import Popover from '@mui/material/Popover'
+import Chip from '@mui/material/Chip'
+import LinearProgress from '@mui/material/LinearProgress'
+import CircularProgress from '@mui/material/CircularProgress'
+import Skeleton from '@mui/material/Skeleton'
+import IconButton from '@mui/material/IconButton'
+import Tooltip from '@mui/material/Tooltip'
+import Checkbox from '@mui/material/Checkbox'
+import Dialog from '@mui/material/Dialog'
+import DialogTitle from '@mui/material/DialogTitle'
+import DialogContent from '@mui/material/DialogContent'
+import DialogActions from '@mui/material/DialogActions'
+import Divider from '@mui/material/Divider'
+import ScheduleSendIcon from '@mui/icons-material/ScheduleSend'
+import FilterListIcon from '@mui/icons-material/FilterList'
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
+import SwapVertIcon from '@mui/icons-material/SwapVert'
+import CancelIcon from '@mui/icons-material/Cancel'
+import CheckCircleIcon from '@mui/icons-material/CheckCircle'
+import ErrorIcon from '@mui/icons-material/Error'
+import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
+import SendIcon from '@mui/icons-material/Send'
+import EditIcon from '@mui/icons-material/Edit'
+import DeleteIcon from '@mui/icons-material/Delete'
+import ContentCopyIcon from '@mui/icons-material/ContentCopy'
+import AddIcon from '@mui/icons-material/Add'
+import SearchIcon from '@mui/icons-material/Search'
+import WhatsAppIcon from '@mui/icons-material/WhatsApp'
+import BusinessIcon from '@mui/icons-material/Business'
+import WarningAmberIcon from '@mui/icons-material/WarningAmber'
+import CloseIcon from '@mui/icons-material/Close'
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
+import ChevronRightIcon from '@mui/icons-material/ChevronRight'
+import CalendarMonthIcon from '@mui/icons-material/CalendarMonth'
+import ViewWeekIcon from '@mui/icons-material/ViewWeek'
+import ViewListIcon from '@mui/icons-material/ViewList'
+import AccessTimeIcon from '@mui/icons-material/AccessTime'
+import EventIcon from '@mui/icons-material/Event'
+import { TemplateLibraryPicker } from './messageTemplateLibrary'
+import { getMinTemplatesRequired } from '@/lib/messageVariants'
+import { loadSendConfig } from '@/lib/sendConfig'
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const MONTHS_ES   = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+const DAYS_ES     = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom']
+const DAYS_ES_L   = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo']
+const USER_TZ     = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : ''
+
+const STATUS_META = {
+  pending:   { tKey: 'statusPending',   color: '#3b82f6', bg: 'rgba(59,130,246,0.15)',  icon: <HourglassEmptyIcon sx={{ fontSize: 13 }} /> },
+  running:   { tKey: 'statusRunning',   color: '#f59e0b', bg: 'rgba(245,158,11,0.15)',  icon: <CircularProgress size={11} thickness={5} sx={{ color: '#f59e0b' }} /> },
+  done:      { tKey: 'statusDone',      color: '#22c55e', bg: 'rgba(34,197,94,0.15)',   icon: <CheckCircleIcon sx={{ fontSize: 13 }} /> },
+  cancelled: { tKey: 'statusCancelled', color: '#6b7280', bg: 'rgba(107,114,128,0.15)', icon: <CancelIcon sx={{ fontSize: 13 }} /> },
+  error:     { tKey: 'statusError',     color: '#ef4444', bg: 'rgba(239,68,68,0.15)',   icon: <ErrorIcon sx={{ fontSize: 13 }} /> },
+}
+
+const FIELD_SX = {
+  '& .MuiOutlinedInput-root': {
+    color: 'var(--text,#f1f5f9)', bgcolor: 'var(--surface,rgba(255,255,255,0.04))', fontSize: '0.85rem',
+    '& fieldset': { borderColor: 'var(--border,rgba(255,255,255,0.1))' },
+    '&:hover fieldset': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.45)' },
+    '&.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' },
+    '& .MuiInputBase-input': { color: 'var(--text,#f1f5f9)', WebkitTextFillColor: 'var(--text,#f1f5f9)' },
+    '& .MuiInputAdornment-root .MuiIconButton-root': { color: 'var(--text-muted,rgba(255,255,255,0.4))' },
+  },
+  '& .MuiInputLabel-root': { color: 'var(--text-muted,rgba(255,255,255,0.4))', fontSize: '0.82rem' },
+  '& .MuiInputLabel-root.Mui-focused': { color: 'var(--accent,#3b82f6)' },
+  // Light base theme: force dark text/border (overrides MUI X's internal palette-driven styles)
+  '[data-theme-mode="light"] & .MuiOutlinedInput-root': { color: '#1a2234' },
+  '[data-theme-mode="light"] & .MuiOutlinedInput-root .MuiInputBase-input': { color: '#1a2234', WebkitTextFillColor: '#1a2234' },
+  '[data-theme-mode="light"] & .MuiOutlinedInput-root fieldset': { borderColor: 'rgba(0,0,0,0.28)' },
+  '[data-theme-mode="light"] & .MuiOutlinedInput-root:hover fieldset': { borderColor: 'rgba(0,0,0,0.5)' },
+  '[data-theme-mode="light"] & .MuiOutlinedInput-root.Mui-focused fieldset': { borderColor: 'var(--accent,#3b82f6)' },
+  '[data-theme-mode="light"] & .MuiOutlinedInput-root .MuiInputAdornment-root .MuiIconButton-root': { color: 'rgba(15,23,42,0.55)' },
+  '[data-theme-mode="light"] & .MuiInputLabel-root': { color: 'rgba(15,23,42,0.58)' },
+}
+
+// MUI X v9 date/time picker text-field: targets PickersTextField root
+// (different class hierarchy than regular TextField — visible text is in
+//  sectionContent contenteditable spans, border is on notchedOutline)
+const PICKER_FIELD_SX = {
+  '& .MuiPickersInputBase-root': { bgcolor: 'var(--surface,rgba(255,255,255,0.04))', fontSize: '0.85rem' },
+  '& .MuiPickersSectionList-sectionContent': { color: 'var(--text,#f1f5f9)' },
+  '& .MuiPickersInputBase-sectionAfter, & .MuiPickersInputBase-sectionBefore': { color: 'var(--text,#f1f5f9)' },
+  '& .MuiPickersOutlinedInput-notchedOutline': { borderColor: 'var(--border,rgba(255,255,255,0.1))' },
+  '& .MuiPickersInputBase-root:hover .MuiPickersOutlinedInput-notchedOutline': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.45)' },
+  '& .MuiPickersInputBase-root.Mui-focused .MuiPickersOutlinedInput-notchedOutline': { borderColor: 'var(--accent,#3b82f6)' },
+  '& .MuiInputAdornment-root .MuiIconButton-root': { color: 'var(--text-muted,rgba(255,255,255,0.4))' },
+  '& .MuiInputLabel-root': { color: 'var(--text-muted,rgba(255,255,255,0.4))', fontSize: '0.82rem' },
+  '& .MuiInputLabel-root.Mui-focused': { color: 'var(--accent,#3b82f6)' },
+  // Light mode: force dark text/border
+  '[data-theme-mode="light"] & .MuiPickersSectionList-sectionContent': { color: '#1a2234' },
+  '[data-theme-mode="light"] & .MuiPickersInputBase-sectionAfter, [data-theme-mode="light"] & .MuiPickersInputBase-sectionBefore': { color: '#1a2234' },
+  '[data-theme-mode="light"] & .MuiPickersOutlinedInput-notchedOutline': { borderColor: 'rgba(0,0,0,0.28)' },
+  '[data-theme-mode="light"] & .MuiPickersInputBase-root:hover .MuiPickersOutlinedInput-notchedOutline': { borderColor: 'rgba(0,0,0,0.55)' },
+  '[data-theme-mode="light"] & .MuiPickersInputBase-root.Mui-focused .MuiPickersOutlinedInput-notchedOutline': { borderColor: 'var(--accent,#3b82f6)' },
+  '[data-theme-mode="light"] & .MuiInputAdornment-root .MuiIconButton-root': { color: 'rgba(15,23,42,0.55)' },
+  '[data-theme-mode="light"] & .MuiInputLabel-root': { color: 'rgba(15,23,42,0.58)' },
+}
+
+const PICKER_POPPER_SX = {
+  '& .MuiPaper-root': { bgcolor: 'var(--card-bg,#1e293b)', color: 'var(--text,#f1f5f9)', border: '1px solid var(--border,rgba(255,255,255,0.1))', borderRadius: 2, boxShadow: '0 8px 32px rgba(0,0,0,0.5)' },
+  '& .MuiPickerDay-root': { color: 'var(--text,#f1f5f9)', '&:hover': { bgcolor: 'var(--item-hover,rgba(255,255,255,0.07))' }, '&.Mui-selected': { bgcolor: 'var(--accent,#3b82f6)', color: '#fff', '&:hover': { bgcolor: 'var(--accent,#3b82f6)' } } },
+  '& .MuiPickerDay-today:not(.Mui-selected)': { border: '1px solid rgba(var(--accent-rgb,59,130,246),0.5)' },
+  '& .MuiDayCalendar-weekDayLabel': { color: 'var(--text-muted,rgba(255,255,255,0.35))' },
+  '& .MuiPickersCalendarHeader-label': { color: 'var(--text,#f1f5f9)', fontWeight: 700 },
+  '& .MuiPickersArrowSwitcher-button': { color: 'var(--text-muted,rgba(255,255,255,0.5))', '&:hover': { color: 'var(--text,#f1f5f9)' } },
+  '& .MuiMultiSectionDigitalClock-root': { bgcolor: 'var(--card-bg,#1e293b)' },
+  '& .MuiMultiSectionDigitalClockSection-item': { color: 'var(--text,#f1f5f9)', '&:hover': { bgcolor: 'var(--item-hover,rgba(255,255,255,0.07))' }, '&.Mui-selected': { bgcolor: 'var(--accent,#3b82f6)', color: '#fff' } },
+  '& .MuiDialogActions-root button': { color: 'var(--accent,#3b82f6)' },
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function fmtDate(iso) {
+  if (!iso) return '—'
+  try { return new Date(iso).toLocaleString('es-MX', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) }
+  catch { return iso }
+}
+function fmtTime(iso) {
+  if (!iso) return ''
+  try { return new Date(iso).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) }
+  catch { return '' }
+}
+// Some scraped WhatsApp contacts have gotten saved with surrounding page text
+// glued to the phone number (e.g. a click-to-chat button's label + pre-filled
+// message + the number all concatenated) — a bad scrape, not a display quirk.
+// Pull out just the digit run that looks like a phone number instead of either
+// concatenating every stray digit in the string or showing the raw blob.
+export function extractPhoneDigits(raw) {
+  if (!raw) return ''
+  const match = String(raw).match(/\+?\d[\d\s\-()]{8,18}\d/)
+  return (match ? match[0] : raw).replace(/\D/g, '')
+}
+
+// A legit label is a short branch/location name ("Sucursal Centro", "Celaya").
+// Some legacy scrapes saved the entire text of a floating WhatsApp widget as the
+// label instead (icon captions + pre-filled chat message + city all glued
+// together) — reject anything that's too long or reads like a sentence rather
+// than a short name, instead of dumping a paragraph next to the phone number.
+export function isPlausibleLabel(label) {
+  if (!label) return false
+  const trimmed = label.trim()
+  if (trimmed.length === 0 || trimmed.length > 40) return false
+  if (/[¡!¿?]/.test(trimmed)) return false
+  if (trimmed.split(/\s+/).length > 6) return false
+  return true
+}
+
+export function fmtNumber(raw) {
+  const d = extractPhoneDigits(raw)
+  if (d.length === 12) return `+${d.slice(0,2)} ${d.slice(2,5)} ${d.slice(5,8)} ${d.slice(8)}`
+  if (d.length === 11) return `+${d.slice(0,1)} ${d.slice(1,4)} ${d.slice(4,7)} ${d.slice(7)}`
+  if (d.length === 10) return `+52 ${d.slice(0,3)} ${d.slice(3,6)} ${d.slice(6)}`
+  // Unusual length — still better to show the cleaned digits than the raw,
+  // possibly paragraph-long, contaminated string.
+  return d || raw || ''
+}
+function isSameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+}
+function dateToDtLocal(date, hour = 9) {
+  const p = n => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${p(date.getMonth()+1)}-${p(date.getDate())}T${p(hour)}:00`
+}
+function getCalendarDays(year, month) {
+  const first = new Date(year, month, 1)
+  const startOffset = (first.getDay() + 6) % 7
+  const days = []
+  for (let i = startOffset; i > 0; i--) days.push(new Date(year, month, 1 - i))
+  const last = new Date(year, month + 1, 0).getDate()
+  for (let d = 1; d <= last; d++) days.push(new Date(year, month, d))
+  while (days.length < 42) { const p = days[days.length - 1]; days.push(new Date(p.getFullYear(), p.getMonth(), p.getDate() + 1)) }
+  return days
+}
+function getWeekStart(date) {
+  const d = new Date(date); d.setHours(0, 0, 0, 0)
+  const day = d.getDay()
+  d.setDate(d.getDate() - (day === 0 ? 6 : day - 1))
+  return d
+}
+
+// ─── Confirm dialog ───────────────────────────────────────────────────────────
+
+function ConfirmDialog({ open, title, body, confirmLabel, danger, onConfirm, onCancel }) {
+  const { t } = useLang()
+  return (
+    <Dialog open={open} onClose={onCancel} sx={{ '& .MuiDialog-paper': { bgcolor: 'var(--card-bg,#1e293b)', color: 'var(--text,#f1f5f9)', border: '1px solid var(--border)', borderRadius: 2.5, minWidth: 320 } }}>
+      <DialogTitle sx={{ fontSize: '0.95rem', fontWeight: 700, pb: 0.5 }}>{title}</DialogTitle>
+      <DialogContent>
+        <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.83rem', lineHeight: 1.5 }}>{body}</Typography>
+      </DialogContent>
+      <DialogActions sx={{ px: 2, pb: 2, gap: 1 }}>
+        <Button onClick={onCancel} sx={{ color: 'var(--text-muted)', textTransform: 'none', fontSize: '0.83rem' }}>{t.common.cancel}</Button>
+        <Button onClick={onConfirm} variant="contained"
+          sx={{ bgcolor: danger ? '#ef4444' : 'var(--accent,#3b82f6)', textTransform: 'none', fontSize: '0.83rem', fontWeight: 600, borderRadius: 2, '&:hover': { bgcolor: danger ? '#dc2626' : 'rgba(var(--accent-rgb,59,130,246),0.85)' } }}>
+          {confirmLabel || t.sched.confirm}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  )
+}
+
+// ─── Status chip ──────────────────────────────────────────────────────────────
+
+function StatusChip({ status }) {
+  const { t } = useLang()
+  const meta = STATUS_META[status] || STATUS_META.pending
+  return (
+    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, px: 1, py: 0.25, borderRadius: 1.5, bgcolor: meta.bg, border: `1px solid ${meta.color}44`, color: meta.color, fontSize: '0.72rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
+      {meta.icon}{t.sched[meta.tKey]}
+    </Box>
+  )
+}
+
+// ─── Progress bar ─────────────────────────────────────────────────────────────
+
+function SendProgress({ sent, total }) {
+  const { t } = useLang()
+  if (!total) return null
+  const pct = Math.min(100, Math.round((sent / total) * 100))
+  return (
+    <Box sx={{ mt: 0.8 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.3 }}>
+        <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.68rem' }}>{sent}/{total} {t.sched.sent}</Typography>
+        <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.68rem' }}>{pct}%</Typography>
+      </Box>
+      <LinearProgress variant="determinate" value={pct} sx={{ height: 4, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.07)', '& .MuiLinearProgress-bar': { bgcolor: 'var(--accent,#3b82f6)', borderRadius: 2 } }} />
+    </Box>
+  )
+}
+
+// ─── Company picker ───────────────────────────────────────────────────────────
+
+// Pure normalizer — lives at module scope so CompanyCard (memoized) can use it
+// without receiving it as a prop.
+export function normPhone(n) {
+  if (!n) return ''
+  const s = String(n).replace(/^\+/, '')
+  return s.replace(/^521(\d{10})$/, '52$1')
+}
+
+const EMPTY_CONTACTED = new Set()
+
+function _companyCardEqual(prev, next) {
+  if (prev.company !== next.company) return false
+  if (prev.contactedNormed !== next.contactedNormed) return false
+  if (prev.activeSet !== next.activeSet) return false
+  for (const n of prev.company.numbers) {
+    if (prev.selectedNums.has(n.number) !== next.selectedNums.has(n.number)) return false
+  }
+  return true
+}
+
+// Algunas empresas quedaron con un número de teléfono (o "+0") guardado como
+// nombre desde el scraping/import — mostrarlo tal cual confunde y parece un
+// bug. Si el "nombre" parece un teléfono, mostramos el dominio en su lugar;
+// si tampoco hay dominio, un placeholder explícito en vez de texto roto.
+// Cualquier "nombre" sin ni una sola letra (números de teléfono, "+0", "-", etc.)
+// no es un nombre real de empresa — el regex anterior solo atrapaba teléfonos
+// de 7+ caracteres y dejaba pasar basura corta como "+0" tal cual.
+export const looksLikePhone = s => !!(s && s.trim()) && !/[a-zA-Z]/.test(s)
+export function displayCompanyName(company, t) {
+  if (!looksLikePhone(company.name)) return company.name || company.domain || t.campaign.noName
+  return company.domain || t.campaign.noName
+}
+
+export const CompanyCard = memo(function CompanyCard({
+  company, contactedNormed, selectedNums, activeSet, onToggle, onToggleCompany, t,
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const sc = company.numbers.filter(n => selectedNums.has(n.number)).length
+  const total = company.numbers.length
+  const allCompanySel = sc === total && total > 0
+  const isNumContacted = n => contactedNormed.has(normPhone(n))
+  // Con 1 solo número, el checkbox de la empresa YA es el checkbox de ese número
+  // — mostrar además la fila anidada y el badge de fracción era doble información
+  // para el mismo dato. Solo empresas con 2+ números tienen algo real que elegir,
+  // así que solo ahí vale la pena el desglose (colapsado por defecto).
+  const single = total <= 1
+  const statusSx = sc === 0
+    ? { bgcolor: 'var(--item-hover)', color: 'var(--text-muted)', border: '1px solid var(--border)' }
+    : allCompanySel
+      ? { bgcolor: 'rgba(34,197,94,0.15)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.35)' }
+      : { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', color: 'var(--accent,#60a5fa)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)' }
+  const statusLabel = sc === 0 ? t.campaign.statusNone : allCompanySel ? t.campaign.statusComplete : t.campaign.statusPartial(sc, total)
+  return (
+    <Box sx={{
+      flexShrink: 0, borderRadius: 2, overflow: 'hidden',
+      border: `1px solid ${sc > 0 ? 'rgba(var(--accent-rgb,59,130,246),0.3)' : 'var(--border)'}`,
+      bgcolor: 'var(--card-bg, rgba(255,255,255,0.015))', transition: 'border-color 0.15s',
+    }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.2, py: 0.7, minHeight: 44, bgcolor: sc > 0 ? 'rgba(var(--accent-rgb,59,130,246),0.05)' : 'var(--surface)', '&:hover': { bgcolor: 'var(--item-hover)' } }}>
+        <Checkbox size="small" checked={allCompanySel} indeterminate={sc > 0 && sc < total} onChange={() => onToggleCompany(company)} sx={{ p: 0.3, color: 'var(--border)', '&.Mui-checked,&.MuiCheckbox-indeterminate': { color: 'var(--accent,#3b82f6)' } }} />
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+            <Typography sx={{ color: 'var(--text)', fontSize: '0.8rem', fontWeight: 600, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayCompanyName(company, t)}</Typography>
+            {company.contacted && (
+              <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.3, flexShrink: 0, bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 1, px: 0.6, py: 0.15 }}>
+                <CheckCircleIcon sx={{ fontSize: 9, color: '#fbbf24' }} />
+                <Typography sx={{ fontSize: '0.6rem', color: '#fbbf24', fontWeight: 700, whiteSpace: 'nowrap' }}>{t.campaign.contacted}</Typography>
+              </Box>
+            )}
+          </Box>
+          {/* Si el nombre está vacío o es un teléfono, el encabezado ya cayó al
+             dominio (ver displayCompanyName) — repetirlo aquí abajo se veía
+             como una entrada duplicada. Solo mostrar cuando aporta info nueva. */}
+          {company.domain && company.name && !looksLikePhone(company.name) && (
+            <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>{company.domain}</Typography>
+          )}
+        </Box>
+        {single && total === 1 && (() => {
+          const n = company.numbers[0]
+          const isSel = selectedNums.has(n.number)
+          const nCont = isNumContacted(n.number)
+          return (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, flexShrink: 0 }}>
+              <WhatsAppIcon sx={{ fontSize: 13, color: isSel ? '#25d366' : nCont ? '#fbbf24' : 'var(--text-muted)' }} />
+              <Typography sx={{ color: isSel ? 'var(--text)' : nCont ? 'rgba(251,191,36,0.75)' : 'var(--text-muted)', fontSize: '0.72rem', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                {fmtNumber(n.number)}
+              </Typography>
+            </Box>
+          )
+        })()}
+        {!single && (
+          <Box onClick={() => setExpanded(v => !v)} sx={{ display: 'flex', alignItems: 'center', gap: 0.2, cursor: 'pointer', flexShrink: 0, px: 0.5, py: 0.2, borderRadius: 1, '&:hover': { bgcolor: 'var(--item-hover)' } }}>
+            <Typography sx={{ fontSize: '0.65rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{t.campaign.numbersCount(total)}</Typography>
+            <ChevronRightIcon sx={{ fontSize: 15, color: 'var(--text-muted)', transition: 'transform 0.15s', transform: expanded ? 'rotate(90deg)' : 'none' }} />
+          </Box>
+        )}
+        {!single && (
+          <Tooltip title={t.campaign.countTooltip(sc, total)} placement="top">
+            <Chip label={statusLabel} size="small" sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700, flexShrink: 0, ...statusSx }} />
+          </Tooltip>
+        )}
+      </Box>
+      {!single && expanded && (
+        <Box sx={{ bgcolor: 'rgba(0,0,0,0.14)', '[data-theme-mode="light"] &': { bgcolor: 'rgba(0,0,0,0.03)' } }}>
+          {company.numbers.map((n, ni) => {
+            const isSel = selectedNums.has(n.number)
+            const nCont = isNumContacted(n.number)
+            return (
+              <Box key={`${company._id}::${n.number}::${ni}`}
+                onClick={() => onToggle(n.number, { number: n.number, company_id: company._id, company_name: company.name, label: n.label, industry: company.industry, city: company.city, web: company.website })}
+                sx={{
+                  display: 'flex', alignItems: 'center', gap: 0.5, pl: 2.2, pr: 1.2, py: 0.45, minHeight: 32, cursor: 'pointer',
+                  borderTop: ni > 0 ? '1px solid var(--border)' : 'none',
+                  borderLeft: `2px solid ${isSel ? 'var(--accent,#3b82f6)' : nCont ? 'rgba(251,191,36,0.4)' : 'transparent'}`,
+                  bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.12)' : nCont ? 'rgba(251,191,36,0.03)' : 'transparent',
+                  '&:hover': { bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.16)' : nCont ? 'rgba(251,191,36,0.07)' : 'var(--item-hover)' },
+                }}>
+                <Checkbox size="small" checked={isSel} onChange={() => {}} sx={{ p: 0.25, color: nCont ? 'rgba(251,191,36,0.35)' : 'var(--border)', '&.Mui-checked': { color: nCont ? '#fbbf24' : 'var(--accent,#3b82f6)' } }} />
+                <WhatsAppIcon sx={{ fontSize: 11, color: isSel ? '#25d366' : nCont ? '#fbbf24' : 'var(--text-muted)', flexShrink: 0 }} />
+                <Typography sx={{ color: isSel ? 'var(--text)' : nCont ? 'rgba(251,191,36,0.75)' : 'var(--text-muted)', fontSize: '0.74rem', fontFamily: 'monospace', flex: 1 }}>{fmtNumber(n.number)}</Typography>
+                {n.active && (
+                  <Tooltip title={t.sched.activeInCampaign}>
+                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.2, bgcolor: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 1, px: 0.5, py: 0.1 }}>
+                      <WarningAmberIcon sx={{ fontSize: 9, color: '#f59e0b' }} />
+                      <Typography sx={{ color: '#f59e0b', fontSize: '0.6rem', fontWeight: 600 }}>activa</Typography>
+                    </Box>
+                  </Tooltip>
+                )}
+              </Box>
+            )
+          })}
+        </Box>
+      )}
+    </Box>
+  )
+}, _companyCardEqual)
+
+function CompanyCardSkeleton() {
+  return (
+    <Box sx={{ borderRadius: 2, overflow: 'hidden', border: '1px solid var(--border)', bgcolor: 'var(--card-bg, rgba(255,255,255,0.015))' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1.2, py: 0.7, minHeight: 44, bgcolor: 'var(--surface)' }}>
+        <Skeleton variant="rounded" width={18} height={18} sx={{ borderRadius: 0.5, flexShrink: 0, bgcolor: 'rgba(255,255,255,0.08)' }} />
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Skeleton variant="text" width="45%" sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
+          <Skeleton variant="text" width="25%" sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
+        </Box>
+        <Skeleton variant="rounded" width={30} height={16} sx={{ borderRadius: 1, flexShrink: 0, bgcolor: 'rgba(255,255,255,0.06)' }} />
+      </Box>
+      <Box sx={{ bgcolor: 'rgba(0,0,0,0.14)' }}>
+        {[0, 1, 2].map(i => (
+          <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 0.8, pl: 2.2, pr: 1.2, py: 0.45, minHeight: 32, borderTop: i > 0 ? '1px solid var(--border)' : 'none' }}>
+            <Skeleton variant="rounded" width={14} height={14} sx={{ borderRadius: 0.5, flexShrink: 0, bgcolor: 'rgba(255,255,255,0.06)' }} />
+            <Skeleton variant="text" width="55%" sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+const PICKER_PAGE_SIZE = 25
+
+export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeight = 240, contactedRefreshKey = 0, newContactsCap = null }) {
+  const { t } = useLang()
+  const [companies,          setCompanies]          = useState([])
+  const [loadingCo,          setLoadingCo]          = useState(true)
+  const [search,             setSearch]             = useState('')
+  const [industryFilters,    setIndustryFilters]    = useState(new Set())
+  const [filterContacted,    setFilterContacted]    = useState('all') // 'all' | 'new' | 'contacted'
+  const [sortRecent,         setSortRecent]         = useState(true)
+  const [industryAnchor,     setIndustryAnchor]     = useState(null)
+  const [industrySearch,     setIndustrySearch]     = useState('')
+  const [page,               setPage]               = useState(0)
+  const [expandedSel,        setExpandedSel]        = useState(new Set())
+  const MAX_IND = 4
+  const companiesRef = useRef([])
+
+  const fetchCompanies = useCallback((cancelledRef, silent = false) => {
+    if (!silent) setLoadingCo(true)
+    authFetch('/api/admin/companies-with-numbers')
+      .then(r => r.json())
+      .then(d => {
+        const list = Array.isArray(d) ? d : []
+        if (cancelledRef.current) return
+        setLoadingCo(false)  // unblock UI immediately — don't wait for check-contacted
+        if (!list.length) return
+        // El fetch base no trae already_contacted (eso solo lo agrega la llamada
+        // de check-contacted, un poco después) — sobreescribir companies aquí sin
+        // más borraba por un instante el badge "Already contacted" de TODA fila que
+        // ya lo tuviera, en cada poll silencioso de 30s, hasta que la segunda
+        // llamada regresaba: eso era el "salto" visible que se veía cada rato.
+        // Se lo cargamos de la lista previa mientras llega el dato fresco.
+        // También evita el re-render entero (setCompanies) cuando el poll no trajo
+        // ningún cambio real — el caso más común entre un poll y el siguiente.
+        setCompanies(prev => {
+          const prevById = new Map(prev.map(c => [c._id, c]))
+          const merged = list.map(c => {
+            const old = prevById.get(c._id)
+            return old?.already_contacted ? { ...c, contacted: old.contacted, already_contacted: old.already_contacted } : c
+          })
+          return JSON.stringify(prev) === JSON.stringify(merged) ? prev : merged
+        })
+        // Overlay "already contacted" status — fire-and-forget, never blocks the spinner
+        authFetch('/api/companies/check-contacted', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ company_ids: list.map(c => c._id) }),
+        })
+          .then(r => r.json())
+          .then(contactedMap => {
+            if (cancelledRef.current) return
+            setCompanies(curr => {
+              const updated = curr.map(c => ({
+                ...c,
+                contacted: !!contactedMap[c._id]?.contacted,
+                already_contacted: contactedMap[c._id] || { contacted: false },
+              }))
+              return JSON.stringify(curr) === JSON.stringify(updated) ? curr : updated
+            })
+          })
+          .catch(() => {})
+      })
+      .catch(() => { if (!cancelledRef.current) setLoadingCo(false) })
+  }, [])
+
+  useEffect(() => {
+    const cancelledRef = { current: false }
+    fetchCompanies(cancelledRef)
+    // Refresco silencioso — así la tabla va reflejando sola las empresas/números
+    // nuevos que otro usuario agregue (scraping, CSV, etc.) sin que haya que
+    // recargar la pantalla ni perder la selección/búsqueda/filtro en curso.
+    const interval = setInterval(() => fetchCompanies(cancelledRef, true), 30_000)
+    return () => { cancelledRef.current = true; clearInterval(interval) }
+  }, [fetchCompanies])
+
+  // Keep ref in sync so the refresh effect always sees the current list
+  useEffect(() => { companiesRef.current = companies }, [companies])
+
+  // Re-check contacted status after a send completes (contactedRefreshKey increments)
+  useEffect(() => {
+    if (!contactedRefreshKey) return
+    const ids = companiesRef.current.map(c => c._id)
+    if (!ids.length) return
+    let cancelled = false
+    authFetch('/api/companies/check-contacted', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_ids: ids }),
+    })
+      .then(r => r.json())
+      .then(contactedMap => {
+        if (!cancelled) setCompanies(curr => curr.map(c => ({
+          ...c,
+          contacted: !!contactedMap[c._id]?.contacted,
+          already_contacted: contactedMap[c._id] || { contacted: false },
+        })))
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [contactedRefreshKey])
+
+  const industries = useMemo(() => [...new Set(companies.map(c => c.industry).filter(Boolean))].sort(), [companies])
+  // Sin el filtro de contactados — usado para que los CONTEOS de "Todos/Sin
+  // contactar/Ya contactados" reflejen los otros filtros activos (industria,
+  // búsqueda) sin quedar atrapados por el propio filtro que están mostrando.
+  const industrySearchFiltered = useMemo(() => companies.filter(c => {
+    if (industryFilters.size > 0 && !industryFilters.has(c.industry)) return false
+    if (search) { const q = search.toLowerCase(); return c.name.toLowerCase().includes(q) || (c.domain||'').toLowerCase().includes(q) }
+    return true
+  }), [companies, industryFilters, search])
+  const filtered   = useMemo(() => {
+    const list = industrySearchFiltered.filter(c => {
+      if (filterContacted === 'new' && c.already_contacted?.contacted) return false
+      if (filterContacted === 'contacted' && !c.already_contacted?.contacted) return false
+      return true
+    })
+    if (!sortRecent) return list
+    // Copia — el .filter() de arriba ya devuelve un array nuevo, pero explícito por claridad.
+    return [...list].sort((a, b) => new Date(b.last_scraped_at || 0) - new Date(a.last_scraped_at || 0))
+  }, [industrySearchFiltered, filterContacted, sortRecent])
+
+  function toggleIndustry(ind) {
+    setIndustryFilters(prev => {
+      const next = new Set(prev)
+      if (next.has(ind)) next.delete(ind); else next.add(ind)
+      return next
+    })
+  }
+
+  // Paginated — rendering all matching companies (350+) with every number at once
+  // is what was causing the borders/checkboxes to visually collapse into a mess of
+  // overlapping lines and the scrollbar to disappear: too many DOM nodes for the
+  // browser to lay out and paint reliably in one shot.
+  useEffect(() => { setPage(0) }, [industryFilters, filterContacted, search, sortRecent])
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PICKER_PAGE_SIZE))
+  const pageSafe   = Math.min(page, totalPages - 1)
+  const paged      = filtered.slice(pageSafe * PICKER_PAGE_SIZE, (pageSafe + 1) * PICKER_PAGE_SIZE)
+
+  const activeSet = useMemo(() => { const s = new Set(); companies.forEach(c => c.numbers.forEach(n => { if (n.active) s.add(n.number) })); return s }, [companies])
+
+  function toggle(num, info) {
+    const ns = new Set(selectedNums); const nm = new Map(numInfoMap)
+    if (ns.has(num)) { ns.delete(num); nm.delete(num) } else { ns.add(num); nm.set(num, info) }
+    onChange(ns, nm)
+  }
+  function _countCurrentNew(ns, nm) {
+    if (newContactsCap === null) return 0
+    let count = 0
+    for (const [num, info] of nm) {
+      const co = companies.find(c => c._id === info.company_id)
+      const cNormed = new Set((co?.already_contacted?.contacted_numbers || []).map(normPhone))
+      if (!cNormed.has(normPhone(num))) count++
+    }
+    return count
+  }
+  function toggleCompany(c) {
+    const ns = new Set(selectedNums); const nm = new Map(numInfoMap)
+    const allSel = c.numbers.every(n => ns.has(n.number))
+    if (allSel) {
+      c.numbers.forEach(n => { ns.delete(n.number); nm.delete(n.number) })
+    } else {
+      const cNormed = new Set((c.already_contacted?.contacted_numbers || []).map(normPhone))
+      let newSlots = newContactsCap !== null ? Math.max(0, newContactsCap - _countCurrentNew(ns, nm)) : Infinity
+      c.numbers.forEach(n => {
+        if (!ns.has(n.number)) {
+          const info = { number: n.number, company_id: c._id, company_name: c.name, label: n.label, industry: c.industry, city: c.city, web: c.website }
+          if (cNormed.has(normPhone(n.number))) {
+            ns.add(n.number); nm.set(n.number, info)
+          } else if (newSlots > 0) {
+            ns.add(n.number); nm.set(n.number, info); newSlots--
+          }
+        }
+      })
+    }
+    onChange(ns, nm)
+  }
+  function toggleAll() {
+    const allNums = filtered.flatMap(c => c.numbers.map(n => ({ number: n.number, company_id: c._id, company_name: c.name, label: n.label, industry: c.industry, city: c.city, web: c.website })))
+    const anySel = allNums.some(n => selectedNums.has(n.number))
+    const ns = new Set(selectedNums); const nm = new Map(numInfoMap)
+    if (anySel) {
+      allNums.forEach(n => { ns.delete(n.number); nm.delete(n.number) })
+    } else {
+      const contactedByCompany = new Map(filtered.map(c => [c._id, new Set((c.already_contacted?.contacted_numbers || []).map(normPhone))]))
+      let newSlots = newContactsCap !== null ? Math.max(0, newContactsCap - _countCurrentNew(ns, nm)) : Infinity
+      for (const n of allNums) {
+        if (!ns.has(n.number)) {
+          const isCont = contactedByCompany.get(n.company_id)?.has(normPhone(n.number))
+          if (isCont) { ns.add(n.number); nm.set(n.number, n) }
+          else if (newSlots > 0) { ns.add(n.number); nm.set(n.number, n); newSlots-- }
+        }
+      }
+    }
+    onChange(ns, nm)
+  }
+
+  // Precomputed per-company — only recalculates when companies (contacted data) changes,
+  // NOT on every number toggle. Passed as a stable prop to CompanyCard.
+  const contactedByCompany = useMemo(() =>
+    new Map(companies.map(c => [c._id, new Set((c.already_contacted?.contacted_numbers || []).map(normPhone))]))
+  , [companies])
+
+  // Stable callbacks — CompanyCard receives the same function reference across renders
+  // so React.memo's comparison doesn't force re-renders just because of callback identity.
+  const _toggleRef = useRef(null); _toggleRef.current = toggle
+  const _toggleCRef = useRef(null); _toggleCRef.current = toggleCompany
+  const stableToggle        = useCallback((num, info) => _toggleRef.current(num, info), [])
+  const stableToggleCompany = useCallback((c) => _toggleCRef.current(c), [])
+
+  const allFilteredNums = filtered.flatMap(c => c.numbers.map(n => n.number))
+  const allSel  = allFilteredNums.length > 0 && allFilteredNums.every(n => selectedNums.has(n))
+  const someSel = !allSel && allFilteredNums.some(n => selectedNums.has(n))
+  const selCount = selectedNums.size
+  const activeSelCount = [...selectedNums].filter(n => activeSet.has(n)).length
+
+  // Deliberadamente SIN azul de acento — ese color ya significa "estos números
+  // van a recibir la campaña" (fila resaltada, checkbox marcado, badge Complete).
+  // Estos chips son solo FILTROS de vista (industria, orden), un concepto distinto;
+  // usar el mismo azul para ambos hacía que todo se viera "igual de importante" y
+  // costaba distinguir un filtro activo de una selección real de destinatarios.
+  const chipSx = active => ({
+    fontSize: '0.68rem', height: 22, fontWeight: active ? 700 : 400,
+    bgcolor: active ? 'var(--item-hover)' : 'transparent',
+    border: `1px solid ${active ? 'var(--text-muted)' : 'var(--border)'}`,
+    color: active ? 'var(--text)' : 'var(--text-muted)', cursor: 'pointer',
+    '&:hover': { bgcolor: 'var(--item-hover)', opacity: active ? 1 : 0.85 }, transition: 'background-color 0.15s, border-color 0.15s',
+  })
+
+  return (
+    // flexShrink:0 — cuando este picker vive dentro de una columna flex (Send Campaign),
+    // sin esto flexbox lo encoge por debajo de su contenido real cuando la ventana baja
+    // de altura, y como el Box tiene overflow:hidden esa parte (paginación, resumen de
+    // selección) se recorta en silencio en vez de quedar accesible con scroll.
+    <Box sx={{ border: '1px solid var(--border)', borderRadius: 2, overflow: 'hidden', flexShrink: 0 }}>
+      <Box sx={{ px: 1.5, py: 1, bgcolor: 'var(--surface)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 0.8, background: 'linear-gradient(90deg, rgba(var(--accent-rgb,59,130,246),0.06) 0%, transparent 60%)' }}>
+        <Box sx={{ width: 3, height: 12, borderRadius: 2, bgcolor: 'var(--accent,#3b82f6)', opacity: 0.55, flexShrink: 0 }} />
+        <Typography sx={{ color: 'rgba(255,255,255,0.45)', fontWeight: 700, fontSize: '0.68rem', flex: 1, textTransform: 'uppercase', letterSpacing: '0.07em' }}>{t.sched.recipients}</Typography>
+        {loadingCo && <CircularProgress size={11} sx={{ color: 'var(--accent,#3b82f6)' }} />}
+      </Box>
+
+      {selectedNums.size > 0 && (() => {
+        const selCosRaw = companies.filter(c => c.numbers.some(n => selectedNums.has(n.number)))
+        const seen = new Set(); const selCos = selCosRaw.filter(c => seen.has(c._id) ? false : (seen.add(c._id), true))
+        if (!selCos.length) return null
+        return (
+          <Box sx={{ borderBottom: '1px solid var(--border)', px: 1.3, pt: 0.9, pb: 1, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.02)', maxHeight: 190, overflowY: 'auto', scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.07) transparent' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.7 }}>
+              <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>
+                Selected
+              </Typography>
+              <Typography sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)', fontVariantNumeric: 'tabular-nums' }}>
+                {selCount} {selCount === 1 ? 'number' : 'numbers'} · {selCos.length} {selCos.length === 1 ? 'co.' : 'cos.'}
+              </Typography>
+            </Box>
+            {/* Leyenda — sin esto el color ámbar de "ya contactada" no se explica solo,
+                y con varias empresas seleccionadas se ve como un color al azar. */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, mb: 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
+                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'var(--accent,#3b82f6)', flexShrink: 0 }} />
+                <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.4)' }}>nuevo</Typography>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
+                <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#fbbf24', flexShrink: 0 }} />
+                <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.4)' }}>ya contactada</Typography>
+              </Box>
+            </Box>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.7 }}>
+              {selCos.map(c => {
+                const selNums = c.numbers.filter(n => selectedNums.has(n.number))
+                const cNormed = new Set((c.already_contacted?.contacted_numbers || []).map(normPhone))
+                const label = displayCompanyName(c, t)
+                const anyContacted = selNums.some(n => cNormed.has(normPhone(n.number)))
+                const accentC = anyContacted ? '#fbbf24' : 'var(--accent,#3b82f6)'
+                // Con 1 solo número seleccionado no hay nada que expandir — mostrarlo
+                // directo evita un clic extra para el caso más común. Con varios, se
+                // colapsa por default (nombre + conteo) para no volver la lista un
+                // bloque denso de chips cuando hay muchas empresas seleccionadas.
+                const single = selNums.length <= 1
+                const expanded = single || expandedSel.has(c._id)
+                return (
+                  <Box key={c._id} sx={{ pl: 1, borderLeft: anyContacted ? '2px solid rgba(251,191,36,0.35)' : '2px solid rgba(var(--accent-rgb,59,130,246),0.22)', py: 0.3 }}>
+                    <Box
+                      onClick={single ? undefined : () => setExpandedSel(prev => {
+                        const next = new Set(prev)
+                        next.has(c._id) ? next.delete(c._id) : next.add(c._id)
+                        return next
+                      })}
+                      sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.4, cursor: single ? 'default' : 'pointer', borderRadius: 0.5, '&:hover': single ? {} : { bgcolor: 'var(--item-hover)' } }}>
+                      {!single && (
+                        <ChevronRightIcon sx={{ fontSize: 14, color: 'var(--text-muted)', flexShrink: 0, transition: 'transform 0.15s', transform: expanded ? 'rotate(90deg)' : 'none' }} />
+                      )}
+                      <Typography sx={{ fontSize: '0.74rem', color: 'var(--text)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{label}</Typography>
+                      <Typography sx={{ fontSize: '0.62rem', color: accentC, opacity: 0.8, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{selNums.length}</Typography>
+                    </Box>
+                    {expanded && (
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, pl: single ? 0 : 2 }}>
+                        {selNums.map((n, ni) => {
+                          const isCont = cNormed.has(normPhone(n.number))
+                          return (
+                            <Typography key={`${c._id}::${n.number}::${ni}`} sx={{
+                              fontSize: '0.65rem', fontFamily: 'monospace', px: 0.6, py: 0.15, borderRadius: 0.5,
+                              color: isCont ? '#fbbf24' : 'var(--accent,#60a5fa)',
+                              bgcolor: isCont ? 'rgba(251,191,36,0.08)' : 'rgba(59,130,246,0.08)',
+                              border: `1px solid ${isCont ? 'rgba(251,191,36,0.18)' : 'rgba(59,130,246,0.18)'}`,
+                            }}>{fmtNumber(n.number)}</Typography>
+                          )
+                        })}
+                      </Box>
+                    )}
+                  </Box>
+                )
+              })}
+            </Box>
+          </Box>
+        )
+      })()}
+
+      <Box sx={{ px: 1.5, pt: 1.2, pb: 0.8, borderBottom: '1px solid var(--border)' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, bgcolor: 'var(--surface)', borderRadius: 1.5, border: '1px solid var(--border)', px: 1, py: 0.4, mb: 0.4 }}>
+          <SearchIcon sx={{ fontSize: 13, color: 'var(--text-muted)' }} />
+          <Box component="input" value={search} onChange={e => setSearch(e.target.value)} placeholder={t.sched.searchCo} sx={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: 'var(--text,#f1f5f9)', fontSize: '0.78rem', '&::placeholder': { color: 'var(--text-muted)' } }} />
+          {search && <IconButton size="small" onClick={() => setSearch('')} sx={{ p: 0.2, color: 'var(--text-muted)' }}><CloseIcon sx={{ fontSize: 12 }} /></IconButton>}
+        </Box>
+        {/* Conteo de EMPRESAS que coinciden con el filtro actual — distinto y
+            separado del conteo de NÚMEROS que muestra "Select all" más abajo,
+            para no mezclar dos unidades distintas bajo el mismo número. */}
+        <Typography sx={{ fontSize: '0.66rem', color: 'var(--text-muted)', mb: 1 }}>
+          {t.campaign.companiesFound(filtered.length)}
+        </Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center', justifyContent: 'space-between' }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
+            {industries.length > 0 && (<>
+              <Chip label={t.sched.allIndustries} size="small" onClick={() => setIndustryFilters(new Set())} sx={chipSx(industryFilters.size === 0)} />
+              {industries.slice(0, MAX_IND).map(ind => (
+                <Chip key={ind} label={ind} size="small" onClick={() => toggleIndustry(ind)} sx={chipSx(industryFilters.has(ind))} />
+              ))}
+              {industries.length > MAX_IND && (() => {
+                const overflowSelected = [...industryFilters].filter(f => !industries.slice(0, MAX_IND).includes(f)).length
+                return (
+                  <Chip
+                    icon={<FilterListIcon sx={{ fontSize: 13 }} />}
+                    deleteIcon={<ArrowDropDownIcon />}
+                    onDelete={e => setIndustryAnchor(e.currentTarget)}
+                    onClick={e => setIndustryAnchor(e.currentTarget)}
+                    label={overflowSelected > 0 ? `+${industries.length - MAX_IND} (${overflowSelected})` : `+${industries.length - MAX_IND}`}
+                    size="small"
+                    sx={chipSx(overflowSelected > 0)}
+                  />
+                )
+              })()}
+              {industryFilters.size > 0 && (
+                <Chip
+                  icon={<CloseIcon sx={{ fontSize: 13 }} />}
+                  label={t.sched.clearFilters}
+                  size="small"
+                  onClick={() => setIndustryFilters(new Set())}
+                  sx={{
+                    fontSize: '0.68rem', height: 22, fontWeight: 600, cursor: 'pointer',
+                    bgcolor: 'transparent', color: 'var(--text-muted)', border: '1px dashed var(--border)',
+                    '&:hover': { color: 'var(--text)', borderColor: 'var(--text-muted)' },
+                  }}
+                />
+              )}
+              <Popover open={Boolean(industryAnchor)} anchorEl={industryAnchor} onClose={() => { setIndustryAnchor(null); setIndustrySearch('') }}
+                anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                slotProps={{ paper: { sx: {
+                  bgcolor: 'var(--card-bg,#1e293b) !important', color: 'var(--text, #f1f5f9)',
+                  border: '1px solid var(--border, rgba(255,255,255,0.1))',
+                  borderRadius: 2, width: 240, p: 1,
+                } } }}>
+                <TextField
+                  size="small" fullWidth autoFocus value={industrySearch} onChange={e => setIndustrySearch(e.target.value)}
+                  placeholder={t.sched.searchCo}
+                  slotProps={{ input: { startAdornment: (
+                    <InputAdornment position="start"><SearchIcon sx={{ fontSize: 14, color: 'var(--text-muted)' }} /></InputAdornment>
+                  ) } }}
+                  sx={{ mb: 0.8, '& .MuiOutlinedInput-root': { bgcolor: 'var(--surface, rgba(255,255,255,0.03)) !important', fontSize: '0.8rem' }, '& input': { color: 'var(--text)' } }}
+                />
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.3, maxHeight: 240, overflowY: 'auto' }}>
+                  {industries.filter(ind => ind.toLowerCase().includes(industrySearch.toLowerCase())).map(ind => (
+                    <Box key={ind}
+                      onClick={() => toggleIndustry(ind)}
+                      sx={{
+                        display: 'flex', alignItems: 'center', gap: 0.5, px: 0.6, py: 0.45, borderRadius: 1, cursor: 'pointer', fontSize: '0.78rem',
+                        color: industryFilters.has(ind) ? 'var(--text)' : 'var(--text-muted)',
+                        fontWeight: industryFilters.has(ind) ? 700 : 400,
+                        bgcolor: 'var(--surface, rgba(255,255,255,0.03)) !important',
+                        '&:hover': { bgcolor: 'var(--item-hover, rgba(255,255,255,0.06)) !important' },
+                      }}>
+                      <Checkbox size="small" checked={industryFilters.has(ind)} onClick={e => e.stopPropagation()} onChange={() => toggleIndustry(ind)}
+                        sx={{ p: 0.4, color: 'var(--text-muted)', '&.Mui-checked': { color: 'var(--text-muted)' } }} />
+                      {ind}
+                    </Box>
+                  ))}
+                </Box>
+              </Popover>
+            </>)}
+          </Box>
+          <Tooltip title={sortRecent ? t.campaign.sortRecentHintOn : t.campaign.sortRecentHintOff} arrow placement="top">
+            <Chip
+              icon={<SwapVertIcon sx={{ fontSize: 13 }} />}
+              label={sortRecent ? t.campaign.sortRecent : t.campaign.sortAlpha}
+              size="small"
+              onClick={() => setSortRecent(v => !v)}
+              sx={chipSx(sortRecent)}
+            />
+          </Tooltip>
+        </Box>
+      </Box>
+
+      <Box sx={{ display: 'flex', gap: 0.5, px: 1.5, py: 0.8, borderBottom: '1px solid var(--border)' }}>
+        {[
+          { key: 'all',       label: t.sched.filterAll(industrySearchFiltered.length) },
+          { key: 'new',       label: t.sched.filterNew(industrySearchFiltered.filter(c => !c.already_contacted?.contacted).length) },
+          { key: 'contacted', label: t.sched.filterContacted(industrySearchFiltered.filter(c => c.already_contacted?.contacted).length) },
+        ].map(f => (
+          <Chip key={f.key} label={f.label} size="small" onClick={() => setFilterContacted(f.key)} sx={chipSx(filterContacted === f.key)} />
+        ))}
+      </Box>
+
+      {filtered.length > 0 && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.15, px: 1.5, py: 0.5, borderBottom: '1px solid var(--border)', bgcolor: 'var(--surface)' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Checkbox size="small" checked={allSel} indeterminate={someSel} onChange={toggleAll} sx={{ p: 0.3, color: 'var(--border)', '&.Mui-checked,&.MuiCheckbox-indeterminate': { color: 'var(--accent,#3b82f6)' } }} />
+            <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>{t.sched.selectAll} ({allFilteredNums.length})</Typography>
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, pl: 3.6 }}>
+            <WhatsAppIcon sx={{ fontSize: 11, color: 'var(--text-muted)', opacity: 0.7 }} />
+            <Typography sx={{ fontSize: '0.63rem', color: 'var(--text-muted)', opacity: 0.85 }}>{t.campaign.pickerHint}</Typography>
+          </Box>
+        </Box>
+      )}
+
+      <Box sx={{ maxHeight: listMaxHeight, overflowY: 'auto', p: 1, display: 'flex', flexDirection: 'column', gap: 0.8 }}>
+        {loadingCo ? (
+          Array.from({ length: 6 }).map((_, i) => <CompanyCardSkeleton key={i} />)
+        ) : filtered.length === 0 ? (
+          <Box sx={{ textAlign: 'center', py: 3 }}><Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>Sin resultados</Typography></Box>
+        ) : paged.map(company => (
+          <CompanyCard
+            key={company._id}
+            company={company}
+            contactedNormed={contactedByCompany.get(company._id) ?? EMPTY_CONTACTED}
+            selectedNums={selectedNums}
+            activeSet={activeSet}
+            onToggle={stableToggle}
+            onToggleCompany={stableToggleCompany}
+            t={t}
+          />
+        ))}
+      </Box>
+
+      {totalPages > 1 && (
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, px: 1.5, py: 0.6, borderTop: '1px solid var(--border)' }}>
+          <IconButton size="small" disabled={pageSafe === 0} onClick={() => setPage(p => Math.max(0, p - 1))} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
+            <ChevronLeftIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', fontVariantNumeric: 'tabular-nums' }}>
+            {t.campaign.pageOf(pageSafe + 1, totalPages)}
+          </Typography>
+          <IconButton size="small" disabled={pageSafe >= totalPages - 1} onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
+            <ChevronRightIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Box>
+      )}
+
+      <Box sx={{ px: 1.5, py: 0.6, borderTop: '1px solid rgba(255,255,255,0.07)', bgcolor: 'rgba(255,255,255,0.02)', display: 'flex', alignItems: 'center', gap: 1 }}>
+        {selCount === 0
+          ? <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.7rem' }}>{t.sched.noNumSel}</Typography>
+          : activeSelCount > 0
+            ? <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3 }}><WarningAmberIcon sx={{ fontSize: 12, color: '#f59e0b' }} /><Typography sx={{ color: '#f59e0b', fontSize: '0.68rem' }}>{activeSelCount} {t.sched.alreadyInCampaign}</Typography></Box>
+            : <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.7rem' }}>{t.sched.noNumSel}</Typography>
+        }
+      </Box>
+
+    </Box>
+  )
+}
+
+// ─── Message variants ───────────────────────────────────────────────────────
+// The scheduler picks one variant at random per recipient (see scheduler.py
+// _pick_message) so a bulk send doesn't repeat identical text — the pattern
+// WhatsApp flags as bot-like and that can get a number banned. Selection
+// itself is TemplateLibraryPicker (checkbox cards + preview + per-recipient
+// variable-availability checks) — same component Ideas/Buscar prospectos/
+// Lote de URLs already use, wired in directly inside CampaignForm below.
+
+// ─── Campaign form (create / edit / duplicate) ────────────────────────────────
+
+function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
+  const { t, lang } = useLang()
+  const { isDisconnected: noInstance } = useInstanceStatus()
+  const isEdit = !!editJob
+  const src    = duplicateFrom || editJob  // source for pre-filling
+
+  const _initDt = isEdit ? (editJob.scheduled_at || defaultDate || '') : (defaultDate || '')
+
+  const [name,      setName]    = useState(editJob?.name || (duplicateFrom ? `${duplicateFrom.name} (copia)` : ''))
+  const [messages,  setMessages] = useState(() => (src?.messages?.length ? src.messages : [src?.message || '']))
+  const [dateVal,   setDateVal] = useState(() => _initDt ? dayjs(_initDt) : dayjs().add(1, 'hour').startOf('hour'))
+  const [timeVal,   setTimeVal] = useState(() => _initDt ? dayjs(_initDt) : dayjs().add(1, 'hour').startOf('hour'))
+  const [selectedNums, setSelectedNums] = useState(() => new Set((src?.selected_numbers || []).map(n => n.number)))
+  const [numInfoMap,   setNumInfoMap]   = useState(() => new Map((src?.selected_numbers || []).map(n => [n.number, n])))
+  const [submitting, setSubmitting] = useState(false)
+  const [saved,      setSaved]      = useState(false)
+  const [error,      setError]      = useState('')
+
+  // Diff mode: capture originals for edit mode
+  const origName    = isEdit ? (editJob?.name    || '') : null
+  const origMessages = isEdit ? (editJob?.messages?.length ? editJob.messages : [editJob?.message || '']) : null
+  const origSchedAt = isEdit ? (editJob?.scheduled_at || null) : null
+
+  useEffect(() => {
+    if (!isEdit && defaultDate) {
+      const d = dayjs(defaultDate)
+      setDateVal(d); setTimeVal(d)
+    }
+  }, [defaultDate]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const cleanMessages = useMemo(() => messages.map(m => m.trim()).filter(Boolean), [messages])
+  const minTemplatesRequired = getMinTemplatesRequired(selectedNums.size)
+  const belowMinTemplates = selectedNums.size > 1 && cleanMessages.length < minTemplatesRequired
+
+  // Variable availability across the CURRENTLY selected recipients — passed to
+  // TemplateLibraryPicker so it can block/warn templates whose {{variable}}
+  // none of them have data for (same pattern as searchProspects.jsx/IdeasPanel).
+  const selectedInfos = useMemo(() => [...numInfoMap.values()], [numInfoMap])
+  const tplVarFlags = useMemo(() => ({
+    hasName:     selectedInfos.some(c => c.company_name),
+    hasCity:     selectedInfos.some(c => c.city),
+    hasIndustry: selectedInfos.some(c => c.industry),
+    hasWeb:      selectedInfos.some(c => c.web),
+  }), [selectedInfos])
+  const tplVarCounts = useMemo(() => ({
+    nombre:    selectedInfos.filter(c => c.company_name).length,
+    ciudad:    selectedInfos.filter(c => c.city).length,
+    industria: selectedInfos.filter(c => c.industry).length,
+    web:       selectedInfos.filter(c => c.web).length,
+  }), [selectedInfos])
+
+  // Cupo estimado para la fecha elegida — el backend deduplica por número real
+  // contactado (no por empresa), así que el conteo aquí es 1 por número marcado.
+  const dateStr = dateVal ? dateVal.format('YYYY-MM-DD') : null
+  const futureStats = useDailyCapForDate(dateStr, isEdit ? editJob._id : null)
+  const overBy           = getOverBy(futureStats, selectedNums.size)
+  const capBlocked       = overBy > 0
+  const isToday          = dateStr === dayjs().format('YYYY-MM-DD')
+  const capExhaustedToday = isToday && futureStats !== null && (futureStats?.total_available ?? 1) <= 0
+
+  async function handleSubmit(e) {
+    e.preventDefault(); setError('')
+    if (noInstance) { setError(lang === 'en' ? 'No connected WhatsApp instance. Connect one from Instances before scheduling.' : 'Sin instancia WhatsApp conectada. Conéctala desde Instancias antes de programar.'); return }
+    if (!name.trim() || cleanMessages.length === 0 || !dateVal || !timeVal) { setError(t.sched.fillAll); return }
+    if (selectedNums.size === 0) { setError(t.sched.selectNum); return }
+    if (belowMinTemplates) { setError(t.tplLib.minRequiredBlock(minTemplatesRequired, cleanMessages.length)); return }
+    if (capExhaustedToday) { setError(lang === 'en' ? 'Daily cap exhausted for today — sends will resume automatically tomorrow' : 'Cupo diario agotado para hoy — los envíos continuarán mañana automáticamente'); return }
+    if (capBlocked) { setError(lang === 'en' ? `Deselect ${overBy} to fit the estimated quota for that day` : `Desmarca ${overBy} para caber en el cupo estimado de esa fecha`); return }
+    setSubmitting(true)
+    try {
+      const combined = dateVal.hour(timeVal.hour()).minute(timeVal.minute()).second(0)
+      const body = {
+        name: name.trim(), messages: cleanMessages,
+        scheduled_at: combined.format('YYYY-MM-DDTHH:mm:ss'),
+        selected_numbers: [...selectedNums].map(n => numInfoMap.get(n)).filter(Boolean),
+        send_config: loadSendConfig(),
+      }
+      const res = await authFetch(
+        isEdit ? `/api/admin/scheduled-sends/${editJob._id}` : '/api/admin/scheduled-sends',
+        { method: isEdit ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(isEdit ? body : { ...body, company_ids: [] }) }
+      )
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || t.sched.saveError)
+      setSaved(true)
+      setTimeout(() => onDone(data, isEdit), 1500)
+    } catch (err) { setError(err.message) }
+    finally { setSubmitting(false) }
+  }
+
+  return (
+    <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale={lang}>
+    <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, p: 2.5, position: 'relative' }}>
+      {saved && (
+        <Box sx={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', bgcolor: 'rgba(13,17,23,0.93)', zIndex: 10, borderRadius: 1, gap: 1.2 }}>
+          <CheckCircleIcon sx={{ fontSize: 50, color: '#4ade80' }} />
+          <Typography sx={{ color: 'rgba(255,255,255,0.75)', fontSize: '0.88rem', fontWeight: 600 }}>
+            {isEdit
+              ? (lang === 'en' ? 'Changes saved' : 'Cambios guardados')
+              : (duplicateFrom
+                  ? (lang === 'en' ? 'Campaign duplicated' : 'Campaña duplicada')
+                  : (lang === 'en' ? 'Send scheduled' : 'Envío programado'))}
+          </Typography>
+        </Box>
+      )}
+      <Box>
+        <TextField label={t.sched.nameLabel} value={name} onChange={e => setName(e.target.value)} size="small" fullWidth sx={FIELD_SX} />
+        {origName !== null && name !== origName && (
+          <Typography sx={{ fontSize: '0.67rem', color: 'rgba(255,255,255,0.25)', mt: 0.4, px: 0.5 }}>
+            Original: <em>{origName}</em>
+          </Typography>
+        )}
+      </Box>
+      {/* Antes era solo una barrita de color + texto — mismo detalle de
+         ícono en caja degradada que ya usa el resto de la app en vez de eso. */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mt: -0.5 }}>
+        <Box sx={{
+          width: 20, height: 20, borderRadius: '6px', flexShrink: 0,
+          background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.26) 0%, rgba(var(--accent-rgb,59,130,246),0.08) 100%)',
+          border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <EventIcon sx={{ fontSize: 12, color: 'var(--accent, #3b82f6)' }} />
+        </Box>
+        <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.5))', fontSize: '0.66rem', textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 700 }}>
+          {t.sched.dateLabel} · {t.sched.timeLabel}
+        </Typography>
+      </Box>
+      <Box sx={{ bgcolor: 'var(--surface,rgba(255,255,255,0.04))', borderRadius: 2, p: 1.5, display: 'flex', flexDirection: 'column', gap: 1, border: '1px solid rgba(255,255,255,0.055)', borderLeft: '3px solid rgba(var(--accent-rgb,59,130,246),0.38)', mt: -0.5 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+          <DatePicker label={t.sched.dateLabel} value={dateVal} onChange={v => setDateVal(v)} disablePast
+            slotProps={{ textField: { size: 'small', fullWidth: true, sx: PICKER_FIELD_SX }, popper: { sx: PICKER_POPPER_SX } }} />
+          <TimePicker label={t.sched.timeLabel} value={timeVal} onChange={v => setTimeVal(v)} ampm
+            slotProps={{ textField: { size: 'small', fullWidth: true, sx: PICKER_FIELD_SX }, popper: { sx: PICKER_POPPER_SX } }} />
+        </Box>
+        {USER_TZ && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <AccessTimeIcon sx={{ fontSize: 12, color: 'var(--text-muted)' }} />
+            <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>{t.sched.tzLabel} {USER_TZ}</Typography>
+          </Box>
+        )}
+        {origSchedAt !== null && (() => {
+          const origStr = dayjs(origSchedAt).format('DD/MM/YYYY HH:mm')
+          const curStr  = dateVal && timeVal ? dateVal.hour(timeVal.hour()).minute(timeVal.minute()).format('DD/MM/YYYY HH:mm') : null
+          return curStr && origStr !== curStr ? (
+            <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', px: 0.5, opacity: 0.7 }}>
+              Original: <em>{origStr}</em>
+            </Typography>
+          ) : null
+        })()}
+      </Box>
+      <Box sx={{ p: 1.2, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--surface,rgba(255,255,255,0.02))' }}>
+        <TemplateLibraryPicker
+          onChange={setMessages}
+          recipientCount={selectedNums.size}
+          baseCount={0}
+          singleSelect={selectedNums.size <= 1}
+          label={t.sched.messagesLabel}
+          hasName={tplVarFlags.hasName} hasCity={tplVarFlags.hasCity}
+          hasIndustry={tplVarFlags.hasIndustry} hasWeb={tplVarFlags.hasWeb}
+          varCounts={tplVarCounts} totalSelected={selectedNums.size}
+          initialTexts={origMessages || messages}
+        />
+        {origMessages !== null && JSON.stringify(messages) !== JSON.stringify(origMessages) && (
+          <Typography sx={{ fontSize: '0.67rem', color: 'var(--text-muted)', mt: 0.6, px: 0.5, opacity: 0.7 }}>
+            {t.sched.originalModified} ({origMessages.length})
+          </Typography>
+        )}
+      </Box>
+      <CompanyPicker selectedNums={selectedNums} numInfoMap={numInfoMap} onChange={(ns, nm) => { setSelectedNums(ns); setNumInfoMap(nm) }} />
+      {futureStats && (
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <DailyCapBadge stats={futureStats} selectionCount={selectedNums.size} />
+        </Box>
+      )}
+      {capExhaustedToday && (
+        <Typography sx={{ color: '#f59e0b', fontSize: '0.7rem', textAlign: 'right' }}>
+          {lang === 'en' ? '⚠ Daily cap exhausted for today — no sends available until midnight reset' : '⚠ Cupo diario agotado para hoy — no hay envíos disponibles hasta que reinicie a medianoche'}
+        </Typography>
+      )}
+      {capBlocked && !capExhaustedToday && (
+        <Typography sx={{ color: '#f59e0b', fontSize: '0.7rem', textAlign: 'right' }}>
+          {lang === 'en' ? `Deselect ${overBy} to fit the estimated quota for that day` : `Desmarca ${overBy} para caber en el cupo estimado de esa fecha`}
+        </Typography>
+      )}
+      {noInstance && (
+        <Box sx={{ px: 1.5, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', display: 'flex', alignItems: 'center', gap: 0.8 }}>
+          <Typography sx={{ color: '#f87171', fontSize: '0.75rem', fontWeight: 600 }}>
+            {lang === 'en' ? '⚠ No connected WhatsApp instance — connect one from Instances to schedule.' : '⚠ Sin instancia WhatsApp conectada — conéctala desde Instancias para poder programar.'}
+          </Typography>
+        </Box>
+      )}
+      {error && <Box sx={{ px: 1.5, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}><Typography sx={{ color: '#ef4444', fontSize: '0.78rem' }}>{error}</Typography></Box>}
+      <Box sx={{ display: 'flex', gap: 1, pt: 0.5 }}>
+        <Tooltip title={noInstance ? (lang === 'en' ? 'Connect a WhatsApp instance first' : 'Conecta una instancia WhatsApp primero') : ''}>
+        <span style={{ flex: 1, minWidth: 0 }}>
+        <Button type="submit" fullWidth variant="contained" disabled={submitting || belowMinTemplates || noInstance || capBlocked || capExhaustedToday
+          || !name.trim() || cleanMessages.length === 0 || !dateVal || !timeVal || selectedNums.size === 0}
+          startIcon={submitting ? <CircularProgress size={13} sx={{ color: 'inherit' }} /> : <SendIcon />}
+          sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.85)', boxShadow: '0 0 18px rgba(var(--accent-rgb,59,130,246),0.35)' }, '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.2)' }, textTransform: 'none', fontWeight: 700, fontSize: '0.85rem', borderRadius: 2, py: 1, boxShadow: 'none', transition: 'all 0.2s' }}>
+          {submitting ? t.sched.saving : (isEdit ? t.sched.saveLbl : (duplicateFrom ? t.sched.duplicateLbl : t.sched.scheduleLbl))}
+        </Button>
+        </span>
+        </Tooltip>
+        <Button variant="outlined" onClick={() => onDone(null, false)} sx={{ color: 'rgba(255,255,255,0.45)', borderColor: 'rgba(255,255,255,0.15)', '&:hover': { borderColor: '#ef4444', color: '#ef4444', bgcolor: 'rgba(239,68,68,0.07)' }, textTransform: 'none', fontSize: '0.8rem', borderRadius: 2, px: 2.5, transition: 'all 0.18s', flexShrink: 0 }}>{t.common.cancel}</Button>
+      </Box>
+    </Box>
+    </LocalizationProvider>
+  )
+}
+
+// ─── Campaign pill ────────────────────────────────────────────────────────────
+
+function CampaignPill({ job, onClick }) {
+  const meta = STATUS_META[job.status] || STATUS_META.pending
+  return (
+    <Box onClick={e => { e.stopPropagation(); onClick(job) }} sx={{
+      display: 'flex', alignItems: 'center', gap: 0.4,
+      bgcolor: meta.bg, borderLeft: `2px solid ${meta.color}`,
+      borderRadius: '0 3px 3px 0', px: 0.6, py: 0.1,
+      cursor: 'pointer', overflow: 'hidden',
+      '&:hover': { filter: 'brightness(1.15)' }, transition: 'filter 0.12s',
+    }}>
+      <Typography sx={{ color: meta.color, fontSize: '0.62rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {fmtTime(job.scheduled_at)} {job.name}
+      </Typography>
+    </Box>
+  )
+}
+
+// ─── Day cell ─────────────────────────────────────────────────────────────────
+
+function DayCell({ date, jobs, inCurrentMonth, isToday, isSelected, onDayClick, onJobClick }) {
+  const todayMs  = new Date(); todayMs.setHours(0, 0, 0, 0)
+  const isPast   = date < todayMs && !isToday
+  const isWeekend = date.getDay() === 0 || date.getDay() === 6
+  const dayJobs  = jobs.filter(j => { try { return isSameDay(new Date(j.scheduled_at), date) } catch { return false } })
+  return (
+    <Box onClick={() => !isPast && onDayClick(date)} sx={{
+      minHeight: 90,
+      border: isSelected ? '1px solid rgba(var(--accent-rgb,59,130,246),0.6)' : '1px solid var(--border)',
+      bgcolor: isSelected ? 'rgba(var(--accent-rgb,59,130,246),0.1)'
+        : isToday ? 'rgba(var(--accent-rgb,59,130,246),0.05)'
+        : isWeekend ? 'rgba(255,255,255,0.02)' : 'transparent',
+      p: 0.5, cursor: isPast ? 'not-allowed' : 'pointer',
+      opacity: isPast ? 0.35 : (inCurrentMonth ? 1 : 0.3),
+      '&:hover': isPast ? {} : { bgcolor: isSelected ? 'rgba(var(--accent-rgb,59,130,246),0.14)' : isToday ? 'rgba(var(--accent-rgb,59,130,246),0.09)' : 'var(--item-hover)' },
+      transition: 'background-color 0.12s, border-color 0.12s',
+    }}>
+      <Box sx={{ width: 22, height: 22, borderRadius: '50%', mb: 0.4, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: isToday ? 'var(--accent,#3b82f6)' : 'transparent' }}>
+        <Typography sx={{ color: isToday ? '#fff' : 'var(--text)', opacity: isToday ? 1 : 0.6, fontSize: '0.72rem', fontWeight: isToday ? 700 : 500, lineHeight: 1 }}>{date.getDate()}</Typography>
+      </Box>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.3 }}>
+        {dayJobs.slice(0, 3).map(j => <CampaignPill key={j._id} job={j} onClick={onJobClick} />)}
+        {dayJobs.length > 3 && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.6rem', pl: 0.5 }}>+{dayJobs.length - 3} más</Typography>}
+      </Box>
+    </Box>
+  )
+}
+
+// ─── Calendar loading skeletons ────────────────────────────────────────────────
+
+function MonthGridSkeleton() {
+  return (
+    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', borderBottom: '1px solid var(--border)', bgcolor: 'var(--surface, rgba(255,255,255,0.03))' }}>
+        {Array.from({ length: 7 }).map((_, i) => (
+          <Box key={i} sx={{ display: 'flex', justifyContent: 'center', py: 0.9 }}>
+            <Skeleton variant="text" width={26} sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
+          </Box>
+        ))}
+      </Box>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', flex: 1, minHeight: 0 }}>
+        {Array.from({ length: 42 }).map((_, i) => {
+          const pillCount = i % 5 === 0 ? 2 : i % 3 === 0 ? 1 : 0
+          return (
+            <Box key={i} sx={{ minHeight: 90, border: '1px solid var(--border)', p: 0.5 }}>
+              <Skeleton variant="circular" width={22} height={22} sx={{ mb: 0.6, bgcolor: 'rgba(255,255,255,0.07)' }} />
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+                {Array.from({ length: pillCount }).map((_, j) => (
+                  <Skeleton key={j} variant="rounded" height={14} width={j === 0 ? '80%' : '55%'}
+                    sx={{ borderRadius: '0 3px 3px 0', bgcolor: 'rgba(255,255,255,0.05)' }} />
+                ))}
+              </Box>
+            </Box>
+          )
+        })}
+      </Box>
+    </Box>
+  )
+}
+
+function WeekGridSkeleton() {
+  return (
+    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', borderBottom: '1px solid var(--border)' }}>
+        {Array.from({ length: 7 }).map((_, i) => (
+          <Box key={i} sx={{ textAlign: 'center', py: 1, borderRight: i < 6 ? '1px solid var(--border)' : 'none' }}>
+            <Skeleton variant="text" width={30} sx={{ mx: 'auto', bgcolor: 'rgba(255,255,255,0.08)' }} />
+            <Skeleton variant="circular" width={30} height={30} sx={{ mx: 'auto', mt: 0.3, bgcolor: 'rgba(255,255,255,0.07)' }} />
+          </Box>
+        ))}
+      </Box>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', flex: 1 }}>
+        {Array.from({ length: 7 }).map((_, i) => (
+          <Box key={i} sx={{ borderRight: i < 6 ? '1px solid var(--border)' : 'none', minHeight: 160, p: 0.75, display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+            {i % 3 !== 2 && <Skeleton variant="rounded" height={16} width="75%" sx={{ borderRadius: '0 3px 3px 0', bgcolor: 'rgba(255,255,255,0.05)' }} />}
+            {i % 4 === 0 && <Skeleton variant="rounded" height={16} width="55%" sx={{ borderRadius: '0 3px 3px 0', bgcolor: 'rgba(255,255,255,0.05)' }} />}
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+function ListRowsSkeleton() {
+  return (
+    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+      <Box sx={{ display: 'flex', gap: 0.5, px: 2, py: 1, borderBottom: '1px solid var(--border)' }}>
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Skeleton key={i} variant="rounded" width={i === 0 ? 60 : 78} height={22} sx={{ borderRadius: 10, bgcolor: 'rgba(255,255,255,0.06)' }} />
+        ))}
+      </Box>
+      <Box sx={{ px: 2, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.2 }}>
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Box key={i} sx={{ display: 'flex', alignItems: 'stretch', borderRadius: 2, overflow: 'hidden', border: '1px solid var(--border)', bgcolor: 'var(--card-bg)' }}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', px: 1.8, py: 1.5, borderRight: '1px solid var(--border)', minWidth: 58, gap: 0.4 }}>
+              <Skeleton variant="text" width={22} height={22} sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
+              <Skeleton variant="text" width={26} sx={{ bgcolor: 'rgba(255,255,255,0.06)' }} />
+            </Box>
+            <Box sx={{ flex: 1, minWidth: 0, px: 1.8, py: 1.4, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 0.6 }}>
+              <Skeleton variant="text" width="40%" sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
+              <Skeleton variant="text" width="65%" sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
+            </Box>
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+// ─── Month view ───────────────────────────────────────────────────────────────
+
+function MonthView({ jobs, viewYear, viewMonth, selectedDate, onDayClick, onJobClick }) {
+  const { t } = useLang()
+  const today  = new Date()
+  const days   = useMemo(() => getCalendarDays(viewYear, viewMonth), [viewYear, viewMonth])
+  const selDay = selectedDate ? new Date(selectedDate) : null
+  const monthJobsCount = useMemo(() => jobs.filter(j => {
+    try { const d = new Date(j.scheduled_at); return d.getFullYear() === viewYear && d.getMonth() === viewMonth } catch { return false }
+  }).length, [jobs, viewYear, viewMonth])
+
+  return (
+    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', borderBottom: '1px solid var(--border)', bgcolor: 'var(--surface, rgba(255,255,255,0.03))' }}>
+        {t.sched.daysShort.map(d => (
+          <Typography key={d} sx={{ textAlign: 'center', color: 'var(--text)', opacity: 0.65, fontSize: '0.7rem', fontWeight: 700, py: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{d}</Typography>
+        ))}
+      </Box>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', flex: 1, minHeight: 0 }}>
+        {days.map((date, i) => (
+          <DayCell key={i} date={date} jobs={jobs}
+            inCurrentMonth={date.getMonth() === viewMonth}
+            isToday={isSameDay(date, today)}
+            isSelected={selDay ? isSameDay(date, selDay) : false}
+            onDayClick={onDayClick} onJobClick={onJobClick}
+          />
+        ))}
+      </Box>
+      {monthJobsCount === 0 && (
+        <Box sx={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', gap: 1 }}>
+          <ScheduleSendIcon sx={{ fontSize: 32, color: 'var(--border)' }} />
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.82rem', opacity: 0.85 }}>{t.sched.noMonthSends}</Typography>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', opacity: 0.55 }}>{t.sched.noMonthSendsHint}</Typography>
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+// ─── Week view ────────────────────────────────────────────────────────────────
+
+function WeekView({ jobs, weekStart, selectedDate, onDayClick, onJobClick }) {
+  const { t } = useLang()
+  const today  = new Date()
+  const selDay = selectedDate ? new Date(selectedDate) : null
+  const days   = useMemo(() => Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(weekStart); d.setDate(d.getDate() + i); return d
+  }), [weekStart])
+
+  return (
+    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* Day headers */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', borderBottom: '1px solid var(--border)' }}>
+        {days.map((d, i) => {
+          const isTod = isSameDay(d, today)
+          return (
+            <Box key={i} sx={{ textAlign: 'center', py: 1, borderRight: i < 6 ? '1px solid var(--border)' : 'none' }}>
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t.sched.daysLong[i]}</Typography>
+              <Box sx={{ width: 30, height: 30, borderRadius: '50%', mx: 'auto', mt: 0.3, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: isTod ? 'var(--accent,#3b82f6)' : 'transparent' }}>
+                <Typography sx={{ color: isTod ? '#fff' : 'var(--text)', fontSize: '0.88rem', fontWeight: 700 }}>{d.getDate()}</Typography>
+              </Box>
+            </Box>
+          )
+        })}
+      </Box>
+      {/* Day columns */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', flex: 1, overflowY: 'auto' }}>
+        {days.map((d, i) => {
+          const todayMs = new Date(); todayMs.setHours(0, 0, 0, 0)
+          const isPast  = d < todayMs && !isSameDay(d, today)
+          const isSel   = selDay ? isSameDay(d, selDay) : false
+          const dayJobs = jobs.filter(j => { try { return isSameDay(new Date(j.scheduled_at), d) } catch { return false } })
+          return (
+            <Box key={i} onClick={() => !isPast && onDayClick(d)} sx={{
+              borderRight: i < 6 ? '1px solid var(--border)' : 'none',
+              minHeight: 160, p: 0.75, cursor: isPast ? 'not-allowed' : 'pointer',
+              opacity: isPast ? 0.35 : 1,
+              bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.08)' : 'transparent',
+              border: isSel ? '1px solid rgba(var(--accent-rgb,59,130,246),0.4)' : '1px solid transparent',
+              '&:hover': isPast ? {} : { bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.12)' : 'var(--item-hover)' },
+              transition: 'background-color 0.12s',
+              display: 'flex', flexDirection: 'column', gap: 0.4,
+            }}>
+              {dayJobs.map(j => <CampaignPill key={j._id} job={j} onClick={onJobClick} />)}
+              {dayJobs.length === 0 && !isPast && (
+                <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <AddIcon sx={{ fontSize: 22, color: 'rgba(var(--accent-rgb,59,130,246),0.35)' }} />
+                </Box>
+              )}
+            </Box>
+          )
+        })}
+      </Box>
+    </Box>
+  )
+}
+
+// ─── List view ────────────────────────────────────────────────────────────────
+
+function ListView({ jobs, onJobClick, onRequestCancel, onRequestDelete, onDuplicate }) {
+  const { t } = useLang()
+  const [statusFilter, setStatusFilter] = useState('all')
+  const filtered = statusFilter === 'all' ? jobs : jobs.filter(j => j.status === statusFilter)
+
+  const filterChipSx = active => ({
+    fontSize: '0.68rem', height: 22,
+    bgcolor: active ? 'var(--accent,#3b82f6)' : 'var(--card-bg)',
+    border: `1px solid ${active ? 'var(--accent,#3b82f6)' : 'var(--border)'}`,
+    color: active ? '#fff' : 'var(--text-muted)',
+    fontWeight: active ? 600 : 400,
+    cursor: 'pointer',
+    boxShadow: active ? '0 0 8px rgba(var(--accent-rgb,59,130,246),0.4)' : 'none',
+    transition: 'all 0.15s',
+    '&:hover': { bgcolor: active ? 'var(--accent,#3b82f6)' : 'rgba(var(--accent-rgb,59,130,246),0.07)', opacity: active ? 0.88 : 1 },
+  })
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+      {/* Status filter */}
+      <Box sx={{ display: 'flex', gap: 0.5, px: 2, py: 1, borderBottom: '1px solid var(--border)', flexWrap: 'wrap', flexShrink: 0 }}>
+        <Chip label={t.sched.allStatuses} size="small" onClick={() => setStatusFilter('all')} sx={filterChipSx(statusFilter === 'all')} />
+        {Object.entries(STATUS_META).map(([k, v]) => (
+          <Chip key={k} label={t.sched[v.tKey]} size="small" onClick={() => setStatusFilter(s => s === k ? 'all' : k)} sx={filterChipSx(statusFilter === k)} />
+        ))}
+      </Box>
+
+      {filtered.length === 0 ? (
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', py: 8, gap: 1.5 }}>
+          <ScheduleSendIcon sx={{ fontSize: 36, color: 'var(--border)' }} />
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+            {statusFilter === 'all' ? t.sched.noJobs : `${t.sched.noJobsStatus} "${t.sched[STATUS_META[statusFilter]?.tKey]}"`}
+          </Typography>
+        </Box>
+      ) : (
+        <Box sx={{ overflowY: 'auto', flex: 1, px: 2, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.2 }}>
+          {filtered.map(job => {
+            const meta      = STATUS_META[job.status] || STATUS_META.pending
+            const canCancel = job.status === 'pending' || job.status === 'running'
+            const canEdit   = job.status === 'pending'
+            const canDelete = !canCancel
+            const numCount  = job.selected_numbers?.length || 0
+            const pct       = job.total_count ? Math.min(100, Math.round(((job.sent_count||0) / job.total_count) * 100)) : null
+            return (
+              <Box key={job._id} onClick={() => onJobClick(job)} sx={{
+                display: 'flex', alignItems: 'stretch', borderRadius: 2, cursor: 'pointer', overflow: 'hidden',
+                border: `1px solid ${meta.color}55`,
+                bgcolor: 'var(--card-bg)',
+                transition: 'border-color 0.18s, box-shadow 0.18s, background-color 0.18s',
+                '&:hover': { borderColor: `${meta.color}99`, bgcolor: `${meta.color}10`, boxShadow: `0 2px 16px ${meta.color}22` },
+              }}>
+                {/* Date badge */}
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', px: 1.8, py: 1.5, borderRight: `1px solid ${meta.color}22`, minWidth: 58, flexShrink: 0, bgcolor: `${meta.color}08` }}>
+                  {job.scheduled_at ? (() => {
+                    const d = new Date(job.scheduled_at)
+                    const day = d.toLocaleString('es-MX', { day: '2-digit' })
+                    const mon = d.toLocaleString('es-MX', { month: 'short' }).replace('.','')
+                    const hr  = d.toLocaleString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: false })
+                    return <>
+                      <Typography sx={{ color: 'var(--text,#f1f5f9)', fontSize: '1.15rem', fontWeight: 700, lineHeight: 1 }}>{day}</Typography>
+                      <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.04em', mt: 0.2 }}>{mon}</Typography>
+                      <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.6rem', mt: 0.5, fontFamily: 'monospace', opacity: 0.7 }}>{hr}</Typography>
+                    </>
+                  })() : <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>—</Typography>}
+                </Box>
+
+                {/* Main content */}
+                <Box sx={{ flex: 1, minWidth: 0, px: 1.8, py: 1.4, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 0.5 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                    <Typography sx={{ color: 'var(--text,#f1f5f9)', fontSize: '0.85rem', fontWeight: 700, lineHeight: 1.2, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {job.name}
+                    </Typography>
+                    <StatusChip status={job.status} />
+                  </Box>
+                  <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
+                    {numCount ? `${numCount} ${t.sched.numbers}` : t.sched.unassigned}
+                    {job.total_count > 0 ? ` · ${job.sent_count||0}/${job.total_count} ${t.sched.sent}` : ''}
+                  </Typography>
+                  {job.message && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, minWidth: 0 }}>
+                      <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.68rem', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                        {job.message}
+                      </Typography>
+                      {job.messages?.length > 1 && (
+                        <Chip label={`+${job.messages.length - 1} ${t.sched.variantsSuffix}`} size="small"
+                          sx={{ height: 15, fontSize: '0.58rem', flexShrink: 0, color: 'var(--accent,#3b82f6)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', border: 'none', '& .MuiChip-label': { px: 0.6 } }} />
+                      )}
+                    </Box>
+                  )}
+                  {pct !== null && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                      <LinearProgress variant="determinate" value={pct} sx={{ flex: 1, height: 5, borderRadius: 2, bgcolor: 'var(--border)', '& .MuiLinearProgress-bar': { bgcolor: meta.color, borderRadius: 2 } }} />
+                      <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem', minWidth: 28, textAlign: 'right' }}>{pct}%</Typography>
+                    </Box>
+                  )}
+                </Box>
+
+                {/* Actions */}
+                <Box onClick={e => e.stopPropagation()} sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 0.3, px: 1, py: 1, borderLeft: '1px solid var(--border)', flexShrink: 0 }}>
+                  <Tooltip title={t.sched.ttDuplicate} placement="left"><IconButton size="small" onClick={() => onDuplicate(job)} sx={{ color: 'var(--text-muted)', '&:hover': { color: '#a78bfa' } }}><ContentCopyIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>
+                  {canEdit   && <Tooltip title={t.sched.ttEdit} placement="left"><IconButton size="small" onClick={() => onJobClick(job)} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--accent,#3b82f6)' } }}><EditIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>}
+                  {canCancel && <Tooltip title={t.sched.ttCancel} placement="left"><IconButton size="small" onClick={() => onRequestCancel(job)} sx={{ color: 'rgba(239,68,68,0.6)', '&:hover': { color: '#ef4444' } }}><CancelIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>}
+                  {canDelete && <Tooltip title={t.sched.ttDelete} placement="left"><IconButton size="small" onClick={() => onRequestDelete(job)} sx={{ color: 'var(--text-muted)', '&:hover': { color: '#ef4444' } }}><DeleteIcon sx={{ fontSize: 14 }} /></IconButton></Tooltip>}
+                </Box>
+              </Box>
+            )
+          })}
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+// ─── Side panel ───────────────────────────────────────────────────────────────
+
+function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicate }) {
+  const { t } = useLang()
+  const isOpen = !!panel
+  const isEdit = panel?.mode === 'edit'
+  const isReadOnly = isEdit && panel?.job?.status !== 'pending'
+  const modeColor  = panel?.mode === 'duplicate' ? '#a78bfa' : (isEdit ? '#4ade80' : 'var(--accent,#3b82f6)')
+  // Duplicate/edit get their own fixed signal color (distinct from whatever
+  // accent the user picked in Settings — they mean something specific: "this
+  // is a copy" / "this is an edit"). Create is just the normal case, so it
+  // should follow the real --accent-rgb instead of a hardcoded blue that
+  // clashed with a non-default accent (e.g. pink) everywhere else in this panel.
+  const modeRgb    = panel?.mode === 'duplicate' ? '167,139,250' : (isEdit ? '74,222,128' : 'var(--accent-rgb,59,130,246)')
+  const [industryMap, setIndustryMap] = useState({})
+
+  useEffect(() => {
+    if (!isReadOnly || !panel?.job?.selected_numbers?.length) return
+    authFetch('/api/admin/companies-with-numbers')
+      .then(r => r.json())
+      .then(data => {
+        const map = {}
+        ;(data || []).forEach(c => { if (c._id && c.industry) map[String(c._id)] = c.industry })
+        setIndustryMap(map)
+      })
+      .catch(() => {})
+  }, [panel?.job?._id, isReadOnly]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <Box sx={{
+      position: 'absolute', top: 0, right: 0, bottom: 0,
+      width: isOpen ? 'min(390px, 55%)' : 0,
+      overflow: 'hidden',
+      transition: 'width 0.25s cubic-bezier(0.4,0,0.2,1)',
+      borderLeft: isOpen ? '1px solid rgba(255,255,255,0.08)' : 'none',
+      display: 'flex', flexDirection: 'column',
+      bgcolor: 'var(--sidebar-bg, #0d1117)',
+      zIndex: 2,
+    }}>
+      {isOpen && (
+        <Box sx={{ width: 'min(390px, 55vw)', display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
+          {/* Mismo lenguaje de header que Warmup/Performance/Instances: fondo
+             en degradado diagonal de 3 paradas + línea de brillo inferior
+             centrada, en vez del degradado plano de arriba-a-abajo sin ese
+             detalle que se veía apagado al lado de esos paneles ya renovados. */}
+          <Box sx={{
+            display: 'flex', alignItems: 'center', gap: 1, px: 2.5, py: 1.8, position: 'relative', flexShrink: 0,
+            background: `linear-gradient(135deg, rgba(${modeRgb},0.14) 0%, rgba(${modeRgb},0.04) 60%, transparent 100%)`,
+            borderBottom: `1px solid rgba(${modeRgb},0.15)`,
+            '&::after': {
+              content: '""', position: 'absolute', bottom: 0, left: 16, right: 16, height: '1px',
+              background: `linear-gradient(90deg, transparent, rgba(${modeRgb},0.4) 40%, rgba(${modeRgb},0.4) 60%, transparent)`,
+            },
+          }}>
+            <Box sx={{ width: 32, height: 32, borderRadius: '9px', flexShrink: 0, background: `linear-gradient(135deg, rgba(${modeRgb},0.28) 0%, rgba(${modeRgb},0.1) 100%)`, border: `1px solid rgba(${modeRgb},0.35)`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {panel.mode === 'duplicate' ? <ContentCopyIcon sx={{ fontSize: 14, color: modeColor }} /> : isEdit ? <EditIcon sx={{ fontSize: 14, color: modeColor }} /> : <ScheduleSendIcon sx={{ fontSize: 15, color: modeColor }} />}
+            </Box>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 700, fontSize: '0.88rem', lineHeight: 1.2 }}>
+                {panel.mode === 'duplicate' ? t.sched.duplicatePanel : isEdit ? t.sched.editPanel : t.sched.createPanel}
+              </Typography>
+              {(isEdit || panel.mode === 'duplicate') && panel.job?.name && (
+                <Chip label={panel.job.name} size="small" sx={{ height: 17, fontSize: '0.62rem', bgcolor: `rgba(${modeRgb},0.1)`, color: modeColor, border: `1px solid rgba(${modeRgb},0.2)`, '& .MuiChip-label': { px: 0.8 }, maxWidth: '100%', mt: 0.3 }} />
+              )}
+            </Box>
+            <IconButton size="small" onClick={() => onDone(null, false)} sx={{ color: 'rgba(255,255,255,0.3)', '&:hover': { color: 'var(--text,#f1f5f9)' } }}>
+              <CloseIcon sx={{ fontSize: 17 }} />
+            </IconButton>
+          </Box>
+
+          {/* Read-only view for non-pending jobs */}
+          {isReadOnly ? (() => {
+            const job = panel.job
+            const meta = STATUS_META[job.status] || STATUS_META.pending
+            const sent  = job.sent_count || 0
+            const total = job.total_count || (job.selected_numbers?.length || 0)
+            const pct   = total > 0 ? Math.round(sent / total * 100) : 0
+
+            const groupMap = {}
+            for (const num of (job.selected_numbers || [])) {
+              const key = num.company_id || num.company_name || '?'
+              if (!groupMap[key]) groupMap[key] = { company_name: num.company_name || '—', company_id: num.company_id, numbers: [] }
+              groupMap[key].numbers.push(num)
+            }
+            const groups = Object.values(groupMap)
+
+            const LABEL_SX = { color: 'var(--text-muted)', fontSize: '0.66rem', mb: 0.8, textTransform: 'uppercase', letterSpacing: '0.06em' }
+
+            return (
+              <Box sx={{ p: 2.5, display: 'flex', flexDirection: 'column', gap: 2, overflowY: 'auto' }}>
+
+                {/* Stats row */}
+                <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <StatusChip status={job.status} />
+                  <Chip icon={<SendIcon sx={{ fontSize: '11px !important' }} />} label={`${sent} / ${total}`} size="small"
+                    sx={{ height: 20, fontSize: '0.68rem', bgcolor: 'var(--surface)', color: 'var(--text-muted)', border: '1px solid var(--border)', '& .MuiChip-icon': { color: 'var(--text-muted)', ml: 0.8 }, '& .MuiChip-label': { px: 0.7 } }} />
+                  <Chip icon={<WhatsAppIcon sx={{ fontSize: '11px !important' }} />} label={job.selected_numbers?.length || 0} size="small"
+                    sx={{ height: 20, fontSize: '0.68rem', bgcolor: 'var(--surface)', color: 'var(--text-muted)', border: '1px solid var(--border)', '& .MuiChip-icon': { color: '#4ade80', ml: 0.8 }, '& .MuiChip-label': { px: 0.7 } }} />
+                  <Chip icon={<AccessTimeIcon sx={{ fontSize: '11px !important' }} />} label={fmtDate(job.scheduled_at)} size="small"
+                    sx={{ height: 20, fontSize: '0.68rem', bgcolor: 'var(--surface)', color: 'var(--text-muted)', border: '1px solid var(--border)', '& .MuiChip-icon': { color: 'var(--text-muted)', ml: 0.8 }, '& .MuiChip-label': { px: 0.7 } }} />
+                </Box>
+
+                {/* Progress */}
+                <Box sx={{ bgcolor: 'var(--surface)', borderRadius: 2, p: 1.5, border: `1px solid ${meta.color}22` }}>
+                  <Typography sx={LABEL_SX}>{t.sched.panelProgress}</Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
+                    <Typography sx={{ color: meta.color, fontWeight: 700, fontSize: '1.5rem', lineHeight: 1 }}>{sent}</Typography>
+                    <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>{t.sched.panelOf} {total} {t.sched.sent}</Typography>
+                    {job.status === 'done' && total > 0 && sent >= total && (
+                      <CheckCircleIcon sx={{ fontSize: 15, color: '#4ade80', ml: 0.3 }} />
+                    )}
+                  </Box>
+                  <LinearProgress variant="determinate" value={Math.min(pct, 100)}
+                    sx={{ height: job.status === 'done' ? 8 : 5, borderRadius: 3, bgcolor: 'var(--border)',
+                      '& .MuiLinearProgress-bar': { bgcolor: meta.color, borderRadius: 3, boxShadow: job.status === 'done' ? `0 0 8px ${meta.color}55` : 'none' } }} />
+                  <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem', mt: 0.4, textAlign: 'right', opacity: 0.7 }}>{pct}%</Typography>
+                </Box>
+
+                {/* Message(s) */}
+                <Box>
+                  <Typography sx={LABEL_SX}>
+                    {job.messages?.length > 1 ? `${t.sched.panelMessage} (${job.messages.length} ${t.sched.variantsSuffix})` : t.sched.panelMessage}
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.8 }}>
+                    {(job.messages?.length ? job.messages : [job.message]).filter(Boolean).map((msg, i) => (
+                      <Box key={i} sx={{ bgcolor: 'var(--surface)', borderRadius: 2, p: 1.5, border: '1px solid var(--border)', borderLeft: '3px solid rgba(var(--accent-rgb,59,130,246),0.35)' }}>
+                        <Typography sx={{ color: 'var(--text)', fontSize: '0.82rem', whiteSpace: 'pre-wrap', lineHeight: 1.65 }}>{msg}</Typography>
+                      </Box>
+                    ))}
+                  </Box>
+                </Box>
+
+                {/* Recipients grouped by company */}
+                {groups.length > 0 && (
+                  <Box>
+                    <Typography sx={LABEL_SX}>{t.sched.panelRecipients} ({job.selected_numbers?.length || 0})</Typography>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.8 }}>
+                      {groups.map(g => {
+                        const industry = industryMap[String(g.company_id)] || ''
+                        return (
+                          <Box key={g.company_id || g.company_name} sx={{ bgcolor: 'var(--surface)', borderRadius: 1.5, p: 1.2, border: '1px solid var(--border)' }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7, mb: 0.4, flexWrap: 'wrap' }}>
+                              <BusinessIcon sx={{ fontSize: 12, color: 'var(--text-muted)', flexShrink: 0 }} />
+                              <Typography sx={{ color: 'var(--text)', fontWeight: 600, fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '55%' }}>{g.company_name}</Typography>
+                              {industry && (
+                                <Chip label={industry} size="small" sx={{ height: 15, fontSize: '0.58rem', color: 'var(--text-muted)', bgcolor: 'var(--item-hover)', border: 'none', '& .MuiChip-label': { px: 0.7 } }} />
+                              )}
+                            </Box>
+                            {g.numbers.map(n => (
+                              <Box key={n.number} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, ml: 2.4, mt: 0.25 }}>
+                                <WhatsAppIcon sx={{ fontSize: 11, color: '#4ade80', flexShrink: 0 }} />
+                                <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.74rem', fontFamily: 'monospace' }}>{n.number}</Typography>
+                              </Box>
+                            ))}
+                          </Box>
+                        )
+                      })}
+                    </Box>
+                  </Box>
+                )}
+
+                {/* Actions — sticky to bottom of scroll container */}
+                <Box sx={{ position: 'sticky', bottom: 0, display: 'flex', gap: 1, flexWrap: 'wrap', justifyContent: 'center', py: 1.5, mt: 0.5, borderTop: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)', backdropFilter: 'blur(4px)' }}>
+                  <Button size="small" startIcon={<ContentCopyIcon />} onClick={() => onDuplicate(job)}
+                    sx={{ color: 'var(--accent,#3b82f6)', borderColor: 'rgba(var(--accent-rgb,59,130,246),0.3)', border: '1px solid', textTransform: 'none', borderRadius: 1.5, transition: 'all 0.18s ease', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', borderColor: 'rgba(var(--accent-rgb,59,130,246),0.6)' } }}>
+                    {t.sched.dupBtn}
+                  </Button>
+                  {job.status === 'running' && (
+                    <Button size="small" startIcon={<CancelIcon />} onClick={() => onRequestCancel(job)}
+                      sx={{ color: '#f59e0b', borderColor: 'rgba(245,158,11,0.3)', border: '1px solid', textTransform: 'none', borderRadius: 1.5, transition: 'all 0.18s ease', '&:hover': { bgcolor: 'rgba(245,158,11,0.1)', borderColor: 'rgba(245,158,11,0.6)' } }}>
+                      {t.sched.cancelSendBtn}
+                    </Button>
+                  )}
+                  {(job.status === 'done' || job.status === 'cancelled' || job.status === 'error') && (
+                    <Button size="small" startIcon={<DeleteIcon />} onClick={() => onRequestDelete(job)}
+                      sx={{ color: '#ef4444', borderColor: 'rgba(239,68,68,0.3)', border: '1px solid', textTransform: 'none', borderRadius: 1.5, transition: 'all 0.18s ease', '&:hover': { bgcolor: 'rgba(239,68,68,0.1)', borderColor: 'rgba(239,68,68,0.6)' } }}>
+                      {t.sched.deleteBtn}
+                    </Button>
+                  )}
+                </Box>
+              </Box>
+            )
+          })() : (
+            <CampaignForm
+              editJob={isEdit ? panel.job : null}
+              defaultDate={panel.mode === 'create' ? panel.defaultDate : undefined}
+              duplicateFrom={panel.mode === 'duplicate' ? panel.job : undefined}
+              onDone={onDone}
+            />
+          )}
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
+
+export default function ScheduledSends() {
+  const { t } = useLang()
+  const today = new Date()
+  const [jobs,      setJobs]      = useState([])
+  const [loading,   setLoading]   = useState(true)
+  const [viewYear,  setViewYear]  = useState(today.getFullYear())
+  const [viewMonth, setViewMonth] = useState(today.getMonth())
+  const [weekStart, setWeekStart] = useState(() => getWeekStart(today))
+  const [calView,   setCalView]   = useState('month') // 'month' | 'week' | 'list'
+  const [panel,     setPanel]     = useState(null)
+  const [confirm,   setConfirm]   = useState(null)   // { action, job, title, body }
+  const fetchJobs = useCallback(async () => {
+    if (!localStorage.getItem('user_token')) return
+    try {
+      const res = await authFetch('/api/admin/scheduled-sends')
+      if (!res.ok) return
+      const data = await res.json()
+      setJobs(Array.isArray(data) ? data : [])
+    } catch { } finally { setLoading(false) }
+  }, [])
+
+  const hasRunning = jobs.some(j => j.status === 'running')
+
+  useEffect(() => { fetchJobs() }, [fetchJobs])
+
+  useEffect(() => {
+    const interval = hasRunning ? 10_000 : 30_000
+    const id = setInterval(() => { if (!document.hidden) fetchJobs() }, interval)
+    return () => clearInterval(id)
+  }, [hasRunning, fetchJobs])
+
+  // ── Navigation ───────────────────────────────────────────────────────────────
+
+  function navPrev() {
+    if (calView === 'week') { setWeekStart(w => { const d = new Date(w); d.setDate(d.getDate() - 7); return d }) }
+    else { setViewMonth(m => { const next = m - 1; if (next < 0) { setViewYear(y => y - 1); return 11 } return next }) }
+  }
+  function navNext() {
+    if (calView === 'week') { setWeekStart(w => { const d = new Date(w); d.setDate(d.getDate() + 7); return d }) }
+    else { setViewMonth(m => { const next = m + 1; if (next > 11) { setViewYear(y => y + 1); return 0 } return next }) }
+  }
+  function goToday() {
+    setViewYear(today.getFullYear()); setViewMonth(today.getMonth())
+    setWeekStart(getWeekStart(today))
+  }
+
+  // ── Panel handlers ───────────────────────────────────────────────────────────
+
+  function handleDayClick(date) {
+    if (panel?.mode === 'create') { setPanel(prev => ({ ...prev, defaultDate: dateToDtLocal(date) })) }
+    else { setPanel({ mode: 'create', defaultDate: dateToDtLocal(date) }) }
+  }
+
+  function handleJobClick(job) {
+    // Auto-navigate to the job's month/week
+    const d = new Date(job.scheduled_at)
+    setViewYear(d.getFullYear()); setViewMonth(d.getMonth())
+    setWeekStart(getWeekStart(d))
+    setPanel({ mode: 'edit', job })
+  }
+
+  function handleDuplicate(job) {
+    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1)
+    setPanel({ mode: 'duplicate', job, defaultDate: dateToDtLocal(tomorrow) })
+  }
+
+  async function handlePanelDone(result, wasEdit) {
+    if (!result) { setPanel(null); return }
+    if (wasEdit) { setJobs(prev => prev.map(j => j._id === result._id ? result : j)) }
+    else { setJobs(prev => [result, ...prev]) }
+    setPanel(null)
+  }
+
+  // ── Confirm actions ──────────────────────────────────────────────────────────
+
+  function requestCancel(job) {
+    setConfirm({ action: 'cancel', job, title: '¿Cancelar envío?', body: `Se detendrá "${job.name}". Los mensajes ya enviados no se pueden deshacer.` })
+  }
+  function requestDelete(job) {
+    setConfirm({ action: 'delete', job, title: '¿Eliminar campaña?', body: `Se eliminará "${job.name}" de forma permanente.` })
+  }
+
+  async function handleConfirm() {
+    const { action, job } = confirm
+    setConfirm(null)
+    try {
+      await authFetch(`/api/admin/scheduled-sends/${job._id}`, { method: 'DELETE' })
+      if (action === 'cancel') setJobs(prev => prev.map(j => j._id === job._id ? { ...j, status: 'cancelled' } : j))
+      if (action === 'delete') setJobs(prev => prev.filter(j => j._id !== job._id))
+      if (panel?.job?._id === job._id) setPanel(null)
+    } catch { }
+  }
+
+  // ── Toolbar label ────────────────────────────────────────────────────────────
+
+  const toolbarLabel = useMemo(() => {
+    if (calView === 'week') {
+      const end = new Date(weekStart); end.setDate(end.getDate() + 6)
+      const sM = t.sched.months[weekStart.getMonth()].slice(0, 3)
+      const eM = t.sched.months[end.getMonth()].slice(0, 3)
+      return weekStart.getMonth() === end.getMonth()
+        ? `${weekStart.getDate()}–${end.getDate()} ${sM} ${weekStart.getFullYear()}`
+        : `${weekStart.getDate()} ${sM} – ${end.getDate()} ${eM} ${end.getFullYear()}`
+    }
+    return `${t.sched.months[viewMonth]} ${viewYear}`
+  }, [calView, viewMonth, viewYear, weekStart, t])
+
+  const hasActive = jobs.some(j => j.status === 'running')
+  const VIEWS = [{ key: 'month', icon: <CalendarMonthIcon sx={{ fontSize: 15 }} />, label: t.sched.viewMonth }, { key: 'week', icon: <ViewWeekIcon sx={{ fontSize: 15 }} />, label: t.sched.viewWeek }, { key: 'list', icon: <ViewListIcon sx={{ fontSize: 15 }} />, label: t.sched.viewList }]
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+      {/* Header */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2, flexShrink: 0 }}>
+        <Box sx={{ width: 36, height: 36, borderRadius: 2, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <ScheduleSendIcon sx={{ fontSize: 19, color: 'var(--accent,#3b82f6)' }} />
+        </Box>
+        <Box>
+          <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 800, fontSize: '1.1rem', lineHeight: 1.2 }}>{t.sched.title}</Typography>
+          <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem' }}>{t.sched.subtitle}</Typography>
+        </Box>
+        <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 1 }}>
+          {hasActive && <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+            <CircularProgress size={11} thickness={5} sx={{ color: '#f59e0b' }} />
+            <Typography sx={{ color: '#f59e0b', fontSize: '0.7rem', fontWeight: 600 }}>{t.sched.live}</Typography>
+          </Box>}
+          <Button size="small" variant="contained" startIcon={<AddIcon />}
+            onClick={() => setPanel({ mode: 'create', defaultDate: dateToDtLocal(today) })}
+            sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.85)' }, textTransform: 'none', fontWeight: 600, fontSize: '0.8rem', borderRadius: 2, px: 1.8 }}>
+            {t.sched.scheduleBtn}
+          </Button>
+        </Box>
+      </Box>
+
+      {/* Main area */}
+      <Box sx={{ flex: 1, display: 'flex', minHeight: 0, bgcolor: 'var(--item-hover)', border: '1px solid var(--border)', borderRadius: 3, overflow: 'hidden', position: 'relative' }}>
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+          {/* Toolbar */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 1.2, borderBottom: '1px solid var(--border)', flexShrink: 0, overflow: 'hidden' }}>
+            {/* Nav group */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
+              <IconButton size="small" onClick={navPrev} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text,#f1f5f9)' } }}><ChevronLeftIcon sx={{ fontSize: 18 }} /></IconButton>
+              <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 700, fontSize: '0.9rem', whiteSpace: 'nowrap' }}>{toolbarLabel}</Typography>
+              <IconButton size="small" onClick={navNext} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text,#f1f5f9)' } }}><ChevronRightIcon sx={{ fontSize: 18 }} /></IconButton>
+              <Button size="small" onClick={goToday} sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', textTransform: 'none', borderRadius: 1.5, border: '1px solid var(--border)', px: 1.2, py: 0.3, '&:hover': { bgcolor: 'var(--item-hover)' } }}>{t.sched.today}</Button>
+            </Box>
+            {/* View switcher */}
+            <Box sx={{ ml: 'auto', flexShrink: 0, display: 'flex', bgcolor: 'var(--item-hover)', borderRadius: 1.5, border: '1px solid var(--border)', overflow: 'hidden' }}>
+              {VIEWS.map(v => (
+                <Box key={v.key} onClick={() => setCalView(v.key)} sx={{ display: 'flex', alignItems: 'center', gap: 0.4, px: 1.2, py: 0.4, cursor: 'pointer', bgcolor: calView === v.key ? 'var(--border)' : 'transparent', color: calView === v.key ? 'var(--text,#f1f5f9)' : 'var(--text-muted)', transition: 'background-color 0.12s' }}>
+                  {v.icon}
+                  <Typography sx={{ fontSize: '0.7rem', fontWeight: calView === v.key ? 600 : 400, display: { xs: 'none', sm: 'block' } }}>{v.label}</Typography>
+                </Box>
+              ))}
+            </Box>
+          </Box>
+
+          {/* Content */}
+          {loading ? (
+            calView === 'week' ? <WeekGridSkeleton /> : calView === 'list' ? <ListRowsSkeleton /> : <MonthGridSkeleton />
+          ) : calView === 'month' ? (
+            <MonthView jobs={jobs} viewYear={viewYear} viewMonth={viewMonth}
+              selectedDate={panel?.mode === 'create' || panel?.mode === 'duplicate' ? panel.defaultDate : null}
+              onDayClick={handleDayClick} onJobClick={handleJobClick} />
+          ) : calView === 'week' ? (
+            <WeekView jobs={jobs} weekStart={weekStart}
+              selectedDate={panel?.mode === 'create' || panel?.mode === 'duplicate' ? panel.defaultDate : null}
+              onDayClick={handleDayClick} onJobClick={handleJobClick} />
+          ) : (
+            <ListView jobs={jobs} onJobClick={handleJobClick}
+              onRequestCancel={requestCancel} onRequestDelete={requestDelete} onDuplicate={handleDuplicate} />
+          )}
+        </Box>
+
+        {/* Side panel */}
+        <SidePanel panel={panel} onDone={handlePanelDone}
+          onRequestCancel={requestCancel} onRequestDelete={requestDelete} onDuplicate={handleDuplicate} />
+      </Box>
+
+      {/* Confirm dialog */}
+      <ConfirmDialog
+        open={!!confirm}
+        title={confirm?.title || ''}
+        body={confirm?.body || ''}
+        confirmLabel={confirm?.action === 'cancel' ? t.sched.confirmCancelSend : t.sched.deleteBtn}
+        danger
+        onConfirm={handleConfirm}
+        onCancel={() => setConfirm(null)}
+      />
+    </Box>
+  )
+}

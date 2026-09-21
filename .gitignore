@@ -13,7 +13,7 @@ next-env.d.ts
 .env.development.local
 .env.test.local
 .env.production.local
-backEnd/app/.env
+apps/api/app/.env
 
 # ── Python ──────────────────────────────────────────────────────
 __pycache__/
@@ -32,7 +32,7 @@ ENV/
 *.egg-info/
 *.egg
 build/
-!src/app/api/andy/build/
+!apps/web/src/app/api/andy/build/
 develop-eggs/
 eggs/
 sdist/
@@ -67,28 +67,16 @@ desktop.ini
 .claude/
 
 # ── Scripts y archivos de prueba / utilidades temporales ────────
-backEnd/insert_test*.py
-backEnd/app/create_test_user.py
-backEnd/app/create_user.py
-backEnd/app/link_instance.py
-backEnd/app/check_instances.py
-backEnd/app/check_msgs.py
-backEnd/app/fix_names.py
-backEnd/app/fix_reaction.py
-backEnd/app/fix_safe.py
-backEnd/app/fix_encoding.py
-backEnd/app/patch_canvas.py
-backEnd/app/patch_drawstring.py
-backEnd/app/read_safe.py
-backEnd/app/update_user_email.py
-backEnd/create_user.py
-backEnd/app/create_user.py
-fix_encoding.py
+apps/api/insert_test*.py
+apps/api/scripts/user_management/create_test_user.py
+apps/api/scripts/user_management/create_user.py
+apps/api/scripts/db_fixes/
+apps/api/scripts/report_patches/
 test_*.pdf
 test_*.csv
 
 # ── Evolution API (Docker) ───────────────────────────────────────
-/evolution/
+/apps/evolution/
 
 # ── Playwright (navegadores descargados localmente) ──────────────
 playwright-report/
@@ -97,14 +85,17 @@ test-results/
 
 # ── Producción / builds ──────────────────────────────────────────
 *.pyc
-backEnd/app/__pycache__/
-backEnd/__pycache__/
+apps/api/app/__pycache__/
+apps/api/__pycache__/
 
 # ── PDFs generados por el sistema ────────────────────────────────
 reporte-*.pdf
-backEnd/bore.exe
-backEnd/bore_*.log
+apps/api/scripts/bore.exe
+apps/api/scripts/bore_*.log
 
-# ── wwebjs-service — datos de sesión y caché ────────────────────
-wwebjs-service/.wwebjs_cache/
-wwebjs-service/sessions/
+# ── wwebjs — datos de sesión y caché ─────────────────────────────
+apps/wwebjs/.wwebjs_cache/
+apps/wwebjs/sessions/
+
+# DB backups — contienen datos reales de contactos/prospectos, nunca deben subirse
+backups/

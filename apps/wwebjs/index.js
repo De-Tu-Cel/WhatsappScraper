@@ -109,6 +109,47 @@ function startProfileSyncPoll(sessionId) {
   }, 30 * 60 * 1000)
 }
 
+// Some whatsapp-web.js sessions go "zombie": the client stays marked
+// connected and no 'disconnected' event ever fires, but the underlying page
+// has silently died (frame detached) and stops sending/receiving for good —
+// a widely-reported, unresolved upstream issue (wwebjs/whatsapp-web.js
+// #127105). Nothing in our own event handlers can catch this since it's
+// exactly the class of failure that skips those events. Poll getState()
+// periodically instead — a real reply proves the session is alive; a
+// timeout or thrown error is the only signal a zombie session gives at all.
+// One bad poll is tolerated (a single slow CDP round-trip under host
+// contention, same as elsewhere in this file) — two in a row triggers the
+// same destroy-and-recreate recovery already used by readyWatchdog/reconnect.
+function startLivenessHeartbeat(sessionId) {
+  const session = sessions.get(sessionId)
+  if (!session) return
+  clearInterval(session.heartbeatTimer)
+  session.heartbeatFailStreak = 0
+  session.heartbeatTimer = setInterval(async () => {
+    const s = sessions.get(sessionId)
+    if (!s || s.status !== 'connected') return
+    try {
+      await Promise.race([
+        s.client.getState(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('getState() timed out')), 10000)),
+      ])
+      s.heartbeatFailStreak = 0
+    } catch (e) {
+      s.heartbeatFailStreak = (s.heartbeatFailStreak || 0) + 1
+      console.warn(`[${sessionId}] Heartbeat failed (${s.heartbeatFailStreak}/2): ${e.message}`)
+      if (s.heartbeatFailStreak < 2) return
+      console.warn(`[${sessionId}] Session looks zombie (no live disconnect event) — recreating`)
+      clearInterval(s.heartbeatTimer)
+      clearInterval(s.presenceTimer)
+      clearInterval(s.profileSyncTimer)
+      forwardWebhook({ event: 'session.status', sessionId, data: { status: 'disconnected', reason: 'HEARTBEAT_TIMEOUT' } })
+      await destroySessionClient(s.client, sessionId)
+      sessions.delete(sessionId)
+      createClient(sessionId, s.phoneNumber)
+    }
+  }, (Math.random() * 5 + 15) * 1000)
+}
+
 // client.getProfilePicUrl() (whatsapp-web.js/src/Client.js) resolves a Chat via
 // WWebJS.getChat(contactId) BEFORE it ever asks the server for the picture —
 // and there is normally no chat thread with your own number (WhatsApp only
@@ -265,7 +306,7 @@ function createClient(sessionId, phoneNumber) {
   // tell "someone has the reconnect dialog open" from "nobody's watching, stop
   // burning CPU generating QR/codes forever" (see that function's own comment
   // for the real incident this fixes).
-  const session = { client, status: 'initializing', qr: null, pairingCode: null, phoneNumber, phone: null, presenceTimer: null, reconnectTimer: null, readyWatchdog: null, ackFailStreak: 0, ackDegraded: false, profileSyncTimer: null, lastPushname: null, lastProfilePicUrl: null, lastPolledAt: Date.now() }
+  const session = { client, status: 'initializing', qr: null, pairingCode: null, phoneNumber, phone: null, presenceTimer: null, reconnectTimer: null, readyWatchdog: null, ackFailStreak: 0, ackDegraded: false, profileSyncTimer: null, heartbeatTimer: null, heartbeatFailStreak: 0, lastPushname: null, lastProfilePicUrl: null, lastPolledAt: Date.now() }
   sessions.set(sessionId, session)
 
   client.on('qr', (qr) => {
@@ -353,6 +394,7 @@ function createClient(sessionId, phoneNumber) {
     console.log(`[${sessionId}] Ready | phone=${session.phone}`)
     startPresenceHeartbeat(sessionId)
     startProfileSyncPoll(sessionId)
+    startLivenessHeartbeat(sessionId)
 
     // Profile name + picture, shown in the Instances panel so it's clear who's
     // behind each line — best-effort, never blocks the "connected" webhook.
@@ -390,6 +432,7 @@ function createClient(sessionId, phoneNumber) {
     session.status = 'auth_failure'
     clearInterval(session.presenceTimer)
     clearInterval(session.profileSyncTimer)
+    clearInterval(session.heartbeatTimer)
     console.error(`[${sessionId}] Auth failure:`, msg)
     forwardWebhook({ event: 'session.status', sessionId, data: { status: 'auth_failure' } })
   })
@@ -398,6 +441,7 @@ function createClient(sessionId, phoneNumber) {
     clearTimeout(session.readyWatchdog)
     clearInterval(session.presenceTimer)
     clearInterval(session.profileSyncTimer)
+    clearInterval(session.heartbeatTimer)
 
     // Reasons that mean credentials are gone — need a new QR scan, NOT a reconnect
     const needsReauth = ['LOGOUT', 'UNPAIRED', 'UNPAIRED_IDLE', 'TOS_BLOCK', 'SMB_TOS_BLOCK'].includes(reason)
@@ -679,6 +723,7 @@ function sweepIdleReconnectSessions() {
       console.log(`[${id}] idle reconnect (no poll in ${Math.round(IDLE_RECONNECT_TIMEOUT_MS / 60000)}min) — stopping QR/code generation until requested again`)
       clearInterval(current.presenceTimer)
       clearInterval(current.profileSyncTimer)
+      clearInterval(current.heartbeatTimer)
       clearTimeout(current.reconnectTimer)
       clearTimeout(current.readyWatchdog)
       await destroySessionClient(current.client, id)
@@ -723,6 +768,7 @@ app.post('/session/:id/start', async (req, res) => {
       // same userDataDir for the createClient() call right below.
       clearInterval(existing.presenceTimer)
       clearInterval(existing.profileSyncTimer)
+      clearInterval(existing.heartbeatTimer)
       clearTimeout(existing.reconnectTimer)
       clearTimeout(existing.readyWatchdog)
       await destroySessionClient(existing.client, id)
@@ -1225,6 +1271,7 @@ app.delete('/session/:id', async (req, res) => {
     if (!session) return { notFound: true }
     clearInterval(session.presenceTimer)
     clearInterval(session.profileSyncTimer)
+    clearInterval(session.heartbeatTimer)
     clearTimeout(session.reconnectTimer)
     clearTimeout(session.readyWatchdog)
     await destroySessionClient(session.client, id)

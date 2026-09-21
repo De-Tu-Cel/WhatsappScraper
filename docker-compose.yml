@@ -13,6 +13,7 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+    mem_limit: 512m
     logging:
       driver: json-file
       options:
@@ -37,6 +38,7 @@ services:
     depends_on:
       - wwebjs
     restart: unless-stopped
+    mem_limit: 1.5g
     logging:
       driver: json-file
       options:
@@ -55,6 +57,7 @@ services:
     volumes:
       - wwebjs_sessions:/app/sessions
     restart: unless-stopped
+    mem_limit: 3g
     logging:
       driver: json-file
       options:

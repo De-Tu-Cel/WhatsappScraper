@@ -1240,8 +1240,10 @@ export default function Analytics() {
                       {/* Reporte */}
                       <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
                         {!hasMultiple && (() => {
-                          const noContact = !row.total_responses || !row.category || row.category === 'sin_respuesta'
-                          const tip = isGenerating ? t.analytics.generating : generating ? t.analytics.pleaseWait : (!row.category || row.category === 'sin_respuesta') ? t.analytics.noReply : !row.total_responses ? t.analytics.noConvRecord : t.analytics.reportPdf
+                          // "sin_respuesta" se puede reportar igual — el PDF sirve
+                          // justamente para dejar constancia de que no hubo respuesta.
+                          const noContact = !row.category || (row.category !== 'sin_respuesta' && !row.total_responses)
+                          const tip = isGenerating ? t.analytics.generating : generating ? t.analytics.pleaseWait : row.category === 'sin_respuesta' ? t.analytics.noReply : !row.category || !row.total_responses ? t.analytics.noConvRecord : t.analytics.reportPdf
                           return (
                             <Tooltip title={tip}>
                               <span>
@@ -1412,7 +1414,7 @@ export default function Analytics() {
                           <TableCell sx={NSUB}>
                             <Tooltip title={isGenNum ? t.analytics.generating : generating ? t.analytics.pleaseWait : !replied ? t.analytics.noReply : `${t.analytics.reportPdf} ${shortNum}`}>
                               <span>
-                                <IconButton size="small" disabled={!!generating || !replied} onClick={() => handleGenerateReport(row, n.number)}
+                                <IconButton size="small" disabled={!!generating || (!replied && n.category !== 'sin_respuesta')} onClick={() => handleGenerateReport(row, n.number)}
                                   sx={{ color: isGenNum ? 'var(--accent,#6366f1)' : 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.65)' } }}>
                                   {isGenNum ? <CircularProgress size={14} sx={{ color: 'var(--accent,#6366f1)' }} /> : <PictureAsPdfIcon sx={{ fontSize: 16 }} />}
                                 </IconButton>

@@ -534,6 +534,12 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
   // just the icon+label placeholder chip above. Scoped to images/stickers for
   // now, matching what wwebjs-service actually downloads.
   const hasRealImage = Boolean(msg.media_url) && (msg.media_content_type || '').startsWith('image/')
+  // Non-image real bytes downloaded from wwebjs (PDFs, docs — see the webhook
+  // handler) — a caption text can arrive alongside these (msg.body IS the
+  // caption, not a placeholder), so this renders next to the text below
+  // instead of replacing it (real case: Grupo Hakkasan's events brochure
+  // PDF, 2026-09-17 — the caption showed but the attached file vanished).
+  const hasRealDocument = Boolean(msg.media_url) && !hasRealImage
   const isSticker = raw.trim().toLowerCase() === '[sticker]'
   const body   = raw || '—'
   const interactive = msg.interactive
@@ -570,6 +576,24 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
             onClick={() => window.open(msg.media_url, '_blank')}
             sx={{ maxWidth: 260, maxHeight: 320, width: '100%', borderRadius: '10px', display: 'block',
                   objectFit: 'cover', cursor: 'pointer' }} />
+        ) : hasRealDocument ? (
+          <>
+            <Box component="a" href={msg.media_url} target="_blank" rel="noopener"
+              sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, borderRadius: '10px', textDecoration: 'none',
+                    bgcolor: isOut ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.05)',
+                    border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer',
+                    '&:hover': { bgcolor: isOut ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.08)' } }}>
+              <InsertDriveFileIcon sx={{ fontSize: 22, color: isOut ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.55)', flexShrink: 0 }} />
+              <Typography sx={{ color: isOut ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.75)', fontSize: '0.8rem', fontWeight: 600, wordBreak: 'break-word' }}>
+                {(msg.media_content_type || '').split('/')[1]?.toUpperCase() || (lang === 'en' ? 'Document' : 'Documento')}
+              </Typography>
+            </Box>
+            {body && !/^\[.*\]$/.test(body.trim()) && (
+              <Typography sx={{ color: 'rgba(255,255,255,0.88)', fontSize: '0.83rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', mt: 0.8 }}>
+                {body}
+              </Typography>
+            )}
+          </>
         ) : media ? (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
             <media.Icon sx={{ fontSize: 18, color: isOut ? 'rgba(var(--accent-rgb, 99,102,241), 0.9)' : 'rgba(255,255,255,0.5)' }} />

@@ -4377,6 +4377,13 @@ async def api_wwebjs_webhook(request: Request):
             instance_name=instance_name,
             media_url=_media_url,
             media_content_type=_media_content_type,
+            # wwebjs-service now extracts button/list option labels into the same
+            # {type, text, options} shape _extract_body_and_interactive() already
+            # builds for Evolution/WAHA — was always None here, so conversations.jsx's
+            # InteractiveMessage component (which renders real option chips) never
+            # had anything to render for a wwebjs-sourced button/list message, only
+            # the raw "[Opciones: ...]" text suffix (real case: Come Bien, 2026-09-15).
+            interactive=data.get("interactive"),
         )
         print(f"[wwebjs Webhook] inbound saved log_id={log_id} company={company_id} from={number}")
 

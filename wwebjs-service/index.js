@@ -437,6 +437,14 @@ function createClient(sessionId, phoneNumber) {
     // shape doesn't match, behavior is identical to before (no options, same
     // as today).
     let messageBody = msg.body
+    // Structured form of the same extraction below — mirrors the shape the
+    // backend's _extract_body_and_interactive() already builds for Evolution/
+    // WAHA ({type, text, options}), so conversations.jsx's existing
+    // InteractiveMessage component (which only ever got fed by those two
+    // providers) can render wwebjs button/list messages as real option chips
+    // too, instead of relying on the frontend to re-parse the "[Opciones: ...]"
+    // text suffix (which nothing does today — it just prints as plain text).
+    let interactive = null
     if (msg.type === 'list' || msg.type === 'buttons') {
       try {
         const raw = msg.rawData || {}
@@ -459,6 +467,7 @@ function createClient(sessionId, phoneNumber) {
         }
         if (titles.length) {
           messageBody = `${msg.body}\n[Opciones: ${titles.join(' | ')}]`
+          interactive = { type: msg.type === 'list' ? 'list' : 'buttons', text: msg.body, options: titles }
           console.log(`[${sessionId}] extracted ${titles.length} menu option(s) from ${msg.type} message`)
         }
       } catch (e) {
@@ -466,13 +475,15 @@ function createClient(sessionId, phoneNumber) {
       }
     }
 
-    // Actually fetch image/sticker bytes so the backend can store and show them —
-    // previously hasMedia was forwarded but the real content was never downloaded,
-    // so a shared photo/sticker only ever showed up as a "[image]"/"[sticker]"
-    // placeholder chip, never the real picture. Scoped to images+stickers for now
-    // (not video/audio/document) — those are the two the app can actually render.
+    // Actually fetch image/sticker/document bytes so the backend can store and
+    // show them — previously hasMedia was forwarded but the real content was
+    // never downloaded, so a shared photo/sticker/PDF only ever showed up as a
+    // "[image]"/"[sticker]"/"[document]" placeholder chip, never the real
+    // file (real case: Grupo Hakkasan's events brochure PDF, 2026-09-17 — the
+    // caption came through but the attached PDF itself vanished). Not video/
+    // audio yet — those still have no frontend renderer.
     let media = null
-    if (msg.hasMedia && (msg.type === 'image' || msg.type === 'sticker')) {
+    if (msg.hasMedia && (msg.type === 'image' || msg.type === 'sticker' || msg.type === 'document')) {
       try {
         const m = await msg.downloadMedia()
         if (m && m.data) media = { data: m.data, mimetype: m.mimetype, filename: m.filename || null }
@@ -495,6 +506,7 @@ function createClient(sessionId, phoneNumber) {
         timestamp: msg.timestamp,
         hasMedia: msg.hasMedia,
         media,
+        interactive,
         // The backend's status/broadcast filter checks these three fields, but
         // until now they were never actually sent — only the literal "@broadcast"
         // JID substring match could ever fire. Forwarding them makes that filter

@@ -583,8 +583,14 @@ def _send_message(db, company_id: str, to_number: str, message: str, job_id: str
     if WWEBJS_URL:
         from app.whatsapp_wwebjs import get_all_connected_instances as _ww_all
         _ww_all_connected = _ww_all(db)
-        if user_instances:
-            # Scope to the sender's own connected instances.
+        # Branch on `user_id` (was `user_instances`) — a real user_id whose owner
+        # happens to have ZERO assigned instances produced an empty user_instances
+        # list indistinguishable from "no user context at all", silently falling
+        # through to the unscoped/claimed-instance pool below and letting a
+        # campaign send through a completely unrelated user's WhatsApp number
+        # (found auditing the sending system, 2026-09-20).
+        if user_id:
+            # Scope to the sender's own connected instances (empty if they own none).
             _ww_candidates = [n for n in _ww_all_connected if n in user_instances]
         else:
             # No user context: only use claimed (non-orphaned) instances.
@@ -599,7 +605,7 @@ def _send_message(db, company_id: str, to_number: str, message: str, job_id: str
                                         sent_by_username=sent_by_username, sent_by_name=sent_by_name)
         # When a user context is set and wwebjs had no valid candidate (all disconnected or
         # at cap), stop here — never fall through to cross-user wasender/waha/evolution pools.
-        if user_instances:
+        if user_id:
             log.warning("[SendMsg] no wwebjs candidate for user instances %s — skipping send", user_instances)
             return None
     if WASENDER_PAT:
@@ -634,7 +640,25 @@ def _execute_send_job(job_id: str):
         # ── Pre-flight: abort immediately if no WA instance is connected ─────
         # Reverts to "pending" so the scheduler retries in 5 min, instead of
         # burning through the entire recipient list producing only errors.
-        if not _any_instance_connected(db):
+        #
+        # Scoped to job_user_id's OWN instances when the job has one — a
+        # global _any_instance_connected() check here let a campaign whose
+        # owner has ZERO assigned instances sail past this gate as long as
+        # SOME other user's instance was connected, then fall all the way
+        # through _send_message()'s own scoping (which only distinguishes
+        # "no user_id" from "user_id" by checking `if user_instances:` — an
+        # empty list for a real user_id reads the same as no user_id at all)
+        # into the unscoped wwebjs/wasender/waha/evolution pool — silently
+        # sending a real campaign through a completely unrelated user's
+        # WhatsApp number. Real gap found auditing the sending system,
+        # 2026-09-20 — reuses send_now_worker's already-correct per-user
+        # connectivity check instead of duplicating that logic here.
+        if job_user_id:
+            from app.send_now_worker import _user_has_connected_instance
+            _has_instance = _user_has_connected_instance(db, job_user_id)
+        else:
+            _has_instance = _any_instance_connected(db)
+        if not _has_instance:
             from datetime import timedelta
             deferred_count = job.get("no_instance_deferred_count", 0) + 1
             log.warning("[Scheduler] job=%s — no connected instance (defer #%d), retrying in 5min",

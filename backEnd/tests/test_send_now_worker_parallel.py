@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 _REAL_SLEEP = time.sleep  # captured before any fixture patches time.sleep
@@ -538,3 +538,113 @@ class TestBatchCompleteNotification:
         sw._maybe_finish_batch(mgr, "b-tag")
         notif = mgr.db.app_notifications.find_one({"type": "batch_complete"})
         assert notif["user_id"] == "u-tagged"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# _check_send_allowed — the blocked/blacklisted safety gate. Every test above
+# mocks this out entirely, so its own real logic (not just its call sites)
+# had zero direct coverage.
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestCheckSendAllowed:
+    def test_no_company_id_is_allowed(self, mgr):
+        assert sw._check_send_allowed(mgr, "") == (True, "")
+
+    def test_malformed_company_id_is_allowed(self, mgr):
+        # Length check only (`len(company_id) != 24`) — anything else short-
+        # circuits to fail-open rather than crashing on a bad ObjectId().
+        assert sw._check_send_allowed(mgr, "not-a-real-id") == (True, "")
+
+    def test_blocked_company_is_not_allowed(self, mgr):
+        cid = ObjectId()
+        mgr.db.companies.insert_one({"_id": cid, "domain": "blocked.com", "industry": "gas", "blocked": True})
+        with patch("app.pipeline._check_blacklist", return_value=None):
+            assert sw._check_send_allowed(mgr, str(cid)) == (False, "skipped_blocked")
+
+    def test_blacklisted_company_is_not_allowed(self, mgr):
+        cid = ObjectId()
+        mgr.db.companies.insert_one({"_id": cid, "domain": "spammy.com", "industry": "gas", "blocked": False})
+        with patch("app.pipeline._check_blacklist", return_value={"reason": "domain", "matched": "spammy.com"}):
+            assert sw._check_send_allowed(mgr, str(cid)) == (False, "skipped_blacklisted")
+
+    def test_normal_company_is_allowed(self, mgr):
+        cid = ObjectId()
+        mgr.db.companies.insert_one({"_id": cid, "domain": "normal.com", "industry": "gas", "blocked": False})
+        with patch("app.pipeline._check_blacklist", return_value=None):
+            assert sw._check_send_allowed(mgr, str(cid)) == (True, "")
+
+    def test_company_not_found_is_allowed(self, mgr):
+        # Deleted/moved company between enqueue and send — fail open rather
+        # than silently dropping an otherwise-valid queued item.
+        assert sw._check_send_allowed(mgr, str(ObjectId())) == (True, "")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# _sweep_interrupted_items — a backend crash mid-send must never auto-retry
+# (a WhatsApp message can't be un-sent), but must not touch items that are
+# genuinely still in flight.
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestSweepInterruptedItems:
+    def test_stale_sending_item_is_marked_interrupted(self, mgr):
+        stale_start = datetime.now(timezone.utc) - timedelta(seconds=sw._SENDING_STALE_AFTER_SEC + 30)
+        mgr.db.send_queue_items.insert_one({"status": "sending", "started_at": stale_start})
+        sw._sweep_interrupted_items(mgr)
+        item = mgr.db.send_queue_items.find_one({})
+        assert item["status"] == "interrupted"
+        assert item["finished_at"] is not None
+
+    def test_recently_started_item_is_left_alone(self, mgr):
+        fresh_start = datetime.now(timezone.utc) - timedelta(seconds=5)
+        mgr.db.send_queue_items.insert_one({"status": "sending", "started_at": fresh_start})
+        sw._sweep_interrupted_items(mgr)
+        item = mgr.db.send_queue_items.find_one({})
+        assert item["status"] == "sending"
+
+    def test_non_sending_items_are_untouched(self, mgr):
+        stale_start = datetime.now(timezone.utc) - timedelta(seconds=sw._SENDING_STALE_AFTER_SEC + 30)
+        mgr.db.send_queue_items.insert_one({"status": "sent", "started_at": stale_start})
+        sw._sweep_interrupted_items(mgr)
+        item = mgr.db.send_queue_items.find_one({})
+        assert item["status"] == "sent"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Instance disconnects mid-send (as opposed to never having one at all) —
+# distinct code path from TestNoInstanceBacksOff, exercised via _process_item
+# directly to control the before/after connection state precisely.
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestDisconnectedMidSendPause:
+    def test_resets_item_and_pauses_when_instance_drops_during_send(self, mgr):
+        mgr.db.send_queue_items.insert_many(_make_items("dc-user", "batch-dc", 1))
+        item = mgr.db.send_queue_items.find_one({"batch_id": "batch-dc"})
+        with (
+            patch.object(sw, "_check_send_allowed", return_value=(True, "")),
+            # True at entry (allowed to start sending), False right after —
+            # simulates the session dying mid-send rather than never existing.
+            patch.object(sw, "_user_has_connected_instance", side_effect=[True, False]),
+            patch.object(sched, "_send_message", return_value=False),
+        ):
+            result, _, _ = sw._process_item(mgr, "dc-user", item, 0, 0)
+        assert result == "disconnected_pause"
+        refreshed = mgr.db.send_queue_items.find_one({"batch_id": "batch-dc"})
+        assert refreshed["status"] == "pending"
+        assert refreshed["started_at"] is None
+
+    def test_genuine_send_failure_with_instance_still_up_is_just_failed(self, mgr):
+        # Same False/None return from _send_message, but the instance is still
+        # connected on the follow-up check — a real failure (bad payload,
+        # blocked number), not a dropped session. Must NOT get the retry
+        # treatment reserved for a disconnect.
+        mgr.db.send_queue_items.insert_many(_make_items("dc-user2", "batch-dc2", 1))
+        item = mgr.db.send_queue_items.find_one({"batch_id": "batch-dc2"})
+        with (
+            patch.object(sw, "_check_send_allowed", return_value=(True, "")),
+            patch.object(sw, "_user_has_connected_instance", side_effect=[True, True]),
+            patch.object(sched, "_send_message", return_value=False),
+        ):
+            result, _, _ = sw._process_item(mgr, "dc-user2", item, 0, 0)
+        assert result is True
+        refreshed = mgr.db.send_queue_items.find_one({"batch_id": "batch-dc2"})
+        assert refreshed["status"] == "failed"

@@ -39,6 +39,19 @@ services:
       - wwebjs
     restart: unless-stopped
     mem_limit: 1.5g
+    # A Docker Compose app gets its own project-scoped network by default,
+    # isolated from Coolify's shared "coolify" network where standalone
+    # resources like mongodb-detucel actually live — MONGODB_URI's hostname
+    # (a Mongo container ID, auto-linked by Coolify) is only resolvable to a
+    # container that's ALSO on that network. Confirmed live 2026-09-22: the
+    # backend couldn't reach Mongo at all ("Temporary failure in name
+    # resolution") until manually joined to it — every prior redeploy today
+    # silently lost that connectivity, since nothing in this file declared
+    # it. `default` keeps the existing backend/wwebjs/frontend service-name
+    # DNS the other two services rely on.
+    networks:
+      - default
+      - coolify
     logging:
       driver: json-file
       options:
@@ -69,3 +82,8 @@ services:
 
 volumes:
   wwebjs_sessions:
+
+networks:
+  default:
+  coolify:
+    external: true

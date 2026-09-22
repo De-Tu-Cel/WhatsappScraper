@@ -224,6 +224,18 @@ async function fetchProfilePicUrl(client, sessionId) {
 // process, so every teardown site (DELETE, /start's recreate, the idle
 // sweep) reliably frees the profile directory instead of sometimes leaving
 // a zombie behind for the next attempt to trip over.
+// A container-boot restore isn't the only way a session's Chromium profile
+// can end up with a stale SingletonLock/-Cookie/-Socket — a force-killed
+// process (SIGKILL, right below) skips its own cleanup entirely and leaves
+// the same files behind mid-runtime. Any code recreating a session right
+// after tearing the old one down needs this, not just the boot path.
+function clearSessionLockFiles(sessionId) {
+  const dir = path.join(SESSIONS_PATH, `session-${sessionId}`)
+  for (const lockFile of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+    try { fs.rmSync(path.join(dir, lockFile), { force: true }) } catch (_) {}
+  }
+}
+
 async function destroySessionClient(client, sessionId) {
   const proc = client.pupBrowser?.process ? client.pupBrowser.process() : null
   try {
@@ -238,6 +250,11 @@ async function destroySessionClient(client, sessionId) {
     console.log(`[${sessionId}] Chrome process ${proc.pid} still alive after destroy() — force-killing it`)
     try { proc.kill('SIGKILL') } catch (_) {}
   }
+  // Confirmed live 2026-09-22: rapid QR<->pairing-code switching hit "The
+  // browser is already running for .../userDataDir" on the very next
+  // createClient() — a SIGKILL'd Chromium never runs the exit handler that
+  // normally removes its own lock, so it was still sitting there.
+  clearSessionLockFiles(sessionId)
 }
 
 // Upstream whatsapp-web.js bug (github.com/wwebjs/whatsapp-web.js#201921,
@@ -347,11 +364,11 @@ function createClient(sessionId, phoneNumber) {
     // Self-heal: if still not connected after a generous window, recreate this
     // one session — cheaper and less disruptive than restarting the whole service.
     clearTimeout(session.readyWatchdog)
-    session.readyWatchdog = setTimeout(() => {
+    session.readyWatchdog = setTimeout(async () => {
       const s = sessions.get(sessionId)
       if (!s || s.status === 'connected') return
       console.warn(`[${sessionId}] Stuck in "${s.status}" — never reached ready, recreating session`)
-      try { s.client.destroy().catch(() => {}) } catch (_) {}
+      await destroySessionClient(s.client, sessionId)
       sessions.delete(sessionId)
       createClient(sessionId, session.phoneNumber)
     }, 90_000)
@@ -471,11 +488,11 @@ function createClient(sessionId, phoneNumber) {
 
     const delay = Math.floor(Math.random() * 7000) + 8000
     console.log(`[${sessionId}] Reconnecting in ${Math.round(delay / 1000)}s`)
-    session.reconnectTimer = setTimeout(() => {
+    session.reconnectTimer = setTimeout(async () => {
       const s = sessions.get(sessionId)
       if (!s || s.status === 'connected') return
       console.log(`[${sessionId}] Auto-reconnecting...`)
-      try { s.client.destroy().catch(() => {}) } catch (_) {}
+      await destroySessionClient(s.client, sessionId)
       sessions.delete(sessionId)
       createClient(sessionId, session.phoneNumber)
     }, delay)
@@ -665,17 +682,7 @@ function autoRestoreSessions() {
   // Chromium exiting cleanly first), and a stale one makes the NEXT launch
   // refuse to start ("profile in use by another Chromium process"). Clearing
   // them unconditionally on boot is safe — no other process can hold them.
-  for (const dir of dirs) {
-    for (const lockFile of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
-      const p = path.join(SESSIONS_PATH, dir, lockFile)
-      // SingletonLock is a symlink whose "target" is just a hostname-pid marker,
-      // not a real path — fs.existsSync() follows symlinks and resolves that
-      // target, so it reports false (file "missing") for a lock that's very
-      // much still there. rmSync with force:true removes the directory entry
-      // itself regardless, and silently no-ops if it's genuinely absent.
-      try { fs.rmSync(p, { force: true }) } catch (_) {}
-    }
-  }
+  for (const dir of dirs) clearSessionLockFiles(dir.replace('session-', ''))
   dirs.forEach((dir, i) => {
     const sessionId = dir.replace('session-', '')
     setTimeout(() => {

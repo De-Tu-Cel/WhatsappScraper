@@ -54,6 +54,9 @@ services:
       - PORT=3001
       - FASTAPI_URL=http://backend:8000
       - API_SECRET=${WWEBJS_API_SECRET}
+      - PROXY_SERVER=${PROXY_SERVER}
+      - PROXY_USERNAME=${PROXY_USERNAME}
+      - PROXY_PASSWORD=${PROXY_PASSWORD}
     volumes:
       - wwebjs_sessions:/app/sessions
     restart: unless-stopped

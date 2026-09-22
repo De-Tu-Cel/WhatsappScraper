@@ -16,6 +16,19 @@ const FASTAPI_URL  = process.env.FASTAPI_URL  || 'http://backend:8000'
 const API_SECRET   = process.env.API_SECRET   || ''
 const SESSIONS_PATH = process.env.SESSIONS_PATH || '/app/sessions'
 
+// Residential proxy for WhatsApp's outbound connection — every session
+// shares this one exit IP instead of Hostinger's own datacenter IP. A
+// datacenter IP is a known detection signal on its own; a shared residential
+// IP still means every session falls together if THIS one gets flagged, but
+// it's the cheaper starting point the team chose over one dedicated IP per
+// session (see README's "por qué el outbound masivo no es viable" section —
+// same tradeoff already documented there for the old WAHA/Wasender setup).
+// PROXY_SERVER expects host:port (e.g. "gate.smartproxy.com:7000") — no
+// scheme prefix, matching Chromium's --proxy-server flag directly.
+const PROXY_SERVER   = process.env.PROXY_SERVER   || ''
+const PROXY_USERNAME = process.env.PROXY_USERNAME || ''
+const PROXY_PASSWORD = process.env.PROXY_PASSWORD || ''
+
 // sessionId → { client, status, qr, phone, presenceTimer, reconnectTimer }
 const sessions = new Map()
 
@@ -290,6 +303,14 @@ function createClient(sessionId, phoneNumber) {
     // gives a much wider window than a QR frame (~20s), useful when the phone being
     // linked isn't in the same room as whoever's running this.
     ...(phoneNumber ? { pairWithPhoneNumber: { phoneNumber, showNotification: true } } : {}),
+    // Only whatsapp-web.js's own traffic needs the proxy credentials — the
+    // --proxy-server Chromium flag below routes the connection, this just
+    // answers the proxy's auth challenge for it (Basic auth doesn't work via
+    // the URL for Chromium's own requests, per Puppeteer's documented proxy
+    // auth pattern).
+    ...(PROXY_SERVER && PROXY_USERNAME
+      ? { proxyAuthentication: { username: PROXY_USERNAME, password: PROXY_PASSWORD } }
+      : {}),
     puppeteer: {
       puppeteer: puppeteerExtra,
       headless: true,
@@ -323,6 +344,7 @@ function createClient(sessionId, phoneNumber) {
         '--metrics-recording-only',
         '--mute-audio',
         '--js-flags=--max-old-space-size=256',
+        ...(PROXY_SERVER ? [`--proxy-server=${PROXY_SERVER}`] : []),
       ],
       defaultViewport: { width: 1280, height: 800 },
     },

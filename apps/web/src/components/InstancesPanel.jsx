@@ -3138,7 +3138,25 @@ export default function InstancesPanel({ isActive } = {}) {
                                     const el = sidebarRowRefs.current[inst.name]
                                     const rect = el ? el.getBoundingClientRect() : null
                                     setExpandedAssign(inst.name)
-                                    setSidebarAnchor(rect ? { top: rect.bottom + 2, left: rect.left, width: rect.width } : null)
+                                    if (rect) {
+                                      // The trigger can sit anywhere down the sidebar, including right
+                                      // at the bottom of the viewport (real case: the "Unassigned"
+                                      // widget) — always opening downward then let the dropdown run
+                                      // off the bottom of the screen with no way to scroll to the rest
+                                      // of it, since this is a position:fixed portal, not part of the
+                                      // page's own scroll flow. Flip upward when there's more room
+                                      // above than below, and cap height to whatever space actually
+                                      // exists in whichever direction wins.
+                                      const margin = 8
+                                      const spaceBelow = window.innerHeight - rect.bottom - margin
+                                      const spaceAbove = rect.top - margin
+                                      const openUpward = spaceBelow < 280 && spaceAbove > spaceBelow
+                                      setSidebarAnchor(openUpward
+                                        ? { bottom: window.innerHeight - rect.top + 2, left: rect.left, width: rect.width, maxHeight: Math.max(spaceAbove, 150) }
+                                        : { top: rect.bottom + 2, left: rect.left, width: rect.width, maxHeight: Math.max(spaceBelow, 150) })
+                                    } else {
+                                      setSidebarAnchor(null)
+                                    }
                                   }
                                 }}
                                 sx={{ color: 'var(--accent, #60a5fa)', p: 0.4, ...(isExp && { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.08)' }),
@@ -3246,12 +3264,16 @@ export default function InstancesPanel({ isActive } = {}) {
             sx={{ position: 'fixed', inset: 0, zIndex: 1200 }} />
           <Box sx={{
             position: 'fixed',
-            top: sidebarAnchor.top,
+            ...(sidebarAnchor.top != null ? { top: sidebarAnchor.top } : { bottom: sidebarAnchor.bottom }),
             left: sidebarAnchor.left,
             width: Math.max(sidebarAnchor.width, 240),
+            maxHeight: sidebarAnchor.maxHeight,
             zIndex: 1201,
             border: '1px solid rgba(59,130,246,0.35)', borderRadius: 2,
-            bgcolor: 'var(--card-bg)', boxShadow: '0 12px 40px rgba(0,0,0,0.55)', overflow: 'hidden',
+            bgcolor: 'var(--card-bg)', boxShadow: '0 12px 40px rgba(0,0,0,0.55)',
+            overflowY: 'auto',
+            '&::-webkit-scrollbar': { width: 3 },
+            '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(255,255,255,0.12)', borderRadius: 4 },
           }}>
             <InlineUserPicker instanceName={expandedAssign} users={users} instances={instances}
               onAssign={(...args) => { handleInlineAssign(...args); setSidebarAnchor(null) }}

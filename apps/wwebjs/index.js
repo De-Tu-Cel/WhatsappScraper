@@ -23,11 +23,23 @@ const SESSIONS_PATH = process.env.SESSIONS_PATH || '/app/sessions'
 // it's the cheaper starting point the team chose over one dedicated IP per
 // session (see README's "por qué el outbound masivo no es viable" section —
 // same tradeoff already documented there for the old WAHA/Wasender setup).
-// PROXY_SERVER expects host:port (e.g. "gate.smartproxy.com:7000") — no
-// scheme prefix, matching Chromium's --proxy-server flag directly.
+// PROXY_SERVER is passed straight through to Chromium's --proxy-server flag:
+// "host:port" for HTTP (e.g. "gate.smartproxy.com:7000"), or a scheme prefix
+// like "socks5://host:port" for SOCKS.
 const PROXY_SERVER   = process.env.PROXY_SERVER   || ''
 const PROXY_USERNAME = process.env.PROXY_USERNAME || ''
 const PROXY_PASSWORD = process.env.PROXY_PASSWORD || ''
+// Optional allowlist so a proxy can be trialed against one session (e.g. a
+// throwaway test account) without routing every real session through it.
+// Empty = proxy applies to all sessions (the eventual production setup).
+const PROXY_ONLY_SESSIONS = (process.env.PROXY_ONLY_SESSIONS || '')
+  .split(',').map(s => s.trim()).filter(Boolean)
+
+function sessionUsesProxy(sessionId) {
+  if (!PROXY_SERVER) return false
+  if (PROXY_ONLY_SESSIONS.length === 0) return true
+  return PROXY_ONLY_SESSIONS.includes(sessionId)
+}
 
 // sessionId → { client, status, qr, phone, presenceTimer, reconnectTimer }
 const sessions = new Map()
@@ -308,7 +320,7 @@ function createClient(sessionId, phoneNumber) {
     // answers the proxy's auth challenge for it (Basic auth doesn't work via
     // the URL for Chromium's own requests, per Puppeteer's documented proxy
     // auth pattern).
-    ...(PROXY_SERVER && PROXY_USERNAME
+    ...(sessionUsesProxy(sessionId) && PROXY_USERNAME
       ? { proxyAuthentication: { username: PROXY_USERNAME, password: PROXY_PASSWORD } }
       : {}),
     puppeteer: {
@@ -344,7 +356,7 @@ function createClient(sessionId, phoneNumber) {
         '--metrics-recording-only',
         '--mute-audio',
         '--js-flags=--max-old-space-size=256',
-        ...(PROXY_SERVER ? [`--proxy-server=${PROXY_SERVER}`] : []),
+        ...(sessionUsesProxy(sessionId) ? [`--proxy-server=${PROXY_SERVER}`] : []),
       ],
       defaultViewport: { width: 1280, height: 800 },
     },
@@ -1370,9 +1382,10 @@ app.get('/proxy-check', async (req, res) => {
     await page.goto('https://ipinfo.io/json', { waitUntil: 'networkidle0', timeout: 15000 })
     const body = await page.evaluate(() => document.body.innerText)
     const info = JSON.parse(body)
+    const usedProxy = sessionUsesProxy(sessionId || [...sessions.entries()].find(([, s]) => s === session)?.[0])
     res.json({
-      proxy_configured: Boolean(PROXY_SERVER),
-      proxy_server: PROXY_SERVER || null,
+      proxy_configured: usedProxy,
+      proxy_server: usedProxy ? PROXY_SERVER : null,
       outbound_ip: info.ip,
       city: info.city, region: info.region, country: info.country, org: info.org,
     })

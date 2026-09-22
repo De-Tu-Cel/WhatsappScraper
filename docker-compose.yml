@@ -70,6 +70,7 @@ services:
       - PROXY_SERVER=${PROXY_SERVER}
       - PROXY_USERNAME=${PROXY_USERNAME}
       - PROXY_PASSWORD=${PROXY_PASSWORD}
+      - PROXY_ONLY_SESSIONS=${PROXY_ONLY_SESSIONS}
     volumes:
       - wwebjs_sessions:/app/sessions
     restart: unless-stopped

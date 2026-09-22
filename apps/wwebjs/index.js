@@ -143,7 +143,7 @@ function startLivenessHeartbeat(sessionId) {
       clearInterval(s.presenceTimer)
       clearInterval(s.profileSyncTimer)
       forwardWebhook({ event: 'session.status', sessionId, data: { status: 'disconnected', reason: 'HEARTBEAT_TIMEOUT' } })
-      await destroySessionClient(s.client, sessionId)
+      await destroySessionClient(s.client, sessionId, s.initPromise)
       sessions.delete(sessionId)
       createClient(sessionId, s.phoneNumber)
     }
@@ -236,7 +236,17 @@ function clearSessionLockFiles(sessionId) {
   }
 }
 
-async function destroySessionClient(client, sessionId) {
+async function destroySessionClient(client, sessionId, initPromise) {
+  // A client whose initialize() launch is still in flight has no pupBrowser
+  // yet — grabbing `proc` before waiting misses the process entirely, the
+  // launch finishes moments later on its own (orphaned), and claims the
+  // profile's lock right out from under the NEXT createClient() for this
+  // same session. Confirmed live 2026-09-22 under rapid QR<->pairing-code
+  // switching: destroy() had nothing to kill, then a session recreated
+  // immediately after hit "browser is already running" once the orphaned
+  // launch caught up. initPromise already swallows its own rejection inside
+  // createClient(), so this race never rejects — it just bounds the wait.
+  if (initPromise) await Promise.race([initPromise, new Promise(r => setTimeout(r, 5000))])
   const proc = client.pupBrowser?.process ? client.pupBrowser.process() : null
   try {
     await Promise.race([
@@ -323,7 +333,7 @@ function createClient(sessionId, phoneNumber) {
   // tell "someone has the reconnect dialog open" from "nobody's watching, stop
   // burning CPU generating QR/codes forever" (see that function's own comment
   // for the real incident this fixes).
-  const session = { client, status: 'initializing', qr: null, pairingCode: null, phoneNumber, phone: null, presenceTimer: null, reconnectTimer: null, readyWatchdog: null, ackFailStreak: 0, ackDegraded: false, profileSyncTimer: null, heartbeatTimer: null, heartbeatFailStreak: 0, lastPushname: null, lastProfilePicUrl: null, lastPolledAt: Date.now() }
+  const session = { client, status: 'initializing', qr: null, pairingCode: null, phoneNumber, phone: null, presenceTimer: null, reconnectTimer: null, readyWatchdog: null, ackFailStreak: 0, ackDegraded: false, profileSyncTimer: null, heartbeatTimer: null, heartbeatFailStreak: 0, initPromise: null, lastPushname: null, lastProfilePicUrl: null, lastPolledAt: Date.now() }
   sessions.set(sessionId, session)
 
   client.on('qr', (qr) => {
@@ -368,7 +378,7 @@ function createClient(sessionId, phoneNumber) {
       const s = sessions.get(sessionId)
       if (!s || s.status === 'connected') return
       console.warn(`[${sessionId}] Stuck in "${s.status}" — never reached ready, recreating session`)
-      await destroySessionClient(s.client, sessionId)
+      await destroySessionClient(s.client, sessionId, s.initPromise)
       sessions.delete(sessionId)
       createClient(sessionId, session.phoneNumber)
     }, 90_000)
@@ -476,7 +486,7 @@ function createClient(sessionId, phoneNumber) {
       // LOGOUT'd, and the very next reconnect attempt failed repeatedly with
       // "The browser is already running for .../userDataDir" — an orphaned
       // Chrome from this exact destroy() call was still holding it.
-      await destroySessionClient(session.client, sessionId)
+      await destroySessionClient(session.client, sessionId, session.initPromise)
       return
     }
 
@@ -492,7 +502,7 @@ function createClient(sessionId, phoneNumber) {
       const s = sessions.get(sessionId)
       if (!s || s.status === 'connected') return
       console.log(`[${sessionId}] Auto-reconnecting...`)
-      await destroySessionClient(s.client, sessionId)
+      await destroySessionClient(s.client, sessionId, s.initPromise)
       sessions.delete(sessionId)
       createClient(sessionId, session.phoneNumber)
     }, delay)
@@ -660,7 +670,9 @@ function createClient(sessionId, phoneNumber) {
     forwardWebhook({ event: 'message_ack', sessionId, data: { messageId: msg.id._serialized, ack, to: msg.to, number } })
   })
 
-  client.initialize().catch((e) => {
+  // Stored so destroySessionClient() can wait for this launch to actually
+  // finish (or fail) before tearing down — see its own comment for why.
+  session.initPromise = client.initialize().catch((e) => {
     console.error(`[${sessionId}] Initialize error:`, e.message)
     session.status = 'error'
   })
@@ -738,7 +750,7 @@ function sweepIdleReconnectSessions() {
       clearInterval(current.heartbeatTimer)
       clearTimeout(current.reconnectTimer)
       clearTimeout(current.readyWatchdog)
-      await destroySessionClient(current.client, id)
+      await destroySessionClient(current.client, id, current.initPromise)
       sessions.delete(id)
     }).catch(() => {})
     _startLocks.set(id, teardown)
@@ -789,7 +801,7 @@ app.post('/session/:id/start', async (req, res) => {
       clearInterval(existing.heartbeatTimer)
       clearTimeout(existing.reconnectTimer)
       clearTimeout(existing.readyWatchdog)
-      await destroySessionClient(existing.client, id)
+      await destroySessionClient(existing.client, id, existing.initPromise)
       sessions.delete(id)
     }
     const session = createClient(id, phoneNumber)
@@ -1292,7 +1304,7 @@ app.delete('/session/:id', async (req, res) => {
     clearInterval(session.heartbeatTimer)
     clearTimeout(session.reconnectTimer)
     clearTimeout(session.readyWatchdog)
-    await destroySessionClient(session.client, id)
+    await destroySessionClient(session.client, id, session.initPromise)
     sessions.delete(id)
     return { notFound: false }
   })

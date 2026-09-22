@@ -21,6 +21,7 @@ import IconButton from '@mui/material/IconButton'
 import Divider from '@mui/material/Divider'
 import BarChartIcon from '@mui/icons-material/BarChart'
 import SearchIcon from '@mui/icons-material/Search'
+import ClearIcon from '@mui/icons-material/Clear'
 import PersonIcon from '@mui/icons-material/Person'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
 import FlashOnIcon from '@mui/icons-material/FlashOn'
@@ -753,7 +754,13 @@ export default function Analytics() {
             <InputAdornment position="start">
               <SearchIcon sx={{ fontSize: 15, color: 'rgba(255,255,255,0.3)' }} />
             </InputAdornment>
-          )}}}
+          ), endAdornment: searchText ? (
+            <InputAdornment position="end">
+              <IconButton size="small" onClick={() => setSearchText('')} sx={{ p: 0.3 }}>
+                <ClearIcon sx={{ fontSize: 15, color: 'rgba(255,255,255,0.4)' }} />
+              </IconButton>
+            </InputAdornment>
+          ) : null }}}
           sx={{ width: 220, '& .MuiOutlinedInput-root': { fontSize: '0.8rem', bgcolor: 'var(--card-bg,#161d2e)', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(255,255,255,0.2)' } }, '& input': { color: 'white', py: 0.7 } }} />
 
         <Divider orientation="vertical" flexItem sx={{ borderColor: 'rgba(255,255,255,0.08)', height: 20, alignSelf: 'center', display: { xs: 'none', sm: 'block' } }} />

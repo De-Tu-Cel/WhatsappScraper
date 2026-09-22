@@ -20,6 +20,7 @@ import SendIcon from '@mui/icons-material/Send'
 import WifiOffIcon from '@mui/icons-material/WifiOff'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
 import SearchIcon from '@mui/icons-material/Search'
+import ClearIcon from '@mui/icons-material/Clear'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import BusinessIcon from '@mui/icons-material/Business'
 import RefreshIcon from '@mui/icons-material/Refresh'
@@ -1362,7 +1363,13 @@ export default function Conversations({ isActive } = {}) {
               setSearchInput(v)
               startSearchTransition(() => setSearch(v))
             }}
-            slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 16, color: 'var(--text-muted)' }} /></InputAdornment> } }}
+            slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 16, color: 'var(--text-muted)' }} /></InputAdornment>, endAdornment: searchInput ? (
+              <InputAdornment position="end">
+                <IconButton size="small" onClick={() => { setSearchInput(''); startSearchTransition(() => setSearch('')) }} sx={{ p: 0.3 }}>
+                  <ClearIcon sx={{ fontSize: 16, color: 'var(--text-muted)' }} />
+                </IconButton>
+              </InputAdornment>
+            ) : null } }}
             sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.8rem', bgcolor: 'var(--item-hover)', '& fieldset': { borderColor: 'var(--border)' }, '&:hover fieldset': { borderColor: 'var(--text-muted)' } }, '& input': { color: 'var(--text)', py: 0.8 } }} />
 
           {/* Toggle mis conversaciones / todas */}

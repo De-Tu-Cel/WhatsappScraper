@@ -381,6 +381,29 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         if req.instance:
             instance = req.instance
             _log.info("[SendMsg] instance=explicit:%s", instance)
+            # Real ask, 2026-09-22: a user replying in an existing conversation got
+            # no warning at all that their phone was disconnected until the send
+            # itself failed — this path never had the live connectivity check the
+            # rotation branch below already does. Best-effort: a check failure
+            # (timeout, wwebjs unreachable) doesn't block the send — only a
+            # CONFIRMED disconnected status does, same caution as elsewhere in
+            # this file about not blocking real sends on a flaky secondary check.
+            _inst_doc = db.db.instances.find_one({"name": instance}, {"provider": 1})
+            if _inst_doc and _inst_doc.get("provider") == "wwebjs":
+                from app.config import WWEBJS_URL as _WW_URL
+                from app.whatsapp_wwebjs import _headers as _ww_headers
+                try:
+                    _r = _req.get(f"{_WW_URL}/session/{instance}/status", headers=_ww_headers(), timeout=2)
+                    _st = _r.json().get("status", "") if _r.ok else ""
+                    if _st and _st != "connected":
+                        raise HTTPException(
+                            status_code=409,
+                            detail=f"No se puede enviar: la instancia '{instance}' no está conectada (estado: {_st}). Reconecta el teléfono desde Instancias.",
+                        )
+                except HTTPException:
+                    raise
+                except Exception:
+                    pass  # wwebjs unreachable/timeout — don't block a real send on a flaky check
         elif x_user_token:
             user = get_user_by_token(x_user_token)
             if user:
@@ -424,7 +447,8 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                                 return name if _st == "connected" else None
                             elif prov == "wwebjs":
                                 from app.config import WWEBJS_URL as _WW_URL
-                                r = _req.get(f"{_WW_URL}/session/{name}/status", timeout=2)
+                                from app.whatsapp_wwebjs import _headers as _ww_headers
+                                r = _req.get(f"{_WW_URL}/session/{name}/status", headers=_ww_headers(), timeout=2)
                                 st = r.json().get("status", "") if r.ok else ""
                                 return name if st == "connected" else None
                             else:
@@ -3816,8 +3840,9 @@ def api_sync_wwebjs_instances(x_user_token: Optional[str] = Header(None)):
         raise HTTPException(403, "Solo admins")
     import requests as _req
     from app.config import WWEBJS_URL as _ww_url
+    from app.whatsapp_wwebjs import _headers as _ww_headers
     from datetime import datetime
-    r = _req.get(f"{_ww_url}/sessions", timeout=10)
+    r = _req.get(f"{_ww_url}/sessions", headers=_ww_headers(), timeout=10)
     if not r.ok:
         raise HTTPException(500, f"wwebjs-service error: {r.text[:200]}")
     sessions = r.json()  # {sessionId: {status, phone}}
@@ -3953,6 +3978,7 @@ def api_wwebjs_create_session(body: dict):
     """Create a new wwebjs session in the service and register it in MongoDB."""
     import re as _re, requests as _req
     from app.config import WWEBJS_URL as _ww_url
+    from app.whatsapp_wwebjs import _headers as _ww_headers
     from datetime import datetime as _dt
 
     name = (body.get("name") or "").strip().lower()
@@ -3970,7 +3996,7 @@ def api_wwebjs_create_session(body: dict):
     phone_number = (body.get("phone_number") or "").strip()
     start_body = {"phoneNumber": phone_number} if phone_number else {}
     try:
-        r = _req.post(f"{_ww_url}/session/{name}/start", json=start_body, timeout=15)
+        r = _req.post(f"{_ww_url}/session/{name}/start", json=start_body, headers=_ww_headers(), timeout=15)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"No se pudo contactar wwebjs-service: {e}")
     if not r.ok:
@@ -4104,6 +4130,7 @@ def api_wwebjs_user_status(x_user_token: Optional[str] = Header(None)):
     """Returns aggregate wwebjs connection status for all instances assigned to the user."""
     from app.auth import get_user_by_token
     from app.config import WWEBJS_URL as _ww_url
+    from app.whatsapp_wwebjs import _headers as _ww_headers
     import requests as _req
     from concurrent.futures import ThreadPoolExecutor
 
@@ -4125,7 +4152,7 @@ def api_wwebjs_user_status(x_user_token: Optional[str] = Header(None)):
 
     def _check(inst):
         try:
-            r = _req.get(f"{_ww_url}/session/{inst['name']}/status", timeout=2)
+            r = _req.get(f"{_ww_url}/session/{inst['name']}/status", headers=_ww_headers(), timeout=2)
             return r.ok and r.json().get("status") == "connected" and bool(inst.get("number"))
         except Exception:
             return False
@@ -6009,6 +6036,7 @@ def api_list_instances(x_user_token: Optional[str] = Header(None)):
     from app.config import WAHA_API_URL, WAHA_API_KEY
     from app.config import WASENDER_PAT, WASENDER_BASE_URL
     from app.config import WWEBJS_URL as _ww_url
+    from app.whatsapp_wwebjs import _headers as _ww_headers
     db = MongoDBManager()
     instances = list(db.db.instances.find({}, {"_id": 0}))
 
@@ -6034,7 +6062,7 @@ def api_list_instances(x_user_token: Optional[str] = Header(None)):
                         "connecting" if ws_st in ("connecting", "need_scan") else "disconnected")
                 return "unknown"
             elif prov == "wwebjs":
-                r = _req.get(f"{_ww_url}/session/{inst['name']}/status", timeout=3)
+                r = _req.get(f"{_ww_url}/session/{inst['name']}/status", headers=_ww_headers(), timeout=3)
                 ww_data = r.json() if r.ok else {}
                 ww_st = ww_data.get("status", "unknown")
                 if ww_st in ("need_scan", "initializing", "authenticated"):
@@ -6075,7 +6103,8 @@ def api_create_instance(body: dict, x_user_token: Optional[str] = Header(None)):
 
     if provider == "wwebjs":
         from app.config import WWEBJS_URL as _ww_url
-        r = _req.post(f"{_ww_url}/session/{name}/start", timeout=10)
+        from app.whatsapp_wwebjs import _headers as _ww_headers
+        r = _req.post(f"{_ww_url}/session/{name}/start", headers=_ww_headers(), timeout=10)
         if not r.ok:
             raise HTTPException(500, f"Error wwebjs-service: {r.text[:200]}")
         doc = {
@@ -6142,8 +6171,9 @@ def api_delete_instance(name: str, x_user_token: Optional[str] = Header(None)):
                 pass
     elif inst_doc.get("provider") == "wwebjs":
         from app.config import WWEBJS_URL as _ww_url
+        from app.whatsapp_wwebjs import _headers as _ww_headers
         try:
-            _req.delete(f"{_ww_url}/session/{name}", timeout=10)
+            _req.delete(f"{_ww_url}/session/{name}", headers=_ww_headers(), timeout=10)
         except Exception:
             pass
     else:

@@ -1349,6 +1349,40 @@ app.get('/sessions', (req, res) => {
   res.json(result)
 })
 
+// Verifies which outbound IP WhatsApp traffic is actually using — opens a new
+// tab in a REAL connected session's own browser (same process, same
+// --proxy-server flag, if any) and hits an IP-echo service, rather than
+// trusting the PROXY_SERVER env var was applied correctly. Meant to be
+// checked once right after setting PROXY_SERVER/PROXY_USERNAME/
+// PROXY_PASSWORD and redeploying — confirms the switch actually took effect
+// before trusting it with the real WhatsApp sessions.
+app.get('/proxy-check', async (req, res) => {
+  const { sessionId } = req.query
+  const session = sessionId
+    ? sessions.get(sessionId)
+    : [...sessions.values()].find(s => s.status === 'connected')
+  if (!session || !session.client.pupBrowser) {
+    return res.status(400).json({ error: 'No connected session with an active browser to check' })
+  }
+  let page
+  try {
+    page = await session.client.pupBrowser.newPage()
+    await page.goto('https://ipinfo.io/json', { waitUntil: 'networkidle0', timeout: 15000 })
+    const body = await page.evaluate(() => document.body.innerText)
+    const info = JSON.parse(body)
+    res.json({
+      proxy_configured: Boolean(PROXY_SERVER),
+      proxy_server: PROXY_SERVER || null,
+      outbound_ip: info.ip,
+      city: info.city, region: info.region, country: info.country, org: info.org,
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  } finally {
+    if (page) await page.close().catch(() => {})
+  }
+})
+
 app.get('/health', (_req, res) => res.json({ ok: true, sessions: sessions.size }))
 
 // Graceful shutdown — without this, `docker stop` SIGKILLs the process after

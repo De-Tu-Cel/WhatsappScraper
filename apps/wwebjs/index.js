@@ -757,20 +757,26 @@ app.post('/session/:id/start', async (req, res) => {
   const thisCall = prior.then(async () => {
     const existing = sessions.get(id)
     if (existing) {
-      if (!phoneNumber) {
-        // No phone number given — same as before: just report current status.
+      // A mode switch is either direction: no phoneNumber before, one now (QR
+      // -> pairing code) or the reverse (pairing code -> QR, phoneNumber now
+      // absent). Only the QR->code direction used to be handled — switching
+      // BACK to QR fell into the "just report status" branch below, leaving
+      // the existing client stuck in pairing-code mode (which never emits a
+      // 'qr' event at all, per whatsapp-web.js) while the frontend polled
+      // GET /qr forever. That's the exact reconnect-dialog "loop" reported
+      // 2026-09-21 when switching the link method back and forth.
+      const modeChanged = Boolean(existing.phoneNumber) !== Boolean(phoneNumber)
+      if (!phoneNumber && !modeChanged) {
+        // No phone number given and the mode hasn't changed — just report current status.
         return { status: existing.status, phone: existing.phone }
       }
-      // A phone number WAS given for an ALREADY-REGISTERED session — the caller
-      // wants to switch it into pairing-code mode (e.g. reconnecting a
-      // disconnected instance via code instead of QR). That existing client was
-      // created without pairWithPhoneNumber, so it can never expose a pairing
-      // code (session.pairingCode stays null forever, GET /pairing-code always
-      // 400s) — recreate it fresh with the phone number this time. Same
-      // teardown as DELETE /session/:id — never touches the saved LocalAuth
-      // files, and now goes through destroySessionClient() so a slow/stuck
-      // browser.close() can't leave an orphaned Chrome process holding this
-      // same userDataDir for the createClient() call right below.
+      // Either a phone number was given (switching to pairing-code mode) or
+      // the existing session was in pairing-code mode and now needs QR
+      // (modeChanged) — recreate fresh in the requested mode. Same teardown
+      // as DELETE /session/:id — never touches the saved LocalAuth files, and
+      // goes through destroySessionClient() so a slow/stuck browser.close()
+      // can't leave an orphaned Chrome process holding this same userDataDir
+      // for the createClient() call right below.
       clearInterval(existing.presenceTimer)
       clearInterval(existing.profileSyncTimer)
       clearInterval(existing.heartbeatTimer)

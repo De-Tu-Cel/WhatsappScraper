@@ -33,6 +33,7 @@ services:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - WWEBJS_URL=http://wwebjs:3001
       - WWEBJS_API_SECRET=${WWEBJS_API_SECRET}
+      - WARMUP_ENABLED=${WARMUP_ENABLED:-false}
     expose:
       - "8000"
     depends_on:

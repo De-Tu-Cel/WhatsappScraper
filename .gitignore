@@ -96,6 +96,12 @@ apps/api/scripts/bore_*.log
 # ── wwebjs — datos de sesión y caché ─────────────────────────────
 apps/wwebjs/.wwebjs_cache/
 apps/wwebjs/sessions/
+apps/wwebjs/local-qr.png
+
+# ── WireGuard home-tunnel bridge — private key + client config never commit ──
+apps/wwebjs/wg/*.key
+apps/wwebjs/wg/*.conf
+apps/wwebjs/wg/*.log
 
 # DB backups — contienen datos reales de contactos/prospectos, nunca deben subirse
 backups/

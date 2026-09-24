@@ -82,8 +82,11 @@ def api_register(body: dict, x_user_token: Optional[str] = Header(None)):
 
 @router.post("/auth/login")
 def api_login(body: dict):
-    from app.auth import login
-    user = login(body.get("username", ""), body.get("pin", ""))
+    from app.auth import login, AccountLocked
+    try:
+        user = login(body.get("username", ""), body.get("pin", ""))
+    except AccountLocked as e:
+        raise HTTPException(status_code=429, detail=f"Demasiados intentos fallidos. Intenta de nuevo en {e.minutes_remaining} minuto(s)")
     if not user:
         raise HTTPException(status_code=401, detail="Usuario o PIN incorrecto")
     return user

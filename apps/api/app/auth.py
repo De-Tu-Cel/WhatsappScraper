@@ -104,13 +104,42 @@ def confirm_pin_reset(token: str, new_pin: str) -> bool:
     return True
 
 
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_MINUTES = 5
+
+
+class AccountLocked(Exception):
+    """Raised by login() when the account is mid-lockout — carries minutes remaining."""
+    def __init__(self, minutes_remaining: int):
+        self.minutes_remaining = minutes_remaining
+        super().__init__(f"Account locked for {minutes_remaining} more minute(s)")
+
+
 def login(username: str, pin: str) -> dict | None:
     db = _db()
     user = db.users.find_one({"username": username.lower(), "active": True})
-    if not user or not verify_pin(pin, user["pin_hash"]):
+    if not user:
         return None
+
+    locked_until = user.get("login_locked_until")
+    if locked_until and datetime.now() < locked_until:
+        remaining = max(1, int((locked_until - datetime.now()).total_seconds() // 60) + 1)
+        raise AccountLocked(remaining)
+
+    if not verify_pin(pin, user["pin_hash"]):
+        attempts = user.get("failed_login_attempts", 0) + 1
+        update = {"failed_login_attempts": attempts}
+        if attempts >= MAX_LOGIN_ATTEMPTS:
+            update["login_locked_until"] = datetime.now() + timedelta(minutes=LOCKOUT_MINUTES)
+            update["failed_login_attempts"] = 0
+        db.users.update_one({"_id": user["_id"]}, {"$set": update})
+        return None
+
     token = str(uuid.uuid4())
-    db.users.update_one({"_id": user["_id"]}, {"$set": {"session_token": token, "last_login": datetime.now()}})
+    db.users.update_one({"_id": user["_id"]}, {"$set": {
+        "session_token": token, "last_login": datetime.now(),
+        "failed_login_attempts": 0, "login_locked_until": None,
+    }})
     user["session_token"] = token
     return _serialize_user(user)
 

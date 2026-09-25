@@ -2,6 +2,15 @@
 DAILY_CAP  = 150
 WARMUP_CAP = 20
 
+# Max isRegisteredUser()/getNumberId() lookups per instance per day — mass
+# number-enumeration (asking "does this number exist?" over and over, fast,
+# with no message ever sent) is its own recognizable bot pattern, separate
+# from and cheaper to trigger than the message-send cap above. A single
+# instance used to absorb 100% of this across every scrape run in the system
+# (pipeline.py picked connected_instances[0] every time, forever) — this caps
+# it per instance so the exposure gets spread instead of concentrated.
+VERIFY_DAILY_CAP = 200
+
 # Max first-time (never-messaged-before) contacts per instance per day.
 # Warmup accounts are much newer/riskier; normal accounts get more room.
 WARMUP_NEW_CONTACTS_CAP = 5
@@ -234,6 +243,25 @@ def check_new_contact_cap(db, instance_name: str, company_id: str) -> tuple:
     limit   = get_new_contacts_limit(warmup)
     count   = count_new_contacts_today_for_instance(db, instance_name)
     return count < limit, count, limit
+
+
+def reserve_verification_slot(db, instance_name: str) -> bool:
+    """Atomically claims one of today's phone-verification lookups for this
+    instance. Returns False once VERIFY_DAILY_CAP is already used up today —
+    the caller should skip verifying (leave the phone unconfirmed) rather than
+    fall back to some other unlimited path. Unlike reserve_daily_slot, there's
+    no release-on-failure: the network round-trip already happened (or was
+    attempted) the moment this is called, so it counts against the cap either
+    way — nothing to give back."""
+    from pymongo import ReturnDocument
+    today = _today()
+    doc = db.db.instance_daily_verifications.find_one_and_update(
+        {"instance": instance_name, "date": today},
+        {"$inc": {"count": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    return doc["count"] <= VERIFY_DAILY_CAP
 
 
 def get_capacity_for_date(db, user_id: str, target_date, exclude_id=None) -> dict:

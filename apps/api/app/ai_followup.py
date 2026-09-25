@@ -711,13 +711,17 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
         return None
 
 
-def _is_blocked_or_blacklisted(db, company_id: str) -> bool:
+def _is_blocked_or_blacklisted(db, company_id: str, phone_number: str | None = None) -> bool:
     """Same check /send-message (routes.py) already does before a manual send —
     ai_followup.py had no equivalent anywhere, so a company blocked/blacklisted
     AFTER Andy's session started was never actually protected."""
-    if not company_id or len(company_id) != 24:
-        return False
     try:
+        if phone_number:
+            digits = "".join(filter(str.isdigit, phone_number))
+            if digits and db.db.blacklist.find_one({"type": "phone", "value": digits}):
+                return True
+        if not company_id or len(company_id) != 24:
+            return False
         from bson import ObjectId
         from app.pipeline import _check_blacklist
         company = db.db.companies.find_one(
@@ -818,7 +822,7 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
     # se bloquea o se agrega a blacklist DESPUÉS de que Andy ya tiene una sesión
     # activa con ella, nada lo detenía — seguía mandándole mensajes a alguien
     # que ya se marcó como "no contactar".
-    if _is_blocked_or_blacklisted(db, company_id):
+    if _is_blocked_or_blacklisted(db, company_id, phone_number):
         print(f"[AIFollowup] EXIT: empresa bloqueada/en blacklist — {company_id}")
         return
 
@@ -938,7 +942,7 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
 
     # Same blacklist/blocked re-check as above, for the same reason as the status
     # re-check above it: the company can get blocked/blacklisted DURING the delay.
-    if _is_blocked_or_blacklisted(db, company_id):
+    if _is_blocked_or_blacklisted(db, company_id, phone_number):
         print(f"[AIFollowup] EXIT: empresa bloqueada/en blacklist durante el delay — {company_id}")
         return
 

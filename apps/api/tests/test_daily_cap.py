@@ -15,8 +15,10 @@ from app.daily_cap import (
     get_scheduled_count_today,
     get_scheduled_count_for_date,
     get_capacity_for_date,
+    reserve_verification_slot,
     DAILY_CAP,
     WARMUP_CAP,
+    VERIFY_DAILY_CAP,
 )
 
 
@@ -73,6 +75,21 @@ class _FakeCollection:
             return _UpdateResult(modified_count=0, upserted_id="fake_id")
         return _UpdateResult(modified_count=0)
 
+    def find_one_and_update(self, query, update, upsert=False, return_document=None):
+        from pymongo import ReturnDocument
+        for d in self.docs:
+            if _matches(d, query):
+                before = dict(d)
+                self._apply(d, update)
+                return before if return_document == ReturnDocument.BEFORE else d
+        if upsert:
+            new_doc = {k: v for k, v in query.items() if not isinstance(v, dict)}
+            before = dict(new_doc)
+            self._apply(new_doc, update)
+            self.docs.append(new_doc)
+            return before if return_document == ReturnDocument.BEFORE else new_doc
+        return None
+
     def _apply(self, doc, update):
         for op, fields in update.items():
             if op == "$set":
@@ -82,21 +99,28 @@ class _FakeCollection:
                     bucket = doc.setdefault(k, [])
                     if v not in bucket:
                         bucket.append(v)
+            elif op == "$inc":
+                for k, v in fields.items():
+                    doc[k] = doc.get(k, 0) + v
             else:
                 raise NotImplementedError(f"fake collection doesn't support {op}")
 
 
 class _FakeDb:
-    def __init__(self, instances=None, instance_daily_sends=None, scheduled_sends=None, app_notifications=None):
+    def __init__(self, instances=None, instance_daily_sends=None, scheduled_sends=None, app_notifications=None,
+                 instance_daily_verifications=None):
         self.instances = _FakeCollection(instances)
         self.instance_daily_sends = _FakeCollection(instance_daily_sends)
         self.scheduled_sends = _FakeCollection(scheduled_sends)
         self.app_notifications = _FakeCollection(app_notifications)
+        self.instance_daily_verifications = _FakeCollection(instance_daily_verifications)
 
 
 class FakeMongoDBManager:
-    def __init__(self, instances=None, instance_daily_sends=None, scheduled_sends=None, app_notifications=None):
-        self.db = _FakeDb(instances, instance_daily_sends, scheduled_sends, app_notifications)
+    def __init__(self, instances=None, instance_daily_sends=None, scheduled_sends=None, app_notifications=None,
+                 instance_daily_verifications=None):
+        self.db = _FakeDb(instances, instance_daily_sends, scheduled_sends, app_notifications,
+                           instance_daily_verifications)
 
 
 # ── get_instance_cap ─────────────────────────────────────────────────────────
@@ -266,3 +290,31 @@ def test_get_capacity_for_date_ignores_other_users_instances():
     ])
     result = get_capacity_for_date(db, "u1", day)
     assert result["total_cap"] == DAILY_CAP
+
+
+# ── reserve_verification_slot — phone-verification (isRegisteredUser) cap ───
+# Added 2026-09-24: mass number-enumeration is its own bot signal, separate
+# from message sends, and pipeline.py used to run it unbounded through
+# whichever connected instance sorted first, forever.
+
+def test_reserve_verification_slot_allows_up_to_the_cap():
+    db = FakeMongoDBManager(instance_daily_verifications=[])
+    for _ in range(VERIFY_DAILY_CAP):
+        assert reserve_verification_slot(db, "wa-1") is True
+
+
+def test_reserve_verification_slot_denies_once_cap_is_used_up():
+    db = FakeMongoDBManager(instance_daily_verifications=[])
+    for _ in range(VERIFY_DAILY_CAP):
+        reserve_verification_slot(db, "wa-1")
+    assert reserve_verification_slot(db, "wa-1") is False
+
+
+def test_reserve_verification_slot_is_per_instance():
+    db = FakeMongoDBManager(instance_daily_verifications=[])
+    for _ in range(VERIFY_DAILY_CAP):
+        reserve_verification_slot(db, "wa-1")
+    # wa-1 is maxed out, but wa-2's own quota is untouched — the whole point
+    # of spreading verification lookups across instances instead of always
+    # hammering the same one.
+    assert reserve_verification_slot(db, "wa-2") is True

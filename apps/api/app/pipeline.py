@@ -68,8 +68,13 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
     # Si esta URL estaba guardada como "idea" pendiente (ver /api/search), ya se
     # está procesando de verdad — quitarla de pendientes sin importar el resultado
     # (blacklist/fallo/éxito), para que no se quede fantasma en el panel de Ideas.
+    # find_one_and_delete (en vez de delete_one) para recuperar target_state antes
+    # de borrar el doc — es la única forma de saber a qué estado estaba acotada
+    # la búsqueda que produjo esta URL, para el chequeo de ubicación de abajo.
+    _target_state = None
     try:
-        db.db.search_ideas.delete_one({"url": website})
+        _idea = db.db.search_ideas.find_one_and_delete({"url": website})
+        _target_state = (_idea or {}).get("target_state")
     except Exception:
         pass
 
@@ -101,6 +106,29 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
             from bson import ObjectId
             db.db.companies.delete_one({"_id": ObjectId(str(_scraped_id))})
         return {"blacklisted": True, "reason": "industry", "matched": _bl_industry["matched"]}
+
+    # Chequeo de ubicación post-scrape — la búsqueda pudo estar acotada a un
+    # estado (target_state, recuperado arriba de search_ideas) pero el filtro
+    # de "estado equivocado" del buscador solo ve el snippet de búsqueda, no la
+    # página real; un negocio sin evidencia de ubicación en su snippet pasa
+    # ese filtro aunque su dirección real (recién descubierta aquí, ya
+    # scrapeada) sea de otro estado. Caso real que motivó esto (2026-09-24):
+    # una búsqueda de "restaurantes en Culiacán, Sinaloa" trajo un restaurante
+    # genuino pero ubicado en Tijuana, Baja California. No se rechaza (podría
+    # ser una sucursal real, o el usuario decidir contactarlo de todos modos)
+    # — solo se marca para que se vea distinto de un prospecto normal.
+    _location_mismatch = None
+    _detected_state = (_extra.get("state") or "").strip()
+    if _target_state and _detected_state:
+        from searcher import _norm_loc
+        if _norm_loc(_detected_state) != _norm_loc(_target_state):
+            _location_mismatch = {
+                "searched_state": _target_state.title(),
+                "detected_state": _detected_state,
+                "detected_city": _extra.get("city") or "",
+            }
+            print(f"⚠️  Ubicación distinta a la buscada: se buscó {_target_state!r}, "
+                  f"se detectó {_detected_state!r} ({_extra.get('city')!r})")
 
     print(f"💾 Guardando empresa en base de datos...")
 
@@ -151,6 +179,16 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
             })
             print(f"✅ Empresa nueva guardada con ID: {company_id}")
 
+    # Aplicar el flag de ubicación distinta (si lo hubo) sin importar cuál de
+    # las 3 rutas de arriba resolvió company_id — un solo punto de escritura
+    # en vez de repetir el $set en cada rama.
+    if _location_mismatch:
+        from bson import ObjectId
+        db.db.companies.update_one(
+            {"_id": ObjectId(company_id)},
+            {"$set": {"location_mismatch": _location_mismatch}},
+        )
+
     # ========================================================================
     # GUARDAR CONTACTOS DE WHATSAPP
     # ========================================================================
@@ -192,23 +230,35 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
     MAX_EMAILS = 10
     _MAX_PHONES_TO_VERIFY = 5  # no estancar el scraping en empresas con muchos números listados
     all_wa = _cr.get("all_whatsapp_numbers", [])
-    _verify_instance = None
+    _connected = []
     try:
         from whatsapp_wwebjs import get_all_connected_instances
-        _connected = get_all_connected_instances(db)
-        _verify_instance = _connected[0] if _connected else None
+        _connected = get_all_connected_instances(db) or []
     except Exception:
-        _verify_instance = None
+        _connected = []
 
     _verified_wa_found = False
     for _pidx, phone in enumerate(_cr.get("phone_numbers", [])[:MAX_PHONES]):
         if phone in all_wa:
             continue
         _is_wa = None
-        if _verify_instance and _pidx < _MAX_PHONES_TO_VERIFY:
+        if _connected and _pidx < _MAX_PHONES_TO_VERIFY:
             try:
+                import random, time
+                from daily_cap import reserve_verification_slot
                 from whatsapp_wwebjs import verify_number
-                _is_wa = bool(verify_number(_verify_instance, phone).get("registered"))
+                # Randomize instance order each lookup instead of always the
+                # same one — spreads the "does this number exist?" exposure
+                # across every connected account instead of concentrating it
+                # on whichever sorts first, forever. Skip any that already
+                # used up today's verification quota.
+                _candidates = _connected[:]
+                random.shuffle(_candidates)
+                _verify_instance = next((i for i in _candidates if reserve_verification_slot(db, i)), None)
+                if _verify_instance:
+                    if _pidx > 0:
+                        time.sleep(random.uniform(2.0, 6.0))  # space out lookups — no burst pattern
+                    _is_wa = bool(verify_number(_verify_instance, phone).get("registered"))
             except Exception as _verify_err:
                 print(f"⚠️  No se pudo verificar WhatsApp para {phone}: {_verify_err}")
                 _is_wa = None
@@ -429,6 +479,7 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
     return {
         "website": website,
         "company_id": company_id,
+        "location_mismatch": _location_mismatch,
         "scraped": scraped,
         "primary_whatsapp_number": primary_whatsapp_number,
         "all_whatsapp_numbers": _cr.get("all_whatsapp_numbers", []),

@@ -1644,9 +1644,12 @@ class WebsiteScraper:
             city = city.replace(f", {alias}", "").replace(f" {alias}", "")
         city = city.strip().strip(",").strip()
 
-        # Si la ciudad parece un string de SEO (demasiado larga o contiene palabras
-        # que no son nombres de ciudad), intentar extraer la ciudad real dentro del string
-        if len(city) > 28 or self._SEO_CITY_WORDS.search(city):
+        # Si la ciudad parece un string de SEO/oración (demasiado larga, tiene
+        # más de 3 palabras, o trae un punto — ninguna ciudad real los tiene,
+        # ej. "Unam. Ubicados En Hermosillo", 28 chars exactos, se colaba
+        # porque el umbral solo miraba longitud) o contiene palabras que no
+        # son nombres de ciudad, intentar extraer la ciudad real del string.
+        if len(city) > 28 or city.count(" ") > 2 or "." in city or self._SEO_CITY_WORDS.search(city):
             cl = city.lower()
             for known in self._KNOWN_CITIES:
                 if known.lower() in cl:
@@ -1795,7 +1798,20 @@ class WebsiteScraper:
         if m:
             candidate = m.group(1).strip()
             if not _re.search(r'\d|[Cc]ol\.|[Cc]olonia|[Aa]v\.|[Cc]alle|[Zz]ona', candidate):
-                return candidate.title()
+                # `search` matches the FIRST "<text>, <state>" pair in the page,
+                # which isn't always the real address — an unrelated earlier
+                # sentence ending in a state name (e.g. a bio: "Egresado de la
+                # UNAM. Ubicados en Hermosillo, Sonora") gets captured whole
+                # ("Unam. Ubicados En Hermosillo", a real bug seen in
+                # production 2026-09-24). _clean_city already knows how to dig
+                # a known city out of a messy/oversized candidate — reuse it
+                # here instead of trusting the raw regex capture verbatim.
+                cleaned = self._clean_city(candidate.title())
+                if cleaned:
+                    return cleaned
+                # Candidate was junk with no recognizable city inside it —
+                # fall through to the known-cities scan below instead of
+                # returning the garbage string.
 
         # Fallback: lista de ciudades conocidas
         cities = [

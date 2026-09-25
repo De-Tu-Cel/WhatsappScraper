@@ -968,8 +968,10 @@ class MongoDBManager:
             "ts":            datetime.utcnow(),
         })
 
-    def get_instance_uptime(self, instance_names: list, hours: int = 24) -> dict:
-        """Calculate uptime % per instance over the last N hours.
+    def get_instance_uptime(self, instance_names: list, hours: int = 24, until: datetime = None) -> dict:
+        """Calculate uptime % per instance over the N hours ending at `until`
+        (defaults to now — pass an explicit historical timestamp to measure a
+        past period instead of always "the last N hours up to this moment").
         Returns {instance_name: {"uptime_pct": float, "last_event": str, "last_ts": datetime, "last_reason": str}}
 
         Batched into exactly 2 queries total (one for the in-window logs, one
@@ -979,7 +981,8 @@ class MongoDBManager:
         instances), which measured at 9+ seconds end to end against the
         production DB. Same output shape, same math, just no longer
         re-querying per instance."""
-        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        until = until or datetime.utcnow()
+        cutoff = until - timedelta(hours=hours)
         result = {}
         if not instance_names:
             return result
@@ -1002,7 +1005,7 @@ class MongoDBManager:
             ])
         }
 
-        now = datetime.utcnow()
+        now = until
         window_secs = hours * 3600
         for name in instance_names:
             logs = logs_by_name.get(name, [])

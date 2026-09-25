@@ -361,6 +361,13 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                         detail=f"No se puede enviar: dominio en lista negra ({bl['matched']})",
                     )
 
+        # Phone blacklist: independent of company_id/domain — checked directly
+        # against the destination number, since a number can be blocked without
+        # its company being flagged (domain/industry) at all.
+        _to_digits = "".join(filter(str.isdigit, req.to_number or ""))
+        if _to_digits and db.db.blacklist.find_one({"type": "phone", "value": _to_digits}):
+            raise HTTPException(status_code=403, detail="No se puede enviar: número en lista negra")
+
         # ── Rotación de instancias: round-robin + routing preferencial por compañía ──
         import requests as _req
         from concurrent.futures import ThreadPoolExecutor
@@ -906,7 +913,7 @@ def api_search(req: SearchRequest, x_user_token: Optional[str] = Header(None)):
         # (200 × 3) still helps in practice. 600 also bounds any caller that
         # bypasses the frontend's own 200 clamp.
         fetch_count = min(target * 3, 600)
-        urls = search_prospects(
+        urls, target_state = search_prospects(
             req.industry, req.city or "", req.keywords or "",
             fetch_count, req.offset or 0,
             exclude_domains=known,
@@ -948,6 +955,11 @@ def api_search(req: SearchRequest, x_user_token: Optional[str] = Header(None)):
                     {"$setOnInsert": {
                         "url": r["url"], "domain": r["domain"], "industry": req.industry,
                         "status": "pending",
+                        # Ubicación (estado) a la que esta búsqueda estaba acotada —
+                        # None para una búsqueda de país completo. process_url() la
+                        # lee de aquí para comparar contra la ubicación REAL una vez
+                        # que el sitio se scrapea de verdad (ver su target_state).
+                        "target_state": target_state,
                         "created_by": (_searcher or {}).get("display_name") or (_searcher or {}).get("username"),
                         "created_at": datetime.utcnow(),
                     }},
@@ -1899,6 +1911,101 @@ def api_rescrape_company(company_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/contacts/search")
+def api_search_contacts(q: str = "", page: int = 1, limit: int = 20, x_user_token: Optional[str] = Header(None)):
+    """Browse/search already-scraped companies/contacts by name or phone digits,
+    paginated — powers the blacklist phone table so numbers can be selected and
+    blocked from the existing database instead of typed in one by one. Empty
+    `q` browses everything (newest first); a `q` filters by company name or
+    phone digits."""
+    _require_user(x_user_token)
+    import re as _re
+    from bson import ObjectId
+    db = MongoDBManager()
+    page = max(1, page)
+    limit = max(1, min(limit, 100))
+    q = q.strip()
+    digits = "".join(filter(str.isdigit, q))
+
+    contact_query = {"type": {"$in": ["whatsapp", "phone"]}}
+    if q:
+        ors = []
+        if digits:
+            ors.append({"value": {"$regex": _re.escape(digits)}})
+        name_matches = list(db.db.companies.find(
+            {"name": {"$regex": _re.escape(q), "$options": "i"}}, {"_id": 1}, limit=1000,
+        ))
+        if name_matches:
+            # contacts.company_id is inconsistently stored as either a string or
+            # an ObjectId depending on when the doc was written — match both so
+            # older contacts aren't silently invisible to a name search.
+            _match_oids = [m["_id"] for m in name_matches]
+            ors.append({"company_id": {"$in": [str(o) for o in _match_oids] + _match_oids}})
+        if not ors:
+            return {"items": [], "total": 0, "page": page, "limit": limit}
+        contact_query["$or"] = ors
+
+    # Group by company (like the Recipients picker) instead of one row per
+    # number — pagination walks distinct companies, not raw contact rows, so
+    # a company with 4 numbers doesn't eat 4 slots of a page.
+    # contacts.company_id is inconsistently stored as either a string or an
+    # ObjectId depending on when the doc was written — normalize to a string
+    # BEFORE grouping, or the same company splits into two separate groups
+    # (duplicate React keys client-side, and each group only shows HALF that
+    # company's numbers).
+    group_stage = {"$group": {
+        "_id": {"$toString": "$company_id"},
+        "numbers": {"$push": {"contact_id": "$_id", "number": "$value"}},
+        "latest": {"$max": "$created_at"},
+    }}
+    total_result = list(db.db.contacts.aggregate([
+        {"$match": contact_query}, group_stage, {"$count": "n"},
+    ]))
+    total = total_result[0]["n"] if total_result else 0
+    groups = list(db.db.contacts.aggregate([
+        {"$match": contact_query}, group_stage,
+        {"$sort": {"latest": -1}},
+        {"$skip": (page - 1) * limit},
+        {"$limit": limit},
+    ]))
+
+    company_ids = [g["_id"] for g in groups if g.get("_id")]
+    companies_by_id = {}
+    try:
+        oids = [ObjectId(cid) for cid in company_ids if ObjectId.is_valid(cid)]
+        companies_by_id = {str(c["_id"]): c for c in db.db.companies.find({"_id": {"$in": oids}}, {"name": 1, "domain": 1, "website": 1})}
+    except Exception:
+        pass
+
+    all_numbers = [n["number"] for g in groups for n in g["numbers"]]
+    blocked_digits = set()
+    if all_numbers:
+        blocked_digits = {
+            e["value"] for e in db.db.blacklist.find(
+                {"type": "phone", "value": {"$in": ["".join(filter(str.isdigit, n or "")) for n in all_numbers]}},
+                {"value": 1},
+            )
+        }
+
+    items = []
+    for g in groups:
+        comp_id_str = str(g.get("_id") or "")
+        numbers = [{
+            "contact_id": str(n["contact_id"]),
+            "number": n["number"],
+            "is_blocked": "".join(filter(str.isdigit, n["number"] or "")) in blocked_digits,
+        } for n in g["numbers"]]
+        comp = companies_by_id.get(comp_id_str) or {}
+        items.append({
+            "company_id": comp_id_str,
+            "company_name": comp.get("name") or "—",
+            "company_domain": comp.get("domain") or comp.get("website") or "",
+            "numbers": numbers,
+        })
+
+    return {"items": items, "total": total, "page": page, "limit": limit}
+
+
 # ── Blacklist ─────────────────────────────────────────────────────────────────
 
 def _normalize_blacklist_value(t: str, value: str) -> str:
@@ -1908,6 +2015,8 @@ def _normalize_blacklist_value(t: str, value: str) -> str:
         value = _re.sub(r'^https?://', '', value)
         value = _re.sub(r'^www\.', '', value)
         value = value.rstrip('/')
+    elif t == "phone":
+        value = "".join(filter(str.isdigit, value))
     return value
 
 
@@ -1929,7 +2038,7 @@ def api_get_blacklist(
     _require_user(x_user_token)
     db = MongoDBManager()
     query: dict = {}
-    if type in ("domain", "industry"):
+    if type in ("domain", "industry", "phone"):
         query["type"] = type
     search = search.strip()
     if search:
@@ -1952,8 +2061,8 @@ def api_get_blacklist(
 def api_add_blacklist(body: dict, x_user_token: Optional[str] = Header(None)):
     _require_user(x_user_token)
     t = body.get("type", "").strip()
-    if t not in ("domain", "industry") or not body.get("value", "").strip():
-        raise HTTPException(status_code=400, detail="type must be 'domain' or 'industry', value required")
+    if t not in ("domain", "industry", "phone") or not body.get("value", "").strip():
+        raise HTTPException(status_code=400, detail="type must be 'domain', 'industry' or 'phone', value required")
     value = _normalize_blacklist_value(t, body.get("value", ""))
     if not value:
         raise HTTPException(status_code=400, detail="value required")
@@ -5877,12 +5986,33 @@ def api_instances_health(x_user_token: Optional[str] = Header(None),
     return db.get_instance_uptime(names, hours=hours)
 
 
+@router.get("/admin/balances")
+def api_admin_balances(x_user_token: Optional[str] = Header(None)):
+    """Spend/balance for the external paid services actually in use today
+    (OpenAI, DataForSEO) — added so the team can watch spend without leaving
+    the app. Each service reports {"configured": False} until its credentials
+    are set, so a missing key shows as "not set up" rather than an error."""
+    user = _require_user(x_user_token)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Solo admins")
+    from app.billing import get_openai_spend, get_dataforseo_balance
+    return {
+        "openai": get_openai_spend(),
+        "dataforseo": get_dataforseo_balance(),
+    }
+
+
 @router.get("/admin/instances/metrics")
-def api_instances_metrics(x_user_token: Optional[str] = Header(None), range: str = "week"):
+def api_instances_metrics(x_user_token: Optional[str] = Header(None), range: str = "week",
+                           year: Optional[int] = None, month: Optional[int] = None):
     """Messages sent + distinct contacts reached per instance, admin-wide, over a
     lookback window — built entirely from message_logs (already indexed on
     instance_name+created_at), no new tracking. `range` is a lookback bucket
-    (day/week/month/year), not a calendar-aligned period."""
+    (day/week/month/year), not a calendar-aligned period, UNLESS `year` (and,
+    for range="month", also `month`) is given — that pins the window to that
+    specific past calendar month/year instead of "since then, until now",
+    since the dashboard previously had no way to look at anything but the
+    current month/year."""
     user = _require_user(x_user_token)
     if user.get("role") != "admin":
         raise HTTPException(403, "Solo admins")
@@ -5900,24 +6030,35 @@ def api_instances_metrics(x_user_token: Optional[str] = Header(None), range: str
     # UTC for comparison against created_at (stored as naive UTC throughout).
     _tz = pytz.timezone("America/Mexico_City")
     _now_mx = datetime.now(_tz)
+    _end_mx = _now_mx  # default: open-ended, "since the period start until now"
     if range == "day":
         _start_mx = _now_mx.replace(hour=0, minute=0, second=0, microsecond=0)
         _prev_start_mx = _start_mx - timedelta(days=1)
     elif range == "month":
-        _start_mx = _now_mx.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if year and month:
+            _start_mx = _tz.localize(datetime(year, month, 1))
+            _next_y, _next_m = (year + 1, 1) if month == 12 else (year, month + 1)
+            _end_mx = _tz.localize(datetime(_next_y, _next_m, 1))
+        else:
+            _start_mx = _now_mx.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         _prev_start_mx = (_start_mx - timedelta(days=1)).replace(day=1)
     elif range == "year":
-        _start_mx = _now_mx.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        if year:
+            _start_mx = _tz.localize(datetime(year, 1, 1))
+            _end_mx = _tz.localize(datetime(year + 1, 1, 1))
+        else:
+            _start_mx = _now_mx.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
         _prev_start_mx = _start_mx.replace(year=_start_mx.year - 1)
     else:  # "week" (default)
         range = "week"
         _start_mx = (_now_mx - timedelta(days=_now_mx.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
         _prev_start_mx = _start_mx - timedelta(days=7)
     since = _start_mx.astimezone(pytz.utc).replace(tzinfo=None)
+    until = _end_mx.astimezone(pytz.utc).replace(tzinfo=None)
     _prev_since_bound = _prev_start_mx.astimezone(pytz.utc).replace(tzinfo=None)
 
     db = MongoDBManager()
-    match = {"direction": "outbound", "created_at": {"$gte": since}, "instance_name": {"$exists": True, "$ne": None}}
+    match = {"direction": "outbound", "created_at": {"$gte": since, "$lt": until}, "instance_name": {"$exists": True, "$ne": None}}
     # A chunk of outbound logs have no company_id (not every send path stamps
     # one) — without this filter $addToSet would count that gap itself as a
     # bogus extra "contact" per instance that has any such message.
@@ -5993,8 +6134,8 @@ def api_instances_metrics(x_user_token: Optional[str] = Header(None), range: str
             return None if curr == 0 else 100.0
         return round((curr - prev) / prev * 100, 1)
 
-    _elapsed_hours = max(1, (datetime.utcnow() - since).total_seconds() / 3600)
-    uptime = db.get_instance_uptime(names, hours=_elapsed_hours)
+    _elapsed_hours = max(1, (until - since).total_seconds() / 3600)
+    uptime = db.get_instance_uptime(names, hours=_elapsed_hours, until=until)
 
     # Time series for the trend chart — bucketed by hour for "day" (otherwise
     # a single-day lookback would only ever be one point), by day for
@@ -6015,6 +6156,7 @@ def api_instances_metrics(x_user_token: Optional[str] = Header(None), range: str
     return {
         "range": range,
         "since": since.isoformat(),
+        "until": until.isoformat(),
         "total_messages": total_messages,
         "total_contacts": total_contacts,
         "replied_contacts": replied_of_contacted,

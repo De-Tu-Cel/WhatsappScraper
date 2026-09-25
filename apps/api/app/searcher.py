@@ -43,6 +43,7 @@ EXCLUDED_DOMAINS = {
     'seccion-amarilla.com', 'seccionamarilla.com.mx',
     'paginasamarillas.com.mx', 'paginas-amarillas.mx',
     'foursquare.com', 'empresasdebogota.com', 'empresite.com',
+    'restaurantguru.com',
     'hotfrog.mx', 'hotfrog.com', 'dnbmx.com',
     'infobel.com', 'kompass.com', 'manta.com',
     'infoisinfo.com', 'infoisinfo.com.mx',
@@ -119,7 +120,7 @@ EXCLUDED_DOMAINS = {
     'slideshare.net', 'scribd.com', 'issuu.com',
     # Software de restaurantes / SaaS
     'bistrosoft.com', 'poster.com', 'square.com', 'toast.com',
-    'lightspeedhq.com', 'restroworks.com', 'loyverse.com',
+    'lightspeedhq.com', 'restroworks.com', 'loyverse.com', 'softrestaurant.com',
     # Foros y preguntas
     'reddit.com', 'quora.com', 'yahoo.com', 'answers.com',
     'forocoches.com', 'taringa.net', 'hispachan.org',
@@ -179,6 +180,15 @@ EXCLUDED_DOMAINS = {
     'gnp.com.mx', 'axa.com.mx', 'zurich.com.mx', 'qualitas.com.mx',
     'hdi.com.mx', 'mapfre.com.mx', 'ana.com.mx', 'chubb.com',
     'comparaseguros.mx', 'rastreator.mx', 'seguros.com.mx',
+    # Universidades públicas — EXCLUDED_TLD_PATTERNS ya cubre '.edu.mx', pero
+    # varias de las universidades públicas más grandes usan un dominio .mx
+    # plano (sin el sufijo .edu.mx), así que se cuelan como si fueran negocios.
+    # Confirmado en producción 2026-09-24: una búsqueda país-completo de
+    # "veterinarias en México" trajo unam.mx, buap.mx y uaemex.mx como si
+    # fueran clínicas — son facultades/programas académicos, no prospectos.
+    'unam.mx', 'buap.mx', 'uaemex.mx', 'ipn.mx', 'udg.mx', 'uanl.mx',
+    'uv.mx', 'uabc.mx', 'uacj.mx', 'umich.mx', 'colmex.mx', 'cinvestav.mx',
+    'uady.mx', 'uas.mx', 'itson.mx',
 }
 
 # Plataformas de "generador de micrositios" donde el dominio pelón (sin
@@ -2236,7 +2246,18 @@ def _search_via_dataforseo_maps(
     # ("Leon,Guanajuato,Mexico") funcionó. Reusa el mismo mapeo ciudad→estado
     # que ya existe para la expansión geográfica en search_prospects().
     _state_key = _find_state_for_city(city.strip())
-    location_name = f"{city.strip()},{_state_key.title()},{effective_country}" if _state_key else f"{city.strip()},{effective_country}"
+    # DataForSEO también rechaza el país con acento ("México" → 40501 Invalid
+    # Field, confirmado en vivo 2026-09-24) — solo acepta el nombre en ASCII
+    # ("Mexico"). El normalizador de LLM (_normalize_query_with_llm) devuelve
+    # "México" con acento (la forma correcta en español), que llegaba aquí sin
+    # tocar: esto rompía TODAS las llamadas a Maps salvo cuando `country` venía
+    # vacío/None, dejando la fuente de mejor calidad devolviendo 0 resultados
+    # en silencio en la mayoría de las búsquedas reales desde que se adoptó
+    # (2026-09-09) — el location_name que sale de aquí es SOLO para esta
+    # llamada; effective_country se deja intacto para el lookup de
+    # COUNTRY_CONFIG de abajo, que sí está indexado con el nombre acentuado.
+    _country_ascii = unicodedata.normalize('NFKD', effective_country).encode('ascii', 'ignore').decode('ascii')
+    location_name = f"{city.strip()},{_state_key.title()},{_country_ascii}" if _state_key else f"{city.strip()},{_country_ascii}"
     cfg = COUNTRY_CONFIG.get(effective_country)
     language_code = cfg.get("hl", "es") if cfg else "es"
 
@@ -2549,7 +2570,14 @@ def search_prospects(
                            len(_dedup_new), len(_extra_result))
                 result = list(dict.fromkeys(result + _extra_result))
 
-    return result
+    # _target_state_key is the state this search was actually scoped to (None
+    # for a whole-country search) — returned so the caller can carry it
+    # forward to a post-scrape location check once a URL gets really scraped
+    # (see process_url's target_state check, added 2026-09-24 after a real
+    # Tijuana restaurant survived this exact search's snippet-only geo filter
+    # for a Culiacán query — the snippet had no location evidence to catch it,
+    # only the fully scraped page's real address does).
+    return result, _target_state_key
 
 
 def _search_via_serpapi(query: str, num_results: int, offset: int = 0) -> tuple[list, dict]:

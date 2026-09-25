@@ -1,11 +1,70 @@
 'use client'
+import { useEffect, useState } from 'react'
 import Box from '@mui/material/Box'
 import Chip from '@mui/material/Chip'
 import Typography from '@mui/material/Typography'
 import Checkbox from '@mui/material/Checkbox'
+import IconButton from '@mui/material/IconButton'
+import Tooltip from '@mui/material/Tooltip'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import BlockIcon from '@mui/icons-material/Block'
 import { useLang } from '../context/LangContext'
+import { authFetch } from '@/lib/api'
+
+// Shared across every picker instance on screen — one fetch instead of one
+// per row/card. Map of normalized phone -> blacklist entry _id (needed to
+// DELETE). Any instance can mutate it (add/remove) and the change is visible
+// to every other instance immediately since they all read the same Map.
+let _blacklistCache = null
+let _blacklistPromise = null
+
+export const digitsOnly = n => (n ? String(n).replace(/\D/g, '') : '')
+
+// A disabled MUI Checkbox alone doesn't explain WHY — wrap it with the
+// reason so a hover actually tells the user this number is blocked instead
+// of just looking greyed out for no visible reason.
+function MaybeBlockedCheckbox({ blocked, lang, ...props }) {
+  const cb = <Checkbox size="small" {...props} />
+  if (!blocked) return cb
+  const reason = lang === 'en' ? 'Blocked number — unblock it to select it' : 'Número bloqueado — desbloquéalo para poder seleccionarlo'
+  return <Tooltip title={reason}><span>{cb}</span></Tooltip>
+}
+
+export function useBlacklistedPhones() {
+  const [, forceRender] = useState(0)
+  useEffect(() => {
+    if (_blacklistCache) return
+    if (!_blacklistPromise) {
+      _blacklistPromise = fetch('/api/blacklist?type=phone&limit=1000')
+        .then(r => r.json())
+        .then(data => {
+          _blacklistCache = new Map((data.items || []).map(e => [e.value, e.id || e._id]))
+          return _blacklistCache
+        })
+        .catch(() => { _blacklistCache = new Map(); return _blacklistCache })
+    }
+    _blacklistPromise.then(() => forceRender(n => n + 1))
+  }, [])
+  return _blacklistCache || new Map()
+}
+
+export async function toggleBlacklistedPhone(normalized, entryId) {
+  if (entryId) {
+    await authFetch(`/api/blacklist/${entryId}`, { method: 'DELETE' })
+    _blacklistCache?.delete(normalized)
+  } else {
+    const res = await authFetch('/api/blacklist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'phone', value: normalized }),
+    })
+    if (res.ok) {
+      const entry = await res.json()
+      _blacklistCache?.set(normalized, entry.id || entry._id)
+    }
+  }
+}
 
 // Construye los 3 handlers que WhatsAppNumberPicker espera, a partir del estado
 // que ya vive en cada componente (Sets de React) — evita repetir esta misma
@@ -41,6 +100,8 @@ export default function WhatsAppNumberPicker({
   onToggleCompany, onToggleExpand, onToggleExtra,
 }) {
   const { lang } = useLang()
+  // Must run before any early return — React hooks can't be conditional.
+  const blacklistMap = useBlacklistedPhones()
   const primary = row.all_whatsapp?.length > 0 ? row.all_whatsapp[0] : row.whatsapp
   if (!primary) return null
   const extras = row.all_whatsapp?.slice(1) || []
@@ -49,6 +110,41 @@ export default function WhatsAppNumberPicker({
   const normNum = n => { if (!n) return ''; let s = String(n).replace(/^\+/, ''); return s.replace(/^521(\d{10})$/, '52$1') }
   const contactedNormed = new Set((row.already_contacted?.contacted_numbers || []).map(normNum))
   const isContacted = n => contactedNormed.has(normNum(n))
+  // Blacklisted = digits-only, matching _normalize_blacklist_value("phone", ...) server-side.
+  const blacklistEntryId = n => blacklistMap.get(digitsOnly(n))
+  const isBlacklisted = n => blacklistMap.has(digitsOnly(n))
+  // Blacklisted (red) always wins over contacted (yellow) — "can't interact
+  // with them" is a stronger signal than "already reached out".
+  const numberStyle = (n, isSelected) => {
+    const blocked = isBlacklisted(n)
+    const contacted = isContacted(n)
+    const color  = blocked ? '#ef4444' : contacted ? '#fbbf24' : '#4ade80'
+    const bg     = blocked ? 'rgba(239,68,68,0.14)' : contacted ? 'rgba(251,191,36,0.12)' : 'rgba(34,197,94,0.1)'
+    const border = blocked ? 'rgba(239,68,68,0.4)'  : contacted ? 'rgba(251,191,36,0.3)'  : 'rgba(34,197,94,0.2)'
+    const idleBorder = blocked ? 'rgba(239,68,68,0.3)' : contacted ? 'rgba(251,191,36,0.18)' : 'rgba(255,255,255,0.08)'
+    const idleColor  = blocked ? 'rgba(239,68,68,0.75)' : contacted ? 'rgba(251,191,36,0.6)' : 'rgba(255,255,255,0.3)'
+    return {
+      color: isSelected ? color : idleColor,
+      bg: isSelected ? bg : 'rgba(255,255,255,0.04)',
+      borderColor: isSelected ? border : idleBorder,
+      checkboxColor: blocked ? 'rgba(239,68,68,0.35)' : contacted ? 'rgba(251,191,36,0.35)' : 'rgba(255,255,255,0.25)',
+      checkedColor: color,
+    }
+  }
+  const BlockToggle = ({ n }) => {
+    const blocked = isBlacklisted(n)
+    return (
+      <Tooltip title={blocked
+        ? (lang === 'en' ? 'Unblock this number' : 'Desbloquear este número')
+        : (lang === 'en' ? 'Block this number — no outreach will be sent to it' : 'Bloquear este número — no se le enviará ningún mensaje')}>
+        <IconButton size="small"
+          onClick={(e) => { e.stopPropagation(); toggleBlacklistedPhone(digitsOnly(n), blacklistEntryId(n)) }}
+          sx={{ p: 0.25, color: blocked ? '#ef4444' : 'rgba(255,255,255,0.2)', '&:hover': { color: '#ef4444', bgcolor: 'rgba(239,68,68,0.1)' } }}>
+          <BlockIcon sx={{ fontSize: 13 }} />
+        </IconButton>
+      </Tooltip>
+    )
+  }
   // Con `label` (uso en RecipientsBox), el número principal se esconde detrás
   // del contador de la flecha si hay más de uno — así el nombre de la empresa
   // se queda con todo el ancho en vez de competir con el chip del número.
@@ -57,8 +153,8 @@ export default function WhatsAppNumberPicker({
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.1 }}>
-        <Checkbox size="small" checked={selected} onChange={onToggleCompany}
-          sx={{ p: 0.3, color: isContacted(primary) ? 'rgba(251,191,36,0.35)' : 'rgba(255,255,255,0.25)', '&.Mui-checked': { color: isContacted(primary) ? '#fbbf24' : '#4ade80' } }} />
+        <MaybeBlockedCheckbox lang={lang} blocked={isBlacklisted(primary)} checked={selected && !isBlacklisted(primary)} disabled={isBlacklisted(primary)} onChange={onToggleCompany}
+          sx={{ p: 0.3, color: numberStyle(primary, selected).checkboxColor, '&.Mui-checked': { color: numberStyle(primary, selected).checkedColor } }} />
         {label && (
           <Typography sx={{
             flex: 1, minWidth: 0, fontSize: '0.75rem', mr: 0.6,
@@ -67,23 +163,21 @@ export default function WhatsAppNumberPicker({
           }}>{label}</Typography>
         )}
         {!collapseNumber && (() => {
-          const pContacted = isContacted(primary)
-          const pColor     = pContacted ? '#fbbf24' : '#4ade80'
-          const pBg        = pContacted ? 'rgba(251,191,36,0.12)' : 'rgba(34,197,94,0.1)'
-          const pBorder    = pContacted ? 'rgba(251,191,36,0.3)'  : 'rgba(34,197,94,0.2)'
-          // Show amber border even when unselected for contacted numbers
-          const borderColor = selected ? pBorder : pContacted ? 'rgba(251,191,36,0.18)' : 'rgba(255,255,255,0.08)'
+          const s = numberStyle(primary, selected)
           return (
-            <Chip
-              icon={<WhatsAppIcon sx={{ fontSize: '11px !important', color: selected ? `${pColor} !important` : pContacted ? '#fbbf24 !important' : 'rgba(255,255,255,0.25) !important' }} />}
-              label={primary} size="small"
-              sx={{
-                height: 20, fontSize: '0.68rem',
-                bgcolor: selected ? pBg    : 'rgba(255,255,255,0.04)',
-                color:   selected ? pColor : pContacted ? 'rgba(251,191,36,0.6)' : 'rgba(255,255,255,0.3)',
-                border: `1px solid ${borderColor}`,
-                '& .MuiChip-label': { px: 0.7 },
-              }} />
+            <>
+              <Chip
+                icon={<WhatsAppIcon sx={{ fontSize: '11px !important', color: `${s.color} !important` }} />}
+                label={primary} size="small"
+                sx={{
+                  height: 20, fontSize: '0.68rem',
+                  bgcolor: selected ? s.bg : 'rgba(255,255,255,0.04)',
+                  color: s.color,
+                  border: `1px solid ${s.borderColor}`,
+                  '& .MuiChip-label': { px: 0.7 },
+                }} />
+              <BlockToggle n={primary} />
+            </>
           )
         })()}
         {extras.length > 0 && (
@@ -104,45 +198,39 @@ export default function WhatsAppNumberPicker({
       {expanded && (
         <>
           {collapseNumber && (() => {
-            const pContacted = isContacted(primary)
-            const pColor     = pContacted ? '#fbbf24' : '#4ade80'
-            const pBg        = pContacted ? 'rgba(251,191,36,0.12)' : 'rgba(34,197,94,0.1)'
-            const pBorder    = pContacted ? 'rgba(251,191,36,0.3)'  : 'rgba(34,197,94,0.2)'
-            const borderColor = selected ? pBorder : pContacted ? 'rgba(251,191,36,0.18)' : 'rgba(255,255,255,0.06)'
+            const s = numberStyle(primary, selected)
             return (
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.1, pl: 2.6 }}>
-                <Checkbox size="small" checked={selected} onChange={onToggleCompany}
-                  sx={{ p: 0.2, color: pContacted ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.2)', '&.Mui-checked': { color: pColor } }} />
+                <MaybeBlockedCheckbox lang={lang} blocked={isBlacklisted(primary)} checked={selected && !isBlacklisted(primary)} disabled={isBlacklisted(primary)} onChange={onToggleCompany}
+                  sx={{ p: 0.2, color: s.checkboxColor, '&.Mui-checked': { color: s.checkedColor } }} />
                 <Chip label={primary} size="small"
                   sx={{
                     height: 18, fontSize: '0.62rem',
-                    bgcolor: selected ? pBg    : 'rgba(255,255,255,0.03)',
-                    color:   selected ? pColor : pContacted ? 'rgba(251,191,36,0.6)' : 'rgba(255,255,255,0.25)',
-                    border: `1px solid ${borderColor}`,
+                    bgcolor: selected ? s.bg : 'rgba(255,255,255,0.03)',
+                    color: s.color,
+                    border: `1px solid ${s.borderColor}`,
                     '& .MuiChip-label': { px: 0.6 },
                   }} />
+                <BlockToggle n={primary} />
               </Box>
             )
           })()}
           {extras.map(n => {
-            const on         = extraSelected.has(key(n))
-            const nContacted = isContacted(n)
-            const nColor     = nContacted ? '#fbbf24' : '#4ade80'
-            const nBg        = nContacted ? 'rgba(251,191,36,0.12)' : 'rgba(34,197,94,0.1)'
-            const nBorder    = nContacted ? 'rgba(251,191,36,0.3)'  : 'rgba(34,197,94,0.2)'
-            const nBorderColor = on ? nBorder : nContacted ? 'rgba(251,191,36,0.18)' : 'rgba(255,255,255,0.06)'
+            const on = extraSelected.has(key(n))
+            const s = numberStyle(n, on)
             return (
               <Box key={n} sx={{ display: 'flex', alignItems: 'center', gap: 0.1, pl: 2.6 }}>
-                <Checkbox size="small" checked={on} onChange={() => onToggleExtra(key(n))}
-                  sx={{ p: 0.2, color: nContacted ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.2)', '&.Mui-checked': { color: nColor } }} />
+                <MaybeBlockedCheckbox lang={lang} blocked={isBlacklisted(n)} checked={on && !isBlacklisted(n)} disabled={isBlacklisted(n)} onChange={() => onToggleExtra(key(n))}
+                  sx={{ p: 0.2, color: s.checkboxColor, '&.Mui-checked': { color: s.checkedColor } }} />
                 <Chip label={n} size="small"
                   sx={{
                     height: 18, fontSize: '0.62rem',
-                    bgcolor: on ? nBg     : 'rgba(255,255,255,0.03)',
-                    color:   on ? nColor  : nContacted ? 'rgba(251,191,36,0.6)' : 'rgba(255,255,255,0.25)',
-                    border: `1px solid ${nBorderColor}`,
+                    bgcolor: on ? s.bg : 'rgba(255,255,255,0.03)',
+                    color: s.color,
+                    border: `1px solid ${s.borderColor}`,
                     '& .MuiChip-label': { px: 0.6 },
                   }} />
+                <BlockToggle n={n} />
               </Box>
             )
           })}

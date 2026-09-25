@@ -6,6 +6,7 @@ import { useLang } from '../context/LangContext'
 import { useUser } from '../context/UserContext'
 import { useNavigation } from '../context/NavigationContext'
 import { useDailyCapStats } from '../hooks/useDailyCapStats'
+import { useBlacklistedPhones, digitsOnly } from './WhatsAppNumberPicker'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -735,6 +736,13 @@ export default function Conversations({ isActive } = {}) {
   const [waNumbers, setWaNumbers]       = useState([])
   const [selectedNums, setSelectedNums] = useState([])
   const [activeNum, setActiveNum]       = useState('all')
+  // Proactively disables sending instead of only surfacing the backend's
+  // 403 after the fact — same blacklist WhatsAppNumberPicker.jsx already
+  // shows red/disabled for in the search/recipients pickers.
+  const blacklistedPhones = useBlacklistedPhones()
+  const isNumberBlacklisted = n => blacklistedPhones.has(digitsOnly(n))
+  const blockedSelectedNums = selectedNums.filter(isNumberBlacklisted)
+  const hasBlockedSelection = blockedSelectedNums.length > 0
   const [numbersReady, setNumbersReady] = useState(false)
   const [syncing, setSyncing]           = useState(false)
   const [emojiAnchor, setEmojiAnchor]   = useState(null)
@@ -1926,16 +1934,22 @@ export default function Conversations({ isActive } = {}) {
                   </IconButton>
                 </Tooltip>
                 <TextField ref={replyRef} fullWidth multiline maxRows={4} size="small"
-                  placeholder={instanceStatus === 'disconnected' ? (lang === 'en' ? 'Instance disconnected — go to Settings' : 'Instancia desconectada — ve a Configuración') : t.convs.reply}
+                  placeholder={
+                    instanceStatus === 'disconnected' ? (lang === 'en' ? 'Instance disconnected — go to Settings' : 'Instancia desconectada — ve a Configuración') :
+                    hasBlockedSelection ? (lang === 'en' ? 'Blocked number — unblock it in Blacklist to write' : 'Número bloqueado — desbloquéalo en Blacklist para escribir') :
+                    t.convs.reply
+                  }
                   defaultValue=""
                   slotProps={{ htmlInput: { ref: el => { if (el) replyRef._textarea = el } } }}
                   onInput={e => setReply(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendReply() } }}
                   error={reply.length > MAX_WA_MSG}
+                  disabled={hasBlockedSelection}
                   sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.85rem', bgcolor: 'rgba(255,255,255,0.04)',
-                    '& fieldset': { borderColor: reply.length > MAX_WA_MSG ? '#ef4444' : instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.1)' } }, '& textarea': { color: 'white' } }} />
+                    '& fieldset': { borderColor: reply.length > MAX_WA_MSG || hasBlockedSelection ? '#ef4444' : instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.1)' } }, '& textarea': { color: 'white' } }} />
                 <Tooltip title={
                   instanceStatus === 'disconnected' ? (lang === 'en' ? 'WhatsApp instance disconnected' : 'Instancia WhatsApp desconectada') :
+                  hasBlockedSelection ? (lang === 'en' ? 'This number is blocked — no messages can be sent to it' : 'Este número está bloqueado — no se le pueden enviar mensajes') :
                   dailyStats?.total_available <= 0 ? (lang === 'en' ? `Daily limit reached (${dailyStats.total_sent}/${dailyStats.total_cap}). Resets at midnight.` : `Límite diario alcanzado (${dailyStats.total_sent}/${dailyStats.total_cap}). Reinicia a medianoche.`) :
                   reply.length > MAX_WA_MSG ? (lang === 'en' ? `Too long (max ${MAX_WA_MSG})` : `Demasiado largo (máx. ${MAX_WA_MSG})`) :
                   waNumbers.length === 0 ? (lang === 'en' ? 'No WhatsApp numbers registered' : 'Sin números WhatsApp registrados') :
@@ -1944,9 +1958,9 @@ export default function Conversations({ isActive } = {}) {
                 }>
                   <span>
                     <IconButton onClick={() => handleSendReply()}
-                      disabled={instanceStatus === 'disconnected' || (dailyStats?.total_available <= 0) || (!reply.trim() && !attachedFile) || sending || uploading || reply.length > MAX_WA_MSG || (waNumbers.length > 0 && selectedNums.length === 0) || (waNumbers.length > 1 && (!activeNum || activeNum === 'all'))}
-                      sx={{ bgcolor: instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.12)' : 'rgba(var(--accent-rgb, 99,102,241), 0.2)', border: `1px solid ${instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.25)' : 'rgba(var(--accent-rgb, 99,102,241), 0.3)'}`, borderRadius: 2, color: instanceStatus === 'disconnected' ? '#ef4444' : 'var(--accent, #a5b4fc)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 99,102,241), 0.35)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.15)' } }}>
-                      {sending ? <CircularProgress size={18} sx={{ color: 'var(--accent, #a5b4fc)' }} /> : instanceStatus === 'disconnected' ? <WifiOffIcon sx={{ fontSize: 18 }} /> : <SendIcon sx={{ fontSize: 18 }} />}
+                      disabled={instanceStatus === 'disconnected' || hasBlockedSelection || (dailyStats?.total_available <= 0) || (!reply.trim() && !attachedFile) || sending || uploading || reply.length > MAX_WA_MSG || (waNumbers.length > 0 && selectedNums.length === 0) || (waNumbers.length > 1 && (!activeNum || activeNum === 'all'))}
+                      sx={{ bgcolor: instanceStatus === 'disconnected' || hasBlockedSelection ? 'rgba(239,68,68,0.12)' : 'rgba(var(--accent-rgb, 99,102,241), 0.2)', border: `1px solid ${instanceStatus === 'disconnected' || hasBlockedSelection ? 'rgba(239,68,68,0.25)' : 'rgba(var(--accent-rgb, 99,102,241), 0.3)'}`, borderRadius: 2, color: instanceStatus === 'disconnected' || hasBlockedSelection ? '#ef4444' : 'var(--accent, #a5b4fc)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 99,102,241), 0.35)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.15)' } }}>
+                      {sending ? <CircularProgress size={18} sx={{ color: 'var(--accent, #a5b4fc)' }} /> : instanceStatus === 'disconnected' || hasBlockedSelection ? <WifiOffIcon sx={{ fontSize: 18 }} /> : <SendIcon sx={{ fontSize: 18 }} />}
                     </IconButton>
                   </span>
                 </Tooltip>

@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { INSTANCES_CHANGED_EVENT } from '../hooks/useDailyCapStats'
 import Box from '@mui/material/Box'
+import Menu from '@mui/material/Menu'
 import Typography from '@mui/material/Typography'
 import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
@@ -23,6 +24,9 @@ import Divider from '@mui/material/Divider'
 import Switch from '@mui/material/Switch'
 import CloseIcon from '@mui/icons-material/Close'
 import AddIcon from '@mui/icons-material/Add'
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
+import ChevronRightIcon from '@mui/icons-material/ChevronRight'
+import CalendarMonthIcon from '@mui/icons-material/CalendarMonth'
 import SearchIcon from '@mui/icons-material/Search'
 import PhonelinkRingIcon from '@mui/icons-material/PhonelinkRing'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
@@ -256,6 +260,219 @@ function DashStatCard({ color, value, title, pctChange, sparkData, categories, r
   )
 }
 
+// Small glance card for an external paid service's spend/balance — not a
+// full billing dashboard, just enough to notice if something's off. Three
+// states: not configured yet (no key set), error (call failed), or the real
+// number. Deliberately simpler than DashStatCard (no sparkline/%-change,
+// there's no meaningful trend data for a single point-in-time balance).
+function BalanceCard({ label, lang, loading, data, unit }) {
+  const notConfigured = !loading && data && data.configured === false
+  const errored = !loading && data && data.configured && data.ok === false
+  const dotColor = notConfigured ? 'var(--text-muted)' : errored ? '#f87171' : '#4ade80'
+  let display = '—'
+  if (!loading && data?.ok) {
+    const n = unit === 'balance' ? data.balance : data.spend_this_month
+    display = n == null ? '—' : `$${Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+  }
+  const subtitle = notConfigured
+    ? (lang === 'en' ? 'Not set up' : 'No configurado')
+    : errored
+      ? (lang === 'en' ? 'Check failed' : 'Error al consultar')
+      : (unit === 'balance' ? (lang === 'en' ? 'Current balance' : 'Saldo actual') : (lang === 'en' ? 'Spend this month' : 'Gasto este mes'))
+  return (
+    <Box sx={{
+      minWidth: 0, p: 1.2, borderRadius: 2.5,
+      bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+      border: '1px solid var(--border, rgba(255,255,255,0.08))',
+      display: 'flex', alignItems: 'center', gap: 1,
+    }}>
+      <Box sx={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, bgcolor: dotColor }} />
+      <Box sx={{ minWidth: 0 }}>
+        <Typography sx={{ fontSize: '0.66rem', fontWeight: 600, color: 'var(--text-muted)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</Typography>
+        <Typography sx={{ fontSize: '1.05rem', fontWeight: 800, color: notConfigured || errored ? 'var(--text-muted)' : 'var(--text)', lineHeight: 1.1 }}>
+          {loading ? '…' : display}
+        </Typography>
+        <Typography sx={{ fontSize: '0.64rem', color: 'var(--text-muted)', lineHeight: 1.3, mt: 0.2 }}>{subtitle}</Typography>
+      </Box>
+    </Box>
+  )
+}
+
+const MONTH_NAMES = {
+  es: ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'],
+  en: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'],
+}
+
+// How many past calendar years the "Año" menu and the "Mes" menu's year
+// switcher offer — arbitrary but generous lookback; picking a year with no
+// data just shows zeros (see the backend's month/year bounds), it's not an
+// error case that needs guarding against here.
+const PERIOD_YEARS_BACK = 5
+
+// Lets "Mes"/"Año" jump to any past calendar period — previously those tabs
+// only ever showed the current month/year with no way to look further back,
+// so checking e.g. March's numbers meant waiting for March to come around
+// again. The center label opens a menu to jump directly to any month/year in
+// one click (a prev/next-only stepper meant clicking 8 times to go from
+// September back to January); the arrows stay for quick one-step nudges.
+// Hidden entirely for "Hoy"/"Semana", which stay rolling lookbacks (a
+// "specific past day/week" picker wasn't asked for).
+function PeriodStepper({ range, year, month, lang, onChange }) {
+  const [anchorEl, setAnchorEl] = useState(null)
+  // The year being browsed inside the month-picker menu — separate from the
+  // committed `year` prop so paging through years while choosing a month
+  // doesn't change the dashboard's data until an actual month is clicked.
+  const [menuYear, setMenuYear] = useState(year)
+  if (range !== 'month' && range !== 'year') return null
+  const now = new Date()
+  const curYear = now.getFullYear()
+  const curMonth = now.getMonth() + 1
+  const atLatest = range === 'month' ? (year === curYear && month === curMonth) : (year === curYear)
+  const label = range === 'month' ? `${MONTH_NAMES[lang === 'en' ? 'en' : 'es'][month - 1]} ${year}` : `${year}`
+  const step = (dir) => {
+    if (range === 'month') {
+      let m = month + dir, y = year
+      if (m < 1) { m = 12; y -= 1 }
+      if (m > 12) { m = 1; y += 1 }
+      onChange(y, m)
+    } else {
+      onChange(year + dir, month)
+    }
+  }
+  const openMenu = (e) => { setMenuYear(year); setAnchorEl(e.currentTarget) }
+  const closeMenu = () => setAnchorEl(null)
+  const monthLabels = MONTH_NAMES[lang === 'en' ? 'en' : 'es']
+
+  return (
+    <Box sx={{
+      display: 'flex', alignItems: 'center', gap: 0.2, px: 0.4, py: 0.2, borderRadius: 2,
+      bgcolor: 'var(--surface, rgba(255,255,255,0.03))', border: '1px solid var(--border, rgba(255,255,255,0.1))',
+    }}>
+      <IconButton size="small" onClick={() => step(-1)} sx={{ p: 0.4 }}
+        aria-label={lang === 'en' ? 'Previous period' : 'Periodo anterior'}>
+        <ChevronLeftIcon sx={{ fontSize: 16, color: 'var(--text-muted)' }} />
+      </IconButton>
+      <Typography onClick={openMenu} sx={{
+        fontSize: '0.72rem', fontWeight: 700, color: 'var(--text)', minWidth: 92, textAlign: 'center',
+        userSelect: 'none', cursor: 'pointer', borderRadius: 1, px: 0.4,
+        '&:hover': { bgcolor: 'var(--item-hover, rgba(255,255,255,0.06))' },
+      }}>
+        {label}
+      </Typography>
+      <IconButton size="small" onClick={() => step(1)} disabled={atLatest} sx={{ p: 0.4 }}
+        aria-label={lang === 'en' ? 'Next period' : 'Periodo siguiente'}>
+        <ChevronRightIcon sx={{ fontSize: 16, color: atLatest ? 'var(--border)' : 'var(--text-muted)' }} />
+      </IconButton>
+
+      <Menu anchorEl={anchorEl} open={!!anchorEl} onClose={closeMenu}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'center' }}
+        elevation={0}
+        slotProps={{
+          list: { sx: { p: 0 } },
+          paper: {
+            sx: {
+              mt: 0.7, borderRadius: 3,
+              // MUI's Menu paper defaults to overflowY:'auto' with a fairly
+              // tight maxHeight — with only a handful of years/12 months this
+              // never actually needs to scroll, so the default was showing a
+              // pointless scrollbar on a list that fully fits.
+              maxHeight: 'none', overflow: 'visible',
+              bgcolor: 'var(--card-bg, #16181d)',
+              border: '1px solid var(--border, rgba(255,255,255,0.1))',
+              boxShadow: '0 16px 40px rgba(0,0,0,0.45)',
+            },
+          },
+        }}>
+        {/* Mismo encabezado (ícono en caja degradada + texto) que usan las
+           cabeceras de las gráficas — para que el menú se sienta parte del
+           mismo diseño en vez de un <select> genérico del navegador. */}
+        <Box sx={{
+          display: 'flex', alignItems: 'center', gap: 1, px: 1.4, py: 1,
+          background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.14) 0%, rgba(var(--accent-rgb,59,130,246),0.03) 70%, transparent 100%)',
+          borderBottom: '1px solid var(--border, rgba(255,255,255,0.08))',
+        }}>
+          <Box sx={{
+            width: 22, height: 22, borderRadius: '7px', flexShrink: 0,
+            background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.28) 0%, rgba(var(--accent-rgb,59,130,246),0.1) 100%)',
+            border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <CalendarMonthIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 13 }} />
+          </Box>
+          <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text)' }}>
+            {range === 'year'
+              ? (lang === 'en' ? 'Jump to year' : 'Ir a un año')
+              : (lang === 'en' ? 'Jump to month' : 'Ir a un mes')}
+          </Typography>
+        </Box>
+
+        {range === 'year' ? (
+          <Box sx={{ p: 0.6, minWidth: 130 }}>
+            {Array.from({ length: PERIOD_YEARS_BACK + 1 }, (_, i) => curYear - i).map(y => {
+              const active = y === year
+              return (
+                <MenuItem key={y} selected={active} onClick={() => { onChange(y, month); closeMenu() }}
+                  sx={{
+                    fontSize: '0.78rem', fontWeight: active ? 700 : 500, justifyContent: 'center', borderRadius: 1.6, my: 0.15,
+                    color: active ? '#fff' : 'var(--text)',
+                    bgcolor: active ? 'var(--accent, #3b82f6) !important' : 'transparent',
+                    '&:hover': { bgcolor: active ? 'var(--accent, #3b82f6)' : 'var(--item-hover, rgba(255,255,255,0.06))' },
+                  }}>
+                  {y}
+                </MenuItem>
+              )
+            })}
+          </Box>
+        ) : (
+          <Box sx={{ px: 1, py: 0.8, minWidth: 230 }}>
+            {/* Pill del año, mismo lenguaje visual que el segmented control de
+               Hoy/Semana/Mes/Año — no flechas + número sueltos. */}
+            <Box sx={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.5, mb: 0.8,
+              borderRadius: 2, bgcolor: 'var(--surface, rgba(255,255,255,0.03))', border: '1px solid var(--border, rgba(255,255,255,0.1))',
+              px: 0.3, py: 0.2,
+            }}>
+              <IconButton size="small" onClick={() => setMenuYear(y => y - 1)} sx={{ p: 0.3 }}
+                aria-label={lang === 'en' ? 'Previous year' : 'Año anterior'}>
+                <ChevronLeftIcon sx={{ fontSize: 15, color: 'var(--text-muted)' }} />
+              </IconButton>
+              <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text)', textAlign: 'center' }}>
+                {menuYear}
+              </Typography>
+              <IconButton size="small" onClick={() => setMenuYear(y => y + 1)} disabled={menuYear >= curYear} sx={{ p: 0.3 }}
+                aria-label={lang === 'en' ? 'Next year' : 'Año siguiente'}>
+                <ChevronRightIcon sx={{ fontSize: 15, color: menuYear >= curYear ? 'var(--border)' : 'var(--text-muted)' }} />
+              </IconButton>
+            </Box>
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 0.5, pb: 0.4 }}>
+              {monthLabels.map((label, idx) => {
+                const m = idx + 1
+                const disabled = menuYear === curYear && m > curMonth
+                const active = menuYear === year && m === month
+                return (
+                  <Box key={m} onClick={() => { if (disabled) return; onChange(menuYear, m); closeMenu() }}
+                    sx={{
+                      px: 0.8, py: 0.6, borderRadius: 1.6, textAlign: 'center', fontSize: '0.72rem', fontWeight: 700,
+                      cursor: disabled ? 'default' : 'pointer', userSelect: 'none', transition: 'background-color 0.15s ease, color 0.15s ease',
+                      color: disabled ? 'var(--border)' : active ? '#fff' : 'var(--text)',
+                      bgcolor: active ? 'var(--accent, #3b82f6)' : 'transparent',
+                      boxShadow: active ? '0 2px 8px rgba(var(--accent-rgb,59,130,246),0.4)' : 'none',
+                      '&:hover': disabled ? {} : { bgcolor: active ? 'var(--accent, #3b82f6)' : 'var(--item-hover, rgba(255,255,255,0.06))' },
+                    }}>
+                    {label.slice(0, 3)}
+                  </Box>
+                )
+              })}
+            </Box>
+          </Box>
+        )}
+      </Menu>
+    </Box>
+  )
+}
+
 // Wide card, different shape from DashStatCard on purpose — a gauge for the
 // combined average (real aggregate over the range) next to a per-instance
 // breakdown (real per-instance %, same instance_health_logs data, just not
@@ -364,7 +581,8 @@ function InstanceHealthCard({ avgUptime, uptimeMap, instances, lang }) {
 // it reproduced with the tab never opened, in a burst of exactly 6, one per
 // chart instance). Real charts only render once this tab has genuinely been
 // activated at least once; until then they show the same loading skeleton.
-function InstancesDashboard({ metrics, loading, range, onRangeChange, lang, chartsReady = true }) {
+function InstancesDashboard({ metrics, loading, range, onRangeChange, lang, chartsReady = true, balances, balancesLoading,
+  periodYear, periodMonth, onPeriodChange }) {
   const showCharts = !loading && chartsReady
   const RANGES = [
     { key: 'day',   label: lang === 'en' ? 'Today' : 'Hoy' },
@@ -484,34 +702,45 @@ function InstancesDashboard({ metrics, loading, range, onRangeChange, lang, char
             </Typography>
           </Box>
         </Box>
-        {/* Segmented control — un solo contenedor "pastilla" donde el rango
-           activo lleva su propio fondo sólido (con sombra sutil), en vez de
-           chips sueltos todos con el mismo peso visual. */}
-        <Box sx={{
-          display: 'flex', gap: 0.2, p: 0.3, borderRadius: 2,
-          bgcolor: 'var(--surface, rgba(255,255,255,0.03))', border: '1px solid var(--border, rgba(255,255,255,0.1))',
-        }}>
-          {RANGES.map(r => {
-            const active = range === r.key
-            return (
-              <Box key={r.key} onClick={() => onRangeChange(r.key)}
-                sx={{
-                  px: 1.5, py: 0.5, borderRadius: 1.6, cursor: 'pointer', userSelect: 'none',
-                  fontSize: '0.7rem', fontWeight: 700, lineHeight: 1.8,
-                  color: active ? '#fff' : 'var(--text-muted)',
-                  bgcolor: active ? 'var(--accent, #3b82f6)' : 'transparent',
-                  boxShadow: active ? '0 2px 8px rgba(var(--accent-rgb,59,130,246),0.4)' : 'none',
-                  transition: 'background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease',
-                  '&:hover': active ? {} : { bgcolor: 'var(--item-hover, rgba(255,255,255,0.06))', color: 'var(--text)' },
-                }}>
-                {r.label}
-              </Box>
-            )
-          })}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          <PeriodStepper range={range} year={periodYear} month={periodMonth} lang={lang} onChange={onPeriodChange} />
+          {/* Segmented control — un solo contenedor "pastilla" donde el rango
+             activo lleva su propio fondo sólido (con sombra sutil), en vez de
+             chips sueltos todos con el mismo peso visual. */}
+          <Box sx={{
+            display: 'flex', gap: 0.2, p: 0.3, borderRadius: 2,
+            bgcolor: 'var(--surface, rgba(255,255,255,0.03))', border: '1px solid var(--border, rgba(255,255,255,0.1))',
+          }}>
+            {RANGES.map(r => {
+              const active = range === r.key
+              return (
+                <Box key={r.key} onClick={() => onRangeChange(r.key)}
+                  sx={{
+                    px: 1.5, py: 0.5, borderRadius: 1.6, cursor: 'pointer', userSelect: 'none',
+                    fontSize: '0.7rem', fontWeight: 700, lineHeight: 1.8,
+                    color: active ? '#fff' : 'var(--text-muted)',
+                    bgcolor: active ? 'var(--accent, #3b82f6)' : 'transparent',
+                    boxShadow: active ? '0 2px 8px rgba(var(--accent-rgb,59,130,246),0.4)' : 'none',
+                    transition: 'background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease',
+                    '&:hover': active ? {} : { bgcolor: 'var(--item-hover, rgba(255,255,255,0.06))', color: 'var(--text)' },
+                  }}>
+                  {r.label}
+                </Box>
+              )
+            })}
+          </Box>
         </Box>
       </Box>
 
       <Box sx={{ p: 2 }}>
+
+      {/* Saldo/gasto de los servicios de pago activos (OpenAI, DataForSEO) —
+         solo para tener a la vista si algo se está disparando, no un
+         dashboard de facturación completo. */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 1.5, mb: 2 }}>
+        <BalanceCard label="OpenAI" lang={lang} loading={balancesLoading} data={balances?.openai} unit="spend" />
+        <BalanceCard label="DataForSEO" lang={lang} loading={balancesLoading} data={balances?.dataforseo} unit="balance" />
+      </Box>
 
       {!showCharts ? (
         <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 1.5, mb: 2 }}>
@@ -1223,6 +1452,17 @@ export default function InstancesPanel({ isActive } = {}) {
   const [metrics,        setMetrics]        = useState(null)
   const [metricsLoading, setMetricsLoading] = useState(true)
   const [metricsRange,   setMetricsRange]   = useState('week')
+  // Only meaningful for range 'month'/'year' — lets the "Mes"/"Año" tabs step
+  // back to any past calendar period instead of always showing the current
+  // one (previously the only way to see e.g. March's numbers was to wait
+  // until March came around again next year).
+  const [periodYear,  setPeriodYear]  = useState(() => new Date().getFullYear())
+  const [periodMonth, setPeriodMonth] = useState(() => new Date().getMonth() + 1)
+
+  // ── Balances (OpenAI spend, DataForSEO balance) — just a glance, not a
+  // full billing dashboard, so it's fetched once on mount, not per range. ──
+  const [balances,        setBalances]        = useState(null)
+  const [balancesLoading, setBalancesLoading] = useState(true)
 
   // ── Create dialog ──
   const [createOpen,   setCreateOpen]   = useState(false)
@@ -1541,16 +1781,30 @@ export default function InstancesPanel({ isActive } = {}) {
     } catch {}
   }, [])
 
-  const fetchMetrics = useCallback(async (range) => {
+  const fetchMetrics = useCallback(async (range, py, pm) => {
     setMetricsLoading(true)
     try {
-      const r = await fetch(`/api/admin/instances/metrics?range=${range}`, { headers: { 'x-user-token': token() } })
+      const qs = new URLSearchParams({ range })
+      // Only "month"/"year" support picking a specific past period — "day"/
+      // "week" stay a rolling lookback from now, unaffected by these.
+      if (range === 'month') { qs.set('year', py); qs.set('month', pm) }
+      else if (range === 'year') { qs.set('year', py) }
+      const r = await fetch(`/api/admin/instances/metrics?${qs}`, { headers: { 'x-user-token': token() } })
       if (r.ok) setMetrics(await r.json())
     } catch {} finally { setMetricsLoading(false) }
   }, [])
 
+  const fetchBalances = useCallback(async () => {
+    setBalancesLoading(true)
+    try {
+      const r = await fetch('/api/admin/balances', { headers: { 'x-user-token': token() } })
+      if (r.ok) setBalances(await r.json())
+    } catch {} finally { setBalancesLoading(false) }
+  }, [])
+
   useEffect(() => { fetchInstances(); fetchUsers() }, [fetchInstances, fetchUsers])
-  useEffect(() => { fetchMetrics(metricsRange) }, [fetchMetrics, metricsRange])
+  useEffect(() => { fetchMetrics(metricsRange, periodYear, periodMonth) }, [fetchMetrics, metricsRange, periodYear, periodMonth])
+  useEffect(() => { fetchBalances() }, [fetchBalances])
   // Cleanup QR polls on unmount / hot reload
   useEffect(() => () => { if (wahaQrPollRef.current) clearInterval(wahaQrPollRef.current) }, [])
   useEffect(() => () => { if (wsQrPollRef.current) clearInterval(wsQrPollRef.current) }, [])
@@ -1720,14 +1974,15 @@ export default function InstancesPanel({ isActive } = {}) {
         attempts = 0
         qrPollRef.current = setTimeout(poll, 300)
       } else {
-        // 60 attempts * 1.5s = 90s — a cold Puppeteer boot after /start (fresh
-        // client recreated for pairing-code mode, or a container under load)
-        // routinely takes longer than the old 15s window gave it, which made
-        // the dialog give up right before the code/QR actually became
-        // available (real case: gely-test2, 2026-09-17 — the code was ready
-        // seconds after the dialog already showed "error").
-        if (attempts >= 60) { setQrStatus('error'); return }
-        qrPollRef.current = setTimeout(poll, 1500)
+        // 180 attempts * 500ms = 90s — same overall timeout budget as before
+        // (a cold Puppeteer boot after /start routinely takes longer than a
+        // short window gives it — see gely-test2, 2026-09-17, where the code
+        // was ready seconds after the dialog already showed "error"), but at
+        // 500ms instead of 1.5s the UI notices a QR/code that's ALREADY ready
+        // server-side much sooner, instead of sitting on stale "loading" for
+        // up to another 1.5s after the fact (real user report, 2026-09-25).
+        if (attempts >= 180) { setQrStatus('error'); return }
+        qrPollRef.current = setTimeout(poll, 500)
       }
     }
     poll()
@@ -2662,7 +2917,9 @@ export default function InstancesPanel({ isActive } = {}) {
          más espacio mínimo (520) para que las gráficas respiren. */}
       <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
         <Box ref={perfColRef} sx={{ flex: '1 1 520px', minWidth: 480 }}>
-          <InstancesDashboard metrics={metrics} loading={metricsLoading} range={metricsRange} onRangeChange={setMetricsRange} lang={lang} chartsReady={everActiveRef.current} />
+          <InstancesDashboard metrics={metrics} loading={metricsLoading} range={metricsRange} onRangeChange={setMetricsRange} lang={lang} chartsReady={everActiveRef.current}
+            balances={balances} balancesLoading={balancesLoading}
+            periodYear={periodYear} periodMonth={periodMonth} onPeriodChange={(y, m) => { setPeriodYear(y); setPeriodMonth(m) }} />
         </Box>
 
         {/* User cards grid + unassigned sidebar */}
@@ -4456,21 +4713,13 @@ export default function InstancesPanel({ isActive } = {}) {
           </Box>
         </DialogContent>
 
-        {/* "Listo" hidden while scanned-but-not-yet-confirmed ('connecting') — the
-            real confirmation closes this dialog on its own via startConnPoll once
-            the backend reports truly connected. Clicking this mid-connecting
-            stopped that polling early, which could let the server's idle sweep
-            reclaim the session before the connection actually finished (real
-            report: pressing it right after scanning interrupted the link). */}
-        {qrStatus !== 'connecting' && (
-        <DialogActions sx={{ px: 3, pb: 3, pt: 2, justifyContent: 'center', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-          <Button onClick={() => { closeQr(); fetchInstances() }} variant="contained"
-            sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'var(--accent,#2563eb)' },
-              textTransform: 'none', fontWeight: 700, fontSize: '0.85rem', borderRadius: 2, px: 5 }}>
-            {t.inst.done}
-          </Button>
-        </DialogActions>
-        )}
+        {/* No "Listo"/Done action here on purpose — a real connection closes
+            this dialog on its own via startConnPoll once the backend reports
+            truly connected. A manual done-style button let users close it
+            early (before scanning, or while still 'need_scan'/'error') and
+            walk away thinking the link was made when nothing had actually
+            connected yet. The X in the title above is the only way to
+            dismiss the dialog without a confirmed connection. */}
       </Dialog>
 
       {/* ── Assign dialog ── */}

@@ -22,7 +22,10 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import LanguageIcon from '@mui/icons-material/Language'
 import CategoryIcon from '@mui/icons-material/Category'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import Divider from '@mui/material/Divider'
+import Checkbox from '@mui/material/Checkbox'
+import Button from '@mui/material/Button'
 import { useLang } from '../context/LangContext'
 import { authFetch } from '@/lib/api'
 
@@ -148,6 +151,318 @@ function EntryRow({ entry, onDelete, onSave, dupError, genericError }) {
   )
 }
 
+const TABLE_PAGE_SIZE = 8
+
+function BlockedPill({ bl }) {
+  return (
+    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4, px: 0.8, py: 0.2, borderRadius: 999, bgcolor: 'rgba(255,255,255,0.05)', flexShrink: 0 }}>
+      <BlockIcon sx={{ fontSize: 10, color: 'rgba(255,255,255,0.3)' }} />
+      <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
+        {bl.alreadyBlocked}
+      </Typography>
+    </Box>
+  )
+}
+
+// Mismo lenguaje de "tag" de estado que ya usa el picker de Recipients
+// (pill "No seleccionado"/"Seleccionado") — aquí en rojo porque el estado
+// que confirma es "se va a bloquear", no "se va a mensajear".
+function StatusPill({ bl, blocked, checked }) {
+  if (blocked) return <BlockedPill bl={bl} />
+  return (
+    <Box sx={{
+      flexShrink: 0, px: 1, py: 0.35, borderRadius: 999,
+      bgcolor: checked ? DANGER_SOFT : 'rgba(255,255,255,0.05)',
+      border: `1px solid ${checked ? DANGER_BORDER : 'rgba(255,255,255,0.1)'}`,
+    }}>
+      <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: checked ? DANGER : 'var(--text-muted, rgba(255,255,255,0.4))', whiteSpace: 'nowrap' }}>
+        {checked ? bl.selectedPill : bl.notSelectedPill}
+      </Typography>
+    </Box>
+  )
+}
+
+// Tabla real (con checkboxes, tipo la de prospectos) de las empresas/números
+// YA scrapeados — para bloquear varios de un jalón con un solo clic en vez de
+// teclear cada número. Solo tiene sentido para type="phone" (dominios/
+// industrias no viven en la colección contacts). Sin buscar nada, navega los
+// más recientes; el buscador filtra por nombre de empresa o dígitos del tel.
+function ContactBlockTable({ bl, onBlocked }) {
+  const [term,      setTerm]      = useState('')
+  const [groups,    setGroups]    = useState([])  // [{company_id, company_name, numbers:[{contact_id,number,is_blocked}]}]
+  const [total,     setTotal]     = useState(0)   // total distinct companies matching, not raw numbers
+  const [page,      setPage]      = useState(1)
+  const [loading,   setLoading]   = useState(true)
+  const [expanded,  setExpanded]  = useState(new Set())  // company_ids currently expanded
+  const [selected,  setSelected]  = useState(new Set())  // contact_ids selected to block
+  const [blocking,  setBlocking]  = useState(false)
+  const debounceRef = useRef(null)
+
+  const load = useCallback((p, q) => {
+    setLoading(true)
+    const qs = new URLSearchParams({ page: String(p), limit: String(TABLE_PAGE_SIZE) })
+    if (q) qs.set('q', q)
+    authFetch(`/api/contacts/search?${qs.toString()}`)
+      .then(r => r.json())
+      .then(d => {
+        // Defensive: normalize so every group always has a real numbers[]
+        // regardless of anything odd the API returns (a malformed/partial
+        // group here used to crash the whole panel on `.is_blocked`).
+        const seenIds = new Set()
+        const clean = (d.items || [])
+          .filter(Boolean)
+          .map(g => ({ ...g, numbers: Array.isArray(g.numbers) ? g.numbers.filter(Boolean) : [] }))
+          .filter(g => g.numbers.length > 0)
+          // Belt-and-suspenders: the backend now dedupes company_id before
+          // grouping, but if a stale/cached response ever slips through with
+          // a repeated id, drop the repeat here instead of crashing the tree.
+          .filter(g => (seenIds.has(g.company_id) ? false : (seenIds.add(g.company_id), true)))
+        setGroups(clean)
+        setTotal(d.total || 0)
+      })
+      .catch(() => { setGroups([]); setTotal(0) })
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load(1, '') }, [load])
+
+  function handleSearchChange(v) {
+    setTerm(v)
+    setSelected(new Set())
+    setExpanded(new Set())
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => { setPage(1); load(1, v.trim()) }, 300)
+  }
+
+  function goPage(p) {
+    setPage(p)
+    setSelected(new Set())
+    setExpanded(new Set())
+    load(p, term.trim())
+  }
+
+  const allNumbers = groups.flatMap(g => g.numbers)
+  const selectableNumbers = allNumbers.filter(n => !n.is_blocked)
+  const allSelected = selectableNumbers.length > 0 && selectableNumbers.every(n => selected.has(n.contact_id))
+
+  function toggleAll() {
+    setSelected(allSelected ? new Set() : new Set(selectableNumbers.map(n => n.contact_id)))
+  }
+
+  function toggleExpand(companyId) {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      next.has(companyId) ? next.delete(companyId) : next.add(companyId)
+      return next
+    })
+  }
+
+  function toggleOne(id) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  // Selecting a company selects every one of its (non-blocked) numbers at
+  // once — matches the Recipients picker's "check the whole company" pattern.
+  function toggleCompany(group) {
+    const ids = group.numbers.filter(n => !n.is_blocked).map(n => n.contact_id)
+    const allOn = ids.length > 0 && ids.every(id => selected.has(id))
+    setSelected(prev => {
+      const next = new Set(prev)
+      ids.forEach(id => allOn ? next.delete(id) : next.add(id))
+      return next
+    })
+  }
+
+  async function handleBlockSelected() {
+    const toBlock = allNumbers.filter(n => selected.has(n.contact_id))
+    if (toBlock.length === 0 || blocking) return
+    setBlocking(true)
+    try {
+      await Promise.all(toBlock.map(n => authFetch('/api/blacklist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'phone', value: n.number }),
+      }).catch(() => {})))
+      setSelected(new Set())
+      load(page, term.trim())
+      onBlocked?.()
+    } finally {
+      setBlocking(false)
+    }
+  }
+
+  const totalPages = Math.max(1, Math.ceil(total / TABLE_PAGE_SIZE))
+
+  return (
+    <Box sx={{ mb: 2.2 }}>
+      <Typography sx={SUB_LABEL_SX}>{bl.contactSearchLabel}</Typography>
+
+      {/* Una sola tarjeta contenedora — buscador, tabla y barra de acción
+         quedan visualmente unidos en vez de flotar como piezas sueltas. */}
+      <Box sx={{
+        borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+        bgcolor: 'var(--surface, rgba(255,255,255,0.018))', overflow: 'hidden',
+      }}>
+        <Box sx={{ p: 1.2, pb: 1, borderBottom: '1px solid var(--border, rgba(255,255,255,0.07))' }}>
+          <TextField
+            size="small" fullWidth value={term} onChange={e => handleSearchChange(e.target.value)}
+            placeholder={bl.contactSearchPh}
+            slotProps={{ input: { startAdornment: (
+              <InputAdornment position="start"><SearchIcon sx={{ fontSize: 16, color: 'var(--text-muted, rgba(255,255,255,0.4))' }} /></InputAdornment>
+            ) } }}
+            sx={FIELD_SX}
+          />
+        </Box>
+
+        <Box sx={{ maxHeight: 380, overflowY: 'auto', p: 1, display: 'flex', flexDirection: 'column', gap: 0.7 }}>
+          {loading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 3.5 }}><CircularProgress size={16} sx={{ color: DANGER }} /></Box>
+          ) : groups.length === 0 ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.6, py: 3.5 }}>
+              <BlockIcon sx={{ fontSize: 18, color: 'rgba(239,68,68,0.2)' }} />
+              <Typography sx={{ fontSize: '0.75rem', color: 'var(--text-muted, rgba(255,255,255,0.35))', fontStyle: 'italic' }}>
+                {bl.noResults}
+              </Typography>
+            </Box>
+          ) : (
+            <>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 0.6, pb: 0.2 }}>
+                <Checkbox size="small" checked={allSelected} indeterminate={selected.size > 0 && !allSelected}
+                  onChange={toggleAll} disabled={selectableNumbers.length === 0}
+                  sx={{ p: 0.4, color: 'var(--text-muted)', '&.Mui-checked, &.MuiCheckbox-indeterminate': { color: DANGER } }} />
+                <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>
+                  {bl.selectAllLabel}
+                </Typography>
+              </Box>
+
+              {groups.map(g => {
+                const single = g.numbers.length === 1
+                const isExpanded = expanded.has(g.company_id)
+                const companyIds = g.numbers.filter(n => !n.is_blocked).map(n => n.contact_id)
+                const companyChecked = companyIds.length > 0 && companyIds.every(id => selected.has(id))
+                const companyIndeterminate = !companyChecked && companyIds.some(id => selected.has(id))
+                const soleChecked = single && selected.has(g.numbers[0]?.contact_id)
+                return (
+                  <Box key={g.company_id} sx={{
+                    borderRadius: 2, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+                    bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+                  }}>
+                    <Box
+                      onClick={() => single ? (!g.numbers[0].is_blocked && toggleOne(g.numbers[0].contact_id)) : toggleExpand(g.company_id)}
+                      sx={{
+                        display: 'flex', alignItems: 'center', gap: 1.1, px: 1.2, py: 0.9, cursor: 'pointer',
+                        transition: 'background 0.1s',
+                        '&:hover': { bgcolor: 'rgba(255,255,255,0.035)' },
+                      }}>
+                      <Checkbox size="small"
+                        checked={single ? soleChecked : companyChecked}
+                        indeterminate={!single && companyIndeterminate}
+                        disabled={single ? g.numbers[0].is_blocked : companyIds.length === 0}
+                        onClick={e => e.stopPropagation()}
+                        onChange={() => single ? toggleOne(g.numbers[0].contact_id) : toggleCompany(g)}
+                        sx={{ p: 0.4, flexShrink: 0, color: 'var(--text-muted)', '&.Mui-checked, &.MuiCheckbox-indeterminate': { color: DANGER } }} />
+
+                      <Box sx={{ flex: 1, minWidth: 0, py: 0.15 }}>
+                        <Typography sx={{ fontSize: '0.84rem', lineHeight: 1.35, fontWeight: 700, color: 'var(--text, white)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {g.company_name}
+                        </Typography>
+                        {g.company_domain && (
+                          <Typography sx={{ fontSize: '0.72rem', lineHeight: 1.35, mt: 0.15, color: 'var(--text-muted, rgba(255,255,255,0.4))', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {g.company_domain}
+                          </Typography>
+                        )}
+                      </Box>
+
+                      {single ? (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, flexShrink: 0 }}>
+                          <WhatsAppIcon sx={{ fontSize: 14, color: soleChecked ? DANGER : 'rgba(255,255,255,0.3)' }} />
+                          <Typography sx={{ fontSize: '0.78rem', color: 'var(--text-muted, rgba(255,255,255,0.65))', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                            {g.numbers[0].number}
+                          </Typography>
+                        </Box>
+                      ) : (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, flexShrink: 0 }}>
+                          <Typography sx={{ fontSize: '0.75rem', color: 'var(--text-muted, rgba(255,255,255,0.5))', whiteSpace: 'nowrap' }}>
+                            {g.numbers.length} {bl.numbersCount}
+                          </Typography>
+                          <ExpandMoreIcon sx={{ fontSize: 16, color: 'var(--text-muted, rgba(255,255,255,0.4))', transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+                        </Box>
+                      )}
+
+                      <StatusPill bl={bl} blocked={single && g.numbers[0].is_blocked} checked={single ? soleChecked : companyChecked} />
+                    </Box>
+
+                    {!single && isExpanded && (
+                      <Box sx={{ borderTop: '1px solid var(--border, rgba(255,255,255,0.06))', bgcolor: 'rgba(255,255,255,0.012)' }}>
+                        {g.numbers.map(n => (
+                          <Box key={n.contact_id}
+                            onClick={() => !n.is_blocked && toggleOne(n.contact_id)}
+                            sx={{
+                              display: 'flex', alignItems: 'center', gap: 1.1, pl: 4, pr: 1.2, py: 0.7,
+                              cursor: n.is_blocked ? 'default' : 'pointer',
+                              opacity: n.is_blocked ? 0.5 : 1,
+                              '&:hover': n.is_blocked ? {} : { bgcolor: 'rgba(255,255,255,0.03)' },
+                            }}>
+                            <Checkbox size="small" checked={selected.has(n.contact_id)} disabled={n.is_blocked}
+                              onClick={e => e.stopPropagation()} onChange={() => toggleOne(n.contact_id)}
+                              sx={{ p: 0.3, flexShrink: 0, color: 'var(--text-muted)', '&.Mui-checked': { color: DANGER } }} />
+                            <WhatsAppIcon sx={{ fontSize: 13, color: selected.has(n.contact_id) ? DANGER : 'rgba(255,255,255,0.25)' }} />
+                            <Typography sx={{ flex: 1, fontSize: '0.78rem', color: 'var(--text-muted, rgba(255,255,255,0.7))', fontVariantNumeric: 'tabular-nums' }}>
+                              {n.number}
+                            </Typography>
+                            <StatusPill bl={bl} blocked={n.is_blocked} checked={selected.has(n.contact_id)} />
+                          </Box>
+                        ))}
+                      </Box>
+                    )}
+                  </Box>
+                )
+              })}
+            </>
+          )}
+        </Box>
+
+        {/* Barra de acción — parte de la misma tarjeta, no una pieza aparte */}
+        <Box sx={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1,
+          px: 1.2, py: 0.9, borderTop: '1px solid var(--border, rgba(255,255,255,0.07))',
+          bgcolor: 'rgba(255,255,255,0.015)',
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.2 }}>
+            <IconButton size="small" disabled={page <= 1} onClick={() => goPage(page - 1)}
+              sx={{ color: 'var(--text-muted)', '&:hover': { color: DANGER, bgcolor: DANGER_SOFT }, '&.Mui-disabled': { opacity: 0.2 } }}>
+              <ChevronLeftIcon sx={{ fontSize: 17 }} />
+            </IconButton>
+            <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600, px: 0.6, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+              {page} / {totalPages} · {total.toLocaleString()}
+            </Typography>
+            <IconButton size="small" disabled={page >= totalPages} onClick={() => goPage(page + 1)}
+              sx={{ color: 'var(--text-muted)', '&:hover': { color: DANGER, bgcolor: DANGER_SOFT }, '&.Mui-disabled': { opacity: 0.2 } }}>
+              <ChevronRightIcon sx={{ fontSize: 17 }} />
+            </IconButton>
+          </Box>
+
+          <Button
+            size="small" disabled={selected.size === 0 || blocking} onClick={handleBlockSelected}
+            startIcon={blocking ? <CircularProgress size={13} sx={{ color: 'inherit' }} /> : <BlockIcon sx={{ fontSize: 14 }} />}
+            sx={{
+              textTransform: 'none', fontWeight: 700, fontSize: '0.76rem', borderRadius: 1.8, px: 1.6, py: 0.5,
+              color: '#fff', bgcolor: DANGER, boxShadow: selected.size > 0 ? '0 0 12px rgba(239,68,68,0.25)' : 'none',
+              '&:hover': { bgcolor: '#dc2626' },
+              '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.2)' },
+            }}>
+            {bl.blockSelected}{selected.size > 0 ? ` · ${selected.size}` : ''}
+          </Button>
+        </Box>
+      </Box>
+    </Box>
+  )
+}
+
 function BlacklistList({ type, icon, label, placeholder, tip, bl }) {
   const [items,    setItems]    = useState([])
   const [total,    setTotal]    = useState(0)
@@ -246,12 +561,18 @@ function BlacklistList({ type, icon, label, placeholder, tip, bl }) {
         </Typography>
       </Box>
 
-      <Typography sx={SUB_LABEL_SX}>{bl.addLabel || bl.add}</Typography>
-      <AddRow value={addVal} onChange={setAddVal} error={addErr} placeholder={placeholder} tip={tip} onAdd={handleAdd} />
+      {type === 'phone' ? (
+        <ContactBlockTable bl={bl} onBlocked={() => load(page, search)} />
+      ) : (
+        <>
+          <Typography sx={SUB_LABEL_SX}>{bl.addLabel || bl.add}</Typography>
+          <AddRow value={addVal} onChange={setAddVal} error={addErr} placeholder={placeholder} tip={tip} onAdd={handleAdd} />
+        </>
+      )}
 
       <Divider sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 2 }} />
 
-      <Typography sx={SUB_LABEL_SX}>{bl.searchLabel || bl.searchPh}</Typography>
+      <Typography sx={SUB_LABEL_SX}>{type === 'phone' ? bl.blockedSearchLabel : (bl.searchLabel || bl.searchPh)}</Typography>
       <TextField
         size="small" fullWidth value={search} onChange={e => handleSearchChange(e.target.value)}
         placeholder={bl.searchPh || 'Buscar...'}
@@ -476,6 +797,7 @@ export default function BlacklistPanel({ isActive }) {
   const TABS = [
     { icon: <LanguageIcon sx={{ fontSize: 15 }} />, label: bl.domains },
     { icon: <CategoryIcon sx={{ fontSize: 15 }} />, label: bl.industries },
+    { icon: <BlockIcon sx={{ fontSize: 15 }} />, label: bl.phones },
   ]
 
   return (
@@ -544,9 +866,12 @@ export default function BlacklistPanel({ isActive }) {
               label={bl.domains} placeholder={bl.domainPh} tip={bl.domainTip} bl={bl} />
             <SystemBlacklist bl={bl} />
           </>
-        ) : (
+        ) : activeTab === 1 ? (
           <BlacklistList type="industry" icon={<CategoryIcon sx={{ fontSize: 13, color: DANGER }} />}
             label={bl.industries} placeholder={bl.industryPh} tip={bl.industryTip} bl={bl} />
+        ) : (
+          <BlacklistList type="phone" icon={<BlockIcon sx={{ fontSize: 13, color: DANGER }} />}
+            label={bl.phones} placeholder={bl.phonePh} tip={bl.phoneTip} bl={bl} />
         )}
       </Box>
     </Box>

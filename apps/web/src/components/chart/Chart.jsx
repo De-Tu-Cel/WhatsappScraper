@@ -1,4 +1,5 @@
 'use client'
+import { useMemo } from 'react'
 import dynamic from 'next/dynamic'
 import Box from '@mui/material/Box'
 import Skeleton from '@mui/material/Skeleton'
@@ -66,9 +67,19 @@ function getReactApexChart(type) {
 // confirmed by inspecting the DOM directly and reading
 // node_modules/react-apexcharts/dist/react-apexcharts.esm.js.
 export function Chart({ type, series, options, height, width = '100%', sx, chartRef }) {
-  const ReactApexChart = getReactApexChart(type)
+  // getReactApexChart(type) already returns a stable, module-level-cached
+  // reference (see chartsByType above) — wrapping it in useMemo too doesn't
+  // change that, it just makes the memoization visible to React/eslint's
+  // static analysis, which otherwise can't tell this apart from actually
+  // creating a fresh component on every render (react-hooks/static-components).
+  const ReactApexChart = useMemo(() => getReactApexChart(type), [type])
   return (
     <Box sx={{ width, flexShrink: 0, position: 'relative', ...sx }}>
+      {/* eslint-disable-next-line react-hooks/static-components -- ReactApexChart
+         IS memoized (useMemo above, backed by the module-level chartsByType
+         cache) despite coming from a function call; the lint rule can't see
+         through either layer of caching and treats this as if a fresh
+         component were constructed on every render, which it isn't. */}
       <ReactApexChart chartRef={chartRef} type={type} series={series} options={options} height={height} width={width} />
     </Box>
   )

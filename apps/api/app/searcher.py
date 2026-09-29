@@ -1581,6 +1581,71 @@ def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: s
     return kept
 
 
+def _reject_wrong_country(urls: list[str], snippets: dict, country: str, city: str = "",
+                           degraded: list | None = None) -> list[str]:
+    """Country-level analog of _reject_wrong_state, for searches outside Mexico
+    — the UI's own example placeholders explicitly invite these ("Dentists in
+    Buenos Aires", "Clinics in London"), but before this, ONLY Mexico-resolvable
+    searches (via _find_state_for_city / the state fan-out) got ANY post-filter
+    geo check at all. Everywhere else, a business from the wrong country could
+    only be caught by chance — the same blind spot _reject_wrong_state was
+    built to close for Mexican states (audit finding, 2026-09-29). No
+    same-country/different-city allowance is needed here (unlike the Mexico
+    check's same-state fan-out) since this only ever runs for a whole-country
+    search with no state-level scoping to begin with.
+    """
+    if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not urls or not country:
+        return urls
+
+    def _check_batch(batch: list[str]) -> list[str]:
+        try:
+            lines = []
+            for i, u in enumerate(batch):
+                s = snippets.get(u, {})
+                title = (s.get("title") or "").strip()
+                body = (s.get("body") or "").strip()[:150]
+                line = f"{i+1}. {u}"
+                if title:
+                    line += f"\n   Título: {title}"
+                if body:
+                    line += f"\n   Resumen: {body}"
+                lines.append(line)
+            where = f"{city}, {country}" if city else country
+            prompt = (
+                f'Se buscan negocios ubicados en {where}.\n\n'
+                f'Tu ÚNICA tarea: de la siguiente lista, señala cuáles tienen evidencia CLARA Y EXPLÍCITA '
+                f'(dirección, código de país telefónico, o texto explícito) de estar ubicados en un país '
+                f'DISTINTO a {country}. No marques nada por duda o ambigüedad — solo evidencia clara y '
+                f'explícita de otro país.\n\n'
+                f'URLs:\n' + '\n'.join(lines) + '\n\n'
+                f'Responde ÚNICAMENTE un array JSON con los números de las que SÍ tienen evidencia clara '
+                f'de estar en OTRO país (para excluirlas). Si ninguna aplica, responde []. '
+                f'Ejemplo: [2] o []'
+            )
+            from app.llm import call_llm
+            content = call_llm([{"role": "user", "content": prompt}], max_tokens=200, temperature=0)
+            m = re.search(r'\[[\d,\s]*\]', content)
+            if m:
+                indices = json.loads(m.group(0))
+                reject_idx = {i for i in indices if 1 <= i <= len(batch)}
+                return [u for i, u in enumerate(batch, 1) if i not in reject_idx]
+        except Exception:
+            pass
+        if degraded is not None and "CountryFilter" not in degraded:
+            degraded.append("CountryFilter")
+        return batch  # fallback: LLM unavailable or parse error — keep everything
+
+    batch_size = 60
+    batches = [urls[i:i + batch_size] for i in range(0, len(urls), batch_size)]
+    if len(batches) <= 1:
+        return _check_batch(urls)
+    kept: list[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(batches), 3)) as ex:
+        for batch_result in ex.map(_check_batch, batches):
+            kept.extend(batch_result)
+    return kept
+
+
 def _shallow_fetch_meta(urls: list[str], timeout: int = 3, max_bytes: int = 4096) -> dict:
     """
     Fetches only the first 5 KB of each URL to extract <title> and
@@ -2590,6 +2655,21 @@ def search_prospects(
         result = _reject_wrong_state(result, snippets, _target_state_key, city=city, degraded=degraded_sources)
         if len(result) != _before_geo:
             _log.info("[search] geo filter: %d → %d URLs (estado distinto a %s)", _before_geo, len(result), _target_state_key)
+    else:
+        # _target_state_key solo se resuelve para ciudades/estados MEXICANOS
+        # (_find_state_for_city). Para el resto del mundo — que la propia UI
+        # invita a buscar con sus placeholders de ejemplo ("Dentists in Buenos
+        # Aires", "Clinics in London") — no había NINGÚN chequeo geográfico
+        # post-filtro (audit finding, 2026-09-29). Más flojo que el de México
+        # (solo país, no ciudad/estado — no hay una tabla de ciudades por país
+        # para el resto del mundo) pero cierra el hueco más obvio: un negocio
+        # real pero del país equivocado colándose sin ninguna señal.
+        _effective_country = _detect_effective_country(country, f"{industry} {city}")
+        if _effective_country and _norm_loc(_effective_country) != "mexico":
+            _before_geo = len(result)
+            result = _reject_wrong_country(result, snippets, _effective_country, city=city, degraded=degraded_sources)
+            if len(result) != _before_geo:
+                _log.info("[search] country filter: %d → %d URLs (país distinto a %s)", _before_geo, len(result), _effective_country)
 
     # Si el resultado se quedó muy corto del target y se buscó en UNA ciudad
     # específica (no un barrido de estado), probar ciudades vecinas del mismo

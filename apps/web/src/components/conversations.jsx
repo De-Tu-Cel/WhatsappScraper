@@ -776,6 +776,7 @@ export default function Conversations({ isActive } = {}) {
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
   const { pendingConvId, pendingConvNumber, clearPendingConv } = useNavigation()
   const pendingNumRef = useRef(null)
+  const lastActivityRef = useRef(undefined)  // undefined = not checked yet (mount's fetchConvs already has fresh data)
 
   // Diagnóstico de por qué el seguimiento automático de IA podría estar en
   // pausa ahora mismo (circuit breaker del proveedor / fuera de horario) — se
@@ -960,9 +961,24 @@ export default function Conversations({ isActive } = {}) {
     // 5s (was 20s) so the list reorders close to live as new messages come in —
     // matches the cadence already used elsewhere in this component (ai-status
     // poll below runs every 4s) instead of leaving conversations feeling "stuck"
-    // for up to 20s before bubbling to the top.
-    const id = setInterval(() => {
-      fetchConvs()
+    // for up to 20s before bubbling to the top. fetchConvs() itself is expensive
+    // (~7 sequential Mongo calls over the full collection, measured 1.3-1.5s) and
+    // was previously called unconditionally every tick for every agent with the
+    // tab open — a continuous background cost. Now each tick checks a cheap
+    // single-field endpoint first and only pays for the real fetch when the
+    // underlying data actually changed.
+    const id = setInterval(async () => {
+      try {
+        const r = await authFetch('/api/conversations/last-activity')
+        const d = await r.json()
+        const activity = d?.last_activity ?? null
+        if (lastActivityRef.current === undefined || activity !== lastActivityRef.current) {
+          lastActivityRef.current = activity
+          fetchConvs()
+        }
+      } catch {
+        fetchConvs()  // cheap-endpoint failure — fall back to the real fetch rather than going silent
+      }
       if (selected) fetchThread(selected.company_id, false, true, activeNum !== 'all' ? activeNum : null)
     }, 5000)
     return () => clearInterval(id)

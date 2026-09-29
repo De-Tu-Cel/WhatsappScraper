@@ -6,9 +6,12 @@ export async function POST(request, { params }) {
   try {
     const { company_id } = await params
     const body = await request.json()
+    const token = request.headers.get('x-user-token')
+    const headers = { 'Content-Type': 'application/json' }
+    if (token) headers['x-user-token'] = token
     const res = await fetch(`${BACKEND_URL}/api/conversations/${company_id}/ai-toggle`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(body),
     })
     const data = await res.json()

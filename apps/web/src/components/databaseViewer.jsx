@@ -664,7 +664,7 @@ function AddCompanyDialog({ open, onClose, onCreated, onNotify }) {
     if (!form.name.trim() || webErr || waErr) return
     setSaving(true)
     try {
-      const res = await fetch('/api/companies', {
+      const res = await authFetch('/api/companies', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...form, name: form.name.trim() }),
@@ -1174,7 +1174,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
     // Also check for rows that are contacted but missing numbers (e.g. cross-page cache)
     const needsFetch = selectedRows.filter(r => r.contacted && !r.contacted_numbers?.length).map(r => r._id)
     if (needsFetch.length > 0) {
-      fetch('/api/companies/check-contacted', {
+      authFetch('/api/companies/check-contacted', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ company_ids: needsFetch }),
       }).then(r => r.json()).then(data => {
@@ -1586,7 +1586,7 @@ export default function DatabaseViewer({ isActive }) {
   const notify = (msg, severity = 'success') => setSnack({ open: true, msg, severity })
 
   useEffect(() => {
-    fetch('/api/companies/meta')
+    authFetch('/api/companies/meta')
       .then((r) => r.json())
       .then((d) => { setIndustries(d.industries || []); setCities(d.cities || []) })
       .catch(() => {})
@@ -1604,7 +1604,7 @@ export default function DatabaseViewer({ isActive }) {
         ...(filters.has_whatsapp !== '' && { has_whatsapp: filters.has_whatsapp }),
         ...(filters.contacted    !== '' && { contacted: filters.contacted }),
       })
-      const res = await fetch(`/api/companies?${params}`)
+      const res = await authFetch(`/api/companies?${params}`)
       const data = await res.json()
       const companies = data.companies || []
       setRows(companies)
@@ -1671,7 +1671,7 @@ export default function DatabaseViewer({ isActive }) {
     setConfirmDelete(false)
     if (!selected.length) return
     try {
-      const res = await fetch('/api/companies', {
+      const res = await authFetch('/api/companies', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: selected }),
@@ -1716,7 +1716,7 @@ export default function DatabaseViewer({ isActive }) {
     setViewData(null)
     setViewLoading(true)
     try {
-      const res = await fetch(`/api/companies/${row._id}`)
+      const res = await authFetch(`/api/companies/${row._id}`)
       const data = await res.json()
       // Adapt to the format ResultDisplay expects
       setViewData({
@@ -1769,7 +1769,7 @@ export default function DatabaseViewer({ isActive }) {
     setMsgData(null)
     setViewLoading(true)
     try {
-      const res = await fetch(`/api/companies/${row._id}`)
+      const res = await authFetch(`/api/companies/${row._id}`)
       const data = await res.json()
       setMsgData({
         website: data.website,
@@ -1814,7 +1814,7 @@ export default function DatabaseViewer({ isActive }) {
   const handleSaveEdit = async (id, fields, waNumbers) => {
     try {
       const [r1, r2] = await Promise.all([
-        fetch(`/api/companies/${id}`, {
+        authFetch(`/api/companies/${id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(fields),

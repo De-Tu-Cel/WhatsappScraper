@@ -785,7 +785,7 @@ export default function Conversations({ isActive } = {}) {
     let cancelled = false
     async function poll() {
       try {
-        const r = await fetch('/api/conversations/ai-health')
+        const r = await authFetch('/api/conversations/ai-health')
         const d = await r.json()
         if (!cancelled && r.ok) setAiHealth(d)
       } catch {}
@@ -867,7 +867,7 @@ export default function Conversations({ isActive } = {}) {
     }
     try {
       const params = numFilter && numFilter !== 'all' ? `?number=${encodeURIComponent(numFilter)}` : ''
-      const res = await fetch(`/api/conversations/${companyId}${params}`)
+      const res = await authFetch(`/api/conversations/${companyId}${params}`)
       const data = await res.json()
       const msgs = Array.isArray(data) ? data : []
       if (silent) {
@@ -876,7 +876,7 @@ export default function Conversations({ isActive } = {}) {
           return msgs
         })
         if (msgs.length > threadLenRef.current) {
-          fetch(`/api/conversations/${companyId}`, { method: 'POST' }).catch(() => {})
+          authFetch(`/api/conversations/${companyId}`, { method: 'POST' }).catch(() => {})
           // Bump this conversation to the top with the fresh last message right
           // away — otherwise the chat you're currently looking at stayed frozen
           // in its old list position (only its unread count changed) until the
@@ -908,7 +908,7 @@ export default function Conversations({ isActive } = {}) {
       }
       threadLenRef.current = msgs.length
       if (!silent) {
-        fetch(`/api/conversations/${companyId}`, { method: 'POST' }).catch(() => {})
+        authFetch(`/api/conversations/${companyId}`, { method: 'POST' }).catch(() => {})
         setConvs(prev => prev.map(c => c.company_id === companyId ? { ...c, unread: 0 } : c))
       }
     } catch {
@@ -921,7 +921,7 @@ export default function Conversations({ isActive } = {}) {
   const fetchCompanyNumbers = useCallback(async (companyId) => {
     currentCompanyRef.current = companyId
     try {
-      const res = await fetch(`/api/companies/${companyId}`)
+      const res = await authFetch(`/api/companies/${companyId}`)
       const data = await res.json()
       if (currentCompanyRef.current !== companyId) return []
       const numbers = [...new Set(
@@ -987,7 +987,7 @@ export default function Conversations({ isActive } = {}) {
     let cancelled = false
     const poll = async () => {
       try {
-        const res = await fetch(`/api/conversations/${selected.company_id}/ai-status`)
+        const res = await authFetch(`/api/conversations/${selected.company_id}/ai-status`)
         if (cancelled) return
         const data = await res.json()
         setAiEnabled(data.ai_enabled || false)
@@ -1014,7 +1014,7 @@ export default function Conversations({ isActive } = {}) {
     // On first enable: check if config exists — if not, open config dialog first
     if (next) {
       try {
-        const r = await fetch(`/api/conversations/${selected.company_id}/ai-config`)
+        const r = await authFetch(`/api/conversations/${selected.company_id}/ai-config`)
         const d = await r.json()
         const hasConfig = r.ok && (d.extra_instructions || d.max_turns !== 3)
         if (!hasConfig) { setAiConfigOpen(true); return }
@@ -1022,7 +1022,7 @@ export default function Conversations({ isActive } = {}) {
     }
     setAiToggling(true)
     try {
-      await fetch(`/api/conversations/${selected.company_id}/ai-toggle`, {
+      await authFetch(`/api/conversations/${selected.company_id}/ai-toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: next }),
@@ -1054,7 +1054,7 @@ export default function Conversations({ isActive } = {}) {
     lastSyncedRef.current = companyId
     setSyncing(true)
     try {
-      const res  = await fetch(`/api/conversations/${companyId}/sync`, { method: 'POST' })
+      const res  = await authFetch(`/api/conversations/${companyId}/sync`, { method: 'POST' })
       const data = await res.json()
       if ((data.synced ?? 0) > 0) {
         await fetchThread(companyId, true)

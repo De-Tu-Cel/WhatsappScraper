@@ -1,6 +1,7 @@
 'use client'
 import { useState, useCallback } from 'react'
 import { useLang } from '../context/LangContext'
+import { authFetch } from '@/lib/api'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Dialog from '@mui/material/Dialog'
@@ -66,7 +67,7 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
     if (!companyId) return
     setLoading(true); setError(''); setSaved(false)
     try {
-      const r = await fetch(`/api/conversations/${companyId}/ai-config`)
+      const r = await authFetch(`/api/conversations/${companyId}/ai-config`)
       const d = await r.json()
       if (!r.ok) { setError(d.detail || `Error ${r.status}`); return }
       setForm({
@@ -82,7 +83,7 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
     setLocked(true); setGlobalSaved(false); setGlobalError('')
     setGlobalLoading(true)
     try {
-      const r = await fetch('/api/conversations/ai-global-config')
+      const r = await authFetch('/api/conversations/ai-global-config')
       const d = await r.json()
       if (r.ok) {
         setGlobalDefault(d.default_system_prompt || '')
@@ -99,7 +100,7 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
   async function handleSaveIdleHours(hours) {
     setIdleSaving(true); setIdleError('')
     try {
-      const r = await fetch('/api/conversations/ai-global-config', {
+      const r = await authFetch('/api/conversations/ai-global-config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ idle_timeout_hours: hours }),
@@ -118,7 +119,7 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
   async function handleSaveGlobalPrompt() {
     setGlobalSaving(true); setGlobalError('')
     try {
-      const r = await fetch('/api/conversations/ai-global-config', {
+      const r = await authFetch('/api/conversations/ai-global-config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ system_prompt: globalPrompt.trim() === globalDefault.trim() ? '' : globalPrompt }),
@@ -143,7 +144,7 @@ export default function ChatAIConfig({ open, onClose, companyId, companyName, on
   async function handleSave() {
     setSaving(true); setError('')
     try {
-      const r = await fetch(`/api/conversations/${companyId}/ai-config`, {
+      const r = await authFetch(`/api/conversations/${companyId}/ai-config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),

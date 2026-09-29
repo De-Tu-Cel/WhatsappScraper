@@ -1509,7 +1509,8 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     return ranked
 
 
-def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: str = "") -> list[str]:
+def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: str = "",
+                         degraded: list | None = None) -> list[str]:
     """Second, focused LLM pass — drops URLs whose address/LADA/content shows
     CLEAR evidence of being in a Mexican state DIFFERENT from state_key. Kept
     deliberately separate from _ai_filter_urls(): folding this into that much
@@ -1520,6 +1521,12 @@ def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: s
     Same-state results (e.g. Ciudad Obregón for a Sonora search) are
     intentionally kept — that's the existing same-state fan-out/shortfall
     feature, not something to filter here.
+
+    `degraded`, when passed, gets "GeoFilter" appended if the LLM call fails
+    for any batch — before this the except branch below silently kept every
+    URL with no signal anywhere that the state check didn't actually run for
+    this search (unlike the existing degraded_sources mechanism for the 4
+    parallel search sources, which this mirrors — audit finding, 2026-09-29).
     """
     if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not urls or not state_key:
         return urls
@@ -1559,6 +1566,8 @@ def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: s
                 return [u for i, u in enumerate(batch, 1) if i not in reject_idx]
         except Exception:
             pass
+        if degraded is not None and "GeoFilter" not in degraded:
+            degraded.append("GeoFilter")
         return batch  # fallback: LLM unavailable or parse error — keep everything
 
     batch_size = 60
@@ -2346,9 +2355,24 @@ def _search_via_dataforseo_maps(
                 if website and _is_business_url(website) and website not in batch_urls:
                     batch_urls.append(website)
                     rating = item.get("rating") or {}
+                    # Google Maps' own business category (e.g. "Taller mecánico") —
+                    # was being discarded here even though it's real category
+                    # signal DataForSEO returns, while the free OSM source folds
+                    # its own tags into the snippet body for the exact same AI
+                    # relevance filter. Maps is documented above as the highest-
+                    # quality source, so it was feeding that filter weaker
+                    # signal than a lower-quality free source (audit finding,
+                    # 2026-09-29).
+                    categories = [item.get("category")] + (item.get("additional_categories") or [])
+                    category = ", ".join(c for c in categories if c)
+                    body_parts = [p for p in [
+                        category,
+                        item.get("address") or "",
+                        f"{rating.get('value')}★" if rating.get("value") else "",
+                    ] if p]
                     batch_snips[website] = {
                         "title": item.get("title", ""),
-                        "body": item.get("address") or (f"{rating.get('value')}★" if rating.get("value") else ""),
+                        "body": " | ".join(body_parts),
                     }
             return batch_urls, batch_snips
         except Exception as e:
@@ -2447,6 +2471,11 @@ def search_prospects(
     geocode_city = (state_cities[0] if state_cities and not city else city)
 
     _dfs_ok = bool(_dataforseo_auth())
+    # Defined before the branch — the DDG-only `else` below never populated this,
+    # so the final `return` at the bottom of this function would raise
+    # NameError whenever DataForSEO isn't configured/authorized (real gap
+    # found while wiring the GeoFilter degradation flag below, 2026-09-29).
+    degraded_sources: list[str] = []
 
     if _dfs_ok:
         # Correr 4 fuentes en paralelo: DataForSEO Maps + DuckDuckGo + Sección Amarilla + OSM.
@@ -2467,7 +2496,6 @@ def search_prospects(
         # search_prospects() no tenía forma de saber que la búsqueda se degradó
         # a fuentes más débiles. Se acumulan las fuentes fallidas para
         # devolverlas al caller (ver el return final de esta función).
-        degraded_sources: list[str] = []
         def _safe_result(f, label):
             try:
                 remaining = _GLOBAL_DEADLINE - (_time.monotonic() - _t0)
@@ -2559,7 +2587,7 @@ def search_prospects(
     _log.info("[search] AI filter returned %d URLs (from %d)", len(result), len(urls))
     if _target_state_key:
         _before_geo = len(result)
-        result = _reject_wrong_state(result, snippets, _target_state_key, city=city)
+        result = _reject_wrong_state(result, snippets, _target_state_key, city=city, degraded=degraded_sources)
         if len(result) != _before_geo:
             _log.info("[search] geo filter: %d → %d URLs (estado distinto a %s)", _before_geo, len(result), _target_state_key)
 
@@ -2606,7 +2634,7 @@ def search_prospects(
             if _dedup_new:
                 _extra_result = _ai_filter_urls(_dedup_new, _industry_singular, snippets, country=country)
                 if _state_key:
-                    _extra_result = _reject_wrong_state(_extra_result, snippets, _state_key, city=city)
+                    _extra_result = _reject_wrong_state(_extra_result, snippets, _state_key, city=city, degraded=degraded_sources)
                 _log.info("[search] expansión geográfica: +%d candidatos → +%d aprobados",
                            len(_dedup_new), len(_extra_result))
                 result = list(dict.fromkeys(result + _extra_result))

@@ -479,6 +479,12 @@ class WebsiteScraper:
                 "phone_numbers": list(dict.fromkeys(
                     self._extract_phone_numbers(soup, text) + structured_phones
                 )),
+                # Igual que whatsapp_contacts pero para links tel: normales — antes
+                # no existía, así que páginas de sucursales sin wa.me (muy comunes)
+                # no tenían NINGUNA forma de asociar cada número con su sucursal
+                # (bug real, 2026-09-29). Aditivo: phone_numbers de arriba sigue
+                # igual para no romper a nadie que ya lo consuma como lista plana.
+                "phone_contacts": self._extract_phone_numbers_with_labels(soup),
                 "emails": self._extract_emails(text),
                 "persons": self._extract_person_contacts(soup, text),
             },
@@ -2023,6 +2029,13 @@ class WebsiteScraper:
         "ordenalo", "cotizar", "cotiza", "cotizacion", "cotización", "reportar",
         "reporta", "solicitar", "solicita", "consulta", "consultar", "aviso",
         "reporte", "click", "clic",
+        # Abreviaciones/frases de botón de "llamar" que _extract_wa_label
+        # también usa para labels de links tel: (ver
+        # _extract_phone_numbers_with_labels) — sin esto, "Tel." o "Llamar
+        # ahora" se guardaban como si fueran el nombre de la sucursal (bug
+        # real, fmexi.com/sucursales, 2026-09-29: 43 de 43 números con este
+        # tipo de label genérico en vez de vacío).
+        "tel", "tel.", "cel", "cel.", "llamar", "marca", "marcar",
     }
     # Palabras de relleno que no aportan ni quitan significado ("por", "vía", "un"...)
     _WA_FILLER_WORDS = {
@@ -2097,6 +2110,31 @@ class WebsiteScraper:
                     return h_text
             node = node.parent
 
+        # 3b. <b>/<strong> INMEDIATAMENTE anterior en orden de DOCUMENTO (no
+        # limitado al mismo contenedor) — cubre el patrón real
+        # "<b>Sucursal X:</b> ... wa.me/... <b>Sucursal Y:</b> ... wa.me/..."
+        # donde varias sucursales comparten un mismo contenedor/tab de
+        # acordeón. El paso 3 nunca lo encuentra porque solo busca h1-h6, y
+        # _has_multiple_wa_links() hace que los pasos 3/4 se rindan apenas
+        # detectan más de un link ahí adentro — bug real confirmado
+        # (enigmarooms.net, 2026-09-29: 14 de 15 sucursales sin label).
+        # Se verifica que no haya OTRO link de WhatsApp entre la etiqueta y
+        # este link — si lo hay, esa etiqueta es de la OTRA sucursal.
+        label_tag = link_tag.find_previous(re.compile(r"^(h[1-6]|b|strong)$"))
+        if label_tag:
+            other_link_between = False
+            for a in label_tag.find_all_next("a", href=True):
+                if a is link_tag:
+                    break
+                h = a["href"]
+                if "wa.me/" in h or (("api.whatsapp.com/send" in h or "web.whatsapp.com/send" in h) and "phone=" in h):
+                    other_link_between = True
+                    break
+            if not other_link_between:
+                lbl_text = _clean(label_tag.get_text(" ", strip=True))
+                if lbl_text and not _is_generic(lbl_text):
+                    return lbl_text
+
         # 4. Texto del contenedor más cercano con un solo fragmento significativo
         node = link_tag.parent
         for _ in range(4):
@@ -2110,6 +2148,27 @@ class WebsiteScraper:
             node = node.parent
 
         return ""
+
+    def _extract_phone_numbers_with_labels(self, soup: BeautifulSoup) -> List[Dict]:
+        """Extrae números de <a href="tel:...">  junto con su label de sucursal —
+        equivalente a _extract_whatsapp_with_labels() pero para links tel: normales.
+        No existía en absoluto (bug real, 2026-09-29: páginas de sucursales que
+        solo usan tel: — muy común, tan común como wa.me — extraían los números
+        correctos pero como lista plana, sin ninguna forma de saber qué número
+        pertenecía a qué sucursal). Reusa _extract_wa_label(), cuya lógica de
+        heading/contenedor-cercano no depende de que el link sea específicamente
+        de WhatsApp."""
+        seen: set = set()
+        result: List[Dict] = []
+        for link in soup.find_all("a", href=True):
+            href = link["href"].strip()
+            if not href.lower().startswith("tel:"):
+                continue
+            clean = self._normalize_phone(href[4:])
+            if clean and clean not in seen:
+                seen.add(clean)
+                result.append({"number": clean, "label": self._extract_wa_label(link)})
+        return result
 
     def _extract_whatsapp_with_labels(self, soup: BeautifulSoup, text: str) -> List[Dict]:
         """Extrae números de WhatsApp junto con su label de sucursal/contexto."""

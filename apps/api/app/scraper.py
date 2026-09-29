@@ -2314,7 +2314,17 @@ class WebsiteScraper:
         clean_soup = BeautifulSoup(str(soup), "html.parser")
         for tag in clean_soup.find_all(["nav", "header", "footer", "script", "style"]):
             tag.decompose()
-        for tag in clean_soup.find_all(class_=re.compile(r"(menu|nav|footer|header)", re.IGNORECASE)):
+        # Límites de palabra (\b) son obligatorios aquí — sin ellos, un simple
+        # substring match confunde clases que solo CONTIENEN estas letras con
+        # clases que de verdad son de navegación. Bug real confirmado en vivo
+        # (2026-09-29, casasenmx.com/agents): la clase de Tailwind "pt-navx"
+        # (padding-top, nada que ver con navegación) se detectaba como "nav" y
+        # borraba TODO el <main> del sitio — 259 agentes con nombre y teléfono,
+        # pérdida total de datos antes de que cualquier estrategia de
+        # extracción llegara a correr. "\bnav\b" con "(?:bar)?" sigue
+        # atrapando variantes reales comunes ("navbar", "main-nav",
+        # "site-header") sin caer en falsos positivos de substring.
+        for tag in clean_soup.find_all(class_=re.compile(r"\b(?:menu|nav|footer|header)(?:bar)?\b", re.IGNORECASE)):
             tag.decompose()
 
         contacts: List[Dict] = []

@@ -2347,7 +2347,7 @@ def search_prospects(
     offset: int = 0,
     exclude_domains: set | None = None,
     country: str = None,
-) -> list:
+) -> tuple[list, str | None, list]:
     # La UI es un solo cuadro de texto libre — el usuario escribe negocio + lugar
     # juntos ("gimnasios en Monterrey") y no manda `city`/`country` por separado.
     # Si no vinieron explícitos, se intentan extraer del propio texto para que
@@ -2429,6 +2429,12 @@ def search_prospects(
         # depth=100 (variabilidad normal de red/servidor, igual que ya se vio
         # antes con BD) — se descartan si llegan después del límite.
         _GLOBAL_DEADLINE = 40 if num_results <= 50 else 80
+        # Antes, un timeout/error de una fuente (típicamente Maps, la de mayor
+        # calidad) solo quedaba en el log del servidor — el caller de
+        # search_prospects() no tenía forma de saber que la búsqueda se degradó
+        # a fuentes más débiles. Se acumulan las fuentes fallidas para
+        # devolverlas al caller (ver el return final de esta función).
+        degraded_sources: list[str] = []
         def _safe_result(f, label):
             try:
                 remaining = _GLOBAL_DEADLINE - (_time.monotonic() - _t0)
@@ -2437,9 +2443,11 @@ def search_prospects(
                 return res
             except concurrent.futures.TimeoutError:
                 _log.warning("[search] %s TIMEOUT at %.1fs — usando resultados parciales", label, _time.monotonic() - _t0)
+                degraded_sources.append(label)
                 return [], {}
             except Exception as _e:
                 _log.warning("[search] %s error: %s", label, _e)
+                degraded_sources.append(label)
                 return [], {}
 
         _ex = concurrent.futures.ThreadPoolExecutor(max_workers=4)
@@ -2577,7 +2585,13 @@ def search_prospects(
     # Tijuana restaurant survived this exact search's snippet-only geo filter
     # for a Culiacán query — the snippet had no location evidence to catch it,
     # only the fully scraped page's real address does).
-    return result, _target_state_key
+    # degraded_sources: names of the parallel sources (Maps/DDG/SA/OSM) that
+    # timed out or errored for THIS search — empty list means every source
+    # answered normally. Confirmed live (2026-09-28) that DataForSEO Maps, the
+    # highest-quality source, can time out completely on a real query; before
+    # this, the caller had no way to know results came only from weaker
+    # fallback sources.
+    return result, _target_state_key, degraded_sources
 
 
 def _search_via_serpapi(query: str, num_results: int, offset: int = 0) -> tuple[list, dict]:

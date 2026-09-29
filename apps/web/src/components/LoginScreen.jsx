@@ -25,8 +25,8 @@ const fadeUp = keyframes`
   to   { opacity: 1; transform: translateY(0); }
 `
 const pulse = keyframes`
-  0%,100% { box-shadow: 0 0 12px rgba(21,87,245,0.2); }
-  50%      { box-shadow: 0 0 22px rgba(21,87,245,0.32); }
+  0%,100% { box-shadow: 0 0 12px rgba(var(--accent-rgb, 21,87,245),0.2); }
+  50%      { box-shadow: 0 0 22px rgba(var(--accent-rgb, 21,87,245),0.32); }
 `
 const shimmer = keyframes`
   0%   { transform: translateX(-100%) skewX(-15deg); }
@@ -54,7 +54,7 @@ const statusPulse = keyframes`
 `
 
 /* ── Partículas flotantes ─────────────────────────────────────────────────── */
-function Particles() {
+function Particles({ accentRgb }) {
   const canvasRef = useRef(null)
   const mouseRef  = useRef({ x: -9999, y: -9999 })
   useEffect(() => {
@@ -81,7 +81,7 @@ function Particles() {
       baseA: Math.random() * 0.5 + 0.15,
       phase: Math.random() * Math.PI * 2,
       freq:  Math.random() * 0.018 + 0.006,
-      hue:   Math.random() < 0.62 ? '21,87,245' : Math.random() < 0.75 ? '22,101,52' : '99,102,241',
+      hue:   Math.random() < 0.62 ? accentRgb : Math.random() < 0.75 ? '22,101,52' : '99,102,241',
     }))
 
     const CONN_SQ   = 130 * 130  // squared threshold — avoids sqrt on most pairs
@@ -155,7 +155,13 @@ function Particles() {
       window.removeEventListener('mousemove',  onMouse)
       window.removeEventListener('mouseleave', onLeave)
     }
-  }, [])
+    // accentRgb starts as the "21,87,245" default and gets corrected moments
+    // after mount (see LoginScreen's own effect, reading the real CSS
+    // variable) — without it in the deps, this effect's pts array would
+    // freeze on that default forever, since it only builds pts once. One
+    // extra reset right after mount (imperceptible) keeps the particles in
+    // sync with whatever accent the user actually has selected.
+  }, [accentRgb])
   return <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0 }} />
 }
 
@@ -167,10 +173,10 @@ const INPUT_SX = {
     borderRadius: '12px',
     transition: 'all 0.2s',
     '& fieldset': { borderColor: 'rgba(255,255,255,0.28) !important', borderRadius: '12px', transition: 'all 0.2s' },
-    '&:hover fieldset': { borderColor: 'rgba(21,87,245,0.7) !important' },
+    '&:hover fieldset': { borderColor: 'rgba(var(--accent-rgb, 21,87,245),0.7) !important' },
     '&.Mui-focused': {
-      backgroundColor: 'rgba(21,87,245,0.2) !important',
-      '& fieldset': { borderColor: '#4f86f7 !important', borderWidth: 1.5 },
+      backgroundColor: 'rgba(var(--accent-rgb, 21,87,245),0.2) !important',
+      '& fieldset': { borderColor: 'var(--accent, #4f86f7) !important', borderWidth: 1.5 },
     },
   },
   '& .MuiInputBase-input': { color: '#ffffff !important', WebkitTextFillColor: '#ffffff !important', caretColor: '#ffffff', py: 1.3 },
@@ -180,7 +186,7 @@ const INPUT_SX = {
   '& input::-ms-reveal': { display: 'none' },
   '& input::-ms-clear': { display: 'none' },
   '& input:-webkit-autofill, & input:-webkit-autofill:hover, & input:-webkit-autofill:focus': {
-    WebkitBoxShadow: '0 0 0px 1000px rgba(10,28,72,0.94) inset',
+    WebkitBoxShadow: '0 0 0px 1000px var(--sidebar-bg, #0a1c48) inset',
     WebkitTextFillColor: '#ffffff',
     caretColor: 'white',
     transition: 'background-color 5000s ease-in-out 0s',
@@ -219,16 +225,16 @@ function SubmitBtn({ loading, label }) {
       sx={{
         mt: 0.5, py: 1.4, borderRadius: '12px', border: 'none',
         cursor: loading ? 'default' : 'pointer', width: '100%',
-        background: 'linear-gradient(135deg, #1557f5 0%, #0e2d5c 100%)',
+        background: 'linear-gradient(135deg, var(--accent, #1557f5) 0%, #0e2d5c 100%)',
         color: 'white', fontWeight: 700, fontSize: '0.95rem',
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.8,
-        boxShadow: '0 2px 12px rgba(21,87,245,0.25)',
+        boxShadow: '0 2px 12px rgba(var(--accent-rgb, 21,87,245),0.25)',
         transition: 'all 0.2s', opacity: loading ? 0.7 : 1,
         position: 'relative', overflow: 'hidden',
         '&:hover:not(:disabled)': {
           transform: 'translateY(-1px)',
-          boxShadow: '0 4px 20px rgba(21,87,245,0.38)',
-          background: 'linear-gradient(135deg, #1e6aff 0%, #1045c0 100%)',
+          boxShadow: '0 4px 20px rgba(var(--accent-rgb, 21,87,245),0.38)',
+          background: 'linear-gradient(135deg, var(--accent, #1e6aff) 0%, #1045c0 100%)',
         },
         '&:active:not(:disabled)': { transform: 'scale(0.99)' },
       }}>
@@ -280,10 +286,23 @@ function ErrorBox({ msg, success }) {
 export default function LoginScreen({ hasUsers }) {
   const { login, register } = useUser()
   const [lang, setLangState] = useState('es')
+  // "21,87,245" (azul de marca) por default — mismo fallback que usa el resto
+  // del sitio en var(--accent-rgb, ...). Se lee directo de la variable CSS que
+  // layout.jsx YA configura antes del primer paint (para toda la app, login
+  // incluido) a partir de app_settings — así esta pantalla usa el mismo color
+  // que el usuario eligió en Apariencia, en vez de tener el azul fijo de
+  // siempre (pedido real del usuario, 2026-09-29). Solo hace falta para
+  // Particles, que dibuja en un <canvas> y no puede leer var(...) por sí solo;
+  // el resto de esta pantalla usa var(--accent-rgb) directo en su sx.
+  const [accentRgb, setAccentRgb] = useState('21,87,245')
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('app_settings') || '{}')
       if (saved.lang) setLangState(saved.lang)
+    } catch {}
+    try {
+      const cssVal = getComputedStyle(document.documentElement).getPropertyValue('--accent-rgb').trim()
+      if (cssVal) setAccentRgb(cssVal)
     } catch {}
   }, [])
   const t = T[lang] || T.es
@@ -396,32 +415,38 @@ export default function LoginScreen({ hasUsers }) {
     <Box data-login="true" sx={{
       minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
       position: 'relative', overflow: 'hidden',
-      bgcolor: '#060f0c',
+      bgcolor: 'var(--bg, #060f0c)',
     }}>
-      {/* Gradiente base — capa de profundidad */}
+      {/* Gradiente base — capa de profundidad. Antes fijo azul/verde sin importar
+         el tema elegido en Apariencia (solo el acento se conectó) — ahora se
+         apoya en --sidebar-bg/--card-bg (el mismo tema base que usa el resto
+         de la app) para el color de fondo, y deja que --accent-rgb siga dando
+         el tinte de color en la capa de luces de esquina de más abajo (pedido
+         real del usuario, 2026-09-29: "el theme base sigue usando el default"). */}
       <Box sx={{
         position: 'absolute', inset: 0, pointerEvents: 'none',
         background: `
           linear-gradient(170deg,
-            rgba(10,35,100,0.72) 0%,
-            rgba(8,18,38,0.35) 45%,
-            rgba(5,32,20,0.65) 100%
+            var(--sidebar-bg, #0a2364) 0%,
+            var(--bg, #081226) 45%,
+            var(--card-bg, #052014) 100%
           )
         `,
+        opacity: 0.75,
       }} />
 
       {/* Luces ambientales en esquinas — gradientes anclados al borde, solo se ve la cola suave */}
       <Box sx={{
         position: 'absolute', inset: 0, pointerEvents: 'none',
         background: `
-          radial-gradient(ellipse 55% 60% at 0% 0%,   rgba(21,87,245,0.18) 0%, transparent 100%),
+          radial-gradient(ellipse 55% 60% at 0% 0%,   rgba(var(--accent-rgb, 21,87,245),0.18) 0%, transparent 100%),
           radial-gradient(ellipse 50% 55% at 100% 100%, rgba(22,101,52,0.15) 0%, transparent 100%),
           radial-gradient(ellipse 38% 42% at 100% 0%,  rgba(99,102,241,0.11) 0%, transparent 100%)
         `,
       }} />
 
       {/* Partículas flotantes */}
-      <Particles />
+      <Particles accentRgb={accentRgb} />
 
       {/* Glow pulsante detrás del card — tamaño relativo al viewport en vez de
          fijo, para que siga leyéndose como una atmósfera deliberada (no un
@@ -430,7 +455,7 @@ export default function LoginScreen({ hasUsers }) {
       <Box sx={{
         position: 'absolute', top: '50%', left: '50%',
         width: 'min(1400px, 130vw)', height: 'min(1100px, 100vh)', pointerEvents: 'none',
-        background: 'radial-gradient(ellipse, rgba(21,87,245,0.32) 0%, rgba(22,101,52,0.16) 45%, transparent 72%)',
+        background: 'radial-gradient(ellipse, rgba(var(--accent-rgb, 21,87,245),0.32) 0%, rgba(22,101,52,0.16) 45%, transparent 72%)',
         animation: `${glowPulse} 4s ease-in-out infinite`,
       }} />
 
@@ -456,8 +481,8 @@ export default function LoginScreen({ hasUsers }) {
           boxShadow: '0 32px 80px rgba(0,0,0,0.75)',
           border: '1px solid transparent',
           background: `
-            linear-gradient(175deg, rgba(10,28,72,0.94) 0%, rgba(6,22,14,0.94) 100%) padding-box,
-            linear-gradient(135deg, rgba(21,87,245,0.5) 0%, rgba(255,255,255,0.05) 50%, rgba(22,101,52,0.4) 100%) border-box
+            linear-gradient(175deg, var(--sidebar-bg, #0a1c48) 0%, var(--card-bg, #06160e) 100%) padding-box,
+            linear-gradient(135deg, rgba(var(--accent-rgb, 21,87,245),0.5) 0%, rgba(255,255,255,0.05) 50%, rgba(22,101,52,0.4) 100%) border-box
           `,
         }}>
 
@@ -468,14 +493,14 @@ export default function LoginScreen({ hasUsers }) {
               {/* Anillo exterior — gira lento */}
               <Box sx={{
                 position: 'absolute', inset: -13, borderRadius: '30px',
-                border: '1.5px dashed rgba(21,87,245,0.28)',
+                border: '1.5px dashed rgba(var(--accent-rgb, 21,87,245),0.28)',
                 animation: `${spin} 14s linear infinite`,
               }} />
               {/* Arco de color en el anillo exterior */}
               <Box sx={{
                 position: 'absolute', inset: -13, borderRadius: '30px',
                 border: '1.5px solid transparent',
-                borderTopColor: 'rgba(21,87,245,0.65)',
+                borderTopColor: 'rgba(var(--accent-rgb, 21,87,245),0.65)',
                 borderRightColor: 'rgba(99,102,241,0.4)',
                 animation: `${spin} 14s linear infinite`,
               }} />
@@ -495,18 +520,18 @@ export default function LoginScreen({ hasUsers }) {
               {/* Caja del ícono */}
               <Box sx={{
                 width: 72, height: 72, borderRadius: '20px',
-                background: 'linear-gradient(135deg, rgba(21,87,245,0.22) 0%, rgba(22,101,52,0.15) 100%)',
-                border: '1.5px solid rgba(21,87,245,0.45)',
+                background: 'linear-gradient(135deg, rgba(var(--accent-rgb, 21,87,245),0.22) 0%, rgba(22,101,52,0.15) 100%)',
+                border: '1.5px solid rgba(var(--accent-rgb, 21,87,245),0.45)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 animation: `${pulse} 3s ease-in-out infinite`,
-                boxShadow: '0 0 0 7px rgba(21,87,245,0.07), 0 0 28px rgba(21,87,245,0.18)',
+                boxShadow: '0 0 0 7px rgba(var(--accent-rgb, 21,87,245),0.07), 0 0 28px rgba(var(--accent-rgb, 21,87,245),0.18)',
               }}>
                 <FingerprintIcon sx={{ fontSize: 42, color: '#7dd3fc', filter: 'drop-shadow(0 0 8px rgba(96,165,250,0.8)) drop-shadow(0 0 3px rgba(129,140,248,0.5))' }} />
               </Box>
             </Box>
             <Typography sx={{
               fontWeight: 800, fontSize: '1.5rem', letterSpacing: '-0.02em', lineHeight: 1.1,
-              background: 'linear-gradient(135deg, #f1f5f9 20%, #4f86f7 100%)',
+              background: 'linear-gradient(135deg, #f1f5f9 20%, var(--accent, #4f86f7) 100%)',
               WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
             }}>
               Mystery Shopper
@@ -523,9 +548,9 @@ export default function LoginScreen({ hasUsers }) {
 
           {/* Separador */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 3.5, mt: -1 }}>
-            <Box sx={{ flex: 1, height: '1px', background: 'linear-gradient(90deg, transparent, rgba(21,87,245,0.45))' }} />
-            <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: 'rgba(21,87,245,0.55)', boxShadow: '0 0 8px rgba(21,87,245,0.5)' }} />
-            <Box sx={{ flex: 1, height: '1px', background: 'linear-gradient(90deg, rgba(21,87,245,0.45), transparent)' }} />
+            <Box sx={{ flex: 1, height: '1px', background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb, 21,87,245),0.45))' }} />
+            <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: 'rgba(var(--accent-rgb, 21,87,245),0.55)', boxShadow: '0 0 8px rgba(var(--accent-rgb, 21,87,245),0.5)' }} />
+            <Box sx={{ flex: 1, height: '1px', background: 'linear-gradient(90deg, rgba(var(--accent-rgb, 21,87,245),0.45), transparent)' }} />
           </Box>
           {/* ── LOGIN ── */}
           {mode === 'login' && (
@@ -614,9 +639,9 @@ export default function LoginScreen({ hasUsers }) {
               </Box>
               <Box onClick={handleContinueAfterCode} sx={{
                 py: 1.3, borderRadius: '12px', cursor: 'pointer', textAlign: 'center',
-                background: 'linear-gradient(135deg, #1557f5, rgba(21,87,245,0.8))',
-                boxShadow: '0 2px 12px rgba(21,87,245,0.25)',
-                '&:hover': { transform: 'translateY(-1px)', boxShadow: '0 4px 20px rgba(21,87,245,0.35)' }, transition: 'all 0.2s',
+                background: 'linear-gradient(135deg, var(--accent, #1557f5), rgba(var(--accent-rgb, 21,87,245),0.8))',
+                boxShadow: '0 2px 12px rgba(var(--accent-rgb, 21,87,245),0.25)',
+                '&:hover': { transform: 'translateY(-1px)', boxShadow: '0 4px 20px rgba(var(--accent-rgb, 21,87,245),0.35)' }, transition: 'all 0.2s',
               }}>
                 {loading ? <CircularProgress size={18} sx={{ color: 'white' }} />
                   : <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.92rem' }}>{lang === 'en' ? 'I saved it → Sign in' : 'Ya lo guardé → Entrar'}</Typography>}
@@ -721,11 +746,11 @@ export default function LoginScreen({ hasUsers }) {
 
         {/* Versión debajo del card */}
         <Box sx={{ textAlign: 'center', mt: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.7 }}>
-          <Box component="span" sx={{ display: 'inline-block', width: 4, height: 4, borderRadius: '1px', bgcolor: 'rgba(21,87,245,0.35)', transform: 'rotate(45deg)' }} />
+          <Box component="span" sx={{ display: 'inline-block', width: 4, height: 4, borderRadius: '1px', bgcolor: 'rgba(var(--accent-rgb, 21,87,245),0.35)', transform: 'rotate(45deg)' }} />
           <Typography component="span" sx={{ color: 'rgba(255,255,255,0.15)', fontSize: '0.68rem' }}>
             Mystery Shopper · DeTuCel © 2026
           </Typography>
-          <Box component="span" sx={{ display: 'inline-block', width: 4, height: 4, borderRadius: '1px', bgcolor: 'rgba(21,87,245,0.35)', transform: 'rotate(45deg)' }} />
+          <Box component="span" sx={{ display: 'inline-block', width: 4, height: 4, borderRadius: '1px', bgcolor: 'rgba(var(--accent-rgb, 21,87,245),0.35)', transform: 'rotate(45deg)' }} />
         </Box>
       </Box>
     </Box>
@@ -734,5 +759,5 @@ export default function LoginScreen({ hasUsers }) {
 
 const LINK_SX = {
   fontSize: '0.75rem', color: 'rgba(255,255,255,0.45)', cursor: 'pointer',
-  '&:hover': { color: '#4f86f7' }, transition: 'color 0.15s',
+  '&:hover': { color: 'var(--accent, #4f86f7)' }, transition: 'color 0.15s',
 }

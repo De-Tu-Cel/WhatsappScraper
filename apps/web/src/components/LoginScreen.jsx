@@ -48,11 +48,6 @@ const spinR = keyframes`
   from { transform: rotate(0deg); }
   to   { transform: rotate(-360deg); }
 `
-const statusPulse = keyframes`
-  0%,100% { opacity: 1; transform: scale(1); }
-  50%      { opacity: 0.55; transform: scale(1.35); }
-`
-
 /* ── Partículas flotantes ─────────────────────────────────────────────────── */
 function Particles({ accentRgb }) {
   const canvasRef = useRef(null)
@@ -726,22 +721,6 @@ export default function LoginScreen({ hasUsers }) {
             </Box>
           )}
 
-          {/* Status pill */}
-          <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3.5 }}>
-            <Box sx={{
-              display: 'inline-flex', alignItems: 'center', gap: 0.7,
-              px: 1.4, py: 0.45, borderRadius: '20px',
-              bgcolor: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.2)',
-            }}>
-              <Box sx={{ position: 'relative', width: 7, height: 7, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Box sx={{ position: 'absolute', width: 7, height: 7, borderRadius: '50%', bgcolor: 'rgba(34,197,94,0.35)', animation: `${statusPulse} 2s ease-in-out infinite` }} />
-                <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: '#22c55e', position: 'relative', zIndex: 1 }} />
-              </Box>
-              <Typography sx={{ fontSize: '0.65rem', color: 'rgba(34,197,94,0.85)', fontWeight: 600, letterSpacing: '0.04em' }}>
-                {lang === 'en' ? 'System active' : 'Sistema activo'}
-              </Typography>
-            </Box>
-          </Box>
         </Box>
 
         {/* Versión debajo del card */}

@@ -1416,15 +1416,38 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
         domain = urlparse(u).netloc.lower().replace('www.', '').split('.')[0]
         return any(kw in domain for kw in _WRONG_SECTOR_DOMAIN_KWS)
 
+    # El prompt de la IA YA le pide excluir "catálogos o agregadores" y
+    # "directorios", pero esa regla compite con otras ~13 reglas de exclusión
+    # por la atención del modelo — mismo problema de "attention dilution" ya
+    # documentado para la ubicación (ver _reject_wrong_state). Confirmado en
+    # vivo (2026-09-29): un blog-directorio nacional de dulcerías (título
+    # "Dulcería en México -", resumen "Directorio de dulcerías, paleterías y
+    # neverías en distintas ciudades de México") fue APROBADO 5/5 veces por el
+    # filtro de IA para una búsqueda de "panaderías en Mérida, Yucatán" — el
+    # sitio ni siquiera menciona Yucatán, solo listaba negocios de otros
+    # estados (Zacatecas). Igual que _wrong_sector_domain, este chequeo es
+    # determinista (no depende de que la IA le dé suficiente peso a la regla).
+    _DIRECTORY_SNIPPET_RE = re.compile(
+        r'\bdirectorio\s+de\b|\blistado\s+de\b|\bcat[aá]logo\s+de\s+negocios\b|'
+        r'\blos\s+mejores\s+\d*\s*\b|\btop\s*\d+\b|\bgu[ií]a\s+de\b|'
+        r'\ben\s+distintas\s+ciudades\b|\ben\s+todo\s+m[eé]xico\b',
+        re.IGNORECASE,
+    )
+
+    def _looks_like_directory_snippet(u: str) -> bool:
+        s = snippets.get(u, {})
+        text = f"{s.get('title') or ''} {s.get('body') or ''}"
+        return bool(_DIRECTORY_SNIPPET_RE.search(text))
+
     def _keyword_fallback(candidates: list[str]) -> list[str]:
         """Last-resort filter by industry keywords in domain when LLM rejects everything."""
         kw_raw = re.sub(r'\b(de|del|en|la|el|los|las|y|o|con|para|por|a)\b', ' ', industry, flags=re.I)
         kws = [w.lower() for w in re.split(r'\s+', kw_raw.strip()) if len(w) >= 3]
         if not kws:
-            return [u for u in candidates if not _wrong_sector_domain(u)]
+            return [u for u in candidates if not _wrong_sector_domain(u) and not _looks_like_directory_snippet(u)]
         kept = []
         for u in candidates:
-            if _wrong_sector_domain(u):
+            if _wrong_sector_domain(u) or _looks_like_directory_snippet(u):
                 continue
             domain = urlparse(u).netloc.lower().replace('www.', '')
             if any(kw in domain for kw in kws):
@@ -1432,13 +1455,23 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
         # Only fall through to snippet matching if domain matching found nothing
         if not kept:
             for u in candidates:
-                if _wrong_sector_domain(u):
+                if _wrong_sector_domain(u) or _looks_like_directory_snippet(u):
                     continue
                 s = snippets.get(u, {})
                 text = ((s.get("title") or "") + " " + (s.get("body") or "")).lower()
                 if any(kw in text for kw in kws):
                     kept.append(u)
-        return kept or [u for u in candidates if not _wrong_sector_domain(u)] or candidates
+        # El último "por si acaso, mejor no descartar nada" NO debe ignorar el
+        # chequeo de directorio — un directorio/agregador nunca es un prospecto
+        # válido sin importar qué tan poco quede el resto de los filtros (bug
+        # real encontrado 2026-09-29: este `or candidates` sin filtrar
+        # resucitaba el directorio incluso después de que _ai_filter_urls,
+        # _keyword_fallback's own domain/snippet checks lo hubieran rechazado).
+        return (
+            kept
+            or [u for u in candidates if not _wrong_sector_domain(u) and not _looks_like_directory_snippet(u)]
+            or [u for u in candidates if not _looks_like_directory_snippet(u)]
+        )
 
     # (Industry keywords para el "rescate" de dominios — _ind_kws/_ind_kws_set ya
     # se calcularon arriba, antes de construir _WRONG_SECTOR_DOMAIN_KWS.)
@@ -1449,7 +1482,7 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
             return []
         rescued = []
         for u in all_urls:
-            if u in already_approved or _wrong_sector_domain(u):
+            if u in already_approved or _wrong_sector_domain(u) or _looks_like_directory_snippet(u):
                 continue
             domain = urlparse(u).netloc.lower().replace('www.', '')
             if any(kw in domain for kw in _ind_kws):
@@ -1460,7 +1493,7 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     batch_size = 60
     batches = [urls[i:i + batch_size] for i in range(0, len(urls), batch_size)]
     if len(batches) <= 1:
-        ai_result = [u for u in _filter_batch(urls) if not _wrong_sector_domain(u)]
+        ai_result = [u for u in _filter_batch(urls) if not _wrong_sector_domain(u) and not _looks_like_directory_snippet(u)]
         rescued = _domain_kw_rescue(urls, set(ai_result))
         result = list(dict.fromkeys(ai_result + rescued))
         return result if result else _keyword_fallback(urls)
@@ -1468,7 +1501,7 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     ranked: list[str] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(batches), 3)) as ex:
         for batch_result in ex.map(_filter_batch, batches):
-            ranked.extend(u for u in batch_result if not _wrong_sector_domain(u))
+            ranked.extend(u for u in batch_result if not _wrong_sector_domain(u) and not _looks_like_directory_snippet(u))
     rescued = _domain_kw_rescue(urls, set(ranked))
     ranked = list(dict.fromkeys(ranked + rescued))
     if not ranked and urls:

@@ -91,7 +91,7 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
         return {"blacklisted": True, "reason": "domain", "matched": _bl_domain["matched"]}
 
     print(f"🔍 Scrapeando datos de {website}...")
-    scraped = scraper.scrape_site(website, force=force, country=country)
+    scraped = scraper.scrape_site(website, force=force, country=country, target_state=_target_state)
     _extra = scraped.get("_extra", {})
     _cr = scraped.get("_contacts_raw", {})
 

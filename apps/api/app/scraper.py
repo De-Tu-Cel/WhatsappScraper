@@ -296,7 +296,7 @@ class WebsiteScraper:
         self.contacts_col = db["contacts"]
         self.scraping_runs_col = db["scraping_runs"]
 
-    def scrape_site(self, url: str, force: bool = False, country: str = None) -> Dict:
+    def scrape_site(self, url: str, force: bool = False, country: str = None, target_state: str = None) -> Dict:
         """
         Scraping completo de un sitio web
         
@@ -336,6 +336,16 @@ class WebsiteScraper:
         _country_cfg = COUNTRY_CONFIG.get(country or DEFAULT_COUNTRY, COUNTRY_CONFIG[DEFAULT_COUNTRY])
         self._default_country_code = _country_cfg["phone_code"]
         self._default_local_digits = _country_cfg["local_digits"]
+
+        # Estado al que estaba acotada la búsqueda que produjo esta URL (si la hay) —
+        # usado por _extract_state/_extract_city para preferir una mención de
+        # ciudad/estado que coincida con lo esperado quando el texto de la página
+        # menciona varios lugares distintos (caso real: terecazola.com, un negocio
+        # genuino de Yucatán cuya portada destacaba un blog post sobre un evento en
+        # Ciudad de México — la extracción se quedaba con esa mención incidental en
+        # vez de la real, 2026-09-29). None = sin preferencia, comportamiento
+        # idéntico al de antes de este cambio.
+        self._target_state_hint = self._norm_state_key(target_state) if target_state else None
 
         print(f"🔍 Scrapeando: {url}")
 
@@ -1847,33 +1857,49 @@ class WebsiteScraper:
         return result
 
     def _extract_city(self, text: str) -> str:
-        """Extrae ciudad buscando lo que aparece antes de un estado conocido."""
+        """Extrae ciudad buscando lo que aparece antes de un estado conocido.
+
+        Si self._target_state_hint está presente (estado al que estaba acotada
+        la búsqueda, ver scrape_site), se prefiere cualquier candidato — de la
+        regex o de la lista de ciudades conocidas — cuyo estado coincida con el
+        esperado, en vez de quedarse ciegamente con la PRIMERA mención que
+        aparece en el texto. Sin hint, el comportamiento es idéntico al de
+        antes (primera mención válida, sin preferencia). Caso real que motivó
+        esto: terecazola.com, negocio real de Yucatán cuya portada destacaba
+        un blog post sobre un evento en Ciudad de México — la mención
+        incidental salía primero en el texto y ganaba siempre, 2026-09-29.
+        """
         import re as _re
 
+        hint = getattr(self, "_target_state_hint", None)
         states_pat = (r'(Ciudad de México|Estado de México|Nuevo León|Jalisco|Puebla|'
                       r'Veracruz|Guanajuato|Chihuahua|Coahuila|Sonora|Oaxaca|Tamaulipas|'
                       r'Sinaloa|Baja California Sur|Baja California|Guerrero|Michoacán|'
                       r'Hidalgo|Tabasco|Yucatán|Querétaro|San Luis Potosí|Morelos|'
                       r'Aguascalientes|Tlaxcala|Quintana Roo|Nayarit|Campeche|'
                       r'Zacatecas|Colima|Durango|Chiapas)')
-        m = _re.search(r'([A-ZÁÉÍÓÚÑ][^,\n]{2,50}),\s*' + states_pat, text)
-        if m:
+        first_valid = None
+        for m in _re.finditer(r'([A-ZÁÉÍÓÚÑ][^,\n]{2,50}),\s*' + states_pat, text):
             candidate = m.group(1).strip()
-            if not _re.search(r'\d|[Cc]ol\.|[Cc]olonia|[Aa]v\.|[Cc]alle|[Zz]ona', candidate):
-                # `search` matches the FIRST "<text>, <state>" pair in the page,
-                # which isn't always the real address — an unrelated earlier
-                # sentence ending in a state name (e.g. a bio: "Egresado de la
-                # UNAM. Ubicados en Hermosillo, Sonora") gets captured whole
-                # ("Unam. Ubicados En Hermosillo", a real bug seen in
-                # production 2026-09-24). _clean_city already knows how to dig
-                # a known city out of a messy/oversized candidate — reuse it
-                # here instead of trusting the raw regex capture verbatim.
-                cleaned = self._clean_city(candidate.title())
-                if cleaned:
-                    return cleaned
-                # Candidate was junk with no recognizable city inside it —
-                # fall through to the known-cities scan below instead of
-                # returning the garbage string.
+            if _re.search(r'\d|[Cc]ol\.|[Cc]olonia|[Aa]v\.|[Cc]alle|[Zz]ona', candidate):
+                continue
+            # `finditer` recorre TODAS las menciones "<texto>, <estado>" de la
+            # página, no solo la primera — una frase anterior sin relación que
+            # termine en un nombre de estado (ej. una bio: "Egresado de la
+            # UNAM. Ubicados en Hermosillo, Sonora") ya no gana automáticamente
+            # solo por aparecer primero (bug real visto en producción,
+            # 2026-09-24). _clean_city ya sabe extraer una ciudad conocida de
+            # un candidato sucio/con ruido — se reusa aquí en vez de confiar en
+            # el texto crudo capturado.
+            cleaned = self._clean_city(candidate.title())
+            if not cleaned:
+                continue
+            if first_valid is None:
+                first_valid = cleaned
+            if hint and self._norm_state_key(m.group(2)) == hint:
+                return cleaned  # coincide con el estado esperado — gana sin importar el orden
+        if first_valid:
+            return first_valid
 
         # Fallback: lista de ciudades conocidas
         cities = [
@@ -1887,6 +1913,13 @@ class WebsiteScraper:
             "Chetumal", "Pachuca", "Tlaxcala", "Cuernavaca",
         ]
         tl = text.lower()
+        if hint:
+            # Revisar primero las ciudades cuyo estado inferido coincide con lo
+            # esperado — mismo criterio de preferencia que arriba, aplicado a
+            # este fallback.
+            for city in cities:
+                if city.lower() in tl and self._norm_state_key(self._infer_state_from_city(city)) == hint:
+                    return city
         for city in cities:
             if city.lower() in tl:
                 return city
@@ -1913,6 +1946,37 @@ class WebsiteScraper:
             "Tlaxcala", "Quintana Roo", "Nayarit", "Campeche", "Zacatecas",
             "Colima", "Durango", "Chiapas", "Baja California Sur",
         ]
+        # Esta lista se recorre en orden FIJO y se devuelve la primera coincidencia
+        # válida — sin importar cuántas veces aparezca el estado REAL más abajo en
+        # el texto, un estado que solo aparece de pasada (ej. una noticia sobre un
+        # evento) siempre gana si está antes en esta lista (caso real:
+        # terecazola.com, negocio real de Yucatán — "Yucatán" aparece 10 veces en
+        # la página pero "Ciudad de México" está antes en esta lista y aparece 1
+        # sola vez en un post de blog, así que siempre ganaba esa, 2026-09-29).
+        # Si la búsqueda que produjo esta URL ya sabía a qué estado apuntaba
+        # (self._target_state_hint, ver scrape_site), se revisa ESE primero —
+        # con la misma protección de contexto de calle — antes de caer al orden
+        # fijo de siempre.
+        hint = getattr(self, "_target_state_hint", None)
+        if hint:
+            for state in states:
+                if self._norm_state_key(state) != hint:
+                    continue
+                s_low = state.lower()
+                tl_hint = text.lower()
+                start = 0
+                _after_re  = re.compile(r'^\s*(n[º°o]\.?\s*\d|#\s*\d|\d)')
+                _before_re = re.compile(r'(calle|av\.|avenida|blvd\.?|boulevard|colonia|col\.)\s*$')
+                while True:
+                    pos = tl_hint.find(s_low, start)
+                    if pos == -1:
+                        break
+                    after  = tl_hint[pos + len(s_low): pos + len(s_low) + 12]
+                    before = tl_hint[max(0, pos - 12): pos]
+                    if not (_after_re.search(after) or _before_re.search(before)):
+                        return state
+                    start = pos + len(s_low)
+                break
         tl = text.lower()
         _STREET_AFTER_RE  = re.compile(r'^\s*(n[º°o]\.?\s*\d|#\s*\d|\d)')
         _STREET_BEFORE_RE = re.compile(r'(calle|av\.|avenida|blvd\.?|boulevard|colonia|col\.)\s*$')

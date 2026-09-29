@@ -1724,6 +1724,27 @@ class WebsiteScraper:
             addr = new_addr
         return self._ADDRESS_TRAILING_JUNK_RE.sub("", addr).strip().strip(",").strip()
 
+    # "[^\.]" (cualquier char que no sea punto) se usaba para acotar dónde termina
+    # la dirección capturada — pero direcciones mexicanas reales casi siempre
+    # traen "Col." (Colonia), la abreviatura MÁS común de todas, con su propio
+    # punto. Eso cortaba la captura justo antes de llegar a ciudad/estado/CP
+    # (caso real, 2026-09-29: encontrado mientras se arreglaba el bug de las
+    # agencias automotrices — cualquier sitio con "Col." en su dirección real
+    # perdía ciudad/estado por esta misma razón, sin relación con el dropdown).
+    # Este char-class alternativo SÍ permite consumir el punto cuando está
+    # pegado a una abreviatura común de dirección — solo un punto "de verdad"
+    # (fin de oración) sigue cortando la captura.
+    # "c" y "p" sueltas cubren las DOS abreviaturas de "C.P." (Código Postal) —
+    # el propio ancla que estos patrones usan más adelante para el CP. Sin
+    # ellas, "...Sonora, C.P. 83000" se truncaba justo en "C." y el código
+    # postal nunca se capturaba (encontrado al probar este mismo arreglo,
+    # 2026-09-29).
+    _ADDR_ABBREVS = ("col", "blvd", "avda", "av", "dra", "dr", "sra", "sr",
+                      "num", "núm", "no", "fracc", "mza", "ote", "pte",
+                      "int", "depto", "edif", "loc", "c", "p")
+    _ADDR_NON_TERMINATING_PERIOD = "|".join(f"(?<={_a})" for _a in _ADDR_ABBREVS)
+    _ADDR_CHAR = rf"(?:[^.]|(?:{_ADDR_NON_TERMINATING_PERIOD})\.)"
+
     def _extract_address_regex(self, text: str, soup: BeautifulSoup) -> str:
         """Fallback: microdata itemprop + regex de calle mexicana."""
         addr_tag = soup.find(["span", "div", "p"], {"itemprop": "address"})
@@ -1731,7 +1752,7 @@ class WebsiteScraper:
             return self._clean_extracted_address(addr_tag.get_text(" ", strip=True))
         patterns = [
             # Captura hasta 250 chars después del número para incluir ciudad/estado al final
-            r"(?:Calle|Av\.|Avenida|Boulevard|Blvd\.|Calzada|Carretera)\s+[A-Za-zÁÉÍÓÚáéíóúñÑ\s]+\d+[^\.]{0,250}",
+            r"(?:Calle|Av\.|Avenida|Boulevard|Blvd\.|Calzada|Carretera)\s+[A-Za-zÁÉÍÓÚáéíóúñÑ\s]+\d+" + self._ADDR_CHAR + "{0,250}",
             r"(?:Dirección|Ubicación|Domicilio|Domicilo)\s*[:\-]\s*([^\n]{20,300})",
             # Dirección "compacta" sin palabra clave de calle ni prefijo
             # "Dirección:" — solo "NOMBRE DE CALLE, NUMERO, COLONIA, CIUDAD,
@@ -1740,7 +1761,7 @@ class WebsiteScraper:
             # mayúsculas, sin "Calle"/"Av." al inicio, 2026-09-28). Se ancla
             # al final en "C.P. NNNNN" (poco ambiguo) para evitar falsos
             # positivos en texto genérico sin ese marcador.
-            r"[A-ZÁÉÍÓÚÑa-záéíóúñ][A-Za-zÁÉÍÓÚáéíóúñÑ\s]{2,50},?\s*\d{1,5}\s*,[^\.]{5,150}?C\.?P\.?\s*\d{5}",
+            r"[A-ZÁÉÍÓÚÑa-záéíóúñ][A-Za-zÁÉÍÓÚáéíóúñÑ\s]{2,50},?\s*\d{1,5}\s*," + self._ADDR_CHAR + r"{5,150}?C\.?P\.?\s*\d{5}",
         ]
         # Fuentes de texto a probar en orden: el texto visible de la página
         # primero, y el meta description como respaldo — algunos sitios (caso

@@ -1145,8 +1145,9 @@ def api_update_company(company_id: str, req: UpdateCompanyRequest, x_user_token:
 # ── Conversations ─────────────────────────────────────────────────────────────
 
 @router.post("/conversations/{company_id}/sync")
-def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks):
+def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks, x_user_token: Optional[str] = Header(None)):
     """Fetch missing messages from Evolution or WAHA and save them to message_logs."""
+    _require_user(x_user_token)
     try:
         from app.config import EVOLUTION_API_KEY, EVOLUTION_API_URL, EVOLUTION_INSTANCE
         from app.config import WAHA_API_KEY, WAHA_API_URL
@@ -1296,7 +1297,8 @@ def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/conversations")
-def api_get_conversations():
+def api_get_conversations(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         db = MongoDBManager()
         return serialize(db.get_conversations())
@@ -1304,7 +1306,8 @@ def api_get_conversations():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/conversations/ai-health")
-def api_get_ai_health():
+def api_get_ai_health(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         import os
         from app.llm_guard import circuit_is_open
@@ -1321,7 +1324,8 @@ def api_get_ai_health():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/conversations/ai-global-config")
-def api_get_ai_global_config():
+def api_get_ai_global_config(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         from app.ai_followup import _DEFAULT_SYSTEM_PROMPT, DEFAULT_IDLE_TIMEOUT_HOURS
         db = MongoDBManager()
@@ -1335,7 +1339,8 @@ def api_get_ai_global_config():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/conversations/ai-global-config")
-def api_put_ai_global_config(body: dict):
+def api_put_ai_global_config(body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_admin(x_user_token)
     try:
         from datetime import datetime as _dt
         db = MongoDBManager()
@@ -1356,7 +1361,8 @@ def api_put_ai_global_config(body: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/conversations/{company_id}")
-def api_get_conversation_thread(company_id: str, number: Optional[str] = None):
+def api_get_conversation_thread(company_id: str, number: Optional[str] = None, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         db = MongoDBManager()
         return serialize(db.get_conversation_thread(company_id, number=number))
@@ -1364,7 +1370,8 @@ def api_get_conversation_thread(company_id: str, number: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/conversations/{company_id}/read")
-def api_mark_read(company_id: str):
+def api_mark_read(company_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         db = MongoDBManager()
         db.mark_conversation_read(company_id)
@@ -1373,7 +1380,8 @@ def api_mark_read(company_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/conversations/{company_id}/ai-status")
-def api_get_ai_status(company_id: str):
+def api_get_ai_status(company_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         db = MongoDBManager()
         prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
@@ -1394,7 +1402,8 @@ def api_get_ai_status(company_id: str):
         return {"ai_enabled": False, "ai_active": False, "ai_typing": False, "turn_count": 0, "max_turns": 3}
 
 @router.post("/conversations/{company_id}/ai-toggle")
-def api_ai_toggle(company_id: str, body: dict):
+def api_ai_toggle(company_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         from datetime import datetime as _dt
         db = MongoDBManager()
@@ -1477,7 +1486,8 @@ def api_ai_toggle(company_id: str, body: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/conversations/{company_id}/ai-config")
-def api_get_ai_config(company_id: str):
+def api_get_ai_config(company_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         db = MongoDBManager()
         prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
@@ -1489,7 +1499,8 @@ def api_get_ai_config(company_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/conversations/{company_id}/ai-config")
-def api_put_ai_config(company_id: str, body: dict):
+def api_put_ai_config(company_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         from datetime import datetime as _dt
         db = MongoDBManager()
@@ -2041,7 +2052,8 @@ def _normalize_blacklist_value(t: str, value: str) -> str:
 
 
 @router.get("/blacklist/system")
-def api_get_system_blacklist():
+def api_get_system_blacklist(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     from app.searcher import EXCLUDED_DOMAINS
     domains = sorted(list(EXCLUDED_DOMAINS))
     return {"domains": domains, "total": len(domains)}

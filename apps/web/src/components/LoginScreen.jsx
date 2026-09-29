@@ -81,7 +81,7 @@ function Particles({ accentRgb }) {
       baseA: Math.random() * 0.5 + 0.15,
       phase: Math.random() * Math.PI * 2,
       freq:  Math.random() * 0.018 + 0.006,
-      hue:   Math.random() < 0.62 ? accentRgb : Math.random() < 0.75 ? '22,101,52' : '99,102,241',
+      hue:   Math.random() < 0.7 ? accentRgb : '99,102,241',
     }))
 
     const CONN_SQ   = 130 * 130  // squared threshold — avoids sqrt on most pairs
@@ -440,7 +440,7 @@ export default function LoginScreen({ hasUsers }) {
         position: 'absolute', inset: 0, pointerEvents: 'none',
         background: `
           radial-gradient(ellipse 55% 60% at 0% 0%,   rgba(var(--accent-rgb, 21,87,245),0.18) 0%, transparent 100%),
-          radial-gradient(ellipse 50% 55% at 100% 100%, rgba(22,101,52,0.15) 0%, transparent 100%),
+          radial-gradient(ellipse 50% 55% at 100% 100%, rgba(var(--accent-rgb, 21,87,245),0.15) 0%, transparent 100%),
           radial-gradient(ellipse 38% 42% at 100% 0%,  rgba(99,102,241,0.11) 0%, transparent 100%)
         `,
       }} />
@@ -455,7 +455,7 @@ export default function LoginScreen({ hasUsers }) {
       <Box sx={{
         position: 'absolute', top: '50%', left: '50%',
         width: 'min(1400px, 130vw)', height: 'min(1100px, 100vh)', pointerEvents: 'none',
-        background: 'radial-gradient(ellipse, rgba(var(--accent-rgb, 21,87,245),0.32) 0%, rgba(22,101,52,0.16) 45%, transparent 72%)',
+        background: 'radial-gradient(ellipse, rgba(var(--accent-rgb, 21,87,245),0.32) 0%, rgba(var(--accent-rgb, 21,87,245),0.16) 45%, transparent 72%)',
         animation: `${glowPulse} 4s ease-in-out infinite`,
       }} />
 
@@ -482,7 +482,7 @@ export default function LoginScreen({ hasUsers }) {
           border: '1px solid transparent',
           background: `
             linear-gradient(175deg, var(--sidebar-bg, #0a1c48) 0%, var(--card-bg, #06160e) 100%) padding-box,
-            linear-gradient(135deg, rgba(var(--accent-rgb, 21,87,245),0.5) 0%, rgba(255,255,255,0.05) 50%, rgba(22,101,52,0.4) 100%) border-box
+            linear-gradient(135deg, rgba(var(--accent-rgb, 21,87,245),0.5) 0%, rgba(255,255,255,0.05) 50%, rgba(99,102,241,0.4) 100%) border-box
           `,
         }}>
 
@@ -514,13 +514,13 @@ export default function LoginScreen({ hasUsers }) {
               <Box sx={{
                 position: 'absolute', inset: -6, borderRadius: '24px',
                 border: '1px solid transparent',
-                borderBottomColor: 'rgba(22,101,52,0.55)',
+                borderBottomColor: 'rgba(99,102,241,0.55)',
                 animation: `${spinR} 8s linear infinite`,
               }} />
               {/* Caja del ícono */}
               <Box sx={{
                 width: 72, height: 72, borderRadius: '20px',
-                background: 'linear-gradient(135deg, rgba(var(--accent-rgb, 21,87,245),0.22) 0%, rgba(22,101,52,0.15) 100%)',
+                background: 'linear-gradient(135deg, rgba(var(--accent-rgb, 21,87,245),0.22) 0%, rgba(99,102,241,0.15) 100%)',
                 border: '1.5px solid rgba(var(--accent-rgb, 21,87,245),0.45)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 animation: `${pulse} 3s ease-in-out infinite`,

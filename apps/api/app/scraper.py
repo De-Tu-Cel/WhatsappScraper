@@ -1820,7 +1820,13 @@ class WebsiteScraper:
         """
         if not city:
             return ""
-        from searcher import _find_state_for_city
+        # Bug real encontrado en una auditoría de performance (2026-09-29):
+        # este import sin el prefijo "app." tronaba con ModuleNotFoundError en
+        # cualquier contexto donde "apps/api" (no "apps/api/app") no estuviera
+        # también en sys.path — no un simple "más lento", el scrape completo
+        # se cancelaba (sin try/except alrededor) cada vez que necesitaba
+        # resolver el estado desde una ciudad.
+        from app.searcher import _find_state_for_city
         state_key = _find_state_for_city(city)
         if not state_key:
             return ""

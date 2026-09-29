@@ -913,7 +913,7 @@ def api_search(req: SearchRequest, x_user_token: Optional[str] = Header(None)):
         # (200 × 3) still helps in practice. 600 also bounds any caller that
         # bypasses the frontend's own 200 clamp.
         fetch_count = min(target * 3, 600)
-        urls, target_state = search_prospects(
+        urls, target_state, degraded_sources = search_prospects(
             req.industry, req.city or "", req.keywords or "",
             fetch_count, req.offset or 0,
             exclude_domains=known,
@@ -968,7 +968,15 @@ def api_search(req: SearchRequest, x_user_token: Optional[str] = Header(None)):
             except Exception:
                 pass
 
-        return {"urls": urls, "results": results, "next_offset": next_offset}  # "urls" kept for now, not read by the frontend anymore
+        return {
+            "urls": urls, "results": results, "next_offset": next_offset,  # "urls" kept for now, not read by the frontend anymore
+            # Fuentes que tronaron/tardaron demasiado para esta búsqueda (p.ej.
+            # "Maps" — la de mayor calidad) — vacío si todas respondieron
+            # normal. Antes esto solo se veía en logs del servidor; el
+            # resultado se degradaba a fuentes más débiles sin que nadie del
+            # lado del cliente pudiera saberlo (confirmado en vivo 2026-09-28).
+            "degraded_sources": degraded_sources,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -3954,7 +3962,10 @@ def api_sync_wwebjs_instances(x_user_token: Optional[str] = Header(None)):
     from app.config import WWEBJS_URL as _ww_url
     from app.whatsapp_wwebjs import _headers as _ww_headers
     from datetime import datetime
-    r = _req.get(f"{_ww_url}/sessions", headers=_ww_headers(), timeout=10)
+    try:
+        r = _req.get(f"{_ww_url}/sessions", headers=_ww_headers(), timeout=10)
+    except _req.exceptions.RequestException as e:
+        raise HTTPException(503, f"No se pudo conectar con wwebjs: {e}")
     if not r.ok:
         raise HTTPException(500, f"wwebjs-service error: {r.text[:200]}")
     sessions = r.json()  # {sessionId: {status, phone}}

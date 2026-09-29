@@ -123,7 +123,7 @@ for industry, city, min_ok, min_good in CASES:
     queries = _bd_build_queries(industry, city, None, '', NUM_RESULTS)
 
     try:
-        results = search_prospects(
+        results, _target_state, _degraded_sources = search_prospects(
             industry, city, '', NUM_RESULTS, 0,
             exclude_domains=set(), country='México',
         )

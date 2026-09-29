@@ -1593,20 +1593,82 @@ class WebsiteScraper:
                 continue
         return ""
 
+    # Marcadores de contenido que NO son parte de la dirección pero que
+    # terminan pegados a ella cuando el patrón "Dirección: ..." solo corta en
+    # salto de línea — la página real suele seguir en la misma línea con
+    # horarios, un link a Google Maps, o boilerplate de la plantilla del sitio
+    # (caso real: acutus.com.mx, 2026-09-28 — la dirección correcta salía
+    # pegada a "Horarios de atención... Ver en Google Maps → ... Denunciar
+    # abuso", un dato bueno pero inservible tal cual para guardarlo).
+    _ADDRESS_TRAILING_JUNK_RE = re.compile(
+        r"\s*(?:Horarios?\s+de\s+atenci[oó]n|Horario|Ver\s+en\s+Google\s+Maps|"
+        r"Google\s+Maps|Google\s+Sites|Denunciar\s+abuso|Citas?\s+e?\s*informes|"
+        r"L[uú]nes\s+a\s+|Tel[eé]fono\s*[:\-]|WhatsApp\s*[:\-]|→).*$",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    # Igual que arriba pero para basura que queda pegada ANTES de la
+    # dirección — el patrón "compacto" (sin palabra clave de calle) hace
+    # match desde lo más a la izquierda posible dentro de su tope de 50
+    # caracteres, así que a veces arrastra el final de la frase anterior de
+    # la página (caso real: veterinariadrserna.com, "...estancia canina
+    # Contacto Map goes here JOSE ELEUTERIO GONZALEZ...", donde "Map goes
+    # here" es el label de un iframe de mapa embebido, 2026-09-28).
+    _ADDRESS_LEADING_JUNK_RE = re.compile(
+        r"^.*?(?:Map\s+goes\s+here|C[oó]mo\s+llegar|Ubicaci[oó]n\s*[:\-]?|"
+        r"Contacto\s*[:\-]?|Nuestra\s+sucursal)\s*",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    def _clean_extracted_address(self, addr: str) -> str:
+        """Corta cualquier texto pegado antes/después de la dirección real
+        (horarios, links de Maps, labels de iframe, boilerplate de plantilla).
+        En bucle porque puede haber más de un marcador de basura encadenado
+        antes del inicio real (caso real: "... canina Contacto Map goes here
+        JOSE ELEUTERIO..." tenía "Contacto" Y "Map goes here" pegados uno
+        después del otro — un solo `.sub()` solo quitaba el primero, 2026-09-28)."""
+        if not addr:
+            return addr
+        for _ in range(5):  # tope de seguridad, nunca debería iterar más de 2-3 veces
+            new_addr = self._ADDRESS_LEADING_JUNK_RE.sub("", addr)
+            if new_addr == addr:
+                break
+            addr = new_addr
+        return self._ADDRESS_TRAILING_JUNK_RE.sub("", addr).strip().strip(",").strip()
+
     def _extract_address_regex(self, text: str, soup: BeautifulSoup) -> str:
         """Fallback: microdata itemprop + regex de calle mexicana."""
         addr_tag = soup.find(["span", "div", "p"], {"itemprop": "address"})
         if addr_tag:
-            return addr_tag.get_text(" ", strip=True)
+            return self._clean_extracted_address(addr_tag.get_text(" ", strip=True))
         patterns = [
             # Captura hasta 250 chars después del número para incluir ciudad/estado al final
             r"(?:Calle|Av\.|Avenida|Boulevard|Blvd\.|Calzada|Carretera)\s+[A-Za-zÁÉÍÓÚáéíóúñÑ\s]+\d+[^\.]{0,250}",
             r"(?:Dirección|Ubicación|Domicilio|Domicilo)\s*[:\-]\s*([^\n]{20,300})",
+            # Dirección "compacta" sin palabra clave de calle ni prefijo
+            # "Dirección:" — solo "NOMBRE DE CALLE, NUMERO, COLONIA, CIUDAD,
+            # ESTADO, C.P. NNNNN", común en <meta name="description"> de
+            # negocios pequeños (caso real: veterinariadrserna.com, todo en
+            # mayúsculas, sin "Calle"/"Av." al inicio, 2026-09-28). Se ancla
+            # al final en "C.P. NNNNN" (poco ambiguo) para evitar falsos
+            # positivos en texto genérico sin ese marcador.
+            r"[A-ZÁÉÍÓÚÑa-záéíóúñ][A-Za-zÁÉÍÓÚáéíóúñÑ\s]{2,50},?\s*\d{1,5}\s*,[^\.]{5,150}?C\.?P\.?\s*\d{5}",
         ]
-        for pattern in patterns:
-            m = re.search(pattern, text, re.IGNORECASE)
-            if m:
-                return m.group(0).strip()[:300]
+        # Fuentes de texto a probar en orden: el texto visible de la página
+        # primero, y el meta description como respaldo — algunos sitios (caso
+        # real: veterinariadrserna.com, 2026-09-28) solo ponen la dirección
+        # completa en <meta name="description">, nunca en el cuerpo visible,
+        # así que el regex sobre `text` nunca encontraba nada aunque el dato
+        # SÍ estuviera en la página.
+        meta_tag = soup.find("meta", attrs={"name": "description"})
+        meta_desc = (meta_tag.get("content") or "").strip() if meta_tag else ""
+        for source in (text, meta_desc):
+            if not source:
+                continue
+            for pattern in patterns:
+                m = re.search(pattern, source, re.IGNORECASE)
+                if m:
+                    return self._clean_extracted_address(m.group(0).strip()[:300])
         return ""
 
     def _extract_address(self, text: str, soup: BeautifulSoup) -> str:
@@ -2650,6 +2712,11 @@ class WebsiteScraper:
 
         self._verify_new_phone_contacts(company_id, contacts_raw.get("phone_numbers", []))
 
+    # No verificar más de N teléfonos por empresa aquí — mismo tope que
+    # pipeline.py's _MAX_PHONES_TO_VERIFY, para no estancar el scraping en
+    # empresas con muchos números listados.
+    _MAX_PHONES_TO_VERIFY = 5
+
     def _verify_new_phone_contacts(self, company_id, phone_numbers: List[str]):
         """Checks freshly-scraped 'phone' contacts against real WhatsApp
         registration (via wwebjs isRegisteredUser) and promotes them to
@@ -2659,25 +2726,52 @@ class WebsiteScraper:
         (real case, Dentalia 2026-09-21: 2 of 19 "phone-only" numbers turned
         out to be registered). Best-effort: skipped entirely if no WA session
         is connected, and any per-number failure just leaves it unverified —
-        /admin/verify-phone-contacts can still retry it later in bulk."""
+        /admin/verify-phone-contacts can still retry it later in bulk.
+
+        Respects the same anti-bot-signal protections as pipeline.py's own
+        verification loop (added there 2026-09-24, missing here until now,
+        2026-09-29): a daily-per-instance cap via reserve_verification_slot
+        (mass number-enumeration is its own bot signal, separate from message
+        sends), random instance rotation instead of always hammering
+        connected[0], and a random delay between lookups so this doesn't look
+        like a burst. Before this fix, this specific code path bypassed all
+        three — pipeline.py's cap only protected its OWN verification loop."""
         if not phone_numbers:
             return
         try:
             from app.whatsapp_wwebjs import get_all_connected_instances, verify_number
+            from app.daily_cap import reserve_verification_slot
             connected = get_all_connected_instances(None)
             if not connected:
                 return
-            instance = connected[0]
         except Exception:
             return
 
-        for phone in phone_numbers:
+        import random, time
+        # reserve_verification_slot() expects a MongoDBManager-shaped object
+        # (reads db.db.instance_daily_verifications) — WebsiteScraper only
+        # holds the raw pymongo Database (see self.companies_col = db[...]
+        # above), so wrap it in a 1-attribute shim instead of duplicating the
+        # cap's atomic-increment logic here a second time.
+        class _DbShim:
+            def __init__(self, database):
+                self.db = database
+        _db_shim = _DbShim(self.companies_col.database)
+
+        for idx, phone in enumerate(phone_numbers[: self._MAX_PHONES_TO_VERIFY]):
             contact = self.contacts_col.find_one(
                 {"company_id": company_id, "type": "phone", "normalized_value": phone},
                 {"verified": 1},
             )
             if not contact or "verified" in contact:
                 continue
+            candidates = connected[:]
+            random.shuffle(candidates)
+            instance = next((i for i in candidates if reserve_verification_slot(_db_shim, i)), None)
+            if not instance:
+                continue  # today's verification quota exhausted on every connected instance
+            if idx > 0:
+                time.sleep(random.uniform(2.0, 6.0))  # space out lookups — no burst pattern
             try:
                 is_wa = bool(verify_number(instance, phone).get("registered"))
             except Exception:

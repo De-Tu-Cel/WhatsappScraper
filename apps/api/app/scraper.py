@@ -1890,6 +1890,20 @@ class WebsiteScraper:
         # ── 1. JSON-LD (Schema.org) — máxima precisión ────────────────────────
         schema = self._extract_schema_address(soup)
         if schema and (schema.get("address") or schema.get("city")):
+            # Para una cadena/franquicia con varios nodos LocalBusiness, `schema`
+            # trae la PRIMERA sucursal listada como si fuera la única — pero si
+            # la búsqueda que produjo esta URL ya sabía a qué estado apuntaba
+            # (self._target_state_hint), y alguna de las OTRAS sucursales de
+            # all_locations sí coincide, esa es casi con certeza la sucursal
+            # real que se buscaba. Antes all_locations solo se guardaba para
+            # revisión manual — nada la consultaba (audit finding, 2026-09-29).
+            hint = getattr(self, "_target_state_hint", None)
+            all_locs = schema.get("all_locations") or []
+            if hint and len(all_locs) > 1:
+                for loc in all_locs:
+                    if self._norm_state_key(loc.get("state", "")) == hint:
+                        schema = {**schema, "city": loc.get("city", ""), "state": loc.get("state", "")}
+                        break
             schema["city"] = self._clean_city(schema.get("city", ""))
             # Inferir estado desde ciudad si quedó vacío
             if not schema.get("state") and schema.get("city"):

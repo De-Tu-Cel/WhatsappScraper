@@ -5981,6 +5981,58 @@ def api_requeue_unanalyzed(background_tasks: BackgroundTasks, limit: int = 20, x
     return {"ok": True, "queued": len(claimed), "remaining": remaining}
 
 
+@router.post("/admin/rescrape-mismatched")
+def api_rescrape_mismatched(background_tasks: BackgroundTasks, limit: int = 10, x_user_token: Optional[str] = Header(None)):
+    """Force re-scrapes companies already flagged with location_mismatch or
+    industry_mismatch — real bad data confirmed in production (dealer-site
+    "Estado" dropdowns misread as addresses, city/state fallbacks picking a
+    hardcoded-list-order match instead of the real one, "Col."/"C.P."
+    truncating the address before reaching city/state, run-on AI-filled
+    cities) that predates the 2026-09-29 location/industry-accuracy fixes and
+    won't self-correct until someone touches these records again (force=True
+    is required — a normal re-scrape skips domains that already have
+    contacts, see scraper.py).
+
+    Same claim-then-process pattern as /admin/requeue-unanalyzed: processes
+    at most `limit` per call, use `remaining` to know if another call is
+    needed. Claiming atomically clears the mismatch flags — a backfill re-
+    scrape has no live search target to re-compare city/state/industry
+    against (that comparison only runs from a fresh /api/search result, see
+    pipeline.py), so the flag can't be recomputed here; clearing it is the
+    correct outcome of triggering this manual fix. Dispatched via
+    BackgroundTasks (fire-and-forget, same as requeue-unanalyzed) since a
+    real scrape can take seconds to tens of seconds — the response doesn't
+    wait for them to finish, so it doesn't report per-company success/
+    failure the way a synchronous call could."""
+    _require_admin(x_user_token)
+    from app.pipeline import process_url
+    db = MongoDBManager()
+    claim_filter = {"$or": [{"location_mismatch": {"$exists": True}}, {"industry_mismatch": {"$exists": True}}]}
+    claimed = []
+    for _ in range(limit):
+        doc = db.db.companies.find_one_and_update(
+            claim_filter,
+            {"$unset": {"location_mismatch": "", "industry_mismatch": ""}},
+            projection={"_id": 1, "website": 1, "domain": 1},
+        )
+        if not doc:
+            break
+        claimed.append(doc)
+
+    queued = 0
+    skipped_no_website = 0
+    for doc in claimed:
+        website = doc.get("website") or (f"https://{doc['domain']}" if doc.get("domain") else None)
+        if not website:
+            skipped_no_website += 1
+            continue
+        background_tasks.add_task(process_url, website, skip_send=True, force=True)
+        queued += 1
+
+    remaining = db.db.companies.count_documents(claim_filter)
+    return {"ok": True, "queued": queued, "skipped_no_website": skipped_no_website, "remaining": remaining}
+
+
 @router.get("/admin/all-pending")
 def api_all_pending(x_user_token: Optional[str] = Header(None)):
     """DEV — list all message_logs with analysis_status pending."""

@@ -57,13 +57,34 @@ def create_user(username: str, display_name: str, pin: str,
 
 
 def recover_pin(username: str, recovery_code: str, new_pin: str) -> bool:
+    """Same per-account lockout as login() (see MAX_LOGIN_ATTEMPTS below) —
+    before this, unlimited recovery-code guesses were allowed against a
+    12-char code (real gap found in a security sweep, 2026-09-29). The
+    entropy alone (~48 bits) makes brute force impractical over the network,
+    but this closes the inconsistency with login's explicit lockout rather
+    than relying on entropy as the only defense."""
     db = _db()
     user = db.users.find_one({"username": username.lower(), "active": True})
-    if not user or user.get("recovery_code") != recovery_code.upper().strip():
+    if not user:
         return False
+
+    locked_until = user.get("recovery_locked_until")
+    if locked_until and datetime.now() < locked_until:
+        raise AccountLocked(max(1, int((locked_until - datetime.now()).total_seconds() // 60) + 1))
+
+    if user.get("recovery_code") != recovery_code.upper().strip():
+        attempts = user.get("failed_recovery_attempts", 0) + 1
+        update = {"failed_recovery_attempts": attempts}
+        if attempts >= MAX_LOGIN_ATTEMPTS:
+            update["recovery_locked_until"] = datetime.now() + timedelta(minutes=LOCKOUT_MINUTES)
+            update["failed_recovery_attempts"] = 0
+        db.users.update_one({"_id": user["_id"]}, {"$set": update})
+        return False
+
     new_code = str(uuid.uuid4()).replace("-", "").upper()[:12]
     db.users.update_one({"_id": user["_id"]}, {
-        "$set": {"pin_hash": hash_pin(new_pin), "recovery_code": new_code, "session_token": None}
+        "$set": {"pin_hash": hash_pin(new_pin), "recovery_code": new_code, "session_token": None,
+                 "failed_recovery_attempts": 0, "recovery_locked_until": None}
     })
     return True
 
@@ -84,12 +105,43 @@ def request_pin_reset(email: str) -> bool:
     return True
 
 
+# Global (not per-account — the token doesn't identify a user until it
+# matches) rate limit on reset-token guesses. Before this, an 8-hex-char
+# token (~32 bits) had a 15-minute expiry but zero attempt throttling of
+# any kind — unlike login/recover_pin's explicit per-account lockout, there
+# was nothing here at all (real gap found in a security sweep, 2026-09-29).
+_RESET_TOKEN_MAX_ATTEMPTS = 20
+_RESET_TOKEN_WINDOW_MINUTES = 5
+
+def _reset_token_rate_limited(db) -> bool:
+    doc = db.security_counters.find_one_and_update(
+        {"_id": "reset_pin_attempts"},
+        {"$setOnInsert": {"window_started_at": datetime.now(), "count": 0}},
+        upsert=True, return_document=False,
+    )
+    if doc is None or datetime.now() - doc.get("window_started_at", datetime.min) > timedelta(minutes=_RESET_TOKEN_WINDOW_MINUTES):
+        db.security_counters.update_one(
+            {"_id": "reset_pin_attempts"},
+            {"$set": {"window_started_at": datetime.now(), "count": 1}},
+            upsert=True,
+        )
+        return False
+    return doc.get("count", 0) >= _RESET_TOKEN_MAX_ATTEMPTS
+
+def _reset_token_record_failure(db):
+    db.security_counters.update_one({"_id": "reset_pin_attempts"}, {"$inc": {"count": 1}})
+
+
 def confirm_pin_reset(token: str, new_pin: str) -> bool:
     db = _db()
+    if _reset_token_rate_limited(db):
+        raise AccountLocked(_RESET_TOKEN_WINDOW_MINUTES)
     user = db.users.find_one({"reset_token": token.upper().strip(), "active": True})
     if not user:
+        _reset_token_record_failure(db)
         return False
     if datetime.now() > user.get("reset_token_expiry", datetime.min):
+        _reset_token_record_failure(db)
         return False
     new_code = str(uuid.uuid4()).replace("-", "").upper()[:12]
     db.users.update_one({"_id": user["_id"]}, {

@@ -156,12 +156,15 @@ def api_get_recovery_code(x_user_token: Optional[str] = Header(None)):
 
 @router.post("/auth/recover")
 def api_recover_pin(body: dict):
-    from app.auth import recover_pin
-    ok = recover_pin(
-        body.get("username", ""),
-        body.get("recovery_code", ""),
-        body.get("new_pin", ""),
-    )
+    from app.auth import recover_pin, AccountLocked
+    try:
+        ok = recover_pin(
+            body.get("username", ""),
+            body.get("recovery_code", ""),
+            body.get("new_pin", ""),
+        )
+    except AccountLocked as e:
+        raise HTTPException(status_code=429, detail=f"Demasiados intentos fallidos. Intenta de nuevo en {e.minutes_remaining} minuto(s)")
     if not ok:
         raise HTTPException(status_code=400, detail="Código de recuperación incorrecto")
     return {"ok": True}
@@ -174,11 +177,14 @@ def api_forgot_pin(body: dict):
 
 @router.post("/auth/reset-pin")
 def api_reset_pin(body: dict):
-    from app.auth import confirm_pin_reset
+    from app.auth import confirm_pin_reset, AccountLocked
     new_pin = body.get("new_pin", "")
     if len(new_pin) < 4:
         raise HTTPException(status_code=400, detail="PIN mínimo 4 dígitos")
-    ok = confirm_pin_reset(body.get("token", ""), new_pin)
+    try:
+        ok = confirm_pin_reset(body.get("token", ""), new_pin)
+    except AccountLocked as e:
+        raise HTTPException(status_code=429, detail=f"Demasiados intentos. Intenta de nuevo en {e.minutes_remaining} minuto(s)")
     if not ok:
         raise HTTPException(status_code=400, detail="Código inválido o expirado")
     return {"ok": True}

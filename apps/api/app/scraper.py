@@ -2298,11 +2298,28 @@ class WebsiteScraper:
         "horario", "lunes", "martes", "miércoles", "miercoles", "jueves", "viernes",
         "sábado", "sabado", "domingo", "whats", "app", "llamar", "escríbenos",
         "escribenos", "visítanos", "visitanos", "síguenos", "siguenos",
+        # Etiquetas típicas de listados inmobiliarios/directorios de agentes —
+        # caso real (casasenmx.com/agents, 2026-09-29): "Trato Directo" pasaba
+        # el filtro y se guardaba como si fuera el nombre de un agente.
+        "trato", "directo", "directa", "exclusiva", "exclusivo", "disponible",
+        "vendido", "vendida", "rentado", "rentada", "propiedad", "propiedades",
+        "inmueble", "inmuebles", "agencia", "agente", "asesor", "asesora",
+        "remax", "century", "coldwell",
     }
 
     def _is_probable_person_name(self, name: str) -> bool:
         words = re.findall(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]+", name.lower())
-        return bool(words) and not any(w in self.NAME_STOPWORDS for w in words)
+        if not words or any(w in self.NAME_STOPWORDS for w in words):
+            return False
+        # Un candidato que ES (o es casi por completo) el nombre de una ciudad
+        # conocida no es una persona — caso real: "San Luis Potosí" pasaba el
+        # filtro de stopwords palabra por palabra (ninguna de "san"/"luis"/
+        # "potosí" está en la lista) y terminaba guardado con el teléfono real
+        # de un agente cercano, 2026-09-29.
+        name_norm = " ".join(words)
+        if any(name_norm == city.lower() for city in self._KNOWN_CITIES):
+            return False
+        return True
 
     def _extract_person_contacts(self, soup: BeautifulSoup, text: str) -> List[Dict]:
         """Extrae nombres asociados a teléfonos/emails de un sitio web.
@@ -2493,8 +2510,13 @@ class WebsiteScraper:
         """Parsea contactos desde texto"""
         contacts = []
         
-        # Patrón: Nombre (2-4 palabras capitalizadas)
-        name_pattern = r"([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,3})"
+        # Patrón: Nombre (2-4 palabras, cada una Titlecase O TODO EN MAYÚSCULAS
+        # — no mezclado). Antes solo aceptaba Titlecase ("Ana Gómez"), así que
+        # nombres en mayúsculas ("ANA XIMENA GOMEZ ELIAS", formato común en
+        # directorios de agentes/notarías/gobierno) nunca se detectaban en
+        # absoluto — caso real confirmado 2026-09-29 (casasenmx.com/agents).
+        _word = r"[A-ZÁÉÍÓÚÑ](?:[a-záéíóúñ]+|[A-ZÁÉÍÓÚÑ]+)"
+        name_pattern = rf"({_word}(?:\s+{_word}){{1,3}})"
         names = re.findall(name_pattern, text)
         
         for name in names:

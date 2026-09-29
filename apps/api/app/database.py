@@ -606,7 +606,14 @@ class MongoDBManager:
         companies = list(
             self.db.companies.find(
                 query,
-                {"name": 1, "domain": 1, "website": 1, "industry": 1, "city": 1, "state": 1, "has_whatsapp": 1, "status": 1, "created_at": 1, "last_scraped_at": 1}
+                # location_mismatch: {searched_state, detected_state, detected_city} — set by
+                # pipeline.py's post-scrape geo check (see its own comment) whenever a
+                # company's real scraped address doesn't match the state its search was
+                # scoped to. Computed and saved since 2026-09-24 but never included in this
+                # projection, so the frontend had no way to ever show it — added 2026-09-29
+                # after confirming live that a real Mérida/Yucatán search returned companies
+                # actually located in Zacatecas and Ciudad de México, silently.
+                {"name": 1, "domain": 1, "website": 1, "industry": 1, "city": 1, "state": 1, "has_whatsapp": 1, "status": 1, "created_at": 1, "last_scraped_at": 1, "location_mismatch": 1}
             )
             .sort("created_at", -1)
             .skip((page - 1) * page_size)

@@ -77,6 +77,7 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
 import PhoneDisabledIcon from '@mui/icons-material/PhoneDisabled'
+import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import Popover from '@mui/material/Popover'
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import { visuallyHidden } from '@mui/utils'
@@ -2231,7 +2232,20 @@ export default function DatabaseViewer({ isActive }) {
                           <span>{truncate(row.industry, 22)}</span>
                         </Tooltip>
                       </TableCell>
-                      <TableCell align="center" onClick={() => handleSelectRow(row._id)}>{display(row.city)}</TableCell>
+                      <TableCell align="center" onClick={() => handleSelectRow(row._id)}>
+                        <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+                          {display(row.city)}
+                          {row.location_mismatch && (
+                            <Tooltip title={
+                              lang === 'en'
+                                ? `Search was scoped to ${row.location_mismatch.searched_state}, but the scraped address is in ${row.location_mismatch.detected_city ? row.location_mismatch.detected_city + ', ' : ''}${row.location_mismatch.detected_state}`
+                                : `La búsqueda estaba acotada a ${row.location_mismatch.searched_state}, pero la dirección real encontrada es de ${row.location_mismatch.detected_city ? row.location_mismatch.detected_city + ', ' : ''}${row.location_mismatch.detected_state}`
+                            } placement="top">
+                              <WarningAmberIcon sx={{ fontSize: 15, color: '#facc15', cursor: 'help' }} />
+                            </Tooltip>
+                          )}
+                        </Box>
+                      </TableCell>
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>
                         {row.has_whatsapp ? (
                           <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={t.db.yes} size="small"

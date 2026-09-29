@@ -1435,9 +1435,19 @@ class WebsiteScraper:
                     # Centro..." (dirección real en Guadalajara, Jalisco) y la IA respondió
                     # "ciudad": "Morelos" — mejor no guardar nada que guardar una ciudad que
                     # sabemos con certeza que no es un lugar real.
-                    if self._norm_state_key(ai_city) in self._STATE_KEY_TO_DISPLAY:
-                        pass
+                    # _clean_city() — la misma validación que ya usa CADA otra ruta de
+                    # extracción de ciudad (regex, known-cities, schema/JSON-LD) — antes
+                    # esta era la ÚNICA ruta que se saltaba ese filtro y podía guardar un
+                    # run-on/string de SEO tal cual. Caso real confirmado en producción
+                    # (mammutpizza.com, 2026-09-29): la IA devolvió "Ezequiel Montes Y
+                    # Cadereyta" (dos municipios de Querétaro pegados, no es un lugar
+                    # real) — _clean_city lo rechaza (más de 2 espacios, sin ciudad
+                    # conocida dentro) en vez de guardarlo tal cual.
+                    if self._norm_state_key(ai_city) not in self._STATE_KEY_TO_DISPLAY:
+                        ai_city = self._clean_city(str(ai_city).strip().title())
                     else:
+                        ai_city = ""  # es un nombre de estado, no una ciudad — descartar
+                    if ai_city:
                         result["_extra"]["city"] = ai_city
                         result["city"] = ai_city
                         # Re-derivar el estado desde la ciudad que acaba de rellenar la IA —
@@ -1743,10 +1753,26 @@ class WebsiteScraper:
         for source in (text, meta_desc):
             if not source:
                 continue
-            for pattern in patterns:
+            for pattern_idx, pattern in enumerate(patterns):
                 m = re.search(pattern, source, re.IGNORECASE)
-                if m:
-                    return self._clean_extracted_address(m.group(0).strip()[:300])
+                if not m:
+                    continue
+                candidate = m.group(0).strip()[:300]
+                # Pattern 1 (índice 1, "Dirección:"/"Ubicación:"/"Domicilio:") es
+                # el único de los 3 sin ancla numérica propia (los otros dos ya
+                # exigen un número de calle o un C.P.) — capturaba literalmente
+                # cualquier cosa hasta 300 chars después de la etiqueta. Un
+                # <select> de "Estado" (formulario de contacto) que soup.get_text()
+                # aplana a una sola línea de "Aguascalientes, Baja California,
+                # ..." pasaba esto sin problema y se guardaba como si fuera la
+                # dirección real — caso real confirmado en producción, plantilla
+                # compartida por varios sitios de agencias Nissan/Infiniti,
+                # 2026-09-29. Una dirección real siempre trae al menos un dígito
+                # (número de calle, CP, o teléfono cercano); un dropdown de
+                # nombres de estado no trae ninguno.
+                if pattern_idx == 1 and not re.search(r'\d', candidate):
+                    continue
+                return self._clean_extracted_address(candidate)
         return ""
 
     def _extract_address(self, text: str, soup: BeautifulSoup) -> str:
@@ -1994,9 +2020,23 @@ class WebsiteScraper:
             for city in cities:
                 if city.lower() in tl and self._norm_state_key(self._infer_state_from_city(city)) == hint:
                     return city
+        # Sin hint (o ninguna coincide con él): a diferencia del bloque regex de
+        # arriba (ya corregido, ver f3ec73b), este fallback nunca recibió el
+        # mismo arreglo y seguía devolviendo la PRIMERA ciudad de esta lista fija
+        # que apareciera en cualquier parte del texto — sin importar en qué
+        # posición real aparecía. Un texto que solo menciona una ciudad
+        # temprana de esta lista de pasada (o que ni siquiera la menciona,
+        # pero SÍ trae la ciudad real más abajo) perdía contra ella. Ahora se
+        # busca la posición de cada ciudad presente y gana la que aparece más
+        # temprano en el texto real, igual que ya hace el bloque regex de
+        # arriba (audit finding, 2026-09-29).
+        best_city, best_pos = None, None
         for city in cities:
-            if city.lower() in tl:
-                return city
+            pos = tl.find(city.lower())
+            if pos != -1 and (best_pos is None or pos < best_pos):
+                best_city, best_pos = city, pos
+        if best_city:
+            return best_city
         return ""
 
     def _extract_state(self, text: str) -> str:
@@ -2054,6 +2094,18 @@ class WebsiteScraper:
         tl = text.lower()
         _STREET_AFTER_RE  = re.compile(r'^\s*(n[º°o]\.?\s*\d|#\s*\d|\d)')
         _STREET_BEFORE_RE = re.compile(r'(calle|av\.|avenida|blvd\.?|boulevard|colonia|col\.)\s*$')
+        # Igual que el fallback de ciudades conocidas de _extract_city: antes se
+        # recorría `states` en orden FIJO y ganaba el primero de la lista que
+        # apareciera en cualquier parte del texto — no el que apareciera primero
+        # en el texto real. Un formulario de contacto con un <select> de "Estado"
+        # (los 32 nombres aplanados a texto por soup.get_text()) hacía que
+        # siempre ganara el que estuviera antes en ESTA lista, sin importar dónde
+        # cayera en la página real — caso real confirmado en producción:
+        # agencias Nissan/Infiniti con la misma plantilla, todas guardadas como
+        # "Puebla" (4to lugar en esta lista) estando en Hermosillo/Tijuana
+        # (mucho más abajo en la lista), 2026-09-29. Ahora gana el que aparece
+        # más temprano en el texto real, igual que ya hace _extract_city.
+        best_state, best_pos = None, None
         for state in states:
             s_low = state.lower()
             start = 0
@@ -2064,9 +2116,11 @@ class WebsiteScraper:
                 after  = tl[pos + len(s_low): pos + len(s_low) + 12]
                 before = tl[max(0, pos - 12): pos]
                 if not (_STREET_AFTER_RE.search(after) or _STREET_BEFORE_RE.search(before)):
-                    return state
+                    if best_pos is None or pos < best_pos:
+                        best_state, best_pos = state, pos
+                    break  # primera ocurrencia VÁLIDA de este estado ya encontrada
                 start = pos + len(s_low)
-        return ""
+        return best_state or ""
 
     def _extract_country(self, text: str) -> str:
         """Extrae país"""

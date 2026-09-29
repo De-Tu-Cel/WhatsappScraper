@@ -1311,6 +1311,16 @@ def api_get_conversations(x_user_token: Optional[str] = Header(None)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/conversations/last-activity")
+def api_get_conversations_last_activity(x_user_token: Optional[str] = Header(None)):
+    """Cheap poll target — see get_conversations_last_activity()'s docstring."""
+    _require_user(x_user_token)
+    try:
+        db = MongoDBManager()
+        return {"last_activity": db.get_conversations_last_activity()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/conversations/ai-health")
 def api_get_ai_health(x_user_token: Optional[str] = Header(None)):
     _require_user(x_user_token)

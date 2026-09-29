@@ -1102,6 +1102,23 @@ class MongoDBManager:
         )
         return result.modified_count > 0
 
+    def get_conversations_last_activity(self):
+        """Cheap "has anything changed" probe for the Conversations tab's
+        polling — a single find_one sorted by created_at (already indexed,
+        this is the natural sort order for message_logs), vs. get_conversations()'s
+        ~7 sequential aggregate/find calls over the full collection.
+
+        A performance audit (2026-09-29) measured get_conversations() at
+        1.3-1.5s, polled every 5s by every agent with the Conversations tab
+        open — a continuous background cost, not just a one-time slow load.
+        The frontend now polls THIS endpoint every 5s instead, and only pays
+        for the real get_conversations() call when the timestamp actually
+        changed since its last check."""
+        last = self.db.message_logs.find_one(
+            {}, sort=[("created_at", -1)], projection={"created_at": 1},
+        )
+        return last["created_at"].isoformat() if last and last.get("created_at") else None
+
     def get_conversations(self):
         """Returns one entry per company that has message activity, sorted by last message."""
         from bson import ObjectId

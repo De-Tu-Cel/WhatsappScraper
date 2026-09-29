@@ -7,7 +7,7 @@ export async function POST(request) {
     const token = request.headers.get('x-user-token')
     const headers = {}
     if (token) headers['x-user-token'] = token
-    const res = await fetch(`${B}/api/admin/cleanup-contacts`, { method: 'POST', headers })
+    const res = await fetch(`${B}/api/admin/cancel-pending`, { method: 'POST', headers })
     const data = await res.json()
     return NextResponse.json(data, { status: res.status })
   } catch (e) {

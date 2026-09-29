@@ -649,7 +649,7 @@ function SystemBlacklist({ bl }) {
       if (!e && !fetchedRef.current) {
         fetchedRef.current = true
         setLoading(true)
-        fetch('/api/blacklist/system')
+        authFetch('/api/blacklist/system')
           .then(r => r.json())
           .then(d => setAll(d.domains || []))
           .catch(() => setAll([]))

@@ -127,6 +127,8 @@ def _run_scrape_job(job_id: str):
             # the progress bar/counter truly frozen at the pause point.
             in_flight = list(chunk)
             chunk_results = []
+            broke_early = False
+            pending_orphaned_urls: list = []
             ex = ThreadPoolExecutor(max_workers=len(chunk))
             try:
                 future_map = {ex.submit(_process_one_url, url): url for url in chunk}
@@ -150,11 +152,42 @@ def _run_scrape_job(job_id: str):
                     # Re-scraping is idempotent (upsert), so no data is lost.
                     _st = db.db.scrape_jobs.find_one({"_id": oid}, {"status": 1, "paused": 1})
                     if _st and _st.get("status") == "cancelled":
+                        broke_early = True
                         break
                     if _st and _st.get("paused"):
+                        broke_early = True
                         break
             finally:
-                ex.shutdown(wait=False)
+                if broke_early and in_flight:
+                    # Real gap found in a performance audit (2026-09-29): the old
+                    # `ex.shutdown(wait=False)` here, combined with the chunk-end
+                    # write below always resetting current_urls to [], made the UI
+                    # report "paused, nothing running" while up to _CONCURRENCY-1
+                    # scrapes were STILL actually in flight in the background
+                    # (measured: on a slow real site this window can be minutes,
+                    # not milliseconds). `in_flight` at this point is the exact set
+                    # of URLs dispatched but never completed — surfaced here
+                    # immediately so the UI can honestly show them as still running,
+                    # then a background thread waits for the real threads to
+                    # actually finish and clears just those entries.
+                    pending_orphaned_urls = list(in_flight)
+                    _orphaned = pending_orphaned_urls
+                    db.db.scrape_jobs.update_one(
+                        {"_id": oid},
+                        {"$set": {"current_urls": _orphaned}},
+                    )
+                    def _drain_orphaned_futures(executor, orphaned_urls, job_oid):
+                        executor.shutdown(wait=True)  # blocks THIS thread only, until the real work is done
+                        db.db.scrape_jobs.update_one(
+                            {"_id": job_oid},
+                            {"$pull": {"current_urls": {"$in": orphaned_urls}}},
+                        )
+                    threading.Thread(
+                        target=_drain_orphaned_futures, args=(ex, _orphaned, oid),
+                        daemon=True, name=f"scrape-job-{job_id}-drain",
+                    ).start()
+                else:
+                    ex.shutdown(wait=False)
 
             # Stamp already_contacted + assigned_instance for this chunk.
             company_ids = [r["company_id"] for r in chunk_results if r.get("company_id")]
@@ -189,13 +222,17 @@ def _run_scrape_job(job_id: str):
             for r in results:
                 seen_urls[r.get("url", "")] = r
             results = list(seen_urls.values())
+            # current_urls: [] here would race with (and stomp) the orphaned-URL
+            # list just written above and the drain thread's later $pull — when a
+            # pause/cancel left real background scrapes still running, keep
+            # showing them until the drain thread confirms they actually finished.
             db.db.scrape_jobs.update_one(
                 {"_id": oid},
                 {"$set": {
                     "results": results,
                     "next_index": next_index,
                     "processed_count": min(len(results), total),
-                    "current_urls": [],
+                    "current_urls": pending_orphaned_urls,
                     "last_progress_at": datetime.now(),
                 }},
             )

@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'rea
 import useSWR from 'swr'
 import { useLang } from '../context/LangContext'
 import { useUser } from '../context/UserContext'
+import { authFetch } from '@/lib/api'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Chip from '@mui/material/Chip'
@@ -423,7 +424,7 @@ export default function Analytics() {
     if (requeueInFlight.current) return { queued: 0, remaining: remainingRef.current }
     requeueInFlight.current = true
     try {
-      const res  = await fetch('/api/admin/requeue-unanalyzed', { method: 'POST' })
+      const res  = await authFetch('/api/admin/requeue-unanalyzed', { method: 'POST' })
       const json = await res.json()
       remainingRef.current = json.remaining ?? 0
       return json
@@ -499,7 +500,7 @@ export default function Analytics() {
       // 1. Parallel: load html2canvas module + fetch thread simultaneously
       const [html2canvasModule, threadRes] = await Promise.all([
         import('html2canvas'),
-        fetch(`/api/conversations/${row.company_id}`),
+        authFetch(`/api/conversations/${row.company_id}`),
       ])
       const thread = threadRes.ok ? await threadRes.json() : []
       const normFn = n => (n || '').replace(/\D/g,'').slice(-10)
@@ -681,7 +682,7 @@ export default function Analytics() {
                 requeueSessionRef.current = false
                 remainingRef.current = 0
                 setAnalyzeAttempts(0)
-                await fetch('/api/admin/cancel-pending', { method: 'POST' })
+                await authFetch('/api/admin/cancel-pending', { method: 'POST' })
                 mutateAnalytics()
               }}
                 sx={{ color: '#f87171', '&:hover': { color: '#fca5a5' } }}>

@@ -26,6 +26,38 @@ def _domain_matches(domain: str, val: str) -> bool:
     e.g. 'gaserasmx.com' must NOT match blacklisted value 'x.com')."""
     return domain == val or domain.endswith("." + val)
 
+_INDUSTRY_STOPWORDS = {"en", "de", "del", "la", "el", "los", "las", "y", "e", "para", "con", "un", "una", "cerca"}
+
+def _industry_words(term: str) -> set:
+    """Loose, deterministic token set for the industry-mismatch heuristic below —
+    normalizes accents/case and singularizes the head noun (reusing searcher.py's
+    own helper, same one used to keep the AI filter prompt from misreading a
+    plural as "give me a directory") so "restaurantes"/"Restaurante" compare equal
+    without needing an LLM call on every single scraped URL.
+
+    Deliberately does NOT expand via searcher.py's INDUSTRY_SYNONYMS table —
+    tried that first, but that table is tuned for widening a SEARCH (it
+    deliberately cross-links adjacent-but-different business types, e.g.
+    "taller mecánico" <-> "refaccionaria", so a search for one also surfaces
+    the other). Reusing it here made the exact case this check exists to
+    catch invisible again: a "taller mecánico" search matched a scraped
+    "Refaccionaria" (auto-parts store, not a mechanic) because the two
+    industries are cross-referenced as related, not because they're the same
+    business — confirmed while testing this fix, 2026-09-29. Plain token
+    overlap is stricter and correctly tells those two apart, at the cost of
+    missing pure vocabulary rephrasings the table WOULD have caught (e.g.
+    "dentista" vs "clínica dental") — an acceptable trade for a flag-only,
+    non-rejecting check where a false positive is far cheaper than a false
+    negative."""
+    from searcher import _norm_loc, _to_singular_es
+
+    def _tokenize(s: str) -> set:
+        norm = _norm_loc(s)
+        return {w.strip(",.") for w in norm.split() if len(w) > 2 and w not in _INDUSTRY_STOPWORDS}
+
+    return _tokenize(_to_singular_es(term or ""))
+
+
 def _check_blacklist(domain: str, industry: str) -> dict:
     """Returns {reason, matched} if blacklisted, else None."""
     try:
@@ -71,10 +103,14 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
     # find_one_and_delete (en vez de delete_one) para recuperar target_state antes
     # de borrar el doc — es la única forma de saber a qué estado estaba acotada
     # la búsqueda que produjo esta URL, para el chequeo de ubicación de abajo.
+    # También recupera la industria buscada — mismo motivo, para el chequeo
+    # de industria (ver más abajo, misma idea que el de ubicación).
     _target_state = None
+    _target_industry = None
     try:
         _idea = db.db.search_ideas.find_one_and_delete({"url": website})
         _target_state = (_idea or {}).get("target_state")
+        _target_industry = (_idea or {}).get("industry")
     except Exception:
         pass
 
@@ -91,7 +127,7 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
         return {"blacklisted": True, "reason": "domain", "matched": _bl_domain["matched"]}
 
     print(f"🔍 Scrapeando datos de {website}...")
-    scraped = scraper.scrape_site(website, force=force, country=country)
+    scraped = scraper.scrape_site(website, force=force, country=country, target_state=_target_state)
     _extra = scraped.get("_extra", {})
     _cr = scraped.get("_contacts_raw", {})
 
@@ -129,6 +165,30 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
             }
             print(f"⚠️  Ubicación distinta a la buscada: se buscó {_target_state!r}, "
                   f"se detectó {_detected_state!r} ({_extra.get('city')!r})")
+
+    # Chequeo de industria post-scrape — mismo problema que el de ubicación de
+    # arriba, pero nunca se le hizo el equivalente: el filtro de industria del
+    # buscador (_ai_filter_urls) solo ve el snippet/título de búsqueda, no la
+    # página real. Si se equivoca (el propio historial de bugs de este archivo
+    # ya tuvo falsos positivos reales — commit 5d12cdb, directorios/catálogos
+    # coláandose), nada río abajo lo detectaba (audit finding, 2026-09-29).
+    # Heurística determinista (no LLM, corre en CADA scrape, no solo en
+    # búsquedas) — comparación difusa de palabras (ver _industry_words). Una
+    # reformulación real (p.ej. "dentistas" vs "Clínica Dental") puede dar
+    # falso positivo; se marca, no se rechaza — mismo criterio que
+    # _location_mismatch, y ese costo es preferible a no detectar nada.
+    _industry_mismatch = None
+    _detected_industry = (scraped.get("industry") or "").strip()
+    if _target_industry and _detected_industry:
+        _target_words = _industry_words(_target_industry)
+        _detected_words = _industry_words(_detected_industry)
+        if _target_words and _detected_words and not (_target_words & _detected_words):
+            _industry_mismatch = {
+                "searched_industry": _target_industry,
+                "detected_industry": _detected_industry,
+            }
+            print(f"⚠️  Industria distinta a la buscada: se buscó {_target_industry!r}, "
+                  f"se detectó {_detected_industry!r}")
 
     print(f"💾 Guardando empresa en base de datos...")
 
@@ -179,14 +239,19 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
             })
             print(f"✅ Empresa nueva guardada con ID: {company_id}")
 
-    # Aplicar el flag de ubicación distinta (si lo hubo) sin importar cuál de
-    # las 3 rutas de arriba resolvió company_id — un solo punto de escritura
-    # en vez de repetir el $set en cada rama.
+    # Aplicar los flags de ubicación/industria distinta (si los hubo) sin
+    # importar cuál de las 3 rutas de arriba resolvió company_id — un solo
+    # punto de escritura en vez de repetir el $set en cada rama.
+    _mismatch_fields = {}
     if _location_mismatch:
+        _mismatch_fields["location_mismatch"] = _location_mismatch
+    if _industry_mismatch:
+        _mismatch_fields["industry_mismatch"] = _industry_mismatch
+    if _mismatch_fields:
         from bson import ObjectId
         db.db.companies.update_one(
             {"_id": ObjectId(company_id)},
-            {"$set": {"location_mismatch": _location_mismatch}},
+            {"$set": _mismatch_fields},
         )
 
     # ========================================================================

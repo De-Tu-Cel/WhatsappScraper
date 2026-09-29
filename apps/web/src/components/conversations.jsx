@@ -776,6 +776,7 @@ export default function Conversations({ isActive } = {}) {
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
   const { pendingConvId, pendingConvNumber, clearPendingConv } = useNavigation()
   const pendingNumRef = useRef(null)
+  const lastActivityRef = useRef(undefined)  // undefined = not checked yet (mount's fetchConvs already has fresh data)
 
   // Diagnóstico de por qué el seguimiento automático de IA podría estar en
   // pausa ahora mismo (circuit breaker del proveedor / fuera de horario) — se
@@ -785,7 +786,7 @@ export default function Conversations({ isActive } = {}) {
     let cancelled = false
     async function poll() {
       try {
-        const r = await fetch('/api/conversations/ai-health')
+        const r = await authFetch('/api/conversations/ai-health')
         const d = await r.json()
         if (!cancelled && r.ok) setAiHealth(d)
       } catch {}
@@ -867,7 +868,7 @@ export default function Conversations({ isActive } = {}) {
     }
     try {
       const params = numFilter && numFilter !== 'all' ? `?number=${encodeURIComponent(numFilter)}` : ''
-      const res = await fetch(`/api/conversations/${companyId}${params}`)
+      const res = await authFetch(`/api/conversations/${companyId}${params}`)
       const data = await res.json()
       const msgs = Array.isArray(data) ? data : []
       if (silent) {
@@ -876,7 +877,7 @@ export default function Conversations({ isActive } = {}) {
           return msgs
         })
         if (msgs.length > threadLenRef.current) {
-          fetch(`/api/conversations/${companyId}`, { method: 'POST' }).catch(() => {})
+          authFetch(`/api/conversations/${companyId}`, { method: 'POST' }).catch(() => {})
           // Bump this conversation to the top with the fresh last message right
           // away — otherwise the chat you're currently looking at stayed frozen
           // in its old list position (only its unread count changed) until the
@@ -908,7 +909,7 @@ export default function Conversations({ isActive } = {}) {
       }
       threadLenRef.current = msgs.length
       if (!silent) {
-        fetch(`/api/conversations/${companyId}`, { method: 'POST' }).catch(() => {})
+        authFetch(`/api/conversations/${companyId}`, { method: 'POST' }).catch(() => {})
         setConvs(prev => prev.map(c => c.company_id === companyId ? { ...c, unread: 0 } : c))
       }
     } catch {
@@ -921,7 +922,7 @@ export default function Conversations({ isActive } = {}) {
   const fetchCompanyNumbers = useCallback(async (companyId) => {
     currentCompanyRef.current = companyId
     try {
-      const res = await fetch(`/api/companies/${companyId}`)
+      const res = await authFetch(`/api/companies/${companyId}`)
       const data = await res.json()
       if (currentCompanyRef.current !== companyId) return []
       const numbers = [...new Set(
@@ -960,9 +961,24 @@ export default function Conversations({ isActive } = {}) {
     // 5s (was 20s) so the list reorders close to live as new messages come in —
     // matches the cadence already used elsewhere in this component (ai-status
     // poll below runs every 4s) instead of leaving conversations feeling "stuck"
-    // for up to 20s before bubbling to the top.
-    const id = setInterval(() => {
-      fetchConvs()
+    // for up to 20s before bubbling to the top. fetchConvs() itself is expensive
+    // (~7 sequential Mongo calls over the full collection, measured 1.3-1.5s) and
+    // was previously called unconditionally every tick for every agent with the
+    // tab open — a continuous background cost. Now each tick checks a cheap
+    // single-field endpoint first and only pays for the real fetch when the
+    // underlying data actually changed.
+    const id = setInterval(async () => {
+      try {
+        const r = await authFetch('/api/conversations/last-activity')
+        const d = await r.json()
+        const activity = d?.last_activity ?? null
+        if (lastActivityRef.current === undefined || activity !== lastActivityRef.current) {
+          lastActivityRef.current = activity
+          fetchConvs()
+        }
+      } catch {
+        fetchConvs()  // cheap-endpoint failure — fall back to the real fetch rather than going silent
+      }
       if (selected) fetchThread(selected.company_id, false, true, activeNum !== 'all' ? activeNum : null)
     }, 5000)
     return () => clearInterval(id)
@@ -987,7 +1003,7 @@ export default function Conversations({ isActive } = {}) {
     let cancelled = false
     const poll = async () => {
       try {
-        const res = await fetch(`/api/conversations/${selected.company_id}/ai-status`)
+        const res = await authFetch(`/api/conversations/${selected.company_id}/ai-status`)
         if (cancelled) return
         const data = await res.json()
         setAiEnabled(data.ai_enabled || false)
@@ -1014,7 +1030,7 @@ export default function Conversations({ isActive } = {}) {
     // On first enable: check if config exists — if not, open config dialog first
     if (next) {
       try {
-        const r = await fetch(`/api/conversations/${selected.company_id}/ai-config`)
+        const r = await authFetch(`/api/conversations/${selected.company_id}/ai-config`)
         const d = await r.json()
         const hasConfig = r.ok && (d.extra_instructions || d.max_turns !== 3)
         if (!hasConfig) { setAiConfigOpen(true); return }
@@ -1022,7 +1038,7 @@ export default function Conversations({ isActive } = {}) {
     }
     setAiToggling(true)
     try {
-      await fetch(`/api/conversations/${selected.company_id}/ai-toggle`, {
+      await authFetch(`/api/conversations/${selected.company_id}/ai-toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: next }),
@@ -1054,7 +1070,7 @@ export default function Conversations({ isActive } = {}) {
     lastSyncedRef.current = companyId
     setSyncing(true)
     try {
-      const res  = await fetch(`/api/conversations/${companyId}/sync`, { method: 'POST' })
+      const res  = await authFetch(`/api/conversations/${companyId}/sync`, { method: 'POST' })
       const data = await res.json()
       if ((data.synced ?? 0) > 0) {
         await fetchThread(companyId, true)

@@ -535,7 +535,7 @@ export default function SearchProspects() {
 
   async function fetchAndMark(urls, blockedMap) {
     try {
-      const r = await fetch('/api/companies/check-urls', {
+      const r = await authFetch('/api/companies/check-urls', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ urls }),
       })

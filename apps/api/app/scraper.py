@@ -1,5 +1,7 @@
 ﻿# scraper.py - VERSIÓN EXTENDIDA
+import ipaddress
 import re
+import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
@@ -11,6 +13,38 @@ from bs4 import BeautifulSoup
 from pymongo import MongoClient
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ── SSRF guard ────────────────────────────────────────────────────────────
+# This scraper fetches whatever URL it's given (from /process-url, /batch,
+# search results) — without this check, a URL like
+# "http://169.254.169.254/latest/meta-data/..." (cloud metadata) or
+# "http://backend:8000/..." (this stack's own internal Docker network) gets
+# fetched and its response parsed/returned exactly like a real business
+# site, handing back an internal-network read primitive to whoever can
+# reach these endpoints. Real gap found in a security sweep, 2026-09-29 —
+# fixed here (checked once per scrape_site() call, before any request) and
+# not just at the route layer, so it also covers internal-link crawling to
+# a subpage/redirect that resolves somewhere blocked.
+_BLOCKED_HOSTNAMES = {"localhost"}
+
+def _is_blocked_host(url: str) -> bool:
+    """True if `url`'s host is a bare blocked name, or resolves to a private/
+    loopback/link-local/reserved/multicast address. Fails CLOSED (blocks) on
+    any error — a URL that can't even be parsed/resolved isn't one we should
+    be fetching anyway, and every real caller already handles a failed fetch."""
+    try:
+        host = urlparse(url).hostname
+        if not host:
+            return True
+        if host.lower() in _BLOCKED_HOSTNAMES:
+            return True
+        for info in socket.getaddrinfo(host, None):
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+                return True
+        return False
+    except Exception:
+        return True
 
 # Same memory-reduction flags added to wwebjs-service (2026-09-18, after a
 # host-wide Docker daemon freeze that correlated with several concurrent
@@ -296,7 +330,7 @@ class WebsiteScraper:
         self.contacts_col = db["contacts"]
         self.scraping_runs_col = db["scraping_runs"]
 
-    def scrape_site(self, url: str, force: bool = False, country: str = None) -> Dict:
+    def scrape_site(self, url: str, force: bool = False, country: str = None, target_state: str = None) -> Dict:
         """
         Scraping completo de un sitio web
         
@@ -336,6 +370,24 @@ class WebsiteScraper:
         _country_cfg = COUNTRY_CONFIG.get(country or DEFAULT_COUNTRY, COUNTRY_CONFIG[DEFAULT_COUNTRY])
         self._default_country_code = _country_cfg["phone_code"]
         self._default_local_digits = _country_cfg["local_digits"]
+
+        # Estado al que estaba acotada la búsqueda que produjo esta URL (si la hay) —
+        # usado por _extract_state/_extract_city para preferir una mención de
+        # ciudad/estado que coincida con lo esperado quando el texto de la página
+        # menciona varios lugares distintos (caso real: terecazola.com, un negocio
+        # genuino de Yucatán cuya portada destacaba un blog post sobre un evento en
+        # Ciudad de México — la extracción se quedaba con esa mención incidental en
+        # vez de la real, 2026-09-29). None = sin preferencia, comportamiento
+        # idéntico al de antes de este cambio.
+        self._target_state_hint = self._norm_state_key(target_state) if target_state else None
+        # Nueva instancia por llamada (ver process_url() en pipeline.py) — este
+        # diccionario nunca sobrevive entre empresas distintas, así que cachear
+        # aquí es seguro (ver _nominatim_structure_address).
+        self._nominatim_cache = {}
+
+        if _is_blocked_host(url):
+            print(f"🚫 URL bloqueada por seguridad (apunta a red interna/reservada): {url}")
+            raise requests.exceptions.ConnectionError(f"URL no permitida: {url}")
 
         print(f"🔍 Scrapeando: {url}")
 
@@ -469,6 +521,12 @@ class WebsiteScraper:
                 "phone_numbers": list(dict.fromkeys(
                     self._extract_phone_numbers(soup, text) + structured_phones
                 )),
+                # Igual que whatsapp_contacts pero para links tel: normales — antes
+                # no existía, así que páginas de sucursales sin wa.me (muy comunes)
+                # no tenían NINGUNA forma de asociar cada número con su sucursal
+                # (bug real, 2026-09-29). Aditivo: phone_numbers de arriba sigue
+                # igual para no romper a nadie que ya lo consuma como lista plana.
+                "phone_contacts": self._extract_phone_numbers_with_labels(soup),
                 "emails": self._extract_emails(text),
                 "persons": self._extract_person_contacts(soup, text),
             },
@@ -1377,9 +1435,19 @@ class WebsiteScraper:
                     # Centro..." (dirección real en Guadalajara, Jalisco) y la IA respondió
                     # "ciudad": "Morelos" — mejor no guardar nada que guardar una ciudad que
                     # sabemos con certeza que no es un lugar real.
-                    if self._norm_state_key(ai_city) in self._STATE_KEY_TO_DISPLAY:
-                        pass
+                    # _clean_city() — la misma validación que ya usa CADA otra ruta de
+                    # extracción de ciudad (regex, known-cities, schema/JSON-LD) — antes
+                    # esta era la ÚNICA ruta que se saltaba ese filtro y podía guardar un
+                    # run-on/string de SEO tal cual. Caso real confirmado en producción
+                    # (mammutpizza.com, 2026-09-29): la IA devolvió "Ezequiel Montes Y
+                    # Cadereyta" (dos municipios de Querétaro pegados, no es un lugar
+                    # real) — _clean_city lo rechaza (más de 2 espacios, sin ciudad
+                    # conocida dentro) en vez de guardarlo tal cual.
+                    if self._norm_state_key(ai_city) not in self._STATE_KEY_TO_DISPLAY:
+                        ai_city = self._clean_city(str(ai_city).strip().title())
                     else:
+                        ai_city = ""  # es un nombre de estado, no una ciudad — descartar
+                    if ai_city:
                         result["_extra"]["city"] = ai_city
                         result["city"] = ai_city
                         # Re-derivar el estado desde la ciudad que acaba de rellenar la IA —
@@ -1466,10 +1534,30 @@ class WebsiteScraper:
     _NOM_LOCK    = None   # throttle: 1 req/s
 
     def _nominatim_structure_address(self, raw: str) -> dict:
-        """Envía una dirección cruda a Nominatim y devuelve {city,state,postal_code,country,lat,lon}."""
-        import threading, time
+        """Envuelve _nominatim_structure_address_uncached con una caché por
+        scrape_site() call (self._nominatim_cache) — medido en una auditoría
+        de performance real (2026-09-29): 6 de 6 llamadas a
+        _extract_address_structured en un solo scrape (página principal + 5
+        subpáginas) disparaban Nominatim, la mayoría con la MISMA dirección
+        física repetida en cada subpágina (footer/contacto compartido), y el
+        candado de throttle es a nivel de CLASE (compartido entre los 4
+        workers concurrentes del lote) — cada llamada repetida no solo era
+        redundante, hacía cola detrás de las de OTRAS empresas en el mismo
+        lote. 48% del tiempo total de un scrape real venía de esto."""
         if not raw or len(raw) < 8:
             return {}
+        cache = getattr(self, "_nominatim_cache", None)
+        if cache is None:
+            cache = self._nominatim_cache = {}
+        if raw in cache:
+            return cache[raw]
+        result = self._nominatim_structure_address_uncached(raw)
+        cache[raw] = result
+        return result
+
+    def _nominatim_structure_address_uncached(self, raw: str) -> dict:
+        """Envía una dirección cruda a Nominatim y devuelve {city,state,postal_code,country,lat,lon}."""
+        import threading, time
         # Throttle: mínimo 1 s entre llamadas (política de uso de Nominatim)
         cls = type(self)
         if cls._NOM_LOCK is None:
@@ -1636,6 +1724,27 @@ class WebsiteScraper:
             addr = new_addr
         return self._ADDRESS_TRAILING_JUNK_RE.sub("", addr).strip().strip(",").strip()
 
+    # "[^\.]" (cualquier char que no sea punto) se usaba para acotar dónde termina
+    # la dirección capturada — pero direcciones mexicanas reales casi siempre
+    # traen "Col." (Colonia), la abreviatura MÁS común de todas, con su propio
+    # punto. Eso cortaba la captura justo antes de llegar a ciudad/estado/CP
+    # (caso real, 2026-09-29: encontrado mientras se arreglaba el bug de las
+    # agencias automotrices — cualquier sitio con "Col." en su dirección real
+    # perdía ciudad/estado por esta misma razón, sin relación con el dropdown).
+    # Este char-class alternativo SÍ permite consumir el punto cuando está
+    # pegado a una abreviatura común de dirección — solo un punto "de verdad"
+    # (fin de oración) sigue cortando la captura.
+    # "c" y "p" sueltas cubren las DOS abreviaturas de "C.P." (Código Postal) —
+    # el propio ancla que estos patrones usan más adelante para el CP. Sin
+    # ellas, "...Sonora, C.P. 83000" se truncaba justo en "C." y el código
+    # postal nunca se capturaba (encontrado al probar este mismo arreglo,
+    # 2026-09-29).
+    _ADDR_ABBREVS = ("col", "blvd", "avda", "av", "dra", "dr", "sra", "sr",
+                      "num", "núm", "no", "fracc", "mza", "ote", "pte",
+                      "int", "depto", "edif", "loc", "c", "p")
+    _ADDR_NON_TERMINATING_PERIOD = "|".join(f"(?<={_a})" for _a in _ADDR_ABBREVS)
+    _ADDR_CHAR = rf"(?:[^.]|(?:{_ADDR_NON_TERMINATING_PERIOD})\.)"
+
     def _extract_address_regex(self, text: str, soup: BeautifulSoup) -> str:
         """Fallback: microdata itemprop + regex de calle mexicana."""
         addr_tag = soup.find(["span", "div", "p"], {"itemprop": "address"})
@@ -1643,7 +1752,7 @@ class WebsiteScraper:
             return self._clean_extracted_address(addr_tag.get_text(" ", strip=True))
         patterns = [
             # Captura hasta 250 chars después del número para incluir ciudad/estado al final
-            r"(?:Calle|Av\.|Avenida|Boulevard|Blvd\.|Calzada|Carretera)\s+[A-Za-zÁÉÍÓÚáéíóúñÑ\s]+\d+[^\.]{0,250}",
+            r"(?:Calle|Av\.|Avenida|Boulevard|Blvd\.|Calzada|Carretera)\s+[A-Za-zÁÉÍÓÚáéíóúñÑ\s]+\d+" + self._ADDR_CHAR + "{0,250}",
             r"(?:Dirección|Ubicación|Domicilio|Domicilo)\s*[:\-]\s*([^\n]{20,300})",
             # Dirección "compacta" sin palabra clave de calle ni prefijo
             # "Dirección:" — solo "NOMBRE DE CALLE, NUMERO, COLONIA, CIUDAD,
@@ -1652,7 +1761,7 @@ class WebsiteScraper:
             # mayúsculas, sin "Calle"/"Av." al inicio, 2026-09-28). Se ancla
             # al final en "C.P. NNNNN" (poco ambiguo) para evitar falsos
             # positivos en texto genérico sin ese marcador.
-            r"[A-ZÁÉÍÓÚÑa-záéíóúñ][A-Za-zÁÉÍÓÚáéíóúñÑ\s]{2,50},?\s*\d{1,5}\s*,[^\.]{5,150}?C\.?P\.?\s*\d{5}",
+            r"[A-ZÁÉÍÓÚÑa-záéíóúñ][A-Za-zÁÉÍÓÚáéíóúñÑ\s]{2,50},?\s*\d{1,5}\s*," + self._ADDR_CHAR + r"{5,150}?C\.?P\.?\s*\d{5}",
         ]
         # Fuentes de texto a probar en orden: el texto visible de la página
         # primero, y el meta description como respaldo — algunos sitios (caso
@@ -1665,10 +1774,26 @@ class WebsiteScraper:
         for source in (text, meta_desc):
             if not source:
                 continue
-            for pattern in patterns:
+            for pattern_idx, pattern in enumerate(patterns):
                 m = re.search(pattern, source, re.IGNORECASE)
-                if m:
-                    return self._clean_extracted_address(m.group(0).strip()[:300])
+                if not m:
+                    continue
+                candidate = m.group(0).strip()[:300]
+                # Pattern 1 (índice 1, "Dirección:"/"Ubicación:"/"Domicilio:") es
+                # el único de los 3 sin ancla numérica propia (los otros dos ya
+                # exigen un número de calle o un C.P.) — capturaba literalmente
+                # cualquier cosa hasta 300 chars después de la etiqueta. Un
+                # <select> de "Estado" (formulario de contacto) que soup.get_text()
+                # aplana a una sola línea de "Aguascalientes, Baja California,
+                # ..." pasaba esto sin problema y se guardaba como si fuera la
+                # dirección real — caso real confirmado en producción, plantilla
+                # compartida por varios sitios de agencias Nissan/Infiniti,
+                # 2026-09-29. Una dirección real siempre trae al menos un dígito
+                # (número de calle, CP, o teléfono cercano); un dropdown de
+                # nombres de estado no trae ninguno.
+                if pattern_idx == 1 and not re.search(r'\d', candidate):
+                    continue
+                return self._clean_extracted_address(candidate)
         return ""
 
     def _extract_address(self, text: str, soup: BeautifulSoup) -> str:
@@ -1766,7 +1891,13 @@ class WebsiteScraper:
         """
         if not city:
             return ""
-        from searcher import _find_state_for_city
+        # Bug real encontrado en una auditoría de performance (2026-09-29):
+        # este import sin el prefijo "app." tronaba con ModuleNotFoundError en
+        # cualquier contexto donde "apps/api" (no "apps/api/app") no estuviera
+        # también en sys.path — no un simple "más lento", el scrape completo
+        # se cancelaba (sin try/except alrededor) cada vez que necesitaba
+        # resolver el estado desde una ciudad.
+        from app.searcher import _find_state_for_city
         state_key = _find_state_for_city(city)
         if not state_key:
             return ""
@@ -1780,6 +1911,20 @@ class WebsiteScraper:
         # ── 1. JSON-LD (Schema.org) — máxima precisión ────────────────────────
         schema = self._extract_schema_address(soup)
         if schema and (schema.get("address") or schema.get("city")):
+            # Para una cadena/franquicia con varios nodos LocalBusiness, `schema`
+            # trae la PRIMERA sucursal listada como si fuera la única — pero si
+            # la búsqueda que produjo esta URL ya sabía a qué estado apuntaba
+            # (self._target_state_hint), y alguna de las OTRAS sucursales de
+            # all_locations sí coincide, esa es casi con certeza la sucursal
+            # real que se buscaba. Antes all_locations solo se guardaba para
+            # revisión manual — nada la consultaba (audit finding, 2026-09-29).
+            hint = getattr(self, "_target_state_hint", None)
+            all_locs = schema.get("all_locations") or []
+            if hint and len(all_locs) > 1:
+                for loc in all_locs:
+                    if self._norm_state_key(loc.get("state", "")) == hint:
+                        schema = {**schema, "city": loc.get("city", ""), "state": loc.get("state", "")}
+                        break
             schema["city"] = self._clean_city(schema.get("city", ""))
             # Inferir estado desde ciudad si quedó vacío
             if not schema.get("state") and schema.get("city"):
@@ -1847,33 +1992,49 @@ class WebsiteScraper:
         return result
 
     def _extract_city(self, text: str) -> str:
-        """Extrae ciudad buscando lo que aparece antes de un estado conocido."""
+        """Extrae ciudad buscando lo que aparece antes de un estado conocido.
+
+        Si self._target_state_hint está presente (estado al que estaba acotada
+        la búsqueda, ver scrape_site), se prefiere cualquier candidato — de la
+        regex o de la lista de ciudades conocidas — cuyo estado coincida con el
+        esperado, en vez de quedarse ciegamente con la PRIMERA mención que
+        aparece en el texto. Sin hint, el comportamiento es idéntico al de
+        antes (primera mención válida, sin preferencia). Caso real que motivó
+        esto: terecazola.com, negocio real de Yucatán cuya portada destacaba
+        un blog post sobre un evento en Ciudad de México — la mención
+        incidental salía primero en el texto y ganaba siempre, 2026-09-29.
+        """
         import re as _re
 
+        hint = getattr(self, "_target_state_hint", None)
         states_pat = (r'(Ciudad de México|Estado de México|Nuevo León|Jalisco|Puebla|'
                       r'Veracruz|Guanajuato|Chihuahua|Coahuila|Sonora|Oaxaca|Tamaulipas|'
                       r'Sinaloa|Baja California Sur|Baja California|Guerrero|Michoacán|'
                       r'Hidalgo|Tabasco|Yucatán|Querétaro|San Luis Potosí|Morelos|'
                       r'Aguascalientes|Tlaxcala|Quintana Roo|Nayarit|Campeche|'
                       r'Zacatecas|Colima|Durango|Chiapas)')
-        m = _re.search(r'([A-ZÁÉÍÓÚÑ][^,\n]{2,50}),\s*' + states_pat, text)
-        if m:
+        first_valid = None
+        for m in _re.finditer(r'([A-ZÁÉÍÓÚÑ][^,\n]{2,50}),\s*' + states_pat, text):
             candidate = m.group(1).strip()
-            if not _re.search(r'\d|[Cc]ol\.|[Cc]olonia|[Aa]v\.|[Cc]alle|[Zz]ona', candidate):
-                # `search` matches the FIRST "<text>, <state>" pair in the page,
-                # which isn't always the real address — an unrelated earlier
-                # sentence ending in a state name (e.g. a bio: "Egresado de la
-                # UNAM. Ubicados en Hermosillo, Sonora") gets captured whole
-                # ("Unam. Ubicados En Hermosillo", a real bug seen in
-                # production 2026-09-24). _clean_city already knows how to dig
-                # a known city out of a messy/oversized candidate — reuse it
-                # here instead of trusting the raw regex capture verbatim.
-                cleaned = self._clean_city(candidate.title())
-                if cleaned:
-                    return cleaned
-                # Candidate was junk with no recognizable city inside it —
-                # fall through to the known-cities scan below instead of
-                # returning the garbage string.
+            if _re.search(r'\d|[Cc]ol\.|[Cc]olonia|[Aa]v\.|[Cc]alle|[Zz]ona', candidate):
+                continue
+            # `finditer` recorre TODAS las menciones "<texto>, <estado>" de la
+            # página, no solo la primera — una frase anterior sin relación que
+            # termine en un nombre de estado (ej. una bio: "Egresado de la
+            # UNAM. Ubicados en Hermosillo, Sonora") ya no gana automáticamente
+            # solo por aparecer primero (bug real visto en producción,
+            # 2026-09-24). _clean_city ya sabe extraer una ciudad conocida de
+            # un candidato sucio/con ruido — se reusa aquí en vez de confiar en
+            # el texto crudo capturado.
+            cleaned = self._clean_city(candidate.title())
+            if not cleaned:
+                continue
+            if first_valid is None:
+                first_valid = cleaned
+            if hint and self._norm_state_key(m.group(2)) == hint:
+                return cleaned  # coincide con el estado esperado — gana sin importar el orden
+        if first_valid:
+            return first_valid
 
         # Fallback: lista de ciudades conocidas
         cities = [
@@ -1887,9 +2048,30 @@ class WebsiteScraper:
             "Chetumal", "Pachuca", "Tlaxcala", "Cuernavaca",
         ]
         tl = text.lower()
+        if hint:
+            # Revisar primero las ciudades cuyo estado inferido coincide con lo
+            # esperado — mismo criterio de preferencia que arriba, aplicado a
+            # este fallback.
+            for city in cities:
+                if city.lower() in tl and self._norm_state_key(self._infer_state_from_city(city)) == hint:
+                    return city
+        # Sin hint (o ninguna coincide con él): a diferencia del bloque regex de
+        # arriba (ya corregido, ver f3ec73b), este fallback nunca recibió el
+        # mismo arreglo y seguía devolviendo la PRIMERA ciudad de esta lista fija
+        # que apareciera en cualquier parte del texto — sin importar en qué
+        # posición real aparecía. Un texto que solo menciona una ciudad
+        # temprana de esta lista de pasada (o que ni siquiera la menciona,
+        # pero SÍ trae la ciudad real más abajo) perdía contra ella. Ahora se
+        # busca la posición de cada ciudad presente y gana la que aparece más
+        # temprano en el texto real, igual que ya hace el bloque regex de
+        # arriba (audit finding, 2026-09-29).
+        best_city, best_pos = None, None
         for city in cities:
-            if city.lower() in tl:
-                return city
+            pos = tl.find(city.lower())
+            if pos != -1 and (best_pos is None or pos < best_pos):
+                best_city, best_pos = city, pos
+        if best_city:
+            return best_city
         return ""
 
     def _extract_state(self, text: str) -> str:
@@ -1913,9 +2095,52 @@ class WebsiteScraper:
             "Tlaxcala", "Quintana Roo", "Nayarit", "Campeche", "Zacatecas",
             "Colima", "Durango", "Chiapas", "Baja California Sur",
         ]
+        # Esta lista se recorre en orden FIJO y se devuelve la primera coincidencia
+        # válida — sin importar cuántas veces aparezca el estado REAL más abajo en
+        # el texto, un estado que solo aparece de pasada (ej. una noticia sobre un
+        # evento) siempre gana si está antes en esta lista (caso real:
+        # terecazola.com, negocio real de Yucatán — "Yucatán" aparece 10 veces en
+        # la página pero "Ciudad de México" está antes en esta lista y aparece 1
+        # sola vez en un post de blog, así que siempre ganaba esa, 2026-09-29).
+        # Si la búsqueda que produjo esta URL ya sabía a qué estado apuntaba
+        # (self._target_state_hint, ver scrape_site), se revisa ESE primero —
+        # con la misma protección de contexto de calle — antes de caer al orden
+        # fijo de siempre.
+        hint = getattr(self, "_target_state_hint", None)
+        if hint:
+            for state in states:
+                if self._norm_state_key(state) != hint:
+                    continue
+                s_low = state.lower()
+                tl_hint = text.lower()
+                start = 0
+                _after_re  = re.compile(r'^\s*(n[º°o]\.?\s*\d|#\s*\d|\d)')
+                _before_re = re.compile(r'(calle|av\.|avenida|blvd\.?|boulevard|colonia|col\.)\s*$')
+                while True:
+                    pos = tl_hint.find(s_low, start)
+                    if pos == -1:
+                        break
+                    after  = tl_hint[pos + len(s_low): pos + len(s_low) + 12]
+                    before = tl_hint[max(0, pos - 12): pos]
+                    if not (_after_re.search(after) or _before_re.search(before)):
+                        return state
+                    start = pos + len(s_low)
+                break
         tl = text.lower()
         _STREET_AFTER_RE  = re.compile(r'^\s*(n[º°o]\.?\s*\d|#\s*\d|\d)')
         _STREET_BEFORE_RE = re.compile(r'(calle|av\.|avenida|blvd\.?|boulevard|colonia|col\.)\s*$')
+        # Igual que el fallback de ciudades conocidas de _extract_city: antes se
+        # recorría `states` en orden FIJO y ganaba el primero de la lista que
+        # apareciera en cualquier parte del texto — no el que apareciera primero
+        # en el texto real. Un formulario de contacto con un <select> de "Estado"
+        # (los 32 nombres aplanados a texto por soup.get_text()) hacía que
+        # siempre ganara el que estuviera antes en ESTA lista, sin importar dónde
+        # cayera en la página real — caso real confirmado en producción:
+        # agencias Nissan/Infiniti con la misma plantilla, todas guardadas como
+        # "Puebla" (4to lugar en esta lista) estando en Hermosillo/Tijuana
+        # (mucho más abajo en la lista), 2026-09-29. Ahora gana el que aparece
+        # más temprano en el texto real, igual que ya hace _extract_city.
+        best_state, best_pos = None, None
         for state in states:
             s_low = state.lower()
             start = 0
@@ -1926,9 +2151,11 @@ class WebsiteScraper:
                 after  = tl[pos + len(s_low): pos + len(s_low) + 12]
                 before = tl[max(0, pos - 12): pos]
                 if not (_STREET_AFTER_RE.search(after) or _STREET_BEFORE_RE.search(before)):
-                    return state
+                    if best_pos is None or pos < best_pos:
+                        best_state, best_pos = state, pos
+                    break  # primera ocurrencia VÁLIDA de este estado ya encontrada
                 start = pos + len(s_low)
-        return ""
+        return best_state or ""
 
     def _extract_country(self, text: str) -> str:
         """Extrae país"""
@@ -1959,6 +2186,13 @@ class WebsiteScraper:
         "ordenalo", "cotizar", "cotiza", "cotizacion", "cotización", "reportar",
         "reporta", "solicitar", "solicita", "consulta", "consultar", "aviso",
         "reporte", "click", "clic",
+        # Abreviaciones/frases de botón de "llamar" que _extract_wa_label
+        # también usa para labels de links tel: (ver
+        # _extract_phone_numbers_with_labels) — sin esto, "Tel." o "Llamar
+        # ahora" se guardaban como si fueran el nombre de la sucursal (bug
+        # real, fmexi.com/sucursales, 2026-09-29: 43 de 43 números con este
+        # tipo de label genérico en vez de vacío).
+        "tel", "tel.", "cel", "cel.", "llamar", "marca", "marcar",
     }
     # Palabras de relleno que no aportan ni quitan significado ("por", "vía", "un"...)
     _WA_FILLER_WORDS = {
@@ -2033,6 +2267,31 @@ class WebsiteScraper:
                     return h_text
             node = node.parent
 
+        # 3b. <b>/<strong> INMEDIATAMENTE anterior en orden de DOCUMENTO (no
+        # limitado al mismo contenedor) — cubre el patrón real
+        # "<b>Sucursal X:</b> ... wa.me/... <b>Sucursal Y:</b> ... wa.me/..."
+        # donde varias sucursales comparten un mismo contenedor/tab de
+        # acordeón. El paso 3 nunca lo encuentra porque solo busca h1-h6, y
+        # _has_multiple_wa_links() hace que los pasos 3/4 se rindan apenas
+        # detectan más de un link ahí adentro — bug real confirmado
+        # (enigmarooms.net, 2026-09-29: 14 de 15 sucursales sin label).
+        # Se verifica que no haya OTRO link de WhatsApp entre la etiqueta y
+        # este link — si lo hay, esa etiqueta es de la OTRA sucursal.
+        label_tag = link_tag.find_previous(re.compile(r"^(h[1-6]|b|strong)$"))
+        if label_tag:
+            other_link_between = False
+            for a in label_tag.find_all_next("a", href=True):
+                if a is link_tag:
+                    break
+                h = a["href"]
+                if "wa.me/" in h or (("api.whatsapp.com/send" in h or "web.whatsapp.com/send" in h) and "phone=" in h):
+                    other_link_between = True
+                    break
+            if not other_link_between:
+                lbl_text = _clean(label_tag.get_text(" ", strip=True))
+                if lbl_text and not _is_generic(lbl_text):
+                    return lbl_text
+
         # 4. Texto del contenedor más cercano con un solo fragmento significativo
         node = link_tag.parent
         for _ in range(4):
@@ -2046,6 +2305,27 @@ class WebsiteScraper:
             node = node.parent
 
         return ""
+
+    def _extract_phone_numbers_with_labels(self, soup: BeautifulSoup) -> List[Dict]:
+        """Extrae números de <a href="tel:...">  junto con su label de sucursal —
+        equivalente a _extract_whatsapp_with_labels() pero para links tel: normales.
+        No existía en absoluto (bug real, 2026-09-29: páginas de sucursales que
+        solo usan tel: — muy común, tan común como wa.me — extraían los números
+        correctos pero como lista plana, sin ninguna forma de saber qué número
+        pertenecía a qué sucursal). Reusa _extract_wa_label(), cuya lógica de
+        heading/contenedor-cercano no depende de que el link sea específicamente
+        de WhatsApp."""
+        seen: set = set()
+        result: List[Dict] = []
+        for link in soup.find_all("a", href=True):
+            href = link["href"].strip()
+            if not href.lower().startswith("tel:"):
+                continue
+            clean = self._normalize_phone(href[4:])
+            if clean and clean not in seen:
+                seen.add(clean)
+                result.append({"number": clean, "label": self._extract_wa_label(link)})
+        return result
 
     def _extract_whatsapp_with_labels(self, soup: BeautifulSoup, text: str) -> List[Dict]:
         """Extrae números de WhatsApp junto con su label de sucursal/contexto."""
@@ -2234,11 +2514,28 @@ class WebsiteScraper:
         "horario", "lunes", "martes", "miércoles", "miercoles", "jueves", "viernes",
         "sábado", "sabado", "domingo", "whats", "app", "llamar", "escríbenos",
         "escribenos", "visítanos", "visitanos", "síguenos", "siguenos",
+        # Etiquetas típicas de listados inmobiliarios/directorios de agentes —
+        # caso real (casasenmx.com/agents, 2026-09-29): "Trato Directo" pasaba
+        # el filtro y se guardaba como si fuera el nombre de un agente.
+        "trato", "directo", "directa", "exclusiva", "exclusivo", "disponible",
+        "vendido", "vendida", "rentado", "rentada", "propiedad", "propiedades",
+        "inmueble", "inmuebles", "agencia", "agente", "asesor", "asesora",
+        "remax", "century", "coldwell",
     }
 
     def _is_probable_person_name(self, name: str) -> bool:
         words = re.findall(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]+", name.lower())
-        return bool(words) and not any(w in self.NAME_STOPWORDS for w in words)
+        if not words or any(w in self.NAME_STOPWORDS for w in words):
+            return False
+        # Un candidato que ES (o es casi por completo) el nombre de una ciudad
+        # conocida no es una persona — caso real: "San Luis Potosí" pasaba el
+        # filtro de stopwords palabra por palabra (ninguna de "san"/"luis"/
+        # "potosí" está en la lista) y terminaba guardado con el teléfono real
+        # de un agente cercano, 2026-09-29.
+        name_norm = " ".join(words)
+        if any(name_norm == city.lower() for city in self._KNOWN_CITIES):
+            return False
+        return True
 
     def _extract_person_contacts(self, soup: BeautifulSoup, text: str) -> List[Dict]:
         """Extrae nombres asociados a teléfonos/emails de un sitio web.
@@ -2250,7 +2547,17 @@ class WebsiteScraper:
         clean_soup = BeautifulSoup(str(soup), "html.parser")
         for tag in clean_soup.find_all(["nav", "header", "footer", "script", "style"]):
             tag.decompose()
-        for tag in clean_soup.find_all(class_=re.compile(r"(menu|nav|footer|header)", re.IGNORECASE)):
+        # Límites de palabra (\b) son obligatorios aquí — sin ellos, un simple
+        # substring match confunde clases que solo CONTIENEN estas letras con
+        # clases que de verdad son de navegación. Bug real confirmado en vivo
+        # (2026-09-29, casasenmx.com/agents): la clase de Tailwind "pt-navx"
+        # (padding-top, nada que ver con navegación) se detectaba como "nav" y
+        # borraba TODO el <main> del sitio — 259 agentes con nombre y teléfono,
+        # pérdida total de datos antes de que cualquier estrategia de
+        # extracción llegara a correr. "\bnav\b" con "(?:bar)?" sigue
+        # atrapando variantes reales comunes ("navbar", "main-nav",
+        # "site-header") sin caer en falsos positivos de substring.
+        for tag in clean_soup.find_all(class_=re.compile(r"\b(?:menu|nav|footer|header)(?:bar)?\b", re.IGNORECASE)):
             tag.decompose()
 
         contacts: List[Dict] = []
@@ -2419,8 +2726,13 @@ class WebsiteScraper:
         """Parsea contactos desde texto"""
         contacts = []
         
-        # Patrón: Nombre (2-4 palabras capitalizadas)
-        name_pattern = r"([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,3})"
+        # Patrón: Nombre (2-4 palabras, cada una Titlecase O TODO EN MAYÚSCULAS
+        # — no mezclado). Antes solo aceptaba Titlecase ("Ana Gómez"), así que
+        # nombres en mayúsculas ("ANA XIMENA GOMEZ ELIAS", formato común en
+        # directorios de agentes/notarías/gobierno) nunca se detectaban en
+        # absoluto — caso real confirmado 2026-09-29 (casasenmx.com/agents).
+        _word = r"[A-ZÁÉÍÓÚÑ](?:[a-záéíóúñ]+|[A-ZÁÉÍÓÚÑ]+)"
+        name_pattern = rf"({_word}(?:\s+{_word}){{1,3}})"
         names = re.findall(name_pattern, text)
         
         for name in names:

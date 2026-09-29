@@ -819,7 +819,8 @@ def _execute_send_job(job_id: str):
         else:
             filter_q = {}
             if industry:
-                filter_q["industry"] = {"$regex": industry, "$options": "i"}
+                import re as _re
+                filter_q["industry"] = {"$regex": _re.escape(industry), "$options": "i"}
             companies = list(db.db.companies.find(
                 filter_q,
                 {"_id": 1, "name": 1, "business_name": 1, "industry": 1, "city": 1, "website": 1, "domain": 1},

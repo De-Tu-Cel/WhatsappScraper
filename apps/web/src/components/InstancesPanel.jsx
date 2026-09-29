@@ -2438,7 +2438,7 @@ export default function InstancesPanel({ isActive } = {}) {
   async function fetchSfInfo(country) {
     setSfInfoLoading(true); setSfInfo(null)
     try {
-      const r = await fetch(`/api/smsfast/info?country=${country}`, { cache: 'no-store' })
+      const r = await fetch(`/api/smsfast/info?country=${country}`, { headers: { 'x-user-token': token() }, cache: 'no-store' })
       const d = await r.json()
       setSfInfo(d)
     } catch {}
@@ -2461,7 +2461,7 @@ export default function InstancesPanel({ isActive } = {}) {
     try {
       const r = await fetch('/api/smsfast/buy', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
         body: JSON.stringify({ country: sfCountry, maxPrice: sfInfo?.price }),
       })
       const d = await r.json()
@@ -2484,7 +2484,7 @@ export default function InstancesPanel({ isActive } = {}) {
     try {
       await fetch('/api/smsfast/cancel', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
         body: JSON.stringify({ id: sfActivationId }),
       })
     } catch {}

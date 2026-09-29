@@ -1,6 +1,7 @@
 'use client'
 import { useState, useCallback } from 'react'
 import { useLang } from '../context/LangContext'
+import { authFetch } from '@/lib/api'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Dialog from '@mui/material/Dialog'
@@ -62,7 +63,7 @@ export default function AndyBotBuilder({ open, onClose, initialData = null }) {
     let emails = initialData?.emails || ''
     if (!emails && initialData?.company_id) {
       try {
-        const cr = await fetch(`/api/companies/${initialData.company_id}`)
+        const cr = await authFetch(`/api/companies/${initialData.company_id}`)
         if (cr.ok) {
           const cd = await cr.json()
           const emailContacts = (cd.contacts || [])

@@ -517,14 +517,23 @@ class MongoDBManager:
 
     def list_companies(self, page=1, page_size=10, search=None, industry=None, city=None, has_whatsapp=None, contacted=None):
         from bson import ObjectId
+        from concurrent.futures import ThreadPoolExecutor
 
         # Build base query (without contacted filter — applied below after we know contacted_set)
         query = {}
         if search:
+            # re.escape() — this endpoint is reachable with a raw, unsanitized
+            # search string; without escaping, a crafted pattern (e.g. catastrophic
+            # backtracking like "(a+)+$") causes each matching document's regex
+            # check to take exponential time, tying up the shared DB for everyone
+            # (real ReDoS gap found in a security sweep, 2026-09-29 — every other
+            # $regex builder in this codebase already escapes, this one didn't).
+            import re as _re
+            _search_safe = _re.escape(search)
             query["$or"] = [
-                {"name": {"$regex": search, "$options": "i"}},
-                {"website": {"$regex": search, "$options": "i"}},
-                {"domain": {"$regex": search, "$options": "i"}},
+                {"name": {"$regex": _search_safe, "$options": "i"}},
+                {"website": {"$regex": _search_safe, "$options": "i"}},
+                {"domain": {"$regex": _search_safe, "$options": "i"}},
             ]
         # industry/city: comma-separated list of exact values from the filter
         # checklist (multi-select) — was a single $regex substring match before;
@@ -567,51 +576,85 @@ class MongoDBManager:
             if _contacted_oids_all:
                 query["_id"] = {"$nin": _contacted_oids_all}
 
-        total = self.db.companies.count_documents(query)
+        # The 6 lookups below are all independent of each other once `query`
+        # is finalized (none depends on another's result) — running them
+        # sequentially just stacks up round trips for no reason, same
+        # "concurrent Mongo round trips" pattern already used in
+        # get_company_full_data(). Measured live in a performance audit
+        # (2026-09-29): ~400ms of pure round-trip time (8 sequential calls at
+        # ~48ms each over this tunnel) for a single /api/companies page load.
+        def _total():
+            return self.db.companies.count_documents(query)
 
-        # Stable denominator for the contacted/not-contacted split — always
-        # against the search/industry/city filters WITHOUT the contacted
-        # narrowing itself, so the percentage stays a real partition (the two
-        # sides sum to 100%) no matter which side is currently selected.
-        total_for_contacted_pct = self.db.companies.count_documents(_query_before_contacted)
-        total_contacted_for_pct = (
-            self.db.companies.count_documents({**_query_before_contacted, "_id": {"$in": _contacted_oids_all}})
-            if _contacted_oids_all else 0
-        )
+        def _total_for_contacted_pct():
+            # Stable denominator for the contacted/not-contacted split — always
+            # against the search/industry/city filters WITHOUT the contacted
+            # narrowing itself, so the percentage stays a real partition (the
+            # two sides sum to 100%) no matter which side is currently selected.
+            return self.db.companies.count_documents(_query_before_contacted)
 
-        # Global stats for the current filter (all pages, not just current)
-        total_wa = self.db.companies.count_documents({**query, "has_whatsapp": True})
-
-        # Total contacted — count companies matching query that are in the contacted set
-        if contacted is True:
-            # All results are contacted by definition
-            total_contacted = total
-        elif contacted is False:
-            total_contacted = 0
-        else:
-            # Intersect: count matching companies whose ID is in _contacted_oids_all
-            if _contacted_oids_all:
-                total_contacted = self.db.companies.count_documents({**query, "_id": {"$in": _contacted_oids_all}})
-            else:
-                total_contacted = 0
-
-        # Most recent scrape date across all matching companies
-        latest_doc = self.db.companies.find_one(
-            {**query, "last_scraped_at": {"$exists": True, "$ne": None}},
-            sort=[("last_scraped_at", -1)],
-            projection={"last_scraped_at": 1},
-        )
-        latest_scrape_at = latest_doc["last_scraped_at"].isoformat() if latest_doc and latest_doc.get("last_scraped_at") else None
-
-        companies = list(
-            self.db.companies.find(
-                query,
-                {"name": 1, "domain": 1, "website": 1, "industry": 1, "city": 1, "state": 1, "has_whatsapp": 1, "status": 1, "created_at": 1, "last_scraped_at": 1}
+        def _total_contacted_for_pct():
+            return (
+                self.db.companies.count_documents({**_query_before_contacted, "_id": {"$in": _contacted_oids_all}})
+                if _contacted_oids_all else 0
             )
-            .sort("created_at", -1)
-            .skip((page - 1) * page_size)
-            .limit(page_size)
-        )
+
+        def _total_wa():
+            return self.db.companies.count_documents({**query, "has_whatsapp": True})
+
+        def _total_contacted():
+            if contacted is True:
+                return None  # resolved from `total` after the pool joins — no query needed
+            if contacted is False:
+                return 0
+            if _contacted_oids_all:
+                return self.db.companies.count_documents({**query, "_id": {"$in": _contacted_oids_all}})
+            return 0
+
+        def _latest_scrape_at():
+            latest_doc = self.db.companies.find_one(
+                {**query, "last_scraped_at": {"$exists": True, "$ne": None}},
+                sort=[("last_scraped_at", -1)],
+                projection={"last_scraped_at": 1},
+            )
+            return latest_doc["last_scraped_at"].isoformat() if latest_doc and latest_doc.get("last_scraped_at") else None
+
+        def _companies():
+            return list(
+                self.db.companies.find(
+                    query,
+                    # location_mismatch: {searched_state, detected_state, detected_city} — set by
+                    # pipeline.py's post-scrape geo check (see its own comment) whenever a
+                    # company's real scraped address doesn't match the state its search was
+                    # scoped to. Computed and saved since 2026-09-24 but never included in this
+                    # projection, so the frontend had no way to ever show it — added 2026-09-29
+                    # after confirming live that a real Mérida/Yucatán search returned companies
+                    # actually located in Zacatecas and Ciudad de México, silently.
+                    {"name": 1, "domain": 1, "website": 1, "industry": 1, "city": 1, "state": 1, "has_whatsapp": 1, "status": 1, "created_at": 1, "last_scraped_at": 1, "location_mismatch": 1}
+                )
+                .sort("created_at", -1)
+                .skip((page - 1) * page_size)
+                .limit(page_size)
+            )
+
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            f_total = ex.submit(_total)
+            f_total_for_pct = ex.submit(_total_for_contacted_pct)
+            f_total_contacted_for_pct = ex.submit(_total_contacted_for_pct)
+            f_total_wa = ex.submit(_total_wa)
+            f_total_contacted = ex.submit(_total_contacted)
+            f_latest = ex.submit(_latest_scrape_at)
+            f_companies = ex.submit(_companies)
+            total = f_total.result()
+            total_for_contacted_pct = f_total_for_pct.result()
+            total_contacted_for_pct = f_total_contacted_for_pct.result()
+            total_wa = f_total_wa.result()
+            total_contacted = f_total_contacted.result()
+            latest_scrape_at = f_latest.result()
+            companies = f_companies.result()
+
+        if total_contacted is None:
+            total_contacted = total  # contacted=True → all results are contacted by definition
         # Mark which companies on this page have been contacted and include contacted numbers
         if companies:
             page_contacted = [str(c["_id"]) for c in companies if str(c["_id"]) in all_contacted_ids_str]
@@ -1058,6 +1101,23 @@ class MongoDBManager:
             {"$set": {"status": status, "updated_at": datetime.now()}},
         )
         return result.modified_count > 0
+
+    def get_conversations_last_activity(self):
+        """Cheap "has anything changed" probe for the Conversations tab's
+        polling — a single find_one sorted by created_at (already indexed,
+        this is the natural sort order for message_logs), vs. get_conversations()'s
+        ~7 sequential aggregate/find calls over the full collection.
+
+        A performance audit (2026-09-29) measured get_conversations() at
+        1.3-1.5s, polled every 5s by every agent with the Conversations tab
+        open — a continuous background cost, not just a one-time slow load.
+        The frontend now polls THIS endpoint every 5s instead, and only pays
+        for the real get_conversations() call when the timestamp actually
+        changed since its last check."""
+        last = self.db.message_logs.find_one(
+            {}, sort=[("created_at", -1)], projection={"created_at": 1},
+        )
+        return last["created_at"].isoformat() if last and last.get("created_at") else None
 
     def get_conversations(self):
         """Returns one entry per company that has message activity, sorted by last message."""

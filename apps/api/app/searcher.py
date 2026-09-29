@@ -1416,15 +1416,38 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
         domain = urlparse(u).netloc.lower().replace('www.', '').split('.')[0]
         return any(kw in domain for kw in _WRONG_SECTOR_DOMAIN_KWS)
 
+    # El prompt de la IA YA le pide excluir "catálogos o agregadores" y
+    # "directorios", pero esa regla compite con otras ~13 reglas de exclusión
+    # por la atención del modelo — mismo problema de "attention dilution" ya
+    # documentado para la ubicación (ver _reject_wrong_state). Confirmado en
+    # vivo (2026-09-29): un blog-directorio nacional de dulcerías (título
+    # "Dulcería en México -", resumen "Directorio de dulcerías, paleterías y
+    # neverías en distintas ciudades de México") fue APROBADO 5/5 veces por el
+    # filtro de IA para una búsqueda de "panaderías en Mérida, Yucatán" — el
+    # sitio ni siquiera menciona Yucatán, solo listaba negocios de otros
+    # estados (Zacatecas). Igual que _wrong_sector_domain, este chequeo es
+    # determinista (no depende de que la IA le dé suficiente peso a la regla).
+    _DIRECTORY_SNIPPET_RE = re.compile(
+        r'\bdirectorio\s+de\b|\blistado\s+de\b|\bcat[aá]logo\s+de\s+negocios\b|'
+        r'\blos\s+mejores\s+\d*\s*\b|\btop\s*\d+\b|\bgu[ií]a\s+de\b|'
+        r'\ben\s+distintas\s+ciudades\b|\ben\s+todo\s+m[eé]xico\b',
+        re.IGNORECASE,
+    )
+
+    def _looks_like_directory_snippet(u: str) -> bool:
+        s = snippets.get(u, {})
+        text = f"{s.get('title') or ''} {s.get('body') or ''}"
+        return bool(_DIRECTORY_SNIPPET_RE.search(text))
+
     def _keyword_fallback(candidates: list[str]) -> list[str]:
         """Last-resort filter by industry keywords in domain when LLM rejects everything."""
         kw_raw = re.sub(r'\b(de|del|en|la|el|los|las|y|o|con|para|por|a)\b', ' ', industry, flags=re.I)
         kws = [w.lower() for w in re.split(r'\s+', kw_raw.strip()) if len(w) >= 3]
         if not kws:
-            return [u for u in candidates if not _wrong_sector_domain(u)]
+            return [u for u in candidates if not _wrong_sector_domain(u) and not _looks_like_directory_snippet(u)]
         kept = []
         for u in candidates:
-            if _wrong_sector_domain(u):
+            if _wrong_sector_domain(u) or _looks_like_directory_snippet(u):
                 continue
             domain = urlparse(u).netloc.lower().replace('www.', '')
             if any(kw in domain for kw in kws):
@@ -1432,13 +1455,23 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
         # Only fall through to snippet matching if domain matching found nothing
         if not kept:
             for u in candidates:
-                if _wrong_sector_domain(u):
+                if _wrong_sector_domain(u) or _looks_like_directory_snippet(u):
                     continue
                 s = snippets.get(u, {})
                 text = ((s.get("title") or "") + " " + (s.get("body") or "")).lower()
                 if any(kw in text for kw in kws):
                     kept.append(u)
-        return kept or [u for u in candidates if not _wrong_sector_domain(u)] or candidates
+        # El último "por si acaso, mejor no descartar nada" NO debe ignorar el
+        # chequeo de directorio — un directorio/agregador nunca es un prospecto
+        # válido sin importar qué tan poco quede el resto de los filtros (bug
+        # real encontrado 2026-09-29: este `or candidates` sin filtrar
+        # resucitaba el directorio incluso después de que _ai_filter_urls,
+        # _keyword_fallback's own domain/snippet checks lo hubieran rechazado).
+        return (
+            kept
+            or [u for u in candidates if not _wrong_sector_domain(u) and not _looks_like_directory_snippet(u)]
+            or [u for u in candidates if not _looks_like_directory_snippet(u)]
+        )
 
     # (Industry keywords para el "rescate" de dominios — _ind_kws/_ind_kws_set ya
     # se calcularon arriba, antes de construir _WRONG_SECTOR_DOMAIN_KWS.)
@@ -1449,7 +1482,7 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
             return []
         rescued = []
         for u in all_urls:
-            if u in already_approved or _wrong_sector_domain(u):
+            if u in already_approved or _wrong_sector_domain(u) or _looks_like_directory_snippet(u):
                 continue
             domain = urlparse(u).netloc.lower().replace('www.', '')
             if any(kw in domain for kw in _ind_kws):
@@ -1460,7 +1493,7 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     batch_size = 60
     batches = [urls[i:i + batch_size] for i in range(0, len(urls), batch_size)]
     if len(batches) <= 1:
-        ai_result = [u for u in _filter_batch(urls) if not _wrong_sector_domain(u)]
+        ai_result = [u for u in _filter_batch(urls) if not _wrong_sector_domain(u) and not _looks_like_directory_snippet(u)]
         rescued = _domain_kw_rescue(urls, set(ai_result))
         result = list(dict.fromkeys(ai_result + rescued))
         return result if result else _keyword_fallback(urls)
@@ -1468,7 +1501,7 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     ranked: list[str] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(batches), 3)) as ex:
         for batch_result in ex.map(_filter_batch, batches):
-            ranked.extend(u for u in batch_result if not _wrong_sector_domain(u))
+            ranked.extend(u for u in batch_result if not _wrong_sector_domain(u) and not _looks_like_directory_snippet(u))
     rescued = _domain_kw_rescue(urls, set(ranked))
     ranked = list(dict.fromkeys(ranked + rescued))
     if not ranked and urls:
@@ -1476,7 +1509,8 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     return ranked
 
 
-def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: str = "") -> list[str]:
+def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: str = "",
+                         degraded: list | None = None) -> list[str]:
     """Second, focused LLM pass — drops URLs whose address/LADA/content shows
     CLEAR evidence of being in a Mexican state DIFFERENT from state_key. Kept
     deliberately separate from _ai_filter_urls(): folding this into that much
@@ -1487,6 +1521,12 @@ def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: s
     Same-state results (e.g. Ciudad Obregón for a Sonora search) are
     intentionally kept — that's the existing same-state fan-out/shortfall
     feature, not something to filter here.
+
+    `degraded`, when passed, gets "GeoFilter" appended if the LLM call fails
+    for any batch — before this the except branch below silently kept every
+    URL with no signal anywhere that the state check didn't actually run for
+    this search (unlike the existing degraded_sources mechanism for the 4
+    parallel search sources, which this mirrors — audit finding, 2026-09-29).
     """
     if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not urls or not state_key:
         return urls
@@ -1526,6 +1566,73 @@ def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: s
                 return [u for i, u in enumerate(batch, 1) if i not in reject_idx]
         except Exception:
             pass
+        if degraded is not None and "GeoFilter" not in degraded:
+            degraded.append("GeoFilter")
+        return batch  # fallback: LLM unavailable or parse error — keep everything
+
+    batch_size = 60
+    batches = [urls[i:i + batch_size] for i in range(0, len(urls), batch_size)]
+    if len(batches) <= 1:
+        return _check_batch(urls)
+    kept: list[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(batches), 3)) as ex:
+        for batch_result in ex.map(_check_batch, batches):
+            kept.extend(batch_result)
+    return kept
+
+
+def _reject_wrong_country(urls: list[str], snippets: dict, country: str, city: str = "",
+                           degraded: list | None = None) -> list[str]:
+    """Country-level analog of _reject_wrong_state, for searches outside Mexico
+    — the UI's own example placeholders explicitly invite these ("Dentists in
+    Buenos Aires", "Clinics in London"), but before this, ONLY Mexico-resolvable
+    searches (via _find_state_for_city / the state fan-out) got ANY post-filter
+    geo check at all. Everywhere else, a business from the wrong country could
+    only be caught by chance — the same blind spot _reject_wrong_state was
+    built to close for Mexican states (audit finding, 2026-09-29). No
+    same-country/different-city allowance is needed here (unlike the Mexico
+    check's same-state fan-out) since this only ever runs for a whole-country
+    search with no state-level scoping to begin with.
+    """
+    if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not urls or not country:
+        return urls
+
+    def _check_batch(batch: list[str]) -> list[str]:
+        try:
+            lines = []
+            for i, u in enumerate(batch):
+                s = snippets.get(u, {})
+                title = (s.get("title") or "").strip()
+                body = (s.get("body") or "").strip()[:150]
+                line = f"{i+1}. {u}"
+                if title:
+                    line += f"\n   Título: {title}"
+                if body:
+                    line += f"\n   Resumen: {body}"
+                lines.append(line)
+            where = f"{city}, {country}" if city else country
+            prompt = (
+                f'Se buscan negocios ubicados en {where}.\n\n'
+                f'Tu ÚNICA tarea: de la siguiente lista, señala cuáles tienen evidencia CLARA Y EXPLÍCITA '
+                f'(dirección, código de país telefónico, o texto explícito) de estar ubicados en un país '
+                f'DISTINTO a {country}. No marques nada por duda o ambigüedad — solo evidencia clara y '
+                f'explícita de otro país.\n\n'
+                f'URLs:\n' + '\n'.join(lines) + '\n\n'
+                f'Responde ÚNICAMENTE un array JSON con los números de las que SÍ tienen evidencia clara '
+                f'de estar en OTRO país (para excluirlas). Si ninguna aplica, responde []. '
+                f'Ejemplo: [2] o []'
+            )
+            from app.llm import call_llm
+            content = call_llm([{"role": "user", "content": prompt}], max_tokens=200, temperature=0)
+            m = re.search(r'\[[\d,\s]*\]', content)
+            if m:
+                indices = json.loads(m.group(0))
+                reject_idx = {i for i in indices if 1 <= i <= len(batch)}
+                return [u for i, u in enumerate(batch, 1) if i not in reject_idx]
+        except Exception:
+            pass
+        if degraded is not None and "CountryFilter" not in degraded:
+            degraded.append("CountryFilter")
         return batch  # fallback: LLM unavailable or parse error — keep everything
 
     batch_size = 60
@@ -2313,9 +2420,24 @@ def _search_via_dataforseo_maps(
                 if website and _is_business_url(website) and website not in batch_urls:
                     batch_urls.append(website)
                     rating = item.get("rating") or {}
+                    # Google Maps' own business category (e.g. "Taller mecánico") —
+                    # was being discarded here even though it's real category
+                    # signal DataForSEO returns, while the free OSM source folds
+                    # its own tags into the snippet body for the exact same AI
+                    # relevance filter. Maps is documented above as the highest-
+                    # quality source, so it was feeding that filter weaker
+                    # signal than a lower-quality free source (audit finding,
+                    # 2026-09-29).
+                    categories = [item.get("category")] + (item.get("additional_categories") or [])
+                    category = ", ".join(c for c in categories if c)
+                    body_parts = [p for p in [
+                        category,
+                        item.get("address") or "",
+                        f"{rating.get('value')}★" if rating.get("value") else "",
+                    ] if p]
                     batch_snips[website] = {
                         "title": item.get("title", ""),
-                        "body": item.get("address") or (f"{rating.get('value')}★" if rating.get("value") else ""),
+                        "body": " | ".join(body_parts),
                     }
             return batch_urls, batch_snips
         except Exception as e:
@@ -2414,6 +2536,11 @@ def search_prospects(
     geocode_city = (state_cities[0] if state_cities and not city else city)
 
     _dfs_ok = bool(_dataforseo_auth())
+    # Defined before the branch — the DDG-only `else` below never populated this,
+    # so the final `return` at the bottom of this function would raise
+    # NameError whenever DataForSEO isn't configured/authorized (real gap
+    # found while wiring the GeoFilter degradation flag below, 2026-09-29).
+    degraded_sources: list[str] = []
 
     if _dfs_ok:
         # Correr 4 fuentes en paralelo: DataForSEO Maps + DuckDuckGo + Sección Amarilla + OSM.
@@ -2434,7 +2561,6 @@ def search_prospects(
         # search_prospects() no tenía forma de saber que la búsqueda se degradó
         # a fuentes más débiles. Se acumulan las fuentes fallidas para
         # devolverlas al caller (ver el return final de esta función).
-        degraded_sources: list[str] = []
         def _safe_result(f, label):
             try:
                 remaining = _GLOBAL_DEADLINE - (_time.monotonic() - _t0)
@@ -2526,9 +2652,24 @@ def search_prospects(
     _log.info("[search] AI filter returned %d URLs (from %d)", len(result), len(urls))
     if _target_state_key:
         _before_geo = len(result)
-        result = _reject_wrong_state(result, snippets, _target_state_key, city=city)
+        result = _reject_wrong_state(result, snippets, _target_state_key, city=city, degraded=degraded_sources)
         if len(result) != _before_geo:
             _log.info("[search] geo filter: %d → %d URLs (estado distinto a %s)", _before_geo, len(result), _target_state_key)
+    else:
+        # _target_state_key solo se resuelve para ciudades/estados MEXICANOS
+        # (_find_state_for_city). Para el resto del mundo — que la propia UI
+        # invita a buscar con sus placeholders de ejemplo ("Dentists in Buenos
+        # Aires", "Clinics in London") — no había NINGÚN chequeo geográfico
+        # post-filtro (audit finding, 2026-09-29). Más flojo que el de México
+        # (solo país, no ciudad/estado — no hay una tabla de ciudades por país
+        # para el resto del mundo) pero cierra el hueco más obvio: un negocio
+        # real pero del país equivocado colándose sin ninguna señal.
+        _effective_country = _detect_effective_country(country, f"{industry} {city}")
+        if _effective_country and _norm_loc(_effective_country) != "mexico":
+            _before_geo = len(result)
+            result = _reject_wrong_country(result, snippets, _effective_country, city=city, degraded=degraded_sources)
+            if len(result) != _before_geo:
+                _log.info("[search] country filter: %d → %d URLs (país distinto a %s)", _before_geo, len(result), _effective_country)
 
     # Si el resultado se quedó muy corto del target y se buscó en UNA ciudad
     # específica (no un barrido de estado), probar ciudades vecinas del mismo
@@ -2573,7 +2714,7 @@ def search_prospects(
             if _dedup_new:
                 _extra_result = _ai_filter_urls(_dedup_new, _industry_singular, snippets, country=country)
                 if _state_key:
-                    _extra_result = _reject_wrong_state(_extra_result, snippets, _state_key, city=city)
+                    _extra_result = _reject_wrong_state(_extra_result, snippets, _state_key, city=city, degraded=degraded_sources)
                 _log.info("[search] expansión geográfica: +%d candidatos → +%d aprobados",
                            len(_dedup_new), len(_extra_result))
                 result = list(dict.fromkeys(result + _extra_result))

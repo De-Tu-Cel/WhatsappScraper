@@ -380,6 +380,10 @@ class WebsiteScraper:
         # vez de la real, 2026-09-29). None = sin preferencia, comportamiento
         # idéntico al de antes de este cambio.
         self._target_state_hint = self._norm_state_key(target_state) if target_state else None
+        # Nueva instancia por llamada (ver process_url() en pipeline.py) — este
+        # diccionario nunca sobrevive entre empresas distintas, así que cachear
+        # aquí es seguro (ver _nominatim_structure_address).
+        self._nominatim_cache = {}
 
         if _is_blocked_host(url):
             print(f"🚫 URL bloqueada por seguridad (apunta a red interna/reservada): {url}")
@@ -1520,10 +1524,30 @@ class WebsiteScraper:
     _NOM_LOCK    = None   # throttle: 1 req/s
 
     def _nominatim_structure_address(self, raw: str) -> dict:
-        """Envía una dirección cruda a Nominatim y devuelve {city,state,postal_code,country,lat,lon}."""
-        import threading, time
+        """Envuelve _nominatim_structure_address_uncached con una caché por
+        scrape_site() call (self._nominatim_cache) — medido en una auditoría
+        de performance real (2026-09-29): 6 de 6 llamadas a
+        _extract_address_structured en un solo scrape (página principal + 5
+        subpáginas) disparaban Nominatim, la mayoría con la MISMA dirección
+        física repetida en cada subpágina (footer/contacto compartido), y el
+        candado de throttle es a nivel de CLASE (compartido entre los 4
+        workers concurrentes del lote) — cada llamada repetida no solo era
+        redundante, hacía cola detrás de las de OTRAS empresas en el mismo
+        lote. 48% del tiempo total de un scrape real venía de esto."""
         if not raw or len(raw) < 8:
             return {}
+        cache = getattr(self, "_nominatim_cache", None)
+        if cache is None:
+            cache = self._nominatim_cache = {}
+        if raw in cache:
+            return cache[raw]
+        result = self._nominatim_structure_address_uncached(raw)
+        cache[raw] = result
+        return result
+
+    def _nominatim_structure_address_uncached(self, raw: str) -> dict:
+        """Envía una dirección cruda a Nominatim y devuelve {city,state,postal_code,country,lat,lon}."""
+        import threading, time
         # Throttle: mínimo 1 s entre llamadas (política de uso de Nominatim)
         cls = type(self)
         if cls._NOM_LOCK is None:

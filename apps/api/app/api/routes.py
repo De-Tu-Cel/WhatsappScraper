@@ -224,6 +224,7 @@ def api_update_evolution(body: dict, x_user_token: Optional[str] = Header(None))
 
 @router.post("/process-url")
 def api_process_url(req: ProcessUrlRequest, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         return serialize(process_url(
             req.url, message_template=req.message_template, skip_send=req.skip_send,
@@ -329,6 +330,7 @@ def api_update_scrape_job(job_id: str, body: dict, x_user_token: Optional[str] =
 
 @router.post("/send-message")
 def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         from app.config import EVOLUTION_API_KEY, EVOLUTION_API_URL, EVOLUTION_INSTANCE, WAHA_API_KEY, WASENDER_PAT, WASENDER_BASE_URL
         from app.providers.legacy.evolution import EvolutionClient
@@ -981,8 +983,9 @@ def api_search(req: SearchRequest, x_user_token: Optional[str] = Header(None)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/companies/check-contacted")
-def api_check_contacted(body: dict):
+def api_check_contacted(body: dict, x_user_token: Optional[str] = Header(None)):
     """Returns contact history for a list of company_ids or domains."""
+    _require_user(x_user_token)
     try:
         db = MongoDBManager()
         return db.check_contacted(body.get("company_ids", []))
@@ -990,7 +993,8 @@ def api_check_contacted(body: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/companies/check-urls")
-def api_check_urls(req: CheckUrlsRequest):
+def api_check_urls(req: CheckUrlsRequest, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         db = MongoDBManager()
         return db.check_urls_scraped(req.urls)
@@ -998,14 +1002,16 @@ def api_check_urls(req: CheckUrlsRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/batch")
-def api_batch(req: BatchRequest):
+def api_batch(req: BatchRequest, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         return serialize(run_pipeline_batch(req.urls))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/companies/meta")
-def api_companies_meta():
+def api_companies_meta(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         db = MongoDBManager()
         return {
@@ -1024,7 +1030,9 @@ def api_list_companies(
     city: Optional[str] = None,
     has_whatsapp: Optional[bool] = None,
     contacted: Optional[bool] = None,
+    x_user_token: Optional[str] = Header(None),
 ):
+    _require_user(x_user_token)
     try:
         db = MongoDBManager()
         result = db.list_companies(
@@ -1041,9 +1049,10 @@ def api_list_companies(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/companies")
-def api_create_company(req: CreateCompanyRequest):
+def api_create_company(req: CreateCompanyRequest, x_user_token: Optional[str] = Header(None)):
     """Alta manual de una empresa desde la vista de Base de Datos — sin pasar
     por el scraper, para cuando ya se conoce a un prospecto por otro medio."""
+    _require_user(x_user_token)
     try:
         from urllib.parse import urlparse as _urlparse
         db = MongoDBManager()
@@ -1092,7 +1101,8 @@ def api_create_company(req: CreateCompanyRequest):
 
 
 @router.delete("/companies")
-def api_delete_companies(req: DeleteCompaniesRequest):
+def api_delete_companies(req: DeleteCompaniesRequest, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         db = MongoDBManager()
         deleted = db.delete_companies(req.ids)
@@ -1101,7 +1111,8 @@ def api_delete_companies(req: DeleteCompaniesRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/companies/{company_id}")
-def api_get_company(company_id: str):
+def api_get_company(company_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         db = MongoDBManager()
         data = db.get_company_full_data(company_id)
@@ -1117,7 +1128,8 @@ def api_get_company(company_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/companies/{company_id}")
-def api_update_company(company_id: str, req: UpdateCompanyRequest):
+def api_update_company(company_id: str, req: UpdateCompanyRequest, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
     try:
         db = MongoDBManager()
         fields = {k: v for k, v in req.model_dump().items() if v is not None}
@@ -2360,7 +2372,8 @@ def api_get_evo_config():
     }
 
 @router.post("/config/evolution")
-def api_save_evo_config(body: dict):
+def api_save_evo_config(body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_admin(x_user_token)
     try:
         from pathlib import Path
         import app.config as cfg
@@ -2576,8 +2589,9 @@ def register_agent_health():
 SMSFAST_BASE = "https://api.smsfast.com/stubs/handler_api.php"
 
 @router.get("/smsfast/info")
-def api_smsfast_info(country: int = 54):
+def api_smsfast_info(country: int = 54, x_user_token: Optional[str] = Header(None)):
     """Return SMSFast account balance and price for WhatsApp number in a country."""
+    _require_user(x_user_token)
     import requests as _req
     from app.config import SMSFAST_API_KEY, SMSFAST_SERVICE
     if not SMSFAST_API_KEY:
@@ -2611,12 +2625,18 @@ def api_smsfast_info(country: int = 54):
 
         return {"balance": balance, "price": price, "qty": qty or 0}
     except HTTPException: raise
-    except Exception as e: raise HTTPException(500, str(e))
+    except Exception as e:
+        # SMSFAST_API_KEY sits in the query string — urllib3's own error strings
+        # (e.g. MaxRetryError on a transient failure) include the full request
+        # URL verbatim, which would leak the live key straight into this 500's
+        # body otherwise (real gap found in a security sweep, 2026-09-29).
+        raise HTTPException(500, str(e).replace(SMSFAST_API_KEY, "***"))
 
 
 @router.post("/smsfast/buy")
-def api_smsfast_buy(body: dict):
+def api_smsfast_buy(body: dict, x_user_token: Optional[str] = Header(None)):
     """Buy a WhatsApp virtual number from SMSFast. Returns {ok, id, number}."""
+    _require_user(x_user_token)
     import requests as _req
     from app.config import SMSFAST_API_KEY, SMSFAST_SERVICE
     if not SMSFAST_API_KEY:
@@ -2646,12 +2666,13 @@ def api_smsfast_buy(body: dict):
         }
         raise HTTPException(400, errs.get(text, f"SMSFast: {text}"))
     except HTTPException: raise
-    except Exception as e: raise HTTPException(500, str(e))
+    except Exception as e: raise HTTPException(500, str(e).replace(SMSFAST_API_KEY, "***"))
 
 
 @router.post("/smsfast/cancel")
-def api_smsfast_cancel(body: dict):
+def api_smsfast_cancel(body: dict, x_user_token: Optional[str] = Header(None)):
     """Cancel a SMSFast activation (status=8 = cancel + refund)."""
+    _require_user(x_user_token)
     import requests as _req
     from app.config import SMSFAST_API_KEY
     if not SMSFAST_API_KEY:
@@ -2666,7 +2687,7 @@ def api_smsfast_cancel(body: dict):
         }, timeout=10)
         text = r.text.strip()
         return {"ok": text == "ACCESS_CANCEL", "response": text}
-    except Exception as e: raise HTTPException(500, str(e))
+    except Exception as e: raise HTTPException(500, str(e).replace(SMSFAST_API_KEY, "***"))
 
 
 @router.get("/evolution/instances/user-status")
@@ -5075,12 +5096,13 @@ def api_get_analytics(
 # ── One-time data cleanup ──────────────────────────────────────────────────────
 
 @router.post("/admin/cleanup-contacts")
-def api_cleanup_contacts():
+def api_cleanup_contacts(x_user_token: Optional[str] = Header(None)):
     """
     One-time cleanup:
     1. Remove +521XXXXXXXXXX contacts when +52XXXXXXXXXX duplicate exists.
     2. Delete phantom outbound message_logs (empty body, to numbers not in contacts).
     """
+    _require_admin(x_user_token)
     try:
         db = MongoDBManager()
 
@@ -5838,7 +5860,7 @@ def _build_requeue_filter():
     }
 
 @router.post("/admin/verify-phone-contacts")
-def api_verify_phone_contacts(limit: int = 10):
+def api_verify_phone_contacts(limit: int = 10, x_user_token: Optional[str] = Header(None)):
     """Check 'phone' contacts (scraped without an explicit WhatsApp icon/link)
     against real WhatsApp registration via isRegisteredUser() — the same
     lookup already done before every real send (getNumberId()), no message
@@ -5848,6 +5870,7 @@ def api_verify_phone_contacts(limit: int = 10):
     call; use `remaining` to know if another call is needed — same
     claim-then-process pattern as /admin/requeue-unanalyzed, so concurrent
     calls don't double-check the same contact."""
+    _require_admin(x_user_token)
     from app.whatsapp_wwebjs import get_all_connected_instances, verify_number
     db = MongoDBManager()
     connected = get_all_connected_instances(db)
@@ -5895,10 +5918,11 @@ def api_verify_phone_contacts(limit: int = 10):
     return {"ok": True, "checked": len(claimed), "promoted": promoted, "remaining": remaining}
 
 @router.post("/admin/requeue-unanalyzed")
-def api_requeue_unanalyzed(background_tasks: BackgroundTasks, limit: int = 20):
+def api_requeue_unanalyzed(background_tasks: BackgroundTasks, limit: int = 20, x_user_token: Optional[str] = Header(None)):
     """Find inbound messages with no valid analysis and re-run the classifier.
     Covers: never processed, stuck pending, classifier exception, LLM error payload.
     Processes at most `limit` per call; use `remaining` to know if another call is needed."""
+    _require_admin(x_user_token)
     from app.classifier import classify_and_save, all_quota_exhausted
     from datetime import datetime, timezone
     if all_quota_exhausted():
@@ -5930,8 +5954,9 @@ def api_requeue_unanalyzed(background_tasks: BackgroundTasks, limit: int = 20):
 
 
 @router.get("/admin/all-pending")
-def api_all_pending():
+def api_all_pending(x_user_token: Optional[str] = Header(None)):
     """DEV — list all message_logs with analysis_status pending."""
+    _require_admin(x_user_token)
     db = MongoDBManager()
     docs = list(db.db.message_logs.find({"analysis_status": "pending"}, {"_id": 1, "company_id": 1, "message_body": 1}))
     for d in docs:
@@ -5940,18 +5965,20 @@ def api_all_pending():
 
 
 @router.post("/admin/reset-quota-circuit")
-def api_reset_quota_circuit():
+def api_reset_quota_circuit(x_user_token: Optional[str] = Header(None)):
     """Reset the LLM circuit breaker so classification resumes immediately.
     Call this after adding credits or when the daily quota resets."""
+    _require_admin(x_user_token)
     from app.classifier import reset_quota_circuit
     reset_quota_circuit()
     return {"ok": True, "message": "Circuit breaker reiniciado — clasificación reanudada."}
 
 
 @router.post("/admin/reset-quota-exceeded")
-def api_reset_quota_exceeded():
+def api_reset_quota_exceeded(x_user_token: Optional[str] = Header(None)):
     """Reset quota_exceeded messages back to unanalyzed so requeue picks them up.
     Call this once the daily LLM quota resets (midnight UTC)."""
+    _require_admin(x_user_token)
     db = MongoDBManager()
     result = db.db.message_logs.update_many(
         {"analysis_status": "quota_exceeded"},
@@ -5961,9 +5988,10 @@ def api_reset_quota_exceeded():
 
 
 @router.post("/admin/cancel-pending")
-def api_cancel_pending():
+def api_cancel_pending(x_user_token: Optional[str] = Header(None)):
     """Mark all stuck 'pending' messages as 'quota_exceeded' to stop the analytics spinner.
     Use when background tasks are frozen (e.g. LLM quota hit) without a server restart."""
+    _require_admin(x_user_token)
     from datetime import datetime, timedelta
     db = MongoDBManager()
     result = db.db.message_logs.update_many(
@@ -5974,8 +6002,9 @@ def api_cancel_pending():
 
 
 @router.delete("/admin/all-pending")
-def api_delete_all_pending():
+def api_delete_all_pending(x_user_token: Optional[str] = Header(None)):
     """DEV ONLY — delete test docs and reset ALL orphaned pending to done."""
+    _require_admin(x_user_token)
     db = MongoDBManager()
     deleted = db.db.message_logs.delete_many({"_test": True}).deleted_count
     reset   = db.db.message_logs.update_many(

@@ -1,5 +1,7 @@
 ﻿# scraper.py - VERSIÓN EXTENDIDA
+import ipaddress
 import re
+import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
@@ -11,6 +13,38 @@ from bs4 import BeautifulSoup
 from pymongo import MongoClient
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ── SSRF guard ────────────────────────────────────────────────────────────
+# This scraper fetches whatever URL it's given (from /process-url, /batch,
+# search results) — without this check, a URL like
+# "http://169.254.169.254/latest/meta-data/..." (cloud metadata) or
+# "http://backend:8000/..." (this stack's own internal Docker network) gets
+# fetched and its response parsed/returned exactly like a real business
+# site, handing back an internal-network read primitive to whoever can
+# reach these endpoints. Real gap found in a security sweep, 2026-09-29 —
+# fixed here (checked once per scrape_site() call, before any request) and
+# not just at the route layer, so it also covers internal-link crawling to
+# a subpage/redirect that resolves somewhere blocked.
+_BLOCKED_HOSTNAMES = {"localhost"}
+
+def _is_blocked_host(url: str) -> bool:
+    """True if `url`'s host is a bare blocked name, or resolves to a private/
+    loopback/link-local/reserved/multicast address. Fails CLOSED (blocks) on
+    any error — a URL that can't even be parsed/resolved isn't one we should
+    be fetching anyway, and every real caller already handles a failed fetch."""
+    try:
+        host = urlparse(url).hostname
+        if not host:
+            return True
+        if host.lower() in _BLOCKED_HOSTNAMES:
+            return True
+        for info in socket.getaddrinfo(host, None):
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+                return True
+        return False
+    except Exception:
+        return True
 
 # Same memory-reduction flags added to wwebjs-service (2026-09-18, after a
 # host-wide Docker daemon freeze that correlated with several concurrent
@@ -346,6 +380,10 @@ class WebsiteScraper:
         # vez de la real, 2026-09-29). None = sin preferencia, comportamiento
         # idéntico al de antes de este cambio.
         self._target_state_hint = self._norm_state_key(target_state) if target_state else None
+
+        if _is_blocked_host(url):
+            print(f"🚫 URL bloqueada por seguridad (apunta a red interna/reservada): {url}")
+            raise requests.exceptions.ConnectionError(f"URL no permitida: {url}")
 
         print(f"🔍 Scrapeando: {url}")
 

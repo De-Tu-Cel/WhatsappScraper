@@ -521,10 +521,18 @@ class MongoDBManager:
         # Build base query (without contacted filter — applied below after we know contacted_set)
         query = {}
         if search:
+            # re.escape() — this endpoint is reachable with a raw, unsanitized
+            # search string; without escaping, a crafted pattern (e.g. catastrophic
+            # backtracking like "(a+)+$") causes each matching document's regex
+            # check to take exponential time, tying up the shared DB for everyone
+            # (real ReDoS gap found in a security sweep, 2026-09-29 — every other
+            # $regex builder in this codebase already escapes, this one didn't).
+            import re as _re
+            _search_safe = _re.escape(search)
             query["$or"] = [
-                {"name": {"$regex": search, "$options": "i"}},
-                {"website": {"$regex": search, "$options": "i"}},
-                {"domain": {"$regex": search, "$options": "i"}},
+                {"name": {"$regex": _search_safe, "$options": "i"}},
+                {"website": {"$regex": _search_safe, "$options": "i"}},
+                {"domain": {"$regex": _search_safe, "$options": "i"}},
             ]
         # industry/city: comma-separated list of exact values from the filter
         # checklist (multi-select) — was a single $regex substring match before;

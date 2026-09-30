@@ -1427,14 +1427,41 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     # sitio ni siquiera menciona Yucatán, solo listaba negocios de otros
     # estados (Zacatecas). Igual que _wrong_sector_domain, este chequeo es
     # determinista (no depende de que la IA le dé suficiente peso a la regla).
+    #
+    # Patrones en inglés agregados 2026-09-30 — esta regex solo cubría español,
+    # así que para búsquedas internacionales (que la propia UI invita a hacer)
+    # dependía 100% del prompt de IA, con el mismo problema de dilución.
+    # Confirmado en vivo: "clinics in London" aprobó clinicguides.com ("Browse
+    # 1,266+ verified clinics... Compare prices, read reviews and get free
+    # quotes") y bookclinics.com ("Find the Best 36 Clinics... Costs, Prices,
+    # Reviews") — ambos agregadores/directorios de turismo médico, no negocios
+    # individuales.
     _DIRECTORY_SNIPPET_RE = re.compile(
         r'\bdirectorio\s+de\b|\blistado\s+de\b|\bcat[aá]logo\s+de\s+negocios\b|'
         r'\blos\s+mejores\s+\d*\s*\b|\btop\s*\d+\b|\bgu[ií]a\s+de\b|'
-        r'\ben\s+distintas\s+ciudades\b|\ben\s+todo\s+m[eé]xico\b',
+        r'\ben\s+distintas\s+ciudades\b|\ben\s+todo\s+m[eé]xico\b|'
+        r'\bdirectory\s+of\b|\blist(?:ing)?\s+of\b|\bguide\s+to\b|'
+        r'\bfind\s+the\s+best\b|\bbest\s+\d+\b|\btop\s+\d+\b|'
+        r'\bcompare\s+prices\b|\bread\s+reviews\b|\bverified\s+(?:clinics|businesses|providers|doctors|professionals)\b|'
+        r'\bin\s+(?:various|multiple)\s+cities\b',
         re.IGNORECASE,
     )
 
+    # Páginas de gobierno/instituciones públicas — el prompt de IA ya pide
+    # excluir "páginas gubernamentales", pero mismo problema de dilución.
+    # Confirmado en vivo: un walk-in center del NHS (servicio de salud público
+    # del Reino Unido, clch.nhs.uk) fue aprobado para "clinics in London" —
+    # es una institución pública, no un negocio al que tenga sentido
+    # contactarle por WhatsApp para venta. Folded into the same
+    # _looks_like_directory_snippet() check (not a separate function) so
+    # every one of this file's call sites gets it automatically instead of
+    # needing each of the 8 places that check directory-snippet to also
+    # remember to check this.
+    _GOV_DOMAIN_RE = re.compile(r'\.gov(?:\.\w{2})?$|\.mil$|\.nhs\.uk$', re.IGNORECASE)
+
     def _looks_like_directory_snippet(u: str) -> bool:
+        if _GOV_DOMAIN_RE.search(urlparse(u).netloc.lower()):
+            return True
         s = snippets.get(u, {})
         text = f"{s.get('title') or ''} {s.get('body') or ''}"
         return bool(_DIRECTORY_SNIPPET_RE.search(text))

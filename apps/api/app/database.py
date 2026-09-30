@@ -1280,6 +1280,12 @@ class MongoDBManager:
                     "company_id": {"$in": all_cids},
                     "direction": "inbound",
                     "analysis": {"$exists": True},
+                    # A classifier/LLM failure gets saved with analysis.error=True
+                    # (see classifier.py's _ERROR_RESULT) but analysis_status="done"
+                    # regardless — without this exclusion it looked identical to a
+                    # real verdict here, showing a fabricated category in the
+                    # Conversations sidebar (audit finding, 2026-09-30).
+                    "analysis.error": {"$ne": True},
                 }},
                 # Conversation-level analyses (conversation_analysis=true) go first,
                 # matching get_analytics()'s own sort — without this a holistic verdict
@@ -1305,6 +1311,7 @@ class MongoDBManager:
                 "direction": "inbound",
                 "analysis": {"$exists": True},
                 "analysis.conversation_analysis": {"$ne": True},
+                "analysis.error": {"$ne": True},
             }},
             {"$project": {"company_id": 1, "analysis": 1}},
         ]):
@@ -1509,7 +1516,13 @@ class MongoDBManager:
         inbound_groups = {
             g["_id"]: g
             for g in self.db.message_logs.aggregate([
-                {"$match": {"direction": "inbound", "analysis": {"$exists": True}, **_cid_filter}},
+                # analysis.error=True means the classifier/LLM call actually failed
+                # (see classifier.py's _ERROR_RESULT) — saved with analysis_status=
+                # "done" regardless, so without this exclusion it was statistically
+                # identical to a real verdict in every dashboard stat (category
+                # percentages, avg_quality) until an admin happened to run
+                # /admin/requeue-unanalyzed (audit finding, 2026-09-30).
+                {"$match": {"direction": "inbound", "analysis": {"$exists": True}, "analysis.error": {"$ne": True}, **_cid_filter}},
                 # Conversation-level analyses (conversation_analysis=true) go first — they
                 # have the most complete view of category/quality/notes. Within each tier,
                 # most recent message wins. last_at uses $max to always reflect the actual
@@ -1566,7 +1579,13 @@ class MongoDBManager:
         _category_sets = {
             g["_id"]: g
             for g in self.db.message_logs.aggregate([
-                {"$match": {"direction": "inbound", "analysis": {"$exists": True}, **_cid_filter}},
+                # analysis.error=True means the classifier/LLM call actually failed
+                # (see classifier.py's _ERROR_RESULT) — saved with analysis_status=
+                # "done" regardless, so without this exclusion it was statistically
+                # identical to a real verdict in every dashboard stat (category
+                # percentages, avg_quality) until an admin happened to run
+                # /admin/requeue-unanalyzed (audit finding, 2026-09-30).
+                {"$match": {"direction": "inbound", "analysis": {"$exists": True}, "analysis.error": {"$ne": True}, **_cid_filter}},
                 {"$group": {
                     "_id": "$company_id",
                     "msgs": {"$push": {

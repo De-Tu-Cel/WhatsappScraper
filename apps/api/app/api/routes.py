@@ -590,13 +590,20 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 detail=f"Límite diario alcanzado ({DAILY_CAP} mensajes). Reinicia a las 00:00 hora local.",
             )
 
-        # Per-instance new-contact warmup cap (5 for warmup, 12 for normal)
-        from app.daily_cap import check_new_contact_cap
-        _nc_ok, _nc_count, _nc_limit = check_new_contact_cap(db, instance, req.company_id)
+        # Per-instance new-contact warmup cap (5 for warmup, 12 for normal) —
+        # reserved atomically, same reasoning and same fix as the daily cap
+        # above (audit finding, 2026-09-30, CRITICAL — this cap had no atomic
+        # gate anywhere in the codebase before this).
+        from app.daily_cap import reserve_new_contact_slot, get_new_contacts_limit
+        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, instance, req.company_id)
         if not _nc_ok:
+            if _cap_reserved_new:
+                from app.daily_cap import release_daily_slot as _release_daily_send_nc
+                _release_daily_send_nc(db, instance, clean_digits(req.to_number))
+            _inst_warmup = bool((db.db.instances.find_one({"name": instance}, {"warmup_mode": 1}) or {}).get("warmup_mode"))
             raise HTTPException(
                 status_code=429,
-                detail=f"new_contact_limit:{_nc_limit}",
+                detail=f"new_contact_limit:{get_new_contacts_limit(_inst_warmup)}",
             )
 
         if _inst_provider_send == "waha":
@@ -782,12 +789,16 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 log_doc["sent_by_username"] = sender.get("username", "")
                 log_doc["sent_by_name"]     = sender.get("display_name", "") or sender.get("username", "")
         log_id = db.insert_message_log(log_doc)
-        # The slot was already claimed atomically by reserve_daily_slot above —
-        # give it back only if the send that reservation was FOR ultimately
-        # failed (matches scheduler.py/ai_followup.py's identical pattern).
-        if status != "sent" and _cap_reserved_new:
-            from app.daily_cap import release_daily_slot as _release_daily_send
-            _release_daily_send(db, instance, clean_digits(req.to_number))
+        # Both slots were already claimed atomically above — give them back only
+        # if the send they were reserved for ultimately failed (matches
+        # scheduler.py/ai_followup.py's identical pattern).
+        if status != "sent":
+            if _cap_reserved_new:
+                from app.daily_cap import release_daily_slot as _release_daily_send
+                _release_daily_send(db, instance, clean_digits(req.to_number))
+            if _nc_reserved_new:
+                from app.daily_cap import release_new_contact_slot as _release_nc_send
+                _release_nc_send(db, instance, req.company_id)
 
         return {"ok": True, "status": status, "log_id": log_id, "message_id": message_id}
     except HTTPException:

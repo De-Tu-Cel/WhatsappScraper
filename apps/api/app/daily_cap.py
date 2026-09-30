@@ -245,6 +245,67 @@ def check_new_contact_cap(db, instance_name: str, company_id: str) -> tuple:
     return count < limit, count, limit
 
 
+def reserve_new_contact_slot(db, instance_name: str, company_id: str) -> tuple[bool, bool]:
+    """Atomic analog of reserve_daily_slot(), but for the new-contact (not total
+    message) cap. check_new_contact_cap() above is a pure read — distinct() over
+    message_logs rows that only exist AFTER a send's network round-trip
+    completes, with no reservation of any kind. Two concurrent first-contact
+    sends through the same instance (a scheduled campaign + a manual reply + an
+    Andy follow-up, or just two queue items dispatched close together) could
+    both read "under cap" before either's message_logs row existed, both pass,
+    and the instance ends up contacting more brand-new people than its
+    warmup/normal cap allows — precisely the risk this cap exists to bound
+    (audit finding, 2026-09-30, CRITICAL — this was the one cap in the whole
+    anti-ban system with no atomic gate anywhere).
+
+    Existing contacts (is_new_contact() is False) always pass and never touch
+    the reservation set — matches check_new_contact_cap()'s existing behavior.
+
+    Returns (allowed, was_new_reservation) — same contract as reserve_daily_slot():
+      allowed=False           → cap is full, nothing changed, do not send.
+      allowed=True,  new=False → not a new contact, OR already reserved today
+                                  (a repeat/multi-number send to the same company).
+      allowed=True,  new=True  → a fresh slot was claimed for company_id. If the
+                                  send this was reserved for ultimately fails,
+                                  call release_new_contact_slot with the SAME
+                                  company_id."""
+    if not company_id or not is_new_contact(db, company_id):
+        return True, False
+    from pymongo import ReturnDocument
+    inst   = db.db.instances.find_one({"name": instance_name}, {"warmup_mode": 1})
+    limit  = get_new_contacts_limit(bool((inst or {}).get("warmup_mode")))
+    today  = _today()
+    before = db.db.instance_new_contacts_today.find_one_and_update(
+        {"instance": instance_name, "date": today},
+        {"$addToSet": {"companies": company_id}},
+        upsert=True,
+        return_document=ReturnDocument.BEFORE,
+    )
+    if company_id in ((before or {}).get("companies") or []):
+        return True, False  # already reserved today — repeat/multi-number send
+
+    after = db.db.instance_new_contacts_today.find_one({"instance": instance_name, "date": today}, {"companies": 1})
+    if len((after or {}).get("companies", [])) > limit:
+        db.db.instance_new_contacts_today.update_one(
+            {"instance": instance_name, "date": today},
+            {"$pull": {"companies": company_id}},
+        )
+        return False, False
+    return True, True
+
+
+def release_new_contact_slot(db, instance_name: str, company_id: str) -> None:
+    """Gives back a slot from reserve_new_contact_slot() when the send it was
+    reserved for ultimately failed. Only call when that call returned
+    was_new_reservation=True."""
+    if not company_id:
+        return
+    db.db.instance_new_contacts_today.update_one(
+        {"instance": instance_name, "date": _today()},
+        {"$pull": {"companies": company_id}},
+    )
+
+
 def reserve_verification_slot(db, instance_name: str) -> bool:
     """Atomically claims one of today's phone-verification lookups for this
     instance. Returns False once VERIFY_DAILY_CAP is already used up today —

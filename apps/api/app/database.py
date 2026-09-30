@@ -1280,6 +1280,12 @@ class MongoDBManager:
                     "company_id": {"$in": all_cids},
                     "direction": "inbound",
                     "analysis": {"$exists": True},
+                    # A classifier/LLM failure gets saved with analysis.error=True
+                    # (see classifier.py's _ERROR_RESULT) but analysis_status="done"
+                    # regardless — without this exclusion it looked identical to a
+                    # real verdict here, showing a fabricated category in the
+                    # Conversations sidebar (audit finding, 2026-09-30).
+                    "analysis.error": {"$ne": True},
                 }},
                 # Conversation-level analyses (conversation_analysis=true) go first,
                 # matching get_analytics()'s own sort — without this a holistic verdict
@@ -1305,6 +1311,7 @@ class MongoDBManager:
                 "direction": "inbound",
                 "analysis": {"$exists": True},
                 "analysis.conversation_analysis": {"$ne": True},
+                "analysis.error": {"$ne": True},
             }},
             {"$project": {"company_id": 1, "analysis": 1}},
         ]):
@@ -1509,7 +1516,13 @@ class MongoDBManager:
         inbound_groups = {
             g["_id"]: g
             for g in self.db.message_logs.aggregate([
-                {"$match": {"direction": "inbound", "analysis": {"$exists": True}, **_cid_filter}},
+                # analysis.error=True means the classifier/LLM call actually failed
+                # (see classifier.py's _ERROR_RESULT) — saved with analysis_status=
+                # "done" regardless, so without this exclusion it was statistically
+                # identical to a real verdict in every dashboard stat (category
+                # percentages, avg_quality) until an admin happened to run
+                # /admin/requeue-unanalyzed (audit finding, 2026-09-30).
+                {"$match": {"direction": "inbound", "analysis": {"$exists": True}, "analysis.error": {"$ne": True}, **_cid_filter}},
                 # Conversation-level analyses (conversation_analysis=true) go first — they
                 # have the most complete view of category/quality/notes. Within each tier,
                 # most recent message wins. last_at uses $max to always reflect the actual
@@ -1566,7 +1579,13 @@ class MongoDBManager:
         _category_sets = {
             g["_id"]: g
             for g in self.db.message_logs.aggregate([
-                {"$match": {"direction": "inbound", "analysis": {"$exists": True}, **_cid_filter}},
+                # analysis.error=True means the classifier/LLM call actually failed
+                # (see classifier.py's _ERROR_RESULT) — saved with analysis_status=
+                # "done" regardless, so without this exclusion it was statistically
+                # identical to a real verdict in every dashboard stat (category
+                # percentages, avg_quality) until an admin happened to run
+                # /admin/requeue-unanalyzed (audit finding, 2026-09-30).
+                {"$match": {"direction": "inbound", "analysis": {"$exists": True}, "analysis.error": {"$ne": True}, **_cid_filter}},
                 {"$group": {
                     "_id": "$company_id",
                     "msgs": {"$push": {
@@ -1908,8 +1927,18 @@ class MongoDBManager:
                         # Use holistic quality from conversation analysis
                         entry["response_quality"] = best["analysis"].get("response_quality")
                     else:
-                        qualities = [m["analysis"].get("response_quality") or 0 for m in analyzed]
-                        entry["response_quality"] = round(sum(qualities) / len(qualities), 1)
+                        # `or 0` treated a message with response_quality=None as a real
+                        # 0 — but None here is deliberate ("sin evaluar" for a
+                        # quick/timing-only classification, see
+                        # _quick_result_unrated's docstring: "None en vez de mentir con
+                        # un puntaje inventado"), not a real low score. Averaging it in
+                        # as 0 fabricates exactly the score that field was designed to
+                        # avoid inventing (same bug as the dashboard-wide avg_quality,
+                        # audit finding 2026-09-30). Only average messages that were
+                        # actually rated.
+                        qualities = [q for m in analyzed
+                                     if (q := m["analysis"].get("response_quality")) is not None]
+                        entry["response_quality"] = round(sum(qualities) / len(qualities), 1) if qualities else None
                     # "Tiempo de reacción" = reaction_time_min del mensaje analizado
                     # cronológicamente PRIMERO, no un promedio — mismo criterio que el
                     # nivel de compañía (ver first_response_groups arriba). Promediar
@@ -2039,9 +2068,17 @@ class MongoDBManager:
         start = (page - 1) * page_size
         # Same bug, same fix as search: this was computed client-side from just the
         # current page's 20 rows. Computed here over the full filtered set instead.
+        # `or 0` on a company that never replied (category="sin_respuesta") or
+        # hasn't been analyzed yet (response_quality=None) turned each into a
+        # quality score of 0 in the numerator while `total` still counted it in
+        # the denominator — conflating "didn't reply" with "replied badly" and
+        # materially deflating the stat, since sin_respuesta is a large, steady
+        # real-world bucket, not an edge case (audit finding, 2026-09-30). Only
+        # average over companies that actually have a rated response.
+        _rated = [r for r in results if r.get("response_quality") is not None]
         avg_quality = (
-            round(sum(r.get("response_quality") or 0 for r in results) / total, 1)
-            if total else None
+            round(sum(r["response_quality"] for r in _rated) / len(_rated), 1)
+            if _rated else None
         )
         return {
             "total":           total,

@@ -366,10 +366,24 @@ class WebsiteScraper:
                 "metadata": {...}
             }
         """
-        from app.searcher import COUNTRY_CONFIG, DEFAULT_COUNTRY
-        _country_cfg = COUNTRY_CONFIG.get(country or DEFAULT_COUNTRY, COUNTRY_CONFIG[DEFAULT_COUNTRY])
+        from app.searcher import COUNTRY_CONFIG, DEFAULT_COUNTRY, _get_country_config, _normalize_country_name
+        # _get_country_config (not a raw COUNTRY_CONFIG.get) — an explicit
+        # `country` in English ("United Kingdom", from the Buscador de
+        # Prospectos' own international examples) never matched this dict's
+        # Spanish-only keys, so every international scrape silently fell back
+        # to MEXICAN phone formatting/digit-count rules regardless of the
+        # real target country (audit finding, 2026-09-30).
+        _country_cfg = _get_country_config(country) or COUNTRY_CONFIG[DEFAULT_COUNTRY]
         self._default_country_code = _country_cfg["phone_code"]
         self._default_local_digits = _country_cfg["local_digits"]
+        # País al que estaba acotada la búsqueda que produjo esta URL (si lo
+        # hay) — usado por _extract_country como último recurso cuando el
+        # propio texto de la página no lo revela (ver su docstring). Normalizado
+        # a la clave en español (el mismo idioma que ya usa el campo `state`)
+        # para que sea consistente con lo que el resto de este archivo espera;
+        # solo el `country` explícito, NUNCA el default de arriba.
+        _normalized_country = _normalize_country_name(country) if country else None
+        self._target_country_hint = _normalized_country if _normalized_country in COUNTRY_CONFIG else None
 
         # Estado al que estaba acotada la búsqueda que produjo esta URL (si la hay) —
         # usado por _extract_state/_extract_city para preferir una mención de
@@ -1751,9 +1765,16 @@ class WebsiteScraper:
         if addr_tag:
             return self._clean_extracted_address(addr_tag.get_text(" ", strip=True))
         patterns = [
-            # Captura hasta 250 chars después del número para incluir ciudad/estado al final
-            r"(?:Calle|Av\.|Avenida|Boulevard|Blvd\.|Calzada|Carretera)\s+[A-Za-zÁÉÍÓÚáéíóúñÑ\s]+\d+" + self._ADDR_CHAR + "{0,250}",
-            r"(?:Dirección|Ubicación|Domicilio|Domicilo)\s*[:\-]\s*([^\n]{20,300})",
+            # Captura hasta 250 chars después del número para incluir ciudad/estado al final.
+            # Tipos de calle en inglés agregados 2026-09-30 — sin esto, un sitio
+            # en inglés (confirmado en vivo: thelondonclinic.co.uk,
+            # arnaud-delmontel.com) nunca producía un raw_addr con ningún patrón
+            # de esta lista, así que Nominatim (que SÍ es un servicio global)
+            # nunca llegaba a recibir nada que geocodificar.
+            r"(?:Calle|Av\.|Avenida|Boulevard|Blvd\.|Calzada|Carretera|"
+            r"Street|St\.|Avenue|Ave\.|Road|Rd\.|Lane|Ln\.|Drive|Dr\.|Way|Place|Pl\.)\s+"
+            r"[A-Za-zÁÉÍÓÚáéíóúñÑ\s]+\d+" + self._ADDR_CHAR + "{0,250}",
+            r"(?:Dirección|Ubicación|Domicilio|Domicilo|Address|Location)\s*[:\-]\s*([^\n]{20,300})",
             # Dirección "compacta" sin palabra clave de calle ni prefijo
             # "Dirección:" — solo "NOMBRE DE CALLE, NUMERO, COLONIA, CIUDAD,
             # ESTADO, C.P. NNNNN", común en <meta name="description"> de
@@ -2048,6 +2069,38 @@ class WebsiteScraper:
             "Chetumal", "Pachuca", "Tlaxcala", "Cuernavaca",
         ]
         tl = text.lower()
+
+        # Ciudades del país buscado (si no es México) — esta lista SOLO tenía
+        # ciudades mexicanas, así que un sitio de cualquier otro país nunca
+        # podía resolver ciudad por este camino sin importar qué tan
+        # claramente mencionada estuviera en su propio texto (audit finding,
+        # 2026-09-30 — confirmado en vivo: thelondonclinic.co.uk,
+        # arnaud-delmontel.com, ambos con city vacío). Se agregan ANTES de
+        # las mexicanas — en caso de empate de posición, ganan ellas, porque
+        # ya sabemos con certeza que el país buscado no es México.
+        country_hint = getattr(self, "_target_country_hint", None)
+        _city_aliases: dict = {}  # normalized extra-country city name -> local-language spelling to search for
+        if country_hint and country_hint != "México":
+            from app.searcher import COUNTRY_CONFIG, _CITY_EXONYMS
+            extra_cities = COUNTRY_CONFIG.get(country_hint, {}).get("cities", [])
+            cities = extra_cities + cities
+            # COUNTRY_CONFIG's own city list is the SPANISH spelling ("Londres"),
+            # built for generating Spanish-language search queries — but a
+            # scraped page's own text is usually in the LOCAL language
+            # ("London"), which never matches "londres" as a substring at all.
+            # _CITY_EXONYMS already maps local-language -> Spanish the other
+            # way around (for parsing a Spanish-typed search query); reverse
+            # it here to get the local-language spelling back for TEXT
+            # matching (audit finding, 2026-09-30 — confirmed live:
+            # thelondonclinic.co.uk had "London" in its own scraped address
+            # but resolved to the wrong city "Reading" because "Londres"
+            # never matched).
+            _reverse_exonyms = {v.lower(): k for k, v in _CITY_EXONYMS.items()}
+            for c in extra_cities:
+                alias = _reverse_exonyms.get(c.lower())
+                if alias:
+                    _city_aliases[c.lower()] = alias
+
         if hint:
             # Revisar primero las ciudades cuyo estado inferido coincide con lo
             # esperado — mismo criterio de preferencia que arriba, aplicado a
@@ -2065,9 +2118,30 @@ class WebsiteScraper:
         # busca la posición de cada ciudad presente y gana la que aparece más
         # temprano en el texto real, igual que ya hace el bloque regex de
         # arriba (audit finding, 2026-09-29).
+        def _wb_pos(needle: str) -> int:
+            """Posición de la primera coincidencia de PALABRA COMPLETA (no
+            substring) — ej. "Angers" (ciudad real francesa) no debe matchear
+            dentro de "dangers" (palabra francesa común, "peligros"). Confirmado
+            en vivo, 2026-09-30, al generalizar esta lista a ciudades fuera de
+            México: un texto de prueba con "dangers" pero SIN ninguna ciudad
+            real devolvía "Angers" como si lo fuera. Las ciudades mexicanas
+            corrían este mismo riesgo en teoría, aunque nunca se había
+            confirmado un caso real — se aplica parejo por seguridad."""
+            m = _re.search(r'\b' + _re.escape(needle) + r'\b', tl)
+            return m.start() if m else -1
+
         best_city, best_pos = None, None
         for city in cities:
-            pos = tl.find(city.lower())
+            pos = _wb_pos(city.lower())
+            # Si el texto no trae la forma en español pero SÍ la forma local
+            # (ej. "london" en vez de "londres"), buscar esa también — y
+            # devolver la forma local encontrada, ya que el resto del
+            # registro de una empresa internacional queda en su propio
+            # idioma, no en español.
+            alias = _city_aliases.get(city.lower())
+            alias_pos = _wb_pos(alias) if alias else -1
+            if alias_pos != -1 and (pos == -1 or alias_pos < pos):
+                pos, city = alias_pos, alias.title()
             if pos != -1 and (best_pos is None or pos < best_pos):
                 best_city, best_pos = city, pos
         if best_city:
@@ -2086,6 +2160,16 @@ class WebsiteScraper:
         (nombre de calle seguido de número/"Nº", o precedido de "Calle"/"Av."/
         "Blvd."/"Col.") y se sigue buscando otra ocurrencia antes de rendirse.
         """
+        # Si ya sabemos con certeza que el país buscado NO es México (ver
+        # self._target_country_hint, scrape_site), ni siquiera vale la pena
+        # buscar estos 32 nombres — no hay concepto de "estado mexicano" que
+        # aplique, y varios de estos nombres ("Morelos", "Hidalgo", "Colima")
+        # también son palabras/apellidos comunes en otros idiomas, con riesgo
+        # real de falso positivo sin ningún beneficio posible a cambio
+        # (audit finding, 2026-09-30 — parte de generalizar la ubicación para
+        # cualquier país, no solo México).
+        if getattr(self, "_target_country_hint", None) not in (None, "México"):
+            return ""
         states = [
             "Ciudad de México", "Estado de México", "Jalisco", "Nuevo León",
             "Veracruz", "Puebla", "Guanajuato", "Chihuahua", "Michoacán",
@@ -2158,10 +2242,33 @@ class WebsiteScraper:
         return best_state or ""
 
     def _extract_country(self, text: str) -> str:
-        """Extrae país"""
-        if any(word in text.lower() for word in ["méxico", "mexico", "mx"]):
-            return "México"
-        return ""
+        """Extrae país.
+
+        Antes SOLO sabía detectar México — cualquier sitio de otro país
+        volvía "" sin importar qué tan explícita fuera la evidencia en su
+        propio texto. Confirmado en vivo, 2026-09-30 (mientras se probaba el
+        Buscador de Prospectos internacional): thelondonclinic.co.uk y
+        arnaud-delmontel.com (una clínica en Reino Unido y una panadería en
+        Francia, ambas reales) se scrapearon con city/state/country/address
+        completamente vacíos — ni un dato de ubicación, pese a que la
+        búsqueda que produjo la URL ya sabía el país objetivo.
+
+        Dos mejoras: (1) revisa contra la misma tabla de nombres/gentilicios
+        de país que ya usa searcher.py para interpretar búsquedas — cubre
+        más países que solo México, aunque sigue siendo mayormente en
+        español (un sitio en inglés no va a decir "reino unido" en su propio
+        texto); (2) si nada coincide, cae a self._target_country_hint — el
+        país que ya sabíamos por la búsqueda que produjo esta URL (ver
+        scrape_site) — en vez de dejarlo vacío. Esto es lo que realmente
+        resuelve el caso de Londres/París: no hay match de texto en
+        absoluto, pero SÍ sabíamos el país de antemano.
+        """
+        from app.searcher import _COUNTRY_KEYWORDS
+        tl = text.lower()
+        for kw, name in _COUNTRY_KEYWORDS:
+            if kw in tl:
+                return name
+        return getattr(self, "_target_country_hint", None) or ""
 
     def _extract_postal_code(self, text: str) -> str:
         """Extrae código postal"""

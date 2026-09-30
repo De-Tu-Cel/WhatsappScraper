@@ -5,7 +5,7 @@ import random
 import threading
 import time
 from datetime import datetime
-from app.daily_cap import DAILY_CAP, get_daily_count, get_instance_cap, notify_cap_reached_once, reserve_daily_slot, release_daily_slot
+from app.daily_cap import DAILY_CAP, get_daily_count, get_instance_cap, notify_cap_reached_once, reserve_daily_slot, release_daily_slot, reserve_new_contact_slot, release_new_contact_slot
 from app.phone_utils import clean_digits
 
 log = logging.getLogger(__name__)
@@ -176,12 +176,14 @@ def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_i
             notify_cap_reached_once(db, EVOLUTION_INSTANCE)
             return "skipped_daily_cap"
 
-        from app.daily_cap import check_new_contact_cap
-        _nc_ok, _nc_count, _nc_limit = check_new_contact_cap(db, EVOLUTION_INSTANCE, company_id)
+        # Atomic reservation — check_new_contact_cap was a pure read with no
+        # reservation of any kind (audit finding, 2026-09-30, CRITICAL — the one
+        # cap in the whole anti-ban system with no atomic gate anywhere).
+        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, EVOLUTION_INSTANCE, company_id)
         if not _nc_ok:
             if _reserved_new:
                 release_daily_slot(db, EVOLUTION_INSTANCE, _to_digits)
-            log.info("[Scheduler] New-contact cap %d/day reached for evolution=%s — skipping new contact company=%s", _nc_limit, EVOLUTION_INSTANCE, company_id)
+            log.info("[Scheduler] New-contact cap reached for evolution=%s — skipping new contact company=%s", EVOLUTION_INSTANCE, company_id)
             return "skipped_nc_cap"
 
         # Learn JID before sending (so instant bot replies can be matched)
@@ -199,8 +201,11 @@ def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_i
         status = "sent" if evo_result.get("status_code") in (200, 201) else "failed"
         if status == "sent":
             _stamp_assigned_instance(db, company_id, EVOLUTION_INSTANCE)
-        elif _reserved_new:
-            release_daily_slot(db, EVOLUTION_INSTANCE, _to_digits)
+        else:
+            if _reserved_new:
+                release_daily_slot(db, EVOLUTION_INSTANCE, _to_digits)
+            if _nc_reserved_new:
+                release_new_contact_slot(db, EVOLUTION_INSTANCE, company_id)
 
         # Learn JID from send response as fallback
         if not real_jid_num and status == "sent":
@@ -266,12 +271,11 @@ def _send_via_waha(db, company_id: str, to_number: str, message: str, job_id: st
             notify_cap_reached_once(db, active_session)
             return "skipped_daily_cap"
 
-        from app.daily_cap import check_new_contact_cap
-        _nc_ok, _nc_count, _nc_limit = check_new_contact_cap(db, active_session, company_id)
+        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, active_session, company_id)
         if not _nc_ok:
             if _reserved_new:
                 release_daily_slot(db, active_session, _phone_digits)
-            log.info("[Scheduler] New-contact cap %d/day reached for waha=%s — skipping new contact company=%s", _nc_limit, active_session, company_id)
+            log.info("[Scheduler] New-contact cap reached for waha=%s — skipping new contact company=%s", active_session, company_id)
             return "skipped_nc_cap"
 
         waha = WAHAClient(WAHA_API_URL, WAHA_API_KEY, active_session)
@@ -314,13 +318,18 @@ def _send_via_waha(db, company_id: str, to_number: str, message: str, job_id: st
                 {"$set": {"reachout_timelock": True, "reachout_locked_at": datetime.now()}})
             if _reserved_new:
                 release_daily_slot(db, active_session, _phone_digits)
+            if _nc_reserved_new:
+                release_new_contact_slot(db, active_session, company_id)
             return False
 
         status      = "sent" if waha_result.get("status_code") in (200, 201) else "failed"
         if status == "sent":
             _stamp_assigned_instance(db, company_id, active_session)
-        elif _reserved_new:
-            release_daily_slot(db, active_session, _phone_digits)
+        else:
+            if _reserved_new:
+                release_daily_slot(db, active_session, _phone_digits)
+            if _nc_reserved_new:
+                release_new_contact_slot(db, active_session, company_id)
 
         db.insert_message_log({
             "channel": "whatsapp",
@@ -372,12 +381,11 @@ def _send_via_wasender(db, company_id: str, to_number: str, message: str, job_id
             notify_cap_reached_once(db, active_session)
             return "skipped_daily_cap"
 
-        from app.daily_cap import check_new_contact_cap
-        _nc_ok, _nc_count, _nc_limit = check_new_contact_cap(db, active_session, company_id)
+        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, active_session, company_id)
         if not _nc_ok:
             if _reserved_new:
                 release_daily_slot(db, active_session, _phone_digits)
-            log.info("[Scheduler] New-contact cap %d/day reached for wasender=%s — skipping new contact company=%s", _nc_limit, active_session, company_id)
+            log.info("[Scheduler] New-contact cap reached for wasender=%s — skipping new contact company=%s", active_session, company_id)
             return "skipped_nc_cap"
 
         inst_doc = db.db.instances.find_one({"name": active_session}, {"wasender_api_key": 1, "number": 1})
@@ -386,6 +394,8 @@ def _send_via_wasender(db, company_id: str, to_number: str, message: str, job_id
             log.warning("[Scheduler] Wasender: no api_key for instance=%s", active_session)
             if _reserved_new:
                 release_daily_slot(db, active_session, _phone_digits)
+            if _nc_reserved_new:
+                release_new_contact_slot(db, active_session, company_id)
             return False
 
         client = WasenderClient(WASENDER_BASE_URL, api_key, active_session,
@@ -407,8 +417,11 @@ def _send_via_wasender(db, company_id: str, to_number: str, message: str, job_id
         status = "sent" if result.get("status_code") in (200, 201) else "failed"
         if status == "sent":
             _stamp_assigned_instance(db, company_id, active_session)
-        elif _reserved_new:
-            release_daily_slot(db, active_session, _phone_digits)
+        else:
+            if _reserved_new:
+                release_daily_slot(db, active_session, _phone_digits)
+            if _nc_reserved_new:
+                release_new_contact_slot(db, active_session, company_id)
 
         db.insert_message_log({
             "channel": "whatsapp",
@@ -473,17 +486,18 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
             notify_cap_reached_once(db, session)
             return "skipped_daily_cap"
 
-        from app.daily_cap import check_new_contact_cap
-        _nc_ok, _nc_count, _nc_limit = check_new_contact_cap(db, session, company_id)
+        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, session, company_id)
         if not _nc_ok:
             if _reserved_new:
                 release_daily_slot(db, session, _phone_digits)
-            log.info("[Scheduler] New-contact cap %d/day reached for wwebjs=%s — skipping new contact company=%s", _nc_limit, session, company_id)
+            log.info("[Scheduler] New-contact cap reached for wwebjs=%s — skipping new contact company=%s", session, company_id)
             return "skipped_nc_cap"
 
         if not _verify_wa_number(db, _phone_digits, session):
             if _reserved_new:
                 release_daily_slot(db, session, _phone_digits)
+            if _nc_reserved_new:
+                release_new_contact_slot(db, session, company_id)
             return False
         db.db.jid_map.update_one(
             {"jid": _phone_digits},
@@ -501,8 +515,11 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
         status = "sent" if ww_result.get("success") else "failed"
         if status == "sent":
             _stamp_assigned_instance(db, company_id, session)
-        elif _reserved_new:
-            release_daily_slot(db, session, _phone_digits)
+        else:
+            if _reserved_new:
+                release_daily_slot(db, session, _phone_digits)
+            if _nc_reserved_new:
+                release_new_contact_slot(db, session, company_id)
 
         db.insert_message_log({
             "channel": "whatsapp",

@@ -187,7 +187,7 @@ function StatusPill({ bl, blocked, checked }) {
 // teclear cada número. Solo tiene sentido para type="phone" (dominios/
 // industrias no viven en la colección contacts). Sin buscar nada, navega los
 // más recientes; el buscador filtra por nombre de empresa o dígitos del tel.
-function ContactBlockTable({ bl, onBlocked }) {
+function ContactBlockTable({ bl, onBlocked, isActive }) {
   const [term,      setTerm]      = useState('')
   const [groups,    setGroups]    = useState([])  // [{company_id, company_name, numbers:[{contact_id,number,is_blocked}]}]
   const [total,     setTotal]     = useState(0)   // total distinct companies matching, not raw numbers
@@ -225,6 +225,15 @@ function ContactBlockTable({ bl, onBlocked }) {
   }, [])
 
   useEffect(() => { load(1, '') }, [load])
+  // isActive se recibía pero nunca se usaba — cambiar de pestaña y volver no
+  // refrescaba nada, a diferencia de databaseViewer.jsx que sí reacciona a
+  // esto. Si otro agente bloqueaba/desbloqueaba un número mientras este panel
+  // seguía montado, se quedaba desactualizado indefinidamente (audit finding,
+  // 2026-09-30).
+  useEffect(() => {
+    if (isActive) load(page, term)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive])
 
   function handleSearchChange(v) {
     setTerm(v)
@@ -463,7 +472,7 @@ function ContactBlockTable({ bl, onBlocked }) {
   )
 }
 
-function BlacklistList({ type, icon, label, placeholder, tip, bl }) {
+function BlacklistList({ type, icon, label, placeholder, tip, bl, isActive }) {
   const [items,    setItems]    = useState([])
   const [total,    setTotal]    = useState(0)
   const [page,     setPage]     = useState(1)
@@ -485,6 +494,12 @@ function BlacklistList({ type, icon, label, placeholder, tip, bl }) {
   }, [type])
 
   useEffect(() => { load(1, '') }, [load])
+  // Mismo arreglo que ContactBlockTable, ver su comentario — isActive nunca
+  // se usaba aquí tampoco.
+  useEffect(() => {
+    if (isActive) load(page, search)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive])
 
   function handleSearchChange(v) {
     setSearch(v)
@@ -562,7 +577,7 @@ function BlacklistList({ type, icon, label, placeholder, tip, bl }) {
       </Box>
 
       {type === 'phone' ? (
-        <ContactBlockTable bl={bl} onBlocked={() => load(page, search)} />
+        <ContactBlockTable bl={bl} onBlocked={() => load(page, search)} isActive={isActive} />
       ) : (
         <>
           <Typography sx={SUB_LABEL_SX}>{bl.addLabel || bl.add}</Typography>
@@ -863,15 +878,15 @@ export default function BlacklistPanel({ isActive }) {
         {activeTab === 0 ? (
           <>
             <BlacklistList type="domain" icon={<LanguageIcon sx={{ fontSize: 13, color: DANGER }} />}
-              label={bl.domains} placeholder={bl.domainPh} tip={bl.domainTip} bl={bl} />
+              label={bl.domains} placeholder={bl.domainPh} tip={bl.domainTip} bl={bl} isActive={isActive} />
             <SystemBlacklist bl={bl} />
           </>
         ) : activeTab === 1 ? (
           <BlacklistList type="industry" icon={<CategoryIcon sx={{ fontSize: 13, color: DANGER }} />}
-            label={bl.industries} placeholder={bl.industryPh} tip={bl.industryTip} bl={bl} />
+            label={bl.industries} placeholder={bl.industryPh} tip={bl.industryTip} bl={bl} isActive={isActive} />
         ) : (
           <BlacklistList type="phone" icon={<BlockIcon sx={{ fontSize: 13, color: DANGER }} />}
-            label={bl.phones} placeholder={bl.phonePh} tip={bl.phoneTip} bl={bl} />
+            label={bl.phones} placeholder={bl.phonePh} tip={bl.phoneTip} bl={bl} isActive={isActive} />
         )}
       </Box>
     </Box>

@@ -19,6 +19,34 @@ from app.phone_utils import clean_digits
 
 router = APIRouter()
 
+# Quién recibe el correo de "sesión de WhatsApp desconectada" (ver el webhook
+# de wwebjs más abajo) — deliberadamente separado de ADMIN_EMAILS (auth.py),
+# que es sobre permisos/rol, no sobre a quién le interesa este aviso
+# operativo en particular. Pedido explícito del usuario, 2026-09-30: "que
+# solo me lleguen las notificaciones a mí, a Gilad no".
+SESSION_DISCONNECT_ALERT_EMAILS = ["marco@detucel.mx"]
+
+# Cuántos segundos esperar, tras una caída, antes de mandar el correo de
+# aviso — un redeploy del contenedor de wwebjs tira TODAS las sesiones a la
+# vez y se reconectan solas en 1-3 min (confirmado con datos reales de
+# instance_health_logs, 2026-09-30); sin este margen, cada deploy dispara
+# un correo de "desconectada" que en realidad nunca lo estuvo de verdad.
+SESSION_DISCONNECT_ALERT_DELAY_SECONDS = 300
+
+
+async def _notify_disconnect_if_still_down(instance_name: str, reason_label_at_trigger: str):
+    """Reconfirma el estado tras el margen de espera antes de avisar por
+    correo — si para entonces ya reconectó sola (redeploy), no manda nada."""
+    await asyncio.sleep(SESSION_DISCONNECT_ALERT_DELAY_SECONDS)
+    db = MongoDBManager()
+    inst = db.db.instances.find_one({"name": instance_name})
+    if not inst or inst.get("status") == "connected":
+        return
+    current_label = inst.get("disconnect_reason_label") or reason_label_at_trigger
+    from app.email_service import send_session_disconnected_email
+    for _alert_email in SESSION_DISCONNECT_ALERT_EMAILS:
+        await asyncio.to_thread(send_session_disconnected_email, _alert_email, instance_name, current_label)
+
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
 def _require_user(x_user_token: Optional[str] = Header(None)):
@@ -33,6 +61,20 @@ def _require_admin(x_user_token: Optional[str] = Header(None)):
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Se requiere rol de administrador")
     return user
+
+def _check_otp_webhook_secret(secret: Optional[str], endpoint: str):
+    """Shared-secret gate for /otp/webhook, /telnyx/inbound, /telnyx/otp — see
+    OTP_WEBHOOK_SECRET's docstring in config.py for why this isn't real HMAC
+    signature verification. Fails OPEN (logs a warning, doesn't reject) while
+    the secret is unset, so this is safe to deploy before the carrier/Telnyx
+    webhook URLs are actually updated to include ?secret=... — flip to
+    fail-closed automatically the moment OTP_WEBHOOK_SECRET is configured."""
+    from app.config import OTP_WEBHOOK_SECRET
+    if not OTP_WEBHOOK_SECRET:
+        _log.warning("[%s] OTP_WEBHOOK_SECRET no configurado — endpoint sin protección", endpoint)
+        return
+    if secret != OTP_WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="secret inválido o ausente")
 
 # ── Auth endpoints ────────────────────────────────────────────────────────────
 
@@ -559,20 +601,37 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         _inst_provider_send = _inst_doc_send.get("provider", "evolution")
         _inst_number = _inst_doc_send.get("number") or "?"
 
-        # Daily send cap — block early before any API call
-        if get_daily_count(db, instance) >= get_instance_cap(db, instance):
+        # Daily send cap — reserved atomically BEFORE sending (not checked-then-
+        # incremented-after) so two concurrent manual sends through the same
+        # instance (two agents replying close together, or a human reply racing
+        # an Andy follow-up) can't both read a stale "under cap" count and both
+        # go out. Matches the same fix already applied to scheduler.py/
+        # ai_followup.py — this was the one send path still using the old
+        # check-then-act race (audit finding, 2026-09-30).
+        from app.daily_cap import reserve_daily_slot as _reserve_daily_send
+        _cap_reserved, _cap_reserved_new = _reserve_daily_send(
+            db, instance, get_instance_cap(db, instance), clean_digits(req.to_number)
+        )
+        if not _cap_reserved:
             raise HTTPException(
                 status_code=429,
                 detail=f"Límite diario alcanzado ({DAILY_CAP} mensajes). Reinicia a las 00:00 hora local.",
             )
 
-        # Per-instance new-contact warmup cap (5 for warmup, 12 for normal)
-        from app.daily_cap import check_new_contact_cap
-        _nc_ok, _nc_count, _nc_limit = check_new_contact_cap(db, instance, req.company_id)
+        # Per-instance new-contact warmup cap (5 for warmup, 12 for normal) —
+        # reserved atomically, same reasoning and same fix as the daily cap
+        # above (audit finding, 2026-09-30, CRITICAL — this cap had no atomic
+        # gate anywhere in the codebase before this).
+        from app.daily_cap import reserve_new_contact_slot, get_new_contacts_limit
+        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, instance, req.company_id)
         if not _nc_ok:
+            if _cap_reserved_new:
+                from app.daily_cap import release_daily_slot as _release_daily_send_nc
+                _release_daily_send_nc(db, instance, clean_digits(req.to_number))
+            _inst_warmup = bool((db.db.instances.find_one({"name": instance}, {"warmup_mode": 1}) or {}).get("warmup_mode"))
             raise HTTPException(
                 status_code=429,
-                detail=f"new_contact_limit:{_nc_limit}",
+                detail=f"new_contact_limit:{get_new_contacts_limit(_inst_warmup)}",
             )
 
         if _inst_provider_send == "waha":
@@ -758,8 +817,16 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 log_doc["sent_by_username"] = sender.get("username", "")
                 log_doc["sent_by_name"]     = sender.get("display_name", "") or sender.get("username", "")
         log_id = db.insert_message_log(log_doc)
-        if status == "sent":
-            increment_daily_count(db, instance, clean_digits(req.to_number))
+        # Both slots were already claimed atomically above — give them back only
+        # if the send they were reserved for ultimately failed (matches
+        # scheduler.py/ai_followup.py's identical pattern).
+        if status != "sent":
+            if _cap_reserved_new:
+                from app.daily_cap import release_daily_slot as _release_daily_send
+                _release_daily_send(db, instance, clean_digits(req.to_number))
+            if _nc_reserved_new:
+                from app.daily_cap import release_new_contact_slot as _release_nc_send
+                _release_nc_send(db, instance, req.company_id)
 
         return {"ok": True, "status": status, "log_id": log_id, "message_id": message_id}
     except HTTPException:
@@ -4181,6 +4248,16 @@ def api_wwebjs_create_session(body: dict):
         "number": "",
         "assigned_to": None,
         "created_at": _dt.utcnow(),
+        # A brand-new number is exactly the one that most needs the slow/safe
+        # limits — get_instance_cap/get_new_contacts_limit (daily_cap.py) treat
+        # a MISSING warmup_mode field as falsy, i.e. full volume. There was no
+        # automated toggle anywhere that ever turned this on; only a human
+        # manually calling POST /api/instances/{name}/warmup after connecting
+        # it did. A number could send up to 150 msgs/day and greet 12 new
+        # strangers on day one if nobody remembered that step (audit finding,
+        # 2026-09-30, CRITICAL). Explicit opt-in to full volume via that same
+        # endpoint once it's actually earned it, not a silent default.
+        "warmup_mode": True,
     })
     return {"name": name, "status": r.json().get("status", "initializing")}
 
@@ -4343,7 +4420,7 @@ def api_wwebjs_user_status(x_user_token: Optional[str] = Header(None)):
 
 
 @router.post("/wwebjs/webhook")
-async def api_wwebjs_webhook(request: Request):
+async def api_wwebjs_webhook(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
     event = body.get("event", "")
     session_id = body.get("sessionId", "")
@@ -4357,10 +4434,17 @@ async def api_wwebjs_webhook(request: Request):
 
     if event == "session.status":
         status = data.get("status", "")
+        # Capturado ANTES del $set de abajo — se usa para saber si esta
+        # transición es una caída real (algo que SÍ estaba conectado dejó de
+        # estarlo) en vez del "need_scan" normal de una instancia recién
+        # creada que nunca llegó a conectarse (ver el aviso por correo más
+        # abajo).
+        was_connected = inst_doc.get("status") == "connected"
         label_map = {
             "connected": "Sesión activa",
             "disconnected": "Sesión desconectada",
             "auth_failure": "Fallo de autenticación",
+            "need_scan": "Requiere volver a escanear QR/código",
         }
         print(f"[wwebjs Webhook] session={instance_name} {status} → {label_map.get(status, status)}")
         db.db.instances.update_one(
@@ -4384,6 +4468,17 @@ async def api_wwebjs_webhook(request: Request):
         elif status in ("disconnected", "auth_failure"):
             db.save_instance_health_log(instance_name, "disconnected",
                                          reason=status, reason_label=label_map.get(status, status))
+        # Correo a los admins cuando una sesión que SÍ estaba conectada deja
+        # de estarlo — incluye "need_scan" (un LOGOUT real, el caso más
+        # importante de avisar, ya que necesita que un humano vuelva a
+        # escanear) pero NUNCA el "need_scan" normal de una instancia recién
+        # creada que nunca llegó a conectarse (was_connected sería False ahí).
+        # Pedido explícito del usuario, 2026-09-30. Despachado vía
+        # BackgroundTasks — smtplib es bloqueante y esta ruta es async, así
+        # que mandarlo inline aquí congelaría el event loop del worker entero
+        # mientras dura el round-trip SMTP.
+        if was_connected and status != "connected":
+            background_tasks.add_task(_notify_disconnect_if_still_down, instance_name, label_map.get(status, status))
         if data.get("phone"):
             db.db.instances.update_one({"name": instance_name}, {"$set": {"number": data["phone"]}})
         _profile_fields = {}
@@ -6380,7 +6475,20 @@ def api_create_instance(body: dict, x_user_token: Optional[str] = Header(None)):
             "assigned_name": None,
             "created_at": datetime.utcnow().isoformat(),
         }
-        db.db.instances.update_one({"name": name}, {"$set": doc}, upsert=True)
+        # $setOnInsert (not $set) for warmup_mode — this same call re-runs on an
+        # already-existing instance (upsert=True) to update number/assignment,
+        # and must NOT reset an instance that already graduated to full volume
+        # back into warmup every time someone edits it. Missing warmup_mode
+        # reads as falsy (full volume) elsewhere (daily_cap.py) with no
+        # automated toggle ever turning it on — a brand-new number could send
+        # up to 150 msgs/day and greet 12 new strangers on day one if nobody
+        # remembered the separate manual warmup-on step (audit finding,
+        # 2026-09-30, CRITICAL).
+        db.db.instances.update_one(
+            {"name": name},
+            {"$set": doc, "$setOnInsert": {"warmup_mode": True}},
+            upsert=True,
+        )
         return {"ok": True, "instance": doc}
 
     from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
@@ -6403,7 +6511,12 @@ def api_create_instance(body: dict, x_user_token: Optional[str] = Header(None)):
         "assigned_name": None,
         "created_at": datetime.utcnow().isoformat(),
     }
-    db.db.instances.update_one({"name": name}, {"$set": doc}, upsert=True)
+    # $setOnInsert — see the identical comment on the wwebjs branch above.
+    db.db.instances.update_one(
+        {"name": name},
+        {"$set": doc, "$setOnInsert": {"warmup_mode": True}},
+        upsert=True,
+    )
     return {"ok": True, "instance": doc, "instance_token": instance_token}
 
 
@@ -6548,11 +6661,17 @@ def api_unassign_instance(name: str, x_user_token: Optional[str] = Header(None))
 
 
 @router.post("/otp/webhook")
-def otp_webhook(body: dict):
+def otp_webhook(body: dict, secret: Optional[str] = Query(None)):
     """
     Telcel (or any carrier) calls this endpoint when an SMS arrives.
     Expected body: { "to": "+521234567890", "text": "Your WhatsApp code is 123456" }
+    Configure the carrier's webhook URL with ?secret=<OTP_WEBHOOK_SECRET> once
+    set — see _check_otp_webhook_secret. Until then this stays open (today's
+    behavior) since an unauthenticated caller could otherwise inject arbitrary
+    text into a live WhatsApp registration via ADB (handle_incoming_sms), or
+    race/block the real OTP for a number currently mid-registration.
     """
+    _check_otp_webhook_secret(secret, "otp/webhook")
     from app.otp_manager import handle_incoming_sms
     phone = body.get("to", "").replace("+", "").strip()
     text  = body.get("text", "")
@@ -6641,7 +6760,12 @@ _telnyx_otp_store: dict = {}  # {"otp": "123456", "ts": "..."}
 
 @router.post("/telnyx/inbound")
 async def telnyx_inbound_webhook(request: Request):
-    """Recibe el webhook de Telnyx con el SMS entrante y extrae el OTP."""
+    """Recibe el webhook de Telnyx con el SMS entrante y extrae el OTP.
+    Configure Telnyx's webhook URL with ?secret=<OTP_WEBHOOK_SECRET> once set.
+    Checked OUTSIDE the try/except below on purpose — that block swallows
+    every exception (by design, so a malformed payload never 500s back to
+    Telnyx), which would silently swallow the auth rejection too."""
+    _check_otp_webhook_secret(request.query_params.get("secret"), "telnyx/inbound")
     import re as _re, datetime as _dt
     try:
         body = await request.json()
@@ -6657,6 +6781,11 @@ async def telnyx_inbound_webhook(request: Request):
     return {"ok": True}
 
 @router.get("/telnyx/otp")
-def telnyx_get_otp():
-    """Devuelve el último OTP recibido (el script de registro lo pollea)."""
+def telnyx_get_otp(secret: Optional[str] = Query(None)):
+    """Devuelve el último OTP recibido (el script de registro lo pollea).
+    Pass ?secret=<OTP_WEBHOOK_SECRET> once set — until then this returns the
+    real verification code to ANY caller with zero auth (the external
+    registration script isn't a logged-in user, so the normal x-user-token
+    session system doesn't apply here)."""
+    _check_otp_webhook_secret(secret, "telnyx/otp")
     return _telnyx_otp_store or {"otp": None}

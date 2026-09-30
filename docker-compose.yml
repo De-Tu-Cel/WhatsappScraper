@@ -34,6 +34,7 @@ services:
       - WWEBJS_URL=http://wwebjs:3001
       - WWEBJS_API_SECRET=${WWEBJS_API_SECRET}
       - WARMUP_ENABLED=${WARMUP_ENABLED}
+      - OTP_WEBHOOK_SECRET=${OTP_WEBHOOK_SECRET}
     expose:
       - "8000"
     depends_on:
@@ -75,7 +76,7 @@ services:
     volumes:
       - wwebjs_sessions:/app/sessions
     restart: unless-stopped
-    mem_limit: 3g
+    mem_limit: 6g
     logging:
       driver: json-file
       options:

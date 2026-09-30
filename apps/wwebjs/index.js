@@ -5,10 +5,24 @@ const StealthPlugin  = require('puppeteer-extra-plugin-stealth')
 const QRCode = require('qrcode')
 const fs = require('fs')
 const path = require('path')
+const dns = require('dns')
+const net = require('net')
 
 puppeteerExtra.use(StealthPlugin())
 
 const app = express()
+// Registered BEFORE the body parser on purpose — an unauthenticated caller
+// used to still force full parsing of up to 10MB bodies before ever hitting
+// this check (mild DoS-amplification gap, no rate limiting anywhere in this
+// service otherwise). API_SECRET itself is read below; this only needs
+// headers, so it doesn't need the parsed body at all (audit finding,
+// 2026-09-30).
+app.use((req, res, next) => {
+  if (API_SECRET && req.headers['x-api-secret'] !== API_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' })
+  }
+  next()
+})
 app.use(express.json({ limit: '10mb' }))
 
 const PORT         = process.env.PORT         || 3001
@@ -61,12 +75,68 @@ process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason)
 })
 
-app.use((req, res, next) => {
-  if (API_SECRET && req.headers['x-api-secret'] !== API_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' })
+// Every :id route param ends up as `sessionId`, which gets built straight
+// into filesystem paths with no sanitization (clearSessionLockFiles's
+// `session-${sessionId}`, whatsapp-web.js's own LocalAuth clientId dir) —
+// a value like "../../etc" could escape SESSIONS_PATH. API_SECRET above
+// already gates this from the open internet, but this is real defense in
+// depth against a compromised/misconfigured caller (audit finding,
+// 2026-09-30). Runs once for every route with an :id param via Express's
+// own app.param, instead of patching each of the 16 handlers individually.
+app.param('id', (req, res, next, id) => {
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+    return res.status(400).json({ error: 'invalid session id' })
   }
   next()
 })
+
+// SSRF guard for MessageMedia.fromUrl() call sites (send-media, set profile
+// picture) — both fetch a caller-supplied URL server-side with no host/scheme
+// restriction and then forward the response bytes onward: as a WhatsApp
+// message to whatever `to` number the same caller picked (send-media), or set
+// as the account's public profile picture (profile/picture). A URL pointing
+// at cloud metadata (169.254.169.254), localhost, or an internal-only service
+// on the Docker network would get fetched and its response bytes exfiltrated
+// straight to an attacker-controlled WhatsApp number — this isn't just SSRF,
+// the send path is a built-in exfiltration channel out of the container
+// (audit finding, 2026-09-30). Mirrors the same fail-closed design as the
+// Python backend's scraper._is_blocked_host.
+function isPrivateIp(ip) {
+  const v = net.isIP(ip)
+  if (v === 4) {
+    const [a, b] = ip.split('.').map(Number)
+    return (
+      a === 10 || a === 127 || a === 0 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      a >= 224 // multicast + reserved
+    )
+  }
+  if (v === 6) {
+    const low = ip.toLowerCase()
+    return low === '::1' || low.startsWith('fc') || low.startsWith('fd') || low.startsWith('fe80')
+  }
+  return true // not a parseable IP — treat as unsafe
+}
+
+async function isBlockedUrl(rawUrl) {
+  let parsed
+  try {
+    parsed = new URL(rawUrl)
+  } catch {
+    return true
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return true
+  const hostname = parsed.hostname.toLowerCase()
+  if (hostname === 'localhost' || hostname.endsWith('.localhost')) return true
+  try {
+    const results = await dns.promises.lookup(hostname, { all: true })
+    return results.some(r => isPrivateIp(r.address))
+  } catch {
+    return true // unresolvable — fail closed, same as the Python guard
+  }
+}
 
 async function forwardWebhook(payload) {
   try {
@@ -152,7 +222,17 @@ function startLivenessHeartbeat(sessionId) {
   session.heartbeatFailStreak = 0
   session.heartbeatTimer = setInterval(async () => {
     const s = sessions.get(sessionId)
-    if (!s || s.status !== 'connected') return
+    // Identity check (s !== session) as well as status — without it, this
+    // specific interval (tied to THIS generation's client) kept polling
+    // getState() on whatever session object the map held later, including a
+    // different generation's, after a recreate elsewhere. That generation
+    // already gets its OWN fresh heartbeat from its own 'ready' handler
+    // calling startLivenessHeartbeat again — leaving this old interval alive
+    // meant two intervals could end up polling/mutating the same session's
+    // heartbeatFailStreak concurrently (audit finding, 2026-09-30). Once the
+    // identity no longer matches, this interval has nothing left to do.
+    if (!s || s !== session) { clearInterval(session.heartbeatTimer); return }
+    if (s.status !== 'connected') return
     try {
       await Promise.race([
         s.client.getState(),
@@ -392,7 +472,11 @@ function createClient(sessionId, phoneNumber) {
     if (session.status !== 'need_scan') forwardWebhook({ event: 'session.status', sessionId, data: { status: 'need_scan' } })
     session.status = 'need_scan'
     session.pairingCode = code
-    console.log(`[${sessionId}] Pairing code ready: ${code}`)
+    // Never log the code itself — it's a short-lived secret equivalent to an
+    // OTP (anyone with log access during its ~3min validity window could link
+    // a rogue device). Callers get it via the session object / API response,
+    // never via logs (audit finding, 2026-09-30).
+    console.log(`[${sessionId}] Pairing code ready`)
   })
 
   client.on('authenticated', () => {
@@ -410,7 +494,14 @@ function createClient(sessionId, phoneNumber) {
     clearTimeout(session.readyWatchdog)
     session.readyWatchdog = setTimeout(async () => {
       const s = sessions.get(sessionId)
-      if (!s || s.status === 'connected') return
+      // Identity check (s !== session), not just status — this timer was
+      // scheduled for THIS specific client generation. Without it, a user
+      // retrying via /start (destroy+recreate) while this watchdog was still
+      // pending left the NEW session in 'initializing'/'need_scan' (not yet
+      // 'connected'), so the stale watchdog didn't bail out on the status
+      // check alone — it tore down the brand-new client, mistaking it for
+      // the stuck one it was actually watching (audit finding, 2026-09-30).
+      if (!s || s !== session || s.status === 'connected') return
       console.warn(`[${sessionId}] Stuck in "${s.status}" — never reached ready, recreating session`)
       await destroySessionClient(s.client, sessionId, s.initPromise)
       sessions.delete(sessionId)
@@ -503,6 +594,14 @@ function createClient(sessionId, phoneNumber) {
     clearInterval(session.presenceTimer)
     clearInterval(session.profileSyncTimer)
     clearInterval(session.heartbeatTimer)
+    // reconnectTimer wasn't cleared here — if an EARLIER network-blip
+    // disconnect had already scheduled one (the branch below) moments before
+    // THIS disconnect event arrived (e.g. a LOGOUT landing right after a
+    // transient network blip), that stale timer could still fire later and
+    // redundantly destroy+recreate a session that's already been handled by
+    // this event, uncoordinated with whichever branch runs below (audit
+    // finding, 2026-09-30).
+    clearTimeout(session.reconnectTimer)
 
     // Reasons that mean credentials are gone — need a new QR scan, NOT a reconnect
     const needsReauth = ['LOGOUT', 'UNPAIRED', 'UNPAIRED_IDLE', 'TOS_BLOCK', 'SMB_TOS_BLOCK'].includes(reason)
@@ -534,7 +633,14 @@ function createClient(sessionId, phoneNumber) {
     console.log(`[${sessionId}] Reconnecting in ${Math.round(delay / 1000)}s`)
     session.reconnectTimer = setTimeout(async () => {
       const s = sessions.get(sessionId)
-      if (!s || s.status === 'connected') return
+      // Identity check (s !== session) — same reasoning as the readyWatchdog
+      // fix above: this timer belongs to THIS generation. Without it, a
+      // session recreated by another path (e.g. the heartbeat zombie-check,
+      // or a manual /start retry) while this timer was still pending got
+      // torn down again the moment it reached a non-'connected' status,
+      // regardless of whether it was actually this timer's session
+      // (audit finding, 2026-09-30).
+      if (!s || s !== session || s.status === 'connected') return
       console.log(`[${sessionId}] Auto-reconnecting...`)
       await destroySessionClient(s.client, sessionId, s.initPromise)
       sessions.delete(sessionId)
@@ -564,7 +670,13 @@ function createClient(sessionId, phoneNumber) {
         if (contact.id?.user) number = contact.id.user
       } catch (_) {}
     }
-    console.log(`[${sessionId}] ← ${number}: ${String(msg.body).substring(0, 60)}`)
+    // Real customer conversation content (and, less sensitively, the phone
+    // number) used to be logged in full on every single inbound message —
+    // anyone with log access (ops, a broader on-call rotation, a log
+    // aggregator with laxer access than the DB) got a plaintext feed of
+    // customer PII with no operational need for the content itself (audit
+    // finding, 2026-09-30). Length/type is enough to see the message flow.
+    console.log(`[${sessionId}] ← ${number} (${msg.type}, ${String(msg.body).length} chars)`)
 
     // DIAGNOSTIC (temporary): kept alongside the extraction below as a safety
     // net — if the field paths guessed from whatsapp-web.js's own OUTGOING
@@ -819,8 +931,17 @@ app.post('/session/:id/start', async (req, res) => {
       // GET /qr forever. That's the exact reconnect-dialog "loop" reported
       // 2026-09-21 when switching the link method back and forth.
       const modeChanged = Boolean(existing.phoneNumber) !== Boolean(phoneNumber)
-      if (!phoneNumber && !modeChanged) {
-        // No phone number given and the mode hasn't changed — just report current status.
+      // A session whose client.initialize() rejected (Chromium launch race, a
+      // transient "browser already running", a network blip) is left at
+      // status='error' with nothing watching it — no watchdog/sweep ever
+      // revisits it. Before this, the natural "click retry" action (same
+      // mode, no phoneNumber change) just echoed the stale 'error' back
+      // forever instead of recreating; only switching link mode (which
+      // happens to trigger the recreate branch below) or an explicit DELETE
+      // then a fresh /start actually recovered it (audit finding, 2026-09-30).
+      if (!phoneNumber && !modeChanged && existing.status !== 'error') {
+        // No phone number given, mode hasn't changed, and it's not stuck
+        // erroring — just report current status.
         return { status: existing.status, phone: existing.phone }
       }
       // Either a phone number was given (switching to pairing-code mode) or
@@ -973,6 +1094,7 @@ app.post('/session/:id/send-media', async (req, res) => {
 
   const { to, mediaUrl, filename, caption, typingMs, asSticker } = req.body
   if (!to || !mediaUrl) return res.status(400).json({ error: 'to and mediaUrl required' })
+  if (await isBlockedUrl(mediaUrl)) return res.status(400).json({ error: 'mediaUrl not allowed' })
 
   const digits = to.replace(/\D/g, '')
 
@@ -1288,6 +1410,7 @@ app.post('/session/:id/profile/picture', async (req, res) => {
   if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected' })
   const { imageUrl } = req.body
   if (typeof imageUrl !== 'string' || !imageUrl.trim()) return res.status(400).json({ error: 'imageUrl string required' })
+  if (await isBlockedUrl(imageUrl)) return res.status(400).json({ error: 'imageUrl not allowed' })
   try {
     const media = stripMediaCollisionId(await MessageMedia.fromUrl(imageUrl, { unsafeMime: true }))
     if (!media.mimetype.startsWith('image/')) return res.status(400).json({ error: `URL is not an image (${media.mimetype})` })

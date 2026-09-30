@@ -195,3 +195,55 @@ def send_reset_email(to_email: str, display_name: str, token: str) -> bool:
 </html>
     """
     return _smtp_send(to_email, "Recupera tu PIN · Mystery Shopper", html)
+
+
+def send_session_disconnected_email(to_email: str, instance_name: str, reason_label: str) -> bool:
+    """Alerta cuando una sesión de WhatsApp que SÍ estaba conectada deja de
+    estarlo (ver el chequeo was_connected en el webhook de wwebjs, routes.py)
+    — a diferencia del "need_scan" normal de una instancia nueva recién creada
+    (que nunca dispara esto), esto es siempre una caída real de algo que ya
+    funcionaba. Pedido explícito del usuario, 2026-09-30: "no me gusta que se
+    desconecten de la nada, debería llegarme notificación a mi correo"."""
+    html = f"""
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:24px 16px;background:#0a0f1a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+
+  <div style="max-width:460px;margin:0 auto;background:#060f0c;border-radius:20px;overflow:hidden;border:1px solid rgba(239,68,68,0.3);box-shadow:0 24px 60px rgba(0,0,0,0.6)">
+
+    <div style="background:linear-gradient(135deg,#3a0e0e 0%,#060f0c 100%);padding:28px 32px 24px;border-bottom:1px solid rgba(239,68,68,0.25)">
+      <div style="color:#fff;font-size:18px;font-weight:800;letter-spacing:-0.02em;line-height:1.2">Mystery Shopper</div>
+      <div style="color:rgba(255,255,255,0.35);font-size:12px;margin-top:4px">by DeTuCel</div>
+    </div>
+
+    <div style="padding:32px">
+      <p style="margin:0 0 6px;font-size:13px;font-weight:700;color:rgba(239,68,68,0.85);text-transform:uppercase;letter-spacing:0.08em">⚠ Sesión de WhatsApp desconectada</p>
+      <p style="margin:0 0 20px;font-size:20px;font-weight:700;color:#fff">{instance_name}</p>
+      <p style="margin:0 0 24px;font-size:14px;color:rgba(255,255,255,0.6);line-height:1.6">
+        Esta sesión estaba conectada y acaba de caerse.
+      </p>
+
+      <div style="background:rgba(239,68,68,0.08);border:1.5px solid rgba(239,68,68,0.3);border-radius:14px;padding:16px 20px;margin-bottom:20px">
+        <div style="font-size:11px;color:rgba(255,255,255,0.3);font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:6px">Motivo</div>
+        <div style="font-size:16px;font-weight:700;color:#fff">{reason_label}</div>
+      </div>
+
+      <p style="margin:0;font-size:13px;color:rgba(255,255,255,0.45);line-height:1.5">
+        Revisa el panel de Instancias — si requiere volver a escanear el código QR, cuanto antes se reconecte, menos mensajes se pierden.
+      </p>
+    </div>
+
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-top:1px solid rgba(255,255,255,0.06)">
+      <tr>
+        <td style="padding:16px 32px;font-size:11px;color:rgba(255,255,255,0.2)">DeTuCel &copy; 2026</td>
+        <td style="padding:16px 32px;font-size:11px;color:rgba(255,255,255,0.2);text-align:right">notificaciones@detucel.mx</td>
+      </tr>
+    </table>
+
+  </div>
+
+</body>
+</html>
+    """
+    return _smtp_send(to_email, f"⚠ Sesión desconectada: {instance_name}", html)

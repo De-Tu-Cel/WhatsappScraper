@@ -584,6 +584,55 @@ COUNTRY_CONFIG: dict[str, dict] = {
 }
 DEFAULT_COUNTRY = "México"
 
+# COUNTRY_CONFIG's keys are all Spanish names — an explicit `country` param
+# in English (or any other language) never matched one, so every caller that
+# passes e.g. "United Kingdom" straight through (the Buscador de Prospectos'
+# own international examples — "Clinics in London", "Dentists in Buenos
+# Aires" — invite exactly this) silently got NO country config at all:
+# COUNTRY_CONFIG.get(effective_country) returned None, falling back to
+# Spanish-language/Mexico-geo defaults wherever that config is read (hl, gl,
+# bd_country). Confirmed live, 2026-09-30, while checking why the scraper's
+# _extract_country() had nothing to fall back to for a real UK/France scrape.
+_COUNTRY_NAME_ALIASES: dict[str, str] = {
+    "mexico": "México",
+    "united states": "Estados Unidos", "usa": "Estados Unidos", "us": "Estados Unidos",
+    "canada": "Canadá",
+    "dominican republic": "República Dominicana",
+    "peru": "Perú",
+    "brazil": "Brasil",
+    "spain": "España",
+    "france": "Francia",
+    "italy": "Italia",
+    "germany": "Alemania",
+    "united kingdom": "Reino Unido", "uk": "Reino Unido", "great britain": "Reino Unido",
+    "panama": "Panamá",
+}
+
+def _normalize_country_name(name: str | None) -> str | None:
+    """Maps a country name in English (or a common alias) to the Spanish key
+    COUNTRY_CONFIG actually uses. Returns the input unchanged if it's already
+    a valid key or doesn't match any known alias (e.g. it's already in
+    Spanish, or it's a country not in COUNTRY_CONFIG at all)."""
+    if not name:
+        return name
+    if name in COUNTRY_CONFIG:
+        return name
+    return _COUNTRY_NAME_ALIASES.get(_norm_loc(name), name)
+
+
+def _get_country_config(name: str | None) -> dict | None:
+    """COUNTRY_CONFIG.get(), but tolerant of an English (or common-alias)
+    country name — the dict's own keys are Spanish, but callers throughout
+    this file pass whatever language the `country` param arrived in (an
+    explicit one is deliberately never translated — see
+    _detect_effective_country's docstring — since it's also used verbatim
+    for DataForSEO's location_name and in natural-language prompts). Use this
+    instead of a raw COUNTRY_CONFIG.get(...) wherever the CONFIG itself
+    (hl/gl/bd_country/phone_code/cities) is what's actually needed."""
+    if not name:
+        return None
+    return COUNTRY_CONFIG.get(name) or COUNTRY_CONFIG.get(_normalize_country_name(name))
+
 
 def _norm_loc(s: str) -> str:
     s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii')
@@ -1143,7 +1192,7 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
     ai_synonyms = _ai_expand_synonyms(ind) if (OPENAI_API_KEY or DEEPSEEK_API_KEY) else []
     synonyms = list(dict.fromkeys(static_synonyms + ai_synonyms))  # merge, dedup, keep order
     is_fitness = "gym" in synonyms or ind.lower() in ("gimnasio", "fitness")
-    cfg = COUNTRY_CONFIG.get(country) if country else None
+    cfg = _get_country_config(country)
 
     if city.strip():
         loc = city.strip()
@@ -1249,6 +1298,33 @@ def _fetch_ddg(query: str, max_results: int = 80, page: int = 1) -> list[dict]:
     return results
 
 
+_SENTENCE_BOUNDARY_RE = re.compile(r'[.!?]\s')
+
+def _clean_snippet_body(body: str, max_len: int = 150) -> str:
+    """Truncate a search-result body for an LLM filter prompt, preferring the
+    first sentence over a raw character cutoff. DDG's own result HTML (via
+    the `ddgs` library, not something this code controls) occasionally
+    concatenates text from SEVERAL unrelated pages into one result's "body"
+    field — confirmed live, 2026-09-30: a "boulangeries en Paris" result for
+    uneboulangerie.fr's directory-entry page came back as "Boulangerie « La
+    Délicieuse »... adresse, téléphone, horaires, email, site web. Entrez
+    chez Pleincœur, votre boulangerie des Batignolles où notre famille vous
+    accueille..." — the SECOND sentence is a different, genuine bakery
+    (approved elsewhere in the same search), spliced onto the first
+    (directory-listing) sentence's text. A flat [:150] slice kept enough of
+    the second sentence's warm, personal language to make the directory
+    filter doubt the first sentence's own clear signal. Cutting at the first
+    sentence boundary instead avoids importing text about a DIFFERENT
+    business into the judgment — falls back to a flat slice if no sentence
+    boundary appears within a reasonable range (most snippets are already a
+    single clean sentence)."""
+    body = (body or "").strip()
+    m = _SENTENCE_BOUNDARY_RE.search(body)
+    if m and 20 <= m.end() <= max_len * 1.5:
+        return body[:m.end()].strip()
+    return body[:max_len]
+
+
 def _to_singular_es(term: str) -> str:
     """
     Best-effort Spanish singularization for industry terms used in the AI filter
@@ -1316,7 +1392,7 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
             for i, u in enumerate(batch):
                 s = snippets.get(u, {})
                 title = (s.get("title") or "").strip()
-                body = (s.get("body") or "").strip()[:150]
+                body = _clean_snippet_body(s.get("body"))
                 line = f"{i+1}. {u}"
                 if title:
                     line += f"\n   Título: {title}"
@@ -1427,14 +1503,78 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     # sitio ni siquiera menciona Yucatán, solo listaba negocios de otros
     # estados (Zacatecas). Igual que _wrong_sector_domain, este chequeo es
     # determinista (no depende de que la IA le dé suficiente peso a la regla).
+    #
+    # Patrones en inglés agregados 2026-09-30 — esta regex solo cubría español,
+    # así que para búsquedas internacionales (que la propia UI invita a hacer)
+    # dependía 100% del prompt de IA, con el mismo problema de dilución.
+    # Confirmado en vivo: "clinics in London" aprobó clinicguides.com ("Browse
+    # 1,266+ verified clinics... Compare prices, read reviews and get free
+    # quotes") y bookclinics.com ("Find the Best 36 Clinics... Costs, Prices,
+    # Reviews") — ambos agregadores/directorios de turismo médico, no negocios
+    # individuales.
     _DIRECTORY_SNIPPET_RE = re.compile(
         r'\bdirectorio\s+de\b|\blistado\s+de\b|\bcat[aá]logo\s+de\s+negocios\b|'
         r'\blos\s+mejores\s+\d*\s*\b|\btop\s*\d+\b|\bgu[ií]a\s+de\b|'
-        r'\ben\s+distintas\s+ciudades\b|\ben\s+todo\s+m[eé]xico\b',
+        r'\ben\s+distintas\s+ciudades\b|\ben\s+todo\s+m[eé]xico\b|'
+        r'\bdirectory\s+of\b|\blist(?:ing)?\s+of\b|\bguide\s+to\b|'
+        r'\bfind\s+the\s+best\b|\bbest\s+\d+\b|\btop\s+\d+\b|'
+        r'\bcompare\s+prices\b|\bread\s+reviews\b|\bverified\s+(?:clinics|businesses|providers|doctors|professionals)\b|'
+        r'\bin\s+(?:various|multiple)\s+cities\b|'
+        # Portugués, agregado 2026-09-30 tras probar "restaurantes en São Paulo"
+        # en vivo — 2 de 3 resultados eran directorios (ver comentario abajo
+        # sobre _KNOWN_DIRECTORY_DOMAINS y el chequeo por ruta).
+        r'\bmelhor(?:es)?\s+\d*\s*\b|\bgu[ií]a\s+(?:de|dos|das)\b|\branking\b|'
+        r'\bop[cç][õo]es\s+de\b|\bavalia[cç][õo]es\s+reais\b|\bideias\s+de\b',
         re.IGNORECASE,
     )
 
+    # Sitios internacionales de directorio/reseñas grandes y reconocibles por
+    # dominio, sin importar el idioma del snippet — confirmado en vivo,
+    # 2026-09-30: restaurantguru.com.br fue aprobado para "restaurantes en São
+    # Paulo" con un snippet 100% en portugués que ninguna regex de palabras
+    # iba a atrapar de forma confiable. Mismo principio que la lista de
+    # directorios ya nombrados en el prompt de IA (Yelp, Hotfrog, Kompass,
+    # Foursquare) pero determinista, no dependiente de que el modelo le dé
+    # peso suficiente.
+    _KNOWN_DIRECTORY_DOMAINS = {
+        'tripadvisor', 'yelp', 'foursquare', 'opentable', 'zomato', 'thefork',
+        'yellowpages', 'angieslist', 'bark', 'thumbtack', 'manta', 'kompass',
+        'europages', 'trustpilot', 'restaurantguru', 'michelin',
+    }
+
+    def _is_known_directory_domain(u: str) -> bool:
+        domain = urlparse(u).netloc.lower().replace('www.', '')
+        return any(kd in domain for kd in _KNOWN_DIRECTORY_DOMAINS)
+
+    # Complemento independiente del idioma: la ESTRUCTURA de la URL (no su
+    # contenido) también delata páginas de listado/ranking/guía — confirmado
+    # en vivo: quintoandar.com.br/guias/cidades/... y estrelize.com.br/
+    # rankings/sao-paulo, ninguno de los dos con un snippet que calzara en la
+    # regex de arriba.
+    _DIRECTORY_PATH_RE = re.compile(
+        r'/(?:guias?|rankings?|directorios?|directory|listado)/', re.IGNORECASE,
+    )
+
+    def _has_directory_path(u: str) -> bool:
+        return bool(_DIRECTORY_PATH_RE.search(urlparse(u).path.lower()))
+
+    # Páginas de gobierno/instituciones públicas — el prompt de IA ya pide
+    # excluir "páginas gubernamentales", pero mismo problema de dilución.
+    # Confirmado en vivo: un walk-in center del NHS (servicio de salud público
+    # del Reino Unido, clch.nhs.uk) fue aprobado para "clinics in London" —
+    # es una institución pública, no un negocio al que tenga sentido
+    # contactarle por WhatsApp para venta. Folded into the same
+    # _looks_like_directory_snippet() check (not a separate function) so
+    # every one of this file's call sites gets it automatically instead of
+    # needing each of the 8 places that check directory-snippet to also
+    # remember to check this.
+    _GOV_DOMAIN_RE = re.compile(r'\.gov(?:\.\w{2})?$|\.mil$|\.nhs\.uk$', re.IGNORECASE)
+
     def _looks_like_directory_snippet(u: str) -> bool:
+        if _GOV_DOMAIN_RE.search(urlparse(u).netloc.lower()):
+            return True
+        if _is_known_directory_domain(u) or _has_directory_path(u):
+            return True
         s = snippets.get(u, {})
         text = f"{s.get('title') or ''} {s.get('body') or ''}"
         return bool(_DIRECTORY_SNIPPET_RE.search(text))
@@ -1538,7 +1678,7 @@ def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: s
             for i, u in enumerate(batch):
                 s = snippets.get(u, {})
                 title = (s.get("title") or "").strip()
-                body = (s.get("body") or "").strip()[:150]
+                body = _clean_snippet_body(s.get("body"))
                 line = f"{i+1}. {u}"
                 if title:
                     line += f"\n   Título: {title}"
@@ -1603,7 +1743,7 @@ def _reject_wrong_country(urls: list[str], snippets: dict, country: str, city: s
             for i, u in enumerate(batch):
                 s = snippets.get(u, {})
                 title = (s.get("title") or "").strip()
-                body = (s.get("body") or "").strip()[:150]
+                body = _clean_snippet_body(s.get("body"))
                 line = f"{i+1}. {u}"
                 if title:
                     line += f"\n   Título: {title}"
@@ -1633,6 +1773,92 @@ def _reject_wrong_country(urls: list[str], snippets: dict, country: str, city: s
             pass
         if degraded is not None and "CountryFilter" not in degraded:
             degraded.append("CountryFilter")
+        return batch  # fallback: LLM unavailable or parse error — keep everything
+
+    batch_size = 60
+    batches = [urls[i:i + batch_size] for i in range(0, len(urls), batch_size)]
+    if len(batches) <= 1:
+        return _check_batch(urls)
+    kept: list[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(batches), 3)) as ex:
+        for batch_result in ex.map(_check_batch, batches):
+            kept.extend(batch_result)
+    return kept
+
+
+def _reject_directories_and_institutions(urls: list[str], snippets: dict,
+                                          degraded: list | None = None) -> list[str]:
+    """Dedicated, focused LLM pass whose ONLY job is spotting directories/
+    aggregators/listing sites and government/public institutions that slipped
+    past _ai_filter_urls — same reasoning as _reject_wrong_state/_reject_wrong_
+    country: that prompt already asks for this (it has "excluir catálogos o
+    agregadores", "directorios", "páginas gubernamentales" among its rules),
+    but competes there with ~13 other exclusion rules for the model's
+    attention. A short prompt with just this one job catches what the diluted
+    version misses — confirmed for the (similar, already-separated) location
+    checks, and now confirmed for this one too.
+
+    Runs for EVERY search (not conditional on Mexico vs. international, unlike
+    _reject_wrong_state/_reject_wrong_country) — the ORIGINAL case that started
+    this whole investigation was a Spanish-language directory approved for a
+    Mexican search, so this isn't an international-only problem. It exists
+    alongside (not instead of) the deterministic _looks_like_directory_snippet/
+    _is_known_directory_domain/_has_directory_path checks in _ai_filter_urls —
+    those are free and catch the obvious cases (a recognizable brand, a /guia/
+    URL); this catches the ones with no such signal, in any language, because
+    an LLM actually reads and understands the page description instead of
+    pattern-matching words (audit finding, 2026-09-30: a small regional
+    directory, baressp.com.br, had no known-domain/path/keyword signal at all
+    and slipped through every deterministic check).
+    """
+    if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not urls:
+        return urls
+
+    def _check_batch(batch: list[str]) -> list[str]:
+        try:
+            lines = []
+            for i, u in enumerate(batch):
+                s = snippets.get(u, {})
+                title = (s.get("title") or "").strip()
+                body = _clean_snippet_body(s.get("body"))
+                line = f"{i+1}. {u}"
+                if title:
+                    line += f"\n   Title/Título: {title}"
+                if body:
+                    line += f"\n   Summary/Resumen: {body}"
+                lines.append(line)
+            prompt = (
+                f'Tu ÚNICA tarea: de la siguiente lista de sitios web (en cualquier idioma), señala '
+                f'cuáles son:\n'
+                f'  (a) Directorios, agregadores, rankings o guías — incluye tanto páginas que LISTAN '
+                f'VARIOS negocios a la vez, COMO la página de entrada/ficha de UN solo negocio DENTRO '
+                f'de un directorio/plataforma de terceros (no es el sitio propio del negocio, aunque '
+                f'solo describa a ese negocio). Señal típica de esto último: el dominio suena genérico '
+                f'o descriptivo del rubro (no el nombre del negocio), la URL tiene una ruta tipo '
+                f'"/ciudad/nombre-del-negocio" o un código dentro de una categoría, o el texto resume '
+                f'datos de contacto en formato de ficha ("dirección, teléfono, horario, email, sitio '
+                f'web") en vez de que el propio negocio hable de sí mismo en primera persona. Incluye '
+                f'también sitios de reseñas/turismo/delivery que agregan muchos locales; o\n'
+                f'  (b) Páginas de gobierno, instituciones públicas (salud pública, educación pública, '
+                f'gobierno), o medios/revistas/blogs de noticias.\n\n'
+                f'Si el sitio es claramente la página oficial de UN negocio específico con nombre '
+                f'propio (aunque tenga varias sucursales), NO lo marques — eso es un prospecto válido.\n'
+                f'Ante la duda genuina, NO marques — solo marca cuando la evidencia sea clara.\n\n'
+                f'Sitios a evaluar:\n' + '\n'.join(lines) + '\n\n'
+                f'Responde ÚNICAMENTE un array JSON con los números de los que SÍ son (a) o (b) '
+                f'(para excluirlos). Si ninguno aplica, responde []. Ejemplo: [2,5] o []'
+            )
+            from app.llm import call_llm
+            content = call_llm([{"role": "user", "content": prompt}], max_tokens=300, temperature=0)
+            m = re.search(r'\[[\d,\s]*\]', content)
+            if m:
+                indices = json.loads(m.group(0))
+                reject_idx = {i for i in indices if 1 <= i <= len(batch)}
+                return [u for i, u in enumerate(batch, 1) if i not in reject_idx]
+        except Exception:
+            pass
+        if degraded is not None and "DirectoryFilter" not in degraded:
+            degraded.append("DirectoryFilter")
         return batch  # fallback: LLM unavailable or parse error — keep everything
 
     batch_size = 60
@@ -2186,7 +2412,7 @@ def _search_via_google_maps(
     Se deja la función por si se quiere reactivar como respaldo.
     """
     effective_country = _detect_effective_country(country, f"{industry} {city}")
-    cfg = COUNTRY_CONFIG.get(effective_country) if effective_country else None
+    cfg = _get_country_config(effective_country)
     gl = cfg.get("gl", "mx") if cfg else "mx"
     hl = cfg.get("hl", "es") if cfg else "es"
     bd_country = cfg.get("bd_country", "mx") if cfg else "mx"
@@ -2365,7 +2591,7 @@ def _search_via_dataforseo_maps(
     # COUNTRY_CONFIG de abajo, que sí está indexado con el nombre acentuado.
     _country_ascii = unicodedata.normalize('NFKD', effective_country).encode('ascii', 'ignore').decode('ascii')
     location_name = f"{city.strip()},{_state_key.title()},{_country_ascii}" if _state_key else f"{city.strip()},{_country_ascii}"
-    cfg = COUNTRY_CONFIG.get(effective_country)
+    cfg = _get_country_config(effective_country)
     language_code = cfg.get("hl", "es") if cfg else "es"
 
     ind_clean = industry.strip()
@@ -2671,6 +2897,16 @@ def search_prospects(
             if len(result) != _before_geo:
                 _log.info("[search] country filter: %d → %d URLs (país distinto a %s)", _before_geo, len(result), _effective_country)
 
+    # Dedicated directory/institution pass — runs for EVERY search (unlike the
+    # geo/country checks above, this isn't Mexico-vs-international: the
+    # original case that motivated it was a Spanish-language directory
+    # approved for a MEXICAN search). See _reject_directories_and_institutions'
+    # own docstring for why this needed to be separate from _ai_filter_urls.
+    _before_dir = len(result)
+    result = _reject_directories_and_institutions(result, snippets, degraded=degraded_sources)
+    if len(result) != _before_dir:
+        _log.info("[search] directory/institution filter: %d → %d URLs", _before_dir, len(result))
+
     # Si el resultado se quedó muy corto del target y se buscó en UNA ciudad
     # específica (no un barrido de estado), probar ciudades vecinas del mismo
     # estado antes de rendirse — solo con fuentes gratis (ddgs + OSM), sin
@@ -2715,6 +2951,7 @@ def search_prospects(
                 _extra_result = _ai_filter_urls(_dedup_new, _industry_singular, snippets, country=country)
                 if _state_key:
                     _extra_result = _reject_wrong_state(_extra_result, snippets, _state_key, city=city, degraded=degraded_sources)
+                _extra_result = _reject_directories_and_institutions(_extra_result, snippets, degraded=degraded_sources)
                 _log.info("[search] expansión geográfica: +%d candidatos → +%d aprobados",
                            len(_dedup_new), len(_extra_result))
                 result = list(dict.fromkeys(result + _extra_result))
@@ -2823,7 +3060,13 @@ _COUNTRY_KEYWORDS: list[tuple[str, str]] = [
 
 
 def _detect_effective_country(country: str | None, text: str) -> str | None:
-    """Return explicit country or auto-detect from text. Returns None if ambiguous."""
+    """Return explicit country or auto-detect from text. Returns None if ambiguous.
+    Deliberately does NOT normalize the language of an explicit `country` here
+    — this value also gets sent straight to DataForSEO's location_name (which
+    needs the country's real name in whatever language it was given, e.g.
+    "United Kingdom", not a Spanish translation) and interpolated into
+    natural-language LLM prompts (where either language reads fine). Only the
+    CONFIG lookup needs normalizing — see _get_country_config()."""
     if country:
         return country
     lower = text.lower()
@@ -2841,7 +3084,7 @@ def _bd_build_queries(industry: str, city: str, country: str | None, keywords: s
 
     # Auto-detect país desde el texto del industria y configurar geo
     effective_country = _detect_effective_country(country, f"{ind} {city}")
-    cfg = COUNTRY_CONFIG.get(effective_country) if effective_country else None
+    cfg = _get_country_config(effective_country)
 
     # Limpiar palabras de ubicación del texto de industria cuando vamos a hacer city fan-out.
     # Ejemplo: "gaseras en mexico" → "gaseras" antes de agregar "Guadalajara"
@@ -2969,7 +3212,7 @@ def _search_via_brightdata_multi(
 
     # Geo-location: usar el gl/hl del país si está configurado
     effective_country = _detect_effective_country(country, f"{industry} {city}")
-    cfg = COUNTRY_CONFIG.get(effective_country) if effective_country else None
+    cfg = _get_country_config(effective_country)
     gl = cfg.get("gl", "mx") if cfg else "mx"
     hl = cfg.get("hl", "es") if cfg else "es"
     bd_country = cfg.get("bd_country", "mx") if cfg else "mx"

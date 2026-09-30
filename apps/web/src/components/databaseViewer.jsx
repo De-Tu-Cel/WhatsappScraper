@@ -1581,7 +1581,7 @@ export default function DatabaseViewer({ isActive }) {
   const [industries, setIndustries] = useState([])
   const [cities, setCities] = useState([])
   const { status: instanceStatus, isDisconnected } = useInstanceStatus()
-  const { addJob } = useSendQueue()
+  const { addJob, completedCount } = useSendQueue()
 
   const notify = (msg, severity = 'success') => setSnack({ open: true, msg, severity })
 
@@ -1592,8 +1592,8 @@ export default function DatabaseViewer({ isActive }) {
       .catch(() => {})
   }, [])
 
-  const fetchData = useCallback(async () => {
-    setLoading(true)
+  const fetchData = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       const params = new URLSearchParams({
         page: page + 1,
@@ -1627,14 +1627,37 @@ export default function DatabaseViewer({ isActive }) {
         return next
       })
     } catch {
-      notify(lang === 'en' ? 'Failed to load data' : 'No se pudieron cargar los datos', 'error')
+      if (!silent) notify(lang === 'en' ? 'Failed to load data' : 'No se pudieron cargar los datos', 'error')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [page, rowsPerPage, filters])
 
   useEffect(() => { fetchData() }, [fetchData])
   useEffect(() => { if (isActive) fetchData() }, [isActive])
+
+  // Refresco silencioso — esta era la ÚNICA tabla de empresas sin ningún
+  // mecanismo de actualización propia (ni poll, ni completedCount, ni SSE) —
+  // si otro agente contactaba o bloqueaba algo mientras esta pantalla seguía
+  // abierta, se quedaba mostrando el estado viejo indefinidamente hasta que
+  // el usuario cambiara de filtro/página o le diera refrescar a mano. Mismo
+  // patrón ya probado en scheduledSends.jsx (silencioso, sin perder
+  // selección/filtro/scroll en curso) — audit finding, 2026-09-30.
+  useEffect(() => {
+    if (!isActive) return
+    const interval = setInterval(() => fetchData(true), 30_000)
+    return () => clearInterval(interval)
+  }, [isActive, fetchData])
+
+  // Igual que searchProspects/batchProcessor/csvImporter: refresca en cuanto
+  // completedCount cambia (un envío terminó en CUALQUIER pantalla de esta
+  // misma sesión, incluyendo el propio diálogo de envío de esta tabla) —
+  // instantáneo, en vez de esperar hasta el próximo tick del poll de 30s.
+  useEffect(() => {
+    if (completedCount === null || !isActive) return
+    fetchData(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [completedCount])
   useEffect(() => {
     setPage(0)
     setRowCache({})   // limpiar caché al cambiar filtros

@@ -1249,6 +1249,33 @@ def _fetch_ddg(query: str, max_results: int = 80, page: int = 1) -> list[dict]:
     return results
 
 
+_SENTENCE_BOUNDARY_RE = re.compile(r'[.!?]\s')
+
+def _clean_snippet_body(body: str, max_len: int = 150) -> str:
+    """Truncate a search-result body for an LLM filter prompt, preferring the
+    first sentence over a raw character cutoff. DDG's own result HTML (via
+    the `ddgs` library, not something this code controls) occasionally
+    concatenates text from SEVERAL unrelated pages into one result's "body"
+    field — confirmed live, 2026-09-30: a "boulangeries en Paris" result for
+    uneboulangerie.fr's directory-entry page came back as "Boulangerie « La
+    Délicieuse »... adresse, téléphone, horaires, email, site web. Entrez
+    chez Pleincœur, votre boulangerie des Batignolles où notre famille vous
+    accueille..." — the SECOND sentence is a different, genuine bakery
+    (approved elsewhere in the same search), spliced onto the first
+    (directory-listing) sentence's text. A flat [:150] slice kept enough of
+    the second sentence's warm, personal language to make the directory
+    filter doubt the first sentence's own clear signal. Cutting at the first
+    sentence boundary instead avoids importing text about a DIFFERENT
+    business into the judgment — falls back to a flat slice if no sentence
+    boundary appears within a reasonable range (most snippets are already a
+    single clean sentence)."""
+    body = (body or "").strip()
+    m = _SENTENCE_BOUNDARY_RE.search(body)
+    if m and 20 <= m.end() <= max_len * 1.5:
+        return body[:m.end()].strip()
+    return body[:max_len]
+
+
 def _to_singular_es(term: str) -> str:
     """
     Best-effort Spanish singularization for industry terms used in the AI filter
@@ -1316,7 +1343,7 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
             for i, u in enumerate(batch):
                 s = snippets.get(u, {})
                 title = (s.get("title") or "").strip()
-                body = (s.get("body") or "").strip()[:150]
+                body = _clean_snippet_body(s.get("body"))
                 line = f"{i+1}. {u}"
                 if title:
                     line += f"\n   Título: {title}"
@@ -1602,7 +1629,7 @@ def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: s
             for i, u in enumerate(batch):
                 s = snippets.get(u, {})
                 title = (s.get("title") or "").strip()
-                body = (s.get("body") or "").strip()[:150]
+                body = _clean_snippet_body(s.get("body"))
                 line = f"{i+1}. {u}"
                 if title:
                     line += f"\n   Título: {title}"
@@ -1667,7 +1694,7 @@ def _reject_wrong_country(urls: list[str], snippets: dict, country: str, city: s
             for i, u in enumerate(batch):
                 s = snippets.get(u, {})
                 title = (s.get("title") or "").strip()
-                body = (s.get("body") or "").strip()[:150]
+                body = _clean_snippet_body(s.get("body"))
                 line = f"{i+1}. {u}"
                 if title:
                     line += f"\n   Título: {title}"
@@ -1744,7 +1771,7 @@ def _reject_directories_and_institutions(urls: list[str], snippets: dict,
             for i, u in enumerate(batch):
                 s = snippets.get(u, {})
                 title = (s.get("title") or "").strip()
-                body = (s.get("body") or "").strip()[:150]
+                body = _clean_snippet_body(s.get("body"))
                 line = f"{i+1}. {u}"
                 if title:
                     line += f"\n   Title/Título: {title}"

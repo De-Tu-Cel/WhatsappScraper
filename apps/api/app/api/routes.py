@@ -4195,6 +4195,16 @@ def api_wwebjs_create_session(body: dict):
         "number": "",
         "assigned_to": None,
         "created_at": _dt.utcnow(),
+        # A brand-new number is exactly the one that most needs the slow/safe
+        # limits — get_instance_cap/get_new_contacts_limit (daily_cap.py) treat
+        # a MISSING warmup_mode field as falsy, i.e. full volume. There was no
+        # automated toggle anywhere that ever turned this on; only a human
+        # manually calling POST /api/instances/{name}/warmup after connecting
+        # it did. A number could send up to 150 msgs/day and greet 12 new
+        # strangers on day one if nobody remembered that step (audit finding,
+        # 2026-09-30, CRITICAL). Explicit opt-in to full volume via that same
+        # endpoint once it's actually earned it, not a silent default.
+        "warmup_mode": True,
     })
     return {"name": name, "status": r.json().get("status", "initializing")}
 
@@ -6394,7 +6404,20 @@ def api_create_instance(body: dict, x_user_token: Optional[str] = Header(None)):
             "assigned_name": None,
             "created_at": datetime.utcnow().isoformat(),
         }
-        db.db.instances.update_one({"name": name}, {"$set": doc}, upsert=True)
+        # $setOnInsert (not $set) for warmup_mode — this same call re-runs on an
+        # already-existing instance (upsert=True) to update number/assignment,
+        # and must NOT reset an instance that already graduated to full volume
+        # back into warmup every time someone edits it. Missing warmup_mode
+        # reads as falsy (full volume) elsewhere (daily_cap.py) with no
+        # automated toggle ever turning it on — a brand-new number could send
+        # up to 150 msgs/day and greet 12 new strangers on day one if nobody
+        # remembered the separate manual warmup-on step (audit finding,
+        # 2026-09-30, CRITICAL).
+        db.db.instances.update_one(
+            {"name": name},
+            {"$set": doc, "$setOnInsert": {"warmup_mode": True}},
+            upsert=True,
+        )
         return {"ok": True, "instance": doc}
 
     from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
@@ -6417,7 +6440,12 @@ def api_create_instance(body: dict, x_user_token: Optional[str] = Header(None)):
         "assigned_name": None,
         "created_at": datetime.utcnow().isoformat(),
     }
-    db.db.instances.update_one({"name": name}, {"$set": doc}, upsert=True)
+    # $setOnInsert — see the identical comment on the wwebjs branch above.
+    db.db.instances.update_one(
+        {"name": name},
+        {"$set": doc, "$setOnInsert": {"warmup_mode": True}},
+        upsert=True,
+    )
     return {"ok": True, "instance": doc, "instance_token": instance_token}
 
 

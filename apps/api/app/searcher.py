@@ -1710,6 +1710,86 @@ def _reject_wrong_country(urls: list[str], snippets: dict, country: str, city: s
     return kept
 
 
+def _reject_directories_and_institutions(urls: list[str], snippets: dict,
+                                          degraded: list | None = None) -> list[str]:
+    """Dedicated, focused LLM pass whose ONLY job is spotting directories/
+    aggregators/listing sites and government/public institutions that slipped
+    past _ai_filter_urls — same reasoning as _reject_wrong_state/_reject_wrong_
+    country: that prompt already asks for this (it has "excluir catálogos o
+    agregadores", "directorios", "páginas gubernamentales" among its rules),
+    but competes there with ~13 other exclusion rules for the model's
+    attention. A short prompt with just this one job catches what the diluted
+    version misses — confirmed for the (similar, already-separated) location
+    checks, and now confirmed for this one too.
+
+    Runs for EVERY search (not conditional on Mexico vs. international, unlike
+    _reject_wrong_state/_reject_wrong_country) — the ORIGINAL case that started
+    this whole investigation was a Spanish-language directory approved for a
+    Mexican search, so this isn't an international-only problem. It exists
+    alongside (not instead of) the deterministic _looks_like_directory_snippet/
+    _is_known_directory_domain/_has_directory_path checks in _ai_filter_urls —
+    those are free and catch the obvious cases (a recognizable brand, a /guia/
+    URL); this catches the ones with no such signal, in any language, because
+    an LLM actually reads and understands the page description instead of
+    pattern-matching words (audit finding, 2026-09-30: a small regional
+    directory, baressp.com.br, had no known-domain/path/keyword signal at all
+    and slipped through every deterministic check).
+    """
+    if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not urls:
+        return urls
+
+    def _check_batch(batch: list[str]) -> list[str]:
+        try:
+            lines = []
+            for i, u in enumerate(batch):
+                s = snippets.get(u, {})
+                title = (s.get("title") or "").strip()
+                body = (s.get("body") or "").strip()[:150]
+                line = f"{i+1}. {u}"
+                if title:
+                    line += f"\n   Title/Título: {title}"
+                if body:
+                    line += f"\n   Summary/Resumen: {body}"
+                lines.append(line)
+            prompt = (
+                f'Tu ÚNICA tarea: de la siguiente lista de sitios web (en cualquier idioma), señala '
+                f'cuáles son:\n'
+                f'  (a) Directorios, agregadores, rankings o guías que LISTAN VARIOS negocios '
+                f'distintos (no la página oficial de UN solo negocio específico), incluyendo sitios de '
+                f'reseñas/turismo/delivery que agregan muchos locales; o\n'
+                f'  (b) Páginas de gobierno, instituciones públicas (salud pública, educación pública, '
+                f'gobierno), o medios/revistas/blogs de noticias.\n\n'
+                f'Si el sitio es claramente la página oficial de UN negocio específico con nombre '
+                f'propio (aunque tenga varias sucursales), NO lo marques — eso es un prospecto válido.\n'
+                f'Ante la duda genuina, NO marques — solo marca cuando la evidencia sea clara.\n\n'
+                f'Sitios a evaluar:\n' + '\n'.join(lines) + '\n\n'
+                f'Responde ÚNICAMENTE un array JSON con los números de los que SÍ son (a) o (b) '
+                f'(para excluirlos). Si ninguno aplica, responde []. Ejemplo: [2,5] o []'
+            )
+            from app.llm import call_llm
+            content = call_llm([{"role": "user", "content": prompt}], max_tokens=300, temperature=0)
+            m = re.search(r'\[[\d,\s]*\]', content)
+            if m:
+                indices = json.loads(m.group(0))
+                reject_idx = {i for i in indices if 1 <= i <= len(batch)}
+                return [u for i, u in enumerate(batch, 1) if i not in reject_idx]
+        except Exception:
+            pass
+        if degraded is not None and "DirectoryFilter" not in degraded:
+            degraded.append("DirectoryFilter")
+        return batch  # fallback: LLM unavailable or parse error — keep everything
+
+    batch_size = 60
+    batches = [urls[i:i + batch_size] for i in range(0, len(urls), batch_size)]
+    if len(batches) <= 1:
+        return _check_batch(urls)
+    kept: list[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(batches), 3)) as ex:
+        for batch_result in ex.map(_check_batch, batches):
+            kept.extend(batch_result)
+    return kept
+
+
 def _shallow_fetch_meta(urls: list[str], timeout: int = 3, max_bytes: int = 4096) -> dict:
     """
     Fetches only the first 5 KB of each URL to extract <title> and
@@ -2735,6 +2815,16 @@ def search_prospects(
             if len(result) != _before_geo:
                 _log.info("[search] country filter: %d → %d URLs (país distinto a %s)", _before_geo, len(result), _effective_country)
 
+    # Dedicated directory/institution pass — runs for EVERY search (unlike the
+    # geo/country checks above, this isn't Mexico-vs-international: the
+    # original case that motivated it was a Spanish-language directory
+    # approved for a MEXICAN search). See _reject_directories_and_institutions'
+    # own docstring for why this needed to be separate from _ai_filter_urls.
+    _before_dir = len(result)
+    result = _reject_directories_and_institutions(result, snippets, degraded=degraded_sources)
+    if len(result) != _before_dir:
+        _log.info("[search] directory/institution filter: %d → %d URLs", _before_dir, len(result))
+
     # Si el resultado se quedó muy corto del target y se buscó en UNA ciudad
     # específica (no un barrido de estado), probar ciudades vecinas del mismo
     # estado antes de rendirse — solo con fuentes gratis (ddgs + OSM), sin
@@ -2779,6 +2869,7 @@ def search_prospects(
                 _extra_result = _ai_filter_urls(_dedup_new, _industry_singular, snippets, country=country)
                 if _state_key:
                     _extra_result = _reject_wrong_state(_extra_result, snippets, _state_key, city=city, degraded=degraded_sources)
+                _extra_result = _reject_directories_and_institutions(_extra_result, snippets, degraded=degraded_sources)
                 _log.info("[search] expansión geográfica: +%d candidatos → +%d aprobados",
                            len(_dedup_new), len(_extra_result))
                 result = list(dict.fromkeys(result + _extra_result))

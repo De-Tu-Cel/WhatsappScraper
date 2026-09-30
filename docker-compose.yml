@@ -76,7 +76,7 @@ services:
     volumes:
       - wwebjs_sessions:/app/sessions
     restart: unless-stopped
-    mem_limit: 3g
+    mem_limit: 6g
     logging:
       driver: json-file
       options:

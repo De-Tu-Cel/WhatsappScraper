@@ -26,6 +26,27 @@ router = APIRouter()
 # solo me lleguen las notificaciones a mí, a Gilad no".
 SESSION_DISCONNECT_ALERT_EMAILS = ["marco@detucel.mx"]
 
+# Cuántos segundos esperar, tras una caída, antes de mandar el correo de
+# aviso — un redeploy del contenedor de wwebjs tira TODAS las sesiones a la
+# vez y se reconectan solas en 1-3 min (confirmado con datos reales de
+# instance_health_logs, 2026-09-30); sin este margen, cada deploy dispara
+# un correo de "desconectada" que en realidad nunca lo estuvo de verdad.
+SESSION_DISCONNECT_ALERT_DELAY_SECONDS = 300
+
+
+async def _notify_disconnect_if_still_down(instance_name: str, reason_label_at_trigger: str):
+    """Reconfirma el estado tras el margen de espera antes de avisar por
+    correo — si para entonces ya reconectó sola (redeploy), no manda nada."""
+    await asyncio.sleep(SESSION_DISCONNECT_ALERT_DELAY_SECONDS)
+    db = MongoDBManager()
+    inst = db.db.instances.find_one({"name": instance_name})
+    if not inst or inst.get("status") == "connected":
+        return
+    current_label = inst.get("disconnect_reason_label") or reason_label_at_trigger
+    from app.email_service import send_session_disconnected_email
+    for _alert_email in SESSION_DISCONNECT_ALERT_EMAILS:
+        await asyncio.to_thread(send_session_disconnected_email, _alert_email, instance_name, current_label)
+
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
 def _require_user(x_user_token: Optional[str] = Header(None)):
@@ -4457,9 +4478,7 @@ async def api_wwebjs_webhook(request: Request, background_tasks: BackgroundTasks
         # que mandarlo inline aquí congelaría el event loop del worker entero
         # mientras dura el round-trip SMTP.
         if was_connected and status != "connected":
-            from app.email_service import send_session_disconnected_email
-            for _alert_email in SESSION_DISCONNECT_ALERT_EMAILS:
-                background_tasks.add_task(send_session_disconnected_email, _alert_email, instance_name, label_map.get(status, status))
+            background_tasks.add_task(_notify_disconnect_if_still_down, instance_name, label_map.get(status, status))
         if data.get("phone"):
             db.db.instances.update_one({"name": instance_name}, {"$set": {"number": data["phone"]}})
         _profile_fields = {}

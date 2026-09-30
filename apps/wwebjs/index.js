@@ -670,7 +670,13 @@ function createClient(sessionId, phoneNumber) {
         if (contact.id?.user) number = contact.id.user
       } catch (_) {}
     }
-    console.log(`[${sessionId}] ← ${number}: ${String(msg.body).substring(0, 60)}`)
+    // Real customer conversation content (and, less sensitively, the phone
+    // number) used to be logged in full on every single inbound message —
+    // anyone with log access (ops, a broader on-call rotation, a log
+    // aggregator with laxer access than the DB) got a plaintext feed of
+    // customer PII with no operational need for the content itself (audit
+    // finding, 2026-09-30). Length/type is enough to see the message flow.
+    console.log(`[${sessionId}] ← ${number} (${msg.type}, ${String(msg.body).length} chars)`)
 
     // DIAGNOSTIC (temporary): kept alongside the extraction below as a safety
     // net — if the field paths guessed from whatsapp-web.js's own OUTGOING

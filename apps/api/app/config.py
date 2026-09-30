@@ -26,6 +26,20 @@ N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "")
 SMSFAST_API_KEY = os.getenv("SMSFAST_API_KEY", "")
 SMSFAST_SERVICE = os.getenv("SMSFAST_SERVICE", "wa")
 
+# Shared secret for the OTP/Telnyx webhooks (/otp/webhook, /telnyx/inbound,
+# /telnyx/otp) — these have no built-in signature verification (the carrier
+# SMS gateway doesn't support HMAC signing, and Telnyx's own Ed25519 scheme
+# would need a new crypto dependency plus the account's real public key,
+# which isn't available to set up remotely). A shared secret appended to the
+# webhook URL as ?secret=... is the practical alternative real integrations
+# use when the provider doesn't support real signing. Empty = not configured
+# yet: endpoints stay open (today's behavior) but log a warning on every
+# call, so this is safe to deploy before the secret is actually set and the
+# carrier/Telnyx webhook URLs are updated to include it (security gap found
+# 2026-09-30 — these 3 endpoints could inject arbitrary OTP text via ADB into
+# a live WhatsApp registration, or read back the real OTP, with zero auth).
+OTP_WEBHOOK_SECRET = os.getenv("OTP_WEBHOOK_SECRET", "")
+
 # Evolution API (WhatsApp personal number)
 EVOLUTION_API_URL      = os.getenv("EVOLUTION_API_URL", "http://localhost:8080")
 EVOLUTION_API_KEY      = os.getenv("EVOLUTION_API_KEY", "")

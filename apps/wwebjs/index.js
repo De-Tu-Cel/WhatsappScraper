@@ -68,6 +68,21 @@ app.use((req, res, next) => {
   next()
 })
 
+// Every :id route param ends up as `sessionId`, which gets built straight
+// into filesystem paths with no sanitization (clearSessionLockFiles's
+// `session-${sessionId}`, whatsapp-web.js's own LocalAuth clientId dir) —
+// a value like "../../etc" could escape SESSIONS_PATH. API_SECRET above
+// already gates this from the open internet, but this is real defense in
+// depth against a compromised/misconfigured caller (audit finding,
+// 2026-09-30). Runs once for every route with an :id param via Express's
+// own app.param, instead of patching each of the 16 handlers individually.
+app.param('id', (req, res, next, id) => {
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+    return res.status(400).json({ error: 'invalid session id' })
+  }
+  next()
+})
+
 async function forwardWebhook(payload) {
   try {
     await fetch(`${FASTAPI_URL}/api/wwebjs/webhook`, {

@@ -34,6 +34,20 @@ def _require_admin(x_user_token: Optional[str] = Header(None)):
         raise HTTPException(status_code=403, detail="Se requiere rol de administrador")
     return user
 
+def _check_otp_webhook_secret(secret: Optional[str], endpoint: str):
+    """Shared-secret gate for /otp/webhook, /telnyx/inbound, /telnyx/otp — see
+    OTP_WEBHOOK_SECRET's docstring in config.py for why this isn't real HMAC
+    signature verification. Fails OPEN (logs a warning, doesn't reject) while
+    the secret is unset, so this is safe to deploy before the carrier/Telnyx
+    webhook URLs are actually updated to include ?secret=... — flip to
+    fail-closed automatically the moment OTP_WEBHOOK_SECRET is configured."""
+    from app.config import OTP_WEBHOOK_SECRET
+    if not OTP_WEBHOOK_SECRET:
+        _log.warning("[%s] OTP_WEBHOOK_SECRET no configurado — endpoint sin protección", endpoint)
+        return
+    if secret != OTP_WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="secret inválido o ausente")
+
 # ── Auth endpoints ────────────────────────────────────────────────────────────
 
 @router.post("/auth/register")
@@ -6548,11 +6562,17 @@ def api_unassign_instance(name: str, x_user_token: Optional[str] = Header(None))
 
 
 @router.post("/otp/webhook")
-def otp_webhook(body: dict):
+def otp_webhook(body: dict, secret: Optional[str] = Query(None)):
     """
     Telcel (or any carrier) calls this endpoint when an SMS arrives.
     Expected body: { "to": "+521234567890", "text": "Your WhatsApp code is 123456" }
+    Configure the carrier's webhook URL with ?secret=<OTP_WEBHOOK_SECRET> once
+    set — see _check_otp_webhook_secret. Until then this stays open (today's
+    behavior) since an unauthenticated caller could otherwise inject arbitrary
+    text into a live WhatsApp registration via ADB (handle_incoming_sms), or
+    race/block the real OTP for a number currently mid-registration.
     """
+    _check_otp_webhook_secret(secret, "otp/webhook")
     from app.otp_manager import handle_incoming_sms
     phone = body.get("to", "").replace("+", "").strip()
     text  = body.get("text", "")
@@ -6641,7 +6661,12 @@ _telnyx_otp_store: dict = {}  # {"otp": "123456", "ts": "..."}
 
 @router.post("/telnyx/inbound")
 async def telnyx_inbound_webhook(request: Request):
-    """Recibe el webhook de Telnyx con el SMS entrante y extrae el OTP."""
+    """Recibe el webhook de Telnyx con el SMS entrante y extrae el OTP.
+    Configure Telnyx's webhook URL with ?secret=<OTP_WEBHOOK_SECRET> once set.
+    Checked OUTSIDE the try/except below on purpose — that block swallows
+    every exception (by design, so a malformed payload never 500s back to
+    Telnyx), which would silently swallow the auth rejection too."""
+    _check_otp_webhook_secret(request.query_params.get("secret"), "telnyx/inbound")
     import re as _re, datetime as _dt
     try:
         body = await request.json()
@@ -6657,6 +6682,11 @@ async def telnyx_inbound_webhook(request: Request):
     return {"ok": True}
 
 @router.get("/telnyx/otp")
-def telnyx_get_otp():
-    """Devuelve el último OTP recibido (el script de registro lo pollea)."""
+def telnyx_get_otp(secret: Optional[str] = Query(None)):
+    """Devuelve el último OTP recibido (el script de registro lo pollea).
+    Pass ?secret=<OTP_WEBHOOK_SECRET> once set — until then this returns the
+    real verification code to ANY caller with zero auth (the external
+    registration script isn't a logged-in user, so the normal x-user-token
+    session system doesn't apply here)."""
+    _check_otp_webhook_secret(secret, "telnyx/otp")
     return _telnyx_otp_store or {"otp": None}

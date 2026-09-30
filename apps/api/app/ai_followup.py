@@ -1212,6 +1212,27 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
     except Exception:
         pass
 
+    # Second re-check, right before the irreversible send — the ONLY earlier
+    # check (right after the read-delay, above) closes that sleep's window but
+    # leaves the much larger gap created by the LLM call itself (often several
+    # seconds, longer still on the copied-example retry path) completely
+    # unguarded: a human toggling AI off, or the session ending for any other
+    # reason, during that gap did not stop Andy from sending anyway (real
+    # customer-facing bug, audit finding 2026-09-30 — confirmed no re-check of
+    # any kind existed between "LLM finished generating" and "message actually
+    # sent", other than the Evolution path's own typing-delay sleep, which has
+    # no check of its own either). Same default (False) as api_get_ai_status
+    # uses elsewhere — no prefs doc means AI was never explicitly turned on.
+    _session_recheck = db.db.ai_followup_sessions.find_one({"_id": sid}, {"status": 1})
+    _prefs_recheck = db.db.conversation_ai_prefs.find_one({"company_id": company_id}, {"ai_enabled": 1}) or {}
+    if not _session_recheck or _session_recheck.get("status") != "active" or not _prefs_recheck.get("ai_enabled", False):
+        log.info("[AIFollowup] aborting send for %s — status/ai_enabled changed after LLM reply was generated "
+                 "(session_status=%r, ai_enabled=%r)",
+                 phone_number, (_session_recheck or {}).get("status"), _prefs_recheck.get("ai_enabled"))
+        print("[AIFollowup] EXIT: status/ai_enabled changed just before send")
+        db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": False}})
+        return
+
     try:
         if _inst_provider == "wasender":
             from app.providers.legacy.wasender import WasenderClient, _clean_digits as _ws_clean

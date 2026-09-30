@@ -1443,9 +1443,44 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
         r'\bdirectory\s+of\b|\blist(?:ing)?\s+of\b|\bguide\s+to\b|'
         r'\bfind\s+the\s+best\b|\bbest\s+\d+\b|\btop\s+\d+\b|'
         r'\bcompare\s+prices\b|\bread\s+reviews\b|\bverified\s+(?:clinics|businesses|providers|doctors|professionals)\b|'
-        r'\bin\s+(?:various|multiple)\s+cities\b',
+        r'\bin\s+(?:various|multiple)\s+cities\b|'
+        # Portugués, agregado 2026-09-30 tras probar "restaurantes en São Paulo"
+        # en vivo — 2 de 3 resultados eran directorios (ver comentario abajo
+        # sobre _KNOWN_DIRECTORY_DOMAINS y el chequeo por ruta).
+        r'\bmelhor(?:es)?\s+\d*\s*\b|\bgu[ií]a\s+(?:de|dos|das)\b|\branking\b|'
+        r'\bop[cç][õo]es\s+de\b|\bavalia[cç][õo]es\s+reais\b|\bideias\s+de\b',
         re.IGNORECASE,
     )
+
+    # Sitios internacionales de directorio/reseñas grandes y reconocibles por
+    # dominio, sin importar el idioma del snippet — confirmado en vivo,
+    # 2026-09-30: restaurantguru.com.br fue aprobado para "restaurantes en São
+    # Paulo" con un snippet 100% en portugués que ninguna regex de palabras
+    # iba a atrapar de forma confiable. Mismo principio que la lista de
+    # directorios ya nombrados en el prompt de IA (Yelp, Hotfrog, Kompass,
+    # Foursquare) pero determinista, no dependiente de que el modelo le dé
+    # peso suficiente.
+    _KNOWN_DIRECTORY_DOMAINS = {
+        'tripadvisor', 'yelp', 'foursquare', 'opentable', 'zomato', 'thefork',
+        'yellowpages', 'angieslist', 'bark', 'thumbtack', 'manta', 'kompass',
+        'europages', 'trustpilot', 'restaurantguru', 'michelin',
+    }
+
+    def _is_known_directory_domain(u: str) -> bool:
+        domain = urlparse(u).netloc.lower().replace('www.', '')
+        return any(kd in domain for kd in _KNOWN_DIRECTORY_DOMAINS)
+
+    # Complemento independiente del idioma: la ESTRUCTURA de la URL (no su
+    # contenido) también delata páginas de listado/ranking/guía — confirmado
+    # en vivo: quintoandar.com.br/guias/cidades/... y estrelize.com.br/
+    # rankings/sao-paulo, ninguno de los dos con un snippet que calzara en la
+    # regex de arriba.
+    _DIRECTORY_PATH_RE = re.compile(
+        r'/(?:guias?|rankings?|directorios?|directory|listado)/', re.IGNORECASE,
+    )
+
+    def _has_directory_path(u: str) -> bool:
+        return bool(_DIRECTORY_PATH_RE.search(urlparse(u).path.lower()))
 
     # Páginas de gobierno/instituciones públicas — el prompt de IA ya pide
     # excluir "páginas gubernamentales", pero mismo problema de dilución.
@@ -1461,6 +1496,8 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
 
     def _looks_like_directory_snippet(u: str) -> bool:
         if _GOV_DOMAIN_RE.search(urlparse(u).netloc.lower()):
+            return True
+        if _is_known_directory_domain(u) or _has_directory_path(u):
             return True
         s = snippets.get(u, {})
         text = f"{s.get('title') or ''} {s.get('body') or ''}"

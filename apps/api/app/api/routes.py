@@ -19,6 +19,13 @@ from app.phone_utils import clean_digits
 
 router = APIRouter()
 
+# Quién recibe el correo de "sesión de WhatsApp desconectada" (ver el webhook
+# de wwebjs más abajo) — deliberadamente separado de ADMIN_EMAILS (auth.py),
+# que es sobre permisos/rol, no sobre a quién le interesa este aviso
+# operativo en particular. Pedido explícito del usuario, 2026-09-30: "que
+# solo me lleguen las notificaciones a mí, a Gilad no".
+SESSION_DISCONNECT_ALERT_EMAILS = ["marco@detucel.mx"]
+
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
 def _require_user(x_user_token: Optional[str] = Header(None)):
@@ -4451,9 +4458,8 @@ async def api_wwebjs_webhook(request: Request, background_tasks: BackgroundTasks
         # mientras dura el round-trip SMTP.
         if was_connected and status != "connected":
             from app.email_service import send_session_disconnected_email
-            from app.auth import ADMIN_EMAILS
-            for _admin_email in ADMIN_EMAILS:
-                background_tasks.add_task(send_session_disconnected_email, _admin_email, instance_name, label_map.get(status, status))
+            for _alert_email in SESSION_DISCONNECT_ALERT_EMAILS:
+                background_tasks.add_task(send_session_disconnected_email, _alert_email, instance_name, label_map.get(status, status))
         if data.get("phone"):
             db.db.instances.update_one({"name": instance_name}, {"$set": {"number": data["phone"]}})
         _profile_fields = {}

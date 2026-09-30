@@ -4392,7 +4392,7 @@ def api_wwebjs_user_status(x_user_token: Optional[str] = Header(None)):
 
 
 @router.post("/wwebjs/webhook")
-async def api_wwebjs_webhook(request: Request):
+async def api_wwebjs_webhook(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
     event = body.get("event", "")
     session_id = body.get("sessionId", "")
@@ -4406,10 +4406,17 @@ async def api_wwebjs_webhook(request: Request):
 
     if event == "session.status":
         status = data.get("status", "")
+        # Capturado ANTES del $set de abajo — se usa para saber si esta
+        # transición es una caída real (algo que SÍ estaba conectado dejó de
+        # estarlo) en vez del "need_scan" normal de una instancia recién
+        # creada que nunca llegó a conectarse (ver el aviso por correo más
+        # abajo).
+        was_connected = inst_doc.get("status") == "connected"
         label_map = {
             "connected": "Sesión activa",
             "disconnected": "Sesión desconectada",
             "auth_failure": "Fallo de autenticación",
+            "need_scan": "Requiere volver a escanear QR/código",
         }
         print(f"[wwebjs Webhook] session={instance_name} {status} → {label_map.get(status, status)}")
         db.db.instances.update_one(
@@ -4433,6 +4440,20 @@ async def api_wwebjs_webhook(request: Request):
         elif status in ("disconnected", "auth_failure"):
             db.save_instance_health_log(instance_name, "disconnected",
                                          reason=status, reason_label=label_map.get(status, status))
+        # Correo a los admins cuando una sesión que SÍ estaba conectada deja
+        # de estarlo — incluye "need_scan" (un LOGOUT real, el caso más
+        # importante de avisar, ya que necesita que un humano vuelva a
+        # escanear) pero NUNCA el "need_scan" normal de una instancia recién
+        # creada que nunca llegó a conectarse (was_connected sería False ahí).
+        # Pedido explícito del usuario, 2026-09-30. Despachado vía
+        # BackgroundTasks — smtplib es bloqueante y esta ruta es async, así
+        # que mandarlo inline aquí congelaría el event loop del worker entero
+        # mientras dura el round-trip SMTP.
+        if was_connected and status != "connected":
+            from app.email_service import send_session_disconnected_email
+            from app.auth import ADMIN_EMAILS
+            for _admin_email in ADMIN_EMAILS:
+                background_tasks.add_task(send_session_disconnected_email, _admin_email, instance_name, label_map.get(status, status))
         if data.get("phone"):
             db.db.instances.update_one({"name": instance_name}, {"$set": {"number": data["phone"]}})
         _profile_fields = {}

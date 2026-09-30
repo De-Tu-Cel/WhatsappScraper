@@ -573,8 +573,18 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         _inst_provider_send = _inst_doc_send.get("provider", "evolution")
         _inst_number = _inst_doc_send.get("number") or "?"
 
-        # Daily send cap — block early before any API call
-        if get_daily_count(db, instance) >= get_instance_cap(db, instance):
+        # Daily send cap — reserved atomically BEFORE sending (not checked-then-
+        # incremented-after) so two concurrent manual sends through the same
+        # instance (two agents replying close together, or a human reply racing
+        # an Andy follow-up) can't both read a stale "under cap" count and both
+        # go out. Matches the same fix already applied to scheduler.py/
+        # ai_followup.py — this was the one send path still using the old
+        # check-then-act race (audit finding, 2026-09-30).
+        from app.daily_cap import reserve_daily_slot as _reserve_daily_send
+        _cap_reserved, _cap_reserved_new = _reserve_daily_send(
+            db, instance, get_instance_cap(db, instance), clean_digits(req.to_number)
+        )
+        if not _cap_reserved:
             raise HTTPException(
                 status_code=429,
                 detail=f"Límite diario alcanzado ({DAILY_CAP} mensajes). Reinicia a las 00:00 hora local.",
@@ -772,8 +782,12 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 log_doc["sent_by_username"] = sender.get("username", "")
                 log_doc["sent_by_name"]     = sender.get("display_name", "") or sender.get("username", "")
         log_id = db.insert_message_log(log_doc)
-        if status == "sent":
-            increment_daily_count(db, instance, clean_digits(req.to_number))
+        # The slot was already claimed atomically by reserve_daily_slot above —
+        # give it back only if the send that reservation was FOR ultimately
+        # failed (matches scheduler.py/ai_followup.py's identical pattern).
+        if status != "sent" and _cap_reserved_new:
+            from app.daily_cap import release_daily_slot as _release_daily_send
+            _release_daily_send(db, instance, clean_digits(req.to_number))
 
         return {"ok": True, "status": status, "log_id": log_id, "message_id": message_id}
     except HTTPException:

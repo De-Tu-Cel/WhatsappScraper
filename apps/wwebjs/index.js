@@ -222,7 +222,17 @@ function startLivenessHeartbeat(sessionId) {
   session.heartbeatFailStreak = 0
   session.heartbeatTimer = setInterval(async () => {
     const s = sessions.get(sessionId)
-    if (!s || s.status !== 'connected') return
+    // Identity check (s !== session) as well as status — without it, this
+    // specific interval (tied to THIS generation's client) kept polling
+    // getState() on whatever session object the map held later, including a
+    // different generation's, after a recreate elsewhere. That generation
+    // already gets its OWN fresh heartbeat from its own 'ready' handler
+    // calling startLivenessHeartbeat again — leaving this old interval alive
+    // meant two intervals could end up polling/mutating the same session's
+    // heartbeatFailStreak concurrently (audit finding, 2026-09-30). Once the
+    // identity no longer matches, this interval has nothing left to do.
+    if (!s || s !== session) { clearInterval(session.heartbeatTimer); return }
+    if (s.status !== 'connected') return
     try {
       await Promise.race([
         s.client.getState(),
@@ -484,7 +494,14 @@ function createClient(sessionId, phoneNumber) {
     clearTimeout(session.readyWatchdog)
     session.readyWatchdog = setTimeout(async () => {
       const s = sessions.get(sessionId)
-      if (!s || s.status === 'connected') return
+      // Identity check (s !== session), not just status — this timer was
+      // scheduled for THIS specific client generation. Without it, a user
+      // retrying via /start (destroy+recreate) while this watchdog was still
+      // pending left the NEW session in 'initializing'/'need_scan' (not yet
+      // 'connected'), so the stale watchdog didn't bail out on the status
+      // check alone — it tore down the brand-new client, mistaking it for
+      // the stuck one it was actually watching (audit finding, 2026-09-30).
+      if (!s || s !== session || s.status === 'connected') return
       console.warn(`[${sessionId}] Stuck in "${s.status}" — never reached ready, recreating session`)
       await destroySessionClient(s.client, sessionId, s.initPromise)
       sessions.delete(sessionId)
@@ -577,6 +594,14 @@ function createClient(sessionId, phoneNumber) {
     clearInterval(session.presenceTimer)
     clearInterval(session.profileSyncTimer)
     clearInterval(session.heartbeatTimer)
+    // reconnectTimer wasn't cleared here — if an EARLIER network-blip
+    // disconnect had already scheduled one (the branch below) moments before
+    // THIS disconnect event arrived (e.g. a LOGOUT landing right after a
+    // transient network blip), that stale timer could still fire later and
+    // redundantly destroy+recreate a session that's already been handled by
+    // this event, uncoordinated with whichever branch runs below (audit
+    // finding, 2026-09-30).
+    clearTimeout(session.reconnectTimer)
 
     // Reasons that mean credentials are gone — need a new QR scan, NOT a reconnect
     const needsReauth = ['LOGOUT', 'UNPAIRED', 'UNPAIRED_IDLE', 'TOS_BLOCK', 'SMB_TOS_BLOCK'].includes(reason)
@@ -608,7 +633,14 @@ function createClient(sessionId, phoneNumber) {
     console.log(`[${sessionId}] Reconnecting in ${Math.round(delay / 1000)}s`)
     session.reconnectTimer = setTimeout(async () => {
       const s = sessions.get(sessionId)
-      if (!s || s.status === 'connected') return
+      // Identity check (s !== session) — same reasoning as the readyWatchdog
+      // fix above: this timer belongs to THIS generation. Without it, a
+      // session recreated by another path (e.g. the heartbeat zombie-check,
+      // or a manual /start retry) while this timer was still pending got
+      // torn down again the moment it reached a non-'connected' status,
+      // regardless of whether it was actually this timer's session
+      // (audit finding, 2026-09-30).
+      if (!s || s !== session || s.status === 'connected') return
       console.log(`[${sessionId}] Auto-reconnecting...`)
       await destroySessionClient(s.client, sessionId, s.initPromise)
       sessions.delete(sessionId)
@@ -893,8 +925,17 @@ app.post('/session/:id/start', async (req, res) => {
       // GET /qr forever. That's the exact reconnect-dialog "loop" reported
       // 2026-09-21 when switching the link method back and forth.
       const modeChanged = Boolean(existing.phoneNumber) !== Boolean(phoneNumber)
-      if (!phoneNumber && !modeChanged) {
-        // No phone number given and the mode hasn't changed — just report current status.
+      // A session whose client.initialize() rejected (Chromium launch race, a
+      // transient "browser already running", a network blip) is left at
+      // status='error' with nothing watching it — no watchdog/sweep ever
+      // revisits it. Before this, the natural "click retry" action (same
+      // mode, no phoneNumber change) just echoed the stale 'error' back
+      // forever instead of recreating; only switching link mode (which
+      // happens to trigger the recreate branch below) or an explicit DELETE
+      // then a fresh /start actually recovered it (audit finding, 2026-09-30).
+      if (!phoneNumber && !modeChanged && existing.status !== 'error') {
+        // No phone number given, mode hasn't changed, and it's not stuck
+        // erroring — just report current status.
         return { status: existing.status, phone: existing.phone }
       }
       // Either a phone number was given (switching to pairing-code mode) or

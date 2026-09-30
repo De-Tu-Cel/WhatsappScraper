@@ -366,10 +366,24 @@ class WebsiteScraper:
                 "metadata": {...}
             }
         """
-        from app.searcher import COUNTRY_CONFIG, DEFAULT_COUNTRY
-        _country_cfg = COUNTRY_CONFIG.get(country or DEFAULT_COUNTRY, COUNTRY_CONFIG[DEFAULT_COUNTRY])
+        from app.searcher import COUNTRY_CONFIG, DEFAULT_COUNTRY, _get_country_config, _normalize_country_name
+        # _get_country_config (not a raw COUNTRY_CONFIG.get) — an explicit
+        # `country` in English ("United Kingdom", from the Buscador de
+        # Prospectos' own international examples) never matched this dict's
+        # Spanish-only keys, so every international scrape silently fell back
+        # to MEXICAN phone formatting/digit-count rules regardless of the
+        # real target country (audit finding, 2026-09-30).
+        _country_cfg = _get_country_config(country) or COUNTRY_CONFIG[DEFAULT_COUNTRY]
         self._default_country_code = _country_cfg["phone_code"]
         self._default_local_digits = _country_cfg["local_digits"]
+        # País al que estaba acotada la búsqueda que produjo esta URL (si lo
+        # hay) — usado por _extract_country como último recurso cuando el
+        # propio texto de la página no lo revela (ver su docstring). Normalizado
+        # a la clave en español (el mismo idioma que ya usa el campo `state`)
+        # para que sea consistente con lo que el resto de este archivo espera;
+        # solo el `country` explícito, NUNCA el default de arriba.
+        _normalized_country = _normalize_country_name(country) if country else None
+        self._target_country_hint = _normalized_country if _normalized_country in COUNTRY_CONFIG else None
 
         # Estado al que estaba acotada la búsqueda que produjo esta URL (si la hay) —
         # usado por _extract_state/_extract_city para preferir una mención de
@@ -2158,10 +2172,33 @@ class WebsiteScraper:
         return best_state or ""
 
     def _extract_country(self, text: str) -> str:
-        """Extrae país"""
-        if any(word in text.lower() for word in ["méxico", "mexico", "mx"]):
-            return "México"
-        return ""
+        """Extrae país.
+
+        Antes SOLO sabía detectar México — cualquier sitio de otro país
+        volvía "" sin importar qué tan explícita fuera la evidencia en su
+        propio texto. Confirmado en vivo, 2026-09-30 (mientras se probaba el
+        Buscador de Prospectos internacional): thelondonclinic.co.uk y
+        arnaud-delmontel.com (una clínica en Reino Unido y una panadería en
+        Francia, ambas reales) se scrapearon con city/state/country/address
+        completamente vacíos — ni un dato de ubicación, pese a que la
+        búsqueda que produjo la URL ya sabía el país objetivo.
+
+        Dos mejoras: (1) revisa contra la misma tabla de nombres/gentilicios
+        de país que ya usa searcher.py para interpretar búsquedas — cubre
+        más países que solo México, aunque sigue siendo mayormente en
+        español (un sitio en inglés no va a decir "reino unido" en su propio
+        texto); (2) si nada coincide, cae a self._target_country_hint — el
+        país que ya sabíamos por la búsqueda que produjo esta URL (ver
+        scrape_site) — en vez de dejarlo vacío. Esto es lo que realmente
+        resuelve el caso de Londres/París: no hay match de texto en
+        absoluto, pero SÍ sabíamos el país de antemano.
+        """
+        from app.searcher import _COUNTRY_KEYWORDS
+        tl = text.lower()
+        for kw, name in _COUNTRY_KEYWORDS:
+            if kw in tl:
+                return name
+        return getattr(self, "_target_country_hint", None) or ""
 
     def _extract_postal_code(self, text: str) -> str:
         """Extrae código postal"""

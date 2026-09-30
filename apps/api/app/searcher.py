@@ -584,6 +584,55 @@ COUNTRY_CONFIG: dict[str, dict] = {
 }
 DEFAULT_COUNTRY = "México"
 
+# COUNTRY_CONFIG's keys are all Spanish names — an explicit `country` param
+# in English (or any other language) never matched one, so every caller that
+# passes e.g. "United Kingdom" straight through (the Buscador de Prospectos'
+# own international examples — "Clinics in London", "Dentists in Buenos
+# Aires" — invite exactly this) silently got NO country config at all:
+# COUNTRY_CONFIG.get(effective_country) returned None, falling back to
+# Spanish-language/Mexico-geo defaults wherever that config is read (hl, gl,
+# bd_country). Confirmed live, 2026-09-30, while checking why the scraper's
+# _extract_country() had nothing to fall back to for a real UK/France scrape.
+_COUNTRY_NAME_ALIASES: dict[str, str] = {
+    "mexico": "México",
+    "united states": "Estados Unidos", "usa": "Estados Unidos", "us": "Estados Unidos",
+    "canada": "Canadá",
+    "dominican republic": "República Dominicana",
+    "peru": "Perú",
+    "brazil": "Brasil",
+    "spain": "España",
+    "france": "Francia",
+    "italy": "Italia",
+    "germany": "Alemania",
+    "united kingdom": "Reino Unido", "uk": "Reino Unido", "great britain": "Reino Unido",
+    "panama": "Panamá",
+}
+
+def _normalize_country_name(name: str | None) -> str | None:
+    """Maps a country name in English (or a common alias) to the Spanish key
+    COUNTRY_CONFIG actually uses. Returns the input unchanged if it's already
+    a valid key or doesn't match any known alias (e.g. it's already in
+    Spanish, or it's a country not in COUNTRY_CONFIG at all)."""
+    if not name:
+        return name
+    if name in COUNTRY_CONFIG:
+        return name
+    return _COUNTRY_NAME_ALIASES.get(_norm_loc(name), name)
+
+
+def _get_country_config(name: str | None) -> dict | None:
+    """COUNTRY_CONFIG.get(), but tolerant of an English (or common-alias)
+    country name — the dict's own keys are Spanish, but callers throughout
+    this file pass whatever language the `country` param arrived in (an
+    explicit one is deliberately never translated — see
+    _detect_effective_country's docstring — since it's also used verbatim
+    for DataForSEO's location_name and in natural-language prompts). Use this
+    instead of a raw COUNTRY_CONFIG.get(...) wherever the CONFIG itself
+    (hl/gl/bd_country/phone_code/cities) is what's actually needed."""
+    if not name:
+        return None
+    return COUNTRY_CONFIG.get(name) or COUNTRY_CONFIG.get(_normalize_country_name(name))
+
 
 def _norm_loc(s: str) -> str:
     s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii')
@@ -1143,7 +1192,7 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
     ai_synonyms = _ai_expand_synonyms(ind) if (OPENAI_API_KEY or DEEPSEEK_API_KEY) else []
     synonyms = list(dict.fromkeys(static_synonyms + ai_synonyms))  # merge, dedup, keep order
     is_fitness = "gym" in synonyms or ind.lower() in ("gimnasio", "fitness")
-    cfg = COUNTRY_CONFIG.get(country) if country else None
+    cfg = _get_country_config(country)
 
     if city.strip():
         loc = city.strip()
@@ -2363,7 +2412,7 @@ def _search_via_google_maps(
     Se deja la función por si se quiere reactivar como respaldo.
     """
     effective_country = _detect_effective_country(country, f"{industry} {city}")
-    cfg = COUNTRY_CONFIG.get(effective_country) if effective_country else None
+    cfg = _get_country_config(effective_country)
     gl = cfg.get("gl", "mx") if cfg else "mx"
     hl = cfg.get("hl", "es") if cfg else "es"
     bd_country = cfg.get("bd_country", "mx") if cfg else "mx"
@@ -2542,7 +2591,7 @@ def _search_via_dataforseo_maps(
     # COUNTRY_CONFIG de abajo, que sí está indexado con el nombre acentuado.
     _country_ascii = unicodedata.normalize('NFKD', effective_country).encode('ascii', 'ignore').decode('ascii')
     location_name = f"{city.strip()},{_state_key.title()},{_country_ascii}" if _state_key else f"{city.strip()},{_country_ascii}"
-    cfg = COUNTRY_CONFIG.get(effective_country)
+    cfg = _get_country_config(effective_country)
     language_code = cfg.get("hl", "es") if cfg else "es"
 
     ind_clean = industry.strip()
@@ -3011,7 +3060,13 @@ _COUNTRY_KEYWORDS: list[tuple[str, str]] = [
 
 
 def _detect_effective_country(country: str | None, text: str) -> str | None:
-    """Return explicit country or auto-detect from text. Returns None if ambiguous."""
+    """Return explicit country or auto-detect from text. Returns None if ambiguous.
+    Deliberately does NOT normalize the language of an explicit `country` here
+    — this value also gets sent straight to DataForSEO's location_name (which
+    needs the country's real name in whatever language it was given, e.g.
+    "United Kingdom", not a Spanish translation) and interpolated into
+    natural-language LLM prompts (where either language reads fine). Only the
+    CONFIG lookup needs normalizing — see _get_country_config()."""
     if country:
         return country
     lower = text.lower()
@@ -3029,7 +3084,7 @@ def _bd_build_queries(industry: str, city: str, country: str | None, keywords: s
 
     # Auto-detect país desde el texto del industria y configurar geo
     effective_country = _detect_effective_country(country, f"{ind} {city}")
-    cfg = COUNTRY_CONFIG.get(effective_country) if effective_country else None
+    cfg = _get_country_config(effective_country)
 
     # Limpiar palabras de ubicación del texto de industria cuando vamos a hacer city fan-out.
     # Ejemplo: "gaseras en mexico" → "gaseras" antes de agregar "Guadalajara"
@@ -3157,7 +3212,7 @@ def _search_via_brightdata_multi(
 
     # Geo-location: usar el gl/hl del país si está configurado
     effective_country = _detect_effective_country(country, f"{industry} {city}")
-    cfg = COUNTRY_CONFIG.get(effective_country) if effective_country else None
+    cfg = _get_country_config(effective_country)
     gl = cfg.get("gl", "mx") if cfg else "mx"
     hl = cfg.get("hl", "es") if cfg else "es"
     bd_country = cfg.get("bd_country", "mx") if cfg else "mx"

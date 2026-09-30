@@ -5,10 +5,24 @@ const StealthPlugin  = require('puppeteer-extra-plugin-stealth')
 const QRCode = require('qrcode')
 const fs = require('fs')
 const path = require('path')
+const dns = require('dns')
+const net = require('net')
 
 puppeteerExtra.use(StealthPlugin())
 
 const app = express()
+// Registered BEFORE the body parser on purpose — an unauthenticated caller
+// used to still force full parsing of up to 10MB bodies before ever hitting
+// this check (mild DoS-amplification gap, no rate limiting anywhere in this
+// service otherwise). API_SECRET itself is read below; this only needs
+// headers, so it doesn't need the parsed body at all (audit finding,
+// 2026-09-30).
+app.use((req, res, next) => {
+  if (API_SECRET && req.headers['x-api-secret'] !== API_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' })
+  }
+  next()
+})
 app.use(express.json({ limit: '10mb' }))
 
 const PORT         = process.env.PORT         || 3001
@@ -61,13 +75,6 @@ process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason)
 })
 
-app.use((req, res, next) => {
-  if (API_SECRET && req.headers['x-api-secret'] !== API_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' })
-  }
-  next()
-})
-
 // Every :id route param ends up as `sessionId`, which gets built straight
 // into filesystem paths with no sanitization (clearSessionLockFiles's
 // `session-${sessionId}`, whatsapp-web.js's own LocalAuth clientId dir) —
@@ -82,6 +89,54 @@ app.param('id', (req, res, next, id) => {
   }
   next()
 })
+
+// SSRF guard for MessageMedia.fromUrl() call sites (send-media, set profile
+// picture) — both fetch a caller-supplied URL server-side with no host/scheme
+// restriction and then forward the response bytes onward: as a WhatsApp
+// message to whatever `to` number the same caller picked (send-media), or set
+// as the account's public profile picture (profile/picture). A URL pointing
+// at cloud metadata (169.254.169.254), localhost, or an internal-only service
+// on the Docker network would get fetched and its response bytes exfiltrated
+// straight to an attacker-controlled WhatsApp number — this isn't just SSRF,
+// the send path is a built-in exfiltration channel out of the container
+// (audit finding, 2026-09-30). Mirrors the same fail-closed design as the
+// Python backend's scraper._is_blocked_host.
+function isPrivateIp(ip) {
+  const v = net.isIP(ip)
+  if (v === 4) {
+    const [a, b] = ip.split('.').map(Number)
+    return (
+      a === 10 || a === 127 || a === 0 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      a >= 224 // multicast + reserved
+    )
+  }
+  if (v === 6) {
+    const low = ip.toLowerCase()
+    return low === '::1' || low.startsWith('fc') || low.startsWith('fd') || low.startsWith('fe80')
+  }
+  return true // not a parseable IP — treat as unsafe
+}
+
+async function isBlockedUrl(rawUrl) {
+  let parsed
+  try {
+    parsed = new URL(rawUrl)
+  } catch {
+    return true
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return true
+  const hostname = parsed.hostname.toLowerCase()
+  if (hostname === 'localhost' || hostname.endsWith('.localhost')) return true
+  try {
+    const results = await dns.promises.lookup(hostname, { all: true })
+    return results.some(r => isPrivateIp(r.address))
+  } catch {
+    return true // unresolvable — fail closed, same as the Python guard
+  }
+}
 
 async function forwardWebhook(payload) {
   try {
@@ -407,7 +462,11 @@ function createClient(sessionId, phoneNumber) {
     if (session.status !== 'need_scan') forwardWebhook({ event: 'session.status', sessionId, data: { status: 'need_scan' } })
     session.status = 'need_scan'
     session.pairingCode = code
-    console.log(`[${sessionId}] Pairing code ready: ${code}`)
+    // Never log the code itself — it's a short-lived secret equivalent to an
+    // OTP (anyone with log access during its ~3min validity window could link
+    // a rogue device). Callers get it via the session object / API response,
+    // never via logs (audit finding, 2026-09-30).
+    console.log(`[${sessionId}] Pairing code ready`)
   })
 
   client.on('authenticated', () => {
@@ -988,6 +1047,7 @@ app.post('/session/:id/send-media', async (req, res) => {
 
   const { to, mediaUrl, filename, caption, typingMs, asSticker } = req.body
   if (!to || !mediaUrl) return res.status(400).json({ error: 'to and mediaUrl required' })
+  if (await isBlockedUrl(mediaUrl)) return res.status(400).json({ error: 'mediaUrl not allowed' })
 
   const digits = to.replace(/\D/g, '')
 
@@ -1303,6 +1363,7 @@ app.post('/session/:id/profile/picture', async (req, res) => {
   if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected' })
   const { imageUrl } = req.body
   if (typeof imageUrl !== 'string' || !imageUrl.trim()) return res.status(400).json({ error: 'imageUrl string required' })
+  if (await isBlockedUrl(imageUrl)) return res.status(400).json({ error: 'imageUrl not allowed' })
   try {
     const media = stripMediaCollisionId(await MessageMedia.fromUrl(imageUrl, { unsafeMime: true }))
     if (!media.mimetype.startsWith('image/')) return res.status(400).json({ error: `URL is not an image (${media.mimetype})` })

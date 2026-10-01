@@ -138,7 +138,20 @@ async function isBlockedUrl(rawUrl) {
   }
 }
 
-async function forwardWebhook(payload) {
+const _sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// No retry here used to mean a webhook POST that failed for ANY reason
+// (backend mid-restart, a network blip, wwebjs itself just back up after a
+// crash) silently dropped the event for good — whatsapp-web.js doesn't
+// re-fire 'message', so that was the only chance to forward it. Most
+// dangerous right after our own reconnects (OOM-restart, heartbeat
+// zombie-recreate), exactly when the backend or network is most likely to
+// still be settling — real prospect replies could vanish without a trace
+// (investigated 2026-10-01: inbound reply volume crashed from ~16/day to
+// 0-3/day right as the mass-reconnect pattern started). 3 attempts with a
+// short, growing delay covers a brief restart window without blocking the
+// event loop for long if the backend is genuinely down.
+async function forwardWebhook(payload, attempt = 1) {
   try {
     await fetch(`${FASTAPI_URL}/api/wwebjs/webhook`, {
       method: 'POST',
@@ -146,7 +159,13 @@ async function forwardWebhook(payload) {
       body: JSON.stringify(payload),
     })
   } catch (e) {
-    console.error('[Webhook forward error]', e.message)
+    if (attempt >= 3) {
+      console.error(`[Webhook forward error] giving up after ${attempt} attempts:`, e.message)
+      return
+    }
+    console.error(`[Webhook forward error] attempt ${attempt}/3, retrying:`, e.message)
+    await _sleep(attempt * 1000)
+    await forwardWebhook(payload, attempt + 1)
   }
 }
 

@@ -1177,6 +1177,27 @@ def _city_window(cities: list[str], window_size: int, offset: int) -> list[str]:
     return cities[start:start + window_size]
 
 
+_SYNONYM_INDEX: dict[str, list[str]] | None = None
+
+
+def _get_industry_synonyms(industry: str) -> list[str]:
+    """INDUSTRY_SYNONYMS lookup that ignores accents and a plural ending.
+
+    52 of its 53 keys are unaccented ("panaderia", "estetica"...) but the
+    industry arrives accented and often plural ("panaderías"), so the raw
+    .get() lookups missed — bakery searches never got their "bakery" /
+    "pastelería" synonyms in DDG, Maps or the AI filter (found 2026-10-02).
+    """
+    global _SYNONYM_INDEX
+    if _SYNONYM_INDEX is None:
+        _SYNONYM_INDEX = {_norm_loc(k): v for k, v in INDUSTRY_SYNONYMS.items()}
+    k = _norm_loc(industry or "")
+    for cand in (k, k[:-1] if k.endswith("s") else None, k[:-2] if k.endswith("es") else None):
+        if cand and cand in _SYNONYM_INDEX:
+            return _SYNONYM_INDEX[cand]
+    return []
+
+
 def _build_variations(industry: str, city: str = "", country: str = None, num_results: int = 10, state_cities: list[str] | None = None, offset: int = 0) -> list[str]:
     """
     Build DDG query variations designed to return actual business WEBSITES,
@@ -1201,7 +1222,7 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
     """
     ind = industry.strip()
     ind_q = f'"{ind}"'
-    static_synonyms = INDUSTRY_SYNONYMS.get(ind.lower(), [])
+    static_synonyms = _get_industry_synonyms(ind)
     ai_synonyms = _ai_expand_synonyms(ind) if (OPENAI_API_KEY or DEEPSEEK_API_KEY) else []
     synonyms = list(dict.fromkeys(static_synonyms + ai_synonyms))  # merge, dedup, keep order
     is_fitness = "gym" in synonyms or ind.lower() in ("gimnasio", "fitness")
@@ -1482,12 +1503,30 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     # Pull keywords from the industry term itself AND from all its synonyms so that
     # short stems ("gas" from "gaseras") are included even when the user typed the
     # plural/variant form.
-    _kw_raw = re.sub(r'\b(de|del|en|la|el|los|las|y|o|con|para|por|a)\b', ' ', industry, flags=re.I)
-    _ind_kws_set: set[str] = {w.lower() for w in re.split(r'\s+', _kw_raw.strip()) if len(w) >= 3}
-    for syn in INDUSTRY_SYNONYMS.get(industry.lower().strip(), []):
-        syn_raw = re.sub(r'\b(de|del|en|la|el|los|las|y|o|con|para|por|a)\b', ' ', syn, flags=re.I)
-        _ind_kws_set.update(w.lower() for w in re.split(r'\s+', syn_raw.strip()) if len(w) >= 3)
-    _ind_kws = list(_ind_kws_set)
+    # Accent-stripped (_norm_loc) on purpose: domains are always plain ASCII,
+    # so "panadería" never matched "panaderialaespiga.com.mx" — which both
+    # left "panaderia" in the wrong-sector block list below for a bakery
+    # search (dropping the very sites named after the searched giro, even
+    # when the LLM approved them) and made _domain_kw_rescue inert for any
+    # accented industry. Found live, 2026-10-02: same bug dropped
+    # clinicadentalsonrisa.mx for a "dentistas" search via "clínica".
+    _STOP = r'\b(de|del|en|la|el|los|las|y|o|con|para|por|a)\b'
+    _kw_raw = re.sub(_STOP, ' ', _norm_loc(industry), flags=re.I)
+    _ind_kws_set: set[str] = {w for w in re.split(r'\s+', _kw_raw.strip()) if len(w) >= 3}
+    # Rescue keywords stay stricter than _ind_kws_set: a multi-word synonym
+    # only counts as a whole ("clínica dental" → "clinicadental"), so the
+    # generic half of it ("clinica") can't rescue an unrelated clinic's
+    # domain now that accents no longer block the match.
+    _rescue_kws_set: set[str] = set(_ind_kws_set)
+    for syn in _get_industry_synonyms(industry):
+        syn_norm = re.sub(_STOP, ' ', _norm_loc(syn), flags=re.I)
+        syn_words = [w for w in re.split(r'\s+', syn_norm.strip()) if len(w) >= 3]
+        _ind_kws_set.update(syn_words)
+        if len(syn_words) == 1:
+            _rescue_kws_set.add(syn_words[0])
+        elif syn_words:
+            _rescue_kws_set.add("".join(syn_words))
+    _ind_kws = list(_rescue_kws_set)
 
     # Keywords en el dominio que delatan que el negocio es de otro giro.
     # Si el dominio los contiene → nunca es del sector buscado, sin importar el snippet.
@@ -1610,8 +1649,8 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
 
     def _keyword_fallback(candidates: list[str]) -> list[str]:
         """Last-resort filter by industry keywords in domain when LLM rejects everything."""
-        kw_raw = re.sub(r'\b(de|del|en|la|el|los|las|y|o|con|para|por|a)\b', ' ', industry, flags=re.I)
-        kws = [w.lower() for w in re.split(r'\s+', kw_raw.strip()) if len(w) >= 3]
+        kw_raw = re.sub(_STOP, ' ', _norm_loc(industry), flags=re.I)
+        kws = [w for w in re.split(r'\s+', kw_raw.strip()) if len(w) >= 3]
         if not kws:
             return [u for u in candidates if not _wrong_sector_domain(u) and not _looks_like_directory_snippet(u)]
         kept = []
@@ -1627,7 +1666,7 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
                 if _wrong_sector_domain(u) or _looks_like_directory_snippet(u):
                     continue
                 s = snippets.get(u, {})
-                text = ((s.get("title") or "") + " " + (s.get("body") or "")).lower()
+                text = _norm_loc((s.get("title") or "") + " " + (s.get("body") or ""))
                 if any(kw in text for kw in kws):
                     kept.append(u)
         # El último "por si acaso, mejor no descartar nada" NO debe ignorar el
@@ -1658,12 +1697,34 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
                 rescued.append(u)
         return rescued
 
+    # Google Maps' own PRIMARY category for the business (picked by the owner).
+    # The LLM, judging 60 URLs per batch, dropped Maps hits whose category was
+    # literally "Panadería" (La Dulce Compañía, Pan Artesanal — Querétaro,
+    # 2026-10-02; La Dulce had passed in an earlier run of the same search).
+    # Primary category only — "Equipos para panaderías" must not match.
+    _cat_targets = {_norm_loc(industry)}
+    _cat_targets.update(_norm_loc(s) for s in _get_industry_synonyms(industry))
+    _cat_targets.discard("")
+
+    def _maps_category_rescue(all_urls: list[str], already_approved: set) -> list[str]:
+        rescued = []
+        for u in all_urls:
+            if u in already_approved or _wrong_sector_domain(u) or _looks_like_directory_snippet(u):
+                continue
+            cat = _norm_loc((snippets.get(u) or {}).get("maps_category") or "")
+            # Exact or "starts with" only — "Laboratorio dental"/"Depósito
+            # dental" end in a dentist synonym but aren't dentists.
+            if cat and any(cat == t or cat.startswith(t + " ") for t in _cat_targets):
+                rescued.append(u)
+        return rescued
+
     # Process batches in parallel (up to 3 concurrent LLM calls)
     batch_size = 60
     batches = [urls[i:i + batch_size] for i in range(0, len(urls), batch_size)]
     if len(batches) <= 1:
         ai_result = [u for u in _filter_batch(urls) if not _wrong_sector_domain(u) and not _looks_like_directory_snippet(u)]
         rescued = _domain_kw_rescue(urls, set(ai_result))
+        rescued += _maps_category_rescue(urls, set(ai_result) | set(rescued))
         result = list(dict.fromkeys(ai_result + rescued))
         return result if result else _keyword_fallback(urls)
 
@@ -1672,10 +1733,47 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
         for batch_result in ex.map(_filter_batch, batches):
             ranked.extend(u for u in batch_result if not _wrong_sector_domain(u) and not _looks_like_directory_snippet(u))
     rescued = _domain_kw_rescue(urls, set(ranked))
+    rescued += _maps_category_rescue(urls, set(ranked) | set(rescued))
     ranked = list(dict.fromkeys(ranked + rescued))
     if not ranked and urls:
         return _keyword_fallback(urls)
     return ranked
+
+
+def _llm_reject_indices(prompt: str, batch_len: int, max_tokens: int) -> set[int] | None:
+    """Ask the LLM for the 1-based indices to REJECT from a batch.
+
+    Returns None when no parsable answer came back (caller keeps the batch).
+    Guards against a sporadic failure mode confirmed live, 2026-10-02: one
+    _reject_directories_and_institutions call flagged all 53 real gyms of a
+    "gimnasios en Jalisco" search as directories, wiping the whole result —
+    5 reruns on the exact same input each kept 52/53. An answer rejecting
+    most of a sizable batch gets a second opinion; if the second opinion
+    agrees it's probably genuine (e.g. mostly other-state results) and is
+    respected, otherwise the sane answer wins.
+    """
+    from app.llm import call_llm
+
+    def _ask() -> set[int] | None:
+        content = call_llm([{"role": "user", "content": prompt}], max_tokens=max_tokens, temperature=0)
+        m = re.search(r'\[[\d,\s]*\]', content)
+        if not m:
+            return None
+        return {i for i in json.loads(m.group(0)) if 1 <= i <= batch_len}
+
+    def _implausible(rej: set[int]) -> bool:
+        return batch_len >= 8 and len(rej) >= 0.6 * batch_len
+
+    first = _ask()
+    if first is None or not _implausible(first):
+        return first
+    print(f"[reject-guard] LLM flagged {len(first)}/{batch_len} for rejection — asking again")
+    second = _ask()
+    if second is None:
+        return None
+    if _implausible(second):
+        print(f"[reject-guard] second answer also flagged {len(second)}/{batch_len} — accepting as genuine")
+    return second
 
 
 def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: str = "",
@@ -1726,12 +1824,8 @@ def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: s
                 f'de estar en OTRO estado (para excluirlas). Si ninguna aplica, responde []. '
                 f'Ejemplo: [2] o []'
             )
-            from app.llm import call_llm
-            content = call_llm([{"role": "user", "content": prompt}], max_tokens=200, temperature=0)
-            m = re.search(r'\[[\d,\s]*\]', content)
-            if m:
-                indices = json.loads(m.group(0))
-                reject_idx = {i for i in indices if 1 <= i <= len(batch)}
+            reject_idx = _llm_reject_indices(prompt, len(batch), max_tokens=200)
+            if reject_idx is not None:
                 return [u for i, u in enumerate(batch, 1) if i not in reject_idx]
         except Exception:
             pass
@@ -1791,12 +1885,8 @@ def _reject_wrong_country(urls: list[str], snippets: dict, country: str, city: s
                 f'de estar en OTRO país (para excluirlas). Si ninguna aplica, responde []. '
                 f'Ejemplo: [2] o []'
             )
-            from app.llm import call_llm
-            content = call_llm([{"role": "user", "content": prompt}], max_tokens=200, temperature=0)
-            m = re.search(r'\[[\d,\s]*\]', content)
-            if m:
-                indices = json.loads(m.group(0))
-                reject_idx = {i for i in indices if 1 <= i <= len(batch)}
+            reject_idx = _llm_reject_indices(prompt, len(batch), max_tokens=200)
+            if reject_idx is not None:
                 return [u for i, u in enumerate(batch, 1) if i not in reject_idx]
         except Exception:
             pass
@@ -1877,12 +1967,8 @@ def _reject_directories_and_institutions(urls: list[str], snippets: dict,
                 f'Responde ÚNICAMENTE un array JSON con los números de los que SÍ son (a) o (b) '
                 f'(para excluirlos). Si ninguno aplica, responde []. Ejemplo: [2,5] o []'
             )
-            from app.llm import call_llm
-            content = call_llm([{"role": "user", "content": prompt}], max_tokens=300, temperature=0)
-            m = re.search(r'\[[\d,\s]*\]', content)
-            if m:
-                indices = json.loads(m.group(0))
-                reject_idx = {i for i in indices if 1 <= i <= len(batch)}
+            reject_idx = _llm_reject_indices(prompt, len(batch), max_tokens=300)
+            if reject_idx is not None:
                 return [u for i, u in enumerate(batch, 1) if i not in reject_idx]
         except Exception:
             pass
@@ -1961,6 +2047,13 @@ _OVERPASS_URLS    = [
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.openstreetmap.fr/api/interpreter",
 ]
+# endpoint → monotonic time until which it's skipped. The public Overpass
+# mirrors were failing on nearly every call (504 / 32s read timeout / 403),
+# tried serially, so OSM alone could hold a search for ~96s — repeated per
+# city in fan-out/shortfall searches (measured live, 2026-10-02). A failing
+# mirror is now skipped for a while instead of re-paying its timeout.
+_OVERPASS_DOWN_UNTIL: dict[str, float] = {}
+_OVERPASS_COOLDOWN_SECS = 300
 _NOMINATIM_HEADERS = {"User-Agent": "DetucelProspectSearcher/1.0 (contact@detucel.mx)"}
 _nominatim_cache: dict = {}
 
@@ -2169,9 +2262,14 @@ def _search_via_openstreetmap(
             f'out center {cap};'
         )
 
-    # Try each Overpass endpoint until one responds
+    # Try each Overpass endpoint until one responds, skipping recently-failed ones
+    import time as _time
     elements: list[dict] = []
-    for endpoint in _OVERPASS_URLS:
+    _now = _time.monotonic()
+    _live = [e for e in _OVERPASS_URLS if _OVERPASS_DOWN_UNTIL.get(e, 0) <= _now]
+    if not _live:
+        print("[OSM] all Overpass mirrors in cooldown — skipping OSM for this call")
+    for endpoint in _live:
         try:
             resp = requests.post(
                 endpoint, data={"data": query},
@@ -2179,9 +2277,11 @@ def _search_via_openstreetmap(
             )
             resp.raise_for_status()
             elements = resp.json().get("elements", [])
+            _OVERPASS_DOWN_UNTIL.pop(endpoint, None)
             break
         except Exception as e:
-            print(f"[OSM] Overpass {endpoint} failed: {e}")
+            _OVERPASS_DOWN_UNTIL[endpoint] = _time.monotonic() + _OVERPASS_COOLDOWN_SECS
+            print(f"[OSM] Overpass {endpoint} failed (skipping it for {_OVERPASS_COOLDOWN_SECS}s): {e}")
             continue
 
     if not elements:
@@ -2456,7 +2556,7 @@ def _search_via_google_maps(
 
     cities = cfg["cities"] if cfg and cfg.get("cities") else []
     _ik = ind_clean.lower()
-    static_synonyms = INDUSTRY_SYNONYMS.get(_ik) or INDUSTRY_SYNONYMS.get(_ik.rstrip("s")) or []
+    static_synonyms = _get_industry_synonyms(_ik)
     # search_queries: list of (query_base, location) — allows synonyms with different query_base
     if city.strip():
         # Antes era 1 sola query para toda la ciudad — Maps sólo devuelve ~1 página
@@ -2588,6 +2688,93 @@ def _search_via_google_maps(
     return urls, snippets
 
 
+# country ISO code → [(first_component_norm, state_component_norm, type, location_name)]
+_DFS_LOCATIONS_CACHE: dict[str, list[tuple[str, str, str, str]]] = {}
+
+
+def _dfs_locations(country_iso: str | None) -> list[tuple[str, str, str, str]]:
+    """DataForSEO's official City/Municipality location names for one country
+    (free endpoint), fetched once per process and cached. Only successful
+    fetches are cached, so a transient failure gets retried next search."""
+    cc = (country_iso or "").strip().lower()
+    if not cc:
+        return []
+    if cc in _DFS_LOCATIONS_CACHE:
+        return _DFS_LOCATIONS_CACHE[cc]
+    auth = _dataforseo_auth()
+    if not auth:
+        return []
+    try:
+        resp = requests.get(
+            f"https://api.dataforseo.com/v3/serp/google/locations/{cc}",
+            headers={"Authorization": f"Basic {auth}"}, timeout=30,
+        )
+        resp.raise_for_status()
+        items = ((resp.json().get("tasks") or [{}])[0] or {}).get("result") or []
+    except Exception as e:
+        print(f"[dataforseo-maps] locations/{cc} fetch failed: {e!r}")
+        return []
+    rows = []
+    for it in items:
+        if it.get("location_type") not in ("City", "Municipality"):
+            continue
+        name = it.get("location_name") or ""
+        parts = [p.strip() for p in name.split(",")]
+        if len(parts) < 2:
+            continue
+        state = _norm_loc(parts[-2]) if len(parts) >= 3 else ""
+        rows.append((_norm_loc(parts[0]), state, it["location_type"], name))
+    if rows:
+        _DFS_LOCATIONS_CACHE[cc] = rows
+    return rows
+
+
+def _resolve_dfs_location(city: str, state_key: str | None, country_iso: str | None) -> str | None:
+    """Map a user-typed city to DataForSEO's exact location_name.
+
+    DataForSEO only accepts its own official ASCII names — anything else
+    fails with status 40501 and zero items, which the Maps fetch used to
+    treat as "no results" without a trace. Confirmed live, 2026-10-02:
+    "Querétaro,Queretaro,Mexico" → 40501, while the official
+    "Santiago de Queretaro,Queretaro,Mexico" → 100 bakeries; "León" also
+    returned 0 vs 8 for "Leon". So Maps — the best source — silently
+    contributed nothing for any city whose typed name isn't byte-identical
+    to DataForSEO's.
+    """
+    rows = _dfs_locations(country_iso)
+    if not rows or not city.strip():
+        return None
+    city_norm = _norm_loc(city)
+    wanted = {city_norm}
+    for k, v in _CITY_EXONYMS.items():
+        if _norm_loc(v) == city_norm:
+            wanted.add(_norm_loc(k))
+        if _norm_loc(k) == city_norm:
+            wanted.add(_norm_loc(v))
+    state_norm = _norm_loc(state_key) if state_key else ""
+
+    best, best_score = None, 0
+    for first, state, loc_type, name in rows:
+        if first in wanted:
+            score = 30
+        elif any(re.search(rf"\b{re.escape(w)}$", first) for w in wanted):
+            score = 20  # "santiago de queretaro" for a "Querétaro" search
+        else:
+            continue
+        if state_norm and state == state_norm:
+            score += 5
+        elif state_norm:
+            score -= 15  # same name, different state (e.g. a "Juarez" elsewhere)
+        if loc_type == "Municipality":
+            score += 1  # broader coverage than the City entry of the same place
+        score -= name.count(",") * 0.1  # prefer the shorter, canonical form
+        if score > best_score:
+            best, best_score = name, score
+    # > 15 rejects a same-name match in a DIFFERENT state when the state is
+    # known — searching the wrong state is worse than no Maps results.
+    return best if best_score > 15 else None
+
+
 def _search_via_dataforseo_maps(
     industry: str, city: str = "", country: str = None,
     keywords: str = "", num_results: int = 10, offset: int = 0,
@@ -2619,15 +2806,22 @@ def _search_via_dataforseo_maps(
     # llamada; effective_country se deja intacto para el lookup de
     # COUNTRY_CONFIG de abajo, que sí está indexado con el nombre acentuado.
     _country_ascii = unicodedata.normalize('NFKD', effective_country).encode('ascii', 'ignore').decode('ascii')
-    location_name = f"{city.strip()},{_state_key.title()},{_country_ascii}" if _state_key else f"{city.strip()},{_country_ascii}"
     cfg = _get_country_config(effective_country)
     language_code = cfg.get("hl", "es") if cfg else "es"
+    # Official name first (see _resolve_dfs_location); the hand-built form is
+    # only a fallback when the official list can't be fetched or has no match.
+    location_name = _resolve_dfs_location(city.strip(), _state_key, (cfg or {}).get("bd_country"))
+    if not location_name:
+        _city_ascii = _norm_loc(city).title()
+        location_name = (f"{_city_ascii},{_state_key.title()},{_country_ascii}" if _state_key
+                         else f"{_city_ascii},{_country_ascii}")
+        print(f"[dataforseo-maps] no official location match for {city!r} — trying {location_name!r}")
 
     ind_clean = industry.strip()
     kw = keywords.strip()
     base_keyword = f"{kw} {ind_clean}".strip() if kw else ind_clean
 
-    static_synonyms = INDUSTRY_SYNONYMS.get(ind_clean.lower(), [])
+    static_synonyms = _get_industry_synonyms(ind_clean)
     # Un solo query ya trae hasta 100 resultados crudos — solo se agregan
     # sinónimos extra para pedidos grandes.
     max_syn = min(3, max(0, (num_results - 1) // 40))
@@ -2667,6 +2861,11 @@ def _search_via_dataforseo_maps(
             resp.raise_for_status()
             data = resp.json()
             task = (data.get("tasks") or [{}])[0]
+            # A bad location_name comes back as HTTP 200 with a task-level
+            # error (40501) and no items — logged so it can't hide as "0 results".
+            if task.get("status_code") not in (None, 20000):
+                print(f"[dataforseo-maps] {kw_variant!r} @ {location_name!r}: "
+                      f"{task.get('status_code')} {task.get('status_message')}")
             results = task.get("result") or []
             items = results[0].get("items", []) if results else []
             batch_urls, batch_snips = [], {}
@@ -2693,6 +2892,9 @@ def _search_via_dataforseo_maps(
                     batch_snips[website] = {
                         "title": item.get("title", ""),
                         "body": " | ".join(body_parts),
+                        # Kept structured (not only folded into body) so
+                        # _ai_filter_urls can rescue on Google's own category.
+                        "maps_category": item.get("category") or "",
                     }
             return batch_urls, batch_snips
         except Exception as e:
@@ -3126,8 +3328,7 @@ def _bd_build_queries(industry: str, city: str, country: str | None, keywords: s
     base_city = f"{kw} {ind_clean}".strip() if kw else ind_clean  # query CON ciudad (texto limpio)
 
     def _get_synonyms(key: str) -> list[str]:
-        k = key.lower()
-        return INDUSTRY_SYNONYMS.get(k) or INDUSTRY_SYNONYMS.get(k.rstrip("s")) or []
+        return _get_industry_synonyms(key)
 
     if city.strip():
         loc = city.strip()

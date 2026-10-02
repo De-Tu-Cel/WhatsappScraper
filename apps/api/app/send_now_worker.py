@@ -396,6 +396,24 @@ def _process_item(db, partition: str, item, msgs_in_batch: int, next_break_at: i
         log.warning("[SendQueue] partition=%s daily cap hit — pausing 5 min, pending items retry tomorrow", partition)
         return "cap_paused", msgs_in_batch, next_break_at
 
+    # New-contact cap exhausted: this used to fall through to the generic
+    # branch below and get permanently marked "skipped_nc_cap" with no retry
+    # — unlike skipped_daily_cap just above, which correctly comes back
+    # tomorrow. Real impact (audit finding, 2026-10-01): a batch that hit this
+    # cap lost every one of its messages for good, with nothing but a count in
+    # a notification to show for it. Mirrors the daily-cap handling exactly —
+    # the NC cap is also a per-day counter, so "retry tomorrow" is correct here too.
+    if ok == "skipped_nc_cap":
+        db.db.send_queue_items.update_one(
+            {"_id": item_id},
+            {"$set": {"status": "pending", "started_at": None}},
+        )
+        _set_state(db, partition, phase="idle", active_total=None, active_sent=None,
+                   next_action_at=None, active_batch=False,
+                   last_error={"message": "Límite de contactos nuevos alcanzado — envíos pendientes continuarán mañana al reiniciarse el cupo", "at": datetime.now(timezone.utc)})
+        log.warning("[SendQueue] partition=%s new-contact cap hit — pausing 5 min, pending items retry tomorrow", partition)
+        return "cap_paused", msgs_in_batch, next_break_at
+
     # _send_message returns True (sent), False/None (failed), or a string skip-reason.
     # If it failed, distinguish between a disconnected instance vs. a genuine send
     # failure (blocked number, bad payload, etc.) so we don't permanently burn items
@@ -415,9 +433,25 @@ def _process_item(db, partition: str, item, msgs_in_batch: int, next_break_at: i
             return "disconnected_pause", msgs_in_batch, next_break_at
 
     status = ok if isinstance(ok, str) else ("sent" if ok else "failed")
+    update_fields = {"status": status, "finished_at": datetime.now(timezone.utc)}
+    if status == "failed":
+        # _send_message's return value carries no error text by design (its
+        # True/False/"skipped_X" contract is also used for control flow
+        # above) — but _send_via_wwebjs now always logs a message_logs row
+        # with the real reason on every failure path, so pull it from there
+        # instead of leaving this item's failure permanently unexplained.
+        try:
+            _last_log = db.db.message_logs.find_one(
+                {"company_id": company_id, "to_number": to_number, "direction": "outbound", "status": "failed"},
+                sort=[("created_at", -1)],
+            )
+            if _last_log and _last_log.get("error"):
+                update_fields["error"] = _last_log["error"]
+        except Exception:
+            pass
     db.db.send_queue_items.update_one(
         {"_id": item_id},
-        {"$set": {"status": status, "finished_at": datetime.now(timezone.utc)}},
+        {"$set": update_fields},
     )
     finished = _maybe_finish_batch(db, batch_id)
     if finished:

@@ -478,8 +478,12 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
     if not session:
         log.warning("[Scheduler] wwebjs: no session provided — skipping %s", to_number)
         return False
+    # Set before the try block so the except handler can always safely check
+    # them, even if the exception hits before a reservation was ever claimed.
+    _phone_digits = clean_digits(to_number)
+    _reserved_new = False
+    _nc_reserved_new = False
     try:
-        _phone_digits = clean_digits(to_number)
         _reserved, _reserved_new = reserve_daily_slot(db, session, get_instance_cap(db, session), _phone_digits)
         if not _reserved:
             log.warning("[Scheduler] Daily cap %d reached for wwebjs=%s — skipping %s", get_instance_cap(db, session), session, to_number)
@@ -498,6 +502,14 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
                 release_daily_slot(db, session, _phone_digits)
             if _nc_reserved_new:
                 release_new_contact_slot(db, session, company_id)
+            db.insert_message_log({
+                "channel": "whatsapp", "platform": "wwebjs", "direction": "outbound",
+                "company_id": company_id, "to_number": to_number, "message_body": message,
+                "message_text": message, "message_id": None, "status": "failed",
+                "error": "numero_no_valido_en_whatsapp", "instance_name": session,
+                "sent_by_username": sent_by_username, "sent_by_name": sent_by_name,
+                "scheduled_send_id": job_id, "analysis_status": None,
+            })
             return False
         db.db.jid_map.update_one(
             {"jid": _phone_digits},
@@ -531,6 +543,7 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
             "message_text": message,
             "message_id": message_id,
             "status": status,
+            "error": None if status == "sent" else (ww_result.get("error") or "wwebjs_error_desconocido"),
             "instance_name": session,
             "sent_by_username": sent_by_username,
             "sent_by_name": sent_by_name,
@@ -539,8 +552,40 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
         })
         log.info("[Scheduler] wwebjs job=%s company=%s to=%s status=%s", job_id, company_id, to_number, status)
         return status == "sent"
-    except Exception:
+    except Exception as e:
+        # Previously: logged to app logs only (log.exception) and returned
+        # bare False — the actual reason (often the real error surfaced by
+        # wwebjs-service's /send, e.g. instance disconnected, timeout) never
+        # reached message_logs or the send_queue_items doc, leaving failed
+        # sends with no diagnosable cause (audit finding, 2026-10-01: 5 failed
+        # test sends with error=None, root cause undiscoverable after the
+        # fact). Logging it here means every failure path through this
+        # function leaves a message_logs row with a real reason.
         log.exception("[Scheduler] _send_via_wwebjs failed for company=%s to=%s", company_id, to_number)
+        # This exact gap (found live, 2026-10-01): a reservation claimed just
+        # above — before the exception hit — was never given back here, so an
+        # instance's new-contact slots silently bled out on every transient
+        # error (a timeout, a wwebjs hiccup) with no message ever sent. Real
+        # case: 5 exceptions during Tono's test burned gely-wa's entire 5-slot
+        # daily new-contact cap, blocking every other new contact through it
+        # for the rest of the day even though it never actually messaged
+        # anyone. Every other failure path in this function already released
+        # both slots — this was the one gap.
+        if _reserved_new:
+            release_daily_slot(db, session, _phone_digits)
+        if _nc_reserved_new:
+            release_new_contact_slot(db, session, company_id)
+        try:
+            db.insert_message_log({
+                "channel": "whatsapp", "platform": "wwebjs", "direction": "outbound",
+                "company_id": company_id, "to_number": to_number, "message_body": message,
+                "message_text": message, "message_id": None, "status": "failed",
+                "error": str(e), "instance_name": session,
+                "sent_by_username": sent_by_username, "sent_by_name": sent_by_name,
+                "scheduled_send_id": job_id, "analysis_status": None,
+            })
+        except Exception:
+            pass
         return False
 
 

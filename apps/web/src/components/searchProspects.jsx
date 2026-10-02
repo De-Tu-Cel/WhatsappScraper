@@ -723,11 +723,16 @@ export default function SearchProspects() {
     [extraVariants]
   )
   const belowMinTemplates = isBulk && allVariants.length < getMinTemplatesRequired(totalContactPoints)
+  // belowMinTemplates only fires when isBulk (totalContactPoints > 1) — selecting
+  // and sending to companies one at a time (isBulk false) skipped it entirely,
+  // letting a send through with zero message text (singleUrlProcessor.jsx's
+  // MessageComposer already guards this separately; this screen didn't).
+  const noMessageSelected = allVariants.length === 0
 
   async function handleSendAll() {
     if (isSending || capBlocked) return
     let targets = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id) && !sentCids.has(r.company_id))
-    if (!targets.length || belowMinTemplates) return
+    if (!targets.length || belowMinTemplates || noMessageSelected) return
 
     // Per-instance daily cap trim
     const newInBatch = targets.filter(r => !r.already_contacted?.contacted)
@@ -1426,7 +1431,7 @@ export default function SearchProspects() {
             <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} sx={{ flexShrink: 0 }} />
             <Button
               onClick={handleSendAll}
-              disabled={effectiveWaSelected.size === 0 || allSelectedSent || isSending || isDisconnected || belowMinTemplates || capBlocked}
+              disabled={effectiveWaSelected.size === 0 || allSelectedSent || isSending || isDisconnected || belowMinTemplates || noMessageSelected || capBlocked}
               startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 15 }} />}
               sx={{
                 flex: 1, fontSize: '0.84rem', fontWeight: 700,

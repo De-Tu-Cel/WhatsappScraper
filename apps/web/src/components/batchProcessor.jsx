@@ -418,6 +418,10 @@ export default function BatchProcessor() {
     [extraVariants]
   )
   const belowMinTemplates = isBulk && allVariants.length < getMinTemplatesRequired(totalContactPoints)
+  // belowMinTemplates only fires when isBulk (totalContactPoints > 1) —
+  // selecting and sending companies one at a time skipped it entirely,
+  // letting a send through with zero message text.
+  const noMessageSelected = allVariants.length === 0
 
   // Variable availability for TemplateLibraryPicker warnings
   const _selectedRows = useMemo(
@@ -456,7 +460,7 @@ export default function BatchProcessor() {
 
   async function handleSendAll() {
     let targets = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id))
-    if (isSending || !targets.length || belowMinTemplates || capBlocked) return
+    if (isSending || !targets.length || belowMinTemplates || noMessageSelected || capBlocked) return
 
     // New-contacts daily cap — per-instance aware pre-flight.
     // Backend enforces 5/day per warmup instance and 12/day per normal instance.
@@ -1067,7 +1071,7 @@ export default function BatchProcessor() {
             <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} sx={{ flexShrink: 0 }} />
             <Button
               onClick={handleSendAll}
-              disabled={effectiveWaSelected.size === 0 || alreadySent || isSending || isDisconnected || belowMinTemplates || capBlocked}
+              disabled={effectiveWaSelected.size === 0 || alreadySent || isSending || isDisconnected || belowMinTemplates || noMessageSelected || capBlocked}
               startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
               sx={{
                 flex: 1, fontSize: '0.84rem', fontWeight: 700,

@@ -478,8 +478,12 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
     if not session:
         log.warning("[Scheduler] wwebjs: no session provided — skipping %s", to_number)
         return False
+    # Set before the try block so the except handler can always safely check
+    # them, even if the exception hits before a reservation was ever claimed.
+    _phone_digits = clean_digits(to_number)
+    _reserved_new = False
+    _nc_reserved_new = False
     try:
-        _phone_digits = clean_digits(to_number)
         _reserved, _reserved_new = reserve_daily_slot(db, session, get_instance_cap(db, session), _phone_digits)
         if not _reserved:
             log.warning("[Scheduler] Daily cap %d reached for wwebjs=%s — skipping %s", get_instance_cap(db, session), session, to_number)
@@ -558,6 +562,19 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
         # fact). Logging it here means every failure path through this
         # function leaves a message_logs row with a real reason.
         log.exception("[Scheduler] _send_via_wwebjs failed for company=%s to=%s", company_id, to_number)
+        # This exact gap (found live, 2026-10-01): a reservation claimed just
+        # above — before the exception hit — was never given back here, so an
+        # instance's new-contact slots silently bled out on every transient
+        # error (a timeout, a wwebjs hiccup) with no message ever sent. Real
+        # case: 5 exceptions during Tono's test burned gely-wa's entire 5-slot
+        # daily new-contact cap, blocking every other new contact through it
+        # for the rest of the day even though it never actually messaged
+        # anyone. Every other failure path in this function already released
+        # both slots — this was the one gap.
+        if _reserved_new:
+            release_daily_slot(db, session, _phone_digits)
+        if _nc_reserved_new:
+            release_new_contact_slot(db, session, company_id)
         try:
             db.insert_message_log({
                 "channel": "whatsapp", "platform": "wwebjs", "direction": "outbound",

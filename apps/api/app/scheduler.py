@@ -498,6 +498,14 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
                 release_daily_slot(db, session, _phone_digits)
             if _nc_reserved_new:
                 release_new_contact_slot(db, session, company_id)
+            db.insert_message_log({
+                "channel": "whatsapp", "platform": "wwebjs", "direction": "outbound",
+                "company_id": company_id, "to_number": to_number, "message_body": message,
+                "message_text": message, "message_id": None, "status": "failed",
+                "error": "numero_no_valido_en_whatsapp", "instance_name": session,
+                "sent_by_username": sent_by_username, "sent_by_name": sent_by_name,
+                "scheduled_send_id": job_id, "analysis_status": None,
+            })
             return False
         db.db.jid_map.update_one(
             {"jid": _phone_digits},
@@ -531,6 +539,7 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
             "message_text": message,
             "message_id": message_id,
             "status": status,
+            "error": None if status == "sent" else (ww_result.get("error") or "wwebjs_error_desconocido"),
             "instance_name": session,
             "sent_by_username": sent_by_username,
             "sent_by_name": sent_by_name,
@@ -539,8 +548,27 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
         })
         log.info("[Scheduler] wwebjs job=%s company=%s to=%s status=%s", job_id, company_id, to_number, status)
         return status == "sent"
-    except Exception:
+    except Exception as e:
+        # Previously: logged to app logs only (log.exception) and returned
+        # bare False — the actual reason (often the real error surfaced by
+        # wwebjs-service's /send, e.g. instance disconnected, timeout) never
+        # reached message_logs or the send_queue_items doc, leaving failed
+        # sends with no diagnosable cause (audit finding, 2026-10-01: 5 failed
+        # test sends with error=None, root cause undiscoverable after the
+        # fact). Logging it here means every failure path through this
+        # function leaves a message_logs row with a real reason.
         log.exception("[Scheduler] _send_via_wwebjs failed for company=%s to=%s", company_id, to_number)
+        try:
+            db.insert_message_log({
+                "channel": "whatsapp", "platform": "wwebjs", "direction": "outbound",
+                "company_id": company_id, "to_number": to_number, "message_body": message,
+                "message_text": message, "message_id": None, "status": "failed",
+                "error": str(e), "instance_name": session,
+                "sent_by_username": sent_by_username, "sent_by_name": sent_by_name,
+                "scheduled_send_id": job_id, "analysis_status": None,
+            })
+        except Exception:
+            pass
         return False
 
 

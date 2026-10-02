@@ -716,10 +716,20 @@ class WebsiteScraper:
         existing = self.companies_col.find_one({"domain": domain})
         if existing:
             next_scrape = existing.get("next_allowed_scrape_at")
+            # Only a WhatsApp contact counts here — including "phone" meant a
+            # company whose very first scrape found a plain phone but missed
+            # WhatsApp got permanently stuck: has_whatsapp stayed False, the
+            # year-long cooldown kicked in anyway (next_scrape check above),
+            # and every later re-appearance in a new search kept re-detecting
+            # the real WhatsApp number in-memory but discarding it on this
+            # skip path, since a phone-only contact already satisfied
+            # "already_has_contact" — found live, 2026-10-02 (fabianas.com.mx:
+            # phone-only since 2026-09-22, WhatsApp detected correctly on
+            # every later scrape attempt but never saved).
             already_has_contact = existing.get("has_whatsapp") or self.contacts_col.find_one(
-                {"company_id": existing["_id"], "type": {"$in": ["whatsapp", "phone"]}}
+                {"company_id": existing["_id"], "type": "whatsapp"}
             )
-            # Solo saltar si ya tiene contactos — si no encontró nada antes, reintentar siempre
+            # Solo saltar si ya tiene WhatsApp — si no encontró WhatsApp antes, reintentar siempre
             if not force and next_scrape and next_scrape.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc) and already_has_contact:
                 print(f"⏭️  Dominio ya scrapeado recientemente con contactos: {domain}")
                 result["_db_action"] = "skipped_duplicate"

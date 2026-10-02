@@ -200,6 +200,15 @@ def enqueue_send_items(db, jobs: list, batch_id: str, label: str, send_config: d
         job_key  = f"{batch_id}#{job_idx}"
         for i, number in enumerate(numbers):
             message = messages[i] if i < len(messages) else (messages[-1] if messages else "")
+            # Backend safety net — the UI is supposed to block sending with no
+            # message selected, but a blank message here would otherwise burn
+            # a real daily/new-contact cap reservation and fail at the very
+            # last step with wwebjs-service's opaque "to and message required"
+            # (audit finding, 2026-10-02: exactly this happened for a batch
+            # sent one recipient at a time, bypassing the bulk-only frontend
+            # guard). Skip silently rather than enqueue a send that can't work.
+            if not message.strip():
+                continue
             docs.append({
                 "batch_id": batch_id, "job_key": job_key, "label": label[:80],
                 "company_id": job.get("companyId", ""), "to_number": number, "message": message,

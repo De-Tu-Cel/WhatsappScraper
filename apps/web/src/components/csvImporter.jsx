@@ -368,6 +368,10 @@ export default function CsvImporter() {
   const isBulk = totalContactPoints > 1
   const allVariants = extraVariants.map(v => v.trim()).filter(Boolean)
   const belowMinTemplates = isBulk && allVariants.length < getMinTemplatesRequired(totalContactPoints)
+  // belowMinTemplates only fires when isBulk (totalContactPoints > 1) —
+  // selecting and sending companies one at a time skipped it entirely,
+  // letting a send through with zero message text.
+  const noMessageSelected = allVariants.length === 0
 
   const _selectedRows = useMemo(
     () => waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id)),
@@ -388,7 +392,7 @@ export default function CsvImporter() {
 
   async function handleSendAll() {
     let targets = filteredWaRows.filter(r => effectiveWaSelected.has(r.company_id))
-    if (isSending || !targets.length || belowMinTemplates || capBlocked) return
+    if (isSending || !targets.length || belowMinTemplates || noMessageSelected || capBlocked) return
 
     // Per-instance daily cap trim
     const newInBatch = targets.filter(r => !r.already_contacted?.contacted)
@@ -922,7 +926,7 @@ export default function CsvImporter() {
               <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1.5 }}>
                 <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} sx={{ flexShrink: 0 }} />
                 <Button onClick={handleSendAll}
-                  disabled={effectiveWaSelected.size === 0 || alreadySent || isSending || isDisconnected || belowMinTemplates || capBlocked}
+                  disabled={effectiveWaSelected.size === 0 || alreadySent || isSending || isDisconnected || belowMinTemplates || noMessageSelected || capBlocked}
                   startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
                   sx={{
                     flex: 1, fontSize: '0.84rem', fontWeight: 700, py: 1.1, textTransform: 'none', borderRadius: 1.8,

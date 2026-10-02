@@ -1164,7 +1164,20 @@ def _simplify_industry_for_search(industry: str) -> str:
     return result
 
 
-def _build_variations(industry: str, city: str = "", country: str = None, num_results: int = 10, state_cities: list[str] | None = None) -> list[str]:
+def _city_window(cities: list[str], window_size: int, offset: int) -> list[str]:
+    """Slice a block of up to `window_size` cities, shifting which block on
+    each successive "load more" (offset grows across repeated calls) so
+    pagination sweeps fresh cities instead of re-querying the same capped
+    top-N every time. Wraps around once every city has had a turn."""
+    if not cities:
+        return []
+    num_blocks = max(1, -(-len(cities) // window_size))  # ceil division
+    block_idx = (offset // 10) % num_blocks
+    start = block_idx * window_size
+    return cities[start:start + window_size]
+
+
+def _build_variations(industry: str, city: str = "", country: str = None, num_results: int = 10, state_cities: list[str] | None = None, offset: int = 0) -> list[str]:
     """
     Build DDG query variations designed to return actual business WEBSITES,
     not directories. Uses advanced DDG operators:
@@ -1256,8 +1269,13 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
             f"{ind} {_NOISE}",
             f"{ind} whatsapp",
         ]
-        city_queries = [f"{ind_q} {c}" for c in state_cities[:max_c]]
-        syn_queries = [f'"{syn}" {c}' for syn in synonyms[:4] for c in state_cities[:4]]
+        # A "load more" click (growing offset) shifts to a fresh block of
+        # cities instead of re-asking the same capped top-N — keeps the whole
+        # curated list reachable across repeated clicks without ever letting
+        # one single request's DDG volume balloon back up.
+        city_window = _city_window(state_cities, max_c, offset)
+        city_queries = [f"{ind_q} {c}" for c in city_window]
+        syn_queries = [f'"{syn}" {c}' for syn in synonyms[:4] for c in city_window[:4]]
         return base + city_queries + syn_queries
 
     # País conocido, sin ciudad: queries base + fan-out por sus ciudades
@@ -1277,8 +1295,10 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
     ]
     # Same DDG-throttle cap as the state-level branch above — num_results*2
     # was unbounded (57 curated MX cities × num_results=150 asked for all 57).
+    # Windowed by offset (see _city_window) so "load more" sweeps a fresh
+    # block of cities each time instead of re-asking the same capped top-N.
     max_cities = max(6, min(len(cities), min(num_results * 2, 20)))
-    city_queries = [f"{ind_q} {c}" for c in cities[:max_cities]]
+    city_queries = [f"{ind_q} {c}" for c in _city_window(cities, max_cities, offset)]
     synonym_queries = [f'"{syn}" {country_name}' for syn in synonyms[:6]]
     return base + city_queries + synonym_queries
 
@@ -2813,7 +2833,7 @@ def search_prospects(
 
         _ex = concurrent.futures.ThreadPoolExecutor(max_workers=4)
         maps_future = _ex.submit(_search_via_dataforseo_maps, industry_q, geocode_city, country, keywords, num_results, offset)
-        ddg_future  = _ex.submit(_search_via_duckduckgo, industry_q, city, exclude_domains or set(), country, num_results, state_cities)
+        ddg_future  = _ex.submit(_search_via_duckduckgo, industry_q, city, exclude_domains or set(), country, num_results, state_cities, offset)
         sa_future   = _ex.submit(_search_via_seccion_amarilla, industry_q, geocode_city, country, num_results)
         osm_future  = _ex.submit(_search_via_openstreetmap, industry_q, geocode_city, country, num_results)
         maps_urls, maps_snips = _safe_result(maps_future, "Maps")
@@ -2847,7 +2867,7 @@ def search_prospects(
     else:
         # DDG-only: also run OSM in parallel for free structured data
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
-            ddg_future = ex.submit(_search_via_duckduckgo, industry, city, exclude_domains or set(), country, num_results, state_cities)
+            ddg_future = ex.submit(_search_via_duckduckgo, industry, city, exclude_domains or set(), country, num_results, state_cities, offset)
             osm_future = ex.submit(_search_via_openstreetmap, industry, geocode_city, country, num_results)
             ddg_urls, ddg_snips = ddg_future.result()
             osm_urls, osm_snips = osm_future.result()
@@ -3307,8 +3327,9 @@ def _search_via_brightdata(
 def _search_via_duckduckgo(
     industry: str, city: str = "", exclude_domains: set | None = None,
     country: str = None, num_results: int = 10, state_cities: list[str] | None = None,
+    offset: int = 0,
 ) -> tuple[list, dict]:
-    variations = _build_variations(industry, city, country, num_results, state_cities=state_cities)
+    variations = _build_variations(industry, city, country, num_results, state_cities=state_cities, offset=offset)
     skip = exclude_domains or set()
 
     all_raw: list[dict] = []

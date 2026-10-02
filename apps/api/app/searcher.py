@@ -1240,7 +1240,14 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
 
     # Estado específico: fan-out solo por ciudades de ese estado
     if state_cities and not city.strip():
-        max_c = min(len(state_cities), max(6, num_results * 3))
+        # Uncapped num_results*3 could ask for dozens of cities — DDG itself
+        # only tolerates ~10-15 simultaneous requests (see the executor below)
+        # before throttling/resetting connections, so past ~20 queries this
+        # stopped adding real coverage and only added retries/latency. Found
+        # live, 2026-10-02: a country-wide "panaderías" search (no city) built
+        # 69 DDG variations this way, took 40-70s, and the overall /api/search
+        # request sometimes failed outright ("fetch failed") before finishing.
+        max_c = min(len(state_cities), max(6, min(num_results * 3, 20)))
         tlds = cfg["tlds"] if cfg else [".mx", "com.mx"]
         base = [
             f"{ind_q} {_DORK_PRESENCE}",
@@ -1268,7 +1275,9 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
         f"{ind} {country_name} whatsapp",
         f"{ind} {country_name} {'inscripción' if is_fitness else 'servicio'}",
     ]
-    max_cities = max(6, min(len(cities), num_results * 2))
+    # Same DDG-throttle cap as the state-level branch above — num_results*2
+    # was unbounded (57 curated MX cities × num_results=150 asked for all 57).
+    max_cities = max(6, min(len(cities), min(num_results * 2, 20)))
     city_queries = [f"{ind_q} {c}" for c in cities[:max_cities]]
     synonym_queries = [f'"{syn}" {country_name}' for syn in synonyms[:6]]
     return base + city_queries + synonym_queries

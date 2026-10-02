@@ -299,6 +299,12 @@ export default function SearchProspects() {
   const [lastIndustry, setLastIndustry] = useState('')
   const [numResults,  setNumResults]  = useState(50)
   const [searching,    setSearching]    = useState(false)
+  // false = no error. 'empty' = request succeeded, genuinely found nothing
+  // (the "add a location" hint is useful here). 'failed' = the request itself
+  // errored/timed out (seen live, 2026-10-02: a country-wide no-city search
+  // can take 40-70s+ fanning out across many cities and sometimes fails
+  // outright) — showing the SAME "add a location" hint for this case is
+  // actively misleading, since the problem has nothing to do with the query.
   const [searchError,  setSearchError]  = useState(false)
   const [visibleCount, setVisibleCount] = useState(10)
   // Se fija una sola vez por búsqueda (a diferencia de visibleCount, que crece con
@@ -572,9 +578,9 @@ export default function SearchProspects() {
       const marked = await fetchAndMark(urls, blockedMap)
       setFound(marked)
       setNextOffset(next_offset || 0)
-      if (marked.length === 0) setSearchError(true)
+      if (marked.length === 0) setSearchError('empty')
     } catch (err) {
-      if (err?.name !== 'AbortError') setSearchError(true)
+      if (err?.name !== 'AbortError') setSearchError('failed')
     } finally {
       setSearching(false)
     }
@@ -955,14 +961,16 @@ export default function SearchProspects() {
       {searchError && !searching && (
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 1.5, py: 4, px: 2 }}>
           <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.45))', fontSize: '0.9rem', textAlign: 'center' }}>
-            {t.search.noResultsFor} <strong style={{ color: 'var(--text, #f1f5f9)' }}>{lastIndustry}</strong>
+            {searchError === 'failed' ? t.search.searchFailedFor : t.search.noResultsFor} <strong style={{ color: 'var(--text, #f1f5f9)' }}>{lastIndustry}</strong>
           </Typography>
           <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.28))', fontSize: '0.78rem', textAlign: 'center', maxWidth: 420, lineHeight: 1.6 }}>
-            {t.search.tryOther}
+            {searchError === 'failed' ? t.search.searchFailedHint : t.search.tryOther}
           </Typography>
-          <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.18))', fontSize: '0.72rem', textAlign: 'center', maxWidth: 460, lineHeight: 1.6, mt: 0.5 }}>
-            {t.search.noResultsHint}
-          </Typography>
+          {searchError !== 'failed' && (
+            <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.18))', fontSize: '0.72rem', textAlign: 'center', maxWidth: 460, lineHeight: 1.6, mt: 0.5 }}>
+              {t.search.noResultsHint}
+            </Typography>
+          )}
         </Box>
       )}
 

@@ -7,6 +7,7 @@ requests
 pytz>=2.31
 cloudscraper>=1.2.71
 beautifulsoup4>=4.12
+phonenumbers>=9.0
 ddgs>=9.0
 groq>=0.9
 openai>=1.30

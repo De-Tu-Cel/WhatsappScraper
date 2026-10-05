@@ -41,9 +41,6 @@ import HighlightOffIcon from '@mui/icons-material/HighlightOff'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import PauseIcon from '@mui/icons-material/Pause'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
-import WhatsAppIcon from '@mui/icons-material/WhatsApp'
-import MessageIcon from '@mui/icons-material/Message'
-import SendIcon from '@mui/icons-material/Send'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import Chip from '@mui/material/Chip'
 import { useLang } from '../context/LangContext'
@@ -52,15 +49,11 @@ import { useScrapeJob } from '../hooks/useScrapeJob'
 import { useSendQueue } from '../context/SendQueueContext'
 import { useDailyCapStats } from '../hooks/useDailyCapStats'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
-import DailyCapBadge, { getOverBy } from './DailyCapBadge'
-import CapacityBanner from './CapacityBanner'
-import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
-import RecipientsBox from './RecipientsBox'
-import { TemplateLibraryPicker } from './messageTemplateLibrary'
-import { SendConfigPanel } from './SendConfigPanel'
+import BulkSendPanel, { useBulkSendGuards, sendableNumbers } from './BulkSendPanel'
 import { loadSendConfig } from '@/lib/sendConfig'
-import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVariants'
+import { pickMessageVariant } from '@/lib/messageVariants'
 import { dedupeByCompany } from '../lib/companyDedupe'
+import CompanyAvatar from './CompanyAvatar'
 
 // Mismo helper que ya vive (duplicado a propósito) en batchProcessor/csvImporter/
 // searchProspects — sustituye {{nombre}}/{{ciudad}}/{{industria}}/{{web}} con los
@@ -332,8 +325,10 @@ function IdeaRow({ idea, checked, onToggle, onDiscard, lang, it, index }) {
       </TableCell>
       <TableCell sx={IDEAS_CELL_SX}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-          <Box component="img" src={`https://www.google.com/s2/favicons?domain=${idea.domain}&sz=32`} alt=""
-            sx={{ width: 18, height: 18, borderRadius: 0.5, flexShrink: 0, opacity: 0.9 }} />
+          {idea.maps_lead
+            ? <CompanyAvatar key={idea.url} photoUrl={idea.maps_lead.photo_url} name={idea.maps_lead.name} size={18} />
+            : <Box component="img" src={`https://www.google.com/s2/favicons?domain=${idea.domain}&sz=32`} alt=""
+                sx={{ width: 18, height: 18, borderRadius: 0.5, flexShrink: 0, opacity: 0.9 }} />}
           <Typography
             component="a" href={idea.url} target="_blank" rel="noopener noreferrer"
             onClick={e => e.stopPropagation()}
@@ -343,9 +338,15 @@ function IdeaRow({ idea, checked, onToggle, onDiscard, lang, it, index }) {
               textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 0.5,
               '&:hover': { color: ACCENT, textDecoration: 'underline' },
             }}>
-            <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{idea.domain}</Box>
+            <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{idea.maps_lead?.name || idea.domain}</Box>
             <OpenInNewIcon sx={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0, opacity: 0.6 }} />
           </Typography>
+          {idea.maps_lead && (
+            <Tooltip placement="top" arrow title={lang === 'en' ? 'No website — data from Google Maps' : 'Sin sitio web — datos de Google Maps'}>
+              <Chip label={lang === 'en' ? 'No website' : 'Sin web'} size="small"
+                sx={{ height: 16, fontSize: '0.6rem', bgcolor: 'rgba(45,212,191,0.1)', color: '#2dd4bf', border: '1px solid rgba(45,212,191,0.25)', flexShrink: 0 }} />
+            </Tooltip>
+          )}
         </Box>
       </TableCell>
       <TableCell sx={{ ...IDEAS_CELL_SX, textAlign: 'center' }}>
@@ -448,7 +449,10 @@ function IdeaResultRow({ result: r, index, lang, t }) {
       border: '1px solid var(--border, rgba(255,255,255,0.07))',
       borderLeft: `3px solid ${accent}`,
     }}>
-      {domain ? (
+      {r.ok ? (
+        <CompanyAvatar key={r.url} photoUrl={r.photo_url}
+          domain={r.no_website ? null : domain} name={r.empresa} size={18} dimmed={!hasWa} />
+      ) : domain && !r.no_website ? (
         <Box component="img" src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`} alt=""
           sx={{ width: 18, height: 18, borderRadius: 0.5, flexShrink: 0, opacity: hasWa ? 0.9 : 0.45 }} />
       ) : <Box sx={{ width: 18, height: 18, flexShrink: 0 }} />}
@@ -461,7 +465,7 @@ function IdeaResultRow({ result: r, index, lang, t }) {
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               textDecoration: 'none', '&:hover': { color: ACCENT, textDecoration: 'underline' },
             }}>
-            {domain || r.url}
+            {r.no_website ? (lang === 'en' ? 'Google Maps (no website)' : 'Google Maps (sin web)') : (domain || r.url)}
           </Typography>
           <OpenInNewIcon sx={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0, opacity: 0.6 }} />
         </Box>
@@ -650,20 +654,21 @@ export default function IdeasPanel({ isActive }) {
     new Set(filteredWaRows.map(r => r.company_id).filter(id => waSelected.has(id))),
   [filteredWaRows, waSelected])
 
-  const _selectedRows = useMemo(
-    () => waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id)),
-  [waRowsUnique, effectiveWaSelected])
+  // Selection math (contact points, new contacts, quota, minimum templates) —
+  // shared with the other post-scrape screens, see BulkSendPanel.jsx.
+  const guards = useBulkSendGuards({ waRows: waRowsUnique, selected: effectiveWaSelected, extraSelected, variants: extraVariants, capStats })
+  const { totalContactPoints, capBlocked, allVariants, belowMinTemplates, noMessageSelected, selectedRows: _selectedRows } = guards
   const tplVarFlags = useMemo(() => ({
     hasName:     _selectedRows.some(r => r.empresa && r.empresa !== '—'),
     hasCity:     _selectedRows.some(r => r.scraped_data?.city || r.scraped_data?.ciudad),
     hasIndustry: _selectedRows.some(r => r.industria && r.industria !== '—'),
-    hasWeb:      _selectedRows.some(r => r.url),
+    hasWeb:      _selectedRows.some(r => r.url && !r.no_website),
   }), [_selectedRows])
   const tplVarCounts = useMemo(() => ({
     nombre:    _selectedRows.filter(r => r.empresa && r.empresa !== '—').length,
     ciudad:    _selectedRows.filter(r => r.scraped_data?.city || r.scraped_data?.ciudad).length,
     industria: _selectedRows.filter(r => r.industria && r.industria !== '—').length,
-    web:       _selectedRows.filter(r => r.url).length,
+    web:       _selectedRows.filter(r => r.url && !r.no_website).length,
   }), [_selectedRows])
 
   const sentCids = useMemo(
@@ -676,24 +681,11 @@ export default function IdeasPanel({ isActive }) {
     () => [...effectiveWaSelected].filter(cid => !sentCids.has(cid)).length,
   [effectiveWaSelected, sentCids])
 
-  const totalRecipients = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id)).length
-  const totalContactPoints = totalRecipients +
-    [...extraSelected].filter(key => effectiveWaSelected.has(key.split('::')[0])).length
-  const _contactedCids = new Set(waRowsUnique.filter(r => r.already_contacted?.contacted).map(r => r.company_id))
-  const newContactPoints =
-    waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id) && !_contactedCids.has(r.company_id)).length +
-    [...extraSelected].filter(key => { const cid = key.split('::')[0]; return effectiveWaSelected.has(cid) && !_contactedCids.has(cid) }).length
-  const overBy = getOverBy(capStats, totalContactPoints, newContactPoints)
-  const capBlocked = overBy > 0
-
-  const isBulk = totalContactPoints > 1
-  const allVariants = useMemo(() => extraVariants.map(v => v.trim()).filter(Boolean), [extraVariants])
-  const belowMinTemplates = isBulk && allVariants.length < getMinTemplatesRequired(totalContactPoints)
 
   async function handleSendAll() {
     if (isSending || capBlocked) return
     let targets = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id) && !sentCids.has(r.company_id))
-    if (!targets.length || belowMinTemplates) return
+    if (!targets.length || belowMinTemplates || noMessageSelected) return
 
     const newInBatch = targets.filter(r => !r.already_contacted?.contacted)
     if (newInBatch.length > 0) {
@@ -738,10 +730,9 @@ export default function IdeasPanel({ isActive }) {
     const jobs = []
     const queuedUrls = {}
     for (const row of targets) {
-      const primary = row.all_whatsapp?.length > 0 ? row.all_whatsapp[0] : row.whatsapp
-      if (!primary) continue
-      const extras = row.all_whatsapp?.slice(1).filter(n => extraSelected.has(`${row.company_id}::${n}`)) || []
-      const numbers = [primary, ...extras]
+      // First number + extras ticked by hand, minus any blocked number.
+      const numbers = sendableNumbers(row, extraSelected)
+      if (!numbers.length) continue
       const v = pickMessageVariant(allVariants, lastVariant)
       lastVariant = v
       const message = renderTemplate(v, row.scraped_data) || v
@@ -749,6 +740,7 @@ export default function IdeasPanel({ isActive }) {
       jobs.push({ numbers, messages, companyId: row.company_id, website: row.url })
       queuedUrls[row.url] = 'queued'
     }
+    if (!jobs.length) return   // every selected number was blocked
     addBatch(jobs, lang === 'en' ? 'Ideas' : 'Ideas')
     setSentOverlay(prev => ({ ...prev, ...queuedUrls }))
     setLocalContactedIds(prev => {
@@ -972,7 +964,7 @@ export default function IdeasPanel({ isActive }) {
                 {scrapeJob.paused
                   ? (lang === 'en' ? `Paused — ${scrapeJob.processed} of ${scrapeJob.total}` : `Pausado — ${scrapeJob.processed} de ${scrapeJob.total}`)
                   : scrapeJob.pausing
-                    ? (lang === 'en' ? `Pausing… — ${scrapeJob.processed} of ${scrapeJob.total}` : `Pausando… — ${scrapeJob.processed} de ${scrapeJob.total}`)
+                    ? (lang === 'en' ? `Pausing… finishing ${scrapeJob.inFlight} in progress — ${scrapeJob.processed} of ${scrapeJob.total}` : `Pausando… terminando ${scrapeJob.inFlight} en curso — ${scrapeJob.processed} de ${scrapeJob.total}`)
                     : (lang === 'en' ? `Processing ${scrapeJob.processed} / ${scrapeJob.total}` : `Procesando ${scrapeJob.processed} / ${scrapeJob.total}`)}
               </Typography>
             </Box>
@@ -1023,90 +1015,19 @@ export default function IdeasPanel({ isActive }) {
                el usuario está seleccionando destinatarios/plantilla ahí adentro.
                Mismo patrón que searchProspects.jsx. ── */}
             {waRowsUnique.length > 0 && (
-              <Box sx={{ borderRadius: 2.5, border: '1px solid rgba(34,197,94,0.2)', display: 'flex', flexDirection: 'column', flexShrink: 0, overflow: 'hidden' }}>
-                <Box sx={{ px: 2, py: 1.4, background: 'linear-gradient(180deg, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.02) 100%)', borderBottom: '1px solid rgba(34,197,94,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
-                    <Box sx={{ width: 30, height: 30, borderRadius: 1.5, bgcolor: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.28)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 12px rgba(34,197,94,0.12)', flexShrink: 0 }}>
-                      <MessageIcon sx={{ fontSize: 14, color: '#4ade80' }} />
-                    </Box>
-                    <Box>
-                      <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.84rem', lineHeight: 1.2 }}>{t.batch.sendMessages}</Typography>
-                      <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.62rem' }}>{waRowsUnique.length} {lang === 'en' ? 'with WhatsApp' : 'con WhatsApp'}</Typography>
-                    </Box>
-                  </Box>
-                  <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={`${effectiveWaSelected.size} / ${filteredWaRows.length}`} size="small"
-                    sx={{ fontSize: '0.7rem', height: 22, bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', '& .MuiChip-icon': { color: '#4ade80' } }} />
-                </Box>
-                <Box sx={{ p: 2 }}>
-                  {capStats && (
-                    <CapacityBanner stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} sx={{ mb: 1.5 }} />
-                  )}
-                  <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 1 }}>
-                    {[
-                      { key: 'all',       label: `${lang === 'en' ? 'All' : 'Todos'} (${waRowsUnique.length})`, color: '#60a5fa', bg: 'rgba(59,130,246,0.1)', border: 'rgba(59,130,246,0.25)' },
-                      { key: 'new',       label: `${lang === 'en' ? 'Not contacted' : 'Sin contactar'} (${waRowsUnique.filter(r => !r.already_contacted?.contacted).length})`, color: '#4ade80', bg: 'rgba(34,197,94,0.1)', border: 'rgba(34,197,94,0.25)' },
-                      { key: 'contacted', label: `${lang === 'en' ? 'Already contacted' : 'Ya contactados'} (${waRowsUnique.filter(r => r.already_contacted?.contacted).length})`, color: '#fbbf24', bg: 'rgba(251,191,36,0.1)', border: 'rgba(251,191,36,0.25)' },
-                    ].map(f => (
-                      <Chip key={f.key} label={f.label} size="small" onClick={() => setFilterContacted(f.key)}
-                        sx={{ height: 22, fontSize: '0.68rem', cursor: 'pointer', bgcolor: filterContacted === f.key ? f.bg : 'var(--item-hover)', color: filterContacted === f.key ? f.color : 'var(--text-muted)', border: `1px solid ${filterContacted === f.key ? f.border : 'var(--border)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
-                    ))}
-                  </Box>
-                  <Box sx={{ display: 'flex', gap: 2.5, flexWrap: 'wrap' }}>
-                    <RecipientsBox rows={filteredWaRows}
-                      effectiveSelected={effectiveWaSelected}
-                      expandedCo={expandedCo}
-                      extraSelected={extraSelected}
-                      setSelected={setWaSelected}
-                      setExpandedCo={setExpandedCo}
-                      setExtraSelected={setExtraSelected}
-                      title={lang === 'en' ? 'Recipients' : 'Destinatarios'}
-                      sx={{ width: 260, flexShrink: 0 }} />
-                    <Box sx={{ flex: 1, minWidth: 260, opacity: filteredWaRows.length === 0 ? 0.35 : 1, pointerEvents: filteredWaRows.length === 0 ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
-                      <Box sx={{ mb: 1.5, p: 1.6, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
-                        <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalContactPoints} baseCount={0}
-                          singleSelect={totalContactPoints <= 1}
-                          hasName={tplVarFlags.hasName} hasCity={tplVarFlags.hasCity}
-                          hasIndustry={tplVarFlags.hasIndustry} hasWeb={tplVarFlags.hasWeb}
-                          varCounts={tplVarCounts} totalSelected={_selectedRows.length} />
-                      </Box>
-                      <Box sx={{ mb: 1.5 }}>
-                        <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
-                      </Box>
-                      <InstanceDisconnectedBanner status={instanceStatus} sx={{ mb: 1 }} />
-                      <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
-                      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 0.6 }}>
-                        <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} />
-                      </Box>
-                      {isSending && (
-                        <Button fullWidth onClick={cancelQueue} startIcon={<HighlightOffIcon />}
-                          sx={{ mb: 0.8, py: 0.8, textTransform: 'none', fontWeight: 600, fontSize: '0.82rem', color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.45)' } }}>
-                          {lang === 'en' ? 'Cancel send' : 'Cancelar envío'}
-                        </Button>
-                      )}
-                      <Button fullWidth onClick={handleSendAll}
-                        disabled={effectiveWaSelected.size === 0 || allSelectedSent || isSending || isDisconnected || belowMinTemplates || capBlocked}
-                        startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 15 }} />}
-                        sx={{
-                          fontSize: '0.84rem', fontWeight: 700, py: 1.1, borderRadius: 1.8, textTransform: 'none', transition: 'all 0.2s',
-                          bgcolor: unsentSelectedCount > 0 ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
-                          color:   unsentSelectedCount > 0 ? '#4ade80' : 'rgba(255,255,255,0.3)',
-                          border:  `1px solid ${unsentSelectedCount > 0 ? 'rgba(34,197,94,0.38)' : 'rgba(255,255,255,0.1)'}`,
-                          '&:hover': unsentSelectedCount > 0 ? { bgcolor: 'rgba(34,197,94,0.28)', borderColor: 'rgba(34,197,94,0.6)', boxShadow: '0 0 18px rgba(34,197,94,0.18)' } : {},
-                          '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
-                        }}>
-                        {allSelectedSent
-                          ? `${sentCount} ${lang === 'en' ? 'sent' : 'enviados'}`
-                          : `${lang === 'en' ? 'Send to' : 'Enviar a'} ${unsentSelectedCount || effectiveWaSelected.size} ${lang === 'en' ? 'companies' : 'empresas'}`}
-                      </Button>
-                      {capBlocked && !isSending && (
-                        <Typography sx={{ color: '#f59e0b', fontSize: '0.7rem', textAlign: 'right', mt: 0.5 }}>
-                          {lang === 'en' ? `Deselect ${overBy} to fit today's quota` : `Desmarca ${overBy} para caber en tu cupo de hoy`}
-                        </Typography>
-                      )}
-                    </Box>
-                  </Box>
-                </Box>
-              </Box>
+              <BulkSendPanel
+                title={t.batch.sendMessages}
+                waRows={waRowsUnique} filteredRows={filteredWaRows}
+                filterContacted={filterContacted} onFilterContacted={setFilterContacted}
+                selected={effectiveWaSelected} setSelected={setWaSelected}
+                expandedCo={expandedCo} setExpandedCo={setExpandedCo}
+                extraSelected={extraSelected} setExtraSelected={setExtraSelected}
+                guards={guards} varFlags={tplVarFlags} varCounts={tplVarCounts} onVariantsChange={setExtraVariants}
+                capStats={capStats} instanceStatus={instanceStatus} isDisconnected={isDisconnected}
+                sendCfg={sendCfg} onSendCfgChange={setSendCfg}
+                sendError={sendError} onDismissError={() => setSendError('')}
+                isSending={isSending} onCancel={cancelQueue} onSend={handleSendAll}
+                allSent={allSelectedSent} sentLabel={`${sentCount} ${lang === 'en' ? 'sent' : 'enviados'}`} unsentCount={unsentSelectedCount} scrollBody={false} />
             )}
 
             {waRowsUnique.length > 0 && (

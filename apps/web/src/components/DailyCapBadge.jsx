@@ -3,6 +3,7 @@ import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Tooltip from '@mui/material/Tooltip'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
+import PersonAddIcon from '@mui/icons-material/PersonAdd'
 import { getOverBy, buildRecommendation } from '../lib/dailyCap'
 import { useLang } from '../context/LangContext'
 
@@ -11,7 +12,9 @@ export { getOverBy }
 // Chip "X/Y hoy" (mismo estilo que ya vivía inline en sendCampaign.jsx) + al
 // hacer hover, desglose por instancia (warmup o no) — antes solo existía el
 // total combinado, sin decir de dónde salía cada número.
-export default function DailyCapBadge({ stats, selectionCount = 0, newSelectionCount = selectionCount, sx }) {
+// oneLine: compact version for panels where this badge is the only place
+// showing today's capacity — new contacts first, sends underneath.
+export default function DailyCapBadge({ stats, selectionCount = 0, newSelectionCount = selectionCount, oneLine = false, sx }) {
   const { lang } = useLang()
   if (!stats) return null
 
@@ -78,6 +81,72 @@ export default function DailyCapBadge({ stats, selectionCount = 0, newSelectionC
       <Typography sx={{ fontSize: '0.62rem', opacity: 0.55 }}>{lang === 'en' ? 'Resets at 00:00 UTC' : 'Reinicia a las 00:00 UTC'}</Typography>
     </Box>
   )
+
+  // oneLine: new contacts lead — when prospecting every company found is a
+  // number never messaged before, so that limit (not total sends) is the one
+  // that runs out first.
+  if (oneLine && !isFutureMode && stats.new_contacts_capacity != null) {
+    const en = lang === 'en'
+    const ncTotal = stats.new_contacts_capacity
+    const ncRemaining = Math.max(0, ncTotal - newSelectionCount)
+    const ncOver = Math.max(0, newSelectionCount - ncTotal)
+    const ncOut = ncRemaining <= 0
+    const ncColor = ncOut ? '#f59e0b' : '#4ade80'
+    const picked = selectionCount > 0
+    const ncTooltip = (
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6, py: 0.3, maxWidth: 260 }}>
+        <Typography sx={{ fontSize: '0.72rem', lineHeight: 1.4 }}>
+          {en
+            ? 'New contacts are numbers you have never messaged. WhatsApp watches how many new chats a number opens per day, so this is the limit that counts when prospecting — each new company uses one.'
+            : 'Contactos nuevos son números a los que nunca les has escrito. WhatsApp vigila cuántos chats nuevos abre un número al día, así que este es el límite que cuenta al prospectar: cada empresa nueva gasta uno.'}
+        </Typography>
+        {tooltip}
+      </Box>
+    )
+    return (
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0.4, ...sx }}>
+        <Tooltip title={ncTooltip} placement="top">
+          <Box sx={{
+            display: 'flex', alignItems: 'baseline', gap: 0.6, cursor: 'default', whiteSpace: 'nowrap',
+            px: 1.1, py: 0.5, borderRadius: 1.5,
+            border: `1px solid ${ncOut ? 'rgba(245,158,11,0.35)' : 'rgba(74,222,128,0.3)'}`,
+            bgcolor: ncOut ? 'rgba(245,158,11,0.08)' : 'rgba(74,222,128,0.07)',
+          }}>
+            <PersonAddIcon sx={{ fontSize: 14, color: ncColor, alignSelf: 'center' }} />
+            {picked && (
+              <Typography component="span" sx={{ fontSize: '0.7rem', color: ncColor }}>
+                {ncOver > 0 ? (en ? 'over by' : 'te pasas por') : (en ? 'leaves' : 'quedarían')}
+              </Typography>
+            )}
+            <Typography component="span" sx={{ fontSize: '1.05rem', fontWeight: 800, lineHeight: 1, color: ncColor, fontVariantNumeric: 'tabular-nums' }}>
+              {ncOver > 0 ? ncOver : ncRemaining}
+            </Typography>
+            <Typography component="span" sx={{ fontSize: '0.7rem', fontWeight: 600, color: ncColor }}>
+              {!picked
+                ? (ncRemaining === 1
+                    ? (en ? 'new contact available today' : 'contacto nuevo disponible hoy')
+                    : (en ? 'new contacts available today' : 'contactos nuevos disponibles hoy'))
+                : ncOver > 0
+                  ? (ncOver === 1
+                      ? (en ? `new contact · ${ncTotal} left today` : `contacto nuevo · hoy quedan ${ncTotal}`)
+                      : (en ? `new contacts · ${ncTotal} left today` : `contactos nuevos · hoy quedan ${ncTotal}`))
+                  : (en ? `of ${ncTotal} new contacts` : `de ${ncTotal} contactos nuevos`)}
+            </Typography>
+          </Box>
+        </Tooltip>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          <Typography sx={{ fontSize: '0.62rem', color: remaining <= 0 ? '#f59e0b' : 'var(--text-muted)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+            {picked
+              ? (en ? `${remaining} of ${available} sends left` : `quedarían ${remaining} de ${available} envíos`)
+              : (en ? `${available} sends available today` : `${available} envíos disponibles hoy`)}
+          </Typography>
+          <Tooltip title={recommendation} placement="top" arrow>
+            <InfoOutlinedIcon sx={{ fontSize: 12, color: 'var(--text-muted)', cursor: 'help' }} />
+          </Tooltip>
+        </Box>
+      </Box>
+    )
+  }
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0.3, ...sx }}>

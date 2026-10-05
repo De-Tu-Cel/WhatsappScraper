@@ -9,14 +9,11 @@ import DialogActions from '@mui/material/DialogActions'
 import { authFetch } from '@/lib/api'
 import { useSendQueue } from '../context/SendQueueContext'
 import { useDailyCapStats } from '../hooks/useDailyCapStats'
-import DailyCapBadge, { getOverBy } from './DailyCapBadge'
 import WhatsAppNumberSummary from './WhatsAppNumberSummary'
-import RecipientsBox from './RecipientsBox'
-import CapacityBanner from './CapacityBanner'
+import BulkSendPanel, { useBulkSendGuards, sendableNumbers } from './BulkSendPanel'
 import { dedupeByCompany } from '../lib/companyDedupe'
 import { useScrapeJob } from '../hooks/useScrapeJob'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
-import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
 import { keyframes } from '@mui/system'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
@@ -45,18 +42,18 @@ import ReplayIcon from '@mui/icons-material/Replay'
 import CheckBoxIcon from '@mui/icons-material/CheckBox'
 import IndeterminateCheckBoxIcon from '@mui/icons-material/IndeterminateCheckBox'
 import HistoryIcon from '@mui/icons-material/History'
-import MessageIcon from '@mui/icons-material/Message'
 import SendIcon from '@mui/icons-material/Send'
+import WarningAmberIcon from '@mui/icons-material/WarningAmber'
+import BlockIcon from '@mui/icons-material/Block'
 import Table from '@mui/material/Table'
 import TableHead from '@mui/material/TableHead'
 import TableBody from '@mui/material/TableBody'
 import TableCell from '@mui/material/TableCell'
 import TableRow from '@mui/material/TableRow'
 import TableContainer from '@mui/material/TableContainer'
-import { TemplateLibraryPicker } from './messageTemplateLibrary'
-import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVariants'
-import { SendConfigPanel } from './SendConfigPanel'
+import { pickMessageVariant } from '@/lib/messageVariants'
 import { loadSendConfig } from '@/lib/sendConfig'
+import CompanyAvatar from './CompanyAvatar'
 
 // INDUSTRY_GROUPS and INDUSTRY_EXAMPLES are built inside the component from translations
 
@@ -125,6 +122,69 @@ function CountSelector({ numResults, setNumResults, showCount, show, size = 'md'
 function getDomain(url) {
   try { return new URL(url).hostname.replace('www.', '') }
   catch { return url }
+}
+
+const MAPS_LEAD_URL = /^https:\/\/www\.google\.com\/maps\?cid=\d+$/
+
+// Google Maps businesses with no website all share google.com as host — their
+// own Maps link is what identifies them.
+function resultKey(url) {
+  return MAPS_LEAD_URL.test(url || '') ? url : getDomain(url)
+}
+
+// Estado de una fila ya procesada, en términos de lo que le importa a quien
+// va a escribir: hay WhatsApp, solo teléfono, o nada. Reemplaza el "OK/Vacío"
+// anterior, que miraba solo el WhatsApp "principal" y marcaba "Vacío" a
+// empresas cuyo WhatsApp se confirmó verificando un teléfono.
+function rowStatus(r, hasWa, en) {
+  if (r.blacklisted) {
+    const isDirectory = (r.blockReason || '').startsWith('directorio')
+    return isDirectory
+      ? { label: en ? 'Directory' : 'Directorio', color: '#f59e0b',
+          tip: en ? `Looks like a listing of many businesses — ${r.blockReason}` : `Parece un listado de muchos negocios — ${r.blockReason}` }
+      : { label: en ? 'Blocked' : 'Bloqueado', color: '#f59e0b',
+          tip: r.blockKind === 'industry'
+            ? (en ? `Blacklisted industry "${r.blockReason}" — not saved` : `Industria en blacklist «${r.blockReason}» — no se guardó`)
+            : r.blockKind === 'domain'
+              ? (en ? `Blacklisted domain "${r.blockReason}"` : `Dominio en blacklist «${r.blockReason}»`)
+              : `Blacklist · "${r.blockReason || ''}"` }
+  }
+  if (!r.ok) return { label: 'Error', color: '#f87171', tip: r.errorReason || (en ? 'Scrape error' : 'Error al scrapear') }
+  if (hasWa) return { label: en ? 'WhatsApp' : 'Con WhatsApp', color: '#4ade80' }
+  if (r.no_website && r.wa_verified == null) {
+    return { label: en ? 'To verify' : 'Por verificar', color: '#fbbf24',
+      tip: en ? 'No connected WhatsApp session could check this phone yet' : 'Ninguna sesión de WhatsApp conectada pudo verificar este teléfono todavía' }
+  }
+  const phones = r.phones_count || (r.phone ? 1 : 0)
+  if (phones > 0) {
+    return { label: en ? 'Phone only' : 'Solo teléfono', color: '#60a5fa',
+      tip: en ? `${phones} phone number(s), no WhatsApp detected` : `${phones} teléfono(s), sin WhatsApp detectado` }
+  }
+  return { label: en ? 'No contact' : 'Sin contacto', color: '#94a3b8',
+    tip: en ? 'No phone or WhatsApp found' : 'No se encontró teléfono ni WhatsApp' }
+}
+
+// Job timestamps are naive UTC on the server; without a zone the browser would
+// read them as local time and be off by the UTC offset.
+function agoLabel(iso, lang) {
+  if (!iso) return ''
+  const s = String(iso)
+  const t = new Date(/[zZ]$|[+-]\d\d:\d\d$/.test(s) ? s : `${s}Z`).getTime()
+  const mins = Math.max(0, Math.floor((Date.now() - t) / 60000))
+  const en = lang === 'en'
+  if (mins < 1) return en ? 'just now' : 'justo ahora'
+  if (mins < 60) return en ? `${mins} min ago` : `hace ${mins} min`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return en ? `${hrs} h ago` : `hace ${hrs} h`
+  const days = Math.floor(hrs / 24)
+  return en ? `${days} d ago` : `hace ${days} d`
+}
+
+function listedSiteLabel(url) {
+  const host = getDomain(url || '').replace(/^m\./, '')
+  if (host.endsWith('facebook.com') || host === 'fb.com') return 'Facebook'
+  if (host.endsWith('instagram.com')) return 'Instagram'
+  return null
 }
 
 function useTypewriter(strings, active) {
@@ -306,6 +366,9 @@ export default function SearchProspects() {
   // outright) — showing the SAME "add a location" hint for this case is
   // actively misleading, since the problem has nothing to do with the query.
   const [searchError,  setSearchError]  = useState(false)
+  // The searched trade is on the industry blacklist (backend: blocked_industry) —
+  // every result of that trade is discarded when processed, so say it up front.
+  const [blockedIndustry, setBlockedIndustry] = useState(null)
   const [visibleCount, setVisibleCount] = useState(10)
   // Se fija una sola vez por búsqueda (a diferencia de visibleCount, que crece con
   // "Cargar más") — permite avisar cuando lo encontrado se queda corto de lo pedido,
@@ -519,8 +582,9 @@ export default function SearchProspects() {
   }), [t, INDUSTRY_EXAMPLES])
 
   const visibleFound = found
-    .filter(r => filterScraped === 'all' ? true : filterScraped === 'new' ? !r.scraped : r.scraped)
+    .filter(r => filterScraped === 'all' ? true : filterScraped === 'new' ? !r.scraped : filterScraped === 'maps' ? r.kind === 'maps' : r.scraped)
     .slice(0, visibleCount)
+  const mapsCount = found.filter(r => r.kind === 'maps').length
   const selectedCount    = found.filter(r => r.selected).length
   const processableCount = found.filter(r => r.selected && !r.scraped && !r.blocked).length
   const skippedCount     = found.filter(r => r.selected && r.scraped).length
@@ -539,19 +603,25 @@ export default function SearchProspects() {
     localStorage.setItem('searchHistory', JSON.stringify(next))
   }
 
-  async function fetchAndMark(urls, blockedMap) {
+  // mapsLeads: Google Maps businesses with no website — listed after the sites,
+  // with the Maps data the backend needs to build them on "Procesar".
+  async function fetchAndMark(siteUrls, blockedMap, mapsLeads = []) {
+    const urls = [...siteUrls, ...mapsLeads.map(l => l.url)]
+    const leadByUrl = Object.fromEntries(mapsLeads.map(l => [l.url, l]))
+    const row = (url, scraped) => ({
+      url, selected: false, scraped,
+      blocked: !!blockedMap[url]?.blocked, blockReason: blockedMap[url]?.block_reason || null,
+      ...(leadByUrl[url] ? { kind: 'maps', lead: leadByUrl[url] } : {}),
+    })
     try {
       const r = await authFetch('/api/companies/check-urls', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ urls }),
       })
       const map = r.ok ? await r.json() : {}
-      return urls.map(url => ({
-        url, selected: false, scraped: !!map[url],
-        blocked: !!blockedMap[url]?.blocked, blockReason: blockedMap[url]?.block_reason || null,
-      }))
+      return urls.map(url => row(url, !!map[url]))
     } catch {
-      return urls.map(url => ({ url, selected: false, scraped: false, blocked: !!blockedMap[url]?.blocked, blockReason: blockedMap[url]?.block_reason || null }))
+      return urls.map(url => row(url, false))
     }
   }
 
@@ -564,7 +634,7 @@ export default function SearchProspects() {
     const ctrl = new AbortController()
     abortSearchRef.current = ctrl
     setSearching(true); setFound([]); setVisibleCount(numResults); setRequestedCount(numResults); setFilterScraped('all'); setFilterContacted('all'); setSearchError(false)
-    setServerExhausted(false); setNextOffset(0)
+    setServerExhausted(false); setNextOffset(0); setBlockedIndustry(null)
     setSentOverlay({}); setRetryBase([]); scrapeJob.reset()
     try {
       const res = await authFetch('/api/search', {
@@ -573,10 +643,12 @@ export default function SearchProspects() {
         signal: ctrl.signal,
       })
       if (!res.ok) throw new Error()
-      const { urls, results: searchResults, next_offset } = await res.json()
+      const { urls, results: searchResults, next_offset, maps_leads = [], blocked_industry = null } = await res.json()
+      setBlockedIndustry(blocked_industry)
       const blockedMap = Object.fromEntries((searchResults || []).map(r => [r.url, r]))
-      const marked = await fetchAndMark(urls, blockedMap)
+      const marked = await fetchAndMark(urls, blockedMap, maps_leads)
       setFound(marked)
+      setVisibleCount(Math.max(numResults, marked.length))
       setNextOffset(next_offset || 0)
       if (marked.length === 0) setSearchError('empty')
     } catch (err) {
@@ -598,7 +670,7 @@ export default function SearchProspects() {
     if (fetchingMore || serverExhausted || !lastIndustry) return
     setFetchingMore(true)
     try {
-      const alreadyShown = found.map(r => getDomain(r.url))
+      const alreadyShown = found.map(r => resultKey(r.url))
       const res = await authFetch('/api/search', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -607,12 +679,12 @@ export default function SearchProspects() {
         }),
       })
       if (!res.ok) throw new Error()
-      const { urls, results: searchResults, next_offset } = await res.json()
+      const { urls, results: searchResults, next_offset, maps_leads = [] } = await res.json()
       setNextOffset(next_offset || nextOffset)
       const blockedMap = Object.fromEntries((searchResults || []).map(r => [r.url, r]))
-      const marked = await fetchAndMark(urls, blockedMap)
+      const marked = await fetchAndMark(urls, blockedMap, maps_leads)
       const seen = new Set(alreadyShown)
-      const fresh = marked.filter(m => !seen.has(getDomain(m.url)))
+      const fresh = marked.filter(m => !seen.has(resultKey(m.url)))
       if (fresh.length === 0) {
         setServerExhausted(true)
       } else {
@@ -644,14 +716,22 @@ export default function SearchProspects() {
     const urls = toProcess.map(r => r.url)
     setSentOverlay({}); setRetryBase([])
     if (skipped > 0) console.info(`⏭️ Saltando ${skipped} URL(s) ya scrapeadas`)
-    await scrapeJob.start(urls)
+    await scrapeJob.start(urls, toProcess.filter(r => r.lead).map(r => r.lead), lastIndustry)
   }
 
   async function handleRetryFailed() {
     const failedUrls = results.filter(r => !r.ok).map(r => r.url)
     if (!failedUrls.length) return
     setRetryBase(results.filter(r => r.ok))
-    await scrapeJob.start(failedUrls)
+    const failed = new Set(failedUrls)
+    await scrapeJob.start(failedUrls, found.filter(r => r.lead && failed.has(r.url)).map(r => r.lead), scrapeJob.job?.query || lastIndustry)
+  }
+
+  // Clears the recovered results so the screen is ready for another search.
+  function handleNewSearch() {
+    scrapeJob.reset()
+    setFound([]); setSentOverlay({}); setRetryBase([])
+    setSearchError(false); setServerExhausted(false); setNextOffset(0); setBlockedIndustry(null)
   }
 
   function handleCancelSearch() {
@@ -661,7 +741,7 @@ export default function SearchProspects() {
   }
 
   function downloadCsv() {
-    const headers = ['url', 'empresa', 'industria', 'whatsapp', 'status_wa', 'estado']
+    const headers = ['url', 'empresa', 'industria', 'whatsapp', 'phone', 'status_wa', 'estado']
     const csv = [headers.join(','), ...results.map(r => headers.map(h => h === 'estado' ? (r.ok ? 'ok' : 'error') : (r[h] || '')).join(','))].join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'prospectos.csv'; a.click()
@@ -682,34 +762,18 @@ export default function SearchProspects() {
     [effectiveWaSelected, sentCids]
   )
 
-  // Un envío masivo manda por default 1 número por empresa (el principal) — no
-  // todos los que se hayan encontrado. Evita que una empresa con muchos números
-  // (varias sucursales/extensiones) se coma el cupo diario de warmup de varias
-  // empresas nuevas de golpe. Expandir el chip de una empresa permite agregar
-  // sus otros números a propósito — cada uno cuenta su propio slot de cupo
-  // (el backend deduplica por número real, no por empresa).
-  const totalRecipients = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id)).length
-  const totalContactPoints = totalRecipients +
-    [...extraSelected].filter(key => effectiveWaSelected.has(key.split('::')[0])).length
+  // Selection math (contact points, new contacts, quota, minimum templates) —
+  // shared with the other post-scrape screens, see BulkSendPanel.jsx.
+  const guards = useBulkSendGuards({ waRows: waRowsUnique, selected: effectiveWaSelected, extraSelected, variants: extraVariants, capStats })
+  const { totalContactPoints, capBlocked, allVariants, belowMinTemplates, noMessageSelected, selectedRows: _selectedRows } = guards
   const _contactedCids = new Set(waRowsUnique.filter(r => r.already_contacted?.contacted).map(r => r.company_id))
-  const newContactPoints =
-    waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id) && !_contactedCids.has(r.company_id)).length +
-    [...extraSelected].filter(key => { const cid = key.split('::')[0]; return effectiveWaSelected.has(cid) && !_contactedCids.has(cid) }).length
-  const overBy     = getOverBy(capStats, totalContactPoints, newContactPoints)
-  const capBlocked = overBy > 0
 
   // Variable availability: does at least one selected company have each field?
-  // Passed to TemplateLibraryPicker so it can block/warn templates that use
-  // variables that no selected recipient can substitute.
-  const _selectedRows = useMemo(
-    () => waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id)),
-    [waRowsUnique, effectiveWaSelected]
-  )
   const tplVarFlags = useMemo(() => ({
     hasName:     _selectedRows.some(r => r.name     || r.empresa),
     hasCity:     _selectedRows.some(r => r._extra?.city || r.city || r.ciudad),
     hasIndustry: _selectedRows.some(r => r.industry || r.industria),
-    hasWeb:      _selectedRows.some(r => r.url      || r.website),
+    hasWeb:      _selectedRows.some(r => !r.no_website && (r.url || r.website)),
   }), [_selectedRows])
 
   // How many selected companies have each variable — shown in chip tooltip
@@ -717,23 +781,8 @@ export default function SearchProspects() {
     nombre:    _selectedRows.filter(r => r.name     || r.empresa).length,
     ciudad:    _selectedRows.filter(r => r._extra?.city || r.city || r.ciudad).length,
     industria: _selectedRows.filter(r => r.industry || r.industria).length,
-    web:       _selectedRows.filter(r => r.url      || r.website).length,
+    web:       _selectedRows.filter(r => !r.no_website && (r.url || r.website)).length,
   }), [_selectedRows])
-
-  // Sending to 2+ contact points needs varied text (see getMinTemplatesRequired).
-  // Uses totalContactPoints (not totalRecipients) so selecting multiple numbers
-  // of a single company also counts toward the minimum.
-  const isBulk = totalContactPoints > 1
-  const allVariants = useMemo(
-    () => extraVariants.map(v => v.trim()).filter(Boolean),
-    [extraVariants]
-  )
-  const belowMinTemplates = isBulk && allVariants.length < getMinTemplatesRequired(totalContactPoints)
-  // belowMinTemplates only fires when isBulk (totalContactPoints > 1) — selecting
-  // and sending to companies one at a time (isBulk false) skipped it entirely,
-  // letting a send through with zero message text (singleUrlProcessor.jsx's
-  // MessageComposer already guards this separately; this screen didn't).
-  const noMessageSelected = allVariants.length === 0
 
   async function handleSendAll() {
     if (isSending || capBlocked) return
@@ -793,10 +842,9 @@ export default function SearchProspects() {
     for (const row of targets) {
       // Principal + números extra que el usuario haya prendido a mano para esta
       // empresa (expandiendo su chip) — ver nota junto a totalContactPoints.
-      const primary = row.all_whatsapp?.length > 0 ? row.all_whatsapp[0] : row.whatsapp
-      if (!primary) continue
-      const extras = row.all_whatsapp?.slice(1).filter(n => extraSelected.has(`${row.company_id}::${n}`)) || []
-      const numbers = [primary, ...extras]
+      // First number + extras ticked by hand, minus any blocked number.
+      const numbers = sendableNumbers(row, extraSelected)
+      if (!numbers.length) continue
       // Mismo texto para todos los números de UNA empresa — no son destinatarios
       // distintos a variar, son la misma empresa por otra línea.
       const v = pickMessageVariant(allVariants, lastVariant)
@@ -806,6 +854,7 @@ export default function SearchProspects() {
       jobs.push({ numbers, messages, companyId: row.company_id, website: row.url })
       queuedUrls[row.url] = 'queued'
     }
+    if (!jobs.length) return   // every selected number was blocked
     addBatch(jobs, lang === 'en' ? 'Prospect search' : 'Búsqueda de prospectos')
     setSentOverlay(prev => ({ ...prev, ...queuedUrls }))
     setLocalContactedIds(prev => {
@@ -957,6 +1006,18 @@ export default function SearchProspects() {
         </Box>
       )}
 
+      {blockedIndustry && !searching && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1, borderRadius: 2, flexShrink: 0,
+          bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)' }}>
+          <BlockIcon sx={{ fontSize: 16, color: '#f87171' }} />
+          <Typography sx={{ fontSize: '0.78rem', color: '#fca5a5' }}>
+            {lang === 'en'
+              ? <>The industry <strong>{blockedIndustry}</strong> is on your blacklist — companies of that trade are discarded when processed and are never messaged.</>
+              : <>La industria <strong>{blockedIndustry}</strong> está en tu blacklist: las empresas de ese giro se descartan al procesarlas y no se les envía nada.</>}
+          </Typography>
+        </Box>
+      )}
+
       {/* ── Sin resultados / error ── */}
       {searchError && !searching && (
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 1.5, py: 4, px: 2 }}>
@@ -1006,6 +1067,15 @@ export default function SearchProspects() {
                 <> {t.search.fewerThanRequested.replace('{n}', requestedCount)}</>
               )}
             </Typography>
+            {mapsCount > 0 && (
+              <Tooltip placement="top" arrow title={lang === 'en'
+                ? 'Google Maps businesses with no website of their own (or only a Facebook/Instagram page). There is no site to scrape: their data comes from Google Maps, and "Process" checks whether their phone has WhatsApp.'
+                : 'Negocios de Google Maps sin sitio web propio (o solo con página de Facebook/Instagram). No hay sitio que escanear: sus datos vienen de Google Maps y "Procesar" verifica si su teléfono tiene WhatsApp.'}>
+                <Typography sx={{ fontSize: '0.75rem', color: '#2dd4bf', cursor: 'help' }}>
+                  <Box component="span" sx={{ fontWeight: 700 }}>{mapsCount}</Box> {lang === 'en' ? 'without website (Google Maps)' : 'sin sitio web (Google Maps)'}
+                </Typography>
+              </Tooltip>
+            )}
             <Box sx={{ width: 1, height: 12, bgcolor: 'var(--border)' }} />
             <Typography sx={{ fontSize: '0.75rem', color: '#4ade80' }}>
               <Box component="span" sx={{ fontWeight: 700 }}>{newCount}</Box> {t.search.newCount}
@@ -1073,6 +1143,7 @@ export default function SearchProspects() {
                 { key: 'all',     label: `${t.search.filterAll} (${found.length})`,        color: '#60a5fa', bg: 'rgba(59,130,246,0.1)',  border: 'rgba(59,130,246,0.25)' },
                 { key: 'new',     label: `${t.search.filterNew} (${newCount})`,            color: '#4ade80', bg: 'rgba(34,197,94,0.1)',   border: 'rgba(34,197,94,0.25)'  },
                 { key: 'scraped', label: `${t.search.filterInDB} (${scrapedCount})`,      color: '#fbbf24', bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.25)' },
+                ...(mapsCount > 0 ? [{ key: 'maps', label: `${lang === 'en' ? 'No website' : 'Sin sitio web'} (${mapsCount})`, color: '#2dd4bf', bg: 'rgba(45,212,191,0.1)', border: 'rgba(45,212,191,0.25)' }] : []),
               ].map(f => (
                 <Chip key={f.key} label={f.label} size="small" onClick={() => setFilterScraped(f.key)}
                   sx={{ height: 22, fontSize: '0.68rem', cursor: 'pointer', bgcolor: filterScraped === f.key ? f.bg : 'var(--item-hover)', color: filterScraped === f.key ? f.color : 'var(--text-muted)', border: `1px solid ${filterScraped === f.key ? f.border : 'var(--border)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
@@ -1100,6 +1171,33 @@ export default function SearchProspects() {
                   sx={{ display: 'flex', alignItems: 'center', gap: 1.5, pl: 1.5, pr: 2, py: 1.1, cursor: item.blocked ? 'not-allowed' : 'pointer', borderBottom: '1px solid var(--border)', borderLeft: item.blocked ? '3px solid rgba(239,68,68,0.4)' : item.scraped ? '3px solid rgba(251,191,36,0.35)' : '3px solid rgba(34,197,94,0.35)', opacity: item.blocked ? 0.6 : 1, bgcolor: item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.05)' : 'transparent', '&:hover': { bgcolor: item.blocked ? 'transparent' : item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.08)' : 'var(--item-hover)' }, '&:last-of-type': { borderBottom: 'none' }, transition: 'background-color 0.15s', animation: `${fadeSlideIn} 0.22s ease both`, animationDelay: `${realIdx * 0.025}s` }}>
                   <Checkbox size="small" checked={item.selected} disabled={item.blocked} onChange={() => toggleOne(realIdx)} onClick={e => e.stopPropagation()}
                     sx={{ color: 'var(--text-muted)', '&.Mui-checked': { color: 'var(--accent, #3b82f6)' }, p: 0.5, flexShrink: 0 }} />
+                  {item.kind === 'maps' ? (() => {
+                    const l = item.lead
+                    const social = listedSiteLabel(l.listed_url)
+                    const meta = [l.category, l.rating ? `★ ${l.rating}${l.reviews ? ` (${l.reviews})` : ''}` : null, l.city].filter(Boolean).join(' · ')
+                    return (
+                      <>
+                        <CompanyAvatar key={item.url} photoUrl={l.photo_url} name={l.name} size={30} dimmed={item.scraped} />
+                        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                          <Tooltip title={l.address || item.url} placement="top" arrow>
+                            <Typography component="a" href={item.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
+                              sx={{ display: 'block', fontSize: '0.82rem', fontWeight: item.scraped ? 400 : 500, color: item.scraped ? 'var(--text-muted)' : item.selected ? 'var(--accent, #60a5fa)' : 'var(--text)', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', '&:hover': { textDecoration: 'underline' } }}>
+                              {l.name}
+                            </Typography>
+                          </Tooltip>
+                          <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {meta}
+                          </Typography>
+                        </Box>
+                        <Tooltip placement="top" arrow title={social
+                          ? (lang === 'en' ? `Only has a ${social} page: ${l.listed_url}` : `Solo tiene página de ${social}: ${l.listed_url}`)
+                          : (lang === 'en' ? 'No website — data from Google Maps' : 'Sin sitio web — datos de Google Maps')}>
+                          <Chip label={social || (lang === 'en' ? 'No website' : 'Sin web')} size="small"
+                            sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(45,212,191,0.1)', color: '#2dd4bf', border: '1px solid rgba(45,212,191,0.25)', flexShrink: 0 }} />
+                        </Tooltip>
+                      </>
+                    )
+                  })() : (<>
                   {/* Favicon */}
                   <Box component="img"
                     src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`}
@@ -1114,6 +1212,7 @@ export default function SearchProspects() {
                       {domain}
                     </Typography>
                   </Tooltip>
+                  </>)}
                   {item.blocked
                     ? <Chip label={t.search.tagBlocked} size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(239,68,68,0.12)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)', flexShrink: 0 }} />
                     : item.scraped
@@ -1149,7 +1248,7 @@ export default function SearchProspects() {
                   ? <CircularProgress size={14} sx={{ color: '#fbbf24' }} />
                   : scrapeJob.paused ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} /> : <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />}
                 <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
-                  {scrapeJob.pausing ? (lang === 'en' ? 'Pausing…' : 'Pausando…') : scrapeJob.paused ? 'Pausado —' : 'Procesando'} {scrapeJob.processed ?? results.length} de {scrapeJob.total || found.filter(r => r.selected).length}
+                  {scrapeJob.pausing ? (lang === 'en' ? `Pausing… finishing ${scrapeJob.inFlight} in progress —` : `Pausando… terminando ${scrapeJob.inFlight} en curso —`) : scrapeJob.paused ? (lang === 'en' ? 'Paused —' : 'Pausado —') : (lang === 'en' ? 'Processing' : 'Procesando')} {scrapeJob.processed ?? results.length} {lang === 'en' ? 'of' : 'de'} {scrapeJob.total || found.filter(r => r.selected).length}
                 </Typography>
               </Box>
               <Typography sx={{ color: (scrapeJob.paused || scrapeJob.pausing) ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>{scrapeJob.progress}%</Typography>
@@ -1200,72 +1299,49 @@ export default function SearchProspects() {
         </Box>
       )}
 
-      {/* ── Stat cards — one bordered strip with inset dividers, same pattern
-           as Prospects' summary strip, instead of 3 separate floating pills.
-           flexShrink: 0 here (and on every fixed-content sibling below, down
-           to the results header) — without it, this flex column's default
-           flex-shrink:1 lets a short browser window squash these boxes well
-           below their own content height instead of just scrolling past them
-           at full size; combined with their own overflow:hidden, that squash
-           read as the content getting silently cropped. ── */}
+      {/* ── De qué búsqueda son estos resultados — la pantalla recupera el último
+           job al volver, y sin esto se veían, por ejemplo, cerrajeros de Saltillo
+           debajo de una caja que decía "Gyms". ── */}
       {results.length > 0 && (
-        <Box sx={{
-          display: 'flex', flexWrap: 'wrap', overflow: 'hidden', flexShrink: 0,
-          borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
-          bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
-        }}>
-          {[
-            { icon: <CheckCircleIcon sx={{ fontSize: 18 }} />, label: t.batch.processed, value: okCount,  color: '#4ade80' },
-            { icon: <WhatsAppIcon    sx={{ fontSize: 18 }} />, label: t.batch.withWa,    value: waCount,  color: '#60a5fa' },
-            { icon: <ErrorIcon       sx={{ fontSize: 18 }} />, label: t.batch.errors,    value: errCount, color: '#f87171' },
-          ].map((c, i) => (
-            <React.Fragment key={c.label}>
-              {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 2 }} />}
-              <Box sx={{ flex: '1 1 0', minWidth: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.6, px: 2.4, py: 2 }}>
-                <Box sx={{
-                  width: 40, height: 40, borderRadius: 2, flexShrink: 0, color: c.color,
-                  background: `linear-gradient(135deg, ${c.color}28 0%, ${c.color}0a 100%)`,
-                  border: `1px solid ${c.color}4d`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  {c.icon}
-                </Box>
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography sx={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.2, fontVariantNumeric: 'tabular-nums' }}>
-                    {c.value}
-                  </Typography>
-                  <Typography sx={{ fontSize: '0.74rem', color: 'var(--text-muted, rgba(255,255,255,0.4))', fontWeight: 500, whiteSpace: 'nowrap' }}>
-                    {c.label}
-                  </Typography>
-                </Box>
-              </Box>
-            </React.Fragment>
-          ))}
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, flexShrink: 0, px: 0.5 }}>
+          <Typography sx={{ fontSize: '0.82rem', color: 'var(--text-muted, rgba(255,255,255,0.5))', minWidth: 0 }}>
+            {scrapeJob.job?.query ? (
+              <>
+                {lang === 'en' ? 'Results for ' : 'Resultados de '}
+                <Box component="span" sx={{ color: 'var(--text, white)', fontWeight: 700 }}>«{scrapeJob.job.query}»</Box>
+              </>
+            ) : (lang === 'en' ? 'Results of the last processing' : 'Resultados del último procesamiento')}
+            {scrapeJob.job?.created_at && <> · {agoLabel(scrapeJob.job.created_at, lang)}</>}
+          </Typography>
+          {!scrapeJob.processing && (
+            <Button size="small" startIcon={<ClearIcon sx={{ fontSize: 14 }} />} onClick={handleNewSearch}
+              sx={{ flexShrink: 0, fontSize: '0.74rem', textTransform: 'none', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 1.5, px: 1.3, py: 0.3, '&:hover': { color: 'var(--text)', bgcolor: 'var(--item-hover)' } }}>
+              {lang === 'en' ? 'New search' : 'Nueva búsqueda'}
+            </Button>
+          )}
         </Box>
       )}
 
-      {/* ── Funnel de conversión: Scrapeadas → Con WhatsApp → Seleccionadas → Enviadas —
-           prototipo de la idea #1 (idea sesión: "qué más podemos hacerle a resultados"),
-           para ver de un vistazo dónde se pierden prospectos en vez de solo 3 contadores
-           sueltos. El relleno de fondo de cada etapa (y su chip de %) representan lo
-           MISMO: cuánto de la etapa anterior se retuvo — así un 100% de conversión real
-           siempre se ve lleno, sin importar qué tan chica sea esa etapa frente al total
-           scrapeado. La primera etapa siempre se ve llena: es la referencia. ── */}
+      {/* ── Resumen — una sola tira. Antes eran dos (Procesadas/Con WhatsApp/
+           Errores y luego Scrapeadas/Con WhatsApp/Seleccionadas/Enviadas) que
+           repetían cifras, y el relleno parcial de fondo de cada etapa se leía
+           como un bloque roto. flexShrink: 0 — sin él, una ventana baja aplasta
+           la tira por debajo de su propio contenido. ── */}
       {results.length > 0 && (() => {
-        // "Seleccionadas" mide NÚMEROS de WhatsApp (no empresas): el número
-        // grande y su % son totalContactPoints/totalAvailableNumbers — cuánto
-        // de lo disponible para enviar ya está marcado. Antes contaba empresas
-        // (misma unidad que las otras 3 etapas) y una empresa con 4 números
-        // marcando solo 1 igual salía "100%", que no reflejaba lo que
-        // realmente se iba a enviar.
+        const en = lang === 'en'
+        const total = scrapeJob.total || results.length
         const totalAvailableNumbers = waRowsUnique.reduce((sum, r) => sum + (r.all_whatsapp?.length || (r.whatsapp ? 1 : 0)), 0)
-        const selectedPct = totalAvailableNumbers > 0 ? Math.round((totalContactPoints / totalAvailableNumbers) * 100) : 0
-        const stages = [
-          { key: 'scraped',  label: lang === 'en' ? 'Scraped'       : 'Scrapeadas',    value: results.length,            color: '#60a5fa', icon: <TravelExploreIcon sx={{ fontSize: 22 }} /> },
-          { key: 'wa',       label: lang === 'en' ? 'With WhatsApp' : 'Con WhatsApp',  value: waCount,                   color: '#4ade80', icon: <WhatsAppIcon      sx={{ fontSize: 22 }} /> },
-          { key: 'selected', label: lang === 'en' ? 'Selected'      : 'Seleccionadas', value: totalContactPoints,        color: '#a78bfa', icon: <CheckBoxIcon      sx={{ fontSize: 22 }} />,
-            pctOverride: selectedPct },
-          { key: 'sent',     label: lang === 'en' ? 'Sent'          : 'Enviadas',      value: sentCids.size,             color: '#fbbf24', icon: <SendIcon          sx={{ fontSize: 22 }} /> },
+        const pct = (a, b) => (b > 0 ? Math.round((a / b) * 100) : 0)
+        const cells = [
+          { key: 'done', color: '#60a5fa', icon: <TravelExploreIcon sx={{ fontSize: 20 }} />, value: results.length,
+            label: en ? 'Processed' : 'Procesadas', sub: results.length < total ? (en ? `of ${total}` : `de ${total}`) : null,
+            alert: errCount > 0 ? (en ? `${errCount} with error` : `${errCount} con error`) : null },
+          { key: 'wa', color: '#4ade80', icon: <WhatsAppIcon sx={{ fontSize: 20 }} />, value: waCount,
+            label: en ? 'With WhatsApp' : 'Con WhatsApp', sub: okCount > 0 ? `${pct(waCount, okCount)}%` : null },
+          { key: 'sel', color: '#a78bfa', icon: <CheckBoxIcon sx={{ fontSize: 20 }} />, value: totalContactPoints,
+            label: en ? 'Numbers selected' : 'Números seleccionados', sub: totalAvailableNumbers > 0 ? (en ? `of ${totalAvailableNumbers}` : `de ${totalAvailableNumbers}`) : null },
+          { key: 'sent', color: '#fbbf24', icon: <SendIcon sx={{ fontSize: 20 }} />, value: sentCids.size,
+            label: en ? 'Sent' : 'Enviadas', sub: null },
         ]
         return (
           <Box sx={{
@@ -1273,198 +1349,53 @@ export default function SearchProspects() {
             borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
             bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
           }}>
-            {stages.map((s, i) => {
-              const prev = i > 0 ? stages[i - 1] : null
-              // pctOverride ("Seleccionadas") es un % propio (números marcados vs.
-              // disponibles), no una tasa de conversión contra la etapa anterior —
-              // esa etapa tiene otra unidad (empresas), comparar directo no tendría sentido.
-              const convRate = s.pctOverride !== undefined ? s.pctOverride : (prev && prev.value > 0 ? Math.round((s.value / prev.value) * 100) : null)
-              // El relleno usa la MISMA base que el chip de % junto a la etiqueta
-              // (conversión vs. la etapa anterior) — antes usaba el % contra la
-              // primera etapa, y un 100% de conversión real (ej. "seleccioné
-              // todo lo disponible") se veía como una barra casi vacía porque
-              // esa etapa era chica frente al total scrapeado. La primera etapa
-              // siempre se ve llena: es la referencia, no hay "anterior" que la achique.
-              const pct = i === 0 ? 100 : (s.value === 0 ? 0 : Math.max(4, convRate ?? 0))
-              return (
-                <React.Fragment key={s.key}>
-                  {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))' }} />}
-                  <Box sx={{ flex: '1 1 0', minWidth: 190, position: 'relative', overflow: 'hidden' }}>
-                    {/* Relleno de fondo == tasa de conversión vs. la etapa anterior (mismo % que el chip) */}
-                    <Box sx={{
-                      position: 'absolute', inset: 0, left: 0, width: `${pct}%`,
-                      background: `linear-gradient(90deg, ${s.color}40 0%, ${s.color}12 100%)`,
-                      transition: 'width 0.4s ease', pointerEvents: 'none',
-                    }} />
-                    <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.8, px: 2.6, py: 2.2 }}>
-                      <Box sx={{
-                        width: 46, height: 46, borderRadius: 2.5, flexShrink: 0, color: s.color,
-                        background: `linear-gradient(135deg, ${s.color}28 0%, ${s.color}0a 100%)`,
-                        border: `1px solid ${s.color}4d`,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      }}>
-                        {s.icon}
-                      </Box>
-                      <Box sx={{ minWidth: 0 }}>
-                        <Typography sx={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.15, fontVariantNumeric: 'tabular-nums' }}>
-                          {s.value}
-                        </Typography>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-                          <Typography sx={{ fontSize: '0.76rem', color: 'var(--text-muted, rgba(255,255,255,0.45))', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                            {s.label}
-                          </Typography>
-                          {convRate !== null && (
-                            <Box sx={{
-                              px: 0.7, py: 0.1, borderRadius: 999, whiteSpace: 'nowrap',
-                              bgcolor: `${s.color}18`, border: `1px solid ${s.color}40`,
-                            }}>
-                              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: s.color }}>
-                                {convRate}%
-                              </Typography>
-                            </Box>
-                          )}
-                        </Box>
-                      </Box>
-                    </Box>
+            {cells.map((c, i) => (
+              <React.Fragment key={c.key}>
+                {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 1.6 }} />}
+                <Box sx={{ flex: '1 1 0', minWidth: 170, display: 'flex', alignItems: 'center', gap: 1.5, px: 2.4, py: 1.6 }}>
+                  <Box sx={{
+                    width: 38, height: 38, borderRadius: 2, flexShrink: 0, color: c.color,
+                    background: `linear-gradient(135deg, ${c.color}28 0%, ${c.color}0a 100%)`, border: `1px solid ${c.color}4d`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    {c.icon}
                   </Box>
-                </React.Fragment>
-              )
-            })}
+                  <Box sx={{ minWidth: 0 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.7 }}>
+                      <Typography sx={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.15, fontVariantNumeric: 'tabular-nums' }}>
+                        {c.value}
+                      </Typography>
+                      {c.sub && (
+                        <Typography sx={{ fontSize: '0.74rem', fontWeight: 600, color: c.color, fontVariantNumeric: 'tabular-nums' }}>{c.sub}</Typography>
+                      )}
+                    </Box>
+                    <Typography sx={{ fontSize: '0.74rem', color: 'var(--text-muted, rgba(255,255,255,0.45))', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      {c.label}
+                      {c.alert && <Box component="span" sx={{ color: '#f87171', ml: 0.8 }}>· {c.alert}</Box>}
+                    </Typography>
+                  </Box>
+                </Box>
+              </React.Fragment>
+            ))}
           </Box>
         )
       })()}
 
       {/* ── Panel de envío masivo ── */}
       {(scrapeJob.done || scrapeJob.processing) && results.length > 0 && (
-        <Box sx={{ borderRadius: 2.5, border: '1px solid rgba(34,197,94,0.2)', overflow: 'hidden', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-          {/* Panel header */}
-          <Box sx={{ px: 2, py: 1.4, background: 'linear-gradient(180deg, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.02) 100%)', borderBottom: '1px solid rgba(34,197,94,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
-              <Box sx={{ width: 30, height: 30, borderRadius: 1.5, bgcolor: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.28)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 12px rgba(34,197,94,0.12)', flexShrink: 0 }}>
-                <MessageIcon sx={{ fontSize: 14, color: '#4ade80' }} />
-              </Box>
-              <Box>
-                <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.84rem', lineHeight: 1.2 }}>{t.batch.sendMessages}</Typography>
-                {waRowsUnique.length > 0 && (
-                  <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.62rem' }}>{waRowsUnique.length} {t.search.withWa}</Typography>
-                )}
-              </Box>
-            </Box>
-            {waRowsUnique.length > 0 && (
-              <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={`${effectiveWaSelected.size} ${t.search.of} ${filteredWaRows.length} ${t.search.withWa}`} size="small"
-                sx={{ fontSize: '0.7rem', height: 22, bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', '& .MuiChip-icon': { color: '#4ade80' } }} />
-            )}
-          </Box>
-          {/* Body — scrollea internamente en vez de crecer sin límite y empujar
-              todo lo que sigue (resultados) fuera de la vista. */}
-          <Box sx={{
-            p: 2, maxHeight: 'clamp(420px, 70vh, 760px)', overflowY: 'auto',
-            scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.12) transparent',
-            '&::-webkit-scrollbar': { width: 6 },
-            '&::-webkit-scrollbar-track': { background: 'transparent' },
-            '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.14)', borderRadius: 3 },
-            '&::-webkit-scrollbar-thumb:hover': { background: 'rgba(255,255,255,0.28)' },
-          }}>
-          {/* Instancia desconectada bloquea el envío entero — debe ser lo PRIMERO
-              que se ve en el panel, no una barra roja más casi al fondo antes del
-              footer. sx aquí solo afecta esta instancia del banner compartido. */}
-          <InstanceDisconnectedBanner status={instanceStatus} sx={{
-            mb: 1.5, px: 2, py: 1.3, borderRadius: 2, borderWidth: '1.5px',
-            boxShadow: '0 0 0 1px rgba(239,68,68,0.15), 0 4px 16px rgba(239,68,68,0.12)',
-            '& svg':  { fontSize: '19px !important' },
-            '& p':    { fontSize: '0.82rem !important', fontWeight: 600 },
-          }} />
-          {capStats && (
-            <CapacityBanner stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} sx={{ mb: 1.5 }} />
-          )}
-
-          {waRowsUnique.length > 0 && (
-            <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 1 }}>
-              {[
-                { key: 'all',       label: `Todos (${waRowsUnique.length})`,                                                     color: '#60a5fa', bg: 'rgba(59,130,246,0.1)',  border: 'rgba(59,130,246,0.25)' },
-                { key: 'new',       label: `Sin contactar (${waRowsUnique.filter(r => !r.already_contacted?.contacted).length})`, color: '#4ade80', bg: 'rgba(34,197,94,0.1)',   border: 'rgba(34,197,94,0.25)'  },
-                { key: 'contacted', label: `Ya contactados (${waRowsUnique.filter(r => r.already_contacted?.contacted).length})`, color: '#fbbf24', bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.25)' },
-              ].map(f => (
-                <Chip key={f.key} label={f.label} size="small" onClick={() => setFilterContacted(f.key)}
-                  sx={{ height: 22, fontSize: '0.68rem', cursor: 'pointer', bgcolor: filterContacted === f.key ? f.bg : 'var(--item-hover)', color: filterContacted === f.key ? f.color : 'var(--text-muted)', border: `1px solid ${filterContacted === f.key ? f.border : 'var(--border)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
-              ))}
-            </Box>
-          )}
-          {/* alignItems: flex-start — antes el row usaba el stretch por default de
-              flex, así que Destinatarios se estiraba a la altura de su hermano
-              (Plantillas) aunque su propio contenido fuera mucho más corto. Con
-              varias empresas seleccionadas, la lista ya tiene su propio scroll
-              interno (maxHeight en RecipientsBox), así que no necesita ese alto
-              extra prestado — debe medirse por su propio contenido. */}
-          <Box sx={{ display: 'flex', gap: 2.5, alignItems: 'flex-start' }}>
-            <RecipientsBox rows={filteredWaRows}
-              effectiveSelected={effectiveWaSelected}
-              expandedCo={expandedCo}
-              extraSelected={extraSelected}
-              setSelected={setWaSelected}
-              setExpandedCo={setExpandedCo}
-              setExtraSelected={setExtraSelected}
-              title={t.search.recipients}
-              maxHeight={320}
-              sx={{ width: 260, flexShrink: 0 }} />
-
-          <Box sx={{ flex: 1, minWidth: 0, opacity: filteredWaRows.length === 0 ? 0.35 : 1, pointerEvents: filteredWaRows.length === 0 ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
-
-          <Box sx={{ mb: 1.5, p: 1.6, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
-            <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalContactPoints} baseCount={0}
-              singleSelect={totalContactPoints <= 1}
-              hasName={tplVarFlags.hasName} hasCity={tplVarFlags.hasCity}
-              hasIndustry={tplVarFlags.hasIndustry} hasWeb={tplVarFlags.hasWeb}
-              varCounts={tplVarCounts} totalSelected={_selectedRows.length} />
-          </Box>
-          <Box sx={{ mb: 1.5 }}>
-            <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
-          </Box>
-          <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
-          {isSending && (
-            <Button fullWidth onClick={cancelQueue} startIcon={<HighlightOffIcon />}
-              sx={{
-                mb: 0.8, py: 0.8, textTransform: 'none', fontWeight: 600, fontSize: '0.82rem',
-                color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)',
-                border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5,
-                '&:hover': { bgcolor: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.45)' },
-              }}>
-              {t.search.cancelSend}
-            </Button>
-          )}
-          {/* Cupo + botón en una sola fila — antes el badge vivía en su propia
-              fila alineada a la derecha ARRIBA del botón, dejando 3 líneas de
-              texto secundario apiladas antes de llegar a la acción principal. */}
-          <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1.5 }}>
-            <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} sx={{ flexShrink: 0 }} />
-            <Button
-              onClick={handleSendAll}
-              disabled={effectiveWaSelected.size === 0 || allSelectedSent || isSending || isDisconnected || belowMinTemplates || noMessageSelected || capBlocked}
-              startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 15 }} />}
-              sx={{
-                flex: 1, fontSize: '0.84rem', fontWeight: 700,
-                py: 1.1, borderRadius: 1.8,
-                bgcolor: unsentSelectedCount > 0 ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
-                color:   unsentSelectedCount > 0 ? '#4ade80' : 'rgba(255,255,255,0.3)',
-                border:  `1px solid ${unsentSelectedCount > 0 ? 'rgba(34,197,94,0.38)' : 'rgba(255,255,255,0.1)'}`,
-                textTransform: 'none',
-                transition: 'all 0.2s',
-                '&:hover': unsentSelectedCount > 0 ? { bgcolor: 'rgba(34,197,94,0.28)', borderColor: 'rgba(34,197,94,0.6)', boxShadow: '0 0 18px rgba(34,197,94,0.18)' } : {},
-                '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
-              }}
-            >
-              {allSelectedSent ? `${sentCount} ${t.search.sentCount}` : `${t.search.sendButton} ${unsentSelectedCount || effectiveWaSelected.size} ${t.search.companies}`}
-            </Button>
-          </Box>
-          {capBlocked && !isSending && (
-            <Typography sx={{ color: '#f59e0b', fontSize: '0.7rem', textAlign: 'right', mt: 0.5 }}>
-              {lang === 'en' ? `Deselect ${overBy} to fit today's quota` : `Desmarca ${overBy} para caber en tu cupo de hoy`}
-            </Typography>
-          )}
-          </Box>
-          </Box>
-          </Box>
-        </Box>
+        <BulkSendPanel
+          title={t.batch.sendMessages}
+          waRows={waRowsUnique} filteredRows={filteredWaRows}
+          filterContacted={filterContacted} onFilterContacted={setFilterContacted}
+          selected={effectiveWaSelected} setSelected={setWaSelected}
+          expandedCo={expandedCo} setExpandedCo={setExpandedCo}
+          extraSelected={extraSelected} setExtraSelected={setExtraSelected}
+          guards={guards} varFlags={tplVarFlags} varCounts={tplVarCounts} onVariantsChange={setExtraVariants}
+          capStats={capStats} instanceStatus={instanceStatus} isDisconnected={isDisconnected}
+          sendCfg={sendCfg} onSendCfgChange={setSendCfg}
+          sendError={sendError} onDismissError={() => setSendError('')}
+          isSending={isSending} onCancel={cancelQueue} onSend={handleSendAll}
+          allSent={allSelectedSent} sentLabel={`${sentCount} ${t.search.sentCount}`} unsentCount={unsentSelectedCount} />
       )}
 
       {/* ── Tarjetas de resultados ── */}
@@ -1491,7 +1422,7 @@ export default function SearchProspects() {
           <TableContainer sx={{
             borderRadius: 2,
             border: '1px solid rgba(255,255,255,0.07)',
-            maxHeight: 'clamp(160px, 25vh, 320px)',
+            maxHeight: 'clamp(240px, 45vh, 560px)',
             overflow: 'auto',
             scrollbarWidth: 'thin',
             scrollbarColor: 'rgba(255,255,255,0.1) transparent',
@@ -1504,7 +1435,7 @@ export default function SearchProspects() {
             <Table size="small" stickyHeader>
               <TableHead>
                 <TableRow>
-                  {['URL', t.batch.colCompany, t.batch.colIndustry, 'WhatsApp', sentCids.size > 0 ? t.batch.colMessage : null, t.batch.colStatus].filter(Boolean).map(h => (
+                  {[t.batch.colCompany, t.batch.colIndustry, 'WhatsApp', sentCids.size > 0 ? t.batch.colMessage : null, t.batch.colStatus].filter(Boolean).map(h => (
                     <TableCell key={h} sx={{
                       bgcolor: 'var(--card-bg, #161d2e)',
                       color: 'rgba(255,255,255,0.5)',
@@ -1521,67 +1452,86 @@ export default function SearchProspects() {
               </TableHead>
               <TableBody>
                 {results.map((r, i) => {
+                  const en          = lang === 'en'
                   const domain      = getDomain(r.url)
                   const hasWa       = r.all_whatsapp?.length > 0 || !!r.whatsapp
-                  const isBlocked   = r.blacklisted
                   const isContacted = r.company_id && _contactedCids.has(r.company_id)
-
-                  // Status dot: green=WA found, blue=OK/no WA, amber=blocked, red=error
-                  const dotColor = !r.ok
-                    ? '#f87171'
-                    : isBlocked ? '#f59e0b'
-                    : hasWa     ? '#4ade80'
-                    :              'rgba(255,255,255,0.2)'
-                  const dotTip = !r.ok
-                    ? (lang === 'en' ? 'Scrape error' : 'Error al scrapear')
-                    : isBlocked ? (lang === 'en' ? 'Blocked by site (Cloudflare/bot protection)' : 'Bloqueado por el sitio (Cloudflare/bot protection)')
-                    : hasWa     ? (lang === 'en' ? 'WhatsApp number found' : 'Número de WhatsApp encontrado')
-                    :              (lang === 'en' ? 'Scraped OK — no WhatsApp found' : 'Scrapeado OK — sin WhatsApp encontrado')
+                  const name        = r.empresa && r.empresa !== '—' ? r.empresa : (r.no_website ? '—' : domain)
+                  const place       = r.city || r.state || ''
+                  const st          = rowStatus(r, hasWa, en)
+                  const lm          = r.location_mismatch
+                  const im          = r.industry_mismatch
 
                   return (
                     <TableRow key={i} sx={{
                       bgcolor: isContacted ? 'rgba(251,191,36,0.03)' : 'transparent',
                       '&:hover': { bgcolor: isContacted ? 'rgba(251,191,36,0.06)' : 'rgba(255,255,255,0.04)' },
-                      '& td': { borderBottom: '1px solid rgba(255,255,255,0.06)', fontSize: '0.8rem' },
+                      '& td': { borderBottom: '1px solid rgba(255,255,255,0.06)', fontSize: '0.8rem', py: 1 },
                       animation: `${fadeSlideIn} 0.22s ease both`,
                       animationDelay: `${i * 0.025}s`,
                       transition: 'background-color 0.15s',
                     }}>
-                      <TableCell sx={{ maxWidth: 200, borderLeft: `3px solid ${dotColor}` }}>
-                        <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.8 }}>
-                          {/* Scrape status dot */}
-                          <Tooltip title={dotTip} placement="top" arrow>
-                            <Box sx={{
-                              width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-                              bgcolor: dotColor,
-                              boxShadow: r.ok && hasWa ? `0 0 4px ${dotColor}90` : 'none',
-                            }} />
-                          </Tooltip>
-                          <Box component="a" href={r.url} target="_blank" rel="noopener"
-                            sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, textDecoration: 'none', '&:hover .bt': { textDecoration: 'underline' } }}>
-                            <Box component="img"
-                              src={`https://www.google.com/s2/favicons?domain=${domain}&sz=16`}
-                              width={12} height={12}
-                              sx={{ borderRadius: '2px', flexShrink: 0 }}
-                              onError={e => { e.target.style.display = 'none' }}
-                            />
-                            <Typography component="span" className="bt"
-                              sx={{ fontSize: '0.78rem', color: '#60a5fa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 150 }}>
-                              {domain}
-                            </Typography>
+                      <TableCell sx={{ borderLeft: `3px solid ${st.color}`, minWidth: 280, maxWidth: 460 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, minWidth: 0 }}>
+                          <CompanyAvatar key={r.url} photoUrl={r.no_website ? r.photo_url : null}
+                            domain={r.no_website ? null : domain} name={name} size={r.no_website ? 30 : 22} dimmed={!r.ok} />
+                          <Box sx={{ minWidth: 0, flex: 1 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, minWidth: 0 }}>
+                              <Tooltip title={name} placement="top" arrow disableHoverListener={name.length < 40}>
+                                <Typography noWrap sx={{ fontSize: '0.84rem', color: 'var(--text, rgba(255,255,255,0.88))', fontWeight: 600 }}>
+                                  {name}
+                                </Typography>
+                              </Tooltip>
+                              {isContacted && (
+                                <Tooltip title={en ? 'Already messaged' : 'Ya contactada'} placement="top" arrow>
+                                  <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#fbbf24', flexShrink: 0, boxShadow: '0 0 4px #fbbf2480' }} />
+                                </Tooltip>
+                              )}
+                            </Box>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, minWidth: 0 }}>
+                              <Typography component="a" href={r.url} target="_blank" rel="noopener" noWrap
+                                sx={{ fontSize: '0.72rem', color: r.no_website ? '#2dd4bf' : '#60a5fa', textDecoration: 'none', flexShrink: 1, minWidth: 0, '&:hover': { textDecoration: 'underline' } }}>
+                                {r.no_website ? (en ? 'Google Maps · no website' : 'Google Maps · sin web') : domain}
+                              </Typography>
+                              {place && (
+                                // Where the location came from (scraper._finalize_location):
+                                // only "sitio" is the page itself — area code / search are inferred.
+                                <Tooltip placement="top" arrow title={
+                                  r.location_source === 'lada'
+                                    ? (en ? "From its phones' area code — the site shows no address" : 'Según la lada de sus teléfonos — el sitio no muestra dirección')
+                                    : r.location_source === 'busqueda'
+                                      ? (en ? 'Assumed from the search — neither the site nor its phones say where it is' : 'Supuesta por la búsqueda — ni el sitio ni sus teléfonos dicen dónde está')
+                                      : (en ? 'From the website' : 'Según el sitio web')}>
+                                  <Typography noWrap sx={{ fontSize: '0.72rem', color: 'var(--text-muted, rgba(255,255,255,0.45))', flexShrink: 0,
+                                    fontStyle: ['lada', 'busqueda'].includes(r.location_source) ? 'italic' : 'normal', cursor: 'help' }}>
+                                    · {place}
+                                  </Typography>
+                                </Tooltip>
+                              )}
+                            </Box>
+                            {(lm || im) && (
+                              <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
+                                {lm && (
+                                  <Tooltip placement="top" arrow title={en
+                                    ? `You searched in ${lm.searched_state}; this business is in ${[lm.detected_city, lm.detected_state].filter(Boolean).join(', ')}`
+                                    : `Buscaste en ${lm.searched_state}; este negocio está en ${[lm.detected_city, lm.detected_state].filter(Boolean).join(', ')}`}>
+                                    <Chip size="small" icon={<WarningAmberIcon sx={{ fontSize: '12px !important' }} />}
+                                      label={`${en ? 'Outside area' : 'Fuera de zona'}: ${lm.detected_city || lm.detected_state}`}
+                                      sx={{ height: 18, fontSize: '0.62rem', cursor: 'help', bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.3)', '& .MuiChip-icon': { color: '#fbbf24' } }} />
+                                  </Tooltip>
+                                )}
+                                {im && (
+                                  <Tooltip placement="top" arrow title={en
+                                    ? `You searched "${im.searched_industry}"${im.searched_category ? ` (${im.searched_category})` : ''}; the site looks like ${im.detected_industry}`
+                                    : `Buscaste "${im.searched_industry}"${im.searched_category ? ` (${im.searched_category})` : ''}; el sitio parece de ${im.detected_industry}`}>
+                                    <Chip size="small" icon={<WarningAmberIcon sx={{ fontSize: '12px !important' }} />}
+                                      label={`${en ? 'Other trade' : 'Otro giro'}: ${im.detected_industry}`}
+                                      sx={{ height: 18, fontSize: '0.62rem', cursor: 'help', bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.3)', '& .MuiChip-icon': { color: '#fbbf24' } }} />
+                                  </Tooltip>
+                                )}
+                              </Box>
+                            )}
                           </Box>
-                        </Box>
-                      </TableCell>
-                      <TableCell sx={{ maxWidth: 180 }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-                          <Typography sx={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.85)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>
-                            {r.empresa !== '—' ? r.empresa : '—'}
-                          </Typography>
-                          {isContacted && (
-                            <Tooltip title={lang === 'en' ? 'Already messaged' : 'Ya contactada'} placement="top" arrow>
-                              <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: '#fbbf24', flexShrink: 0, boxShadow: '0 0 4px #fbbf2480' }} />
-                            </Tooltip>
-                          )}
                         </Box>
                       </TableCell>
                       <TableCell sx={{ color: 'rgba(255,255,255,0.55)' }}>
@@ -1593,9 +1543,21 @@ export default function SearchProspects() {
                       <TableCell>
                         {hasWa ? (
                           <WhatsAppNumberSummary row={r} />
+                        ) : r.blacklisted ? (
+                          // Never checked — it was blocked before scraping/verifying.
+                          <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.75rem' }}>—</Typography>
+                        ) : r.no_website && r.wa_verified == null && r.ok ? (
+                          <Tooltip placement="top" arrow title={lang === 'en'
+                            ? `Phone ${r.phone} — no connected WhatsApp session could check it. Saved as a phone, pending verification.`
+                            : `Teléfono ${r.phone} — ninguna sesión de WhatsApp conectada pudo verificarlo. Quedó guardado como teléfono, pendiente de verificar.`}>
+                            <Chip label={lang === 'en' ? 'Not verified' : 'Sin verificar'} size="small"
+                              sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'rgba(251,191,36,0.08)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)', cursor: 'help' }} />
+                          </Tooltip>
                         ) : (
-                          <Chip label={lang === 'en' ? 'No WA' : 'Sin WA'} size="small"
-                            sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'rgba(255,255,255,0.03)', color: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.08)', letterSpacing: '0.02em' }} />
+                          <Tooltip placement="top" arrow title={r.no_website && r.phone ? (lang === 'en' ? `Phone ${r.phone} has no WhatsApp` : `El teléfono ${r.phone} no tiene WhatsApp`) : ''}>
+                            <Chip label={lang === 'en' ? 'No WA' : 'Sin WA'} size="small"
+                              sx={{ height: 18, fontSize: '0.6rem', bgcolor: 'rgba(255,255,255,0.03)', color: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.08)', letterSpacing: '0.02em' }} />
+                          </Tooltip>
                         )}
                       </TableCell>
                       {sentCids.size > 0 && (
@@ -1606,24 +1568,12 @@ export default function SearchProspects() {
                           {!r.msg_status && <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>}
                         </TableCell>
                       )}
-                      <TableCell>
-                        {r.blacklisted ? (
-                          <Tooltip title={r.blockReason ? `🚫 Blacklist · "${r.blockReason}"` : '🚫 Blacklist'} placement="top" arrow>
-                            <Chip label={lang === 'en' ? 'Blocked' : 'Bloqueado'} size="small"
-                              sx={{ bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.2)', height: 20, fontSize: '0.68rem', cursor: 'help' }} />
-                          </Tooltip>
-                        ) : r.ok && !r.whatsapp ? (
-                          <Chip label={lang === 'en' ? 'Empty' : 'Vacío'} size="small"
-                            sx={{ bgcolor: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.1)', height: 20, fontSize: '0.68rem' }} />
-                        ) : r.ok ? (
-                          <Chip label="OK" size="small" icon={<CheckCircleIcon sx={{ fontSize: '12px !important' }} />}
-                            sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#4ade80' } }} />
-                        ) : (
-                          <Tooltip title={r.errorReason || (lang === 'en' ? 'Scrape error' : 'Error al scrapear')} placement="top" arrow>
-                            <Chip label="Error" size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
-                              sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' }, cursor: 'help' }} />
-                          </Tooltip>
-                        )}
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                        <Tooltip title={st.tip || ''} placement="top" arrow disableHoverListener={!st.tip}>
+                          <Chip label={st.label} size="small"
+                            sx={{ height: 20, fontSize: '0.68rem', fontWeight: 600, cursor: st.tip ? 'help' : 'default',
+                              bgcolor: `${st.color}1a`, color: st.color, border: `1px solid ${st.color}40` }} />
+                        </Tooltip>
                       </TableCell>
                     </TableRow>
                   )

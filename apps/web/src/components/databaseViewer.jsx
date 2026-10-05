@@ -96,6 +96,7 @@ function cleanDomain(url) {
   } catch { return url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] }
 }
 import ResultDisplay, { ResultSkeleton } from './resultDisplay'
+import CompanyAvatar from './CompanyAvatar'
 import { MessageComposer } from './singleUrlProcessor'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVariants'
@@ -1754,6 +1755,12 @@ export default function DatabaseViewer({ isActive }) {
           // unused by ResultDisplay), so the chip showed the right domain text
           // but the link itself was href=undefined and did nothing on click.
           website: data.website,
+          logo_url: data.logo_url,
+          photo_url: data.photo_url,
+          maps_url: data.maps_url,
+          rating: data.rating,
+          reviews: data.reviews,
+          maps_profile: data.maps_profile || null,
           _extra: {
             city: data.city,
             state: data.state,
@@ -1761,7 +1768,11 @@ export default function DatabaseViewer({ isActive }) {
             business_hours: data.business_hours,
             services: data.services,
             products: data.products,
-            social_media: data.social_media?.platforms || {},
+            // The social_media doc is {facebook: url, instagram: url, …} plus
+            // bookkeeping fields — there's no `platforms` key, so this was always {}.
+            social_media: Object.fromEntries(Object.entries(data.social_media || {})
+              .filter(([k, v]) => !['_id', 'company_id', 'source', 'created_at', 'updated_at'].includes(k)
+                && typeof v === 'string' && v.startsWith('http'))),
           },
           _contacts_raw: {
             whatsapp_numbers: data.contacts?.filter(c => c.type === 'whatsapp').map(c => c.value) || [],
@@ -2175,6 +2186,9 @@ export default function DatabaseViewer({ isActive }) {
                       </TableCell>
                       <TableCell onClick={() => handleSelectRow(row._id)}>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7 }}>
+                          {row.photo_url && !row.website && (
+                            <CompanyAvatar key={row._id} photoUrl={row.photo_url} name={row.name} size={22} />
+                          )}
                           <Tooltip title={row.name || '—'} placement="top" disableHoverListener={!row.name || row.name.length <= 28}>
                             <Typography sx={{ fontSize: '0.82rem', fontWeight: 500, color: 'white' }}>
                               {truncate(row.name, 28) || '—'}
@@ -2218,6 +2232,16 @@ export default function DatabaseViewer({ isActive }) {
                         {(() => {
                           const url = row.website || row.domain
                           const domain = cleanDomain(url)
+                          if (!domain && row.maps_url) return (
+                            <Tooltip placement="top" title={lang === 'en' ? 'No website — found on Google Maps' : 'Sin sitio web — encontrado en Google Maps'}>
+                              <Box component="a" href={row.maps_url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
+                                sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.6, textDecoration: 'none', '&:hover span': { textDecoration: 'underline' } }}>
+                                <Typography component="span" sx={{ fontSize: '0.78rem', color: '#2dd4bf', whiteSpace: 'nowrap' }}>
+                                  Google Maps{row.rating ? ` · ★ ${row.rating}` : ''}
+                                </Typography>
+                              </Box>
+                            </Tooltip>
+                          )
                           if (!domain) return <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>
                           const faviconSrc = `https://www.google.com/s2/favicons?domain=${domain}&sz=16`
                           return (

@@ -28,6 +28,60 @@ import CheckIcon from '@mui/icons-material/Check'
 import LinkIcon from '@mui/icons-material/Link'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import CancelIcon from '@mui/icons-material/Cancel'
+import StarIcon from '@mui/icons-material/Star'
+import FacebookIcon from '@mui/icons-material/Facebook'
+import InstagramIcon from '@mui/icons-material/Instagram'
+import XIcon from '@mui/icons-material/X'
+import LinkedInIcon from '@mui/icons-material/LinkedIn'
+import YouTubeIcon from '@mui/icons-material/YouTube'
+import ShareIcon from '@mui/icons-material/Share'
+import CompanyAvatar from './CompanyAvatar'
+
+const SOCIAL = {
+  facebook:  { label: 'Facebook',  icon: <FacebookIcon sx={{ fontSize: '14px !important' }} />,  color: '#60a5fa' },
+  instagram: { label: 'Instagram', icon: <InstagramIcon sx={{ fontSize: '14px !important' }} />, color: '#f472b6' },
+  twitter:   { label: 'X',         icon: <XIcon sx={{ fontSize: '13px !important' }} />,         color: 'var(--text, #e2e8f0)' },
+  linkedin:  { label: 'LinkedIn',  icon: <LinkedInIcon sx={{ fontSize: '14px !important' }} />,  color: '#38bdf8' },
+  youtube:   { label: 'YouTube',   icon: <YouTubeIcon sx={{ fontSize: '14px !important' }} />,   color: '#f87171' },
+}
+
+function ChipGroup({ label, items, color }) {
+  if (!items?.length) return null
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6 }}>
+      <Typography sx={{ fontSize: '0.67rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted, rgba(255,255,255,0.45))' }}>
+        {label}
+      </Typography>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6 }}>
+        {items.map(it => (
+          <Chip key={it} label={it} size="small"
+            sx={{ height: 22, fontSize: '0.72rem', bgcolor: `${color}14`, color, border: `1px solid ${color}33` }} />
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+function RatingBars({ distribution, votes }) {
+  const total = votes || Object.values(distribution || {}).reduce((a, b) => a + (b || 0), 0)
+  if (!total) return null
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.35, minWidth: 150, flex: 1, maxWidth: 260 }}>
+      {['5', '4', '3', '2', '1'].map(k => {
+        const n = distribution?.[k] || 0
+        return (
+          <Box key={k} sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+            <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted, rgba(255,255,255,0.45))', width: 8, fontVariantNumeric: 'tabular-nums' }}>{k}</Typography>
+            <Box sx={{ flex: 1, height: 6, borderRadius: 3, bgcolor: 'var(--border, rgba(255,255,255,0.08))', overflow: 'hidden' }}>
+              <Box sx={{ width: `${(n / total) * 100}%`, height: '100%', bgcolor: '#fbbf24', borderRadius: 3 }} />
+            </Box>
+            <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted, rgba(255,255,255,0.45))', width: 26, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{n}</Typography>
+          </Box>
+        )
+      })}
+    </Box>
+  )
+}
 
 // ─── Loading skeleton — mirrors the real layout below (banner, metrics, ────────
 // description, 3-column contact info) so the modal doesn't pop content in with
@@ -315,7 +369,11 @@ export default function ResultDisplay({ result }) {
         }} />
 
         <Box sx={{ position: 'relative', zIndex: 1, p: 3, display: 'flex', alignItems: 'center', gap: 2.5 }}>
-          {/* Avatar con favicon */}
+          {/* Logo del sitio (o foto de Google Maps) → favicon → inicial */}
+          {(s.logo_url || s.photo_url) ? (
+            <CompanyAvatar logoUrl={s.logo_url} photoUrl={s.photo_url} domain={domain} name={s.name} size={56}
+              logoBg={/white|blanco|negativ/i.test(s.logo_url || '') ? '#1e293b' : undefined} />
+          ) : (
           <Box sx={{
             width: 56, height: 56, flexShrink: 0, borderRadius: 2.5,
             bgcolor: 'rgba(99,102,241,0.2)',
@@ -344,6 +402,7 @@ export default function ResultDisplay({ result }) {
               {(s.name || domain || '?')[0]}
             </Box>
           </Box>
+          )}
 
           {/* Info principal */}
           <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -361,6 +420,12 @@ export default function ResultDisplay({ result }) {
               {domain && (
                 <Chip icon={<LinkIcon sx={{ fontSize: '11px !important' }} />} label={domain} size="small" component="a" href={s.website} target="_blank" clickable
                   sx={{ bgcolor: 'var(--surface, rgba(255,255,255,0.06))', color: 'var(--text-muted, rgba(255,255,255,0.4))', border: '1px solid var(--border, rgba(255,255,255,0.1))', fontSize: '0.7rem', height: 20, '& .MuiChip-icon': { color: 'var(--text-muted, rgba(255,255,255,0.3))' }, '&:hover': { bgcolor: 'var(--item-hover, rgba(255,255,255,0.1))', color: 'var(--text, rgba(255,255,255,0.7))' } }} />
+              )}
+              {s.maps_url && (
+                <Chip icon={<LocationOnIcon sx={{ fontSize: '11px !important' }} />}
+                  label={`Google Maps${s.rating ? ` · ★ ${s.rating}${s.reviews ? ` (${s.reviews})` : ''}` : ''}${domain ? '' : (lang === 'en' ? ' · no website' : ' · sin sitio web')}`}
+                  size="small" component="a" href={s.maps_url} target="_blank" clickable
+                  sx={{ bgcolor: 'rgba(45,212,191,0.1)', color: '#2dd4bf', border: '1px solid rgba(45,212,191,0.25)', fontSize: '0.7rem', height: 20, '& .MuiChip-icon': { color: '#2dd4bf' } }} />
               )}
               {contacted?.contacted && (
                 <Chip
@@ -467,6 +532,82 @@ export default function ResultDisplay({ result }) {
                 )}
               </Box>
             )}
+          </Box>
+        </Section>
+      )}
+
+      {/* ── PERFIL DE GOOGLE MAPS ── (lo que publica un negocio aunque no tenga sitio web) */}
+      {(s.maps_url || s.maps_profile) && (() => {
+        const mp = s.maps_profile || {}
+        const en = lang === 'en'
+        return (
+          <Section icon={<LocationOnIcon fontSize="small" />} title={en ? 'Google Maps profile' : 'Perfil de Google Maps'} color="#2dd4bf">
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.8 }}>
+              <Box sx={{ display: 'flex', gap: 2.5, alignItems: 'center', flexWrap: 'wrap' }}>
+                {s.photo_url && (
+                  <Box component="img" src={s.photo_url} alt="" referrerPolicy="no-referrer" loading="lazy"
+                    onError={e => { e.currentTarget.style.display = 'none' }}
+                    sx={{ width: 120, height: 84, objectFit: 'cover', borderRadius: 1.5, flexShrink: 0, border: '1px solid var(--border)' }} />
+                )}
+                {s.rating ? (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 72 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
+                      <Typography sx={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--text, white)', lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{s.rating}</Typography>
+                      <StarIcon sx={{ fontSize: 20, color: '#fbbf24' }} />
+                    </Box>
+                    <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-muted, rgba(255,255,255,0.45))', mt: 0.4 }}>
+                      {s.reviews || 0} {en ? 'reviews' : 'reseñas'}
+                    </Typography>
+                  </Box>
+                ) : (
+                  <Typography sx={{ fontSize: '0.78rem', color: 'var(--text-muted, rgba(255,255,255,0.45))' }}>{en ? 'No reviews yet' : 'Sin reseñas todavía'}</Typography>
+                )}
+                <RatingBars distribution={mp.rating_distribution} votes={s.reviews} />
+              </Box>
+
+              <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap' }}>
+                {s.maps_url && (
+                  <Chip component="a" href={s.maps_url} target="_blank" clickable size="small" icon={<LinkIcon sx={{ fontSize: '13px !important' }} />}
+                    label={en ? 'Open in Google Maps' : 'Ver en Google Maps'}
+                    sx={{ height: 22, fontSize: '0.72rem', bgcolor: 'rgba(45,212,191,0.1)', color: '#2dd4bf', border: '1px solid rgba(45,212,191,0.25)', '& .MuiChip-icon': { color: '#2dd4bf' } }} />
+                )}
+                {mp.book_online_url && (
+                  <Chip component="a" href={mp.book_online_url} target="_blank" clickable size="small" label={en ? 'Online booking' : 'Reservar en línea'}
+                    sx={{ height: 22, fontSize: '0.72rem', bgcolor: 'rgba(45,212,191,0.1)', color: '#2dd4bf', border: '1px solid rgba(45,212,191,0.25)' }} />
+                )}
+                {mp.price_level && <Chip size="small" label={`${en ? 'Price' : 'Precio'}: ${mp.price_level}`} sx={{ height: 22, fontSize: '0.72rem' }} />}
+                {mp.is_claimed && <Chip size="small" icon={<CheckIcon sx={{ fontSize: '13px !important' }} />} label={en ? 'Owner-verified profile' : 'Perfil verificado por el dueño'}
+                  sx={{ height: 22, fontSize: '0.72rem', bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', '& .MuiChip-icon': { color: 'inherit' } }} />}
+                {mp.total_photos > 0 && <Chip size="small" label={`${mp.total_photos} ${en ? 'photos' : 'fotos'}`} sx={{ height: 22, fontSize: '0.72rem' }} />}
+              </Box>
+
+              <ChipGroup label={en ? 'What reviews mention' : 'Lo que mencionan las reseñas'} items={mp.review_topics} color="#fbbf24" />
+              <ChipGroup label={en ? 'Payments' : 'Formas de pago'} items={mp.payment_methods} color="#60a5fa" />
+              <ChipGroup label={en ? 'Amenities' : 'Comodidades y extras'} items={mp.amenities} color="#a78bfa" />
+              {mp.related_businesses?.length > 0 && (
+                <InfoRow label={en ? 'People also search' : 'También buscan'} value={mp.related_businesses.join(' · ')} />
+              )}
+              {!s.maps_profile && (
+                <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted, rgba(255,255,255,0.45))' }}>
+                  {en ? 'Profile details are fetched when the business is processed.' : 'El detalle del perfil se obtiene al procesar el negocio.'}
+                </Typography>
+              )}
+            </Box>
+          </Section>
+        )
+      })()}
+
+      {/* ── REDES SOCIALES ── */}
+      {Object.keys(sx.social_media || {}).length > 0 && (
+        <Section icon={<ShareIcon fontSize="small" />} title={lang === 'en' ? 'Social media' : 'Redes sociales'} color="#f472b6">
+          <Box sx={{ display: 'flex', gap: 0.8, flexWrap: 'wrap' }}>
+            {Object.entries(sx.social_media).filter(([, url]) => url).map(([k, url]) => {
+              const m = SOCIAL[k] || { label: k.charAt(0).toUpperCase() + k.slice(1), icon: <LinkIcon sx={{ fontSize: '13px !important' }} />, color: '#a5b4fc' }
+              return (
+                <Chip key={k} component="a" href={url} target="_blank" clickable size="small" icon={m.icon} label={m.label}
+                  sx={{ height: 24, fontSize: '0.74rem', color: m.color, bgcolor: 'var(--surface, rgba(255,255,255,0.04))', border: '1px solid var(--border)', '& .MuiChip-icon': { color: m.color } }} />
+              )
+            })}
           </Box>
         </Section>
       )}

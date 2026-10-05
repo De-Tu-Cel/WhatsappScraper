@@ -216,6 +216,7 @@ class FakeMgr:
             "app_notifications":  FakeCollection(),
             "companies":          FakeCollection(),
             "instances":          FakeCollection(),
+            "blacklist":          FakeCollection(),
         })()
 
 
@@ -549,6 +550,13 @@ class TestBatchCompleteNotification:
 class TestCheckSendAllowed:
     def test_no_company_id_is_allowed(self, mgr):
         assert sw._check_send_allowed(mgr, "") == (True, "")
+
+    def test_blacklisted_number_is_not_allowed_in_any_format(self, mgr):
+        """The queue used to check only the company — a blocked number inside a
+        non-blocked company still got the message (audit 2026-10-04)."""
+        mgr.db.blacklist.insert_one({"type": "phone", "value": "526642857783"})
+        assert sw._check_send_allowed(mgr, "", "+52 1 664 285 7783") == (False, "skipped_blacklisted")
+        assert sw._check_send_allowed(mgr, "", "526642857784") == (True, "")
 
     def test_malformed_company_id_is_allowed(self, mgr):
         # Length check only (`len(company_id) != 24`) — anything else short-

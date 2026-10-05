@@ -60,12 +60,22 @@ QUIÉN ERES:
   y quiere saber si le pueden ayudar con algo que necesita.
 - Tu nombre es {persona_name}. Si piden apellido y no tienes uno natural, evita el tema ("nomás dime así" / cambia de tema). Bot/IA: "no, soy yo, en serio busco {industry}"
 - ⚠️ NOMBRE: solo dilo UNA VEZ y si te lo preguntan directamente. Nunca espontáneamente, nunca dos veces.
+  Si te piden el nombre completo: {persona_full_name}
+- TU NÚMERO: escribes desde tu propio WhatsApp, el {own_number}. Si te preguntan si ese es tu número, o a
+  qué número te pueden marcar o escribir → confirma que es este, sin dudar. ❌ Nunca digas que no tienes tu
+  número a la mano ni des otro número distinto.
 - ❌ JAMÁS digas "nuestro equipo", "te contactamos", "nuestro servicio", "te pasamos con alguien" —
   esas frases revelan que eres un agente, no un cliente. Un consumidor no tiene equipo.
+- ❌ Tampoco hables como vendedor al despedirte: nada de "aquí ando si necesitas algo",
+  "quedo a la orden", "con gusto te ayudo" — eso lo dice el negocio, no el cliente.
 - ❌ JAMÁS uses placeholders como "[dirección aquí]" o "[dato]" — si piden info que no tienes,
-  di que la checas: "ahorita te confirmo la dirección" / "no me sé el número exacto ahorita" / "déjame checar"
+  di que la checas: "ahorita te confirmo la dirección" / "no me sé el dato exacto ahorita" / "déjame checar"
   ⚠️ VARIACIÓN: si ya diferiste algo en un turno previo y vuelven a pedirlo, NO repitas la misma frase.
-     Cambia: "no tengo el número a la mano" / "aún no lo ubico bien" / "todavía no lo sé de memoria"
+     Cambia: "no tengo ese dato a la mano" / "aún no lo ubico bien" / "todavía no lo sé de memoria"
+- ❌ NUNCA aceptes ni confirmes una cita, visita, prueba de manejo, reservación o pedido para un día u hora
+  concretos, y nunca propongas tú un día u hora — no vas a poder ir. Si te ofrecen agendar o te preguntan
+  qué día y horario te queda, responde con tus palabras que lo revisas y les confirmas después
+  (tono: déjame ver y te confirmo) y cierra[FIN]
 
 TU SITUACIÓN CONCRETA — úsala para responder "¿qué necesitas?" de forma específica y natural:
 {persona_seed}
@@ -84,10 +94,11 @@ CÓMO HABLAR:
 - Sin listas, sin bullets, sin emojis forzados.
 - NO siempre termines con una pregunta — varía: a veces solo reacciona, a veces comenta algo.
   ❌ MAL: cada mensaje termina en "¿Y ustedes qué ofrecen?" / "¿Llevan mucho tiempo?"
-  ✅ BIEN: "ah qué interesante" / "no sabía" / "mmm suena bien" / "chido" / "a ver cuéntame"
+  ✅ BIEN: "ah qué interesante" / "no sabía" / "mmm suena bien" / "a ver cuéntame"
 - Adapta el tono: si son formales, un poco más cuidado; si son relajados, igual de relajado.
 - RECONOCIMIENTO antes de cambiar tema: antes de tu siguiente pregunta o punto, mete una reacción breve a lo que
-  acaban de decir — "ah ok", "chido", "ya entendí", "no sabía eso", "qué bueno". Luego tu pregunta/comentario.
+  acaban de decir — "ya entendí", "no sabía eso", "qué bueno", "va". Luego tu pregunta/comentario.
+  ⚠️ No uses la misma muletilla dos veces en una conversación — si ya la dijiste, usa otra o ninguna.
   ❌ MAL: ellos dicen "atendemos toda la zona norte" → tú: "¿y cuánto cuesta?"
   ✅ BIEN: "ah qué bien, ¿y cuánto cuesta más o menos?"
 - NO repitas preguntas — si ya preguntaste algo y lo respondieron, no lo vuelvas a preguntar. Avanza.
@@ -101,7 +112,7 @@ IMPERFECCIONES REALES — así escribe un mexicano en WhatsApp, no un corrector 
 - ❌ PROHIBIDO: abrir con "Hola!" en mensajes de seguimiento — ya se saludaron, no repitas el saludo
 - Sin tildes en palabras comunes: "mas", "como", "que", "si", "solo", "tu", "el", "como", "aun"
 - ⚠️ MINÚSCULA ESTRICTA al arrancar cada mensaje — la primera letra del mensaje en minúscula SIEMPRE:
-  "oye", "ps", "bueno", "la neta", "a webo", "no", "ahorita", "ah", "chido", "mira"
+  "oye", "ps", "bueno", "la neta", "a webo", "no", "ahorita", "ah", "mira"
   ❌ NUNCA empieces con "No,", "Ahorita", "{persona_name}", "Sí," — eso es como correo formal, no WhatsApp
 - ❌ "ps" es una reacción, no arranca un saludo — nunca lo pegues directo a un saludo formal
   ("buenas tardes"/"buenos días"), suena forzado y ningún mexicano habla así:
@@ -115,7 +126,7 @@ IMPERFECCIONES REALES — así escribe un mexicano en WhatsApp, no un corrector 
 - Nunca ¡¡ ni ?? ni ¿ ni ¡ — solo el signo de cierre si acaso: "en serio?" / "y eso?"
 - Varía cómo abres cada mensaje — NUNCA dos mensajes seguidos con el mismo arranque, y "ps" NO
   es tu arranque por defecto — es solo una opción más entre muchas, úsala poco:
-  "oye" / "bueno" / "ah" / "mira" / "neta?" / "y eso?" / "no sabía" / "chido" / "mmm" / "ay" /
+  "oye" / "bueno" / "ah" / "mira" / "neta?" / "y eso?" / "no sabía" / "mmm" / "ay" /
   "a ver" / "ps" (ocasional) / [sin arranque, directo al punto]
 - ❌ JAMÁS: "¡Hola! Soy {persona_name}. Vi su negocio y me pareció interesante, quería saber más sobre lo que hacen."
 - ✅ ASÍ (varios tonos posibles — arma tu propia versión, no repitas ninguna tal cual; una sola
@@ -216,7 +227,7 @@ Ejemplo KLM (*A*-Reserva *B*-Equipaje *C*-Reembolso *D*-Reclamación *E*-Factura
 
 Ejemplo KLM (*A*-Volver al menú / *B*-Hablar con un agente): opción B dice "agente" → responde "B"
 
-- Si te preguntan nombre: "{persona_name}". Teléfono solo si te lo piden: "5530123456"
+- Si te preguntan nombre: "{persona_name}". Teléfono solo si te lo piden: {own_number}
 - Sigue el flujo hasta llegar a un humano → cambia a [HUMANO REAL]
 
 [MENSAJE AUTOMÁTICO / ACUSE DE RECIBO]
@@ -232,12 +243,17 @@ Cero palabras. Cero letras. Solo [FIN] y nada más.
 Razón: un humano lee el ACK y espera en silencio. Responder —  aunque sea una sola palabra — es
 la señal número 1 de que eres un bot automatizado. El silencio ES la respuesta humana.
 
+⚠️ EXCEPCIÓN — TE PIDEN TU NOMBRE: si el mensaje (aunque sea automático) te pregunta tu nombre
+(con quién tienen el gusto, cómo te llamas, que les compartas tu nombre) → responde SOLO tu nombre,
+{persona_name} (o {persona_full_name} si piden nombre completo), sin [FIN] — así te pasan con un asesor.
+
 Cuando llegue el humano de verdad → responde normal en ese turno.
 
 [IA CONVERSACIONAL DE OTRA EMPRESA]
 Señales: se presenta con nombre de agente ("Soy Olivia", "Soy Sofía", "Soy AMAIA"), menciona empresa
 ajena, hace onboarding ("¿Cómo te llamas?"), o repite el mismo mensaje aunque ya respondiste.
 Comportamiento: respuestas mínimas y directas, SIN preguntas de curiosidad — no vale la pena.
+Si te pide tu nombre, dáselo ({persona_name}) — es lo que suele faltar para que llegue un asesor.
 ⚠️ EXCEPCIÓN CRÍTICA: si esta IA te envía un MENÚ con opciones (letras o números),
    aplica INMEDIATAMENTE la regla de [BOT CON MENÚS / IVR] — responde SOLO la letra/número.
    NO escribas texto libre como "Hablar con asesor" aunque eso sea lo que quieras. Usa la letra.
@@ -274,8 +290,9 @@ CUÁNDO CERRAR — responde normal y añade [FIN] pegado al final:
   textual): "ay bueno, y cuánto sería más o menos?"
   Si te dan el precio, muestra interés y cierra natural con tus palabras, ej: "ah mira,
   déjame pensarlo y te aviso"[FIN]
-- Piden que los llames o agenden cita → algo como "sí, con gusto. a qué número te marco
-  o cómo lo hacen?"[FIN]
+- Te ofrecen agendar cita / visita / prueba, o te piden escoger día y hora → no confirmes nada:
+  di con tus palabras que lo revisas y les confirmas (tono: déjame ver y te confirmo)[FIN]
+- Piden que los llames → pregunta a qué número o cómo lo hacen, sin comprometer día ni hora[FIN]
 - Te preguntan QUÉ VENDES o qué ofreces TÚ → deja claro que eres cliente, con tus propias
   palabras — nunca la misma frase que usaste en otra conversación — ej de tono: "no, yo
   no vendo nada, solo busco el servicio. ustedes sí atienden en [city]?"[FIN]
@@ -285,6 +302,7 @@ CUÁNDO CERRAR — responde normal y añade [FIN] pegado al final:
 - La empresa cierra con despedida ("buen día", "hasta luego", "con gusto") →
   reconoce brevemente y cierra con tus propias palabras — nunca dejes su despedida sin
   respuesta[FIN]
+- Si TÚ ya te despediste y solo te vuelven a agradecer o despedir → no contestes: [FIN] solo
 
 IMPORTANTE: [FIN] es señal interna, nunca llega al contacto. Ponlo pegado al texto sin espacio.
 {extra_block}"""
@@ -335,6 +353,180 @@ def _looks_copied_from_prompt(text: str) -> bool:
                 if len(chunk) >= 20 and chunk in norm:
                     return True
     return False
+
+
+# ── Reply hygiene ─────────────────────────────────────────────────────────────
+
+def _norm_text(text: str) -> str:
+    """Lowercase, accent-free, letters/digits/'?' only — for phrase matching."""
+    import unicodedata
+    t = unicodedata.normalize("NFKD", (text or "").lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9?\s]", " ", t)
+
+
+# A burst of several messages from the business used to reach the LLM numbered
+# ("[1] Así es\n[2] No hay de qué, lindo día"), and the model answered with the
+# marker itself — "[2]" went out as a real WhatsApp message (PASA Tijuana,
+# 2026-10-02). Bursts are joined without numbers now (followup_queue.py), and
+# any bracket marker the model still emits is stripped here before sending.
+_MARKER_RE = re.compile(r"\[\s*\d{1,2}\s*\]")
+_INTERNAL_TAG_RE = re.compile(r"\[(?:sin respuesta|[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ /]{2,40})\]", re.IGNORECASE)
+_ONLY_MARKER_RE = re.compile(r"\s*\[\s*([0-9]{1,2}|[A-Za-z])\s*\]\s*")
+_EMOJI_RE = re.compile(r"[☀-➿\U0001F000-\U0001FAFF]")
+
+
+def _looks_like_menu(text: str) -> bool:
+    """Numbered / lettered options or a buttons list — a bare "2" or "B" is a valid reply to these."""
+    t = text or ""
+    return bool(
+        "[Opciones:" in t or "[Lista:" in t
+        or re.search(r"(^|\n)\s*\*?\(?\d{1,2}[\.\)]\*?\s+\S", t)
+        or re.search(r"\*[A-H]\*\s*[-–]", t)
+        or re.search(r"(^|\n)\s*\*?[A-H][\)\.]\*?\s+\S", t)
+    )
+
+
+def _strip_reply_markers(text: str, inbound_body: str = "") -> str:
+    """Remove "[2]"-style markers and internal prompt tags from a reply. A bare
+    "[2]" answering a real menu becomes "2"; anything left with no letters,
+    digits or emoji is junk and comes back empty (caller closes without sending)."""
+    only = _ONLY_MARKER_RE.fullmatch(text or "")
+    if only and _looks_like_menu(inbound_body):
+        return only.group(1)
+    t = _MARKER_RE.sub(" ", text or "")
+    t = _INTERNAL_TAG_RE.sub(" ", t)
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    if not re.search(r"[0-9A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", t) and not _EMOJI_RE.search(t):
+        return ""
+    return t
+
+
+def _clean_reply(raw: str | None, inbound_body: str = "") -> tuple[str, bool]:
+    """(text to send, wants_end) from the raw LLM output."""
+    raw = raw or ""
+    wants_end = "[FIN]" in raw
+    text = _strip_reply_markers(raw.replace("[FIN]", ""), inbound_body)
+    # El prompt prohíbe los signos de apertura ¿/¡ (nadie los usa al escribir WhatsApp
+    # casual — es una de las señales anti-detección), pero DeepSeek no lo respeta de
+    # forma consistente (visto en prod: "¿tienen lo que busco?", "¿qué tiene de raro?").
+    text = text.replace("¿", "").replace("¡", "")
+    # Mismo problema con el punto final — el lookbehind evita tocar puntos
+    # suspensivos ("...") que sí están permitidos como pausa natural.
+    text = re.sub(r"(?<!\.)\.$", "", text.strip()).rstrip()
+    return text, wants_end
+
+
+# Courtesy / farewell detection. After Andy closed a conversation, every
+# "gracias" / "quedo a la orden" from the business restarted it and Andy kept
+# answering goodbyes (Fame Querétaro, 2026-10-02: two more replies after it had
+# already said goodbye) — and a farewell it did answer left the session open
+# (and the AI icon on) for the full 48h idle timeout.
+_FAREWELL_PHRASES = [
+    "no hay de que", "no hay porque", "de nada", "hasta luego", "hasta pronto", "hasta manana",
+    "a la orden", "a sus ordenes", "a tus ordenes", "para servirle", "para servirte",
+    "que le vaya bien", "que te vaya bien", "que este bien", "que estes bien", "estamos en contacto",
+    "quedo atento", "quedo atenta", "quedo pendiente", "quedamos atentos", "quedamos pendientes",
+    "igualmente", "saludos", "bendiciones", "cuidese", "cuidate",
+]
+_FAREWELL_WISH_RE = re.compile(
+    r"\b(excelente|lindo|linda|bonito|bonita|feliz|gran)\s+(dia|tarde|noche|fin de semana|semana)\b"
+    r"|\bque tengas?n? (un )?(buen|buena|excelente|lindo|linda|bonito|bonita|feliz)\b"
+)
+_GREETING_WORDS = {"hola", "buen", "buena", "buenos", "buenas", "dia", "dias", "tarde", "tardes",
+                   "noche", "noches", "que", "tal"}
+_COURTESY_WORDS = _GREETING_WORDS | set("""
+    gracias muchas muchisimas mil por favor a la las los sus tus orden ordenes de y
+    igualmente igual tambien usted ti te le lo este esten bien muy mucho excelente lindo linda
+    bonito bonita feliz gran fin semana hasta luego pronto manana saludos bendiciones cuidese
+    cuidate abrazo quedo quedamos atento atenta atentos pendiente pendientes estamos en contacto
+    cualquier cosa aqui para servirle servirte placer gusto un una con tenga tengas vaya
+    ok okay oki va vale sale listo perfecto claro entendido enterado enterada acuerdo
+    asi es si correcto exacto genial super amable
+""".split())
+
+
+def _is_courtesy_only(text: str) -> bool:
+    """Thanks / acknowledgements / goodbyes and nothing else — no question, no new
+    information. A bare greeting ("buenas tardes") is NOT courtesy: it can be the
+    opener of a real message that's still coming."""
+    if not text or "?" in text:
+        return False
+    n = _norm_text(text)
+    for p in _FAREWELL_PHRASES:
+        n = n.replace(p, " ")
+    tokens = n.split()
+    if not tokens:
+        return True
+    if len(tokens) > 14 or set(tokens) <= _GREETING_WORDS:
+        return False
+    return set(tokens) <= _COURTESY_WORDS
+
+
+def _is_farewell(text: str) -> bool:
+    """Courtesy-only AND an actual goodbye in it (not just "ok" / "gracias")."""
+    if not _is_courtesy_only(text):
+        return False
+    n = _norm_text(text)
+    return any(p in n for p in _FAREWELL_PHRASES) or bool(_FAREWELL_WISH_RE.search(n))
+
+
+_ASKS_NAME_RE = re.compile(
+    r"con quien tengo el gusto|con quien hablo|como te llamas|como se llama|cual es (tu|su) nombre"
+    r"|(tu|su) nombre|nombre completo|a nombre de quien"
+)
+
+
+def _asks_for_name(text: str) -> bool:
+    return bool(_ASKS_NAME_RE.search(_norm_text(text)))
+
+
+# Fillers the model leaned on until they showed up in every chat ("chido" 5×
+# across 4 conversations, twice in one of them; "ah ok" ~8×) — the prompt itself
+# listed them as examples. Tracked per conversation so Andy doesn't repeat one.
+_TRACKED_FILLERS = ["chido", "ah ok", "ah perfecto", "ah que bien", "que bien", "la neta", "orale",
+                    "mmm", "oye", "mira", "a ver", "ps", "sale", "perfecto"]
+_DISTINCTIVE_FILLERS = {"chido", "ah ok", "ah perfecto", "ah que bien", "la neta", "orale", "mmm", "oye", "mira"}
+
+
+def _fillers_in(text: str) -> set:
+    n = " " + " ".join(_norm_text(text).replace("?", " ").split()) + " "
+    return {f for f in _TRACKED_FILLERS if f" {f} " in n}
+
+
+def _opener(text: str) -> str:
+    words = _norm_text(text).replace("?", " ").split()
+    return " ".join(words[:2]) if len(words) >= 2 else ""
+
+
+def _used_fillers(prior_replies: list) -> list:
+    """Fillers and two-word openers Andy already used in this conversation."""
+    used = []
+    for r in prior_replies:
+        for f in sorted(_fillers_in(r)) + [_opener(r)]:
+            if f and f not in used:
+                used.append(f)
+    return used
+
+
+def _repeated_filler(text: str, prior_replies: list) -> str | None:
+    """A distinctive filler or the exact two-word opener already used earlier in this conversation."""
+    if not prior_replies or not text:
+        return None
+    before = set()
+    for r in prior_replies:
+        before |= _fillers_in(r)
+    for f in sorted(_fillers_in(text) & before & _DISTINCTIVE_FILLERS):
+        return f
+    op = _opener(text)
+    if op and any(op == _opener(r) for r in prior_replies):
+        return op
+    return None
+
+
+def _national_number(number: str) -> str:
+    digits = "".join(filter(str.isdigit, number or ""))
+    return digits[-10:] if len(digits) >= 10 else ""
 
 
 def _get_system_prompt(db) -> str:
@@ -613,13 +805,17 @@ def _build_context(db: MongoDBManager, company_id: str, outbound_log: dict) -> d
     # for now); falls back to the generic default persona for instances without one
     # (Evolution/WAHA/Wasender, or a wwebjs instance whose profile hasn't synced yet).
     persona_name = DEFAULT_PERSONA_NAME
+    persona_full_name = ""
+    own_number = ""
     try:
         assigned_instance = company.get("assigned_instance")
         if assigned_instance:
-            inst = db.db.instances.find_one({"name": assigned_instance}, {"profile_name": 1})
+            inst = db.db.instances.find_one({"name": assigned_instance}, {"profile_name": 1, "number": 1})
             profile_name = ((inst or {}).get("profile_name") or "").strip()
             if profile_name:
                 persona_name = profile_name.split()[0]  # first name only — casual WhatsApp use
+                persona_full_name = profile_name
+            own_number = _national_number((inst or {}).get("number", ""))
     except Exception:
         pass
 
@@ -633,11 +829,14 @@ def _build_context(db: MongoDBManager, company_id: str, outbound_log: dict) -> d
         "website":         website,
         "persona_seed":    _generate_persona_seed(industry, city),
         "persona_name":    persona_name,
+        "persona_full_name": persona_full_name or persona_name,
+        "own_number":      own_number,
     }
 
 
 def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False, prefs: dict = None, db=None,
-                         proactive_minutes: int = None, correction: str = "") -> str | None:
+                         proactive_minutes: int = None, correction: str = "",
+                         used_fillers: list = None) -> str | None:
     ctx = dict(context)
     parts = []
     if ctx.get("description"):
@@ -653,6 +852,11 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
         ctx["persona_seed"] = _generate_persona_seed(ctx.get("industry", ""), ctx.get("city", "México"))
     if not ctx.get("persona_name"):
         ctx["persona_name"] = DEFAULT_PERSONA_NAME
+    # Sessions created before these existed don't carry them in their context.
+    if not ctx.get("persona_full_name"):
+        ctx["persona_full_name"] = ctx["persona_name"]
+    if not ctx.get("own_number"):
+        ctx["own_number"] = "mismo número desde el que escribes"
     extra = ((prefs or {}).get("extra_instructions") or "").strip()
     ctx["extra_block"] = f"\n\nINSTRUCCIONES ADICIONALES:\n{extra}" if extra else ""
     base_prompt = _get_system_prompt(db or MongoDBManager())
@@ -672,6 +876,7 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
             "'[Opciones: ...]', o pide elegir una opción), esta excepción NO es un ACK — ignórala "
             "por completo y sigue la regla normal de [BOT CON MENÚS / IVR] (responde SOLO la letra "
             "o número correcto, nunca [FIN] sin haber intentado navegar). "
+            "TAMPOCO APLICA si el mensaje te pregunta tu nombre: ahí responde SOLO tu nombre, sin [FIN]. "
             "Si NO es un ACK ni un menú: puedes saludar brevemente si encaja — SIN ¡Hola! ni signos invertidos. "
             "Usa algo como \"hey\", \"buenas\", \"oye\" — o ve directo al punto. Nunca más de 2-3 palabras."
         )
@@ -683,6 +888,11 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
             "relacionado o simplemente quisieras saber si llegó tu mensaje. "
             "REGLAS: nunca digas que estás esperando respuesta; nunca uses el mismo arranque que en "
             "tu último mensaje (si empezaste con 'oye', empieza diferente); 1 frase máxima, casual, sin puntos."
+        )
+    if used_fillers:
+        system += (
+            "\n\n⚠️ YA USASTE en esta conversación: " + ", ".join(f"'{f}'" for f in used_fillers[:12])
+            + " — no repitas esas muletillas ni esos arranques; usa otras palabras o ninguna."
         )
     if correction:
         system += f"\n\n⚠️ CORRECCIÓN: {correction}"
@@ -716,30 +926,12 @@ def _is_blocked_or_blacklisted(db, company_id: str, phone_number: str | None = N
     ai_followup.py had no equivalent anywhere, so a company blocked/blacklisted
     AFTER Andy's session started was never actually protected."""
     try:
-        if phone_number:
-            digits = "".join(filter(str.isdigit, phone_number))
-            if digits and db.db.blacklist.find_one({"type": "phone", "value": digits}):
-                return True
-        if not company_id or len(company_id) != 24:
-            return False
-        from bson import ObjectId
-        from app.pipeline import _check_blacklist
-        company = db.db.companies.find_one(
-            {"_id": ObjectId(company_id)},
-            {"domain": 1, "industry": 1, "blocked": 1},
-        )
-        if not company:
-            return False
-        if company.get("blocked"):
-            return True
-        domain = company.get("domain") or ""
-        industry = company.get("industry") or ""
-        # NOT gated on `domain` being set — _check_blacklist already handles an
-        # empty domain fine (it just checks industry on its own), and gating here
-        # meant a company with no stored domain (WhatsApp-only businesses, or a
-        # site that failed to scrape) skipped the industry check entirely, even
-        # with a real, non-empty blacklisted industry on file.
-        return bool(_check_blacklist(domain, industry))
+        # Shared with every other send path (app/send_guard.py). Inbound numbers
+        # arrive as 521… while numbers blocked from a recipient list are stored
+        # as 52… — the old exact-digits match never caught them, so Andy kept
+        # answering a number someone had blocked.
+        from app.send_guard import send_block_reason
+        return send_block_reason(db, company_id or "", phone_number or "") is not None
     except Exception as exc:
         log.warning("[AIFollowup] blacklist check failed (failing safe, allowing send): %s", exc)
         return False
@@ -794,6 +986,43 @@ def _close_session_without_reply(db, sid, company_id: str, phone_number: str, re
     log.warning("[AIFollowup] session %s closed without reply (reason=%s) for %s", sid, reason, phone_number)
 
 
+def _recently_closed_after_talking(db, company_id: str) -> bool:
+    """No open session, and the last one was closed by Andy (content decision,
+    not a failure) after actually talking, within the idle-timeout window."""
+    if db.db.ai_followup_sessions.find_one(
+            {"company_id": company_id, "status": {"$in": ["active", "waiting"]}}, {"_id": 1}):
+        return False
+    last = db.db.ai_followup_sessions.find_one(
+        {"company_id": company_id, "status": "ended"}, sort=[("last_activity", -1)])
+    if not isinstance(last, dict) or last.get("end_reason") != "ai_decision" or not last.get("turn_count"):
+        return False
+    closed_at = last.get("last_activity") or last.get("created_at")
+    if not closed_at:
+        return False
+    return datetime.utcnow() - closed_at < timedelta(hours=_get_idle_timeout_hours(db))
+
+
+def _newer_inbound_exists(db, company_id: str, inbound_log_id: str | None) -> bool:
+    """The business wrote again after the last message this reply answers. Prod
+    runs 2 API processes, each with its own in-memory debounce, so one burst can
+    be split in two and answered twice at once (Fame Querétaro, 2026-10-02:
+    "a qué hora sería?" right after they'd said 10:00, then a second reply). Only
+    the reply covering the newest message is sent — the other process sees the
+    earlier turn in the session and answers everything together."""
+    try:
+        from bson import ObjectId
+        ref = db.db.message_logs.find_one({"_id": ObjectId(inbound_log_id)}, {"created_at": 1})
+    except Exception:
+        return False
+    if not isinstance(ref, dict) or not ref.get("created_at"):
+        return False
+    newer = db.db.message_logs.find_one(
+        {"company_id": company_id, "direction": "inbound", "created_at": {"$gt": ref["created_at"]}},
+        {"_id": 1},
+    )
+    return isinstance(newer, dict)
+
+
 def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str | None, inbound_log_id: str | None,
                           manual_activation: bool = False, proactive: bool = False):
     """
@@ -842,6 +1071,20 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
                     return
         except Exception as _age_err:
             print(f"[AIFollowup] age check error (ignored): {_age_err}")
+
+    # Andy already said goodbye and closed this conversation — a "gracias" / "quedo
+    # a la orden" afterwards needs no answer and must not open a new session (the
+    # webhook flipped the toggle back on to get here; put it back). A real message
+    # (a question, new info) still reactivates as before.
+    if not proactive and not manual_activation and _is_courtesy_only(inbound_body or ""):
+        if _recently_closed_after_talking(db, company_id):
+            db.db.conversation_ai_prefs.update_one(
+                {"company_id": company_id},
+                {"$set": {"ai_enabled": False, "auto_disabled": True}},
+                upsert=True,
+            )
+            print(f"[AIFollowup] EXIT: courtesy-only message after Andy closed — no reply for {phone_number}")
+            return
 
     if proactive:
         # In proactive mode, only use an EXISTING waiting session — never create a new one.
@@ -972,7 +1215,10 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
     # El clasificador ya lo detectaría, pero el LLM a temperatura 0.82 no siempre
     # sigue las reglas de [MENSAJE AUTOMÁTICO] de forma confiable. Cerramos aquí
     # directamente, sin enviar nada — el silencio ES la respuesta humana ante un ACK.
-    if not proactive:
+    # Except when it asks for our name ("Le atiende Sandra López, ¿con quién tengo el
+    # gusto?" — Infiniti / Nissan Autocom, 2026-10-02): answering that is usually
+    # what gets the chat to a person, so it goes to the LLM like any other message.
+    if not proactive and not _asks_for_name(inbound_body or ""):
         try:
             from app.classifier import _looks_like_auto_reply
             if _looks_like_auto_reply(inbound_body or ""):
@@ -1106,14 +1352,27 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
     # actually about to send this message, so Andy never claims a name that
     # doesn't match the WhatsApp account the prospect is really talking to.
     _llm_context = dict(session.get("context", {}))
-    if _inst_provider == "wwebjs" and instance:
+    if instance:
         try:
-            _inst_doc_persona = db.db.instances.find_one({"name": instance}, {"profile_name": 1})
-            _real_profile_name = ((_inst_doc_persona or {}).get("profile_name") or "").strip()
-            if _real_profile_name:
+            _inst_doc_persona = db.db.instances.find_one({"name": instance}, {"profile_name": 1, "number": 1}) or {}
+            _real_profile_name = (_inst_doc_persona.get("profile_name") or "").strip()
+            if _real_profile_name and _inst_provider == "wwebjs":
                 _llm_context["persona_name"] = _real_profile_name.split()[0]
+                _llm_context["persona_full_name"] = _real_profile_name
+            # The number Andy is actually writing from — it used to have a made-up
+            # one in the prompt and, asked "¿es correcto el 5527479218?" (its own
+            # number), answered it didn't have that number at hand (Renault
+            # Grupo Geisha, 2026-10-02).
+            _own = _national_number(_inst_doc_persona.get("number", ""))
+            if _own:
+                _llm_context["own_number"] = _own
         except Exception:
             pass
+
+    # Fillers / openers already used in this conversation — the prompt tells the
+    # model to avoid them, and a reply that repeats one gets one retry below.
+    _prior_replies = [t.get("content") or "" for t in session.get("turns", []) if t.get("role") == "assistant"]
+    _used = _used_fillers(_prior_replies)
 
     # Mark AI as typing (frontend polls this) — now that we know there's an
     # instance to actually send through, not before (a "no_instance" close
@@ -1123,7 +1382,7 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
 
     ai_text_raw = _call_llm_for_reply(_llm_turns, _llm_context,
                                        is_cold_start=is_cold_start, prefs=_prefs, db=db,
-                                       proactive_minutes=_proactive_minutes)
+                                       proactive_minutes=_proactive_minutes, used_fillers=_used)
     print(f"[AIFollowup] LLM response: {repr(ai_text_raw[:80]) if ai_text_raw else 'None'}")
     if not ai_text_raw:
         # _call_llm_for_reply already swallowed the real error (rate limit, circuit
@@ -1135,20 +1394,10 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         print("[AIFollowup] EXIT: LLM returned None")
         return
 
-    # Detect AI-initiated close signal and strip it before sending
-    ai_wants_end = "[FIN]" in ai_text_raw
-    ai_text = ai_text_raw.replace("[FIN]", "").strip()
-
-    # El prompt prohíbe los signos de apertura ¿/¡ (nadie los usa al escribir WhatsApp
-    # casual — es una de las señales anti-detección), pero DeepSeek no lo respeta de
-    # forma consistente (visto en prod: "¿tienen lo que busco?", "¿qué tiene de raro?").
-    # No hay forma de garantizarlo solo con el prompt, así que se refuerza aquí.
-    ai_text = ai_text.replace("¿", "").replace("¡", "")
-
-    # Mismo problema con el punto final (prompt lo prohíbe, el modelo no siempre lo
-    # respeta) — se refuerza aquí en vez de confiar solo en el prompt. El lookbehind
-    # evita tocar puntos suspensivos ("...") que sí están permitidos como pausa natural.
-    ai_text = re.sub(r"(?<!\.)\.$", "", ai_text).rstrip()
+    # Detect AI-initiated close signal and strip it (plus "[2]"-style markers and
+    # ¿/¡/final period — see _clean_reply) before sending.
+    _inbound_text = inbound_body or ""
+    ai_text, ai_wants_end = _clean_reply(ai_text_raw, _inbound_text)
 
     # Guard against the LLM copying one of the prompt's own tone examples
     # verbatim instead of generating something contextual (see
@@ -1162,31 +1411,63 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         print(f"[AIFollowup] LLM copied a prompt example — retrying: {ai_text[:80]!r}")
         ai_text_raw_retry = _call_llm_for_reply(
             _llm_turns, _llm_context, is_cold_start=is_cold_start, prefs=_prefs, db=db,
-            proactive_minutes=_proactive_minutes,
+            proactive_minutes=_proactive_minutes, used_fillers=_used,
             correction="tu respuesta anterior fue una de las frases de ejemplo de este prompt, copiada tal "
                        "cual — eso está prohibido. genera una respuesta distinta y original, en tus propias "
                        "palabras, que reaccione específicamente a lo que la otra persona te acaba de escribir.",
         )
-        ai_wants_end = bool(ai_text_raw_retry) and "[FIN]" in ai_text_raw_retry
-        ai_text = (ai_text_raw_retry or "").replace("[FIN]", "").strip()
-        ai_text = ai_text.replace("¿", "").replace("¡", "")
-        ai_text = re.sub(r"(?<!\.)\.$", "", ai_text).rstrip()
+        ai_text, ai_wants_end = _clean_reply(ai_text_raw_retry, _inbound_text)
         if not ai_text_raw_retry or _looks_copied_from_prompt(ai_text):
             log.warning("[AIFollowup] LLM copied a prompt example again after retry — closing without sending")
             print("[AIFollowup] EXIT: copied example persisted after retry")
             _close_session_without_reply(db, sid, company_id, phone_number, "ai_decision")
             return
 
-    # The model can answer with JUST "[FIN]" (no accompanying text) when it decides
-    # the conversation is over without anything left to say. ai_text is then empty,
-    # and every send path below (Evolution/WAHA/Wasender/wwebjs) rejects an empty
-    # message — the exception was caught by the broad handler at the bottom of this
-    # function, which only resets ai_typing, leaving the session stuck at
-    # status="active" forever (never marked "ended", never retried) since nothing
-    # else ever calls back into a session once it's "active" outside of a new
-    # inbound message. Close the session directly instead of attempting to send.
-    if ai_wants_end and not ai_text:
+    # They asked for our name and the model chose silence anyway (an automated
+    # greeting can still be the step before a person) — answer with the name of
+    # the WhatsApp account that's writing, and keep the session open.
+    if not ai_text and not proactive and _asks_for_name(_inbound_text):
+        ai_text = _llm_context.get("persona_name") or DEFAULT_PERSONA_NAME
+        ai_wants_end = False
+
+    # The same filler or opener twice in one conversation reads like a script
+    # ("chido" twice in Fame Querétaro, 2026-10-02) — one retry asking for other
+    # words. If the retry fails or is unusable, the original reply still goes out.
+    _rep = _repeated_filler(ai_text, _prior_replies)
+    if _rep:
+        print(f"[AIFollowup] repeated filler {_rep!r} — retrying once")
+        _raw_retry = _call_llm_for_reply(
+            _llm_turns, _llm_context, is_cold_start=is_cold_start, prefs=_prefs, db=db,
+            proactive_minutes=_proactive_minutes, used_fillers=_used,
+            correction=f"tu respuesta repetía '{_rep}', que ya usaste en esta conversación. "
+                       "di lo mismo con otras palabras, sin esa muletilla ni ese arranque.",
+        )
+        _retry_text, _retry_end = _clean_reply(_raw_retry, _inbound_text)
+        if _retry_text and not _looks_copied_from_prompt(_retry_text):
+            ai_text, ai_wants_end = _retry_text, _retry_end
+
+    # Nothing left to send — a bare "[FIN]" (the model decided the conversation is
+    # over with nothing to add) or a reply that was only markers like "[2]". Every
+    # send path rejects an empty message, and the broad handler at the bottom of
+    # this function only resets ai_typing — the session used to be left stuck at
+    # status="active" forever. Close it directly instead of attempting to send.
+    if not ai_text:
         _close_session_without_reply(db, sid, company_id, phone_number, "ai_decision")
+        return
+
+    # The business wrote again while this reply was being generated — drop it;
+    # the reply covering their newest message answers everything together (see
+    # _newer_inbound_exists). The inbound turn stays in the session for that one.
+    if not proactive and _newer_inbound_exists(db, company_id, inbound_log_id):
+        print(f"[AIFollowup] EXIT: newer inbound arrived — dropping stale reply for {phone_number}")
+        db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": False}})
+        return
+
+    # Blocked while the LLM was generating (the earlier checks ran before the
+    # read delay and the LLM call) — don't send.
+    if _is_blocked_or_blacklisted(db, company_id, phone_number):
+        print(f"[AIFollowup] EXIT: blocked/blacklisted while generating — {company_id}")
+        db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": False}})
         return
 
     # Daily cap guard — Andy respects the same limit as campaigns. Reserved
@@ -1346,6 +1627,11 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         })
 
         new_count = session.get("turn_count", 0) + 1
+        # The business said goodbye and Andy just answered it — the conversation is
+        # over even if the model forgot [FIN]; otherwise the session sat "waiting"
+        # (AI icon on) for the whole 48h idle timeout (PASA Tijuana, Fame, 2026-10-02).
+        if not proactive and _is_farewell(inbound_body or "") and "?" not in ai_text:
+            ai_wants_end = True
         is_ended = ai_wants_end or (new_count >= session_max_turns)
         end_reason = "ai_decision" if ai_wants_end else ("max_turns" if is_ended else None)
         db.db.ai_followup_sessions.update_one(

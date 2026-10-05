@@ -37,6 +37,10 @@ EXCLUDED_DOMAINS = {
     'linkedin.com', 'pinterest.com', 'snapchat.com', 'threads.net',
     # Buscadores y mapas
     'google.com', 'google.com.mx', 'maps.google.com', 'bing.com', 'duckduckgo.com',
+    # Sitios de Perfil de Negocio de Google — Google los dio de baja en 2024
+    # y hoy dan 404; un negocio de Maps que aún los lista cuenta como "sin
+    # sitio web" (entra como lead de teléfono, ver _maps_lead_from_item).
+    'negocio.site', 'business.site',
     # Directorios de negocios
     'yelp.com', 'yelp.com.mx', 'tripadvisor.com', 'tripadvisor.com.mx',
     'cylex.mx', 'cylex.com', 'cylex-mexico.com', 'cybo.com',
@@ -49,7 +53,7 @@ EXCLUDED_DOMAINS = {
     'infoisinfo.com', 'infoisinfo.com.mx',
     'salir.com', 'mx.salir.com',
     'bripemedia.com', 'design.bripemedia.com',
-    'tusalondeeventos.com', 'peluquerias.com.mx',
+    'tusalondeeventos.com', 'peluquerias.com.mx', 'vetty.mx', 'electricistasmx.com',
     'monterrey10.com.mx',
     # Directorios de agenda / reservas
     'agendapro.com', 'fresha.com', 'mindbodyonline.com',
@@ -1094,7 +1098,18 @@ def _normalize_query_with_llm(raw: str) -> dict | None:
     return result
 
 
-def _ai_expand_synonyms(industry: str) -> list[str]:
+def _country_synonyms(industry: str, country: str | None) -> list[str]:
+    """INDUSTRY_SYNONYMS is Mexican vocabulary ("taquería", "fonda", "comida
+    corrida") — used abroad it skewed "restaurantes en Bogotá" to Mexican
+    food (74 of 171 results, 2026-10-02). Outside Mexico only the LLM's
+    locale-aware terms (_ai_expand_synonyms with the country) are used."""
+    effective = _detect_effective_country(country, industry)
+    if effective and _norm_loc(effective) != "mexico":
+        return []
+    return _get_industry_synonyms(industry)
+
+
+def _ai_expand_synonyms(industry: str, country: str | None = None) -> list[str]:
     """
     Ask the active LLM (OpenAI if configured, else DeepSeek — see app.llm) for extra
     Spanish search terms for this industry, since INDUSTRY_SYNONYMS only covers a
@@ -1102,15 +1117,17 @@ def _ai_expand_synonyms(industry: str) -> list[str]:
     synonym queries before this; this fills the gap for arbitrary/unlisted industries.
     Cached per-process by industry so repeat searches don't re-spend a call.
     """
-    key = industry.lower().strip()
+    effective = _detect_effective_country(country, industry) or DEFAULT_COUNTRY
+    key = f"{industry.lower().strip()}|{_norm_loc(effective)}"
     if key in _SYNONYM_CACHE:
         return _SYNONYM_CACHE[key]
     syns: list[str] = []
     try:
         from app.llm import call_llm
         prompt = (
-            f'Da de 4 a 6 términos o sinónimos en español de México que la gente usa para buscar '
-            f'negocios del giro "{industry}" (nombres alternativos, jerga local, variantes regionales). '
+            f'Da de 4 a 6 términos o sinónimos, en el idioma y la forma de hablar de {effective}, '
+            f'que la gente de ahí usa para buscar negocios del giro "{industry}" (nombres '
+            f'alternativos, jerga local, variantes regionales). '
             f'Responde ÚNICAMENTE con un array JSON de strings cortos, sin explicación. '
             f'Ejemplo: ["taller mecánico", "servicio automotriz"]'
         )
@@ -1164,6 +1181,17 @@ def _simplify_industry_for_search(industry: str) -> str:
     return result
 
 
+# Largest metro areas first (INEGI 2020), for spreading a search with no
+# location over Mexico — MAJOR_CITIES is ordered by state, not size.
+_MX_METROS_BY_SIZE = [
+    "Ciudad de México", "Monterrey", "Guadalajara", "Puebla", "Toluca", "Tijuana", "León",
+    "Querétaro", "Ciudad Juárez", "Torreón", "San Luis Potosí", "Mérida", "Aguascalientes",
+    "Mexicali", "Cuernavaca", "Saltillo", "Chihuahua", "Culiacán", "Morelia", "Hermosillo",
+    "Veracruz", "Villahermosa", "Cancún", "Reynosa", "Tuxtla Gutiérrez", "Durango",
+    "Acapulco", "Xalapa", "Oaxaca", "Tampico", "Pachuca", "Celaya", "Mazatlán", "Irapuato",
+]
+
+
 def _city_window(cities: list[str], window_size: int, offset: int) -> list[str]:
     """Slice a block of up to `window_size` cities, shifting which block on
     each successive "load more" (offset grows across repeated calls) so
@@ -1175,6 +1203,19 @@ def _city_window(cities: list[str], window_size: int, offset: int) -> list[str]:
     block_idx = (offset // 10) % num_blocks
     start = block_idx * window_size
     return cities[start:start + window_size]
+
+
+def _maps_category_matches(category: str, industry: str) -> bool:
+    """True if Google Maps' PRIMARY category is the searched giro (or one of
+    its synonyms). Exact or "starts with" only — "Equipos para panaderías",
+    "Laboratorio dental" or "Depósito dental" must not count."""
+    cat = _norm_loc(category or "")
+    if not cat:
+        return False
+    targets = {_norm_loc(industry), _norm_loc(_to_singular_es(industry))}
+    targets.update(_norm_loc(s) for s in _get_industry_synonyms(industry))
+    targets.discard("")
+    return any(cat == t or cat.startswith(t + " ") for t in targets)
 
 
 _SYNONYM_INDEX: dict[str, list[str]] | None = None
@@ -1222,8 +1263,8 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
     """
     ind = industry.strip()
     ind_q = f'"{ind}"'
-    static_synonyms = _get_industry_synonyms(ind)
-    ai_synonyms = _ai_expand_synonyms(ind) if (OPENAI_API_KEY or DEEPSEEK_API_KEY) else []
+    static_synonyms = _country_synonyms(ind, country)
+    ai_synonyms = _ai_expand_synonyms(ind, country) if (OPENAI_API_KEY or DEEPSEEK_API_KEY) else []
     synonyms = list(dict.fromkeys(static_synonyms + ai_synonyms))  # merge, dedup, keep order
     is_fitness = "gym" in synonyms or ind.lower() in ("gimnasio", "fitness")
     cfg = _get_country_config(country)
@@ -1701,20 +1742,13 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     # The LLM, judging 60 URLs per batch, dropped Maps hits whose category was
     # literally "Panadería" (La Dulce Compañía, Pan Artesanal — Querétaro,
     # 2026-10-02; La Dulce had passed in an earlier run of the same search).
-    # Primary category only — "Equipos para panaderías" must not match.
-    _cat_targets = {_norm_loc(industry)}
-    _cat_targets.update(_norm_loc(s) for s in _get_industry_synonyms(industry))
-    _cat_targets.discard("")
-
+    # Primary category only — see _maps_category_matches.
     def _maps_category_rescue(all_urls: list[str], already_approved: set) -> list[str]:
         rescued = []
         for u in all_urls:
             if u in already_approved or _wrong_sector_domain(u) or _looks_like_directory_snippet(u):
                 continue
-            cat = _norm_loc((snippets.get(u) or {}).get("maps_category") or "")
-            # Exact or "starts with" only — "Laboratorio dental"/"Depósito
-            # dental" end in a dentist synonym but aren't dentists.
-            if cat and any(cat == t or cat.startswith(t + " ") for t in _cat_targets):
+            if _maps_category_matches((snippets.get(u) or {}).get("maps_category") or "", industry):
                 rescued.append(u)
         return rescued
 
@@ -2775,14 +2809,390 @@ def _resolve_dfs_location(city: str, state_key: str | None, country_iso: str | N
     return best if best_score > 15 else None
 
 
+_DAY_LABELS_ES = [("monday", "Lun"), ("tuesday", "Mar"), ("wednesday", "Mié"), ("thursday", "Jue"),
+                  ("friday", "Vie"), ("saturday", "Sáb"), ("sunday", "Dom")]
+
+
+def _format_maps_hours(work_hours: dict | None) -> str:
+    """DataForSEO's work_hours timetable → "Lun 08:30-13:00, 16:30-20:00; ...".
+    Closed days are omitted; "" when there's no timetable."""
+    timetable = (work_hours or {}).get("timetable") or {}
+    parts = []
+    for key, label in _DAY_LABELS_ES:
+        spans = []
+        for span in timetable.get(key) or []:
+            try:
+                o, c = span["open"], span["close"]
+                spans.append(f"{o['hour']:02d}:{o['minute']:02d}-{c['hour']:02d}:{c['minute']:02d}")
+            except (KeyError, TypeError):
+                continue
+        if spans:
+            parts.append(f"{label} {', '.join(spans)}")
+    return "; ".join(parts)
+
+
+# Google Maps' address_info.region sometimes comes as the postal abbreviation
+# ("Qro.", "Jal.", "Yuc." — ~7% of leads, 2026-10-02) instead of the name the
+# rest of the DB uses, which would split state filters in two.
+_MX_STATE_ABBR = {
+    "ags": "Aguascalientes", "bc": "Baja California", "bcs": "Baja California Sur",
+    "camp": "Campeche", "chis": "Chiapas", "chih": "Chihuahua", "cdmx": "Ciudad de México",
+    "df": "Ciudad de México", "coah": "Coahuila", "col": "Colima", "dgo": "Durango",
+    "gto": "Guanajuato", "gro": "Guerrero", "hgo": "Hidalgo", "jal": "Jalisco",
+    "mex": "Estado de México", "edomex": "Estado de México", "edo mex": "Estado de México",
+    "mich": "Michoacán", "mor": "Morelos", "nay": "Nayarit", "nl": "Nuevo León",
+    "oax": "Oaxaca", "pue": "Puebla", "qro": "Querétaro", "qroo": "Quintana Roo",
+    "q roo": "Quintana Roo", "qr": "Quintana Roo", "slp": "San Luis Potosí", "sin": "Sinaloa",
+    "son": "Sonora", "tab": "Tabasco", "tamps": "Tamaulipas", "tamp": "Tamaulipas",
+    "tlax": "Tlaxcala", "ver": "Veracruz", "yuc": "Yucatán", "zac": "Zacatecas",
+}
+
+
+def _mx_state_name(region: str) -> str:
+    key = re.sub(r"[.\s]+", " ", _norm_loc(region or "")).strip()
+    return _MX_STATE_ABBR.get(key) or _MX_STATE_ABBR.get(key.replace(" ", "")) or (region or "").strip()
+
+
+def _city_state_from_address(address: str) -> tuple[str, str]:
+    """Last two parts of a Mexican Maps address: "..., 97000 Mérida, Yuc." →
+    ("Mérida", "Yuc."). Used only when address_info has no city/region."""
+    parts = [p.strip() for p in (address or "").split(",") if p.strip()]
+    if len(parts) < 2:
+        return "", ""
+    city = re.sub(r"^\d{5}\s*", "", parts[-2]).strip()
+    return (city if not re.search(r"\d", city) else ""), parts[-1]
+
+
+_GENERIC_NAME_WORDS = {
+    "de", "del", "la", "las", "el", "los", "y", "en", "mx", "sa", "cv", "rl", "s", "a", "c", "v",
+    "grupo", "servicio", "servicios", "centro", "clinica", "consultorio", "taller", "tienda",
+    "dental", "dentista", "dentistas", "cerrajeria", "cerrajero", "cerrajeros", "panaderia",
+    "pasteleria", "gimnasio", "gym", "restaurante", "restaurant", "electricista", "electricistas",
+    "plomeria", "plomero", "plomeros", "estetica", "canina", "salon", "spa", "fitness",
+    "doctor", "dr", "dra", "sucursal", "matriz", "oficial", "mexico",
+}
+
+
+def same_business_name(a: str, b: str, extra_generic=()) -> bool:
+    """Whether two names plausibly belong to the same business: they share a
+    distinctive word (not "cerrajería", "dental", "servicios"…). A shared
+    phone alone isn't proof — a directory site lists hundreds of other
+    businesses' phones (electricistasmx.com: 1,119), and "Cerrajería Las
+    Varas" got merged into "Electricistas MX" over one of them (2026-10-04)."""
+    generic = _GENERIC_NAME_WORDS | {_norm_loc(w) for w in extra_generic}
+
+    def _tokens(s: str) -> set:
+        return {w for w in re.findall(r"[a-z0-9]+", _norm_loc(s or "")) if len(w) >= 3 and w not in generic}
+
+    return bool(_tokens(a) & _tokens(b))
+
+
+def maps_url_for_cid(cid: str) -> str:
+    return f"https://www.google.com/maps?cid={cid}"
+
+
+def is_maps_lead_url(url: str) -> bool:
+    return bool(re.match(r"^https://www\.google\.com/maps\?cid=\d+$", url or ""))
+
+
+def _maps_lead_from_item(item: dict, phone_code: str | None, listed_url: str = "") -> dict | None:
+    """A Google Maps business with no usable website of its own — none at all,
+    or only a Facebook/Instagram/directory page — as a contactable lead. None
+    when its phone can't be messaged: missing, a switchboard extension
+    ("+525562850400ext.9411", a chain's call center), or another country's
+    number (a +92 one showed up for a London dentist)."""
+    phone = (item.get("phone") or "").strip()
+    cid = str(item.get("cid") or "")
+    if not phone or not cid or re.search(r"[a-z]", phone, re.IGNORECASE):
+        return None
+    digits = re.sub(r"\D", "", phone)
+    if phone_code and not digits.startswith(phone_code.lstrip("+")):
+        return None
+    rating = item.get("rating") or {}
+    addr = item.get("address_info") or {}
+    city, state = addr.get("city") or "", addr.get("region") or ""
+    if (addr.get("country_code") or "MX").upper() == "MX":
+        if not city or not state:
+            p_city, p_state = _city_state_from_address(item.get("address") or "")
+            city, state = city or p_city, state or p_state
+        state = _mx_state_name(state)
+    return {
+        "url": maps_url_for_cid(cid),
+        "cid": cid,
+        "place_id": item.get("place_id") or "",
+        "name": item.get("title") or "",
+        "category": item.get("category") or "",
+        "additional_categories": item.get("additional_categories") or [],
+        "phone": phone,
+        "address": item.get("address") or "",
+        "city": city,
+        "state": state,
+        "postal_code": addr.get("zip") or "",
+        "country_code": addr.get("country_code") or "",
+        "latitude": item.get("latitude"),
+        "longitude": item.get("longitude"),
+        "rating": rating.get("value"),
+        "reviews": rating.get("votes_count"),
+        "photo_url": item.get("main_image") or "",
+        "business_hours": _format_maps_hours(item.get("work_hours")),
+        "listed_url": listed_url,
+        "is_claimed": bool(item.get("is_claimed")),
+        "source": "maps",
+    }
+
+
+# Google Business Profile attribute ids → Spanish labels. Unknown ids fall back
+# to a humanized form of the id (see _attribute_label).
+_ATTRIBUTE_LABELS = {
+    "has_delivery": "Entrega a domicilio", "has_takeout": "Para llevar",
+    "has_in_store_pickup": "Recoger en tienda", "has_in_store_shopping": "Compras en tienda",
+    "has_curbside_pickup": "Recoger en la acera", "has_no_contact_delivery": "Entrega sin contacto",
+    "serves_dine_in": "Comer en el lugar", "has_dine_in": "Comer en el lugar",
+    "has_onsite_services": "Servicio en el lugar", "offers_online_appointments": "Citas en línea",
+    "has_online_classes": "Clases en línea", "has_online_care": "Atención en línea",
+    "has_same_day_delivery": "Entrega el mismo día", "has_drive_through": "Autoservicio",
+    "pay_credit_card": "Tarjeta de crédito", "pay_debit_card": "Tarjeta de débito",
+    "pay_mobile_nfc": "Pago con el celular (NFC)", "pay_cash_only": "Solo efectivo",
+    "pay_check": "Cheque", "accepts_reservations": "Acepta reservaciones",
+    "requires_appointments": "Requiere cita", "appointments_recommended": "Se recomienda cita",
+    "quick_visit": "Visita rápida", "has_wheelchair_accessible_entrance": "Entrada accesible",
+    "has_wheelchair_accessible_parking": "Estacionamiento accesible",
+    "has_wheelchair_accessible_restroom": "Baño accesible",
+    "has_wheelchair_accessible_seating": "Asientos accesibles",
+    "has_restroom": "Baños", "has_wi_fi": "Wi-Fi", "wi_fi": "Wi-Fi", "has_free_wi_fi": "Wi-Fi gratis",
+    "welcomes_children": "Apto para niños", "good_for_kids": "Apto para niños",
+    "welcomes_dogs": "Se permiten perros", "allows_dogs": "Se permiten perros",
+    "has_parking": "Estacionamiento", "has_free_parking_lot": "Estacionamiento gratis",
+    "has_paid_parking_lot": "Estacionamiento de pago", "has_free_street_parking": "Estacionamiento en la calle",
+    "serves_coffee": "Café", "serves_breakfast": "Desayunos", "serves_lunch": "Comidas",
+    "serves_dinner": "Cenas", "serves_alcohol": "Bebidas alcohólicas", "serves_beer": "Cerveza",
+    "serves_vegetarian": "Opciones vegetarianas", "serves_vegan": "Opciones veganas",
+    "serves_healthy_food": "Comida saludable", "serves_desserts": "Postres",
+    "has_seating": "Asientos", "has_outdoor_seating": "Mesas al aire libre",
+    "is_lgbtq_friendly": "Amigable con LGBTQ+", "has_women_led": "Dirigido por mujeres",
+    "identifies_as_women_owned": "Negocio de mujeres",
+}
+_PRICE_LEVELS = {"inexpensive": "$", "moderate": "$$", "expensive": "$$$", "very_expensive": "$$$$"}
+
+
+def _attribute_label(attr_id: str) -> str:
+    if attr_id in _ATTRIBUTE_LABELS:
+        return _ATTRIBUTE_LABELS[attr_id]
+    words = re.sub(r"^(has|serves|offers|pay|is|welcomes|accepts)_", "", attr_id).replace("_", " ")
+    return words[:1].upper() + words[1:]
+
+
+def maps_business_details(cid: str, country_code: str = "MX") -> dict:
+    """Google Business Profile of one Maps business via DataForSEO
+    (my_business_info, $0.0054 each — only called on "Procesar"): what a
+    business with no website of its own still publishes. {} on any failure."""
+    auth = _dataforseo_auth()
+    if not auth or not cid:
+        return {}
+    cfg = next((c for c in COUNTRY_CONFIG.values() if c.get("bd_country") == (country_code or "").lower()),
+               COUNTRY_CONFIG.get(DEFAULT_COUNTRY) or {})
+    country_name = next((n for n, c in COUNTRY_CONFIG.items() if c is cfg), "México")
+    location = unicodedata.normalize("NFKD", country_name).encode("ascii", "ignore").decode("ascii")
+    try:
+        resp = requests.post(
+            "https://api.dataforseo.com/v3/business_data/google/my_business_info/live",
+            headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
+            json=[{"keyword": f"cid:{cid}", "location_name": location, "language_code": cfg.get("hl", "es")}],
+            timeout=60,
+        )
+        resp.raise_for_status()
+        task = (resp.json().get("tasks") or [{}])[0]
+        items = ((task.get("result") or [{}])[0] or {}).get("items") or []
+    except Exception as e:
+        print(f"[maps-details] cid {cid}: {e!r}")
+        return {}
+    if not items:
+        print(f"[maps-details] cid {cid}: {task.get('status_code')} {task.get('status_message')} — no profile")
+        return {}
+    it = items[0]
+    groups = ((it.get("attributes") or {}).get("available_attributes") or {})
+    payments = [_attribute_label(a) for a in groups.get("payments") or []]
+    services = [_attribute_label(a) for a in groups.get("service_options") or []]
+    services += [s if isinstance(s, str) else (s or {}).get("name", "") for s in it.get("services") or []]
+    amenities = [_attribute_label(a) for g, ids in groups.items()
+                 if g not in ("payments", "service_options") for a in ids or []]
+    logo = it.get("logo") or ""
+    # Google serves the profile logo at 44px; the same URL scales on request.
+    logo = re.sub(r"/s\d+-", "/s256-", logo, count=1)
+    topics = sorted((it.get("place_topics") or {}).items(), key=lambda kv: -kv[1])
+    return {
+        "description": (it.get("description") or "").strip(),
+        "logo_url": logo,
+        "services": [s for s in dict.fromkeys(services) if s],
+        "payment_methods": list(dict.fromkeys(payments)),
+        "amenities": list(dict.fromkeys(amenities)),
+        "price_level": _PRICE_LEVELS.get(it.get("price_level") or "", ""),
+        "review_topics": [t for t, _ in topics[:10]],
+        "rating_distribution": it.get("rating_distribution") or {},
+        "total_photos": it.get("total_photos"),
+        "book_online_url": it.get("book_online_url") or "",
+        "related_businesses": [p.get("title") for p in (it.get("people_also_search") or [])[:6] if p.get("title")],
+        "is_claimed": bool(it.get("is_claimed")),
+    }
+
+
+# (industry, category), both _norm_loc'd → is that Maps category the searched giro?
+_MAPS_CATEGORY_VERDICTS: dict[tuple[str, str], bool] = {}
+
+
+def _filter_maps_leads_by_category(leads: list[dict], industry: str) -> list[dict]:
+    """Keep the leads whose Google Maps PRIMARY category is the searched giro.
+
+    A category equal to the giro passes outright. Every other distinct
+    category is judged once by the LLM, cached per process: the fixed
+    prefix rule (_maps_category_matches) wrongly dropped specialties
+    ("Ortodoncista", "Endodoncista" for dentists), close variants
+    ("Repostería" for bakeries) and English categories ("Dentist" for a
+    London search normalized to "dentistas"), and wrongly kept "Dental
+    laboratory". Without an LLM answer it falls back to that prefix rule.
+    """
+    ind_key = _norm_loc(_to_singular_es(industry))
+    exact = {ind_key, _norm_loc(industry)}
+    originals: dict[str, str] = {}
+    examples: dict[str, list[str]] = {}
+    for lead in leads:
+        cat = _norm_loc(lead.get("category") or "")
+        if cat and cat not in exact:
+            originals.setdefault(cat, lead["category"])
+            if len(examples.setdefault(cat, [])) < 2 and lead.get("name"):
+                examples[cat].append(lead["name"])
+    pending = [c for c in originals if (ind_key, c) not in _MAPS_CATEGORY_VERDICTS]
+
+    if pending:
+        accepted = None
+        try:
+            from app.llm import call_llm
+            synonyms = _get_industry_synonyms(industry)
+            listing = "\n".join(
+                f'{i}. {originals[c]}'
+                + (f' (p.ej. {", ".join(repr(n) for n in examples.get(c, []))})' if examples.get(c) else "")
+                for i, c in enumerate(pending, 1))
+            # The synonyms are only extra examples of the giro, not its limits —
+            # listed as a closed set they made the LLM read "restaurante" as
+            # "Mexican food" (taquería, fonda…) and reject Italian, grill and
+            # sushi restaurants in Bogotá (2026-10-02).
+            prompt = (
+                f'Buscamos negocios del giro "{_to_singular_es(industry)}"'
+                + (f' (también cuentan variantes como: {", ".join(synonyms)}; no es una lista cerrada)'
+                   if synonyms else "")
+                + '. Abajo están las categorías principales de Google Maps de los resultados '
+                'encontrados (pueden venir en otro idioma), con nombres de negocios reales '
+                'que la usan.\n'
+                'Para CADA categoría decide si es un negocio de ese giro. SÍ: el mismo '
+                'tipo de negocio, cualquier subtipo o especialidad (cualquier tipo de cocina '
+                'si el giro es restaurante — "Italiana", "Parrilla", "Sushi"; cualquier '
+                'especialidad si es un consultorio — "Ortodoncista" es dentista) o su nombre '
+                'en otro idioma. NO: un giro distinto (una cafetería no es un restaurante; una '
+                'ferretería no es un plomero) o proveedores, tiendas de insumos, laboratorios '
+                'o fabricantes del giro. Usa los nombres de ejemplo cuando la categoría sea '
+                'ambigua.\n\n'
+                f'{listing}\n\n'
+                'Responde ÚNICAMENTE con un objeto JSON que tenga TODOS los números, cada uno '
+                'con "si" o "no", p.ej. {"1": "si", "2": "no"}.'
+            )
+            # One explicit verdict per category, not "list the ones that match":
+            # with a list gpt-4o-mini silently left out real matches — it took
+            # "Italiana" but dropped "Francesa" and "Carne" in the same answer.
+            content = call_llm([{"role": "user", "content": prompt}],
+                               max_tokens=min(1500, 40 + 12 * len(pending)), temperature=0)
+            m = re.search(r'\{.*\}', content or "", re.S)
+            if m:
+                answers = json.loads(m.group(0))
+                accepted = {int(k) for k, v in answers.items()
+                            if str(k).isdigit() and str(v).strip().lower().startswith("s")}
+        except Exception as e:
+            print(f"[maps-leads] category LLM failed: {e!r}")
+        if accepted is not None:
+            for i, c in enumerate(pending, 1):
+                _MAPS_CATEGORY_VERDICTS[(ind_key, c)] = i in accepted
+
+    def _keep(lead: dict) -> bool:
+        cat = _norm_loc(lead.get("category") or "")
+        if not cat:
+            return False
+        if cat in exact:
+            return True
+        verdict = _MAPS_CATEGORY_VERDICTS.get((ind_key, cat))
+        return verdict if verdict is not None else _maps_category_matches(lead["category"], industry)
+
+    kept_urls = {l["url"] for l in leads if _keep(l)}
+    kept_urls |= _rescue_maps_leads_by_name([l for l in leads if l["url"] not in kept_urls], industry)
+    return [l for l in leads if l["url"] in kept_urls]
+
+
+def _rescue_maps_leads_by_name(rejected: list[dict], industry: str) -> set[str]:
+    """URLs of leads whose category was rejected but whose NAME says they are
+    the giro — Google files "Electricista y plomero Mérida" under Electricista
+    or Constructor, so 13 real plumbers of one Mérida search were dropped
+    (2026-10-02). Name hits go to the LLM one by one rather than being kept
+    outright, since "Depósito Dental" also says "dental"."""
+    words = {_norm_loc(_to_singular_es(industry))} | {_norm_loc(s) for s in _get_industry_synonyms(industry)}
+    words = {w for w in words if len(w) >= 4}
+    # The giro's own stem in the name ("plomer" → Plomero/Plomería, "estetic
+    # canin" → Estética Canina) is decisive unless Google files the place as a
+    # store/supplier — the LLM alone kept "Electricista y plomero" but dropped
+    # "Electricista plomero" in the same answer.
+    stems = [re.sub(r"[aeo]s?$", "", w) for w in _norm_loc(_to_singular_es(industry)).split()]
+    stem_re = (re.compile(r"\b" + r"\w*\s+".join(re.escape(s) for s in stems) + r"\w*")
+               if stems and all(len(s) >= 4 for s in stems) else None)
+    supplier_re = re.compile(r"tienda|ferreter|distribuid|proveedor|mayorist|deposito|comercio|"
+                             r"laborator|fabric|supermerc|almacen|venta|farmacia")
+    sure: set[str] = set()
+    cands = []
+    for l in rejected:
+        name = _norm_loc(l.get("name") or "")
+        if stem_re and stem_re.search(name) and not supplier_re.search(_norm_loc(l.get("category") or "")):
+            sure.add(l["url"])
+        elif any(w in name for w in words):
+            cands.append(l)
+    cands = cands[:60]
+    if not cands:
+        return sure
+    try:
+        from app.llm import call_llm
+        listing = "\n".join(
+            f'{i}. {l.get("name")} (categoría de Google: {l.get("category") or "sin categoría"})'
+            for i, l in enumerate(cands, 1))
+        prompt = (
+            f'Buscamos negocios del giro "{_to_singular_es(industry)}". ¿Cuáles de estos negocios '
+            'de Google Maps SON de ese giro? Juzga sobre todo por el nombre: un negocio que ofrece '
+            'varios servicios cuenta si uno de ellos es el giro ("Electricista y plomero" sí es '
+            'plomero), aunque Google lo tenga como tienda ("Pet Shop / Estética Canina" sí es '
+            'estética canina). NO cuentan los que solo venden insumos o material del giro '
+            '("Material Eléctrico y Plomería" no es plomero).\n\n'
+            f'{listing}\n\n'
+            'Responde ÚNICAMENTE con un array JSON de los números que SÍ son del giro, p.ej. [2, 5]. '
+            'Si ninguno, [].'
+        )
+        content = call_llm([{"role": "user", "content": prompt}], max_tokens=200, temperature=0)
+        m = re.search(r'\[[\d,\s]*\]', content or "")
+        if not m:
+            return sure
+        return sure | {cands[i - 1]["url"] for i in json.loads(m.group(0)) if 1 <= i <= len(cands)}
+    except Exception as e:
+        print(f"[maps-leads] name rescue LLM failed: {e!r}")
+        return sure
+
+
 def _search_via_dataforseo_maps(
     industry: str, city: str = "", country: str = None,
     keywords: str = "", num_results: int = 10, offset: int = 0,
+    phone_leads: list | None = None, sink: dict | None = None,
 ) -> tuple[list, dict]:
     """Google Maps local business search via DataForSEO's Maps SERP API (Live).
     Replaced Bright Data's Maps scraping (2026-09-09) — same query side by
     side gave ~15-17 real business sites here vs 8 via Bright Data, at
     $0.002/call. See _search_via_google_maps's docstring for the comparison.
+
+    `phone_leads`, when given, also collects businesses that have a phone but
+    NO website — discarded before, though measured live (2026-10-02) to be
+    roughly as many as the website ones (81 vs 74 bakeries in Querétaro,
+    134 vs 145 dentists in Monterrey) from the same already-paid call.
     """
     auth = _dataforseo_auth()
     if not auth or not city.strip():
@@ -2808,6 +3218,7 @@ def _search_via_dataforseo_maps(
     _country_ascii = unicodedata.normalize('NFKD', effective_country).encode('ascii', 'ignore').decode('ascii')
     cfg = _get_country_config(effective_country)
     language_code = cfg.get("hl", "es") if cfg else "es"
+    phone_code = (cfg or {}).get("phone_code")
     # Official name first (see _resolve_dfs_location); the hand-built form is
     # only a fallback when the official list can't be fetched or has no match.
     location_name = _resolve_dfs_location(city.strip(), _state_key, (cfg or {}).get("bd_country"))
@@ -2821,7 +3232,7 @@ def _search_via_dataforseo_maps(
     kw = keywords.strip()
     base_keyword = f"{kw} {ind_clean}".strip() if kw else ind_clean
 
-    static_synonyms = _get_industry_synonyms(ind_clean)
+    static_synonyms = _country_synonyms(ind_clean, effective_country)
     # Un solo query ya trae hasta 100 resultados crudos — solo se agregan
     # sinónimos extra para pedidos grandes.
     max_syn = min(3, max(0, (num_results - 1) // 40))
@@ -2837,10 +3248,14 @@ def _search_via_dataforseo_maps(
     # pero también tarda más en responder (confirmado: un intento real superó
     # los 25s). Para pedidos chicos, donde ni falta tanta profundidad, se usa
     # depth=100 (rápido); solo los pedidos grandes pagan la espera extra.
-    base_depth = 100 if num_results <= 20 else 300
+    # El corte va alineado con _GLOBAL_DEADLINE de search_prospects (40s hasta
+    # 50, 80s arriba): depth=300 tardó 40-80s seguido (2026-10-02), así que con
+    # el límite de 40s una búsqueda de 10 resultados (num_results=30) perdía
+    # Maps completo — sitios y negocios sin web — por timeout.
+    base_depth = 100 if num_results <= 50 else 300
     depth = base_depth if offset <= 0 else min(base_depth + offset, 700)
 
-    def _fetch_one(kw_variant: str) -> tuple[list, dict]:
+    def _fetch_one(kw_variant: str) -> tuple[list, dict, list]:
         payload = [{
             "keyword": f"{kw_variant} en {city.strip()}",
             "location_name": location_name,
@@ -2868,9 +3283,17 @@ def _search_via_dataforseo_maps(
                       f"{task.get('status_code')} {task.get('status_message')}")
             results = task.get("result") or []
             items = results[0].get("items", []) if results else []
-            batch_urls, batch_snips = [], {}
+            batch_urls, batch_snips, batch_phones = [], {}, []
             for item in items:
                 website = item.get("url") or (f"https://{item['domain']}" if item.get("domain") else None)
+                # No usable site of its own — 16 of 100 bakeries in one
+                # Querétaro search listed only a Facebook/Instagram page and
+                # were lost to both flows (2026-10-02).
+                if phone_leads is not None and not (website and _is_business_url(website)):
+                    lead = _maps_lead_from_item(item, phone_code, listed_url=website or "")
+                    if lead:
+                        batch_phones.append(lead)
+                    continue
                 if website and _is_business_url(website) and website not in batch_urls:
                     batch_urls.append(website)
                     rating = item.get("rating") or {}
@@ -2896,24 +3319,34 @@ def _search_via_dataforseo_maps(
                         # _ai_filter_urls can rescue on Google's own category.
                         "maps_category": item.get("category") or "",
                     }
-            return batch_urls, batch_snips
+            return batch_urls, batch_snips, batch_phones
         except Exception as e:
             print(f"[dataforseo-maps] {kw_variant!r} error: {e!r}")
-            return [], {}
+            return [], {}, []
 
     seen_domains: set[str] = set()
-    urls: list[str] = []
-    snippets: dict = {}
+    seen_phones: set[str] = set()
+    # `sink` ({"urls": [], "snippets": {}}) lets the caller read what the
+    # queries that already answered found, if the whole call outlives its
+    # deadline — one slow depth-300 query used to throw away the rest.
+    urls: list[str] = sink["urls"] if sink is not None else []
+    snippets: dict = sink["snippets"] if sink is not None else {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(query_keywords), 4)) as ex:
         futures = [ex.submit(_fetch_one, kwv) for kwv in query_keywords]
         for f in concurrent.futures.as_completed(futures):
-            batch_urls, batch_snips = f.result()
+            batch_urls, batch_snips, batch_phones = f.result()
             for u in batch_urls:
                 d = _get_domain(u)
                 if d and d not in seen_domains:
                     seen_domains.add(d)
-                    urls.append(u)
                     snippets[u] = batch_snips.get(u, {})
+                    urls.append(u)
+            if phone_leads is not None:
+                for lead in batch_phones:
+                    digits = re.sub(r"\D", "", lead["phone"])
+                    if digits and digits not in seen_phones:
+                        seen_phones.add(digits)
+                        phone_leads.append(lead)
 
     return urls, snippets
 
@@ -2926,7 +3359,13 @@ def search_prospects(
     offset: int = 0,
     exclude_domains: set | None = None,
     country: str = None,
+    phone_leads_out: list | None = None,
+    meta_out: dict | None = None,
 ) -> tuple[list, str | None, list]:
+    # phone_leads_out: if given, gets Google Maps businesses that have a phone
+    # but no website, kept only when Google's primary category is the
+    # searched giro (see _maps_category_matches). Separate from the returned
+    # URLs because there's no site to scrape for them.
     # La UI es un solo cuadro de texto libre — el usuario escribe negocio + lugar
     # juntos ("gimnasios en Monterrey") y no manda `city`/`country` por separado.
     # Si no vinieron explícitos, se intentan extraer del propio texto para que
@@ -2978,6 +3417,10 @@ def search_prospects(
 
     _log.info("[search] industry=%r city=%r country=%r num=%d offset=%d",
               industry, city, country, num_results, offset)
+    if meta_out is not None:
+        # The giro alone ("plomeros", not "plomeros en Mérida") — what a later
+        # post-scrape industry check should compare against.
+        meta_out.update({"industry": industry, "city": city, "country": country})
 
     # For complex multi-word industry phrases, simplify to a shorter core term that
     # generates better Google recall. The original 'industry' is kept for the AI filter
@@ -2993,6 +3436,7 @@ def search_prospects(
     geocode_city = (state_cities[0] if state_cities and not city else city)
 
     _dfs_ok = bool(_dataforseo_auth())
+    _leads_future = None
     # Defined before the branch — the DDG-only `else` below never populated this,
     # so the final `return` at the bottom of this function would raise
     # NameError whenever DataForSEO isn't configured/authorized (real gap
@@ -3034,15 +3478,57 @@ def search_prospects(
                 return [], {}
 
         _ex = concurrent.futures.ThreadPoolExecutor(max_workers=4)
-        maps_future = _ex.submit(_search_via_dataforseo_maps, industry_q, geocode_city, country, keywords, num_results, offset)
+        _maps_phone_raw: list = []
+        _maps_sink: dict = {"urls": [], "snippets": {}}
+        _phone_arg = _maps_phone_raw if phone_leads_out is not None else None
+        if geocode_city:
+            maps_future = _ex.submit(_search_via_dataforseo_maps, industry_q, geocode_city, country, keywords,
+                                     num_results, offset, _phone_arg, _maps_sink)
+        else:
+            # No city or state at all ("Panaderías"): Maps needs a place, so it
+            # used to sit these searches out entirely — sweep the country's main
+            # cities instead, 3 per page, a fresh block on each "load more".
+            _eff = _detect_effective_country(country, industry) or DEFAULT_COUNTRY
+            _cc = _get_country_config(_eff) or {}
+            # Mexico's list starts with the state capitals in alphabetical
+            # order (Aguascalientes, Mexicali…) — Maps should start big.
+            _city_pool = _MX_METROS_BY_SIZE if _norm_loc(_eff) == "mexico" else (_cc.get("cities") or [])
+            _maps_cities = _city_window(_city_pool, 3, offset)
+            _per_city = max(10, num_results // max(1, len(_maps_cities)))
+
+            def _maps_country_wide():
+                merged_urls, merged_snips = [], {}
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(_maps_cities))) as _mx:
+                    for _u, _s in _mx.map(lambda c: _search_via_dataforseo_maps(
+                            industry_q, c, country, keywords, _per_city, 0, _phone_arg, _maps_sink), _maps_cities):
+                        merged_urls.extend(_u)
+                        merged_snips.update(_s)
+                return merged_urls, merged_snips
+
+            _log.info("[search] country-wide Maps over %s", _maps_cities)
+            maps_future = _ex.submit(_maps_country_wide)
         ddg_future  = _ex.submit(_search_via_duckduckgo, industry_q, city, exclude_domains or set(), country, num_results, state_cities, offset)
         sa_future   = _ex.submit(_search_via_seccion_amarilla, industry_q, geocode_city, country, num_results)
         osm_future  = _ex.submit(_search_via_openstreetmap, industry_q, geocode_city, country, num_results)
         maps_urls, maps_snips = _safe_result(maps_future, "Maps")
+        if not maps_urls and _maps_sink["urls"]:
+            # Snapshot the list first; the dict is only read by key (never
+            # iterated) since the Maps thread may still be adding to it.
+            maps_urls = list(_maps_sink["urls"])
+            maps_snips = {u: _maps_sink["snippets"].get(u, {}) for u in maps_urls}
+            _log.info("[search] Maps partial: %d urls from the queries that answered in time", len(maps_urls))
         ddg_urls,  ddg_snips  = _safe_result(ddg_future,  "DDG")
         sa_urls,   sa_snips   = _safe_result(sa_future,   "SA")
         osm_urls,  osm_snips  = _safe_result(osm_future,  "OSM")
         _ex.shutdown(wait=False)
+
+        if phone_leads_out is not None and _maps_phone_raw:
+            # Several Maps calls (synonyms, or cities for a country-wide search)
+            # can return the same place.
+            _maps_phone_raw[:] = list({l["cid"]: l for l in list(_maps_phone_raw)}.values())
+            _leads_ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            _leads_future = _leads_ex.submit(_filter_maps_leads_by_category, list(_maps_phone_raw), industry)
+            _leads_ex.shutdown(wait=False)
 
         _log.info("[search] Maps=%d DDG=%d SA=%d OSM=%d → merged=%d",
                   len(maps_urls), len(ddg_urls), len(sa_urls), len(osm_urls),
@@ -3200,6 +3686,15 @@ def search_prospects(
     # highest-quality source, can time out completely on a real query; before
     # this, the caller had no way to know results came only from weaker
     # fallback sources.
+    if _leads_future is not None:
+        try:
+            _kept_leads = _leads_future.result(timeout=30)
+        except Exception as _e:
+            _log.warning("[search] Maps lead category filter failed (%s) — prefix rule only", _e)
+            _kept_leads = [l for l in _maps_phone_raw if _maps_category_matches(l["category"], industry)]
+        phone_leads_out.extend(_kept_leads)
+        _log.info("[search] Maps leads without website: %d raw → %d matching category",
+                  len(_maps_phone_raw), len(_kept_leads))
     return result, _target_state_key, degraded_sources
 
 

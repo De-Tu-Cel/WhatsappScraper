@@ -13,10 +13,17 @@ look at it.
 import logging
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 log = logging.getLogger(__name__)
+
+
+def _utcnow() -> datetime:
+    # Naive UTC, never server-local time: a dev backend on Mexico time sharing
+    # this DB stamped heartbeats 6h "old" for the UTC production container,
+    # whose stale sweep then re-ran the job with its own code (2026-10-02).
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 _POLL_INTERVAL_SEC = 15   # scraping is interactive (user is watching a progress bar) —
                           # kept short; the real "feels instant" part is the direct
@@ -27,13 +34,17 @@ _STALE_AFTER_SEC    = 600  # A single slow URL (JS/SPA with 25 route probes) can
 _CONCURRENCY        = 4    # matches the CONCURRENCY the frontend loops used to hardcode.
 
 
-def _process_one_url(url: str) -> dict:
+def _process_one_url(url: str, maps_lead: dict | None = None) -> dict:
     """Mirrors the per-URL result shape the 3 frontend components (searchProspects,
     batchProcessor, csvImporter) used to build client-side from the /process-url
     response — a superset covering every field any of the 3 read."""
-    from app.pipeline import process_url
+    from app.pipeline import process_maps_lead, process_url
+    from app.searcher import is_maps_lead_url
     try:
-        d = process_url(url, skip_send=True)
+        if is_maps_lead_url(url):
+            d = process_maps_lead(url, maps_lead)
+        else:
+            d = process_url(url, skip_send=True)
     except Exception as e:
         return {
             "url": url, "empresa": "—", "industria": "—", "whatsapp": "", "all_whatsapp": [],
@@ -41,19 +52,39 @@ def _process_one_url(url: str) -> dict:
             "blacklisted": False, "blockReason": None, "duplicate": False, "errorReason": str(e),
         }
     if d.get("blacklisted"):
+        # Keep the business name (and that it's a Maps lead) — a blocked Maps row
+        # used to show up as "google.com" with Google's logo.
+        is_maps = is_maps_lead_url(url)
         return {
-            "url": url, "empresa": "—", "industria": "—", "whatsapp": "", "all_whatsapp": [],
+            "url": url, "empresa": d.get("name") or (maps_lead or {}).get("name") or "—",
+            "industria": d.get("industry") or "—", "whatsapp": "", "all_whatsapp": [],
             "company_id": "", "scraped_data": None, "status_wa": "—", "ok": False,
-            "blacklisted": True, "blockReason": d.get("matched"), "duplicate": False, "errorReason": None,
+            "blacklisted": True, "blockReason": d.get("matched"), "blockKind": d.get("reason"),
+            "duplicate": False, "errorReason": None,
+            "no_website": is_maps, "maps_url": url if is_maps else None,
         }
     scraped = d.get("scraped") or {}
-    primary = d.get("primary_whatsapp_number") or ""
+    all_wa = d.get("all_whatsapp_numbers") or []
+    # A number confirmed by the phone-verification step lands in all_wa but not
+    # as the page's "primary" — the row then showed its WhatsApp chip next to an
+    # "Empty" status.
+    primary = d.get("primary_whatsapp_number") or (all_wa[0] if all_wa else "")
+    extra = scraped.get("_extra") or {}
+    phones = (scraped.get("_contacts_raw") or {}).get("phone_numbers") or ([d["phone"]] if d.get("phone") else [])
     return {
         "url": url,
         "empresa": scraped.get("name") or "—",
         "industria": scraped.get("industry") or "—",
+        "city": scraped.get("city") or extra.get("city") or "",
+        "state": scraped.get("state") or extra.get("state") or "",
+        # "sitio" (the page itself), "lada" (its phones' area code) or "busqueda"
+        # (the place the search was aimed at) — see scraper._finalize_location.
+        "location_source": scraped.get("location_source") or extra.get("loc_source") or "",
+        "phones_count": len(phones),
+        "location_mismatch": d.get("location_mismatch"),
+        "industry_mismatch": d.get("industry_mismatch"),
         "whatsapp": primary,
-        "all_whatsapp": d.get("all_whatsapp_numbers") or ([primary] if primary else []),
+        "all_whatsapp": all_wa or ([primary] if primary else []),
         "company_id": d.get("company_id") or "",
         "scraped_data": scraped,
         "status_wa": (d.get("send_result") or {}).get("status_code") or "—",
@@ -62,6 +93,11 @@ def _process_one_url(url: str) -> dict:
         "blockReason": None,
         "duplicate": False,
         "errorReason": None,
+        "no_website": bool(scraped.get("no_website")),
+        "phone": d.get("phone") or "",
+        "wa_verified": d.get("wa_verified"),
+        "logo_url": scraped.get("logo_url") or "",
+        "photo_url": scraped.get("photo_url") or "",
     }
 
 
@@ -82,7 +118,7 @@ def _run_scrape_job(job_id: str):
             try:
                 db.db.scrape_jobs.update_one(
                     {"_id": oid, "status": "running"},
-                    {"$set": {"last_progress_at": datetime.now()}},
+                    {"$set": {"last_progress_at": _utcnow()}},
                 )
             except Exception:
                 pass
@@ -110,28 +146,35 @@ def _run_scrape_job(job_id: str):
                 # Heartbeat while paused so the stale-job sweep doesn't mistake a
                 # legitimately-paused-but-alive job for a crashed one and reclaim it
                 # into a second, duplicate worker thread.
-                db.db.scrape_jobs.update_one({"_id": oid}, {"$set": {"last_progress_at": datetime.now()}})
+                db.db.scrape_jobs.update_one({"_id": oid}, {"$set": {"last_progress_at": _utcnow()}})
                 time.sleep(1)
                 continue
 
             chunk = urls[next_index:next_index + _CONCURRENCY]
             db.db.scrape_jobs.update_one(
                 {"_id": oid},
-                {"$set": {"current_urls": chunk, "last_progress_at": datetime.now()}},
+                {"$set": {"current_urls": chunk, "last_progress_at": _utcnow()}},
             )
 
-            # Pause breaks immediately after the first URL that completes post-pause.
-            # Remaining futures run to completion in the background but results are
-            # discarded; next_index advances only by len(chunk_results), so those
-            # 1-3 URLs are re-scraped on resume (idempotent — upsert). This keeps
-            # the progress bar/counter truly frozen at the pause point.
+            # Pause is graceful: no new URL starts, but the ones already in flight
+            # (≤ _CONCURRENCY, threads can't be stopped anyway) finish and ARE
+            # recorded. Breaking out on pause used to discard their results while
+            # they kept running, so the count jumped when the pause settled and
+            # resume re-did that work — a second WhatsApp lookup for Maps leads,
+            # and a possible double run if resumed before the drain finished.
+            # Cancel still breaks immediately.
             in_flight = list(chunk)
             chunk_results = []
             broke_early = False
             pending_orphaned_urls: list = []
             ex = ThreadPoolExecutor(max_workers=len(chunk))
             try:
-                future_map = {ex.submit(_process_one_url, url): url for url in chunk}
+                _leads = {l.get("url"): l for l in (job.get("maps_leads") or [])}
+                future_map = {
+                    (ex.submit(_process_one_url, url, _leads[url]) if url in _leads
+                     else ex.submit(_process_one_url, url)): url
+                    for url in chunk
+                }
                 for future in as_completed(future_map):
                     url = future_map[future]
                     result = future.result()
@@ -142,19 +185,14 @@ def _run_scrape_job(job_id: str):
                         {
                             "$push": {"results": result},  # visible en tabla inmediatamente
                             "$inc": {"processed_count": 1},
-                            "$set": {"current_urls": in_flight, "last_progress_at": datetime.now()},
+                            "$set": {"current_urls": in_flight, "last_progress_at": _utcnow()},
                         },
                     )
-                    # Break on cancel OR pause. Remaining futures keep running in the
-                    # background (ThreadPoolExecutor can't cancel submitted futures)
-                    # but their results are discarded — next_index advances only by
-                    # len(chunk_results), so those URLs are re-scraped on resume.
-                    # Re-scraping is idempotent (upsert), so no data is lost.
-                    _st = db.db.scrape_jobs.find_one({"_id": oid}, {"status": 1, "paused": 1})
+                    # Cancel breaks here; remaining futures keep running in the
+                    # background (ThreadPoolExecutor can't cancel submitted ones)
+                    # but their results are discarded. Pause doesn't break — see above.
+                    _st = db.db.scrape_jobs.find_one({"_id": oid}, {"status": 1})
                     if _st and _st.get("status") == "cancelled":
-                        broke_early = True
-                        break
-                    if _st and _st.get("paused"):
                         broke_early = True
                         break
             finally:
@@ -233,13 +271,13 @@ def _run_scrape_job(job_id: str):
                     "next_index": next_index,
                     "processed_count": min(len(results), total),
                     "current_urls": pending_orphaned_urls,
-                    "last_progress_at": datetime.now(),
+                    "last_progress_at": _utcnow(),
                 }},
             )
 
         db.db.scrape_jobs.update_one(
             {"_id": oid},
-            {"$set": {"status": "done", "finished_at": datetime.now()}},
+            {"$set": {"status": "done", "finished_at": _utcnow()}},
         )
         log.info("[ScrapeJobs] job %s done — %d/%d processed", job_id, len(results), total)
 
@@ -248,7 +286,7 @@ def _run_scrape_job(job_id: str):
         try:
             db.db.scrape_jobs.update_one(
                 {"_id": oid},
-                {"$set": {"status": "error", "finished_at": datetime.now()}},
+                {"$set": {"status": "error", "finished_at": _utcnow()}},
             )
         except Exception:
             pass
@@ -270,7 +308,7 @@ def _claim_and_dispatch():
             job_id = str(job["_id"])
             result = db.db.scrape_jobs.update_one(
                 {"_id": job["_id"], "status": "pending"},
-                {"$set": {"status": "running", "started_at": datetime.now(), "last_progress_at": datetime.now()}},
+                {"$set": {"status": "running", "started_at": _utcnow(), "last_progress_at": _utcnow()}},
             )
             if result.modified_count == 0:
                 continue  # another tick/process already claimed it
@@ -299,8 +337,8 @@ def _sweep_stale_jobs():
 
     try:
         db = MongoDBManager()
-        cutoff_stale    = datetime.now() - timedelta(seconds=_STALE_AFTER_SEC)
-        cutoff_abandoned = datetime.now() - timedelta(seconds=_PAUSED_ABANDON_SEC)
+        cutoff_stale    = _utcnow() - timedelta(seconds=_STALE_AFTER_SEC)
+        cutoff_abandoned = _utcnow() - timedelta(seconds=_PAUSED_ABANDON_SEC)
 
         # 1) Crashed non-paused workers → reset to pending
         result = db.db.scrape_jobs.update_many(
@@ -317,7 +355,7 @@ def _sweep_stale_jobs():
         for job in abandoned:
             db.db.scrape_jobs.update_one(
                 {"_id": job["_id"]},
-                {"$set": {"status": "cancelled", "finished_at": datetime.now()}},
+                {"$set": {"status": "cancelled", "finished_at": _utcnow()}},
             )
             _mark_pending_urls(db, job)
             log.warning("[ScrapeJobs] abandoned paused job %s → cancelled with %d pending URLs",
@@ -326,12 +364,25 @@ def _sweep_stale_jobs():
         log.exception("[ScrapeJobs] _sweep_stale_jobs failed")
 
 
-def create_scrape_job(db, surface: str, urls: list, user: dict) -> dict:
+def create_scrape_job(db, surface: str, urls: list, user: dict, maps_leads: dict | None = None,
+                      query: str | None = None) -> dict:
     """Insert a new pending job and dispatch it immediately (instead of waiting for
-    the next poll tick) so it feels as instant as the old in-browser loop did."""
-    now = datetime.now()
+    the next poll tick) so it feels as instant as the old in-browser loop did.
+    `maps_leads` ({url: lead}) carries the Google Maps data for results with no
+    website — see pipeline.process_maps_lead."""
+    now = _utcnow()
+    # Google Maps leads first: each takes a few seconds (profile + one paced
+    # WhatsApp lookup) while a website can take minutes, and a chunk only
+    # moves on when its slowest URL finishes — mixed in after the sites, the
+    # quick ones sat waiting behind them. Stable sort keeps each group's order.
+    from app.searcher import is_maps_lead_url
+    urls = sorted(urls, key=lambda u: not is_maps_lead_url(u))
     doc = {
+        # A list, not a {url: lead} map — URLs contain dots, which aren't safe as Mongo field names.
+        "maps_leads": [{**l, "url": u} for u, l in (maps_leads or {}).items() if u in set(urls)],
         "surface": surface,
+        # The search that produced these URLs, shown above the results ("Resultados de …").
+        "query": (query or "").strip()[:200] or None,
         "created_by_username": (user or {}).get("username", ""),
         "created_by_name": (user or {}).get("display_name", ""),
         "created_at": now,
@@ -376,9 +427,9 @@ def set_job_action(db, job_id: str, action: str) -> dict:
     if action == "pause":
         db.db.scrape_jobs.update_one({"_id": oid}, {"$set": {"paused": True}})
     elif action == "resume":
-        db.db.scrape_jobs.update_one({"_id": oid}, {"$set": {"paused": False, "last_progress_at": datetime.now()}})
+        db.db.scrape_jobs.update_one({"_id": oid}, {"$set": {"paused": False, "last_progress_at": _utcnow()}})
     elif action == "cancel":
-        db.db.scrape_jobs.update_one({"_id": oid}, {"$set": {"status": "cancelled", "finished_at": datetime.now()}})
+        db.db.scrape_jobs.update_one({"_id": oid}, {"$set": {"status": "cancelled", "finished_at": _utcnow()}})
         # Re-fetch AFTER cancelling to get the latest next_index — the worker may
         # have advanced it between our fetch and the status write.
         job = db.db.scrape_jobs.find_one({"_id": oid})
@@ -394,11 +445,16 @@ def set_job_action(db, job_id: str, action: str) -> dict:
                 "paused": False,
                 "finished_at": None,
                 "pending_urls_count": 0,
-                "last_progress_at": datetime.now(),
+                "last_progress_at": _utcnow(),
             }},
         )
         if result.modified_count:
             _claim_and_dispatch()
+    elif action == "dismiss":
+        # The user cleared these results ("Nueva búsqueda", X, back to ideas) —
+        # /scrape-jobs/latest must stop handing the job back after a refresh.
+        # Doesn't touch the job itself: a running one keeps going.
+        db.db.scrape_jobs.update_one({"_id": oid}, {"$set": {"dismissed_at": _utcnow()}})
     return db.db.scrape_jobs.find_one({"_id": oid})
 
 

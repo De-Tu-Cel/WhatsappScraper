@@ -1,5 +1,6 @@
 ﻿# scraper.py - VERSIÓN EXTENDIDA
 import ipaddress
+import json
 import re
 import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -10,6 +11,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 import urllib3
 from bs4 import BeautifulSoup
+from bson import ObjectId
 from pymongo import MongoClient
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -330,7 +332,8 @@ class WebsiteScraper:
         self.contacts_col = db["contacts"]
         self.scraping_runs_col = db["scraping_runs"]
 
-    def scrape_site(self, url: str, force: bool = False, country: str = None, target_state: str = None) -> Dict:
+    def scrape_site(self, url: str, force: bool = False, country: str = None, target_state: str = None,
+                    verify_phones: bool = True, target_city: str = None) -> Dict:
         """
         Scraping completo de un sitio web
         
@@ -394,6 +397,11 @@ class WebsiteScraper:
         # vez de la real, 2026-09-29). None = sin preferencia, comportamiento
         # idéntico al de antes de este cambio.
         self._target_state_hint = self._norm_state_key(target_state) if target_state else None
+        # Raw values of the search's target place — last-resort location for a
+        # site that shows none and whose phones don't tell either (see
+        # _finalize_location).
+        self._target_state_raw = target_state or ""
+        self._target_city_raw = target_city or ""
         # Nueva instancia por llamada (ver process_url() en pipeline.py) — este
         # diccionario nunca sobrevive entre empresas distintas, así que cachear
         # aquí es seguro (ver _nominatim_structure_address).
@@ -429,6 +437,8 @@ class WebsiteScraper:
                     },
                     "metadata": {"scraped_at": datetime.now(timezone.utc).isoformat()}
                 }
+                # Nothing on the page to go by — at least the place the search was aimed at.
+                self._finalize_location(blocked)
                 # Same dedup-by-domain path the success flow uses below — without it,
                 # a domain already saved by an earlier scrape (e.g. a different URL
                 # on the same site) hits the unique index and crashes with E11000
@@ -490,12 +500,18 @@ class WebsiteScraper:
 
         # Extraer todos los datos
         _company_name = self._extract_company_name(soup, url)
-        _addr = self._extract_address_structured(soup, text)
+        # Form drop-downs (state / municipality <select>s on contact or quote
+        # forms) read like a list of places — "Ciudad Estado Aguascalientes Baja
+        # California…" became Nissan Tijuana's "address" and Puebla its state.
+        _loc_soup = self._without_form_lists(soup)
+        _loc_text = text if _loc_soup is soup else _loc_soup.get_text(" ", strip=True)
+        _addr = self._extract_address_structured(_loc_soup, _loc_text)
         result = {
             # Campos para MongoDB companies
             "website": url,
             "domain": domain,
             "name": _company_name,
+            "logo_url": self._extract_logo_url(soup, url),
             "industry": self._detect_industry(text, soup, company_name=_company_name),
             "description": self._extract_description(soup, text),
             "has_whatsapp": False,
@@ -712,6 +728,9 @@ class WebsiteScraper:
         # ── Enriquecimiento con IA: rellenar campos vacíos en una sola llamada ──
         self._deepseek_enrich_result(result, text[:1000])
 
+        # Location the page didn't give: from the phones' area code, else the search's place.
+        self._finalize_location(result)
+
         # Deduplicación y guardado en MongoDB
         existing = self.companies_col.find_one({"domain": domain})
         if existing:
@@ -727,8 +746,12 @@ class WebsiteScraper:
             # phone-only since 2026-09-22, WhatsApp detected correctly on
             # every later scrape attempt but never saved).
             already_has_contact = existing.get("has_whatsapp") or self.contacts_col.find_one(
-                {"company_id": existing["_id"], "type": "whatsapp"}
+                {"company_id": {"$in": [existing["_id"], str(existing["_id"])]}, "type": "whatsapp"}
             )
+            # Backfill del logo para empresas guardadas antes de que se extrajera —
+            # la página ya se descargó, así que no cuesta nada extra.
+            if result.get("logo_url") and (force or not existing.get("logo_url")):
+                self.companies_col.update_one({"_id": existing["_id"]}, {"$set": {"logo_url": result["logo_url"]}})
             # Solo saltar si ya tiene WhatsApp — si no encontró WhatsApp antes, reintentar siempre
             if not force and next_scrape and next_scrape.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc) and already_has_contact:
                 print(f"⏭️  Dominio ya scrapeado recientemente con contactos: {domain}")
@@ -743,8 +766,14 @@ class WebsiteScraper:
                     "next_allowed_scrape_at": result["next_allowed_scrape_at"],
                     "updated_at": datetime.now(timezone.utc),
                 }
+                # A company saved without a location gets the one found now (area
+                # code / search fallback included) even on a normal re-scrape.
+                if not existing.get("state") and result.get("state"):
+                    for field in ("city", "state", "location_source"):
+                        if result.get(field):
+                            update_fields[field] = result[field]
                 if force:
-                    for field in ("name","industry","description","city","state","country",
+                    for field in ("name","industry","description","city","state","country","location_source",
                                   "address","all_locations","phone_numbers","whatsapp_numbers","all_whatsapp_numbers",
                                   "social_media","business_hours","services","products"):
                         if field in result:
@@ -779,7 +808,7 @@ class WebsiteScraper:
                 else:
                     raise
 
-        self._save_contacts(result["_contacts_raw"], result["_company_id"], url)
+        self._save_contacts(result["_contacts_raw"], result["_company_id"], url, verify_phones=verify_phones)
 
         return result
 
@@ -1072,17 +1101,30 @@ class WebsiteScraper:
         wa_numbers: List[str] = []
 
         _PHONE_RE = re.compile(
-            r'(?:\+52[\s\-]?)?'
+            r'(?<!\d)(?:\+?52[\s\-]?(?:1[\s\-]?)?)?'
             r'(?:\d{3}[\s\.\-]\d{3}[\s\.\-]\d{4}'      # 800 123 4567
             r'|\d{2}[\s\.\-]\d{4}[\s\.\-]\d{4}'          # 55 1234 5678
             r'|\d{10}'                                     # 10 dígitos continuos
-            r'|\(\d{3}\)\s*\d{3}[\s\-]?\d{4})'           # (800) 123-4567
+            r'|\(\d{3}\)\s*\d{3}[\s\-]?\d{4})(?!\d)'     # (800) 123-4567
         )
+        # Whole words only: substrings like "call"/"contact"/"tel" are all over
+        # page JS ("callback", "contactForm", "telemetry", "hotel").
+        _CONTACT_HINT = re.compile(
+            r'\b(?:tel|tel[eé]fono|telephone|phone\w*|whats\w*|celular|m[oó]vil|ll[aá]m\w*)\b|wa\.me',
+            re.IGNORECASE)
 
         def _harvest(text_blob: str):
-            """Busca números en un bloque de texto plano."""
+            """Busca números en un bloque de texto plano. Inside arbitrary page
+            JS a bare 10-digit run is far more often an ID/timestamp/date than
+            a phone (2026-10-02: Canva/Wix/Gamma/UENI sites yielded dozens of
+            fake ones, each then spending a WhatsApp lookup — and a random valid
+            number can be a real person's WhatsApp). So a script number counts
+            only when written like a phone or with contact wording right before it."""
             for m in _PHONE_RE.finditer(text_blob):
                 raw = m.group(0)
+                formatted = raw.startswith("+") or bool(re.search(r"[\s.\-()]", raw))
+                if not formatted and not _CONTACT_HINT.search(text_blob[max(0, m.start() - 40):m.start()]):
+                    continue
                 clean = self._normalize_phone(raw)
                 if clean and clean not in phones:
                     if "whatsapp" in text_blob[max(0, m.start()-30):m.end()+30].lower():
@@ -1121,7 +1163,11 @@ class WebsiteScraper:
             elif isinstance(obj, list):
                 for item in obj:
                     _walk_json(item)
-            elif isinstance(obj, str) and len(obj) < 30:
+            elif (isinstance(obj, str) and len(obj) < 30
+                  and re.fullmatch(r"\+?[\d\s().\-]{10,20}", obj.strip())
+                  and re.search(r"[+\s().\-]", obj.strip())):
+                # A bare string under a non-phone key only counts when it's
+                # written like a phone — plain digit strings here are IDs/dates.
                 clean = self._normalize_phone(obj)
                 if clean and clean not in phones:
                     phones.append(clean)
@@ -1305,6 +1351,101 @@ class WebsiteScraper:
         domain = urlparse(url).netloc.replace("www.", "")
         return domain.split(".")[0].capitalize()
 
+    def _extract_logo_url(self, soup: BeautifulSoup, url: str) -> str:
+        """URL absoluta del logotipo, o "" si no hay uno usable. Se guarda solo
+        el enlace (no el archivo). Orden: logo declarado en JSON-LD → <img> que
+        se identifica como logo → apple-touch-icon → favicon más grande →
+        og:image (a menudo un banner, por eso al final)."""
+        def _ok(src) -> str:
+            if not src or not isinstance(src, str):
+                return ""
+            absolute = urljoin(url, src.strip())
+            if urlparse(absolute).scheme not in ("http", "https") or len(absolute) > 1000:
+                return ""
+            # Site builders' own defaults, not the business's logo.
+            if re.search(r"//(?:www\.)?wix\.com/favicon|uenicdn\.com/assets/.*favicon|"
+                         r"gamma\.app/.*/screenshots/", absolute, re.IGNORECASE):
+                return ""
+            return absolute
+
+        def _ld_logo(node):
+            if isinstance(node, list):
+                for n in node:
+                    found = _ld_logo(n)
+                    if found:
+                        return found
+            elif isinstance(node, dict):
+                logo = node.get("logo")
+                if isinstance(logo, dict):
+                    logo = logo.get("url") or logo.get("contentUrl")
+                if isinstance(logo, list):
+                    logo = next((x for x in logo if isinstance(x, str)), None)
+                if isinstance(logo, str) and _ok(logo):
+                    return _ok(logo)
+                for v in node.values():
+                    if isinstance(v, (dict, list)):
+                        found = _ld_logo(v)
+                        if found:
+                            return found
+            return ""
+
+        for script in soup.find_all("script", type="application/ld+json"):
+            try:
+                found = _ld_logo(json.loads(script.string or ""))
+            except Exception:
+                continue
+            if found:
+                return found
+
+        _logo_re = re.compile(r"logo", re.IGNORECASE)
+        _header_re = re.compile(r"header|navbar|masthead|brand", re.IGNORECASE)
+
+        def _region(img) -> int:
+            # 0 = header/nav, 1 = body, 2 = footer — a footer "logo" is often a
+            # partner/certification badge (an NHS seal on a London clinic).
+            for p in img.parents:
+                attrs = " ".join(p.get("class") or []) + " " + (p.get("id") or "") if p.name else ""
+                if p.name in ("header", "nav") or _header_re.search(attrs):
+                    return 0
+                if p.name == "footer" or re.search(r"footer", attrs, re.IGNORECASE):
+                    return 2
+            return 1
+
+        logo_imgs = []
+        for img in soup.find_all("img"):
+            src = img.get("src") or img.get("data-src") or ""
+            if src.startswith("data:") or not _ok(src):
+                continue
+            hints = " ".join([
+                " ".join(img.get("class") or []), img.get("id") or "",
+                img.get("alt") or "", src,
+                " ".join((img.parent.get("class") or [])) if img.parent else "",
+            ])
+            if _logo_re.search(hints):
+                logo_imgs.append(img)
+        if logo_imgs:
+            best = min(logo_imgs, key=_region)  # min() keeps document order among ties
+            return _ok(best.get("src") or best.get("data-src"))
+
+        # BeautifulSoup calls a rel= filter once per space-separated rel value.
+        apple = soup.find("link", rel=lambda r: bool(r) and r.lower().startswith("apple-touch-icon"))
+        if apple and _ok(apple.get("href")):
+            return _ok(apple.get("href"))
+
+        def _icon_size(link) -> int:
+            m = re.match(r"(\d+)", link.get("sizes") or "")
+            return int(m.group(1)) if m else 0
+
+        icons = [l for l in soup.find_all("link", rel=lambda r: bool(r) and r.lower() == "icon")
+                 if _ok(l.get("href"))]
+        if icons:
+            return _ok(max(icons, key=_icon_size).get("href"))
+
+        og_img = soup.find("meta", property="og:image")
+        if og_img and _ok(og_img.get("content")):
+            return _ok(og_img.get("content"))
+        return ""
+
     def _detect_industry(self, text: str, soup: BeautifulSoup, company_name: str = "") -> str:
         """DeepSeek clasifica la industria; keywords como fallback si falla."""
         import re as _re
@@ -1314,7 +1455,7 @@ class WebsiteScraper:
         if company_name:
             _nm = company_name.lower()
             _GAS_NAME = _re.compile(
-                r"gas|gas\s*lp|glp|gasera|tanque.*gas|gas.*tanque|cilindro|"
+                r"\bgas\b|gas\s*lp|glp|gasera|tanque.*gas|gas.*tanque|cilindro|"
                 r"pipas?\s*de\s*gas|distribuidora.*gas|gas.*distribuidora",
                 _re.I,
             )
@@ -1934,6 +2075,81 @@ class WebsiteScraper:
             return ""
         return self._STATE_KEY_TO_DISPLAY.get(state_key, "")
 
+    # ── Location hygiene (2026-10-04) ─────────────────────────────────────────
+
+    @staticmethod
+    def _without_form_lists(soup):
+        """The page without <select>/<datalist> drop-downs — their options (every
+        state, every municipality) otherwise read like an address."""
+        if not soup.find(["select", "datalist"]):
+            return soup
+        import copy
+        clean = copy.copy(soup)
+        for el in clean.find_all(["select", "datalist"]):
+            el.decompose()
+        return clean
+
+    _FORM_LABEL_RE = re.compile(
+        r"\b(?:municipio|estado|ciudad|colonia|delegacion|alcaldia)\s*\*|\*\s*(?:ciudad|estado|municipio)\b|selecciona"
+    )
+
+    def _mentions_many_states(self, text: str) -> bool:
+        """A real address names one state; a list of places names several. Form
+        labels ("Municipio*", "*Ciudad, Estado", "Selecciona…") give it away too."""
+        folded = self._fold_text(text)
+        if self._FORM_LABEL_RE.search(folded):
+            return True
+        hits = {k for k in self._STATE_KEY_TO_DISPLAY if len(k) > 4 and re.search(rf"\b{re.escape(k)}\b", folded)}
+        if "baja california sur" in hits:
+            hits.discard("baja california")
+        return len(hits) >= 3
+
+    @staticmethod
+    def _fold_text(text: str) -> str:
+        import unicodedata
+        t = unicodedata.normalize("NFKD", (text or "").lower())
+        return "".join(c for c in t if not unicodedata.combining(c))
+
+    def _consistent_state(self, city: str, state: str) -> str:
+        """A city implies its state — "Querétaro, Hidalgo" came from a street named
+        Hidalgo winning over the city. Ambiguous city names infer nothing and keep
+        the detected state."""
+        inferred = self._infer_state_from_city(city) if city else ""
+        return inferred or state
+
+    def _finalize_location(self, result: dict) -> None:
+        """Fill a location the page didn't give. Order: the page itself > the
+        area code most of the business's Mexican phones share > the place the
+        search was aimed at. Records where it came from in location_source."""
+        from app.geo import canonical_state, tidy_city
+        extra = result.setdefault("_extra", {})
+        if result.get("state") or extra.get("state"):
+            # "Coah." / "coahuila" / "Coahuila de Zaragoza" → "Coahuila"; "saltillo" → "Saltillo"
+            for target in (result, extra):
+                if target.get("state"):
+                    target["state"] = canonical_state(target["state"])
+                if target.get("city"):
+                    target["city"] = tidy_city(target["city"])
+            result["location_source"] = extra.get("loc_source") or "sitio"
+            return
+        raw = result.get("_contacts_raw") or {}
+        from app.geo import phones_location
+        loc = phones_location((raw.get("all_whatsapp_numbers") or []) + (raw.get("phone_numbers") or []))
+        source = "lada"
+        if not loc and getattr(self, "_target_state_raw", ""):
+            st_key = self._norm_state_key(self._target_state_raw)
+            loc = {"city": getattr(self, "_target_city_raw", "") or "",
+                   "state": self._STATE_KEY_TO_DISPLAY.get(st_key, self._target_state_raw.title())}
+            source = "busqueda"
+        if not loc:
+            return
+        for k in ("city", "state"):
+            if loc.get(k):
+                result[k] = loc[k]
+                extra[k] = loc[k]
+        result["location_source"] = source
+        extra["loc_source"] = source
+
     def _extract_address_structured(self, soup: BeautifulSoup, text: str) -> dict:
         """Cascade de 4 estrategias para extraer dirección estructurada.
         Devuelve {address, city, state, postal_code, country, lat, lon}."""
@@ -1964,7 +2180,7 @@ class WebsiteScraper:
             if schema.get("address") and not schema.get("city"):
                 nom = self._nominatim_structure_address(schema["address"])
                 schema.update({k: v for k, v in nom.items() if v and not schema.get(k)})
-            return {**empty, **schema}
+            return {**empty, **schema, "loc_source": "sitio"}
 
         # ── 2. Google Maps iframe — dirección del embed ──────────────────────
         map_q = self._extract_map_iframe_text(soup)
@@ -1973,10 +2189,14 @@ class WebsiteScraper:
             result = {**empty, "address": map_q}
             result.update({k: v for k, v in nom.items() if v})
             result["city"] = self._clean_city(result.get("city", ""))
+            result["state"] = self._consistent_state(result["city"], result.get("state", ""))
+            result["loc_source"] = "sitio"
             return result
 
         # ── 3. Regex — preferir ciudad/estado del string de dirección ────────
         raw_addr = self._extract_address_regex(text, soup)
+        if raw_addr and self._mentions_many_states(raw_addr):
+            raw_addr = ""      # "Municipio* San Luis Potosí Ahualulco Alaquines…" is a list, not an address
         cp       = self._extract_postal_code(raw_addr or text)
         country  = self._extract_country(raw_addr or text)
 
@@ -2020,6 +2240,9 @@ class WebsiteScraper:
                     result["state"] = nom.get("state") or self._infer_state_from_city(nom.get("city",""))
             result["city"] = self._clean_city(result.get("city", ""))
 
+        result["state"] = self._consistent_state(result.get("city", ""), result.get("state", ""))
+        if result.get("state") or result.get("city"):
+            result["loc_source"] = "sitio" if raw_addr else "texto"
         return result
 
     def _extract_city(self, text: str) -> str:
@@ -2515,9 +2738,11 @@ class WebsiteScraper:
             r"\d{2}[\s\.\-]\d{4}[\s\.\-]\d{4}",   # 55 1234 5678
             r"\d{3}[\s\.\-]\d{4}[\s\.\-]\d{4}",   # 800 1234 5678 (lada larga)
         ]
-        
+
         for pattern in phone_patterns:
-            matches = re.findall(pattern, text)
+            # Digit boundaries: without them "\d{10}" sliced phone-shaped pieces
+            # out of longer runs (CLABE accounts, tracking numbers, IDs).
+            matches = re.findall(rf"(?<!\d){pattern}(?!\d)", text)
             candidates.extend(matches)
         
         # Normalizar
@@ -2529,7 +2754,47 @@ class WebsiteScraper:
         
         return normalized
 
+    # 2^32-1 / 2^31-1: integer limits that show up in page scripts.
+    _INT_CONSTANTS = {"4294967295", "2147483647"}
+    # Numbering plans strict enough to check: Colombia since 2021 is mobile 3xx
+    # or landline 60x only.
+    _NATIONAL_PREFIXES = {"57": re.compile(r"(3|60)")}
+
+    @classmethod
+    def _plausible_phone(cls, e164: str) -> bool:
+        """Rejects digit runs that normalize like a phone but can't be one.
+        Mexican and North American 10-digit numbers never start with 0 or 1,
+        which is exactly how page-script Unix timestamps (1790990963 = today)
+        and IDs kept getting saved as "+521790990963" from Wix sites — and
+        then spent WhatsApp verification lookups (found 2026-10-02)."""
+        digits = re.sub(r"\D", "", e164 or "")
+        national = None
+        if digits.startswith("52") and len(digits) == 12:
+            national = digits[2:]
+        elif digits.startswith("1") and len(digits) == 11:
+            national = digits[1:]
+        if national is not None and national[0] in "01":
+            return False
+        # No country we search keeps a leading 0 in international format (the
+        # trunk 0 is dropped) — "+570000056492" came out of a Wix page's JS.
+        from app.searcher import COUNTRY_CONFIG
+        for cfg in COUNTRY_CONFIG.values():
+            code = cfg["phone_code"].lstrip("+")
+            if digits.startswith(code) and len(digits) == len(code) + cfg["local_digits"]:
+                rest = digits[len(code):]
+                if rest[0] == "0" or (code in cls._NATIONAL_PREFIXES and not cls._NATIONAL_PREFIXES[code].match(rest)):
+                    return False
+                break
+        tail = digits[-10:]
+        if tail in cls._INT_CONSTANTS or re.search(r"(\d)\1{6}", tail):
+            return False
+        return True
+
     def _normalize_phone(self, raw_number: str, default_country_code: str = None) -> Optional[str]:
+        e164 = self._normalize_phone_unchecked(raw_number, default_country_code)
+        return e164 if e164 and self._plausible_phone(e164) else None
+
+    def _normalize_phone_unchecked(self, raw_number: str, default_country_code: str = None) -> Optional[str]:
         """
         Normaliza número telefónico al país configurado en scrape_site (default MX
         si no se seteó — self._default_country_code/_default_local_digits). Descarta
@@ -2604,6 +2869,15 @@ class WebsiteScraper:
         # Filtrar emails no útiles
         excluded = ["example.com", "test.com", "domain.com", "email.com", "yoursite.com"]
         emails = [e for e in emails if not any(ex in e.lower() for ex in excluded)]
+
+        def _real_domain(e: str) -> bool:
+            # "f@h.tGq" (minified-JS noise): a real TLD is one case, and the
+            # name before it has more than one letter.
+            labels = e.rsplit("@", 1)[1].split(".")
+            tld = labels[-1]
+            return (tld.islower() or tld.isupper()) and len(labels[-2]) >= 2
+
+        emails = [e for e in emails if _real_domain(e)]
         
         return list(dict.fromkeys(emails))
 
@@ -3071,13 +3345,21 @@ class WebsiteScraper:
     # MONGODB — GUARDADO Y TRACKING
     # ========================================================================
 
-    def _save_contacts(self, contacts_raw: Dict, company_id, source_url: str):
-        """Guarda contactos en la colección contacts, sin duplicar por normalized_value"""
+    def _save_contacts(self, contacts_raw: Dict, company_id, source_url: str, verify_phones: bool = True):
+        """Guarda contactos en la colección contacts, sin duplicar por normalized_value.
+
+        company_id se guarda como string, igual que en el resto de la app
+        (database.insert_contact, y todas las lecturas filtran por string):
+        con ObjectId estos docs eran invisibles para las pantallas y el pipeline
+        no los reconocía al deduplicar, así que cada número quedaba guardado 2-3
+        veces (26k duplicados encontrados el 2026-10-02)."""
         all_contacts = []
+        cid = str(company_id)
+        _wa_last10 = {re.sub(r"\D", "", n)[-10:] for n in contacts_raw.get("all_whatsapp_numbers", [])}
 
         for number in contacts_raw.get("all_whatsapp_numbers", []):
             all_contacts.append({
-                "company_id": company_id,
+                "company_id": cid,
                 "type": "whatsapp",
                 "value": number,
                 "normalized_value": number,
@@ -3091,9 +3373,11 @@ class WebsiteScraper:
                 "updated_at": datetime.now(timezone.utc),
             })
 
-        for email in contacts_raw.get("emails", []):
+        # Same caps as pipeline.process_url (MAX_EMAILS / MAX_PHONES) — this saved
+        # every number a page listed: 1,119 for one directory site (2026-10-04).
+        for email in contacts_raw.get("emails", [])[:10]:
             all_contacts.append({
-                "company_id": company_id,
+                "company_id": cid,
                 "type": "email",
                 "value": email,
                 "normalized_value": email.lower(),
@@ -3107,9 +3391,11 @@ class WebsiteScraper:
                 "updated_at": datetime.now(timezone.utc),
             })
 
-        for phone in contacts_raw.get("phone_numbers", []):
+        for phone in contacts_raw.get("phone_numbers", [])[:20]:
+            if re.sub(r"\D", "", phone)[-10:] in _wa_last10:
+                continue  # same number already saved as its WhatsApp contact
             all_contacts.append({
-                "company_id": company_id,
+                "company_id": cid,
                 "type": "phone",
                 "value": phone,
                 "normalized_value": phone,
@@ -3128,7 +3414,7 @@ class WebsiteScraper:
             # Evita duplicados dentro de la misma empresa sin afectar otras
             self.contacts_col.update_one(
                 {
-                    "company_id": company_id,
+                    "company_id": cid,
                     "type":       contact["type"],
                     "normalized_value": contact["normalized_value"],
                 },
@@ -3139,7 +3425,11 @@ class WebsiteScraper:
                 upsert=True,
             )
 
-        self._verify_new_phone_contacts(company_id, contacts_raw.get("phone_numbers", []))
+        # pipeline.process_url passes verify_phones=False: it checks the same
+        # numbers itself right after, so doing it here too spent two WhatsApp
+        # lookups per phone (102 numbers verified twice, found 2026-10-02).
+        if verify_phones:
+            self._verify_new_phone_contacts(company_id, contacts_raw.get("phone_numbers", []))
 
     # No verificar más de N teléfonos por empresa aquí — mismo tope que
     # pipeline.py's _MAX_PHONES_TO_VERIFY, para no estancar el scraping en
@@ -3189,7 +3479,7 @@ class WebsiteScraper:
 
         for idx, phone in enumerate(phone_numbers[: self._MAX_PHONES_TO_VERIFY]):
             contact = self.contacts_col.find_one(
-                {"company_id": company_id, "type": "phone", "normalized_value": phone},
+                {"company_id": str(company_id), "type": "phone", "normalized_value": phone},
                 {"verified": 1},
             )
             if not contact or "verified" in contact:
@@ -3210,7 +3500,7 @@ class WebsiteScraper:
                     {"_id": contact["_id"]},
                     {"$set": {"type": "whatsapp", "verified": True, "detected_via": "phone_verification"}},
                 )
-                self.companies_col.update_one({"_id": company_id}, {"$set": {"has_whatsapp": True}})
+                self.companies_col.update_one({"_id": ObjectId(str(company_id))}, {"$set": {"has_whatsapp": True}})
             else:
                 self.contacts_col.update_one({"_id": contact["_id"]}, {"$set": {"verified": False}})
 

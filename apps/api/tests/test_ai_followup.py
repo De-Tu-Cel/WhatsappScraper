@@ -595,3 +595,221 @@ class TestPersonaNameFromWhatsappProfile:
 
         assert "Eres Richie" in captured["system"]
         assert "Andrés" not in captured["system"]
+
+
+# ── Reply hygiene, goodbyes, name, own number, stale replies (2026-10-04) ─────
+#
+# Real cases reviewed 2026-10-04 (all from 2026-10-02): PASA Tijuana got a bare
+# "[2]"; Fame Querétaro got two replies at once, a booked test drive, "chido"
+# twice and two more replies after Andy had already said goodbye; Renault Grupo
+# Geisha asked to confirm Andy's own number and Andy said it didn't have it;
+# Infiniti / Nissan asked for a name and Andy stayed silent.
+
+from datetime import timedelta
+
+from bson import ObjectId
+
+
+class FakeMgrWithSend(FakeMgr):
+    """FakeMgr plus what the post-send bookkeeping touches."""
+
+    def __init__(self, session_doc):
+        super().__init__(session_doc)
+        self.db.instances = MagicMock()
+        self.db.instances.find_one.return_value = {"profile_name": "Richie", "number": "5215527479218"}
+        self.logged = []
+
+    def insert_message_log(self, doc):
+        self.logged.append(doc)
+        return "ailog1"
+
+
+def _ww_client():
+    c = MagicMock()
+    c.send.return_value = {"success": True, "messageId": "m1"}
+    return c
+
+
+def _run(mgr, llm, inbound="Mande", log_id="log1", ww=None):
+    with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
+         patch("app.ai_followup._call_llm_for_reply", **llm) as mock_llm, \
+         patch("app.whatsapp_wwebjs.WWebjsClient", return_value=ww or _ww_client()):
+        af.process_inbound_reply(phone_number="5214428079840", company_id="aabbccddeeff001122334455",
+                                 inbound_body=inbound, inbound_log_id=log_id)
+    return mock_llm
+
+
+class TestReplyMarkersNeverSent:
+    def test_bare_number_marker_closes_without_sending(self, _common_patches):
+        mgr, ww = FakeMgrWithSend(_session_doc()), _ww_client()
+        _run(mgr, {"return_value": "[2]"}, inbound="Asi es\nNo hay de que, lindo dia", ww=ww)
+        ww.send.assert_not_called()
+        assert mgr.db.ai_followup_sessions._doc["status"] == "ended"
+
+    def test_markers_inside_text_are_stripped(self):
+        assert af._clean_reply("[1] va gracias [2] igual", "x") == ("va gracias igual", False)
+
+    def test_bare_marker_answering_a_menu_becomes_the_option(self):
+        assert af._clean_reply("[2]", "Elige una opción:\n1. Ventas\n2. Servicio") == ("2", False)
+
+    def test_internal_tags_and_fin(self):
+        assert af._clean_reply("[Sin respuesta]") == ("", False)
+        assert af._clean_reply("ok gracias[FIN]") == ("ok gracias", True)
+        assert af._clean_reply("👍") == ("👍", False)
+
+
+class TestCourtesyAndFarewellDetection:
+    @pytest.mark.parametrize("text", [
+        "Muchas gracias, igual cualquier cosa, quedo a la orden", "Perfecto", "Excelente día",
+        "Asi es\nNo hay de que, lindo dia", "gracias", "👍",
+    ])
+    def test_courtesy_only(self, text):
+        assert af._is_courtesy_only(text) is True
+
+    @pytest.mark.parametrize("text", [
+        "Buenas tardes", "Hola", "No", "¿A las 10:00 am le quedaría bien?", "Licencia de manejo vigente",
+        "Claro\nEl número de serie es importante, porque con el puedo saber si su unidad cuenta con recall",
+    ])
+    def test_not_courtesy(self, text):
+        assert af._is_courtesy_only(text) is False
+
+    def test_farewell_needs_an_actual_goodbye(self):
+        assert af._is_farewell("Asi es\nNo hay de que, lindo dia") is True
+        assert af._is_farewell("Excelente día") is True
+        assert af._is_farewell("Perfecto") is False
+        assert af._is_farewell("Buen día") is False
+
+
+class TestFarewellClosesTheSession:
+    def test_answering_their_goodbye_ends_the_session(self, _common_patches):
+        mgr, ww = FakeMgrWithSend(_session_doc()), _ww_client()
+        _run(mgr, {"return_value": "igual que te vaya bien"}, inbound="No hay de que, lindo dia", ww=ww)
+        ww.send.assert_called_once()
+        assert mgr.db.ai_followup_sessions._doc["status"] == "ended"
+        assert mgr.db.ai_followup_sessions._doc["end_reason"] == "ai_decision"
+
+    def test_normal_message_keeps_waiting(self, _common_patches):
+        mgr = FakeMgrWithSend(_session_doc())
+        _run(mgr, {"return_value": "ah va y abren el sabado?"}, inbound="Tenemos servicio de hojalateria")
+        assert mgr.db.ai_followup_sessions._doc["status"] == "waiting"
+
+
+class FakeClosedSessions:
+    """No open session; the last one was closed by Andy after talking."""
+
+    def __init__(self, last):
+        self.last = last
+
+    def find_one(self, query=None, *a, **kw):
+        status = (query or {}).get("status")
+        if isinstance(status, dict):          # open-session lookup
+            return None
+        return dict(self.last) if status == "ended" else None
+
+
+class TestCourtesyAfterCloseDoesNotReactivate:
+    def _mgr(self, **last):
+        doc = {"_id": "old", "status": "ended", "end_reason": "ai_decision", "turn_count": 8,
+               "last_activity": datetime.utcnow()}
+        doc.update(last)
+        mgr = FakeMgrWithSend(_session_doc())
+        mgr.db.ai_followup_sessions = FakeClosedSessions(doc)
+        return mgr
+
+    def test_thanks_after_goodbye_gets_no_reply(self, _common_patches):
+        mgr = self._mgr()
+        mock_llm = _run(mgr, {"return_value": "va"}, inbound="Muchas gracias, igual cualquier cosa, quedo a la orden")
+        mock_llm.assert_not_called()
+        assert mgr.db.conversation_ai_prefs.updates[-1]["$set"] == {"ai_enabled": False, "auto_disabled": True}
+
+    def test_closed_by_an_ack_without_talking_still_reactivates(self):
+        assert af._recently_closed_after_talking(self._mgr(turn_count=0), "c1") is False
+
+    def test_old_close_does_not_block(self):
+        mgr = self._mgr(last_activity=datetime.utcnow() - timedelta(hours=60))
+        assert af._recently_closed_after_talking(mgr, "c1") is False
+
+
+class TestNameRequests:
+    @pytest.mark.parametrize("text", [
+        "Buen día. Le atiende Sandra López ¿Con quién tengo el gusto?",
+        "¿Me compartes tu nombre completo, por favor?",
+        "Podría compartirme su nombre completo por favor",
+    ])
+    def test_detected(self, text):
+        assert af._asks_for_name(text) is True
+
+    def test_sharing_someone_elses_number_is_not_a_name_request(self):
+        assert af._asks_for_name("Le comparto el numero del asesor Javier Espinoza") is False
+
+    def test_bot_asking_for_name_gets_the_account_name_not_silence(self, _common_patches):
+        mgr, ww = FakeMgrWithSend(_session_doc(context={"persona_name": "Andrés"})), _ww_client()
+        with patch("app.classifier._looks_like_auto_reply", return_value=True):
+            _run(mgr, {"return_value": "[FIN]"}, inbound="Le atiende Sandra López ¿Con quién tengo el gusto?", ww=ww)
+        ww.send.assert_called_once()
+        assert ww.send.call_args.args[1] == "Richie"      # the sending WhatsApp account's profile
+        assert mgr.db.ai_followup_sessions._doc["status"] == "waiting"
+
+
+class TestOwnNumberInPrompt:
+    def test_real_number_reaches_the_prompt(self, _common_patches):
+        mgr = FakeMgrWithSend(_session_doc())
+        mock_llm = _run(mgr, {"return_value": "si es ese"}, inbound="¿Es correcto el 5527479218?")
+        assert mock_llm.call_args.args[1]["own_number"] == "5527479218"
+
+    def test_prompt_has_no_made_up_number_and_no_chido(self):
+        text = af._DEFAULT_SYSTEM_PROMPT.format(
+            persona_name="Richie", persona_full_name="Richie", own_number="5527479218", company_name="X",
+            industry="Automotriz", city="Tijuana", initial_message="hola", company_context="", persona_seed="",
+            extra_block="")
+        assert "5527479218" in text and "5530123456" not in text
+        assert "chido" not in text
+
+    def test_seller_style_goodbye_counts_as_copied(self):
+        assert af._looks_copied_from_prompt("de nada! aquí ando si necesitas algo más") is True
+
+
+class TestRepeatedFillerRetry:
+    def test_detection(self):
+        assert af._repeated_filler("chido, estamos en contacto", ["chido, y qué documento necesito?"]) == "chido"
+        assert af._repeated_filler("va, nos vemos", ["chido, y qué documento necesito?"]) is None
+        assert af._repeated_filler("ok gracias por todo", ["ok gracias por la info"]) == "ok gracias"
+
+    def test_retries_once_with_other_words(self, _common_patches):
+        turns = [{"role": "assistant", "content": "chido y que documento necesito?"}]
+        mgr, ww = FakeMgrWithSend(_session_doc(turns=turns)), _ww_client()
+        mock_llm = _run(mgr, {"side_effect": ["chido, estamos en contacto", "va estamos en contacto entonces"]},
+                        inbound="Licencia de manejo vigente", ww=ww)
+        assert mock_llm.call_count == 2
+        assert "chido" in mock_llm.call_args_list[1].kwargs["correction"]
+        assert ww.send.call_args.args[1] == "va estamos en contacto entonces"
+
+
+class TestStaleReplyDropped:
+    def _logs(self, newer):
+        ref_time = datetime.utcnow()
+
+        def find_one(query, *a, **kw):
+            if "_id" in query:
+                return {"created_at": ref_time}
+            return {"_id": "newer"} if newer else None
+        m = MagicMock()
+        m.find_one.side_effect = find_one
+        m.count_documents.return_value = 1
+        return m
+
+    def test_reply_not_sent_when_business_wrote_again(self, _common_patches):
+        mgr, ww = FakeMgrWithSend(_session_doc()), _ww_client()
+        mgr.db.message_logs = self._logs(newer=True)
+        _run(mgr, {"return_value": "a que hora seria?"}, inbound="Claro, puede ser mañana",
+             log_id=str(ObjectId()), ww=ww)
+        ww.send.assert_not_called()
+        assert mgr.db.ai_followup_sessions._doc["status"] == "active"   # the newer reply will answer
+        assert mgr.db.ai_followup_sessions._doc["ai_typing"] is False
+
+    def test_reply_sent_when_nothing_newer(self, _common_patches):
+        mgr, ww = FakeMgrWithSend(_session_doc()), _ww_client()
+        mgr.db.message_logs = self._logs(newer=False)
+        _run(mgr, {"return_value": "a que hora seria?"}, inbound="Claro, puede ser mañana",
+             log_id=str(ObjectId()), ww=ww)
+        ww.send.assert_called_once()

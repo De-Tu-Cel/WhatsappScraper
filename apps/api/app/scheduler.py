@@ -7,6 +7,7 @@ import time
 from datetime import datetime
 from app.daily_cap import DAILY_CAP, get_daily_count, get_instance_cap, notify_cap_reached_once, reserve_daily_slot, release_daily_slot, reserve_new_contact_slot, release_new_contact_slot
 from app.phone_utils import clean_digits
+from app.send_guard import send_block_reason
 
 log = logging.getLogger(__name__)
 
@@ -813,6 +814,7 @@ def _execute_send_job(job_id: str):
             error_count = 0
             skipped_nc_count = 0
             skipped_daily_count = 0
+            skipped_blocked_count = 0
             last_text = None
             log.warning("[Scheduler] job=%s 🚀 starting Branch A — %d numbers, %d template variant(s)",
                         job_id, len(selected_numbers), len(messages))
@@ -827,6 +829,14 @@ def _execute_send_job(job_id: str):
                 company_name = num_info.get("company_name", "") or cid
                 to_number = num_info.get("number", "")
                 if not to_number:
+                    continue
+                # Blocked number / company — checked at send time, so a block added
+                # after the campaign was scheduled still stops it (app/send_guard.py).
+                if send_block_reason(db, cid, to_number):
+                    skipped_blocked_count += 1
+                    log.warning("[Scheduler] job=%s ⛔ blacklisted — skipped %s", job_id, to_number[-4:])
+                    db.db.scheduled_sends.update_one({"_id": ObjectId(job_id)},
+                                                     {"$set": {"skipped_blocked_count": skipped_blocked_count}})
                     continue
 
                 # Delay BEFORE sending (skipped for the very first message)
@@ -902,6 +912,7 @@ def _execute_send_job(job_id: str):
         error_count = 0
         skipped_nc_count = 0
         skipped_daily_count = 0
+        skipped_blocked_count = 0
         send_index = 0
         last_text = None
         log.warning("[Scheduler] job=%s 🚀 starting Branch B — %d companies, ~%d contacts, %d template variant(s)",
@@ -927,6 +938,12 @@ def _execute_send_job(job_id: str):
             for contact in contacts:
                 to_number = contact.get("value", "")
                 if not to_number:
+                    continue
+                if send_block_reason(db, cid, to_number):
+                    skipped_blocked_count += 1
+                    log.warning("[Scheduler] job=%s ⛔ blacklisted — skipped %s", job_id, to_number[-4:])
+                    db.db.scheduled_sends.update_one({"_id": ObjectId(job_id)},
+                                                     {"$set": {"skipped_blocked_count": skipped_blocked_count}})
                     continue
 
                 # Delay BEFORE sending (skipped for the very first message)

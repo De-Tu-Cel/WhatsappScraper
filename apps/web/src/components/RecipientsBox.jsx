@@ -1,8 +1,19 @@
 'use client'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
+import Tooltip from '@mui/material/Tooltip'
+import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import WhatsAppNumberPicker, { makeWaToggleHandlers } from './WhatsAppNumberPicker'
 import { useLang } from '../context/LangContext'
+import { useBlacklistedPhones, phoneKey } from '../lib/phoneBlacklist'
+
+function flagReason(r, lang) {
+  const lm = r.location_mismatch, im = r.industry_mismatch
+  const en = lang === 'en'
+  if (lm) return en ? `Outside the searched area: ${lm.detected_city || lm.detected_state}` : `Fuera de la zona buscada: ${lm.detected_city || lm.detected_state}`
+  if (im) return en ? `Other trade: ${im.detected_industry}` : `Otro giro: ${im.detected_industry}`
+  return ''
+}
 
 export default function RecipientsBox({
   rows, effectiveSelected, expandedCo, extraSelected,
@@ -10,8 +21,13 @@ export default function RecipientsBox({
   title, emptyMsg, maxHeight = 260, sx,
 }) {
   const { lang } = useLang()
+  const blocked = useBlacklistedPhones()
   const selectedCount = rows.filter(r => effectiveSelected.has(r.company_id)).length
-  const allSelected = rows.length > 0 && selectedCount === rows.length
+  // "todos" leaves out results flagged as outside the searched area or trade
+  // — they can still be ticked one by one — and companies whose number is
+  // blocked (those can't be ticked at all).
+  const selectable = rows.filter(r => !flagReason(r, lang) && !blocked.has(phoneKey(r.all_whatsapp?.[0] || r.whatsapp)))
+  const allSelected = selectable.length > 0 && selectable.every(r => effectiveSelected.has(r.company_id))
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, ...sx }}>
@@ -28,7 +44,7 @@ export default function RecipientsBox({
             <Typography
               onClick={() => allSelected
                 ? setSelected(new Set())
-                : setSelected(new Set(rows.map(r => r.company_id)))
+                : setSelected(new Set(selectable.map(r => r.company_id)))
               }
               sx={{ fontSize: '0.6rem', color: 'rgba(255,255,255,0.3)', cursor: 'pointer', userSelect: 'none',
                 '&:hover': { color: '#4ade80' }, transition: 'color 0.15s' }}
@@ -82,7 +98,15 @@ export default function RecipientsBox({
                   '&:hover': { bgcolor: isSelected ? selBgHov : 'rgba(255,255,255,0.04)' },
                 }}>
                   <WhatsAppNumberPicker row={r}
-                    label={r.empresa || r.url}
+                    labelTitle={[r.empresa || r.url, r.city].filter(Boolean).join(' · ')}
+                    label={flagReason(r, lang) ? (
+                      <>
+                        <Tooltip title={flagReason(r, lang)} placement="top" arrow>
+                          <WarningAmberIcon sx={{ fontSize: 12, color: '#fbbf24', verticalAlign: '-2px', mr: 0.4 }} />
+                        </Tooltip>
+                        {r.empresa || r.url}
+                      </>
+                    ) : (r.empresa || r.url)}
                     selected={isSelected}
                     expanded={expandedCo.has(r.company_id)}
                     extraSelected={extraSelected}

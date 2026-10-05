@@ -252,25 +252,16 @@ def cancel_pending_send_items(db, user_id: str = "") -> int:
 
 # ─── Sending ──────────────────────────────────────────────────────────────────
 
-def _check_send_allowed(db, company_id: str):
-    """Ported from routes.py POST /api/send-message's blacklist/blocked gate —
-    scheduler.py's send primitives don't do this check, so skipping it here
-    would silently regress a safety check immediate sends already had."""
-    if not company_id or len(company_id) != 24:
+def _check_send_allowed(db, company_id: str, to_number: str = ""):
+    """Same gate as every other send path (app/send_guard.py), checked right
+    before each item goes out — so a number or company blocked after the batch
+    was queued stops the rest of it. It used to check only the company: a
+    blocked number inside a non-blocked company still got the message."""
+    from app.send_guard import send_block_reason
+    block = send_block_reason(db, company_id, to_number)
+    if not block:
         return True, ""
-    from bson import ObjectId
-    from app.pipeline import _check_blacklist
-    company = db.db.companies.find_one({"_id": ObjectId(company_id)}, {"domain": 1, "industry": 1, "blocked": 1})
-    if not company:
-        return True, ""
-    if company.get("blocked"):
-        return False, "skipped_blocked"
-    domain = company.get("domain") or ""
-    # NOT gated on `domain` — see ai_followup.py's _is_blocked_or_blacklisted for
-    # why: a company with no stored domain still needs its industry checked.
-    if _check_blacklist(domain, company.get("industry") or ""):
-        return False, "skipped_blacklisted"
-    return True, ""
+    return False, "skipped_blocked" if block["reason"] == "blocked" else "skipped_blacklisted"
 
 
 def _user_has_connected_instance(db, user_id: str) -> bool:
@@ -337,18 +328,21 @@ def _maybe_finish_batch(db, batch_id: str):
     items    = list(db.db.send_queue_items.find({"batch_id": batch_id}, {"status": 1, "label": 1, "user_id": 1}))
     sent     = sum(1 for i in items if i.get("status") == "sent")
     nc_skip  = sum(1 for i in items if i.get("status") == "skipped_nc_cap")
-    failed   = len(items) - sent - nc_skip
+    # Skipped on purpose because of a block — not a failure, and used to be
+    # counted as one in the "batch finished" notification.
+    blocked  = sum(1 for i in items if i.get("status") in ("skipped_blocked", "skipped_blacklisted"))
+    failed   = len(items) - sent - nc_skip - blocked
     label    = items[0].get("label", "") if items else ""
     user_id  = items[0].get("user_id", "") if items else ""
     now = datetime.now(timezone.utc)
     notif = {
         "type": "batch_complete", "sent": sent, "failed": failed,
-        "skipped_nc_cap": nc_skip, "label": label, "created_at": now,
+        "skipped_nc_cap": nc_skip, "skipped_blocked": blocked, "label": label, "created_at": now,
     }
     if user_id:
         notif["user_id"] = user_id
     db.db.app_notifications.insert_one(notif)
-    return {"sent": sent, "failed": failed, "skipped_nc_cap": nc_skip, "at": now}
+    return {"sent": sent, "failed": failed, "skipped_nc_cap": nc_skip, "skipped_blocked": blocked, "at": now}
 
 
 def _process_item(db, partition: str, item, msgs_in_batch: int, next_break_at: int):
@@ -365,7 +359,7 @@ def _process_item(db, partition: str, item, msgs_in_batch: int, next_break_at: i
     job_index   = item.get("job_index", 0)
     user_id     = item.get("user_id") or ""
 
-    allowed, skip_status = _check_send_allowed(db, company_id)
+    allowed, skip_status = _check_send_allowed(db, company_id, to_number)
     if not allowed:
         db.db.send_queue_items.update_one({"_id": item_id}, {"$set": {"status": skip_status, "finished_at": datetime.now(timezone.utc)}})
         finished = _maybe_finish_batch(db, batch_id)

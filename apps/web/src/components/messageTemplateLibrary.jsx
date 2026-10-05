@@ -387,8 +387,13 @@ export function TemplateLibraryPicker({
   useEffect(() => { onChangeRef.current = onChange })
 
   const availability = { hasName, hasCity, hasIndustry, hasWeb }
-  const missingVarsFor = useCallback((text) => VAR_CHECKS.filter(v => v.re.test(text) && !availability[v.flag]),
-    [hasName, hasCity, hasIndustry, hasWeb]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Multi-recipient pickers (the ones passing varCounts) compute the flags from
+  // the SELECTED recipients — with nobody selected yet every flag is false, which
+  // greyed out every template using {{ciudad}}/{{industria}} before the user had
+  // picked anyone. Nothing is "missing" until there's someone to send to.
+  const noRecipientsYet = !!varCounts && totalSelected === 0
+  const missingVarsFor = useCallback((text) => noRecipientsYet ? [] : VAR_CHECKS.filter(v => v.re.test(text) && !availability[v.flag]),
+    [hasName, hasCity, hasIndustry, hasWeb, noRecipientsYet]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Build a human-readable tooltip for a blocked template with per-variable counts
   const blockedTooltip = useCallback((missing) => {

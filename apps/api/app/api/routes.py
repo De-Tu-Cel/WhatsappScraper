@@ -299,8 +299,11 @@ def api_create_scrape_job(body: dict, x_user_token: Optional[str] = Header(None)
         urls = [u for u in (body.get("urls") or []) if isinstance(u, str) and u.strip()]
         if not urls:
             raise HTTPException(status_code=400, detail="Sin URLs para procesar")
+        maps_leads = {l["url"]: l for l in (body.get("maps_leads") or [])
+                      if isinstance(l, dict) and isinstance(l.get("url"), str) and l.get("cid") and l.get("phone")}
         db = MongoDBManager()
-        doc = create_scrape_job(db, surface, urls, user)
+        query = body.get("query") if isinstance(body.get("query"), str) else None
+        doc = create_scrape_job(db, surface, urls, user, maps_leads=maps_leads, query=query)
         return serialize(doc)
     except HTTPException:
         raise
@@ -317,7 +320,9 @@ def api_get_latest_scrape_job(surface: str = "search", x_user_token: Optional[st
         from datetime import datetime, timedelta
         db = MongoDBManager()
         username = (user or {}).get("username", "")
-        base_filter = {"surface": surface, "created_by_username": username}
+        # Jobs the user cleared on purpose ("Nueva búsqueda", X) never come back —
+        # this fallback is for a job reference lost by accident, not a closed one.
+        base_filter = {"surface": surface, "created_by_username": username, "dismissed_at": None}
         # Prefer an active job first (pending or running)
         doc = db.db.scrape_jobs.find_one(
             {**base_filter, "status": {"$in": ["pending", "running"]}},
@@ -325,7 +330,8 @@ def api_get_latest_scrape_job(surface: str = "search", x_user_token: Optional[st
         )
         if not doc:
             # Fall back to a recently-finished job (within 24h) so results survive a refresh
-            cutoff = datetime.now() - timedelta(hours=24)
+            from app.scrape_jobs import _utcnow
+            cutoff = _utcnow() - timedelta(hours=24)
             doc = db.db.scrape_jobs.find_one(
                 {**base_filter, "finished_at": {"$gte": cutoff}},
                 sort=[("finished_at", -1)],
@@ -361,8 +367,8 @@ def api_update_scrape_job(job_id: str, body: dict, x_user_token: Optional[str] =
         from bson import ObjectId
         from app.scrape_jobs import set_job_action
         action = body.get("action", "")
-        if action not in ("pause", "resume", "cancel", "reanudar"):
-            raise HTTPException(status_code=400, detail="action debe ser pause, resume, cancel o reanudar")
+        if action not in ("pause", "resume", "cancel", "reanudar", "dismiss"):
+            raise HTTPException(status_code=400, detail="action debe ser pause, resume, cancel, reanudar o dismiss")
         db = MongoDBManager()
         username = (user or {}).get("username", "")
         if not db.db.scrape_jobs.find_one({"_id": ObjectId(job_id), "created_by_username": username}):
@@ -391,32 +397,19 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
             raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío")
 
         # ── Bloqueo por blacklist / chat bloqueado ──────────────────────────────────
+        # Same rule as every other send path (app/send_guard.py): the number first
+        # (any 52/521/+ format), then the company's blocked flag, domain, industry.
         from bson import ObjectId
-        if req.company_id and len(req.company_id) == 24:
-            company = db.db.companies.find_one(
-                {"_id": ObjectId(req.company_id)},
-                {"domain": 1, "industry": 1, "blocked": 1},
-            )
-            if company:
-                if company.get("blocked"):
-                    raise HTTPException(status_code=403, detail="No se puede enviar: este chat está bloqueado")
-                domain = company.get("domain") or ""
-                industry = company.get("industry") or ""
-                # NOT gated on `domain` — see ai_followup.py's _is_blocked_or_blacklisted
-                # for why: a company with no stored domain still needs its industry checked.
-                bl = _check_blacklist(domain, industry)
-                if bl:
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"No se puede enviar: dominio en lista negra ({bl['matched']})",
-                    )
-
-        # Phone blacklist: independent of company_id/domain — checked directly
-        # against the destination number, since a number can be blocked without
-        # its company being flagged (domain/industry) at all.
-        _to_digits = "".join(filter(str.isdigit, req.to_number or ""))
-        if _to_digits and db.db.blacklist.find_one({"type": "phone", "value": _to_digits}):
-            raise HTTPException(status_code=403, detail="No se puede enviar: número en lista negra")
+        from app.send_guard import send_block_reason
+        _block = send_block_reason(db, req.company_id or "", req.to_number or "")
+        if _block:
+            _why = {
+                "phone": "número en lista negra",
+                "blocked": "este chat está bloqueado",
+                "domain": f"dominio en lista negra ({_block['matched']})",
+                "industry": f"industria en lista negra ({_block['matched']})",
+            }.get(_block["reason"], "en lista negra")
+            raise HTTPException(status_code=403, detail=f"No se puede enviar: {_why}")
 
         # ── Rotación de instancias: round-robin + routing preferencial por compañía ──
         import requests as _req
@@ -988,15 +981,43 @@ def api_search(req: SearchRequest, x_user_token: Optional[str] = Header(None)):
         # (200 × 3) still helps in practice. 600 also bounds any caller that
         # bypasses the frontend's own 200 clamp.
         fetch_count = min(target * 3, 600)
+        maps_leads: list = []
+        search_meta: dict = {}
         urls, target_state, degraded_sources = search_prospects(
             req.industry, req.city or "", req.keywords or "",
             fetch_count, req.offset or 0,
             exclude_domains=known,
             country=req.country,
+            phone_leads_out=maps_leads,
+            meta_out=search_meta,
         )
+        industry_giro = search_meta.get("industry") or req.industry
         # All returned URLs are already "new" (exclude_domains filtered inside
         # search_prospects), so just trim to what the user asked for.
         urls = urls[:target]
+
+        # Google Maps businesses with no website of their own — a separate
+        # list (nothing to scrape; "Procesar" builds them from this data, see
+        # pipeline.process_maps_lead). Same "only new ones" rule as the URLs.
+        _shown = set(req.already_shown_domains or [])
+        maps_leads = [l for l in maps_leads if l["url"] not in _shown]
+        try:
+            _known_leads = db.known_maps_lead_urls(maps_leads)
+        except Exception:
+            _known_leads = set()
+        # Same industry rule as the pipeline and the send guard (_industry_matches:
+        # accent-insensitive, word start) — this used a raw substring check.
+        from app.pipeline import _industry_matches
+        _bl_industries = [(e.get("value") or "").strip()
+                          for e in db.db.blacklist.find({"type": "industry"}, {"value": 1})]
+        maps_leads = [l for l in maps_leads if l["url"] not in _known_leads
+                      and not any(_industry_matches(l.get("category") or "", v) or _industry_matches(l.get("name") or "", v)
+                                  for v in _bl_industries)][:target]
+        # The searched trade itself is blocked: every result of that trade gets
+        # discarded when processed — say so up front instead of letting the user
+        # find out one "bloqueada" row at a time.
+        blocked_industry = next((v for v in _bl_industries
+                                 if _industry_matches(req.industry, v) or _industry_matches(industry_giro or "", v)), None)
 
         # Flag domain-blacklisted results here (industry isn't known until the
         # site is actually scraped, so only the domain rule can apply pre-scrape)
@@ -1029,12 +1050,33 @@ def api_search(req: SearchRequest, x_user_token: Optional[str] = Header(None)):
                     {"url": r["url"]},
                     {"$setOnInsert": {
                         "url": r["url"], "domain": r["domain"], "industry": req.industry,
+                        "industry_giro": industry_giro,
                         "status": "pending",
                         # Ubicación (estado) a la que esta búsqueda estaba acotada —
                         # None para una búsqueda de país completo. process_url() la
                         # lee de aquí para comparar contra la ubicación REAL una vez
                         # que el sitio se scrapea de verdad (ver su target_state).
                         "target_state": target_state,
+                        # The searched city ("cerrajeros en Saltillo" → Saltillo) —
+                        # last-resort location for a site that shows none and
+                        # whose phones don't tell either (scraper._finalize_location).
+                        "target_city": search_meta.get("city") or None,
+                        "created_by": (_searcher or {}).get("display_name") or (_searcher or {}).get("username"),
+                        "created_at": datetime.utcnow(),
+                    }},
+                    upsert=True,
+                )
+            except Exception:
+                pass
+        for lead in maps_leads:
+            try:
+                db.db.search_ideas.update_one(
+                    {"url": lead["url"]},
+                    {"$setOnInsert": {
+                        "url": lead["url"], "domain": "", "industry": req.industry,
+                        "industry_giro": industry_giro,
+                        "status": "pending", "target_state": target_state,
+                        "maps_lead": lead,
                         "created_by": (_searcher or {}).get("display_name") or (_searcher or {}).get("username"),
                         "created_at": datetime.utcnow(),
                     }},
@@ -1044,6 +1086,8 @@ def api_search(req: SearchRequest, x_user_token: Optional[str] = Header(None)):
                 pass
 
         return {
+            "maps_leads": maps_leads,
+            "blocked_industry": blocked_industry,
             "urls": urls, "results": results, "next_offset": next_offset,  # "urls" kept for now, not read by the frontend anymore
             # Fuentes que tronaron/tardaron demasiado para esta búsqueda (p.ej.
             # "Maps" — la de mayor calidad) — vacío si todas respondieron
@@ -1150,7 +1194,9 @@ def api_create_company(req: CreateCompanyRequest, x_user_token: Optional[str] = 
             "city": (req.city or "").strip(),
             "state": (req.state or "").strip(),
             "website": website,
-            "domain": domain,
+            # Omitted (not "") without a website — the unique domain index is
+            # sparse, so a second "" would collide with the first.
+            **({"domain": domain} if domain else {}),
             "description": (req.description or "").strip(),
             "has_whatsapp": has_whatsapp,
             "status": "manual",
@@ -1992,7 +2038,7 @@ def api_rescrape_company(company_id: str):
         result  = scraper.scrape_site(website, force=True)
         # Industry check after scraping
         _industry = result.get("industry", "") or ""
-        _bl_ind = _check_blacklist("", _industry)
+        _bl_ind = _check_blacklist("", _industry, result.get("name") or "")
         if _bl_ind:
             raise HTTPException(status_code=403, detail=f"Industry is blacklisted: {_bl_ind['matched']}")
 
@@ -2091,15 +2137,8 @@ def api_search_contacts(q: str = "", page: int = 1, limit: int = 20, x_user_toke
     except Exception:
         pass
 
-    all_numbers = [n["number"] for g in groups for n in g["numbers"]]
-    blocked_digits = set()
-    if all_numbers:
-        blocked_digits = {
-            e["value"] for e in db.db.blacklist.find(
-                {"type": "phone", "value": {"$in": ["".join(filter(str.isdigit, n or "")) for n in all_numbers]}},
-                {"value": 1},
-            )
-        }
+    from app.send_guard import blacklisted_phone_keys, phone_key
+    blocked_keys = blacklisted_phone_keys(db) if groups else set()
 
     items = []
     for g in groups:
@@ -2107,7 +2146,7 @@ def api_search_contacts(q: str = "", page: int = 1, limit: int = 20, x_user_toke
         numbers = [{
             "contact_id": str(n["contact_id"]),
             "number": n["number"],
-            "is_blocked": "".join(filter(str.isdigit, n["number"] or "")) in blocked_digits,
+            "is_blocked": phone_key(n["number"]) in blocked_keys,
         } for n in g["numbers"]]
         comp = companies_by_id.get(comp_id_str) or {}
         items.append({
@@ -2148,6 +2187,7 @@ def api_get_blacklist(
     search: str = "",
     page: int = 1,
     limit: int = 10,
+    all_entries: bool = Query(False, alias="all"),
     x_user_token: Optional[str] = Header(None),
 ):
     _require_user(x_user_token)
@@ -2159,6 +2199,12 @@ def api_get_blacklist(
     if search:
         import re as _re
         query["value"] = {"$regex": _re.escape(search), "$options": "i"}
+
+    # Every blocked phone at once, for the recipient pickers — the page size cap
+    # below (100) meant only the newest 100 could ever show as blocked there.
+    if all_entries and type == "phone":
+        entries = list(db.db.blacklist.find(query, {"_id": 1, "type": 1, "value": 1, "created_at": 1}))
+        return {"items": serialize(entries), "total": len(entries), "page": 1, "limit": len(entries)}
 
     page = max(1, page)
     limit = max(1, min(limit, 100))
@@ -2172,6 +2218,30 @@ def api_get_blacklist(
     return {"items": serialize(entries), "total": total, "page": page, "limit": limit}
 
 
+@router.get("/blacklist/industry-preview")
+def api_blacklist_industry_preview(value: str = "", x_user_token: Optional[str] = Header(None)):
+    """The industries the app actually assigns (with how many companies each),
+    and which of them `value` would block. Industries are a fixed set of names
+    ("Gas LP / Energía", "Cerrajero"…) — free text like "farmacia" or "gaseras"
+    silently matched nothing, so the Blacklist page shows this while typing."""
+    _require_user(x_user_token)
+    from collections import Counter
+    from app.pipeline import _industry_matches
+    db = MongoDBManager()
+    companies = list(db.db.companies.find({}, {"industry": 1, "name": 1}))
+    counts = Counter(c.get("industry") for c in companies)
+    industries = [{"industry": k, "companies": n} for k, n in counts.most_common()
+                  if k and k not in ("No detectada", "—")]
+    value = value.strip()
+    matches = [i for i in industries if value and _industry_matches(i["industry"], value)]
+    # The entry also applies to business names (see _check_blacklist) — count
+    # the companies it would catch that way, beyond the matched industries.
+    by_name = [c.get("name") for c in companies if value and c.get("name")
+               and not _industry_matches(c.get("industry") or "", value) and _industry_matches(c["name"], value)]
+    return {"industries": industries, "matches": matches,
+            "by_name": {"companies": len(by_name), "examples": by_name[:3]}}
+
+
 @router.post("/blacklist")
 def api_add_blacklist(body: dict, x_user_token: Optional[str] = Header(None)):
     _require_user(x_user_token)
@@ -2182,8 +2252,14 @@ def api_add_blacklist(body: dict, x_user_token: Optional[str] = Header(None)):
     if not value:
         raise HTTPException(status_code=400, detail="value required")
     db = MongoDBManager()
-    # Prevent duplicates
-    existing = db.db.blacklist.find_one({"type": t, "value": value})
+    # Prevent duplicates — a phone counts as the same entry in any format
+    # (52… / 521… / 10 digits), see app/send_guard.py.
+    if t == "phone":
+        import re as _re
+        from app.send_guard import phone_key
+        existing = db.db.blacklist.find_one({"type": "phone", "value": {"$regex": _re.escape(phone_key(value)) + "$"}})
+    else:
+        existing = db.db.blacklist.find_one({"type": t, "value": value})
     if existing:
         raise HTTPException(status_code=409, detail="Entry already exists")
     from datetime import datetime
@@ -2249,6 +2325,7 @@ def api_get_ideas(
         query["$or"] = [
             {"domain": {"$regex": _re.escape(search), "$options": "i"}},
             {"industry": {"$regex": _re.escape(search), "$options": "i"}},
+            {"maps_lead.name": {"$regex": _re.escape(search), "$options": "i"}},
         ]
     # "terms" = filtro exacto multi-selección por checkbox (el/los término(s) de
     # búsqueda que generaron la idea, NO una industria verificada — eso solo se

@@ -427,7 +427,7 @@ const FAQ = {
       items: [
         {
           q: '¿Por qué solo un mensaje por empresa?',
-          a: 'Por defecto el sistema envía al número principal. Puedes expandir el chip de empresa en el selector para activar números extra, pero enviar a múltiples contactos de la misma empresa a la vez puede parecer agresivo.',
+          a: 'Por defecto el sistema envía a un solo número por empresa (el primero de la lista). Puedes expandir el chip de empresa en el selector para activar números extra, pero enviar a múltiples contactos de la misma empresa a la vez puede parecer agresivo.',
         },
         {
           q: '¿Qué es la deduplicación de empresas?',

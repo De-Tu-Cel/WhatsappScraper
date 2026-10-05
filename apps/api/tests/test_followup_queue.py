@@ -184,6 +184,14 @@ class FakeExpirySessionsCollection:
                 n += 1
         return MagicMock(modified_count=n)
 
+    def update_one(self, query, update):
+        s = self._sessions.get(query["_id"])
+        statuses = query.get("status", {}).get("$in")
+        if not s or (statuses and s["status"] not in statuses):
+            return MagicMock(modified_count=0)
+        s.update(update.get("$set", {}))
+        return MagicMock(modified_count=1)
+
 
 class FakePrefsUpdateMany:
     def __init__(self):
@@ -254,3 +262,66 @@ class TestExpireIdleSessionsRespectsConfig:
         mgr = FakeExpiryMgr([sess], idle_timeout_hours=2)
         fq._expire_idle_sessions(mgr)
         assert mgr.db.ai_followup_sessions._sessions["s3"]["status"] == "ended"
+
+
+# ── Burst joining + cross-process claims (2026-10-04) ─────────────────────────
+
+class TestDebouncedBurstIsNotNumbered:
+    """A burst used to reach the LLM as "[1] Así es\n[2] No hay de qué…" and the
+    model replied with the marker itself — "[2]" went out as a WhatsApp message."""
+
+    def test_messages_joined_one_per_line_without_markers(self):
+        fq._pending["5210000000000"] = {
+            "messages": ["Asi es", "No hay de que, lindo dia"],
+            "log_ids": ["l1", "l2"], "company_id": "c1", "manual": False, "timer": None,
+        }
+        with patch.object(fq._q, "put") as put:
+            fq._flush_debounced("5210000000000")
+        item = put.call_args.args[0]
+        assert item["inbound_body"] == "Asi es\nNo hay de que, lindo dia"
+        assert "[1]" not in item["inbound_body"]
+        assert item["inbound_log_id"] == "l2"
+
+
+class FakeProactiveSessions:
+    """Two API processes run the same sweep: find() returns the session to both,
+    but only the first conditional update actually claims it."""
+
+    def __init__(self):
+        self.doc = {"_id": "s1", "company_id": "c1", "phone_number": "521",
+                    "status": "waiting", "turn_count": 1, "proactive_sent": False}
+
+    def find(self, query, projection=None):
+        return [dict(self.doc)]
+
+    def update_one(self, query, update):
+        if query.get("proactive_sent", {}).get("$ne") is True and self.doc.get("proactive_sent") is True:
+            return MagicMock(modified_count=0)
+        self.doc.update(update.get("$set", {}))
+        return MagicMock(modified_count=1)
+
+
+class TestProactiveNudgeClaimedOnce:
+    def test_second_sweep_does_not_queue_the_same_session_again(self):
+        sessions = FakeProactiveSessions()
+        db = type("_M", (), {"db": type("_DB", (), {"ai_followup_sessions": sessions})()})()
+        with patch.object(fq._q, "put") as put:
+            fq._run_proactive_followups(db)   # process A
+            fq._run_proactive_followups(db)   # process B, same tick
+        assert put.call_count == 1
+
+
+class TestIdleExpiryClosedOnce:
+    def test_already_closed_session_is_not_processed_again(self):
+        sess = _stale_session("s9", hours_silent=50)
+        mgr = FakeExpiryMgr([sess], idle_timeout_hours=48)
+        # the other process closed it between our find() and our update
+        real_find = mgr.db.ai_followup_sessions.find
+
+        def find_then_close(query, projection=None):
+            found = real_find(query, projection)
+            mgr.db.ai_followup_sessions._sessions["s9"]["status"] = "ended"
+            return found
+        mgr.db.ai_followup_sessions.find = find_then_close
+        fq._expire_idle_sessions(mgr)
+        assert mgr.db.conversation_ai_prefs.calls == []

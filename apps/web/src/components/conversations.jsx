@@ -6,7 +6,7 @@ import { useLang } from '../context/LangContext'
 import { useUser } from '../context/UserContext'
 import { useNavigation } from '../context/NavigationContext'
 import { useDailyCapStats } from '../hooks/useDailyCapStats'
-import { useBlacklistedPhones, digitsOnly } from './WhatsAppNumberPicker'
+import { useBlacklistedPhones, phoneKey } from '../lib/phoneBlacklist'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -740,7 +740,7 @@ export default function Conversations({ isActive } = {}) {
   // 403 after the fact — same blacklist WhatsAppNumberPicker.jsx already
   // shows red/disabled for in the search/recipients pickers.
   const blacklistedPhones = useBlacklistedPhones()
-  const isNumberBlacklisted = n => blacklistedPhones.has(digitsOnly(n))
+  const isNumberBlacklisted = n => blacklistedPhones.has(phoneKey(n))
   const blockedSelectedNums = selectedNums.filter(isNumberBlacklisted)
   const hasBlockedSelection = blockedSelectedNums.length > 0
   const [numbersReady, setNumbersReady] = useState(false)

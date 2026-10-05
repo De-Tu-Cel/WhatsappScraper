@@ -197,6 +197,7 @@ def delete_session(session_id: str):
 def list_sessions() -> dict:
     r = _req.get(f"{WWEBJS_URL}/sessions", headers=_headers(), timeout=5)
     if not r.ok:
+        print(f"[wwebjs] GET /sessions → {r.status_code}: {r.text[:120]}")
         return {}
     return r.json()
 
@@ -207,7 +208,8 @@ def get_all_connected_instances(db) -> list:
         sessions = list_sessions()
         return [sid for sid, info in sessions.items()
                 if isinstance(info, dict) and info.get("status") == "connected"]
-    except Exception:
+    except Exception as e:
+        print(f"[wwebjs] sessions lookup failed: {e!r}")
         return []
 
 

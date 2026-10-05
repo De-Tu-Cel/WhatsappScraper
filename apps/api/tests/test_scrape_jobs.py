@@ -397,6 +397,20 @@ class TestSetJobAction:
             set_job_action(mgr, jid, "reanudar")
         assert col._doc["status"] == "pending"
 
+    # ── dismiss ("Nueva búsqueda" / X — results cleared on purpose) ──
+
+    def test_dismiss_stamps_dismissed_at_only(self):
+        mgr, col, jid = self._mgr_col(status="done")
+        set_job_action(mgr, jid, "dismiss")
+        assert list(col.sets_recorded[-1]) == ["dismissed_at"]
+        assert col._doc["status"] == "done"
+
+    def test_dismiss_leaves_a_running_job_running(self):
+        mgr, col, jid = self._mgr_col(status="running")
+        set_job_action(mgr, jid, "dismiss")
+        assert col._doc["status"] == "running" and col._doc["paused"] is False
+
+
     def test_reanudar_triggers_dispatch(self):
         mgr, col, jid = self._mgr_col(status="cancelled")
         with patch("app.scrape_jobs._claim_and_dispatch") as mock_dispatch:
@@ -684,3 +698,76 @@ class TestEdgeCases:
         urls = [f"https://s{i}.com" for i in range(5)]
         col = _run(_make_job(urls))
         assert col._doc["processed_count"] <= col._doc["total_count"]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Graceful pause — in-flight URLs finish and count; nothing is redone
+# ══════════════════════════════════════════════════════════════════════════
+
+class _SnapshotOnPauseCol(FakeJobsCollection):
+    """Records (processed_count, len(results), next_index) every time the
+    worker heartbeats while paused — i.e. what the UI shows as "Pausado"."""
+
+    def __init__(self, doc, pause_schedule):
+        super().__init__(doc, pause_schedule=pause_schedule)
+        self.paused_snapshots: list[tuple[int, int, int]] = []
+
+    def update_one(self, query, update):
+        if ("$set" in update and list(update["$set"].keys()) == ["last_progress_at"]
+                and self._doc.get("paused")):
+            self.paused_snapshots.append((self._doc.get("processed_count", 0),
+                                          len(self._doc.get("results", [])),
+                                          self._doc.get("next_index", 0)))
+        return super().update_one(query, update)
+
+
+class TestGracefulPause:
+    def _run_counting(self, urls, pause_schedule):
+        calls: dict[str, int] = {}
+
+        def _counting(url, *a):
+            calls[url] = calls.get(url, 0) + 1
+            return _fake_result(url)
+
+        col = _SnapshotOnPauseCol(_make_job(urls), pause_schedule)
+        with (
+            patch("app.database.MongoDBManager", return_value=FakeMgr(col)),
+            patch("app.scrape_jobs._process_one_url", side_effect=_counting),
+            patch("time.sleep"),
+        ):
+            _run_scrape_job(str(col._doc["_id"]))
+        return col, calls
+
+    def test_no_url_is_processed_twice_across_pauses(self):
+        urls = [f"https://s{i}.com" for i in range(11)]
+        col, calls = self._run_counting(urls, [2, 6, 9])
+        assert col._doc["status"] == "done"
+        assert calls == {u: 1 for u in urls}  # used to redo the in-flight ones on resume
+
+    def test_paused_count_matches_results_and_resume_point(self):
+        urls = [f"https://s{i}.com" for i in range(11)]
+        col, _ = self._run_counting(urls, [2, 6])
+        assert col.paused_snapshots, "the worker never sat paused"
+        for processed, n_results, next_index in col.paused_snapshots:
+            assert processed == n_results == next_index
+
+
+class TestLatestJobSkipsDismissed:
+    """Bug 2026-10-04: after "Nueva búsqueda", a refresh brought the old search
+    back — the /latest fallback returned any job finished in the last 24h."""
+
+    def test_every_lookup_excludes_dismissed_jobs(self):
+        from fastapi import HTTPException
+        from app.api import routes
+        queries = []
+
+        class _Jobs:
+            def find_one(self, query, *a, **kw):
+                queries.append(query)
+                return None
+        fake = type("_M", (), {"db": type("_DB", (), {"scrape_jobs": _Jobs()})()})()
+        with patch.object(routes, "_require_user", return_value={"username": "u"}),              patch.object(routes, "MongoDBManager", return_value=fake):
+            with pytest.raises(HTTPException):
+                routes.api_get_latest_scrape_job(surface="search", x_user_token="t")
+        assert len(queries) == 2
+        assert all(q.get("dismissed_at", "missing") is None for q in queries)

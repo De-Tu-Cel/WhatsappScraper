@@ -22,10 +22,6 @@ export function useScrapeJob(surface) {
   const [jobId, setJobId] = useState(null)
   const timerRef    = useRef(null)
   const mountedRef  = useRef(true)
-  // Valor congelado en el momento exacto en que el usuario hace clic en Pause.
-  // Evita saltos hacia atrás (next_index < processed_count) o hacia adelante
-  // (in-flight $inc) mientras el chunk termina de drenarse.
-  const frozenCountRef = useRef(null)
 
   // Named function expression so the recursive self-reference below resolves
   // to this function's own binding instead of the outer `const poll` (still
@@ -95,12 +91,15 @@ export function useScrapeJob(surface) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const start = useCallback(async (urls) => {
+  // mapsLeads: Google Maps businesses with no website (their url is a Maps
+  // link) — the backend builds them from this data instead of scraping.
+  // query: the search that produced these URLs, shown above the results.
+  const start = useCallback(async (urls, mapsLeads = [], query = '') => {
     if (timerRef.current) clearTimeout(timerRef.current)
     setJob(null)
     const res = await authFetch('/api/scrape-jobs', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ surface, urls }),
+      body: JSON.stringify({ surface, urls, ...(mapsLeads.length ? { maps_leads: mapsLeads } : {}), ...(query ? { query } : {}) }),
     })
     if (!res.ok) throw new Error('No se pudo iniciar el scraping')
     const data = await res.json()
@@ -113,12 +112,6 @@ export function useScrapeJob(surface) {
 
   const act = useCallback(async (action) => {
     if (!jobId) return
-    if (action === 'pause') {
-      // Freeze optimista inmediato (valor del último poll, puede tener hasta 3s de lag)
-      frozenCountRef.current = job ? Math.min(job.processed_count || 0, job.total_count || 0) : null
-    } else {
-      frozenCountRef.current = null
-    }
     const res = await authFetch(`/api/scrape-jobs/${jobId}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action }),
@@ -126,10 +119,11 @@ export function useScrapeJob(surface) {
     if (res.ok) {
       const data = await res.json()
       setJob(data)
-      if (action === 'pause') {
-        // Actualiza el freeze con el processed_count real del servidor en ese instante,
-        // más preciso que el valor de React state que pudo ser hasta 3s stale.
-        frozenCountRef.current = Math.min(data.processed_count || 0, data.total_count || 0)
+      // Poll right away instead of waiting out the 3s tick, so "Pausando… / Pausado"
+      // shows up as soon as the click lands.
+      if (!TERMINAL.includes(data.status)) {
+        if (timerRef.current) clearTimeout(timerRef.current)
+        timerRef.current = setTimeout(() => poll(jobId), 800)
       }
       // On cancel: keep the job in localStorage so the "N pending URLs / Reanudar"
       // banner survives a page refresh. reset() (the X button) is the explicit clear.
@@ -140,26 +134,31 @@ export function useScrapeJob(surface) {
         poll(jobId)
       }
     }
-  }, [jobId, storageKey, job, poll])
+  }, [jobId, storageKey, poll])
 
+  // The user is done with these results. Also tells the backend, otherwise the
+  // /latest fallback above handed the same job back on the next refresh.
   const reset = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current)
+    if (jobId) {
+      authFetch(`/api/scrape-jobs/${jobId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'dismiss' }),
+      }).catch(() => {})
+    }
     setJob(null); setJobId(null)
     localStorage.removeItem(storageKey)
-  }, [storageKey])
+  }, [storageKey, jobId])
 
   const total      = job?.total_count || 0
   const status     = job?.status || null
-  const isPausing  = !!job?.paused && (job?.current_urls?.length > 0)
-  // Durante pausing mostramos el valor congelado en el clic de Pause (frozenCountRef).
-  // Esto evita tanto el salto hacia adelante (in-flight $inc) como el salto hacia
-  // atrás (next_index < processed_count) mientras el chunk en vuelo termina.
-  const processed  = Math.min(
-    isPausing && frozenCountRef.current !== null
-      ? frozenCountRef.current
-      : (job?.processed_count || 0),
-    total,
-  )
+  const inFlight   = job?.current_urls?.length || 0
+  // Pausing = paused, but the URLs already running (≤ 4) are still finishing.
+  // The backend records them (graceful pause, see scrape_jobs.py), so the count
+  // only ever goes up to where the job actually stops — shown live, no freeze:
+  // freezing it at the click and releasing it later is what made it jump.
+  const isPausing  = !!job?.paused && inFlight > 0
+  const processed  = Math.min(job?.processed_count || 0, total)
 
   return {
     job,
@@ -167,6 +166,7 @@ export function useScrapeJob(surface) {
     total, processed,
     progress:   total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0,
     currentUrl: job?.current_urls?.[0] || '',
+    inFlight,
     status,
     processing: status === 'pending' || status === 'running',
     pausing:    isPausing,

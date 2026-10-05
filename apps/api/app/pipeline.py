@@ -1,4 +1,6 @@
 # pipeline.py
+import re
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 # from pathlib import Path
@@ -58,11 +60,80 @@ def _industry_words(term: str) -> set:
     return _tokenize(_to_singular_es(term or ""))
 
 
-def _check_blacklist(domain: str, industry: str) -> dict:
-    """Returns {reason, matched} if blacklisted, else None."""
+_GIRO_CATEGORY_CACHE: dict[str, str] = {}
+
+
+def _giro_category(giro: str, scraper) -> str:
+    """The scraper's own broad category for a searched giro ("plomeros" →
+    "Servicios del Hogar"), so it can be compared with the category it gave
+    a scraped site. A search text that still carries its location ("plomeros
+    en Mérida", older ideas) is trimmed first. "" when it can't tell."""
+    from searcher import _extract_location, _norm_loc
+    giro = (_extract_location(giro)[0] or giro).strip()
+    key = _norm_loc(giro)
+    if key not in _GIRO_CATEGORY_CACHE:
+        from bs4 import BeautifulSoup
+        try:
+            cat = scraper._detect_industry(giro, BeautifulSoup("", "html.parser"), company_name=giro)
+        except Exception:
+            return ""
+        _GIRO_CATEGORY_CACHE[key] = "" if cat in ("", "No detectada") else cat
+    return _GIRO_CATEGORY_CACHE[key]
+
+
+_GIRO_COMPAT_CACHE: dict[tuple[str, str], bool] = {}
+
+
+def _giro_fits_category(giro: str, category: str) -> bool:
+    """Second opinion before flagging a mismatch: the classifier alone put
+    "agencias … autos tijuana" under Transporte / Logística and so flagged
+    five real car dealerships (Automotriz). True when unsure."""
+    from searcher import _norm_loc
+    key = (_norm_loc(giro), category)
+    if key not in _GIRO_COMPAT_CACHE:
+        try:
+            from app.llm import call_llm
+            ans = call_llm([{"role": "user", "content": (
+                f'¿Un negocio clasificado como "{category}" puede ser lo que alguien busca '
+                f'con "{giro}"? Responde solo "si" o "no".')}], max_tokens=3, temperature=0)
+        except Exception:
+            return True
+        _GIRO_COMPAT_CACHE[key] = not (ans or "").strip().lower().startswith("n")
+    return _GIRO_COMPAT_CACHE[key]
+
+
+def _fold(text: str) -> str:
+    """Lowercase without accents — "Médico" and "medico" compare equal."""
+    import unicodedata
+    t = unicodedata.normalize("NFKD", (text or "").lower())
+    return "".join(c for c in t if not unicodedata.combining(c)).strip()
+
+
+def _industry_matches(industry: str, blocked: str) -> bool:
+    """Accent-insensitive, matched at the start of a word. Short entries (< 4
+    letters) must be the whole word (plural tolerated) so "gas" blocks "Gas LP /
+    Energía" but not "Gastronomía"; longer ones may be a word's beginning, so
+    "farmac" covers "Farmacia" and "cerrajer" both "Cerrajero" and "Cerrajería".
+    A plain substring check made "gas" also block "Gastronomía" and "medico"
+    miss "Médico"."""
+    blocked = _fold(blocked)
+    if not blocked:
+        return False
+    tail = r"(?:es|s)?\b" if len(blocked) < 4 else ""
+    return re.search(rf"\b{re.escape(blocked)}{tail}", _fold(industry)) is not None
+
+
+def _check_blacklist(domain: str, industry: str, name: str = "") -> dict:
+    """Returns {reason, matched} if blacklisted, else None.
+
+    An industry entry is checked against the detected industry AND the business
+    name: industry detection is coarse for small businesses — "Cerrajería en
+    Saltillo" came out as "Servicios", so blocking "cerrajer" let every
+    locksmith through (tested 2026-10-04). For Maps leads `industry` is Google's
+    category."""
     try:
         db = MongoDBManager()
-        entries = list(db.db.blacklist.find({}))
+        entries = list(db.db.blacklist.find({"type": {"$in": ["domain", "industry"]}}))
         domain = (domain or "").lower().strip()
         for e in entries:
             val = e.get("value", "").lower().strip()
@@ -70,7 +141,7 @@ def _check_blacklist(domain: str, industry: str) -> dict:
                 continue
             if e.get("type") == "domain" and domain and _domain_matches(domain, val):
                 return {"reason": "domain", "matched": val}
-            if e.get("type") == "industry" and industry and val in industry.lower():
+            if e.get("type") == "industry" and any(t and _industry_matches(t, val) for t in (industry, name)):
                 return {"reason": "industry", "matched": val}
     except Exception:
         pass
@@ -106,11 +177,13 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
     # También recupera la industria buscada — mismo motivo, para el chequeo
     # de industria (ver más abajo, misma idea que el de ubicación).
     _target_state = None
+    _target_city = None
     _target_industry = None
     try:
         _idea = db.db.search_ideas.find_one_and_delete({"url": website})
         _target_state = (_idea or {}).get("target_state")
-        _target_industry = (_idea or {}).get("industry")
+        _target_city = (_idea or {}).get("target_city")
+        _target_industry = (_idea or {}).get("industry_giro") or (_idea or {}).get("industry")
     except Exception:
         pass
 
@@ -127,21 +200,44 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
         return {"blacklisted": True, "reason": "domain", "matched": _bl_domain["matched"]}
 
     print(f"🔍 Scrapeando datos de {website}...")
-    scraped = scraper.scrape_site(website, force=force, country=country, target_state=_target_state)
+    scraped = scraper.scrape_site(website, force=force, country=country, target_state=_target_state,
+                                  verify_phones=False, target_city=_target_city)
     _extra = scraped.get("_extra", {})
     _cr = scraped.get("_contacts_raw", {})
 
     # Industry blacklist check — after scraping, undo scraper's DB write if needed
     _industry = scraped.get("industry", "") or ""
-    _bl_industry = _check_blacklist("", _industry)
+    def _discard_new_company():
+        _scraped_id = scraped.get("_company_id")
+        if _scraped_id and scraped.get("_db_action") == "created":
+            from bson import ObjectId
+            _oid = ObjectId(str(_scraped_id))
+            db.db.companies.delete_one({"_id": _oid})
+            # the scraper already saved its contacts — don't leave them orphaned
+            db.db.contacts.delete_many({"company_id": {"$in": [_oid, str(_oid)]}})
+
+    _bl_industry = _check_blacklist("", _industry, scraped.get("name") or "")
     if _bl_industry:
         print(f"🚫 Blacklisted industry: {_industry}")
-        _scraped_id = scraped.get("_company_id")
-        _db_action  = scraped.get("_db_action")
-        if _scraped_id and _db_action == "created":
-            from bson import ObjectId
-            db.db.companies.delete_one({"_id": ObjectId(str(_scraped_id))})
-        return {"blacklisted": True, "reason": "industry", "matched": _bl_industry["matched"]}
+        _discard_new_company()
+        return {"blacklisted": True, "reason": "industry", "matched": _bl_industry["matched"],
+                "name": scraped.get("name") or "", "industry": _industry}
+
+    # A directory/listing page, not a business: one site with WhatsApp numbers
+    # spread over many area codes (vetty.mx: 20 numbers of 20 different
+    # groomers across the country, saved as one "company", 2026-10-02).
+    _wa_all = {re.sub(r"\D", "", n)[-10:] for n in _cr.get("all_whatsapp_numbers") or []}
+    _ladas = {n[:3] for n in _wa_all}
+    # Phones count too: electricistasmx.com listed 1,119 phone numbers from
+    # all over the country but only 3 WhatsApp links, and got saved as one
+    # "company" (2026-10-04).
+    _all_nums = _wa_all | {re.sub(r"\D", "", n)[-10:] for n in _cr.get("phone_numbers") or []}
+    _all_ladas = {n[:3] for n in _all_nums}
+    if (len(_wa_all) >= 8 and len(_ladas) >= 5) or (len(_all_nums) >= 15 and len(_all_ladas) >= 5):
+        print(f"🚫 Parece directorio: {len(_all_nums)} números de {len(_all_ladas)} ladas distintas en {website}")
+        _discard_new_company()
+        return {"blacklisted": True, "reason": "directory",
+                "matched": f"directorio ({len(_all_nums)} números de {len(_all_ladas)} ladas)"}
 
     # Chequeo de ubicación post-scrape — la búsqueda pudo estar acotada a un
     # estado (target_state, recuperado arriba de search_ideas) pero el filtro
@@ -165,6 +261,40 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
             }
             print(f"⚠️  Ubicación distinta a la buscada: se buscó {_target_state!r}, "
                   f"se detectó {_detected_state!r} ({_extra.get('city')!r})")
+    # Same state, different city: a Torreón plumber in a "plomeros en Saltillo"
+    # search is out of the searched zone even though both are in Coahuila (the
+    # state check above can't see it). Municipalities of the same metro area
+    # (Ramos Arizpe for Saltillo, Zapopan for Guadalajara…) count as the same
+    # place. Only for a location the site or its phones gave — one assumed from
+    # the search can't disagree with it.
+    _detected_city = (_extra.get("city") or "").strip()
+    if (_target_city and _detected_city and not _location_mismatch
+            and (_extra.get("loc_source") or scraped.get("location_source")) in ("sitio", "texto", "lada")):
+        from app.geo import same_area
+        if not same_area(_detected_city, _target_city):
+            _location_mismatch = {
+                "searched_state": (_target_state or "").title(),
+                "searched_city": _target_city,
+                "detected_state": _detected_state,
+                "detected_city": _detected_city,
+            }
+            print(f"⚠️  Ciudad distinta a la buscada: se buscó {_target_city!r}, se detectó {_detected_city!r}")
+    # _target_state is only ever a Mexican state. When every number the site
+    # lists is foreign, the address the scraper inferred (it leans on the
+    # searched state as a hint) can't be trusted — "talleres mecánicos en León"
+    # brought a real León, SPAIN shop (+34 only) saved as León, Guanajuato.
+    _nums = (_cr.get("all_whatsapp_numbers") or []) + (_cr.get("phone_numbers") or [])
+    if _target_state and not _location_mismatch and _nums and not any(n.lstrip("+").startswith("52") for n in _nums):
+        from searcher import COUNTRY_CONFIG as _CC
+        _known = sorted({c["phone_code"] for c in _CC.values()}, key=len, reverse=True)
+        _codes = sorted({next((k for k in _known if ("+" + n.lstrip("+")).startswith(k)), "+" + n.lstrip("+")[:2])
+                         for n in _nums})
+        _location_mismatch = {
+            "searched_state": _target_state.title(),
+            "detected_state": f"otro país (teléfonos {', '.join(_codes)})",
+            "detected_city": "",
+        }
+        print(f"⚠️  Ningún teléfono es de México ({_codes}) para una búsqueda en {_target_state!r}")
 
     # Chequeo de industria post-scrape — mismo problema que el de ubicación de
     # arriba, pero nunca se le hizo el equivalente: el filtro de industria del
@@ -179,16 +309,24 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
     # _location_mismatch, y ese costo es preferible a no detectar nada.
     _industry_mismatch = None
     _detected_industry = (scraped.get("industry") or "").strip()
-    if _target_industry and _detected_industry:
+    if _target_industry and _detected_industry and _detected_industry != "No detectada":
         _target_words = _industry_words(_target_industry)
         _detected_words = _industry_words(_detected_industry)
         if _target_words and _detected_words and not (_target_words & _detected_words):
-            _industry_mismatch = {
-                "searched_industry": _target_industry,
-                "detected_industry": _detected_industry,
-            }
-            print(f"⚠️  Industria distinta a la buscada: se buscó {_target_industry!r}, "
-                  f"se detectó {_detected_industry!r}")
+            # Words alone flagged ~54% of real matches: the scraper files a
+            # business under a broad category ("Servicios del Hogar") that never
+            # shares a word with the giro searched ("plomeros"). Classify the
+            # giro with the same classifier and compare category to category.
+            _searched_category = _giro_category(_target_industry, scraper)
+            if (_searched_category and _searched_category != _detected_industry
+                    and not _giro_fits_category(_target_industry, _detected_industry)):
+                _industry_mismatch = {
+                    "searched_industry": _target_industry,
+                    "searched_category": _searched_category,
+                    "detected_industry": _detected_industry,
+                }
+                print(f"⚠️  Industria distinta a la buscada: se buscó {_target_industry!r} "
+                      f"({_searched_category}), se detectó {_detected_industry!r}")
 
     print(f"💾 Guardando empresa en base de datos...")
 
@@ -545,6 +683,7 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
         "website": website,
         "company_id": company_id,
         "location_mismatch": _location_mismatch,
+        "industry_mismatch": _industry_mismatch,
         "scraped": scraped,
         "primary_whatsapp_number": primary_whatsapp_number,
         "all_whatsapp_numbers": _cr.get("all_whatsapp_numbers", []),
@@ -563,6 +702,229 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
         "evolution_result": evolution_result,
     }
     
+_VERIFY_LOCK = threading.Lock()
+_last_verify_at = 0.0
+
+
+def _verify_whatsapp_paced(db, phone: str):
+    """isRegisteredUser lookup (no message sent) on a random connected
+    instance with verification quota left — True/False, or None when no
+    instance could check. Lookups are spaced 3-7s apart process-wide: a Maps
+    lead has no page to scrape in between, so a batch of them would otherwise
+    fire lookups back-to-back from the same accounts."""
+    global _last_verify_at
+    import random
+    import time
+    from daily_cap import reserve_verification_slot
+    from whatsapp_wwebjs import get_all_connected_instances, verify_number
+
+    candidates = get_all_connected_instances(db) or []
+    if not candidates:
+        time.sleep(2)  # the sessions lookup has a 5s timeout; one blip shouldn't skip the check
+        candidates = get_all_connected_instances(db) or []
+    if not candidates:
+        print(f"⚠️  Sin sesión de WhatsApp conectada para verificar {phone}")
+        return None
+    random.shuffle(candidates)
+    with _VERIFY_LOCK:
+        wait = _last_verify_at + random.uniform(3.0, 7.0) - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        instance = next((i for i in candidates if reserve_verification_slot(db, i)), None)
+        if not instance:
+            print(f"⚠️  Cupo diario de verificaciones agotado en todas las sesiones — {phone} queda sin verificar")
+            return None
+        try:
+            return bool(verify_number(instance, phone).get("registered"))
+        except Exception as e:
+            print(f"⚠️  No se pudo verificar WhatsApp para {phone}: {e}")
+            return None
+        finally:
+            _last_verify_at = time.monotonic()
+
+
+_SOCIAL_KEYS = {"facebook.com": "facebook", "fb.com": "facebook", "instagram.com": "instagram",
+                "tiktok.com": "tiktok", "twitter.com": "twitter", "x.com": "twitter",
+                "linkedin.com": "linkedin", "youtube.com": "youtube"}
+
+
+def _country_name_for_code(code: str) -> str:
+    from searcher import COUNTRY_CONFIG
+    code = (code or "").lower()
+    return next((name for name, cfg in COUNTRY_CONFIG.items() if cfg.get("bd_country") == code), "")
+
+
+def process_maps_lead(maps_url: str, lead: dict = None) -> dict:
+    """"Procesar" for a Google Maps business with no website of its own: there
+    is no page to scrape, so the company is built from the Maps data captured
+    at search time (saved on its search_ideas doc) and its phone is checked for
+    WhatsApp. Returns the same shape as process_url so the scrape-job results,
+    selection and send flow treat it like any scraped site."""
+    from bson import ObjectId
+
+    db = MongoDBManager()
+    try:
+        _idea = db.db.search_ideas.find_one_and_delete({"url": maps_url})
+    except Exception:
+        _idea = None
+    lead = lead or (_idea or {}).get("maps_lead")
+    if not lead:
+        raise ValueError("Sin datos de Google Maps para este negocio — vuelve a buscarlo")
+
+    _bl = _check_blacklist("", lead.get("category") or "", lead.get("name") or "")
+    if _bl:
+        return {"blacklisted": True, "reason": "industry", "matched": _bl["matched"],
+                "name": lead.get("name") or "", "industry": lead.get("category") or ""}
+
+    now = datetime.now()
+    cid = str(lead["cid"])
+    phone = lead["phone"]
+    last10 = "".join(filter(str.isdigit, phone))[-10:]
+    maps_fields = {
+        "maps_url": maps_url,
+        "maps_cid": cid,
+        "maps_place_id": lead.get("place_id") or "",
+        "rating": lead.get("rating"),
+        "reviews": lead.get("reviews"),
+        "photo_url": lead.get("photo_url") or "",
+        "latitude": lead.get("latitude"),
+        "longitude": lead.get("longitude"),
+    }
+
+    existing = db.db.companies.find_one({"maps_cid": cid})
+    if not existing and last10:
+        # Same phone AND a matching name — a shared phone alone merged six real
+        # locksmiths into a directory site that listed their numbers.
+        from searcher import same_business_name
+        _extra_generic = (lead.get("category") or "").split() + (lead.get("city") or "").split()
+        for _contact in db.db.contacts.find({"type": {"$in": ["whatsapp", "phone"]},
+                                             "value": {"$regex": f"{last10}$"}}).limit(20):
+            if not ObjectId.is_valid(str(_contact.get("company_id"))):
+                continue
+            _cand = db.db.companies.find_one({"_id": ObjectId(str(_contact["company_id"]))})
+            if _cand and same_business_name(lead.get("name") or "", _cand.get("name") or "", _extra_generic):
+                existing = _cand
+                break
+
+    if existing:
+        company_id = str(existing["_id"])
+        # Only fill what's missing — a company first found through its own
+        # website keeps its scraped name/industry/address.
+        fill = {k: v for k, v in maps_fields.items() if v not in (None, "") and not existing.get(k)}
+        if fill:
+            db.update_company(company_id, fill)
+        company = {**existing, **fill}
+        print(f"♻️  Negocio de Maps ya existía ({company.get('name')}), ID: {company_id}")
+    else:
+        company = {
+            "name": lead.get("name") or phone,
+            "industry": lead.get("category") or "",
+            "description": "",
+            "website": "",
+            "source": "google_maps",
+            "has_website": False,
+            "listed_url": lead.get("listed_url") or "",
+            "address": lead.get("address") or "",
+            "city": lead.get("city") or "",
+            "state": lead.get("state") or "",
+            "country": _country_name_for_code(lead.get("country_code")),
+            "postal_code": lead.get("postal_code") or "",
+            "business_hours": lead.get("business_hours") or "",
+            **maps_fields,
+            "has_whatsapp": False,
+            "status": "new",
+            "last_scraped_at": now,
+            "created_at": now,
+            "updated_at": now,
+            "metadata": {
+                "source": "google_maps",
+                "maps_category": lead.get("category") or "",
+                "maps_additional_categories": lead.get("additional_categories") or [],
+                "is_claimed": bool(lead.get("is_claimed")),
+            },
+        }
+        # Upsert on maps_cid (no `domain` key at all — the unique domain index
+        # is sparse, so an explicit null would collide with every other one).
+        res = db.db.companies.update_one({"maps_cid": cid}, {"$setOnInsert": company}, upsert=True)
+        if res.upserted_id:
+            company_id = str(res.upserted_id)
+            print(f"✅ Negocio de Maps guardado ({company['name']}), ID: {company_id}")
+        else:
+            company = db.db.companies.find_one({"maps_cid": cid})
+            company_id = str(company["_id"])
+
+    # The Business Profile is what a place with no website still publishes
+    # (owner's description, logo, services, payments, review topics) — fetched
+    # once per company, here rather than at search time so only the leads
+    # someone actually processes cost the extra call.
+    if not company.get("maps_profile_at"):
+        from searcher import maps_business_details
+        details = maps_business_details(cid, lead.get("country_code") or "MX")
+        if details:
+            upd = {
+                "maps_profile": {k: details[k] for k in (
+                    "payment_methods", "amenities", "price_level", "review_topics", "rating_distribution",
+                    "total_photos", "book_online_url", "related_businesses", "is_claimed")},
+                "maps_profile_at": now,
+            }
+            for k in ("description", "logo_url", "services"):
+                if details.get(k) and not company.get(k):
+                    upd[k] = details[k]
+            db.update_company(company_id, upd)
+            company = {**company, **upd}
+
+    is_wa = _verify_whatsapp_paced(db, phone)
+    if is_wa:
+        db.insert_contact({
+            "company_id": company_id, "type": "whatsapp", "value": phone,
+            "source": maps_url, "is_primary": True,
+            "detected_via": "phone_verification", "verified": True,
+        })
+        db.update_company(company_id, {"has_whatsapp": True})
+        print(f"📱 {phone} sí tiene WhatsApp")
+    else:
+        db.insert_contact({
+            "company_id": company_id, "type": "phone", "value": phone, "source": maps_url,
+            **({"verified": False} if is_wa is False else {}),
+        })
+
+    listed = lead.get("listed_url") or ""
+    if listed:
+        from urllib.parse import urlparse as _urlparse
+        _host = _urlparse(listed).netloc.lower().removeprefix("www.").removeprefix("m.")
+        _key = next((v for k, v in _SOCIAL_KEYS.items() if _host == k or _host.endswith("." + k)), None)
+        if _key and not db.db.social_media.find_one({"company_id": company_id, _key: {"$exists": True}}):
+            db.insert_social_media({"company_id": company_id, _key: listed, "source": maps_url})
+
+    wa_numbers = [phone] if is_wa else []
+    scraped = {
+        "name": company.get("name"),
+        "industry": company.get("industry"),
+        "description": company.get("description") or "",
+        "website": "",
+        "maps_url": maps_url,
+        "no_website": True,
+        "city": company.get("city") or "",
+        "state": company.get("state") or "",
+        "address": company.get("address") or "",
+        "rating": company.get("rating"),
+        "reviews": company.get("reviews"),
+        "photo_url": company.get("photo_url") or "",
+        "logo_url": company.get("logo_url") or "",
+        "_extra": {"city": company.get("city") or "", "state": company.get("state") or "",
+                   "services": company.get("services") or []},
+    }
+    return {
+        "website": maps_url,
+        "company_id": company_id,
+        "scraped": scraped,
+        "primary_whatsapp_number": wa_numbers[0] if wa_numbers else None,
+        "all_whatsapp_numbers": wa_numbers,
+        "wa_verified": is_wa,
+        "phone": phone,
+    }
+
+
 _BATCH_WORKERS = 10  # URLs procesadas en paralelo
 _SUB_WORKERS   = 4   # subpáginas en paralelo dentro de cada sitio
 

@@ -120,10 +120,14 @@ def _run_proactive_followups(db) -> None:
     }, {"_id": 1, "company_id": 1, "phone_number": 1}))
 
     for sess in needs_followup:
-        # Mark immediately to prevent double-queueing across cleanup cycles
-        db.db.ai_followup_sessions.update_one(
-            {"_id": sess["_id"]}, {"$set": {"proactive_sent": True}}
+        # Claim atomically before queueing — prod runs 2 API processes, each with
+        # this same cleanup loop on the same 30-min clock, so a plain find-then-mark
+        # let both queue the same nudge.
+        claimed = db.db.ai_followup_sessions.update_one(
+            {"_id": sess["_id"], "proactive_sent": {"$ne": True}}, {"$set": {"proactive_sent": True}}
         )
+        if not claimed.modified_count:
+            continue
         log.info("[FollowupQ] proactive follow-up queued for %s (company=%s)",
                  sess["phone_number"], sess["company_id"])
         _q.put({
@@ -156,11 +160,20 @@ def _expire_idle_sessions(db) -> None:
     if not stale:
         return
 
-    ids = [s["_id"] for s in stale]
-    db.db.ai_followup_sessions.update_many(
-        {"_id": {"$in": ids}},
-        {"$set": {"status": "ended", "end_reason": "idle_timeout"}},
-    )
+    # Close one by one, conditionally — the other API process runs this same sweep
+    # at the same time, and only the one that actually closes a session should
+    # trigger its (LLM-backed) conversation analysis.
+    closed = []
+    for s in stale:
+        res = db.db.ai_followup_sessions.update_one(
+            {"_id": s["_id"], "status": {"$in": ["active", "waiting"]}},
+            {"$set": {"status": "ended", "end_reason": "idle_timeout"}},
+        )
+        if res.modified_count:
+            closed.append(s)
+    if not closed:
+        return
+    stale = closed
     # Disable AI toggle for each affected conversation
     company_ids = list({s["company_id"] for s in stale})
     db.db.conversation_ai_prefs.update_many(
@@ -256,7 +269,9 @@ def _flush_debounced(phone_number: str):
     if not entry:
         return
     msgs = entry["messages"]
-    combined = "\n".join(msgs) if len(msgs) == 1 else "\n".join(f"[{i+1}] {m}" for i, m in enumerate(msgs))
+    # One bubble per line, no "[1] / [2]" numbering — the model imitated the
+    # markers and once replied with just "[2]" (PASA Tijuana, 2026-10-02).
+    combined = "\n".join(msgs)
     _q.put({
         "phone_number": phone_number,
         "company_id": entry["company_id"],

@@ -180,6 +180,12 @@ def _get_client() -> MongoClient:
         except Exception:
             pass  # duplicates exist — index will be created after cleanup
         try:
+            # Google Maps businesses with no website (pipeline.process_maps_lead)
+            # are keyed by their Maps cid instead of a domain.
+            db.companies.create_index("maps_cid", unique=True, sparse=True)
+        except Exception:
+            pass
+        try:
             # Partial (not sparse) porque casi todos los mensajes tienen message_id=None
             # explícito (no ausente) — un índice sparse+unique seguiría exigiendo
             # unicidad entre todos los None y fallaría de inmediato. Solo exige
@@ -630,7 +636,8 @@ class MongoDBManager:
                     # projection, so the frontend had no way to ever show it — added 2026-09-29
                     # after confirming live that a real Mérida/Yucatán search returned companies
                     # actually located in Zacatecas and Ciudad de México, silently.
-                    {"name": 1, "domain": 1, "website": 1, "industry": 1, "city": 1, "state": 1, "has_whatsapp": 1, "status": 1, "created_at": 1, "last_scraped_at": 1, "location_mismatch": 1}
+                    {"name": 1, "domain": 1, "website": 1, "industry": 1, "city": 1, "state": 1, "has_whatsapp": 1, "status": 1, "created_at": 1, "last_scraped_at": 1, "location_mismatch": 1,
+                     "source": 1, "maps_url": 1, "rating": 1, "reviews": 1, "logo_url": 1, "photo_url": 1}
                 )
                 .sort("created_at", -1)
                 .skip((page - 1) * page_size)
@@ -789,11 +796,56 @@ class MongoDBManager:
             }
         return result
 
+    def known_maps_lead_urls(self, leads: list) -> set:
+        """URLs of the Google Maps leads (see searcher._maps_lead_from_item)
+        already in the DB — same business by Maps cid, or its phone already
+        saved as a contact of any company (e.g. found earlier via its website)."""
+        if not leads:
+            return set()
+        known_cids = {d["maps_cid"] for d in self.db.companies.find(
+            {"maps_cid": {"$in": [l["cid"] for l in leads]}}, {"maps_cid": 1})}
+        variants_by_url = {}
+        for l in leads:
+            digits = "".join(filter(str.isdigit, l.get("phone") or ""))
+            if len(digits) < 10:
+                continue
+            last10, cc = digits[-10:], digits[:-10]
+            v = {digits, "+" + digits, last10}
+            if cc == "52":
+                v |= {"521" + last10, "+521" + last10}
+            variants_by_url[l["url"]] = v
+        all_variants = list(set().union(*variants_by_url.values())) if variants_by_url else []
+        # value → names of the companies holding it. A phone only counts as
+        # "already ours" when that company is the same business by name: a
+        # directory site lists hundreds of other businesses' phones.
+        from collections import defaultdict
+        from bson import ObjectId
+        from app.searcher import same_business_name
+        holders = defaultdict(set)
+        for d in self.db.contacts.find({"type": {"$in": ["whatsapp", "phone"]}, "value": {"$in": all_variants}},
+                                       {"value": 1, "company_id": 1}):
+            holders[d["value"]].add(str(d.get("company_id")))
+        ids = [ObjectId(c) for cs in holders.values() for c in cs if ObjectId.is_valid(c)]
+        names = {str(c["_id"]): c.get("name") or "" for c in self.db.companies.find({"_id": {"$in": ids}}, {"name": 1})}
+
+        def _known_by_phone(lead) -> bool:
+            extra = (lead.get("category") or "").split() + (lead.get("city") or "").split()
+            return any(same_business_name(lead.get("name") or "", names.get(cid, ""), extra)
+                       for v in variants_by_url.get(lead["url"], set()) for cid in holders.get(v, ()))
+
+        return {l["url"] for l in leads if l["cid"] in known_cids or _known_by_phone(l)}
+
     def check_urls_scraped(self, urls: list) -> dict:
         from urllib.parse import urlparse
+        from app.searcher import is_maps_lead_url
 
         def clean_domain(u):
             return urlparse(u).netloc.lower().replace("www.", "")
+
+        maps_urls = [u for u in urls if is_maps_lead_url(u)]
+        known_maps = {d["maps_url"] for d in self.db.companies.find(
+            {"maps_url": {"$in": maps_urls}}, {"maps_url": 1})} if maps_urls else set()
+        urls = [u for u in urls if u not in set(maps_urls)]
 
         domain_map = {clean_domain(u): u for u in urls if u}
         domains = list(domain_map.keys())
@@ -813,7 +865,8 @@ class MongoDBManager:
             if doc.get("website"):
                 scraped_domains.add(clean_domain(doc["website"]))
 
-        return {url: (clean_domain(url) in scraped_domains) for url in urls}
+        return {**{url: (clean_domain(url) in scraped_domains) for url in urls},
+                **{url: url in known_maps for url in maps_urls}}
 
     def find_company_id_by_phone(self, phone_number):
         clean = "".join(filter(str.isdigit, phone_number))
@@ -1164,7 +1217,7 @@ class MongoDBManager:
             str(c["_id"]): c
             for c in self.db.companies.find(
                 {"_id": {"$in": valid_oids}},
-                {"name": 1, "domain": 1, "website": 1, "industry": 1, "source": 1},
+                {"name": 1, "domain": 1, "website": 1, "industry": 1, "source": 1, "maps_url": 1, "logo_url": 1},
             )
         }
         wa_contact_cids = {
@@ -1351,6 +1404,8 @@ class MongoDBManager:
                 "company_name": company.get("name") or _display_name_from_domain(company.get("domain", "")) or "Sin nombre",
                 "domain": company.get("domain", ""),
                 "website": company.get("website", ""),
+                "maps_url": company.get("maps_url", ""),
+                "logo_url": company.get("logo_url", ""),
                 "industry": company.get("industry", ""),
                 "last_message":       g["last_message"] or "",
                 "last_direction":     g["last_direction"],
@@ -1367,11 +1422,12 @@ class MongoDBManager:
                 "numbers":            sorted(numbers_by_cid.get(company_id, [])),
             })
         # Deduplicate: same domain+name scraped multiple times → keep the one with
-        # the most recent activity. Companies with no domain are deduped by name alone.
+        # the most recent activity. Companies with no domain are deduped by name alone,
+        # except Google Maps ones: same-name branches of a chain are distinct businesses.
         _seen_key: dict = {}
         deduped = []
         for r in results:
-            domain = (r.get("domain") or "").strip().lower()
+            domain = (r.get("domain") or r.get("maps_url") or "").strip().lower()
             key = (r["company_name"].strip().lower(), domain)
             existing = _seen_key.get(key)
             if existing is None:

@@ -9,7 +9,8 @@ import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { SendConfigPanel } from './SendConfigPanel'
 import { InstanceDisconnectedBanner } from './InstanceStatusBanner'
 import DailyCapBadge, { getOverBy } from './DailyCapBadge'
-import CapacityBanner from './CapacityBanner'
+import { sendBlockReason } from './BulkSendPanel'
+import { isPhoneBlacklisted } from '@/lib/phoneBlacklist'
 import { loadSendConfig } from '@/lib/sendConfig'
 import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVariants'
 import Box from '@mui/material/Box'
@@ -27,7 +28,6 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import DescriptionIcon from '@mui/icons-material/Description'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
-import SpeedIcon from '@mui/icons-material/Speed'
 
 // Per-recipient variable check — TemplateLibraryPicker only blocks a template
 // when NONE of the selection has the data it needs, so a mixed selection (some
@@ -142,6 +142,9 @@ export default function SendCampaign() {
   // ── Recipients (per-number selection, same shape CompanyPicker/CampaignForm use) ──
   const [selectedNums, setSelectedNums] = useState(() => new Set())
   const [numInfoMap,   setNumInfoMap]   = useState(() => new Map())
+  // Selected numbers never messaged before — only those use the daily
+  // new-contacts quota (reported by CompanyPicker, which has the contacted data).
+  const [newSelCount,  setNewSelCount]  = useState(0)
 
   // ── Message + timing ──
   const [templateTexts, setTemplateTexts] = useState([])
@@ -180,6 +183,15 @@ export default function SendCampaign() {
   const hasCityData     = targets.some(n => n.city)
   const hasIndustryData = targets.some(n => n.industry)
   const hasWebData      = targets.some(n => n.web)
+  // Per company, not per number — the picker's tooltips read "N/M empresas", and
+  // with nobody selected yet it leaves variable templates usable.
+  const targetCompanies = useMemo(() => [...new Map(targets.map(n => [n.company_id, n])).values()], [targets])
+  const tplVarCounts = useMemo(() => ({
+    nombre:    targetCompanies.filter(n => n.company_name).length,
+    ciudad:    targetCompanies.filter(n => n.city).length,
+    industria: targetCompanies.filter(n => n.industry).length,
+    web:       targetCompanies.filter(n => n.web).length,
+  }), [targetCompanies])
   const cleanMessages = useMemo(() => templateTexts.map(m => m.trim()).filter(Boolean), [templateTexts])
   // Preview of what the first selected recipient could actually receive —
   // same eligible-template filtering + variable substitution handleSend()
@@ -200,9 +212,18 @@ export default function SendCampaign() {
   }, [previewTarget, cleanMessages])
   const minTemplatesRequired = getMinTemplatesRequired(targets.length)
   const belowMinTemplates = targets.length > 1 && cleanMessages.length < minTemplatesRequired
-  const overBy      = getOverBy(capStats, targets.length)
+  // Already-contacted numbers don't use the new-contacts quota — counting every
+  // selected number as new blocked follow-ups that actually fit.
+  const overBy      = getOverBy(capStats, targets.length, newSelCount)
   const capBlocked  = overBy > 0
   const canSend = targets.length > 0 && cleanMessages.length > 0 && !belowMinTemplates && !capBlocked && !isSending
+  const blockReason = sendBlockReason({
+    lang, isSending, allSent: false, isDisconnected,
+    selectedCount: targets.length,
+    templateCount: cleanMessages.length,
+    minTemplates: targets.length > 1 ? minTemplatesRequired : 1,
+    overBy,
+  })
 
   function handleSend() {
     if (!canSend) return
@@ -210,7 +231,9 @@ export default function SendCampaign() {
     // Pre-compute per-recipient messages (variant selection + variable substitution)
     // before enqueuing so all randomization happens at click time, not during send.
     let lastVariant = null
-    const jobs = targets.map(info => {
+    // A number blocked a moment ago may still be in the selection — never send it
+    // (the backend re-checks every message too).
+    const jobs = targets.filter(info => !isPhoneBlacklisted(info.number)).map(info => {
       const eligible = cleanMessages.filter(m => templateFitsTarget(m, info))
       const pool = eligible.length ? eligible : cleanMessages
       const variant = pickMessageVariant(pool, lastVariant)
@@ -223,6 +246,7 @@ export default function SendCampaign() {
       const cleanNumber = extractPhoneDigits(info.number) || info.number
       return { numbers: [cleanNumber], messages: [message], companyId: info.company_id, website: info.web }
     })
+    if (!jobs.length) return
     addBatch(jobs, t.campaign.title)
   }
 
@@ -262,7 +286,10 @@ export default function SendCampaign() {
       <Box sx={{ flex: 1, minHeight: 0, display: 'flex', gap: 2.5, overflow: 'hidden' }}>
         {/* Left — templates, timing, send */}
         <Box sx={{ flex: '1 1 420px', minWidth: 320, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1.8, pr: 0.5, pt: 1 }}>
+          {/* flex 0 1 auto: as tall as its content (the send bar sits right
+              under it, no empty gap) and only shrinks + scrolls when the
+              content outgrows the column. */}
+          <Box sx={{ flex: '0 1 auto', minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1.8, pr: 0.5, pt: 1 }}>
             <StepSection n={1} title={t.campaign.stepTemplates} hint={t.campaign.hintTemplates}
               icon={<DescriptionIcon sx={{ fontSize: 14, color: 'var(--accent, #3b82f6)' }} />}>
               <SectionCard>
@@ -270,11 +297,13 @@ export default function SendCampaign() {
                   onChange={setTemplateTexts}
                   recipientCount={targets.length}
                   baseCount={0}
-                  singleSelect={targets.length <= 1}
+                  singleSelect={targets.length === 1}
                   hasName={hasNameData}
                   hasCity={hasCityData}
                   hasIndustry={hasIndustryData}
                   hasWeb={hasWebData}
+                  varCounts={tplVarCounts}
+                  totalSelected={targetCompanies.length}
                 />
               </SectionCard>
             </StepSection>
@@ -389,7 +418,7 @@ export default function SendCampaign() {
                 <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem', fontStyle: 'italic' }}>
                   {lang === 'en'
                     ? 'Pick a template and at least one recipient to preview the actual message.'
-                    : 'Elige un template y al menos un destinatario para ver el mensaje real.'}
+                    : 'Elige una plantilla y al menos un destinatario para ver el mensaje real.'}
                 </Typography>
               )}
             </SectionCard>
@@ -445,85 +474,37 @@ export default function SendCampaign() {
             bgcolor: 'transparent',
             display: 'flex', flexDirection: 'column', gap: 0.6,
           }}>
-            {capStats && capStats.total_available <= 0 && (
-              <CapacityBanner stats={capStats} selectionCount={Math.max(targets.length, 1)} sx={{ mb: 0.5 }} />
-            )}
-            {/* Antes era solo texto gris chiquito flotando a la derecha, con
-               mucho menos peso visual que el botón grande de al lado. Ahora
-               tiene ícono en caja degradada (mismo lenguaje que el resto de
-               la app) + una barra de progreso real del cupo usado, coloreada
-               igual que ya hace DailyCapBadge internamente (normal/aviso/
-               agotado), en vez de solo números sueltos. */}
-            {capStats && (() => {
-              const used   = (capStats.total_sent || 0) + (capStats.scheduled_today || 0)
-              const cap    = capStats.total_cap || 0
-              const pct    = cap > 0 ? Math.min(100, (used / cap) * 100) : 0
-              const danger = capStats.total_available <= 0
-              const warn   = !danger && capStats.total_available < 30
-              const barRgb   = danger ? '245,158,11' : warn ? '251,191,36' : 'var(--accent-rgb,59,130,246)'
-              const barColor = danger ? '#f59e0b' : warn ? '#fbbf24' : 'var(--accent, #3b82f6)'
-              return (
-                <Box sx={{
-                  display: 'flex', flexDirection: 'column', gap: 0.8,
-                  px: 1.4, py: 1, borderRadius: 2,
-                  bgcolor: 'var(--surface, rgba(255,255,255,0.03))', border: '1px solid var(--border)',
-                }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.9 }}>
-                      <Box sx={{
-                        width: 22, height: 22, borderRadius: '7px', flexShrink: 0,
-                        background: `linear-gradient(135deg, rgba(${barRgb},0.3) 0%, rgba(${barRgb},0.1) 100%)`,
-                        border: `1px solid rgba(${barRgb},0.4)`,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      }}>
-                        <SpeedIcon sx={{ fontSize: 13, color: barColor }} />
-                      </Box>
-                      <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                        {lang === 'en' ? 'Daily quota' : 'Cupo diario'}
-                      </Typography>
-                    </Box>
-                    <DailyCapBadge stats={capStats} selectionCount={targets.length} />
-                  </Box>
-                  <LinearProgress variant="determinate" value={pct}
-                    sx={{ borderRadius: 4, height: 4, bgcolor: 'rgba(255,255,255,0.06)', '& .MuiLinearProgress-bar': { bgcolor: barColor, borderRadius: 4 } }} />
-                </Box>
-              )
-            })()}
-            <Button
-              fullWidth
-              onClick={handleSend}
-              disabled={!canSend || isDisconnected}
-              startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 16 }} />}
-              sx={{
-                bgcolor: canSend ? 'rgba(34,197,94,0.85)' : 'var(--item-hover)',
-                color:   canSend ? '#fff' : 'var(--text-muted)',
-                border:  `1px solid ${canSend ? 'rgba(34,197,94,0.9)' : 'var(--border)'}`,
-                borderRadius: 2, px: 3, py: 1.1, fontWeight: 700, textTransform: 'none', fontSize: '0.9rem',
-                boxShadow: 'none',
-                transition: 'all 0.25s ease',
-                '&:hover': { bgcolor: canSend ? '#22c55e' : 'rgba(255,255,255,0.05)', boxShadow: 'none' },
-                // MUI's own .Mui-disabled base style otherwise overrides the
-                // custom border/background above with its generic light-gray
-                // default, producing a bright outline that clashes with the
-                // dark theme — force ours to actually win.
-                '&.Mui-disabled': {
-                  bgcolor: 'var(--item-hover) !important',
-                  color: 'var(--text-muted) !important',
-                  border: '1px solid var(--border) !important',
-                },
-              }}
-            >
-              {isSending ? t.campaign.sending : `${t.campaign.sendBtn}${targets.length ? ` (${targets.length})` : ''}`}
-            </Button>
-            {!canSend && !isSending && (
-              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', textAlign: 'center' }}>
-                {targets.length === 0 ? t.campaign.blockedNoRecipients
-                  : cleanMessages.length === 0 ? t.campaign.blockedNoTemplate
-                  : belowMinTemplates ? t.tplLib.minRequiredBlock(minTemplatesRequired, cleanMessages.length)
-                  : capBlocked ? (lang === 'en' ? `Deselect ${overBy} to fit today's quota` : `Desmarca ${overBy} para caber en tu cupo de hoy`)
-                  : ''}
-              </Typography>
-            )}
+            {/* Same capacity indicator as the post-scrape send panels (new
+                contacts first), next to a button that says why it can't send. */}
+            <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1.5, flexWrap: 'wrap' }}>
+              <DailyCapBadge stats={capStats} selectionCount={targets.length} newSelectionCount={newSelCount} oneLine sx={{ flexShrink: 0 }} />
+              <Button
+                onClick={handleSend}
+                disabled={!canSend || isDisconnected}
+                startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 16 }} />}
+                sx={{
+                  flex: 1, minWidth: 220,
+                  bgcolor: canSend ? 'rgba(34,197,94,0.85)' : 'var(--item-hover)',
+                  color:   canSend ? '#fff' : 'var(--text-muted)',
+                  border:  `1px solid ${canSend ? 'rgba(34,197,94,0.9)' : 'var(--border)'}`,
+                  borderRadius: 2, px: 3, py: 1.1, fontWeight: 700, textTransform: 'none', fontSize: '0.9rem',
+                  boxShadow: 'none',
+                  transition: 'all 0.25s ease',
+                  '&:hover': { bgcolor: canSend ? '#22c55e' : 'rgba(255,255,255,0.05)', boxShadow: 'none' },
+                  // MUI's own .Mui-disabled base style otherwise overrides the
+                  // custom border/background above with its generic light-gray
+                  // default, producing a bright outline that clashes with the
+                  // dark theme — force ours to actually win.
+                  '&.Mui-disabled': {
+                    bgcolor: 'var(--item-hover) !important',
+                    color: 'var(--text-muted) !important',
+                    border: '1px solid var(--border) !important',
+                  },
+                }}
+              >
+                {isSending ? t.campaign.sending : (blockReason || `${t.campaign.sendBtn} (${targets.length})`)}
+              </Button>
+            </Box>
           </Box>
         </Box>
 
@@ -557,6 +538,8 @@ export default function SendCampaign() {
             listMaxHeight="60vh"
             contactedRefreshKey={contactedRefreshKey}
             newContactsCap={capStats?.new_contacts_capacity ?? null}
+            onNewCountChange={setNewSelCount}
+            showTitle={false}
           />
         </Box>
       </Box>

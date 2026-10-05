@@ -9,6 +9,7 @@ import PresenceHeartbeat from '../components/PresenceHeartbeat'
 import { UserProvider } from '../context/UserContext'
 import { LangProvider } from '../context/LangContext'
 import { ACCENTS, THEMES } from '../lib/themeConfig'
+import { readBuildId } from '../lib/buildId'
 
 export const metadata = {
   title: 'Mystery Shopper',
@@ -82,7 +83,7 @@ export default function RootLayout({ children }) {
         <script id="theme-init" dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
       <body suppressHydrationWarning>
-        <VersionWatcher />
+        <VersionWatcher buildId={readBuildId()} />
         <ThemeRegistry><UserProvider><PresenceHeartbeat /><LangProvider>{children}</LangProvider></UserProvider></ThemeRegistry>
       </body>
     </html>

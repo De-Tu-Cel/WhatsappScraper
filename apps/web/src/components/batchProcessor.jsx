@@ -5,7 +5,6 @@ import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { keyframes } from '@mui/system'
-import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import LinearProgress from '@mui/material/LinearProgress'
@@ -31,23 +30,18 @@ import ErrorIcon from '@mui/icons-material/Error'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import LinkIcon from '@mui/icons-material/Link'
 import InboxIcon from '@mui/icons-material/Inbox'
-import MessageIcon from '@mui/icons-material/Message'
 import PauseIcon from '@mui/icons-material/Pause'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import ReplayIcon from '@mui/icons-material/Replay'
 import TravelExploreIcon from '@mui/icons-material/TravelExplore'
 import CheckBoxIcon from '@mui/icons-material/CheckBox'
-import { TemplateLibraryPicker } from './messageTemplateLibrary'
-import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVariants'
-import { SendConfigPanel } from './SendConfigPanel'
+import { pickMessageVariant } from '@/lib/messageVariants'
 import { loadSendConfig } from '@/lib/sendConfig'
 import { useSendQueue } from '../context/SendQueueContext'
 import { useScrapeJob } from '../hooks/useScrapeJob'
 import { useDailyCapStats } from '../hooks/useDailyCapStats'
-import DailyCapBadge, { getOverBy } from './DailyCapBadge'
 import WhatsAppNumberSummary from './WhatsAppNumberSummary'
-import RecipientsBox from './RecipientsBox'
-import CapacityBanner from './CapacityBanner'
+import BulkSendPanel, { useBulkSendGuards, sendableNumbers } from './BulkSendPanel'
 import { dedupeByCompany } from '../lib/companyDedupe'
 import Dialog from '@mui/material/Dialog'
 import DialogTitle from '@mui/material/DialogTitle'
@@ -395,39 +389,12 @@ export default function BatchProcessor() {
     (r.msg_status === 'sent' || r.msg_status === 'failed' || r.msg_status === 'queued')
   )
   const isSending   = queueActive !== null && alreadySent
-  // Un envío masivo manda por default 1 número por empresa (el principal) — evita
-  // que una empresa con muchos números se coma el cupo diario de warmup de varias
-  // empresas nuevas de golpe. Expandir el chip de una empresa permite agregar sus
-  // otros números a propósito — cada uno cuenta su propio slot de cupo (el
-  // backend deduplica por número real, no por empresa).
-  const totalNumbers = effectiveWaSelected.size
-  const totalContactPoints = totalNumbers +
-    [...extraSelected].filter(key => effectiveWaSelected.has(key.split('::')[0])).length
-  const _contactedCids = new Set(waRowsUnique.filter(r => r.already_contacted?.contacted).map(r => r.company_id))
-  const newContactPoints =
-    waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id) && !_contactedCids.has(r.company_id)).length +
-    [...extraSelected].filter(key => { const cid = key.split('::')[0]; return effectiveWaSelected.has(cid) && !_contactedCids.has(cid) }).length
-  const overBy      = getOverBy(capStats, totalContactPoints, newContactPoints)
-  const capBlocked  = overBy > 0
-  // Sending to 2+ contact points needs varied text (see getMinTemplatesRequired).
-  // Uses totalContactPoints so selecting multiple numbers of a single company
-  // also counts toward the minimum.
-  const isBulk = totalContactPoints > 1
-  const allVariants = useMemo(
-    () => extraVariants.map(v => v.trim()).filter(Boolean),
-    [extraVariants]
-  )
-  const belowMinTemplates = isBulk && allVariants.length < getMinTemplatesRequired(totalContactPoints)
-  // belowMinTemplates only fires when isBulk (totalContactPoints > 1) —
-  // selecting and sending companies one at a time skipped it entirely,
-  // letting a send through with zero message text.
-  const noMessageSelected = allVariants.length === 0
+  // Selection math (contact points, new contacts, quota, minimum templates) —
+  // shared with the other post-scrape screens, see BulkSendPanel.jsx.
+  const guards = useBulkSendGuards({ waRows: waRowsUnique, selected: effectiveWaSelected, extraSelected, variants: extraVariants, capStats })
+  const { totalContactPoints, capBlocked, allVariants, belowMinTemplates, noMessageSelected, selectedRows: _selectedRows } = guards
 
   // Variable availability for TemplateLibraryPicker warnings
-  const _selectedRows = useMemo(
-    () => waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id)),
-    [waRowsUnique, effectiveWaSelected]
-  )
   const tplVarFlags = useMemo(() => ({
     hasName:     _selectedRows.some(r => r.empresa),
     hasCity:     _selectedRows.some(r => r.scraped_data?.city || r.scraped_data?.ciudad),
@@ -523,10 +490,9 @@ export default function BatchProcessor() {
     for (const row of targets) {
       // Principal + números extra prendidos a mano para esta empresa — ver
       // nota junto a totalContactPoints.
-      const primary = row.all_whatsapp?.length > 0 ? row.all_whatsapp[0] : row.whatsapp
-      if (!primary) continue
-      const extras = row.all_whatsapp?.slice(1).filter(n => extraSelected.has(`${row.company_id}::${n}`)) || []
-      const numbers = [primary, ...extras]
+      // First number + extras ticked by hand, minus any blocked number.
+      const numbers = sendableNumbers(row, extraSelected)
+      if (!numbers.length) continue
       // Mismo texto para todos los números de UNA empresa.
       const v = pickMessageVariant(allVariants, lastVariant)
       lastVariant = v
@@ -535,6 +501,7 @@ export default function BatchProcessor() {
       jobs.push({ numbers, messages, companyId: row.company_id, website: row.url })
       queuedUrls[row.url] = { msg_status: 'queued', msgSent: message }
     }
+    if (!jobs.length) return   // every selected number was blocked
     addBatch(jobs, lang === 'en' ? 'URL batch' : 'Lote de URLs')
     setSentOverlay(prev => ({ ...prev, ...queuedUrls }))
     setLocalContactedIds(prev => {
@@ -763,7 +730,7 @@ export default function BatchProcessor() {
                   {paused
                     ? (lang === 'en' ? `Paused — ${doneCount} of ${totalCount}` : `Pausado — ${doneCount} de ${totalCount}`)
                     : pausing
-                      ? (lang === 'en' ? `Pausing… — ${doneCount} of ${totalCount}` : `Pausando… — ${doneCount} de ${totalCount}`)
+                      ? (lang === 'en' ? `Pausing… finishing ${scrapeJob.inFlight} in progress — ${doneCount} of ${totalCount}` : `Pausando… terminando ${scrapeJob.inFlight} en curso — ${doneCount} de ${totalCount}`)
                       : (lang === 'en' ? `Scraping — ${doneCount} of ${totalCount}` : `Scrapeando — ${doneCount} de ${totalCount}`)}
                 </Typography>
               </Box>
@@ -966,143 +933,19 @@ export default function BatchProcessor() {
       {/* ── Post-scraping: template + send — visible también durante el
            scraping, para poder empezar a enviar a lo ya encontrado ── */}
       {(done || loading) && rows.length > 0 && (
-        <Box sx={{ borderRadius: 2.5, border: '1px solid rgba(34,197,94,0.2)', overflow: 'hidden', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-          {/* Panel header */}
-          <Box sx={{ px: 2, py: 1.4, background: 'linear-gradient(180deg, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.02) 100%)', borderBottom: '1px solid rgba(34,197,94,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
-              <Box sx={{ width: 30, height: 30, borderRadius: 1.5, bgcolor: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.28)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 12px rgba(34,197,94,0.12)', flexShrink: 0 }}>
-                <MessageIcon sx={{ fontSize: 14, color: '#4ade80' }} />
-              </Box>
-              <Box>
-                <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.84rem', lineHeight: 1.2 }}>{t.batch.sendMessages}</Typography>
-                {waRowsUnique.length > 0 && (
-                  <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.62rem' }}>{waRowsUnique.length} {t.search.withWa}</Typography>
-                )}
-              </Box>
-            </Box>
-            {waRowsUnique.length > 0 && (
-              <Chip
-                icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />}
-                label={`${effectiveWaSelected.size} ${t.search.of} ${filteredWaRows.length} ${t.batch.withWa}`}
-                size="small"
-                sx={{
-                  fontSize: '0.7rem', height: 22,
-                  bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80',
-                  border: '1px solid rgba(34,197,94,0.25)',
-                  '& .MuiChip-icon': { color: '#4ade80' },
-                }}
-              />
-            )}
-          </Box>
-          {/* Body — scrollea internamente en vez de crecer sin límite y empujar
-              lo que sigue (resultados) fuera de la vista. */}
-          <Box sx={{
-            p: 2, maxHeight: 'clamp(420px, 70vh, 760px)', overflowY: 'auto',
-            scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.12) transparent',
-            '&::-webkit-scrollbar': { width: 6 },
-            '&::-webkit-scrollbar-track': { background: 'transparent' },
-            '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.14)', borderRadius: 3 },
-            '&::-webkit-scrollbar-thumb:hover': { background: 'rgba(255,255,255,0.28)' },
-          }}>
-          {/* Instancia desconectada bloquea el envío entero — debe ser lo PRIMERO
-              que se ve en el panel, no una barra roja más al fondo. */}
-          <InstanceDisconnectedBanner status={instanceStatus} sx={{
-            mb: 1.5, px: 2, py: 1.3, borderRadius: 2, borderWidth: '1.5px',
-            boxShadow: '0 0 0 1px rgba(239,68,68,0.15), 0 4px 16px rgba(239,68,68,0.12)',
-            '& svg':  { fontSize: '19px !important' },
-            '& p':    { fontSize: '0.82rem !important', fontWeight: 600 },
-          }} />
-          {capStats && (
-            <CapacityBanner stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} sx={{ mb: 1.5 }} />
-          )}
-
-          {waRowsUnique.length > 0 && (
-            <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 1 }}>
-              {[
-                { key: 'all',       label: `Todos (${waRowsUnique.length})`,                                                     color: '#60a5fa', bg: 'rgba(59,130,246,0.1)',  border: 'rgba(59,130,246,0.25)' },
-                { key: 'new',       label: `Sin contactar (${waRowsUnique.filter(r => !r.already_contacted?.contacted).length})`, color: '#4ade80', bg: 'rgba(34,197,94,0.1)',   border: 'rgba(34,197,94,0.25)'  },
-                { key: 'contacted', label: `Ya contactados (${waRowsUnique.filter(r => r.already_contacted?.contacted).length})`, color: '#fbbf24', bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.25)' },
-              ].map(f => (
-                <Chip key={f.key} label={f.label} size="small" onClick={() => setFilterContacted(f.key)}
-                  sx={{ height: 22, fontSize: '0.68rem', cursor: 'pointer', bgcolor: filterContacted === f.key ? f.bg : 'var(--item-hover)', color: filterContacted === f.key ? f.color : 'var(--text-muted)', border: `1px solid ${filterContacted === f.key ? f.border : 'var(--border)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
-              ))}
-            </Box>
-          )}
-
-          <Box sx={{ display: 'flex', gap: 2.5, alignItems: 'flex-start' }}>
-            <RecipientsBox rows={filteredWaRows}
-              effectiveSelected={effectiveWaSelected}
-              expandedCo={expandedCo}
-              extraSelected={extraSelected}
-              setSelected={setWaSelected}
-              setExpandedCo={setExpandedCo}
-              setExtraSelected={setExtraSelected}
-              title={t.search.recipients}
-              maxHeight={320}
-              sx={{ width: 260, flexShrink: 0 }} />
-
-          <Box sx={{ flex: 1, minWidth: 0, opacity: filteredWaRows.length === 0 ? 0.35 : 1, pointerEvents: filteredWaRows.length === 0 ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
-          <Box sx={{ mb: 1.5, p: 1.6, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
-            <TemplateLibraryPicker onChange={setExtraVariants} recipientCount={totalContactPoints} baseCount={0}
-                singleSelect={totalContactPoints <= 1}
-                hasName={tplVarFlags.hasName} hasCity={tplVarFlags.hasCity}
-                hasIndustry={tplVarFlags.hasIndustry} hasWeb={tplVarFlags.hasWeb}
-                varCounts={tplVarCounts} totalSelected={_selectedRows.length} />
-          </Box>
-          {/* Send config */}
-          <Box sx={{ mb: 1.5 }}>
-            <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
-          </Box>
-          <SendErrorBanner error={sendError} onDismiss={() => setSendError('')} sx={{ mb: 1 }} />
-          {isSending && (
-            <Button fullWidth onClick={cancelQueue} startIcon={<HighlightOffIcon />}
-              sx={{
-                mb: 0.8, py: 0.8, textTransform: 'none', fontWeight: 600, fontSize: '0.82rem',
-                color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)',
-                border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5,
-                '&:hover': { bgcolor: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.45)' },
-              }}>
-              {t.search.cancelSend}
-            </Button>
-          )}
-          {/* Cupo + botón en una sola fila, en vez de un badge alineado a la
-              derecha ARRIBA de un botón fullWidth separado. */}
-          <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1.5 }}>
-            <DailyCapBadge stats={capStats} selectionCount={totalContactPoints} newSelectionCount={newContactPoints} sx={{ flexShrink: 0 }} />
-            <Button
-              onClick={handleSendAll}
-              disabled={effectiveWaSelected.size === 0 || alreadySent || isSending || isDisconnected || belowMinTemplates || noMessageSelected || capBlocked}
-              startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 14 }} />}
-              sx={{
-                flex: 1, fontSize: '0.84rem', fontWeight: 700,
-                py: 1.1, borderRadius: 1.8,
-                bgcolor: effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.18)' : 'rgba(255,255,255,0.04)',
-                color:   effectiveWaSelected.size > 0 && !alreadySent ? '#4ade80' : 'rgba(255,255,255,0.3)',
-                border:  `1px solid ${effectiveWaSelected.size > 0 && !alreadySent ? 'rgba(34,197,94,0.38)' : 'rgba(255,255,255,0.1)'}`,
-                textTransform: 'none',
-                transition: 'all 0.2s',
-                '&:hover': effectiveWaSelected.size > 0 && !alreadySent ? { bgcolor: 'rgba(34,197,94,0.28)', borderColor: 'rgba(34,197,94,0.6)', boxShadow: '0 0 18px rgba(34,197,94,0.18)' } : {},
-                '&.Mui-disabled': { color: 'rgba(255,255,255,0.2)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
-              }}
-            >
-              {alreadySent
-                ? t.batch.msgSent
-                : lang === 'en'
-                  ? `Send to ${effectiveWaSelected.size} ${effectiveWaSelected.size !== 1 ? 'companies' : 'company'} with WhatsApp`
-                  : `Enviar a ${effectiveWaSelected.size} empresa${effectiveWaSelected.size !== 1 ? 's' : ''} con WhatsApp`}
-            </Button>
-          </Box>
-          {capBlocked && !isSending && (
-            <Typography sx={{ color: '#f59e0b', fontSize: '0.7rem', textAlign: 'right', mt: 0.5 }}>
-              {lang === 'en'
-                ? `Deselect ${overBy} to fit today's quota`
-                : `Desmarca ${overBy} para caber en tu cupo de hoy`}
-            </Typography>
-          )}
-          </Box>
-          </Box>
-          </Box>
-        </Box>
+        <BulkSendPanel
+          title={t.batch.sendMessages}
+          waRows={waRowsUnique} filteredRows={filteredWaRows}
+          filterContacted={filterContacted} onFilterContacted={setFilterContacted}
+          selected={effectiveWaSelected} setSelected={setWaSelected}
+          expandedCo={expandedCo} setExpandedCo={setExpandedCo}
+          extraSelected={extraSelected} setExtraSelected={setExtraSelected}
+          guards={guards} varFlags={tplVarFlags} varCounts={tplVarCounts} onVariantsChange={setExtraVariants}
+          capStats={capStats} instanceStatus={instanceStatus} isDisconnected={isDisconnected}
+          sendCfg={sendCfg} onSendCfgChange={setSendCfg}
+          sendError={sendError} onDismissError={() => setSendError('')}
+          isSending={isSending} onCancel={cancelQueue} onSend={handleSendAll}
+          allSent={alreadySent} sentLabel={t.batch.msgSent} />
       )}
 
       {/* ── Results ── */}

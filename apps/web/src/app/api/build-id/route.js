@@ -1,16 +1,10 @@
-import { readFileSync } from 'fs'
-import { join } from 'path'
+import { readBuildId } from '@/lib/buildId'
 
-// Next.js writes a fresh random BUILD_ID to .next/BUILD_ID on every `next
-// build` — reading it here (server-side, always the CURRENTLY running
-// build) gives VersionWatcher.jsx something to compare against the buildId
-// the client loaded with (window.__NEXT_DATA__.buildId), so it can detect
-// a deploy that happened after the page was opened and reload.
+// The build id of the CURRENTLY running server — VersionWatcher.jsx compares
+// it against the one its page was rendered with to detect a deploy that
+// happened after the page was opened, and reloads.
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
-  try {
-    const buildId = readFileSync(join(process.cwd(), '.next', 'BUILD_ID'), 'utf8').trim()
-    return Response.json({ buildId }, { headers: { 'Cache-Control': 'no-store' } })
-  } catch {
-    return Response.json({ buildId: null }, { headers: { 'Cache-Control': 'no-store' } })
-  }
+  return Response.json({ buildId: readBuildId() }, { headers: { 'Cache-Control': 'no-store' } })
 }

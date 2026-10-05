@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { refreshBlacklistedPhones } from '@/lib/phoneBlacklist'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import TextField from '@mui/material/TextField'
@@ -77,6 +78,66 @@ function AddRow({ value, onChange, onAdd, error, placeholder, tip }) {
         }}>
         <AddIcon sx={{ fontSize: 18 }} />
       </IconButton>
+    </Box>
+  )
+}
+
+// What an industry entry would actually block. The app assigns its own fixed
+// industry names ("Gas LP / Energía", "Cerrajero"…), so free text like
+// "farmacia" or "gaseras" silently matched nothing — this shows the real names
+// (with company counts) and, while typing, exactly which ones would be hit.
+function IndustryPreview({ value, onPick }) {
+  const { lang } = useLang()
+  const en = lang === 'en'
+  const [data, setData] = useState({ industries: [], matches: [], byName: { companies: 0, examples: [] } })
+  useEffect(() => {
+    const id = setTimeout(() => {
+      authFetch(`/api/blacklist/industry-preview?value=${encodeURIComponent(value.trim())}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => { if (d) setData({ industries: d.industries || [], matches: d.matches || [], byName: d.by_name || { companies: 0, examples: [] } }) })
+        .catch(() => {})
+    }, 250)
+    return () => clearTimeout(id)
+  }, [value])
+
+  const typed = value.trim()
+  const byName = data.byName.companies
+  const total = data.matches.reduce((n, m) => n + m.companies, 0) + byName
+  const hit = data.matches.length > 0 || byName > 0
+  const chip = (i, hit) => (
+    <Box key={i.industry} component="button" type="button" onClick={() => onPick(i.industry)}
+      sx={{
+        display: 'inline-flex', alignItems: 'center', gap: 0.5, px: 0.9, py: 0.25, borderRadius: 999, cursor: 'pointer',
+        fontSize: '0.68rem', fontFamily: 'inherit', border: `1px solid ${hit ? DANGER_BORDER : 'var(--border, rgba(255,255,255,0.12))'}`,
+        bgcolor: hit ? DANGER_SOFT : 'transparent', color: hit ? DANGER : 'var(--text-muted, rgba(255,255,255,0.6))',
+        '&:hover': { borderColor: DANGER_BORDER, color: DANGER },
+      }}>
+      {i.industry}<Box component="span" sx={{ opacity: 0.6, fontVariantNumeric: 'tabular-nums' }}>{i.companies}</Box>
+    </Box>
+  )
+
+  return (
+    <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 0.7 }}>
+      {typed && (
+        <Typography sx={{ fontSize: '0.7rem', color: hit ? DANGER : '#f59e0b', fontWeight: 600, lineHeight: 1.5 }}>
+          {hit
+            ? (en ? `Would block ${total} compan${total === 1 ? 'y' : 'ies'}` : `Bloquearía ${total} empresa${total === 1 ? '' : 's'}`)
+              + (data.matches.length ? (en ? ' — industry: ' : ' — industria: ') + data.matches.map(m => m.industry).join(', ') : '')
+              + (byName ? (en ? ` — by name: ${byName} (e.g. ${data.byName.examples.join(', ')})` : ` — por nombre: ${byName} (ej. ${data.byName.examples.join(', ')})`) : '')
+            : (en ? `"${typed}" matches no industry or business name of your companies yet.`
+                  : `«${typed}» todavía no coincide con la industria ni con el nombre de ninguna de tus empresas.`)}
+        </Typography>
+      )}
+      {data.industries.length > 0 && (
+        <>
+          <Typography sx={{ fontSize: '0.64rem', color: 'var(--text-muted, rgba(255,255,255,0.45))' }}>
+            {en ? 'Industries of your companies (click to use):' : 'Industrias de tus empresas (clic para usarla):'}
+          </Typography>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6 }}>
+            {data.industries.slice(0, 24).map(i => chip(i, data.matches.some(m => m.industry === i.industry)))}
+          </Box>
+        </>
+      )}
     </Box>
   )
 }
@@ -298,6 +359,7 @@ function ContactBlockTable({ bl, onBlocked, isActive }) {
       }).catch(() => {})))
       setSelected(new Set())
       load(page, term.trim())
+      refreshBlacklistedPhones()   // other open screens see the new blocks
       onBlocked?.()
     } finally {
       setBlocking(false)
@@ -527,6 +589,7 @@ function BlacklistList({ type, icon, label, placeholder, tip, bl, isActive }) {
       if (!r.ok) { setAddErr(bl.addError); return }
       setAddVal('')
       load(1, search); setPage(1)
+      refreshBlacklistedPhones()
     } catch { setAddErr(bl.addError) }
   }
 
@@ -540,6 +603,7 @@ function BlacklistList({ type, icon, label, placeholder, tip, bl, isActive }) {
       if (r.status === 409) { setRowErr(bl.dupError); return false }
       if (!r.ok) { setRowErr(bl.addError); return false }
       load(page, search)
+      refreshBlacklistedPhones()
       return true
     } catch { setRowErr(bl.addError); return false }
   }
@@ -547,6 +611,7 @@ function BlacklistList({ type, icon, label, placeholder, tip, bl, isActive }) {
   async function handleDelete(id) {
     try {
       await authFetch(`/api/blacklist/${id}`, { method: 'DELETE' })
+      refreshBlacklistedPhones()
       const isLastOnPage = items.length === 1 && page > 1
       load(isLastOnPage ? page - 1 : page, search)
       if (isLastOnPage) setPage(page - 1)
@@ -582,6 +647,7 @@ function BlacklistList({ type, icon, label, placeholder, tip, bl, isActive }) {
         <>
           <Typography sx={SUB_LABEL_SX}>{bl.addLabel || bl.add}</Typography>
           <AddRow value={addVal} onChange={setAddVal} error={addErr} placeholder={placeholder} tip={tip} onAdd={handleAdd} />
+          {type === 'industry' && <IndustryPreview value={addVal} onPick={setAddVal} />}
         </>
       )}
 

@@ -418,25 +418,42 @@ class TestCapPauseIsolation:
                 return "skipped_daily_cap"
             return True
 
+        # capped-user's partition retries forever by design. It used to be left
+        # spinning after this test — still running once the patches below were
+        # undone, it called the real send/DB code and made later tests flaky
+        # (~1 in 3 full runs). Now it parks on its 5-minute cap pause (item
+        # already reset to pending) until the checks are done, then exits.
+        parked, stop = threading.Event(), threading.Event()
+
+        class _Stop(Exception):
+            pass
+
+        def fake_sleep(seconds):
+            if seconds >= 300:
+                parked.set()
+                stop.wait(5)
+                raise _Stop()   # _partition_worker logs it and exits
+
         with (
             patch("app.database.MongoDBManager", return_value=mgr),
             patch.object(sched, "_send_message", side_effect=fake_send),
             patch.object(sw, "_user_has_connected_instance", return_value=True),
             patch.object(sw, "_check_send_allowed", return_value=(True, "")),
+            patch("time.sleep", side_effect=fake_sleep),
         ):
-            # capped-user's partition retries forever by design (time.sleep is
-            # mocked to a no-op, so it spins fast rather than sleeping 5 real
-            # minutes) — don't join it. The whole point of this test is that
-            # free-user's own thread never waits on it.
             ta = threading.Thread(target=sw._partition_worker, args=("capped-user", "capped-user"), daemon=True)
             ta.start()
             tb = _run_partition(mgr, "free-user", "free-user")
-
-        assert not tb.is_alive()
-        assert mgr.db.send_queue_items.count_documents({"batch_id": "batch-free", "status": "sent"}) == 1
-        # capped item is reset to pending before every retry (for tomorrow's
-        # cap reset) — never lost, never marked failed.
-        assert mgr.db.send_queue_items.find_one({"batch_id": "batch-cap"})["status"] == "pending"
+            # The whole point: free-user finished while capped-user is paused.
+            assert not tb.is_alive()
+            assert mgr.db.send_queue_items.count_documents({"batch_id": "batch-free", "status": "sent"}) == 1
+            # capped item is reset to pending before every retry (for tomorrow's
+            # cap reset) — never lost, never marked failed.
+            assert parked.wait(5)
+            assert mgr.db.send_queue_items.find_one({"batch_id": "batch-cap"})["status"] == "pending"
+            stop.set()
+            ta.join(5)
+        assert not ta.is_alive()
 
 
 # ══════════════════════════════════════════════════════════════════════════

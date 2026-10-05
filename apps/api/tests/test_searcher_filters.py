@@ -67,6 +67,14 @@ from unittest.mock import patch
 from app import searcher
 
 
+@pytest.fixture(autouse=True)
+def _llm_configured(monkeypatch):
+    """searcher only calls the LLM when one of its API keys is set. CI has no
+    .env, so every LLM-backed filter test took the "no LLM" path there and
+    failed while passing locally. The LLM itself is patched in each test."""
+    monkeypatch.setattr(searcher, "OPENAI_API_KEY", "test-key")
+
+
 def _approve_all(msgs, **kwargs):
     return "[" + ",".join(str(i) for i in range(1, 61)) + "]"
 

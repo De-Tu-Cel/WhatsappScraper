@@ -6665,7 +6665,11 @@ def api_proxies_check_all(x_user_token: Optional[str] = Header(None)):
 def api_proxies_settings(body: dict, x_user_token: Optional[str] = Header(None)):
     _require_admin(x_user_token)
     from app import proxies as _px
-    return _px.save_settings(MongoDBManager().db, body or {})
+    saved = _px.save_settings(MongoDBManager().db, body or {})
+    # Al prenderla, los números que ya existían pasan a su proxy en seguida (uno tras otro).
+    if (body or {}).get("auto_assign") and saved.get("auto_assign"):
+        _px.start_migration(MongoDBManager, SESSION_DISCONNECT_ALERT_EMAILS)
+    return saved
 
 
 @router.post("/proxies/{proxy_id}/check")

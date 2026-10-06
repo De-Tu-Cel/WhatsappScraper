@@ -156,27 +156,72 @@ class TestAutonomousAssignment:
     def _settings(self, monkeypatch, auto):
         monkeypatch.setattr(px, "get_settings", lambda db: {"country": "US", "auto_assign": auto})
 
-    def test_migration_does_nothing_when_auto_is_off(self, monkeypatch):
-        self._settings(monkeypatch, False)
-        assert px.migrate_one(object()) is None
-
-    def test_migration_moves_one_connected_number_without_proxy(self, monkeypatch):
-        self._settings(monkeypatch, True)
-        seen = {}
-
+    def _migration_db(self, names):
         class _Inst:
-            def find_one(self, q, sort=None):
-                seen["q"] = q
-                return {"name": "tania-sesion-1"}
+            def find(self, q, proj=None, sort=None):
+                assert q["status"] == "connected" and q["proxy_id"] == {"$in": [None, ""]}
+                return [{"name": n} for n in names]
+
+        class _Settings:
+            def __init__(self):
+                self.updates = []
+
+            def update_one(self, flt, upd, upsert=False):
+                self.updates.append(upd)
 
         class _DB:
             instances = _Inst()
+            settings = _Settings()
+        return _DB()
 
+    def _migrate(self, monkeypatch, names, statuses, auto=True, paused=None):
+        monkeypatch.setattr(px, "get_settings", lambda db: {"country": "US", "auto_assign": auto, "migrate_paused": paused})
+        monkeypatch.setattr(px, "_claim", lambda db, field, every: True)
         assigned = []
         monkeypatch.setattr(px, "assign", lambda db, name, pid: assigned.append((name, pid)) or {"proxy_id": "p9"})
-        assert px.migrate_one(_DB()) == "tania-sesion-1"
-        assert assigned == [("tania-sesion-1", "auto")]
-        assert seen["q"]["status"] == "connected" and seen["q"]["proxy_id"] == {"$in": [None, ""]}
+        db = self._migration_db(names)
+        result = px.migrate_all(db, [], wait=lambda name: statuses[name])
+        return result, assigned, db
+
+    def test_migration_does_nothing_when_auto_is_off(self, monkeypatch):
+        result, assigned, _ = self._migrate(monkeypatch, ["a"], {"a": "connected"}, auto=False)
+        assert result["moved"] == [] and assigned == []
+
+    def test_every_connected_number_moves_right_away_one_after_another(self, monkeypatch):
+        # Antes era uno cada 6 h; ahora todos en seguida, cada uno tras reconectarse el anterior.
+        names = ["gely-wa", "tania-sesion-1", "tania-sesion-3"]
+        result, assigned, db = self._migrate(monkeypatch, names, {n: "connected" for n in names})
+        assert result["moved"] == names and result["stopped"] is None
+        assert assigned == [(n, "auto") for n in names]
+        assert {"$unset": {"migrating_since": ""}} in db.settings.updates
+
+    def test_it_pauses_at_the_first_number_that_does_not_come_back(self, monkeypatch):
+        names = ["gely-wa", "tania-sesion-1", "tania-sesion-3"]
+        statuses = {"gely-wa": "connected", "tania-sesion-1": "need_scan", "tania-sesion-3": "connected"}
+        result, assigned, db = self._migrate(monkeypatch, names, statuses)
+        assert result["moved"] == ["gely-wa"]
+        assert [n for n, _ in assigned] == ["gely-wa", "tania-sesion-1"]   # tania-sesion-3 no se tocó
+        paused = next(u["$set"]["migrate_paused"] for u in db.settings.updates if "migrate_paused" in u.get("$set", {}))
+        assert paused["name"] == "tania-sesion-1" and paused["status"] == "need_scan"
+
+    def test_a_paused_migration_waits_for_the_user(self, monkeypatch):
+        result, assigned, _ = self._migrate(monkeypatch, ["a"], {"a": "connected"}, paused={"name": "x"})
+        assert assigned == []
+
+    def test_turning_auto_on_again_resumes(self):
+        class _Settings:
+            def __init__(self):
+                self.doc = {"_id": "proxies", "auto_assign": False, "migrate_paused": {"name": "x"}}
+
+            def update_one(self, flt, upd, upsert=False):
+                self.doc.update(upd["$set"])
+
+            def find_one(self, flt):
+                return self.doc
+
+        db = type("D", (), {"settings": _Settings()})()
+        out = px.save_settings(db, {"auto_assign": True})
+        assert out["auto_assign"] is True and out["migrate_paused"] is None
 
     def _health(self, monkeypatch, auto, streak):
         self._settings(monkeypatch, auto)

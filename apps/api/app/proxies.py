@@ -30,12 +30,15 @@ from bson import ObjectId
 log = logging.getLogger(__name__)
 
 SETTINGS_ID = "proxies"
-DEFAULT_SETTINGS = {"country": "US", "auto_assign": False}
+# migrate_paused: el número que no volvió a conectarse al pasarlo a su proxy (ver migrate_all).
+DEFAULT_SETTINGS = {"country": "US", "auto_assign": False, "migrate_paused": None}
 CHECK_URL = "https://ipinfo.io/json"
 HEALTH_EVERY = timedelta(minutes=30)
 ALERT_AFTER_FAILS = 2       # 1 h sin responder (revisión cada 30 min): correo
 FAILOVER_AFTER_FAILS = 4    # 2 h sin responder: con asignación automática, sus números se mueven
-MIGRATE_EVERY = timedelta(hours=6)  # números sin proxy: uno a la vez, nunca todos juntos
+# Números que ya existían sin proxy: pasan todos en seguida, uno tras otro (ver migrate_all).
+MIGRATE_READY_TIMEOUT = 180  # segundos que se espera a que cada uno vuelva a conectarse
+MIGRATE_POLL = 5
 
 # "user:pass@host:port" (con o sin esquema) y "host:port:user:pass". Los separadores pueden
 # ser ":" o espacios/saltos de línea, para aceptar también la tabla copiada del panel de
@@ -114,6 +117,8 @@ def save_settings(db, values: dict) -> dict:
         clean["country"] = str(values["country"] or "").strip().upper()[:2] or DEFAULT_SETTINGS["country"]
     if "auto_assign" in values:
         clean["auto_assign"] = bool(values["auto_assign"])
+        if clean["auto_assign"]:
+            clean["migrate_paused"] = None  # volver a prenderla reanuda los que faltan
     if clean:
         db.settings.update_one({"_id": SETTINGS_ID}, {"$set": clean}, upsert=True)
     return get_settings(db)
@@ -366,22 +371,73 @@ def health_round(db, alert_emails: list[str]) -> None:
             log.warning("[Proxies] %s sin respuesta %d veces — números: %s — movidos: %s", label, streak, names, moved)
 
 
-def migrate_one(db) -> str | None:
-    """Asignación automática para los números que ya existían sin proxy: uno a la vez (cada
-    6 h) y solo si está conectado, para que se reconecte por su proxy sin volver a escanear."""
-    if not get_settings(db)["auto_assign"]:
-        return None
-    inst = db.instances.find_one({"provider": "wwebjs", "status": "connected",
-                                  "proxy_id": {"$in": [None, ""]}}, sort=[("name", 1)])
-    if not inst:
-        return None
+def _wait_connected(name: str, timeout: int = MIGRATE_READY_TIMEOUT) -> str:
+    """Espera a que la sesión vuelva a quedar conectada después de reiniciarse por su proxy.
+    Regresa "connected", "need_scan" (WhatsApp pidió volver a escanear) o el último estado visto."""
+    from app import whatsapp_wwebjs as ww
+    deadline = time.time() + timeout
+    status = "sin respuesta"
+    while time.time() < deadline:
+        time.sleep(MIGRATE_POLL)
+        try:
+            status = ww.get_status(name).get("status") or status
+        except Exception as e:
+            status = f"error: {e}"
+        if status in ("connected", "need_scan"):
+            break
+    return status
+
+
+def migrate_all(db, alert_emails: list[str] | None = None, wait=_wait_connected) -> dict:
+    """Asignación automática para los números que ya existían sin proxy: todos en seguida, pero
+    uno tras otro — cada uno espera a que el anterior vuelva a conectarse por su proxy (con su
+    login guardado, sin QR: marco-wa, 2026-10-06). Si alguno no regresa, se pausa ahí para no
+    tirar a los demás y llega un correo; volver a prender la asignación automática lo reanuda.
+    Antes era uno cada 6 h; el usuario lo pidió al instante (2026-10-06)."""
+    settings = get_settings(db)
+    if not settings["auto_assign"] or settings.get("migrate_paused"):
+        return {"moved": [], "stopped": None}
+    if not _claim(db, "migrating_since", timedelta(minutes=30)):  # ya hay una corriendo
+        return {"moved": [], "stopped": None, "busy": True}
+    moved, stopped = [], None
     try:
-        assign(db, inst["name"], "auto")
-        log.info("[Proxies] %s pasó a salir por un proxy (asignación automática)", inst["name"])
-        return inst["name"]
-    except Exception as e:
-        log.warning("[Proxies] no se pudo asignar proxy a %s: %s", inst["name"], e)
-        return None
+        pending = list(db.instances.find({"provider": "wwebjs", "status": "connected",
+                                          "proxy_id": {"$in": [None, ""]}}, {"name": 1}, sort=[("name", 1)]))
+        for inst in pending:
+            name = inst["name"]
+            try:
+                assign(db, name, "auto")
+                status = wait(name)
+            except Exception as e:
+                status = f"error: {e}"
+            if status != "connected":
+                stopped = {"name": name, "status": status, "at": datetime.utcnow()}
+                break
+            moved.append(name)
+            log.info("[Proxies] %s pasó a salir por su proxy y volvió a conectarse", name)
+    finally:
+        db.settings.update_one({"_id": SETTINGS_ID}, {"$unset": {"migrating_since": ""}})
+    if stopped:
+        db.settings.update_one({"_id": SETTINGS_ID}, {"$set": {"migrate_paused": stopped}})
+        log.warning("[Proxies] %s no volvió a conectarse por su proxy (%s): asignación automática en pausa",
+                    stopped["name"], stopped["status"])
+        try:
+            from app.email_service import send_proxy_failing_email
+            for to in alert_emails or []:
+                send_proxy_failing_email(
+                    to, "asignación automática", [stopped["name"]],
+                    f"{stopped['name']} no volvió a conectarse después de pasarla a su proxy ({stopped['status']}). "
+                    "Se pausó la asignación de los demás números: revisa si pide QR y vuelve a prender la "
+                    "asignación automática para seguir.")
+        except Exception:
+            log.exception("[Proxies] no se pudo mandar el aviso de la pausa")
+    return {"moved": moved, "stopped": stopped}
+
+
+def start_migration(db_factory, alert_emails: list[str] | None = None) -> None:
+    """Al prender la asignación automática: pasa en seguida los números que ya existían."""
+    threading.Thread(target=lambda: migrate_all(db_factory().db, alert_emails), daemon=True,
+                     name="proxy-migrate").start()
 
 
 def start_health_worker(db_factory, alert_emails: list[str]) -> None:
@@ -391,8 +447,8 @@ def start_health_worker(db_factory, alert_emails: list[str]) -> None:
             try:
                 if _claim(db, "last_health_at", HEALTH_EVERY):
                     health_round(db, alert_emails)
-                if _claim(db, "last_migrate_at", MIGRATE_EVERY):
-                    migrate_one(db)
+                # Cada 5 min: algún número que volvió a conectarse sin proxy, o uno nuevo.
+                migrate_all(db, alert_emails)
             except Exception:
                 log.exception("[Proxies] la revisión periódica falló")
             time.sleep(300)

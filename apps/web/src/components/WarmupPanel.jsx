@@ -1,5 +1,6 @@
 'use client'
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { parseUtc, mxDayKey, MX_TZ } from '../lib/dates'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Chip from '@mui/material/Chip'
@@ -67,7 +68,7 @@ const WA_BG_PATTERN = `url("data:image/svg+xml,${encodeURIComponent(_WA_SVG)}")`
 // ── helpers ───────────────────────────────────────────────────────────────────
 function relativeTime(isoString, lang, w) {
   if (!isoString) return null
-  const diff = Math.floor((Date.now() - new Date(isoString)) / 1000)
+  const diff = Math.floor((Date.now() - parseUtc(isoString)) / 1000)
   if (diff < 60)   return w.relativeNow
   if (diff < 3600) return w.relativeMin.replace('{m}', Math.floor(diff / 60))
   const h = Math.floor(diff / 3600)
@@ -79,32 +80,30 @@ function relativeTime(isoString, lang, w) {
 
 function formatTime(isoString) {
   if (!isoString) return ''
-  return new Date(isoString).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+  return parseUtc(isoString).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: MX_TZ })
 }
 
 function formatDaySeparator(isoString, lang, w) {
   const locale = lang === 'en' ? 'en-US' : 'es-MX'
-  const today = new Date()
-  const yesterday = new Date(); yesterday.setDate(today.getDate() - 1)
   if (!isoString) return w.today
-  const d = new Date(isoString)
-  if (d.toDateString() === today.toDateString()) return w.today
-  if (d.toDateString() === yesterday.toDateString()) return w.yesterday
-  return d.toLocaleDateString(locale, { day: 'numeric', month: 'long' })
+  const d = parseUtc(isoString)
+  const day = mxDayKey(d)
+  if (day === mxDayKey(new Date())) return w.today
+  if (day === mxDayKey(new Date(Date.now() - 86400000))) return w.yesterday
+  return d.toLocaleDateString(locale, { day: 'numeric', month: 'long', timeZone: MX_TZ })
 }
 
 function formatNextRotation(isoString, lang, w) {
   if (!isoString) return ''
   const locale = lang === 'en' ? 'en-US' : 'es-MX'
-  const d = new Date(isoString)
-  const now = new Date()
-  const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1); tomorrow.setHours(0,0,0,0)
-  const isToday    = d.toDateString() === now.toDateString()
-  const isTomorrow = d.toDateString() === tomorrow.toDateString()
-  const time = d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
+  const d = parseUtc(isoString)
+  const day = mxDayKey(d)
+  const isToday    = day === mxDayKey(new Date())
+  const isTomorrow = day === mxDayKey(new Date(Date.now() + 86400000))
+  const time = d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', timeZone: MX_TZ })
   if (isToday)    return w.rotToday.replace('{time}', time)
   if (isTomorrow) return w.rotTomorrow.replace('{time}', time)
-  return d.toLocaleDateString(locale, { weekday: 'long', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleDateString(locale, { weekday: 'long', hour: '2-digit', minute: '2-digit', timeZone: MX_TZ })
 }
 
 function getStatusCfg(w) {
@@ -182,7 +181,7 @@ function SessionDetail({ instanceA, instanceB, messages }) {
   let lastDay = null, lastSpeaker = null
   for (let idx = 0; idx < msgs.length; idx++) {
     const msg = msgs[idx]
-    const dayKey = msg.ts ? new Date(msg.ts).toDateString() : 'unknown'
+    const dayKey = msg.ts ? mxDayKey(parseUtc(msg.ts)) : 'unknown'
     if (dayKey !== lastDay) {
       grouped.push({ type: 'separator', ts: msg.ts, key: dayKey })
       lastDay = dayKey; lastSpeaker = null
@@ -266,7 +265,7 @@ function SessionDetail({ instanceA, instanceB, messages }) {
                       color: isA ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.5)',
                       fontSize: 9.5, letterSpacing: '0.02em',
                     }}>
-                      {new Date(msg.ts).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                      {parseUtc(msg.ts).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: MX_TZ })}
                       {!isA && ' ✓✓'}
                     </Typography>
                   )}
@@ -300,8 +299,10 @@ function avatarGradientFor(str) {
 
 function formatItemDate(dateStr, w) {
   if (!dateStr) return ''
-  const today = new Date().toISOString().slice(0, 10)
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+  // The session `date` is a Mexico City day — compare against today there, not
+  // the UTC day (which flips at 6 p.m. in Mexico).
+  const today = mxDayKey(new Date())
+  const yesterday = mxDayKey(new Date(Date.now() - 86400000))
   if (dateStr === today) return w.today
   if (dateStr === yesterday) return w.yesterday
   const [, m, d] = dateStr.split('-')
@@ -556,7 +557,7 @@ function InstanceCard({ inst, token, onRefresh, pairColor }) {
   const newMsgCount = (() => {
     if (!inst.last_msg_at) return 0
     if (!lastViewed) return inst.msgs_today > 0 ? inst.msgs_today : 0
-    if (new Date(inst.last_msg_at) <= new Date(lastViewed.at)) return 0
+    if (parseUtc(inst.last_msg_at) <= parseUtc(lastViewed.at)) return 0
     return Math.max(0, inst.msgs_today - (lastViewed.msgs || 0))
   })()
 

@@ -40,6 +40,9 @@ import LinkOffIcon from '@mui/icons-material/LinkOff'
 import SmartphoneIcon from '@mui/icons-material/Smartphone'
 import EditIcon from '@mui/icons-material/Edit'
 import BadgeIcon from '@mui/icons-material/Badge'
+import VpnLockIcon from '@mui/icons-material/VpnLock'
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz'
+import { ProxiesSection, InstanceNetworkDialog } from './ProxiesPanel'
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
 import TrendingUpIcon from '@mui/icons-material/TrendingUp'
@@ -897,9 +900,79 @@ const DISCONNECT_LABEL_ES = { banned: 'Baneado por WhatsApp', logged_out: 'Cerr�
 const DISCONNECT_LABEL_EN = { banned: 'Banned by WhatsApp', logged_out: 'Logged out', conflict: 'Device conflict', multidevice: 'Multi-device conflict', server_error: 'Internal error', restart: 'Restart required', replaced: 'Session replaced', timeout: 'Connection timeout', closed: 'Connection closed', disconnected: 'Disconnected', failed: 'Connection error' }
 
 // ── InstanceRow ──────────────────────────────────────────────────────────────
-function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile }) {
+// Acciones secundarias de un número en un menú "⋯". En la fila ya no cabían todos los
+// íconos: con el de proxy se encimaban sobre el nombre y la etiqueta WWEBJS (2026-10-05).
+// En la fila quedan solo las de todos los días (calentamiento y reconectar).
+function RowActionsMenu({ items, size = 14, onOpenChange }) {
+  const { lang } = useLang()
+  const [anchor, setAnchor] = useState(null)
+  const close = () => { setAnchor(null); onOpenChange?.(false) }
+  return (
+    <>
+      <Tooltip title={lang === 'en' ? 'More actions' : 'Más acciones'} placement="top">
+        <IconButton size="small" aria-label={lang === 'en' ? 'More actions' : 'Más acciones'}
+          onClick={e => { e.stopPropagation(); setAnchor(e.currentTarget); onOpenChange?.(true) }}
+          sx={{ color: 'var(--text-muted)', p: 0.4, ...(anchor && { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)', color: 'var(--accent,#60a5fa)' }),
+            '&:hover': { color: 'var(--accent,#60a5fa)', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)' } }}>
+          <MoreHorizIcon sx={{ fontSize: size + 2 }} />
+        </IconButton>
+      </Tooltip>
+      <Menu anchorEl={anchor} open={!!anchor} onClose={close}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+        elevation={0}
+        slotProps={{
+          list: { sx: { py: 0.5 } },
+          paper: { sx: {
+            mt: 0.5, borderRadius: 2, minWidth: 210,
+            bgcolor: 'var(--card-bg, #16181d)', backgroundImage: 'none',
+            border: '1px solid var(--border, rgba(255,255,255,0.1))',
+            boxShadow: '0 16px 40px rgba(0,0,0,0.45)',
+          } },
+        }}>
+        {items.filter(Boolean).map(it => (
+          <MenuItem key={it.label} onClick={e => { e.stopPropagation(); close(); it.onClick() }}
+            sx={{ gap: 1.2, py: 0.8, fontSize: '0.8rem', color: it.danger ? '#f87171' : 'var(--text)',
+              '& svg': { fontSize: 16, color: it.danger ? '#f87171' : 'var(--accent,#60a5fa)' },
+              '&:hover': { bgcolor: it.danger ? 'rgba(248,113,113,0.08)' : 'var(--item-hover, rgba(255,255,255,0.05))' } }}>
+            {it.icon}{it.label}
+          </MenuItem>
+        ))}
+      </Menu>
+    </>
+  )
+}
+
+// País del proxy por el que sale el número (y si va en modo ligero). Nada si sale por la IP
+// del servidor, para no llenar de etiquetas los números sin proxy.
+function ProxyChip({ inst, lang }) {
+  if (inst.provider !== 'wwebjs' || (!inst.proxy && !inst.lean_mode)) return null
+  const p = inst.proxy
+  const failing = p && p.status !== 'ok'
+  const tip = [
+    p ? `${lang === 'en' ? 'Proxy' : 'Proxy'} ${p.host} · ${p.city || p.country || ''}${failing ? (lang === 'en' ? ' · not responding' : ' · no responde') : ''}` : null,
+    inst.lean_mode ? (lang === 'en' ? 'Light mode' : 'Modo ligero') : null,
+    inst.memory_mb != null ? `${inst.memory_mb} MB` : null,
+  ].filter(Boolean).join(' · ')
+  return (
+    <Tooltip title={tip} placement="top">
+      <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, lineHeight: 1.6, px: 0.5, borderRadius: 0.8, cursor: 'default',
+        color: failing ? '#f87171' : 'var(--accent,#60a5fa)',
+        bgcolor: failing ? 'rgba(248,113,113,0.1)' : 'rgba(var(--accent-rgb,59,130,246),0.1)',
+        border: `1px solid ${failing ? 'rgba(248,113,113,0.3)' : 'rgba(var(--accent-rgb,59,130,246),0.3)'}` }}>
+        {p ? (p.country || 'proxy') : ''}{p && inst.lean_mode ? ' · ' : ''}{inst.lean_mode ? '⚡' : ''}
+      </Typography>
+    </Tooltip>
+  )
+}
+
+function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile, onNetwork }) {
   const { t, lang } = useLang()
   const [hover, setHover] = useState(false)
+  // Con el menú "⋯" abierto el mouse ya está sobre el menú (fuera de la fila): sin esto
+  // los íconos se ocultaban y el menú perdía su ancla.
+  const [menuOpen, setMenuOpen] = useState(false)
+  const showActions = hover || menuOpen
   const status = inst.live_status || 'unknown'
   const color = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
   const isConnected = ['open', 'connected'].includes(status)
@@ -986,7 +1059,7 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile
         </Typography>
       </Box>
       {/* Right side: status label (resting) or action icons (hover) */}
-      {hover ? (
+      {showActions ? (
         <Box sx={{ display: 'flex', gap: 0.2, flexShrink: 0, alignItems: 'center' }}>
           <Tooltip title={inst.warmup_mode ? (lang === 'en' ? 'Warmup ON — 20 msg/day' : 'Calentamiento ON — 20 msg/día') : (lang === 'en' ? 'Warmup OFF — 150 msg/day' : 'Calentamiento OFF — 150 msg/día')} placement="top">
             <Switch
@@ -1006,31 +1079,16 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile
               <PhonelinkRingIcon sx={{ fontSize: 14 }} />
             </IconButton>
           </Tooltip>
-          {/* Antes iba en morado fijo (#a78bfa) en vez de seguir el acento
-             elegido en Ajustes, igual que el ícono de QR de al lado. */}
-          <Tooltip title={lang === 'en' ? 'Edit phone number' : 'Editar número'} placement="top">
-            <IconButton size="small" onClick={() => onEditNumber(inst)}
-              sx={{ color: 'var(--accent,#60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)' } }}>
-              <EditIcon sx={{ fontSize: 14 }} />
-            </IconButton>
-          </Tooltip>
-          {inst.provider === 'wwebjs' && onWaProfile && (
-            <Tooltip title={lang === 'en' ? 'WhatsApp profile' : 'Perfil de WhatsApp'} placement="top">
-              <IconButton size="small" onClick={() => onWaProfile(inst)}
-                sx={{ color: 'var(--accent,#60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)' } }}>
-                <BadgeIcon sx={{ fontSize: 14 }} />
-              </IconButton>
-            </Tooltip>
-          )}
-          <Tooltip title={lang === 'en' ? 'Remove from user' : 'Quitar de este usuario'} placement="top">
-            <IconButton size="small" onClick={() => onRemove(inst)}
-              sx={{ color: 'var(--text-muted)', p: 0.4, '&:hover': { color: '#f87171', bgcolor: 'rgba(248,113,113,0.1)' } }}>
-              <LinkOffIcon sx={{ fontSize: 14 }} />
-            </IconButton>
-          </Tooltip>
+          <RowActionsMenu onOpenChange={setMenuOpen} items={[
+            { label: lang === 'en' ? 'Edit phone number' : 'Editar número', icon: <EditIcon />, onClick: () => onEditNumber(inst) },
+            inst.provider === 'wwebjs' && onWaProfile && { label: lang === 'en' ? 'WhatsApp profile' : 'Perfil de WhatsApp', icon: <BadgeIcon />, onClick: () => onWaProfile(inst) },
+            inst.provider === 'wwebjs' && onNetwork && { label: lang === 'en' ? 'Proxy and performance' : 'Proxy y rendimiento', icon: <VpnLockIcon />, onClick: () => onNetwork(inst) },
+            { label: lang === 'en' ? 'Remove from user' : 'Quitar de este usuario', icon: <LinkOffIcon />, danger: true, onClick: () => onRemove(inst) },
+          ]} />
         </Box>
       ) : (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
+          <ProxyChip inst={inst} lang={lang} />
           {inst.ack_degraded && (
             <Tooltip title={lang === 'en' ? 'Delivery degraded — messages not reaching recipients' : 'Entrega degradada — mensajes no llegan a destinatarios'} placement="top">
               <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: '#f87171',
@@ -1055,7 +1113,7 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile
 }
 
 // ── UserCard ─────────────────────────────────────────────────────────────────
-function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, onWarmup, onWaProfile, cardIndex = 0 }) {
+function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, onWarmup, onWaProfile, onNetwork, cardIndex = 0 }) {
   const { t, lang } = useLang()
   const connectedCount = instances.filter(i => ['open', 'connected'].includes(i.live_status)).length
   const isAdmin = user.role === 'admin'
@@ -1158,7 +1216,7 @@ function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, on
             '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.15)', borderRadius: 3 },
           }}>
             {instances.map(inst => (
-              <InstanceRow key={inst.name} inst={inst} onQr={onQr} onEditNumber={onEditNumber} onRemove={onRemove} onWarmup={onWarmup} onWaProfile={onWaProfile} />
+              <InstanceRow key={inst.name} inst={inst} onQr={onQr} onEditNumber={onEditNumber} onRemove={onRemove} onWarmup={onWarmup} onWaProfile={onWaProfile} onNetwork={onNetwork} />
             ))}
           </Box>
           {/* Capacity bar — 5 slot dots + add button */}
@@ -2174,6 +2232,8 @@ export default function InstancesPanel({ isActive } = {}) {
   // actually sees on WhatsApp (the real pushname/photo), not just how the
   // instance shows up inside our own app.
   const [waProfileOpen,    setWaProfileOpen]    = useState(false)
+  // Número cuyo diálogo de "Proxy y rendimiento" está abierto (null = cerrado).
+  const [networkInst,      setNetworkInst]      = useState(null)
   const [waProfileInst,    setWaProfileInst]    = useState(null)
   const [waProfileName,    setWaProfileName]    = useState('')
   const [waProfileImgUrl,  setWaProfileImgUrl]  = useState('')
@@ -3129,6 +3189,7 @@ export default function InstancesPanel({ isActive } = {}) {
                     onRemove={setUnassignTarget}
                     onWarmup={handleWarmupToggle}
                     onWaProfile={inst => handleWaProfileClick(inst)}
+                    onNetwork={setNetworkInst}
                   />
                 )
               })}
@@ -3422,32 +3483,12 @@ export default function InstancesPanel({ isActive } = {}) {
                                   transform: isExp ? 'rotate(180deg)' : 'none' }} />
                               </IconButton>
                             </Tooltip>
-                            {/* Antes iba en morado fijo (#a78bfa), no en el
-                               acento elegido en Ajustes. */}
-                            <Tooltip title={lang === 'en' ? 'Edit number' : 'Editar número'}>
-                              <IconButton size="small" onClick={() => handleEditNumberClick(inst)}
-                                sx={{ color: 'var(--accent, #60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' } }}>
-                                <EditIcon sx={{ fontSize: 13 }} />
-                              </IconButton>
-                            </Tooltip>
-                            {/* Real WhatsApp profile name/photo — only possible for wwebjs
-                               sessions (setDisplayName/setProfilePicture aren't exposed by
-                               the other providers' APIs). Separate from "Edit number" above,
-                               which only touches our own internal label. */}
-                            {inst.provider === 'wwebjs' && (
-                              <Tooltip title={lang === 'en' ? 'WhatsApp profile' : 'Perfil de WhatsApp'}>
-                                <IconButton size="small" onClick={() => handleWaProfileClick(inst)}
-                                  sx={{ color: 'var(--accent,#60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' } }}>
-                                  <BadgeIcon sx={{ fontSize: 13 }} />
-                                </IconButton>
-                              </Tooltip>
-                            )}
-                            <Tooltip title={t.inst.delete}>
-                              <IconButton size="small" onClick={() => handleDeleteClick(inst)}
-                                sx={{ color: '#f87171', p: 0.4, '&:hover': { bgcolor: 'rgba(248,113,133,0.1)' } }}>
-                                <DeleteForeverIcon sx={{ fontSize: 13 }} />
-                              </IconButton>
-                            </Tooltip>
+                            <RowActionsMenu size={13} items={[
+                              { label: lang === 'en' ? 'Edit number' : 'Editar número', icon: <EditIcon />, onClick: () => handleEditNumberClick(inst) },
+                              inst.provider === 'wwebjs' && { label: lang === 'en' ? 'WhatsApp profile' : 'Perfil de WhatsApp', icon: <BadgeIcon />, onClick: () => handleWaProfileClick(inst) },
+                              inst.provider === 'wwebjs' && { label: lang === 'en' ? 'Proxy and performance' : 'Proxy y rendimiento', icon: <VpnLockIcon />, onClick: () => setNetworkInst(inst) },
+                              { label: t.inst.delete, icon: <DeleteForeverIcon />, danger: true, onClick: () => handleDeleteClick(inst) },
+                            ]} />
                           </Box>
                         </Box>
                       </Box>
@@ -3502,6 +3543,10 @@ export default function InstancesPanel({ isActive } = {}) {
         })()}
         </Box>
       </Box>
+
+      {/* Proxies por número — el pool y cómo se asignan (ver ProxiesPanel.jsx) */}
+      <ProxiesSection onChanged={fetchInstances} />
+      <InstanceNetworkDialog key={networkInst?.name || 'none'} inst={networkInst} onClose={() => setNetworkInst(null)} onChanged={fetchInstances} />
 
       {/* Bulk assign dialog */}
       <BulkPickDialog

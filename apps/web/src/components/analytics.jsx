@@ -4,6 +4,9 @@ import useSWR from 'swr'
 import { useLang } from '../context/LangContext'
 import { useUser } from '../context/UserContext'
 import { authFetch } from '@/lib/api'
+import { STAT_STRIP_BG } from '@/lib/surfaces'
+import { parseVCards, documentType, splitInlineOptions, mediaCaption, MEDIA_PLACEHOLDERS } from '@/lib/messageFormat'
+import { parseUtc, mxDayKey } from '@/lib/dates'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Chip from '@mui/material/Chip'
@@ -27,7 +30,6 @@ import PersonIcon from '@mui/icons-material/Person'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
 import FlashOnIcon from '@mui/icons-material/FlashOn'
 import SupportAgentIcon from '@mui/icons-material/SupportAgent'
-import SwapHorizIcon from '@mui/icons-material/SwapHoriz'
 import StarIcon from '@mui/icons-material/Star'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import RefreshIcon from '@mui/icons-material/Refresh'
@@ -66,6 +68,9 @@ import AndyBotBuilder from './AndyBotBuilder'
 import { isPlausibleLabel } from './scheduledSends'
 import GasBotModal from './GasBotModal'
 import ClassificationSettingsModal from './ClassificationSettingsModal'
+import TimerOffIcon from '@mui/icons-material/TimerOff'
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows'
+import { ResultChip, ComparisonDialog, ComparisonSummary, ClassifierHelp, refreshComparisonSummary, last10 } from './ClassifierComparison'
 import { CATEGORY_CONFIG, normCategory, matchesCategory, getCategoryConfig } from '@/lib/categoryConfig'
 
 // Same palette/hash as conversations.jsx's agentColor — an agent's dot in the
@@ -201,6 +206,17 @@ const HEADER_CELL_SX = {
 // separate from the table's own edge).
 const HEADER_CELL_LAST_SX = { ...HEADER_CELL_SX, '&::after': { display: 'none' } }
 
+// Grupo "Análisis" (Timing / IA / Timing + IA): encabezado de dos niveles con una línea
+// bajo el título del grupo. Colores neutros a propósito — con el color de la paleta el
+// bloque cambiaba de tono según el tema.
+const ANALYSIS_ROW_H = 26   // alto de la fila "Análisis" del encabezado
+const ANALYSIS_SUB_H = 36   // alto de la fila Timing / IA / Timing + IA
+const ANALYSIS_COL_W = 112
+const ANALYSIS_FRAME = '1px solid rgba(255,255,255,0.07)'
+const ANALYSIS_GROUP_SX = { color: 'rgba(255,255,255,0.62)', letterSpacing: '0.14em', '&::after': { display: 'none' } }
+const ANALYSIS_SUB_SX = { height: ANALYSIS_SUB_H, py: 0, color: 'rgba(255,255,255,0.5)' }
+const ANALYSIS_CELL_SX = { px: 0.75, width: ANALYSIS_COL_W }
+
 // One section of the shared stats card (icon + label + value) — no border of
 // its own; lives inside ONE outer card together with the others, separated by
 // vertical Dividers. Same pattern as Prospects' StatCard (databaseViewer.jsx),
@@ -234,7 +250,7 @@ function StatCard({ icon, color, value, label, subtitle, percent }) {
         </Box>
       </Box>
       <Box sx={{ minWidth: 0 }}>
-        <Typography title={label} sx={{ fontSize: '0.85rem', color: 'var(--text)', fontWeight: 700, lineHeight: 1.3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <Typography title={label} sx={{ fontSize: '0.8rem', color: 'var(--text)', fontWeight: 700, lineHeight: 1.25, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', wordBreak: 'break-word' }}>
           {label}
         </Typography>
         {subtitle && (
@@ -254,17 +270,37 @@ function StatCard({ icon, color, value, label, subtitle, percent }) {
 // by vertical dividers, icon-ring circle + 2 text lines each) so the stats
 // row doesn't just vanish and pop back in — matching StatCard's layout keeps
 // the page height stable while analytics data is loading.
+// Franja de métricas: 8 columnas cuando caben y 4 + 4 cuando no (2 + 2… en móvil). Con
+// flex-wrap y 8 tarjetas los valores se cortaban ("2…") a 1280 px con la barra lateral
+// abierta. Los divisores son pseudo-elementos para no ocupar celdas del grid.
+const STAT_DIVIDER = { content: '""', position: 'absolute', backgroundColor: 'var(--border, rgba(255,255,255,0.08))' }
+const STAT_STRIP_SX = {
+  containerType: 'inline-size', overflow: 'hidden', flexShrink: 0,
+  borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
+  background: STAT_STRIP_BG,
+}
+const STAT_GRID_SX = {
+  display: 'grid', gridTemplateColumns: 'repeat(8, minmax(0, 1fr))',
+  '& > *': { position: 'relative' },
+  '& > *:not(:first-of-type)::before': { ...STAT_DIVIDER, left: 0, top: '16px', bottom: '16px', width: '1px' },
+  '@container (max-width: 1200px)': {
+    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+    '& > *:nth-of-type(4n+1)::before': { display: 'none' },
+    '& > *:nth-of-type(n+5)::after': { ...STAT_DIVIDER, top: 0, left: '16px', right: '16px', height: '1px' },
+  },
+  '@container (max-width: 480px)': {
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    '& > *:nth-of-type(2n+1)::before': { display: 'none' },
+    '& > *:nth-of-type(n+3)::after': { ...STAT_DIVIDER, top: 0, left: '16px', right: '16px', height: '1px' },
+  },
+}
+
 function StatsCardSkeleton() {
   return (
-    <Box sx={{
-      display: 'flex', flexWrap: 'wrap', overflow: 'hidden', flexShrink: 0,
-      borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
-      bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
-    }}>
-      {Array.from({ length: 8 }).map((_, i) => (
-        <Fragment key={i}>
-          {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 2 }} />}
-          <Box sx={{ flex: '1 1 0', minWidth: 96, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.2, px: 1.6, py: 1.6, overflow: 'hidden' }}>
+    <Box sx={STAT_STRIP_SX}>
+      <Box sx={STAT_GRID_SX}>
+        {Array.from({ length: 8 }).map((_, i) => (
+          <Box key={i} sx={{ minWidth: 96, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.2, px: 1.6, py: 1.6, overflow: 'hidden' }}>
             <Skeleton variant="circular" width={40} height={40} sx={{ bgcolor: 'rgba(255,255,255,0.1)', flexShrink: 0,
               '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent)' } }} />
             <Box sx={{ minWidth: 0, flex: 1 }}>
@@ -274,8 +310,130 @@ function StatsCardSkeleton() {
                 '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent)' } }} />
             </Box>
           </Box>
-        </Fragment>
-      ))}
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+// Cómo se ve cada mensaje en el screenshot del reporte: el mismo criterio que Conversaciones
+// (opciones como botones, contacto como tarjeta, foto, documento, multimedia) pero en colores
+// claros. Antes imprimía el texto crudo: "[Opciones: Español | English…]", "BEGIN:VCARD…"
+// (Taboo Restaurant, 2026-10-06). Íconos con emoji en vez de SVG: html2canvas los dibuja seguro.
+const CAPTURE_EMOJI_FONT = '"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",system-ui,sans-serif'
+
+function CaptureBody({ msg, isOut }) {
+  const raw = msg.body || msg.message_body || ''
+  const ink = isOut ? '#1e40af' : '#1e293b'
+  const soft = isOut ? 'rgba(37,99,235,0.07)' : '#f1f5f9'
+  const line = isOut ? 'rgba(37,99,235,0.25)' : 'rgba(15,23,42,0.12)'
+  const textSx = { color: ink, fontSize: '13px', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: CAPTURE_EMOJI_FONT }
+  const caption = mediaCaption(raw, msg.media_url)
+  const interactive = msg.interactive || (!isOut ? splitInlineOptions(raw) : null)
+  const isImage = Boolean(msg.media_url) && (msg.media_content_type || '').startsWith('image/')
+
+  if (interactive && (interactive.options || []).length) {
+    return (
+      <Box>
+        {interactive.text && <Box sx={{ ...textSx, mb: '8px' }}>{interactive.text}</Box>}
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: '5px', borderTop: `1px solid ${line}`, pt: '8px' }}>
+          {interactive.options.map((opt, i) => (
+            <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: '8px', px: '8px', py: '5px',
+              borderRadius: '8px', border: `1px solid ${line}`, bgcolor: soft }}>
+              <Box sx={{ width: '18px', height: '18px', borderRadius: '50%', flexShrink: 0, display: 'flex',
+                alignItems: 'center', justifyContent: 'center', bgcolor: '#ffffff', border: `1px solid ${line}`,
+                color: '#64748b', fontSize: '10px', fontWeight: 700 }}>{i + 1}</Box>
+              <Box sx={{ color: '#2563eb', fontSize: '12.5px', fontWeight: 600, fontFamily: CAPTURE_EMOJI_FONT }}>{opt}</Box>
+            </Box>
+          ))}
+        </Box>
+      </Box>
+    )
+  }
+
+  if (raw.includes('BEGIN:VCARD')) {
+    const cards = parseVCards(raw)
+    if (cards.length) {
+      return (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          {cards.map((c, i) => (
+            <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: '9px', px: '10px', py: '7px', minWidth: 190,
+              borderRadius: '10px', border: `1px solid ${line}`, bgcolor: soft }}>
+              <Box sx={{ width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0, display: 'flex',
+                alignItems: 'center', justifyContent: 'center', bgcolor: '#e2e8f0', fontSize: '16px',
+                fontFamily: CAPTURE_EMOJI_FONT }}>👤</Box>
+              <Box sx={{ minWidth: 0 }}>
+                <Box sx={{ color: ink, fontSize: '13px', fontWeight: 700, lineHeight: 1.25 }}>{c.fn || 'Contacto'}</Box>
+                {c.biz && c.biz !== c.fn && <Box sx={{ color: '#64748b', fontSize: '11px', lineHeight: 1.25 }}>{c.biz}</Box>}
+                {c.tel && <Box sx={{ color: '#64748b', fontSize: '11px', lineHeight: 1.25, fontFamily: 'monospace' }}>{c.tel}</Box>}
+              </Box>
+            </Box>
+          ))}
+        </Box>
+      )
+    }
+  }
+
+  if (isImage) {
+    const sticker = raw.trim().toLowerCase() === '[sticker]'
+    // Por la ruta /api/files de esta misma app: una imagen de otro dominio sin CORS deja el
+    // canvas "contaminado" y html2canvas ya no puede exportar el screenshot.
+    const src = (msg.media_url || '').replace(/^https?:\/\/[^/]+(?=\/api\/files\/)/i, '')
+    return (
+      <Box>
+        <Box component="img" src={src} alt=""
+          sx={sticker ? { width: 96, height: 96, objectFit: 'contain', display: 'block' }
+                      : { maxWidth: 240, maxHeight: 280, width: '100%', borderRadius: '8px', display: 'block', objectFit: 'cover' }} />
+        {caption && <Box sx={{ ...textSx, mt: '6px' }}>{caption}</Box>}
+      </Box>
+    )
+  }
+
+  if (msg.media_url) {
+    const doc = documentType(msg.media_content_type, 'Documento')
+    const accent = doc.color || '#64748b'
+    return (
+      <Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px', px: '8px', py: '6px', borderRadius: '8px',
+          border: `1px solid ${line}`, bgcolor: soft }}>
+          <Box sx={{ width: '28px', height: '28px', borderRadius: '7px', flexShrink: 0, display: 'flex', alignItems: 'center',
+            justifyContent: 'center', bgcolor: `${accent}22`, border: `1px solid ${accent}55`, fontSize: '14px',
+            fontFamily: CAPTURE_EMOJI_FONT }}>📄</Box>
+          <Box sx={{ color: ink, fontSize: '12.5px', fontWeight: 700 }}>{doc.label}</Box>
+        </Box>
+        {caption && <Box sx={{ ...textSx, mt: '6px' }}>{caption}</Box>}
+      </Box>
+    )
+  }
+
+  const placeholder = MEDIA_PLACEHOLDERS[raw.trim().toLowerCase()]
+  if (placeholder || !raw.trim()) {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#64748b', fontSize: '12.5px', fontStyle: 'italic' }}>
+        <Box component="span" sx={{ fontStyle: 'normal', fontFamily: CAPTURE_EMOJI_FONT }}>{placeholder ? placeholder.emoji : '📎'}</Box>
+        {placeholder ? placeholder.label.es : 'Mensaje sin texto (foto, audio o archivo)'}
+      </Box>
+    )
+  }
+
+  return <Box sx={textSx}>{raw}</Box>
+}
+
+// Separador de día del screenshot del reporte, como el de Conversaciones pero siempre con la
+// fecha completa y el día de la semana: "Hoy" o "Ayer" dejan de ser ciertos en cuanto el
+// reporte se lee otro día, y el día de la semana dice si contestaron en fin de semana.
+function captureDayLabel(date) {
+  const s = date.toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: _TZ })
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+function CaptureDayDivider({ label, first }) {
+  return (
+    <Box sx={{ display: 'flex', justifyContent: 'center', mt: first ? 0 : '6px' }}>
+      <Box sx={{ px: '10px', py: '3px', borderRadius: '99px', bgcolor: '#e2e8f0', border: '1px solid rgba(15,23,42,0.08)',
+                 color: '#475569', fontSize: '10.5px', fontWeight: 600, fontFamily: 'system-ui, sans-serif' }}>
+        {label}
+      </Box>
     </Box>
   )
 }
@@ -302,8 +460,16 @@ function ConversationCapture({ thread, captureRef, visible }) {
       >
         {thread.map((msg, i) => {
           const isOut = msg.direction === 'outbound'
+          // Un separador cada vez que cambia el día (en hora de Ciudad de México), incluido el
+          // primero, para saber de qué día es cada mensaje.
+          const at = parseUtc(msg.created_at)
+          const day = at && !isNaN(at) ? mxDayKey(at) : null
+          const prev = i > 0 ? parseUtc(thread[i - 1].created_at) : null
+          const newDay = day && (!prev || isNaN(prev) || mxDayKey(prev) !== day)
           return (
-            <Box key={i} sx={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
+            <Fragment key={i}>
+            {newDay && <CaptureDayDivider label={captureDayLabel(at)} first={i === 0} />}
+            <Box sx={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start' }}>
               <Box sx={{
                 maxWidth: '78%',
                 px: '12px', py: '7px',
@@ -312,16 +478,16 @@ function ConversationCapture({ thread, captureRef, visible }) {
                 border: `1px solid ${isOut ? 'rgba(37,99,235,0.25)' : 'rgba(0,0,0,0.1)'}`,
                 boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
               }}>
-                <Box sx={{ color: isOut ? '#1e40af' : '#1e293b', fontSize: '13px', lineHeight: 1.45,
-                           fontFamily: 'system-ui, sans-serif', whiteSpace: 'pre-wrap' }}>
-                  {msg.body || msg.message_body || ''}
-                </Box>
+                <CaptureBody msg={msg} isOut={isOut} />
                 <Box sx={{ color: '#94a3b8', fontSize: '10px', mt: '3px',
                            textAlign: 'right', fontFamily: 'system-ui, sans-serif' }}>
-                  {msg.created_at ? new Date(msg.created_at.endsWith('Z') ? msg.created_at : msg.created_at + 'Z').toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }) : ''}
+                  {/* Same Mexico City time as Conversaciones — without timeZone the
+                     screenshot took the zone of whichever computer made the report. */}
+                  {msg.created_at ? new Date(msg.created_at.endsWith('Z') ? msg.created_at : msg.created_at + 'Z').toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', timeZone: _TZ }) : ''}
                 </Box>
               </Box>
             </Box>
+            </Fragment>
           )
         })}
       </Box>
@@ -412,6 +578,36 @@ export default function Analytics() {
   const [classificationSettingsOpen, setClassificationSettingsOpen] = useState(false)
   const { user } = useUser()
   const isAdmin = user?.role === 'admin'
+  // Comparación de clasificadores (Timing / IA / Timing + IA): fila cuyo log está abierto
+  // y fila que se está comparando en este momento.
+  const [compareFor, setCompareFor] = useState(null) // { id, name, number? }
+  const [comparing, setComparing]   = useState(null) // company_id
+  // Corre los tres clasificadores para esa conversación (una llamada a gpt-4.1-mini por
+  // clasificador de IA, y por número que respondió en empresas con varios).
+  function compareButton(row) {
+    const busy = comparing === row.company_id
+    return (
+      <Button size="small" onClick={() => runCompare(row)} disabled={busy}
+        startIcon={busy ? <CircularProgress size={10} sx={{ color: 'inherit' }} /> : <CompareArrowsIcon sx={{ fontSize: '14px !important' }} />}
+        sx={{ textTransform: 'none', fontSize: '0.68rem', py: 0, minWidth: 0, color: 'var(--accent,#a5b4fc)' }}>
+        {busy ? t.analytics.compareRunning : t.analytics.compareRun}
+      </Button>
+    )
+  }
+  async function runCompare(row) {
+    setComparing(row.company_id)
+    try {
+      const res = await authFetch(`/api/classification/comparisons/${row.company_id}/run`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.detail || `Error ${res.status}`)
+      mutateAnalytics()
+      refreshComparisonSummary()
+    } catch (e) {
+      notify(`${t.analytics.compareFailed}: ${e.message}`)
+    } finally {
+      setComparing(null)
+    }
+  }
 
   const handleSort = (field) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -513,12 +709,17 @@ export default function Analytics() {
 
       // 3. Wait for the browser to actually paint the newly-rendered thread —
       // a blind 800ms guessed long enough for the worst case and added that
-      // same delay to every report regardless of thread length. The capture
-      // is plain text (no images, no webfonts to wait on — see
-      // ConversationCapture above), so a double rAF is enough: the first
-      // fires once React's DOM update has committed, the second confirms the
-      // browser has actually painted it before html2canvas runs.
+      // same delay to every report regardless of thread length. A double rAF:
+      // the first fires once React's DOM update has committed, the second
+      // confirms the browser has actually painted it before html2canvas runs.
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+      // Las fotos del hilo (ver CaptureBody) tienen que terminar de cargar antes de capturar;
+      // como mucho 5 s, para que una imagen que no carga no detenga el reporte.
+      const _imgs = captureRef.current ? [...captureRef.current.querySelectorAll('img')] : []
+      await Promise.race([
+        Promise.all(_imgs.map(img => (img.complete ? null : new Promise(r => { img.onload = r; img.onerror = r })))),
+        new Promise(r => setTimeout(r, 5000)),
+      ])
 
       // 4. Capture with html2canvas
       let screenshotB64 = null
@@ -641,8 +842,8 @@ export default function Analytics() {
   const pct = cat  => globalTotal ? Math.round(((categoryCounts[cat] || 0) / globalTotal) * 100) : 0
   const humanPct   = pct('humano')
   const autoPct    = pct('automatico')
+  const autoNoReplyPct = pct('automatico_sin_respuesta')
   const hibridoBotPct  = pct('hibrido_bot')
-  const hibridoAutoPct = pct('hibrido_automatico')
   const botPct     = pct('bot')
   const botIaPct   = pct('bot_ia')
   const avgQualityNum = avgQualityServer ?? 0
@@ -723,28 +924,23 @@ export default function Analytics() {
       {loading ? (
         <StatsCardSkeleton />
       ) : (
-        <Box sx={{
-          display: 'flex', flexWrap: 'wrap', overflow: 'hidden', flexShrink: 0,
-          borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
-          bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
-        }}>
-          {[
-            { key: 'total',     icon: <StarIcon sx={{ fontSize: 20, color: 'var(--text-muted)' }} />, color: 'rgba(148,163,184,0.6)', value: globalTotal, label: t.analytics.total, percent: 100 },
-            { key: 'human',     icon: <PersonIcon sx={{ fontSize: 20, color: '#4ade80' }} />, color: '#4ade80', value: `${humanPct}%`, label: t.analytics.pctHuman, percent: humanPct },
-            { key: 'automatic', icon: <FlashOnIcon sx={{ fontSize: 20, color: '#facc15' }} />, color: '#facc15', value: `${autoPct}%`, label: t.analytics.automatic, percent: autoPct },
-            { key: 'hibridoBot',  icon: <SupportAgentIcon sx={{ fontSize: 20, color: '#38bdf8' }} />, color: '#38bdf8', value: `${hibridoBotPct}%`, label: t.analytics.hybridBot, percent: hibridoBotPct },
-            { key: 'hibridoAuto', icon: <SwapHorizIcon sx={{ fontSize: 20, color: '#f59e0b' }} />, color: '#f59e0b', value: `${hibridoAutoPct}%`, label: t.analytics.hybridAuto, percent: hibridoAutoPct },
-            { key: 'bot',       icon: <SmartToyIcon sx={{ fontSize: 20, color: '#a78bfa' }} />, color: '#a78bfa', value: `${botPct}%`, label: t.analytics.bot, percent: botPct },
-            { key: 'botIa',     icon: <PsychologyIcon sx={{ fontSize: 20, color: '#c084fc' }} />, color: '#c084fc', value: `${botIaPct}%`, label: t.analytics.botAi, percent: botIaPct },
-            { key: 'quality',   icon: <StarIcon sx={{ fontSize: 20, color: '#facc15' }} />, color: '#facc15', value: avgQuality, label: t.analytics.avgQuality, percent: (avgQualityNum / 5) * 100 },
-          ].map(({ key, ...c }, i) => (
-            <Fragment key={key}>
-              {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 2 }} />}
-              <StatCard {...c} />
-            </Fragment>
-          ))}
+        <Box sx={STAT_STRIP_SX}>
+          <Box sx={STAT_GRID_SX}>
+            {[
+              { key: 'total',     icon: <StarIcon sx={{ fontSize: 20, color: 'var(--text-muted)' }} />, color: 'rgba(148,163,184,0.6)', value: globalTotal, label: t.analytics.total, percent: 100 },
+              { key: 'human',     icon: <PersonIcon sx={{ fontSize: 20, color: '#4ade80' }} />, color: '#4ade80', value: `${humanPct}%`, label: t.analytics.pctHuman, percent: humanPct },
+              { key: 'automatic', icon: <FlashOnIcon sx={{ fontSize: 20, color: '#facc15' }} />, color: '#facc15', value: `${autoPct}%`, label: t.analytics.automatic, percent: autoPct },
+              { key: 'autoNoReply', icon: <TimerOffIcon sx={{ fontSize: 20, color: '#fb923c' }} />, color: '#fb923c', value: `${autoNoReplyPct}%`, label: t.analytics.autoNoReply, percent: autoNoReplyPct },
+              { key: 'hibridoBot',  icon: <SupportAgentIcon sx={{ fontSize: 20, color: '#38bdf8' }} />, color: '#38bdf8', value: `${hibridoBotPct}%`, label: t.analytics.hybridBot, percent: hibridoBotPct },
+              { key: 'bot',       icon: <SmartToyIcon sx={{ fontSize: 20, color: '#a78bfa' }} />, color: '#a78bfa', value: `${botPct}%`, label: t.analytics.bot, percent: botPct },
+              { key: 'botIa',     icon: <PsychologyIcon sx={{ fontSize: 20, color: '#c084fc' }} />, color: '#c084fc', value: `${botIaPct}%`, label: t.analytics.botAi, percent: botIaPct },
+              { key: 'quality',   icon: <StarIcon sx={{ fontSize: 20, color: '#facc15' }} />, color: '#facc15', value: avgQuality, label: t.analytics.avgQuality, percent: (avgQualityNum / 5) * 100 },
+            ].map(({ key, ...c }) => <StatCard key={key} {...c} />)}
+          </Box>
         </Box>
       )}
+
+      <ComparisonSummary />
 
       {/* ── Filtros ── */}
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', flexShrink: 0 }}>
@@ -771,8 +967,8 @@ export default function Analytics() {
           { value: 'all',           icon: null,             label: t.analytics.all,     color: 'rgba(255,255,255,0.6)',  bg: 'rgba(255,255,255,0.06)'  },
           { value: 'humano',        icon: PersonIcon,       label: t.analytics.human,   color: '#4ade80',                bg: 'rgba(74,222,128,0.1)'    },
           { value: 'automatico',    icon: FlashOnIcon,      label: t.analytics.automatic, color: '#facc15',              bg: 'rgba(250,204,21,0.1)'    },
+          { value: 'automatico_sin_respuesta', icon: TimerOffIcon, label: t.analytics.autoNoReply, color: '#fb923c',      bg: 'rgba(251,146,60,0.1)'    },
           { value: 'hibrido_bot',      icon: SupportAgentIcon,   label: t.analytics.hybridBot,  color: '#38bdf8',             bg: 'rgba(56,189,248,0.1)'    },
-          { value: 'hibrido_automatico', icon: SwapHorizIcon, label: t.analytics.hybridAuto, color: '#f59e0b',             bg: 'rgba(245,158,11,0.1)'    },
           { value: 'bot',           icon: SmartToyIcon,     label: t.analytics.bot,     color: '#a78bfa',                bg: 'rgba(167,139,250,0.1)'   },
           { value: 'bot_ia',        icon: PsychologyIcon,   label: t.analytics.botAi,   color: '#c084fc',                bg: 'rgba(192,132,252,0.1)'   },
           // "sin_respuesta" (confirmado, ya se cumplió el tiempo de espera y
@@ -862,11 +1058,11 @@ export default function Analytics() {
             return (
               <MenuItem key={a.username} onClick={() => toggleAgentFilter(a.username)} sx={{
                 py: 0.5, px: 0.8, mb: 0.2, borderRadius: 1.5, gap: 0.9,
-                bgcolor: checked ? `${color}14` : 'transparent',
-                '&:hover': { bgcolor: checked ? `${color}20` : 'rgba(255,255,255,0.05)' },
+                bgcolor: checked ? 'rgba(var(--accent-rgb,99,102,241),0.12)' : 'transparent',
+                '&:hover': { bgcolor: checked ? 'rgba(var(--accent-rgb,99,102,241),0.18)' : 'rgba(255,255,255,0.05)' },
               }}>
                 <Checkbox size="small" checked={checked}
-                  sx={{ p: 0, color: 'rgba(255,255,255,0.25)', '&.Mui-checked': { color } }} />
+                  sx={{ p: 0, color: 'var(--text-muted)', '&.Mui-checked': { color: 'var(--accent, #3b82f6)' } }} />
                 <Box sx={{
                   width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -919,8 +1115,8 @@ export default function Analytics() {
             <Table size="small" stickyHeader sx={{ minWidth: 800 }}>
               <TableHead>
                 <TableRow>
-                  {/* anchos espejo de la tabla real: expand, empresa, número, industria, categoría, calidad, reacción, última resp, notas, chatIA, modBot, reporte */}
-                  {[32, '22%', 115, 130, 100, 60, 55, 65, 220, 45, 65, 45].map((w, i, arr) => (
+                  {/* anchos espejo de la tabla real: expand, empresa, número, industria, timing, IA, timing + IA, calidad, reacción, última resp, notas, chatIA, modBot, reporte */}
+                  {[32, '22%', 115, 130, 112, 112, 112, 60, 55, 65, 220, 45, 65, 45].map((w, i, arr) => (
                     <TableCell key={i} sx={{ ...(i === 0 || i === arr.length - 1 ? HEADER_CELL_LAST_SX : HEADER_CELL_SX), width: i === 0 ? 32 : undefined, px: i === 0 ? 0.5 : undefined }}>
                       {i > 0 && (
                         <Skeleton variant="text" width={typeof w === 'number' ? Math.min(w * 0.55, 70) : 55} height={11}
@@ -938,7 +1134,7 @@ export default function Analytics() {
                     animation: 'skRowIn 0.28s ease both',
                     animationDelay: `${row * 0.03}s`,
                   }}>
-                    {[32, '22%', 115, 130, 100, 60, 55, 65, 220, 45, 65, 45].map((w, col) => {
+                    {[32, '22%', 115, 130, 112, 112, 112, 60, 55, 65, 220, 45, 65, 45].map((w, col) => {
                       const isChip = col === 4
                       const isIcon = col === 9 || col === 10 || col === 11
                       const numBg  = col === 5 ? 'rgba(96,165,250,0.1)'
@@ -992,35 +1188,34 @@ export default function Analytics() {
               <TableHead>
                 <TableRow>
                   {/* Columna expand — sin label */}
-                  <TableCell sx={{ ...HEADER_CELL_LAST_SX, width: 32, px: 0.5 }} />
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_LAST_SX, width: 32, px: 0.5 }} />
                   {/* Empresa */}
-                  <TableCell sx={HEADER_CELL_SX}>
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
                     <TableSortLabel active={sortField === 'company_name'} direction={sortField === 'company_name' ? sortDir : 'asc'}
                       onClick={() => handleSort('company_name')}
-                      sx={{ color: 'rgba(255,255,255,0.5) !important', '& .MuiTableSortLabel-icon': { color: 'rgba(255,255,255,0.3) !important' }, '&.Mui-active': { color: 'white !important' } }}>
+                      sx={SORT_LABEL_CENTER_SX}>
                       {t.analytics.company}
                     </TableSortLabel>
                   </TableCell>
                   {/* Número */}
-                  <TableCell sx={{ ...HEADER_CELL_SX, whiteSpace: 'nowrap', textAlign: 'center' }}>
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, whiteSpace: 'nowrap', textAlign: 'center' }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
                       <WhatsAppIcon sx={{ fontSize: 12 }} /> {t.analytics.phoneNum}
                     </Box>
                   </TableCell>
                   {/* Industria + Categoría */}
-                  {[
-                    { field: 'industry', label: t.analytics.industry },
-                    { field: 'category', label: t.analytics.category },
-                  ].map(({ field, label }) => (
-                    <TableCell key={field} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
-                      <TableSortLabel active={sortField === field} direction={sortField === field ? sortDir : 'asc'}
-                        onClick={() => handleSort(field)}
-                        sx={SORT_LABEL_CENTER_SX}>
-                        {label}
-                      </TableSortLabel>
-                    </TableCell>
-                  ))}
-                  <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
+                    <TableSortLabel active={sortField === 'industry'} direction={sortField === 'industry' ? sortDir : 'asc'}
+                      onClick={() => handleSort('industry')}
+                      sx={SORT_LABEL_CENTER_SX}>
+                      {t.analytics.industry}
+                    </TableSortLabel>
+                  </TableCell>
+                  {/* Categoría, dividida en los tres clasificadores */}
+                  <TableCell colSpan={3} sx={{ ...HEADER_CELL_SX, ...ANALYSIS_GROUP_SX, height: ANALYSIS_ROW_H, py: 0, textAlign: 'center', borderBottom: ANALYSIS_FRAME }}>
+                    {t.analytics.analysisGroup}
+                  </TableCell>
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
                     <TableSortLabel active={sortField === 'response_quality'} direction={sortField === 'response_quality' ? sortDir : 'asc'}
                       onClick={() => handleSort('response_quality')}
                       sx={SORT_LABEL_CENTER_SX}>
@@ -1029,7 +1224,7 @@ export default function Analytics() {
                       </Box>
                     </TableSortLabel>
                   </TableCell>
-                  <TableCell sx={{ ...HEADER_CELL_SX, whiteSpace: 'nowrap', textAlign: 'center' }}>
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, whiteSpace: 'nowrap', textAlign: 'center' }}>
                     <TableSortLabel active={sortField === 'reaction_time_min'} direction={sortField === 'reaction_time_min' ? sortDir : 'asc'}
                       onClick={() => handleSort('reaction_time_min')}
                       sx={SORT_LABEL_CENTER_SX}>
@@ -1038,15 +1233,15 @@ export default function Analytics() {
                       </Box>
                     </TableSortLabel>
                   </TableCell>
-                  <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
                     <TableSortLabel active={sortField === 'last_at'} direction={sortField === 'last_at' ? sortDir : 'asc'}
                       onClick={() => handleSort('last_at')}
                       sx={SORT_LABEL_CENTER_SX}>
                       {t.analytics.lastResp}
                     </TableSortLabel>
                   </TableCell>
-                  <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>{t.analytics.notes}</TableCell>
-                  <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>{t.analytics.notes}</TableCell>
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
                     <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4 }}>
                       Chat IA
                       <Tooltip title={t.analytics.chatIaHelp}>
@@ -1054,7 +1249,7 @@ export default function Analytics() {
                       </Tooltip>
                     </Box>
                   </TableCell>
-                  <TableCell sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
                     <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4 }}>
                       {t.analytics.modifyBot}
                       <Tooltip title={t.analytics.modifyBotHelp}>
@@ -1062,7 +1257,20 @@ export default function Analytics() {
                       </Tooltip>
                     </Box>
                   </TableCell>
-                  <TableCell sx={{ ...HEADER_CELL_LAST_SX, textAlign: 'center' }}>{t.analytics.report}</TableCell>
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_LAST_SX, textAlign: 'center' }}>{t.analytics.report}</TableCell>
+                </TableRow>
+                <TableRow>
+                  {/* "?" de cada clasificador: cómo decide (ClassifierHelp). Los límites del
+                      diagrama de Timing salen de cualquier comparación ya corrida. */}
+                  {[['timing', 'colTiming'], ['ia', 'colIa'], ['hibrido', 'colHybrid']].map(([method, label]) => (
+                    <TableCell key={method} sx={{ ...HEADER_CELL_SX, ...ANALYSIS_SUB_SX, width: ANALYSIS_COL_W, px: 0.75, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                      <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+                        {t.analytics[label]}
+                        <ClassifierHelp method={method} size={13}
+                          limits={method === 'timing' ? sortedData.find(r => r.comparison?.timing?.inputs)?.comparison.timing.inputs : undefined} />
+                      </Box>
+                    </TableCell>
+                  ))}
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -1178,12 +1386,32 @@ export default function Analytics() {
                         </Typography>
                       </TableCell>
 
-                      {/* Categoría */}
-                      <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
-                        {!hasMultiple && (row.category
-                          ? <Chip icon={<cat.icon />} label={t.analytics[cat.tKey]} size="small" sx={{ height: 20, fontSize: '0.7rem', bgcolor: cat.bg, color: cat.color, border: `1px solid ${cat.color}44`, '& .MuiChip-icon': { color: cat.color, fontSize: 13, ml: '6px' } }} />
-                          : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>{t.analytics.noCategory}</Typography>)}
-                      </TableCell>
+                      {/* Análisis — Timing / IA / Timing + IA. Clic en cualquiera abre el log
+                          de cómo llegó cada uno. Con varios números, la comparación va en
+                          cada fila del desplegable (no se mezcla la plática de números distintos). */}
+                      {hasMultiple ? (
+                        <TableCell colSpan={3} sx={{ ...CELL_SX, ...ANALYSIS_CELL_SX, width: undefined, textAlign: 'center' }}>
+                          {/* La comparación va en cada número del desplegable (flecha junto al nombre). */}
+                          {!row.comparison && compareButton(row)}
+                        </TableCell>
+                      ) : (
+                        <>
+                          {['timing', 'ia'].map(m => (
+                            <TableCell key={m} sx={{ ...CELL_SX, ...ANALYSIS_CELL_SX, textAlign: 'center' }}>
+                              {row.comparison?.[m]
+                                ? <ResultChip compact method={m} result={row.comparison[m]} onClick={() => setCompareFor({ id: row.company_id, name: row.company_name })} />
+                                : m === 'timing' && compareButton(row)}
+                            </TableCell>
+                          ))}
+                          <TableCell sx={{ ...CELL_SX, ...ANALYSIS_CELL_SX, textAlign: 'center' }}>
+                            {row.comparison?.hibrido
+                              ? <ResultChip compact method="hibrido" result={row.comparison.hibrido} onClick={() => setCompareFor({ id: row.company_id, name: row.company_name })} />
+                              : row.category
+                                ? <ResultChip compact method="hibrido" result={{ category: row.category, is_ai: row.is_ai, common: row.category }} />
+                                : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>{t.analytics.noCategory}</Typography>}
+                          </TableCell>
+                        </>
+                      )}
 
                       {/* Calidad */}
                       <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
@@ -1351,22 +1579,24 @@ export default function Analytics() {
                           </TableCell>
                           {/* Industria — vacía */}
                           <TableCell sx={NSUB} />
-                          {/* Categoría */}
-                          <TableCell sx={{ ...NSUB, textAlign: 'center' }}>
-                            {!replied
-                              ? <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>
-                              : hasAnalysis
-                                ? <Chip
-                                    icon={<nCat.icon />}
-                                    label={t.analytics[nCat.tKey]}
-                                    size="small"
-                                    sx={{ height: 18, fontSize: '0.65rem', bgcolor: nCat.bg, color: nCat.color,
-                                          border: `1px solid ${nCat.color}44`,
-                                          opacity: inherited ? 0.65 : 1,
-                                          '& .MuiChip-icon': { color: nCat.color, fontSize: 12, ml: '5px' } }}
-                                  />
-                                : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>}
-                          </TableCell>
+                          {/* Análisis de ESTE número — Timing / IA / Timing + IA */}
+                          {['timing', 'ia', 'hibrido'].map(m => {
+                            const cmp = (row.comparison?.numbers || []).find(x => x.number === last10(n.number))
+                            const open = () => setCompareFor({ id: row.company_id, name: row.company_name, number: n.number })
+                            return (
+                              <TableCell key={m} sx={{ ...NSUB, ...ANALYSIS_CELL_SX, textAlign: 'center' }}>
+                                {cmp?.[m]
+                                  ? <ResultChip compact method={m} result={cmp[m]} onClick={open} />
+                                  : m === 'hibrido' && (!replied
+                                    ? <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>
+                                    : hasAnalysis
+                                      ? <Box sx={{ opacity: inherited ? 0.65 : 1, display: 'inline-flex' }}>
+                                          <ResultChip compact method="hibrido" result={{ category: n.category, is_ai: n.is_ai, common: n.category }} />
+                                        </Box>
+                                      : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>)}
+                              </TableCell>
+                            )
+                          })}
                           {/* Calidad */}
                           <TableCell sx={{ ...NSUB, textAlign: 'center' }}>
                             {replied && n.response_quality != null
@@ -1506,6 +1736,11 @@ export default function Analytics() {
 
       {isAdmin && (
         <ClassificationSettingsModal open={classificationSettingsOpen} onClose={() => setClassificationSettingsOpen(false)} />
+      )}
+
+      {compareFor && (
+        <ComparisonDialog companyId={compareFor.id} companyName={compareFor.name} number={compareFor.number}
+          onClose={() => setCompareFor(null)} onChanged={mutateAnalytics} />
       )}
 
       <Snackbar

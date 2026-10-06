@@ -179,11 +179,14 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
     _target_state = None
     _target_city = None
     _target_industry = None
+    _maps_name = _maps_category = None
     try:
         _idea = db.db.search_ideas.find_one_and_delete({"url": website})
         _target_state = (_idea or {}).get("target_state")
         _target_city = (_idea or {}).get("target_city")
         _target_industry = (_idea or {}).get("industry_giro") or (_idea or {}).get("industry")
+        _maps_name = (_idea or {}).get("maps_name")
+        _maps_category = (_idea or {}).get("maps_category")
     except Exception:
         pass
 
@@ -201,7 +204,8 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
 
     print(f"🔍 Scrapeando datos de {website}...")
     scraped = scraper.scrape_site(website, force=force, country=country, target_state=_target_state,
-                                  verify_phones=False, target_city=_target_city)
+                                  verify_phones=False, target_city=_target_city,
+                                  maps_name=_maps_name, maps_category=_maps_category)
     _extra = scraped.get("_extra", {})
     _cr = scraped.get("_contacts_raw", {})
 

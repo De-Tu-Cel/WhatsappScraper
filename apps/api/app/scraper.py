@@ -96,6 +96,40 @@ def _soup_from_bytes(content: bytes) -> BeautifulSoup:
         return BeautifulSoup(content, "html.parser")
 
 
+# Names a page can carry that belong to the platform, not the business.
+_PLATFORM_NAMES = {"whatsapp", "whatsapp.com", "linktree", "facebook", "instagram", "doctoralia",
+                   "google", "google maps", "inicio", "home"}
+_DOMAIN_LIKE = re.compile(r"^[\w-]+(\.[\w-]+)*\.[a-z]{2,6}$", re.IGNORECASE)
+_NAME_SEPARATOR = re.compile(r"\s[|\-–—]\s|[:.]\s|\|")
+
+
+def prefer_maps_name(page_name: str, maps_name: str, domain: str = "", maps_category: str = "") -> str:
+    """The name to save for a site that Google Maps found. The business's name
+    on Maps (the one its owner registered) wins over the one read from the
+    page, which in 6 of 28 Maps sites measured on 2026-10-05 was a slogan
+    ("DELÉITATE CON NUESTROS SABORES…" for OK Pastelería), the domain
+    ("upfitness.mx"), a generic title ("TALLER MECÁNICO EN QRO" for Bosch Car
+    Service) or the platform's ("WhatsApp.com"). The page's name stays only
+    when the Maps one is keyword-stuffed and both clearly name the same
+    business ("Taller mecánico Premium: Gucar Automotriz Circuito…" vs
+    "GuCar - Taller Mecánico Automotriz Premium")."""
+    maps_name = re.sub(r"\s+", " ", maps_name or "").strip()
+    page_name = (page_name or "").strip()
+    if not maps_name or not page_name:
+        return maps_name or page_name
+    p, d = page_name.lower(), (domain or "").lower().replace("www.", "")
+    if p in _PLATFORM_NAMES or _DOMAIN_LIKE.match(p) or (d and p in (d, d.split(".")[0])):
+        return maps_name
+    stuffed = len(maps_name) > 40 or bool(_NAME_SEPARATOR.search(maps_name))
+    if stuffed:
+        from app.searcher import same_business_name
+        # Words of the Maps category ("Taller mecánico") don't make two names
+        # the same business — every taller has them.
+        if same_business_name(page_name, maps_name, extra_generic=re.findall(r"\w+", maps_category or "")):
+            return page_name
+    return maps_name
+
+
 class WebsiteScraper:
     """
     Scraper extenso que extrae:
@@ -333,7 +367,8 @@ class WebsiteScraper:
         self.scraping_runs_col = db["scraping_runs"]
 
     def scrape_site(self, url: str, force: bool = False, country: str = None, target_state: str = None,
-                    verify_phones: bool = True, target_city: str = None) -> Dict:
+                    verify_phones: bool = True, target_city: str = None,
+                    maps_name: str = None, maps_category: str = None) -> Dict:
         """
         Scraping completo de un sitio web
         
@@ -402,6 +437,10 @@ class WebsiteScraper:
         # _finalize_location).
         self._target_state_raw = target_state or ""
         self._target_city_raw = target_city or ""
+        # The business's own name/category on Google Maps, when the search
+        # found this site there (see prefer_maps_name).
+        self._maps_name = maps_name or ""
+        self._maps_category = maps_category or ""
         # Nueva instancia por llamada (ver process_url() en pipeline.py) — este
         # diccionario nunca sobrevive entre empresas distintas, así que cachear
         # aquí es seguro (ver _nominatim_structure_address).
@@ -424,7 +463,7 @@ class WebsiteScraper:
                 _blocked_domain = urlparse(url).netloc.replace("www.", "")
                 blocked = {
                     "website": url, "domain": _blocked_domain,
-                    "name": _blocked_domain.split(".")[0].capitalize(),
+                    "name": self._maps_name or _blocked_domain.split(".")[0].capitalize(),
                     "industry": "No detectada", "description": "Sitio no accesible (403)",
                     "has_whatsapp": False, "status": "blocked",
                     "last_scraped_at": datetime.now(timezone.utc),
@@ -499,7 +538,7 @@ class WebsiteScraper:
                 _wa_seen.add(_n)
 
         # Extraer todos los datos
-        _company_name = self._extract_company_name(soup, url)
+        _company_name = prefer_maps_name(self._extract_company_name(soup, url), self._maps_name, domain, self._maps_category)
         # Form drop-downs (state / municipality <select>s on contact or quote
         # forms) read like a list of places — "Ciudad Estado Aguascalientes Baja
         # California…" became Nissan Tijuana's "address" and Puebla its state.

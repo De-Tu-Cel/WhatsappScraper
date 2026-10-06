@@ -696,6 +696,12 @@ def _execute_send_job(job_id: str):
 
         industry = job.get("industry", "")
         job_user_id = job.get("user_id") or job.get("created_by") or ""
+        # Cada mensaje se atribuye a quien programó la campaña (el mensaje conserva
+        # scheduled_send_id, así que sigue sabiéndose que fue programado). Antes todos
+        # salían como "Envio programado" y en el filtro de Análisis aparecía como si
+        # fuera otra persona (real ask, 2026-10-05).
+        job_sender = {"sent_by_username": job.get("created_by_username") or "scheduler",
+                      "sent_by_name": job.get("created_by_name") or "Envio programado"}
         company_ids = job.get("company_ids") or []
         selected_numbers = job.get("selected_numbers") or []
         messages = job.get("messages") or ([job["message"]] if job.get("message") else [])
@@ -850,7 +856,8 @@ def _execute_send_job(job_id: str):
                     message_variant, company_name,
                     num_info.get("industry", ""), num_info.get("city", ""), num_info.get("web", ""),
                 )
-                ok = _send_message(db, cid, to_number, message, job_id, delay_ms=typing_ms, user_id=job_user_id)
+                ok = _send_message(db, cid, to_number, message, job_id, delay_ms=typing_ms, user_id=job_user_id,
+                                   **job_sender)
                 if ok is True:
                     sent_count += 1
                 elif ok == "skipped_nc_cap":
@@ -952,7 +959,8 @@ def _execute_send_job(job_id: str):
                 message_variant = _pick_message(messages, last_text)
                 last_text = message_variant
                 message = _render_message(message_variant, company_name, company_industry, company_city, company_web)
-                ok = _send_message(db, cid, to_number, message, job_id, delay_ms=typing_ms, user_id=job_user_id)
+                ok = _send_message(db, cid, to_number, message, job_id, delay_ms=typing_ms, user_id=job_user_id,
+                                   **job_sender)
                 send_index += 1
                 if ok is True:
                     sent_count += 1

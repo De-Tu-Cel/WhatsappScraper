@@ -42,8 +42,9 @@ C = {
 }
 
 CATEGORY_INFO = {
-    "humano":         ("Persona real",        C["humano"]),
-    "automatico":     ("Resp. automatica",    C["amber"]),
+    "humano":         ("Humano",              C["humano"]),
+    "automatico":     ("Automatico + Humano", C["amber"]),
+    "automatico_sin_respuesta": ("Automatico + Sin respuesta", C["amber"]),
     # "hibrido" separado en dos categorías el 2026-09-18: un bot CONFIRMADO
     # (menú/plantilla/autoidentificación) mezclado con un humano ("hibrido_bot")
     # vs. una señal automática ambigua mezclada con un humano ("hibrido_automatico") —
@@ -53,25 +54,26 @@ CATEGORY_INFO = {
     # se muestra igual que "hibrido_bot", mismo patrón que categoryConfig.js.
     "hibrido":            ("Bot+Humano",         C["primary"]),
     "hibrido_bot":        ("Bot+Humano",         C["primary"]),
-    "hibrido_automatico": ("Automático+Humano",  C["amber"]),
+    "hibrido_automatico": ("Automatico + Humano", C["amber"]),
     "bot":            ("Chatbot",             C["bot"]),
     # "menu" ya no es categoría propia en el reporte — un IVR numérico se fusionó con
     # "bot" (mismo label/color), así los reportes viejos con esa categoría no quedan
     # como "Desconocido".
     "menu":           ("Chatbot",             C["bot"]),
-    "bot_ia":         ("Asistente IA",        C["bot_ia"]),
+    "bot_ia":         ("Agente IA",           C["bot_ia"]),
     "sin_respuesta":  ("Sin respuesta",       C["muted"]),
 }
 
 CATEGORY_DESCRIPTIONS = {
     "humano":         "El canal es atendido por una persona real que responde manualmente a cada mensaje.",
-    "automatico":     "El canal responde de forma automatica sin intervencion humana detectada.",
+    "automatico":     "El canal manda una respuesta automatica al instante y despues contesta una persona.",
+    "automatico_sin_respuesta": "El canal manda una respuesta automatica al instante y despues nadie contesto.",
     "hibrido":        "El canal combina un bot confirmado (menu/plantilla/autoidentificacion) con atencion humana posterior.",
     "hibrido_bot":        "El canal combina un bot confirmado (menu/plantilla/autoidentificacion) con atencion humana posterior.",
-    "hibrido_automatico": "El canal combina una senal automatica ambigua (sin confirmar bot) con atencion humana posterior.",
+    "hibrido_automatico": "El canal manda una respuesta automatica al instante y despues contesta una persona.",
     "bot":            "El canal usa un chatbot o sistema automatizado (con o sin IA conversacional) para gestionar las conversaciones.",
     "menu":           "El canal usa un chatbot o sistema automatizado (con o sin IA conversacional) para gestionar las conversaciones.",
-    "bot_ia":         "El canal usa un asistente de inteligencia artificial conversacional.",
+    "bot_ia":         "El canal lo atiende un agente de inteligencia artificial: entiende lo que se le escribe, responde en segundos y puede agendar, sin una persona detras.",
     "sin_respuesta":  "El canal no respondio al contacto realizado durante el periodo analizado.",
 }
 
@@ -746,15 +748,15 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     # un error, cuando en realidad es "todavía no hay nada que clasificar".
     cat_key = analytics.get("category")
     is_ai   = bool(analytics.get("is_ai", False))
+    # Un bot que es IA conversacional es "Agente IA", como en Análisis — con su propia
+    # descripción (antes decía "Bot con IA" con la descripción de un bot de menú).
+    if cat_key == "bot" and is_ai:
+        cat_key = "bot_ia"
     if cat_key is None:
         cat_label, cat_color = "Pendiente de analisis", C["muted"]
     else:
         cat_label, cat_color = CATEGORY_INFO.get(cat_key, ("Desconocido", C["muted"]))
-    # Refine label when the bot is confirmed conversational AI
-    if cat_key == "bot" and is_ai:
-        cat_label = "Bot con IA"
-        cat_color = C["bot_ia"]
-    quality              = float(analytics.get("response_quality") or 0)
+    quality             = float(analytics.get("response_quality") or 0)
     reaction_min         = analytics.get("reaction_time_min")
     try:
         reaction_min = float(reaction_min) if reaction_min is not None else None

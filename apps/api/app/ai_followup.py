@@ -14,13 +14,25 @@ from app.database import MongoDBManager, _display_name_from_domain
 
 log = logging.getLogger(__name__)
 
-MAX_TURNS = 10  # safety net — Chat IA should close naturally via prompt rules before this
+# Tope de turnos por sesión — red de seguridad, Andy debe cerrar antes por las reglas del
+# prompt. Es el mismo default que muestra la configuración del chat: antes aquí era 10
+# mientras la pantalla decía 3, y las pláticas llegaban a 9 turnos (Nissan Autocom, Fame,
+# Toyota BC — real ask 2026-10-05: "no se alarguen tanto").
+MAX_TURNS = 6
+# Sesión reabierta porque el negocio volvió a escribir con una pregunta después de que Andy
+# ya platicó y cerró: alcanza con contestar y cerrar. Sin esto cada reapertura era otra
+# plática completa (Nissan Autocom, 2026-10-04: dos sesiones de 9 turnos seguidas).
+REOPEN_MAX_TURNS = 2
 DEFAULT_PERSONA_NAME = "Andrés"  # fallback persona name when the assigned instance has no synced WhatsApp profile_name
 DEFAULT_IDLE_TIMEOUT_HOURS = 48  # configurable from Settings > Chat IA (ai_global_config)
 RESPONSE_DELAY_MIN = 3    # seconds before responding (simulates reading time)
 RESPONSE_DELAY_MAX = 12
 RESPONSE_DELAY_MENU_MIN = 1  # much shorter delay for menu/IVR replies
 RESPONSE_DELAY_MENU_MAX = 3
+# Solo un saludo ("hola", "¡Hola! 😊"): casi siempre viene el resto atrás ("¿en qué te ayudo?").
+# Se espera más para contestar UNA vez a todo junto (simulador del Chat IA, 2026-10-06).
+GREETING_WAIT_MIN = 25
+GREETING_WAIT_MAX = 40
 TYPING_DELAY_MIN = 4      # seconds of typing simulation — floor so composing is visible
 TYPING_DELAY_MAX = 18     # ceiling; real calc is proportional to message length
 OUTBOUND_LOOKBACK_DAYS = 7  # only follow up if we messaged this number within N days
@@ -57,8 +69,12 @@ que tú mismo acabas de pensar, no la envíes, reformúlala.
 QUIÉN ERES:
 - Eres un CONSUMIDOR / cliente potencial. Te interesa contratar o comprar lo que {company_name} ofrece.
   No tienes equipo, no representas a nadie, no vendes nada — eres una persona normal que encontró su negocio
-  y quiere saber si le pueden ayudar con algo que necesita.
-- Tu nombre es {persona_name}. Si piden apellido y no tienes uno natural, evita el tema ("nomás dime así" / cambia de tema). Bot/IA: "no, soy yo, en serio busco {industry}"
+  y quiere saber si le pueden ayudar con algo que necesita. (Eso es para ti: no lo digas — "no vendo nada"
+  solo si te preguntan si vendes algo o de qué empresa eres.)
+- Tu nombre es {persona_name}. Si piden apellido y no tienes uno natural, evita el tema ("nomás dime así" / cambia de tema).
+- Bots/IA: solo si te preguntan DIRECTAMENTE si eres bot o IA, niégalo corto con tus palabras. Si nadie
+  te lo pregunta, jamás hables de bots, de IA ni de que eres una persona real — aunque el negocio sea un
+  bot o te mande un seguimiento automático.
 - ⚠️ NOMBRE: solo dilo UNA VEZ y si te lo preguntan directamente. Nunca espontáneamente, nunca dos veces.
   Si te piden el nombre completo: {persona_full_name}
 - TU NÚMERO: escribes desde tu propio WhatsApp, el {own_number}. Si te preguntan si ese es tu número, o a
@@ -77,6 +93,22 @@ QUIÉN ERES:
   qué día y horario te queda, responde con tus palabras que lo revisas y les confirmas después
   (tono: déjame ver y te confirmo) y cierra[FIN]
 
+TU META — PLÁTICA CORTA Y AL GRANO:
+Solo necesitas saber si te pueden ayudar con lo que buscas y cuál sería el siguiente paso. En cuanto
+tengas UNA de estas cosas, cierra en ese mismo mensaje con tus palabras[FIN]:
+  · un precio o rango de precio
+  · que te ofrezcan cita, visita, prueba o reservación (no la aceptes — lo revisas y les confirmas)
+  · el contacto, número o área que te va a atender
+  · que no tienen o no hacen lo que buscas
+- Máximo 2 o 3 preguntas tuyas en toda la plática. Cuando ya tienes lo que buscabas, nada de preguntas
+  extra por curiosidad (promociones, otros productos, requisitos, horarios).
+- Si te preguntan algo concreto (cuántos litros, qué modelo, para cuándo, tu nombre), contesta ESO con un
+  dato creíble y corto ("como 100 litros", "un aveo 2015", "richie"), sin contar toda tu situación.
+- "déjame ver / déjame pensarlo y te confirmo" es SOLO para cerrar cuando ya te dieron precio, te ofrecieron
+  cita o te pasaron un contacto. Si te hicieron una pregunta, contéstala y ya.
+- Una sola despedida: si ya te despediste, no contestes más despedidas, recordatorios ni confirmaciones
+  del negocio — eso no necesita respuesta[FIN].
+
 TU SITUACIÓN CONCRETA — úsala para responder "¿qué necesitas?" de forma específica y natural:
 {persona_seed}
 ⚠️ Esta situación es FIJA — sé consistente en toda la conversación. Un humano no olvida para qué llama.
@@ -90,7 +122,8 @@ CÓMO HABLAR:
   mexicano (sin comas, sin tildes, abreviado) — solo sin humor ni risas, aunque el otro lado
   bromee contigo.
 - WhatsApp casual mexicano. Piensa en cómo escribe alguien en su teléfono, no en cómo redacta un correo.
-- Máximo 2 oraciones. A veces 1 es suficiente. Nunca 3 o más.
+- Máximo 2 oraciones y unas 20 palabras. A veces 1 es suficiente. Nunca 3 o más. Sin comas no significa
+  una sola oración larguísima: si tienes mucho que decir, di solo lo más importante.
 - Sin listas, sin bullets, sin emojis forzados.
 - NO siempre termines con una pregunta — varía: a veces solo reacciona, a veces comenta algo.
   ❌ MAL: cada mensaje termina en "¿Y ustedes qué ofrecen?" / "¿Llevan mucho tiempo?"
@@ -318,10 +351,30 @@ IMPORTANTE: [FIN] es señal interna, nunca llega al contacto. Ponlo pegado al te
 # pass the contact to an agent. Entries containing "{" are skipped (they're
 # templated, e.g. "Hola {persona_name}", and can't be verbatim-matched against
 # real generated text anyway).
-_PROMPT_EXAMPLE_PHRASES = [
-    m.strip().lower().rstrip("?!.") for m in re.findall(r'"([^"\n]{10,90})"', _DEFAULT_SYSTEM_PROMPT)
-    if " " in m.strip() and "{" not in m
-]
+# Dos clases de frases entre comillas en el prompt:
+#  · PROHIBIDAS — en renglones con ❌ / JAMÁS / PROHIBIDO / nunca / "nada de", o que siguen la
+#    lista de uno de esos renglones ("aquí ando si necesitas algo", "qué tiene de raro"): nunca se
+#    mandan, de ningún largo.
+#  · EJEMPLOS de tono — el resto: solo cuentan como copia si son largos (6+ palabras). Los cortos
+#    ("ah gracias", "déjame pensarlo", "qué bueno") son frases normales que el prompt mismo pide
+#    usar; marcarlos bloqueaba la respuesta y, al segundo intento, la plática se cerraba sin mandar
+#    nada (simulador, 2026-10-06: tras recibir el precio o el contacto, el Chat IA se quedaba callado).
+_FORBIDDEN_LINE_RE = re.compile(r"❌|JAMÁS|PROHIBIDO|\bnunca\b|\bnada de\b", re.IGNORECASE)
+
+
+def _prompt_phrases() -> list:
+    out, prev_forbidden = [], False
+    for line in _DEFAULT_SYSTEM_PROMPT.splitlines():
+        forbidden = bool(_FORBIDDEN_LINE_RE.search(line)) or (prev_forbidden and line.lstrip().startswith('"'))
+        for m in re.findall(r'"([^"\n]{10,90})"', line):
+            phrase = m.strip().lower().rstrip("?!.")
+            if " " in phrase and "{" not in m and (forbidden or len(phrase.split()) >= 6):
+                out.append(phrase)
+        prev_forbidden = forbidden
+    return out
+
+
+_PROMPT_EXAMPLE_PHRASES = _prompt_phrases()
 
 
 def _looks_copied_from_prompt(text: str) -> bool:
@@ -427,7 +480,7 @@ _FAREWELL_PHRASES = [
     "a la orden", "a sus ordenes", "a tus ordenes", "para servirle", "para servirte",
     "que le vaya bien", "que te vaya bien", "que este bien", "que estes bien", "estamos en contacto",
     "quedo atento", "quedo atenta", "quedo pendiente", "quedamos atentos", "quedamos pendientes",
-    "igualmente", "saludos", "bendiciones", "cuidese", "cuidate",
+    "igualmente", "saludos", "bendiciones", "cuidese", "cuidate", "nos vemos",
 ]
 _FAREWELL_WISH_RE = re.compile(
     r"\b(excelente|lindo|linda|bonito|bonita|feliz|gran)\s+(dia|tarde|noche|fin de semana|semana)\b"
@@ -463,12 +516,45 @@ def _is_courtesy_only(text: str) -> bool:
     return set(tokens) <= _COURTESY_WORDS
 
 
+def _is_greeting_only(text: str) -> bool:
+    tokens = _norm_text(text or "").split()
+    return bool(tokens) and set(tokens) <= _GREETING_WORDS
+
+
 def _is_farewell(text: str) -> bool:
     """Courtesy-only AND an actual goodbye in it (not just "ok" / "gracias")."""
     if not _is_courtesy_only(text):
         return False
     n = _norm_text(text)
     return any(p in n for p in _FAREWELL_PHRASES) or bool(_FAREWELL_WISH_RE.search(n))
+
+
+def _says_goodbye(text: str) -> bool:
+    """Andy's own reply is a goodbye ("nos vemos pronto en la agencia", "igual para ti,
+    excelente día") — it may carry context words, so this is looser than _is_farewell,
+    but never with a question: a goodbye that asks something still expects an answer."""
+    if not text or "?" in text:
+        return False
+    n = _norm_text(text)
+    return any(p in n for p in _FAREWELL_PHRASES) or bool(_FAREWELL_WISH_RE.search(n))
+
+
+# Andy negando ser bot sin que nadie se lo preguntara (Nissan Autocom, 2026-10-04: al
+# "te escribo de nuevo para hacer seguimiento" del negocio contestó "oye no soy un bot,
+# solo estoy buscando…") — eso sí suena a bot. Solo se permite si el negocio lo
+# preguntó o lo acusó.
+_BOT_DENIAL_RE = re.compile(
+    r"\bno soy (un |una )?(bot|robot|ia|maquina|contestadora|sistema)\b"
+    r"|\bsoy (una )?persona( real)?\b|\bsoy humano\b|\bsoy real\b"
+)
+_BOT_ASKED_RE = re.compile(
+    r"\bbots?\b|robot|automatic|automatizad|inteligencia artificial|\bia\b|persona real|eres real"
+    r"|plantilla|spam|con quien hablo"
+)
+
+
+def _denies_being_bot(reply: str, recent_inbound: str) -> bool:
+    return bool(_BOT_DENIAL_RE.search(_norm_text(reply))) and not _BOT_ASKED_RE.search(_norm_text(recent_inbound))
 
 
 _ASKS_NAME_RE = re.compile(
@@ -522,6 +608,185 @@ def _repeated_filler(text: str, prior_replies: list) -> str | None:
     if op and any(op == _opener(r) for r in prior_replies):
         return op
     return None
+
+
+# ── Booking guard ─────────────────────────────────────────────────────────────
+# The prompt forbids taking an appointment, choosing a day or hour, or handing
+# over booking data — Andy can't show up. gpt-4o-mini still did it: it booked a
+# real service slot at Nissan La Capilla with an invented plate and email
+# (2026-10-04), and replaying that chat with the current prompt it committed
+# again in 2 of 4 runs. So it's checked here, not left to the prompt.
+
+def _fold(text: str) -> str:
+    """Lowercase and accent-free, punctuation kept (hours, dates, emails)."""
+    import unicodedata
+    t = unicodedata.normalize("NFKD", (text or "").lower())
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
+# The business is offering a slot or asking for the data to book one.
+_BOOKING_STEP_RE = re.compile(
+    r"agend|apart|reserv|\bcitas?\b|prueba de manejo|\bvisita"
+    r"|\b(que|cual) (dia|fecha|horario|hora)\b|\b(te|le) (acomoda|queda mejor)"
+    r"|\b\d{1,2}:\d{2}\b|\b\d{1,2}/\d{1,2}\b"
+    r"|\bplacas?\b|\bcorreo\b|\bemail\b|nombre completo|\bapellidos?\b|kilometraje|numero de serie")
+# A reply that takes the slot or hands over data: a booking verb, a concrete
+# hour or date, "puedo el sábado", an email or a plate.
+_BOOKING_COMMIT_RE = re.compile(
+    r"agend|apart|reserv"
+    r"|\b\d{1,2}:\d{2}\b|\ba las \d|\b\d{1,2} ?(am|pm|hrs)\b|\b\d{1,2}/\d{1,2}\b"
+    r"|\b(puedo|me queda|me late|me sirve)\b[^.?!]{0,30}"
+    r"\b(lunes|martes|miercoles|jueves|viernes|sabado|domingo|en la manana|en la tarde)\b"
+    r"|\bplacas?\b|\bmi correo\b|[\w.+-]+@[\w-]+\.\w+|\b[a-z]{3}-?\d{3,4}\b")
+# "¿Te lo agendo?" → "sí, porfa" takes the slot without saying any of the above.
+_BOOKING_OFFER_RE = re.compile(r"(agend|apart|reserv|confirm)[^?]*\?")
+_AFFIRMATIVE_RE = re.compile(r"^\W*(si|va|vale|dale|ok|okay|claro|perfecto|de acuerdo|sale|porfa|por favor)\b")
+_DEFLECTION_RE = re.compile(r"dejame|checo|reviso|luego|despues|te confirmo|les confirmo|te aviso|les aviso")
+BOOKING_DEFLECT_REPLY = "va, déjame ver y te confirmo"
+
+
+def _is_booking_step(recent_inbound: str) -> bool:
+    return bool(_BOOKING_STEP_RE.search(_fold(recent_inbound)))
+
+
+# Andy ya tiene lo que vino a buscar — el prompt pide cerrar en ese momento, pero el
+# modelo casi nunca lo hace solo (replay real 2026-10-05: Toyota BC preguntó por
+# promociones y por cómo agendar después de recibir el número de servicio; Fame y
+# Nissan siguieron platicando tras ofrecerles horario). Más angosto que
+# _BOOKING_STEP_RE: pedir nombre, correo o placa no es ofrecer cita.
+_GOAL_APPOINTMENT_RE = re.compile(
+    r"agend|apart|reserv|\bcitas?\b|prueba de manejo|horarios? (disponibles|cercanos)"
+    r"|\b(que|cual) (dia|fecha|horario|hora)\b|\b(te|le) (acomoda|queda|quedaria) (mejor|bien)"
+    r"|\b\d{1,2}:\d{2}\b")
+_GOAL_PRICE_RE = re.compile(r"\$ ?\d|\b\d[\d,.]* ?(pesos|mxn)\b")
+_GOAL_CONTACT_RE = re.compile(
+    r"\b(le|te) (comparto|paso|dejo|envio|mando) (el|su|mi|un|los) (numero|contacto|telefono|whats)"
+    r"|\bcomuni(cate|quese|carse) (al|con el|con la)\b|\b(marque|marca|llame|llama) al\b"
+    r"|(?:\d[ -]?){10}")
+_GOAL_CORRECTION = {
+    "cita": "te ofrecieron cita u horario: es todo lo que necesitabas. no hagas preguntas. responde corto, "
+            "con tus palabras, que lo revisas y les confirmas, sin fechas ni horas, y termina con [FIN].",
+    "precio": "ya te dieron el precio: es todo lo que necesitabas. no hagas más preguntas. reacciona corto "
+              "al precio con tus palabras, di que lo piensas y termina con [FIN].",
+    "contacto": "ya te dieron el número o contacto a donde llamar: es todo lo que necesitabas. no hagas más "
+                "preguntas. agradece corto, di que les marcas o escribes y termina con [FIN].",
+}
+# Último recurso si el reintento sigue preguntando — varias para que dos conversaciones
+# no terminen con el mismo texto exacto.
+_GOAL_FALLBACK = {
+    "cita": [BOOKING_DEFLECT_REPLY, "ok déjame checar y te confirmo", "va lo reviso y les aviso"],
+    "precio": ["va déjame pensarlo", "ok lo pienso y te aviso", "mmm va lo checo y te digo"],
+    "contacto": ["va gracias les marco", "ok gracias ahorita les escribo", "sale gracias les marco al rato"],
+}
+
+
+_MENU_ITEM_LINE_RE = re.compile(r"^\s*\d{1,2}\s*[.)-]\s")
+
+
+def _business_since_last_reply(turns: list, fallback: str = "") -> str:
+    """Todo lo que mandó el negocio desde nuestra última respuesta. Una ráfaga cuenta completa: si el
+    precio venía en el primero de varios mensajes, la meta ya se alcanzó aunque el último sea
+    "¿necesitas algo más?" (simulador, 2026-10-06)."""
+    parts = []
+    for t in reversed(turns or []):
+        if t.get("role") == "assistant":
+            break
+        if t.get("role") == "user" and t.get("content") and t["content"] not in parts:
+            parts.append(t["content"])
+    return "\n".join(reversed(parts)) or fallback
+
+
+# Arranque de una respuesta de verdad: "Sí, ofrecemos…", "Claro, …", "¡Hola! Sí, tenemos…".
+_ANSWER_START_RE = re.compile(r"^\W*(?:hola\W+)?(?:si|claro|con gusto|por supuesto|desde luego)\b")
+
+
+def _is_auto_ack(text: str) -> bool:
+    """Acuse automático al que no se contesta: plantilla de auto-respuesta que NO trae nada
+    concreto. "¡Hola! Gracias por tu mensaje. La limpieza cuesta $500…" lo escribió alguien que
+    contesta: trae precio. Antes el filtro rápido lo cerraba sin responder (simulador, 2026-10-06)."""
+    from app.classifier import _looks_like_auto_reply, _is_choice_menu
+    if not text or not _looks_like_auto_reply(text):
+        return False
+    # Pregunta algo, muestra un menú ("…elige una de las siguientes opciones") o es un renglón de
+    # un menú mandado en pedazos ("3. Horarios de atención"): espera respuesta.
+    if "?" in text or _is_choice_menu(text) or _MENU_ITEM_LINE_RE.match(text):
+        return False
+    return not (_goal_reached(text) or _ANSWER_START_RE.search(_fold(text)))
+
+
+# "déjame ver / pensarlo y te confirmo / aviso": cierre amable, como una despedida.
+_DEFLECT_RE = re.compile(r"\bdejame (ver|pensarlo|checar|revisar)|\bte (confirmo|aviso)\b|\blo (reviso|checo)\b")
+
+
+def _is_bot_noise(text: str) -> bool:
+    """Menú, renglón de menú o aviso automático: después de despedirnos no reabre la plática.
+    Caso del simulador (2026-10-06): tras recibir el precio y cerrar, el bot mandó otro menú con
+    "¿te gustaría saber más…?" y la plática se reabría para contestarle a un bot."""
+    from app.classifier import _is_choice_menu, _looks_like_auto_reply
+    t = text or ""
+    return bool(_is_choice_menu(t) or _MENU_ITEM_LINE_RE.match(t) or _looks_like_auto_reply(t))
+
+
+def _invalid_menu_pick(reply: str, business_text: str) -> bool:
+    """Una respuesta de 1-2 caracteres ("H", "7") que no es ninguna opción del menú que mandaron.
+    Visto en el simulador: a un menú de 1 a 3 contestó "H", dos veces."""
+    r = (reply or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9]{1,2}", r):
+        return False
+    opt = re.escape(r)
+    return not re.search(rf"(^|[\s*(\[])({opt})\s*[*.)\-–:]|\b{opt}\ufe0f?\u20e3|\[Opciones:[^\]]*\b{opt}\b",
+                         business_text or "", re.IGNORECASE | re.MULTILINE)
+
+
+MAX_REPLY_WORDS = 25
+
+
+def _too_long(text: str) -> bool:
+    """Más de lo que alguien escribe en un WhatsApp casual. En el simulador salían respuestas de una
+    sola oración larguísima que juntaba toda su situación ("no necesito tantos litros porque es un
+    local pequeño pero… y estoy remodelando ahí déjame ver y te confirmo")."""
+    return len((text or "").split()) > MAX_REPLY_WORDS
+
+
+def _goal_reached(inbound: str) -> str | None:
+    """'cita' / 'precio' / 'contacto' cuando el mensaje del negocio ya le da a Andy lo
+    que vino a buscar; None si no (o si es un menú — ahí Andy sigue navegando)."""
+    from app.classifier import _looks_like_menu
+    if not inbound:
+        return None
+    if "BEGIN:VCARD" in inbound.upper():
+        return "contacto"
+    if _looks_like_menu(inbound):
+        return None
+    t = _fold(inbound)
+    if _GOAL_PRICE_RE.search(t):
+        return "precio"
+    if _GOAL_CONTACT_RE.search(t):
+        return "contacto"
+    if _GOAL_APPOINTMENT_RE.search(t):
+        return "cita"
+    return None
+
+
+def _close_on_goal(ai_text: str, goal: str, retry) -> str:
+    """Respuesta final cuando ya se alcanzó la meta: sin preguntas. `retry(correction)`
+    devuelve la respuesta cruda del reintento."""
+    if "?" not in ai_text:
+        return ai_text
+    retry_text, _ = _clean_reply(retry(_GOAL_CORRECTION[goal]))
+    if (retry_text and "?" not in retry_text and not _commits_to_booking(retry_text)
+            and not _looks_copied_from_prompt(retry_text)):
+        return retry_text
+    import random
+    return random.choice(_GOAL_FALLBACK[goal])
+
+
+def _commits_to_booking(reply: str, inbound: str = "") -> bool:
+    r = _fold(reply)
+    if _BOOKING_COMMIT_RE.search(r):
+        return True
+    return bool(_BOOKING_OFFER_RE.search(_fold(inbound)) and _AFFIRMATIVE_RE.search(r)
+                and not _DEFLECTION_RE.search(r))
 
 
 def _national_number(number: str) -> str:
@@ -625,6 +890,12 @@ def _get_or_create_session(db: MongoDBManager, phone_number: str, company_id: st
     # Read max_turns from per-chat prefs (set when user toggled AI on), fallback to global default
     prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
     max_turns = int(prefs.get("max_turns", MAX_TURNS))
+    # Andy ya platicó y cerró antes con esta empresa — esta sesión nace porque el
+    # negocio volvió a escribir: alcanza con contestar y cerrar (ver REOPEN_MAX_TURNS).
+    if db.db.ai_followup_sessions.find_one(
+            {"company_id": company_id, "status": "ended", "turn_count": {"$gt": 0}}, {"_id": 1}):
+        max_turns = min(max_turns, REOPEN_MAX_TURNS)
+        ctx = {**ctx, "reopened": True}
 
     # Pre-populate turns with recent message history so the AI has context
     # to detect bots/humans before the first response (e.g. "Soy AMAIA").
@@ -877,6 +1148,8 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
             "por completo y sigue la regla normal de [BOT CON MENÚS / IVR] (responde SOLO la letra "
             "o número correcto, nunca [FIN] sin haber intentado navegar). "
             "TAMPOCO APLICA si el mensaje te pregunta tu nombre: ahí responde SOLO tu nombre, sin [FIN]. "
+            "TAMPOCO es acuse un saludo solo ('hola', 'buenas tardes', '¡Hola! 😊'): contesta el saludo corto "
+            "y di en pocas palabras qué buscas, sin [FIN]. "
             "Si NO es un ACK ni un menú: puedes saludar brevemente si encaja — SIN ¡Hola! ni signos invertidos. "
             "Usa algo como \"hey\", \"buenas\", \"oye\" — o ve directo al punto. Nunca más de 2-3 palabras."
         )
@@ -888,6 +1161,16 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
             "relacionado o simplemente quisieras saber si llegó tu mensaje. "
             "REGLAS: nunca digas que estás esperando respuesta; nunca uses el mismo arranque que en "
             "tu último mensaje (si empezaste con 'oye', empieza diferente); 1 frase máxima, casual, sin puntos."
+        )
+    if ctx.get("reopened"):
+        # Replay real (Nissan La Capilla, 2026-10-05): al "¿pudiste revisar…?" del
+        # seguimiento, el modelo se volvía a presentar y contaba otra vez todo lo que buscaba.
+        system += (
+            "\n\n⚠️ YA TE HABÍAS DESPEDIDO de este negocio y te volvieron a escribir. Contesta SOLO lo que "
+            "te preguntan ahora, en una frase corta y sin hacer preguntas. No digas tu nombre (salvo que te lo "
+            "pidan en este mensaje), no vuelvas a contar lo que buscas y no aceptes nada (cita, horario, datos). "
+            "Si te preguntan si ya lo revisaste o si te decidiste: todavía no, lo revisas y les avisas. "
+            "Termina con [FIN]."
         )
     if used_fillers:
         system += (
@@ -994,7 +1277,7 @@ def _recently_closed_after_talking(db, company_id: str) -> bool:
         return False
     last = db.db.ai_followup_sessions.find_one(
         {"company_id": company_id, "status": "ended"}, sort=[("last_activity", -1)])
-    if not isinstance(last, dict) or last.get("end_reason") != "ai_decision" or not last.get("turn_count"):
+    if not isinstance(last, dict) or last.get("end_reason") not in ("ai_decision", "max_turns") or not last.get("turn_count"):
         return False
     closed_at = last.get("last_activity") or last.get("created_at")
     if not closed_at:
@@ -1074,9 +1357,13 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
 
     # Andy already said goodbye and closed this conversation — a "gracias" / "quedo
     # a la orden" afterwards needs no answer and must not open a new session (the
-    # webhook flipped the toggle back on to get here; put it back). A real message
-    # (a question, new info) still reactivates as before.
-    if not proactive and not manual_activation and _is_courtesy_only(inbound_body or ""):
+    # webhook flipped the toggle back on to get here; put it back). Same for anything
+    # that doesn't ask him something: a recap ("te esperamos el 12/10 a las 09:00"),
+    # a promo, a "saludos desde…" (Nissan Autocom, Toyota BC). Only a question
+    # reopens it, and then only briefly (REOPEN_MAX_TURNS).
+    if not proactive and not manual_activation and (
+            _is_courtesy_only(inbound_body or "") or "?" not in (inbound_body or "")
+            or _is_bot_noise(inbound_body or "")):
         if _recently_closed_after_talking(db, company_id):
             db.db.conversation_ai_prefs.update_one(
                 {"company_id": company_id},
@@ -1141,7 +1428,9 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         or bool(_re.search(r'\*[A-H]\*\s*[-–]', inbound_body))  # *A* - Opción format
         or len(inbound_body.strip()) < 60
     )
-    if is_menu_msg:
+    if not proactive and _is_greeting_only(inbound_body or ""):
+        read_delay = random.uniform(GREETING_WAIT_MIN, GREETING_WAIT_MAX)
+    elif is_menu_msg:
         read_delay = random.uniform(RESPONSE_DELAY_MENU_MIN, RESPONSE_DELAY_MENU_MAX)
     else:
         read_delay = random.uniform(RESPONSE_DELAY_MIN, RESPONSE_DELAY_MAX)
@@ -1183,6 +1472,12 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         print(f"[AIFollowup] EXIT: session ended during delay (status={session.get('status')!r})")
         return
 
+    # El negocio volvió a escribir durante la espera ("hola" … "¿en qué te ayudo?"): la respuesta
+    # a ese mensaje cubre los dos. Antes esto solo se revisaba después de llamar al LLM.
+    if not proactive and _newer_inbound_exists(db, company_id, inbound_log_id):
+        print(f"[AIFollowup] EXIT: newer inbound arrived during the read delay — that one gets the reply ({phone_number})")
+        return
+
     # Same blacklist/blocked re-check as above, for the same reason as the status
     # re-check above it: the company can get blocked/blacklisted DURING the delay.
     if _is_blocked_or_blacklisted(db, company_id, phone_number):
@@ -1220,8 +1515,7 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
     # what gets the chat to a person, so it goes to the LLM like any other message.
     if not proactive and not _asks_for_name(inbound_body or ""):
         try:
-            from app.classifier import _looks_like_auto_reply
-            if _looks_like_auto_reply(inbound_body or ""):
+            if _is_auto_ack(inbound_body or ""):
                 log.info("[AIFollowup] ACK/auto-reply detectado — cerrando silenciosamente para %s", phone_number)
                 db.db.ai_followup_sessions.update_one(
                     {"_id": sid},
@@ -1446,6 +1740,88 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         if _retry_text and not _looks_copied_from_prompt(_retry_text):
             ai_text, ai_wants_end = _retry_text, _retry_end
 
+    # Demasiado larga para WhatsApp: un reintento pidiendo lo esencial. Si sale larga otra vez,
+    # se manda la original (mejor larga que nada).
+    if ai_text and _too_long(ai_text):
+        print(f"[AIFollowup] reply too long ({len(ai_text.split())} words) — retrying once")
+        _raw_retry = _call_llm_for_reply(
+            _llm_turns, _llm_context, is_cold_start=is_cold_start, prefs=_prefs, db=db,
+            proactive_minutes=_proactive_minutes, used_fillers=_used,
+            correction=f"tu respuesta era muy larga ({len(ai_text.split())} palabras). di solo lo esencial, en "
+                       "máximo 15 palabras, y contesta solo lo que te preguntaron.",
+        )
+        _retry_text, _retry_end = _clean_reply(_raw_retry, _inbound_text)
+        if _retry_text and not _too_long(_retry_text) and not _looks_copied_from_prompt(_retry_text):
+            ai_text, ai_wants_end = _retry_text, _retry_end
+
+    # Never take a slot or give booking data (see _BOOKING_COMMIT_RE): one retry
+    # with the rule spelled out, else a fixed "déjame ver y te confirmo" — and
+    # the conversation ends there either way, as the prompt asks.
+    _recent_inbound = " ".join([t.get("content") or "" for t in _llm_turns[-6:] if t.get("role") == "user"]
+                               + [_inbound_text])
+    if ai_text and _is_booking_step(_recent_inbound) and _commits_to_booking(ai_text, _inbound_text):
+        print(f"[AIFollowup] reply commits to a booking — retrying: {ai_text[:80]!r}")
+        _raw_retry = _call_llm_for_reply(
+            _llm_turns, _llm_context, is_cold_start=is_cold_start, prefs=_prefs, db=db,
+            proactive_minutes=_proactive_minutes, used_fillers=_used,
+            correction="tu respuesta aceptaba la cita, escogía un día u hora o daba datos para la reserva "
+                       "(nombre completo, placa, correo). eso está prohibido: no vas a poder ir. responde corto, "
+                       "con tus palabras, que lo revisas y les confirmas, sin fechas ni horas ni datos, y termina con [FIN].",
+        )
+        _retry_text, _ = _clean_reply(_raw_retry, _inbound_text)
+        if (_retry_text and not _commits_to_booking(_retry_text, _inbound_text)
+                and not _looks_copied_from_prompt(_retry_text)):
+            ai_text = _retry_text
+        else:
+            ai_text = BOOKING_DEFLECT_REPLY
+        ai_wants_end = True
+
+    # Negar ser bot sin que nadie lo preguntara (ver _BOT_DENIAL_RE): un reintento
+    # con la regla explícita; si insiste, no se manda nada y la plática se cierra —
+    # quedarse callado es lo que haría una persona ante un seguimiento automático.
+    if ai_text and _denies_being_bot(ai_text, _recent_inbound):
+        print(f"[AIFollowup] reply denies being a bot unprompted — retrying: {ai_text[:80]!r}")
+        _raw_retry = _call_llm_for_reply(
+            _llm_turns, _llm_context, is_cold_start=is_cold_start, prefs=_prefs, db=db,
+            proactive_minutes=_proactive_minutes, used_fillers=_used,
+            correction="tu respuesta decía que no eres un bot, pero nadie te lo preguntó. no menciones bots, "
+                       "IA ni que eres una persona real. responde corto, solo a lo que te dijeron.",
+        )
+        _retry_text, _retry_end = _clean_reply(_raw_retry, _inbound_text)
+        if (_retry_text and not _denies_being_bot(_retry_text, _recent_inbound)
+                and not _looks_copied_from_prompt(_retry_text)):
+            ai_text, ai_wants_end = _retry_text, _retry_end
+        else:
+            ai_text = ""
+
+    # Ya tiene lo que vino a buscar (cita ofrecida, precio, contacto a donde llamar):
+    # esta respuesta cierra la plática, sin más preguntas (ver _goal_reached).
+    _goal = None if proactive else _goal_reached(_business_since_last_reply(_llm_turns, _inbound_text))
+    if ai_text and _goal:
+        print(f"[AIFollowup] goal reached ({_goal}) — this reply closes the conversation")
+        ai_text = _close_on_goal(ai_text, _goal, lambda correction: _call_llm_for_reply(
+            _llm_turns, _llm_context, is_cold_start=is_cold_start, prefs=_prefs, db=db,
+            proactive_minutes=_proactive_minutes, used_fillers=_used, correction=correction))
+        ai_wants_end = True
+
+    # Una "opción" que el menú no tiene ("H" a un menú de 1 a 3): mejor no mandar nada.
+    if ai_text and _invalid_menu_pick(ai_text, _business_since_last_reply(_llm_turns, _inbound_text)):
+        print(f"[AIFollowup] menu pick {ai_text!r} is not one of the options — not sending")
+        ai_text = ""
+
+    # El negocio nos acaba de preguntar algo y lo contestamos: la plática sigue, aunque el modelo
+    # haya puesto [FIN] — salvo que la respuesta sea una despedida o un "déjame ver y te confirmo".
+    # Antes cerraba al contestar "¿qué auto es?" y ya no llegaba al precio (simulador, 2026-10-06).
+    if (ai_text and ai_wants_end and not _goal and "?" in _inbound_text
+            and not _says_goodbye(ai_text) and not _DEFLECT_RE.search(_fold(ai_text))):
+        ai_wants_end = False
+
+    # Una respuesta que pregunta algo espera contestación: no puede cerrar la plática. El modelo
+    # a veces mandaba "…ustedes lo hacen? [FIN]" y la respuesta del negocio ya no se contestaba
+    # (simulador, 2026-10-06).
+    if ai_text and "?" in ai_text:
+        ai_wants_end = False
+
     # Nothing left to send — a bare "[FIN]" (the model decided the conversation is
     # over with nothing to add) or a reply that was only markers like "[2]". Every
     # send path rejects an empty message, and the broad handler at the bottom of
@@ -1631,6 +2007,11 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         # over even if the model forgot [FIN]; otherwise the session sat "waiting"
         # (AI icon on) for the whole 48h idle timeout (PASA Tijuana, Fame, 2026-10-02).
         if not proactive and _is_farewell(inbound_body or "") and "?" not in ai_text:
+            ai_wants_end = True
+        # Andy se despidió él mismo, aunque olvidara [FIN] — la plática terminó. Sin
+        # esto cada recordatorio del negocio ("te esperamos el 12/10 a las 09:00")
+        # recibía otra despedida (Nissan Autocom, 2026-10-04: 8 despedidas seguidas).
+        if _says_goodbye(ai_text):
             ai_wants_end = True
         is_ended = ai_wants_end or (new_count >= session_max_turns)
         end_reason = "ai_decision" if ai_wants_end else ("max_turns" if is_ended else None)

@@ -431,6 +431,8 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         # routing, which still strictly scopes to the owning user — that one guards
         # against a bug silently misrouting unattended sends, not a real person
         # deliberately choosing to reply.
+        # Por qué no sirve la sesión que lleva el chat (None = sí sirve).
+        _chat_instance_down = None
         if req.instance:
             instance = req.instance
             _log.info("[SendMsg] instance=explicit:%s", instance)
@@ -438,26 +440,35 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
             # no warning at all that their phone was disconnected until the send
             # itself failed — this path never had the live connectivity check the
             # rotation branch below already does. Best-effort: a check failure
-            # (timeout, wwebjs unreachable) doesn't block the send — only a
+            # (timeout, wwebjs unreachable) doesn't count as down — only a
             # CONFIRMED disconnected status does, same caution as elsewhere in
             # this file about not blocking real sends on a flaky secondary check.
             _inst_doc = db.db.instances.find_one({"name": instance}, {"provider": 1})
-            if _inst_doc and _inst_doc.get("provider") == "wwebjs":
+            if not _inst_doc:
+                # Borrada de Instancias — antes se intentaba igual por el proveedor
+                # legado (Evolution), fallaba y quedaba "failed" sin ningún aviso.
+                _chat_instance_down = "ya no existe"
+            elif _inst_doc.get("provider") == "wwebjs":
                 from app.config import WWEBJS_URL as _WW_URL
                 from app.whatsapp_wwebjs import _headers as _ww_headers
                 try:
                     _r = _req.get(f"{_WW_URL}/session/{instance}/status", headers=_ww_headers(), timeout=2)
                     _st = _r.json().get("status", "") if _r.ok else ""
                     if _st and _st != "connected":
-                        raise HTTPException(
-                            status_code=409,
-                            detail=f"No se puede enviar: la instancia '{instance}' no está conectada (estado: {_st}). Reconecta el teléfono desde Instancias.",
-                        )
-                except HTTPException:
-                    raise
+                        _chat_instance_down = "ya no existe" if _st == "not_found" else f"no está conectada ({_st})"
                 except Exception:
                     pass  # wwebjs unreachable/timeout — don't block a real send on a flaky check
-        elif x_user_token:
+            if _chat_instance_down:
+                # Real ask, 2026-10-05: un chat no se bloquea porque la sesión que lo
+                # llevaba se desconectó o ya no existe (antes: 409 en cada intento, sin
+                # salida). Se envía como cualquier mensaje nuevo — por la rotación de
+                # las sesiones conectadas de quien escribe — y la cadena de sesiones del
+                # encabezado (conversations.jsx) muestra el cambio sola. Al negocio le
+                # llega desde otro número; para quien opera no importa.
+                _log.info("[SendMsg] la sesión del chat %s %s — se envía por la rotación normal",
+                          instance, _chat_instance_down)
+                instance = None
+        if x_user_token and (not req.instance or _chat_instance_down):
             user = get_user_by_token(x_user_token)
             if user:
                 user_id = user.get("id") or str(user.get("_id", ""))
@@ -580,13 +591,19 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 elif user.get("evolution_instance"):
                     instance = user["evolution_instance"]
 
+        _chat_why = f"la sesión de este chat ({req.instance}) {_chat_instance_down} y " if _chat_instance_down else ""
         if _all_disconnected:
             raise HTTPException(
                 status_code=503,
-                detail=f"Ninguna de tus instancias está conectada. Ve a Instancias para reconectar.",
+                detail=(f"No se puede enviar: {_chat_why}ninguna de tus sesiones está conectada. Ve a Instancias para reconectar."
+                        if _chat_why else "Ninguna de tus instancias está conectada. Ve a Instancias para reconectar."),
             )
         if not instance:
-            raise HTTPException(status_code=400, detail="Sin instancia de WhatsApp configurada")
+            raise HTTPException(
+                status_code=400,
+                detail=(f"No se puede enviar: {_chat_why}no tienes otra sesión de WhatsApp para enviar."
+                        if _chat_why else "Sin instancia de WhatsApp configurada"),
+            )
 
         # Determine provider for the selected instance
         from datetime import datetime as _dt
@@ -1042,13 +1059,20 @@ def api_search(req: SearchRequest, x_user_token: Optional[str] = Header(None)):
         # usuario no selecciona/procesa nada (o solo una parte), lo que quedó fuera
         # no se pierde al cambiar de pantalla. Upsert por url (índice único la
         # protege de duplicados); silencioso si ya existe.
+        _maps_names = search_meta.get("maps_names") or {}
         for r in results:
             if r["blocked"]:
                 continue
+            # The business's name on Google Maps, when Maps is where this site
+            # was found — process_url() hands it to the scraper, which prefers
+            # it over the page's own title (scraper.prefer_maps_name). $set, not
+            # $setOnInsert: an idea left over from an earlier search gets it too.
+            _maps = _maps_names.get(r["url"])
+            _maps_set = {"$set": {"maps_name": _maps["title"], "maps_category": _maps.get("category") or ""}} if _maps else {}
             try:
                 db.db.search_ideas.update_one(
                     {"url": r["url"]},
-                    {"$setOnInsert": {
+                    {**_maps_set, "$setOnInsert": {
                         "url": r["url"], "domain": r["domain"], "industry": req.industry,
                         "industry_giro": industry_giro,
                         "status": "pending",
@@ -1519,7 +1543,8 @@ def api_get_ai_status(company_id: str, x_user_token: Optional[str] = Header(None
             {"company_id": company_id, "status": {"$in": ["active", "waiting"]}},
             sort=[("created_at", -1)],
         )
-        pref_max = int(prefs.get("max_turns", 3))
+        from app.ai_followup import MAX_TURNS as _MAX_TURNS
+        pref_max = int(prefs.get("max_turns", _MAX_TURNS))
         return {
             "ai_enabled": ai_enabled,
             "ai_active": bool(session),
@@ -1528,7 +1553,8 @@ def api_get_ai_status(company_id: str, x_user_token: Optional[str] = Header(None
             "max_turns": session.get("max_turns", pref_max) if session else pref_max,
         }
     except Exception:
-        return {"ai_enabled": False, "ai_active": False, "ai_typing": False, "turn_count": 0, "max_turns": 3}
+        from app.ai_followup import MAX_TURNS as _MAX_TURNS
+        return {"ai_enabled": False, "ai_active": False, "ai_typing": False, "turn_count": 0, "max_turns": _MAX_TURNS}
 
 @router.post("/conversations/{company_id}/ai-toggle")
 def api_ai_toggle(company_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
@@ -1620,8 +1646,10 @@ def api_get_ai_config(company_id: str, x_user_token: Optional[str] = Header(None
     try:
         db = MongoDBManager()
         prefs = db.db.conversation_ai_prefs.find_one({"company_id": company_id}) or {}
+        # Mismo default que usa la IA al crear la sesión (antes la pantalla decía 3 y la IA usaba 10).
+        from app.ai_followup import MAX_TURNS as _MAX_TURNS
         return {
-            "max_turns":          int(prefs.get("max_turns", 3)),
+            "max_turns":          int(prefs.get("max_turns", _MAX_TURNS)),
             "extra_instructions": prefs.get("extra_instructions", ""),
         }
     except Exception as e:
@@ -2494,6 +2522,13 @@ def api_generate_report(company_id: str, req: ReportRequest):
         analytics_raw  = db.get_analytics(company_id=company_id)
         analytics_list = analytics_raw.get("items", []) if isinstance(analytics_raw, dict) else analytics_raw
         analytics = analytics_list[0] if analytics_list else {}
+        # La misma clasificación que la columna "Timing + IA" de Análisis (la de la última
+        # comparación, o la del número elegido) — ver report_verdict.
+        try:
+            from app.classification_compare import report_verdict
+            analytics = {**analytics, **(report_verdict(db, company_id, req.filter_number) or {})}
+        except Exception as _rv_err:
+            _log.warning("report %s: sin clasificación de la comparación (%s)", company_id, _rv_err)
 
         thread = db.get_conversation_thread(company_id)
 
@@ -4311,6 +4346,9 @@ def api_wwebjs_create_session(body: dict):
     # instead of QR (see createClient in wwebjs-service/index.js).
     phone_number = (body.get("phone_number") or "").strip()
     start_body = {"phoneNumber": phone_number} if phone_number else {}
+    # Número nuevo: su proxy queda puesto antes de que su Chrome arranque por primera vez.
+    from app import proxies as _px
+    _proxy_fields = _px.prepare_new_instance(_db.db, name)
     try:
         r = _req.post(f"{_ww_url}/session/{name}/start", json=start_body, headers=_ww_headers(), timeout=15)
     except Exception as e:
@@ -4335,6 +4373,7 @@ def api_wwebjs_create_session(body: dict):
         # 2026-09-30, CRITICAL). Explicit opt-in to full volume via that same
         # endpoint once it's actually earned it, not a silent default.
         "warmup_mode": True,
+        **_proxy_fields,
     })
     return {"name": name, "status": r.json().get("status", "initializing")}
 
@@ -5289,9 +5328,47 @@ def api_get_analytics(
     try:
         db = MongoDBManager()
         agent_list = [a for a in (agents or "").split(",") if a] or None
-        return serialize(db.get_analytics(page=page, page_size=page_size, category=category, agents=agent_list, search=search))
+        data = db.get_analytics(page=page, page_size=page_size, category=category, agents=agent_list, search=search)
+        # Resultado de los tres clasificadores (Timing / IA / Timing + IA) por fila, sin
+        # los logs — esos se piden aparte al abrir el detalle.
+        from app.classification_compare import comparisons_for
+        cmp = comparisons_for(db, [r.get("company_id") for r in data.get("items", [])])
+        for r in data.get("items", []):
+            r["comparison"] = cmp.get(r.get("company_id"))
+        return serialize(data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Comparación de clasificadores (Timing / IA / Timing + IA) ──────────────────
+# Ver app/classification_compare.py. Real ask, 2026-10-05: comparar los tres y ver el
+# log de cómo llega cada uno a su resultado.
+
+@router.get("/classification/comparisons/summary")
+def api_classification_summary(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    from app.classification_compare import summary
+    return serialize(summary(MongoDBManager()))
+
+
+@router.get("/classification/comparisons/{company_id}")
+def api_classification_comparison(company_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    from app.classification_compare import get_comparison
+    doc = get_comparison(MongoDBManager(), company_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Esta conversación todavía no tiene comparación.")
+    return serialize(doc)
+
+
+@router.post("/classification/comparisons/{company_id}/run")
+def api_classification_run(company_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    from app.classification_compare import run_comparison
+    try:
+        return serialize(run_comparison(company_id))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"No se pudo correr la comparación: {e}")
 
 # ── One-time data cleanup ──────────────────────────────────────────────────────
 
@@ -6521,7 +6598,152 @@ def api_list_instances(x_user_token: Optional[str] = Header(None)):
         for fut in as_completed(futures):
             futures[fut]["live_status"] = fut.result()
 
+    # Proxy asignado (sin contraseña), modo ligero y memoria real de cada sesión wwebjs.
+    try:
+        _pmap = {str(p["_id"]): p for p in db.db.proxies.find({}, {"password": 0})}
+        try:
+            _mem = _req.get(f"{_ww_url}/sessions/memory", headers=_ww_headers(), timeout=5).json().get("sessions", {})
+        except Exception:
+            _mem = {}
+        for inst in instances:
+            if inst.get("provider") != "wwebjs":
+                continue
+            p = _pmap.get(inst.get("proxy_id") or "")
+            inst["proxy"] = ({"id": str(p["_id"]), "host": p["host"], "port": p["port"], "country": p.get("country"),
+                              "city": p.get("city"), "status": p.get("status"), "exit_ip": p.get("exit_ip")} if p else None)
+            inst["lean_mode"] = bool(inst.get("lean_mode"))
+            inst["memory_mb"] = (_mem.get(inst["name"]) or {}).get("memory_mb")
+    except Exception:
+        _log.exception("[instances] no se pudo agregar proxy/memoria al listado")
+
     return instances
+
+
+# ── Proxies por número (ver app/proxies.py) ──────────────────────────────────
+
+@router.get("/proxies")
+def api_proxies_list(x_user_token: Optional[str] = Header(None)):
+    _require_admin(x_user_token)
+    from app import proxies as _px
+    db = MongoDBManager().db
+    usage = _px.usage_by_proxy(db)
+    items = [_px.public_proxy(p, usage) for p in db.proxies.find().sort([("country", 1), ("host", 1)])]
+    settings = _px.get_settings(db)
+    usable = [p for p in items if p["enabled"] and p["status"] == "ok" and p["country"] == settings["country"]]
+    return {
+        "settings": settings,
+        "proxies": items,
+        "summary": {"total": len(items), "usable": len(usable),
+                    "ok": sum(1 for p in items if p["status"] == "ok"),
+                    "free": sum(1 for p in usable if not p["instances"]),
+                    "assigned_instances": sum(len(v) for v in usage.values()),
+                    "wwebjs_instances": db.instances.count_documents({"provider": "wwebjs"})},
+    }
+
+
+@router.post("/proxies/import")
+def api_proxies_import(body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_admin(x_user_token)
+    from app import proxies as _px
+    text = (body or {}).get("text") or ""
+    if not _px.parse_proxy_text(text):
+        raise HTTPException(400, "No encontré proxies en el texto. Formato: ip:puerto:usuario:contraseña, uno por renglón.")
+    return _px.import_text(MongoDBManager().db, text)
+
+
+@router.post("/proxies/check-all")
+def api_proxies_check_all(x_user_token: Optional[str] = Header(None)):
+    _require_admin(x_user_token)
+    from app import proxies as _px
+    db = MongoDBManager().db
+    checked = _px.check_many(db, list(db.proxies.find({"enabled": {"$ne": False}})))
+    return {"ok": sum(1 for p in checked if p.get("status") == "ok"),
+            "failing": sum(1 for p in checked if p.get("status") == "failing")}
+
+
+@router.put("/proxies/settings")
+def api_proxies_settings(body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_admin(x_user_token)
+    from app import proxies as _px
+    return _px.save_settings(MongoDBManager().db, body or {})
+
+
+@router.post("/proxies/{proxy_id}/check")
+def api_proxy_check(proxy_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_admin(x_user_token)
+    from bson import ObjectId as _OID
+    from app import proxies as _px
+    db = MongoDBManager().db
+    p = db.proxies.find_one({"_id": _OID(proxy_id)}) if _OID.is_valid(proxy_id) else None
+    if not p:
+        raise HTTPException(404, "Ese proxy no existe")
+    return _px.public_proxy(_px.check_many(db, [p])[0], _px.usage_by_proxy(db))
+
+
+@router.patch("/proxies/{proxy_id}")
+def api_proxy_update(proxy_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_admin(x_user_token)
+    from bson import ObjectId as _OID
+    db = MongoDBManager().db
+    if not _OID.is_valid(proxy_id) or "enabled" not in (body or {}):
+        raise HTTPException(400, "Solo se puede cambiar 'enabled'")
+    res = db.proxies.update_one({"_id": _OID(proxy_id)}, {"$set": {"enabled": bool(body["enabled"])}})
+    if not res.matched_count:
+        raise HTTPException(404, "Ese proxy no existe")
+    return {"ok": True}
+
+
+@router.delete("/proxies/{proxy_id}")
+def api_proxy_delete(proxy_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_admin(x_user_token)
+    from bson import ObjectId as _OID
+    from app import proxies as _px
+    db = MongoDBManager().db
+    if not _OID.is_valid(proxy_id):
+        raise HTTPException(404, "Ese proxy no existe")
+    names = _px.usage_by_proxy(db).get(proxy_id, [])
+    if names:
+        raise HTTPException(409, f"Está asignado a {', '.join(names)}. Cámbiales el proxy primero.")
+    db.proxies.delete_one({"_id": _OID(proxy_id)})
+    return {"ok": True}
+
+
+@router.post("/proxies/instances/{name}")
+def api_instance_set_proxy(name: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    """body.proxy_id: "auto" (al azar entre los menos usados), un id del pool, o null para quitarlo.
+    Reinicia la sesión para que su Chrome salga por el proxy nuevo (sin volver a escanear)."""
+    _require_admin(x_user_token)
+    from app import proxies as _px
+    try:
+        return _px.assign(MongoDBManager().db, name, (body or {}).get("proxy_id"))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"Se guardó, pero wwebjs no confirmó el cambio: {e}")
+
+
+@router.post("/proxies/instances/{name}/lean")
+def api_instance_set_lean(name: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_admin(x_user_token)
+    from app import proxies as _px
+    try:
+        return _px.set_lean(MongoDBManager().db, name, bool((body or {}).get("enabled")))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"Se guardó, pero wwebjs no confirmó el cambio: {e}")
+
+
+@router.get("/proxies/instances/{name}/check")
+def api_instance_exit_check(name: str, x_user_token: Optional[str] = Header(None)):
+    _require_admin(x_user_token)
+    from app import proxies as _px
+    try:
+        return _px.session_exit_check(MongoDBManager().db, name)
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
 
 
 @router.post("/admin/instances")
@@ -6541,6 +6763,9 @@ def api_create_instance(body: dict, x_user_token: Optional[str] = Header(None)):
     if provider == "wwebjs":
         from app.config import WWEBJS_URL as _ww_url
         from app.whatsapp_wwebjs import _headers as _ww_headers
+        from app import proxies as _px
+        # Número nuevo: su proxy queda puesto antes de que su Chrome arranque por primera vez.
+        _proxy_fields = {} if db.db.instances.find_one({"name": name}) else _px.prepare_new_instance(db.db, name)
         r = _req.post(f"{_ww_url}/session/{name}/start", headers=_ww_headers(), timeout=10)
         if not r.ok:
             raise HTTPException(500, f"Error wwebjs-service: {r.text[:200]}")
@@ -6551,6 +6776,7 @@ def api_create_instance(body: dict, x_user_token: Optional[str] = Header(None)):
             "assigned_to": None,
             "assigned_name": None,
             "created_at": datetime.utcnow().isoformat(),
+            **_proxy_fields,
         }
         # $setOnInsert (not $set) for warmup_mode — this same call re-runs on an
         # already-existing instance (upsert=True) to update number/assignment,
@@ -6631,6 +6857,10 @@ def api_delete_instance(name: str, x_user_token: Optional[str] = Header(None)):
             _req.delete(f"{_ww_url}/session/{name}", headers=_ww_headers(), timeout=10)
         except Exception:
             pass
+        # Libera su proxy: el lugar en el pool se libera solo al borrar el documento,
+        # y wwebjs olvida su copia para que un número nuevo con el mismo nombre no la herede.
+        from app import proxies as _px
+        _px.forget_instance(name)
     else:
         from app.config import EVOLUTION_API_URL, EVOLUTION_API_KEY
         try:

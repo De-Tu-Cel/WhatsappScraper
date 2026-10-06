@@ -58,6 +58,10 @@ WWEBJS_URL             = os.getenv("WWEBJS_URL", "http://wwebjs:3001")
 # LLM API keys — priority: OPENAI > DEEPSEEK
 OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY", "")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+# Modelo de los clasificadores (Timing + IA y solo IA) — un nivel arriba del de Chat IA
+# (gpt-4o-mini, llm.OPENAI_MODEL). Real ask, 2026-10-05. gpt-4.1-mini desde 2026-10-06: ~5 veces más
+# barato que gpt-4.1 y en las pruebas falló solo 1 de 65 casos claros (bot contra agente de IA).
+CLASSIFIER_MODEL = os.getenv("CLASSIFIER_MODEL", "gpt-4.1-mini")
 
 # Debug: Mostrar qué se cargó (solo para desarrollo)
 if __name__ == "__main__":

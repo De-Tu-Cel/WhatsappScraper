@@ -41,6 +41,15 @@ EXCLUDED_DOMAINS = {
     # y hoy dan 404; un negocio de Maps que aún los lista cuenta como "sin
     # sitio web" (entra como lead de teléfono, ver _maps_lead_from_item).
     'negocio.site', 'business.site',
+    # Enlaces de WhatsApp, páginas "link in bio" y perfiles en directorios
+    # médicos: no son el sitio del negocio, y todos los negocios comparten el
+    # mismo dominio — que es la identidad de una empresa guardada. Un negocio
+    # de Maps cuya "página" era wa.me se guardó como "WhatsApp.com", y el
+    # siguiente con wa.me habría caído en esa misma empresa (2026-10-05). Un
+    # negocio de Maps que solo lista uno de estos entra como lead de teléfono.
+    'wa.me', 'wa.link', 'whatsapp.com',
+    'linktr.ee', 'beacons.ai', 'lnk.bio', 'taplink.cc',
+    'doctoralia.com.mx', 'doctoralia.com', 'topdoctors.mx',
     # Directorios de negocios
     'yelp.com', 'yelp.com.mx', 'tripadvisor.com', 'tripadvisor.com.mx',
     'cylex.mx', 'cylex.com', 'cylex-mexico.com', 'cybo.com',
@@ -2895,6 +2904,9 @@ def is_maps_lead_url(url: str) -> bool:
     return bool(re.match(r"^https://www\.google\.com/maps\?cid=\d+$", url or ""))
 
 
+_WA_LINK_PHONE = re.compile(r"(?:wa\.me/|whatsapp\.com/send/?\?(?:[^#]*&)?phone=)\+?(\d{10,15})", re.IGNORECASE)
+
+
 def _maps_lead_from_item(item: dict, phone_code: str | None, listed_url: str = "") -> dict | None:
     """A Google Maps business with no usable website of its own — none at all,
     or only a Facebook/Instagram/directory page — as a contactable lead. None
@@ -2902,6 +2914,11 @@ def _maps_lead_from_item(item: dict, phone_code: str | None, listed_url: str = "
     ("+525562850400ext.9411", a chain's call center), or another country's
     number (a +92 one showed up for a London dentist)."""
     phone = (item.get("phone") or "").strip()
+    if not phone:
+        # Its "website" is a wa.me link — that number is its WhatsApp.
+        m = _WA_LINK_PHONE.search(listed_url or "")
+        if m:
+            phone = "+" + m.group(1)
     cid = str(item.get("cid") or "")
     if not phone or not cid or re.search(r"[a-z]", phone, re.IGNORECASE):
         return None
@@ -3437,6 +3454,9 @@ def search_prospects(
 
     _dfs_ok = bool(_dataforseo_auth())
     _leads_future = None
+    # domain → the business's own name and category on Google Maps, for the
+    # sites Maps found (see meta_out["maps_names"] at the return).
+    _maps_names: dict = {}
     # Defined before the branch — the DDG-only `else` below never populated this,
     # so the final `return` at the bottom of this function would raise
     # NameError whenever DataForSEO isn't configured/authorized (real gap
@@ -3546,6 +3566,9 @@ def search_prospects(
                 urls.append(u)
                 snippets[u] = (maps_snips.get(u) or ddg_snips.get(u)
                                or sa_snips.get(u) or osm_snips.get(u, {}))
+        for u, s in maps_snips.items():
+            if s.get("title") and _get_domain(u):
+                _maps_names.setdefault(_get_domain(u), {"title": s["title"], "category": s.get("maps_category") or ""})
 
     elif SERPAPI_KEY:
         query = f"{industry.strip()} empresa en {city.strip() or country or ''}".strip()
@@ -3695,6 +3718,12 @@ def search_prospects(
         phone_leads_out.extend(_kept_leads)
         _log.info("[search] Maps leads without website: %d raw → %d matching category",
                   len(_maps_phone_raw), len(_kept_leads))
+    if meta_out is not None:
+        # url → {"title", "category"} as on Google Maps. The scraper reads the
+        # name from the page, which 1 site in 5 gets wrong — a slogan, the
+        # domain, "TALLER MECÁNICO EN QRO" (measured 2026-10-05) — while Maps
+        # has the name the owner registered (see scraper.prefer_maps_name).
+        meta_out["maps_names"] = {u: _maps_names[_get_domain(u)] for u in result if _get_domain(u) in _maps_names}
     return result, _target_state_key, degraded_sources
 
 

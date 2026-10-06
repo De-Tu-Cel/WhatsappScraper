@@ -44,26 +44,29 @@ def call_llm(
     max_tokens: int = 300,
     temperature: float = 0,
     priority: int = PRIORITY_BATCH,
+    model: str | None = None,
 ) -> str:
     """
     Send messages to the active LLM provider and return the response text.
     All calls are routed through llm_guard (semaphore + retry + circuit breaker).
     Pass priority=PRIORITY_LIVE for real-time Chat IA calls.
+    `model` overrides OPENAI_MODEL for this call (OpenAI only — the classifier
+    uses a bigger model than Chat IA, see config.CLASSIFIER_MODEL).
     Raises RuntimeError if no API key is configured.
     """
     if OPENAI_API_KEY:
-        return guarded_call(_call_openai, messages, max_tokens, temperature, priority=priority)
+        return guarded_call(_call_openai, messages, max_tokens, temperature, model, priority=priority)
     if DEEPSEEK_API_KEY:
         return guarded_call(_call_deepseek, messages, max_tokens, temperature, priority=priority)
     raise RuntimeError("No LLM API key configured (OPENAI_API_KEY or DEEPSEEK_API_KEY)")
 
 
-def _call_openai(messages: list, max_tokens: int, temperature: float) -> str:
+def _call_openai(messages: list, max_tokens: int, temperature: float, model: str | None = None) -> str:
     resp = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {OPENAI_API_KEY}",
                  "Content-Type": "application/json"},
-        json={"model": OPENAI_MODEL, "messages": messages,
+        json={"model": model or OPENAI_MODEL, "messages": messages,
               "max_tokens": max_tokens, "temperature": temperature},
         timeout=30,
     )

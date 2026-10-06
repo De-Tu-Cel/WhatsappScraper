@@ -90,6 +90,13 @@ async def lifespan(app: FastAPI):
     start_followup_workers()
     if os.getenv("WARMUP_ENABLED", "false").lower() == "true":
         start_warmup_worker()
+    # Proxies por número: re-sincroniza los ajustes con wwebjs (se despliegan juntos) y
+    # revisa cada 30 min que respondan (ver app/proxies.py).
+    from app import proxies as _proxies
+    from app.api.routes import SESSION_DISCONNECT_ALERT_EMAILS
+    from app.database import MongoDBManager as _ProxyDB
+    _proxies.start_sync_on_boot(_ProxyDB)
+    _proxies.start_health_worker(_ProxyDB, SESSION_DISCONNECT_ALERT_EMAILS)
     yield
 
 

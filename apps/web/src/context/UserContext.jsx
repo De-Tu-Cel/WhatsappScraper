@@ -6,6 +6,22 @@ const UserContext = createContext(null)
 const INACTIVITY_TIMEOUT = 30 * 60 * 1000   // 30 min → logout
 const WARNING_BEFORE     =  3 * 60 * 1000   // show warning 3 min before
 
+// A session belongs to the version of the app it signed in with: after a
+// deploy, everyone signs in again instead of carrying on with whatever the old
+// version left in the browser (asked for on 2026-10-05). VersionWatcher reloads
+// open tabs on a new version; fetchMe below then sees the mismatch.
+const BUILD_KEY = 'user_token_build'
+export const LOGOUT_REASON_KEY = 'logout_reason'
+
+async function liveBuildId() {
+  try {
+    const res = await fetch('/api/build-id', { cache: 'no-store' })
+    return res.ok ? (await res.json()).buildId || null : null
+  } catch {
+    return null
+  }
+}
+
 export function UserProvider({ children }) {
   const [user,        setUser]        = useState(null)
   const [loading,     setLoading]     = useState(true)
@@ -19,6 +35,16 @@ export function UserProvider({ children }) {
   const fetchMe = useCallback(async () => {
     const token = localStorage.getItem('user_token')
     if (!token) { setLoading(false); return }
+    // No build id (dev server, or the request failed) → can't tell, keep the session.
+    const live = await liveBuildId()
+    if (live && localStorage.getItem(BUILD_KEY) !== live) {
+      await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-user-token': token } }).catch(() => {})
+      localStorage.removeItem('user_token')
+      localStorage.removeItem(BUILD_KEY)
+      try { sessionStorage.setItem(LOGOUT_REASON_KEY, 'update') } catch {}
+      setLoading(false)
+      return
+    }
     try {
       const res = await fetch('/api/auth/me', { headers: { 'x-user-token': token } })
       if (res.ok) {
@@ -48,6 +74,7 @@ export function UserProvider({ children }) {
     if (token) {
       await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-user-token': token } }).catch(() => {})
       localStorage.removeItem('user_token')
+      localStorage.removeItem(BUILD_KEY)
     }
     setUser(null)
   }, [clearTimers])
@@ -100,6 +127,8 @@ export function UserProvider({ children }) {
     })
     if (!res.ok) throw new Error((await res.json()).detail || 'Error de autenticación')
     const data = await res.json()
+    const live = await liveBuildId()
+    if (live) localStorage.setItem(BUILD_KEY, live)
     localStorage.setItem('user_token', data.session_token)
     setUser({ ...data, token: data.session_token })
     return data
@@ -120,6 +149,7 @@ export function UserProvider({ children }) {
     if (token) {
       await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-user-token': token } }).catch(() => {})
       localStorage.removeItem('user_token')
+      localStorage.removeItem(BUILD_KEY)
     }
     setUser(null)
   }

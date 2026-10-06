@@ -247,3 +247,63 @@ def send_session_disconnected_email(to_email: str, instance_name: str, reason_la
 </html>
     """
     return _smtp_send(to_email, f"⚠ Sesión desconectada: {instance_name}", html)
+
+
+def send_proxy_failing_email(to_email: str, proxy_label: str, instance_names: list, error: str,
+                             moved_to: dict | None = None) -> bool:
+    """Alerta cuando el proxy de uno o más números deja de responder (1 h, ver app/proxies.py).
+    Con asignación automática, a las 2 h sus números se mueven a otro proxy: moved_to dice a
+    cuál se fue cada uno."""
+    from html import escape
+    numbers = ", ".join(escape(n) for n in instance_names) or "ninguno"
+    if moved_to:
+        intro = "Lleva 2 horas sin responder. Como la asignación automática está prendida, sus números se movieron a otro proxy:"
+        numbers = "<br>".join(f"{escape(n)} → {escape(v)}" for n, v in moved_to.items())
+        footer = "Se reconectan solos en 1-2 minutos. Revisa Instancias → Proxies por si el proxy caído no vuelve."
+    else:
+        intro = "Falló dos revisiones seguidas. Los números que salen por él no podrán conectarse mientras siga caído."
+        footer = "Revisa Instancias → Proxies. Si no vuelve, asígnale a esos números uno de repuesto (con asignación automática se mueven solos a las 2 h)."
+    html = f"""
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:24px 16px;background:#0a0f1a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+
+  <div style="max-width:460px;margin:0 auto;background:#060f0c;border-radius:20px;overflow:hidden;border:1px solid rgba(245,158,11,0.3);box-shadow:0 24px 60px rgba(0,0,0,0.6)">
+
+    <div style="background:linear-gradient(135deg,#3a2a0e 0%,#060f0c 100%);padding:28px 32px 24px;border-bottom:1px solid rgba(245,158,11,0.25)">
+      <div style="color:#fff;font-size:18px;font-weight:800;letter-spacing:-0.02em;line-height:1.2">Mystery Shopper</div>
+      <div style="color:rgba(255,255,255,0.35);font-size:12px;margin-top:4px">by DeTuCel</div>
+    </div>
+
+    <div style="padding:32px">
+      <p style="margin:0 0 6px;font-size:13px;font-weight:700;color:rgba(245,158,11,0.9);text-transform:uppercase;letter-spacing:0.08em">⚠ Proxy sin respuesta</p>
+      <p style="margin:0 0 20px;font-size:20px;font-weight:700;color:#fff">{escape(proxy_label)}</p>
+      <p style="margin:0 0 24px;font-size:14px;color:rgba(255,255,255,0.6);line-height:1.6">
+        {intro}
+      </p>
+
+      <div style="background:rgba(245,158,11,0.08);border:1.5px solid rgba(245,158,11,0.3);border-radius:14px;padding:16px 20px;margin-bottom:20px">
+        <div style="font-size:11px;color:rgba(255,255,255,0.3);font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:6px">Números afectados</div>
+        <div style="font-size:16px;font-weight:700;color:#fff">{numbers}</div>
+        <div style="font-size:12px;color:rgba(255,255,255,0.4);margin-top:10px">{escape(error or '')}</div>
+      </div>
+
+      <p style="margin:0;font-size:13px;color:rgba(255,255,255,0.45);line-height:1.5">
+        {footer}
+      </p>
+    </div>
+
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-top:1px solid rgba(255,255,255,0.06)">
+      <tr>
+        <td style="padding:16px 32px;font-size:11px;color:rgba(255,255,255,0.2)">DeTuCel &copy; 2026</td>
+        <td style="padding:16px 32px;font-size:11px;color:rgba(255,255,255,0.2);text-align:right">notificaciones@detucel.mx</td>
+      </tr>
+    </table>
+
+  </div>
+
+</body>
+</html>
+    """
+    return _smtp_send(to_email, f"⚠ Proxy sin respuesta: {proxy_label}", html)

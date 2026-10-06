@@ -11,7 +11,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility'
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import LockResetIcon from '@mui/icons-material/LockReset'
-import { useUser } from '../context/UserContext'
+import { useUser, LOGOUT_REASON_KEY } from '../context/UserContext'
 import { T } from '../lib/translations'
 
 /* ── Animaciones ─────────────────────────────────────────────────────────── */
@@ -316,8 +316,20 @@ export default function LoginScreen({ hasUsers }) {
   const [savedCode,    setSavedCode]    = useState('')
   const [copied,       setCopied]       = useState(false)
   const [mounted,      setMounted]      = useState(false)
+  // Signed out because a new version was deployed (see UserContext) — say so,
+  // or it looks like the session just broke. The flag is read once, so a later
+  // visit to the login screen doesn't repeat it.
+  const [updated,      setUpdated]      = useState(false)
 
   useEffect(() => { setTimeout(() => setMounted(true), 50) }, [])
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem(LOGOUT_REASON_KEY) === 'update') {
+        sessionStorage.removeItem(LOGOUT_REASON_KEY)
+        setUpdated(true)
+      }
+    } catch {}
+  }, [])
 
   function reset(newMode) {
     setMode(newMode); setError(''); setPin(''); setPin2('')
@@ -558,6 +570,11 @@ export default function LoginScreen({ hasUsers }) {
               </Box>
               <PinField label="PIN" value={pin} onChange={setPin} autoComplete="current-password" />
               {error && <ErrorBox msg={error} success={error.startsWith('✓')} />}
+              {!error && updated && (
+                <ErrorBox success msg={lang === 'en'
+                  ? '✓ The system was updated. Sign in again to use the new version.'
+                  : '✓ Actualizamos el sistema. Inicia sesión de nuevo para usar la versión nueva.'} />
+              )}
               <SubmitBtn loading={loading} label={`${t.login.enter} →`} />
               {/* No self-service "Create account" here anymore — this is an
                  internal tool where every account belongs to a known DeTuCel

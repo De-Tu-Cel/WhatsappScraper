@@ -85,9 +85,9 @@ def _mixed_signal_category(analyzed_msgs, computed_category):
     it kept showing "automatico" for Volkswagen del Centro and Whirlpool
     México after Analytics had already been corrected to "humano"/"bot"
     (reported live, 2026-09-18)."""
-    if computed_category not in ("bot", "humano", "automatico"):
+    if computed_category not in ("bot", "humano", "automatico", "automatico_sin_respuesta"):
         return computed_category, None
-    bot_like = [m for m in analyzed_msgs if m["analysis"].get("category") in ("bot", "automatico")]
+    bot_like = [m for m in analyzed_msgs if m["analysis"].get("category") in ("bot", "automatico", "automatico_sin_respuesta")]
     has_humano = any(m["analysis"].get("category") == "humano" for m in analyzed_msgs)
     if not has_humano:
         # No human signal anywhere — but if an earlier message in the same
@@ -1661,7 +1661,7 @@ class MongoDBManager:
             msgs = cset.get("msgs") or []
             cats = {m.get("category") for m in msgs}
             cur_cat = g.get("category")
-            if cur_cat not in ("bot", "humano", "automatico"):
+            if cur_cat not in ("bot", "humano", "automatico", "automatico_sin_respuesta"):
                 continue
             if "humano" not in cats:
                 # No human signal anywhere in the thread — same promotion as
@@ -1676,7 +1676,7 @@ class MongoDBManager:
                         g["category"] = "bot"
                         g["is_ai"] = hard_bot.get("is_ai")
                 continue
-            if not ("bot" in cats or "automatico" in cats):
+            if not ("bot" in cats or "automatico" in cats or "automatico_sin_respuesta" in cats):
                 continue
             # Same carve-out as _mixed_signal_category above: only a genuine bot
             # fingerprint ("bot" without soft_signal) is hard evidence — "automatico"
@@ -1684,7 +1684,7 @@ class MongoDBManager:
             # and neither should alone outweigh a clearly human-paced reply elsewhere
             # in the same conversation (real cases: Grupo Hakkasan, Volkswagen del
             # Centro — 2026-09-17).
-            bot_like = [m for m in msgs if m.get("category") in ("bot", "automatico")]
+            bot_like = [m for m in msgs if m.get("category") in ("bot", "automatico", "automatico_sin_respuesta")]
             has_hard_bot = any(m.get("category") == "bot" and not m.get("soft_signal") for m in bot_like)
             if not has_hard_bot:
                 HUMAN_PACED_MIN = 2.0
@@ -1967,8 +1967,13 @@ class MongoDBManager:
                     # PDF, que sí ordena por fecha, mostraba correctamente el estado
                     # actual de la conversación ("humano") — mismo número, dos respuestas
                     # distintas para la misma pregunta.
-                    _conv = next((m for m in analyzed
-                                  if m["analysis"].get("conversation_analysis")), None)
+                    # El análisis de conversación MÁS RECIENTE, igual que Analytics y el
+                    # reporte — puede haber varios (una sesión de IA por ronda, más los
+                    # mensajes que la promoción retroactiva a "hibrido_bot" marca como
+                    # conversation_analysis), y el orden natural de Mongo devolvía el
+                    # más viejo.
+                    _conv = max((m for m in analyzed if m["analysis"].get("conversation_analysis")),
+                                key=lambda m: m.get("created_at") or datetime.min, default=None)
                     most_recent = max(analyzed, key=lambda m: m.get("created_at") or datetime.min)
                     best = _conv or most_recent
                     entry["category"]       = best["analysis"].get("category")
@@ -2012,8 +2017,8 @@ class MongoDBManager:
                     # into a totally different sibling branch as the garbled-sender noise
                     # this fallback was built to absorb — there's no single "the" number
                     # to inherit from when every branch is independently real.
-                    _conv = next((m for m in company_analyzed
-                                  if m["analysis"].get("conversation_analysis")), None)
+                    _conv = max((m for m in company_analyzed if m["analysis"].get("conversation_analysis")),
+                                key=lambda m: m.get("created_at") or datetime.min, default=None)
                     most_recent = max(company_analyzed, key=lambda m: m.get("created_at") or datetime.min)
                     best = _conv or most_recent
                     entry["category"]          = best["analysis"].get("category")
@@ -2085,6 +2090,11 @@ class MongoDBManager:
             # filters by.
             if nc == "hibrido":
                 nc = "hibrido_bot"
+            # "hibrido_automatico" (mezcla de una respuesta automática y una persona en la
+            # conversación) es lo mismo que "automatico": los dos son "Automático + Humano".
+            # Un solo conteo y un solo filtro (real ask, 2026-10-05); el valor guardado no cambia.
+            if nc == "hibrido_automatico":
+                nc = "automatico"
             if nc == "bot":
                 return "bot_ia" if r.get("is_ai") else "bot"
             return nc if nc is not None else "sin_clasificar"
@@ -2092,8 +2102,8 @@ class MongoDBManager:
         category_counts = {
             "humano":             cat_counts.get("humano", 0),
             "automatico":         cat_counts.get("automatico", 0),
+            "automatico_sin_respuesta": cat_counts.get("automatico_sin_respuesta", 0),
             "hibrido_bot":        cat_counts.get("hibrido_bot", 0),
-            "hibrido_automatico": cat_counts.get("hibrido_automatico", 0),
             "bot":                cat_counts.get("bot", 0),
             "bot_ia":             cat_counts.get("bot_ia", 0),
             "sin_respuesta":      cat_counts.get("sin_respuesta", 0),

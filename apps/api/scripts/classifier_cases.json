@@ -1,0 +1,82 @@
+[
+ {
+  "empresa": "Nissan Autocom Querétaro La Capilla",
+  "esperado": "agente_ia",
+  "motivo": "Carla y luego Martina contestan todo en 1-31s, agendan cita y no dejan terminar la plática. Confirmado por Marco, 2026-10-05."
+ },
+ {
+  "empresa": "Fame Querétaro",
+  "esperado": "humano",
+  "motivo": "Primera respuesta a las 16h, ráfagas de mensajes cortos, minutos entre respuestas. Confirmado por Marco, 2026-10-05."
+ },
+ {
+  "empresa": "Grupo Hakkasan",
+  "esperado": "humano",
+  "motivo": "La misma persona pega un folleto guardado (rápido) y en otra respuesta tarda 22 min. Confirmado 2026-09-17."
+ },
+ {
+  "empresa": "Ferra",
+  "esperado": "humano",
+  "motivo": "100% humano confirmado; el LLM decía hibrido por el tono formal del saludo. 2026-09-09."
+ },
+ {
+  "empresa": "Casacravioto",
+  "esperado": "humano",
+  "motivo": "100% humano confirmado; el LLM decía hibrido por el tono formal del saludo. 2026-09-09."
+ },
+ {
+  "empresa": "Bienvenido a Volkswagen del Centro",
+  "esperado": "humano",
+  "motivo": "Respuesta claramente humana que el sondeo no pudo confirmar. 2026-09-17."
+ },
+ {
+  "empresa": "Stellantis Country",
+  "esperado": "automatico_humano",
+  "motivo": "Saludo automático de plantilla y luego una persona responde la pregunta real."
+ },
+ {
+  "empresa": "Barbaro",
+  "esperado": "automatico_sin_respuesta",
+  "motivo": "Plantilla de autorespuesta ('no podemos responder'), sin IA conversacional. 2026-09-18."
+ },
+ {
+  "empresa": "Daltontoyota",
+  "esperado": "automatico_sin_respuesta",
+  "motivo": "Plantilla de autorespuesta ('agradecemos su preferencia'), sin IA conversacional. 2026-09-18."
+ },
+ {
+  "empresa": "Gas Elena",
+  "esperado": "automatico_sin_respuesta",
+  "motivo": "Plantilla de autorespuesta ('Gracias por comunicarte con Pipgas'), sin IA conversacional. 2026-09-18."
+ },
+ {
+  "empresa": "Taboo Restaurant",
+  "esperado": "bot",
+  "motivo": "Bot de botones ([Opciones: …]) de Grupo Rosa Negra: flujo fijo, no IA conversacional."
+ },
+ {
+  "empresa": "Universidad ESDIE",
+  "esperado": "agente_ia",
+  "motivo": "\"Sofía\" contesta 322 y 188 caracteres en 21 s y 14 s y sigue escribiendo sola a intervalos exactos; el tono cálido no la hace persona. Revisión manual, pendiente de confirmar."
+ },
+ {
+  "empresa": "Whirlpool México",
+  "esperado": "bot",
+  "motivo": "\"Hola, soy *Mateo* tu asistente virtual\" con pasos que esperan respuesta (aviso de privacidad, ¿estás de acuerdo?); no es solo un aviso automático. Revisión manual, pendiente de confirmar."
+ },
+ {
+  "empresa": "Infiniti",
+  "esperado": "automatico_humano",
+  "motivo": "Bienvenida automática con aviso de privacidad a los 6 s y luego 'Le atiende Sandra López' un minuto después: una persona tomó la plática"
+ },
+ {
+  "empresa": "Concesionario Toyota en Baja California",
+  "esperado": "humano",
+  "motivo": "Una persona (Chanely) con respuestas guardadas: saludo con firma a los 11 min y el mismo texto de Servicio a los 28 y 30 s; tarda minutos y escribe sin acentos. Las campañas de marketing no son contestaciones"
+ },
+ {
+  "empresa": "Fénix El Super de Casa",
+  "esperado": "automatico_humano",
+  "motivo": "Aviso automático a los 12 s ('En un momento un agente te brindará ayuda') y 'Buenas tardes' 14 s después: el agente tomó la plática"
+ }
+]

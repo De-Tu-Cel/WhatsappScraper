@@ -813,3 +813,320 @@ class TestStaleReplyDropped:
         _run(mgr, {"return_value": "a que hora seria?"}, inbound="Claro, puede ser mañana",
              log_id=str(ObjectId()), ww=ww)
         ww.send.assert_called_once()
+
+
+class TestBookingGuard:
+    """Nissan La Capilla, 2026-10-04: the AI took a real service slot (12/10,
+    09:00, reserva 58132800) and gave an invented plate and email. Replaying
+    the chat with the prompt rule in place it still committed in 2 of 4 runs,
+    so the reply itself is checked before it goes out."""
+
+    _SLOTS = ("Richie, para el 11/10/2026 en Nissan La Capilla ya no hay espacio. Sí encontré horarios "
+              "cercanos: 10/10/2026 08:30, 09:00, 09:30. ¿Cuál fecha y horario te acomoda mejor?")
+    _DATA = ("Te dejo apartado el 12/10/2026 a las 09:00 en Nissan La Capilla. Para generar tu reserva, "
+             "¿me compartes por favor? Nombre completo, Placa del vehículo, Correo electrónico")
+
+    @pytest.mark.parametrize("reply", [
+        "ay qué mal, preferiría el 11/10 pero creo que me va mejor el 12/10 en la mañana. puedo a las 09:00, por favor?",
+        "ah bueno, creo que el 10/10 en la mañana a las 09:00 estaría bien. puedes agendarlo?",
+        "ah ok, mi nombre es Richie, la placa es ABC123, el año modelo es 2020 y mi correo es richie@email.com",
+        "va, me queda bien el sábado en la mañana",
+    ])
+    def test_commitments_are_caught(self, reply):
+        assert af._is_booking_step(self._SLOTS + " " + self._DATA)
+        assert af._commits_to_booking(reply)
+
+    @pytest.mark.parametrize("reply", [
+        "mira, no tengo los datos a la mano. mejor lo checo y luego te aviso, gracias",
+        "va, déjame ver y te confirmo",
+        "ah ok, gracias por la info",
+    ])
+    def test_deflections_pass(self, reply):
+        assert not af._commits_to_booking(reply, "¿Quieres que te agende el sábado?")
+
+    def test_yes_to_a_booking_offer_is_a_commitment(self):
+        assert af._commits_to_booking("sí, porfa", "¿Quieres que te agende para el sábado?")
+        assert not af._commits_to_booking("sí, porfa", "¿Tienes alguna otra duda?")
+
+    def test_ordinary_messages_are_not_a_booking_step(self):
+        assert not af._is_booking_step("Buen día, ¿con quién tengo el gusto?")
+
+    def _run(self, llm_replies, inbound):
+        mgr = FakeMgr(_session_doc())
+        mgr.db.instances = MagicMock()   # the post-send log reads the sending instance's number
+        mgr.db.instances.find_one.return_value = {"number": "5214428079840"}
+        mgr.insert_message_log = MagicMock(return_value="6abff06f006691a49cfa805c")
+        client = MagicMock()
+        client.send.return_value = {"success": True, "messageId": "abc123"}
+        with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
+             patch("app.ai_followup._call_llm_for_reply", side_effect=llm_replies) as llm, \
+             patch("app.whatsapp_wwebjs.get_all_connected_instances", return_value=["sender666"]), \
+             patch("app.whatsapp_wwebjs.WWebjsClient", return_value=client), \
+             patch("app.whatsapp_wwebjs.mark_read"), \
+             patch("app.classifier.classify_conversation_and_save"):  # runs when the session ends
+            af.process_inbound_reply(phone_number="5214428079840", company_id="aabbccddeeff001122334455",
+                                     inbound_body=inbound, inbound_log_id="log1")
+        return llm, client, mgr.db.ai_followup_sessions._doc
+
+    def test_commitment_is_retried_and_the_conversation_ends(self, _common_patches):
+        llm, client, sess = self._run(
+            ["ah bueno, a las 09:00 estaría bien, puedes agendarlo?", "mmm déjame checar y les confirmo[FIN]"],
+            self._SLOTS)
+        assert llm.call_count == 2
+        assert "prohibido" in llm.call_args_list[1].kwargs["correction"]
+        assert client.send.call_args.args[1] == "mmm déjame checar y les confirmo"
+        assert sess["status"] == "ended"
+
+    def test_fixed_deflection_when_the_retry_commits_too(self, _common_patches):
+        llm, client, _ = self._run(
+            ["ok, mi correo es richie@email.com", "la placa es ABC123"], self._DATA)
+        assert client.send.call_args.args[1] == af.BOOKING_DEFLECT_REPLY
+
+    def test_outside_a_booking_step_nothing_changes(self, _common_patches):
+        llm, client, _ = self._run(["soy Richie, quería saber si abren el sábado a las 10"],
+                                   "Buen día, ¿con quién tengo el gusto?")
+        assert llm.call_count == 1
+        assert client.send.call_args.args[1] == "soy Richie, quería saber si abren el sábado a las 10"
+
+
+# ── Pláticas cortas (real ask, 2026-10-05: Nissan Autocom, Fame, Toyota BC) ──
+class TestShortConversations:
+    def _closed_mgr(self):
+        doc = {"_id": "old", "status": "ended", "end_reason": "ai_decision", "turn_count": 8,
+               "last_activity": datetime.utcnow()}
+        mgr = FakeMgrWithSend(_session_doc())
+        mgr.db.ai_followup_sessions = FakeClosedSessions(doc)
+        return mgr
+
+    @pytest.mark.parametrize("inbound", [
+        # Nissan Autocom: recordatorio del bot después de que Andy ya se despidió.
+        "¡Nos vemos, Richie! 😊 Aquí estaremos el 12/10/2026 a las 09:00. ¡Hasta pronto! 🚗",
+        # Toyota BC: promoción masiva días después.
+        "¡LLEGÓ EL TOYOTA FEST A TIJUANA! 🚗 Si estabas esperando la mejor oportunidad para estrenar auto, ¡es este fin de semana!",
+    ])
+    def test_message_without_question_after_close_gets_no_reply(self, _common_patches, inbound):
+        mgr = self._closed_mgr()
+        mock_llm = _run(mgr, {"return_value": "va"}, inbound=inbound)
+        mock_llm.assert_not_called()
+        assert mgr.db.conversation_ai_prefs.updates[-1]["$set"] == {"ai_enabled": False, "auto_disabled": True}
+
+    def test_question_after_close_is_still_answered(self, _common_patches):
+        mgr = self._closed_mgr()
+        with patch("app.ai_followup._get_or_create_session", return_value=None) as goc:
+            _run(mgr, {"return_value": "no es todo gracias"},
+                 inbound="Richie, tu cita sigue registrada. ¿Hay algo más en lo que te pueda ayudar? 😊")
+        goc.assert_called_once()
+        assert mgr.db.conversation_ai_prefs.updates == []
+
+    def test_max_turns_close_also_counts_as_closed(self):
+        mgr = self._closed_mgr()
+        mgr.db.ai_followup_sessions.last["end_reason"] = "max_turns"
+        assert af._recently_closed_after_talking(mgr, "c1") is True
+
+    def test_andy_goodbye_ends_the_session_without_fin(self, _common_patches):
+        mgr = FakeMgrWithSend(_session_doc())
+        _run(mgr, {"return_value": "gracias igualmente nos vemos pronto en la agencia"},
+             inbound="¡Perfecto, Richie! Te esperamos el 12/10/2026 a las 09:00 en Nissan La Capilla.")
+        assert mgr.db.ai_followup_sessions._doc["status"] == "ended"
+        assert mgr.db.ai_followup_sessions._doc["end_reason"] == "ai_decision"
+
+    def test_goodbye_with_a_question_keeps_waiting(self):
+        assert af._says_goodbye("va nos vemos y a qué hora abren?") is False
+        assert af._says_goodbye("ok gracias hasta luego") is True
+
+
+class _ReopenDB:
+    def __init__(self, andy_already_talked):
+        outer = self
+        self.inserted = None
+
+        class Sessions:
+            def find_one(self, q, *a, **kw):
+                if q.get("status") == "ended":
+                    return {"_id": "old", "turn_count": 8} if andy_already_talked else None
+                return None
+
+            def insert_one(self, doc):
+                outer.inserted = doc
+                return MagicMock(inserted_id="new")
+
+        self.ai_followup_sessions = Sessions()
+        self.message_logs = MagicMock()
+        self.message_logs.find_one.return_value = {"_id": "o1", "direction": "outbound", "created_at": datetime.utcnow()}
+        self.message_logs.find.return_value = []
+        self.conversation_ai_prefs = MagicMock()
+        self.conversation_ai_prefs.find_one.return_value = {}
+
+
+class TestReopenedSessionIsShort:
+    def _create(self, talked):
+        db = _ReopenDB(talked)
+        mgr = MagicMock(db=db)
+        with patch("app.ai_followup._build_context", return_value={"company_name": "Nissan"}):
+            af._get_or_create_session(mgr, "5215597184834", "aabbccddeeff001122334455")
+        return db.inserted
+
+    def test_first_session_gets_the_normal_budget(self):
+        assert self._create(talked=False)["max_turns"] == af.MAX_TURNS
+
+    def test_session_after_andy_already_talked_is_short(self):
+        assert self._create(talked=True)["max_turns"] == af.REOPEN_MAX_TURNS
+
+    def test_reopened_session_is_marked_and_first_one_is_not(self):
+        assert self._create(talked=True)["context"].get("reopened") is True
+        assert not self._create(talked=False)["context"].get("reopened")
+
+    def test_reopened_session_tells_the_model_not_to_retell_its_story(self):
+        captured = {}
+
+        def _fake_call_llm(messages, **kwargs):
+            captured["system"] = messages[0]["content"]
+            return "todavía no, lo reviso y les aviso [FIN]"
+
+        ctx = {"company_name": "Nissan", "industry": "Automotriz", "city": "Querétaro", "reopened": True}
+        with patch("app.llm.call_llm", side_effect=_fake_call_llm), \
+                patch("app.ai_followup._get_system_prompt", return_value="Eres {persona_name}."):
+            af._call_llm_for_reply([{"role": "user", "content": "¿Pudiste revisar la propuesta?"}], ctx, db=MagicMock())
+        assert "YA TE HABÍAS DESPEDIDO" in captured["system"]
+
+
+class TestUnpromptedBotDenial:
+    FOLLOWUP = "¡Hola! te escribo de nuevo para hacer seguimiento de la conversación. ¿Pudiste revisar la información que te enviamos?"
+
+    def test_detects_unprompted_denial(self):
+        # Caso real: Nissan Autocom, 2026-10-04.
+        assert af._denies_being_bot("oye no soy un bot, solo estoy buscando que me ayuden con el servicio de mi carro",
+                                    self.FOLLOWUP) is True
+
+    @pytest.mark.parametrize("inbound", ["oye eres un bot?", "¿Hablo con una persona real?", "esto es spam?"])
+    def test_denial_is_fine_when_they_asked(self, inbound):
+        assert af._denies_being_bot("no, soy una persona real", inbound) is False
+
+    def test_normal_reply_is_not_a_denial(self):
+        assert af._denies_being_bot("todavia no lo reviso, ando viendo lo del servicio de mi carro", self.FOLLOWUP) is False
+
+    def test_retry_replaces_the_denial(self, _common_patches):
+        mgr, ww = FakeMgrWithSend(_session_doc()), _ww_client()
+        _run(mgr, {"side_effect": ["oye no soy un bot, solo busco servicio para mi carro",
+                                   "todavia no lo reviso, ando viendo lo del servicio"]},
+             inbound=self.FOLLOWUP, ww=ww)
+        ww.send.assert_called_once()
+        assert "bot" not in ww.send.call_args.args[1]
+
+    def test_insisting_on_the_denial_sends_nothing(self, _common_patches):
+        mgr, ww = FakeMgrWithSend(_session_doc()), _ww_client()
+        _run(mgr, {"return_value": "oye no soy un bot, solo busco servicio para mi carro"}, inbound=self.FOLLOWUP, ww=ww)
+        ww.send.assert_not_called()
+        assert mgr.db.ai_followup_sessions._doc["status"] == "ended"
+
+
+# ── Cerrar en cuanto Andy tiene lo que vino a buscar (replay real 2026-10-05) ──
+class TestCloseWhenGoalReached:
+    @pytest.mark.parametrize("inbound,goal", [
+        ("¡Claro, Richie! Con gusto te ayudo a agendar el mantenimiento. ¿qué fecha te gustaría?", "cita"),
+        ("¿Quisiera una prueba de manejo para este fin de semana?", "cita"),
+        ("¿A las 10:00 am le quedaría bien?", "cita"),
+        ("El servicio de 10 mil km cuesta $3,450", "precio"),
+        ("Buen día, con gusto le comparto el número del área de Servicio: 664 123 4567", "contacto"),
+        ("BEGIN:VCARD\nVERSION:3.0\nFN:Servicio Toyota\nEND:VCARD", "contacto"),
+    ])
+    def test_goal_detected(self, inbound, goal):
+        assert af._goal_reached(inbound) == goal
+
+    @pytest.mark.parametrize("inbound", [
+        "¡Gracias por contactarnos en Nissan Autocom! Mi nombre es Carla 😊 ¿Me compartes tu nombre completo, por favor?",
+        "1. Cotizar Mazda nuevo\n2. Cita inmediata de servicio\n3. Seminuevos",   # menú: Andy sigue navegando
+        " [Opciones: Cancún | CDMX | Los Cabos]",
+        "Tengo beneficios especiales para algunas unidades",
+        "Podría compartirme su nombre completo por favor",
+    ])
+    def test_no_goal(self, inbound):
+        assert af._goal_reached(inbound) is None
+
+    def test_question_after_goal_is_retried_and_session_ends(self, _common_patches):
+        mgr, ww = FakeMgrWithSend(_session_doc()), _ww_client()
+        _run(mgr, {"side_effect": ["ah perfecto gracias, y tienen alguna promo ahorita?", "va gracias les marco al rato"]},
+             inbound="Buen día, con gusto le comparto el número del área de Servicio: 664 123 4567", ww=ww)
+        assert ww.send.call_args.args[1] == "va gracias les marco al rato"
+        assert mgr.db.ai_followup_sessions._doc["status"] == "ended"
+
+    def test_insisting_on_questions_falls_back_to_a_short_close(self, _common_patches):
+        mgr, ww = FakeMgrWithSend(_session_doc()), _ww_client()
+        _run(mgr, {"return_value": "ah ok y cuánto cuesta el servicio?"},
+             inbound="Buen día, con gusto le comparto el número del área de Servicio: 664 123 4567", ww=ww)
+        assert ww.send.call_args.args[1] in af._GOAL_FALLBACK["contacto"]
+        assert mgr.db.ai_followup_sessions._doc["status"] == "ended"
+
+    def test_menu_keeps_the_conversation_going(self, _common_patches):
+        mgr = FakeMgrWithSend(_session_doc())
+        _run(mgr, {"return_value": "2"}, inbound="1. Cotizar Mazda nuevo\n2. Cita inmediata de servicio\n3. Seminuevos")
+        assert mgr.db.ai_followup_sessions._doc["status"] == "waiting"
+
+
+# ── Hallazgos del simulador del Chat IA (2026-10-06) ─────────────────────────
+class TestSimulatorFindings:
+    def test_greeting_only(self):
+        assert af._is_greeting_only("¡Hola! 😊") and af._is_greeting_only("Hola, buenas tardes!")
+        assert not af._is_greeting_only("¿Qué modelo buscas?")
+
+    def test_real_answers_and_menus_are_not_auto_acks(self):
+        assert not af._is_auto_ack("¡Hola! Gracias por tu mensaje. El costo de una limpieza es de $500 pesos.")
+        assert not af._is_auto_ack("¡Hola! Sí, ofrecemos tratamientos para hombres. Quedo a la orden.")
+        assert not af._is_auto_ack("Gracias por contactarnos. Para ayudarte mejor, por favor elige una de las siguientes opciones:")
+        assert not af._is_auto_ack("3. Horarios de atención")
+        assert af._is_auto_ack("Gracias por comunicarte con Hidrogas, en breve te atendemos.")
+
+    def test_short_natural_phrases_are_not_copies_but_forbidden_ones_are(self):
+        assert not af._looks_copied_from_prompt("ah gracias")
+        assert not af._looks_copied_from_prompt("ah mira suena razonable déjame pensarlo y te aviso")
+        assert af._looks_copied_from_prompt("va gracias quedo a la orden")
+
+    def test_too_long(self):
+        assert af._too_long(" ".join(["palabra"] * 30))
+        assert not af._too_long("como 100 litros es pa un local chico")
+
+    def test_goal_counts_the_whole_burst(self):
+        turns = [{"role": "assistant", "content": "cuanto el gas"},
+                 {"role": "user", "content": "El precio del gas LP es de $12.50 por litro."},
+                 {"role": "user", "content": "¿Necesitas saber algo más?"}]
+        assert af._goal_reached(af._business_since_last_reply(turns)) == "precio"
+
+    def test_a_reply_with_a_question_does_not_close(self, _common_patches):
+        mgr = FakeMgr(_session_doc())
+        mgr.db.instances = MagicMock()
+        mgr.db.instances.find_one.return_value = {}
+        mgr.insert_message_log = lambda doc: "log2"
+        with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
+             patch("app.ai_followup._call_llm_for_reply", return_value="y ustedes lo hacen?[FIN]"):
+            af.process_inbound_reply(phone_number="5214428079840", company_id="aabbccddeeff001122334455",
+                                     inbound_body="Hacemos servicio de mantenimiento", inbound_log_id="log1")
+        final = [u["$set"] for u in mgr.db.ai_followup_sessions.updates if "status" in u.get("$set", {})][-1]
+        assert final["status"] == "waiting"
+
+    def test_greeting_only_waits_longer_before_answering(self, _common_patches, monkeypatch):
+        slept = []
+        monkeypatch.setattr(af.time, "sleep", lambda s: slept.append(s))
+        mgr = FakeMgr(_session_doc())
+        with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
+             patch("app.ai_followup._call_llm_for_reply", return_value="hola buenas"):
+            af.process_inbound_reply(phone_number="5214428079840", company_id="aabbccddeeff001122334455",
+                                     inbound_body="Hola, buenas tardes", inbound_log_id="log1")
+        assert slept and slept[0] >= af.GREETING_WAIT_MIN
+
+
+class TestSimulatorFindingsRound4:
+    def test_menu_pick_must_be_one_of_the_options(self):
+        menu = "Elige una opción:\n1. Ortodoncia\n2. Blanqueamiento\n3. Endodoncia"
+        assert af._invalid_menu_pick("H", menu)
+        assert not af._invalid_menu_pick("2", menu)
+        assert not af._invalid_menu_pick("Si", "[Opciones: Si | No]")
+        assert not af._invalid_menu_pick("ah va gracias", menu)
+
+    def test_menus_and_notices_do_not_reopen_after_goodbye(self):
+        assert af._is_bot_noise("¿Te gustaría saber más? Elige una de las siguientes opciones:")
+        assert af._is_bot_noise("3. Volver al menú principal")
+        assert not af._is_bot_noise("¿Y cuándo vienes a verlo?")
+
+    def test_deflect_phrases_count_as_a_close(self):
+        assert af._DEFLECT_RE.search(af._fold("mmm no estaba mal el precio déjame ver y te confirmo"))
+        assert not af._DEFLECT_RE.search(af._fold("un aveo 2015 que necesita mantenimiento"))

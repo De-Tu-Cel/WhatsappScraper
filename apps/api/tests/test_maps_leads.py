@@ -60,6 +60,29 @@ class TestLeadFromItem:
         lead = searcher._maps_lead_from_item(_item(), "+52", listed_url="https://www.facebook.com/x/")
         assert lead["listed_url"] == "https://www.facebook.com/x/"
 
+    @pytest.mark.parametrize("url", [
+        "https://wa.me/+526645742660",
+        "https://api.whatsapp.com/send?phone=526645742660&text=Hola",
+    ])
+    def test_whatsapp_link_gives_the_phone_when_maps_has_none(self, url):
+        lead = searcher._maps_lead_from_item(_item(phone=None), "+52", listed_url=url)
+        assert lead["phone"] == "+526645742660"
+
+    def test_maps_phone_wins_over_whatsapp_link(self):
+        lead = searcher._maps_lead_from_item(_item(), "+52", listed_url="https://wa.me/526645742660")
+        assert lead["phone"] == _item()["phone"]
+
+    @pytest.mark.parametrize("url", [
+        # Central Dental / Club boxeo cortés (Monterrey/Mérida, 2026-10-05):
+        # saved as a company named "WhatsApp.com" with domain wa.me.
+        "https://wa.me/528112345678", "https://api.whatsapp.com/send?phone=528112345678",
+        "https://linktr.ee/elmaravillastx",
+        "https://www.doctoralia.com.mx/nora-amelia-villegas/dentista/monterrey",
+    ])
+    def test_not_a_website_of_its_own(self, url):
+        # → the Maps business goes in as a phone lead, not scraped as a site
+        assert not searcher._is_business_url(url)
+
     @pytest.mark.parametrize("region,expected", [
         ("Qro.", "Querétaro"), ("Jal.", "Jalisco"), ("N.L.", "Nuevo León"), ("Q. Roo", "Quintana Roo"),
         ("Edo. Méx.", "Estado de México"), ("B.C.S.", "Baja California Sur"), ("Yucatán", "Yucatán"),
@@ -604,3 +627,66 @@ class TestLogoExtraction:
 
     def test_nothing_usable(self):
         assert _logo("<p>hola</p>") == ""
+
+
+class TestPreferMapsName:
+    """A site Google Maps found was saved under the name read from its page —
+    wrong for 6 of 28 measured on 2026-10-05 — while Maps had the name the
+    business registered. Cases are the real pairs (Maps name, page name)."""
+
+    from app.scraper import prefer_maps_name as _pick
+    _pick = staticmethod(_pick)
+
+    @pytest.mark.parametrize("maps,page,domain,category", [
+        ("OK Pastelería", "DELÉITATE CON NUESTROS SABORES EN REPOSTERÍA", "okpasteleria.mx", "Pastelería"),
+        ("Up Fitness Center", "upfitness.mx", "upfitness.mx", "Gimnasio"),
+        ("Up Fitness Center", "Upfitness", "upfitness.mx", "Gimnasio"),          # the capitalized-domain fallback
+        ("Central Dental", "WhatsApp.com", "wa.me", "Dentista"),
+        ("Bosch Car Service - Taller Automotriz Los Arcos, Taller Mecánico", "TALLER MECÁNICO EN QRO",
+         "boschcarservice-losarcos.mx", "Taller mecánico"),
+        ("Clínica Dental México", "ClínicaDentalMéxico", "clinicadentalmexico.mx", "Dentista"),
+        ("Anytime Fitness Plaza Odara Mérida", "Anytime Fitness", "anytimefitness.mx", "Gimnasio"),  # keeps the branch
+    ])
+    def test_maps_name_wins(self, maps, page, domain, category):
+        assert self._pick(page, maps, domain, category) == maps
+
+    @pytest.mark.parametrize("maps,page,category", [
+        ("Taller mecánico Premium: Gucar Automotriz Circuito Moliere", "GuCar - Taller Mecánico Automotriz Premium",
+         "Taller mecánico"),
+        ("AUTOMOTORS Servicio Automotriz Querétaro Afinación Frenos Suspensión", "AutoMotors Taller Mecánico en Querétaro",
+         "Taller mecánico"),
+        ("BANETTO. Panadería Boutique. Masa Madre", "Banetto", "Panadería"),
+        ("Dra. Ely Juliana Dentista Monterrey", "Dra. Ely Juliana", "Dentista"),
+    ])
+    def test_page_name_kept_when_maps_name_is_keyword_stuffed(self, maps, page, category):
+        assert self._pick(page, maps, "x.mx", category) == page
+
+    def test_without_a_maps_name_the_page_name_stays(self):
+        assert self._pick("Croissants Alfredo", "", "croissantsalfredo.com") == "Croissants Alfredo"
+        assert self._pick("Croissants Alfredo", None) == "Croissants Alfredo"
+
+    def test_maps_name_reaches_the_scraper(self):
+        oid = ObjectId()
+        mgr = _FakeMgr(companies=[{"_id": oid, "name": "OK Pastelería"}],
+                       ideas=[{"url": "https://okpasteleria.mx/", "industry": "pastelerías",
+                               "maps_name": "OK Pastelería", "maps_category": "Pastelería"}])
+        mgr.insert_person_contact = lambda c: None
+        scraped = {"name": "OK Pastelería", "industry": "Pastelería", "description": "", "metadata": {},
+                   "_company_id": oid, "_db_action": "created", "_extra": {},
+                   "_contacts_raw": {"whatsapp_numbers": [], "all_whatsapp_numbers": [], "phone_numbers": [],
+                                     "emails": [], "persons": []}}
+        with patch.object(pipeline, "MongoDBManager", return_value=mgr), \
+             patch.object(pipeline, "_check_blacklist", return_value=None), \
+             patch.object(pipeline, "_giro_category", return_value=""), \
+             patch.object(pipeline.WebsiteScraper, "scrape_site", return_value=scraped) as scrape, \
+             patch("whatsapp_wwebjs.get_all_connected_instances", return_value=[]):
+            pipeline.process_url("https://okpasteleria.mx/")
+        assert scrape.call_args.kwargs.get("maps_name") == "OK Pastelería"
+        assert scrape.call_args.kwargs.get("maps_category") == "Pastelería"
+
+    def test_scraper_saves_the_maps_name(self):
+        from app.scraper import WebsiteScraper, _soup_from_bytes
+        html = b"<html><head><title>DELEITATE CON NUESTROS SABORES</title></head><body><h1>Bienvenidos</h1></body></html>"
+        sc = WebsiteScraper.__new__(WebsiteScraper)
+        page = sc._extract_company_name(_soup_from_bytes(html), "https://okpasteleria.mx/")
+        assert self._pick(page, "OK Pastelería", "okpasteleria.mx", "Pastelería") == "OK Pastelería"

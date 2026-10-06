@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, Fragment, memo, useT
 import { MAX_WA_MSG } from '@/lib/validators'
 import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
+import { parseVCards, documentType, splitInlineOptions, mediaCaption } from '../lib/messageFormat'
 import { useUser } from '../context/UserContext'
 import { useNavigation } from '../context/NavigationContext'
 import { useDailyCapStats } from '../hooks/useDailyCapStats'
@@ -436,24 +437,7 @@ function formatSenderNumber(raw) {
   return d ? `+${d}` : null
 }
 
-// ── vCard parser ──────────────────────────────────────────────────────────────
-function parseVCards(text) {
-  const cards = []
-  const blocks = text.match(/BEGIN:VCARD[\s\S]*?END:VCARD/gi) || []
-  for (const block of blocks) {
-    const get = (key) => {
-      const re = new RegExp(`^${key}[^:]*:(.+)`, 'im')
-      const m = block.match(re)
-      return m ? m[1].trim() : ''
-    }
-    const fn = get('FN') || get('N').split(';').filter(Boolean).reverse().join(' ')
-    const tel = get('TEL')
-    const biz = get('X-WA-BIZ-NAME')
-    cards.push({ fn, tel, biz })
-  }
-  return cards
-}
-
+// ── vCard: parseVCards vive en lib/messageFormat.js (también lo usa el reporte) ──
 function VCardBubble({ text, isOut }) {
   const cards = parseVCards(text)
   if (!cards.length) return null
@@ -495,28 +479,6 @@ function VCardBubble({ text, isOut }) {
   )
 }
 
-// The MIME subtype alone is unreadable for Office formats (e.g.
-// "vnd.openxmlformats-officedocument.spreadsheetml.sheet") — map the ones
-// this app's own upload allow-list (_ALLOWED_MIME in routes.py) actually
-// accepts to their real file extensions (+ the accent each gets in the
-// document chip, matching the color each app already uses for its own
-// files elsewhere — red PDF, blue Word, green Excel, orange PowerPoint);
-// anything else falls back to the raw subtype, uppercased, in the app's
-// neutral accent.
-const _DOC_TYPES = {
-  'pdf':                                                                       { label: 'PDF',  color: '#f87171' },
-  'msword':                                                                    { label: 'DOC',  color: '#60a5fa' },
-  'vnd.openxmlformats-officedocument.wordprocessingml.document':              { label: 'DOCX', color: '#60a5fa' },
-  'vnd.ms-excel':                                                              { label: 'XLS',  color: '#4ade80' },
-  'vnd.openxmlformats-officedocument.spreadsheetml.sheet':                    { label: 'XLSX', color: '#4ade80' },
-  'vnd.ms-powerpoint':                                                        { label: 'PPT',  color: '#fb923c' },
-  'vnd.openxmlformats-officedocument.presentationml.presentation':           { label: 'PPTX', color: '#fb923c' },
-}
-function documentType(mimeType, fallbackLabel) {
-  const subtype = (mimeType || '').split('/')[1] || ''
-  return _DOC_TYPES[subtype] || { label: subtype ? subtype.toUpperCase() : fallbackLabel, color: null }
-}
-
 const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
   const { lang } = useLang()
   const isOut  = msg.direction === 'outbound'
@@ -537,7 +499,8 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
   const hasRealDocument = Boolean(msg.media_url) && !hasRealImage
   const isSticker = raw.trim().toLowerCase() === '[sticker]'
   const body   = raw || '—'
-  const interactive = msg.interactive
+  // Mensajes viejos sin `interactive`: las opciones vienen al final del texto ("[Opciones: …]").
+  const interactive = msg.interactive || (!isOut ? splitInlineOptions(raw) : null)
   const senderNum = isOut ? formatSenderNumber(msg.instance_number) : null
   // Nombre/foto real de WhatsApp de la instancia en vez del codename técnico
   // interno — el codename sigue disponible en el tooltip de esta misma etiqueta.
@@ -545,6 +508,12 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
   const sentTooltip = isOut && msg.instance_name
     ? (lang === 'en' ? `Sent from this number — instance: ${msg.instance_name}` : `Enviado desde este número — instancia: ${msg.instance_name}`)
     : (lang === 'en' ? 'Sent from this number' : 'Enviado desde este número')
+  // Quién escribió el mensaje — la sesión de arriba solo dice desde qué número
+  // salió, y cualquiera puede contestar por la sesión que lleva la conversación
+  // (ver /send-message en routes.py). Real ask, 2026-10-05: Gilad contestó por
+  // la sesión de Antonio y en el chat no había forma de saberlo. Los de la IA ya
+  // llevan su propio distintivo.
+  const sentByName = isOut && !isAI ? (msg.sent_by_name || '').trim() : ''
   return (
     <Box sx={{ display: 'flex', justifyContent: isOut ? 'flex-end' : 'flex-start', mb: 0.8, px: 2 }}>
       <Box sx={{
@@ -575,7 +544,7 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
             {/* An image can arrive with its own caption (msg.body IS the caption
                 text, not a placeholder) — this was silently dropped before,
                 unlike the document branch below which already showed it. */}
-            {body && !/^\[.*\]$/.test(body.trim()) && (
+            {mediaCaption(body, msg.media_url) && (
               <Typography sx={{ color: 'rgba(255,255,255,0.88)', fontSize: '0.83rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', mt: 0.8 }}>
                 {body}
               </Typography>
@@ -604,7 +573,7 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
                 {doc.label}
               </Typography>
             </Box>
-            {body && !/^\[.*\]$/.test(body.trim()) && (
+            {mediaCaption(body, msg.media_url) && (
               <Typography sx={{ color: 'rgba(255,255,255,0.88)', fontSize: '0.83rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', mt: 0.8 }}>
                 {body}
               </Typography>
@@ -624,18 +593,32 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
             {body}
           </Typography>
         )}
-        {sentLabel && (
-          <Tooltip title={sentTooltip}>
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 0.3, mt: 0.5, opacity: 0.55 }}>
-              {msg.instance_profile_pic_url
-                ? <Box component="img" src={msg.instance_profile_pic_url} alt=""
-                    sx={{ width: 10, height: 10, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
-                : <PhoneAndroidIcon sx={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }} />}
-              <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.62rem', fontFamily: 'monospace', letterSpacing: '0.01em' }}>
-                {sentLabel}
-              </Typography>
-            </Box>
-          </Tooltip>
+        {(sentLabel || sentByName) && (
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 0.7, mt: 0.5 }}>
+            {sentByName && (
+              <Tooltip title={lang === 'en' ? `Sent by ${sentByName}` : `Enviado por ${sentByName}`}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
+                  <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: agentColor(sentByName), boxShadow: '0 0 0 1px rgba(255,255,255,0.55)', flexShrink: 0 }} />
+                  <Typography sx={{ color: 'rgba(255,255,255,0.85)', fontSize: '0.66rem', fontWeight: 700, lineHeight: 1.3 }}>
+                    {sentByName.split(' ')[0]}
+                  </Typography>
+                </Box>
+              </Tooltip>
+            )}
+            {sentLabel && (
+              <Tooltip title={sentTooltip}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3, opacity: 0.55 }}>
+                  {msg.instance_profile_pic_url
+                    ? <Box component="img" src={msg.instance_profile_pic_url} alt=""
+                        sx={{ width: 10, height: 10, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
+                    : <PhoneAndroidIcon sx={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }} />}
+                  <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.62rem', fontFamily: 'monospace', letterSpacing: '0.01em' }}>
+                    {sentLabel}
+                  </Typography>
+                </Box>
+              </Tooltip>
+            )}
+          </Box>
         )}
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 0.5, mt: 0.25 }}>
           <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.65rem' }}>
@@ -1195,6 +1178,9 @@ export default function Conversations({ isActive } = {}) {
           created_at: now,
           sent_at: now,
           platform: 'evolution',
+          // Mismo valor que guarda /send-message (display_name o username) — así
+          // el nombre de quien envía aparece en la burbuja desde el primer instante.
+          sent_by_name: user?.display_name || user?.username || '',
           _optimistic: true,
         })),
       ])
@@ -1220,7 +1206,7 @@ export default function Conversations({ isActive } = {}) {
       setTimeout(() => setSendError(''), 8000)
     }
     finally { setSending(false) }
-  }, [selectedNums, waNumbers, selected, fetchThread, dailyStats, fetchDailyStats, lang])
+  }, [selectedNums, waNumbers, selected, fetchThread, dailyStats, fetchDailyStats, lang, user])
 
   // ── Sticker tray — a small shared library so picking one is a click (like
   // the emoji picker), instead of browsing the filesystem every time. ────────
@@ -1729,16 +1715,29 @@ export default function Conversations({ isActive } = {}) {
                   animation: 'threadAppear 0.18s ease',
                 }}>
                   {(() => {
-                    let lastDay = null
-                    return visibleThread.map(m => {
+                    // Un bloque por día: el divisor es sticky dentro de su propio bloque,
+                    // así al llegar al día siguiente el de arriba se va con su bloque en vez
+                    // de quedarse encimado debajo del nuevo ("1 de octubre" asomándose
+                    // detrás de "Ayer").
+                    const groups = []
+                    for (const m of visibleThread) {
                       const day = dayKey(m.created_at)
-                      const showDivider = day && day !== lastDay && !isToday(m.created_at)
-                      lastDay = day
+                      const last = groups[groups.length - 1]
+                      if (last && last.day === day) last.msgs.push(m)
+                      else groups.push({ day, msgs: [m] })
+                    }
+                    return groups.map((g, i) => {
+                      // Un chat que es todo de hoy no lleva divisor; si viene de días
+                      // anteriores, "Hoy" marca dónde empieza lo nuevo — sin él, lo de hoy
+                      // quedaba pegado debajo del último día (Taboo: el "Español" de Gilad
+                      // del 5 de octubre parecía del 21 de septiembre).
+                      const today = isToday(g.msgs[0].created_at)
+                      const showDivider = g.day && (!today || i > 0)
                       return (
-                        <Fragment key={m._id}>
-                          {showDivider && <DateDivider label={formatDateLabel(m.created_at, lang, t)} />}
-                          <MessageBubble msg={m} onReply={handleSendReply} />
-                        </Fragment>
+                        <Box key={`${g.day}-${i}`}>
+                          {showDivider && <DateDivider label={today ? t.convs.today : formatDateLabel(g.msgs[0].created_at, lang, t)} />}
+                          {g.msgs.map(m => <MessageBubble key={m._id} msg={m} onReply={handleSendReply} />)}
+                        </Box>
                       )
                     })
                   })()}

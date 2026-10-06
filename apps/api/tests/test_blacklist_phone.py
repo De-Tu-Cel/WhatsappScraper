@@ -173,6 +173,35 @@ class TestScheduledCampaignSkipsBlocked:
         assert sets[-1]["status"] == "done"
 
 
+class TestScheduledCampaignAttribution:
+    """Los mensajes de una campaña programada se atribuyen a quien la creó, no a
+    "Envio programado" (real ask, 2026-10-05)."""
+
+    def _run(self, job_extra):
+        from unittest.mock import MagicMock, patch
+        from bson import ObjectId
+        from app import scheduler
+        job_id = ObjectId()
+        job = {"_id": job_id, "messages": ["hola"], **job_extra,
+               "selected_numbers": [{"company_id": "", "number": "5215511112222", "company_name": "B"}]}
+        sched = MagicMock()
+        sched.find_one.return_value = job
+        db = FakeMgr(blacklist=[])
+        db.db.scheduled_sends = sched
+        db.db.app_notifications = MagicMock()
+        with patch("app.database.MongoDBManager", return_value=db),              patch.object(scheduler, "_any_instance_connected", return_value=True),              patch.object(scheduler, "_send_message", return_value=True) as send,              patch.object(scheduler.time, "sleep"):
+            scheduler._execute_send_job(str(job_id))
+        return send.call_args.kwargs
+
+    def test_sent_as_the_campaign_creator(self):
+        kw = self._run({"created_by_username": "tono", "created_by_name": "Antonio Dominguez"})
+        assert (kw["sent_by_username"], kw["sent_by_name"]) == ("tono", "Antonio Dominguez")
+
+    def test_old_jobs_without_creator_keep_the_generic_name(self):
+        kw = self._run({})
+        assert (kw["sent_by_username"], kw["sent_by_name"]) == ("scheduler", "Envio programado")
+
+
 class TestIndustryWordStart:
     """Longer entries match the beginning of a word, so the user doesn't have to
     guess the app's exact category name ("Cerrajero" vs "cerrajería")."""

@@ -35,7 +35,8 @@ const FIELD_SX = {
   '& .MuiFormHelperText-root': { color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem' },
 }
 
-const DEFAULTS = { max_turns: 3, extra_instructions: '' }
+// max_turns: mismo default que MAX_TURNS en ai_followup.py — el API lo manda igual si el chat no tiene uno guardado.
+const DEFAULTS = { max_turns: 6, extra_instructions: '' }
 
 export default function ChatAIConfig({ open, onClose, companyId, companyName, onSaved }) {
   const { t } = useLang()

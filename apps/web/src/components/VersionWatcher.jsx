@@ -6,7 +6,9 @@ import { useEffect } from 'react'
 // happened to refresh. This polls the running server's build id (/api/build-id)
 // and reloads the page as soon as it differs from the one the page was built
 // with — a forced update, on purpose: sends and scrape jobs run on the server
-// and the page reattaches to them after the reload.
+// and the page reattaches to them after the reload. The reloaded page then
+// signs the user out (UserContext: a session belongs to the version it signed
+// in with).
 //
 // buildId comes from the root layout (read on the server when the page was
 // rendered). It used to be read from window.__NEXT_DATA__, which only exists

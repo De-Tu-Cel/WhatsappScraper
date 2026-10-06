@@ -105,6 +105,8 @@ import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
 import { SendConfigPanel, CountdownBar } from './SendConfigPanel'
 import { loadSendConfig, randMsgDelayMs, randBatchBreakMs, randBatchSize } from '@/lib/sendConfig'
+import { parseUtc } from '@/lib/dates'
+import { STAT_STRIP_BG } from '@/lib/surfaces'
 
 // One section of the shared stats card (icon + label + value) — no border of
 // its own; lives inside ONE outer card together with the others, separated by
@@ -1114,7 +1116,7 @@ function StatsCardSkeleton() {
     <Box sx={{
       display: 'flex', flexWrap: 'wrap', overflow: 'hidden',
       borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
-      bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+      background: STAT_STRIP_BG,
     }}>
       {Array.from({ length: 6 }).map((_, i) => (
         <Fragment key={i}>
@@ -1562,7 +1564,7 @@ export default function DatabaseViewer({ isActive }) {
   const [scrapeAgeDisplay, setScrapeAgeDisplay] = useState(null)
   useEffect(() => {
     if (!globalStats.latest_scrape_at) { setScrapeAgeDisplay(null); return }
-    const daysAgo = Math.max(0, Math.floor((Date.now() - new Date(globalStats.latest_scrape_at).getTime()) / 86_400_000))
+    const daysAgo = Math.max(0, Math.floor((Date.now() - parseUtc(globalStats.latest_scrape_at).getTime()) / 86_400_000))
     const color = daysAgo <= 1 ? '#4ade80' : daysAgo <= 7 ? '#fbbf24' : '#f87171'
     setScrapeAgeDisplay({ daysAgo, color })
   }, [globalStats.latest_scrape_at])
@@ -2005,7 +2007,7 @@ export default function DatabaseViewer({ isActive }) {
             <Box sx={{
               display: 'flex', flexWrap: 'wrap', overflow: 'hidden',
               borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
-              bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
+              background: STAT_STRIP_BG,
             }}>
               {statCards.map(({ key, ...c }, i) => (
                 <Fragment key={key}>

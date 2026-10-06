@@ -7,6 +7,7 @@ const fs = require('fs')
 const path = require('path')
 const dns = require('dns')
 const net = require('net')
+const http = require('http')
 
 puppeteerExtra.use(StealthPlugin())
 
@@ -53,6 +54,119 @@ function sessionUsesProxy(sessionId) {
   if (!PROXY_SERVER) return false
   if (PROXY_ONLY_SESSIONS.length === 0) return true
   return PROXY_ONLY_SESSIONS.includes(sessionId)
+}
+
+// Ajustes por sesión — proxy propio (una IP fija por número) y modo ligero — que manda
+// el backend con PUT /session/:id/settings. Se guardan en el volumen de sesiones, junto
+// a los logins, para que sobrevivan reinicios y deploys sin variables de entorno. El
+// nombre NO empieza con "session-" a propósito: autoRestoreSessions() trata así a las
+// carpetas de login. Un proxy propio tiene prioridad sobre el global de PROXY_SERVER.
+const SETTINGS_FILE = path.join(SESSIONS_PATH, 'wwebjs-settings.json')
+let sessionSettings = {}
+try { sessionSettings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) || {} } catch (_) {}
+
+function saveSessionSettings() {
+  fs.mkdirSync(SESSIONS_PATH, { recursive: true })
+  const tmp = `${SETTINGS_FILE}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(sessionSettings), { mode: 0o600 })
+  fs.renameSync(tmp, SETTINGS_FILE)
+}
+
+function proxyFor(sessionId) {
+  const own = sessionSettings[sessionId]?.proxy
+  if (own?.server) return own
+  if (sessionUsesProxy(sessionId)) return { server: PROXY_SERVER, username: PROXY_USERNAME, password: PROXY_PASSWORD }
+  return null
+}
+
+// Modo ligero: menos procesos de Chrome por sesión. El de gráficos y el de audio corren
+// dentro del principal, y sin aislamiento por sitio las páginas internas de WhatsApp Web
+// comparten proceso. Más la pantalla interna de 800×600 en vez de 1280×800. Se activa
+// por sesión para medirlo primero en un número piloto contra los demás.
+const LEAN_ARGS = [
+  '--in-process-gpu',
+  '--renderer-process-limit=2',
+  '--disable-site-isolation-trials',
+  '--disable-features=IsolateOrigins,SitePerProcess,AudioServiceOutOfProcess',
+  '--window-size=800,600',
+]
+
+function isLean(sessionId) {
+  return Boolean(sessionSettings[sessionId]?.lean)
+}
+
+// Intermediario local por sesión para proxies con usuario y contraseña. Chrome se conecta a
+// 127.0.0.1:<puerto> sin credenciales y este reenvía al proxy real agregándolas. Hace falta
+// porque la autenticación de Puppeteer (page.authenticate / proxyAuthentication) solo cubre
+// a la página, no al service worker que WhatsApp Web instala en el perfil: desde el segundo
+// arranque de una sesión el service worker carga la página y el proxy lo rechazaba con
+// "ERR_TUNNEL_CONNECTION_FAILED" (probado 2026-10-05: el primer arranque siempre funcionaba,
+// cualquier reinicio fallaba). De paso, un proxy caído ya no deja que Chrome salga directo
+// por la IP del servidor: el intermediario siempre responde, y con un 502 si el proxy no.
+const relays = new Map() // sessionId -> { key, server, port }
+let nextRelayPort = Number(process.env.PROXY_RELAY_BASE_PORT || 41000)
+
+function relayFor(sessionId, proxy) {
+  const key = `${proxy.server}|${proxy.username}|${proxy.password}`
+  const existing = relays.get(sessionId)
+  if (existing?.key === key) return `127.0.0.1:${existing.port}`
+  if (existing) existing.server.close()
+  const [upHost, upPortStr] = proxy.server.replace(/^\w+:\/\//, '').split(':')
+  const upPort = Number(upPortStr)
+  const auth = 'Basic ' + Buffer.from(`${proxy.username}:${proxy.password}`).toString('base64')
+
+  const server = http.createServer((req, res) => {
+    // HTTP sin TLS (raro: WhatsApp Web es todo https/wss): se reenvía con la autenticación.
+    const up = http.request({ host: upHost, port: upPort, method: req.method, path: req.url,
+      headers: { ...req.headers, 'proxy-authorization': auth } })
+    up.on('response', r => { res.writeHead(r.statusCode, r.headers); r.pipe(res) })
+    up.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end() })
+    req.pipe(up)
+  })
+  server.on('connect', (req, client, head) => {
+    const up = net.connect(upPort, upHost, () => {
+      up.write(`CONNECT ${req.url} HTTP/1.1\r\nHost: ${req.url}\r\nProxy-Authorization: ${auth}\r\n\r\n`)
+    })
+    let buf = Buffer.alloc(0)
+    const onData = (chunk) => {
+      buf = Buffer.concat([buf, chunk])
+      const end = buf.indexOf('\r\n\r\n')
+      if (end === -1) {
+        if (buf.length > 16384) { client.destroy(); up.destroy() }
+        return
+      }
+      up.removeListener('data', onData)
+      if (!/^HTTP\/1\.[01] 200/.test(buf.subarray(0, buf.indexOf('\r\n')).toString())) {
+        client.end('HTTP/1.1 502 Bad Gateway\r\n\r\n')
+        up.destroy()
+        return
+      }
+      client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
+      const rest = buf.subarray(end + 4)
+      if (rest.length) client.write(rest)
+      if (head?.length) up.write(head)
+      up.pipe(client)
+      client.pipe(up)
+    }
+    up.on('data', onData)
+    up.on('error', () => client.destroy())
+    client.on('error', () => up.destroy())
+  })
+  server.on('error', (e) => console.error(`[${sessionId}] Proxy relay error: ${e.message}`))
+  const port = nextRelayPort++
+  server.listen(port, '127.0.0.1')
+  relays.set(sessionId, { key, server, port })
+  return `127.0.0.1:${port}`
+}
+
+function closeRelay(sessionId) {
+  const r = relays.get(sessionId)
+  if (r) { r.server.close(); relays.delete(sessionId) }
+}
+
+// Lo que va en --proxy-server: el intermediario local si el proxy pide usuario y contraseña.
+function proxyServerArg(sessionId, proxy) {
+  return proxy.username ? relayFor(sessionId, proxy) : proxy.server
 }
 
 // sessionId → { client, status, qr, phone, presenceTimer, reconnectTimer }
@@ -405,7 +519,9 @@ function stripMediaCollisionId(media) {
   return media
 }
 
-function createClient(sessionId, phoneNumber) {
+function createClient(sessionId, phoneNumber, initAttempt = 0) {
+  const proxy = proxyFor(sessionId)
+  const lean = isLean(sessionId)
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: sessionId, dataPath: SESSIONS_PATH }),
     // Pairing-code linking instead of QR: whatsapp-web.js's initialize() branches on
@@ -414,14 +530,8 @@ function createClient(sessionId, phoneNumber) {
     // gives a much wider window than a QR frame (~20s), useful when the phone being
     // linked isn't in the same room as whoever's running this.
     ...(phoneNumber ? { pairWithPhoneNumber: { phoneNumber, showNotification: true } } : {}),
-    // Only whatsapp-web.js's own traffic needs the proxy credentials — the
-    // --proxy-server Chromium flag below routes the connection, this just
-    // answers the proxy's auth challenge for it (Basic auth doesn't work via
-    // the URL for Chromium's own requests, per Puppeteer's documented proxy
-    // auth pattern).
-    ...(sessionUsesProxy(sessionId) && PROXY_USERNAME
-      ? { proxyAuthentication: { username: PROXY_USERNAME, password: PROXY_PASSWORD } }
-      : {}),
+    // Sin proxyAuthentication: las credenciales del proxy las pone el intermediario local
+    // (relayFor, arriba) — page.authenticate no cubría al service worker de WhatsApp Web.
     puppeteer: {
       puppeteer: puppeteerExtra,
       headless: true,
@@ -455,9 +565,10 @@ function createClient(sessionId, phoneNumber) {
         '--metrics-recording-only',
         '--mute-audio',
         '--js-flags=--max-old-space-size=256',
-        ...(sessionUsesProxy(sessionId) ? [`--proxy-server=${PROXY_SERVER}`] : []),
+        ...(proxy ? [`--proxy-server=${proxyServerArg(sessionId, proxy)}`] : []),
+        ...(lean ? LEAN_ARGS : []),
       ],
-      defaultViewport: { width: 1280, height: 800 },
+      defaultViewport: lean ? { width: 800, height: 600 } : { width: 1280, height: 800 },
     },
   })
 
@@ -466,7 +577,7 @@ function createClient(sessionId, phoneNumber) {
   // tell "someone has the reconnect dialog open" from "nobody's watching, stop
   // burning CPU generating QR/codes forever" (see that function's own comment
   // for the real incident this fixes).
-  const session = { client, status: 'initializing', qr: null, pairingCode: null, phoneNumber, phone: null, presenceTimer: null, reconnectTimer: null, readyWatchdog: null, ackFailStreak: 0, ackDegraded: false, profileSyncTimer: null, heartbeatTimer: null, heartbeatFailStreak: 0, initPromise: null, lastPushname: null, lastProfilePicUrl: null, lastPolledAt: Date.now() }
+  const session = { client, status: 'initializing', qr: null, pairingCode: null, phoneNumber, initAttempt, phone: null, presenceTimer: null, reconnectTimer: null, readyWatchdog: null, ackFailStreak: 0, ackDegraded: false, profileSyncTimer: null, heartbeatTimer: null, heartbeatFailStreak: 0, initPromise: null, lastPushname: null, lastProfilePicUrl: null, lastPolledAt: Date.now() }
   sessions.set(sessionId, session)
 
   client.on('qr', (qr) => {
@@ -840,9 +951,38 @@ function createClient(sessionId, phoneNumber) {
   session.initPromise = client.initialize().catch((e) => {
     console.error(`[${sessionId}] Initialize error:`, e.message)
     session.status = 'error'
+    scheduleInitRetry(sessionId, session, e.message)
   })
 
   return session
+}
+
+// Un error de red al abrir WhatsApp Web suele ser momentáneo — sobre todo con proxy: visto
+// 2026-10-05, "ERR_TUNNEL_CONNECTION_FAILED" justo al reiniciar una sesión, con el mismo
+// proxy respondiendo bien segundos después. Antes la sesión se quedaba en "error" hasta que
+// alguien le diera reconectar. Solo errores de red (net::ERR_*): los demás siguen igual.
+const INIT_RETRY_DELAYS_MS = [15000, 45000, 90000]
+
+function scheduleInitRetry(sessionId, session, message) {
+  const attempt = session.initAttempt || 0
+  if (!/net::ERR_/.test(message || '') || attempt >= INIT_RETRY_DELAYS_MS.length) return
+  setTimeout(() => {
+    const prior = _startLocks.get(sessionId) || Promise.resolve()
+    const thisCall = prior.then(async () => {
+      // Ya la reemplazó otro /start o /settings, o ya no está en error: no tocarla.
+      if (sessions.get(sessionId) !== session || session.status !== 'error') return
+      clearInterval(session.presenceTimer)
+      clearInterval(session.profileSyncTimer)
+      clearInterval(session.heartbeatTimer)
+      clearTimeout(session.reconnectTimer)
+      clearTimeout(session.readyWatchdog)
+      await destroySessionClient(session.client, sessionId, session.initPromise)
+      sessions.delete(sessionId)
+      console.log(`[${sessionId}] Retrying after a network error (attempt ${attempt + 1}/${INIT_RETRY_DELAYS_MS.length})`)
+      createClient(sessionId, session.phoneNumber, attempt + 1)
+    })
+    _startLocks.set(sessionId, thisCall.catch(() => {}))
+  }, INIT_RETRY_DELAYS_MS[attempt])
 }
 
 // Auto-restore sessions from disk on startup
@@ -1482,6 +1622,7 @@ app.delete('/session/:id', async (req, res) => {
     clearTimeout(session.readyWatchdog)
     await destroySessionClient(session.client, id, session.initPromise)
     sessions.delete(id)
+    closeRelay(id)
     return { notFound: false }
   })
   _startLocks.set(id, thisCall.catch(() => {}))
@@ -1502,6 +1643,141 @@ app.get('/sessions', (req, res) => {
   }
   res.json(result)
 })
+
+function publicSettings(id) {
+  const s = sessionSettings[id] || {}
+  return {
+    proxy: s.proxy?.server ? { server: s.proxy.server, username: s.proxy.username || null } : null,
+    lean: Boolean(s.lean),
+  }
+}
+
+app.get('/session/:id/settings', (req, res) => res.json(publicSettings(req.params.id)))
+
+// Cambia el proxy propio y/o el modo ligero de una sesión. Si la sesión está corriendo
+// y algo cambió, la reinicia para que su Chrome arranque con lo nuevo — mismo desmontaje
+// y mismo candado que /start y DELETE. El login guardado no se toca: reconecta sola, sin
+// escanear el QR. `restart: false` solo guarda (p. ej. al dar de baja la instancia).
+app.put('/session/:id/settings', async (req, res) => {
+  const { id } = req.params
+  const body = req.body || {}
+  const prev = sessionSettings[id] || {}
+  const next = { ...prev }
+  if ('proxy' in body) {
+    const p = body.proxy
+    if (p && (typeof p.server !== 'string' || !/^((https?|socks5?):\/\/)?[\w.-]+:\d{2,5}$/.test(p.server))) {
+      return res.status(400).json({ error: 'proxy.server debe ser host:puerto' })
+    }
+    next.proxy = p ? { server: p.server, username: p.username || '', password: p.password || '' } : null
+  }
+  if ('lean' in body) next.lean = Boolean(body.lean)
+  // Se compara lo que de verdad cambia el arranque de Chrome: "sin ajustes" y "sin proxy
+  // ni modo ligero" son lo mismo. Sin esto, el backend al re-sincronizar en cada deploy
+  // reiniciaría sesiones que no lo necesitan.
+  const launchKey = s => JSON.stringify([s.proxy?.server ? [s.proxy.server, s.proxy.username || '', s.proxy.password || ''] : null, Boolean(s.lean)])
+  const changed = launchKey(prev) !== launchKey(next)
+  sessionSettings[id] = next
+  try { saveSessionSettings() } catch (e) { return res.status(500).json({ error: e.message }) }
+
+  let restarted = false
+  if (changed && body.restart !== false && sessions.has(id)) {
+    try { restarted = await restartSession(id) } catch (e) { return res.status(500).json({ error: e.message }) }
+    console.log(`[${id}] Settings changed — session restarted (proxy: ${next.proxy?.server ? 'own' : 'none'}, lean: ${Boolean(next.lean)})`)
+  }
+  res.json({ success: true, restarted, ...publicSettings(id) })
+})
+
+// Reinicia una sesión que está corriendo para que su Chrome arranque con sus ajustes
+// actuales — mismo desmontaje y mismo candado que /start y DELETE. El login guardado no
+// se toca: reconecta sola, sin escanear el QR.
+function restartSession(id) {
+  const prior = _startLocks.get(id) || Promise.resolve()
+  const thisCall = prior.then(async () => {
+    const s = sessions.get(id)
+    if (!s) return false
+    clearInterval(s.presenceTimer)
+    clearInterval(s.profileSyncTimer)
+    clearInterval(s.heartbeatTimer)
+    clearTimeout(s.reconnectTimer)
+    clearTimeout(s.readyWatchdog)
+    await destroySessionClient(s.client, id, s.initPromise)
+    sessions.delete(id)
+    if (!proxyFor(id)?.username) closeRelay(id)
+    createClient(id)
+    return true
+  })
+  _startLocks.set(id, thisCall.catch(() => {}))
+  return thisCall
+}
+
+// Memoria real de cada sesión: su Chrome y todos sus procesos hijos, para comparar el
+// modo ligero contra las demás. PSS (/proc/<pid>/smaps_rollup) reparte la memoria
+// compartida entre procesos; sumar RSS la contaría varias veces. Solo Linux.
+function _pssKb(pid) {
+  try {
+    const m = fs.readFileSync(`/proc/${pid}/smaps_rollup`, 'utf8').match(/^Pss:\s+(\d+) kB/m)
+    return m ? Number(m[1]) : 0
+  } catch (_) { return 0 }
+}
+
+function sessionMemory() {
+  const children = new Map()
+  for (const d of fs.readdirSync('/proc')) {
+    if (!/^\d+$/.test(d)) continue
+    try {
+      const stat = fs.readFileSync(`/proc/${d}/stat`, 'utf8')
+      const ppid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1])
+      if (!children.has(ppid)) children.set(ppid, [])
+      children.get(ppid).push(Number(d))
+    } catch (_) {}
+  }
+  const result = {}
+  for (const [id, s] of sessions) {
+    const root = s.client?.pupBrowser?.process?.()?.pid
+    if (!root) { result[id] = { memory_mb: null, processes: 0, lean: isLean(id) }; continue }
+    const stack = [root]; let kb = 0; let count = 0
+    while (stack.length) {
+      const pid = stack.pop()
+      kb += _pssKb(pid); count += 1
+      for (const c of children.get(pid) || []) stack.push(c)
+    }
+    result[id] = { memory_mb: Math.round(kb / 1024), processes: count, lean: isLean(id) }
+  }
+  return result
+}
+
+app.get('/sessions/memory', (req, res) => {
+  if (process.platform !== 'linux') return res.json({ supported: false, sessions: {} })
+  res.json({ supported: true, sessions: sessionMemory() })
+})
+
+// Parte del modo ligero: WhatsApp Web va acumulando memoria con los días (la semana del
+// 2026-09-28 el contenedor subió de 63% a 70% en un día). Una sesión en modo ligero que
+// pasa de NIGHT_RESTART_MB se reinicia sola de madrugada (3-5 am, hora de México), una a la
+// vez y como mucho una vez al día. Se desconecta 1-2 minutos; los mensajes que lleguen en
+// ese rato se entregan al reconectar, igual que en un deploy.
+const NIGHT_RESTART_MB = Number(process.env.NIGHT_RESTART_MB || 900)
+const lastNightRestart = new Map()
+
+function mexicoHour() {
+  return Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Mexico_City', hour: 'numeric', hourCycle: 'h23' }).format(new Date()))
+}
+
+async function nightlyRestartSweep() {
+  if (process.platform !== 'linux') return
+  const hour = mexicoHour()
+  if (hour < 3 || hour >= 5) return
+  const mem = sessionMemory()
+  for (const [id, s] of sessions) {
+    if (!isLean(id) || s.status !== 'connected') continue
+    if ((mem[id]?.memory_mb || 0) < NIGHT_RESTART_MB) continue
+    if (Date.now() - (lastNightRestart.get(id) || 0) < 20 * 3600 * 1000) continue
+    lastNightRestart.set(id, Date.now())
+    console.log(`[${id}] Nightly restart: ${mem[id].memory_mb} MB > ${NIGHT_RESTART_MB} MB`)
+    try { await restartSession(id) } catch (e) { console.error(`[${id}] Nightly restart failed: ${e.message}`) }
+    return // una por vuelta: la siguiente, en 10 minutos
+  }
+}
 
 // Verifies which outbound IP WhatsApp traffic is actually using — opens a new
 // tab in a REAL connected session's own browser (same process, same
@@ -1524,10 +1800,10 @@ app.get('/proxy-check', async (req, res) => {
     await page.goto('https://ipinfo.io/json', { waitUntil: 'networkidle0', timeout: 15000 })
     const body = await page.evaluate(() => document.body.innerText)
     const info = JSON.parse(body)
-    const usedProxy = sessionUsesProxy(sessionId || [...sessions.entries()].find(([, s]) => s === session)?.[0])
+    const proxy = proxyFor(sessionId || [...sessions.entries()].find(([, s]) => s === session)?.[0])
     res.json({
-      proxy_configured: usedProxy,
-      proxy_server: usedProxy ? PROXY_SERVER : null,
+      proxy_configured: Boolean(proxy),
+      proxy_server: proxy?.server || null,
       outbound_ip: info.ip,
       city: info.city, region: info.region, country: info.country, org: info.org,
     })
@@ -1573,4 +1849,5 @@ app.listen(PORT, () => {
   console.log(`wwebjs-service on port ${PORT}`)
   autoRestoreSessions()
   setInterval(sweepIdleReconnectSessions, 60 * 1000)
+  setInterval(() => { nightlyRestartSweep().catch(() => {}) }, 10 * 60 * 1000)
 })

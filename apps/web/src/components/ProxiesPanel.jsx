@@ -2,7 +2,7 @@
 // Proxies por número de WhatsApp: el pool (Instancias → Proxies) y el diálogo de cada
 // número (su proxy, modo ligero, memoria y por qué IP sale). La lógica vive en el backend
 // (apps/api/app/proxies.py); aquí nunca llega una contraseña.
-import { useState, useEffect, useCallback, Fragment } from 'react'
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Button from '@mui/material/Button'
@@ -336,14 +336,38 @@ export function ProxiesSection({ onChanged }) {
   const [importOpen, setImportOpen] = useState(false)
   const [busy, setBusy] = useState('')
 
+  // Qué número usa qué proxy: si cambia sin que hayas hecho nada aquí (asignación automática,
+  // un proxy caído que movió sus números, o el menú ⋯ de una fila), se recarga también la
+  // lista de Instancias para que sus chips de proxy digan lo mismo.
+  const assignSig = useRef('')
+  const sigOf = d => (d?.proxies || []).map(p => `${p.id}:${(p.instances || []).join(',')}`).join('|')
+
   const load = useCallback(async () => {
-    try { setData(await api('')); setErr('') } catch (e) { setErr(e.message) }
+    try { const d = await api(''); assignSig.current = sigOf(d); setData(d); setErr('') } catch (e) { setErr(e.message) }
   }, [])
   useEffect(() => {
     let alive = true
-    api('').then(d => { if (alive) setData(d) }).catch(e => { if (alive) setErr(e.message) })
+    api('').then(d => { if (alive) { assignSig.current = sigOf(d); setData(d) } }).catch(e => { if (alive) setErr(e.message) })
     return () => { alive = false }
   }, [])
+
+  // Se actualiza sola cada 10 s mientras la página está a la vista: con la asignación
+  // automática los números cambian de proxy en segundo plano (al prenderla pasan uno tras
+  // otro en un par de minutos).
+  useEffect(() => {
+    const id = setInterval(async () => {
+      if (document.visibilityState !== 'visible') return
+      try {
+        const d = await api('')
+        const sig = sigOf(d)
+        const moved = assignSig.current && sig !== assignSig.current
+        assignSig.current = sig
+        setData(d)
+        if (moved) onChanged?.()
+      } catch { /* la siguiente vuelta lo vuelve a intentar */ }
+    }, 10000)
+    return () => clearInterval(id)
+  }, [onChanged])
 
   const run = async (key, fn) => {
     setBusy(key); setErr('')

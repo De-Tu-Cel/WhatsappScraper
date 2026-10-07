@@ -2533,12 +2533,14 @@ def api_generate_report(company_id: str, req: ReportRequest):
         thread = db.get_conversation_thread(company_id)
 
         if req.filter_number:
-            norm = lambda n: re.sub(r'\D', '', n or '')[-10:]
-            fn   = norm(req.filter_number)
-            thread = [
-                m for m in thread
-                if norm(m.get('to_number') or m.get('from_number') or m.get('number') or '') == fn
-            ]
+            # Mazda Santa Anita (2026-10-06): las respuestas con LID se quedaban fuera
+            # del PDF del número. Son del número al que le escribimos justo antes.
+            from app.classifier import assign_thread_numbers
+            fn = re.sub(r'\D', '', req.filter_number or '')[-10:]
+            for m in thread:
+                if m.get('direction') == 'inbound' and not m.get('from_number'):
+                    m['from_number'] = m.get('number')
+            thread = [m for m in assign_thread_numbers(thread) if m.get('_num') == fn]
 
         pdf_buf = generate_report(
             company=serialize(company),
@@ -4927,11 +4929,8 @@ def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
         {"instance_a": 1, "instance_b": 1, "messages": 1},
     ))
     stats = _dd(lambda: {"sent": 0, "received": 0, "last_msg_at": None})
-    partner_map = {}  # instance_name -> partner_name for today
     for sess in all_sessions:
         a, b = sess["instance_a"], sess["instance_b"]
-        partner_map[a] = b
-        partner_map[b] = a
         for msg in sess.get("messages", []):
             sender, receiver = (a, b) if msg.get("speaker") == "a" else (b, a)
             stats[sender]["sent"]     += 1
@@ -4953,23 +4952,17 @@ def warmup_get_instances(x_user_token: Optional[str] = Header(None)):
     tomorrow_mx = (now_mx + _td(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     next_rotation_at = tomorrow_mx.isoformat()
 
-    # Compute expected pairs from rotation algorithm.
-    # Overrides existing session partner when that partner is now disabled —
-    # this happens when an instance is removed from warmup mid-day and a new
-    # pair is formed that hasn't exchanged a message yet.
+    # La pareja que se pinta es la rotación de hoy, los dos lados a la vez.
+    # Una sesión vieja del mismo día (cambió quién estaba conectado) no puede
+    # dejar a una sola instancia apuntando al compañero anterior: sender666 y
+    # gely-wa (2026-10-06) salían de un color que nadie más tenía.
+    from app.warmup_queue import _get_today_pairs, _get_warmup_instances, resolve_display_partners
     try:
-        from app.warmup_queue import _get_warmup_instances, _get_today_pairs
-        _disabled = {i["name"] for i in raw if i.get("peer_warmup_enabled") is False}
-        # Reuse _st (already fetched above) instead of letting this trigger a
-        # second full round of the same per-instance wwebjs status HTTP calls.
         _live_insts = _get_warmup_instances(db, session_status=_st)
-        _expected_pairs = _get_today_pairs(_live_insts)
-        for _ia, _ib in _expected_pairs:
-            for _self, _other in ((_ia["name"], _ib["name"]), (_ib["name"], _ia["name"])):
-                if _self not in partner_map or partner_map[_self] in _disabled:
-                    partner_map[_self] = _other
+        _expected_pairs = [(a["name"], b["name"]) for a, b in _get_today_pairs(_live_insts)]
     except Exception:
-        pass
+        _expected_pairs = []
+    partner_map = resolve_display_partners(all_sessions, _expected_pairs)
 
     result = []
     for inst in raw:

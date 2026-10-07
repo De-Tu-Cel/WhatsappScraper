@@ -94,6 +94,27 @@ def agreement(timing: str | None, ia: str | None, hibrido: str | None) -> dict:
     return pairs
 
 
+def _failed_sends(db, company_id: str, number: str | None = None) -> int:
+    """Envíos que no llegaron. No entran a la plática (NOT_FAILED), pero el log tiene que
+    decirlo: si no, parece que todavía no le escribimos. GAS 5 DE MAYO y aztecagas
+    (2026-10-06), los dos intentos quedaron en failed."""
+    try:
+        rows = db.db.message_logs.find(
+            {"company_id": company_id, "direction": "outbound", "status": "failed"},
+            {"to_number": 1},
+        )
+    except Exception:
+        return 0
+    n = 0
+    for row in rows:
+        if number:
+            digits = "".join(c for c in (row.get("to_number") or "") if c.isdigit())[-10:]
+            if digits != number:
+                continue
+        n += 1
+    return n
+
+
 def _messages(db, company_id: str, limit: int = 0, number: str | None = None) -> list:
     """Plática de la empresa en orden, sin lo mandado a números que nunca contestaron
     (classifier.drop_unanswered_threads). Con `number`, solo la plática de ese número."""
@@ -119,7 +140,16 @@ def _result(method: str, common: str, trace: list, **extra) -> dict:
 # ── 1. Timing: el diagrama de flujo, paso por paso ─────────────────────────────
 def run_timing(db, company_id: str, settings: dict | None = None, now: datetime | None = None,
                number: str | None = None) -> dict:
-    from app.classifier import _looks_like_menu
+    from app.classifier import (
+        _VIRTUAL_ASSISTANT_RE, _is_choice_menu, _is_ignorable_body, _looks_like_menu,
+    )
+
+    def _opening_is_bot(body: str) -> bool:
+        # Taboo y Rivera Gas (2026-10-06): el menú llegó a los 11 s, más que T1, y no hubo
+        # segundo mensaje. Compugadget: el menú tardó 24 min. El Chopo: el segundo mensaje
+        # era un menú a los 7 s. Eso es un bot, no un humano ni Automático + Humano.
+        text = body or ""
+        return bool(_looks_like_menu(text) or _is_choice_menu(text) or _VIRTUAL_ASSISTANT_RE.search(text))
     s = settings or db.get_classifier_settings()
     t1_max, t2_max = s["t1_threshold_seconds"], s["t2_threshold_seconds"]
     wait = s["probe_wait_hours"] * 3600
@@ -159,45 +189,114 @@ def run_timing(db, company_id: str, settings: dict | None = None, now: datetime 
 
     outs = [m for m in msgs if m["direction"] == "outbound"]
     if not outs:
-        step("Enviar primer mensaje", "Todavía no le escribimos a esta empresa.")
+        # Sin esta fila la tabla queda toda en gris y el resultado Pendiente no tiene flecha.
+        checks.insert(0, {
+            "key": "envio1", "cond": "¿Llegó nuestro primer mensaje?", "limite": "—",
+            "medido": None, "estado": "no_evaluada",
+        })
+        if _failed_sends(db, company_id, number):
+            check("envio1", "no", "no llegó")
+            step("Enviar primer mensaje",
+                 "Se intentó escribir, pero el envío falló y el mensaje no llegó. No hay conversación que medir.")
+        else:
+            check("envio1", "pendiente", "no se ha mandado")
+            step("Enviar primer mensaje", "Todavía no le escribimos a esta empresa.")
         return done("pendiente")
-    # El diagrama mide siempre la respuesta al PRIMER mensaje, al pie de la letra (así la
-    # columna Timing representa el algoritmo tal como se diseñó).
     first_out = outs[0]
     step("Enviar primer mensaje", f"{_when(first_out['created_at'])} — {_quote(first_out.get('message_body'))}")
+    # Mazda Santa Anita (2026-10-06): el asistente digital contestó a los 9 s en un número
+    # y "no estamos interesados" llegó media hora después en otro. El diagrama los lee juntos.
+    nums = []
+    for m in msgs:
+        n = m.get("_num")
+        if n and n not in nums:
+            nums.append(n)
+    if len(nums) > 1:
+        step("Varios números",
+             "Hay mensajes de " + ", ".join(nums) + ". Este diagrama los lee juntos, por hora: "
+             "la primera respuesta que llega es la que decide, aunque sea de otro número. "
+             "Cada número por separado se clasifica en su propia fila.")
     step("Activar temporizador T1", f"Espera hasta {wait_label} a que el negocio responda.")
+    # Servi-Gas (2026-10-06): "Buenas tardes" llegó 21 min antes. Solo IA lo lee y dice Humano;
+    # este diagrama no lo cuenta, y el log tiene que decir por qué.
+    early = [m for m in msgs if m["direction"] == "inbound" and m["created_at"] < first_out["created_at"]
+             and not _is_ignorable_body(m.get("message_body"))]
+    if early:
+        shown = early[-1]
+        step("Llegó antes de que escribiéramos",
+             f"{_when(shown['created_at'])} — {_quote(shown.get('message_body'))}. "
+             "No es una contestación: ya estaba en el chat cuando mandamos el primer mensaje.")
 
-    first_in = next((m for m in msgs if m["direction"] == "inbound" and m["created_at"] > first_out["created_at"]), None)
-    # Si contestaron, pero a un reintento posterior (caso real: Laboratorio del Chopo — al
-    # "Hola" del 22/06 nunca contestaron y al "Buenas tardes" del 23/06 un bot contestó en
-    # 5 s), se anota en el log sin cambiar el resultado del diagrama.
-    retry = first_in and [m for m in outs if first_out["created_at"] < m["created_at"] < first_in["created_at"]]
-    retry_note = None
-    if retry and (first_in["created_at"] - first_out["created_at"]).total_seconds() > wait:
-        answered = retry[-1]
-        retry_note = (f"El negocio contestó {_secs((first_in['created_at'] - answered['created_at']).total_seconds())} "
-                      f"después de otro mensaje nuestro ({_when(answered['created_at'])}). El diagrama solo mide la "
-                      "respuesta al primer mensaje, así que no cambia el resultado.")
+    ignored = [m for m in msgs if m["direction"] == "inbound" and m["created_at"] > first_out["created_at"]
+               and _is_ignorable_body(m.get("message_body"))]
+    if ignored:
+        step("Mensajes que no cuentan",
+             f"Se ignoraron {len(ignored)} mensajes vacíos o ilegibles: no son una contestación.")
+
+    def _answered_by(inn):
+        prev = None
+        for o in outs:
+            if o["created_at"] < inn["created_at"]:
+                prev = o
+            else:
+                break
+        return prev
+
+    # Un vacío a los 2 s no es T1 (Stellantis, 2026-10-06: el saludo real de Clarissa llegó a
+    # los 42 s). Si el primer mensaje no tuvo respuesta dentro de la espera y un reintento sí,
+    # se mide ese (Laboratorio del Chopo: al "Hola" no contestaron; al del día siguiente, en 6 s).
+    exchange = late = None
+    for inn in msgs:
+        if inn["direction"] != "inbound" or inn["created_at"] <= first_out["created_at"]:
+            continue
+        if _is_ignorable_body(inn.get("message_body")):
+            continue
+        src = _answered_by(inn)
+        if not src:
+            continue
+        gap = (inn["created_at"] - src["created_at"]).total_seconds()
+        if gap <= wait:
+            exchange = (src, inn, gap, src is not first_out)
+            break
+        if late is None:
+            late = (src, inn, gap)
 
     q1 = f"¿El negocio respondió? (hasta {wait_label})"
-    if not first_in:
-        if now - first_out["created_at"] < timedelta(seconds=wait):
+    if not exchange:
+        if late:
+            inputs["t1_s"] = round(late[2], 1)
+            check("resp1", "no", _secs(late[2]))
+            step(q1, f"Su primera respuesta llegó {_secs(late[2])} después: más de {wait_label}.", "no")
+            return done("humano_o_desconectado")
+        if now - outs[-1]["created_at"] < timedelta(seconds=wait):
             check("resp1", "pendiente", "todavía no")
             step(q1, "Todavía no contesta y la hora de espera no ha terminado.", "pendiente")
             return done("pendiente")
         check("resp1", "no", "no contestó")
         step(q1, "No contestó.", "no")
         return done("humano_o_desconectado")
-    t1 = (first_in["created_at"] - first_out["created_at"]).total_seconds()
+
+    measured_out, first_in, t1, used_retry = exchange
     inputs["t1_s"] = round(t1, 1)
-    if t1 > wait:
-        check("resp1", "no", _secs(t1))
-        step(q1, f"Su primera respuesta llegó {_secs(t1)} después: más de {wait_label}.", "no")
-        if retry_note:
-            step("Nota: contestaron a un reintento", retry_note)
-        return done("humano_o_desconectado")
+    if used_retry:
+        step("Se mide la respuesta al reintento",
+             f"Al primer mensaje no contestaron dentro de {wait_label}. "
+             f"Al mensaje del {_when(measured_out['created_at'])} contestaron en {_secs(t1)}.")
     check("resp1", "si", _secs(t1))
     step(q1, f"Contestó a los {_secs(t1)} ({_when(first_in['created_at'])}): {_quote(first_in.get('message_body'))}", "si")
+    if _opening_is_bot(first_in.get("message_body") or ""):
+        check("t1", "no" if t1 > t1_max else "si", _secs(t1))
+        # Compugadget México (2026-10-06): el menú tardó 23 min 48 s. La flecha "→ Bot"
+        # quedaba en la fila de T1 y se leía como "contestó tarde, entonces es bot".
+        # T1 solo dice si fue rápido. Lo que decide es el texto.
+        checks.insert(2, {
+            "key": "menu1", "cond": "¿La primera respuesta es un menú?",
+            "limite": "Sí = Bot, aunque tarde", "medido": None, "estado": "no_evaluada",
+        })
+        check("menu1", "si", "trae menú")
+        step("¿La primera respuesta es un menú o un asistente virtual?",
+             f"Llegó a los {_secs(t1)} y el texto ya es un menú o se presenta como asistente virtual → Bot.", "si")
+        return done("bot")
     if t1 > t1_max:
         check("t1", "no", _secs(t1))
         step(f"¿T1 ≤ {t1_max} s?", f"{_secs(t1)} es más que el máximo de {t1_max} s: según el diagrama, contestó "
@@ -219,7 +318,8 @@ def run_timing(db, company_id: str, settings: dict | None = None, now: datetime 
     step("Activar temporizador T2", f"Espera hasta {wait_label} a que responda el segundo mensaje.")
 
     q2 = f"¿Respondió al segundo mensaje? (hasta {wait_label})"
-    second_in = next((m for m in msgs if m["direction"] == "inbound" and m["created_at"] > second_out["created_at"]), None)
+    second_in = next((m for m in msgs if m["direction"] == "inbound" and m["created_at"] > second_out["created_at"]
+                      and not _is_ignorable_body(m.get("message_body"))), None)
     if not second_in:
         if now - second_out["created_at"] < timedelta(seconds=wait):
             check("resp2", "pendiente", "todavía no")
@@ -236,15 +336,22 @@ def run_timing(db, company_id: str, settings: dict | None = None, now: datetime 
         return done("automatico_sin_respuesta")
     check("resp2", "si", _secs(t2))
     step(q2, f"Contestó a los {_secs(t2)} ({_when(second_in['created_at'])}): {_quote(second_in.get('message_body'))}", "si")
-    if t2 > t2_max:
+    opening = _opening_is_bot(second_in.get("message_body") or "")
+    if t2 > t2_max and not opening:
         check("t2", "no", _secs(t2))
         step(f"¿T2 ≤ {t2_max} s?", f"{_secs(t2)} es más que el máximo de {t2_max} s: el primero fue automático y el "
                                    "segundo lo contestó una persona → Automático + Humano.", "no")
         return done("automatico_humano")
+    if t2 > t2_max:
+        check("t2", "no", _secs(t2))
+        check("menu", "si", "trae menú")
+        step("¿El mensaje #2 trae menú?",
+             f"Tardó {_secs(t2)}, más que {t2_max} s, pero el texto es un menú o un asistente virtual → Bot.", "si")
+        return done("bot")
     check("t2", "si", _secs(t2))
     step(f"¿T2 ≤ {t2_max} s?", f"{_secs(t2)} está dentro del máximo de {t2_max} s: volvió a contestar al instante, "
                                "es un Bot o un Agente IA.", "si")
-    if _looks_like_menu(second_in.get("message_body") or ""):
+    if opening:
         check("menu", "si", "trae menú")
         step("¿El mensaje #2 trae menú?", "Trae un menú de opciones → Bot.", "si")
         return done("bot")

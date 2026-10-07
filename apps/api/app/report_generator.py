@@ -35,7 +35,10 @@ C = {
     "bot":        HexColor("#7c3aed"),
     "bot_ia":     HexColor("#9333ea"),
     "green":      HexColor("#16a34a"),
-    "white":      HexColor("#0f172a"),
+    # El nombre de la empresa va en este tono sobre el fondo blanco. Se llamaba
+    # "white" y es casi negro (#0f172a): quien lo reutilice esperando blanco
+    # deja el texto invisible (revisión 2026-10-06).
+    "ink":        HexColor("#0f172a"),
     "wa":         HexColor("#16a34a"),
     "red":        HexColor("#dc2626"),
     "cyan":       HexColor("#0891b2"),
@@ -810,7 +813,7 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
 
     header_tbl = Table(
         [[Paragraph(company_name, _st("cn", fontSize=15, fontName="Helvetica-Bold",
-                                      textColor=C["white"], leading=19)),
+                                      textColor=C["ink"], leading=19)),
           meta_lines]],
         colWidths=[PW * 0.55, PW * 0.45],
     )
@@ -943,16 +946,8 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     #                                  f"{qual_level}  ({round(quality)}/5)", qual_color))
     right_items.append(_info_row("Mensajes enviados",           str(sent_c),  C["primary"]))
     right_items.append(_info_row("Mensajes recibidos",          str(recv_c),  C["primary"]))
-
-    # — Service quality dimensions (svc_*) from LLM evaluation —
-    has_svc = any(analytics.get(k) is not None for k, _ in _SVC_DIMS)
-    if has_svc:
-        right_items.append(Spacer(1, 3 * mm))
-        right_items.append(HRFlowable(width=RIGHT_W, thickness=0.5, color=C["border"], spaceAfter=4))
-        right_items.append(Paragraph("Calidad de atencion", _st("svch",
-            fontSize=7.5, fontName="Helvetica-Bold", textColor=C["muted"],
-            leading=10, spaceAfter=3)))
-        right_items.append(ServiceQualityTable(analytics, RIGHT_W))
+    # Calidad de atención (Profesionalismo, Respuesta completa, etc.) ya no va en el PDF
+    # (2026-10-06): no se usa al leer el reporte. ServiceQualityTable sigue en este archivo.
 
     # ── PRESERVED FOR FUTURE USE (not rendered) ───────────────────────────────
     # The following sections exist in this file and can be re-enabled:

@@ -15,6 +15,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility'
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
+import VpnKeyOutlinedIcon from '@mui/icons-material/VpnKeyOutlined'
 import AccountCircleIcon from '@mui/icons-material/AccountCircle'
 import Slider from '@mui/material/Slider'
 import TimerIcon from '@mui/icons-material/Timer'
@@ -203,48 +204,42 @@ function AccountSection({ user }) {
         bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))', overflow: 'hidden',
       }}>
 
-        {/* Identidad — avatar simple (sin banner, sin sobreposición) + datos,
-           con un leve tinte de color de fondo para no perder el detalle de
-           color que sí funcionó. Stats a la derecha. */}
+        {/* Identidad: nombre y pastilla de rol. El correo va debajo, solo.
+           Los conteos de instancias se quitaron: la lista de abajo ya los muestra. */}
         <Box sx={{
-          display: 'flex', alignItems: 'center', gap: 2, p: 2.2, flexWrap: 'wrap',
+          display: 'flex', alignItems: 'center', gap: 2, p: 2.2,
           background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.12) 0%, rgba(var(--accent-rgb,59,130,246),0.03) 55%, transparent 100%)',
           borderBottom: '1px solid var(--border, rgba(255,255,255,0.08))',
         }}>
           <Box sx={{
-            width: 64, height: 64, borderRadius: '50%', flexShrink: 0,
+            width: 56, height: 56, borderRadius: '50%', flexShrink: 0,
             bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)',
             border: '2px solid rgba(var(--accent-rgb,59,130,246),0.35)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
-            <Typography sx={{ fontWeight: 800, fontSize: '1.4rem', color: 'var(--accent,#60a5fa)', textTransform: 'uppercase' }}>
+            <Typography sx={{ fontWeight: 800, fontSize: '1.25rem', color: 'var(--accent,#60a5fa)', textTransform: 'uppercase' }}>
               {(user?.display_name || '?')[0]}
             </Typography>
           </Box>
-          <Box sx={{ flex: '1 1 180px', minWidth: 0 }}>
-            <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.25 }}>
-              {user?.display_name}
-            </Typography>
-            <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.78rem', mt: 0.2 }}>
-              {user?.role === 'admin' ? t.settings.adminRole : t.settings.agentRole} · {user?.email || `@${user?.username}`}
-            </Typography>
-          </Box>
-          {myInst.length > 0 && (
-            <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
-              <Box sx={{ textAlign: 'center', px: 1.6, py: 0.7, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
-                <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1.05rem', lineHeight: 1 }}>{myInst.length}</Typography>
-                <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.58rem', mt: 0.3, textTransform: 'uppercase' }}>
-                  {lang === 'en' ? 'Instances' : 'Instancias'}
-                </Typography>
-              </Box>
-              <Box sx={{ textAlign: 'center', px: 1.6, py: 0.7, borderRadius: 2, bgcolor: 'rgba(74,222,128,0.06)', border: '1px solid rgba(74,222,128,0.15)' }}>
-                <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '1.05rem', lineHeight: 1 }}>{connCount}</Typography>
-                <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.58rem', mt: 0.3, textTransform: 'uppercase' }}>
-                  {lang === 'en' ? 'Connected' : 'Conectadas'}
+          <Box sx={{ minWidth: 0 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Typography sx={{ color: 'var(--text, #f1f5f9)', fontWeight: 700, fontSize: '1.05rem', lineHeight: 1.2 }}>
+                {user?.display_name}
+              </Typography>
+              <Box sx={{
+                px: 0.9, py: 0.15, borderRadius: 10,
+                bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)',
+                border: '1px solid rgba(var(--accent-rgb,59,130,246),0.28)',
+              }}>
+                <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--accent,#60a5fa)', letterSpacing: '0.02em' }}>
+                  {user?.role === 'admin' ? t.settings.adminRole : t.settings.agentRole}
                 </Typography>
               </Box>
             </Box>
-          )}
+            <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.45))', fontSize: '0.78rem', mt: 0.45 }}>
+              {user?.email || `@${user?.username}`}
+            </Typography>
+          </Box>
         </Box>
 
         {/* WhatsApp instances — sección dentro de la misma tarjeta */}
@@ -272,9 +267,6 @@ function AccountSection({ user }) {
                   <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.8rem' }}>
                     {lang === 'en' ? 'WhatsApp Instances' : 'Instancias WhatsApp'}
                   </Typography>
-                  <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted, rgba(255,255,255,0.3))' }}>
-                    ({myInst.length} {lang === 'en' ? (myInst.length === 1 ? 'number' : 'numbers') : (myInst.length === 1 ? 'número' : 'números')})
-                  </Typography>
                 </Box>
                 {hasRotation && (
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, px: 0.8, py: 0.25, borderRadius: 10,
@@ -297,24 +289,41 @@ function AccountSection({ user }) {
                     : isConnecting
                       ? (lang === 'en' ? 'Connecting' : 'Conectando')
                       : (lang === 'en' ? 'Disconnected' : 'Desconectada')
+                  const phone = inst.number
+                    ? (String(inst.number).startsWith('+') ? inst.number : `+${inst.number}`)
+                    : (lang === 'en' ? 'No number' : 'Sin número')
                   return (
                     <Box key={inst.name} sx={{
-                      display: 'flex', alignItems: 'center', gap: 1, px: 1.2, py: 0.7, borderRadius: 1.5,
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1,
+                      px: 1.2, py: 0.85, borderRadius: 1.5,
                       bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)',
                     }}>
-                      <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: dot, flexShrink: 0,
-                        boxShadow: isConn ? `0 0 4px ${dot}88` : 'none' }} />
-                      <Typography sx={{ fontSize: '0.77rem', fontWeight: 600, color: '#4ade80', fontFamily: 'monospace',
-                        flex: '0 0 auto', minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {inst.name}
-                      </Typography>
-                      <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', fontFamily: 'monospace', flex: 1,
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {inst.number ? `+${inst.number}` : (lang === 'en' ? 'No number' : 'Sin número')}
-                      </Typography>
-                      <Typography sx={{ fontSize: '0.64rem', fontWeight: 600, color: dot, flexShrink: 0 }}>
-                        {label}
-                      </Typography>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography sx={{
+                          fontSize: '0.84rem', fontWeight: 700, color: 'var(--text, #f1f5f9)', fontFamily: 'monospace',
+                          fontVariantNumeric: 'tabular-nums', letterSpacing: '0.01em', whiteSpace: 'nowrap',
+                        }}>
+                          {phone}
+                        </Typography>
+                        <Typography sx={{
+                          fontSize: '0.72rem', color: 'var(--text-muted, rgba(255,255,255,0.45))', mt: 0.15,
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {inst.name}
+                        </Typography>
+                      </Box>
+                      <Box sx={{
+                        display: 'inline-flex', alignItems: 'center', gap: 0.55, flexShrink: 0,
+                        px: 0.9, py: 0.3, borderRadius: 10,
+                        bgcolor: isConn ? 'rgba(34,197,94,0.1)' : isConnecting ? 'rgba(245,158,11,0.1)' : 'rgba(255,255,255,0.04)',
+                        border: `1px solid ${isConn ? 'rgba(34,197,94,0.28)' : isConnecting ? 'rgba(245,158,11,0.28)' : 'rgba(255,255,255,0.08)'}`,
+                      }}>
+                        <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: dot, flexShrink: 0,
+                          boxShadow: isConn ? `0 0 4px ${dot}88` : 'none' }} />
+                        <Typography sx={{ fontSize: '0.64rem', fontWeight: 700, color: dot, lineHeight: 1 }}>
+                          {label}
+                        </Typography>
+                      </Box>
                     </Box>
                   )
                 })}
@@ -340,21 +349,19 @@ function AccountSection({ user }) {
                 border: '1px solid rgba(250,204,21,0.3)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                <span style={{ fontSize: 13, lineHeight: 1 }}>🔑</span>
+                <VpnKeyOutlinedIcon sx={{ fontSize: 14, color: '#facc15' }} />
               </Box>
               <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.8rem' }}>
                 {t.settings.recoveryCode}
               </Typography>
             </Box>
-            <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.65rem' }}>
-              {t.settings.recoveryHint}
-            </Typography>
           </Box>
 
-          <Box sx={{ p: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
-            {/* Código */}
-            <Box sx={{ flex: 1, py: 0.8, px: 1.2, borderRadius: 1.5, bgcolor: 'rgba(0,0,0,0.25)', border: '1px solid rgba(250,204,21,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Typography sx={{ fontFamily: 'monospace', fontSize: '0.95rem', fontWeight: 700, letterSpacing: '0.18em', color: revealed && code ? '#facc15' : 'rgba(255,255,255,0.25)' }}>
+          <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0.8 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {/* Código: solo el ancho del texto, no una barra de lado a lado */}
+            <Box sx={{ py: 0.8, px: 1.6, borderRadius: 1.5, bgcolor: 'rgba(0,0,0,0.25)', border: '1px solid rgba(250,204,21,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Typography sx={{ fontFamily: 'monospace', fontSize: '0.95rem', fontWeight: 700, letterSpacing: '0.18em', color: revealed && code ? '#facc15' : 'var(--text-muted, rgba(255,255,255,0.35))' }}>
                 {revealed ? (code || t.settings.notAvailable) : masked}
               </Typography>
             </Box>
@@ -389,6 +396,10 @@ function AccountSection({ user }) {
                 </Box>
               </Tooltip>
             )}
+            </Box>
+            <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.4))', fontSize: '0.72rem' }}>
+              {t.settings.recoveryHint}
+            </Typography>
           </Box>
         </Box>
       </Box>

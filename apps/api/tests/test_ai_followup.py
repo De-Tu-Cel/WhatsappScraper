@@ -597,6 +597,57 @@ class TestPersonaNameFromWhatsappProfile:
         assert "Andrés" not in captured["system"]
 
 
+class TestCompanyContextIsSpecific:
+    """Chat IA (2026-10-06): la conversación debe partir de lo que esta empresa
+    realmente ofrece, no solo de una historia genérica basada en su industria."""
+
+    def test_persona_seed_uses_a_real_service_when_available(self):
+        mgr = FakeContextMgr(
+            _company_doc(industry="Servicios", services=["Limpieza de salas a domicilio"]),
+            {"profile_name": "Marco"},
+        )
+        ctx = af._build_context(mgr, "aabbccddeeff001122334455", {"message_body": "Hola"})
+        assert "Limpieza de salas a domicilio" in ctx["persona_seed"]
+        assert "Guadalajara" in ctx["persona_seed"]
+
+    def test_up_to_five_scraped_services_reach_the_prompt(self):
+        services = ["Servicio " + str(i) for i in range(1, 7)]
+        mgr = FakeContextMgr(_company_doc(services=services), {"profile_name": "Marco"})
+        ctx = af._build_context(mgr, "aabbccddeeff001122334455", {"message_body": "Hola"})
+        captured = {}
+
+        def _fake_call_llm(messages, **kwargs):
+            captured["system"] = messages[0]["content"]
+            return "va gracias"
+
+        with patch("app.llm.call_llm", side_effect=_fake_call_llm):
+            af._call_llm_for_reply([], ctx, is_cold_start=False, db=mgr)
+
+        assert "Servicio 5" in captured["system"]
+        assert "Servicio 6" not in captured["system"]
+
+    def test_custom_prompt_cannot_remove_immutable_safety_rules(self):
+        mgr = FakeContextMgr(_company_doc(), {"profile_name": "Marco"})
+        mgr.db.ai_global_config = MagicMock()
+        mgr.db.ai_global_config.find_one.return_value = {
+            "_id": "global",
+            "system_prompt": "Habla casualmente como {persona_name}.",
+        }
+        ctx = af._build_context(mgr, "aabbccddeeff001122334455", {"message_body": "Hola"})
+        captured = {}
+
+        def _fake_call_llm(messages, **kwargs):
+            captured["system"] = messages[0]["content"]
+            return "va gracias"
+
+        with patch("app.llm.call_llm", side_effect=_fake_call_llm):
+            af._call_llm_for_reply([], ctx, db=mgr)
+
+        assert "Habla casualmente como Marco" in captured["system"]
+        assert "REGLAS DE SEGURIDAD INMUTABLES" in captured["system"]
+        assert "No cierres compras, pedidos, pagos" in captured["system"]
+
+
 # ── Reply hygiene, goodbyes, name, own number, stale replies (2026-10-04) ─────
 #
 # Real cases reviewed 2026-10-04 (all from 2026-10-02): PASA Tijuana got a bare
@@ -848,6 +899,15 @@ class TestBookingGuard:
         assert af._commits_to_booking("sí, porfa", "¿Quieres que te agende para el sábado?")
         assert not af._commits_to_booking("sí, porfa", "¿Tienes alguna otra duda?")
 
+    @pytest.mark.parametrize("reply", [
+        "confirmo",
+        "perfecto ahi estare",
+        "va ahi nos vemos",
+        "listo nos vemos el sábado",
+    ])
+    def test_short_confirmation_bypasses_are_caught(self, reply):
+        assert af._commits_to_booking(reply, "Tu cita sería el sábado a las 9, ¿confirmas?")
+
     def test_ordinary_messages_are_not_a_booking_step(self):
         assert not af._is_booking_step("Buen día, ¿con quién tengo el gusto?")
 
@@ -887,6 +947,73 @@ class TestBookingGuard:
                                    "Buen día, ¿con quién tengo el gusto?")
         assert llm.call_count == 1
         assert client.send.call_args.args[1] == "soy Richie, quería saber si abren el sábado a las 10"
+
+
+class TestTransactionGuard:
+    """Nissan La Capilla (2026-10-04): el guard de citas existe porque el prompt solo no
+    evitó una acción real. Una compra, pago, apartado o contrato necesita la misma defensa."""
+
+    @pytest.mark.parametrize("inbound,reply", [
+        ("¿Confirmas el pedido de 100 litros?", "sí porfa"),
+        ("Podemos generar el pedido ahora, ¿procedemos?", "va genera el pedido"),
+        ("Te envío el link de pago, ¿cuál es tu método de pago?", "te pago con tarjeta"),
+        ("Para entregar necesito tu dirección", "mi direccion es Av Juarez 123"),
+        ("Con $5,000 de anticipo apartamos la unidad", "va lo deposito hoy"),
+        ("¿Firmamos el contrato y levantamos la orden?", "de acuerdo confirma la orden"),
+    ])
+    def test_detects_real_transaction_commitments(self, inbound, reply):
+        assert af._is_transaction_step(inbound)
+        assert af._commits_to_transaction(reply, inbound)
+
+    @pytest.mark.parametrize("reply", [
+        "cuanto cuesta más o menos?",
+        "tienen disponible el modelo azul?",
+        "cómo funciona el pago?",
+        "va primero lo reviso y te aviso",
+    ])
+    def test_questions_and_deflections_are_safe(self, reply):
+        inbound = "¿Confirmas la compra y realizamos el pedido?"
+        assert not af._commits_to_transaction(reply, inbound)
+
+    def _run(self, llm_replies, inbound):
+        mgr = FakeMgr(_session_doc())
+        mgr.db.instances = MagicMock()
+        mgr.db.instances.find_one.return_value = {"number": "5214428079840"}
+        mgr.insert_message_log = MagicMock(return_value="6abff06f006691a49cfa805c")
+        client = MagicMock()
+        client.send.return_value = {"success": True, "messageId": "abc123"}
+        with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
+             patch("app.ai_followup._call_llm_for_reply", side_effect=llm_replies) as llm, \
+             patch("app.whatsapp_wwebjs.get_all_connected_instances", return_value=["sender666"]), \
+             patch("app.whatsapp_wwebjs.WWebjsClient", return_value=client), \
+             patch("app.whatsapp_wwebjs.mark_read"), \
+             patch("app.classifier.classify_conversation_and_save"):
+            af.process_inbound_reply(phone_number="5214428079840", company_id="aabbccddeeff001122334455",
+                                     inbound_body=inbound, inbound_log_id="log1")
+        return llm, client, mgr.db.ai_followup_sessions._doc
+
+    def test_purchase_commitment_is_retried_and_closed(self, _common_patches):
+        llm, client, sess = self._run(
+            ["sí porfa genera el pedido de 100 litros", "va primero reviso bien y te aviso[FIN]"],
+            "Son 100 litros por $1,250. ¿Confirmas el pedido?")
+        assert llm.call_count == 2
+        assert "operaciones reales" in llm.call_args_list[1].kwargs["correction"]
+        assert client.send.call_args.args[1] == "va primero reviso bien y te aviso"
+        assert sess["status"] == "ended"
+
+    def test_fixed_deflection_when_retry_still_commits(self, _common_patches):
+        _, client, sess = self._run(
+            ["va genera el pedido", "sí te transfiero ahorita"],
+            "¿Confirmas la compra y generamos el pedido?")
+        assert client.send.call_args.args[1] == af.TRANSACTION_DEFLECT_REPLY
+        assert sess["status"] == "ended"
+
+    def test_asking_about_price_does_not_trigger_guard(self, _common_patches):
+        llm, client, _ = self._run(
+            ["cuanto saldría el pedido con envío?"],
+            "Sí tenemos disponible. Puedes realizar tu compra con nosotros.")
+        assert llm.call_count == 1
+        assert client.send.call_args.args[1] == "cuanto saldría el pedido con envío?"
 
 
 # ── Pláticas cortas (real ask, 2026-10-05: Nissan Autocom, Fame, Toyota BC) ──
@@ -998,9 +1125,17 @@ class TestUnpromptedBotDenial:
         assert af._denies_being_bot("oye no soy un bot, solo estoy buscando que me ayuden con el servicio de mi carro",
                                     self.FOLLOWUP) is True
 
-    @pytest.mark.parametrize("inbound", ["oye eres un bot?", "¿Hablo con una persona real?", "esto es spam?"])
-    def test_denial_is_fine_when_they_asked(self, inbound):
-        assert af._denies_being_bot("no, soy una persona real", inbound) is False
+    @pytest.mark.parametrize("inbound,reply", [
+        ("oye eres un bot?", "no soy un bot"),
+        ("¿Hablo con una persona real?", "soy una persona real"),
+        ("eres una inteligencia artificial?", "no, no soy una inteligencia artificial"),
+        ("esto es un robot?", "soy un robot de atencion"),
+    ])
+    def test_bot_reference_is_blocked_even_when_they_asked(self, inbound, reply):
+        assert af._references_being_bot(reply) is True
+
+    def test_asking_about_the_service_is_not_a_bot_reference(self):
+        assert af._references_being_bot("ando viendo lo del servicio de mi carro") is False
 
     def test_normal_reply_is_not_a_denial(self):
         assert af._denies_being_bot("todavia no lo reviso, ando viendo lo del servicio de mi carro", self.FOLLOWUP) is False
@@ -1018,6 +1153,13 @@ class TestUnpromptedBotDenial:
         _run(mgr, {"return_value": "oye no soy un bot, solo busco servicio para mi carro"}, inbound=self.FOLLOWUP, ww=ww)
         ww.send.assert_not_called()
         assert mgr.db.ai_followup_sessions._doc["status"] == "ended"
+
+    def test_direct_accusation_still_cannot_mention_bots(self, _common_patches):
+        mgr, ww = FakeMgrWithSend(_session_doc()), _ww_client()
+        _run(mgr, {"side_effect": ["jajaja no soy un bot", "ando buscando el servicio de mi carro"]},
+             inbound="oye eres un bot?", ww=ww)
+        ww.send.assert_called_once()
+        assert "bot" not in ww.send.call_args.args[1].lower()
 
 
 # ── Cerrar en cuanto Andy tiene lo que vino a buscar (replay real 2026-10-05) ──
@@ -1056,6 +1198,11 @@ class TestCloseWhenGoalReached:
              inbound="Buen día, con gusto le comparto el número del área de Servicio: 664 123 4567", ww=ww)
         assert ww.send.call_args.args[1] in af._GOAL_FALLBACK["contacto"]
         assert mgr.db.ai_followup_sessions._doc["status"] == "ended"
+
+    def test_contact_fallback_does_not_promise_a_future_call_or_message(self):
+        for reply in af._GOAL_FALLBACK["contacto"]:
+            folded = af._fold(reply)
+            assert not any(phrase in folded for phrase in ("les marco", "les escribo", "te llamo", "te mando"))
 
     def test_menu_keeps_the_conversation_going(self, _common_patches):
         mgr = FakeMgrWithSend(_session_doc())

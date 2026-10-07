@@ -367,6 +367,19 @@ class TestParseLlmResponse:
         result = _parse_llm_response(self._raw(category="bot", lead_signal=None))
         assert result["lead_signal"] is None
 
+    def test_conversation_categories_are_remapped_after_the_single_message_parse(self):
+        # El prompt de la plática completa pide categorías que _parse_llm_response
+        # no acepta. classify_conversation las recupera con _conv_category
+        # (2026-10-06): sin ese paso, agente_ia y bot_humano se guardarían como humano.
+        from app.classifier import _CONV_CATEGORY_MAP, _conv_category
+        for raw_cat, expected in _CONV_CATEGORY_MAP.items():
+            raw = self._raw(category=raw_cat)
+            parsed = _parse_llm_response(raw)
+            mapped = _conv_category(raw)
+            assert mapped == expected
+            parsed["category"], parsed["is_ai"] = mapped
+            assert (parsed["category"], parsed["is_ai"]) == expected
+
 
 # ── _resolve_probe (T1→T2 probe resolution) ─────────────────────────────────
 # Regression tests for a real production bug: when a prospect sends a second
@@ -604,12 +617,17 @@ class TestApplyDeterministicCorrections:
         messages = [
             _msg("outbound", "Hola, ¿en qué le puedo ayudar?"),
             _msg("inbound", "Hola, quería preguntar por el precio del servicio"),
+            _msg("outbound", "¿De cuál?"),
+            _msg("inbound", "Del mantenimiento, ¿cuánto sale?"),
         ]
         thread = "[Representante]: Hola\n[Prospecto]: Hola, quería preguntar por el precio"
-        result = {"category": "hibrido", "is_ai": True, "notes": ""}
+        result = {"category": "hibrido", "is_ai": True, "notes": "Hubo una bienvenida automática y luego una persona."}
         out = _apply_deterministic_corrections(result, messages, thread)
         assert out["category"] == "humano"
         assert out["is_ai"] is False
+        # Whato CRM (2026-10-06): la nota vieja del modelo no se pega debajo de la corrección.
+        assert "automática" not in out["notes"]
+        assert "Humano" in out["notes"]
 
     def test_hibrido_with_formal_bdc_greeting_is_not_downgraded(self):
         # Real case: Stellantis Country — a genuine automated greeting template
@@ -1244,3 +1262,168 @@ class TestSomeoneWroteAfterTheAutoReply:
              "message_body": "Nuestro horario es de lunes a sábado, de 10 a 18 horas. ¿Te gustaría conocer más sobre nuestros tratamientos?"},
         ]
         assert self._fix(msgs)["category"] == "automatico_sin_respuesta"
+
+
+class TestAuditFixes20261006:
+    """Los ocho chats que Timing + IA tenía mal el 2026-10-06, más los que no deben moverse."""
+
+    @staticmethod
+    def _at(s):
+        return _T0 + timedelta(seconds=s)
+
+    def _fix(self, events, category="automatico", thread=""):
+        msgs = [{"direction": "outbound" if d == "out" else "inbound",
+                 "message_body": body, "created_at": self._at(s)} for d, s, body in events]
+        return _apply_deterministic_corrections({"category": category, "is_ai": False, "notes": "varios minutos"},
+                                                msgs, thread, [])
+
+    def test_empty_late_message_is_no_reply(self):
+        # OH EXPRESS: dos mensajes vacíos ~73 días después.
+        r = self._fix([("out", 0, "Hola"), ("in", 6_342_056, ""), ("in", 6_342_100, "")], category="humano")
+        assert r["category"] == "sin_respuesta"
+
+    def test_message_before_we_wrote_is_no_reply(self):
+        # Servi-Gas: "Buenas tardes" antes de nuestro saludo.
+        r = self._fix([("in", -1200, "Buenas tardes"), ("out", 0, "Hola, buenas tardes")], category="humano")
+        assert r["category"] == "sin_respuesta"
+        assert "antes" in (r.get("notes") or "").lower()
+
+    def test_late_campaign_only_is_no_reply(self):
+        # Agencia de autos Toyota: "Seguimos atentos" 56 días después, y nada más.
+        r = self._fix([("out", 0, "Hola"),
+                       ("in", 56 * 86400, "Seguimos atentos a su proceso. Vehículo Toyota, visita o videollamada.")],
+                      category="humano")
+        assert r["category"] == "sin_respuesta"
+        assert "seguimiento" in (r.get("notes") or "").lower()
+
+    def test_audio_after_we_wrote_is_a_reply(self):
+        # El Wero: un audio a los 76 s es una persona, no "sin respuesta".
+        r = self._fix([("out", 0, "Hola"), ("in", 76, "[audio]")])
+        assert r["category"] == "humano"
+        assert "Primera respuesta real" in (r.get("notes") or "")
+
+    def test_saved_greeting_at_80s_is_human(self):
+        # Autostar: Kimberly a los 80 s y después "si clar". "Gracias por comunicarse" no es ausencia.
+        greet = ("Gracias por comunicarse a su agencia Autostar. Mi nombre es Kimberly Flores. "
+                 "Con gusto le ayudo a ver los autos disponibles en piso y a agendar una visita.")
+        r = self._fix([("out", 0, "Hola"), ("in", 80, greet), ("in", 438, "Hola si clar")])
+        assert r["category"] == "humano"
+        assert "1 min 20 s" in (r.get("notes") or "")
+
+    def test_menu_at_68s_stays_automatic(self):
+        # Come Bien: menú a los 68 s. No es el saludo lento de una persona.
+        menu = "Selecciona una opción:\n1. Menú del día\n2. Sucursales\n3. Promociones"
+        r = self._fix([("out", 0, "Hola"), ("in", 68, menu), ("out", 200, "el menú"), ("in", 400, "Soy Ale, te ayudo")])
+        assert r["category"] == "automatico"
+
+    def test_one_fast_paste_in_a_slow_chat_is_human(self):
+        # Whato: primera respuesta a las 14 h y un precio de 74 caracteres a los 0.7 s.
+        price = "*Maria:* Actualmente tenemos 2 planes: Mensual de 15 USD Anual de 139 USD"
+        pitch = "*Maria:* El chatbot de whato responde automáticamente a las preguntas de tus clientes."
+        r = self._fix([("out", 0, "Hola"), ("in", 50844, "Hola Marco, Cómo puedo ayudarte hoy?"),
+                       ("out", 51000, "cómo funciona"), ("in", 51244, pitch),
+                       ("out", 52000, "precios"), ("in", 52000.7, price)],
+                      thread="[Prospecto [⚡ 1s — posible autorespuesta automática]]: " + price)
+        assert r["category"] == "humano"
+
+    def test_mentioning_a_chatbot_product_is_not_self_id(self):
+        from app.classifier import _strong_bot_selfid
+        assert _strong_bot_selfid("El chatbot de whato responde automáticamente a las preguntas") is False
+        assert _strong_bot_selfid("Hola, soy un chatbot") is True
+
+    def test_repeated_menu_then_long_scripts_is_bot(self):
+        # Universidad UVM: el menú se repite y luego "James, asesor educativo", sin que escribiéramos.
+        menu = "Selecciona una opción para hablar con un asesor:\n1️⃣ Licenciaturas\n2️⃣ Maestrías"
+        james = "Soy James, asesor educativo. Te comparto el plan de estudios y las becas de este ciclo escolar."
+        pitch = "Contamos con más de 20 campus y becas de hasta el 40 por ciento. ¿Agendamos una cita esta semana?"
+        r = self._fix([("out", 0, "Hola, buenos días"), ("in", 8.6, menu), ("in", 1210, menu),
+                       ("in", 3620, james), ("in", 4525, pitch)])
+        assert r["category"] == "bot"
+
+    def test_short_lines_after_a_menu_are_not_a_bot(self):
+        # Diesgas: menú y luego "Hola buenas tardes" / "a sus ordenes".
+        menu = "Selecciona una opción:\n1. Pedido\n2. Precio\n3. Sucursal"
+        r = self._fix([("out", 0, "Hola"), ("in", 4, menu), ("in", 30, "Hola buenas tardes, asu"),
+                       ("in", 40, "a sus ordenes")])
+        assert r["category"] != "bot"
+
+    def test_away_notice_then_a_person_is_automatic_plus_human(self):
+        # AgendaPro: avisos de fuera de horario y después el pedicure.
+        away = "Hola, en este momento no estamos disponibles porque estamos fuera de horario."
+        person = "Hola buen día, si tenemos un pedicure spa para caballero"
+        r = self._fix([("out", 0, "Hola"), ("in", 416, away), ("in", 900, person)], category="humano")
+        assert r["category"] == "automatico"
+
+    def test_toyota_baja_greeting_is_not_an_away_notice(self):
+        greet = "¡Buen día! Soy Chanely Zaragoza, tu consultor digital en Toyota Tijuana Oriente"
+        r = self._fix([("out", 0, "Hola"), ("in", 675, greet), ("in", 800, "con gusto le comparto el número de Servicio")],
+                      category="automatico")
+        assert r["category"] == "humano"
+
+
+class TestAdversarialBoundaryMatrix20261006:
+    """Variaciones ficticias alrededor de los límites que más se confunden. No repiten
+    una sola frase: cambian tiempo y redacción para que una regex demasiado específica
+    no dé una falsa sensación de cobertura."""
+
+    @pytest.mark.parametrize("delay,body", [
+        (61, "Buen día, soy Karla del área de servicio, en qué te apoyo"),
+        (90, "Hola Marco, te atiende Luis, sí manejamos ese producto"),
+        (420, "Buenas tardes, soy Diana, con gusto reviso tu cotización"),
+    ])
+    def test_slow_saved_openers_are_human(self, delay, body):
+        out = _apply_deterministic_corrections(
+            {"category": "automatico", "is_ai": False, "notes": ""},
+            _timed_thread([(delay, body)]), "", [])
+        assert out["category"] == "humano"
+
+    @pytest.mark.parametrize("delay,body", [
+        (2, "Gracias por comunicarte. En breve uno de nuestros asesores te atenderá."),
+        (6, "Recibimos tu mensaje. Nuestro horario de atención es de lunes a viernes."),
+        (9, "Por el momento estamos fuera de horario. Te responderemos al regresar."),
+    ])
+    def test_instant_system_notices_without_a_person_are_auto_no_reply(self, delay, body):
+        out = _apply_deterministic_corrections(
+            {"category": "humano", "is_ai": False, "notes": ""},
+            _timed_thread([(delay, body)]), "", [])
+        assert out["category"] == "automatico_sin_respuesta"
+
+    @pytest.mark.parametrize("first,second", [(3, 4), (7, 9), (14, 12)])
+    def test_multiple_fast_contextual_answers_are_ai_agent(self, first, second):
+        replies = [
+            (first, "Claro, tenemos sedanes 2025 desde $320,000 y financiamiento con distintos enganches. "
+                    "Puedo calcularte varias mensualidades y comparar versiones según el equipo que buscas. ¿Qué presupuesto tienes?"),
+            (second, "Con ese presupuesto puedo ofrecerte tres versiones disponibles y calcular el enganche, "
+                     "las mensualidades y el seguro para cada una en este momento. ¿Qué plazo prefieres manejar?"),
+        ]
+        out = _apply_deterministic_corrections(
+            {"category": "humano", "is_ai": False, "notes": ""},
+            _timed_thread(replies), "", [])
+        assert out["category"] == "bot" and out["is_ai"] is True
+
+    @pytest.mark.parametrize("human_gap,human_text", [
+        (14, "Hola buenas tardes soy Andrea"),
+        (75, "Qué tal, le atiende Roberto, en qué le ayudo"),
+        (300, "Buenas, apenas vi su mensaje, sí contamos con ese servicio"),
+    ])
+    def test_person_after_an_instant_notice_is_auto_plus_human(self, human_gap, human_text):
+        msgs = [
+            {"direction": "outbound", "message_body": "Hola", "created_at": _T0},
+            {"direction": "inbound", "message_body": "Gracias por escribir. En breve un asesor te atenderá.",
+             "created_at": _T0 + timedelta(seconds=4)},
+            {"direction": "inbound", "message_body": human_text,
+             "created_at": _T0 + timedelta(seconds=4 + human_gap)},
+        ]
+        out = _apply_deterministic_corrections(
+            {"category": "automatico_sin_respuesta", "is_ai": False, "notes": ""},
+            msgs, "", [])
+        assert out["category"] == "automatico"
+
+    @pytest.mark.parametrize("text", [
+        "Nuestro chatbot ayuda a responder preguntas de tus clientes",
+        "Vendemos soluciones de chatbot para comercios",
+        "La plataforma incluye un bot configurable por el usuario",
+    ])
+    def test_selling_bot_software_is_not_self_identification(self, text):
+        from app.classifier import _strong_bot_selfid
+        assert _strong_bot_selfid(text) is False

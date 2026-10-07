@@ -8,6 +8,7 @@ single daemon background thread that polls every _POLL_INTERVAL seconds.
 import logging
 import os
 import random
+import re
 import socket
 import threading
 import time
@@ -193,6 +194,39 @@ def _get_warmup_instances(db, session_status: dict | None = None) -> list[dict]:
     return connected
 
 
+def resolve_display_partners(sessions: list[dict], expected: list[tuple[str, str]]) -> dict[str, str]:
+    """Con quién muestra la tarjeta de Warmup que está hablando cada instancia.
+
+    En un mismo día puede haber varias sesiones si cambió quién estaba conectado.
+    La tarjeta tiene que mostrar la rotación de ahora (las mismas parejas a las que
+    el worker les escribe) y los dos lados tienen que nombrarse entre sí: el color
+    del borde es uno por pareja. sender666 y gely-wa (2026-10-06) se quedaron con
+    un compañero de una sesión vieja, de un solo lado, y cada una salió de un color
+    que nadie más tenía.
+    """
+    latest: dict[str, tuple] = {}
+    for sess in sessions:
+        a, b = sess.get("instance_a"), sess.get("instance_b")
+        if not a or not b:
+            continue
+        last = None
+        for msg in sess.get("messages") or []:
+            ts = msg.get("ts")
+            if ts is not None and (last is None or ts > last):
+                last = ts
+        for self_name, other in ((a, b), (b, a)):
+            prev = latest.get(self_name)
+            newer = prev is None or (last is not None and (prev[0] is None or last >= prev[0]))
+            if newer:
+                latest[self_name] = (last, other)
+    partners = {name: other for name, (_, other) in latest.items()}
+    for a, b in expected:
+        if a and b:
+            partners[a] = b
+            partners[b] = a
+    return partners
+
+
 def _get_today_pairs(instances: list[dict]) -> list[tuple[dict, dict]]:
     """
     Ring-rotation pairing (Berger / circle method).
@@ -260,6 +294,107 @@ def _get_or_create_session(db, inst_a: dict, inst_b: dict, today: str) -> dict:
     return doc
 
 
+# Cada lado de la plática es una persona distinta. Warmup del 2026-10-06: los dos lados
+# escribían igual, con "wey" y un emoji en casi cada mensaje, y copiaban tal cual los
+# ejemplos del prompt ("noo wey en serio 😂"). Eso se ve armado, no como dos amigos.
+_PERSONAS = [
+    ("Luis", "29 años, trabaja en sistemas en una oficina de Guadalajara"),
+    ("Karla", "34 años, es contadora y tiene una hija en la primaria"),
+    ("Diego", "24 años, estudia ingeniería y trabaja medio tiempo en una cafetería"),
+    ("Fer", "31 años, vende en Mercado Libre y hace entregas en moto"),
+    ("Ale", "27 años, es diseñadora freelance y trabaja desde su casa en Puebla"),
+    ("Toño", "38 años, tiene un taller mecánico chico en Monterrey"),
+    ("Mariana", "26 años, es enfermera y hace guardias de noche"),
+    ("Jorge", "42 años, es maestro de secundaria y le va al Cruz Azul"),
+]
+
+# (descripción para el prompt, probabilidad de dejar un emoji, permite modismos fuertes)
+_STYLES = [
+    ("Escribes normal y sin muchos modismos: a veces empiezas con mayúscula, casi no usas emojis.", 0.1, False),
+    ("Eres relajado y usas modismos mexicanos (neta, chale, a poco, wey) pero solo de vez en cuando, no en cada mensaje.", 0.25, True),
+    ("Escribes muy corto. Muchas veces contestas con 2 o 3 palabras, un 'jaja' o un 'va'. Casi nunca preguntas.", 0.15, False),
+    ("Eres expresivo: alargas palabras (siii, nooo), te ríes seguido y a veces mandas un emoji.", 0.4, True),
+]
+
+_EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F]")
+
+# Escribir que eres un bot o una IA. La IA como tema de plática sí se vale.
+_SELF_AI_RE = re.compile(
+    r"\b(soy|como)\s+(una?\s+)?(ia|bot|robot|asistente|modelo de lenguaje|inteligencia artificial)\b"
+    r"|\bmodelo de lenguaje\b|\bno soy (una? )?(bot|ia|robot)\b|\bpersona real\b",
+    re.IGNORECASE)
+
+# Muletillas de asistente que delatan al modelo en un chat entre amigos.
+_ASSISTANT_PHRASE_RE = re.compile(
+    r"^(totalmente|definitivamente|exacto|claro que s[ií]|por supuesto|sin duda)[,.!]?\s*"
+    r"|,?\s*\bsin duda\b|\bjeje\b|\bexperiencia [úu]nica\b",
+    re.IGNORECASE)
+
+
+def _stable_int(*parts) -> int:
+    """El mismo número en los dos procesos de uvicorn y tras reiniciar. hash() de Python
+    cambia por proceso, y el tema de una pareja podía cambiar a media plática."""
+    import hashlib
+    return int(hashlib.sha1("|".join(str(p) for p in parts).encode()).hexdigest()[:12], 16)
+
+
+def _session_persona(session_id, speaker_key: str) -> tuple[str, str, str, float, bool]:
+    seed = _stable_int(session_id, "persona")
+    a_idx = seed % len(_PERSONAS)
+    b_idx = (a_idx + 1 + (seed // 7) % (len(_PERSONAS) - 1)) % len(_PERSONAS)
+    idx = a_idx if speaker_key == "a" else b_idx
+    s_seed = _stable_int(session_id, "style", speaker_key)
+    style, emoji_rate, slang = _STYLES[s_seed % len(_STYLES)]
+    name, bio = _PERSONAS[idx]
+    return name, bio, style, emoji_rate, slang
+
+
+def _clean_warmup_text(text: str, history: list[dict], speaker_key: str,
+                       emoji_rate: float, slang: bool, rng=random) -> str:
+    """Lo que manda el modelo, como lo escribiría una persona. Vacío = no mandarlo."""
+    t = (text or "").strip()
+    t = re.sub(r"^\s*\w+\s*:\s+", "", t)
+    if len(t) > 1 and t[0] == t[-1] and t[0] in "\"'“”":
+        t = t[1:-1].strip()
+    elif len(t) > 1 and t[0] in "“" and t[-1] in "”":
+        t = t[1:-1].strip()
+    t = t.split("\n")[0].strip()
+    if not t or _SELF_AI_RE.search(t):
+        return ""
+    # El modelo ignora "mensajes cortos" y manda párrafos con ¡¿ y frases de asistente
+    # (prueba del 2026-10-06). El largo se impone aquí: máximo dos frases y ~110 letras.
+    t = re.sub(r"[¡¿]", "", t)
+    t = _ASSISTANT_PHRASE_RE.sub("", t).strip(" ,")
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", t) if s.strip()]
+    keep = sentences[:1]
+    for s in sentences[1:2]:
+        if len(" ".join(keep + [s])) <= 110:
+            keep.append(s)
+    t = " ".join(keep)
+    if len(t) > 140:
+        t = t[:140].rsplit(" ", 1)[0]
+    if t and t[0].isupper() and rng.random() < 0.6:
+        t = t[0].lower() + t[1:]
+
+    own = [m["content"] for m in history if m.get("speaker") == speaker_key][-3:]
+    own_text = " ".join(own).lower()
+    if not slang or re.search(r"\bwey\b", own_text):
+        t = re.sub(r",?\s*\bwe[yi]\b,?", "", t, flags=re.IGNORECASE).strip()
+    emojis = _EMOJI_RE.findall(t)
+    if emojis:
+        t = _EMOJI_RE.sub("", t).strip()
+        recent_emoji = any(_EMOJI_RE.search(o) for o in own[-1:])
+        if not recent_emoji and rng.random() < emoji_rate:
+            t = f"{t} {emojis[0]}".strip()
+    t = re.sub(r"\s{2,}", " ", t).rstrip(".").strip(" ,")
+    if not t:
+        return ""
+    norm = lambda s: re.sub(r"\W+", " ", s.lower()).strip()
+    if any(norm(t) == norm(m["content"]) for m in history[-6:]):
+        return ""
+    return t
+
+
 def _generate_message(history: list[dict], speaker_key: str, session_id=None, topic_override: str | None = None) -> str:
     """Ask the LLM for the next message in the warmup conversation."""
     from app.llm import call_llm, PRIORITY_BATCH
@@ -271,35 +406,29 @@ def _generate_message(history: list[dict], speaker_key: str, session_id=None, to
         except (ValueError, IndexError):
             topic = _TOPICS[0]
     else:
-        # Seleccionar tema determinista por sesión para que ambos hablen del mismo tema
-        topic_idx = abs(hash(str(session_id))) % len(_TOPICS) if session_id else random.randint(0, len(_TOPICS) - 1)
+        # El mismo tema para los dos lados y en los dos procesos del backend.
+        topic_idx = _stable_int(session_id, "topic") % len(_TOPICS) if session_id else random.randint(0, len(_TOPICS) - 1)
         topic = _TOPICS[topic_idx]
 
+    name, bio, style, emoji_rate, slang = _session_persona(session_id, speaker_key)
+    other_name = _session_persona(session_id, "b" if speaker_key == "a" else "a")[0]
     system = (
-        "Eres una persona real mexicana chateando con un amigo por WhatsApp. "
-        f"Contexto: {topic}. "
-        "REGLAS para sonar como humano de verdad:\n"
-        "- Mensajes MUY cortos: máximo 1-2 oraciones, a veces solo 2-5 palabras\n"
-        "- Español mexicano informal: 'wey', 'bro', 'nel', 'simon', 'sale', 'órale', 'chido', 'a poco', 'no manches', 'neta', 'chale', 'qué onda'\n"
-        "- Omite acentos y signos de apertura (¿ ¡) como se hace en chat real\n"
-        "- Usa 'jaja', 'jajajaja', 'haha', 'ajá', 'oye', 'neta?', 'en serio??' cuando corresponde\n"
-        "- Emojis ocasionalmente, nunca en cada mensaje: 😂 🔥 👀 😭 💀 😤 👾\n"
-        "- Nunca uses puntuación perfecta — sin punto final, comas opcionales, todo minúsculas\n"
-        "- Varía el largo: a veces 3 palabras, a veces una oración completa\n"
-        "- Reacciona a lo que dijo el otro antes de agregar algo tuyo\n"
-        "- NUNCA uses frases de IA como 'claro que sí', 'por supuesto', 'sin duda', 'interesante punto'\n\n"
-        "Ejemplos de mensajes CORRECTOS (así debes escribir):\n"
-        "  'noo wey en serio 😂'\n"
-        "  'simon buenísima esa'\n"
-        "  'ps si ba, yo preferiría quedarme jaja'\n"
-        "  'nel yo creí que ibas a decir otra cosa'\n"
-        "  'a poco no la has visto??'\n"
-        "  'chale yo también quiero ir'\n"
-        "  'oye y el final que?? jajaja'\n"
-        "  'no manches llevaba años esperando eso'\n"
-        "  'bro igual, me caga ese personaje'\n"
-        "  'simon es de lo mejor que han sacado'\n\n"
-        "Escribe SOLO el mensaje, sin comillas ni explicaciones."
+        f"Eres {name}, {bio}. Chateas por WhatsApp con {other_name}, un amigo de hace años. "
+        f"De lo que platican: {topic}. Pueden irse a otra cosa de su vida (el trabajo, la comida, "
+        "el fin de semana) como pasa en una plática real.\n"
+        f"Tu forma de escribir: {style}\n"
+        "Cómo suena una persona real en el chat:\n"
+        "- Mensajes cortos: máximo 15 palabras, muchas veces menos de 6. Nunca un párrafo.\n"
+        "- No preguntes en cada mensaje. Muchas veces solo comentas, opinas o cuentas algo tuyo.\n"
+        "- Contesta a lo último que dijo el otro con algo concreto (un nombre, un lugar, un detalle), "
+        "no con frases que sirven para cualquier cosa como 'eso me late' o 'está brutal'.\n"
+        "- No repitas palabras ni muletillas que ya usaste en tus mensajes anteriores.\n"
+        "- Sin punto final, sin signos de apertura (¿ ¡), con alguna falta de acento como en chat real.\n"
+        "- Nunca frases de asistente ('claro que sí', 'por supuesto', 'sin duda', 'totalmente', "
+        "'definitivamente', 'qué interesante').\n"
+        "- No cierres cada mensaje con una pregunta para el otro.\n"
+        "- Eres una persona: nunca digas ni niegues que eres un bot, una IA o un asistente.\n"
+        "Escribe SOLO tu siguiente mensaje, sin tu nombre, sin comillas ni explicaciones."
     )
 
     openai_msgs = [{"role": "system", "content": system}]
@@ -311,10 +440,16 @@ def _generate_message(history: list[dict], speaker_key: str, session_id=None, to
     if not history:
         openai_msgs.append({
             "role": "user",
-            "content": "(Inicia la conversación con un mensaje corto y casual sobre el tema, como si hubiera pasado algo relevante hace poco)"
+            "content": "(Abre la plática con algo corto que te pasó hoy o que acabas de ver, relacionado con el tema)"
         })
 
-    return call_llm(openai_msgs, max_tokens=90, temperature=0.95, priority=PRIORITY_BATCH)
+    rng = random.Random(_stable_int(session_id, speaker_key, len(history)))
+    for _ in range(2):
+        raw = call_llm(openai_msgs, max_tokens=60, temperature=0.95, priority=PRIORITY_BATCH)
+        text = _clean_warmup_text(raw, history, speaker_key, emoji_rate, slang, rng)
+        if text:
+            return text
+    raise ValueError("el modelo no dio un mensaje que suene a persona")
 
 
 def _contact_already_saved(db, instance_name: str, number: str) -> bool:

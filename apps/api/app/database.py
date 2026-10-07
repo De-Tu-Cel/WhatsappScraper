@@ -48,6 +48,47 @@ def _sort_handled_by(handled_by: list) -> list:
     return sorted(handled_by, key=lambda h: (h.get("username") == "ai_andy", (h.get("name") or "").lower()))
 
 
+def _use_hybrid_verdict(db, results: list) -> None:
+    """Análisis filtra y cuenta con la clasificación de Timing + IA (la de la columna y el
+    reporte), no con la categoría guardada en el mensaje. Universidad UVM (2026-10-06): salía
+    en el filtro Bot + Humano por el análisis viejo del mensaje mientras la columna decía Bot.
+    En empresas con varios números, la de la empresa sale de sus números: Diesgas (2026-10-06)
+    salía Agente IA por la plática de sus dos números juntos, cuando cada uno es
+    Automático + Humano."""
+    from app.classification_compare import COMPARISONS
+    ids = [r["company_id"] for r in results if r.get("company_id")]
+    if not ids:
+        return
+    docs = {d["company_id"]: d for d in db[COMPARISONS].find(
+        {"company_id": {"$in": ids}},
+        {"company_id": 1, "hibrido.category": 1, "hibrido.is_ai": 1, "hibrido.error": 1,
+         "numbers.number": 1, "numbers.replied": 1,
+         "numbers.hibrido.category": 1, "numbers.hibrido.is_ai": 1, "numbers.hibrido.error": 1})}
+
+    def _ok(h):
+        return bool(h) and not h.get("error") and h.get("category")
+
+    for r in results:
+        doc = docs.get(r.get("company_id"))
+        if not doc:
+            continue
+        by_num = {e.get("number"): e for e in doc.get("numbers") or []}
+        replied = []
+        for n in r.get("numbers") or []:
+            entry = by_num.get("".join(c for c in (n.get("number") or "") if c.isdigit())[-10:])
+            h = (entry or {}).get("hibrido")
+            if _ok(h):
+                n["category"], n["is_ai"] = h["category"], bool(h.get("is_ai"))
+                if entry.get("replied"):
+                    n["hybrid_verdict"] = True
+                    replied.append((h["category"], bool(h.get("is_ai"))))
+        company = doc.get("hibrido")
+        if len(set(replied)) == 1 and len(by_num) > 1:
+            r["category"], r["is_ai"] = replied[0]
+        elif _ok(company):
+            r["category"], r["is_ai"] = company["category"], bool(company.get("is_ai"))
+
+
 def _mixed_signal_category(analyzed_msgs, computed_category):
     """A conversation that has BOTH a bot-authored and a human-authored
     inbound message anywhere in its history is a hibrido variant, even when
@@ -1780,7 +1821,7 @@ class MongoDBManager:
         _msgs_all = list(self.db.message_logs.find(
             {"company_id": {"$in": _all_cids}},
             {"direction": 1, "to_number": 1, "from_number": 1, "number": 1,
-             "analysis": 1, "created_at": 1, "company_id": 1,
+             "analysis": 1, "created_at": 1, "company_id": 1, "status": 1,
              "sent_by_username": 1, "sent_by_name": 1}
         ))
         _msgs_by_cid = defaultdict(list)
@@ -1828,7 +1869,12 @@ class MongoDBManager:
             def _norm(n):
                 return (n or "").replace("+", "").replace(" ", "").replace("-", "")[-10:]
 
-            msgs = _msgs_by_cid.get(company_id, [])
+            # Mazda Santa Anita (2026-10-06): las 3 respuestas llegaron con LID y los 4
+            # números salían "Sin respuesta", con el PDF apagado. Una respuesta con LID es
+            # del número al que le escribimos justo antes, igual que en la comparación.
+            from app.classifier import assign_thread_numbers, phone_last10
+            msgs = sorted(_msgs_by_cid.get(company_id, []), key=lambda m: m.get("created_at") or datetime.min)
+            assign_thread_numbers(msgs)
             num_map = {}  # key = normalized 10-digit number
             num_raw  = {}  # key = normalized → raw display number
             for m in msgs:
@@ -1836,6 +1882,8 @@ class MongoDBManager:
                 raw = (m.get("to_number") if direction == "outbound"
                        else m.get("from_number") or m.get("number"))
                 n = _norm(raw)
+                if direction != "outbound" and not phone_last10(raw) and m.get("_num"):
+                    n = m["_num"]
                 if not n:
                     continue
                 if n not in num_map:
@@ -2076,6 +2124,7 @@ class MongoDBManager:
                 "numbers": numbers,
                 "analyzing": analyzing,
             })
+        _use_hybrid_verdict(self.db, results)
         # Compute global category distribution from ALL results before any filtering.
         # Replicates frontend matchesCategory: "menu" normalizes to "bot", and
         # bot/bot_ia split is determined by the is_ai flag (not the category field).
@@ -2098,7 +2147,15 @@ class MongoDBManager:
             if nc == "bot":
                 return "bot_ia" if r.get("is_ai") else "bot"
             return nc if nc is not None else "sin_clasificar"
-        cat_counts = Counter(_eff_cat(r) for r in results)
+        def _eff_cats(r):
+            # Una empresa con varios números aparece en el filtro de cada número que contestó
+            # (Hidrogaspedidos, 2026-10-06: Hermosillo es Bot + Humano y San Luis es Bot).
+            cats = {_eff_cat(r)}
+            for n in r.get("numbers") or []:
+                if n.get("hybrid_verdict"):
+                    cats.add(_eff_cat(n))
+            return cats
+        cat_counts = Counter(c for r in results for c in _eff_cats(r))
         category_counts = {
             "humano":             cat_counts.get("humano", 0),
             "automatico":         cat_counts.get("automatico", 0),
@@ -2112,7 +2169,7 @@ class MongoDBManager:
         }
         # Apply server-side category filter after computing global counts
         if category and category != "all":
-            results = [r for r in results if _eff_cat(r) == category]
+            results = [r for r in results if category in _eff_cats(r)]
         # Same treatment for the agent filter — applied after category_counts so the
         # summary chips at the top keep showing totals for the whole dataset, not just
         # whoever is currently selected (matches how the category filter already behaves).

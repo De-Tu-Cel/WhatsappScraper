@@ -328,6 +328,72 @@ function ProxyTile({ p, lang, busy, onCheck, onToggle, onDelete, dim }) {
   )
 }
 
+const SK = { bgcolor: 'var(--border, rgba(255,255,255,0.08))' }
+
+// Silueta de los ajustes y de las tarjetas mientras llega la lista: mismas cajas que
+// SettingTile y ProxyTile para que la página no brinque al cargar.
+function ProxiesSkeleton() {
+  const widths = ['78%', '62%', '86%', '70%', '74%', '58%', '82%', '67%']
+  return (
+    <>
+      <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+        {[0, 1].map(i => (
+          <Box key={i} sx={{ flex: '1 1 320px', minWidth: 0, border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 2.5,
+            px: 1.8, py: 1.4, display: 'flex', flexDirection: 'column', gap: 0.8, bgcolor: 'rgba(255,255,255,0.015)' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, minHeight: 28 }}>
+              <Skeleton variant="text" width={i ? 142 : 92} height={17} sx={SK} />
+              {i ? <Skeleton variant="rounded" width={34} height={18} sx={{ ...SK, borderRadius: 99 }} />
+                 : <Skeleton variant="rounded" width={150} height={32} sx={{ ...SK, borderRadius: 2 }} />}
+            </Box>
+            <Box>
+              <Skeleton variant="text" width="98%" height={13} sx={SK} />
+              <Skeleton variant="text" width={i ? '91%' : '94%'} height={13} sx={SK} />
+              <Skeleton variant="text" width={i ? '74%' : '69%'} height={13} sx={SK} />
+            </Box>
+          </Box>
+        ))}
+      </Box>
+      {/* En una carga normal se ven primero los proxies asignados y después los libres.
+          Se dibujan varias filas para conservar la altura y densidad del pool real. */}
+      {[6, 8].map((n, g) => (
+        <Box key={g}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mt: 0.4, mb: 0.8 }}>
+            <Skeleton variant="circular" width={6} height={6} sx={SK} />
+            <Skeleton variant="text" width={g ? 42 : 50} height={12} sx={SK} />
+            <Skeleton variant="text" width={12} height={12} sx={SK} />
+          </Box>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 1.2 }}>
+            {Array.from({ length: n }).map((_, i) => (
+              <Box key={i} sx={{ border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 2.5, px: 1.5, py: 1.2,
+                bgcolor: 'var(--card-bg)', display: 'flex', flexDirection: 'column', gap: 0.7, minWidth: 0 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.9 }}>
+                  <Skeleton variant="circular" width={8} height={8} sx={{ ...SK, flexShrink: 0 }} />
+                  <Box sx={{ display: 'flex', alignItems: 'baseline', flex: 1, minWidth: 0, gap: 0.4 }}>
+                    <Skeleton variant="text" width={widths[i % widths.length]} height={18} sx={SK} />
+                    <Skeleton variant="text" width={30} height={15} sx={{ ...SK, flexShrink: 0 }} />
+                  </Box>
+                  <Skeleton variant="rounded" width={23} height={15} sx={{ ...SK, borderRadius: 0.8 }} />
+                  <Skeleton variant="circular" width={20} height={20} sx={SK} />
+                </Box>
+                <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', ml: 2.1 }}>
+                  <Skeleton variant="text" width={i % 3 === 0 ? 78 : 56} height={13} sx={SK} />
+                  <Skeleton variant="text" width={i % 2 ? 66 : 48} height={13} sx={SK} />
+                </Box>
+                {g === 0
+                  ? <Box sx={{ display: 'flex', gap: 0.5, ml: 2.1 }}>
+                      <Skeleton variant="rounded" width={i % 2 ? 92 : 76} height={18} sx={{ ...SK, borderRadius: 99 }} />
+                      {i === 0 && <Skeleton variant="rounded" width={70} height={18} sx={{ ...SK, borderRadius: 99 }} />}
+                    </Box>
+                  : <Skeleton variant="text" width={58} height={12} sx={{ ...SK, ml: 2.1 }} />}
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      ))}
+    </>
+  )
+}
+
 export function ProxiesSection({ onChanged }) {
   const { lang } = useLang()
   const L = (es, en) => (lang === 'en' ? en : es)
@@ -422,12 +488,16 @@ export function ProxiesSection({ onChanged }) {
         {/* Métricas */}
         {!data ? (
           <Box sx={STRIP_SX}>
-            {[0, 1, 2, 3, 4].map(i => (
+            {[0, 1, 2, 3].map(i => (
               <Fragment key={i}>
                 {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 1.4 }} />}
                 <Box sx={{ flex: '1 1 0', minWidth: 130, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.4, px: 2, py: 1.6 }}>
                   <Skeleton variant="circular" width={40} height={40} sx={{ flexShrink: 0, bgcolor: 'var(--border)' }} />
-                  <Box><Skeleton variant="text" width={62} height={12} sx={{ mb: 0.5, bgcolor: 'var(--border)' }} /><Skeleton variant="text" width={32} height={20} sx={{ bgcolor: 'var(--border)' }} /></Box>
+                  <Box>
+                    <Skeleton variant="text" width={i === 2 ? 108 : i === 3 ? 82 : 62} height={13} sx={{ bgcolor: 'var(--border)' }} />
+                    {i > 0 && <Skeleton variant="text" width={i === 3 ? 96 : 34} height={11} sx={{ bgcolor: 'var(--border)' }} />}
+                    <Skeleton variant="text" width={i === 2 ? 54 : 32} height={22} sx={{ bgcolor: 'var(--border)' }} />
+                  </Box>
                 </Box>
               </Fragment>
             ))}
@@ -453,6 +523,8 @@ export function ProxiesSection({ onChanged }) {
             ))}
           </Box>
         )}
+
+        {!data && !err && <ProxiesSkeleton />}
 
         {/* Ajustes */}
         {proxies.length > 0 && (

@@ -441,9 +441,7 @@ function InstanceChatsDialog({ open, onClose, instanceName, token }) {
         '&::-webkit-scrollbar-thumb': { borderRadius: 3, bgcolor: 'rgba(255,255,255,0.08)' },
       }}>
         {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', pt: 4 }}>
-            <CircularProgress size={28} />
-          </Box>
+          <WarmupChatsSkeleton />
         ) : selected ? (
           <SessionDetail
             instanceA={selectedGroup?.latest.instance_a}
@@ -1169,6 +1167,31 @@ function WarmupConfigDialog({ open, onClose, token }) {
 // mientras que el resto de la app ya usa recuadros con la silueta real del
 // contenido que está por llegar.
 const WSKEL = { bgcolor: 'var(--skeleton-base,rgba(255,255,255,0.06))', '[data-theme-mode="light"] &': { bgcolor: 'rgba(0,0,0,0.08)' }, '&::after': { background: 'linear-gradient(90deg,transparent,rgba(255,255,255,0.04),transparent)', '[data-theme-mode="light"] &': { background: 'linear-gradient(90deg,transparent,rgba(0,0,0,0.04),transparent)' } } }
+
+// El diálogo de "Ver chats" es siempre oscuro, aunque la app esté en claro.
+// La lista real es avatar redondo, nombre, fecha y el último mensaje.
+function WarmupChatsSkeleton() {
+  const bone = { bgcolor: 'rgba(255,255,255,0.08)' }
+  return (
+    <Box>
+      {[0, 1, 2, 3, 4, 5].map(i => (
+        <Box key={i}>
+          {i > 0 && <Divider sx={{ borderColor: 'rgba(255,255,255,0.05)', ml: 9 }} />}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.25, borderLeft: '3px solid transparent' }}>
+            <Skeleton variant="circular" width={48} height={48} sx={bone} />
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+                <Skeleton variant="text" width={`${46 + (i % 3) * 12}%`} height={18} sx={bone} />
+                <Skeleton variant="text" width={36} height={14} sx={bone} />
+              </Box>
+              <Skeleton variant="text" width={`${58 + (i % 2) * 18}%`} height={14} sx={bone} />
+            </Box>
+          </Box>
+        </Box>
+      ))}
+    </Box>
+  )
+}
 
 function WarmupStatsRowSkeleton() {
   return (

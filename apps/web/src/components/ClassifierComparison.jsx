@@ -21,6 +21,7 @@ import Typography from '@mui/material/Typography'
 import Divider from '@mui/material/Divider'
 import Collapse from '@mui/material/Collapse'
 import CircularProgress from '@mui/material/CircularProgress'
+import Skeleton from '@mui/material/Skeleton'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows'
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
@@ -451,6 +452,63 @@ function MethodLog({ method, result }) {
   )
 }
 
+const SK = { bgcolor: 'color-mix(in srgb, var(--text, #f1f5f9) 11%, transparent)' }
+
+// Silueta de una columna del log mientras carga: mismo encabezado (ícono, nombre, ayuda,
+// pills), la tabla de condiciones en Timing, los pasos con su número y el resultado.
+function MethodLogSkeleton({ method }) {
+  const meta = METHOD_META[method]
+  const Icon = meta.icon
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, border: `1px solid ${C.border}`, borderRadius: 2.5, bgcolor: C.surface, overflow: 'hidden' }}>
+      <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 1.1, borderBottom: `1px solid ${C.border}` }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ width: 30, height: 30, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: `${meta.color}1f`, color: meta.color, flexShrink: 0 }}>
+            <Icon sx={{ fontSize: 18 }} />
+          </Box>
+          <Skeleton variant="text" width={method === 'hibrido' ? 104 : 64} height={24} sx={SK} />
+        </Box>
+        <Skeleton variant="text" width="96%" height={14} sx={SK} />
+        <Skeleton variant="text" width="72%" height={14} sx={SK} />
+        <Box sx={{ display: 'flex', gap: 0.6 }}>
+          <Skeleton variant="rounded" width={88} height={20} sx={{ ...SK, borderRadius: 99 }} />
+          {method !== 'timing' && <Skeleton variant="rounded" width={110} height={20} sx={{ ...SK, borderRadius: 99 }} />}
+        </Box>
+        <Skeleton variant="text" width={118} height={12} sx={SK} />
+        {method === 'timing' && (
+          <Box sx={{ border: `1px solid ${C.border}`, borderRadius: 1.5, overflow: 'hidden', mt: 0.4 }}>
+            {Array.from({ length: 7 }).map((_, i) => (
+              <Box key={i} sx={{ display: 'grid', gridTemplateColumns: 'minmax(150px, 1fr) 48px 72px 70px', gap: 1, px: 1, py: 0.75,
+                borderTop: i ? `1px solid ${C.border}` : 'none', bgcolor: i ? 'transparent' : C.faint }}>
+                <Skeleton variant="text" height={14} width={i ? '86%' : '50%'} sx={SK} />
+                <Skeleton variant="text" height={14} sx={SK} />
+                <Skeleton variant="text" height={14} sx={SK} />
+                {i ? <Skeleton variant="rounded" height={18} width={34} sx={{ ...SK, borderRadius: 99 }} /> : <Skeleton variant="text" height={14} sx={SK} />}
+              </Box>
+            ))}
+          </Box>
+        )}
+      </Box>
+      <Box sx={{ px: 2, pt: 2, pb: 1.5, flex: 1, display: 'flex', flexDirection: 'column', gap: 1.6 }}>
+        {Array.from({ length: method === 'timing' ? 4 : 6 }).map((_, i) => (
+          <Box key={i} sx={{ display: 'grid', gridTemplateColumns: '22px 1fr', columnGap: 1.2 }}>
+            <Skeleton variant="circular" width={22} height={22} sx={SK} />
+            <Box sx={{ minWidth: 0 }}>
+              <Skeleton variant="text" width={`${46 + ((i * 17) % 34)}%`} height={18} sx={SK} />
+              <Skeleton variant="text" width="94%" height={14} sx={SK} />
+              {i % 2 === 0 && <Skeleton variant="text" width="64%" height={14} sx={SK} />}
+            </Box>
+          </Box>
+        ))}
+      </Box>
+      <Box sx={{ m: 1.5, mt: 0, p: 1.4, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, border: `1px solid ${C.border}`, bgcolor: C.faint }}>
+        <Skeleton variant="text" width={70} height={14} sx={SK} />
+        <Skeleton variant="rounded" width={96} height={26} sx={{ ...SK, borderRadius: 99 }} />
+      </Box>
+    </Box>
+  )
+}
+
 const fmtNumber = (n) => last10(n).replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')
 
 // number: en empresas con varios números, abre la comparación de ese número.
@@ -503,8 +561,9 @@ export function ComparisonDialog({ companyId, companyName, number, onClose, onCh
       </DialogTitle>
       <DialogContent sx={{ px: 3 }}>
         {state === 'loading' && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 6, justifyContent: 'center', color: C.muted }}>
-            <CircularProgress size={16} /> <Typography sx={{ fontSize: '0.85rem' }}>{t.analytics.logLoading}</Typography>
+          <Box aria-busy="true" aria-label={t.analytics.logLoading}
+            sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }, gap: 2 }}>
+            {METHODS.map(m => <MethodLogSkeleton key={m} method={m} />)}
           </Box>
         )}
         {(state === 'empty' || (state === 'ready' && !view)) && (
@@ -594,10 +653,96 @@ function DistributionRow({ method, counts, t }) {
   )
 }
 
+function ComparisonSummarySkeleton() {
+  const line = { bgcolor: 'color-mix(in srgb, var(--text, #f1f5f9) 11%, transparent)' }
+  return (
+    <Box aria-busy="true" sx={{
+      containerType: 'inline-size', flexShrink: 0,
+      borderRadius: 2.5, border: `1px solid ${C.border}`, background: STAT_STRIP_BG,
+    }}>
+      <Box sx={{
+        display: 'grid', columnGap: 2.5, rowGap: 2.5, px: 3, py: 2.2, gridTemplateColumns: '1fr',
+        '@container (min-width: 720px)': { gridTemplateColumns: '1fr 1fr' },
+        '@container (min-width: 1100px)': {
+          gridTemplateColumns: 'auto minmax(320px, 560px) minmax(380px, 860px)',
+          justifyContent: 'space-between', columnGap: 6,
+        },
+      }}>
+        {/* Coincidencia global: título, porcentaje grande y muestra comparada. */}
+        <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+            <Skeleton variant="circular" width={18} height={18} sx={line} />
+            <Skeleton variant="text" width={190} height={20} sx={line} />
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mt: 1.2 }}>
+            <Skeleton variant="text" width={72} height={48} sx={line} />
+            <Skeleton variant="text" width={104} height={18} sx={line} />
+          </Box>
+          <Skeleton variant="text" width={145} height={14} sx={{ ...line, mt: 0.6 }} />
+        </Box>
+
+        {/* Las tres coincidencias por pares conservan etiquetas, barra y porcentaje. */}
+        <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+          <Skeleton variant="text" width={155} height={15} sx={{ ...line, mb: 1.2 }} />
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.1 }}>
+            {[0, 1, 2].map(i => (
+              <Box key={i} sx={{ display: 'grid', gridTemplateColumns: 'minmax(150px, auto) 1fr 40px', alignItems: 'center', gap: 1.4 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.55 }}>
+                  <Skeleton variant="circular" width={7} height={7} sx={line} />
+                  <Skeleton variant="text" width={i === 0 ? 42 : 52} height={15} sx={line} />
+                  <Skeleton variant="text" width={8} height={14} sx={line} />
+                  <Skeleton variant="circular" width={7} height={7} sx={line} />
+                  <Skeleton variant="text" width={i === 1 ? 72 : 50} height={15} sx={line} />
+                </Box>
+                <Skeleton variant="rounded" height={8} sx={{ ...line, borderRadius: 99 }} />
+                <Skeleton variant="text" width={34} height={17} sx={line} />
+              </Box>
+            ))}
+          </Box>
+        </Box>
+
+        {/* Distribución de Timing, IA y Timing + IA con la leyenda inferior. */}
+        <Box sx={{
+          display: 'flex', flexDirection: 'column', justifyContent: 'center',
+          '@container (min-width: 720px)': { gridColumn: '1 / -1' },
+          '@container (min-width: 1100px)': { gridColumn: 'auto' },
+        }}>
+          <Skeleton variant="text" width={166} height={15} sx={{ ...line, mb: 1.2 }} />
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.1 }}>
+            {[62, 26, 82].map((nameWidth, i) => (
+              <Box key={i} sx={{ display: 'grid', gridTemplateColumns: '96px 1fr', alignItems: 'center', gap: 1.4 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <Skeleton variant="circular" width={7} height={7} sx={line} />
+                  <Skeleton variant="text" width={nameWidth} height={15} sx={line} />
+                </Box>
+                <Box sx={{ display: 'flex', height: 14, gap: '2px' }}>
+                  {[24, 14, 18, 10, 20, 8].map((w, j) => (
+                    <Skeleton key={j} variant="rectangular" width={`${w}%`} height={14} sx={{ ...line, borderRadius: j === 0 || j === 5 ? 99 : 0 }} />
+                  ))}
+                </Box>
+              </Box>
+            ))}
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1.6, mt: 1.4 }}>
+            {[70, 100, 54, 74].map((w, i) => (
+              <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                <Skeleton variant="rounded" width={8} height={8} sx={line} />
+                <Skeleton variant="text" width={w} height={13} sx={line} />
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      </Box>
+    </Box>
+  )
+}
+
 export function ComparisonSummary() {
   const { t } = useLang()
   const fetcher = url => authFetch(url).then(r => r.json())
-  const { data: sum } = useSWR(SUMMARY_KEY, fetcher, { revalidateOnFocus: false })
+  const { data: sum, isLoading, error } = useSWR(SUMMARY_KEY, fetcher, { revalidateOnFocus: false })
+  if (isLoading) return <ComparisonSummarySkeleton />
+  if (error) return null
   if (!sum?.total) return null
 
   const c = sum.coincidencia || {}

@@ -190,7 +190,7 @@ export const T = {
       colIa:           'IA',
       colHybrid:       'Timing + IA',
       colAgree:        'Coinciden',
-      helpTiming:      'Solo tiempos de respuesta, según el diagrama de flujo determinista (T1, segundo mensaje, T2 y análisis del mensaje #2). No usa IA.',
+      helpTiming:      'Diagrama de flujo determinista con los tiempos de respuesta (T1, segundo mensaje, T2). Además revisa con reglas fijas si la respuesta es un menú o un asistente virtual: eso es Bot aunque haya tardado. No usa IA.',
       helpIa:          'Solo IA: le pasamos a la IA (gpt-4.1-mini) únicamente el texto de la conversación, sin tiempos ni reglas fijas, y ella decide.',
       helpHybrid:      'El clasificador actual. Le pasamos a la IA (gpt-4.1-mini) la conversación completa —lo que escribimos y lo que respondió el negocio— con cuánto tardó cada respuesta. La IA busca patrones y decide, y al final unas reglas fijas pueden corregirla. Es la categoría que sale en el reporte.',
       // "?" junto a cada clasificador (ClassifierHelp en ClassifierComparison.jsx). {t1}, {t2} y
@@ -202,13 +202,14 @@ export const T = {
         outputs: 'Resultados posibles',
         weak:    'Dónde se puede equivocar',
         timing: {
-          sees:  'Solo cuánto tarda el negocio en contestar. No lee los mensajes, salvo su segunda respuesta, para ver si trae un menú. No usa IA.',
+          sees:  'Cuánto tarda el negocio en contestar. Ignora mensajes vacíos. Lee la primera respuesta si es un menú o un asistente virtual, y la segunda para ver si trae un menú. No usa IA.',
           steps: [
-            'Mide T1: lo que tarda en contestar nuestro primer mensaje. Si no contesta en {wait}, Humano o canal desconectado. Si tarda más de {t1}, Humano.',
-            'Si contestó en {t1} o menos pudo ser automático: le mandamos un segundo mensaje y medimos T2. Si nadie contesta en {wait}, Automático + Sin respuesta. Si tarda más de {t2}, Automático + Humano.',
+            'Si el primer mensaje no tuvo una respuesta real en {wait} y un reintento sí, mide ese reintento. Un mensaje vacío no cuenta.',
+            'Mide T1. Si no contesta en {wait}, Humano o canal desconectado. Si la primera respuesta es un menú o un asistente virtual, Bot, aunque tarde más de {t1} o no haya segundo mensaje. Si tarda más de {t1} y no es menú, Humano.',
+            'Si contestó en {t1} o menos pudo ser automático: se mide T2. Si nadie contesta en {wait}, Automático + Sin respuesta. Si T2 pasa de {t2} y esa respuesta es un menú, Bot; si no, Automático + Humano.',
             'Si T2 también es de {t2} o menos: si esa respuesta trae un menú, Bot; si no, Agente IA.',
           ],
-          weak:  'Solo mide las dos primeras respuestas. Un bot o una IA que tarda más de {t1} sale Humano, y una persona que pega respuestas guardadas en segundos sale automática.',
+          weak:  'Solo mide las dos primeras respuestas reales. Un bot que tarda y no manda menú sale Humano, y una persona que pega respuestas guardadas en segundos sale automática.',
         },
         ia: {
           sees:  'Solo el texto de la conversación (hasta 40 mensajes), sin horas ni tiempos de respuesta.',
@@ -222,7 +223,8 @@ export const T = {
           sees:  'La conversación completa (hasta 40 mensajes) con cuánto tardó cada respuesta del negocio. Marca con ⚡ las que llegaron en menos de 10 s con más texto del que alguien teclea en ese tiempo.',
           steps: [
             'La IA (gpt-4.1-mini) busca patrones: menús, plantillas, textos repetidos, respuestas en segundos, cambios de nombre, trato personal.',
-            'Reglas fijas la corrigen cuando los datos la contradicen. Por ejemplo: si todas las respuestas llegaron más rápido de lo que alguien teclea, no es Humano; si el negocio solo mandó plantillas o menús, no es Agente IA; si contestó en segundos a cada pregunta con respuestas distintas, es Agente IA; si no hay nada automático, es Humano.',
+            'Si no hay una respuesta real (vacío, anterior al nuestro, o solo una campaña días después), es Sin respuesta. Si la primera respuesta real tardó más de un minuto y nada contestó como un sistema, es Humano.',
+            'Reglas fijas la corrigen cuando los datos la contradicen. Por ejemplo: si todas las respuestas llegaron más rápido de lo que alguien teclea, no es Humano; un menú que se repite y luego manda guiones largos, sin que volvamos a escribir, es Bot; un aviso de fuera de horario y después una persona es Automático + Humano; si no hay nada automático, es Humano.',
             'Revisa el último mensaje del negocio: un menú o un "soy un asistente virtual" al final, o un saludo casual de una persona, pueden cambiar el resultado.',
           ],
           weak:  'Una IA programada para tardar como persona y escribir informal, o una persona que pega respuestas guardadas en segundos.',
@@ -1747,7 +1749,7 @@ export const T = {
       colIa:           'AI',
       colHybrid:       'Timing + AI',
       colAgree:        'Agree',
-      helpTiming:      'Response times only, following the deterministic flowchart (T1, second message, T2 and analysis of message #2). No AI.',
+      helpTiming:      'Deterministic flowchart on response times (T1, second message, T2). It also checks with fixed rules whether the reply is a menu or a virtual assistant: that is a Bot even if it was slow. No AI.',
       helpIa:          'AI only: we give the AI (gpt-4.1-mini) only the text of the conversation, without timing or fixed rules, and it decides.',
       helpHybrid:      'The current classifier. We give the AI (gpt-4.1-mini) the whole conversation —what we wrote and what the business replied— with how long each reply took. The AI looks for patterns and decides, and fixed rules can correct it at the end. It is the category used in the report.',
       classifierHow: {
@@ -1757,13 +1759,14 @@ export const T = {
         outputs: 'Possible results',
         weak:    'Where it can be wrong',
         timing: {
-          sees:  'Only how long the business takes to reply. It does not read the messages, except its second reply, to see whether it is a menu. No AI.',
+          sees:  'How long the business takes to reply. Empty messages are ignored. It reads the first reply when that reply is a menu or a virtual assistant, and the second reply to see whether it is a menu. No AI.',
           steps: [
-            'Measures T1: how long it takes to answer our first message. No reply within {wait}: Human or channel offline. Longer than {t1}: Human.',
-            'If it replied within {t1} it may be automatic: we send a second message and measure T2. Nobody replies within {wait}: Automatic + No reply. Longer than {t2}: Automatic + Human.',
+            'If the first message got no real reply within {wait} but a retry did, that retry is what gets measured. An empty message does not count.',
+            'Measures T1. No reply within {wait}: Human or channel offline. A menu or a virtual assistant on the first reply is Bot, even if it took longer than {t1} or there is no second message. Longer than {t1} and not a menu: Human.',
+            'A reply within {t1} may be automatic: T2 is measured. Nobody replies within {wait}: Automatic + No reply. If T2 is over {t2} and that reply is a menu, Bot; otherwise, Automatic + Human.',
             'If T2 is also {t2} or less: a menu in that reply means Bot; otherwise, AI Agent.',
           ],
-          weak:  'It only measures the first two replies. A bot or AI that takes longer than {t1} comes out Human, and a person pasting saved replies in seconds comes out automatic.',
+          weak:  'It only measures the first two real replies. A slow bot that sends no menu comes out Human, and a person pasting saved replies in seconds comes out automatic.',
         },
         ia: {
           sees:  'Only the text of the conversation (up to 40 messages), without times or reply delays.',
@@ -1777,7 +1780,8 @@ export const T = {
           sees:  'The whole conversation (up to 40 messages) with how long each business reply took. Replies that arrived in under 10 s with more text than anyone can type in that time are marked with ⚡.',
           steps: [
             'The AI (gpt-4.1-mini) looks for patterns: menus, templates, repeated texts, replies in seconds, name changes, personal touch.',
-            'Fixed rules correct it when the data contradicts it. For example: if every reply came faster than anyone types, it is not Human; if the business only sent templates or menus, it is not an AI Agent; if it answered each question in seconds with different replies, it is an AI Agent; if nothing is automatic, it is Human.',
+            'If there is no real reply (empty, sent before ours, or only a campaign days later), it is No reply. If the first real reply took more than a minute and nothing answered like a system, it is Human.',
+            'Fixed rules correct it when the data contradicts it. For example: if every reply came faster than anyone types, it is not Human; a menu that repeats and then sends long scripts, without us writing again, is Bot; an away notice and then a person is Automatic + Human; if nothing is automatic, it is Human.',
             'It checks the business\'s last message: a menu or an "I am a virtual assistant" at the end, or a casual greeting from a person, can change the result.',
           ],
           weak:  'An AI programmed to take as long as a person and write casually, or a person pasting saved replies in seconds.',

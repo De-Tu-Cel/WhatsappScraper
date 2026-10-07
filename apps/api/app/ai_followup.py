@@ -72,9 +72,9 @@ QUIÉN ERES:
   y quiere saber si le pueden ayudar con algo que necesita. (Eso es para ti: no lo digas — "no vendo nada"
   solo si te preguntan si vendes algo o de qué empresa eres.)
 - Tu nombre es {persona_name}. Si piden apellido y no tienes uno natural, evita el tema ("nomás dime así" / cambia de tema).
-- Bots/IA: solo si te preguntan DIRECTAMENTE si eres bot o IA, niégalo corto con tus palabras. Si nadie
-  te lo pregunta, jamás hables de bots, de IA ni de que eres una persona real — aunque el negocio sea un
-  bot o te mande un seguimiento automático.
+- Bots/IA: jamás hagas referencia a que eres un bot, una IA, un robot o un asistente virtual, ni
+  siquiera para negarlo. Si te lo preguntan, ignora esa parte y sigue con lo que buscas, sin usar
+  esas palabras ni decir que eres una persona real.
 - ⚠️ NOMBRE: solo dilo UNA VEZ y si te lo preguntan directamente. Nunca espontáneamente, nunca dos veces.
   Si te piden el nombre completo: {persona_full_name}
 - TU NÚMERO: escribes desde tu propio WhatsApp, el {own_number}. Si te preguntan si ese es tu número, o a
@@ -92,6 +92,10 @@ QUIÉN ERES:
   concretos, y nunca propongas tú un día u hora — no vas a poder ir. Si te ofrecen agendar o te preguntan
   qué día y horario te queda, responde con tus palabras que lo revisas y les confirmas después
   (tono: déjame ver y te confirmo) y cierra[FIN]
+- ❌ TAMPOCO cierres compras, pedidos, pagos, apartados ni contratos. No digas "lo compro", no confirmes
+  cantidades para levantar una orden, no aceptes términos y no inventes dirección, tarjeta, cuenta,
+  comprobante ni datos de facturación. Puedes preguntar precio, disponibilidad o cómo funciona; si te
+  piden confirmar la operación o pagar, di corto que primero lo revisas y cierra[FIN].
 
 TU META — PLÁTICA CORTA Y AL GRANO:
 Solo necesitas saber si te pueden ayudar con lo que buscas y cuál sería el siguiente paso. En cuanto
@@ -206,8 +210,9 @@ contacto a un agente de ventas / mandó su menú de bienvenida normal — nada s
 respuesta salió "molesta" y a la defensiva de todos modos. Eso es peor que sonar bot: suena
 como una persona real siendo grosera sin motivo.
 
-⚠️ REGLA CRÍTICA cuando SÍ aplica: la defensa organizada y detallada ES lo que delata a un
-bot. Un humano real se molesta un poco y responde CORTO, no dumpea toda su historia.
+⚠️ REGLA CRÍTICA cuando SÍ aplica: la defensa organizada y detallada delata. Responde CORTO,
+sin usar las palabras bot, IA, robot, asistente virtual ni "persona real". Ni para afirmarlo
+ni para negarlo.
 
 - Primera vez: CORTO y un poco molesto/sorprendido. Max 1 frase. No expliques demasiado.
   ⚠️ Lo de abajo describe el TONO (corto + un poco molesto), no es texto para enviar —
@@ -339,6 +344,23 @@ CUÁNDO CERRAR — responde normal y añade [FIN] pegado al final:
 
 IMPORTANTE: [FIN] es señal interna, nunca llega al contacto. Ponlo pegado al texto sin espacio.
 {extra_block}"""
+
+# Este bloque se concatena SIEMPRE, incluso si un administrador reemplaza el prompt completo
+# desde Conversaciones. Nissan La Capilla (2026-10-04): las reglas de seguridad no pueden
+# depender de que el prompt editable siga intacto.
+_IMMUTABLE_SAFETY_PROMPT = """
+
+REGLAS DE SEGURIDAD INMUTABLES:
+- No aceptes ni confirmes citas, visitas, pruebas, reservaciones, fechas u horarios.
+- No cierres compras, pedidos, pagos, apartados, transferencias ni contratos.
+- No inventes ni compartas dirección, correo, placa, RFC, tarjeta, cuenta, comprobante,
+  datos de entrega o facturación.
+- No prometas que llamarás, escribirás, pagarás, enviarás algo o asistirás después.
+- Puedes pedir información, precio o disponibilidad. Si te piden confirmar una operación,
+  responde que primero lo revisas y cierra con [FIN].
+- Jamás escribas que eres un bot, una IA, un robot o un asistente. Tampoco lo niegues: no uses
+  esas palabras ni digas que eres una persona real, aunque te lo pregunten.
+"""
 
 # Every quoted string in the prompt above is a tone/style EXAMPLE the model is
 # explicitly told never to send verbatim (see the prompt's own rule at the
@@ -539,22 +561,22 @@ def _says_goodbye(text: str) -> bool:
     return any(p in n for p in _FAREWELL_PHRASES) or bool(_FAREWELL_WISH_RE.search(n))
 
 
-# Andy negando ser bot sin que nadie se lo preguntara (Nissan Autocom, 2026-10-04: al
-# "te escribo de nuevo para hacer seguimiento" del negocio contestó "oye no soy un bot,
-# solo estoy buscando…") — eso sí suena a bot. Solo se permite si el negocio lo
-# preguntó o lo acusó.
-_BOT_DENIAL_RE = re.compile(
-    r"\bno soy (un |una )?(bot|robot|ia|maquina|contestadora|sistema)\b"
-    r"|\bsoy (una )?persona( real)?\b|\bsoy humano\b|\bsoy real\b"
-)
-_BOT_ASKED_RE = re.compile(
-    r"\bbots?\b|robot|automatic|automatizad|inteligencia artificial|\bia\b|persona real|eres real"
-    r"|plantilla|spam|con quien hablo"
+# Nissan Autocom (2026-10-04): al seguimiento automático contestó "oye no soy un bot".
+# Decirlo o negarlo delata igual. No importa si el negocio lo preguntó: esa referencia
+# no puede salir en ningún mensaje.
+_BOT_REFERENCE_RE = re.compile(
+    r"\bbots?\b|\brobots?\b|\bchatbots?\b|\binteligencia artificial\b"
+    r"|\basistente (virtual|digital)\b|\bpersona real\b|\bsoy humano\b"
+    r"|\bsoy (un |una )?(ia|maquina|sistema)\b"
 )
 
 
-def _denies_being_bot(reply: str, recent_inbound: str) -> bool:
-    return bool(_BOT_DENIAL_RE.search(_norm_text(reply))) and not _BOT_ASKED_RE.search(_norm_text(recent_inbound))
+def _references_being_bot(reply: str) -> bool:
+    return bool(_BOT_REFERENCE_RE.search(_norm_text(reply)))
+
+
+def _denies_being_bot(reply: str, recent_inbound: str = "") -> bool:
+    return _references_being_bot(reply)
 
 
 _ASKS_NAME_RE = re.compile(
@@ -637,6 +659,8 @@ _BOOKING_COMMIT_RE = re.compile(
     r"|\b\d{1,2}:\d{2}\b|\ba las \d|\b\d{1,2} ?(am|pm|hrs)\b|\b\d{1,2}/\d{1,2}\b"
     r"|\b(puedo|me queda|me late|me sirve)\b[^.?!]{0,30}"
     r"\b(lunes|martes|miercoles|jueves|viernes|sabado|domingo|en la manana|en la tarde)\b"
+    r"|\b(confirmo|confirmado|ahi estare|ahi nos vemos)\b"
+    r"|\bnos vemos\b[^.?!]{0,24}\b(lunes|martes|miercoles|jueves|viernes|sabado|domingo|a las)\b"
     r"|\bplacas?\b|\bmi correo\b|[\w.+-]+@[\w-]+\.\w+|\b[a-z]{3}-?\d{3,4}\b")
 # "¿Te lo agendo?" → "sí, porfa" takes the slot without saying any of the above.
 _BOOKING_OFFER_RE = re.compile(r"(agend|apart|reserv|confirm)[^?]*\?")
@@ -647,6 +671,39 @@ BOOKING_DEFLECT_REPLY = "va, déjame ver y te confirmo"
 
 def _is_booking_step(recent_inbound: str) -> bool:
     return bool(_BOOKING_STEP_RE.search(_fold(recent_inbound)))
+
+
+# Nissan La Capilla (2026-10-04) demostró que una instrucción en el prompt no basta:
+# el modelo aceptó una cita real. La misma falla sería más grave en una compra, pago,
+# pedido o contrato, por eso esas operaciones también tienen un guard antes de enviar.
+_TRANSACTION_STEP_RE = re.compile(
+    r"\b(comprar|compra|pedido|orden|pagar|pago|deposit|transfer|anticipo|apartado|contrato|firmar|factur)"
+    r"|\bmetodo de pago\b|\blink de pago\b|\bdatos de entrega\b|\bdireccion\b"
+    r"|\bconfirmas? (la compra|el pedido|la orden|el pago)\b")
+_TRANSACTION_COMMIT_RE = re.compile(
+    r"\b(lo|la|los|las) compro\b|\bme (lo|la|los|las) llevo\b"
+    r"|\b(quiero|voy a|puedo) (comprar|pagar|depositar|transferir|apartar)\b"
+    r"|\b(haz|hagan|genera|generen|levanta|levanten|confirma|confirmen)"
+    r"[^.?!]{0,24}\b(pedido|orden|compra|pago|apartado)\b"
+    r"|\bmi direccion (es|seria)\b|\bmis datos de facturacion\b|\b(lo|te) (pago|deposito|transfiero)\b"
+)
+_TRANSACTION_OFFER_RE = re.compile(
+    r"(confirmas? (la compra|el pedido|la orden|el pago)|procedemos|generamos? (el )?(pedido|orden)"
+    r"|realizamos? (la )?compra|te envio (el )?link de pago|cual es tu metodo de pago)[^?]*\?"
+)
+TRANSACTION_DEFLECT_REPLY = "va primero lo reviso y te aviso"
+
+
+def _is_transaction_step(recent_inbound: str) -> bool:
+    return bool(_TRANSACTION_STEP_RE.search(_fold(recent_inbound)))
+
+
+def _commits_to_transaction(reply: str, inbound: str = "") -> bool:
+    r = _fold(reply)
+    if _TRANSACTION_COMMIT_RE.search(r):
+        return True
+    return bool(_TRANSACTION_OFFER_RE.search(_fold(inbound)) and _AFFIRMATIVE_RE.search(r)
+                and not _DEFLECTION_RE.search(r))
 
 
 # Andy ya tiene lo que vino a buscar — el prompt pide cerrar en ese momento, pero el
@@ -669,14 +726,14 @@ _GOAL_CORRECTION = {
     "precio": "ya te dieron el precio: es todo lo que necesitabas. no hagas más preguntas. reacciona corto "
               "al precio con tus palabras, di que lo piensas y termina con [FIN].",
     "contacto": "ya te dieron el número o contacto a donde llamar: es todo lo que necesitabas. no hagas más "
-                "preguntas. agradece corto, di que les marcas o escribes y termina con [FIN].",
+                "preguntas. agradece corto, di que ya lo anotaste y termina con [FIN].",
 }
 # Último recurso si el reintento sigue preguntando — varias para que dos conversaciones
 # no terminen con el mismo texto exacto.
 _GOAL_FALLBACK = {
     "cita": [BOOKING_DEFLECT_REPLY, "ok déjame checar y te confirmo", "va lo reviso y les aviso"],
     "precio": ["va déjame pensarlo", "ok lo pienso y te aviso", "mmm va lo checo y te digo"],
-    "contacto": ["va gracias les marco", "ok gracias ahorita les escribo", "sale gracias les marco al rato"],
+    "contacto": ["va gracias ya lo anoté", "ok gracias ya guardé el contacto", "sale gracias con eso tengo"],
 }
 
 
@@ -783,6 +840,10 @@ def _close_on_goal(ai_text: str, goal: str, retry) -> str:
 
 def _commits_to_booking(reply: str, inbound: str = "") -> bool:
     r = _fold(reply)
+    # "te confirmo después" es precisamente la salida segura; no confundir el verbo
+    # dentro de una postergación con "confirmo" a secas.
+    if _DEFLECTION_RE.search(r):
+        return False
     if _BOOKING_COMMIT_RE.search(r):
         return True
     return bool(_BOOKING_OFFER_RE.search(_fold(inbound)) and _AFFIRMATIVE_RE.search(r)
@@ -932,8 +993,8 @@ def _get_or_create_session(db: MongoDBManager, phone_number: str, company_id: st
     return doc
 
 
-def _generate_persona_seed(industry: str, city: str) -> str:
-    """Return a short, plausible backstory for Andy based on company industry."""
+def _generate_persona_seed(industry: str, city: str, offer_hint: str = "") -> str:
+    """Return a short, plausible backstory based on the company's real offer when known."""
     import unicodedata
     def _strip_accents(s: str) -> str:
         return "".join(c for c in unicodedata.normalize("NFD", s)
@@ -1036,6 +1097,13 @@ def _generate_persona_seed(industry: str, city: str) -> str:
             return random.choice(pool)
 
     # Generic fallback
+    # Contexto raspado > una historia genérica del giro. Antes una empresa con giro vago
+    # podía recibir una situación que no tenía relación con lo que realmente vende.
+    if offer_hint:
+        item = re.sub(r"\s+", " ", str(offer_hint)).strip()[:90]
+        return (f"Te interesa {item} para una necesidad personal en {city_short}. "
+                "Estás comparando opciones y quieres entender precio y disponibilidad antes de decidir.")
+
     generics = [
         f"Necesitas contratar o comprar algo relacionado con {industry} en {city_short}. Todavía comparando opciones.",
         f"Buscas un proveedor de {industry} confiable en {city_short}. Quieres saber precios y disponibilidad antes de decidir.",
@@ -1053,17 +1121,19 @@ def _build_context(db: MongoDBManager, company_id: str, outbound_log: dict) -> d
     if not company:
         return None
 
-    # Compact scraped summary — max 3 items each to keep prompt tight
+    # Resumen raspado compacto pero suficientemente específico para que no parezca un guion
+    # genérico. Cinco elementos siguen siendo pequeños para el prompt y evitan ignorar justo
+    # el servicio por el que se contactó a la empresa.
     services  = company.get("services") or []
     products  = company.get("products") or []
     offer_parts = []
-    if services[:3]:
-        offer_parts.append("Servicios: " + ", ".join(str(s) for s in services[:3]))
-    if products[:3]:
-        offer_parts.append("Productos: " + ", ".join(str(p) for p in products[:3]))
+    if services[:5]:
+        offer_parts.append("Servicios: " + ", ".join(str(s) for s in services[:5]))
+    if products[:5]:
+        offer_parts.append("Productos: " + ", ".join(str(p) for p in products[:5]))
     offer = " | ".join(offer_parts) if offer_parts else ""
 
-    description   = (company.get("description") or company.get("main_activity") or "").strip()[:200]
+    description   = (company.get("description") or company.get("main_activity") or "").strip()[:400]
     website       = (company.get("website") or "").strip()
 
     industry = company.get("industry", "su giro")
@@ -1098,7 +1168,8 @@ def _build_context(db: MongoDBManager, company_id: str, outbound_log: dict) -> d
         "description":     description,
         "offer":           offer,
         "website":         website,
-        "persona_seed":    _generate_persona_seed(industry, city),
+        "persona_seed":    _generate_persona_seed(
+            industry, city, (services or products or [""])[0]),
         "persona_name":    persona_name,
         "persona_full_name": persona_full_name or persona_name,
         "own_number":      own_number,
@@ -1138,6 +1209,9 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
         # cae al prompt default en vez de tumbar la respuesta por completo.
         log.error("[AIFollowup] instrucción base con formato inválido, usando default: %s", e)
         system = _DEFAULT_SYSTEM_PROMPT.format(**ctx)
+    # El prompt editable puede cambiar tono y objetivo, pero nunca quitar las barreras
+    # que evitan acciones reales o datos inventados.
+    system += _IMMUTABLE_SAFETY_PROMPT
     if is_cold_start:
         system += (
             "\n\n⚠️ PRIMER MENSAJE DE ESTA SESIÓN: es tu primera respuesta a esta persona. "
@@ -1776,19 +1850,39 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
             ai_text = BOOKING_DEFLECT_REPLY
         ai_wants_end = True
 
-    # Negar ser bot sin que nadie lo preguntara (ver _BOT_DENIAL_RE): un reintento
-    # con la regla explícita; si insiste, no se manda nada y la plática se cierra —
-    # quedarse callado es lo que haría una persona ante un seguimiento automático.
-    if ai_text and _denies_being_bot(ai_text, _recent_inbound):
-        print(f"[AIFollowup] reply denies being a bot unprompted — retrying: {ai_text[:80]!r}")
+    # Una cita falsa ya ocurrió en Nissan La Capilla (2026-10-04); el mismo tipo de
+    # alucinación no puede convertirse en compra, pedido, pago o contrato real. Se
+    # reintenta una vez y, si insiste, sale un cierre fijo sin aceptar la operación.
+    if ai_text and _is_transaction_step(_recent_inbound) and _commits_to_transaction(ai_text, _inbound_text):
+        print(f"[AIFollowup] reply commits to a transaction — retrying: {ai_text[:80]!r}")
         _raw_retry = _call_llm_for_reply(
             _llm_turns, _llm_context, is_cold_start=is_cold_start, prefs=_prefs, db=db,
             proactive_minutes=_proactive_minutes, used_fillers=_used,
-            correction="tu respuesta decía que no eres un bot, pero nadie te lo preguntó. no menciones bots, "
-                       "IA ni que eres una persona real. responde corto, solo a lo que te dijeron.",
+            correction="tu respuesta confirmaba una compra, pedido, pago, apartado o contrato. eso está "
+                       "prohibido: no puedes realizar operaciones reales ni inventar datos de entrega, pago o "
+                       "facturación. responde corto que primero lo revisas y avisas, y termina con [FIN].",
+        )
+        _retry_text, _ = _clean_reply(_raw_retry, _inbound_text)
+        if (_retry_text and not _commits_to_transaction(_retry_text, _inbound_text)
+                and not _looks_copied_from_prompt(_retry_text)):
+            ai_text = _retry_text
+        else:
+            ai_text = TRANSACTION_DEFLECT_REPLY
+        ai_wants_end = True
+
+    # Hablar de bots, IA o "persona real" delata al Chat IA, aunque sea para negarlo
+    # (Nissan Autocom, 2026-10-04). Si el reintento lo repite, no se manda nada.
+    if ai_text and _references_being_bot(ai_text):
+        print(f"[AIFollowup] reply mentions being a bot — retrying: {ai_text[:80]!r}")
+        _raw_retry = _call_llm_for_reply(
+            _llm_turns, _llm_context, is_cold_start=is_cold_start, prefs=_prefs, db=db,
+            proactive_minutes=_proactive_minutes, used_fillers=_used,
+            correction="tu respuesta hablaba de bots, IA, robots o de ser una persona real. está prohibido "
+                       "mencionarlo, también para negarlo, aunque te lo hayan preguntado. responde corto "
+                       "solo a lo que buscas, sin esas palabras.",
         )
         _retry_text, _retry_end = _clean_reply(_raw_retry, _inbound_text)
-        if (_retry_text and not _denies_being_bot(_retry_text, _recent_inbound)
+        if (_retry_text and not _references_being_bot(_retry_text)
                 and not _looks_copied_from_prompt(_retry_text)):
             ai_text, ai_wants_end = _retry_text, _retry_end
         else:

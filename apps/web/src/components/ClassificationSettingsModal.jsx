@@ -9,8 +9,12 @@ import DialogActions from '@mui/material/DialogActions'
 import Button from '@mui/material/Button'
 import Tooltip from '@mui/material/Tooltip'
 import Slider from '@mui/material/Slider'
+import TextField from '@mui/material/TextField'
 import Skeleton from '@mui/material/Skeleton'
 import CircularProgress from '@mui/material/CircularProgress'
+import Autocomplete from '@mui/material/Autocomplete'
+import Collapse from '@mui/material/Collapse'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import CheckIcon from '@mui/icons-material/Check'
 import TuneIcon from '@mui/icons-material/Tune'
 import BoltIcon from '@mui/icons-material/Bolt'
@@ -18,6 +22,8 @@ import SmartToyIcon from '@mui/icons-material/SmartToy'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import MailOutlineIcon from '@mui/icons-material/MailOutlined'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined'
+import AddIcon from '@mui/icons-material/Add'
 import { useLang } from '../context/LangContext'
 import { authFetch } from '@/lib/api'
 
@@ -121,53 +127,369 @@ function ClassificationSettingsSkeleton() {
 const CLASSIFIER_DEFAULTS = {
   t1_threshold_seconds: 10, t2_threshold_seconds: 5,
   probe_wait_hours: 1, no_reply_wait_minutes: 60,
+  industry_templates: [],
+  llm_instructions: '',
+}
+
+const fieldSx = {
+  '& .MuiInputBase-input': { color: 'var(--text, #f1f5f9)', fontSize: '0.8rem', lineHeight: 1.45 },
+  '& .MuiInputLabel-root': { color: 'var(--text-muted, rgba(255,255,255,0.45))' },
+  '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--border, rgba(255,255,255,0.14))' },
+  '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--border, rgba(255,255,255,0.28))' },
+}
+
+function foldIndustry(value) {
+  return (value || '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().trim()
+}
+
+function fingerprint(v) {
+  if (!v) return ''
+  return JSON.stringify({
+    t1: v.t1_threshold_seconds,
+    t2: v.t2_threshold_seconds,
+    probe: v.probe_wait_hours,
+    wait: v.no_reply_wait_minutes,
+    templates: (v.industry_templates || []).map(item => ({
+      id: item.id,
+      industry: (item.industry || '').trim(),
+      text: (item.text || '').trim(),
+    })),
+  })
+}
+
+const MUTED = 'var(--text-muted, rgba(255,255,255,0.5))'
+const TEXT = 'var(--text, #f1f5f9)'
+const ACCENT_RGB = 'var(--accent-rgb,99,102,241)'
+
+function StepPill({ n, children }) {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flex: 1, minWidth: 150 }}>
+      <Box sx={{
+        width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: '0.7rem', fontWeight: 800, color: 'var(--accent, #818cf8)',
+        bgcolor: `rgba(${ACCENT_RGB},0.15)`, border: `1px solid rgba(${ACCENT_RGB},0.4)`,
+      }}>{n}</Box>
+      <Typography sx={{ fontSize: '0.74rem', color: TEXT, lineHeight: 1.3 }}>{children}</Typography>
+    </Box>
+  )
+}
+
+function TemplatesTab({ c, values, selectedId, setSelectedId, showBase, setShowBase,
+                        addTemplate, removeTemplate, editTemplate, appendExample }) {
+  const templates = values.industry_templates || []
+  const options = values.industry_options || []
+  const counts = Object.fromEntries(options.map(o => [foldIndustry(o.industry), o.companies]))
+  const used = new Set(templates.map(item => foldIndustry(item.industry)))
+  const available = options.filter(o => !used.has(foldIndustry(o.industry)))
+  const selected = templates.find(item => item.id === selectedId) || templates[0] || null
+  const examples = c.examples || []
+
+  return (
+    <>
+      <Box sx={{ ...CARD_SX, display: 'flex', gap: 1.5, flexWrap: 'wrap', py: 1.4 }}>
+        <StepPill n={1}>{c.step1}</StepPill>
+        <StepPill n={2}>{c.step2}</StepPill>
+        <StepPill n={3}>{c.step3}</StepPill>
+      </Box>
+
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '240px 1fr' }, gap: 2, mb: 2 }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Autocomplete
+            size="small"
+            options={available}
+            value={null}
+            blurOnSelect
+            clearOnBlur
+            getOptionLabel={o => o.industry}
+            isOptionEqualToValue={(a, b) => a.industry === b.industry}
+            onChange={(_, o) => o && addTemplate(o.industry)}
+            noOptionsText={c.noMoreIndustries}
+            renderOption={(props, o) => {
+              const { key, ...rest } = props
+              return (
+                <Box component="li" key={key} {...rest} sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, fontSize: '0.8rem' }}>
+                  <span>{o.industry}</span>
+                  <Typography component="span" sx={{ fontSize: '0.7rem', color: MUTED, fontVariantNumeric: 'tabular-nums' }}>{o.companies}</Typography>
+                </Box>
+              )
+            }}
+            renderInput={params => {
+              const inputSlot = params.slotProps?.input || {}
+              return (
+                <TextField {...params} placeholder={c.addIndustry}
+                  slotProps={{
+                    ...params.slotProps,
+                    input: {
+                      ...inputSlot,
+                      startAdornment: (
+                        <>
+                          <AddIcon sx={{ fontSize: 18, color: 'var(--accent, #818cf8)', ml: 0.5 }} />
+                          {inputSlot.startAdornment}
+                        </>
+                      ),
+                    },
+                  }}
+                  sx={fieldSx} />
+              )
+            }}
+            slotProps={{ paper: { sx: { bgcolor: 'var(--card-bg, #161d2e)', color: TEXT, border: '1px solid var(--border, rgba(255,255,255,0.12))' } } }}
+            sx={{ mb: 1.2 }}
+          />
+
+          {templates.length === 0 && (
+            <Typography sx={{ fontSize: '0.74rem', color: MUTED, lineHeight: 1.45, px: 0.5 }}>{c.emptyTemplates}</Typography>
+          )}
+
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6 }}>
+            {templates.map(item => {
+              const active = selected?.id === item.id
+              const n = counts[foldIndustry(item.industry)]
+              const filled = Boolean((item.text || '').trim())
+              return (
+                <Box key={item.id} component="button" type="button" onClick={() => setSelectedId(item.id)} sx={{
+                  all: 'unset', boxSizing: 'border-box', cursor: 'pointer', width: '100%',
+                  display: 'flex', alignItems: 'center', gap: 1, px: 1.2, py: 0.9, borderRadius: 2,
+                  bgcolor: active ? `rgba(${ACCENT_RGB},0.16)` : 'rgba(255,255,255,0.025)',
+                  border: `1px solid ${active ? `rgba(${ACCENT_RGB},0.5)` : 'var(--border, rgba(255,255,255,0.08))'}`,
+                  '&:hover': { borderColor: `rgba(${ACCENT_RGB},0.4)` },
+                  '&:focus-visible': { outline: `2px solid rgba(${ACCENT_RGB},0.6)` },
+                }}>
+                  <Box sx={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, bgcolor: filled ? '#4ade80' : '#f59e0b' }} />
+                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                    <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {item.industry}
+                    </Typography>
+                    <Typography sx={{ fontSize: '0.66rem', color: MUTED }}>
+                      {filled ? c.companiesCount.replace('{n}', n ?? 0) : c.templateEmpty}
+                    </Typography>
+                  </Box>
+                </Box>
+              )
+            })}
+          </Box>
+        </Box>
+
+        <Box sx={{ ...CARD_SX, mb: 0, minWidth: 0 }}>
+          {!selected ? (
+            <Typography sx={{ fontSize: '0.78rem', color: MUTED }}>{c.pickToEdit}</Typography>
+          ) : (
+            <>
+              <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1.2 }}>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography sx={{ fontSize: '0.95rem', fontWeight: 800, color: TEXT }}>{selected.industry}</Typography>
+                  <Typography sx={{ fontSize: '0.7rem', color: MUTED, lineHeight: 1.45 }}>
+                    {c.appliesTo.replace('{n}', counts[foldIndustry(selected.industry)] ?? 0)}
+                    {' '}
+                    {(selected.match === 'gas' || selected.match === 'auto')
+                      ? ((selected.also || []).length
+                        ? c.appliesAlso.replace('{list}', selected.also.join(', '))
+                        : c.appliesFamily)
+                      : c.appliesExact}
+                  </Typography>
+                </Box>
+                <Button size="small" onClick={() => removeTemplate(selected.id)} startIcon={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
+                  sx={{ textTransform: 'none', fontSize: '0.72rem', color: MUTED, '&:hover': { color: '#f87171', bgcolor: 'rgba(248,113,113,0.08)' } }}>
+                  {c.removeTemplate}
+                </Button>
+              </Box>
+
+              <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: TEXT, mb: 0.6 }}>{c.whatToKnow}</Typography>
+              <TextField value={selected.text || ''} placeholder={c.templatePh}
+                onChange={e => editTemplate(selected.id, { text: e.target.value.slice(0, 800) })}
+                multiline minRows={4} fullWidth sx={fieldSx}
+                helperText={`${(selected.text || '').length}/800`}
+                slotProps={{ formHelperText: { sx: { textAlign: 'right', mx: 0, color: MUTED } } }} />
+
+              {examples.length > 0 && (
+                <Box sx={{ mt: 1 }}>
+                  <Typography sx={{ fontSize: '0.68rem', color: MUTED, mb: 0.6 }}>{c.examplesTitle}</Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6 }}>
+                    {examples.map(sentence => (
+                      <Box key={sentence} component="button" type="button" onClick={() => appendExample(selected.id, sentence)} sx={{
+                        all: 'unset', cursor: 'pointer', fontSize: '0.68rem', lineHeight: 1.3, color: TEXT,
+                        px: 1, py: 0.45, borderRadius: 99, border: '1px dashed var(--border, rgba(255,255,255,0.2))',
+                        '&:hover': { borderColor: 'var(--accent, #818cf8)', color: 'var(--accent, #818cf8)' },
+                      }}>+ {sentence}</Box>
+                    ))}
+                  </Box>
+                </Box>
+              )}
+
+              <Box sx={{ mt: 1.6, p: 1.2, borderRadius: 1.5, bgcolor: 'rgba(0,0,0,0.2)', border: '1px solid var(--border, rgba(255,255,255,0.08))' }}>
+                <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: MUTED, mb: 0.5 }}>
+                  {c.previewTitle}
+                </Typography>
+                <Typography sx={{ fontSize: '0.74rem', color: TEXT, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+                  {(selected.text || '').trim()
+                    ? `NOTA DEL EQUIPO PARA ESTE GIRO (aplícala junto con las reglas de abajo; no puede contradecir una regla fija):\n${selected.text.trim()}`
+                    : c.previewEmpty}
+                </Typography>
+              </Box>
+            </>
+          )}
+        </Box>
+      </Box>
+
+      <Box sx={{ ...CARD_SX, mb: 1 }}>
+        <Box component="button" type="button" onClick={() => setShowBase(s => !s)} sx={{
+          all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 1, width: '100%',
+        }}>
+          <SmartToyIcon sx={{ fontSize: 18, color: 'var(--accent, #818cf8)' }} />
+          <Box sx={{ flex: 1 }}>
+            <Typography sx={{ fontSize: '0.82rem', fontWeight: 800, color: TEXT }}>{c.instructionsTitle}</Typography>
+            <Typography sx={{ fontSize: '0.7rem', color: MUTED, lineHeight: 1.4 }}>{c.instructionsHelp}</Typography>
+          </Box>
+          <ExpandMoreIcon sx={{ color: MUTED, transition: 'transform 0.2s', transform: showBase ? 'rotate(180deg)' : 'none' }} />
+        </Box>
+        <Collapse in={showBase} unmountOnExit>
+          <Box sx={{
+            mt: 1.4, maxHeight: 300, overflow: 'auto', p: 1.4, borderRadius: 1.5,
+            bgcolor: 'rgba(0,0,0,0.22)', border: '1px solid var(--border, rgba(255,255,255,0.08))',
+            fontSize: '0.74rem', lineHeight: 1.55, whiteSpace: 'pre-wrap', color: TEXT,
+          }}>
+            {values.llm_instructions || '—'}
+          </Box>
+          <Typography sx={{ fontSize: '0.68rem', color: MUTED, mt: 0.8 }}>{c.instructionsEnd}</Typography>
+        </Collapse>
+      </Box>
+
+      {values.notes_updated_by && (
+        <Typography sx={{ fontSize: '0.68rem', color: MUTED }}>
+          {c.notesBy}: {values.notes_updated_by}
+        </Typography>
+      )}
+    </>
+  )
 }
 
 export default function ClassificationSettingsModal({ open, onClose }) {
   const { t } = useLang()
   const c = t.classification
-  const [values, setValues] = useState(null) // null mientras carga
-  const [saveState, setSaveState] = useState('idle') // idle | saving | saved | error
-  const saveTimer = useRef(null)
+  const [values, setValues] = useState(null)
+  const [baseline, setBaseline] = useState('')
+  const [tab, setTab] = useState(0)
+  const [saveState, setSaveState] = useState('idle')
+  const [errorText, setErrorText] = useState('')
+  const [selectedId, setSelectedId] = useState(null)
+  const [showBase, setShowBase] = useState(false)
+  const savedTimer = useRef(null)
 
   useEffect(() => {
     if (!open) return
+    setTab(0)
+    setSaveState('idle')
+    setErrorText('')
+    setShowBase(false)
     authFetch('/api/admin/classifier-settings')
       .then(r => r.json())
-      .then(setValues)
-      .catch(() => setValues(CLASSIFIER_DEFAULTS))
+      .then(data => {
+        const next = { ...CLASSIFIER_DEFAULTS, ...data, industry_templates: data.industry_templates || [] }
+        setValues(next)
+        setBaseline(fingerprint(next))
+        setSelectedId(next.industry_templates[0]?.id || null)
+      })
+      .catch(() => {
+        setValues(CLASSIFIER_DEFAULTS)
+        setBaseline(fingerprint(CLASSIFIER_DEFAULTS))
+      })
   }, [open])
 
-  function update(key, val) {
-    const next = { ...values, [key]: val }
-    setValues(next)
-    setSaveState('saving')
-    if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(async () => {
-      try {
-        const res = await authFetch('/api/admin/classifier-settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(next),
-        })
-        if (!res.ok) throw new Error()
-        const saved = await res.json()
-        setValues(saved) // refleja el clamp del servidor si el usuario llegó a un límite
-        setSaveState('saved')
-        setTimeout(() => setSaveState(s => (s === 'saved' ? 'idle' : s)), 1500)
-      } catch {
-        setSaveState('error')
-      }
-    }, 600)
+  const dirty = Boolean(values) && fingerprint(values) !== baseline
+  const t2Warning = values && values.t2_threshold_seconds > values.t1_threshold_seconds
+
+  function edit(patch) {
+    setValues(v => ({ ...v, ...patch }))
+    setSaveState('idle')
+    setErrorText('')
   }
 
-  const t2Warning = values && values.t2_threshold_seconds > values.t1_threshold_seconds
+  function editTemplate(id, patch) {
+    edit({
+      industry_templates: (values.industry_templates || []).map(item => item.id === id ? { ...item, ...patch } : item),
+    })
+  }
+
+  function addTemplate(industry) {
+    if (!industry) return
+    const folded = foldIndustry(industry)
+    const existing = (values.industry_templates || []).find(item => foldIndustry(item.industry) === folded)
+    if (existing) {
+      setSelectedId(existing.id)
+      return
+    }
+    const id = `new-${Date.now()}`
+    edit({
+      industry_templates: [
+        ...(values.industry_templates || []),
+        { id, industry, match: '', text: '' },
+      ],
+    })
+    setSelectedId(id)
+  }
+
+  function removeTemplate(id) {
+    const rest = (values.industry_templates || []).filter(item => item.id !== id)
+    edit({ industry_templates: rest })
+    setSelectedId(rest[0]?.id || null)
+  }
+
+  function appendExample(id, sentence) {
+    const item = (values.industry_templates || []).find(x => x.id === id)
+    if (!item) return
+    const current = (item.text || '').trim()
+    if (current.includes(sentence)) return
+    editTemplate(id, { text: (current ? `${current} ${sentence}` : sentence).slice(0, 800) })
+  }
+
+  async function save() {
+    const names = (values.industry_templates || []).map(item => foldIndustry(item.industry)).filter(Boolean)
+    if (new Set(names).size !== names.length) {
+      setSaveState('error')
+      setErrorText(c.duplicateIndustry)
+      setTab(1)
+      return
+    }
+    setSaveState('saving')
+    setErrorText('')
+    try {
+      const res = await authFetch('/api/admin/classifier-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          t1_threshold_seconds: values.t1_threshold_seconds,
+          t2_threshold_seconds: values.t2_threshold_seconds,
+          probe_wait_hours: values.probe_wait_hours,
+          no_reply_wait_minutes: values.no_reply_wait_minutes,
+          industry_templates: (values.industry_templates || []).map(item => ({
+            id: item.id, industry: item.industry, text: item.text,
+          })),
+        }),
+      })
+      const saved = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(saved.detail || c.saveError)
+      const next = { ...values, ...saved, industry_templates: saved.industry_templates || [] }
+      setValues(next)
+      setBaseline(fingerprint(next))
+      setSaveState('saved')
+      if (savedTimer.current) clearTimeout(savedTimer.current)
+      savedTimer.current = setTimeout(() => setSaveState(s => (s === 'saved' ? 'idle' : s)), 1600)
+    } catch (err) {
+      setSaveState('error')
+      setErrorText(err.message || c.saveError)
+    }
+  }
+
+  function requestClose() {
+    if (dirty && !window.confirm(c.discardConfirm)) return
+    onClose()
+  }
 
   return (
     <Dialog
       open={open}
-      onClose={onClose}
-      maxWidth="sm"
+      onClose={requestClose}
+      maxWidth="md"
       fullWidth
       sx={{
         '& .MuiDialog-paper': {
@@ -204,72 +526,106 @@ export default function ClassificationSettingsModal({ open, onClose }) {
         </Box>
       </DialogTitle>
 
-      <DialogContent sx={{ pt: '8px !important' }}>
+      <DialogContent sx={{ pt: '4px !important' }}>
         {!values ? (
           <ClassificationSettingsSkeleton />
         ) : (
           <>
-            <TimingCard
-              icon={<BoltIcon sx={{ fontSize: 16, color: '#facc15' }} />}
-              color="#facc15" bg="rgba(250,204,21,0.12)"
-              phraseBefore={c.phraseT1Before} value={values.t1_threshold_seconds} unit={c.seconds} phraseAfter={c.phraseT1After}
-              tooltip={c.tipT1}
-              onChange={v => update('t1_threshold_seconds', v)}
-              min={3} max={60} step={1}
-              marks={[3, 10, 20, 30, 45, 60].map(v => ({ value: v, label: `${v}s` }))}
-            />
-
-            <TimingCard
-              icon={<SmartToyIcon sx={{ fontSize: 16, color: '#a78bfa' }} />}
-              color="#a78bfa" bg="rgba(167,139,250,0.12)"
-              phraseBefore={c.phraseT2Before} value={values.t2_threshold_seconds} unit={c.seconds} phraseAfter={c.phraseT2After}
-              tooltip={c.tipT2}
-              warning={t2Warning ? c.warnT2GtT1 : null}
-              onChange={v => update('t2_threshold_seconds', v)}
-              min={3} max={30} step={1}
-              marks={[3, 5, 10, 15, 20, 30].map(v => ({ value: v, label: `${v}s` }))}
-            />
-
-            <TimingCard
-              icon={<AccessTimeIcon sx={{ fontSize: 16, color: '#94a3b8' }} />}
-              color="#94a3b8" bg="rgba(148,163,184,0.12)"
-              phraseBefore={c.phraseNoReplyBefore} value={values.no_reply_wait_minutes} unit={c.minutes} phraseAfter={c.phraseNoReplyAfter}
-              tooltip={c.tipNoReply}
-              onChange={v => update('no_reply_wait_minutes', v)}
-              min={15} max={1440} step={15}
-              marks={[60, 180, 360, 720, 1440].map(v => ({ value: v, label: `${v / 60}h` }))}
-            />
-
-            <TimingCard
-              icon={<MailOutlineIcon sx={{ fontSize: 16, color: '#818cf8' }} />}
-              color="#818cf8" bg="rgba(129,140,248,0.12)"
-              phraseBefore={c.phraseProbeBefore} value={values.probe_wait_hours} unit={c.hours} phraseAfter={c.phraseProbeAfter}
-              tooltip={c.tipProbe}
-              onChange={v => update('probe_wait_hours', v)}
-              min={0.5} max={24} step={0.5}
-              marks={[1, 4, 8, 12, 24].map(v => ({ value: v, label: `${v}h` }))}
-            />
-
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, height: 18 }}>
-              {saveState === 'saving' && <>
-                <CircularProgress size={12} sx={{ color: 'rgba(255,255,255,0.3)' }} />
-                <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)' }}>{c.saving}</Typography>
-              </>}
-              {saveState === 'saved' && <>
-                <CheckIcon sx={{ fontSize: 14, color: '#4ade80' }} />
-                <Typography sx={{ fontSize: '0.7rem', color: '#4ade80' }}>{c.saved}</Typography>
-              </>}
-              {saveState === 'error' && (
-                <Typography sx={{ fontSize: '0.7rem', color: '#f87171' }}>{c.saveError}</Typography>
-              )}
+            <Box sx={{ display: 'flex', gap: 0.75, mb: 2 }}>
+              {[c.tabTiming, c.tabTemplates].map((label, i) => (
+                <Button key={label} onClick={() => setTab(i)} sx={{
+                  textTransform: 'none', fontWeight: 700, fontSize: '0.78rem', borderRadius: 99, px: 1.6, py: 0.4, minWidth: 0,
+                  color: tab === i ? 'var(--text, #f1f5f9)' : 'var(--text-muted, rgba(255,255,255,0.45))',
+                  bgcolor: tab === i ? 'rgba(var(--accent-rgb,99,102,241),0.18)' : 'transparent',
+                  border: `1px solid ${tab === i ? 'rgba(var(--accent-rgb,99,102,241),0.45)' : 'var(--border, rgba(255,255,255,0.08))'}`,
+                }}>{label}</Button>
+              ))}
             </Box>
+
+            {tab === 0 && (
+              <>
+                <TimingCard
+                  icon={<BoltIcon sx={{ fontSize: 16, color: '#facc15' }} />}
+                  color="#facc15" bg="rgba(250,204,21,0.12)"
+                  phraseBefore={c.phraseT1Before} value={values.t1_threshold_seconds} unit={c.seconds} phraseAfter={c.phraseT1After}
+                  tooltip={c.tipT1}
+                  onChange={v => edit({ t1_threshold_seconds: v })}
+                  min={3} max={60} step={1}
+                  marks={[3, 10, 20, 30, 45, 60].map(v => ({ value: v, label: `${v}s` }))}
+                />
+                <TimingCard
+                  icon={<SmartToyIcon sx={{ fontSize: 16, color: '#a78bfa' }} />}
+                  color="#a78bfa" bg="rgba(167,139,250,0.12)"
+                  phraseBefore={c.phraseT2Before} value={values.t2_threshold_seconds} unit={c.seconds} phraseAfter={c.phraseT2After}
+                  tooltip={c.tipT2}
+                  warning={t2Warning ? c.warnT2GtT1 : null}
+                  onChange={v => edit({ t2_threshold_seconds: v })}
+                  min={3} max={30} step={1}
+                  marks={[3, 5, 10, 15, 20, 30].map(v => ({ value: v, label: `${v}s` }))}
+                />
+                <TimingCard
+                  icon={<AccessTimeIcon sx={{ fontSize: 16, color: '#94a3b8' }} />}
+                  color="#94a3b8" bg="rgba(148,163,184,0.12)"
+                  phraseBefore={c.phraseNoReplyBefore} value={values.no_reply_wait_minutes} unit={c.minutes} phraseAfter={c.phraseNoReplyAfter}
+                  tooltip={c.tipNoReply}
+                  onChange={v => edit({ no_reply_wait_minutes: v })}
+                  min={15} max={1440} step={15}
+                  marks={[60, 180, 360, 720, 1440].map(v => ({ value: v, label: `${v / 60}h` }))}
+                />
+                <TimingCard
+                  icon={<MailOutlineIcon sx={{ fontSize: 16, color: '#818cf8' }} />}
+                  color="#818cf8" bg="rgba(129,140,248,0.12)"
+                  phraseBefore={c.phraseProbeBefore} value={values.probe_wait_hours} unit={c.hours} phraseAfter={c.phraseProbeAfter}
+                  tooltip={c.tipProbe}
+                  onChange={v => edit({ probe_wait_hours: v })}
+                  min={0.5} max={24} step={0.5}
+                  marks={[1, 4, 8, 12, 24].map(v => ({ value: v, label: `${v}h` }))}
+                />
+              </>
+            )}
+
+            {tab === 1 && (
+              <TemplatesTab
+                c={c}
+                values={values}
+                selectedId={selectedId}
+                setSelectedId={setSelectedId}
+                showBase={showBase}
+                setShowBase={setShowBase}
+                addTemplate={addTemplate}
+                removeTemplate={removeTemplate}
+                editTemplate={editTemplate}
+                appendExample={appendExample}
+              />
+            )}
           </>
         )}
       </DialogContent>
 
-      <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
-        <Button onClick={onClose} sx={{ color: 'rgba(255,255,255,0.5)', textTransform: 'none' }}>
+      <DialogActions sx={{ px: 3, pb: 2.5, pt: 1.5, gap: 1, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+        <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', gap: 0.8, minWidth: 0 }}>
+          {dirty && saveState === 'idle' && (
+            <Typography sx={{ fontSize: '0.72rem', color: '#fbbf24' }}>{c.unsaved}</Typography>
+          )}
+          {saveState === 'saving' && <>
+            <CircularProgress size={14} sx={{ color: 'var(--text-muted)' }} />
+            <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{c.saving}</Typography>
+          </>}
+          {saveState === 'saved' && <>
+            <CheckIcon sx={{ fontSize: 16, color: '#4ade80' }} />
+            <Typography sx={{ fontSize: '0.72rem', color: '#4ade80' }}>{c.saved}</Typography>
+          </>}
+          {saveState === 'error' && (
+            <Typography sx={{ fontSize: '0.72rem', color: '#f87171' }}>{errorText || c.saveError}</Typography>
+          )}
+        </Box>
+        <Button onClick={requestClose} sx={{ color: 'rgba(255,255,255,0.5)', textTransform: 'none' }}>
           {t.common.close || 'Cerrar'}
+        </Button>
+        <Button onClick={save} disabled={!values || !dirty || saveState === 'saving'} variant="contained"
+          sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 2, boxShadow: 'none',
+            bgcolor: 'var(--accent, #6366f1)', '&:hover': { bgcolor: 'var(--accent, #6366f1)', filter: 'brightness(1.08)' } }}>
+          {c.saveBtn}
         </Button>
       </DialogActions>
     </Dialog>

@@ -9,13 +9,65 @@
 // newCount: how many of the selected numbers are NEW contacts (not previously messaged).
 // Defaults to selectionCount (conservative — treats all as new) for callers that
 // don't track per-number history. MessageComposer passes the accurate value.
-export function getOverBy(stats, selectionCount, newCount = selectionCount) {
-  if (!stats || !selectionCount) return 0
-  const totalOver = Math.max(0, selectionCount - stats.total_available)
+export function getOverBy(stats, selectionCount, newCount = selectionCount, { requireStats = false } = {}) {
+  if (!selectionCount) return 0
+  // Sin el cupo cargado no se puede saber si el lote cabe. En el envío de hoy
+  // eso no es "sin límite": Antonio (2026-10-07) encoló 6 contactos nuevos con
+  // gely-wa en warmup (tope 5) porque la pantalla no tenía el número y dejó
+  // pasar todo. El servidor no debe ser el único que lo corta.
+  if (!stats) return requireStats ? selectionCount : 0
+  const totalOver = Math.max(0, selectionCount - (stats.total_available ?? 0))
   const ncOver = stats.new_contacts_capacity != null
     ? Math.max(0, newCount - stats.new_contacts_capacity)
     : 0
   return Math.max(totalOver, ncOver)
+}
+
+// Cuántos contactos nuevos del lote caben hoy. Si el cupo no cargó, no cabe
+// ninguno: encolarlos y esperar a que el servidor los rechace fue lo que marcó
+// Gas Express Nieto y Bochegas como fallidos sin haber salido.
+export function fitNewContacts(newRows, stats, instanceOf = (row) => row?.assigned_instance) {
+  const known = stats != null && stats.new_contacts_capacity != null
+  const globalRoom = known ? Math.max(0, Number(stats.new_contacts_capacity) || 0) : 0
+  const instCap = Object.fromEntries(
+    (stats?.instances ?? []).map(inst => [inst.instance, inst.new_contacts_left ?? 0]),
+  )
+  const byInstance = {}
+  const unassigned = []
+  for (const row of newRows) {
+    const inst = instanceOf(row)
+    if (inst && instCap[inst] !== undefined) (byInstance[inst] ??= []).push(row)
+    else unassigned.push(row)
+  }
+  let roomLeft = globalRoom
+  const kept = []
+  let trimmed = 0
+  for (const [inst, rows] of Object.entries(byInstance)) {
+    const cap = Math.min(instCap[inst] ?? 0, roomLeft)
+    const take = rows.slice(0, cap)
+    kept.push(...take)
+    roomLeft -= take.length
+    trimmed += rows.length - take.length
+  }
+  const unassignedCap = Math.min(roomLeft, unassigned.length)
+  kept.push(...unassigned.slice(0, unassignedCap))
+  trimmed += unassigned.length - unassignedCap
+  return { kept, trimmed }
+}
+
+// Qué tope es el que no da: el de contactos nuevos o el de mensajes del día.
+// El botón tiene que decir cuál, porque "desmarca para caber en el cupo" no
+// explica que el calentamiento de Antonio (2026-10-07) corta en 5 aunque el
+// número todavía pueda mandar más mensajes.
+export function capOverflowKind(stats, selectionCount, newCount = selectionCount) {
+  if (!stats || !selectionCount) return null
+  const totalOver = Math.max(0, selectionCount - (stats.total_available ?? 0))
+  const ncOver = stats.new_contacts_capacity != null
+    ? Math.max(0, newCount - stats.new_contacts_capacity)
+    : 0
+  if (ncOver <= 0 && totalOver <= 0) return null
+  if (ncOver > 0 && ncOver >= totalOver) return 'new'
+  return 'daily'
 }
 
 // Recomendación personalizada de cómo distribuir envíos, calculada con las

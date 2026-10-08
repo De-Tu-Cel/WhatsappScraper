@@ -9,7 +9,8 @@ import SendIcon from '@mui/icons-material/Send'
 import HighlightOffIcon from '@mui/icons-material/HighlightOff'
 import MessageIcon from '@mui/icons-material/Message'
 import RecipientsBox from './RecipientsBox'
-import DailyCapBadge, { getOverBy } from './DailyCapBadge'
+import DailyCapBadge from './DailyCapBadge'
+import { getOverBy, capOverflowKind } from '../lib/dailyCap'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { SendConfigPanel } from './SendConfigPanel'
 import { InstanceDisconnectedBanner, SendErrorBanner } from './InstanceStatusBanner'
@@ -48,14 +49,20 @@ export function useBulkSendGuards({ waRows, selected, extraSelected, variants, c
       totalContactPoints += n
       if (!r.already_contacted?.contacted) newContactPoints += n
     }
-    const overBy = getOverBy(capStats, totalContactPoints, newContactPoints)
+    // Sin el cupo cargado el botón no manda: Antonio (2026-10-07) encoló 6
+    // contactos nuevos con gely-wa en warmup (tope 5) porque un cupo vacío se
+    // leía como "sin límite".
+    const capPending = !capStats && totalContactPoints > 0
+    const overBy = getOverBy(capStats, totalContactPoints, newContactPoints, { requireStats: true })
+    const overKind = capOverflowKind(capStats, totalContactPoints, newContactPoints)
     const allVariants = variants.map(v => v.trim()).filter(Boolean)
     // Sending to 2+ contact points needs varied text (see getMinTemplatesRequired);
     // a single one still needs at least one template — never an empty message.
     const isBulk = totalContactPoints > 1
     const minTemplates = isBulk ? getMinTemplatesRequired(totalContactPoints) : 1
     return {
-      selectedRows, totalContactPoints, newContactPoints, overBy, capBlocked: overBy > 0,
+      selectedRows, totalContactPoints, newContactPoints, overBy, overKind,
+      capPending, capBlocked: capPending || overBy > 0,
       allVariants, isBulk, minTemplates,
       belowMinTemplates: isBulk && allVariants.length < minTemplates,
       noMessageSelected: allVariants.length === 0,
@@ -74,7 +81,7 @@ export function sendableNumbers(row, extraSelected) {
 
 // Why the send button can't send, shown as the button's own label instead of
 // greying it out with the reason (if any) in small text somewhere else.
-export function sendBlockReason({ lang, isSending, allSent, isDisconnected, selectedCount, templateCount, minTemplates, overBy }) {
+export function sendBlockReason({ lang, isSending, allSent, isDisconnected, selectedCount, templateCount, minTemplates, overBy, capPending = false, overKind = null }) {
   if (isSending || allSent) return null
   const en = lang === 'en'
   if (isDisconnected) return en ? 'WhatsApp session disconnected — reconnect it to send' : 'Sesión de WhatsApp desconectada — reconéctala para enviar'
@@ -83,6 +90,12 @@ export function sendBlockReason({ lang, isSending, allSent, isDisconnected, sele
     return minTemplates > 1
       ? (en ? `Choose ${minTemplates} templates (you have ${templateCount})` : `Elige ${minTemplates} plantillas (llevas ${templateCount})`)
       : (en ? 'Choose a template' : 'Elige una plantilla')
+  }
+  if (capPending) return en ? 'Loading today\'s quota…' : 'Cargando el cupo de hoy…'
+  if (overBy > 0 && overKind === 'new') {
+    return en
+      ? `Deselect ${overBy}: today's new-contact cap doesn't fit them`
+      : `Desmarca ${overBy}: el tope de contactos nuevos de hoy no da para más`
   }
   if (overBy > 0) return en ? `Deselect ${overBy} to fit today's quota` : `Desmarca ${overBy} para caber en el cupo de hoy`
   return null
@@ -119,6 +132,8 @@ export default function BulkSendPanel({
     templateCount: guards.allVariants.length,
     minTemplates: guards.minTemplates,
     overBy: guards.overBy,
+    capPending: guards.capPending,
+    overKind: guards.overKind,
   })
   const disabled = isSending || allSent || !!blockReason
   const n = unsentCount ?? selected.size

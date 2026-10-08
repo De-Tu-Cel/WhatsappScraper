@@ -70,7 +70,7 @@ import GasBotModal from './GasBotModal'
 import ClassificationSettingsModal from './ClassificationSettingsModal'
 import TimerOffIcon from '@mui/icons-material/TimerOff'
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows'
-import { ResultChip, ComparisonDialog, ComparisonSummary, ClassifierHelp, refreshComparisonSummary, last10 } from './ClassifierComparison'
+import { ResultChip, ComparisonDialog, ComparisonSummary, ClassifierHelp, ParecidoCell, refreshComparisonSummary, last10 } from './ClassifierComparison'
 import { CATEGORY_CONFIG, normCategory, matchesCategory, getCategoryConfig } from '@/lib/categoryConfig'
 
 // Same palette/hash as conversations.jsx's agentColor — an agent's dot in the
@@ -1212,7 +1212,7 @@ export default function Analytics() {
                     </TableSortLabel>
                   </TableCell>
                   {/* Categoría, dividida en los tres clasificadores */}
-                  <TableCell colSpan={3} sx={{ ...HEADER_CELL_SX, ...ANALYSIS_GROUP_SX, height: ANALYSIS_ROW_H, py: 0, textAlign: 'center', borderBottom: ANALYSIS_FRAME }}>
+                  <TableCell colSpan={4} sx={{ ...HEADER_CELL_SX, ...ANALYSIS_GROUP_SX, height: ANALYSIS_ROW_H, py: 0, textAlign: 'center', borderBottom: ANALYSIS_FRAME }}>
                     {t.analytics.analysisGroup}
                   </TableCell>
                   <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
@@ -1271,6 +1271,19 @@ export default function Analytics() {
                       </Box>
                     </TableCell>
                   ))}
+                  <TableCell sx={{ ...HEADER_CELL_SX, ...ANALYSIS_SUB_SX, width: 148, px: 0.75, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                    <Tooltip title={t.analytics.colRangeHelp}
+                      slotProps={{ tooltip: { className: 'classifier-help-tip', sx: {
+                        bgcolor: 'var(--card-bg, #161d2e)', color: 'var(--text, #f1f5f9)',
+                        border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 1.5,
+                        fontSize: '0.75rem', lineHeight: 1.45, maxWidth: 320,
+                      } } }}>
+                      <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4, cursor: 'help' }}>
+                        {t.analytics.colRange}
+                        <HelpOutlineIcon sx={{ fontSize: 13, color: 'var(--text-muted, rgba(255,255,255,0.35))' }} />
+                      </Box>
+                    </Tooltip>
+                  </TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -1390,7 +1403,7 @@ export default function Analytics() {
                           de cómo llegó cada uno. Con varios números, la comparación va en
                           cada fila del desplegable (no se mezcla la plática de números distintos). */}
                       {hasMultiple ? (
-                        <TableCell colSpan={3} sx={{ ...CELL_SX, ...ANALYSIS_CELL_SX, width: undefined, textAlign: 'center' }}>
+                        <TableCell colSpan={4} sx={{ ...CELL_SX, ...ANALYSIS_CELL_SX, width: undefined, textAlign: 'center' }}>
                           {/* La comparación va en cada número del desplegable (flecha junto al nombre). */}
                           {!row.comparison && compareButton(row)}
                         </TableCell>
@@ -1409,6 +1422,10 @@ export default function Analytics() {
                               : row.category
                                 ? <ResultChip compact method="hibrido" result={{ category: row.category, is_ai: row.is_ai, common: row.category }} />
                                 : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>{t.analytics.noCategory}</Typography>}
+                          </TableCell>
+                          <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
+                            <ParecidoCell hibrido={row.comparison?.hibrido}
+                              onClick={row.comparison?.hibrido ? () => setCompareFor({ id: row.company_id, name: row.company_name }) : undefined} />
                           </TableCell>
                         </>
                       )}
@@ -1579,24 +1596,30 @@ export default function Analytics() {
                           </TableCell>
                           {/* Industria — vacía */}
                           <TableCell sx={NSUB} />
-                          {/* Análisis de ESTE número — Timing / IA / Timing + IA */}
-                          {['timing', 'ia', 'hibrido'].map(m => {
+                          {/* Análisis de este número: Timing, IA, Timing + IA y rango */}
+                          {(() => {
                             const cmp = (row.comparison?.numbers || []).find(x => x.number === last10(n.number))
                             const open = () => setCompareFor({ id: row.company_id, name: row.company_name, number: n.number })
-                            return (
+                            const cells = ['timing', 'ia', 'hibrido'].map(m => (
                               <TableCell key={m} sx={{ ...NSUB, ...ANALYSIS_CELL_SX, textAlign: 'center' }}>
                                 {cmp?.[m]
                                   ? <ResultChip compact method={m} result={cmp[m]} onClick={open} />
-                                  : m === 'hibrido' && (!replied
-                                    ? <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>
-                                    : hasAnalysis
-                                      ? <Box sx={{ opacity: inherited ? 0.65 : 1, display: 'inline-flex' }}>
-                                          <ResultChip compact method="hibrido" result={{ category: n.category, is_ai: n.is_ai, common: n.category }} />
-                                        </Box>
-                                      : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>)}
+                                  : (m === 'hibrido' && replied && hasAnalysis
+                                    ? <Box sx={{ opacity: inherited ? 0.65 : 1, display: 'inline-flex' }}>
+                                        <ResultChip compact method="hibrido" result={{ category: n.category, is_ai: n.is_ai, common: n.category }} />
+                                      </Box>
+                                    : (m === 'hibrido'
+                                      ? <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>
+                                      : null))}
+                              </TableCell>
+                            ))
+                            cells.push(
+                              <TableCell key="rango" sx={{ ...NSUB, textAlign: 'center' }}>
+                                <ParecidoCell hibrido={cmp?.hibrido} onClick={cmp ? open : undefined} />
                               </TableCell>
                             )
-                          })}
+                            return cells
+                          })()}
                           {/* Calidad */}
                           <TableCell sx={{ ...NSUB, textAlign: 'center' }}>
                             {replied && n.response_quality != null

@@ -15,9 +15,12 @@ from app.daily_cap import (
     get_scheduled_count_today,
     get_scheduled_count_for_date,
     get_capacity_for_date,
+    daily_stats_for_user,
     reserve_verification_slot,
     DAILY_CAP,
     WARMUP_CAP,
+    WARMUP_NEW_CONTACTS_CAP,
+    NORMAL_NEW_CONTACTS_CAP,
     VERIFY_DAILY_CAP,
 )
 
@@ -280,6 +283,36 @@ def test_get_capacity_for_date_never_goes_negative():
     )
     result = get_capacity_for_date(db, "u1", day)
     assert result["total_available"] == 0
+
+
+def test_daily_stats_sums_every_session_of_this_user_and_ignores_the_rest(monkeypatch):
+    """Antonio con una sesión en warmup tiene 5. Con una segunda, normal, el
+    tope pasa a 5+12. La sesión de otro usuario no se suma (2026-10-07)."""
+    used = {"wa-warmup": 2, "wa-normal": 0, "wa-other": 5}
+    monkeypatch.setattr(
+        "app.daily_cap.count_new_contacts_today_for_instance",
+        lambda db, name: used.get(name, 0),
+    )
+    db = FakeMongoDBManager(instances=[
+        {"name": "wa-warmup", "warmup_mode": True, "assigned_to": "tono", "label": "Gely"},
+        {"name": "wa-normal", "warmup_mode": False, "assigned_to": "tono", "label": "Otra"},
+        {"name": "wa-other", "warmup_mode": True, "assigned_to": "otro", "label": "Ajena"},
+    ])
+    stats = daily_stats_for_user(db, "tono")
+    assert {r["instance"] for r in stats["instances"]} == {"wa-warmup", "wa-normal"}
+    by_name = {r["instance"]: r for r in stats["instances"]}
+    assert by_name["wa-warmup"]["new_contacts_left"] == WARMUP_NEW_CONTACTS_CAP - 2
+    assert by_name["wa-normal"]["new_contacts_left"] == NORMAL_NEW_CONTACTS_CAP
+    assert stats["new_contacts_capacity"] == (WARMUP_NEW_CONTACTS_CAP - 2) + NORMAL_NEW_CONTACTS_CAP
+
+    one = daily_stats_for_user(
+        FakeMongoDBManager(instances=[{"name": "wa-warmup", "warmup_mode": True, "assigned_to": "tono"}]),
+        "tono",
+    )
+    assert one["new_contacts_capacity"] == WARMUP_NEW_CONTACTS_CAP - 2
+
+    assert daily_stats_for_user(db, "nadie")["new_contacts_capacity"] == 0
+    assert daily_stats_for_user(db, "")["new_contacts_capacity"] == 0
 
 
 def test_get_capacity_for_date_ignores_other_users_instances():

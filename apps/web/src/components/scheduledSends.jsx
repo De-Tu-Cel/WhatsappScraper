@@ -4,7 +4,7 @@ import { authFetch } from '@/lib/api'
 import { useBlacklistedPhones, phoneKey } from '@/lib/phoneBlacklist'
 import { useLang } from '../context/LangContext'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
-import { useDailyCapForDate } from '../hooks/useDailyCapStats'
+import { useDailyCapForDate, useDailyCapStats } from '../hooks/useDailyCapStats'
 import DailyCapBadge, { getOverBy } from './DailyCapBadge'
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
@@ -583,7 +583,19 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
   function toggle(num, info) {
     if (isBlocked(num)) return
     const ns = new Set(selectedNums); const nm = new Map(numInfoMap)
-    if (ns.has(num)) { ns.delete(num); nm.delete(num) } else { ns.add(num); nm.set(num, info) }
+    if (ns.has(num)) {
+      ns.delete(num); nm.delete(num)
+    } else {
+      // Un clic suelto no pasaba por el tope; solo "seleccionar todo" lo hacía.
+      // Con el cupo en null (envío programado, sin dato de contactos nuevos)
+      // se sigue pudiendo marcar. En el envío de hoy el cupo llega en 0 hasta
+      // que carga, así que no se cuela el sexto contacto nuevo.
+      const co = companies.find(c => c._id === info.company_id)
+      const contacted = new Set((co?.already_contacted?.contacted_numbers || []).map(normPhone))
+      const isNew = !contacted.has(normPhone(num))
+      if (isNew && newContactsCap !== null && _countCurrentNew(ns, nm) >= newContactsCap) return
+      ns.add(num); nm.set(num, info)
+    }
     onChange(ns, nm)
   }
   function _countCurrentNew(ns, nm) {
@@ -998,6 +1010,8 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
   const [submitting, setSubmitting] = useState(false)
   const [saved,      setSaved]      = useState(false)
   const [error,      setError]      = useState('')
+  const [newSelCount, setNewSelCount] = useState(0)
+  const { stats: todayStats } = useDailyCapStats()
 
   // Diff mode: capture originals for edit mode
   const origName    = isEdit ? (editJob?.name    || '') : null
@@ -1040,6 +1054,21 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
   const capBlocked       = overBy > 0
   const isToday          = dateStr === dayjs().format('YYYY-MM-DD')
   const capExhaustedToday = isToday && futureStats !== null && (futureStats?.total_available ?? 1) <= 0
+  // Hoy cuenta lo que queda. Otro día el tope se reinicia a medianoche, así
+  // que el límite es el completo de cada número (5 en warmup, 12 normal),
+  // no los que ya se gastaron hoy. Mismos números que daily_cap.py.
+  const ncCap = useMemo(() => {
+    if (!todayStats?.instances) return null
+    if (isToday) return todayStats.new_contacts_capacity ?? 0
+    return todayStats.instances.reduce(
+      (sum, inst) => sum + (inst.new_contacts_limit ?? (inst.warmup_mode ? 5 : 12)),
+      0,
+    )
+  }, [todayStats, isToday])
+  const ncOver = todayStats == null
+    ? (newSelCount > 0 ? newSelCount : 0)
+    : Math.max(0, newSelCount - (ncCap ?? 0))
+  const ncBlocked = ncOver > 0
 
   async function handleSubmit(e) {
     e.preventDefault(); setError('')
@@ -1049,6 +1078,14 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
     if (belowMinTemplates) { setError(t.tplLib.minRequiredBlock(minTemplatesRequired, cleanMessages.length)); return }
     if (capExhaustedToday) { setError(lang === 'en' ? 'Daily cap exhausted for today — sends will resume automatically tomorrow' : 'Cupo diario agotado para hoy — los envíos continuarán mañana automáticamente'); return }
     if (capBlocked) { setError(lang === 'en' ? `Deselect ${overBy} to fit the estimated quota for that day` : `Desmarca ${overBy} para caber en el cupo estimado de esa fecha`); return }
+    if (ncBlocked) {
+      setError(todayStats == null
+        ? (lang === 'en' ? 'Loading today\'s new-contact cap…' : 'Cargando el tope de contactos nuevos…')
+        : (lang === 'en'
+            ? `Deselect ${ncOver}: that day's new-contact cap doesn't fit them`
+            : `Desmarca ${ncOver}: el tope de contactos nuevos de ese día no da para más`))
+      return
+    }
     setSubmitting(true)
     try {
       const combined = dateVal.hour(timeVal.hour()).minute(timeVal.minute()).second(0)
@@ -1149,7 +1186,12 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
           </Typography>
         )}
       </Box>
-      <CompanyPicker selectedNums={selectedNums} numInfoMap={numInfoMap} onChange={(ns, nm) => { setSelectedNums(ns); setNumInfoMap(nm) }} />
+      <CompanyPicker
+        selectedNums={selectedNums} numInfoMap={numInfoMap}
+        onChange={(ns, nm) => { setSelectedNums(ns); setNumInfoMap(nm) }}
+        newContactsCap={todayStats ? ncCap : 0}
+        onNewCountChange={setNewSelCount}
+      />
       {futureStats && (
         <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
           <DailyCapBadge stats={futureStats} selectionCount={selectedNums.size} />
@@ -1165,6 +1207,15 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
           {lang === 'en' ? `Deselect ${overBy} to fit the estimated quota for that day` : `Desmarca ${overBy} para caber en el cupo estimado de esa fecha`}
         </Typography>
       )}
+      {ncBlocked && (
+        <Typography sx={{ color: '#f59e0b', fontSize: '0.7rem', textAlign: 'right' }}>
+          {todayStats == null
+            ? (lang === 'en' ? 'Loading today\'s new-contact cap…' : 'Cargando el tope de contactos nuevos…')
+            : (lang === 'en'
+                ? `Deselect ${ncOver}: that day's new-contact cap doesn't fit them`
+                : `Desmarca ${ncOver}: el tope de contactos nuevos de ese día no da para más`)}
+        </Typography>
+      )}
       {noInstance && (
         <Box sx={{ px: 1.5, py: 0.8, borderRadius: 1.5, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', display: 'flex', alignItems: 'center', gap: 0.8 }}>
           <Typography sx={{ color: '#f87171', fontSize: '0.75rem', fontWeight: 600 }}>
@@ -1176,7 +1227,7 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
       <Box sx={{ display: 'flex', gap: 1, pt: 0.5 }}>
         <Tooltip title={noInstance ? (lang === 'en' ? 'Connect a WhatsApp instance first' : 'Conecta una instancia WhatsApp primero') : ''}>
         <span style={{ flex: 1, minWidth: 0 }}>
-        <Button type="submit" fullWidth variant="contained" disabled={submitting || belowMinTemplates || noInstance || capBlocked || capExhaustedToday
+        <Button type="submit" fullWidth variant="contained" disabled={submitting || belowMinTemplates || noInstance || capBlocked || capExhaustedToday || ncBlocked
           || !name.trim() || cleanMessages.length === 0 || !dateVal || !timeVal || selectedNums.size === 0}
           startIcon={submitting ? <CircularProgress size={13} sx={{ color: 'inherit' }} /> : <SendIcon />}
           sx={{ bgcolor: 'var(--accent,#3b82f6)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.85)', boxShadow: '0 0 18px rgba(var(--accent-rgb,59,130,246),0.35)' }, '&.Mui-disabled': { bgcolor: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.2)' }, textTransform: 'none', fontWeight: 700, fontSize: '0.85rem', borderRadius: 2, py: 1, boxShadow: 'none', transition: 'all 0.2s' }}>

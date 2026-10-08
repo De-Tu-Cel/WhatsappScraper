@@ -292,6 +292,12 @@
   background-color: #1e293b !important;
   color: #ffffff !important;
 }
+/* El "?" de los clasificadores sigue el tema de la pantalla, no el tooltip fijo oscuro. */
+.MuiTooltip-tooltip.classifier-help-tip {
+  background-color: var(--card-bg, #161d2e) !important;
+  color: var(--text, #f1f5f9) !important;
+  border: 1px solid var(--border, rgba(255,255,255,0.1)) !important;
+}
 
 /* ── Scrollbars ── */
 [data-theme-mode="light"] *::-webkit-scrollbar-thumb {

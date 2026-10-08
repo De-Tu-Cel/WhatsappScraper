@@ -29,6 +29,7 @@ import ReplayIcon from '@mui/icons-material/Replay'
 import TimerIcon from '@mui/icons-material/Timer'
 import PsychologyIcon from '@mui/icons-material/Psychology'
 import CallMergeIcon from '@mui/icons-material/CallMerge'
+import PercentIcon from '@mui/icons-material/Percent'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlined'
 import FormatQuoteIcon from '@mui/icons-material/FormatQuote'
@@ -44,6 +45,7 @@ const METHOD_META = {
   timing:  { label: 'colTiming', help: 'helpTiming', icon: TimerIcon,      color: '#60a5fa' },
   ia:      { label: 'colIa',     help: 'helpIa',     icon: PsychologyIcon, color: '#f472b6' },
   hibrido: { label: 'colHybrid', help: 'helpHybrid', icon: CallMergeIcon,  color: '#2dd4bf' },
+  rango:   { label: 'colRange',  help: 'helpRange',  icon: PercentIcon,    color: '#818cf8' },
 }
 // Superficies, texto y bordes salen del tema y la paleta del usuario (variables de
 // app/layout.jsx); los colores de significado (Sí/No, regla, categorías) son fijos.
@@ -151,6 +153,221 @@ function Pill({ children, color }) {
 }
 
 // Datos clave de cada método, arriba del log.
+// El número que se muestra es el centro del piso y el techo (88 y 96 → 92).
+// Un intervalo guardado antes de tener pct se calcula igual (2026-10-07).
+export function parecidoPct(rango) {
+  if (!rango) return null
+  if (rango.pct != null && Number.isFinite(Number(rango.pct))) return Math.round(Number(rango.pct))
+  if (rango.min == null || rango.max == null) return null
+  const a = Math.round(Number(rango.min))
+  const b = Math.round(Number(rango.max))
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+  return Math.round((Math.min(a, b) + Math.max(a, b)) / 2)
+}
+
+export function formatRango(rango) {
+  const pct = parecidoPct(rango)
+  return pct == null ? '' : `${pct}%`
+}
+
+export function rangoWasOverridden(result) {
+  const rango = result?.rango
+  if (!rango || rango.category == null) return false
+  return rango.category !== result.category || !!rango.is_ai !== !!result.is_ai
+}
+
+function categoryLabel(t, rango) {
+  const cfg = getCategoryConfig({ category: rango?.category, is_ai: rango?.is_ai })
+  return t.analytics[cfg.tKey] || ''
+}
+
+// Lo que muestra la columna Rango. Si hay parecido nuevo, son una o varias
+// clasificaciones. Si la comparación es anterior, queda el intervalo único.
+export function parecidoItems(hibrido) {
+  const items = hibrido?.parecido?.items
+  if (Array.isArray(items) && items.some(it => it && it.min != null && it.max != null)) {
+    return items.filter(it => it && it.min != null && it.max != null)
+  }
+  const rango = hibrido?.rango
+  if (rango && rango.min != null && rango.max != null) return [rango]
+  return []
+}
+
+function parecidoTip(t, hibrido, it, fresh, items) {
+  const text = formatRango(it)
+  if (!fresh && rangoWasOverridden({ rango: it, category: hibrido?.category, is_ai: hibrido?.is_ai })) {
+    return t.analytics.rangeShifted.replace('{range}', text).replace('{cat}', categoryLabel(t, it))
+  }
+  const lo = Math.round(Number(it.min))
+  const hi = Math.round(Number(it.max))
+  const exact = Number.isFinite(lo) && Number.isFinite(hi) && lo !== hi
+    ? t.analytics.rangeExact.replace('{pct}', String(parecidoPct(it))).replace('{min}', String(Math.min(lo, hi))).replace('{max}', String(Math.max(lo, hi)))
+    : t.analytics.rangeExactSame.replace('{pct}', String(parecidoPct(it)))
+  if (!fresh) return `${t.analytics.rangeLegacy} ${exact}`
+  return items.length > 1 ? `${exact} ${t.analytics.rangeMixed}` : exact
+}
+
+export function ParecidoCell({ hibrido, onClick }) {
+  const { t } = useLang()
+  const items = parecidoItems(hibrido)
+  if (!items.length) {
+    return (
+      <Typography sx={{
+        fontSize: '0.75rem', lineHeight: 1, textAlign: 'center',
+        color: 'var(--text-muted, rgba(255,255,255,0.28))',
+      }}>—</Typography>
+    )
+  }
+  const fresh = Array.isArray(hibrido?.parecido?.items) && hibrido.parecido.items.length > 0
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.45 }}>
+      {items.map((it, i) => {
+        const text = formatRango(it)
+        if (!text) return null
+        const cfg = getCategoryConfig({ category: it.category, is_ai: it.is_ai })
+        const Icon = cfg.icon
+        const name = t.analytics[cfg.tKey] || ''
+        return (
+          <Tooltip key={`${it.category}-${it.is_ai}-${i}`} title={parecidoTip(t, hibrido, it, fresh, items)}
+            slotProps={{ tooltip: { className: 'classifier-help-tip', sx: {
+              bgcolor: 'var(--card-bg, #161d2e)', color: 'var(--text, #f1f5f9)',
+              border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 1.5,
+              fontSize: '0.75rem', lineHeight: 1.45, maxWidth: 280,
+            } } }}>
+            <Chip icon={<Icon />} size="small" onClick={onClick}
+              label={<Box component="span" sx={{ display: 'inline-flex', alignItems: 'baseline', gap: 0.6, maxWidth: '100%' }}>
+                <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</Box>
+                <Box component="span" sx={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{text}</Box>
+              </Box>}
+              sx={{
+                height: 22, maxWidth: 142, fontSize: '0.66rem', fontWeight: 600,
+                bgcolor: cfg.bg, color: cfg.color, border: `1px solid ${cfg.color}55`,
+                cursor: onClick ? 'pointer' : 'default',
+                [LIGHT]: { color: inkOnLight(cfg.color), '& .MuiChip-icon': { color: inkOnLight(cfg.color) } },
+                '& .MuiChip-icon': { color: cfg.color, fontSize: 14, ml: '5px', mr: '-4px' },
+                '& .MuiChip-label': { px: '7px', overflow: 'hidden' },
+                '&:hover': onClick ? { bgcolor: cfg.bg, borderColor: cfg.color } : undefined,
+              }} />
+          </Tooltip>
+        )
+      })}
+    </Box>
+  )
+}
+
+function ParecidoLog({ hibrido }) {
+  const { t } = useLang()
+  const meta = METHOD_META.rango
+  const Icon = meta.icon
+  const items = parecidoItems(hibrido)
+  const fresh = Array.isArray(hibrido?.parecido?.items)
+  const steps = fresh
+    ? (hibrido.parecido.trace || []).filter(s => s?.paso && s.paso !== 'Resultado')
+    : items.length
+      ? [{ paso: t.analytics.rangeLegacyTitle, detalle: t.analytics.rangeLegacy }]
+      : [{ paso: t.analytics.rangeEmptyTitle, detalle: t.analytics.rangeEmpty }]
+  const countLabel = items.length > 1
+    ? t.analytics.rangeCountMixed.replace('{n}', String(items.length))
+    : items.length === 1 ? t.analytics.rangeCountOne : t.analytics.rangeEmptyTitle
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100%', border: `1px solid ${C.border}`, borderRadius: 2.5, bgcolor: C.surface, overflow: 'hidden' }}>
+      <Box sx={{ p: 2, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 1.1, borderBottom: `1px solid ${C.border}` }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ width: 30, height: 30, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: `${meta.color}1f`, color: meta.color, flexShrink: 0 }}>
+            <Icon sx={{ fontSize: 18 }} />
+          </Box>
+          <Typography sx={{ fontWeight: 800, fontSize: '1rem', color: C.text, letterSpacing: '0.01em' }}>{t.analytics[meta.label]}</Typography>
+          <ClassifierHelp method="rango" size={17} />
+        </Box>
+        <Typography sx={{ fontSize: '0.74rem', color: C.muted, lineHeight: 1.5 }}>{t.analytics[meta.help]}</Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6 }}>
+          <Pill color={items.length > 1 ? meta.color : undefined}>{countLabel}</Pill>
+          {hibrido?.parecido?.model && <Pill>{hibrido.parecido.model}</Pill>}
+        </Box>
+      </Box>
+      <Box component="ol" sx={{ listStyle: 'none', m: 0, px: 2, pt: 2, pb: 1.5, overflowY: 'auto', flex: 1, minHeight: 0 }}>
+        {steps.map((step, i) => <Step key={i} step={step} n={i + 1} isLast={i === steps.length - 1} />)}
+      </Box>
+      <Box sx={{ flexShrink: 0 }}>
+      {items.length > 0 ? items.map((it, i) => {
+        const cfg = getCategoryConfig({ category: it.category, is_ai: it.is_ai })
+        const text = formatRango(it)
+        const name = t.analytics[cfg.tKey] || ''
+        return (
+          <Box key={`${it.category}-${i}`} sx={{
+            mx: 1.5, mb: i === items.length - 1 ? 1.5 : 0.7, mt: 0, p: 1.3, borderRadius: 2,
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1,
+            bgcolor: cfg.bg, border: `1px solid ${cfg.color}55`,
+          }}>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography sx={{ fontSize: '0.64rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: cfg.color, [LIGHT]: { color: inkOnLight(cfg.color) } }}>
+                {i === 0 ? t.analytics.logResult : t.analytics.rangeAlso}
+              </Typography>
+              <Typography sx={{ fontSize: '0.84rem', fontWeight: 800, color: cfg.color, lineHeight: 1.25, mt: 0.25, [LIGHT]: { color: inkOnLight(cfg.color) } }}>
+                {name}
+              </Typography>
+            </Box>
+            <Typography sx={{ fontSize: '1.15rem', fontWeight: 800, color: cfg.color, fontVariantNumeric: 'tabular-nums', flexShrink: 0, [LIGHT]: { color: inkOnLight(cfg.color) } }}>
+              {text}
+            </Typography>
+          </Box>
+        )
+      }) : (
+        <Box sx={{ m: 1.5, mt: 0, p: 1.4, borderRadius: 2, border: `1px solid ${C.border}`, bgcolor: C.faint }}>
+          <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: C.muted }}>
+            {t.analytics.logResult}
+          </Typography>
+          <Typography sx={{ fontSize: '0.8rem', color: C.muted, mt: 0.4 }}>{t.analytics.rangeEmptyTitle}</Typography>
+        </Box>
+      )}
+      </Box>
+    </Box>
+  )
+}
+
+export function RangeReadout({ rango, category, isAi, onClick, wide = false }) {
+  const { t } = useLang()
+  const text = formatRango(rango)
+  if (!text) {
+    return (
+      <Typography sx={{
+        fontSize: '0.75rem', lineHeight: 1, textAlign: 'center',
+        color: 'var(--text-muted, rgba(255,255,255,0.28))',
+      }}>—</Typography>
+    )
+  }
+  const lo = parecidoPct(rango)
+  const shifted = rangoWasOverridden({ rango, category, is_ai: isAi })
+  // Pastilla, igual que las otras celdas de análisis. El tramo pintado se leía como un
+  // control roto cuando el intervalo era alto y angosto (2026-10-07).
+  const color = shifted ? '#f59e0b' : (lo >= 75 ? '#4ade80' : '#93c5fd')
+  const tip = shifted
+    ? t.analytics.rangeShifted.replace('{range}', text).replace('{cat}', categoryLabel(t, rango))
+    : t.analytics.colRangeHelp
+  return (
+    <Tooltip title={tip}
+      slotProps={{ tooltip: { className: 'classifier-help-tip', sx: {
+        bgcolor: 'var(--card-bg, #161d2e)', color: 'var(--text, #f1f5f9)',
+        border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 1.5,
+        fontSize: '0.75rem', lineHeight: 1.45, maxWidth: 280,
+      } } }}>
+      <Box onClick={onClick} sx={{
+        display: 'inline-flex', alignItems: 'center', gap: 0.6,
+        height: wide ? 26 : 22, pl: 0.8, pr: 1.05, borderRadius: 99,
+        bgcolor: `${color}1c`, border: `1px solid ${color}55`, color,
+        cursor: onClick ? 'pointer' : 'default',
+        [LIGHT]: { color: inkOnLight(color), borderColor: `${color}88` },
+      }}>
+        <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'currentColor', flexShrink: 0 }} />
+        <Typography sx={{
+          fontSize: wide ? '0.8rem' : '0.72rem', fontWeight: 700, lineHeight: 1,
+          fontVariantNumeric: 'tabular-nums', color: 'inherit',
+        }}>{text}</Typography>
+      </Box>
+    </Tooltip>
+  )
+}
+
 function MethodFacts({ method, result }) {
   const { t } = useLang()
   const pills = [<Pill key="m">{result.model || t.analytics.logNoModel}</Pill>]
@@ -325,13 +542,17 @@ const METHOD_OUTPUTS = {
   timing:  ['humano', 'automatico_humano', 'automatico_sin_respuesta', 'bot', 'agente_ia', 'humano_o_desconectado', 'pendiente'],
   ia:      ['humano', 'automatico_humano', 'automatico_sin_respuesta', 'bot', 'agente_ia', 'sin_respuesta'],
   hibrido: ['humano', 'automatico_humano', 'automatico_sin_respuesta', 'bot', 'agente_ia', 'sin_respuesta'],
+  rango:   ['humano', 'automatico_humano', 'automatico_sin_respuesta', 'bot', 'agente_ia'],
 }
 
-// Los tooltips de la app son siempre oscuros con texto claro, también en los temas claros
-// (globals.css fuerza el fondo con !important): la explicación usa esos colores fijos. Su
-// texto va en Box y no en Typography, porque en los temas claros globals.css pinta todo
-// Typography y todo ícono de oscuro con !important — sobre este fondo no se leería.
-const TIP = { bg: '#1e293b', text: '#f1f5f9', muted: 'rgba(241,245,249,0.62)', border: 'rgba(255,255,255,0.1)' }
+// El "?" usa el fondo y el texto del tema activo. globals.css pinta todo tooltip de
+// claro en #1e293b con !important; la clase classifier-help-tip lo gana (2026-10-07).
+const TIP = {
+  bg: 'var(--card-bg, #161d2e)',
+  text: 'var(--text, #f1f5f9)',
+  muted: 'var(--text-muted, rgba(241,245,249,0.62))',
+  border: 'var(--border, rgba(255,255,255,0.1))',
+}
 
 function HelpSection({ label, tone, children }) {
   return (
@@ -400,8 +621,8 @@ export function ClassifierHelp({ method, limits, size = 15 }) {
   )
   return (
     <Tooltip title={body} placement="bottom-start" enterDelay={120} leaveDelay={80}
-      slotProps={{ tooltip: { sx: { bgcolor: TIP.bg, color: TIP.text, border: `1px solid ${TIP.border}`, borderRadius: 2.5, p: 1.75, maxWidth: 380,
-        boxShadow: '0 14px 36px rgba(0,0,0,0.45)' } } }}>
+      slotProps={{ tooltip: { className: 'classifier-help-tip', sx: { bgcolor: TIP.bg, color: TIP.text, border: `1px solid ${TIP.border}`, borderRadius: 2.5, p: 1.75, maxWidth: 380,
+        boxShadow: '0 14px 36px rgba(0,0,0,0.28)' } } }}>
       <Box component="span" role="button" tabIndex={0} aria-label={`${how.title}: ${t.analytics[meta.label]}`}
         onClick={e => e.stopPropagation()}
         sx={{ display: 'inline-flex', alignItems: 'center', cursor: 'help', color: C.muted, borderRadius: '50%', transition: 'color 0.15s',
@@ -419,8 +640,8 @@ function MethodLog({ method, result }) {
   const cfg = resultConfig(method, result)
   const steps = (result?.trace || []).filter(s => s.paso !== 'Resultado')
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, border: `1px solid ${C.border}`, borderRadius: 2.5, bgcolor: C.surface, overflow: 'hidden' }}>
-      <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 1.1, borderBottom: `1px solid ${C.border}` }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100%', border: `1px solid ${C.border}`, borderRadius: 2.5, bgcolor: C.surface, overflow: 'hidden' }}>
+      <Box sx={{ p: 2, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 1.1, borderBottom: `1px solid ${C.border}` }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Box sx={{ width: 30, height: 30, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: `${meta.color}1f`, color: meta.color, flexShrink: 0 }}>
             <Icon sx={{ fontSize: 18 }} />
@@ -437,11 +658,11 @@ function MethodLog({ method, result }) {
         )}
         {method === 'timing' && result?.checks && <ConditionsTable checks={result.checks} resultCfg={cfg} />}
       </Box>
-      <Box component="ol" sx={{ listStyle: 'none', m: 0, px: 2, pt: 2, pb: 1.5, overflowY: 'auto', maxHeight: '50vh', flex: 1 }}>
+      <Box component="ol" sx={{ listStyle: 'none', m: 0, px: 2, pt: 2, pb: 1.5, overflowY: 'auto', flex: 1, minHeight: 0 }}>
         {steps.map((step, i) => <Step key={i} step={step} n={i + 1} isLast={i === steps.length - 1} />)}
       </Box>
       {result && cfg && (
-        <Box sx={{ m: 1.5, mt: 0, p: 1.4, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, bgcolor: cfg.bg, border: `1px solid ${cfg.color}55` }}>
+        <Box sx={{ m: 1.5, mt: 0, flexShrink: 0, p: 1.4, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, bgcolor: cfg.bg, border: `1px solid ${cfg.color}55` }}>
           <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: cfg.color, [LIGHT]: { color: inkOnLight(cfg.color) } }}>
             {t.analytics.logResult}
           </Typography>
@@ -460,8 +681,8 @@ function MethodLogSkeleton({ method }) {
   const meta = METHOD_META[method]
   const Icon = meta.icon
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, border: `1px solid ${C.border}`, borderRadius: 2.5, bgcolor: C.surface, overflow: 'hidden' }}>
-      <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 1.1, borderBottom: `1px solid ${C.border}` }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100%', border: `1px solid ${C.border}`, borderRadius: 2.5, bgcolor: C.surface, overflow: 'hidden' }}>
+      <Box sx={{ p: 2, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 1.1, borderBottom: `1px solid ${C.border}` }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Box sx={{ width: 30, height: 30, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: `${meta.color}1f`, color: meta.color, flexShrink: 0 }}>
             <Icon sx={{ fontSize: 18 }} />
@@ -544,7 +765,7 @@ export function ComparisonDialog({ companyId, companyName, number, onClose, onCh
   const view = number ? (doc?.numbers || []).find(x => x.number === last10(number)) : doc
   return (
     <Dialog open={!!companyId} onClose={onClose} maxWidth="xl" fullWidth
-      slotProps={{ paper: { sx: { bgcolor: C.card, backgroundImage: 'none', color: C.text, border: `1px solid ${C.border}`, borderRadius: 3 } } }}>
+      slotProps={{ paper: { sx: { bgcolor: C.card, backgroundImage: 'none', color: C.text, border: `1px solid ${C.border}`, borderRadius: 3, height: { md: 'min(92vh, 900px)' }, display: 'flex', flexDirection: 'column' } } }}>
       <DialogTitle sx={{ pb: 1.5, pt: 2.5, px: 3 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
           <Box>
@@ -559,11 +780,12 @@ export function ComparisonDialog({ companyId, companyName, number, onClose, onCh
           {view?.agreement && <AgreementBadge agreement={view.agreement} />}
         </Box>
       </DialogTitle>
-      <DialogContent sx={{ px: 3 }}>
+      <DialogContent sx={{ px: 3, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {state === 'loading' && (
           <Box aria-busy="true" aria-label={t.analytics.logLoading}
-            sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }, gap: 2 }}>
+            sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr', xl: 'repeat(4, minmax(0, 1fr))' }, gridAutoRows: { xs: 'auto', md: 'minmax(0, 1fr)' }, gap: 1.5, flex: 1, minHeight: 0 }}>
             {METHODS.map(m => <MethodLogSkeleton key={m} method={m} />)}
+            <MethodLogSkeleton method="rango" />
           </Box>
         )}
         {(state === 'empty' || (state === 'ready' && !view)) && (
@@ -571,8 +793,9 @@ export function ComparisonDialog({ companyId, companyName, number, onClose, onCh
         )}
         {error && <Typography sx={{ mb: 1, fontSize: '0.8rem', color: '#f87171' }}>{t.analytics.compareFailed}: {error}</Typography>}
         {view && (state === 'ready' || state === 'running') && (
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }, gap: 2, opacity: state === 'running' ? 0.5 : 1, transition: 'opacity 0.2s' }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr', xl: 'repeat(4, minmax(0, 1fr))' }, gridAutoRows: { xs: 'auto', md: 'minmax(0, 1fr)' }, gap: 1.5, flex: 1, minHeight: 0, opacity: state === 'running' ? 0.5 : 1, transition: 'opacity 0.2s' }}>
             {METHODS.map(m => <MethodLog key={m} method={m} result={view[m]} />)}
+            <ParecidoLog hibrido={view.hibrido} />
           </Box>
         )}
       </DialogContent>

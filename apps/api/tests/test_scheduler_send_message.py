@@ -74,6 +74,23 @@ class TestSendMessageUserScoping:
         mock_send.assert_called_once()
         assert mock_send.call_args.kwargs["session"] == "my-instance"
 
+    def test_new_contact_cap_full_is_a_skip_not_a_failed_send(self):
+        """gely-wa de Antonio (2026-10-07): el sexto y el séptimo contacto nuevo
+        se marcaron failed sin message_logs porque _nc_aware_pick devolvía None
+        y la cola lo leía como que WhatsApp no recibió. No salieron; no cabían."""
+        db = _fake_db(user_instances_docs=[{"name": "gely-wa"}])
+        with (
+            patch("app.config.WWEBJS_URL", "http://fake-wwebjs:3001"),
+            patch("app.whatsapp_wwebjs.get_all_connected_instances", return_value=["gely-wa"]),
+            patch.object(sched, "_nc_aware_pick", return_value=None),
+            patch.object(sched, "_send_via_wwebjs") as mock_send,
+        ):
+            result = sched._send_message(
+                db, "co-nuevo", "5210000000", "hola", "job1", user_id="tono",
+            )
+        assert result == "skipped_nc_cap"
+        mock_send.assert_not_called()
+
     def test_no_user_id_falls_back_to_claimed_instance_pool(self):
         """Sanity check the other normal case: no user context at all (legacy/
         system-attributed sends) still uses the claimed-instances fallback."""

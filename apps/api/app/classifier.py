@@ -299,6 +299,16 @@ Responde SOLO con JSON válido:
 {{"category":"humano|automatico_humano|automatico_sin_respuesta|bot_humano|bot|agente_ia","ai_confidence":0.0,"svc_prof":3,"svc_comp":3,"svc_empa":3,"svc_solu":3,"svc_next":3,"svc_proact":3,"bot_quality":null,"lead_signal":1,"notes":"diagnóstico","conversation_analysis":true}}\
 """
 
+
+def llm_instruction_preview() -> str:
+    """El texto fijo que lee el modelo en Timing + IA, sin una conversación real.
+    La pantalla de plantillas lo muestra para verificarlo (2026-10-07)."""
+    return _CONV_PROMPT_TEMPLATE.format(
+        company_name="«EMPRESA»",
+        industry="«INDUSTRIA»",
+        thread="«AQUÍ VA LA CONVERSACIÓN, CON EL TIEMPO DE CADA MENSAJE DEL NEGOCIO»",
+    )
+
 _ERROR_RESULT = {
     "category": "humano",
     "is_ai": False,
@@ -1386,8 +1396,211 @@ def _conv_category(raw: str) -> tuple | None:
     return _CONV_CATEGORY_MAP.get(m.group(1)) if m else None
 
 
+# Las mismas palabras que el filtro de gas en Análisis. "energia" sin acento:
+# el texto ya viene normalizado.
+_GAS_INDUSTRY_RE = re.compile(r"\b(gas|lp|gasera|gaseras|gasolinera|energia)\b", re.IGNORECASE)
+_AUTO_INDUSTRY_RE = re.compile(
+    r"automotriz|automotrices|concesionari[oa]s?|agencias? de autos|\bautos\b",
+    re.IGNORECASE,
+)
+
+
+def industry_profile(industry: str) -> str | None:
+    """'gas', 'auto' o None. Sirve para pegarle al modelo la nota de ese giro."""
+    import unicodedata
+    norm = unicodedata.normalize("NFD", industry or "")
+    norm = "".join(c for c in norm if unicodedata.category(c) != "Mn").lower()
+    if _GAS_INDUSTRY_RE.search(norm):
+        return "gas"
+    if _AUTO_INDUSTRY_RE.search(norm):
+        return "auto"
+    return None
+
+
+def _fold_industry(value: str) -> str:
+    norm = unicodedata.normalize("NFD", value or "")
+    norm = "".join(c for c in norm if unicodedata.category(c) != "Mn")
+    return re.sub(r"\s+", " ", norm).strip().lower()
+
+
+def industry_note_text(industry: str, notes: dict | None) -> str:
+    """La plantilla de este giro. Una lista guardada reemplaza las de siempre.
+    Si todavía no hay lista, gas y automotriz usan el texto actual."""
+    from app.database import DEFAULT_INDUSTRY_NOTES
+    notes = notes or {}
+    templates = notes.get("industry_templates")
+    if isinstance(templates, list):
+        return _text_for_industry(industry, templates)[:800]
+    profile = industry_profile(industry)
+    key = {"gas": "note_gas", "auto": "note_automotriz"}.get(profile or "")
+    if not key:
+        return ""
+    custom = str(notes.get(key) or "").strip()
+    return (custom or DEFAULT_INDUSTRY_NOTES[key])[:800]
+
+
+def _text_for_industry(industry: str, templates: list) -> str:
+    """Una sola plantilla: la de la misma industria de Prospectos. Si la empresa trae
+    una industria vieja escrita a mano ("Agencia de autos"), cae al giro gas/auto
+    (2026-10-07). "Servicios" no debe tomar la de "Servicios del Hogar": por eso es
+    igualdad y no búsqueda de palabras."""
+    profile = industry_profile(industry)
+    norm = _fold_industry(industry)
+    best_text, best_score = "", -1
+    for item in templates:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        label = _fold_industry(str(item.get("industry") or ""))
+        score = 0
+        if label and label == norm:
+            score = 100
+        else:
+            tmatch = item.get("match") or industry_profile(str(item.get("industry") or ""))
+            if tmatch and tmatch == profile:
+                score = 10
+        if score > best_score and score > 0:
+            best_score = score
+            best_text = text
+    return best_text
+
+
+def _pct_bounds(raw_a: str, raw_b: str) -> tuple[int, int]:
+    """Dos números a un piso y un techo entre 0 y 100. 0.62 cuenta como 62%."""
+    a, b = float(raw_a), float(raw_b)
+    if max(a, b) <= 1 and ("." in raw_a or "." in raw_b):
+        a, b = a * 100, b * 100
+    lo, hi = sorted((int(round(a)), int(round(b))))
+    return max(0, min(100, lo)), max(0, min(100, hi))
+
+
+def parecido_exacto(lo: int, hi: int) -> int:
+    """Un solo porcentaje, el centro del piso y el techo. 88 y 96 dan 92.
+    No es otro número que inventa el modelo (Análisis, 2026-10-07)."""
+    return int(round((int(lo) + int(hi)) / 2))
+
+
+def parse_rango(raw: str) -> dict | None:
+    """Piso y techo (0-100) del formato viejo, cuando el intervalo venía en el
+    mismo JSON de Timing + IA. Las corridas nuevas no lo piden ahí (2026-10-07)."""
+    m = re.search(
+        r'"rango"\s*:\s*\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]',
+        raw or "",
+    )
+    if not m:
+        return None
+    lo, hi = _pct_bounds(m.group(1), m.group(2))
+    return {"min": lo, "max": hi}
+
+
+def parse_parecidos(raw: str) -> list[dict]:
+    """Hasta tres parecidos de la petición aparte. Cada uno es una categoría y
+    el intervalo de qué tanto se le parece el chat. Una categoría desconocida
+    o repetida no entra. El más alto queda primero (Análisis, 2026-10-07)."""
+    found = []
+    seen = set()
+    for blob in re.findall(r"\{[^{}]+\}", raw or ""):
+        cat_m = re.search(r'"category"\s*:\s*"([a-z_]+)"', blob)
+        min_m = re.search(r'"min"\s*:\s*(-?\d+(?:\.\d+)?)', blob)
+        max_m = re.search(r'"max"\s*:\s*(-?\d+(?:\.\d+)?)', blob)
+        if not (cat_m and min_m and max_m):
+            continue
+        mapped = _CONV_CATEGORY_MAP.get(cat_m.group(1))
+        if not mapped or mapped in seen:
+            continue
+        seen.add(mapped)
+        lo, hi = _pct_bounds(min_m.group(1), max_m.group(1))
+        found.append({
+            "category": mapped[0], "is_ai": mapped[1],
+            "min": lo, "max": hi, "pct": parecido_exacto(lo, hi),
+        })
+    found.sort(key=lambda item: (-item["max"], -item["min"]))
+    return found[:3]
+
+
+_PARECI_PROMPT = """\
+Eres un segundo analista. NO eliges la categoría oficial del chat de {company_name} ({industry}).
+Otra lectura ya hizo eso. Tú solo dices qué tanto se PARECE esta conversación a cada tipo,
+porque un chat mixto puede verse como una persona y como una IA a la vez y eso engaña.
+
+CONVERSACIÓN:
+{thread}
+
+Tipos, con estos nombres exactos:
+  "humano" — una persona escribió todo.
+  "automatico_humano" — hubo un aviso automático y después escribió una persona.
+  "automatico_sin_respuesta" — solo avisos automáticos, nadie escribió después.
+  "bot_humano" — primero un menú o un flujo y después una persona.
+  "bot" — menú o flujo fijo, sin persona.
+  "agente_ia" — una IA conversacional de principio a fin.
+
+Devuelve de 1 a 3 parecidos, los que de verdad compiten. Si el caso es claro, uno solo,
+con un intervalo alto y estrecho (por ejemplo 88 y 96). Si está mixto, cada tipo que
+compite con su propio piso y techo: no inventes un tercero para llenar. Cada intervalo
+es independiente; no tienen que sumar 100. Enteros de 0 a 100.
+
+Responde SOLO con JSON:
+{{"parecidos":[{{"category":"humano","min":55,"max":75}}]}}
+"""
+
+
+def score_parecido(thread: str, company_name: str = "", industry: str = "") -> dict:
+    """Petición aparte de Timing + IA. Su log no se mezcla con el de la categoría
+    (Análisis, 2026-10-07): el intervalo dice parecido, no el veredicto."""
+    from app.config import CLASSIFIER_MODEL
+    trace = [{"paso": "Petición aparte",
+              "detalle": "No decide la categoría del reporte. Mide qué tanto se parece el chat "
+                         "a una clasificación, o a varias si el caso está mixto."}]
+    if not (thread or "").strip():
+        trace.append({"paso": "Sin consultar al modelo", "detalle": "No hay conversación que medir."})
+        return {"items": [], "trace": trace, "model": None}
+    def _esc(s: str) -> str:
+        return s.replace("{", "{{").replace("}", "}}")
+    prompt = _PARECI_PROMPT.format(
+        company_name=_esc(company_name or "la empresa"),
+        industry=_esc(industry or "desconocido"),
+        thread=_esc(thread),
+    )
+    # La misma nota del giro que lee Timing + IA: si no, el parecido contradice la
+    # plantilla (gaseras con precio guardado de una persona, 2026-10-07).
+    try:
+        giro = industry_note_text(industry, MongoDBManager().get_classifier_notes())
+    except Exception:
+        giro = ""
+    if giro:
+        safe = giro.replace("{", "(").replace("}", ")")
+        prompt = "NOTA DEL EQUIPO PARA ESTE GIRO:\n" + safe + "\n\n" + prompt
+        trace.append({"paso": "Nota del giro", "detalle": f"Usó la plantilla de {industry}."})
+    try:
+        raw = _call_deepseek([{"role": "user", "content": prompt}], max_tokens=220)
+    except LLMQuotaExceeded:
+        raise
+    except Exception as e:
+        trace.append({"paso": "Consulta al modelo", "detalle": f"Falló: {e}"})
+        return {"items": [], "trace": trace, "model": CLASSIFIER_MODEL, "error": True}
+    items = parse_parecidos(raw)
+    if not items:
+        trace.append({"paso": "Respuesta", "detalle": "El modelo no devolvió un parecido usable."})
+    elif len(items) == 1:
+        it = items[0]
+        trace.append({"paso": "Un solo parecido",
+                      "detalle": f"Se parece a {verdict_label(it['category'], it['is_ai'])} "
+                                 f"en {it['pct']}%, el centro de {it['min']}% y {it['max']}%."})
+    else:
+        bits = ", ".join(
+            f"{verdict_label(it['category'], it['is_ai'])} {it['pct']}% "
+            f"(centro de {it['min']}% y {it['max']}%)" for it in items
+        )
+        trace.append({"paso": "Varios parecidos",
+                      "detalle": f"El chat está mixto. Cada porcentaje es el centro de su piso y su techo. {bits}."})
+    return {"items": items, "trace": trace, "model": CLASSIFIER_MODEL}
+
+
 def classify_conversation(company_id: str, company_name: str = "", industry: str = "",
-                          trace: list | None = None, messages: list | None = None) -> dict:
+                          trace: list | None = None, messages: list | None = None,
+                          with_thread: bool = False) -> dict:
     """Analyze the full message thread for a company after an AI session closes.
     Fetches all messages from message_logs and builds a complete conversation view."""
     from app.llm import active_provider
@@ -1500,8 +1713,28 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
         industry=_esc(industry or "desconocido"),
         thread=_esc(thread),
     )
+    # Gas LP / agencias de autos (2026-10-07): el equipo puede dejar una nota por giro
+    # en Clasificación. Se le pega al modelo solo si la industria coincide, y no
+    # sustituye las reglas fijas de después.
     try:
-        raw = _call_deepseek([{"role": "user", "content": prompt}], max_tokens=350)
+        giro = industry_note_text(industry, db.get_classifier_notes())
+    except Exception:
+        giro = ""
+    if giro:
+        safe = giro.replace("{", "(").replace("}", ")")
+        prompt = prompt.replace(
+            "CONVERSACIÓN COMPLETA",
+            "NOTA DEL EQUIPO PARA ESTE GIRO (aplícala junto con las reglas de abajo; "
+            "no puede contradecir una regla fija):\n" + safe + "\n\nCONVERSACIÓN COMPLETA",
+            1,
+        )
+        # Una plantilla de Fitness no debe decir "automotriz" en el log (2026-10-07).
+        _trace(trace, "Nota del giro",
+               f"Industria en Prospectos: {industry or 'desconocida'}. Nota del equipo: {safe[:160]}")
+    try:
+        # 450: con "notes" y el cierre, 350 a veces cortaba el JSON (2026-10-07).
+        # El parecido no va en esta petición: es otra llamada, con su propio log.
+        raw = _call_deepseek([{"role": "user", "content": prompt}], max_tokens=450)
         result = _parse_llm_response(raw)
         mapped = _conv_category(raw)
         if mapped:
@@ -1521,7 +1754,11 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
            "Con la conversación y los tiempos revisa menús, plantillas, textos repetidos, respuestas en segundos, "
            f"cambios de nombre y trato personal. Decide: {verdict_label(result.get('category'), result.get('is_ai'))}. "
            f"Su explicación: {result.get('notes') or '—'}")
-    return _apply_deterministic_corrections(result, messages, thread, trace)
+    result = _apply_deterministic_corrections(result, messages, thread, trace)
+    # La comparación pide el hilo para la petición de parecido. No se guarda en el mensaje.
+    if with_thread and thread and not result.get("error") and result.get("category") != "sin_respuesta":
+        result["_thread"] = thread
+    return result
 
 
 _VIRTUAL_ASSISTANT_RE = re.compile(
@@ -1664,6 +1901,9 @@ def _apply_deterministic_corrections(result: dict, messages: list, thread: str,
     no_reply = _no_reply_verdict(messages)
     if no_reply:
         result.update(no_reply)
+        # El intervalo era de la categoría que había elegido la IA. Sin contestación
+        # esa categoría ya no queda, y mostrar el rango al lado mentiría.
+        result.pop("rango", None)
         _trace(trace, "Corrección fija: el negocio no contestó", no_reply["notes"])
         return result
 
@@ -2689,7 +2929,8 @@ def classify_conversation_and_save(company_id: str, log_id: str, force: bool = F
         company_name = company.get("name", "")
         industry = company.get("industry", "")
 
-        analysis = classify_conversation(company_id, company_name, industry, trace=trace)
+        analysis = classify_conversation(company_id, company_name, industry, trace=trace,
+                                         with_thread=compare)
 
         try:
             _last = db.db.message_logs.find_one({"_id": ObjectId(log_id)}, {"message_body": 1})
@@ -2697,6 +2938,12 @@ def classify_conversation_and_save(company_id: str, log_id: str, force: bool = F
         except Exception:
             pass
         _trace(trace, "Resultado", verdict_label(analysis.get("category"), analysis.get("is_ai")))
+        # El parecido no se guarda en el mensaje: es de la comparación, con su propio log.
+        parecido = None
+        if compare:
+            from app.classification_compare import finish_parecido
+            finish_parecido(analysis, company_name, industry)
+            parecido = analysis.pop("parecido", None)
 
         analysis["classified_at"] = datetime.now().isoformat()
         analysis["pending_human_check"] = False
@@ -2735,9 +2982,16 @@ def classify_conversation_and_save(company_id: str, log_id: str, force: bool = F
         if compare:
             try:
                 from app.classification_compare import save_comparison
-                save_comparison(db, company_id, company, hybrid=analysis, hybrid_trace=trace)
+                hybrid = dict(analysis)
+                if parecido:
+                    hybrid["parecido"] = parecido
+                save_comparison(db, company_id, company, hybrid=hybrid, hybrid_trace=trace)
             except Exception as _ce:
                 log.error("classify_conversation_and_save: comparison failed for %s: %s", company_id, _ce)
+        # run_comparison vuelve a guardar la comparación con este dict. El mensaje ya se
+        # guardó arriba, sin el parecido.
+        if parecido:
+            analysis["parecido"] = parecido
         return analysis
     except LLMQuotaExceeded:
         log.warning("classify_conversation_and_save: LLM sin cuota para company=%s", company_id)

@@ -5,7 +5,8 @@ import { useSendQueue } from '../context/SendQueueContext'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { useDailyCapStats } from '../hooks/useDailyCapStats'
 import { InstanceDisconnectedBanner } from './InstanceStatusBanner'
-import DailyCapBadge, { getOverBy } from './DailyCapBadge'
+import DailyCapBadge from './DailyCapBadge'
+import { getOverBy, capOverflowKind } from '../lib/dailyCap'
 import Box from '@mui/material/Box'
 import TextField from '@mui/material/TextField'
 import IconButton from '@mui/material/IconButton'
@@ -42,7 +43,7 @@ function renderWithValues(text, vals) {
     .replace(/\{\{web\}\}/g,       vals.web       ?? '')
 }
 
-export function MessageComposer({ result, onSend, sending, disabled, capStats }) {
+export function MessageComposer({ result, onSend, sending, disabled, capStats, onRefreshCap }) {
   const { t, lang } = useLang()
   const vals = extractValues(result)
 
@@ -75,13 +76,19 @@ export function MessageComposer({ result, onSend, sending, disabled, capStats })
   const newCount = selectedNums.filter(n => !contactedNumbers.has(n)).length
   // El backend deduplica por número real, no por empresa — cada número marcado
   // aquí (aunque sean todos de la misma empresa) cuesta su propio slot de cupo.
-  const overBy      = getOverBy(capStats, selectedNums.length, newCount)
-  const capBlocked  = overBy > 0
+  const capPending  = !capStats && selectedNums.length > 0
+  const overBy      = getOverBy(capStats, selectedNums.length, newCount, { requireStats: true })
+  const overKind    = capOverflowKind(capStats, selectedNums.length, newCount)
+  const capBlocked  = capPending || overBy > 0
   const sendBlocked = sending || disabled || selectedNums.length === 0 || allVariants.length === 0 || belowMinTemplates || capBlocked
     || allVariants.some(v => v.length > MAX_WA_MSG)
 
-  function handleSendClick() {
+  async function handleSendClick() {
     if (sendBlocked) return
+    if (onRefreshCap) {
+      const fresh = await onRefreshCap()
+      if (getOverBy(fresh || capStats, selectedNums.length, newCount, { requireStats: true }) > 0) return
+    } else if (!capStats) return
     let lastVariant = null
     const messages = selectedNums.map(() => {
       const v = pickMessageVariant(allVariants, lastVariant)
@@ -173,7 +180,11 @@ export function MessageComposer({ result, onSend, sending, disabled, capStats })
       </Box>
       {capBlocked && !sending && (
         <Typography sx={{ color: '#f59e0b', fontSize: '0.72rem', mb: 1, textAlign: 'right' }}>
-          Cupo diario agotado — inténtalo más tarde o desde otra instancia
+          {capPending
+            ? (lang === 'en' ? 'Loading today\'s quota…' : 'Cargando el cupo de hoy…')
+            : overKind === 'new'
+              ? (lang === 'en' ? 'New-contact cap for today is full' : 'Tope de contactos nuevos de hoy lleno')
+              : (lang === 'en' ? 'Daily quota used up — try later or from another number' : 'Cupo diario agotado — inténtalo más tarde o desde otra instancia')}
         </Typography>
       )}
       <Box onClick={handleSendClick}
@@ -497,7 +508,7 @@ export default function SingleUrlProcessor() {
           ? <>
               <InstanceDisconnectedBanner status={instanceStatus} sx={{ mt: 2, mb: 1 }} />
               {sendSuccess && <Alert severity="success" sx={{ mt: 2 }}>Mensaje enviado correctamente</Alert>}
-              {!sendSuccess && <MessageComposer result={result} onSend={handleSend} sending={sending} disabled={isDisconnected} capStats={capStats} />}
+              {!sendSuccess && <MessageComposer result={result} onSend={handleSend} sending={sending} disabled={isDisconnected} capStats={capStats} onRefreshCap={refreshCapStats} />}
             </>
           : <Box sx={{ mt: 3, p: 2, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--item-hover)', textAlign: 'center' }}>
               <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>

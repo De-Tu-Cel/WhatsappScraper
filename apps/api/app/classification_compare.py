@@ -461,10 +461,29 @@ def _hybrid_result(analysis: dict, trace: list) -> dict:
     from app.classifier import verdict_label
     from app.config import CLASSIFIER_MODEL
     category, is_ai = analysis.get("category"), bool(analysis.get("is_ai"))
-    return {"method": "hibrido", "category": category, "is_ai": is_ai, "common": to_common(category, is_ai),
-            "label": verdict_label(category, is_ai), "notes": analysis.get("notes") or "",
-            "scores": {k: analysis[k] for k in _SCORE_FIELDS if analysis.get(k) is not None},
-            "model": CLASSIFIER_MODEL, "trace": trace, "error": bool(analysis.get("error"))}
+    out = {"method": "hibrido", "category": category, "is_ai": is_ai, "common": to_common(category, is_ai),
+           "label": verdict_label(category, is_ai), "notes": analysis.get("notes") or "",
+           "scores": {k: analysis[k] for k in _SCORE_FIELDS if analysis.get(k) is not None},
+           "model": CLASSIFIER_MODEL, "trace": trace, "error": bool(analysis.get("error"))}
+    if analysis.get("rango"):
+        out["rango"] = analysis["rango"]
+    if analysis.get("parecido"):
+        out["parecido"] = analysis["parecido"]
+    return out
+
+
+def finish_parecido(analysis: dict, company_name: str = "", industry: str = "") -> dict:
+    """Pide el parecido en otra llamada y lo deja en el análisis. El hilo que armó
+    Timing + IA no se guarda. Sin contestación no se consulta al modelo
+    (Análisis, 2026-10-07)."""
+    if not isinstance(analysis, dict):
+        return analysis
+    thread = analysis.pop("_thread", "") or ""
+    if not thread or analysis.get("error") or analysis.get("category") == "sin_respuesta":
+        return analysis
+    from app.classifier import score_parecido
+    analysis["parecido"] = score_parecido(thread, company_name, industry)
+    return analysis
 
 
 # Calificaciones de servicio del análisis de Timing + IA: viajan con la comparación para que el
@@ -557,10 +576,12 @@ def _per_number(db, company_id: str, company: dict | None, company_results: dict
             ia = run_ai_only(db, company_id, number=num)
             trace = []
             analysis = classify_conversation(company_id, (company or {}).get("name", ""),
-                                             (company or {}).get("industry", ""), trace=trace, messages=threads[num])
+                                             (company or {}).get("industry", ""), trace=trace,
+                                             messages=threads[num], with_thread=True)
             last = next((m for m in reversed(threads[num]) if m["direction"] == "inbound"), {})
             analysis = _apply_last_message_corrections(analysis, last.get("message_body") or "", trace)
             _trace(trace, "Resultado", verdict_label(analysis.get("category"), analysis.get("is_ai")))
+            finish_parecido(analysis, (company or {}).get("name", ""), (company or {}).get("industry", ""))
             hybrid = _hybrid_result(analysis, trace)
         entry = {"number": num, "timing": timing, "ia": dict(ia), "hibrido": dict(hybrid), "replied": num in replied}
         for m in METHODS:
@@ -595,14 +616,20 @@ def run_comparison(company_id: str, save_prod: bool | None = None) -> dict:
         hybrid = classify_conversation_and_save(company_id, str(last_in["_id"]), force=True,
                                                 trace=trace, compare=False) or {"category": None, "error": True}
     else:
-        hybrid = classify_conversation(company_id, company.get("name", ""), company.get("industry", ""), trace=trace)
+        hybrid = classify_conversation(company_id, company.get("name", ""), company.get("industry", ""),
+                                       trace=trace, with_thread=True)
         hybrid = _apply_last_message_corrections(hybrid, last_in.get("message_body") or "", trace)
         _trace(trace, "Resultado", verdict_label(hybrid.get("category"), hybrid.get("is_ai")))
+        finish_parecido(hybrid, company.get("name", ""), company.get("industry", ""))
     return save_comparison(db, company_id, company, hybrid=hybrid, hybrid_trace=trace)
 
 
 # ── Lectura para Análisis ───────────────────────────────────────────────────────
-_LIST_PROJECTION = {f"{m}.trace": 0 for m in METHODS} | {f"numbers.{m}.trace": 0 for m in METHODS} | {"_id": 0}
+_LIST_PROJECTION = (
+    {f"{m}.trace": 0 for m in METHODS}
+    | {f"numbers.{m}.trace": 0 for m in METHODS}
+    | {"hibrido.parecido.trace": 0, "numbers.hibrido.parecido.trace": 0, "_id": 0}
+)
 
 
 def comparisons_for(db, company_ids: list) -> dict:

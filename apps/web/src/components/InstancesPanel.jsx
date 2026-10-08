@@ -2,6 +2,14 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import { INSTANCES_CHANGED_EVENT } from '../hooks/useDailyCapStats'
+
+// Las pantallas de envío se quedan montadas al cambiar de pestaña. Si solo
+// el diálogo de asignar y el switch de warmup avisaban, quitar una sesión
+// en línea dejaba el tope de contactos nuevos con el número viejo hasta el
+// refresco de 5 min (2026-10-07).
+function notifyInstancesChanged() {
+  window.dispatchEvent(new Event(INSTANCES_CHANGED_EVENT))
+}
 import Box from '@mui/material/Box'
 import Menu from '@mui/material/Menu'
 import Typography from '@mui/material/Typography'
@@ -2663,7 +2671,7 @@ export default function InstancesPanel({ isActive } = {}) {
         : t.inst.unassignSuccess
       setAssignOpen(false)
       fetchInstances()
-      window.dispatchEvent(new Event(INSTANCES_CHANGED_EVENT))
+      notifyInstancesChanged()
       setSnack({ open: true, msg })
     } catch {}
     finally { setAssigning(false) }
@@ -2672,10 +2680,11 @@ export default function InstancesPanel({ isActive } = {}) {
   async function handleDelete() {
     setDeleting(true)
     try {
-      await fetch(`/api/instances/${deleteTarget.name}`, {
+      const r = await fetch(`/api/instances/${deleteTarget.name}`, {
         method: 'DELETE', headers: { 'x-user-token': token() },
       })
       setDeleteTarget(null); fetchInstances()
+      if (r.ok) notifyInstancesChanged()
     } catch {}
     finally { setDeleting(false) }
   }
@@ -2695,13 +2704,14 @@ export default function InstancesPanel({ isActive } = {}) {
     if (!pickTargetUser) return
     const userId = pickTargetUser._id || pickTargetUser.id || pickTargetUser.username
     const userName = pickTargetUser.display_name || pickTargetUser.username || ''
-    await fetch(`/api/instances/${instanceName}?action=assign`, {
+    const r = await fetch(`/api/instances/${instanceName}?action=assign`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
       body: JSON.stringify({ user_id: userId, user_name: userName }),
     })
     closePick()
     fetchInstances()
+    if (r.ok) notifyInstancesChanged()
   }
 
   async function handlePickAssignMulti() {
@@ -2721,6 +2731,7 @@ export default function InstancesPanel({ isActive } = {}) {
     const ok = results.filter(Boolean).length
     const failed = names.filter((_, i) => !results[i])
     if (failed.length) setInstances(prev => prev.map(i => failed.includes(i.name) ? { ...i, assigned_to: null, assigned_name: null } : i))
+    if (ok) notifyInstancesChanged()
     setSnack({ open: true, msg: `${ok} instancia${ok !== 1 ? 's' : ''} → ${userName}` })
   }
 
@@ -2740,6 +2751,7 @@ export default function InstancesPanel({ isActive } = {}) {
       setSnack({ open: true, msg: d.detail || (lang === 'en' ? 'Could not assign instance' : 'No se pudo asignar la instancia') })
       return
     }
+    notifyInstancesChanged()
     setSnack({ open: true, msg: `${instanceName} → ${userName}` })
   }
 
@@ -2755,7 +2767,10 @@ export default function InstancesPanel({ isActive } = {}) {
         body: JSON.stringify({}),
       })
       if (!r.ok) fetchInstances()
-      else setSnack({ open: true, msg: `${inst.name} ${t.inst.quickUnassignDone}` })
+      else {
+        notifyInstancesChanged()
+        setSnack({ open: true, msg: `${inst.name} ${t.inst.quickUnassignDone}` })
+      }
     } finally {
       setUnassigning(false)
       setUnassignTarget(null)
@@ -2790,6 +2805,7 @@ export default function InstancesPanel({ isActive } = {}) {
     const failed = results.filter(r => !r.ok).map(r => r.name)
     const ok     = results.length - failed.length
     if (failed.length) setInstances(prev => prev.map(i => failed.includes(i.name) ? { ...i, assigned_to: null, assigned_name: null } : i))
+    if (ok) notifyInstancesChanged()
     const pfx = lang === 'en'
       ? `${ok} instance${ok !== 1 ? 's' : ''} → ${userName}`
       : `${ok} instancia${ok !== 1 ? 's' : ''} → ${userName}`
@@ -2817,7 +2833,7 @@ export default function InstancesPanel({ isActive } = {}) {
       // programados/URL individual) se quedan montados en segundo plano y no
       // saben que el cupo de este número acaba de cambiar — este evento los
       // hace refrescar de inmediato en vez de quedarse con el dato viejo.
-      window.dispatchEvent(new Event(INSTANCES_CHANGED_EVENT))
+      notifyInstancesChanged()
     } else {
       setInstances(prev => prev.map(i => i.name === inst.name ? { ...i, warmup_mode: inst.warmup_mode } : i))
     }

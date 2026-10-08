@@ -11,6 +11,7 @@ import { useSendQueue } from '../context/SendQueueContext'
 import { useDailyCapStats } from '../hooks/useDailyCapStats'
 import WhatsAppNumberSummary from './WhatsAppNumberSummary'
 import BulkSendPanel, { useBulkSendGuards, sendableNumbers } from './BulkSendPanel'
+import { fitNewContacts } from '../lib/dailyCap'
 import { dedupeByCompany } from '../lib/companyDedupe'
 import { useScrapeJob } from '../hooks/useScrapeJob'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
@@ -789,42 +790,23 @@ export default function SearchProspects() {
     let targets = waRowsUnique.filter(r => effectiveWaSelected.has(r.company_id) && !sentCids.has(r.company_id))
     if (!targets.length || belowMinTemplates || noMessageSelected) return
 
-    // Per-instance daily cap trim
+    // Tope de contactos nuevos, con el cupo recién leído. Sin número cargado
+    // no cabe ninguno: gely-wa de Antonio (2026-10-07) encoló 2 de más porque
+    // un cupo vacío se trataba como infinito.
     const newInBatch = targets.filter(r => !r.already_contacted?.contacted)
     if (newInBatch.length > 0) {
-      const instCapMap = Object.fromEntries(
-        (capStats?.instances ?? []).map(inst => [inst.instance, inst.new_contacts_left ?? 0])
-      )
-      const globalPool = capStats?.new_contacts_capacity ?? Infinity
-      const byInstance = {}
-      const unassigned = []
-      for (const r of newInBatch) {
-        if (r.assigned_instance && instCapMap[r.assigned_instance] !== undefined) {
-          ;(byInstance[r.assigned_instance] ??= []).push(r)
-        } else {
-          unassigned.push(r)
-        }
-      }
-      const kept = []
-      let totalTrimmed = 0
-      for (const [inst, companies] of Object.entries(byInstance)) {
-        const cap = instCapMap[inst] ?? 0
-        kept.push(...companies.slice(0, cap))
-        totalTrimmed += Math.max(0, companies.length - cap)
-      }
-      const unassignedCap = Math.min(globalPool, unassigned.length)
-      kept.push(...unassigned.slice(0, unassignedCap))
-      totalTrimmed += Math.max(0, unassigned.length - unassignedCap)
-      if (totalTrimmed > 0) {
-        const newRemaining = newInBatch.length - totalTrimmed
+      const fresh = await refreshCapStats()
+      const { kept, trimmed } = fitNewContacts(newInBatch, fresh || capStats)
+      if (trimmed > 0) {
         const confirmed = await new Promise(resolve =>
-          setNewContactsDialog({ open: true, trimCount: totalTrimmed, newRemaining, resolve })
+          setNewContactsDialog({ open: true, trimCount: trimmed, newRemaining: kept.length, resolve })
         )
         if (!confirmed) return
         const existing = targets.filter(r => r.already_contacted?.contacted)
         targets = [...existing, ...kept]
       }
     }
+    if (!targets.length) return
 
     // Warn about already-contacted companies — MUI dialog
     const alreadyContacted = targets.filter(r => r.already_contacted?.contacted)
@@ -928,8 +910,8 @@ export default function SearchProspects() {
         <DialogContent sx={{ pt: '8px !important' }}>
           <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.6))', fontSize: '0.85rem', lineHeight: 1.6 }}>
             {lang === 'en'
-              ? `Your warmup limit allows ${newContactsDialog.newRemaining} new contacts today. ${newContactsDialog.trimCount} will be removed from the batch.`
-              : `Tu límite de calentamiento permite ${newContactsDialog.newRemaining} contactos nuevos hoy. Se eliminarán ${newContactsDialog.trimCount} del lote.`}
+              ? `Today's new-contact cap allows ${newContactsDialog.newRemaining}. ${newContactsDialog.trimCount} will be removed from the batch.`
+              : `El tope de contactos nuevos de hoy permite ${newContactsDialog.newRemaining}. Se quitan ${newContactsDialog.trimCount} del lote.`}
           </Typography>
           <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.5))', fontSize: '0.78rem', mt: 1.2 }}>
             {lang === 'en'

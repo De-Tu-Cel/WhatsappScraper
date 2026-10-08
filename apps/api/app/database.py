@@ -20,6 +20,97 @@ CLASSIFIER_DEFAULTS = {
     "no_reply_wait_minutes": 60,
 }
 
+# Lo que el modelo ya debe aplicar en esos giros (2026-10-07). Si el equipo no ha
+# guardado otra plantilla, se usa este texto y en la pantalla sale para afinarlo.
+DEFAULT_INDUSTRY_NOTES = {
+    "note_gas": (
+        "En gaseras, un precio del litro o un saludo guardado que manda una persona sigue siendo humano, "
+        "aunque llegue en segundos. Un mensaje que llegó antes de que escribiéramos no es contestación. "
+        "Una campaña o un seguimiento días después tampoco."
+    ),
+    "note_automotriz": (
+        "En agencias, un saludo con nombre y firma que manda una persona es humano, aunque parte llegue en segundos. "
+        "Consultor o asesor digital es un puesto, no un bot. Asistente virtual o asistente digital sí es un bot. "
+        "Un menú en el primer mensaje es bot aunque haya tardado."
+    ),
+}
+
+_TEMPLATE_ID_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
+
+
+def default_industry_templates() -> list:
+    """Gas y automotriz, con el texto que ya usa el modelo, hasta que el equipo guarde otra lista."""
+    return [
+        {"id": "gas", "industry": "Gas LP / Energía", "match": "gas", "text": DEFAULT_INDUSTRY_NOTES["note_gas"]},
+        {"id": "auto", "industry": "Automotriz", "match": "auto", "text": DEFAULT_INDUSTRY_NOTES["note_automotriz"]},
+    ]
+
+
+def _fold_template_label(value: str) -> str:
+    import unicodedata
+    norm = unicodedata.normalize("NFD", value or "")
+    norm = "".join(c for c in norm if unicodedata.category(c) != "Mn")
+    return re.sub(r"\s+", " ", norm).strip().lower()
+
+
+def normalize_industry_templates(raw, strict: bool = False) -> list:
+    """Una plantilla por industria (los nombres que asigna el scraper, p. ej.
+    "Gas LP / Energía"). strict=True rechaza duplicados al guardar; al leer se
+    salta lo repetido para no tumbar la pantalla."""
+    from app.classifier import industry_profile
+    if not isinstance(raw, list):
+        if strict:
+            raise ValueError("La lista de plantillas no es válida")
+        return default_industry_templates()
+    out = []
+    seen_label = {}
+    used_ids = set()
+    for item in raw[:40]:
+        if not isinstance(item, dict):
+            continue
+        industry = re.sub(r"\s+", " ", str(item.get("industry") or "")).strip()[:60]
+        text = str(item.get("text") or "").strip()[:800]
+        if not industry:
+            continue
+        label = _fold_template_label(industry)
+        if label in seen_label:
+            if strict:
+                raise ValueError(f"Ya hay una plantilla para {industry}")
+            continue
+        match = industry_profile(industry) or ""
+        tid = str(item.get("id") or "").strip().lower()
+        if not _TEMPLATE_ID_RE.fullmatch(tid) or tid in used_ids:
+            base = re.sub(r"[^a-z0-9]+", "-", label).strip("-")[:32] or "giro"
+            tid, n = base, 2
+            while tid in used_ids:
+                tid = f"{base}-{n}"
+                n += 1
+        used_ids.add(tid)
+        seen_label[label] = industry
+        out.append({"id": tid, "industry": industry, "match": match, "text": text})
+    return out
+
+
+def attach_template_covers(templates: list, options: list) -> list:
+    """Qué otros nombres de Prospectos caen en la misma plantilla. Solo el giro
+    gas o automotriz alcanza un nombre viejo ("Gas LP"); "Servicios" no toma
+    "Servicios del Hogar" (2026-10-07). No se guarda: es para mostrarlo."""
+    from app.classifier import _fold_industry, industry_profile
+    for item in templates or []:
+        match = item.get("match") or ""
+        exact = _fold_industry(item.get("industry") or "")
+        also = []
+        if match:
+            for opt in options or []:
+                name = str((opt or {}).get("industry") or "")
+                if not name or _fold_industry(name) == exact:
+                    continue
+                if industry_profile(name) == match:
+                    also.append(name)
+        item["also"] = also[:12]
+    return templates
+
+
 _MX_521_RE = re.compile(r"^521(\d{10})$")
 
 _DOMAIN_TLD_RE = re.compile(
@@ -307,6 +398,40 @@ class MongoDBManager:
         cambio en la UI aplica al siguiente mensaje sin necesitar redeploy."""
         doc = self.db.settings.find_one({"_id": "classifier"}) or {}
         return {**CLASSIFIER_DEFAULTS, **{k: v for k, v in doc.items() if k in CLASSIFIER_DEFAULTS}}
+
+    def get_classifier_notes(self) -> dict:
+        """Plantillas de IA, una por industria. Si nadie ha guardado la lista, salen
+        gas y automotriz con el texto de ahora. Un guardado de solo los tiempos no la borra."""
+        doc = self.db.settings.find_one({"_id": "classifier"}) or {}
+        updated = doc.get("notes_updated_at")
+        if isinstance(doc.get("industry_templates"), list):
+            templates = normalize_industry_templates(doc["industry_templates"])
+        else:
+            templates = default_industry_templates()
+            # Notas viejas note_gas / note_automotriz, de antes de la lista (2026-10-07).
+            for item in templates:
+                legacy_key = {"gas": "note_gas", "auto": "note_automotriz"}.get(item["match"])
+                legacy = str(doc.get(legacy_key) or "").strip() if legacy_key else ""
+                if legacy:
+                    item["text"] = legacy[:800]
+        from app.classifier import llm_instruction_preview
+        return {
+            "industry_templates": templates,
+            "notes_updated_by": str(doc.get("notes_updated_by") or ""),
+            "notes_updated_at": updated.isoformat() + "Z" if hasattr(updated, "isoformat") else "",
+            "llm_instructions": llm_instruction_preview(),
+        }
+
+    def get_industry_options(self) -> list:
+        """Las industrias tal como salen en Prospectos, con cuántas empresas tiene cada una.
+        Las plantillas se eligen de aquí para que el nombre coincida exacto (2026-10-07)."""
+        rows = self.db.companies.aggregate([
+            {"$group": {"_id": "$industry", "n": {"$sum": 1}}},
+            {"$sort": {"n": -1}},
+        ])
+        return [{"industry": r["_id"], "companies": r["n"]} for r in rows
+                if isinstance(r.get("_id"), str) and r["_id"].strip()
+                and r["_id"] not in ("No detectada", "—")]
 
     def save_classifier_settings(self, values: dict) -> None:
         self.db.settings.update_one({"_id": "classifier"}, {"$set": values}, upsert=True)

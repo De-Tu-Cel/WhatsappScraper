@@ -8,6 +8,13 @@ const path = require('path')
 const dns = require('dns')
 const net = require('net')
 const http = require('http')
+const {
+  recordHeartbeatFailure,
+  stampedeSessionIds,
+  isTransientInitError,
+  reserveLaunch,
+  LAUNCH_GAP_MS,
+} = require('./sessionRecovery')
 
 puppeteerExtra.use(StealthPlugin())
 
@@ -348,6 +355,18 @@ function startProfileSyncPoll(sessionId) {
 // One bad poll is tolerated (a single slow CDP round-trip under host
 // contention, same as elsewhere in this file) — two in a row triggers the
 // same destroy-and-recreate recovery already used by readyWatchdog/reconnect.
+// Varias sesiones que fallan el latido en la misma ventana son el proceso
+// trabado, no un zombi cada una. Se espera un segundo para verlas juntas
+// antes de matar a nadie (las seis cayeron en el mismo milisegundo, 2026-10-07).
+let heartbeatFailureLog = []
+let nextAutoLaunchAt = 0
+
+function scheduleAutoLaunch(fn) {
+  const slot = reserveLaunch(Date.now(), nextAutoLaunchAt, LAUNCH_GAP_MS)
+  nextAutoLaunchAt = slot.nextLaunchAt
+  setTimeout(fn, slot.delay)
+}
+
 function startLivenessHeartbeat(sessionId) {
   const session = sessions.get(sessionId)
   if (!session) return
@@ -374,16 +393,38 @@ function startLivenessHeartbeat(sessionId) {
       s.heartbeatFailStreak = 0
     } catch (e) {
       s.heartbeatFailStreak = (s.heartbeatFailStreak || 0) + 1
+      heartbeatFailureLog = recordHeartbeatFailure(heartbeatFailureLog, sessionId, Date.now())
       console.warn(`[${sessionId}] Heartbeat failed (${s.heartbeatFailStreak}/2): ${e.message}`)
       if (s.heartbeatFailStreak < 2) return
-      console.warn(`[${sessionId}] Session looks zombie (no live disconnect event) — recreating`)
-      clearInterval(s.heartbeatTimer)
-      clearInterval(s.presenceTimer)
-      clearInterval(s.profileSyncTimer)
-      forwardWebhook({ event: 'session.status', sessionId, data: { status: 'disconnected', reason: 'HEARTBEAT_TIMEOUT' } })
-      await destroySessionClient(s.client, sessionId, s.initPromise)
-      sessions.delete(sessionId)
-      createClient(sessionId, s.phoneNumber)
+      const captured = s
+      setTimeout(() => {
+        const current = sessions.get(sessionId)
+        if (!current || current !== captured || current.status !== 'connected') return
+        if ((current.heartbeatFailStreak || 0) < 2) return
+        const stalled = stampedeSessionIds(heartbeatFailureLog, Date.now())
+        if (stalled.length >= 2) {
+          console.warn(`[${sessionId}] Heartbeat failed with ${stalled.length} sessions at once — process stall, not recreating`)
+          for (const id of stalled) {
+            const other = sessions.get(id)
+            if (other) other.heartbeatFailStreak = 0
+          }
+          heartbeatFailureLog = []
+          return
+        }
+        console.warn(`[${sessionId}] Session looks zombie (no live disconnect event) — recreating`)
+        clearInterval(current.heartbeatTimer)
+        clearInterval(current.presenceTimer)
+        clearInterval(current.profileSyncTimer)
+        forwardWebhook({ event: 'session.status', sessionId, data: { status: 'disconnected', reason: 'HEARTBEAT_TIMEOUT' } })
+        scheduleAutoLaunch(async () => {
+          const still = sessions.get(sessionId)
+          if (!still || still !== captured) return
+          await destroySessionClient(still.client, sessionId, still.initPromise)
+          if (sessions.get(sessionId) !== captured) return
+          sessions.delete(sessionId)
+          createClient(sessionId, captured.phoneNumber)
+        })
+      }, 1000)
     }
   }, (Math.random() * 5 + 15) * 1000)
 }
@@ -960,27 +1001,36 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
 // Un error de red al abrir WhatsApp Web suele ser momentáneo — sobre todo con proxy: visto
 // 2026-10-05, "ERR_TUNNEL_CONNECTION_FAILED" justo al reiniciar una sesión, con el mismo
 // proxy respondiendo bien segundos después. Antes la sesión se quedaba en "error" hasta que
-// alguien le diera reconectar. Solo errores de red (net::ERR_*): los demás siguen igual.
+// alguien le diera reconectar. También se reintenta el timeout de Chrome al abrir
+// (2026-10-07: las seis se quedaron en error con "waiting for the WS endpoint URL"
+// y este reintento no las cubría).
 const INIT_RETRY_DELAYS_MS = [15000, 45000, 90000]
 
 function scheduleInitRetry(sessionId, session, message) {
   const attempt = session.initAttempt || 0
-  if (!/net::ERR_/.test(message || '') || attempt >= INIT_RETRY_DELAYS_MS.length) return
+  if (!isTransientInitError(message) || attempt >= INIT_RETRY_DELAYS_MS.length) return
   setTimeout(() => {
     const prior = _startLocks.get(sessionId) || Promise.resolve()
-    const thisCall = prior.then(async () => {
-      // Ya la reemplazó otro /start o /settings, o ya no está en error: no tocarla.
-      if (sessions.get(sessionId) !== session || session.status !== 'error') return
-      clearInterval(session.presenceTimer)
-      clearInterval(session.profileSyncTimer)
-      clearInterval(session.heartbeatTimer)
-      clearTimeout(session.reconnectTimer)
-      clearTimeout(session.readyWatchdog)
-      await destroySessionClient(session.client, sessionId, session.initPromise)
-      sessions.delete(sessionId)
-      console.log(`[${sessionId}] Retrying after a network error (attempt ${attempt + 1}/${INIT_RETRY_DELAYS_MS.length})`)
-      createClient(sessionId, session.phoneNumber, attempt + 1)
-    })
+    const thisCall = prior.then(() => new Promise((resolve) => {
+      scheduleAutoLaunch(async () => {
+        try {
+          // Ya la reemplazó otro /start o /settings, o ya no está en error: no tocarla.
+          if (sessions.get(sessionId) !== session || session.status !== 'error') return
+          clearInterval(session.presenceTimer)
+          clearInterval(session.profileSyncTimer)
+          clearInterval(session.heartbeatTimer)
+          clearTimeout(session.reconnectTimer)
+          clearTimeout(session.readyWatchdog)
+          await destroySessionClient(session.client, sessionId, session.initPromise)
+          if (sessions.get(sessionId) !== session) return
+          sessions.delete(sessionId)
+          console.log(`[${sessionId}] Retrying after Chrome failed to start (attempt ${attempt + 1}/${INIT_RETRY_DELAYS_MS.length})`)
+          createClient(sessionId, session.phoneNumber, attempt + 1)
+        } finally {
+          resolve()
+        }
+      })
+    }))
     _startLocks.set(sessionId, thisCall.catch(() => {}))
   }, INIT_RETRY_DELAYS_MS[attempt])
 }

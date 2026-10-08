@@ -666,6 +666,13 @@ def _send_message(db, company_id: str, to_number: str, message: str, job_id: str
             if _picked:
                 return _send_via_wwebjs(db, company_id, to_number, message, job_id, delay_ms, session=_picked,
                                         sent_by_username=sent_by_username, sent_by_name=sent_by_name)
+            # None aquí es el tope de contactos nuevos, no un fallo de envío.
+            # gely-wa de Antonio (2026-10-07): el sexto y el séptimo se marcaron
+            # "failed" sin mensaje porque esto devolvía None y la cola lo tomaba
+            # como que WhatsApp no recibió. No salieron; no cabían.
+            if company_id:
+                log.info("[SendMsg] new-contact cap full for user instances %s — not sending company=%s", user_instances, company_id)
+                return "skipped_nc_cap"
         # When a user context is set and wwebjs had no valid candidate (all disconnected or
         # at cap), stop here — never fall through to cross-user wasender/waha/evolution pools.
         if user_id:

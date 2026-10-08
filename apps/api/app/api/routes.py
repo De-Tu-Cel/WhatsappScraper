@@ -4611,7 +4611,7 @@ async def api_wwebjs_webhook(request: Request, background_tasks: BackgroundTasks
         from_me = data.get("fromMe", False)
         number = data.get("number") or data.get("from", "").replace("@s.whatsapp.net", "").replace("@c.us", "")
         message_body = data.get("body", "")
-        message_id = data.get("messageId", "")
+        message_id = data.get("messageId") or data.get("id") or ""
 
         # Defense-in-depth: wwebjs-service already filters these protocol-level event
         # types before forwarding (e2e_notification is WhatsApp's "encryption session
@@ -4736,7 +4736,7 @@ async def api_wwebjs_webhook(request: Request, background_tasks: BackgroundTasks
             company_id=str(company_id),
             number=number,
             message_body=message_body,
-            message_id=data.get("messageId"),
+            message_id=message_id,
             message_type="conversation",
             status="received",
             instance_name=instance_name,

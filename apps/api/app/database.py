@@ -139,6 +139,26 @@ def _sort_handled_by(handled_by: list) -> list:
     return sorted(handled_by, key=lambda h: (h.get("username") == "ai_andy", (h.get("name") or "").lower()))
 
 
+def collapse_echoed_messages(messages: list, window_sec: int = 5) -> list:
+    """Quita el eco de un mismo inbound/outbound que se grabó dos veces en
+    segundos. Supergas LP (2026-10-08): "Hola", "Disculpa estas equivocado"
+    y "Dnd" salían dobles porque el webhook no trajo message_id."""
+    out = []
+    for msg in messages:
+        body = (msg.get("message_body") or msg.get("message_text") or msg.get("body") or "").strip()
+        if out and body:
+            prev = out[-1]
+            prev_body = (prev.get("message_body") or prev.get("message_text") or prev.get("body") or "").strip()
+            t1, t2 = prev.get("created_at"), msg.get("created_at")
+            close = False
+            if t1 and t2 and hasattr(t1, "timestamp") and hasattr(t2, "timestamp"):
+                close = abs((t2 - t1).total_seconds()) <= window_sec
+            if close and prev.get("direction") == msg.get("direction") and prev_body == body:
+                continue
+        out.append(msg)
+    return out
+
+
 def _use_hybrid_verdict(db, results: list) -> None:
     """Análisis filtra y cuenta con la clasificación de Timing + IA (la de la columna y el
     reporte), no con la categoría guardada en el mensaje. Universidad UVM (2026-10-06): salía
@@ -1143,6 +1163,19 @@ class MongoDBManager:
                         {"$set": {"company_id": company_id}},
                     )
                 return str(existing["_id"])
+        # Supergas LP (2026-10-08): el webhook de wwebjs llegó dos veces sin
+        # message_id (producción tiene 2 procesos) y cada "Hola" / "Dnd" se
+        # guardó a 2 ms. Sin id no aplica el índice único; este eco cercano
+        # es el mismo mensaje.
+        if direction == "inbound" and (message_body or "").strip():
+            echo = self.db.message_logs.find_one({
+                "company_id": company_id,
+                "direction": "inbound",
+                "message_body": message_body,
+                "created_at": {"$gte": datetime.utcnow() - timedelta(seconds=5)},
+            }, {"_id": 1})
+            if echo:
+                return str(echo["_id"])
         doc = {
             "platform": "evolution",
             "direction": direction,
@@ -1657,6 +1690,7 @@ class MongoDBManager:
              "instance_name": 1, "instance_number": 1, "received_on_instance": 1,
              "media_url": 1, "media_content_type": 1}
         ).sort("created_at", 1))
+        messages = collapse_echoed_messages(messages)
 
         # Deduplicate: if same message_id exists as both outbound and inbound, keep outbound only
         seen_ids = {}  # message_id -> index in result
@@ -1725,7 +1759,13 @@ class MongoDBManager:
         from bson import ObjectId
         self.db.message_logs.update_one(
             {"_id": ObjectId(log_id)},
-            {"$set": {"analysis": analysis, "analysis_status": "done"}},
+            {"$set": {
+                "analysis": analysis,
+                "analysis_status": "done",
+                # El throttle de webhooks busca este campo. Sin guardarlo, cada
+                # mensaje de una misma ráfaga volvía a pagar la IA (2026-10-08).
+                "updated_at": datetime.utcnow(),
+            }},
         )
 
     def get_analytics(self, page: int = 1, page_size: int = 20, category: str | None = None, company_id: str | None = None,

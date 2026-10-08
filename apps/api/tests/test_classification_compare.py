@@ -370,6 +370,59 @@ class TestFailedSendsDoNotCount:
         assert seen["distinct"]["status"] == {"$ne": "failed"}
 
 
+def _ready(common="humano", **extra):
+    block = {"common": common, "error": False}
+    block.update(extra)
+    return block
+
+
+def test_a_reply_without_a_comparison_needs_the_four_analyses():
+    # Accesorios e Insprogas (2026-10-08): contestaron y no había documento.
+    assert cc.reply_analysis_gap(None, datetime(2026, 10, 7, 22, 26)) == "missing"
+
+
+def test_a_saved_comparison_older_than_the_last_reply_is_stale():
+    # KINO (2026-10-08): la comparación quedó a las 22:19 y el último mensaje a las 22:42.
+    doc = {
+        "updated_at": datetime(2026, 10, 7, 22, 19, 41),
+        "timing": _ready("automatico_humano"),
+        "ia": _ready("humano"),
+        "hibrido": {"category": "automatico", "common": "automatico_humano", "error": False},
+    }
+    assert cc.reply_analysis_gap(doc, datetime(2026, 10, 7, 22, 42, 32)) == "stale"
+
+
+def test_no_reply_does_not_need_a_range():
+    doc = {
+        "updated_at": datetime(2026, 10, 7, 22, 10),
+        "timing": _ready("sin_respuesta"),
+        "ia": _ready("sin_respuesta"),
+        "hibrido": {"category": "sin_respuesta", "common": "sin_respuesta", "error": False},
+    }
+    assert cc.reply_analysis_gap(doc, datetime(2026, 10, 7, 22, 9)) is None
+
+
+def test_three_results_without_a_range_still_need_parecido():
+    doc = {
+        "updated_at": datetime(2026, 10, 7, 22, 50),
+        "timing": _ready("automatico_humano"),
+        "ia": _ready("humano"),
+        "hibrido": {"category": "automatico", "common": "automatico_humano", "error": False},
+    }
+    assert cc.reply_analysis_gap(doc, datetime(2026, 10, 7, 22, 40)) == "no_parecido"
+
+
+def test_a_complete_comparison_is_left_alone():
+    doc = {
+        "updated_at": datetime(2026, 10, 7, 22, 50),
+        "timing": _ready("humano"),
+        "ia": _ready("humano"),
+        "hibrido": {"category": "humano", "common": "humano", "error": False,
+                    "parecido": {"items": [{"pct": 90}]}},
+    }
+    assert cc.reply_analysis_gap(doc, datetime(2026, 10, 7, 22, 40)) is None
+
+
 def test_hybrid_result_keeps_the_probability_range():
     out = cc._hybrid_result({
         "category": "humano", "is_ai": False, "notes": "escribió una persona",
@@ -377,3 +430,51 @@ def test_hybrid_result_keeps_the_probability_range():
     }, [])
     assert out["rango"] == {"min": 62, "max": 78, "category": "humano", "is_ai": False}
     assert out["category"] == "humano"
+
+
+def test_save_comparison_persists_timing_ai_hybrid_and_parecido():
+    from unittest.mock import MagicMock
+
+    db = MagicMock()
+    comparisons = MagicMock()
+    logs = MagicMock()
+    db.db.__getitem__.side_effect = lambda name: comparisons if name == cc.COMPARISONS else logs
+    db.db.message_logs.find_one.return_value = {"_id": "inbound"}
+    timing = {"method": "timing", "common": "automatico_humano", "trace": []}
+    ia = {"method": "ia", "common": "humano", "trace": []}
+    hybrid = {
+        "category": "automatico", "is_ai": False, "notes": "respuesta automática y persona",
+        "parecido": {"items": [{"category": "humano", "pct": 80}], "trace": []},
+    }
+
+    with patch.object(cc, "_per_number", return_value=[]):
+        saved = cc.save_comparison(
+            db, "kino", {"name": "KINO"}, hybrid, [],
+            timing=timing, ia=ia,
+        )
+
+    assert saved["timing"]["common"] == "automatico_humano"
+    assert saved["ia"]["common"] == "humano"
+    assert saved["hibrido"]["category"] == "automatico"
+    assert saved["hibrido"]["parecido"]["items"][0]["pct"] == 80
+    persisted = comparisons.update_one.call_args.args[1]["$set"]
+    assert persisted["hibrido"]["parecido"]["items"][0]["pct"] == 80
+
+
+def test_manual_production_comparison_uses_the_same_four_analysis_path():
+    from unittest.mock import MagicMock
+
+    db = MagicMock()
+    db.db.companies.find_one.return_value = {"name": "Empresa"}
+    db.db.message_logs.find_one.return_value = {"_id": "507f1f77bcf86cd799439011", "message_body": "hola"}
+    expected = {"company_id": "507f1f77bcf86cd799439012", "timing": {}, "ia": {}, "hibrido": {}}
+    with patch("app.database.MongoDBManager", return_value=db), \
+         patch("app.classifier.classify_conversation_and_save") as classify, \
+         patch.object(cc, "get_comparison", return_value=expected):
+        result = cc.run_comparison("507f1f77bcf86cd799439012", save_prod=True)
+
+    classify.assert_called_once_with(
+        "507f1f77bcf86cd799439012", "507f1f77bcf86cd799439011",
+        force=True, trace=[], compare=True,
+    )
+    assert result is expected

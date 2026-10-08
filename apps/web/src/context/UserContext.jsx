@@ -2,7 +2,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import {
   INACTIVITY_MS, WARNING_MS, buildIdRequestUrl, clockJumped,
-  inactivityLeft, readLastActivity, writeLastActivity,
+  decideBuildBind, inactivityLeft, readLastActivity, writeLastActivity,
 } from '../lib/sessionGuard'
 
 const UserContext = createContext(null)
@@ -57,9 +57,18 @@ export function UserProvider({ children }) {
       setLoading(false)
       return
     }
-    // No build id (dev server, or the request failed) → can't tell, keep the session.
+    // Antonio (2026-10-08): un /api/build-id cacheado ≠ la marca del login
+    // cerraba la sesión a los segundos. Sin marca o recién entrado, se pega
+    // al build vivo. Solo un desajuste tarde (tras un deploy de verdad) saca.
     const live = await liveBuildId()
-    if (live && localStorage.getItem(BUILD_KEY) !== live) {
+    const lastAct = readLastActivity(localStorage)
+    const bind = decideBuildBind({
+      bound: localStorage.getItem(BUILD_KEY),
+      live,
+      msSinceActivity: lastAct ? Date.now() - lastAct : null,
+    })
+    if (bind === 'bind' && live) localStorage.setItem(BUILD_KEY, live)
+    if (bind === 'logout') {
       await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-user-token': token } }).catch(() => {})
       localStorage.removeItem('user_token')
       localStorage.removeItem(BUILD_KEY)

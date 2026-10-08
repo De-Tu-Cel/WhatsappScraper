@@ -132,6 +132,30 @@ def _messages(db, company_id: str, limit: int = 0, number: str | None = None) ->
     return msgs[:limit] if limit else msgs
 
 
+def _block_ready(block) -> bool:
+    if not isinstance(block, dict) or block.get("error"):
+        return False
+    return bool(block.get("common") or block.get("category"))
+
+
+def reply_analysis_gap(doc: dict | None, latest_inbound_at) -> str | None:
+    """None si Timing, IA, Timing + IA y el rango ya cubren la última respuesta.
+
+    Accesorios para estufas e Insprogas (2026-10-08) contestaron y no se corrieron
+    los cuatro. KINO se guardó antes de su último mensaje y sin rango. Sin
+    respuesta no lleva rango: no hay plática que medir.
+    """
+    if not doc or any(not _block_ready(doc.get(m)) for m in METHODS):
+        return "missing"
+    updated = doc.get("updated_at")
+    if latest_inbound_at is not None and (updated is None or updated < latest_inbound_at):
+        return "stale"
+    hybrid = doc.get("hibrido") or {}
+    if hybrid.get("category") not in (None, "sin_respuesta") and "parecido" not in hybrid:
+        return "no_parecido"
+    return None
+
+
 def _result(method: str, common: str, trace: list, **extra) -> dict:
     trace.append({"paso": "Resultado", "detalle": COMMON_LABELS[common]})
     return {"method": method, "common": common, "label": COMMON_LABELS[common], "trace": trace, **extra}
@@ -613,8 +637,11 @@ def run_comparison(company_id: str, save_prod: bool | None = None) -> dict:
         _trace(trace, "Resultado", "Sin respuesta")
         hybrid = {"category": "sin_respuesta", "is_ai": False, "notes": "El negocio no ha respondido."}
     elif save_prod:
-        hybrid = classify_conversation_and_save(company_id, str(last_in["_id"]), force=True,
-                                                trace=trace, compare=False) or {"category": None, "error": True}
+        # compare=True guarda los cuatro (también el rango). Volver a armar la
+        # comparación aquí repetía Timing y la IA (2026-10-08).
+        classify_conversation_and_save(company_id, str(last_in["_id"]), force=True,
+                                       trace=trace, compare=True)
+        return get_comparison(db, company_id) or {"category": None, "error": True}
     else:
         hybrid = classify_conversation(company_id, company.get("name", ""), company.get("industry", ""),
                                        trace=trace, with_thread=True)
@@ -636,8 +663,8 @@ def comparisons_for(db, company_ids: list) -> dict:
     """{company_id: comparación sin los logs} — para las filas de Análisis."""
     if not company_ids:
         return {}
-    return {d["company_id"]: d for d in db.db[COMPARISONS].find({"company_id": {"$in": list(company_ids)}},
-                                                                _LIST_PROJECTION)}
+    return {d["company_id"]: d for d in db.db[COMPARISONS].find(
+        {"company_id": {"$in": list(company_ids)}}, _LIST_PROJECTION)}
 
 
 def get_comparison(db, company_id: str) -> dict | None:

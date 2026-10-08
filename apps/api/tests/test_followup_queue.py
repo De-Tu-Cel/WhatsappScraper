@@ -263,6 +263,16 @@ class TestExpireIdleSessionsRespectsConfig:
         fq._expire_idle_sessions(mgr)
         assert mgr.db.ai_followup_sessions._sessions["s3"]["status"] == "ended"
 
+    def test_expiry_uses_the_distributed_analysis_queue(self):
+        """Insprogas (2026-10-08): no llamar al clasificador directo; los dos
+        workers podrían cobrar al mismo tiempo."""
+        sess = _stale_session("s4", hours_silent=50)
+        mgr = FakeExpiryMgr([sess], idle_timeout_hours=48)
+        mgr.db.message_logs.find_one.return_value = {"_id": "last-inbound"}
+        with patch("app.classifier.queue_reply_analysis") as queued:
+            fq._expire_idle_sessions(mgr)
+        queued.assert_called_once_with("company_s4")
+
 
 # ── Burst joining + cross-process claims (2026-10-04) ─────────────────────────
 

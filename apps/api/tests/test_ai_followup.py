@@ -709,6 +709,22 @@ class TestReplyMarkersNeverSent:
         assert af._clean_reply("👍") == ("👍", False)
 
 
+class TestHelpOfferIsNotAnAutomaticAck:
+    def test_detects_how_can_we_help(self):
+        assert af._offers_help("buen dia como le podemos ayudar?") is True
+        assert af._offers_help("Hola! en qué te puedo ayudar") is True
+        assert af._offers_help("Disculpa estas equivocado") is False
+        assert af._offers_help("quedo a la orden") is False
+
+    def test_bare_fin_on_a_help_offer_still_sends(self, _common_patches):
+        mgr, ww = FakeMgrWithSend(_session_doc()), _ww_client()
+        _run(mgr, {"side_effect": ["[FIN]", "[FIN]"]}, inbound="buen dia como le podemos ayudar?", ww=ww)
+        ww.send.assert_called_once()
+        sent = ww.send.call_args.args[1]
+        assert sent in af._HELP_FALLBACK_REPLIES
+        assert mgr.db.ai_followup_sessions._doc.get("end_reason") != "ai_decision"
+
+
 class TestCourtesyAndFarewellDetection:
     @pytest.mark.parametrize("text", [
         "Muchas gracias, igual cualquier cosa, quedo a la orden", "Perfecto", "Excelente día",
@@ -1277,3 +1293,20 @@ class TestSimulatorFindingsRound4:
     def test_deflect_phrases_count_as_a_close(self):
         assert af._DEFLECT_RE.search(af._fold("mmm no estaba mal el precio déjame ver y te confirmo"))
         assert not af._DEFLECT_RE.search(af._fold("un aveo 2015 que necesita mantenimiento"))
+
+
+def test_closing_without_a_reply_still_queues_the_four_analyses_when_they_wrote():
+    # Accesorios para estufas (2026-10-08): Andy cerró sin contestar y nadie clasificó.
+    mgr = FakeMgr(_session_doc())
+    mgr.db.message_logs.find_one.return_value = {"_id": "log-accesorios"}
+    with patch("app.classifier.queue_reply_analysis") as queued:
+        af._close_session_without_reply(mgr, "sess1", "aabbccddeeff001122334455", "5214428079840", "ai_decision")
+    queued.assert_called_once_with("aabbccddeeff001122334455", "log-accesorios")
+
+
+def test_closing_without_a_reply_does_not_analyze_a_chat_that_never_answered():
+    mgr = FakeMgr(_session_doc())
+    mgr.db.message_logs.find_one.return_value = None
+    with patch("app.classifier.queue_reply_analysis") as queued:
+        af._close_session_without_reply(mgr, "sess1", "aabbccddeeff001122334455", "5214428079840", "ai_decision")
+    queued.assert_not_called()

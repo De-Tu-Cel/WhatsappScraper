@@ -14,7 +14,7 @@ from app.utils import serialize
 from app.pipeline import process_url, run_pipeline_batch, _check_blacklist   # ← app.pipeline
 from app.searcher import search_prospects, pages_per_query_for  # ← app.searcher
 from app.database import MongoDBManager
-from app.daily_cap import DAILY_CAP, WARMUP_CAP, get_daily_count, increment_daily_count, get_scheduled_count_today, get_instance_cap, get_capacity_for_date
+from app.daily_cap import DAILY_CAP, WARMUP_CAP, get_daily_count, get_instance_cap, get_capacity_for_date, daily_stats_for_user
 from app.phone_utils import clean_digits
 
 router = APIRouter()
@@ -900,52 +900,7 @@ def api_instances_daily_stats(x_user_token: Optional[str] = Header(None)):
     user = _require_user(x_user_token)
     db = MongoDBManager()
     user_id = user.get("id") or str(user.get("_id", ""))
-    instances = list(db.db.instances.find(
-        {"assigned_to": user_id},
-        {"_id": 0, "name": 1, "label": 1, "number": 1, "warmup_mode": 1},
-    )) if user_id else []
-
-    from app.daily_cap import count_new_contacts_today_for_instance, get_new_contacts_limit
-
-    rows = []
-    for inst in instances:
-        name    = inst["name"]
-        warmup  = bool(inst.get("warmup_mode"))
-        sent    = get_daily_count(db, name)
-        cap     = WARMUP_CAP if warmup else DAILY_CAP
-        nc_today = count_new_contacts_today_for_instance(db, name)
-        nc_limit = get_new_contacts_limit(warmup)
-        rows.append({
-            "instance":           name,
-            "label":              inst.get("label") or name,
-            "number":             inst.get("number"),
-            "sent_today":         sent,
-            "cap":                cap,
-            "available":          max(0, cap - sent),
-            "warmup_mode":        warmup,
-            "new_contacts_today": nc_today,
-            "new_contacts_limit": nc_limit,
-            "new_contacts_left":  max(0, nc_limit - nc_today),
-        })
-
-    total_sent            = sum(r["sent_today"] for r in rows)
-    scheduled_today       = get_scheduled_count_today(db)
-    total_cap             = sum(r["cap"] for r in rows) if rows else 0
-    total_available       = max(0, total_cap - total_sent - scheduled_today)
-    new_contacts_today    = sum(r["new_contacts_today"] for r in rows)
-    new_contacts_capacity = sum(r["new_contacts_left"] for r in rows)
-
-    return {
-        "instances":             rows,
-        "total_sent":            total_sent,
-        "scheduled_today":       scheduled_today,
-        "total_cap":             total_cap,
-        "total_available":       total_available,
-        "cap_per_instance":      DAILY_CAP,
-        "reset_hour":            "00:00 local",
-        "new_contacts_today":    new_contacts_today,
-        "new_contacts_capacity": new_contacts_capacity,
-    }
+    return daily_stats_for_user(db, user_id)
 
 
 @router.get("/instances/capacity-for-date")
@@ -5636,7 +5591,12 @@ def api_get_classifier_settings(x_user_token: Optional[str] = Header(None)):
     por qué se clasificó algo así); solo un admin puede cambiarlos (ver POST abajo)."""
     _require_user(x_user_token)
     try:
-        return MongoDBManager().get_classifier_settings()
+        db = MongoDBManager()
+        from app.database import attach_template_covers
+        notes = db.get_classifier_notes()
+        options = db.get_industry_options()
+        attach_template_covers(notes.get("industry_templates"), options)
+        return {**db.get_classifier_settings(), **notes, "industry_options": options}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -5655,9 +5615,24 @@ def api_save_classifier_settings(body: dict, x_user_token: Optional[str] = Heade
             "probe_wait_hours":      max(0.5, min(24, float(body.get("probe_wait_hours", 1)))),
             "no_reply_wait_minutes": max(15, min(1440, int(body.get("no_reply_wait_minutes", 60)))),
         }
+        # Plantillas: solo si vienen en el body. Un cliente viejo que solo manda
+        # los umbrales no las borra. Una por industria.
+        touched_note = False
+        if "industry_templates" in body:
+            from app.database import normalize_industry_templates
+            values["industry_templates"] = normalize_industry_templates(body.get("industry_templates"), strict=True)
+            touched_note = True
+        if touched_note:
+            from datetime import datetime as _dt
+            values["notes_updated_by"] = user.get("display_name") or user.get("username") or ""
+            values["notes_updated_at"] = _dt.utcnow()
         db = MongoDBManager()
         db.save_classifier_settings(values)
-        return values
+        from app.database import attach_template_covers
+        notes = db.get_classifier_notes()
+        options = db.get_industry_options()
+        attach_template_covers(notes.get("industry_templates"), options)
+        return {**db.get_classifier_settings(), **notes, "industry_options": options}
     except HTTPException:
         raise
     except (TypeError, ValueError) as e:

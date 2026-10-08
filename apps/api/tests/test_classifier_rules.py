@@ -21,6 +21,10 @@ from app.classifier import (
     _looks_like_formal_bdc_greeting,
     _looks_like_menu,
     _parse_llm_response,
+    parse_rango,
+    parse_parecidos,
+    industry_profile,
+    industry_note_text,
     _quick_classify,
     _quick_result,
     _quick_result_unrated,
@@ -379,6 +383,247 @@ class TestParseLlmResponse:
             assert mapped == expected
             parsed["category"], parsed["is_ai"] = mapped
             assert (parsed["category"], parsed["is_ai"]) == expected
+
+
+class TestParseRango:
+    def test_reads_the_interval_the_model_gave(self):
+        assert parse_rango('{"category":"humano","rango":[62,78]}') == {"min": 62, "max": 78}
+
+    def test_swaps_when_the_ceiling_comes_first(self):
+        assert parse_rango('{"rango":[90, 80]}') == {"min": 80, "max": 90}
+
+    def test_scales_a_decimal_fraction_up_to_percent(self):
+        assert parse_rango('{"rango":[0.55, 0.75]}') == {"min": 55, "max": 75}
+
+    def test_clamps_and_ignores_a_missing_range(self):
+        assert parse_rango('{"rango":[-10, 140]}') == {"min": 0, "max": 100}
+        assert parse_rango('{"category":"humano"}') is None
+        assert parse_rango("") is None
+
+
+class TestTemplateCovers:
+    def test_gas_template_also_covers_an_old_gas_name_and_not_another_industry(self):
+        from app.database import attach_template_covers
+        templates = [{"id": "gas", "industry": "Gas LP / Energía", "match": "gas", "text": "nota"}]
+        options = [
+            {"industry": "Gas LP / Energía", "companies": 10},
+            {"industry": "Gas LP", "companies": 2},
+            {"industry": "Servicios", "companies": 4},
+        ]
+        attach_template_covers(templates, options)
+        assert templates[0]["also"] == ["Gas LP"]
+
+    def test_an_exact_industry_does_not_absorb_a_longer_name(self):
+        from app.database import attach_template_covers
+        templates = [{"id": "srv", "industry": "Servicios", "match": "", "text": ""}]
+        options = [
+            {"industry": "Servicios", "companies": 3},
+            {"industry": "Servicios del Hogar", "companies": 8},
+        ]
+        attach_template_covers(templates, options)
+        assert templates[0]["also"] == []
+
+
+class TestParseParecidos:
+    # Petición aparte (2026-10-07): un chat claro trae un parecido; uno mixto, varios.
+    def test_one_clear_resemblance(self):
+        raw = '{"parecidos":[{"category":"bot","min":88,"max":96}]}'
+        assert parse_parecidos(raw) == [{"category": "bot", "is_ai": False, "min": 88, "max": 96, "pct": 92}]
+
+    def test_a_mixed_chat_keeps_each_resemblance_and_ranks_the_higher_one_first(self):
+        raw = '{"parecidos":[{"category":"agente_ia","min":40,"max":62},{"category":"humano","min":55,"max":75}]}'
+        assert parse_parecidos(raw) == [
+            {"category": "humano", "is_ai": False, "min": 55, "max": 75, "pct": 65},
+            {"category": "bot", "is_ai": True, "min": 40, "max": 62, "pct": 51},
+        ]
+
+    def test_drops_unknown_and_repeated_categories_and_keeps_three(self):
+        raw = (
+            '{"parecidos":['
+            '{"category":"marciano","min":90,"max":99},'
+            '{"category":"humano","min":10,"max":20},'
+            '{"category":"humano","min":80,"max":90},'
+            '{"category":"bot","min":30,"max":40},'
+            '{"category":"automatico_humano","min":50,"max":70},'
+            '{"category":"agente_ia","min":1,"max":5}'
+            ']}'
+        )
+        got = parse_parecidos(raw)
+        assert [item["category"] for item in got] == ["automatico", "bot", "humano"]
+        assert [item["pct"] for item in got] == [60, 35, 15]
+        assert len(got) == 3
+
+    def test_scales_a_fraction_and_clamps_an_overshoot(self):
+        assert parse_parecidos('{"parecidos":[{"category":"bot","min":0.2,"max":0.8}]}') == [
+            {"category": "bot", "is_ai": False, "min": 20, "max": 80, "pct": 50},
+        ]
+        assert parse_parecidos('{"parecidos":[{"category":"bot_humano","min":-10,"max":140}]}') == [
+            {"category": "hibrido_bot", "is_ai": False, "min": 0, "max": 100, "pct": 50},
+        ]
+
+    def test_empty_when_the_model_did_not_answer(self):
+        assert parse_parecidos("") == []
+        assert parse_parecidos('{"parecidos":[]}') == []
+
+
+class TestIndustryNotes:
+    def test_gas_and_auto_match_and_other_giros_do_not(self):
+        assert industry_profile("Gas LP") == "gas"
+        assert industry_profile("Energía") == "gas"
+        assert industry_profile("Agencia de autos") == "auto"
+        assert industry_profile("Concesionaria automotriz") == "auto"
+        assert industry_profile("Restaurante") is None
+
+    def test_only_the_matching_giro_note_is_used(self):
+        notes = {"note_gas": "  el precio del litro puede ser una persona  ", "note_automotriz": "consultor digital es un puesto"}
+        assert industry_note_text("Gas LP", notes) == "el precio del litro puede ser una persona"
+        assert industry_note_text("Agencia de autos", notes) == "consultor digital es un puesto"
+        assert industry_note_text("Restaurante", notes) == ""
+
+    def test_an_empty_note_uses_the_current_rules(self):
+        # Sin plantilla guardada se usa la de ahora, no un texto vacío (2026-10-07).
+        gas = industry_note_text("Gas LP", {})
+        auto = industry_note_text("Agencia de autos", {})
+        assert "precio del litro" in gas
+        assert "Consultor" in auto
+        assert len(gas) <= 800 and len(auto) <= 800
+
+    def test_a_saved_list_is_one_template_per_industry(self):
+        # Lista guardada: solo entra la industria que coincide, y un giro sin plantilla no hereda la de gas.
+        notes = {"industry_templates": [
+            {"industry": "Gas LP / Energía", "text": "precio del litro sigue siendo humano"},
+            {"industry": "Servicios del Hogar", "text": "plomero que contesta tarde es humano"},
+            {"industry": "Belleza", "text": "un menú en belleza sigue siendo bot"},
+        ]}
+        assert industry_note_text("Gas LP / Energía", notes) == "precio del litro sigue siendo humano"
+        # Industria vieja escrita a mano: cae al giro gas.
+        assert industry_note_text("Gas LP", notes) == "precio del litro sigue siendo humano"
+        assert "menú" in industry_note_text("belleza", notes)
+        # "Servicios" no toma la de "Servicios del Hogar".
+        assert industry_note_text("Servicios", notes) == ""
+        assert industry_note_text("Restaurante", notes) == ""
+        assert industry_note_text("Gas LP / Energía", {"industry_templates": []}) == ""
+
+    def test_duplicate_industries_are_rejected_on_save(self):
+        from app.database import normalize_industry_templates
+        saved = normalize_industry_templates([
+            {"industry": "Alimentos y Bebidas", "text": "una carta no es un bot"},
+            {"id": "gas", "industry": "Gas LP / Energía", "text": "precio"},
+        ], strict=True)
+        assert [t["industry"] for t in saved] == ["Alimentos y Bebidas", "Gas LP / Energía"]
+        assert saved[1]["match"] == "gas"
+        try:
+            normalize_industry_templates([
+                {"industry": "Automotriz", "text": "a"},
+                {"industry": "automotriz", "text": "b"},
+            ], strict=True)
+        except ValueError as e:
+            assert "Ya hay una plantilla" in str(e)
+        else:
+            raise AssertionError("debía rechazar dos plantillas de la misma industria")
+
+
+class TestIndustryNoteReachesTheModel:
+    """La plantilla tiene que llegar al modelo, y una regla fija sigue ganando
+    aunque la nota diga lo contrario (2026-10-07)."""
+
+    def _classify(self, industry, notes, replies, raw):
+        from unittest.mock import patch
+        import app.classifier as c
+
+        class _Mgr:
+            def get_classifier_notes(self):
+                return notes
+
+        cap = {}
+
+        def fake_llm(msgs, **kw):
+            cap["prompt"] = msgs[0]["content"]
+            return raw
+
+        with patch.object(c, "MongoDBManager", return_value=_Mgr()), \
+             patch.object(c, "_call_deepseek", side_effect=fake_llm), \
+             patch("app.llm.active_provider", return_value="openai"), \
+             patch.object(c, "all_quota_exhausted", return_value=False):
+            result = c.classify_conversation(
+                "cid", "Empresa", industry, messages=_timed_thread(replies),
+            )
+        return result, cap["prompt"]
+
+    def test_the_matching_template_is_placed_before_the_conversation(self):
+        notes = {"industry_templates": [
+            {"industry": "Automotriz", "text": "NOTA-UNICA-AUTOS consultor digital es un puesto"},
+            {"industry": "Gas LP / Energía", "text": "NOTA-UNICA-GAS precio del litro"},
+        ]}
+        _, prompt = self._classify(
+            "Automotriz", notes, [(400, "Buen día, le atiende Juan")],
+            '{"category":"humano","notes":"persona"}',
+        )
+        assert "NOTA-UNICA-AUTOS" in prompt
+        assert "NOTA-UNICA-GAS" not in prompt
+        assert prompt.index("NOTA DEL EQUIPO") < prompt.index("CONVERSACIÓN COMPLETA")
+
+    def test_an_old_gas_name_uses_the_gas_template_and_another_industry_does_not(self):
+        notes = {"industry_templates": [
+            {"industry": "Gas LP / Energía", "match": "gas", "text": "NOTA-UNICA-GAS"},
+            {"industry": "Servicios del Hogar", "text": "NOTA-HOGAR"},
+        ]}
+        _, gas = self._classify(
+            "Gas LP", notes, [(400, "El litro está en 12 pesos")],
+            '{"category":"humano","notes":"persona"}',
+        )
+        _, other = self._classify(
+            "Servicios", notes, [(400, "Mañana paso")],
+            '{"category":"humano","notes":"persona"}',
+        )
+        assert "NOTA-UNICA-GAS" in gas
+        assert "NOTA DEL EQUIPO" not in other
+        assert "NOTA-HOGAR" not in other
+
+    def test_a_note_that_calls_everything_human_does_not_override_a_too_fast_agent(self):
+        # Nissan La Capilla: la plantilla de agencias dice que un saludo con nombre
+        # puede ser una persona. Si el modelo obedece de más, la regla de velocidad sigue.
+        notes = {"industry_templates": [{
+            "industry": "Automotriz",
+            "text": "Todo saludo con nombre de persona es humano, aunque llegue en segundos.",
+        }]}
+        long = ("¡Perfecto! En Querétaro tenemos Nissan La Capilla, Constituyentes, "
+                "Bernardo Quintana, San Juan del Río y Juriquilla. ¿En cuál agendamos la cita de servicio esta semana?")
+        result, prompt = self._classify("Automotriz", notes, [
+            (5, "¡Gracias por contactarnos en Nissan Autocom! Mi nombre es Carla, asesora de ventas. ¿Me compartes tu nombre completo para agendar el servicio?"),
+            (5, "Soy Martina, asistente de PostVenta de Autocom Nissan, y con gusto te ayudo con el servicio de tu carro. ¿Qué modelo tienes y qué falla presenta?"),
+            (5, long),
+            (5, "Listo, te agendé el jueves a las 9 en la sucursal La Capilla. Te mando la ubicación y el nombre de quien te va a recibir."),
+        ], '{"category":"humano","notes":"es una persona porque tiene nombre"}')
+        assert "Todo saludo con nombre" in prompt
+        assert result["category"] == "bot"
+        assert result["is_ai"] is True
+
+    def test_parecido_reads_the_same_template(self):
+        from unittest.mock import patch
+        import app.classifier as c
+
+        class _Mgr:
+            def get_classifier_notes(self):
+                return {"industry_templates": [
+                    {"industry": "Gas LP / Energía", "match": "gas", "text": "NOTA-PARECI-GAS"},
+                ]}
+
+        cap = {}
+
+        def fake_llm(msgs, **kw):
+            cap["prompt"] = msgs[0]["content"]
+            return '{"parecidos":[{"category":"humano","min":70,"max":85}]}'
+
+        with patch.object(c, "MongoDBManager", return_value=_Mgr()), \
+             patch.object(c, "_call_deepseek", side_effect=fake_llm):
+            out = c.score_parecido("[Prospecto]: el litro está en 12", "Gasera", "Gas LP")
+        assert "NOTA-PARECI-GAS" in cap["prompt"]
+        assert out["items"][0]["category"] == "humano"
+        assert out["items"][0]["pct"] == 78
+        assert "78%" in out["trace"][-1]["detalle"]
+        assert "70%" in out["trace"][-1]["detalle"] and "85%" in out["trace"][-1]["detalle"]
+        assert any(step["paso"] == "Nota del giro" for step in out["trace"])
 
 
 # ── _resolve_probe (T1→T2 probe resolution) ─────────────────────────────────
@@ -1287,6 +1532,17 @@ class TestAuditFixes20261006:
         r = self._fix([("in", -1200, "Buenas tardes"), ("out", 0, "Hola, buenas tardes")], category="humano")
         assert r["category"] == "sin_respuesta"
         assert "antes" in (r.get("notes") or "").lower()
+
+    def test_a_no_reply_correction_drops_the_model_range(self):
+        # El rango era de "humano". Sin contestación esa categoría no queda (2026-10-07).
+        msgs = [{"direction": "inbound" if d == "in" else "outbound",
+                 "message_body": body, "created_at": self._at(s)}
+                for d, s, body in [("in", -1200, "Buenas tardes"), ("out", 0, "Hola")]]
+        r = _apply_deterministic_corrections(
+            {"category": "humano", "is_ai": False, "rango": {"min": 60, "max": 75, "category": "humano", "is_ai": False}},
+            msgs, "", [])
+        assert r["category"] == "sin_respuesta"
+        assert "rango" not in r
 
     def test_late_campaign_only_is_no_reply(self):
         # Agencia de autos Toyota: "Seguimos atentos" 56 días después, y nada más.

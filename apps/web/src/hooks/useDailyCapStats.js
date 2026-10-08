@@ -16,11 +16,16 @@ export function useDailyCapStats() {
   const [stats, setStats] = useState(null)
 
   const refresh = useCallback(async () => {
-    if (typeof window === 'undefined' || !localStorage.getItem('user_token')) return
+    if (typeof window === 'undefined' || !localStorage.getItem('user_token')) return null
     try {
       const r = await authFetch('/api/instances/daily-stats')
-      if (r.ok) setStats(await r.json())
+      if (r.ok) {
+        const data = await r.json()
+        setStats(data)
+        return data
+      }
     } catch {}
+    return null
   }, [])
 
   useEffect(() => { refresh() }, [refresh])

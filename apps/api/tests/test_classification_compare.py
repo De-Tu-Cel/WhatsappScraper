@@ -368,3 +368,12 @@ class TestFailedSendsDoNotCount:
         cc._contacted_numbers(db, "c1")
         assert seen["filter"]["status"] == {"$ne": "failed"}
         assert seen["distinct"]["status"] == {"$ne": "failed"}
+
+
+def test_hybrid_result_keeps_the_probability_range():
+    out = cc._hybrid_result({
+        "category": "humano", "is_ai": False, "notes": "escribió una persona",
+        "rango": {"min": 62, "max": 78, "category": "humano", "is_ai": False},
+    }, [])
+    assert out["rango"] == {"min": 62, "max": 78, "category": "humano", "is_ai": False}
+    assert out["category"] == "humano"

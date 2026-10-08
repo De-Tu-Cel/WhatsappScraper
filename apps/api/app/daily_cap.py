@@ -183,6 +183,55 @@ def get_new_contacts_limit(warmup_mode: bool) -> int:
     return WARMUP_NEW_CONTACTS_CAP if warmup_mode else NORMAL_NEW_CONTACTS_CAP
 
 
+def daily_stats_for_user(db, user_id: str) -> dict:
+    """Cupo de hoy solo de las sesiones asignadas a este usuario.
+
+    Dos sesiones en warmup suman 5+5 contactos nuevos; la de otro usuario no
+    entra. Si se le quita una sesión, la siguiente lectura ya no la cuenta.
+    """
+    instances = list(db.db.instances.find(
+        {"assigned_to": user_id},
+        {"_id": 0, "name": 1, "label": 1, "number": 1, "warmup_mode": 1},
+    )) if user_id else []
+
+    rows = []
+    for inst in instances:
+        name = inst["name"]
+        warmup = bool(inst.get("warmup_mode"))
+        sent = get_daily_count(db, name)
+        cap = WARMUP_CAP if warmup else DAILY_CAP
+        nc_today = count_new_contacts_today_for_instance(db, name)
+        nc_limit = get_new_contacts_limit(warmup)
+        rows.append({
+            "instance":           name,
+            "label":              inst.get("label") or name,
+            "number":             inst.get("number"),
+            "sent_today":         sent,
+            "cap":                cap,
+            "available":          max(0, cap - sent),
+            "warmup_mode":        warmup,
+            "new_contacts_today": nc_today,
+            "new_contacts_limit": nc_limit,
+            "new_contacts_left":  max(0, nc_limit - nc_today),
+        })
+
+    total_sent = sum(r["sent_today"] for r in rows)
+    scheduled_today = get_scheduled_count_today(db)
+    total_cap = sum(r["cap"] for r in rows) if rows else 0
+    total_available = max(0, total_cap - total_sent - scheduled_today)
+    return {
+        "instances":             rows,
+        "total_sent":            total_sent,
+        "scheduled_today":       scheduled_today,
+        "total_cap":             total_cap,
+        "total_available":       total_available,
+        "cap_per_instance":      DAILY_CAP,
+        "reset_hour":            "00:00 local",
+        "new_contacts_today":    sum(r["new_contacts_today"] for r in rows),
+        "new_contacts_capacity": sum(r["new_contacts_left"] for r in rows),
+    }
+
+
 def _today_utc_range():
     """(today_start, tomorrow) as naive UTC datetimes for message_logs queries."""
     from datetime import datetime, timedelta

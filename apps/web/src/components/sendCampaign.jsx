@@ -8,7 +8,8 @@ import { CompanyPicker, extractPhoneDigits } from './scheduledSends'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { SendConfigPanel } from './SendConfigPanel'
 import { InstanceDisconnectedBanner } from './InstanceStatusBanner'
-import DailyCapBadge, { getOverBy } from './DailyCapBadge'
+import DailyCapBadge from './DailyCapBadge'
+import { getOverBy, capOverflowKind } from '../lib/dailyCap'
 import { sendBlockReason } from './BulkSendPanel'
 import { isPhoneBlacklisted } from '@/lib/phoneBlacklist'
 import { loadSendConfig } from '@/lib/sendConfig'
@@ -214,19 +215,25 @@ export default function SendCampaign() {
   const belowMinTemplates = targets.length > 1 && cleanMessages.length < minTemplatesRequired
   // Already-contacted numbers don't use the new-contacts quota — counting every
   // selected number as new blocked follow-ups that actually fit.
-  const overBy      = getOverBy(capStats, targets.length, newSelCount)
-  const capBlocked  = overBy > 0
+  // Sin el cupo cargado no se manda: un vacío se leía como sin tope y
+  // Antonio (2026-10-07) encoló 6 contactos nuevos con gely-wa en warmup (tope 5).
+  const capPending  = !capStats && targets.length > 0
+  const overBy      = getOverBy(capStats, targets.length, newSelCount, { requireStats: true })
+  const overKind    = capOverflowKind(capStats, targets.length, newSelCount)
+  const capBlocked  = capPending || overBy > 0
   const canSend = targets.length > 0 && cleanMessages.length > 0 && !belowMinTemplates && !capBlocked && !isSending
   const blockReason = sendBlockReason({
     lang, isSending, allSent: false, isDisconnected,
     selectedCount: targets.length,
     templateCount: cleanMessages.length,
     minTemplates: targets.length > 1 ? minTemplatesRequired : 1,
-    overBy,
+    overBy, capPending, overKind,
   })
 
-  function handleSend() {
+  async function handleSend() {
     if (!canSend) return
+    const fresh = await refreshCapStats()
+    if (getOverBy(fresh || capStats, targets.length, newSelCount, { requireStats: true }) > 0) return
     setDone(false)
     // Pre-compute per-recipient messages (variant selection + variable substitution)
     // before enqueuing so all randomization happens at click time, not during send.
@@ -537,7 +544,7 @@ export default function SendCampaign() {
             onChange={(ns, nm) => { setSelectedNums(ns); setNumInfoMap(nm) }}
             listMaxHeight="60vh"
             contactedRefreshKey={contactedRefreshKey}
-            newContactsCap={capStats?.new_contacts_capacity ?? null}
+            newContactsCap={capStats ? (capStats.new_contacts_capacity ?? 0) : 0}
             onNewCountChange={setNewSelCount}
             showTitle={false}
           />

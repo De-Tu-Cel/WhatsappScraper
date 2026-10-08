@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'rea
 import { authFetch } from '@/lib/api'
 import { useSendQueue } from '../context/SendQueueContext'
 import { useDailyCapStats } from '../hooks/useDailyCapStats'
-import { getOverBy } from '../lib/dailyCap'
+import { getOverBy, capOverflowKind } from '../lib/dailyCap'
 import DailyCapBadge from './DailyCapBadge'
 const display = v => (!v || ['null','none','undefined','n/a'].includes(String(v).trim().toLowerCase())) ? '—' : v
 
@@ -412,7 +412,10 @@ function renderTemplate(template, row) {
 function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescraping, selectedWithWA, onRefresh, onToggleFilter, filterOpen, total, instanceStatus, onAddCompany }) {
   const { t, lang } = useLang()
   const { stats: capStats } = useDailyCapStats()
-  const capBlocked = getOverBy(capStats, selectedWithWA || 0) > 0
+  // La barra no sabe cuáles ya fueron contactados; el diálogo sí. Aquí solo
+  // se frena el cupo de mensajes, y si el cupo no cargó no se abre el envío.
+  const capPending = !capStats && (selectedWithWA || 0) > 0
+  const capBlocked = getOverBy(capStats, selectedWithWA || 0, 0, { requireStats: true }) > 0
   return (
     <Toolbar sx={{
       pl: { sm: 2 }, pr: { xs: 1, sm: 1 },
@@ -460,6 +463,7 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
           <>
             <Tooltip title={
               instanceStatus === 'disconnected' ? t.db.instDisconnTip :
+              capPending ? (lang === 'en' ? 'Loading today\'s quota…' : 'Cargando el cupo de hoy…') :
               capBlocked ? (lang === 'en' ? `Daily limit reached (${capStats.total_sent}/${capStats.total_cap}). Resets at midnight.` : `Límite diario alcanzado (${capStats.total_sent}/${capStats.total_cap}). Reinicia a medianoche.`) :
               selectedWithWA === 0 ? t.db.noWaSelected :
               `${t.db.sendMsgTo} ${selectedWithWA} ${t.db.withWA}`
@@ -1138,6 +1142,8 @@ function StatsCardSkeleton() {
 
 export function CampaignDialog({ open, selectedRows, onClose, onNotify, instanceStatus = 'unknown', isDisconnected = false, capStats = null }) {
   const { t, lang } = useLang()
+  const { stats: liveCap, refresh: refreshCapStats } = useDailyCapStats()
+  const cap = liveCap || capStats
   const [extraVariants, setExtraVariants] = useState([])
   const [sending,      setSending]      = useState(false)
   const [sendError,    setSendError]    = useState('')
@@ -1255,7 +1261,20 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
       return next
     })
   }
-  const capOverBy   = getOverBy(capStats, selectedNums.size)
+  const newSelCount = useMemo(() => {
+    let n = 0
+    for (const [cid, nums] of Object.entries(recipientsMap)) {
+      const contacted = new Set((contactedMap[cid] || []).map(normPhone))
+      for (const item of nums) {
+        if (!selectedNums.has(item.number)) continue
+        if (!contacted.has(normPhone(item.number))) n++
+      }
+    }
+    return n
+  }, [recipientsMap, contactedMap, selectedNums])
+  const capPending = !cap && selectedNums.size > 0
+  const capOverBy   = getOverBy(cap, selectedNums.size, newSelCount, { requireStats: true })
+  const overKind    = capOverflowKind(cap, selectedNums.size, newSelCount)
   const sentCount   = results.filter(r => r.status === 'sent').length
   const failedCount = results.filter(r => r.status === 'failed').length
   const noWaCount   = results.filter(r => r.status === 'no_wa').length
@@ -1298,7 +1317,9 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
   }, [])
 
   async function handleSend() {
-    if (msgInvalid || sendingRef.current || belowMinTemplates || targets.length === 0) return
+    if (msgInvalid || sendingRef.current || belowMinTemplates || targets.length === 0 || capOverBy > 0) return
+    const fresh = await refreshCapStats()
+    if (getOverBy(fresh || cap, selectedNums.size, newSelCount, { requireStats: true }) > 0) return
     cancelRef.current = false
     sendingRef.current = true
     setSending(true); setProgress(0); setResults([]); setDone(false)
@@ -1505,13 +1526,22 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
       </DialogContent>
 
       <DialogActions sx={{ px: 3, pb: 3, pt: 2, gap: 1, bgcolor: 'var(--sidebar-bg, #0d1117)', borderTop: '1px solid rgba(255,255,255,0.06)', flexWrap: 'wrap' }}>
-        {capStats && selectedNums.size > 0 && (
-          <DailyCapBadge stats={capStats} selectionCount={selectedNums.size} sx={{ mr: 'auto' }} />
+        {cap && selectedNums.size > 0 && (
+          <DailyCapBadge stats={cap} selectionCount={selectedNums.size} newSelectionCount={newSelCount} sx={{ mr: 'auto' }} />
         )}
         <Button onClick={onClose} disabled={sending}
           sx={{ color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 2, px: 2.5, '&:hover': { bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.7)' } }}>
           {done ? t.common.close : t.common.cancel}
         </Button>
+        {!done && capOverBy > 0 && (
+          <Typography sx={{ width: '100%', color: '#f59e0b', fontSize: '0.72rem' }}>
+            {capPending
+              ? (lang === 'en' ? 'Loading today\'s quota…' : 'Cargando el cupo de hoy…')
+              : overKind === 'new'
+                ? (lang === 'en' ? `Deselect ${capOverBy}: today's new-contact cap doesn't fit them` : `Desmarca ${capOverBy}: el tope de contactos nuevos de hoy no da para más`)
+                : (lang === 'en' ? `Deselect ${capOverBy} to fit today's quota` : `Desmarca ${capOverBy} para caber en el cupo de hoy`)}
+          </Typography>
+        )}
         {!done && (
           <Button
             onClick={handleSend}
@@ -1537,7 +1567,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function DatabaseViewer({ isActive }) {
   const { t, lang } = useLang()
-  const { stats: capStats } = useDailyCapStats()
+  const { stats: capStats, refresh: refreshCapStats } = useDailyCapStats()
   const headCells  = getHeadCells(t)
   const alertTitles = getAlertTitles(t)
   const [rows, setRows] = useState([])
@@ -2397,7 +2427,7 @@ export default function DatabaseViewer({ isActive }) {
             </Box>
           )}
           {!viewLoading && msgData && (
-            <MessageComposer result={msgData} onSend={handleSendFromDB} sending={msgSending} disabled={isDisconnected} capStats={capStats} />
+            <MessageComposer result={msgData} onSend={handleSendFromDB} sending={msgSending} disabled={isDisconnected} capStats={capStats} onRefreshCap={refreshCapStats} />
           )}
           {!viewLoading && msgData && !msgData.primary_whatsapp_number && (
             <Alert severity="warning" sx={{ mt: 2, bgcolor: 'rgba(251,146,60,0.1)', color: '#fb923c', border: '1px solid rgba(251,146,60,0.2)' }}>

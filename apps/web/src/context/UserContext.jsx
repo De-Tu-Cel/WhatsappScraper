@@ -1,10 +1,14 @@
 'use client'
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
+import {
+  INACTIVITY_MS, WARNING_MS, buildIdRequestUrl, clockJumped,
+  inactivityLeft, readLastActivity, writeLastActivity,
+} from '../lib/sessionGuard'
 
 const UserContext = createContext(null)
 
-const INACTIVITY_TIMEOUT = 30 * 60 * 1000   // 30 min → logout
-const WARNING_BEFORE     =  3 * 60 * 1000   // show warning 3 min before
+const INACTIVITY_TIMEOUT = INACTIVITY_MS   // 30 min → logout
+const WARNING_BEFORE     = WARNING_MS      // show warning 3 min before
 
 // A session belongs to the version of the app it signed in with: after a
 // deploy, everyone signs in again instead of carrying on with whatever the old
@@ -15,7 +19,11 @@ export const LOGOUT_REASON_KEY = 'logout_reason'
 
 async function liveBuildId() {
   try {
-    const res = await fetch('/api/build-id', { cache: 'no-store' })
+    // Misma query con hora que VersionWatcher: Safari guardaba el build viejo.
+    const res = await fetch(buildIdRequestUrl(), {
+      cache: 'no-store',
+      headers: { 'cache-control': 'no-cache', pragma: 'no-cache' },
+    })
     return res.ok ? (await res.json()).buildId || null : null
   } catch {
     return null
@@ -31,10 +39,24 @@ export function UserProvider({ children }) {
   const logoutTimerRef  = useRef(null)
   const warnTimerRef    = useRef(null)
   const countdownRef    = useRef(null)
+  const showWarningRef  = useRef(false)
+  // El setTimeout no puede llamar a armTimers directo: el linter lo toma como
+  // uso antes de declararse (CI, 2026-10-07) y tumba el build.
+  const armTimersRef    = useRef(() => {})
 
   const fetchMe = useCallback(async () => {
     const token = localStorage.getItem('user_token')
     if (!token) { setLoading(false); return }
+    // Pestaña descartada y vuelta a abrir horas después (Safari, 2026-10-07):
+    // el temporizador no sobrevivió, pero la marca de actividad sí.
+    const idleFor = inactivityLeft(readLastActivity(localStorage), Date.now())
+    if (idleFor <= 0) {
+      await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-user-token': token } }).catch(() => {})
+      localStorage.removeItem('user_token')
+      localStorage.removeItem(BUILD_KEY)
+      setLoading(false)
+      return
+    }
     // No build id (dev server, or the request failed) → can't tell, keep the session.
     const live = await liveBuildId()
     if (live && localStorage.getItem(BUILD_KEY) !== live) {
@@ -79,45 +101,98 @@ export function UserProvider({ children }) {
     setUser(null)
   }, [clearTimers])
 
-  const resetTimers = useCallback(() => {
-    if (!localStorage.getItem('user_token')) return
+  // left es el tiempo que de verdad falta, no otros 30 min. Si la página estuvo
+  // congelada, el setTimeout no corrió pero la marca en localStorage sí envejeció.
+  const armTimers = useCallback((left) => {
     clearTimers()
-
-    // Warning timer
-    warnTimerRef.current = setTimeout(() => {
+    if (left <= 0) return
+    const startWarning = () => {
       setShowWarning(true)
-      let secs = Math.round(WARNING_BEFORE / 1000)
+      let secs = Math.max(1, Math.round(Math.min(left, WARNING_BEFORE) / 1000))
       setCountdown(secs)
       countdownRef.current = setInterval(() => {
         secs -= 1
-        setCountdown(secs)
-        if (secs <= 0) clearInterval(countdownRef.current)
+        setCountdown(Math.max(0, secs))
+        if (secs <= 0 && countdownRef.current) clearInterval(countdownRef.current)
       }, 1000)
-    }, INACTIVITY_TIMEOUT - WARNING_BEFORE)
-
-    // Logout timer
+    }
+    if (left <= WARNING_BEFORE) startWarning()
+    else warnTimerRef.current = setTimeout(startWarning, left - WARNING_BEFORE)
     logoutTimerRef.current = setTimeout(() => {
-      doLogout()
-    }, INACTIVITY_TIMEOUT)
+      const still = inactivityLeft(readLastActivity(localStorage), Date.now())
+      if (still <= 0) doLogout()
+      else armTimersRef.current(still)
+    }, left)
   }, [clearTimers, doLogout])
+  armTimersRef.current = armTimers
 
-  // Listen for activity events
+  const resetTimers = useCallback(() => {
+    if (!localStorage.getItem('user_token')) return
+    writeLastActivity(localStorage)
+    armTimers(INACTIVITY_TIMEOUT)
+  }, [armTimers])
+
+  useEffect(() => { showWarningRef.current = showWarning }, [showWarning])
+
+  // La advertencia NO puede ser dependencia de este efecto: al mostrarla el
+  // efecto se re-ejecutaba, clearTimers cancelaba el cierre y volvía a contar
+  // 30 min. La sesión no se cerraba nunca (2026-10-07).
   useEffect(() => {
     if (!user) { clearTimers(); return }
+    if (!readLastActivity(localStorage)) writeLastActivity(localStorage)
+    const left = inactivityLeft(readLastActivity(localStorage), Date.now())
+    if (left <= 0) { doLogout(); return }
+    armTimers(left)
 
+    let lastArm = 0
     const events = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click']
     const onActivity = () => {
-      if (showWarning) setShowWarning(false)
+      const now = Date.now()
+      if (!showWarningRef.current && now - lastArm < 5000) return
+      lastArm = now
       resetTimers()
     }
 
-    resetTimers()
+    let lastTick = Date.now()
+    const catchUp = () => {
+      const remain = inactivityLeft(readLastActivity(localStorage), Date.now())
+      if (remain <= 0) doLogout()
+      else armTimers(remain)
+    }
+    const onWake = () => {
+      if (document.visibilityState === 'hidden') return
+      const now = Date.now()
+      const jumped = clockJumped(lastTick, now)
+      lastTick = now
+      if (jumped) catchUp()
+    }
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      lastTick = Date.now()
+      catchUp()
+    }
+    const heartbeat = setInterval(() => {
+      const now = Date.now()
+      if (!clockJumped(lastTick, now)) { lastTick = now; return }
+      lastTick = now
+      catchUp()
+    }, 5000)
+
     events.forEach(e => window.addEventListener(e, onActivity, { passive: true }))
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onWake)
+    window.addEventListener('pageshow', onWake)
+    document.addEventListener('resume', onWake)
     return () => {
+      clearInterval(heartbeat)
       clearTimers()
       events.forEach(e => window.removeEventListener(e, onActivity))
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onWake)
+      window.removeEventListener('pageshow', onWake)
+      document.removeEventListener('resume', onWake)
     }
-  }, [user, resetTimers, clearTimers, showWarning])
+  }, [user, armTimers, clearTimers, doLogout, resetTimers])
 
   // ── Auth functions ───────────────────────────────────────────────────────────
   async function login(username, pin) {
@@ -129,6 +204,7 @@ export function UserProvider({ children }) {
     const data = await res.json()
     const live = await liveBuildId()
     if (live) localStorage.setItem(BUILD_KEY, live)
+    writeLastActivity(localStorage)
     localStorage.setItem('user_token', data.session_token)
     setUser({ ...data, token: data.session_token })
     return data

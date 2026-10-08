@@ -40,6 +40,9 @@ export function UserProvider({ children }) {
   const warnTimerRef    = useRef(null)
   const countdownRef    = useRef(null)
   const showWarningRef  = useRef(false)
+  // El setTimeout no puede llamar a armTimers directo: el linter lo toma como
+  // uso antes de declararse (CI, 2026-10-07) y tumba el build.
+  const armTimersRef    = useRef(() => {})
 
   const fetchMe = useCallback(async () => {
     const token = localStorage.getItem('user_token')
@@ -118,9 +121,10 @@ export function UserProvider({ children }) {
     logoutTimerRef.current = setTimeout(() => {
       const still = inactivityLeft(readLastActivity(localStorage), Date.now())
       if (still <= 0) doLogout()
-      else armTimers(still)
+      else armTimersRef.current(still)
     }, left)
   }, [clearTimers, doLogout])
+  armTimersRef.current = armTimers
 
   const resetTimers = useCallback(() => {
     if (!localStorage.getItem('user_token')) return

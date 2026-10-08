@@ -54,36 +54,52 @@ const CARD_SX = {
   border: '1px solid rgba(255,255,255,0.07)',
 }
 
-function TimingCard({ icon, color, bg, phraseBefore, value, unit, phraseAfter, tooltip, warning,
+function TimingCard({ icon, color, bg, title, phraseBefore, value, unit, phraseAfter, tooltip, warning,
                       onChange, min, max, step, marks = true }) {
   return (
-    <Box sx={CARD_SX}>
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, mb: 1.5 }}>
+    <Box sx={{
+      ...CARD_SX,
+      p: 2.1,
+      position: 'relative',
+      overflow: 'hidden',
+      '&::before': {
+        content: '""', position: 'absolute', left: 0, top: 0, bottom: 0, width: 3,
+        bgcolor: color, opacity: 0.85,
+      },
+    }}>
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, mb: 1.6 }}>
         <Box sx={{
-          width: 30, height: 30, borderRadius: 1.5, flexShrink: 0, mt: 0.1,
+          width: 34, height: 34, borderRadius: 1.5, flexShrink: 0, mt: 0.1,
           bgcolor: bg, border: `1px solid ${color}55`,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
           {icon}
         </Box>
-        <Typography sx={{ fontSize: '0.8rem', color: 'var(--text, rgba(255,255,255,0.85))', lineHeight: 1.6, flex: 1 }}>
-          {phraseBefore}{' '}
-          <Box component="span" sx={{
-            display: 'inline-block', px: 0.8, py: 0.1, mx: 0.2, borderRadius: 1,
-            bgcolor: bg, border: `1px solid ${color}55`,
-            color, fontWeight: 700, fontVariantNumeric: 'tabular-nums', fontSize: '0.78rem',
-          }}>
-            {value}{unit}
-          </Box>{' '}
-          {phraseAfter}
-          {tooltip && (
-            <Tooltip title={tooltip} placement="top" arrow>
-              <InfoOutlinedIcon sx={{ fontSize: 13, ml: 0.5, verticalAlign: 'middle', color: 'var(--border)', cursor: 'help', '&:hover': { color } }} />
-            </Tooltip>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          {title && (
+            <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', color, mb: 0.45 }}>
+              {title}
+            </Typography>
           )}
-        </Typography>
+          <Typography sx={{ fontSize: '0.8rem', color: 'var(--text, rgba(255,255,255,0.85))', lineHeight: 1.6 }}>
+            {phraseBefore}{' '}
+            <Box component="span" sx={{
+              display: 'inline-block', px: 1, py: 0.15, mx: 0.2, borderRadius: 1.2,
+              bgcolor: bg, border: `1px solid ${color}66`,
+              color, fontWeight: 800, fontVariantNumeric: 'tabular-nums', fontSize: '0.82rem',
+            }}>
+              {value}{unit}
+            </Box>{' '}
+            {phraseAfter}
+            {tooltip && (
+              <Tooltip title={tooltip} placement="top" arrow>
+                <InfoOutlinedIcon sx={{ fontSize: 13, ml: 0.5, verticalAlign: 'middle', color: 'var(--border)', cursor: 'help', '&:hover': { color } }} />
+              </Tooltip>
+            )}
+          </Typography>
+        </Box>
       </Box>
-      <Box sx={{ width: '90%', mx: 'auto' }}>
+      <Box sx={{ width: '92%', mx: 'auto' }}>
         <Slider value={value} onChange={(_, v) => onChange(v)}
           min={min} max={max} step={step} marks={marks}
           valueLabelDisplay="auto" valueLabelFormat={v => `${v}${unit}`}
@@ -187,10 +203,15 @@ function TemplatesTab({ c, values, selectedId, setSelectedId, showBase, setShowB
 
   return (
     <>
-      <Box sx={{ ...CARD_SX, display: 'flex', gap: 1.5, flexWrap: 'wrap', py: 1.4 }}>
-        <StepPill n={1}>{c.step1}</StepPill>
-        <StepPill n={2}>{c.step2}</StepPill>
-        <StepPill n={3}>{c.step3}</StepPill>
+      <Box sx={{ ...CARD_SX, py: 1.5, px: 1.8, mb: 1.6 }}>
+        <Typography sx={{ fontSize: '0.8rem', color: TEXT, lineHeight: 1.5, mb: 1.2 }}>
+          {c.templatesIntro}
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+          <StepPill n={1}>{c.step1}</StepPill>
+          <StepPill n={2}>{c.step2}</StepPill>
+          <StepPill n={3}>{c.step3}</StepPill>
+        </Box>
       </Box>
 
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '240px 1fr' }, gap: 2, mb: 2 }}>
@@ -531,22 +552,38 @@ export default function ClassificationSettingsModal({ open, onClose }) {
           <ClassificationSettingsSkeleton />
         ) : (
           <>
-            <Box sx={{ display: 'flex', gap: 0.75, mb: 2 }}>
-              {[c.tabTiming, c.tabTemplates].map((label, i) => (
-                <Button key={label} onClick={() => setTab(i)} sx={{
-                  textTransform: 'none', fontWeight: 700, fontSize: '0.78rem', borderRadius: 99, px: 1.6, py: 0.4, minWidth: 0,
-                  color: tab === i ? 'var(--text, #f1f5f9)' : 'var(--text-muted, rgba(255,255,255,0.45))',
-                  bgcolor: tab === i ? 'rgba(var(--accent-rgb,99,102,241),0.18)' : 'transparent',
-                  border: `1px solid ${tab === i ? 'rgba(var(--accent-rgb,99,102,241),0.45)' : 'var(--border, rgba(255,255,255,0.08))'}`,
-                }}>{label}</Button>
-              ))}
+            <Box sx={{
+              display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.6, mb: 1.2, p: 0.45,
+              borderRadius: 2.5, bgcolor: 'rgba(255,255,255,0.03)',
+              border: '1px solid rgba(255,255,255,0.08)',
+            }}>
+              {[
+                { label: c.tabTiming, icon: AccessTimeIcon },
+                { label: c.tabTemplates, icon: SmartToyIcon },
+              ].map((item, i) => {
+                const Icon = item.icon
+                const active = tab === i
+                return (
+                  <Button key={item.label} onClick={() => setTab(i)} startIcon={<Icon sx={{ fontSize: 18 }} />} sx={{
+                    textTransform: 'none', fontWeight: 800, fontSize: '0.8rem', borderRadius: 2, py: 0.7,
+                    color: active ? 'var(--text, #f1f5f9)' : 'var(--text-muted, rgba(255,255,255,0.45))',
+                    bgcolor: active ? `rgba(${ACCENT_RGB},0.22)` : 'transparent',
+                    border: `1px solid ${active ? `rgba(${ACCENT_RGB},0.5)` : 'transparent'}`,
+                    boxShadow: active ? `0 0 0 1px rgba(${ACCENT_RGB},0.12)` : 'none',
+                    '&:hover': { bgcolor: active ? `rgba(${ACCENT_RGB},0.28)` : 'rgba(255,255,255,0.04)' },
+                  }}>{item.label}</Button>
+                )
+              })}
             </Box>
+            <Typography sx={{ fontSize: '0.72rem', color: MUTED, lineHeight: 1.45, mb: 2 }}>
+              {tab === 0 ? c.tabTimingHelp : c.tabTemplatesHelp}
+            </Typography>
 
             {tab === 0 && (
               <>
                 <TimingCard
-                  icon={<BoltIcon sx={{ fontSize: 16, color: '#facc15' }} />}
-                  color="#facc15" bg="rgba(250,204,21,0.12)"
+                  icon={<BoltIcon sx={{ fontSize: 17, color: '#facc15' }} />}
+                  color="#facc15" bg="rgba(250,204,21,0.12)" title={c.labelT1}
                   phraseBefore={c.phraseT1Before} value={values.t1_threshold_seconds} unit={c.seconds} phraseAfter={c.phraseT1After}
                   tooltip={c.tipT1}
                   onChange={v => edit({ t1_threshold_seconds: v })}
@@ -554,8 +591,8 @@ export default function ClassificationSettingsModal({ open, onClose }) {
                   marks={[3, 10, 20, 30, 45, 60].map(v => ({ value: v, label: `${v}s` }))}
                 />
                 <TimingCard
-                  icon={<SmartToyIcon sx={{ fontSize: 16, color: '#a78bfa' }} />}
-                  color="#a78bfa" bg="rgba(167,139,250,0.12)"
+                  icon={<SmartToyIcon sx={{ fontSize: 17, color: '#a78bfa' }} />}
+                  color="#a78bfa" bg="rgba(167,139,250,0.12)" title={c.labelT2}
                   phraseBefore={c.phraseT2Before} value={values.t2_threshold_seconds} unit={c.seconds} phraseAfter={c.phraseT2After}
                   tooltip={c.tipT2}
                   warning={t2Warning ? c.warnT2GtT1 : null}
@@ -564,8 +601,8 @@ export default function ClassificationSettingsModal({ open, onClose }) {
                   marks={[3, 5, 10, 15, 20, 30].map(v => ({ value: v, label: `${v}s` }))}
                 />
                 <TimingCard
-                  icon={<AccessTimeIcon sx={{ fontSize: 16, color: '#94a3b8' }} />}
-                  color="#94a3b8" bg="rgba(148,163,184,0.12)"
+                  icon={<AccessTimeIcon sx={{ fontSize: 17, color: '#94a3b8' }} />}
+                  color="#94a3b8" bg="rgba(148,163,184,0.12)" title={c.labelNoReply}
                   phraseBefore={c.phraseNoReplyBefore} value={values.no_reply_wait_minutes} unit={c.minutes} phraseAfter={c.phraseNoReplyAfter}
                   tooltip={c.tipNoReply}
                   onChange={v => edit({ no_reply_wait_minutes: v })}
@@ -573,8 +610,8 @@ export default function ClassificationSettingsModal({ open, onClose }) {
                   marks={[60, 180, 360, 720, 1440].map(v => ({ value: v, label: `${v / 60}h` }))}
                 />
                 <TimingCard
-                  icon={<MailOutlineIcon sx={{ fontSize: 16, color: '#818cf8' }} />}
-                  color="#818cf8" bg="rgba(129,140,248,0.12)"
+                  icon={<MailOutlineIcon sx={{ fontSize: 17, color: '#818cf8' }} />}
+                  color="#818cf8" bg="rgba(129,140,248,0.12)" title={c.labelProbe}
                   phraseBefore={c.phraseProbeBefore} value={values.probe_wait_hours} unit={c.hours} phraseAfter={c.phraseProbeAfter}
                   tooltip={c.tipProbe}
                   onChange={v => edit({ probe_wait_hours: v })}

@@ -219,9 +219,9 @@ export function ParecidoCell({ hibrido, onClick }) {
   if (!items.length) {
     return (
       <Typography sx={{
-        fontSize: '0.75rem', lineHeight: 1, textAlign: 'center',
+        fontSize: '0.7rem', lineHeight: 1, textAlign: 'center', fontStyle: 'italic',
         color: 'var(--text-muted, rgba(255,255,255,0.28))',
-      }}>—</Typography>
+      }}>{t.analytics.noCategory}</Typography>
     )
   }
   const fresh = Array.isArray(hibrido?.parecido?.items) && hibrido.parecido.items.length > 0

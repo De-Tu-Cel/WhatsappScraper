@@ -93,7 +93,7 @@ import IdeasPanel from '../components/IdeasPanel'
 import BlockIcon from '@mui/icons-material/Block'
 import LightbulbIcon from '@mui/icons-material/Lightbulb'
 import { SendQueueProvider } from '../context/SendQueueContext'
-import SendBubble from '../components/SendBubble'
+import SendQueuePanel from '../components/SendQueuePanel'
 import { NavigationProvider, useNavigation } from '../context/NavigationContext'
 
 // Lazy-mount + memo: each tab mounts only on first visit, then stays mounted
@@ -357,7 +357,7 @@ function DashboardInner() {
           <HelpPanel open={helpOpen} onClose={closeRightPanel} />
         </Box>
       </Box>
-      <SendBubble />
+      <SendQueuePanel />
     </Box>
   )
 }

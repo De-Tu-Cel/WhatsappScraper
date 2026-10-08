@@ -6,5 +6,11 @@ import { readBuildId } from '@/lib/buildId'
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  return Response.json({ buildId: readBuildId() }, { headers: { 'Cache-Control': 'no-store' } })
+  return Response.json({ buildId: readBuildId() }, {
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'CDN-Cache-Control': 'no-store',
+      Pragma: 'no-cache',
+    },
+  })
 }

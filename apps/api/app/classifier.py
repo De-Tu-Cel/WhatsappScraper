@@ -2911,14 +2911,16 @@ def classify_conversation_and_save(company_id: str, log_id: str, force: bool = F
         from bson import ObjectId
         db = MongoDBManager()
 
-        # Idempotency guard — if a concurrent call already wrote the conversation
-        # analysis for this log_id, skip to avoid a double LLM call and overwrite.
+        # Si los cuatro resultados cubren el último mensaje, no se vuelve a pagar
+        # el modelo. Si contestaron después, o nunca se guardó el rango, sí se
+        # corre. Accesorios, Insprogas y KINO (2026-10-08).
         if not force:
             try:
-                _target = db.db.message_logs.find_one({"_id": ObjectId(log_id)}, {"analysis.conversation_analysis": 1})
-                if (_target or {}).get("analysis", {}).get("conversation_analysis"):
-                    log.debug("classify_conversation_and_save: log_id=%s ya tiene conversation_analysis, skip", log_id)
+                gap, _last = _reply_analysis_gap_for_company(db, company_id)
+                if gap is None:
+                    log.debug("classify_conversation_and_save: %s ya tiene los cuatro análisis al día", company_id)
                     return None
+                log.info("classify_conversation_and_save: %s para %s, se vuelven a correr los cuatro", gap, company_id)
             except Exception:
                 pass
 
@@ -3002,6 +3004,137 @@ def classify_conversation_and_save(company_id: str, log_id: str, force: bool = F
 
 
 _SWEEP_INTERVAL_SEC = 300
+_REPLY_SETTLE_MINUTES = 3
+_REPLY_CLAIM_MINUTES = 20
+_reply_analysis_inflight: set[str] = set()
+_reply_analysis_lock = threading.Lock()
+
+
+def _reply_analysis_gap_for_company(db, company_id: str):
+    """(faltante, último inbound). Centraliza la decisión para que el barrido,
+    el worker y el guard idempotente usen exactamente la misma regla."""
+    from app.classification_compare import COMPARISONS, reply_analysis_gap
+    last = db.db.message_logs.find_one(
+        {"company_id": company_id, "direction": "inbound"},
+        {"_id": 1, "created_at": 1},
+        sort=[("created_at", -1)],
+    )
+    if not isinstance(last, dict) or not last.get("_id"):
+        return None, None
+    doc = db.db[COMPARISONS].find_one(
+        {"company_id": company_id},
+        {"updated_at": 1, "timing.common": 1, "timing.category": 1, "timing.error": 1,
+         "ia.common": 1, "ia.category": 1, "ia.error": 1,
+         "hibrido.category": 1, "hibrido.common": 1, "hibrido.error": 1,
+         "hibrido.parecido": 1},
+    )
+    return reply_analysis_gap(doc, last.get("created_at")), last
+
+
+def _claim_reply_analysis(db, company_id: str) -> str | None:
+    """Lease Mongo por empresa. Producción tiene dos procesos de uvicorn: el
+    set en memoria evita duplicados dentro de uno, pero no entre ambos."""
+    from uuid import uuid4
+    from pymongo import ReturnDocument
+    from pymongo.errors import DuplicateKeyError
+    from app.classification_compare import _PREFIX
+    token = uuid4().hex
+    now = datetime.utcnow()
+    collection = db.db[f"{_PREFIX}classification_analysis_claims"]
+    try:
+        claim = collection.find_one_and_update(
+            {
+                "_id": company_id,
+                "$or": [
+                    {"expires_at": {"$lte": now}},
+                    {"expires_at": {"$exists": False}},
+                ],
+            },
+            {"$set": {"holder": token, "expires_at": now + timedelta(minutes=_REPLY_CLAIM_MINUTES)}},
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+    except DuplicateKeyError:
+        return None
+    return token if isinstance(claim, dict) and claim.get("holder") == token else None
+
+
+def queue_reply_analysis(company_id: str, log_id: str | None = None) -> None:
+    """Timing, IA, Timing + IA y rango, en segundo plano, si ya contestaron.
+
+    No espera a que el Chat IA cierre la plática. Accesorios para estufas cerró
+    sin que Andy escribiera; Insprogas sigue en espera 48 h (2026-10-08).
+    """
+    if not company_id or company_id in ("unknown", "manual"):
+        return
+    from app.llm import active_provider
+    if active_provider() == "none":
+        return
+    with _reply_analysis_lock:
+        if company_id in _reply_analysis_inflight:
+            return
+        _reply_analysis_inflight.add(company_id)
+    def _run():
+        db = MongoDBManager()
+        token = None
+        try:
+            gap, last = _reply_analysis_gap_for_company(db, company_id)
+            if gap is None or not last:
+                return
+            token = _claim_reply_analysis(db, company_id)
+            if not token:
+                return
+            # El otro proceso pudo terminar entre el primer chequeo y el lease.
+            gap, last = _reply_analysis_gap_for_company(db, company_id)
+            if gap is None or not last:
+                return
+            classify_conversation_and_save(company_id, str(last["_id"]))
+        except Exception:
+            log.exception("queue_reply_analysis failed for %s", company_id)
+        finally:
+            if token:
+                try:
+                    from app.classification_compare import _PREFIX
+                    db.db[f"{_PREFIX}classification_analysis_claims"].delete_one(
+                        {"_id": company_id, "holder": token},
+                    )
+                except Exception:
+                    log.exception("reply analysis lease release failed for %s", company_id)
+            with _reply_analysis_lock:
+                _reply_analysis_inflight.discard(company_id)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _sweep_reply_analyses(db, now, limit: int = 3) -> None:
+    """Quien ya contestó en la última semana y no tiene los cuatro resultados al
+    día. Tope por vuelta para no disparar una tanda de llamadas al modelo el día
+    del despliegue (2026-10-08)."""
+    since = now - timedelta(days=7)
+    settled = now - timedelta(minutes=_REPLY_SETTLE_MINUTES)
+    rows = list(db.db.message_logs.find(
+        {"direction": "inbound", "created_at": {"$gte": since, "$lte": settled},
+         "company_id": {"$nin": [None, "", "unknown", "manual"]}},
+        {"company_id": 1, "created_at": 1, "_id": 1},
+    ).sort("created_at", -1).limit(300))
+    seen = set()
+    queued = 0
+    for row in rows:
+        cid = str(row.get("company_id") or "")
+        if not cid or cid in seen:
+            continue
+        seen.add(cid)
+        gap, last = _reply_analysis_gap_for_company(db, cid)
+        if gap not in ("missing", "stale", "no_parecido") or not last:
+            continue
+        if last.get("created_at") and last["created_at"] > settled:
+            continue
+        queue_reply_analysis(cid, str(last["_id"]))
+        queued += 1
+        if queued >= limit:
+            break
+    if queued:
+        log.info("reply analyses queued: %d", queued)
 
 
 def _sweep_pending():
@@ -3114,6 +3247,8 @@ def _sweep_pending():
                         args=(str(msg["_id"]), resolved, body, now),
                         daemon=True,
                     ).start()
+
+        _sweep_reply_analyses(db, now)
 
     except Exception:
         log.exception("_sweep_pending failed")

@@ -193,18 +193,24 @@ export function parecidoItems(hibrido) {
   return []
 }
 
+function fillTip(template, vars) {
+  let text = typeof template === 'string' ? template : ''
+  for (const [key, value] of Object.entries(vars)) text = text.replace(`{${key}}`, String(value))
+  return text
+}
+
 function parecidoTip(t, hibrido, it, fresh, items) {
   const text = formatRango(it)
   if (!fresh && rangoWasOverridden({ rango: it, category: hibrido?.category, is_ai: hibrido?.is_ai })) {
-    return t.analytics.rangeShifted.replace('{range}', text).replace('{cat}', categoryLabel(t, it))
+    return fillTip(t.analytics.rangeShifted, { range: text, cat: categoryLabel(t, it) })
   }
   const lo = Math.round(Number(it.min))
   const hi = Math.round(Number(it.max))
   const exact = Number.isFinite(lo) && Number.isFinite(hi) && lo !== hi
-    ? t.analytics.rangeExact.replace('{pct}', String(parecidoPct(it))).replace('{min}', String(Math.min(lo, hi))).replace('{max}', String(Math.max(lo, hi)))
-    : t.analytics.rangeExactSame.replace('{pct}', String(parecidoPct(it)))
-  if (!fresh) return `${t.analytics.rangeLegacy} ${exact}`
-  return items.length > 1 ? `${exact} ${t.analytics.rangeMixed}` : exact
+    ? fillTip(t.analytics.rangeExact, { pct: parecidoPct(it), min: Math.min(lo, hi), max: Math.max(lo, hi) })
+    : fillTip(t.analytics.rangeExactSame, { pct: parecidoPct(it) })
+  if (!fresh) return `${t.analytics.rangeLegacy || ''} ${exact}`.trim()
+  return items.length > 1 ? `${exact} ${t.analytics.rangeMixed || ''}`.trim() : exact
 }
 
 export function ParecidoCell({ hibrido, onClick }) {
@@ -342,8 +348,8 @@ export function RangeReadout({ rango, category, isAi, onClick, wide = false }) {
   // control roto cuando el intervalo era alto y angosto (2026-10-07).
   const color = shifted ? '#f59e0b' : (lo >= 75 ? '#4ade80' : '#93c5fd')
   const tip = shifted
-    ? t.analytics.rangeShifted.replace('{range}', text).replace('{cat}', categoryLabel(t, rango))
-    : t.analytics.colRangeHelp
+    ? fillTip(t.analytics.rangeShifted, { range: text, cat: categoryLabel(t, rango) })
+    : (t.analytics.colRangeHelp || '')
   return (
     <Tooltip title={tip}
       slotProps={{ tooltip: { className: 'classifier-help-tip', sx: {

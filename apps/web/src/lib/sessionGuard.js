@@ -55,3 +55,42 @@ export function stripVersionParam(href) {
   const search = url.searchParams.toString()
   return `${url.pathname}${search ? `?${search}` : ''}${url.hash}`
 }
+
+// Antonio / Mac (2026-10-08): VersionWatcher pedía el build al instante.
+// Safari devolvía un id viejo, location.replace abortaba la página que aún
+// cargaba y salía "This page couldn't load". No recargar en el primer pintado.
+export const VERSION_RELOAD_GRACE_MS = 15 * 1000
+export const LOGIN_GRACE_MS = 60 * 1000
+
+export function decideVersionReload({
+  pageBuildId,
+  liveBuildId,
+  pendingLive,
+  alreadyReloadedFor,
+  documentComplete,
+  pageAgeMs,
+  msSinceActivity,
+}) {
+  if (!liveBuildId) return { action: 'ignore', pending: pendingLive || null }
+  if (!pageBuildId) return { action: 'adopt', pending: null }
+  if (liveBuildId === pageBuildId) return { action: 'match', pending: null }
+  if (alreadyReloadedFor === liveBuildId) return { action: 'ignore', pending: pendingLive || null }
+  if (!documentComplete) return { action: 'wait', pending: pendingLive || null }
+  if ((pageAgeMs ?? 0) < VERSION_RELOAD_GRACE_MS) return { action: 'wait', pending: pendingLive || null }
+  if (msSinceActivity != null && msSinceActivity < LOGIN_GRACE_MS) {
+    return { action: 'wait', pending: pendingLive || null }
+  }
+  if (pendingLive !== liveBuildId) return { action: 'confirm', pending: liveBuildId }
+  return { action: 'reload', pending: liveBuildId }
+}
+
+// Si no hay marca, o acaba de entrar, se pega al build vivo. Cerrar por
+// "update" justo después del login era un falso positivo del id cacheado.
+export function decideBuildBind({ bound, live, msSinceActivity }) {
+  if (!live) return 'keep'
+  if (!bound) return 'bind'
+  if (bound === live) return 'keep'
+  // Sin marca de actividad es la primera carga de esta pestaña, no un deploy.
+  if (msSinceActivity == null || msSinceActivity < LOGIN_GRACE_MS) return 'bind'
+  return 'logout'
+}

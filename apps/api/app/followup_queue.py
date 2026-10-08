@@ -182,23 +182,19 @@ def _expire_idle_sessions(db) -> None:
     )
     log.info("[FollowupQ] expired %d idle session(s) after %.1fh silence", len(stale), idle_timeout_hours)
 
-    # Trigger full-conversation analysis for each expired session
+    # Trigger full-conversation analysis for each expired session. Pasa por la
+    # cola protegida: producción tiene dos procesos y llamar directo aquí podía
+    # cobrar dos veces los cuatro análisis (Insprogas, 2026-10-08).
     try:
-        from app.llm import active_provider as _ap
-        from app.classifier import classify_conversation_and_save
-        if _ap() != "none":
-            for cid in company_ids:
-                last_in = db.db.message_logs.find_one(
-                    {"company_id": cid, "direction": "inbound"},
-                    sort=[("created_at", -1)],
-                )
-                if last_in:
-                    import threading
-                    threading.Thread(
-                        target=classify_conversation_and_save,
-                        args=(cid, str(last_in["_id"])),
-                        daemon=True,
-                    ).start()
+        from app.classifier import queue_reply_analysis
+        for cid in company_ids:
+            last_in = db.db.message_logs.find_one(
+                {"company_id": cid, "direction": "inbound"},
+                {"_id": 1},
+                sort=[("created_at", -1)],
+            )
+            if last_in:
+                queue_reply_analysis(cid)
     except Exception as _ae:
         log.warning("[FollowupQ] conversation analysis on expire failed: %s", _ae)
     # Clear stale pending analysis records for personal-contact (.local) companies

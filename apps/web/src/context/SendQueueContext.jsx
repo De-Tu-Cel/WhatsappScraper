@@ -20,6 +20,8 @@ const POLL_ERROR  = 30_000  // slow down when backend is unreachable
 export function SendQueueProvider({ children }) {
   const [active,         setActive]         = useState(null)
   const [queueLen,       setQueueLen]       = useState(0)
+  const [queueItems,     setQueueItems]     = useState([])
+  const [queueStatus,    setQueueStatus]    = useState({ phase: 'idle', next_action_at: null, wait_reason: null, wait_message: null })
   const [completedCount, setCompletedCount] = useState(null)
   const [queueError,     setQueueError]     = useState(null)
 
@@ -56,7 +58,7 @@ export function SendQueueProvider({ children }) {
         const res = await authFetch('/api/send-queue/status')
         if (res.ok) {
           const s = await res.json()
-          fast = s.phase !== 'idle'
+          fast = s.phase !== 'idle' || (s.items || []).some(item => item.status === 'pending' || item.status === 'sending')
           if (fast) {
             const countdown = s.next_action_at
               ? Math.max(0, Math.ceil((new Date(s.next_action_at) - Date.now()) / 1000))
@@ -67,6 +69,13 @@ export function SendQueueProvider({ children }) {
           } else {
             setActive(null)
           }
+          setQueueItems(Array.isArray(s.items) ? s.items : [])
+          setQueueStatus({
+            phase: s.phase || 'idle',
+            next_action_at: s.next_action_at || null,
+            wait_reason: s.wait_reason || null,
+            wait_message: s.wait_message || null,
+          })
           setQueueLen(s.queue_len || 0)
 
           if (s.last_completed?.at && s.last_completed.at !== lastCompletedAtRef.current) {
@@ -137,19 +146,45 @@ export function SendQueueProvider({ children }) {
     debugActiveRef.current = true
     setQueueLen(2)
     const total = 5
+    const now = Date.now()
+    const sample = [
+      ['demo-1', 'KINO GAS DE TIJUANA', '••• ••• 1842', 'sent', now - 80_000],
+      ['demo-2', 'Insprogas México', '••• ••• 2291', 'sent', now - 50_000],
+      ['demo-3', 'Accesorios para estufas', '••• ••• 4408', 'pending', null],
+      ['demo-4', 'BAJA GAS NATURAL', '••• ••• 7710', 'pending', null],
+      ['demo-5', 'Gassaga', '••• ••• 9033', 'pending', null],
+    ].map(([id, company_name, phone_masked, status, finished]) => ({
+      id, batch_id: 'demo-batch', batch_label: 'Demostración local',
+      company_name, phone_masked, status, display_status: status,
+      created_at: new Date(now - 120_000).toISOString(),
+      finished_at: finished ? new Date(finished).toISOString() : null,
+    }))
+    setQueueItems(sample)
     let allSent = 0
     for (let i = 0; i < total; i++) {
       setActive({ total, sent: i, phase: 'sending', countdown: null })
+      setQueueStatus({ phase: 'sending', next_action_at: null, wait_reason: null, wait_message: null })
+      setQueueItems(rows => rows.map((row, index) => index === i
+        ? { ...row, status: 'sending', display_status: 'sending', started_at: new Date().toISOString(), is_next: false }
+        : row))
       await new Promise(r => setTimeout(r, 700))
       allSent++
+      setQueueItems(rows => rows.map((row, index) => index === i
+        ? { ...row, status: 'sent', display_status: 'sent', finished_at: new Date().toISOString() }
+        : row))
       if (i < total - 1) {
         const end = Date.now() + 12000
         await new Promise(resolve => {
           const tick = () => {
             const rem = end - Date.now()
             if (rem <= 0) { resolve(); return }
+            const nextAt = new Date(end).toISOString()
             startTransition(() => {
-              setActive({ total, sent: i + 1, phase: 'waiting', countdown: Math.ceil(rem / 1000) })
+              setActive({ total, sent: i + 1, phase: 'waiting', countdown: Math.ceil(rem / 1000), next_action_at: nextAt })
+              setQueueStatus({ phase: 'waiting', next_action_at: nextAt, wait_reason: 'message_delay', wait_message: 'Espera de seguridad entre mensajes' })
+              setQueueItems(rows => rows.map((row, index) => index === i + 1
+                ? { ...row, display_status: 'waiting', is_next: true, next_action_at: nextAt, wait_reason: 'message_delay' }
+                : { ...row, is_next: false }))
             })
             setTimeout(tick, 200)
           }
@@ -158,6 +193,7 @@ export function SendQueueProvider({ children }) {
       }
     }
     setActive({ phase: 'success', sent: allSent, total: allSent })
+    setQueueStatus({ phase: 'idle', next_action_at: null, wait_reason: null, wait_message: null })
     setTimeout(() => {
       setActive(null)
       setQueueLen(0)
@@ -167,7 +203,7 @@ export function SendQueueProvider({ children }) {
   }, [])
 
   return (
-    <SendQueueCtx.Provider value={{ addJob, addBatch, cancel, active, queueLen, debugBubble, completedCount, clearCompleted, queueError, clearQueueError }}>
+    <SendQueueCtx.Provider value={{ addJob, addBatch, cancel, active, queueLen, queueItems, queueStatus, debugBubble, completedCount, clearCompleted, queueError, clearQueueError }}>
       {children}
     </SendQueueCtx.Provider>
   )

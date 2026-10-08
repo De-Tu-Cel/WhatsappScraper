@@ -41,6 +41,9 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
+
+from bson import ObjectId
 
 log = logging.getLogger(__name__)
 
@@ -109,6 +112,99 @@ def _set_state(db, partition: str, **fields):
         log.exception("[SendQueue] _set_state failed for partition %s", partition)
 
 
+def _mask_number(value: str) -> str:
+    """Never expose a complete recipient number in the queue monitor."""
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return f"••• ••• {digits[-4:]}" if digits else ""
+
+
+def _queue_company_names(db, items: list[dict]) -> dict[str, str]:
+    ids = []
+    for item in items:
+        raw = str(item.get("company_id") or "")
+        if len(raw) == 24:
+            try:
+                ids.append(ObjectId(raw))
+            except Exception:
+                pass
+    if not ids:
+        return {}
+    try:
+        return {
+            str(row["_id"]): row.get("name") or row.get("domain") or ""
+            for row in db.db.companies.find({"_id": {"$in": list(set(ids))}}, {"name": 1, "domain": 1})
+        }
+    except Exception:
+        return {}
+
+
+def _display_queue_items(db, user_id: str, state: dict, limit: int = 80) -> list[dict]:
+    """Recent per-user history for the floating monitor.
+
+    Message bodies and full phone numbers are intentionally omitted. Finished
+    rows from today remain visible when a later batch is enqueued, while old
+    history is naturally bounded by both date and count.
+    """
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    query = {
+        "user_id": user_id,
+        "$or": [
+            {"status": {"$in": ["pending", "sending"]}},
+            {"created_at": {"$gte": since}},
+        ],
+    }
+    try:
+        rows = list(db.db.send_queue_items.find(query, {
+            "batch_id": 1, "job_key": 1, "label": 1, "company_id": 1,
+            "to_number": 1, "website": 1, "status": 1, "created_at": 1,
+            "started_at": 1, "finished_at": 1, "error": 1,
+        }, sort=[("created_at", -1)], limit=limit))
+    except Exception:
+        return []
+    rows.reverse()
+    names = _queue_company_names(db, rows)
+    active_id = str(state.get("active_item_id") or "")
+    first_pending = next((str(row.get("_id")) for row in rows if row.get("status") == "pending"), "")
+    output = []
+    for row in rows:
+        raw_company_id = str(row.get("company_id") or "")
+        website = str(row.get("website") or "")
+        host = ""
+        if website:
+            try:
+                host = (urlparse(website if "://" in website else f"https://{website}").hostname or "").removeprefix("www.")
+            except Exception:
+                pass
+        status = row.get("status") or "pending"
+        is_next = status == "pending" and str(row.get("_id")) == first_pending
+        display_status = status
+        if str(row.get("_id")) == active_id and status == "sending":
+            display_status = "sending"
+        elif is_next and state.get("phase") == "waiting":
+            display_status = "waiting"
+        elif is_next and state.get("phase") == "paused":
+            display_status = "paused"
+        output.append({
+            "id": str(row.get("_id")),
+            "batch_id": row.get("batch_id") or "",
+            "job_key": row.get("job_key") or "",
+            "batch_label": row.get("label") or "",
+            "company_name": names.get(raw_company_id) or host or row.get("label") or "Sin nombre",
+            "phone_masked": _mask_number(row.get("to_number")),
+            "status": status,
+            "display_status": display_status,
+            "is_next": is_next,
+            "created_at": row.get("created_at"),
+            "started_at": row.get("started_at"),
+            "finished_at": row.get("finished_at"),
+            "error": row.get("error") if status == "failed" else None,
+            "next_action_at": state.get("next_action_at") if is_next else None,
+            "wait_reason": state.get("wait_reason") if is_next else None,
+            "wait_message": state.get("wait_message") if is_next else None,
+        })
+    return output
+
+
 def get_status(db, user_id: str = "") -> dict:
     """When user_id is given, returns ONLY that user's own partition — the
     bubble shows your queue, not whatever another user happens to be sending.
@@ -116,7 +212,8 @@ def get_status(db, user_id: str = "") -> dict:
     authenticated route), falls back to an aggregate view across everyone."""
     idle_default = {"phase": "idle", "active_total": None, "active_sent": None,
                      "active_batch": False, "next_action_at": None,
-                     "queue_len": 0, "last_completed": None, "last_error": None}
+                     "queue_len": 0, "last_completed": None, "last_error": None,
+                     "wait_reason": None, "wait_message": None, "items": []}
     if user_id:
         try:
             doc = db.db.send_queue_state.find_one({"_id": _state_id(user_id)}) or {}
@@ -126,7 +223,7 @@ def get_status(db, user_id: str = "") -> dict:
             ))
         except Exception:
             return idle_default
-        return {
+        result = {
             "phase": doc.get("phase", "idle"),
             "active_total": doc.get("active_total"),
             "active_sent": doc.get("active_sent"),
@@ -135,7 +232,11 @@ def get_status(db, user_id: str = "") -> dict:
             "queue_len": queue_len,
             "last_completed": doc.get("last_completed"),
             "last_error": doc.get("last_error"),
+            "wait_reason": doc.get("wait_reason"),
+            "wait_message": doc.get("wait_message"),
         }
+        result["items"] = _display_queue_items(db, user_id, doc)
+        return result
 
     try:
         partitions = list(db.db.send_queue_state.find({"_id": {"$regex": "^partition_"}}))
@@ -300,7 +401,28 @@ def _antispam_wait(db, partition: str, is_batch_break: bool, seconds: float, act
         if remaining <= 0:
             return True
         _set_state(db, partition, phase="waiting", active_total=active_total, active_sent=active_sent,
-                   active_batch=is_batch_break, next_action_at=datetime.now(timezone.utc) + timedelta(seconds=remaining))
+                   active_batch=is_batch_break, active_item_id=None,
+                   wait_reason="batch_break" if is_batch_break else "message_delay",
+                   wait_message="Pausa entre lotes" if is_batch_break else "Espera de seguridad entre mensajes",
+                   next_action_at=datetime.now(timezone.utc) + timedelta(seconds=remaining))
+        time.sleep(min(remaining, _LEASE_RENEW_TICK_SEC))
+        if not _renew_lease(db):
+            return False
+
+
+def _paused_wait(db, partition: str, reason: str, message: str, seconds: float) -> bool:
+    """Visible, lease-safe pause for caps and disconnected WhatsApp sessions."""
+    end = time.time() + seconds
+    while True:
+        remaining = end - time.time()
+        if remaining <= 0:
+            return True
+        _set_state(
+            db, partition, phase="paused", active_total=None, active_sent=None,
+            active_batch=False, active_item_id=None, wait_reason=reason,
+            wait_message=message,
+            next_action_at=datetime.now(timezone.utc) + timedelta(seconds=remaining),
+        )
         time.sleep(min(remaining, _LEASE_RENEW_TICK_SEC))
         if not _renew_lease(db):
             return False
@@ -348,8 +470,9 @@ def _maybe_finish_batch(db, batch_id: str):
 def _process_item(db, partition: str, item, msgs_in_batch: int, next_break_at: int):
     """Processes one item for this partition. Returns
     (outcome, msgs_in_batch, next_break_at) where outcome is True (continue),
-    False (leadership lost — caller should stop this partition), "cap_paused",
-    or "disconnected_pause"."""
+    False (leadership lost — caller should stop this partition),
+    "daily_cap_paused", "new_contact_cap_paused", or
+    "disconnected_pause"."""
     item_id     = item["_id"]
     company_id  = item.get("company_id", "")
     to_number   = item.get("to_number", "")
@@ -369,14 +492,18 @@ def _process_item(db, partition: str, item, msgs_in_batch: int, next_break_at: i
 
     if not _user_has_connected_instance(db, user_id):
         db.db.send_queue_items.update_one({"_id": item_id}, {"$set": {"status": "pending", "started_at": None}})
-        _set_state(db, partition, phase="idle", active_total=None, active_sent=None, next_action_at=None,
+        _set_state(db, partition, phase="paused", active_total=None, active_sent=None,
+                   next_action_at=datetime.now(timezone.utc) + timedelta(seconds=15),
+                   wait_reason="no_instance", wait_message="Sin instancia de WhatsApp conectada",
                    last_error={"message": "Sin instancia de WhatsApp conectada", "at": datetime.now(timezone.utc)})
         # Not a crash — just no instance right now. A short pause here (unlike
         # the True/continue this used to return) keeps a permanently-disconnected
         # partition from busy-polling Mongo several times a second forever.
         return "no_instance_pause", msgs_in_batch, next_break_at
 
-    _set_state(db, partition, phase="sending", active_total=job_size, active_sent=job_index, active_batch=False, last_error=None)
+    _set_state(db, partition, phase="sending", active_total=job_size, active_sent=job_index,
+               active_batch=False, active_item_id=item_id, next_action_at=None,
+               wait_reason=None, wait_message=None, last_error=None)
 
     from app import scheduler as _sched
     typing_ms = random.randint(800, 1800)
@@ -393,11 +520,12 @@ def _process_item(db, partition: str, item, msgs_in_batch: int, next_break_at: i
             {"_id": item_id},
             {"$set": {"status": "pending", "started_at": None}},
         )
-        _set_state(db, partition, phase="idle", active_total=None, active_sent=None,
-                   next_action_at=None, active_batch=False,
+        _set_state(db, partition, phase="paused", active_total=None, active_sent=None,
+                   next_action_at=None, active_batch=False, active_item_id=None,
+                   wait_reason="daily_cap", wait_message="Límite diario alcanzado",
                    last_error={"message": "Límite diario alcanzado — envíos pendientes continuarán mañana al reiniciarse el cupo", "at": datetime.now(timezone.utc)})
         log.warning("[SendQueue] partition=%s daily cap hit — pausing 5 min, pending items retry tomorrow", partition)
-        return "cap_paused", msgs_in_batch, next_break_at
+        return "daily_cap_paused", msgs_in_batch, next_break_at
 
     # New-contact cap exhausted: this used to fall through to the generic
     # branch below and get permanently marked "skipped_nc_cap" with no retry
@@ -411,11 +539,12 @@ def _process_item(db, partition: str, item, msgs_in_batch: int, next_break_at: i
             {"_id": item_id},
             {"$set": {"status": "pending", "started_at": None}},
         )
-        _set_state(db, partition, phase="idle", active_total=None, active_sent=None,
-                   next_action_at=None, active_batch=False,
+        _set_state(db, partition, phase="paused", active_total=None, active_sent=None,
+                   next_action_at=None, active_batch=False, active_item_id=None,
+                   wait_reason="new_contact_cap", wait_message="Límite de contactos nuevos alcanzado",
                    last_error={"message": "Límite de contactos nuevos alcanzado — envíos pendientes continuarán mañana al reiniciarse el cupo", "at": datetime.now(timezone.utc)})
         log.warning("[SendQueue] partition=%s new-contact cap hit — pausing 5 min, pending items retry tomorrow", partition)
-        return "cap_paused", msgs_in_batch, next_break_at
+        return "new_contact_cap_paused", msgs_in_batch, next_break_at
 
     # _send_message returns True (sent), False/None (failed), or a string skip-reason.
     # If it failed, distinguish between a disconnected instance vs. a genuine send
@@ -429,8 +558,9 @@ def _process_item(db, partition: str, item, msgs_in_batch: int, next_break_at: i
                 {"_id": item_id},
                 {"$set": {"status": "pending", "started_at": None}},
             )
-            _set_state(db, partition, phase="idle", active_total=None, active_sent=None,
-                       next_action_at=None, active_batch=False,
+            _set_state(db, partition, phase="paused", active_total=None, active_sent=None,
+                       next_action_at=None, active_batch=False, active_item_id=None,
+                       wait_reason="disconnected", wait_message="WhatsApp se desconectó durante el envío",
                        last_error={"message": "Instancia desconectada durante el envío — cola pausada, reintentará al reconectar", "at": datetime.now(timezone.utc)})
             log.warning("[SendQueue] partition=%s instance disconnected mid-campaign — resetting item %s, pausing 2 min", partition, item_id)
             return "disconnected_pause", msgs_in_batch, next_break_at
@@ -507,7 +637,8 @@ def _partition_worker(partition: str, user_id: str):
             )
             if item is None:
                 _set_state(db, partition, phase="idle", active_total=None, active_sent=None,
-                           next_action_at=None, active_batch=False)
+                           next_action_at=None, active_batch=False, active_item_id=None,
+                           wait_reason=None, wait_message=None)
                 return
 
             if next_break_at == 0:
@@ -519,12 +650,21 @@ def _partition_worker(partition: str, user_id: str):
                 return  # lost leadership — another process's dispatcher will take over
 
             result, msgs_in_batch, next_break_at = _process_item(db, partition, item, msgs_in_batch, next_break_at)
-            if result == "cap_paused":
-                time.sleep(5 * 60)
+            if result in ("daily_cap_paused", "new_contact_cap_paused"):
+                is_new_contact_cap = result == "new_contact_cap_paused"
+                reason = "new_contact_cap" if is_new_contact_cap else "daily_cap"
+                message = (
+                    "Límite de contactos nuevos alcanzado; se volverá a revisar"
+                    if is_new_contact_cap else
+                    "Límite diario alcanzado; se volverá a revisar"
+                )
+                if not _paused_wait(db, partition, reason, message, 5 * 60):
+                    return
                 msgs_in_batch, next_break_at = 0, 0
                 continue
             if result == "disconnected_pause":
-                time.sleep(2 * 60)
+                if not _paused_wait(db, partition, "disconnected", "WhatsApp desconectado; reintentará al reconectar", 2 * 60):
+                    return
                 msgs_in_batch, next_break_at = 0, 0
                 continue
             if result == "no_instance_pause":

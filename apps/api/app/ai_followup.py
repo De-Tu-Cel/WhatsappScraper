@@ -589,6 +589,25 @@ def _asks_for_name(text: str) -> bool:
     return bool(_ASKS_NAME_RE.search(_norm_text(text)))
 
 
+# Accesorios para estufas (2026-10-08): "buen dia como le podemos ayudar?" lo
+# leyó como acuse automático, mandó solo [FIN] y apagó el Chat IA. Ofrecer
+# ayuda es una pregunta: hay que decir qué se busca.
+_OFFERS_HELP_RE = re.compile(
+    r"(en )?que( te| le)? (puedo|podemos) (ayudar|servir)"
+    r"|como (te|le) (puedo|podemos) ayudar"
+    r"|dime (en que|como) (te|le) (ayudo|puedo ayudar)"
+)
+_HELP_FALLBACK_REPLIES = (
+    "oye, ando viendo el servicio, me puedes orientar?",
+    "buenas, busco el servicio, me ayudas?",
+    "oye, qué servicios manejan?",
+)
+
+
+def _offers_help(text: str) -> bool:
+    return bool(_OFFERS_HELP_RE.search(_norm_text(text)))
+
+
 # Fillers the model leaned on until they showed up in every chat ("chido" 5×
 # across 4 conversations, twice in one of them; "ah ok" ~8×) — the prompt itself
 # listed them as examples. Tracked per conversation so Andy doesn't repeat one.
@@ -1307,6 +1326,22 @@ def _send_typing_presence(phone_number: str, instance: str):
         log.debug("[AIFollowup] typing presence failed: %s", e)
 
 
+def _queue_reply_analysis(db, company_id: str) -> None:
+    """Pide Timing, IA, Timing + IA y el rango si hay una respuesta del negocio."""
+    try:
+        last = db.db.message_logs.find_one(
+            {"company_id": company_id, "direction": "inbound"},
+            {"_id": 1},
+            sort=[("created_at", -1)],
+        )
+        if not isinstance(last, dict) or not last.get("_id"):
+            return
+        from app.classifier import queue_reply_analysis
+        queue_reply_analysis(company_id, str(last["_id"]))
+    except Exception as exc:
+        log.warning("[AIFollowup] no se pudieron encolar los cuatro análisis de %s: %s", company_id, exc)
+
+
 def _close_session_without_reply(db, sid, company_id: str, phone_number: str, reason: str):
     """Shared cleanup for every path in process_inbound_reply where Andy ends up
     UNABLE to actually deliver a reply — the LLM call itself failed, no connected
@@ -1341,6 +1376,10 @@ def _close_session_without_reply(db, sid, company_id: str, phone_number: str, re
         upsert=True,
     )
     log.warning("[AIFollowup] session %s closed without reply (reason=%s) for %s", sid, reason, phone_number)
+    # Accesorios para estufas (2026-10-08): el negocio sí escribió y Andy cerró sin
+    # contestar. Ese cierre no clasificaba, y Timing, IA, Timing + IA y el rango
+    # no se corrían nunca.
+    _queue_reply_analysis(db, company_id)
 
 
 def _recently_closed_after_talking(db, company_id: str) -> bool:
@@ -1798,6 +1837,22 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         ai_text = _llm_context.get("persona_name") or DEFAULT_PERSONA_NAME
         ai_wants_end = False
 
+    # Accesorios para estufas (2026-10-08): el negocio preguntó en qué podía
+    # ayudar y el modelo cerró con [FIN] como si fuera un acuse. Un reintento,
+    # y si insiste, una frase corta para no apagar el Chat IA.
+    if not ai_text and not proactive and _offers_help(_inbound_text):
+        print("[AIFollowup] help offer got a bare [FIN] — retrying once")
+        _raw_retry = _call_llm_for_reply(
+            _llm_turns, _llm_context, is_cold_start=is_cold_start, prefs=_prefs, db=db,
+            proactive_minutes=_proactive_minutes, used_fillers=_used,
+            correction="te están preguntando en qué los puedes ayudar. no es un acuse automático. "
+                       "di corto qué buscas, en tus palabras, y no pongas [FIN].",
+        )
+        ai_text, ai_wants_end = _clean_reply(_raw_retry, _inbound_text)
+        if not ai_text:
+            ai_text = random.choice(_HELP_FALLBACK_REPLIES)
+            ai_wants_end = False
+
     # The same filler or opener twice in one conversation reads like a script
     # ("chido" twice in Fame Querétaro, 2026-10-02) — one retry asking for other
     # words. If the retry fails or is unusable, the original reply still goes out.
@@ -2140,26 +2195,7 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
                 upsert=True,
             )
             log.info("[AIFollowup] conversation closed (%s), toggle disabled for %s", end_reason, company_id)
-
-            # Trigger full-conversation analysis so analytics reflects the entire exchange
-            try:
-                from app.llm import active_provider as _ap
-                if _ap() != "none":
-                    last_inbound = db.db.message_logs.find_one(
-                        {"company_id": company_id, "direction": "inbound"},
-                        sort=[("created_at", -1)],
-                    )
-                    if last_inbound:
-                        from app.classifier import classify_conversation_and_save
-                        import threading
-                        threading.Thread(
-                            target=classify_conversation_and_save,
-                            args=(company_id, str(last_inbound["_id"])),
-                            daemon=True,
-                        ).start()
-                        log.info("[AIFollowup] queued conversation analysis for %s", company_id)
-            except Exception as _ae:
-                log.warning("[AIFollowup] conversation analysis failed: %s", _ae)
+            _queue_reply_analysis(db, company_id)
 
         log.info("[AIFollowup] sent turn %d/%d to %s", new_count, session_max_turns, phone_number)
 

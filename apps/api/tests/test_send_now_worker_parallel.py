@@ -36,6 +36,8 @@ from bson import ObjectId
 from app import send_now_worker as sw
 from app import scheduler as sched
 
+_REAL_ANTISPAM_WAIT = sw._antispam_wait
+
 
 # ── generic in-memory Mongo collection ─────────────────────────────────────
 # Broad enough to cover every operation send_now_worker.py issues: update_one
@@ -365,6 +367,21 @@ class TestPerUserStatusAndCancel:
         assert status_b["phase"] == "idle"
         assert status_b["active_total"] is None
 
+    def test_queue_items_are_only_the_calling_users_sends(self, mgr):
+        sw.enqueue_send_items(
+            mgr, [{"numbers": ["521111111111"], "messages": ["hola a"]}],
+            "batch-a", "Lote de A", {}, user_id="user-a",
+        )
+        sw.enqueue_send_items(
+            mgr, [{"numbers": ["522222222222"], "messages": ["hola b"]}],
+            "batch-b", "Lote de B", {}, user_id="user-b",
+        )
+        status_a = sw.get_status(mgr, "user-a")
+        status_b = sw.get_status(mgr, "user-b")
+        assert [item["batch_id"] for item in status_a["items"]] == ["batch-a"]
+        assert [item["batch_id"] for item in status_b["items"]] == ["batch-b"]
+        assert all(item["phone_masked"] != "521111111111" for item in status_a["items"] + status_b["items"])
+
     def test_get_status_shows_own_progress(self, mgr):
         sw._set_state(mgr, "user-a", phase="sending", active_total=5, active_sent=2)
         status_a = sw.get_status(mgr, "user-a")
@@ -400,6 +417,85 @@ class TestPerUserStatusAndCancel:
         assert sw._get_send_config(mgr, "user-a")["msgDelay"] == [25, 55]
         assert sw._get_send_config(mgr, "user-b")["msgDelay"] == [1, 2]
 
+    def test_status_returns_safe_recent_item_details_without_message_body(self, mgr):
+        cid = ObjectId()
+        mgr.db.companies.insert_one({"_id": cid, "name": "Empresa de prueba"})
+        sw.enqueue_send_items(
+            mgr,
+            [{"numbers": ["+52 1 664 123 9876"], "messages": ["texto secreto"],
+              "companyId": str(cid), "website": "https://example.com"}],
+            "batch-detail", "Campaña", {}, user_id="user-a",
+        )
+
+        status = sw.get_status(mgr, "user-a")
+
+        assert len(status["items"]) == 1
+        item = status["items"][0]
+        assert item["company_name"] == "Empresa de prueba"
+        assert item["phone_masked"] == "••• ••• 9876"
+        assert "message" not in item
+        assert "to_number" not in item
+
+    def test_waiting_state_is_attached_only_to_the_next_pending_item(self, mgr):
+        mgr.db.send_queue_items.insert_many(_make_items("user-a", "batch-wait", 2))
+        next_at = datetime.now(timezone.utc) + timedelta(seconds=30)
+        sw._set_state(
+            mgr, "user-a", phase="waiting", next_action_at=next_at,
+            wait_reason="message_delay", wait_message="Espera de seguridad",
+        )
+
+        status = sw.get_status(mgr, "user-a")
+
+        assert status["items"][0]["display_status"] == "waiting"
+        assert status["items"][0]["next_action_at"] == next_at
+        assert status["items"][1]["display_status"] == "pending"
+
+    def test_todays_sent_rows_stay_when_a_later_batch_is_queued(self, mgr):
+        older = _make_items("user-a", "batch-old", 1)[0]
+        older["status"] = "sent"
+        older["finished_at"] = datetime.now(timezone.utc) - timedelta(hours=2)
+        older["label"] = "Primera tanda"
+        newer = _make_items("user-a", "batch-new", 1)[0]
+        newer["label"] = "Segunda tanda"
+        mgr.db.send_queue_items.insert_many([older, newer])
+
+        status = sw.get_status(mgr, "user-a")
+        names = {item["batch_id"]: item["status"] for item in status["items"]}
+        assert names["batch-old"] == "sent"
+        assert names["batch-new"] == "pending"
+        assert status["items"][0]["finished_at"] == older["finished_at"]
+
+    def test_yesterday_sent_rows_drop_out_but_a_stuck_pending_stays(self, mgr):
+        stale = _make_items("user-a", "batch-stale", 1)[0]
+        stale["status"] = "sent"
+        stale["created_at"] = datetime.now(timezone.utc) - timedelta(hours=30)
+        stale["finished_at"] = stale["created_at"]
+        stuck = _make_items("user-a", "batch-stuck", 1)[0]
+        stuck["created_at"] = datetime.now(timezone.utc) - timedelta(hours=30)
+        mgr.db.send_queue_items.insert_many([stale, stuck])
+
+        status = sw.get_status(mgr, "user-a")
+        ids = {item["batch_id"] for item in status["items"]}
+        assert "batch-stale" not in ids
+        assert "batch-stuck" in ids
+
+    def test_disconnected_pause_is_visible_on_the_next_item(self, mgr):
+        mgr.db.send_queue_items.insert_many(_make_items("user-a", "batch-dc-ui", 1))
+        next_at = datetime.now(timezone.utc) + timedelta(seconds=120)
+        sw._set_state(
+            mgr, "user-a", phase="paused", next_action_at=next_at,
+            wait_reason="disconnected",
+            wait_message="WhatsApp se desconectó durante el envío",
+            last_error={"message": "Instancia desconectada durante el envío — cola pausada, reintentará al reconectar", "at": next_at},
+        )
+
+        status = sw.get_status(mgr, "user-a")
+        assert status["phase"] == "paused"
+        assert status["wait_reason"] == "disconnected"
+        assert "desconect" in status["last_error"]["message"]
+        assert status["items"][0]["display_status"] == "paused"
+        assert status["items"][0]["wait_message"] == "WhatsApp se desconectó durante el envío"
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # A daily-cap pause on one partition must never stall another partition
@@ -428,18 +524,17 @@ class TestCapPauseIsolation:
         class _Stop(Exception):
             pass
 
-        def fake_sleep(seconds):
-            if seconds >= 300:
-                parked.set()
-                stop.wait(5)
-                raise _Stop()   # _partition_worker logs it and exits
+        def fake_pause(*args, **kwargs):
+            parked.set()
+            stop.wait(5)
+            raise _Stop()   # _partition_worker logs it and exits
 
         with (
             patch("app.database.MongoDBManager", return_value=mgr),
             patch.object(sched, "_send_message", side_effect=fake_send),
             patch.object(sw, "_user_has_connected_instance", return_value=True),
             patch.object(sw, "_check_send_allowed", return_value=(True, "")),
-            patch("time.sleep", side_effect=fake_sleep),
+            patch.object(sw, "_paused_wait", side_effect=fake_pause),
         ):
             ta = threading.Thread(target=sw._partition_worker, args=("capped-user", "capped-user"), daemon=True)
             ta.start()
@@ -454,6 +549,65 @@ class TestCapPauseIsolation:
             stop.set()
             ta.join(5)
         assert not ta.is_alive()
+
+
+class TestVisiblePauseTiming:
+    @staticmethod
+    def _clock():
+        ticks = iter([1000.0, 1000.0, 1015.0, 1030.0])
+        wall = iter([
+            datetime(2026, 10, 8, 17, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 10, 8, 17, 0, 15, tzinfo=timezone.utc),
+        ])
+
+        class _Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return next(wall)
+
+        return ticks, _Clock
+
+    def test_pause_keeps_one_stable_deadline_and_renews_the_worker_lease(self, mgr):
+        sw._ensure_lease_doc(mgr)
+        sw._try_acquire_lease(mgr)
+        ticks, clock = self._clock()
+
+        with (
+            patch.object(sw.time, "time", side_effect=lambda: next(ticks)),
+            patch.object(sw.time, "sleep"),
+            patch.object(sw, "datetime", clock),
+            patch.object(sw, "_renew_lease", return_value=True) as renew,
+            patch.object(sw, "_set_state") as set_state,
+        ):
+            assert sw._paused_wait(mgr, "user-a", "disconnected", "WhatsApp desconectado", 30) is True
+
+        first_state = set_state.call_args_list[0].kwargs
+        last_state = set_state.call_args_list[-1].kwargs
+        assert first_state["phase"] == "paused"
+        assert first_state["wait_reason"] == "disconnected"
+        assert first_state["wait_message"] == "WhatsApp desconectado"
+        # Recalculated from one fixed end time: polling does not push the
+        # displayed retry deadline farther into the future.
+        assert abs((first_state["next_action_at"] - last_state["next_action_at"]).total_seconds()) < 0.1
+        assert renew.call_count == 2
+
+    def test_batch_delay_exposes_exact_deadline_without_drifting(self, mgr):
+        ticks, clock = self._clock()
+        with (
+            patch.object(sw.time, "time", side_effect=lambda: next(ticks)),
+            patch.object(sw.time, "sleep"),
+            patch.object(sw, "datetime", clock),
+            patch.object(sw, "_renew_lease", return_value=True),
+            patch.object(sw, "_set_state") as set_state,
+        ):
+            assert _REAL_ANTISPAM_WAIT(mgr, "user-a", True, 30, 5, 3) is True
+
+        first_state = set_state.call_args_list[0].kwargs
+        last_state = set_state.call_args_list[-1].kwargs
+        assert first_state["phase"] == "waiting"
+        assert first_state["active_batch"] is True
+        assert first_state["wait_reason"] == "batch_break"
+        assert abs((first_state["next_action_at"] - last_state["next_action_at"]).total_seconds()) < 0.1
 
 
 # ══════════════════════════════════════════════════════════════════════════

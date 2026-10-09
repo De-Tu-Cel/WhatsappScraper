@@ -1389,7 +1389,9 @@ app.post('/session/:id/messages', async (req, res) => {
     // (SIMAGAS/GUVAL, 2026-10-08; mismo fallo que la foto de perfil).
     // Se lee Store.Chat directo, sin pasar por getChat.
     const last10 = digits.slice(-10)
-    const payload = await session.client.pupPage.evaluate(async (last10, limit) => {
+    const numberId = await session.client.getNumberId(digits).catch(() => null)
+    const serialized = (numberId && numberId._serialized) || ''
+    const payload = await session.client.pupPage.evaluate(async (last10, serialized, limit) => {
       // Esta build de WhatsApp ya no tiene window.Store.Chat
       // (SIMAGAS/GUVAL, 2026-10-08: no-store-chat). El collection vivo
       // está en WAWebCollections, el mismo que usa WWebJS.getChats.
@@ -1402,12 +1404,31 @@ app.post('/session/:id/messages', async (req, res) => {
         return { error: 'no-store-chat' }
       }
       const chats = storeChat.getModelsArray()
+      let toPn = null
+      try {
+        toPn = window.require('WAWebLidMigrationUtils').toPn
+      } catch (_) {}
+      const blobOf = (c) => {
+        const parts = [
+          (c.id && c.id.user) || '',
+          (c.id && c.id._serialized) || '',
+        ]
+        try {
+          const pn = toPn && toPn(c.id)
+          if (pn) parts.push(pn.user || '', pn._serialized || '')
+        } catch (_) {}
+        const phone = c.contact && c.contact.phoneNumber
+        if (phone) parts.push(phone.user || '', phone._serialized || String(phone))
+        return parts.join(' ')
+      }
       const chat = chats.find((c) => {
-        const user = String((c.id && c.id.user) || '')
-        const ser = String((c.id && c.id._serialized) || '')
-        return user.slice(-10) === last10 || ser.includes(last10)
+        const blob = blobOf(c)
+        return (serialized && blob.includes(serialized)) || (last10 && blob.includes(last10))
       })
-      if (!chat) return { error: 'no-chat', n: chats.length }
+      if (!chat) {
+        const lids = chats.filter((c) => String((c.id && c.id._serialized) || '').includes('@lid')).length
+        return { error: 'no-chat', n: chats.length, lids, hasWid: !!serialized }
+      }
       let msgs = []
       try {
         msgs = chat.msgs && chat.msgs.getModelsArray ? chat.msgs.getModelsArray() : []
@@ -1437,9 +1458,9 @@ app.post('/session/:id/messages', async (req, res) => {
           hasMedia: !!(m.mediaData || m.deprecatedMms3Url),
         })),
       }
-    }, last10, limit)
+    }, last10, serialized, limit)
     if (payload && payload.error) {
-      console.log(`[${id}] history ${payload.error} last10=${last10} n=${payload.n || 0}`)
+      console.log(`[${id}] history ${payload.error} last10=${last10} n=${payload.n || 0} lids=${payload.lids || 0} wid=${!!serialized}`)
       return res.json({ messages: [] })
     }
     const messages = []

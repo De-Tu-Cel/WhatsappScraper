@@ -478,3 +478,53 @@ def test_manual_production_comparison_uses_the_same_four_analysis_path():
         force=True, trace=[], compare=True,
     )
     assert result is expected
+
+
+def test_local_qa_copy_gets_prod_range_without_writing():
+    """Diesgas (2026-10-08): qa_ no tenía items y Rango salía Sin definir."""
+    from unittest.mock import MagicMock
+
+    qa = {
+        "company_id": "diesgas",
+        "hibrido": {"category": "bot"},
+        "numbers": [
+            {"number": "4421705112", "replied": True, "hibrido": {"category": "bot"}},
+        ],
+    }
+    prod_items = [{"category": "automatico", "min": 70, "max": 90, "pct": 80}]
+    prod = MagicMock()
+    prod.find_one.return_value = {
+        "hibrido": {"parecido": {"items": prod_items}},
+        "numbers": [{"number": "4421705112", "hibrido": {"parecido": {"items": prod_items}}}],
+    }
+    db = MagicMock()
+    db.db = {"classification_comparisons": prod}
+    with patch.object(cc, "_PREFIX", "qa_"):
+        out = cc.fill_parecido_from_prod(db, qa)
+    assert out["hibrido"]["parecido"]["items"][0]["pct"] == 80
+    assert out["numbers"][0]["hibrido"]["parecido"]["items"][0]["pct"] == 80
+    prod.update_one.assert_not_called()
+
+
+def test_local_does_not_paste_range_on_a_number_that_did_not_reply():
+    from unittest.mock import MagicMock
+
+    qa = {
+        "company_id": "gas1",
+        "hibrido": {"category": "automatico"},
+        "numbers": [
+            {"number": "2228120419", "replied": False,
+             "ia": {"common": "sin_respuesta"}, "hibrido": {"category": "sin_respuesta", "common": "sin_respuesta"}},
+        ],
+    }
+    prod = MagicMock()
+    prod.find_one.return_value = {
+        "hibrido": {"parecido": {"items": [{"category": "automatico", "min": 70, "max": 90, "pct": 80}]}},
+        "numbers": [{"number": "2228120419", "hibrido": {"parecido": {"items": [{"pct": 88}]}}}],
+    }
+    db = MagicMock()
+    db.db = {"classification_comparisons": prod}
+    with patch.object(cc, "_PREFIX", "qa_"):
+        out = cc.fill_parecido_from_prod(db, qa)
+    assert (out["numbers"][0].get("hibrido") or {}).get("parecido") is None
+    assert out["hibrido"]["parecido"]["items"][0]["pct"] == 80

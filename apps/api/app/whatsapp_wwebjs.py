@@ -213,6 +213,20 @@ def get_all_connected_instances(db) -> list:
         return []
 
 
+def fetch_messages(session_id: str, to: str, limit: int = 50) -> list:
+    """Historial ya en WhatsApp. SIMAGAS/GUVAL (2026-10-08): el webhook no
+    guardó el inbound; esto lo vuelve a leer sin mandar nada."""
+    r = _req.post(
+        f"{WWEBJS_URL}/session/{session_id}/messages",
+        json={"to": to, "limit": limit},
+        headers=_headers(),
+        timeout=60,
+    )
+    if not r.ok:
+        raise Exception(r.json().get("error", r.text))
+    return r.json().get("messages") or []
+
+
 class WWebjsClient:
     def __init__(self, session_id: str, instance_name: str = ""):
         self.session_id = session_id
@@ -234,6 +248,9 @@ class WWebjsClient:
 
     def save_contact(self, phone: str, first_name: str, last_name: str = "") -> dict:
         return save_contact(self.session_id, phone, first_name, last_name)
+
+    def fetch_messages(self, number: str, limit: int = 100) -> list:
+        return fetch_messages(self.session_id, number, limit)
 
     def mark_read(self, to: str):
         mark_read(self.session_id, to)

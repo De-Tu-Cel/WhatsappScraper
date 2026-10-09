@@ -184,6 +184,9 @@ function categoryLabel(t, rango) {
 // Lo que muestra la columna Rango. Si hay parecido nuevo, son una o varias
 // clasificaciones. Si la comparación es anterior, queda el intervalo único.
 export function parecidoItems(hibrido) {
+  const cat = hibrido?.common || hibrido?.category
+  // Sin contestación no hay de qué parecerse (Gas 1 2228120419, 2026-10-08).
+  if (cat === 'sin_respuesta') return []
   const items = hibrido?.parecido?.items
   if (Array.isArray(items) && items.some(it => it && it.min != null && it.max != null)) {
     return items.filter(it => it && it.min != null && it.max != null)

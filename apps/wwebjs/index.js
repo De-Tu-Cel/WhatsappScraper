@@ -1372,6 +1372,44 @@ app.post('/session/:id/typing', async (req, res) => {
   }
 })
 
+// Historial de un chat (SIMAGAS/GUVAL, 2026-10-08): el webhook tragó inbound
+// sin id y el botón Sincronizar decía que wwebjs no tenía historial. Sí lo
+// tiene: chat.fetchMessages. Solo se usa para recuperar lo que ya está en
+// WhatsApp; no manda nada.
+app.post('/session/:id/messages', async (req, res) => {
+  const { id } = req.params
+  const session = sessions.get(id)
+  if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected' })
+  const to = req.body && req.body.to
+  const limit = Math.min(100, Math.max(1, parseInt(req.body && req.body.limit, 10) || 50))
+  if (!to) return res.status(400).json({ error: 'to required' })
+  const digits = String(to).replace(/\D/g, '')
+  try {
+    const numberId = await session.client.getNumberId(digits).catch(() => null)
+    const chatId = numberId?._serialized || `${digits}@c.us`
+    const chat = await session.client.getChatById(chatId)
+    const msgs = await chat.fetchMessages({ limit })
+    const messages = []
+    for (const msg of msgs) {
+      if (NON_CONTENT_MSG_TYPES.has(msg.type)) continue
+      messages.push({
+        id: msg.id && msg.id._serialized ? msg.id._serialized : '',
+        fromMe: !!msg.fromMe,
+        body: msg.body || '',
+        timestamp: msg.timestamp || 0,
+        type: msg.type,
+        from: msg.from || '',
+        hasMedia: !!msg.hasMedia,
+      })
+    }
+    console.log(`[${id}] history ${digits} n=${messages.length}`)
+    res.json({ messages })
+  } catch (e) {
+    console.error(`[${id}] history error:`, e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 app.post('/session/:id/read', async (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)

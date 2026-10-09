@@ -659,16 +659,65 @@ _LIST_PROJECTION = (
 )
 
 
+def _parecido_items(block) -> list:
+    items = ((block or {}).get("parecido") or {}).get("items")
+    return items if isinstance(items, list) and items else []
+
+
+def fill_parecido_from_prod(db, doc: dict | None) -> dict | None:
+    """En local (prefijo qa_) la copia puede no tener rango. Diesgas (2026-10-08):
+    qa_ era del 6-oct y Análisis pintaba Sin definir; producción sí tenía
+    items. Se copia solo el parecido, sin escribir qa_ ni tocar Timing/IA."""
+    if not doc or not _PREFIX:
+        return doc
+    nums = doc.get("numbers") or []
+    need_company = not _parecido_items(doc.get("hibrido"))
+    need_nums = [n.get("number") for n in nums if not _parecido_items(n.get("hibrido"))]
+    if not need_company and not need_nums:
+        return doc
+    prod = db.db["classification_comparisons"].find_one(
+        {"company_id": doc.get("company_id")},
+        {"hibrido.parecido": 1, "numbers.number": 1, "numbers.hibrido.parecido": 1},
+    )
+    if not prod:
+        return doc
+    if need_company:
+        par = (prod.get("hibrido") or {}).get("parecido")
+        if par:
+            doc.setdefault("hibrido", {})["parecido"] = par
+    by_num = {n.get("number"): n for n in prod.get("numbers") or []}
+    for n in nums:
+        if _parecido_items(n.get("hibrido")):
+            continue
+        # No pegar el rango de la empresa (o de prod) a un número que en
+        # esta copia no contestó — Gas 1 / 2228120419 (2026-10-08).
+        if not _replied(n):
+            continue
+        src = ((by_num.get(n.get("number")) or {}).get("hibrido") or {}).get("parecido")
+        if src:
+            n.setdefault("hibrido", {})["parecido"] = src
+    return doc
+
+
 def comparisons_for(db, company_ids: list) -> dict:
     """{company_id: comparación sin los logs} — para las filas de Análisis."""
     if not company_ids:
         return {}
-    return {d["company_id"]: d for d in db.db[COMPARISONS].find(
+    out = {d["company_id"]: d for d in db.db[COMPARISONS].find(
         {"company_id": {"$in": list(company_ids)}}, _LIST_PROJECTION)}
+    if _PREFIX:
+        for d in out.values():
+            fill_parecido_from_prod(db, d)
+    return out
 
 
 def get_comparison(db, company_id: str) -> dict | None:
-    return db.db[COMPARISONS].find_one({"company_id": company_id}, {"_id": 0})
+    doc = db.db[COMPARISONS].find_one({"company_id": company_id}, {"_id": 0})
+    if _PREFIX:
+        if doc:
+            return fill_parecido_from_prod(db, doc)
+        return db.db["classification_comparisons"].find_one({"company_id": company_id}, {"_id": 0})
+    return doc
 
 
 def _replied(entry: dict) -> bool:

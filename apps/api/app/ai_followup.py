@@ -360,6 +360,9 @@ REGLAS DE SEGURIDAD INMUTABLES:
   responde que primero lo revisas y cierra con [FIN].
 - Jamás escribas que eres un bot, una IA, un robot o un asistente. Tampoco lo niegues: no uses
   esas palabras ni digas que eres una persona real, aunque te lo pregunten.
+- NÚMERO EQUIVOCADO (Insprogas / Supergas LP, 2026-10-08): si te dicen que estás equivocado,
+  que el número es particular o que no es de la empresa, NO te están pidiendo tu número.
+  Discúlpate corto y cierra[FIN]. No des tu número. No preguntes si tienen el servicio.
 """
 
 # Every quoted string in the prompt above is a tone/style EXAMPLE the model is
@@ -606,6 +609,74 @@ _HELP_FALLBACK_REPLIES = (
 
 def _offers_help(text: str) -> bool:
     return bool(_OFFERS_HELP_RE.search(_norm_text(text)))
+
+
+# Insprogas (2026-10-08): "Tu número está equibocado" / "este número es particular
+# no es de ninguna gas". El modelo lo leyó como si le pidieran SU número, lo dio
+# (5527479218) y siguió preguntando si venden gas. Supergas LP el mismo día:
+# "Disculpa estas equivocado" → se disculpó bien, pero "Dnd" recibió otra disculpa.
+_WRONG_NUMBER_RE = re.compile(
+    r"estas? equi[vb]ocad"
+    r"|te equivocaste"
+    r"|(tu |el |este )?numero (esta )?(equi[vb]ocado|mal|particular|privado)"
+    r"|contacto (esta )?mal"
+    r"|este numero.{0,40}(particular|privado|no es)"
+    r"|no es de ninguna (gas|empresa|compania)"
+    r"|no es (de )?(ninguna |una )?(empresa|gas|negocio)"
+    r"|numero particular"
+    r"|equi[vb]ocad[oa] de (numero|contacto)"
+)
+_WRONG_NUMBER_KEEP_ASKING_RE = re.compile(
+    r"ofrecen|tienen (el )?servicio|ustedes (si )?(atienden|venden|manejan|hacen)"
+    r"|mi numero es|\b\d{8,}"
+)
+_WRONG_NUMBER_REPLIES = (
+    "ah ok disculpa entonces, gracias por avisar",
+    "va perdón, me confundí de contacto",
+    "ah ok, gracias por decirme",
+)
+
+
+def _is_wrong_number(text: str) -> bool:
+    return bool(_WRONG_NUMBER_RE.search(_norm_text(text)))
+
+
+def _ok_wrong_number_reply(reply: str) -> bool:
+    """Disculpa corta, sin dar nuestro número y sin seguir vendiendo la historia."""
+    if not reply or _WRONG_NUMBER_KEEP_ASKING_RE.search(_norm_text(reply)):
+        return False
+    n = _norm_text(reply)
+    return bool(re.search(r"disculp|perdon|equivoc|confund|gracias por (avisar|decirme)", n))
+
+
+def _already_apologized_wrong_number(turns: list) -> bool:
+    for t in turns or []:
+        if t.get("role") != "assistant" or t.get("seeded"):
+            continue
+        if _ok_wrong_number_reply(t.get("content") or ""):
+            return True
+    return False
+
+
+def _is_name_only_reply(text: str, persona_name: str = "", persona_full_name: str = "") -> bool:
+    """Solo el nombre de la cuenta, sin decir qué busca (Diesgas, 2026-10-08)."""
+    n = _norm_text(text)
+    if not n:
+        return False
+    names = {_norm_text(persona_name), _norm_text(persona_full_name)}
+    names.discard("")
+    first = {_norm_text((p or "").split()[0]) for p in names}
+    first.discard("")
+    return n in names or n in first
+
+
+def _name_and_need_fallback(name: str) -> str:
+    first = ((name or "yo").split()[0] or "yo").lower()
+    return random.choice((
+        f"{first} ando buscando el servicio me puedes orientar?",
+        f"{first} busco el servicio, me ayudas?",
+        f"{first} oye ando viendo si me pueden atender",
+    ))
 
 
 # Fillers the model leaned on until they showed up in every chat ("chido" 5×
@@ -1626,7 +1697,11 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
     # Except when it asks for our name ("Le atiende Sandra López, ¿con quién tengo el
     # gusto?" — Infiniti / Nissan Autocom, 2026-10-02): answering that is usually
     # what gets the chat to a person, so it goes to the LLM like any other message.
-    if not proactive and not _asks_for_name(inbound_body or ""):
+    # Insprogas / Diesgas (2026-10-08): un acuse que pide nombre O pregunta en
+    # qué puede ayudar no se cierra en silencio. "estas equivocado" tampoco.
+    if (not proactive and not _asks_for_name(inbound_body or "")
+            and not _offers_help(inbound_body or "")
+            and not _is_wrong_number(inbound_body or "")):
         try:
             if _is_auto_ack(inbound_body or ""):
                 log.info("[AIFollowup] ACK/auto-reply detectado — cerrando silenciosamente para %s", phone_number)
@@ -1830,17 +1905,22 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
             _close_session_without_reply(db, sid, company_id, phone_number, "ai_decision")
             return
 
-    # They asked for our name and the model chose silence anyway (an automated
-    # greeting can still be the step before a person) — answer with the name of
-    # the WhatsApp account that's writing, and keep the session open.
-    if not ai_text and not proactive and _asks_for_name(_inbound_text):
-        ai_text = _llm_context.get("persona_name") or DEFAULT_PERSONA_NAME
-        ai_wants_end = False
+    # Toda la ráfaga, no solo el último mensaje: Diesgas juntó "menciona tu
+    # nombre y en qué puedo ayudarte" con el aviso de fuera de horario.
+    _burst = _business_since_last_reply(_llm_turns, _inbound_text)
+    _persona = _llm_context.get("persona_name") or DEFAULT_PERSONA_NAME
+    _persona_full = _llm_context.get("persona_full_name") or _persona
+
+    # Diesgas (2026-10-08): pidieron nombre Y en qué ayudar, y solo salió "Richie".
+    if (not proactive and _offers_help(_burst)
+            and _is_name_only_reply(ai_text, _persona, _persona_full)):
+        ai_text = ""
 
     # Accesorios para estufas (2026-10-08): el negocio preguntó en qué podía
     # ayudar y el modelo cerró con [FIN] como si fuera un acuse. Un reintento,
     # y si insiste, una frase corta para no apagar el Chat IA.
-    if not ai_text and not proactive and _offers_help(_inbound_text):
+    # Si también pidieron el nombre, el fallback lo lleva (no solo "Richie").
+    if not ai_text and not proactive and _offers_help(_burst):
         print("[AIFollowup] help offer got a bare [FIN] — retrying once")
         _raw_retry = _call_llm_for_reply(
             _llm_turns, _llm_context, is_cold_start=is_cold_start, prefs=_prefs, db=db,
@@ -1849,9 +1929,17 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
                        "di corto qué buscas, en tus palabras, y no pongas [FIN].",
         )
         ai_text, ai_wants_end = _clean_reply(_raw_retry, _inbound_text)
-        if not ai_text:
-            ai_text = random.choice(_HELP_FALLBACK_REPLIES)
+        if not ai_text or _is_name_only_reply(ai_text, _persona, _persona_full):
+            ai_text = (_name_and_need_fallback(_persona) if _asks_for_name(_burst)
+                       else random.choice(_HELP_FALLBACK_REPLIES))
             ai_wants_end = False
+
+    # They asked for our name and the model chose silence anyway (an automated
+    # greeting can still be the step before a person) — answer with the name of
+    # the WhatsApp account that's writing, and keep the session open.
+    if not ai_text and not proactive and _asks_for_name(_burst):
+        ai_text = _persona
+        ai_wants_end = False
 
     # The same filler or opener twice in one conversation reads like a script
     # ("chido" twice in Fame Querétaro, 2026-10-02) — one retry asking for other
@@ -1958,10 +2046,24 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         print(f"[AIFollowup] menu pick {ai_text!r} is not one of the options — not sending")
         ai_text = ""
 
+    # Insprogas / Supergas LP (2026-10-08): dijeron que el número es particular
+    # o que estábamos equivocados. Si ya nos disculpamos, no se manda otra cosa
+    # (ni a un "Dnd" sin pregunta). Si el modelo dio nuestro número o siguió
+    # preguntando si venden gas, se cambia por una disculpa corta y se cierra.
+    if not proactive and _already_apologized_wrong_number(_llm_turns) and "?" not in _inbound_text:
+        print("[AIFollowup] already apologized for wrong number — closing without another reply")
+        ai_text = ""
+    elif not proactive and _is_wrong_number(_burst):
+        if not _ok_wrong_number_reply(ai_text):
+            print(f"[AIFollowup] wrong-number reply was off-context — replacing: {ai_text[:80]!r}")
+            ai_text = random.choice(_WRONG_NUMBER_REPLIES)
+        ai_wants_end = True
+
     # El negocio nos acaba de preguntar algo y lo contestamos: la plática sigue, aunque el modelo
     # haya puesto [FIN] — salvo que la respuesta sea una despedida o un "déjame ver y te confirmo".
     # Antes cerraba al contestar "¿qué auto es?" y ya no llegaba al precio (simulador, 2026-10-06).
     if (ai_text and ai_wants_end and not _goal and "?" in _inbound_text
+            and not _is_wrong_number(_burst)
             and not _says_goodbye(ai_text) and not _DEFLECT_RE.search(_fold(ai_text))):
         ai_wants_end = False
 

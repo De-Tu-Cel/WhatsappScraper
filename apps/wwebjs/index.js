@@ -1390,7 +1390,14 @@ app.post('/session/:id/messages', async (req, res) => {
     // Se lee Store.Chat directo, sin pasar por getChat.
     const last10 = digits.slice(-10)
     const payload = await session.client.pupPage.evaluate(async (last10, limit) => {
-      const storeChat = window.Store && window.Store.Chat
+      // Esta build de WhatsApp ya no tiene window.Store.Chat
+      // (SIMAGAS/GUVAL, 2026-10-08: no-store-chat). El collection vivo
+      // está en WAWebCollections, el mismo que usa WWebJS.getChats.
+      let storeChat = window.Store && window.Store.Chat
+      try {
+        const cols = window.require && window.require('WAWebCollections')
+        if (cols && cols.Chat) storeChat = cols.Chat
+      } catch (_) {}
       if (!storeChat || typeof storeChat.getModelsArray !== 'function') {
         return { error: 'no-store-chat' }
       }

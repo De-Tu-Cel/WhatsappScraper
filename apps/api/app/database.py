@@ -349,7 +349,11 @@ def _get_client() -> MongoClient:
             # distintas y pudiendo encolar el seguimiento de IA dos veces.
             db.message_logs.create_index(
                 "message_id", unique=True,
-                partialFilterExpression={"message_id": {"$type": "string"}},
+                # $gt:"" : un warmup de gely-test2 (2026-08-28) quedó con
+                # message_id="" y, como "" es string, el índice lo trataba como
+                # id único. Cada inbound sin id (SIMAGAS/GUVAL, 2026-10-08)
+                # chocaba y se “guardaba” reusando ese documento de agosto.
+                partialFilterExpression={"message_id": {"$type": "string", "$gt": ""}},
             )
         except Exception:
             pass  # ya existen duplicados — el índice se creará tras limpiarlos
@@ -1151,6 +1155,13 @@ class MongoDBManager:
                            created_at: datetime = None,
                            media_url: str = None,
                            media_content_type: str = None):
+        # "" no es un id. Un warmup de gely-test2 (2026-08-28) tiene message_id=""
+        # y el índice único de strings tragaba todo inbound sin id: el insert
+        # chocaba y devolvía ese documento de agosto (SIMAGAS/GUVAL, 2026-10-08).
+        if isinstance(message_id, str):
+            message_id = message_id.strip() or None
+        elif not message_id:
+            message_id = None
         # Dedup: if this message_id already exists, avoid duplicate entries.
         # If the existing record has company_id="unknown" and we now know the real
         # company, upgrade it in place (handles the race: inbound before JID learned).
@@ -1246,8 +1257,15 @@ class MongoDBManager:
             # con ~187ms de diferencia) ganó la carrera e insertó primero — el índice
             # único de message_id evita el duplicado real; aquí solo se recupera su
             # _id para devolver la misma referencia que un caller normal esperaría.
-            existing = self.db.message_logs.find_one({"message_id": message_id})
-            return str(existing["_id"]) if existing else None
+            if message_id:
+                existing = self.db.message_logs.find_one({"message_id": message_id})
+                if existing:
+                    return str(existing["_id"])
+            # Choque contra un message_id="" viejo (warmup 2026-08-28): reintentar
+            # sin ese string vacío para no reusar el documento equivocado.
+            doc["message_id"] = None
+            result = self.db.message_logs.insert_one(doc)
+            return str(result.inserted_id)
 
     def save_instance_health_log(self, instance_name: str, event: str,
                                   reason: str = None, reason_label: str = None,

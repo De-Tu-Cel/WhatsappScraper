@@ -7,7 +7,7 @@ import {
 } from '../lib/sendQueuePanel'
 
 const WIDTH = 400
-const BAR_HEIGHT = 92
+const BAR_HEIGHT = 110
 const STORAGE_POS = 'send_queue_panel_pos'
 const STORAGE_DISMISSED = 'send_queue_panel_dismissed_at'
 
@@ -39,6 +39,8 @@ function savedPosition() {
 export default function SendQueuePanel() {
   const { queueItems, queueStatus, queueLen, queueError, cancel, debugBubble } = useSendQueue()
   const dragRef = useRef(null)
+  const boxRef = useRef(null)
+  const posRef = useRef({ x: 16, y: 16 })
   const previousNewestRef = useRef('')
   const [ready, setReady] = useState(false)
   const [open, setOpen] = useState(true)
@@ -46,6 +48,15 @@ export default function SendQueuePanel() {
   const [confirmCancel, setConfirmCancel] = useState(false)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [pos, setPos] = useState({ x: 16, y: 16 })
+
+  const paintPos = (next) => {
+    posRef.current = next
+    const node = boxRef.current
+    if (node) {
+      node.style.left = `${next.x}px`
+      node.style.top = `${next.y}px`
+    }
+  }
 
   const items = queueItems || []
   const groups = useMemo(() => groupQueueItems(items), [items])
@@ -57,10 +68,12 @@ export default function SendQueuePanel() {
     const width = Math.min(WIDTH, window.innerWidth - 24)
     const fallback = { x: 16, y: window.innerHeight - BAR_HEIGHT - 20 }
     const saved = savedPosition() || fallback
-    setPos({
+    const next = {
       x: clamp(saved.x, 8, Math.max(8, window.innerWidth - width - 8)),
       y: clamp(saved.y, 8, Math.max(8, window.innerHeight - BAR_HEIGHT - 8)),
-    })
+    }
+    posRef.current = next
+    setPos(next)
     setDismissed(Boolean(localStorage.getItem(STORAGE_DISMISSED)))
     setReady(true)
   }, [])
@@ -90,7 +103,7 @@ export default function SendQueuePanel() {
       if (!dragRef.current) return
       const point = event.touches?.[0] || event
       const width = Math.min(WIDTH, window.innerWidth - 24)
-      setPos({
+      paintPos({
         x: clamp(point.clientX - dragRef.current.dx, 8, Math.max(8, window.innerWidth - width - 8)),
         y: clamp(point.clientY - dragRef.current.dy, 8, Math.max(8, window.innerHeight - BAR_HEIGHT - 8)),
       })
@@ -99,10 +112,9 @@ export default function SendQueuePanel() {
     const up = () => {
       if (!dragRef.current) return
       dragRef.current = null
-      setPos((current) => {
-        localStorage.setItem(STORAGE_POS, JSON.stringify(current))
-        return current
-      })
+      const current = posRef.current
+      setPos(current)
+      localStorage.setItem(STORAGE_POS, JSON.stringify(current))
     }
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up)
@@ -135,7 +147,7 @@ export default function SendQueuePanel() {
   const beginDrag = (event) => {
     if (event.target.closest('button')) return
     const point = event.touches?.[0] || event
-    dragRef.current = { dx: point.clientX - pos.x, dy: point.clientY - pos.y }
+    dragRef.current = { dx: point.clientX - posRef.current.x, dy: point.clientY - posRef.current.y }
   }
 
   const dismiss = () => {
@@ -159,7 +171,7 @@ export default function SendQueuePanel() {
 
   if (dismissed) {
     return (
-      <button type="button" className="sqp-launcher" onClick={restore} title="Abrir cola de envíos"
+      <button type="button" ref={boxRef} className="sqp-launcher" onClick={restore} title="Abrir cola de envíos"
         style={{ position: 'fixed', left: pos.x, top: pos.y + 36, zIndex: 9998 }}>
         <SendIcon />
         {counts.active > 0 && <span>{counts.active}</span>}
@@ -169,7 +181,7 @@ export default function SendQueuePanel() {
   }
 
   return (
-    <div style={{
+    <div ref={boxRef} style={{
       position: 'fixed', left: pos.x, top: pos.y, zIndex: 9998,
       width: `min(${WIDTH}px, calc(100vw - 24px))`, height: BAR_HEIGHT,
     }}>
@@ -294,9 +306,9 @@ function PanelStyles() {
     @keyframes sqp-pulse { 50% { opacity: .45; } }
     @keyframes sqp-rise { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: translateY(0); } }
     .sqp-summary,.sqp-details{background:var(--card-bg,#111d2e);border:1px solid var(--border,rgba(255,255,255,.1));box-shadow:0 14px 45px rgba(0,0,0,.45)}
-    .sqp-summary{height:92px;border-radius:16px;padding:11px 12px 12px;cursor:grab;user-select:none}
+    .sqp-summary{height:110px;border-radius:16px;padding:12px 14px 18px;display:flex;flex-direction:column;cursor:grab;user-select:none;touch-action:none}
     .sqp-summary:active{cursor:grabbing}
-    .sqp-details{position:absolute;left:0;right:0;bottom:100px;border-radius:16px;overflow:hidden;animation:sqp-rise .2s ease}
+    .sqp-details{position:absolute;left:0;right:0;bottom:122px;border-radius:16px;overflow:hidden;animation:sqp-rise .2s ease}
     .sqp-topline{display:flex;align-items:center;gap:8px;color:var(--text,#f1f5f9);font-size:12px}
     .sqp-grip{display:inline-flex;align-items:center;gap:5px;color:var(--text-muted,#94a3b8);font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
     .sqp-live{font-size:9px;font-weight:800;color:#60a5fa;background:rgba(59,130,246,.13);padding:2px 7px;border-radius:999px;letter-spacing:.06em}
@@ -334,6 +346,6 @@ function PanelStyles() {
     .sqp-launcher{width:48px;height:48px;border-radius:50%;border:1px solid rgba(96,165,250,.35);background:var(--card-bg,#111d2e);color:#60a5fa;box-shadow:0 8px 28px rgba(0,0,0,.45);display:grid;place-items:center;cursor:pointer}
     .sqp-launcher:hover{transform:scale(1.05);box-shadow:0 0 22px rgba(59,130,246,.25)}
     .sqp-launcher span{position:absolute;right:-4px;top:-4px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#3b82f6;color:white;font-size:10px;font-weight:800;display:grid;place-items:center}
-    @media(max-width:520px){.sqp-title{max-width:250px}.sqp-details{bottom:98px}.sqp-list{max-height:52vh}}
+    @media(max-width:520px){.sqp-title{max-width:250px}.sqp-details{bottom:120px}.sqp-list{max-height:52vh}}
   `}</style>
 }

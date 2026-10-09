@@ -1413,7 +1413,9 @@ export default function Analytics() {
                             <TableCell key={m} sx={{ ...CELL_SX, ...ANALYSIS_CELL_SX, textAlign: 'center' }}>
                               {row.comparison?.[m]
                                 ? <ResultChip compact method={m} result={row.comparison[m]} onClick={() => setCompareFor({ id: row.company_id, name: row.company_name })} />
-                                : m === 'timing' && compareButton(row)}
+                                : m === 'timing'
+                                  ? compareButton(row)
+                                  : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.28)', fontStyle: 'italic' }}>{t.analytics.noCategory}</Typography>}
                             </TableCell>
                           ))}
                           <TableCell sx={{ ...CELL_SX, ...ANALYSIS_CELL_SX, textAlign: 'center' }}>
@@ -1608,9 +1610,7 @@ export default function Analytics() {
                                     ? <Box sx={{ opacity: inherited ? 0.65 : 1, display: 'inline-flex' }}>
                                         <ResultChip compact method="hibrido" result={{ category: n.category, is_ai: n.is_ai, common: n.category }} />
                                       </Box>
-                                    : (m === 'hibrido'
-                                      ? <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>Sin definir</Typography>
-                                      : null))}
+                                    : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.28)', fontStyle: 'italic' }}>{t.analytics.noCategory}</Typography>)}
                               </TableCell>
                             ))
                             cells.push(

@@ -1389,7 +1389,9 @@ app.post('/session/:id/messages', async (req, res) => {
     // (SIMAGAS/GUVAL, 2026-10-08; mismo fallo que la foto de perfil).
     // Se lee Store.Chat directo, sin pasar por getChat.
     const last10 = digits.slice(-10)
-    const payload = await session.client.pupPage.evaluate(async (last10, limit) => {
+    const numberId = await session.client.getNumberId(digits).catch(() => null)
+    const serialized = (numberId && numberId._serialized) || ''
+    const payload = await session.client.pupPage.evaluate(async (last10, serialized, limit) => {
       // Esta build de WhatsApp ya no tiene window.Store.Chat
       // (SIMAGAS/GUVAL, 2026-10-08: no-store-chat). El collection vivo
       // está en WAWebCollections, el mismo que usa WWebJS.getChats.
@@ -1437,9 +1439,9 @@ app.post('/session/:id/messages', async (req, res) => {
           hasMedia: !!(m.mediaData || m.deprecatedMms3Url),
         })),
       }
-    }, last10, limit)
+    }, last10, serialized, limit)
     if (payload && payload.error) {
-      console.log(`[${id}] history ${payload.error} last10=${last10} n=${payload.n || 0}`)
+      console.log(`[${id}] history ${payload.error} last10=${last10} n=${payload.n || 0} lids=${payload.lids || 0} wid=${!!serialized}`)
       return res.json({ messages: [] })
     }
     const messages = []

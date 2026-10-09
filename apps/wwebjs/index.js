@@ -1385,9 +1385,22 @@ app.post('/session/:id/messages', async (req, res) => {
   if (!to) return res.status(400).json({ error: 'to required' })
   const digits = String(to).replace(/\D/g, '')
   try {
+    // getChatById(wid) tira "r" en estos hilos (SIMAGAS/GUVAL, 2026-10-08),
+    // el mismo fallo que la foto de perfil. El chat ya está en la lista:
+    // se busca por los últimos 10 dígitos o por el WID que resuelve getNumberId.
+    const last10 = digits.slice(-10)
     const numberId = await session.client.getNumberId(digits).catch(() => null)
-    const chatId = numberId?._serialized || `${digits}@c.us`
-    const chat = await session.client.getChatById(chatId)
+    const serialized = numberId && numberId._serialized
+    const chats = await session.client.getChats()
+    const chat = chats.find(c => {
+      const user = String((c.id && c.id.user) || '')
+      const ser = String((c.id && c.id._serialized) || '')
+      return (serialized && ser === serialized) || user.slice(-10) === last10 || ser.includes(last10)
+    })
+    if (!chat) {
+      console.log(`[${id}] history no chat last10=${last10} chats=${chats.length}`)
+      return res.json({ messages: [] })
+    }
     const msgs = await chat.fetchMessages({ limit })
     const messages = []
     for (const msg of msgs) {
@@ -1402,7 +1415,7 @@ app.post('/session/:id/messages', async (req, res) => {
         hasMedia: !!msg.hasMedia,
       })
     }
-    console.log(`[${id}] history ${digits} n=${messages.length}`)
+    console.log(`[${id}] history ${digits} n=${messages.length} via=${chat.id && chat.id._serialized}`)
     res.json({ messages })
   } catch (e) {
     console.error(`[${id}] history error:`, e.message)

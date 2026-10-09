@@ -37,6 +37,12 @@ const PORT         = process.env.PORT         || 3001
 const FASTAPI_URL  = process.env.FASTAPI_URL  || 'http://backend:8000'
 const API_SECRET   = process.env.API_SECRET   || ''
 const SESSIONS_PATH = process.env.SESSIONS_PATH || '/app/sessions'
+// e2e_notification y similares no son texto de un humano. Lo usa el webhook
+// y el historial (SIMAGAS/GUVAL, 2026-10-08: NON_CONTENT_MSG_TYPES quedó
+// dentro de createClient y Sync tiraba "is not defined" al filtrar).
+const NON_CONTENT_MSG_TYPES = new Set([
+  'e2e_notification', 'notification_template', 'gp2', 'call_log', 'revoked', 'ciphertext', 'protocol',
+])
 
 // Residential proxy for WhatsApp's outbound connection — every session
 // shares this one exit IP instead of Hostinger's own datacenter IP. A
@@ -824,10 +830,6 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
   // WhatsApp injects the first time a chat opens with a number, empty body). Forwarding
   // these created phantom empty-body inbound records every time we contacted a new
   // prospect, which the backend then logged and classified as if a human had replied.
-  const NON_CONTENT_MSG_TYPES = new Set([
-    'e2e_notification', 'notification_template', 'gp2', 'call_log', 'revoked', 'ciphertext', 'protocol',
-  ])
-
   client.on('message', async (msg) => {
     if (msg.fromMe) return
     if (NON_CONTENT_MSG_TYPES.has(msg.type)) return

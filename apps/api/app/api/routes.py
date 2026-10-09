@@ -1276,7 +1276,21 @@ def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks, x_
         if _provider == "wasender":
             return {"synced": 0, "message": "WasenderAPI no expone historial — los mensajes se registran en tiempo real desde el webhook"}
         elif _provider == "wwebjs":
-            return {"synced": 0, "message": "WhatsApp Web no expone historial — los mensajes se registran en tiempo real desde el webhook"}
+            # SIMAGAS/GUVAL (2026-10-08): el inbound sí estaba en WhatsApp; el
+            # webhook no lo guardó. wwebjs sí puede leer el chat (fetchMessages).
+            from app.whatsapp_wwebjs import WWebjsClient
+            session = inst_name
+            if not session:
+                _last_wa = db.db.message_logs.find_one(
+                    {"company_id": company_id, "direction": "outbound",
+                     "instance_name": {"$exists": True, "$nin": [None, ""]}},
+                    sort=[("created_at", -1)],
+                    projection={"instance_name": 1},
+                )
+                session = (_last_wa or {}).get("instance_name")
+            if not session:
+                raise HTTPException(400, "Sin sesión wwebjs para esta empresa")
+            client = WWebjsClient(session)
         elif _provider == "waha":
             if not WAHA_API_KEY:
                 raise HTTPException(400, "WAHA no configurado")
@@ -1333,6 +1347,16 @@ def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks, x_
                     body    = m.get("body") or ("[media]" if m.get("hasMedia") else "")
                     ts      = m.get("timestamp", 0)
                     msg_type = "conversation"
+                elif _provider == "wwebjs":
+                    msg_id = m.get("id") or ""
+                    from_me = m.get("fromMe", False)
+                    body = m.get("body") or ("[media]" if m.get("hasMedia") else "")
+                    ts = m.get("timestamp", 0)
+                    msg_type = m.get("type") or "conversation"
+                    # El "Hola" de salida ya está en message_logs sin id de
+                    # WhatsApp. Traerlo otra vez duplicaría la fila.
+                    if from_me:
+                        continue
                 else:
                     key     = m.get("key", {})
                     msg_id  = key.get("id", "")

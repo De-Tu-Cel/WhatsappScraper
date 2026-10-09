@@ -1310,3 +1310,59 @@ def test_closing_without_a_reply_does_not_analyze_a_chat_that_never_answered():
     with patch("app.classifier.queue_reply_analysis") as queued:
         af._close_session_without_reply(mgr, "sess1", "aabbccddeeff001122334455", "5214428079840", "ai_decision")
     queued.assert_not_called()
+
+
+class TestWrongNumberIsNotOurNumber:
+    """Insprogas / Supergas LP (2026-10-08): 'tu número está equivocado' no es
+    una pregunta por el número de Andy, y no hay que seguir vendiendo gas."""
+
+    @pytest.mark.parametrize("text", [
+        "Tu número está equibocado",
+        "Disculpa estas equivocado",
+        "Este número al que estás escribiendo es particular. No es de ninguna gas",
+        "Tu contacto está mal este número es particular",
+    ])
+    def test_detected(self, text):
+        assert af._is_wrong_number(text) is True
+
+    def test_normal_chat_is_not_wrong_number(self):
+        assert af._is_wrong_number("Buenas noches le atiende Araceli. En que le puedo ayudar?") is False
+        assert af._is_wrong_number("¿Es correcto el 5527479218?") is False
+
+    def test_giving_our_number_is_replaced_and_the_chat_closes(self, _common_patches):
+        mgr, ww = FakeMgrWithSend(_session_doc()), _ww_client()
+        _run(mgr, {"return_value": "ah, perdón, mi número es 5527479218. Pueden ayudarme con el servicio de gas?"},
+             inbound="Tu número está equivocado", ww=ww)
+        ww.send.assert_called_once()
+        sent = ww.send.call_args.args[1]
+        assert sent in af._WRONG_NUMBER_REPLIES
+        assert "5527479218" not in sent
+        assert mgr.db.ai_followup_sessions._doc["status"] == "ended"
+
+    def test_second_message_after_apology_gets_silence(self, _common_patches):
+        turns = [{"role": "assistant",
+                  "content": "ah ok, creo que me equivoqué de número. Gracias por avisar"}]
+        mgr, ww = FakeMgrWithSend(_session_doc(turns=turns, turn_count=1)), _ww_client()
+        mock_llm = _run(mgr, {"return_value": "ah perdón, creo que me confundí de contacto"},
+                        inbound="Dnd", ww=ww)
+        ww.send.assert_not_called()
+        assert mgr.db.ai_followup_sessions._doc["status"] == "ended"
+
+
+class TestNamePlusHelpIsNotNameOnly:
+    """Diesgas (2026-10-08): pidieron nombre y en qué ayudar; solo salió 'Richie'."""
+
+    def test_name_only_is_detected(self):
+        assert af._is_name_only_reply("Richie", "Richie", "Richie Pérez") is True
+        assert af._is_name_only_reply("richie ando buscando gas", "Richie", "Richie Pérez") is False
+
+    def test_name_plus_help_sends_what_we_need(self, _common_patches):
+        inbound = ("Gracias por comunicarte a Diesgas. Menciona tu nombre y en que puedo "
+                   "ayudarte. Nos encontramos fuera de nuestro horario de atención")
+        mgr, ww = FakeMgrWithSend(_session_doc(context={"persona_name": "Richie"})), _ww_client()
+        _run(mgr, {"side_effect": ["Richie", "Richie"]}, inbound=inbound, ww=ww)
+        ww.send.assert_called_once()
+        sent = ww.send.call_args.args[1]
+        assert sent != "Richie"
+        assert "richie" in sent.lower()
+        assert "servicio" in sent or "atender" in sent

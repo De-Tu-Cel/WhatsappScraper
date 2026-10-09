@@ -1404,7 +1404,9 @@ export default function Analytics() {
                           cada fila del desplegable (no se mezcla la plática de números distintos). */}
                       {hasMultiple ? (
                         <TableCell colSpan={4} sx={{ ...CELL_SX, ...ANALYSIS_CELL_SX, width: undefined, textAlign: 'center' }}>
-                          {/* La comparación va en cada número del desplegable (flecha junto al nombre). */}
+                          {/* La comparación va en cada número del desplegable. El rango
+                              de la empresa aquí se leía como si fuera de un número que
+                              no contestó (Gas 1 / 2228120419, 2026-10-08). */}
                           {!row.comparison && compareButton(row)}
                         </TableCell>
                       ) : (

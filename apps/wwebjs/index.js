@@ -1385,37 +1385,62 @@ app.post('/session/:id/messages', async (req, res) => {
   if (!to) return res.status(400).json({ error: 'to required' })
   const digits = String(to).replace(/\D/g, '')
   try {
-    // getChatById(wid) tira "r" en estos hilos (SIMAGAS/GUVAL, 2026-10-08),
-    // el mismo fallo que la foto de perfil. El chat ya está en la lista:
-    // se busca por los últimos 10 dígitos o por el WID que resuelve getNumberId.
+    // fetchMessages/getChatById llaman WWebJS.getChat y tiran "r"
+    // (SIMAGAS/GUVAL, 2026-10-08; mismo fallo que la foto de perfil).
+    // Se lee Store.Chat directo, sin pasar por getChat.
     const last10 = digits.slice(-10)
-    const numberId = await session.client.getNumberId(digits).catch(() => null)
-    const serialized = numberId && numberId._serialized
-    const chats = await session.client.getChats()
-    const chat = chats.find(c => {
-      const user = String((c.id && c.id.user) || '')
-      const ser = String((c.id && c.id._serialized) || '')
-      return (serialized && ser === serialized) || user.slice(-10) === last10 || ser.includes(last10)
-    })
-    if (!chat) {
-      console.log(`[${id}] history no chat last10=${last10} chats=${chats.length}`)
+    const payload = await session.client.pupPage.evaluate(async (last10, limit) => {
+      const storeChat = window.Store && window.Store.Chat
+      if (!storeChat || typeof storeChat.getModelsArray !== 'function') {
+        return { error: 'no-store-chat' }
+      }
+      const chats = storeChat.getModelsArray()
+      const chat = chats.find((c) => {
+        const user = String((c.id && c.id.user) || '')
+        const ser = String((c.id && c.id._serialized) || '')
+        return user.slice(-10) === last10 || ser.includes(last10)
+      })
+      if (!chat) return { error: 'no-chat', n: chats.length }
+      let msgs = []
+      try {
+        msgs = chat.msgs && chat.msgs.getModelsArray ? chat.msgs.getModelsArray() : []
+      } catch (e) {
+        return { error: 'msgs:' + (e && e.message) }
+      }
+      try {
+        const loader = window.require && window.require('WAWebChatLoadMessages')
+        if (loader && loader.loadEarlierMsgs) {
+          while (msgs.length < limit) {
+            const more = await loader.loadEarlierMsgs({ chat })
+            if (!more || !more.length) break
+            msgs = more.concat(msgs)
+          }
+        }
+      } catch (_) { /* con lo que ya esté en memoria alcanza */ }
+      const slice = msgs.filter((m) => m && !m.isNotification).slice(-limit)
+      return {
+        via: (chat.id && chat.id._serialized) || '',
+        messages: slice.map((m) => ({
+          id: (m.id && m.id._serialized) || '',
+          fromMe: !!(m.id && m.id.fromMe),
+          body: m.body || m.caption || '',
+          timestamp: m.t || 0,
+          type: m.type,
+          from: (m.from && (m.from._serialized || m.from)) || '',
+          hasMedia: !!(m.mediaData || m.deprecatedMms3Url),
+        })),
+      }
+    }, last10, limit)
+    if (payload && payload.error) {
+      console.log(`[${id}] history ${payload.error} last10=${last10} n=${payload.n || 0}`)
       return res.json({ messages: [] })
     }
-    const msgs = await chat.fetchMessages({ limit })
     const messages = []
-    for (const msg of msgs) {
+    for (const msg of (payload && payload.messages) || []) {
       if (NON_CONTENT_MSG_TYPES.has(msg.type)) continue
-      messages.push({
-        id: msg.id && msg.id._serialized ? msg.id._serialized : '',
-        fromMe: !!msg.fromMe,
-        body: msg.body || '',
-        timestamp: msg.timestamp || 0,
-        type: msg.type,
-        from: msg.from || '',
-        hasMedia: !!msg.hasMedia,
-      })
+      messages.push(msg)
     }
-    console.log(`[${id}] history ${digits} n=${messages.length} via=${chat.id && chat.id._serialized}`)
+    console.log(`[${id}] history ${digits} n=${messages.length} via=${payload && payload.via}`)
     res.json({ messages })
   } catch (e) {
     console.error(`[${id}] history error:`, e.message)

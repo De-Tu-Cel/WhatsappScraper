@@ -1404,12 +1404,31 @@ app.post('/session/:id/messages', async (req, res) => {
         return { error: 'no-store-chat' }
       }
       const chats = storeChat.getModelsArray()
+      let toPn = null
+      try {
+        toPn = window.require('WAWebLidMigrationUtils').toPn
+      } catch (_) {}
+      const blobOf = (c) => {
+        const parts = [
+          (c.id && c.id.user) || '',
+          (c.id && c.id._serialized) || '',
+        ]
+        try {
+          const pn = toPn && toPn(c.id)
+          if (pn) parts.push(pn.user || '', pn._serialized || '')
+        } catch (_) {}
+        const phone = c.contact && c.contact.phoneNumber
+        if (phone) parts.push(phone.user || '', phone._serialized || String(phone))
+        return parts.join(' ')
+      }
       const chat = chats.find((c) => {
-        const user = String((c.id && c.id.user) || '')
-        const ser = String((c.id && c.id._serialized) || '')
-        return user.slice(-10) === last10 || ser.includes(last10)
+        const blob = blobOf(c)
+        return (serialized && blob.includes(serialized)) || (last10 && blob.includes(last10))
       })
-      if (!chat) return { error: 'no-chat', n: chats.length }
+      if (!chat) {
+        const lids = chats.filter((c) => String((c.id && c.id._serialized) || '').includes('@lid')).length
+        return { error: 'no-chat', n: chats.length, lids, hasWid: !!serialized }
+      }
       let msgs = []
       try {
         msgs = chat.msgs && chat.msgs.getModelsArray ? chat.msgs.getModelsArray() : []

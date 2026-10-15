@@ -793,11 +793,40 @@ def _lexical_words(text: str) -> list[str]:
     return re.findall(r'[a-z0-9]+', _norm_text(text))
 
 
+_CLOSING_TAIL_RE = re.compile(
+    r'\b(?:d[eé]jame\s+(?:pensarlo|ver|checar|revisarlo)|lo\s+(?:reviso|checo|pienso)|primero\s+lo\s+reviso)\b[^?]*$',
+    re.IGNORECASE)
+
+
+def _repeated_closing_wording(text: str, recent_replies: list[str]) -> str | None:
+    # Multisector 2026-10-15: cambiar "450" por "300" no hace diferente el
+    # mismo cierre de cinco palabras. Examinar sólo la despedida, no los datos.
+    match = _CLOSING_TAIL_RE.search(text or '')
+    if not match:
+        return None
+    words = _lexical_words(match.group())
+    if len(words) < 5:
+        return None
+    for prior in recent_replies[-24:]:
+        tail = _CLOSING_TAIL_RE.search(prior)
+        if not tail:
+            continue
+        previous = _lexical_words(tail.group())
+        chunks = {tuple(previous[i:i + 5]) for i in range(len(previous) - 4)}
+        for i in range(len(words) - 4):
+            if tuple(words[i:i + 5]) in chunks:
+                return ' '.join(words[i:i + 5])
+    return None
+
+
 def _repeated_wording(text: str, recent_replies: list[str]) -> str | None:
     """Formulaciones repetidas, no datos obligatorios ni opciones de menú (2026-10-14)."""
     words = _lexical_words(text)
     if len(words) < 5:
         return None
+    closing = _repeated_closing_wording(text, recent_replies)
+    if closing:
+        return closing
     previous = [_lexical_words(reply) for reply in recent_replies[-24:]]
     if words in previous:
         return ' '.join(words[:12])
@@ -993,6 +1022,13 @@ _GOAL_CONTACT_RE = re.compile(
 _GOAL_NEGATIVE_RE = re.compile(
     r'\bno (?:ofrecemos|manejamos|prestamos|brindamos|hacemos) (?:el |ese |este |su |tu )?servicio\b'
     r'|\bno (?:tenemos|hay) (?:ese |el |este )?(?:servicio|producto)\b')
+# Simulación multisector (2026-10-15): agradecer por falta de cobertura no
+# cerraba la sesión. Sólo negativas explícitas; una cobertura parcial o una
+# condición hipotética todavía pueden requerir una aclaración.
+_NO_COVERAGE_RE = re.compile(
+    r'(?:^|[.!?\n])\s*(?:(?:lo sentimos|lamentablemente|por ahora|actualmente)[,\s]+)?no '
+    r'(?:(?:tenemos|hay|contamos con) cobertura\b(?!\s+(?:total\b|en\s+tod[ao]s?\b))'
+    r'|(?:llegamos|atendemos|damos servicio) (?:a|en) (?:tu|su|esa|esta) (?:zona|colonia|ciudad|domicilio)\b)')
 _GOAL_CORRECTION = {
     'negativa': 'El negocio no ofrece el servicio solicitado. No sigas preguntando ni cambies la necesidad. '
                 'Agradece brevemente o termina en silencio con [FIN].',
@@ -1098,7 +1134,7 @@ def _goal_reached(inbound: str) -> str | None:
         return "contacto"
     if _GOAL_APPOINTMENT_RE.search(t):
         return "cita"
-    if _GOAL_NEGATIVE_RE.search(t):
+    if _GOAL_NEGATIVE_RE.search(t) or _NO_COVERAGE_RE.search(t):
         return 'negativa'
     return None
 
@@ -2396,6 +2432,11 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
     if (ai_wants_end and not _asks_for_name(_burst) and not any(c.isdigit() for c in ai_text)
             and _repeated_wording(ai_text, _recent_wording)):
         ai_text = ''
+    elif ai_wants_end and _repeated_closing_wording(ai_text, _recent_wording):
+        # Si el reintento conservó el mismo cierre, quitar sólo esa coletilla:
+        # el precio u otro dato significativo anterior debe permanecer intacto.
+        tail = _CLOSING_TAIL_RE.search(ai_text)
+        ai_text = ai_text[:tail.start()].rstrip(' ,\n.')
 
     # Nothing left to send — a bare "[FIN]" (the model decided the conversation is
     # over with nothing to add) or a reply that was only markers like "[2]". Every

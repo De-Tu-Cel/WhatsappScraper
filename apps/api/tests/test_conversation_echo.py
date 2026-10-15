@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 from app.database import collapse_echoed_messages
+import pytest
 
 
 def _msg(direction, body, seconds, mid=None):
@@ -67,3 +68,33 @@ def test_generic_media_or_distinct_attachments_are_not_hidden():
     assert len(collapse_echoed_messages([_msg('inbound', '[media]', 0), _msg('inbound', '[media]', 0.1)])) == 2
     assert len(collapse_echoed_messages([{**_msg('inbound', 'Foto', 0), 'media_url': 'a.jpg'},
                                         {**_msg('inbound', 'Foto', 0.1), 'media_url': 'b.jpg'}])) == 2
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_simagas_import_reference_is_not_a_second_whatsapp_id(reverse):
+    from datetime import timezone
+    stamp = datetime(2026, 10, 8, 22, 20, 50)
+    epoch = int(stamp.replace(tzinfo=timezone.utc).timestamp())
+    imported = {**_msg('inbound', 'Buen día gracias por comunicarse a SIMAGASMEX', 0),
+                'created_at': stamp, 'from_number': '+525528842109',
+                'message_id': f'hist:5528842109:{epoch}:in'}
+    real = {**imported, 'message_id': '3EB014F7B9F506FEB24DF1'}
+    rows = [real, imported] if reverse else [imported, real]
+    result = collapse_echoed_messages(rows)
+    assert len(result) == 1
+    assert result[0]['message_id'] == real['message_id']
+    assert imported['message_id'].startswith('hist:')
+    # Una segunda identidad real del proveedor nunca se elimina.
+    assert len(collapse_echoed_messages(rows + [{**real, 'message_id': 'other-real-id'}])) == 2
+
+
+@pytest.mark.parametrize('reference', [
+    'hist:5528842110:1791498050:in',  # otro teléfono
+    'hist:5528842109:1791498050:out',  # otra dirección
+    'hist:5528842109:1791498000:in',  # otro momento
+    'hist:5528842109:invalid:in',
+])
+def test_unrelated_or_malformed_history_references_are_preserved(reference):
+    message = {**_msg('inbound', 'Buen día', 0), 'created_at': datetime(2026, 10, 8, 22, 20, 50),
+               'from_number': '+525528842109', 'message_id': reference}
+    assert len(collapse_echoed_messages([message, {**message, 'message_id': 'real-id'}])) == 2

@@ -144,6 +144,24 @@ def collapse_echoed_messages(messages: list, window_sec: int = 5) -> list:
     segundos. Supergas LP (2026-10-08): "Hola", "Disculpa estas equivocado"
     y "Dnd" salían dobles porque el webhook no trajo message_id."""
     from app.phone_utils import conversation_phone_key
+    def confirmed_id(msg):
+        value = msg.get('message_id')
+        # SIMAGAS (2026-10-15): hist:teléfono:epoch:in es una referencia
+        # provisional del importador, no un segundo ID emitido por WhatsApp.
+        match = re.fullmatch(r'hist:(\d{10,15}):(\d{10}):(in|out)', str(value or ''))
+        if match:
+            address = 'to_number' if msg.get('direction') == 'outbound' else 'from_number'
+            actual = conversation_phone_key(msg.get(address))
+            reference = conversation_phone_key(match[1])
+            if len(reference) == 10 and actual.startswith('52') and len(actual) == 12:
+                reference = '52' + reference
+            stamp = msg.get('created_at')
+            direction = 'out' if msg.get('direction') == 'outbound' else 'in'
+            if (actual == reference and direction == match[3] and isinstance(stamp, datetime)
+                    and abs((stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)).timestamp() - int(match[2])) <= window_sec):
+                return None
+        return value
+
     out, recent = [], {}
     for msg in messages:
         body = (msg.get("message_body") or msg.get("message_text") or msg.get("body") or "").strip()
@@ -158,14 +176,15 @@ def collapse_echoed_messages(messages: list, window_sec: int = 5) -> list:
             close = False
             if t1 and t2 and hasattr(t1, "timestamp") and hasattr(t2, "timestamp"):
                 close = abs((t2 - t1).total_seconds()) <= window_sec
-            same_id = not (prev.get('message_id') and msg.get('message_id')) or prev['message_id'] == msg['message_id']
+            prev_id, current_id = confirmed_id(prev), confirmed_id(msg)
+            same_id = not (prev_id and current_id) or prev_id == current_id
             inst1 = prev.get('received_on_instance') or prev.get('instance_name')
             inst2 = msg.get('received_on_instance') or msg.get('instance_name')
             same_instance = not (inst1 and inst2) or inst1 == inst2
             media1, media2 = prev.get('media_url'), msg.get('media_url')
             safe_media = media1 == media2 and (body != '[media]' or bool(media1))
             if close and same_id and same_instance and safe_media:
-                if not prev.get('message_id') and msg.get('message_id'):
+                if not prev_id and current_id:
                     out[index] = {**prev, 'message_id': msg['message_id']}
                 duplicate = True
                 break

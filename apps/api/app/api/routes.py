@@ -2518,6 +2518,21 @@ def api_generate_report(company_id: str, req: ReportRequest):
         if not company:
             raise HTTPException(status_code=404, detail="Company not found")
 
+        from app.report_scope import select_number_analytics, report_thread_for_number
+        analytics_raw = db.get_analytics(company_id=company_id)
+        analytics_list = analytics_raw.get("items", []) if isinstance(analytics_raw, dict) else analytics_raw
+        analytics = analytics_list[0] if analytics_list else {}
+        if req.filter_number:
+            selected = select_number_analytics(analytics, req.filter_number)
+            if selected is None:
+                raise HTTPException(status_code=404, detail="No hay análisis para ese número de esta empresa")
+            # Diesgas (2026-10-15): el PDF de PIDE TU GAS heredaba los datos
+            # generales y el primer WhatsApp de Cotizar tanque.
+            analytics = {**selected, "industry": analytics.get("industry"),
+                         "total_responses": selected.get("responses", 0)}
+            company = {**company, "report_number": selected["number"],
+                       "report_contact_label": selected.get("label")}
+
         if not req.force:
             open_probe = db.db.message_logs.find_one(
                 {"company_id": company_id, "analysis_status": "awaiting_t2"},
@@ -2532,9 +2547,6 @@ def api_generate_report(company_id: str, req: ReportRequest):
                     "resolves_by": deadline.isoformat() if deadline else None,
                 })
 
-        analytics_raw  = db.get_analytics(company_id=company_id)
-        analytics_list = analytics_raw.get("items", []) if isinstance(analytics_raw, dict) else analytics_raw
-        analytics = analytics_list[0] if analytics_list else {}
         # La misma clasificación que la columna "Timing + IA" de Análisis (la de la última
         # comparación, o la del número elegido) — ver report_verdict.
         try:
@@ -2546,14 +2558,12 @@ def api_generate_report(company_id: str, req: ReportRequest):
         thread = db.get_conversation_thread(company_id)
 
         if req.filter_number:
-            # Mazda Santa Anita (2026-10-06): las respuestas con LID se quedaban fuera
-            # del PDF del número. Son del número al que le escribimos justo antes.
-            from app.classifier import assign_thread_numbers
-            fn = re.sub(r'\D', '', req.filter_number or '')[-10:]
-            for m in thread:
-                if m.get('direction') == 'inbound' and not m.get('from_number'):
-                    m['from_number'] = m.get('number')
-            thread = [m for m in assign_thread_numbers(thread) if m.get('_num') == fn]
+            thread = report_thread_for_number(thread, req.filter_number)
+            from app.report_scope import first_response_seconds
+            seconds = first_response_seconds(thread)
+            if seconds is not None:
+                analytics = {**analytics, "reaction_time_seconds": seconds,
+                             "reaction_time_min": seconds / 60}
 
         pdf_buf = generate_report(
             company=serialize(company),
@@ -2568,7 +2578,8 @@ def api_generate_report(company_id: str, req: ReportRequest):
             .replace("—", "-").replace("–", "-")
             .encode("ascii", errors="ignore").decode("ascii")
             .replace(" ", "_").strip("_") or "empresa")
-        filename = f"reporte-{safe_name}.pdf"
+        number_suffix = "-" + re.sub(r'\D', '', req.filter_number) if req.filter_number else ""
+        filename = f"reporte-{safe_name}{number_suffix}.pdf"
 
         return StreamingResponse(
             pdf_buf,

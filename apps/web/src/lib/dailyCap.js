@@ -86,17 +86,19 @@ export function buildRecommendation(stats, lang = 'es') {
       ? "You don't have any WhatsApp instances assigned — connect one to be able to send."
       : 'No tienes instancias de WhatsApp asignadas — conecta una para poder enviar.'
   }
-  const warmup = stats.instances.filter(r => r.warmup_mode)
-  const normal = stats.instances.filter(r => !r.warmup_mode)
-  const tightest = [...stats.instances].sort((a, b) => a.available - b.available)[0]
+  const connected = stats.instances.filter(r => r.connected !== false)
+  if (!connected.length) return en ? 'Your sessions are disconnected; connect one to send.' : 'Tus sesiones están desconectadas; conecta una para enviar.'
+  const warmup = connected.filter(r => r.warmup_mode)
+  const normal = connected.filter(r => !r.warmup_mode)
+  const tightest = [...connected].sort((a, b) => a.available - b.available)[0]
 
   const parts = []
   if (warmup.length) parts.push(en ? `${warmup.length} in warmup (20/day each)` : `${warmup.length} en warmup (20/día c/u)`)
   if (normal.length) parts.push(en
-    ? `${normal.length} normal${normal.length > 1 ? 's' : ''} (200/day each)`
-    : `${normal.length} normal${normal.length > 1 ? 'es' : ''} (200/día c/u)`)
+    ? `${normal.length} normal${normal.length > 1 ? 's' : ''} (${normal[0].cap ?? 200}/day each)`
+    : `${normal.length} normal${normal.length > 1 ? 'es' : ''} (${normal[0].cap ?? 200}/día c/u)`)
   let msg = en ? `You have ${parts.join(' and ')}.` : `Tienes ${parts.join(' y ')}.`
-  if (stats.instances.length > 1) {
+  if (connected.length > 1) {
     msg += en
       ? ' Spread your sends across your numbers instead of concentrating them on just one.'
       : ' Reparte tus envíos entre tus números en vez de concentrarlos en uno solo.'

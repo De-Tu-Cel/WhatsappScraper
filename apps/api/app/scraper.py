@@ -636,12 +636,15 @@ class WebsiteScraper:
         _SUBPAGE_CRAWL_CAP = 16
         print(f"🔗 {len(all_links)} links encontrados → crawleando top {min(_SUBPAGE_CRAWL_CAP, len(sub_urls))} en paralelo")
         _existing_wa = {c["number"] for c in result["_contacts_raw"]["whatsapp_contacts"]}
+        branch_pages = set()
         with ThreadPoolExecutor(max_workers=4) as pool:
             futures = {pool.submit(self._fetch_sub, u): u for u in sub_urls[:_SUBPAGE_CRAWL_CAP]}
             for future in as_completed(futures):
                 data = future.result()
                 if not data:
                     continue
+                branch_pages.update(self._branch_followup_urls(data, set(sub_urls[:_SUBPAGE_CRAWL_CAP]) | {url}, domain, target_city))
+                self._merge_phone_labels(result["_contacts_raw"], data.get("phone_contacts", []))
                 # Merge WhatsApp contacts
                 for contact in data["wa_contacts"]:
                     if contact["number"] not in _existing_wa:
@@ -678,6 +681,23 @@ class WebsiteScraper:
                             result["_extra"][field] = data[field]
                             if field in ("city", "state", "country"):
                                 result[field] = result[field] or data[field]
+
+        # 2026-10-14: una página /sucursales suele enlazar fichas que no aparecen
+        # en inicio. Leer hasta ocho fichas de la ciudad pedida, del mismo sitio.
+        if branch_pages:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                for data in pool.map(self._fetch_sub, sorted(branch_pages)[:8]):
+                    if not data or not self._branch_page_matches_city(data, target_city):
+                        continue
+                    self._merge_phone_labels(result["_contacts_raw"], data.get("phone_contacts", []))
+                    for phone in data["phones"]:
+                        if phone not in result["_contacts_raw"]["phone_numbers"]:
+                            result["_contacts_raw"]["phone_numbers"].append(phone)
+                    for contact in data["wa_contacts"] + [{"number": number, "label": ""} for number in data["wa_scripts"]]:
+                        if contact["number"] not in _existing_wa:
+                            result["_contacts_raw"]["whatsapp_contacts"].append(contact)
+                            result["_contacts_raw"]["all_whatsapp_numbers"].append(contact["number"])
+                            _existing_wa.add(contact["number"])
 
         if result["_contacts_raw"]["all_whatsapp_numbers"]:
             result["_contacts_raw"]["whatsapp_numbers"] = result["_contacts_raw"]["all_whatsapp_numbers"]
@@ -1084,6 +1104,48 @@ class WebsiteScraper:
             pass
         return None, ""
 
+    @staticmethod
+    def _branch_page_matches_city(data: dict, target_city: str | None) -> bool:
+        import unicodedata
+        def normalize(value):
+            return re.sub(r'[^a-z0-9]+', ' ', unicodedata.normalize('NFKD', value.lower()).encode('ascii', 'ignore').decode()).strip()
+        city = normalize(target_city or '')
+        if not city:
+            return False
+        headings = normalize(data.get('headings', ''))
+        return normalize(data.get('city', '')) == city or f' {city} ' in f' {headings} '
+
+    @staticmethod
+    def _merge_phone_labels(contacts: dict, labelled: list):
+        existing = {item['number']: item for item in contacts.setdefault('phone_contacts', [])}
+        for item in labelled:
+            if item['number'] not in existing:
+                contacts['phone_contacts'].append(dict(item))
+                existing[item['number']] = contacts['phone_contacts'][-1]
+            elif not existing[item['number']].get('label') and item.get('label'):
+                existing[item['number']]['label'] = item['label']
+
+    @staticmethod
+    def _branch_followup_urls(data: dict, visited: set, domain: str, target_city: str | None) -> list[str]:
+        import unicodedata
+        def normalize(value):
+            return re.sub(r'[^a-z0-9]+', ' ', unicodedata.normalize('NFKD', value.lower()).encode('ascii', 'ignore').decode()).strip()
+        city = normalize(target_city or '')
+        if not city:
+            return []
+        hub = re.search(r'sucursal|ubicacion|branch|location', data.get('source_url', ''), re.I)
+        found = []
+        for link in data.get('internal_links', []):
+            url = link['url']
+            if url in visited or urlparse(url).netloc.lower().removeprefix('www.') != domain.lower().removeprefix('www.'):
+                continue
+            label = normalize(link.get('text', '') + ' ' + link.get('path', ''))
+            if f' {city} ' not in f' {label} ':
+                continue
+            if hub or re.search(r'sucursal|ubicacion|branch|location', label):
+                found.append(url)
+        return list(dict.fromkeys(found))[:8]
+
     def _fetch_sub(self, url: str) -> dict | None:
         """Fetch one subpage and extract all data without touching shared state."""
         sub_soup, sub_text = self._scrape_subpage(url)
@@ -1092,6 +1154,10 @@ class WebsiteScraper:
         phones_s, wa_s = self._extract_from_scripts(sub_soup)
         addr_data = self._extract_address_structured(sub_soup, sub_text)
         return {
+            "source_url": url,
+            "headings": ' '.join(tag.get_text(' ', strip=True) for tag in sub_soup.find_all(['h1', 'h2', 'h3'])),
+            "internal_links": self._find_all_internal_links(sub_soup, url, urlparse(url).netloc.removeprefix('www.')),
+            "phone_contacts": self._extract_phone_numbers_with_labels(sub_soup),
             "wa_contacts": self._extract_whatsapp_with_labels(sub_soup, sub_text),
             "wa_scripts":  wa_s,
             "phones":      self._extract_phone_numbers(sub_soup, sub_text) + phones_s,
@@ -1582,8 +1648,8 @@ class WebsiteScraper:
         """Una sola llamada al LLM activo (OpenAI o DeepSeek) para rellenar campos vacíos: descripción, horarios, servicios, ciudad."""
         import json
 
-        from app.llm import OPENAI_API_KEY, DEEPSEEK_API_KEY
-        if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not text_snippet.strip():
+        from app.llm import provider_credentials
+        if not provider_credentials() or not text_snippet.strip():
             return
 
         extra = result.get("_extra", {})
@@ -3075,8 +3141,8 @@ class WebsiteScraper:
         if not candidates:
             return []
 
-        from app.llm import OPENAI_API_KEY, DEEPSEEK_API_KEY
-        if not (OPENAI_API_KEY or DEEPSEEK_API_KEY):
+        from app.llm import provider_credentials
+        if not provider_credentials():
             return candidates
 
         import json
@@ -3116,8 +3182,8 @@ class WebsiteScraper:
         Útil para páginas de contacto con formato no estructurado."""
         if not clean_text.strip():
             return []
-        from app.llm import OPENAI_API_KEY, DEEPSEEK_API_KEY
-        if not (OPENAI_API_KEY or DEEPSEEK_API_KEY):
+        from app.llm import provider_credentials
+        if not provider_credentials():
             return []
         import json
         prompt = (
@@ -3430,6 +3496,7 @@ class WebsiteScraper:
                 "updated_at": datetime.now(timezone.utc),
             })
 
+        phone_labels = {item['number']: item.get('label', '') for item in contacts_raw.get('phone_contacts', [])}
         for phone in contacts_raw.get("phone_numbers", [])[:20]:
             if re.sub(r"\D", "", phone)[-10:] in _wa_last10:
                 continue  # same number already saved as its WhatsApp contact
@@ -3438,6 +3505,7 @@ class WebsiteScraper:
                 "type": "phone",
                 "value": phone,
                 "normalized_value": phone,
+                "label": phone_labels.get(phone, ''),
                 "source": source_url,
                 "is_primary": False,
                 "is_valid": True,
@@ -3464,84 +3532,17 @@ class WebsiteScraper:
                 upsert=True,
             )
 
-        # pipeline.process_url passes verify_phones=False: it checks the same
-        # numbers itself right after, so doing it here too spent two WhatsApp
-        # lookups per phone (102 numbers verified twice, found 2026-10-02).
+        # 2026-10-14: consultas diferidas por el worker, sin bloquear el scrapeo.
         if verify_phones:
             self._verify_new_phone_contacts(company_id, contacts_raw.get("phone_numbers", []))
 
-    # No verificar más de N teléfonos por empresa aquí — mismo tope que
-    # pipeline.py's _MAX_PHONES_TO_VERIFY, para no estancar el scraping en
-    # empresas con muchos números listados.
-    _MAX_PHONES_TO_VERIFY = 5
-
     def _verify_new_phone_contacts(self, company_id, phone_numbers: List[str]):
-        """Checks freshly-scraped 'phone' contacts against real WhatsApp
-        registration (via wwebjs isRegisteredUser) and promotes them to
-        type='whatsapp' when they match — some sites only expose a wa.me
-        button on branch subpages the crawler didn't reach, so a number
-        without an HTML WhatsApp marker isn't necessarily NOT WhatsApp
-        (real case, Dentalia 2026-09-21: 2 of 19 "phone-only" numbers turned
-        out to be registered). Best-effort: skipped entirely if no WA session
-        is connected, and any per-number failure just leaves it unverified —
-        /admin/verify-phone-contacts can still retry it later in bulk.
+        """La cola persistente son los contactos guardados sin verified.
 
-        Respects the same anti-bot-signal protections as pipeline.py's own
-        verification loop (added there 2026-09-24, missing here until now,
-        2026-09-29): a daily-per-instance cap via reserve_verification_slot
-        (mass number-enumeration is its own bot signal, separate from message
-        sends), random instance rotation instead of always hammering
-        connected[0], and a random delay between lookups so this doesn't look
-        like a burst. Before this fix, this specific code path bypassed all
-        three — pipeline.py's cap only protected its OWN verification loop."""
-        if not phone_numbers:
-            return
-        try:
-            from app.whatsapp_wwebjs import get_all_connected_instances, verify_number
-            from app.daily_cap import reserve_verification_slot
-            connected = get_all_connected_instances(None)
-            if not connected:
-                return
-        except Exception:
-            return
-
-        import random, time
-        # reserve_verification_slot() expects a MongoDBManager-shaped object
-        # (reads db.db.instance_daily_verifications) — WebsiteScraper only
-        # holds the raw pymongo Database (see self.companies_col = db[...]
-        # above), so wrap it in a 1-attribute shim instead of duplicating the
-        # cap's atomic-increment logic here a second time.
-        class _DbShim:
-            def __init__(self, database):
-                self.db = database
-        _db_shim = _DbShim(self.companies_col.database)
-
-        for idx, phone in enumerate(phone_numbers[: self._MAX_PHONES_TO_VERIFY]):
-            contact = self.contacts_col.find_one(
-                {"company_id": str(company_id), "type": "phone", "normalized_value": phone},
-                {"verified": 1},
-            )
-            if not contact or "verified" in contact:
-                continue
-            candidates = connected[:]
-            random.shuffle(candidates)
-            instance = next((i for i in candidates if reserve_verification_slot(_db_shim, i)), None)
-            if not instance:
-                continue  # today's verification quota exhausted on every connected instance
-            if idx > 0:
-                time.sleep(random.uniform(2.0, 6.0))  # space out lookups — no burst pattern
-            try:
-                is_wa = bool(verify_number(instance, phone).get("registered"))
-            except Exception:
-                continue
-            if is_wa:
-                self.contacts_col.update_one(
-                    {"_id": contact["_id"]},
-                    {"$set": {"type": "whatsapp", "verified": True, "detected_via": "phone_verification"}},
-                )
-                self.companies_col.update_one({"_id": ObjectId(str(company_id))}, {"$set": {"has_whatsapp": True}})
-            else:
-                self.contacts_col.update_one({"_id": contact["_id"]}, {"$set": {"verified": False}})
+        2026-10-14: el worker verifica todos los pendientes con pausas.
+        Este metodo no consulta WhatsApp durante el scrapeo.
+        """
+        return
 
     def run_scraping_batch(self, urls: List[str], triggered_by: str = "user") -> Dict:
         """Scrapea múltiples URLs y registra la ejecución en scraping_runs"""

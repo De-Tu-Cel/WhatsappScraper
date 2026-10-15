@@ -29,6 +29,9 @@ def get_openai_spend() -> dict:
     """
     if not OPENAI_ADMIN_API_KEY:
         return {"configured": False}
+    if not OPENAI_PROJECT_ID:
+        # No consultar toda la organización cuando falta el proyecto.
+        return {"configured": False, "reason": "missing_project"}
     now = datetime.now(timezone.utc)
     month_start = int(now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp())
     try:
@@ -44,12 +47,16 @@ def get_openai_spend() -> dict:
         for bucket in data.get("data", []):
             for result in bucket.get("results", []):
                 total += (result.get("amount") or {}).get("value", 0) or 0
-        return {"configured": True, "ok": True, "spend_this_month": round(total, 2), "currency": "usd"}
+        from app.balance_alerts import record_balance, limits
+        value = {"configured": True, "ok": True, "spend_this_month": round(total, 2), "currency": "usd",
+                 "monthly_budget_usd": limits()['openai_monthly_budget_usd']}
+        record_balance('ai', value)
+        return value
     except Exception as e:
         return {"configured": True, "ok": False, "error": str(e)}
 
 
-def get_dataforseo_balance() -> dict:
+def get_dataforseo_balance(*, clear_block=False) -> dict:
     """Current account balance via DataForSEO's free user_data endpoint."""
     login = os.getenv("DATAFORSEO_LOGIN", "")
     password = os.getenv("DATAFORSEO_PASSWORD", "")
@@ -62,10 +69,20 @@ def get_dataforseo_balance() -> dict:
             headers={"Authorization": f"Basic {auth}"},
             timeout=10,
         )
-        r.raise_for_status()
-        data = r.json()
+        from app.service_health import inspect_response, record, state
+        data = inspect_response('dataforseo', f'{login}:{password}', r, mark_success=False)
         result = ((data.get("tasks") or [{}])[0].get("result") or [{}])[0] or {}
         money = result.get("money") or {}
-        return {"configured": True, "ok": True, "balance": money.get("balance"), "currency": "usd"}
+        if money.get('balance') is None:
+            return {'configured': True, 'ok': False, 'error': 'No se pudo obtener el saldo de DataForSEO.'}
+        if float(money['balance']) <= 0:
+            record('dataforseo', f'{login}:{password}', 'billing')
+        elif clear_block or state('dataforseo', f'{login}:{password}').get('status') != 'blocked':
+            # A positive balance does not prove an endpoint's daily cost limit was raised.
+            record('dataforseo', f'{login}:{password}')
+        from app.balance_alerts import record_balance
+        value = {"configured": True, "ok": True, "balance": money.get("balance"), "currency": "usd"}
+        record_balance('dataforseo', value)
+        return value
     except Exception as e:
         return {"configured": True, "ok": False, "error": str(e)}

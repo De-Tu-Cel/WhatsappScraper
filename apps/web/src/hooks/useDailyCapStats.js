@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { authFetch } from '@/lib/api'
 
 // Nombre del evento que InstancesPanel.jsx dispara al prender/apagar warmup en
@@ -11,32 +11,38 @@ export const INSTANCES_CHANGED_EVENT = 'wa-instances-changed'
 
 // Extraído del patrón que ya usaba sendCampaign.jsx (fetchDailyStats/dailyStats) —
 // GET /api/instances/daily-stats ya devuelve todo lo necesario para mostrar cupo
-// diario por instancia (warmup o no) y el total combinado, sin tocar el backend.
+// diario por instancia conectada (warmup o no) y el total combinado disponible.
 export function useDailyCapStats() {
   const [stats, setStats] = useState(null)
+  const requestSeq = useRef(0)
 
   const refresh = useCallback(async () => {
     if (typeof window === 'undefined' || !localStorage.getItem('user_token')) return null
+    const seq = ++requestSeq.current
     try {
       const r = await authFetch('/api/instances/daily-stats')
       if (r.ok) {
         const data = await r.json()
-        setStats(data)
+        if (seq === requestSeq.current) setStats(data)
         return data
       }
     } catch {}
+    if (seq === requestSeq.current) setStats(null)
     return null
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
   useEffect(() => {
     window.addEventListener(INSTANCES_CHANGED_EVENT, refresh)
-    return () => window.removeEventListener(INSTANCES_CHANGED_EVENT, refresh)
+    window.addEventListener('focus', refresh)
+    return () => {
+      window.removeEventListener(INSTANCES_CHANGED_EVENT, refresh)
+      window.removeEventListener('focus', refresh)
+    }
   }, [refresh])
-  // Poll every 5 min so the banner disappears automatically after midnight reset
-  // or when a new session is added outside this browser tab.
+  // 2026-10-14: detectar también la caída de una de varias sesiones conectadas.
   useEffect(() => {
-    const id = setInterval(refresh, 5 * 60 * 1000)
+    const id = setInterval(refresh, 30 * 1000)
     return () => clearInterval(id)
   }, [refresh])
 

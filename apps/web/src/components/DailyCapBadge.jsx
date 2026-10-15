@@ -58,6 +58,7 @@ export default function DailyCapBadge({ stats, selectionCount = 0, newSelectionC
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, fontSize: '0.68rem' }}>
             <Box component="span" sx={{ flex: 1, opacity: 0.85, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {r.label}{r.warmup_mode ? (lang === 'en' ? ' · warmup' : ' · warmup') : ''}
+              {r.connected === false ? (lang === 'en' ? ' · disconnected · 0 available' : ' · desconectada · 0 disponibles') : ''}
             </Box>
             <Box component="span" sx={{ fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{r.sent_today}/{r.cap}</Box>
           </Box>

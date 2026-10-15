@@ -2,11 +2,15 @@
 import os
 import re
 import json
+import logging
 import requests
 import unicodedata
 import concurrent.futures
+import threading
+import time
 from urllib.parse import urlparse, quote_plus
 from dotenv import load_dotenv
+from bs4 import BeautifulSoup
 from pathlib import Path
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
@@ -14,6 +18,13 @@ load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=True)
 SERPAPI_KEY        = os.getenv("SERPAPI_KEY", "")
 DEEPSEEK_API_KEY   = os.getenv("DEEPSEEK_API_KEY", "")
 OPENAI_API_KEY     = os.getenv("OPENAI_API_KEY", "")
+
+
+def _has_llm_key() -> bool:
+    # Migración a Claude (2026-10-14): no omitir filtros/enriquecimiento si
+    # el servidor deja de tener claves de OpenAI y DeepSeek.
+    from app.llm import provider_credentials
+    return bool(OPENAI_API_KEY or DEEPSEEK_API_KEY or provider_credentials('anthropic'))
 
 def _brightdata_key() -> str:
     return os.getenv("BRIGHTDATA_SERP_KEY", "")
@@ -28,6 +39,8 @@ def _dataforseo_auth() -> str:
     return base64.b64encode(f"{login}:{password}".encode()).decode()
 
 EXCLUDED_DOMAINS = {
+    # Third-party business profiles, not the business's own website.
+    'findglocal.com',
     # Enciclopedias
     'wikipedia.org', 'wikimedia.org', 'wikidata.org',
     # Video
@@ -91,6 +104,7 @@ EXCLUDED_DOMAINS = {
     'sephora.com.mx', 'maccosmetics.com', 'clinique.com',
     # Directorios generales adicionales
     'directorioempresas.mx', 'lasempresas.com.mx',
+    'capitalactiva.mx',  # 2026-10-14: directorio, no gasera de Hermosillo.
     'viamichelin.es', 'viamichelin.com',
     'citiservi.com.mx',
     # Mapas y directorios geográficos
@@ -969,6 +983,9 @@ def _extract_location(text: str) -> tuple[str, str, str | None]:
 
 # Sinónimos y términos relacionados por industria para ampliar la búsqueda
 INDUSTRY_SYNONYMS: dict[str, list[str]] = {
+    # English searches must recognize "dental" as the requested sector,
+    # otherwise the unrelated-sector domain check removes genuine clinics.
+    "dentist":       ["dental", "dental clinic", "dental office"],
     "gimnasio":      ["gym", "fitness center", "crossfit", "club deportivo", "smartfit", "iron gym"],
     "gym":           ["gimnasio", "fitness", "crossfit", "club deportivo"],
     "fitness":       ["gimnasio", "gym", "crossfit", "entrenamiento"],
@@ -1047,7 +1064,7 @@ def _normalize_query_with_llm(raw: str) -> dict | None:
     if key in _NORMALIZE_CACHE:
         return _NORMALIZE_CACHE[key]
 
-    if not (OPENAI_API_KEY or DEEPSEEK_API_KEY):
+    if not _has_llm_key():
         _NORMALIZE_CACHE[key] = None
         return None
 
@@ -1248,6 +1265,26 @@ def _get_industry_synonyms(industry: str) -> list[str]:
     return []
 
 
+def _city_query_intent(country: str | None, offset: int) -> str:
+    language = (_get_country_config(country) or {}).get("hl", "es")
+    intents = {
+        "en": ["contact", "official website", "services", "about us"],
+        "pt": ["contato", "site oficial", "servicos", "sobre nos"],
+    }.get(language, ["contacto", "sitio oficial", "servicios", "nosotros"])
+    return intents[(max(0, offset) // 10) % len(intents)]
+
+
+def _service_search_terms(industry: str, country: str | None = None) -> list[str]:
+    # Gaseras (2026-10-14): buscar servicios sin confundir gas LP con gasolina
+    # ni trasladar vocabulario mexicano a búsquedas de otros países.
+    effective = _detect_effective_country(country, industry)
+    if effective and _norm_loc(effective) != 'mexico':
+        return []
+    if _norm_loc(industry) in {'gasera', 'gaseras', 'gas lp', 'gas licuado', 'distribuidora de gas'}:
+        return ['gas lp a domicilio', 'llenado de cilindros de gas', 'gas para tanques estacionarios', 'distribuidora de gas lp']
+    return []
+
+
 def _build_variations(industry: str, city: str = "", country: str = None, num_results: int = 10, state_cities: list[str] | None = None, offset: int = 0) -> list[str]:
     """
     Build DDG query variations designed to return actual business WEBSITES,
@@ -1273,7 +1310,7 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
     ind = industry.strip()
     ind_q = f'"{ind}"'
     static_synonyms = _country_synonyms(ind, country)
-    ai_synonyms = _ai_expand_synonyms(ind, country) if (OPENAI_API_KEY or DEEPSEEK_API_KEY) else []
+    ai_synonyms = _ai_expand_synonyms(ind, country) if _has_llm_key() else []
     synonyms = list(dict.fromkeys(static_synonyms + ai_synonyms))  # merge, dedup, keep order
     is_fitness = "gym" in synonyms or ind.lower() in ("gimnasio", "fitness")
     cfg = _get_country_config(country)
@@ -1292,20 +1329,17 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
         ]
         for syn in synonyms[:4]:
             queries.append(f'"{syn}" {loc}')
-        # When many results are requested and the city is a Mexican state capital,
-        # fan-out to other cities in that state to increase coverage beyond what
-        # a single city can return.
-        if num_results > 20:
-            loc_norm = _norm_loc(loc)
-            state_key = next((sk for sk, cap in _MX_STATE_TO_CAPITAL.items() if _norm_loc(cap) == loc_norm), None)
-            if state_key:
-                extra_cities = [c for c in _MX_STATE_CITIES.get(state_key, []) if _norm_loc(c) != loc_norm]
-                max_extra = min(len(extra_cities), max(3, num_results // 10))
-                for c in extra_cities[:max_extra]:
-                    queries.append(f"{ind_q} {c}")
-                    for syn in synonyms[:2]:
-                        queries.append(f'"{syn}" {c}')
-        return queries
+        queries += [f'{service} {loc}' for service in _service_search_terms(ind, country)]
+        if num_results > 50:
+            # A deeper page of the same query does not cover businesses that
+            # describe themselves differently. Try contact/service queries
+            # for the singular trade and its synonyms, still in this city.
+            intent = _city_query_intent(country, offset)
+            terms = list(dict.fromkeys([_to_singular_es(ind), ind] + synonyms))[:8]
+            queries += [f"{term} {loc} {intent}" for term in terms]
+        # Large requests still target this city. State/country searches fan
+        # out below; widening a city search is handled by allow_nearby.
+        return list(dict.fromkeys(queries))
 
     if not cfg:
         # Sin ciudad ni país conocido — variaciones genéricas, sin sesgo geográfico.
@@ -1374,7 +1408,10 @@ def _build_variations(industry: str, city: str = "", country: str = None, num_re
     return base + city_queries + synonym_queries
 
 
-def _fetch_ddg(query: str, max_results: int = 80, page: int = 1) -> list[dict]:
+_DDG_FETCH_SLOTS = threading.BoundedSemaphore(6)
+
+
+def _fetch_ddg(query: str, max_results: int = 80, page: int = 1, region: str = "wt-wt", backend: str = "auto") -> list[dict]:
     import time
     import random
     from ddgs import DDGS
@@ -1383,14 +1420,19 @@ def _fetch_ddg(query: str, max_results: int = 80, page: int = 1) -> list[dict]:
     # after a short backoff instead of just losing that query's results silently.
     for attempt in range(2):
         try:
-            with DDGS() as ddgs:
+            # Puebla (2026-10-14): auto falló mientras Bing devolvió cinco
+            # dominios para la misma consulta. El segundo intento cambia de
+            # motor; el límite se comparte entre búsquedas de los usuarios.
+            retry_backend = "bing" if attempt and backend == "auto" else backend
+            with _DDG_FETCH_SLOTS, DDGS() as ddgs:
                 # wt-wt = worldwide, evita sesgo por IP del servidor
                 # safesearch=off da más resultados de negocios reales
-                for r in ddgs.text(query, region="wt-wt", safesearch="off", max_results=max_results, page=page):
+                for r in ddgs.text(query, region=region, backend=retry_backend, safesearch="off", max_results=max_results, page=page):
                     href = r.get("href")
                     if href and _is_business_url(href):
                         results.append({"href": href, "title": r.get("title", ""), "body": r.get("body", "")})
-            return results
+            if results or attempt or backend != "auto":
+                return results
         except Exception:
             if attempt == 0:
                 time.sleep(1.5 + random.random() * 1.5)
@@ -1480,7 +1522,7 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
     attempt for a Hermosillo/Sonora search. See _reject_wrong_state(), a
     separate short/focused pass run after this one in search_prospects().
     """
-    if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not urls:
+    if not _has_llm_key() or not urls:
         return urls
     snippets = snippets or {}
     geo = country  # None = no geographic restriction in the prompt
@@ -1662,6 +1704,8 @@ def _ai_filter_urls(urls: list[str], industry: str, snippets: dict | None = None
 
     def _is_known_directory_domain(u: str) -> bool:
         domain = urlparse(u).netloc.lower().replace('www.', '')
+        if domain == 'findglocal.com' or domain.endswith('.findglocal.com'):
+            return True
         return any(kd in domain for kd in _KNOWN_DIRECTORY_DOMAINS)
 
     # Complemento independiente del idioma: la ESTRUCTURA de la URL (no su
@@ -1838,7 +1882,7 @@ def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: s
     this search (unlike the existing degraded_sources mechanism for the 4
     parallel search sources, which this mirrors — audit finding, 2026-09-29).
     """
-    if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not urls or not state_key:
+    if not _has_llm_key() or not urls or not state_key:
         return urls
     state_label = state_key.title()
 
@@ -1889,18 +1933,12 @@ def _reject_wrong_state(urls: list[str], snippets: dict, state_key: str, city: s
 
 def _reject_wrong_country(urls: list[str], snippets: dict, country: str, city: str = "",
                            degraded: list | None = None) -> list[str]:
-    """Country-level analog of _reject_wrong_state, for searches outside Mexico
-    — the UI's own example placeholders explicitly invite these ("Dentists in
-    Buenos Aires", "Clinics in London"), but before this, ONLY Mexico-resolvable
-    searches (via _find_state_for_city / the state fan-out) got ANY post-filter
-    geo check at all. Everywhere else, a business from the wrong country could
-    only be caught by chance — the same blind spot _reject_wrong_state was
-    built to close for Mexican states (audit finding, 2026-09-29). No
-    same-country/different-city allowance is needed here (unlike the Mexico
-    check's same-state fan-out) since this only ever runs for a whole-country
-    search with no state-level scoping to begin with.
+    """Reject explicit evidence of another country or, when supplied, city.
+
+    Missing evidence stays inconclusive; this filter is not a verification
+    of the business. A branch or service in the requested city still fits.
     """
-    if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not urls or not country:
+    if not _has_llm_key() or not urls or not country:
         return urls
 
     def _check_batch(batch: list[str]) -> list[str]:
@@ -1917,15 +1955,21 @@ def _reject_wrong_country(urls: list[str], snippets: dict, country: str, city: s
                     line += f"\n   Resumen: {body}"
                 lines.append(line)
             where = f"{city}, {country}" if city else country
+            city_rule = (
+                f'También excluye un negocio si hay una dirección explícita en OTRA ciudad '
+                f'y no hay evidencia de una sucursal o servicio en {city}. '
+                f'No deduzcas la ciudad por el dominio o un teléfono; no excluyas por falta de datos.\n\n'
+                if city else ''
+            )
             prompt = (
                 f'Se buscan negocios ubicados en {where}.\n\n'
-                f'Tu ÚNICA tarea: de la siguiente lista, señala cuáles tienen evidencia CLARA Y EXPLÍCITA '
+                f'De la siguiente lista, señala cuáles tienen evidencia CLARA Y EXPLÍCITA '
                 f'(dirección, código de país telefónico, o texto explícito) de estar ubicados en un país '
-                f'DISTINTO a {country}. No marques nada por duda o ambigüedad — solo evidencia clara y '
-                f'explícita de otro país.\n\n'
-                f'URLs:\n' + '\n'.join(lines) + '\n\n'
+                f'DISTINTO a {country}. Un código telefónico compartido por varios países no basta. '
+                f'No marques nada por duda o ambigüedad.\n\n'
+                + city_rule + f'URLs:\n' + '\n'.join(lines) + '\n\n'
                 f'Responde ÚNICAMENTE un array JSON con los números de las que SÍ tienen evidencia clara '
-                f'de estar en OTRO país (para excluirlas). Si ninguna aplica, responde []. '
+                f'de estar fuera de la ubicación solicitada (para excluirlas). Si ninguna aplica, responde []. '
                 f'Ejemplo: [2] o []'
             )
             reject_idx = _llm_reject_indices(prompt, len(batch), max_tokens=200)
@@ -1973,7 +2017,7 @@ def _reject_directories_and_institutions(urls: list[str], snippets: dict,
     directory, baressp.com.br, had no known-domain/path/keyword signal at all
     and slipped through every deterministic check).
     """
-    if not (OPENAI_API_KEY or DEEPSEEK_API_KEY) or not urls:
+    if not _has_llm_key() or not urls:
         return urls
 
     def _check_batch(batch: list[str]) -> list[str]:
@@ -2037,6 +2081,8 @@ def _shallow_fetch_meta(urls: list[str], timeout: int = 3, max_bytes: int = 4096
     didn't describe (e.g. Sección Amarilla or Maps hits). All fetches run
     concurrently; slow/broken sites are silently skipped.
     """
+    if not urls:
+        return {}
     _HEADERS = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -2047,6 +2093,7 @@ def _shallow_fetch_meta(urls: list[str], timeout: int = 3, max_bytes: int = 4096
     }
 
     def _fetch_one(url: str) -> tuple[str, dict]:
+        resp = None
         try:
             resp = requests.get(
                 url, headers=_HEADERS, timeout=timeout,
@@ -2067,9 +2114,13 @@ def _shallow_fetch_meta(urls: list[str], timeout: int = 3, max_bytes: int = 4096
             return url, {"title": title, "body": body}
         except Exception:
             return url, {}
+        finally:
+            if resp is not None:
+                resp.close()
 
     result: dict = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(urls), 20)) as ex:
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=min(len(urls), 20))
+    try:
         futs = {ex.submit(_fetch_one, u): u for u in urls}
         for fut in concurrent.futures.as_completed(futs, timeout=timeout + 3):
             try:
@@ -2078,6 +2129,12 @@ def _shallow_fetch_meta(urls: list[str], timeout: int = 3, max_bytes: int = 4096
                     result[u] = meta
             except Exception:
                 pass
+    except concurrent.futures.TimeoutError:
+        # Keep completed metadata. A slow site's enrichment is optional and
+        # must not abort the search or hold its ready candidates hostage.
+        logging.getLogger("searcher").info("[search] metadata deadline: kept %d/%d sites", len(result), len(urls))
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
     return result
 
 
@@ -2610,7 +2667,7 @@ def _search_via_google_maps(
         # Run AI synonym expansion in a thread with a 5s cap so it doesn't block
         # the map queries when the LLM is slow. Static synonyms start immediately;
         # AI synonyms are added only if the LLM responds fast enough.
-        if OPENAI_API_KEY or DEEPSEEK_API_KEY:
+        if _has_llm_key():
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _syn_ex:
                 _syn_fut = _syn_ex.submit(_ai_expand_synonyms, ind_clean)
                 try:
@@ -2752,8 +2809,9 @@ def _dfs_locations(country_iso: str | None) -> list[tuple[str, str, str, str]]:
             f"https://api.dataforseo.com/v3/serp/google/locations/{cc}",
             headers={"Authorization": f"Basic {auth}"}, timeout=30,
         )
-        resp.raise_for_status()
-        items = ((resp.json().get("tasks") or [{}])[0] or {}).get("result") or []
+        from app.service_health import inspect_response, dataforseo_credentials
+        data = inspect_response('dataforseo', dataforseo_credentials(), resp, mark_success=False)
+        items = ((data.get("tasks") or [{}])[0] or {}).get("result") or []
     except Exception as e:
         print(f"[dataforseo-maps] locations/{cc} fetch failed: {e!r}")
         return []
@@ -3011,14 +3069,17 @@ def maps_business_details(cid: str, country_code: str = "MX") -> dict:
     country_name = next((n for n, c in COUNTRY_CONFIG.items() if c is cfg), "México")
     location = unicodedata.normalize("NFKD", country_name).encode("ascii", "ignore").decode("ascii")
     try:
+        from app.service_health import ensure_available, inspect_response, dataforseo_credentials
+        credentials = dataforseo_credentials()
+        ensure_available('dataforseo', credentials)
         resp = requests.post(
             "https://api.dataforseo.com/v3/business_data/google/my_business_info/live",
             headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
             json=[{"keyword": f"cid:{cid}", "location_name": location, "language_code": cfg.get("hl", "es")}],
             timeout=60,
         )
-        resp.raise_for_status()
-        task = (resp.json().get("tasks") or [{}])[0]
+        data = inspect_response('dataforseo', credentials, resp)
+        task = (data.get("tasks") or [{}])[0]
         items = ((task.get("result") or [{}])[0] or {}).get("items") or []
     except Exception as e:
         print(f"[maps-details] cid {cid}: {e!r}")
@@ -3221,7 +3282,8 @@ def _search_via_dataforseo_maps(
     # error "Invalid Field: location_name", mientras que agregar el estado
     # ("Leon,Guanajuato,Mexico") funcionó. Reusa el mismo mapeo ciudad→estado
     # que ya existe para la expansión geográfica en search_prospects().
-    _state_key = _find_state_for_city(city.strip())
+    _state_key = (_find_state_for_city(city.strip())
+                  if _norm_loc(_normalize_country_name(effective_country)) == "mexico" else None)
     # DataForSEO también rechaza el país con acento ("México" → 40501 Invalid
     # Field, confirmado en vivo 2026-09-24) — solo acepta el nombre en ASCII
     # ("Mexico"). El normalizador de LLM (_normalize_query_with_llm) devuelve
@@ -3280,6 +3342,9 @@ def _search_via_dataforseo_maps(
             "depth": depth,
         }]
         try:
+            from app.service_health import ensure_available, inspect_response, dataforseo_credentials
+            credentials = dataforseo_credentials()
+            ensure_available('dataforseo', credentials)
             resp = requests.post(
                 "https://api.dataforseo.com/v3/serp/google/maps/live/advanced",
                 headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
@@ -3290,8 +3355,7 @@ def _search_via_dataforseo_maps(
                 # como para chocar con el _GLOBAL_DEADLINE del pipeline (40-80s).
                 json=payload, timeout=45,
             )
-            resp.raise_for_status()
-            data = resp.json()
+            data = inspect_response('dataforseo', credentials, resp)
             task = (data.get("tasks") or [{}])[0]
             # A bad location_name comes back as HTTP 200 with a task-level
             # error (40501) and no items — logged so it can't hide as "0 results".
@@ -3378,7 +3442,9 @@ def search_prospects(
     country: str = None,
     phone_leads_out: list | None = None,
     meta_out: dict | None = None,
+    allow_nearby: bool = False,
 ) -> tuple[list, str | None, list]:
+    # A specific city is a constraint. Expand only when explicitly requested.
     # phone_leads_out: if given, gets Google Maps businesses that have a phone
     # but no website, kept only when Google's primary category is the
     # searched giro (see _maps_category_matches). Separate from the returned
@@ -3414,7 +3480,9 @@ def search_prospects(
             state_raw = _llm_result.get("state") or ""
             if state_raw and not city:
                 state_key = _norm_loc(state_raw)
-                state_cities = _MX_STATE_CITIES.get(state_key)
+                state_cities = (_MX_STATE_CITIES.get(state_key)
+                                if _norm_loc(_detect_effective_country(country, industry) or DEFAULT_COUNTRY) == "mexico"
+                                else None)
                 if state_cities:
                     _target_state_key = state_key
                     _log.info("[search] state fan-out: %s → %d cities", state_raw, len(state_cities))
@@ -3429,7 +3497,8 @@ def search_prospects(
                 city     = extracted_city
                 country  = country or extracted_country
 
-    if not _target_state_key and city:
+    if (not _target_state_key and city
+            and _norm_loc(_detect_effective_country(country, industry) or DEFAULT_COUNTRY) == "mexico"):
         _target_state_key = _find_state_for_city(city)
 
     _log.info("[search] industry=%r city=%r country=%r num=%d offset=%d",
@@ -3443,7 +3512,7 @@ def search_prospects(
     # generates better Google recall. The original 'industry' is kept for the AI filter
     # so relevance checking still matches the user's full intent.
     industry_q = industry
-    if len(industry.split()) > 3 and (OPENAI_API_KEY or DEEPSEEK_API_KEY):
+    if len(industry.split()) > 3 and _has_llm_key():
         industry_q = _simplify_industry_for_search(industry)
         if industry_q != industry:
             _log.info("[search] query simplified %r → %r", industry, industry_q)
@@ -3621,6 +3690,9 @@ def search_prospects(
         result = _reject_wrong_state(result, snippets, _target_state_key, city=city, degraded=degraded_sources)
         if len(result) != _before_geo:
             _log.info("[search] geo filter: %d → %d URLs (estado distinto a %s)", _before_geo, len(result), _target_state_key)
+        if city and not allow_nearby:
+            result = _reject_wrong_country(result, snippets, country or DEFAULT_COUNTRY,
+                                           city=city, degraded=degraded_sources)
     else:
         # _target_state_key solo se resuelve para ciudades/estados MEXICANOS
         # (_find_state_for_city). Para el resto del mundo — que la propia UI
@@ -3654,8 +3726,8 @@ def search_prospects(
     # genuinamente no haya más oferta en la región), pero le da una oportunidad
     # real antes de devolver menos de lo pedido.
     _SHORTFALL_RATIO = 0.7
-    if offset == 0 and city.strip() and not state_cities and len(result) < num_results * _SHORTFALL_RATIO:
-        _state_key = _find_state_for_city(city)
+    if allow_nearby and offset == 0 and city.strip() and not state_cities and len(result) < num_results * _SHORTFALL_RATIO:
+        _state_key = _target_state_key
         _nearby = (
             [c for c in _MX_STATE_CITIES.get(_state_key, []) if _norm_loc(c) != _norm_loc(city)][:3]
             if _state_key else []
@@ -3862,7 +3934,7 @@ def _bd_build_queries(industry: str, city: str, country: str | None, keywords: s
         # la cobertura sin perder precisión (siguen siendo esa ciudad exacta, no
         # fan-out geográfico).
         static_synonyms = _get_synonyms(ind_clean)
-        ai_synonyms = _ai_expand_synonyms(ind_clean) if (OPENAI_API_KEY or DEEPSEEK_API_KEY) else []
+        ai_synonyms = _ai_expand_synonyms(ind_clean) if _has_llm_key() else []
         synonyms = list(dict.fromkeys(static_synonyms + ai_synonyms))
         queries = [
             f"{base_city} {loc} {_DORK_PRESENCE}",  # dork primary
@@ -3878,18 +3950,7 @@ def _bd_build_queries(industry: str, city: str, country: str | None, keywords: s
             f"{base_city} pedidos {loc}",
         ]
         queries += [f"{syn} {loc}" for syn in synonyms[:10]]
-        # Fan-out to other cities in the same state when many results requested
-        if num_results > 20:
-            loc_norm = _norm_loc(loc)
-            state_key = next((sk for sk, cap in _MX_STATE_TO_CAPITAL.items() if _norm_loc(cap) == loc_norm), None)
-            if state_key:
-                extra_cities = [c for c in _MX_STATE_CITIES.get(state_key, []) if _norm_loc(c) != loc_norm]
-                max_extra = min(len(extra_cities), max(3, num_results // 10))
-                for c in extra_cities[:max_extra]:
-                    queries.append(f"{base_city} {c}")
-                    queries.append(f"{base_city} empresa {c}")
-                    for syn in synonyms[:3]:
-                        queries.append(f"{syn} {c}")
+        # Keep the requested city even when asking for many results.
         return queries
 
     cities = cfg["cities"] if cfg and cfg.get("cities") else []
@@ -4049,6 +4110,33 @@ def _search_via_brightdata(
     return urls, snippets
 
 
+# 2026-10-14: conservar páginas recientes permite continuar sin saltar páginas
+# de consultas secundarias ni volver a pedir las que ya se descargaron.
+_DDG_PAGE_CACHE = {}
+_DDG_CACHE_LOCK = threading.Lock()
+_DDG_CACHE_TTL = 600
+
+
+def _cached_ddg_page(query, page):
+    key = (query, page)
+    now = time.monotonic()
+    with _DDG_CACHE_LOCK:
+        cached = _DDG_PAGE_CACHE.get(key)
+        if cached and now - cached[0] < _DDG_CACHE_TTL:
+            return cached[1]
+    rows = _fetch_ddg(query, page=page)
+    # No conservar vacíos: el proveedor también devuelve [] cuando falla.
+    if rows:
+        with _DDG_CACHE_LOCK:
+            expired = [k for k, value in _DDG_PAGE_CACHE.items() if now - value[0] >= _DDG_CACHE_TTL]
+            for old_key in expired:
+                _DDG_PAGE_CACHE.pop(old_key, None)
+            if len(_DDG_PAGE_CACHE) >= 512:
+                _DDG_PAGE_CACHE.pop(next(iter(_DDG_PAGE_CACHE)))
+            _DDG_PAGE_CACHE[key] = (now, rows)
+    return rows
+
+
 def _search_via_duckduckgo(
     industry: str, city: str = "", exclude_domains: set | None = None,
     country: str = None, num_results: int = 10, state_cities: list[str] | None = None,
@@ -4069,19 +4157,71 @@ def _search_via_duckduckgo(
     # No se aplica a TODAS las variaciones para no cuadruplicar el volumen total
     # y empeorar el throttling que ya describe el comentario de abajo.
     _EXTRA_PAGES_FOR = 3
-    tasks: list[tuple[str, int]] = [(v, 1) for v in variations]
-    tasks += [(v, p) for v in variations[:_EXTRA_PAGES_FOR] for p in (2, 3, 4)]
+    # A city keeps the same queries across batches, so advance the pages.
+    # Country/state batches rotate city queries and must start at page one
+    # for each newly selected city. The public cursor advances by ten.
+    first_page = 1 + max(0, offset) // 10 if city.strip() else 1
+    # Priorizar para profundidad las consultas que sí dieron dominios nuevos;
+    # las otras mantienen su página base para no perder cobertura.
+    with _DDG_CACHE_LOCK:
+        cached_pages = {(q, p): rows for (q, p), (stamp, rows) in _DDG_PAGE_CACHE.items()
+                        if time.monotonic() - stamp < _DDG_CACHE_TTL}
+        history = {q: [row for (query, _), (stamp, rows) in _DDG_PAGE_CACHE.items()
+                       if query == q and time.monotonic() - stamp < _DDG_CACHE_TTL
+                       for row in rows] for q in variations}
+    # Mantener profundidad en las tres consultas originales (dork/región):
+    # ordenar solo por volumen crudo favoreció ruido y perdió candidatos en
+    # Hermosillo. Usar el historial para ordenar la lectura, no para quitarlas.
+    deep_queries = variations[:_EXTRA_PAGES_FOR]
+    ranked_queries = sorted(variations, key=lambda q: (
+        len({_get_domain(r['href']) for r in history[q]} - skip), len(history[q])
+    ), reverse=True)
+    def next_page(query):
+        if not offset or not skip:
+            return first_page
+        # Cada consulta avanza solo por páginas cuyos dominios ya conoce este
+        # usuario. Otra búsqueda puede reutilizar páginas con candidatos nuevos.
+        page = 1
+        while (query, page) in cached_pages and all(_get_domain(row['href']) in skip for row in cached_pages[query, page]):
+            page += 1
+        return page
+
+    starts = {query: next_page(query) for query in variations}
+    tasks: list[tuple[str, int]] = [(v, starts[v]) for v in ranked_queries]
+    tasks += [(v, p) for v in deep_queries
+              for p in range(starts[v] + 1, starts[v] + 4)]
+    if city.strip() and num_results > 50 and first_page > 1:
+        # The last queries use a new intent in this batch: start those at
+        # page one rather than skipping their best results on load more.
+        intent = _city_query_intent(country, offset)
+        tasks = [(query, 1 if query.endswith(" " + intent) else page) for query, page in tasks]
 
     # Kept below the point where DDG starts throttling/blocking (~10-15 simultaneous
     # requests), but higher than before since MAJOR_CITIES now covers all 32 state
     # capitals + big metros, nearly doubling the variation count per search.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), 12)) as executor:
-        futures = {executor.submit(_fetch_ddg, v, page=p): (v, p) for v, p in tasks}
+    # ddgs's automatic backend fans each request out to several engines.
+    # Twelve outer workers multiplied that traffic and caused connection
+    # resets in the real volume probe; keep the outer fan-out bounded.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), 6)) as executor:
+        futures = {executor.submit(_cached_ddg_page, v, p): (v, p) for v, p in dict.fromkeys(tasks)}
         for future in concurrent.futures.as_completed(futures):
             try:
                 all_raw.extend(future.result())
             except Exception:
                 pass
+
+    # Pedidos pequeños también necesitan variantes si faltan candidatos nuevos.
+    # Mantener la ciudad exacta y limitar la ampliación a ocho consultas gratis.
+    new_domains = {_get_domain(row['href']) for row in all_raw} - skip - {''}
+    if city.strip() and len(new_domains) < num_results:
+        intent = _city_query_intent(country, offset)
+        terms = list(dict.fromkeys([_to_singular_es(industry), industry] + _country_synonyms(industry, country)))[:8]
+        extra = [f'{term} {city.strip()} {intent}' for term in terms]
+        extra = [query for query in extra if (query, 1) not in tasks]
+        if extra:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(extra), 3)) as executor:
+                for rows in executor.map(lambda query: _cached_ddg_page(query, 1), extra):
+                    all_raw.extend(rows)
 
     # Deduplicar por dominio; saltar los que ya están en la BD
     seen_domains: set[str] = set()

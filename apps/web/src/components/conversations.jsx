@@ -15,6 +15,7 @@ import Skeleton from '@mui/material/Skeleton'
 import Chip from '@mui/material/Chip'
 import TextField from '@mui/material/TextField'
 import IconButton from '@mui/material/IconButton'
+import Button from '@mui/material/Button'
 import Badge from '@mui/material/Badge'
 import Tooltip from '@mui/material/Tooltip'
 import InputAdornment from '@mui/material/InputAdornment'
@@ -29,6 +30,7 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import DoneAllIcon from '@mui/icons-material/DoneAll'
 import DoneIcon from '@mui/icons-material/Done'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined'
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid'
 import MicIcon from '@mui/icons-material/Mic'
 import ImageIcon from '@mui/icons-material/Image'
@@ -49,6 +51,8 @@ import { getCategoryConfig } from '@/lib/categoryConfig'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { InstanceDisconnectedBanner, SendErrorBanner, InstanceStatusDot } from './InstanceStatusBanner'
 import ChatAIConfig from './ChatAIConfig'
+import ConversationAnalysisButton from './ConversationAnalysisButton'
+import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 
 const EMOJI_GROUPS = [
   { label: { en: 'Frequent',  es: 'Frecuentes' }, emojis: ['😀','😂','🥹','😊','😍','🤩','😎','🥳','😅','😭','😤','🤔','👍','👎','👋','🙌','🤝','❤️','🔥','✅','⭐','🎉','💯','🚀'] },
@@ -154,6 +158,7 @@ function DateDivider({ label }) {
 }
 
 function StatusIcon({ status, direction }) {
+  if (status === 'failed') return <ErrorOutlineIcon sx={{ fontSize: 13, color: '#f87171' }} />
   if (direction === 'inbound') return null
   if (status === 'read')      return <DoneAllIcon sx={{ fontSize: 13, color: 'var(--accent, #60a5fa)' }} />
   if (status === 'delivered') return <DoneAllIcon sx={{ fontSize: 13, color: 'rgba(255,255,255,0.35)' }} />
@@ -233,7 +238,7 @@ const ConversationItem = memo(function ConversationItemImpl({ conv, active, onCl
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.3 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0, flex: 1 }}>
-            <Typography sx={{ color: conv.unread ? 'white' : 'rgba(255,255,255,0.8)', fontWeight: conv.unread ? 700 : 500, fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
+            <Typography title={conv.company_name || 'Sin nombre'} sx={{ color: conv.unread ? 'white' : 'rgba(255,255,255,0.8)', fontWeight: conv.unread ? 700 : 500, fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
               {conv.company_name || 'Sin nombre'}
             </Typography>
             {conv.ai_active && (
@@ -315,7 +320,9 @@ const ConversationItem = memo(function ConversationItemImpl({ conv, active, onCl
           }}>
             {conv.last_message?.includes?.('BEGIN:VCARD')
               ? '(contacto compartido)'
-              : (conv.last_message || '—')}
+              : `${conv.last_error === 'numero_no_valido_en_whatsapp'
+                ? (lang === 'en' ? 'No WhatsApp: ' : 'Sin WhatsApp: ')
+                : conv.last_status === 'failed' ? (lang === 'en' ? 'Not sent: ' : 'No enviado: ') : ''}${conv.last_message || '—'}`}
           </Typography>
         </Box>
       </Box>
@@ -620,6 +627,13 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
             )}
           </Box>
         )}
+        {msg.status === 'failed' && (
+          <Typography sx={{ color: '#f87171', fontSize: '0.7rem', mt: 0.75 }}>
+            {msg.error === 'numero_no_valido_en_whatsapp'
+              ? (lang === 'en' ? 'Not sent · Number unavailable on WhatsApp' : 'No enviado · Número no válido en WhatsApp')
+              : (lang === 'en' ? 'Not sent · Sending failed' : 'No enviado · Falló el envío')}
+          </Typography>
+        )}
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 0.5, mt: 0.25 }}>
           <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.65rem' }}>
             {formatMsgTime(msg.created_at, lang)}
@@ -704,6 +718,8 @@ export default function Conversations({ isActive } = {}) {
   const [selected, setSelected]     = useState(null)
   const [thread, setThread]         = useState([])
   const [threadLoad, setThreadLoad] = useState(false)
+  const [threadError, setThreadError] = useState(false)
+  const threadRequestRef = useRef(0)
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch]           = useState('')
   const [, startSearchTransition]     = useTransition()
@@ -717,8 +733,12 @@ export default function Conversations({ isActive } = {}) {
   const fileInputRef = useRef(null)
   const stickerInputRef = useRef(null)
   const [waNumbers, setWaNumbers]       = useState([])
+  const [waValidation, setWaValidation] = useState({})
+  const isUnregisteredNumber = useCallback(num => waValidation[normPhone(num)]?.valid === false, [waValidation])
   const [selectedNums, setSelectedNums] = useState([])
   const [activeNum, setActiveNum]       = useState('all')
+  const hasInvalidTarget = activeNum && activeNum !== 'all'
+    ? isUnregisteredNumber(activeNum) : waNumbers.length === 1 && isUnregisteredNumber(waNumbers[0])
   // Proactively disables sending instead of only surfacing the backend's
   // 403 after the fact — same blacklist WhatsAppNumberPicker.jsx already
   // shows red/disabled for in the search/recipients pickers.
@@ -726,6 +746,7 @@ export default function Conversations({ isActive } = {}) {
   const isNumberBlacklisted = n => blacklistedPhones.has(phoneKey(n))
   const blockedSelectedNums = selectedNums.filter(isNumberBlacklisted)
   const hasBlockedSelection = blockedSelectedNums.length > 0
+  const composerDisabled = hasBlockedSelection || hasInvalidTarget
   const [numbersReady, setNumbersReady] = useState(false)
   const [syncing, setSyncing]           = useState(false)
   const [emojiAnchor, setEmojiAnchor]   = useState(null)
@@ -740,6 +761,9 @@ export default function Conversations({ isActive } = {}) {
   const { stats: dailyStats, refresh: fetchDailyStats } = useDailyCapStats()
   const currentCompanyRef               = useRef(null)  // evita race condition en fetchCompanyNumbers
   const { t, lang } = useLang()
+  const composerDisabledReason = hasInvalidTarget
+    ? (lang === 'en' ? 'This number is not registered on WhatsApp according to the last validation. Sending is disabled.' : 'Este número no tiene WhatsApp según la última validación. El envío está deshabilitado.')
+    : hasBlockedSelection ? (lang === 'en' ? 'This number is blocked. Unblock it in Blacklist to send messages.' : 'Este número está bloqueado. Desbloquéalo en Blacklist para enviar mensajes.') : ''
   const { user } = useUser()
   const [myConvsOnly, setMyConvsOnly] = useState(false)
   const threadLenRef    = useRef(0)
@@ -752,6 +776,7 @@ export default function Conversations({ isActive } = {}) {
   const replyRef  = useRef(null)
   const [sendError, setSendError] = useState('')
   const [aiTyping, setAiTyping]         = useState(false)
+  const [aiProviderBlocked, setAiProviderBlocked] = useState(null)
   const [aiActive, setAiActive]         = useState(false)
   const [aiEnabled, setAiEnabled]       = useState(false)
   const [aiToggling, setAiToggling]     = useState(false)
@@ -846,6 +871,8 @@ export default function Conversations({ isActive } = {}) {
   }, [waNumbers])
 
   const fetchThread = useCallback(async (companyId, scrollToBottom = false, silent = false, numFilter = null) => {
+    const requestId = ++threadRequestRef.current
+    const isCurrent = () => requestId === threadRequestRef.current && currentCompanyRef.current === companyId
     if (!silent) {
       if (scrollToBottom) setThreadLoad(true)
     }
@@ -853,7 +880,10 @@ export default function Conversations({ isActive } = {}) {
       const params = numFilter && numFilter !== 'all' ? `?number=${encodeURIComponent(numFilter)}` : ''
       const res = await authFetch(`/api/conversations/${companyId}${params}`)
       const data = await res.json()
-      const msgs = Array.isArray(data) ? data : []
+      if (!isCurrent()) return
+      if (!res.ok || !Array.isArray(data)) throw new Error('Conversation could not be loaded')
+      const msgs = data
+      setThreadError(false)
       if (silent) {
         setThread(prev => {
           if (msgs.length === prev.length) return prev
@@ -875,6 +905,8 @@ export default function Conversations({ isActive } = {}) {
               unread: 0,
               last_message: last?.body ?? prev[idx].last_message,
               last_direction: last?.direction ?? prev[idx].last_direction,
+              last_status: last?.status ?? prev[idx].last_status,
+              last_error: last?.error ?? null,
               last_at: last?.created_at ?? prev[idx].last_at,
             }
             const next = [...prev]
@@ -896,9 +928,9 @@ export default function Conversations({ isActive } = {}) {
         setConvs(prev => prev.map(c => c.company_id === companyId ? { ...c, unread: 0 } : c))
       }
     } catch {
-      if (!silent) setThread([])
+      if (isCurrent()) setThreadError(true)
     } finally {
-      if (!silent) setThreadLoad(false)
+      if (isCurrent()) setThreadLoad(false)
     }
   }, [])
 
@@ -914,12 +946,15 @@ export default function Conversations({ isActive } = {}) {
           .map(c => c.value)
       )]
       setWaNumbers(numbers)
-      setSelectedNums(numbers)
+      const validation = Object.fromEntries(Object.entries(data.whatsapp_validation || {}).map(([num, value]) => [normPhone(num), value]))
+      setWaValidation(validation)
+      setSelectedNums(numbers.filter(num => validation[normPhone(num)]?.valid !== false))
       setNumbersReady(true)
       return numbers
     } catch {
       if (currentCompanyRef.current !== companyId) return []
       setWaNumbers([])
+      setWaValidation({})
       setNumbersReady(true)
       return []
     }
@@ -979,6 +1014,7 @@ export default function Conversations({ isActive } = {}) {
 
   // Poll AI follow-up status when a conversation is open
   useEffect(() => {
+    setAiProviderBlocked(null)
     if (!selected) {
       setAiTyping(false); setAiActive(false); setAiEnabled(false)
       return
@@ -991,6 +1027,7 @@ export default function Conversations({ isActive } = {}) {
         const data = await res.json()
         setAiEnabled(data.ai_enabled || false)
         setAiActive(data.ai_active || false)
+        setAiProviderBlocked(data.provider_blocked || null)
         setAiTyping(prev => {
           const next = data.ai_typing || false
           if (!prev && next) {
@@ -1036,9 +1073,9 @@ export default function Conversations({ isActive } = {}) {
 
   // Sync reply target with active tab
   useEffect(() => {
-    if (activeNum && activeNum !== 'all') setSelectedNums([activeNum])
-    else setSelectedNums(waNumbers.slice(0, 1))
-  }, [activeNum, waNumbers])
+    if (activeNum && activeNum !== 'all') setSelectedNums(isUnregisteredNumber(activeNum) ? [] : [activeNum])
+    else setSelectedNums(waNumbers.filter(num => !isUnregisteredNumber(num)).slice(0, 1))
+  }, [activeNum, waNumbers, isUnregisteredNumber])
 
   // Re-fetch thread when user switches to a specific number tab
   useEffect(() => {
@@ -1069,7 +1106,9 @@ export default function Conversations({ isActive } = {}) {
     if (selected) {
       threadLenRef.current = 0
       setThread([])
+      setThreadError(false)
       setWaNumbers([])
+      setWaValidation({})
       setNumbersReady(false)
       setActiveNum('all')
       // Run both in parallel: numbers gate the render, thread populates numStats/icons.
@@ -1086,8 +1125,11 @@ export default function Conversations({ isActive } = {}) {
   // its URL — while still going through the same targeting/send/optimistic-
   // update logic as a normal attached-file send.
   const handleSendReply = useCallback(async function handleSendReply(overrideText = null, overrideMedia = null) {
+    if (hasInvalidTarget) return
     const text   = overrideText ?? replyValueRef.current
-    const toSend = selectedNums.length > 0 ? selectedNums : waNumbers.slice(0, 1)
+    const candidates = selectedNums.length > 0 ? selectedNums
+      : activeNum && activeNum !== 'all' ? [activeNum] : waNumbers.slice(0, 1)
+    const toSend = candidates.filter(num => !isUnregisteredNumber(num))
     if (!text.trim() && !attachedFile && !overrideMedia) return
     if (!selected || toSend.length === 0) return
     if (dailyStats && dailyStats.total_available <= 0) {
@@ -1206,7 +1248,7 @@ export default function Conversations({ isActive } = {}) {
       setTimeout(() => setSendError(''), 8000)
     }
     finally { setSending(false) }
-  }, [selectedNums, waNumbers, selected, fetchThread, dailyStats, fetchDailyStats, lang, user])
+  }, [selectedNums, waNumbers, activeNum, hasInvalidTarget, isUnregisteredNumber, selected, fetchThread, dailyStats, fetchDailyStats, lang, user])
 
   // ── Sticker tray — a small shared library so picking one is a click (like
   // the emoji picker), instead of browsing the filesystem every time. ────────
@@ -1221,11 +1263,13 @@ export default function Conversations({ isActive } = {}) {
   }, [])
 
   const openStickerTray = e => {
+    if (composerDisabled) return
     setStickerAnchor(e.currentTarget)
     if (stickerLibrary === null) fetchStickerLibrary()
   }
 
   async function sendLibrarySticker(sticker) {
+    if (composerDisabled) return
     setStickerAnchor(null)
     setStickerSendingUrl(sticker.url)
     await handleSendReply('', { url: sticker.url, contentType: sticker.content_type })
@@ -1233,7 +1277,7 @@ export default function Conversations({ isActive } = {}) {
   }
 
   async function handleNewStickerFile(file) {
-    if (!file) return
+    if (!file || composerDisabled) return
     setStickerUploadErr('')
     setStickerSendingUrl('uploading')
     try {
@@ -1260,8 +1304,8 @@ export default function Conversations({ isActive } = {}) {
       const msgNum = normPhone(m.to_number || m.from_number || m.number)
       const match  = normMap.get(msgNum)
       if (match) {
-        if (m.direction === 'outbound') stats[match].sent++
-        else stats[match].received++
+        if (m.direction === 'outbound' && m.status !== 'failed') stats[match].sent++
+        else if (m.direction === 'inbound') stats[match].received++
       }
     })
     return stats
@@ -1273,7 +1317,7 @@ export default function Conversations({ isActive } = {}) {
     const target  = normPhone(activeNum)
     const normSet = new Set(waNumbers.map(n => normPhone(n)))
     const sentToThisNum = thread.some(m =>
-      m.direction === 'outbound' && normPhone(m.to_number || m.number) === target
+      m.direction === 'outbound' && m.status !== 'failed' && normPhone(m.to_number || m.number) === target
     )
     return thread.filter(m => {
       const msgNum = normPhone(m.to_number || m.from_number || m.number)
@@ -1325,10 +1369,11 @@ export default function Conversations({ isActive } = {}) {
 
   return (
     <>
-    <Box sx={{ display: 'flex', height: '100%', minHeight: 0, gap: 0, borderRadius: 2, overflow: 'hidden', border: '1px solid var(--border)' }}>
+    <Box sx={{ display: 'flex', height: '100%', minHeight: 0, gap: 0, borderRadius: 2, overflow: 'hidden', border: '1px solid var(--border)', containerType: 'inline-size', containerName: 'conversation-panel' }}>
 
       {/* ── Lista de conversaciones ── */}
-      <Box sx={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
+      <Box sx={{ width: 'clamp(240px, 30%, 300px)', flexShrink: 0, display: 'flex', flexDirection: 'column', borderRight: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)',
+        '@container conversation-panel (max-width: 600px)': { width: '100%', display: selected ? 'none' : 'flex', borderRight: 0 } }}>
         {/* Header — mismo verde difuminado que usa el fondo del título de
            Ideas, pero sin encerrarlo en su propio recuadro con borde: aquí
            el degradado cubre todo este bloque (título, aviso de IA,
@@ -1440,11 +1485,15 @@ export default function Conversations({ isActive } = {}) {
       </Box>
 
       {/* ── Hilo de mensajes ── */}
-      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
+      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, overflow: 'hidden', containerType: 'inline-size', containerName: 'conversation-thread',
+        '@container conversation-panel (max-width: 600px)': { display: selected ? 'flex' : 'none' } }}>
         {!selected ? (
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%',
+          <Box data-conversation-empty sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', minWidth: 0, boxSizing: 'border-box', p: 2, overflowY: 'auto',
+            '@container conversation-thread (max-width: 320px)': { p: 1 },
             backgroundImage: WA_BG_PATTERN, backgroundSize: '100px 100px' }}>
-            <Box sx={{ textAlign: 'center', px: 4, py: 3, borderRadius: 3,
+            <Box sx={{ textAlign: 'center', width: '100%', maxWidth: 440, minWidth: 0, boxSizing: 'border-box', px: 3, py: 3, borderRadius: 3,
+              '@container conversation-thread (max-width: 400px)': { px: 2, py: 2 },
+              '@container conversation-thread (max-width: 260px)': { px: 1.5, py: 1.5 },
               bgcolor: 'var(--card-bg)', backdropFilter: 'blur(12px)',
               border: '1px solid rgba(37,211,102,0.22)',
               boxShadow: '0 8px 32px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.04)' }}>
@@ -1453,10 +1502,10 @@ export default function Conversations({ isActive } = {}) {
                 display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <ForumOutlinedIcon sx={{ fontSize: 20, color: 'rgba(37,211,102,0.7)' }} />
               </Box>
-              <Typography sx={{ color: 'var(--text)', fontSize: '0.92rem', fontWeight: 600, mb: 0.4 }}>
+              <Typography sx={{ color: 'var(--text)', fontSize: '0.92rem', fontWeight: 600, lineHeight: 1.4, overflowWrap: 'anywhere', mb: 0.4 }}>
                 {t.convs.noneSelected}
               </Typography>
-              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem', lineHeight: 1.5, overflowWrap: 'anywhere' }}>
                 {t.convs.pickCompany}
               </Typography>
             </Box>
@@ -1464,9 +1513,16 @@ export default function Conversations({ isActive } = {}) {
         ) : (
           <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
             {/* Header del hilo */}
-            <Box sx={{ px: 2.5, py: 1.5, borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+            <Box data-conversation-header sx={{ px: 2.5, py: 1.5, borderBottom: '1px solid var(--border)', flexShrink: 0,
+              '@container conversation-thread (max-width: 480px)': { px: 1.5 } }}>
               {/* Fila superior: nombre + link + refresh */}
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: waNumbers.length > 0 ? 1 : 0 }}>
+              <Button size="small" startIcon={<ArrowBackIcon />} onClick={() => setSelected(null)}
+                sx={{ display: 'none', mb: 1, textTransform: 'none', color: 'var(--accent)',
+                  '@container conversation-panel (max-width: 600px)': { display: 'inline-flex' } }}>
+                {lang === 'en' ? 'Back to conversations' : 'Volver a conversaciones'}
+              </Button>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.5, mb: waNumbers.length > 0 ? 1 : 0 }}>
+                <Box data-conversation-identity sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, flex: '1 1 260px', minWidth: 'min(100%, 260px)' }}>
                 {/* Mismo ícono-en-caja-degradada verde que ya usa el header
                    de la lista de Conversaciones, en vez del ícono plano y
                    suelto de antes — era el único lugar de este archivo sin
@@ -1480,24 +1536,35 @@ export default function Conversations({ isActive } = {}) {
                   <BusinessIcon sx={{ fontSize: 15, color: '#4ade80' }} />
                 </Box>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
-                  <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '0.9rem' }}>
+                  <Typography data-conversation-name title={selected.company_name} sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.9rem', lineHeight: 1.4, overflowWrap: 'anywhere' }}>
                     {selected.company_name}
                   </Typography>
                   {selected.industry && (
-                    <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.72rem' }}>{selected.industry}</Typography>
+                    <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', lineHeight: 1.4, overflowWrap: 'anywhere' }}>{selected.industry}</Typography>
                   )}
-                </Box>
                 {selected.website && (
-                  <Chip label={selected.domain || selected.website} size="small" component="a"
+                  <Chip title={selected.domain || selected.website} label={selected.domain || selected.website} size="small" component="a"
                     href={selected.website} target="_blank" clickable
-                    sx={{ fontSize: '0.7rem', height: 20, bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.1)', maxWidth: 180, overflow: 'hidden' }} />
+                    sx={{ mt: 0.5, fontSize: '0.7rem', height: 20, bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.1)', maxWidth: '100%', overflow: 'hidden' }} />
                 )}
+                </Box>
+                </Box>
+                <Box data-conversation-actions sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, maxWidth: '100%', flex: '0 1 auto',
+                  '@container conversation-thread (max-width: 320px)': {
+                    gap: 0.25, '& > .MuiIconButton-root': { p: 0.5 }, '& > [data-chat-ai-toggle]': { width: 36 },
+                  } }}>
+                <ConversationAnalysisButton
+                  key={`${selected.company_id}:${activeNum}`}
+                  companyId={selected.company_id} companyName={selected.company_name}
+                  number={activeNum && activeNum !== 'all' ? activeNum : waNumbers.length === 1 ? waNumbers[0] : null}
+                  numberCount={waNumbers.length}
+                />
               {syncing && (
                 <CircularProgress size={12} sx={{ color: 'rgba(255,255,255,0.2)', mr: 0.5 }} />
               )}
                 {/* AI toggle — pill switch with SmartToy ball */}
                 <Tooltip title={aiEnabled ? t.convs.andyOn : t.convs.andyOff}>
-                  <Box onClick={aiToggling ? undefined : handleAiToggle} sx={{
+                  <Box data-chat-ai-toggle onClick={aiToggling ? undefined : handleAiToggle} sx={{
                     position: 'relative', cursor: aiToggling ? 'default' : 'pointer',
                     width: 42, height: 24, borderRadius: 99, flexShrink: 0,
                     bgcolor: aiEnabled ? 'var(--accent,#6366f1)' : 'rgba(255,255,255,0.1)',
@@ -1545,6 +1612,7 @@ export default function Conversations({ isActive } = {}) {
                     <RefreshIcon sx={{ fontSize: 16 }} />
                   </IconButton>
                 </Tooltip>
+                </Box>
               </Box>
 
               {/* Separador suave entre la identidad del negocio (arriba) y
@@ -1642,23 +1710,31 @@ export default function Conversations({ isActive } = {}) {
                     const isActive  = activeNum === num
                     const stats     = numStats[num] || { sent: 0, received: 0 }
                     const replied   = stats.sent > 0 || stats.received > 0
+                    const validation = waValidation[normPhone(num)]
+                    const invalid = validation?.valid === false
+                    const verified = validation?.valid === true
                     const formatted = num.replace(/\D/g, '').slice(-10)
                       .replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')
                     return (
-                      <Box key={num} onClick={() => setActiveNum(isActive ? 'all' : num)} sx={{
+                      <Tooltip key={num} title={invalid
+                        ? (lang === 'en' ? 'Not registered on WhatsApp according to the last check. Sending disabled.' : 'Sin WhatsApp según la última validación. Envío deshabilitado.')
+                        : ''}>
+                        <Box component="span" sx={{ display: 'inline-flex', flexShrink: 0 }}>
+                      <Box component="button" type="button" disabled={invalid} data-wa-number={num}
+                        onClick={() => setActiveNum(isActive ? 'all' : num)} sx={{
                         display: 'flex', alignItems: 'center', gap: 0.6, flexShrink: 0,
-                        px: 1.2, py: 0.5, borderRadius: 99, cursor: 'pointer',
+                        px: 1.2, py: 0.5, borderRadius: 99, cursor: invalid ? 'not-allowed' : 'pointer',
                         bgcolor: isActive ? 'rgba(var(--accent-rgb,99,102,241),0.15)' : 'rgba(255,255,255,0.05)',
-                        border: `1px solid ${isActive ? 'rgba(var(--accent-rgb,99,102,241),0.4)' : 'rgba(255,255,255,0.1)'}`,
+                        border: `1px solid ${invalid ? 'rgba(248,113,113,0.3)' : isActive ? 'rgba(var(--accent-rgb,99,102,241),0.4)' : 'rgba(255,255,255,0.1)'}`,
                         transition: 'all 0.15s',
-                        '&:hover': { bgcolor: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.2)' },
+                        '&:hover': invalid ? {} : { bgcolor: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.2)' },
                       }}>
                         <WhatsAppIcon sx={{
                           fontSize: 13, flexShrink: 0,
-                          color: replied ? '#4ade80' : 'rgba(255,255,255,0.22)',
-                          filter: replied ? 'drop-shadow(0 0 4px #4ade8066)' : 'none',
+                          color: invalid ? '#f87171' : verified || replied ? '#4ade80' : 'rgba(255,255,255,0.22)',
+                          filter: !invalid && (verified || replied) ? 'drop-shadow(0 0 4px #4ade8066)' : 'none',
                         }} />
-                        <Typography sx={{
+                        <Typography component="span" sx={{
                           fontSize: '0.72rem', fontFamily: 'monospace', letterSpacing: '0.03em',
                           fontWeight: isActive ? 700 : 400,
                           color: isActive ? 'var(--accent, #a5b4fc)' : 'rgba(255,255,255,0.6)',
@@ -1666,6 +1742,8 @@ export default function Conversations({ isActive } = {}) {
                           {formatted}
                         </Typography>
                       </Box>
+                        </Box>
+                      </Tooltip>
                     )
                   })}
                 </Box>
@@ -1707,7 +1785,11 @@ export default function Conversations({ isActive } = {}) {
                 </Box>
               ) : visibleThread.length === 0 ? (
                 <Box sx={{ textAlign: 'center', pt: 4 }}>
-                  <Typography sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.8rem' }}>{lang === 'en' ? 'No messages' : 'Sin mensajes'}</Typography>
+                  <Typography role={threadError ? 'alert' : undefined} sx={{ color: threadError ? '#f87171' : 'rgba(255,255,255,0.25)', fontSize: '0.8rem' }}>
+                    {threadError
+                      ? (lang === 'en' ? 'Could not load the conversation. Try opening it again.' : 'No se pudo cargar la conversación. Intenta abrirla de nuevo.')
+                      : (lang === 'en' ? 'No messages' : 'Sin mensajes')}
+                  </Typography>
                 </Box>
               ) : (
                 <Box key={selected?.company_id} sx={{
@@ -1741,6 +1823,9 @@ export default function Conversations({ isActive } = {}) {
                       )
                     })
                   })()}
+                  {aiProviderBlocked && <Box role="status" sx={{ mx: 2, mb: 1, p: 1.2, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--card-bg)', color: 'var(--text)', fontSize: '.78rem' }}>
+                    {lang === 'en' ? 'AI reply pending. You can reply manually.' : 'Respuesta del Chat IA pendiente. Puedes responder manualmente.'}
+                  </Box>}
                   {aiTyping && (
                     <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 0.8, px: 2 }}>
                       <Box sx={{
@@ -1764,7 +1849,7 @@ export default function Conversations({ isActive } = {}) {
 
             {/* Emoji picker popover */}
             <Popover
-              open={Boolean(emojiAnchor)} anchorEl={emojiAnchor}
+              open={Boolean(emojiAnchor) && !composerDisabled} anchorEl={emojiAnchor}
               onClose={() => setEmojiAnchor(null)}
               anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
               transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
@@ -1811,7 +1896,7 @@ export default function Conversations({ isActive } = {}) {
 
             {/* Sticker tray popover */}
             <Popover
-              open={Boolean(stickerAnchor)} anchorEl={stickerAnchor}
+              open={Boolean(stickerAnchor) && !composerDisabled} anchorEl={stickerAnchor}
               onClose={() => setStickerAnchor(null)}
               anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
               transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
@@ -1913,43 +1998,57 @@ export default function Conversations({ isActive } = {}) {
                 </Box>
               )}
 
-              <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-end' }}>
+              <Box data-chat-composer sx={{ display: 'flex', gap: 1, alignItems: 'flex-end',
+                '@container conversation-thread (max-width: 420px)': {
+                  display: 'grid', gridTemplateColumns: 'repeat(3, 28px) minmax(0, 1fr) 36px',
+                  '& [data-composer-input]': { gridColumn: '1 / -1', gridRow: 1 },
+                  '& [data-composer-send]': { gridColumn: 5, gridRow: 2 },
+                } }}>
                 {/* Hidden file input */}
-                <input ref={fileInputRef} type="file" hidden
+                <input ref={fileInputRef} type="file" hidden disabled={composerDisabled}
                   accept="image/jpeg,image/png,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                   onChange={e => {
                     const f = e.target.files?.[0]
                     if (f) { setAttachedFile({ file: f, name: f.name, type: f.type }); setAsSticker(false) }
                   }}
                 />
-                <Tooltip title={lang === 'en' ? 'Attach image or document' : 'Adjuntar imagen o documento'}>
-                  <IconButton size="small" onClick={() => fileInputRef.current?.click()}
+                <Tooltip title={composerDisabledReason || (lang === 'en' ? 'Attach image or document' : 'Adjuntar imagen o documento')}>
+                  <Box component="span" sx={{ display: 'inline-flex', cursor: composerDisabled ? 'not-allowed' : undefined }}>
+                  <IconButton size="small" disabled={composerDisabled} onClick={() => fileInputRef.current?.click()}
                     sx={{ color: attachedFile ? 'var(--accent, #a5b4fc)' : 'rgba(255,255,255,0.3)',
-                      flexShrink: 0, mb: 0.5, '&:hover': { color: 'var(--accent, #a5b4fc)' } }}>
+                      flexShrink: 0, mb: 0.5, '&:hover': { color: 'var(--accent, #a5b4fc)' }, '&.Mui-disabled': { color: '#f87171' } }}>
                     <AttachFileIcon sx={{ fontSize: 20 }} />
                   </IconButton>
+                  </Box>
                 </Tooltip>
                 {/* Sticker button — opens a tray of previously-sent stickers to pick from
                     with one click, same idea as the emoji picker next to it, instead of
                     browsing the filesystem every time. wwebjs only. */}
-                <input ref={stickerInputRef} type="file" hidden accept="image/jpeg,image/png"
+                <input ref={stickerInputRef} type="file" hidden disabled={composerDisabled} accept="image/jpeg,image/png"
                   onChange={e => { const f = e.target.files?.[0]; if (f) handleNewStickerFile(f); e.target.value = '' }}
                 />
-                <Tooltip title="Sticker">
-                  <IconButton size="small" onClick={openStickerTray}
+                <Tooltip title={composerDisabledReason || 'Sticker'}>
+                  <Box component="span" sx={{ display: 'inline-flex', cursor: composerDisabled ? 'not-allowed' : undefined }}>
+                  <IconButton size="small" disabled={composerDisabled} onClick={openStickerTray}
                     sx={{ color: Boolean(stickerAnchor) ? 'var(--accent, #a5b4fc)' : 'rgba(255,255,255,0.3)',
-                      flexShrink: 0, mb: 0.5, '&:hover': { color: 'var(--accent, #a5b4fc)' } }}>
+                      flexShrink: 0, mb: 0.5, '&:hover': { color: 'var(--accent, #a5b4fc)' }, '&.Mui-disabled': { color: '#f87171' } }}>
                     <HotelClassIcon sx={{ fontSize: 20 }} />
                   </IconButton>
+                  </Box>
                 </Tooltip>
-                <Tooltip title="Emojis">
-                  <IconButton size="small" onClick={e => setEmojiAnchor(e.currentTarget)}
-                    sx={{ color: 'rgba(255,255,255,0.3)', flexShrink: 0, mb: 0.5, '&:hover': { color: '#facc15' } }}>
+                <Tooltip title={composerDisabledReason || 'Emojis'}>
+                  <Box component="span" sx={{ display: 'inline-flex', cursor: composerDisabled ? 'not-allowed' : undefined }}>
+                  <IconButton size="small" disabled={composerDisabled} onClick={e => setEmojiAnchor(e.currentTarget)}
+                    sx={{ color: 'rgba(255,255,255,0.3)', flexShrink: 0, mb: 0.5, '&:hover': { color: '#facc15' }, '&.Mui-disabled': { color: '#f87171' } }}>
                     <EmojiEmotionsIcon sx={{ fontSize: 20 }} />
                   </IconButton>
+                  </Box>
                 </Tooltip>
+                <Tooltip title={composerDisabledReason}>
+                <Box data-composer-input sx={{ flex: 1, minWidth: 0, cursor: composerDisabled ? 'not-allowed' : undefined }}>
                 <TextField ref={replyRef} fullWidth multiline maxRows={4} size="small"
                   placeholder={
+                    hasInvalidTarget ? (lang === 'en' ? 'Number not registered on WhatsApp' : 'Número sin WhatsApp — envío deshabilitado') :
                     instanceStatus === 'disconnected' ? (lang === 'en' ? 'Instance disconnected — go to Settings' : 'Instancia desconectada — ve a Configuración') :
                     hasBlockedSelection ? (lang === 'en' ? 'Blocked number — unblock it in Blacklist to write' : 'Número bloqueado — desbloquéalo en Blacklist para escribir') :
                     t.convs.reply
@@ -1959,22 +2058,27 @@ export default function Conversations({ isActive } = {}) {
                   onInput={e => setReply(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendReply() } }}
                   error={reply.length > MAX_WA_MSG}
-                  disabled={hasBlockedSelection}
-                  sx={{ '& .MuiOutlinedInput-root': { fontSize: '0.85rem', bgcolor: 'rgba(255,255,255,0.04)',
-                    '& fieldset': { borderColor: reply.length > MAX_WA_MSG || hasBlockedSelection ? '#ef4444' : instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.1)' } }, '& textarea': { color: 'white' } }} />
+                  disabled={composerDisabled}
+                  sx={{ pointerEvents: composerDisabled ? 'none' : undefined, '& .MuiOutlinedInput-root': { fontSize: '0.85rem', bgcolor: 'rgba(255,255,255,0.04)',
+                    '& fieldset': { borderColor: reply.length > MAX_WA_MSG || composerDisabled ? '#f87171' : instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.1)' },
+                    '&.Mui-disabled fieldset': { borderColor: '#f87171' } }, '& textarea': { color: 'white' } }} />
+                </Box>
+                </Tooltip>
                 <Tooltip title={
+                  composerDisabledReason || (
                   instanceStatus === 'disconnected' ? (lang === 'en' ? 'WhatsApp instance disconnected' : 'Instancia WhatsApp desconectada') :
                   hasBlockedSelection ? (lang === 'en' ? 'This number is blocked — no messages can be sent to it' : 'Este número está bloqueado — no se le pueden enviar mensajes') :
                   dailyStats?.total_available <= 0 ? (lang === 'en' ? `Daily limit reached (${dailyStats.total_sent}/${dailyStats.total_cap}). Resets at midnight.` : `Límite diario alcanzado (${dailyStats.total_sent}/${dailyStats.total_cap}). Reinicia a medianoche.`) :
                   reply.length > MAX_WA_MSG ? (lang === 'en' ? `Too long (max ${MAX_WA_MSG})` : `Demasiado largo (máx. ${MAX_WA_MSG})`) :
                   waNumbers.length === 0 ? (lang === 'en' ? 'No WhatsApp numbers registered' : 'Sin números WhatsApp registrados') :
                   (waNumbers.length > 1 && (!activeNum || activeNum === 'all')) ? (lang === 'en' ? 'Select a number first' : 'Selecciona un número primero') :
-                  selectedNums.length === 0 ? (lang === 'en' ? 'Select at least one number' : 'Selecciona al menos un número') : (lang === 'en' ? 'Send (Enter)' : 'Enviar (Enter)')
+                  hasInvalidTarget ? (lang === 'en' ? 'This number is not registered on WhatsApp' : 'Este número no está registrado en WhatsApp') :
+                  selectedNums.length === 0 ? (lang === 'en' ? 'Select at least one number' : 'Selecciona al menos un número') : (lang === 'en' ? 'Send (Enter)' : 'Enviar (Enter)'))
                 }>
-                  <span>
+                  <span data-composer-send>
                     <IconButton onClick={() => handleSendReply()}
-                      disabled={instanceStatus === 'disconnected' || hasBlockedSelection || (dailyStats?.total_available <= 0) || (!reply.trim() && !attachedFile) || sending || uploading || reply.length > MAX_WA_MSG || (waNumbers.length > 0 && selectedNums.length === 0) || (waNumbers.length > 1 && (!activeNum || activeNum === 'all'))}
-                      sx={{ bgcolor: instanceStatus === 'disconnected' || hasBlockedSelection ? 'rgba(239,68,68,0.12)' : 'rgba(var(--accent-rgb, 99,102,241), 0.2)', border: `1px solid ${instanceStatus === 'disconnected' || hasBlockedSelection ? 'rgba(239,68,68,0.25)' : 'rgba(var(--accent-rgb, 99,102,241), 0.3)'}`, borderRadius: 2, color: instanceStatus === 'disconnected' || hasBlockedSelection ? '#ef4444' : 'var(--accent, #a5b4fc)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 99,102,241), 0.35)' }, '&.Mui-disabled': { color: 'rgba(255,255,255,0.15)' } }}>
+                      disabled={instanceStatus === 'disconnected' || composerDisabled || (dailyStats?.total_available <= 0) || (!reply.trim() && !attachedFile) || sending || uploading || reply.length > MAX_WA_MSG || (waNumbers.length > 0 && selectedNums.length === 0) || (waNumbers.length > 1 && (!activeNum || activeNum === 'all'))}
+                      sx={{ bgcolor: instanceStatus === 'disconnected' || composerDisabled ? 'rgba(239,68,68,0.12)' : 'rgba(var(--accent-rgb, 99,102,241), 0.2)', border: `1px solid ${composerDisabled ? '#f87171' : instanceStatus === 'disconnected' ? 'rgba(239,68,68,0.25)' : 'rgba(var(--accent-rgb, 99,102,241), 0.3)'}`, borderRadius: 2, color: instanceStatus === 'disconnected' || composerDisabled ? '#f87171' : 'var(--accent, #a5b4fc)', '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 99,102,241), 0.35)' }, '&.Mui-disabled': { color: composerDisabled ? '#f87171' : 'rgba(255,255,255,0.15)' } }}>
                       {sending ? <CircularProgress size={18} sx={{ color: 'var(--accent, #a5b4fc)' }} /> : instanceStatus === 'disconnected' || hasBlockedSelection ? <WifiOffIcon sx={{ fontSize: 18 }} /> : <SendIcon sx={{ fontSize: 18 }} />}
                     </IconButton>
                   </span>

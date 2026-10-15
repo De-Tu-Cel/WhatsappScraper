@@ -305,6 +305,16 @@ function BalanceCard({ label, lang, loading, data, unit }) {
           {loading ? '…' : display}
         </Typography>
         <Typography sx={{ fontSize: '0.64rem', color: 'var(--text-muted)', lineHeight: 1.3, mt: 0.2 }}>{subtitle}</Typography>
+        {unit === 'spend' && notConfigured && (
+          <Typography sx={{ fontSize: '0.64rem', color: 'var(--text-muted)', mt: 0.4 }}>
+            {lang === 'en' ? 'Budget alerts require an OpenAI Admin API key and project ID.' : 'Las alertas de presupuesto requieren una clave Admin de OpenAI y el ID del proyecto.'}
+          </Typography>
+        )}
+        {unit === 'spend' && data?.ok && data.monthly_budget_usd > 0 && (
+          <Typography sx={{ fontSize: '0.64rem', color: 'var(--text-muted)', mt: 0.4 }}>
+            {lang === 'en' ? `Alert budget: $${data.monthly_budget_usd} USD · not prepaid credit` : `Presupuesto de alerta: $${data.monthly_budget_usd} USD · no es saldo prepago`}
+          </Typography>
+        )}
       </Box>
     </Box>
   )
@@ -1048,10 +1058,6 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile
               px: 0.5, borderRadius: 0.8, lineHeight: 1.6, flexShrink: 0, letterSpacing: '0.03em' }}>
               WAHA
             </Typography>
-          )}
-          {inst.provider === 'wwebjs' && (
-            <Typography sx={{ fontSize: '0.55rem', fontWeight: 700, color: '#34d399',
-              bgcolor: 'rgba(52,211,153,0.12)', px: 0.6, py: 0.1, borderRadius: 0.5 }}>WWEBJS</Typography>
           )}
           {inst.provider === 'wasender' && (
             <Typography sx={{ fontSize: '0.55rem', fontWeight: 700, color: '#a78bfa',
@@ -3434,12 +3440,6 @@ export default function InstancesPanel({ isActive } = {}) {
                                   bgcolor: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.25)',
                                   px: 0.45, borderRadius: 0.8, lineHeight: 1.5, flexShrink: 0, letterSpacing: '0.03em' }}>
                                   WAHA
-                                </Typography>
-                              )}
-                              {inst.provider === 'wwebjs' && (
-                                <Typography sx={{ fontSize: '0.5rem', fontWeight: 700, color: '#34d399',
-                                  bgcolor: 'rgba(52,211,153,0.12)', px: 0.5, py: 0.1, borderRadius: 0.5, flexShrink: 0 }}>
-                                  WWEBJS
                                 </Typography>
                               )}
                               {inst.provider === 'wasender' && (

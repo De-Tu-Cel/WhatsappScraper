@@ -14,7 +14,12 @@ export async function GET(request) {
     const catParam    = category ? `&category=${encodeURIComponent(category)}` : ''
     const agentsParam = agents   ? `&agents=${encodeURIComponent(agents)}`     : ''
     const searchParam = search   ? `&search=${encodeURIComponent(search)}`     : ''
-    const res  = await fetch(`${BACKEND_URL}/api/analytics?page=${page}&page_size=${page_size}${catParam}${agentsParam}${searchParam}`, { cache: 'no-store' })
+    const review = searchParams.get('review') || ''
+    const reviewParam = review ? `&review=${encodeURIComponent(review)}` : ''
+    const token = request.headers.get('x-user-token')
+    const res  = await fetch(`${BACKEND_URL}/api/analytics?page=${page}&page_size=${page_size}${catParam}${agentsParam}${searchParam}${reviewParam}`, {
+      cache: 'no-store', headers: token ? { 'x-user-token': token } : {},
+    })
     const data = await res.json()
     return NextResponse.json(data, { status: res.status })
   } catch (error) {

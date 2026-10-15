@@ -18,7 +18,8 @@ import TableBody from '@mui/material/TableBody'
 import TableRow from '@mui/material/TableRow'
 import TableCell from '@mui/material/TableCell'
 import TableContainer from '@mui/material/TableContainer'
-import TablePagination from '@mui/material/TablePagination'
+import Pagination from '@mui/material/Pagination'
+import Select from '@mui/material/Select'
 import TableSortLabel from '@mui/material/TableSortLabel'
 import Tooltip from '@mui/material/Tooltip'
 import IconButton from '@mui/material/IconButton'
@@ -29,7 +30,6 @@ import ClearIcon from '@mui/icons-material/Clear'
 import PersonIcon from '@mui/icons-material/Person'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
 import FlashOnIcon from '@mui/icons-material/FlashOn'
-import SupportAgentIcon from '@mui/icons-material/SupportAgent'
 import StarIcon from '@mui/icons-material/Star'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import RefreshIcon from '@mui/icons-material/Refresh'
@@ -49,8 +49,6 @@ import Button from '@mui/material/Button'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight'
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
-import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
-import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import LocalGasStationIcon from '@mui/icons-material/LocalGasStation'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlined'
@@ -71,6 +69,8 @@ import ClassificationSettingsModal from './ClassificationSettingsModal'
 import TimerOffIcon from '@mui/icons-material/TimerOff'
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows'
 import { ResultChip, ComparisonDialog, ComparisonSummary, ClassifierHelp, ParecidoCell, refreshComparisonSummary, last10 } from './ClassifierComparison'
+import ConversationAnalysisButton from './ConversationAnalysisButton'
+import ChatBubbleOutlineIcon from '@mui/icons-material/ForumOutlined'
 import { CATEGORY_CONFIG, normCategory, matchesCategory, getCategoryConfig } from '@/lib/categoryConfig'
 
 // Same palette/hash as conversations.jsx's agentColor — an agent's dot in the
@@ -195,7 +195,9 @@ const HEADER_CELL_SX = {
   letterSpacing: '0.05em',
   py: 1.2,
   px: 1.5,
-  position: 'relative',
+  position: 'sticky',
+  top: 'var(--analytics-filter-height, 0px)',
+  zIndex: 2,
   '&::after': {
     content: '""', position: 'absolute', top: 10, bottom: 10, right: 0,
     width: '1px', bgcolor: 'rgba(255,255,255,0.08)',
@@ -214,7 +216,10 @@ const ANALYSIS_SUB_H = 36   // alto de la fila Timing / IA / Timing + IA
 const ANALYSIS_COL_W = 112
 const ANALYSIS_FRAME = '1px solid rgba(255,255,255,0.07)'
 const ANALYSIS_GROUP_SX = { color: 'rgba(255,255,255,0.62)', letterSpacing: '0.14em', '&::after': { display: 'none' } }
-const ANALYSIS_SUB_SX = { height: ANALYSIS_SUB_H, py: 0, color: 'rgba(255,255,255,0.5)' }
+const ANALYSIS_SUB_SX = {
+  height: ANALYSIS_SUB_H, py: 0, color: 'rgba(255,255,255,0.5)',
+  top: `calc(var(--analytics-filter-height, 0px) + var(--analytics-group-height, ${ANALYSIS_ROW_H}px))`,
+}
 const ANALYSIS_CELL_SX = { px: 0.75, width: ANALYSIS_COL_W }
 
 // One section of the shared stats card (icon + label + value) — no border of
@@ -270,9 +275,8 @@ function StatCard({ icon, color, value, label, subtitle, percent }) {
 // by vertical dividers, icon-ring circle + 2 text lines each) so the stats
 // row doesn't just vanish and pop back in — matching StatCard's layout keeps
 // the page height stable while analytics data is loading.
-// Franja de métricas: 8 columnas cuando caben y 4 + 4 cuando no (2 + 2… en móvil). Con
-// flex-wrap y 8 tarjetas los valores se cortaban ("2…") a 1280 px con la barra lateral
-// abierta. Los divisores son pseudo-elementos para no ocupar celdas del grid.
+// Seven public metrics, with wrapping on smaller panels. Human-assisted bots
+// share the Bot metric. Dividers do not occupy grid cells.
 const STAT_DIVIDER = { content: '""', position: 'absolute', backgroundColor: 'var(--border, rgba(255,255,255,0.08))' }
 const STAT_STRIP_SX = {
   containerType: 'inline-size', overflow: 'hidden', flexShrink: 0,
@@ -280,7 +284,7 @@ const STAT_STRIP_SX = {
   background: STAT_STRIP_BG,
 }
 const STAT_GRID_SX = {
-  display: 'grid', gridTemplateColumns: 'repeat(8, minmax(0, 1fr))',
+  display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
   '& > *': { position: 'relative' },
   '& > *:not(:first-of-type)::before': { ...STAT_DIVIDER, left: 0, top: '16px', bottom: '16px', width: '1px' },
   '@container (max-width: 1200px)': {
@@ -299,7 +303,7 @@ function StatsCardSkeleton() {
   return (
     <Box sx={STAT_STRIP_SX}>
       <Box sx={STAT_GRID_SX}>
-        {Array.from({ length: 8 }).map((_, i) => (
+        {Array.from({ length: 7 }).map((_, i) => (
           <Box key={i} sx={{ minWidth: 96, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.2, px: 1.6, py: 1.6, overflow: 'hidden' }}>
             <Skeleton variant="circular" width={40} height={40} sx={{ bgcolor: 'rgba(255,255,255,0.1)', flexShrink: 0,
               '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent)' } }} />
@@ -495,7 +499,12 @@ function ConversationCapture({ thread, captureRef, visible }) {
   )
 }
 
-export default function Analytics() {
+export default function Analytics({ onNavigateToConv }) {
+  const scrollRef = useRef(null)
+  const filtersRef = useRef(null)
+  const headerRowRef = useRef(null)
+  const tableRegionRef = useRef(null)
+
   const [analyzeAttempts, setAnalyzeAttempts] = useState(0)
   const requeueSessionRef  = useRef(false)
   const requeueInFlight    = useRef(false)
@@ -505,8 +514,9 @@ export default function Analytics() {
 
   // ── SWR: caching + background revalidation ────────────────────────────────
   const [page, setPage] = useState(1)
-  const PAGE_SIZE = 20
+  const [rowsPerPage, setRowsPerPage] = useState(15)
   const [filterCat, setFilterCat] = useState('all')
+  const [reviewFilter, setReviewFilter] = useState('all')
   const [filterAgents, setFilterAgents] = useState([])  // selected usernames
   const [searchText, setSearchText] = useState('')
   // Debounced separately from searchText — the input needs to feel instant while
@@ -520,18 +530,49 @@ export default function Analytics() {
     return () => clearTimeout(id)
   }, [searchText])
   useEffect(() => { setPage(1) }, [searchQuery])
-  const _swrFetcher = url => fetch(url).then(r => r.json())
-  const _swrKey = `/api/analytics?page=${page}&page_size=${PAGE_SIZE}`
+  const _swrFetcher = async url => {
+    const response = await authFetch(url)
+    if (!response.ok) throw new Error(`Error ${response.status}`)
+    return response.json()
+  }
+  const _swrKey = `/api/analytics?page=${page}&page_size=${rowsPerPage}`
     + (filterCat !== 'all' ? `&category=${filterCat}` : '')
     + (filterAgents.length ? `&agents=${filterAgents.join(',')}` : '')
     + (searchQuery.trim() ? `&search=${encodeURIComponent(searchQuery.trim())}` : '')
+    + (reviewFilter !== 'all' ? `&review=${reviewFilter}` : '')
   const { data: _analyticsData, isLoading: loading, mutate: mutateAnalytics } = useSWR(
     _swrKey,
     _swrFetcher,
     { revalidateOnFocus: false, dedupingInterval: 5000, keepPreviousData: true }
   )
+  useEffect(() => {
+    const filters = filtersRef.current
+    const scroll = scrollRef.current
+    const header = headerRowRef.current
+    const table = tableRegionRef.current?.querySelector('table')
+    if (!filters || !scroll) return
+    // Measure wrapping filters and the actual group row, including font scaling.
+    const updateHeights = () => {
+      // The table can exceed the viewport. Its natural width also defines the
+      // dashboards and filters, so horizontal scrolling keeps their edges aligned.
+      const width = Math.ceil(Math.max(scroll.clientWidth, table?.getBoundingClientRect().width || 0))
+      const value = `${width}px`
+      if (scroll.style.getPropertyValue('--analytics-content-width') !== value) {
+        scroll.style.setProperty('--analytics-content-width', value)
+      }
+      scroll.style.setProperty('--analytics-filter-height', `${filters.getBoundingClientRect().height}px`)
+      if (header) scroll.style.setProperty('--analytics-group-height', `${header.getBoundingClientRect().height}px`)
+    }
+    updateHeights()
+    const observer = new ResizeObserver(updateHeights)
+    observer.observe(filters)
+    observer.observe(scroll)
+    if (table) observer.observe(table)
+    if (header) observer.observe(header)
+    return () => observer.disconnect()
+  }, [loading])
   const data           = _analyticsData?.items           || []
-  const totalPages     = _analyticsData?.pages           || 1
+  const totalPages     = Math.max(1, _analyticsData?.pages || 1)
   const totalItems     = _analyticsData?.total           || 0
   // Same "persist last known value while loading" treatment as categoryCounts
   // below — computed over the WHOLE filtered set server-side now, not just
@@ -581,32 +622,17 @@ export default function Analytics() {
   // Comparación de clasificadores (Timing / IA / Timing + IA): fila cuyo log está abierto
   // y fila que se está comparando en este momento.
   const [compareFor, setCompareFor] = useState(null) // { id, name, number? }
-  const [comparing, setComparing]   = useState(null) // company_id
   // Corre los tres clasificadores para esa conversación (una llamada a gpt-4.1-mini por
   // clasificador de IA, y por número que respondió en empresas con varios).
   function compareButton(row) {
-    const busy = comparing === row.company_id
+    const busy = false
     return (
-      <Button size="small" onClick={() => runCompare(row)} disabled={busy}
+      <Button size="small" onClick={() => setCompareFor({ id: row.company_id, name: row.company_name })} disabled={busy}
         startIcon={busy ? <CircularProgress size={10} sx={{ color: 'inherit' }} /> : <CompareArrowsIcon sx={{ fontSize: '14px !important' }} />}
         sx={{ textTransform: 'none', fontSize: '0.68rem', py: 0, minWidth: 0, color: 'var(--accent,#a5b4fc)' }}>
-        {busy ? t.analytics.compareRunning : t.analytics.compareRun}
+        {busy ? t.analytics.compareRunning : (lang === 'en' ? 'View analysis' : 'Ver análisis')}
       </Button>
     )
-  }
-  async function runCompare(row) {
-    setComparing(row.company_id)
-    try {
-      const res = await authFetch(`/api/classification/comparisons/${row.company_id}/run`, { method: 'POST' })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.detail || `Error ${res.status}`)
-      mutateAnalytics()
-      refreshComparisonSummary()
-    } catch (e) {
-      notify(`${t.analytics.compareFailed}: ${e.message}`)
-    } finally {
-      setComparing(null)
-    }
   }
 
   const handleSort = (field) => {
@@ -617,6 +643,7 @@ export default function Analytics() {
 
   // Queue the next batch of unanalyzed messages; returns the API response
   const triggerRequeue = useCallback(async () => {
+    if (!isAdmin) return { queued: 0, remaining: 0 }
     if (requeueInFlight.current) return { queued: 0, remaining: remainingRef.current }
     requeueInFlight.current = true
     try {
@@ -626,7 +653,7 @@ export default function Analytics() {
       return json
     } catch { return { queued: 0, remaining: 0 } }
     finally { requeueInFlight.current = false }
-  }, [])
+  }, [isAdmin])
 
   // On mount: silently start auto-requeue if there are rezagados
   useEffect(() => {
@@ -696,14 +723,11 @@ export default function Analytics() {
       // 1. Parallel: load html2canvas module + fetch thread simultaneously
       const [html2canvasModule, threadRes] = await Promise.all([
         import('html2canvas'),
-        authFetch(`/api/conversations/${row.company_id}`),
+        authFetch(`/api/conversations/${row.company_id}${filterNum ? `?number=${encodeURIComponent(filterNum)}` : ''}`),
       ])
       const thread = threadRes.ok ? await threadRes.json() : []
-      const normFn = n => (n || '').replace(/\D/g,'').slice(-10)
       const rawThread = Array.isArray(thread) ? thread : []
-      const threadArr = filterNum
-        ? rawThread.filter(m => normFn(m.to_number || m.from_number || m.number) === normFn(filterNum))
-        : rawThread
+      const threadArr = rawThread
       setReportThread(threadArr)
       setCaptureVisible(true)
 
@@ -795,6 +819,27 @@ export default function Analytics() {
     })
   }, [])
 
+  function quickActions(row, number, review = row.review) {
+    const labels = {
+      pending: lang === 'en' ? 'Analysis pending' : 'Análisis pendiente',
+      new_messages: lang === 'en' ? 'New messages' : 'Mensajes nuevos',
+      different_results: lang === 'en' ? 'Different results' : 'Resultados diferentes',
+    }
+    return <Box data-analysis-quick-actions sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5, mt: 0.75 }}>
+      <ConversationAnalysisButton companyId={row.company_id} companyName={row.company_name}
+        number={number} numberCount={(row.numbers || []).length} onChanged={mutateAnalytics} />
+      <Tooltip title={lang === 'en' ? 'Open conversation' : 'Abrir conversación'}>
+        <IconButton size="small" aria-label={lang === 'en' ? 'Open conversation' : 'Abrir conversación'}
+          onClick={() => onNavigateToConv?.(row.company_id, number)} disabled={!onNavigateToConv}
+          sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--accent)', bgcolor: 'var(--item-hover)' } }}>
+          <ChatBubbleOutlineIcon sx={{ fontSize: 17 }} />
+        </IconButton>
+      </Tooltip>
+      {review?.flags?.map(flag => labels[flag] ? <Chip key={flag} size="small" label={labels[flag]}
+        sx={{ height: 20, fontSize: '0.64rem', bgcolor: 'var(--item-hover)', color: 'var(--text-muted)', border: '1px solid var(--border)' }} /> : null)}
+    </Box>
+  }
+
   const downloadReportPreview = useCallback(() => {
     if (!reportPreview) return
     const a = document.createElement('a')
@@ -843,16 +888,26 @@ export default function Analytics() {
   const humanPct   = pct('humano')
   const autoPct    = pct('automatico')
   const autoNoReplyPct = pct('automatico_sin_respuesta')
-  const hibridoBotPct  = pct('hibrido_bot')
   const botPct     = pct('bot')
   const botIaPct   = pct('bot_ia')
   const avgQualityNum = avgQualityServer ?? 0
   const avgQuality = avgQualityServer != null ? avgQualityServer.toFixed(1) : '—'
 
-  const { t } = useLang()
+  const { t, lang } = useLang()
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, gap: 2, position: 'relative' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+    <Box ref={scrollRef} data-analytics-scroll sx={{
+      display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 2,
+      position: 'relative', overflow: 'auto', scrollbarWidth: 'thin',
+      scrollbarColor: 'rgba(255,255,255,0.1) transparent',
+      '& > *': { flexShrink: 0 },
+      '& > :not([data-analytics-table-region])': {
+        width: 'var(--analytics-content-width, 100%)',
+        minWidth: 'var(--analytics-content-width, 100%)',
+        boxSizing: 'border-box',
+      },
+    }}>
 
       <ConversationCapture thread={reportThread} captureRef={captureRef} visible={captureVisible} />
 
@@ -877,7 +932,7 @@ export default function Analytics() {
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
 
-          {data.some(r => r.analyzing) && (
+          {isAdmin && data.some(r => r.analyzing) && (
             <Tooltip title={t.analytics.cancelPending || 'Detener análisis pendientes'}>
               <IconButton size="small" onClick={async () => {
                 requeueSessionRef.current = false
@@ -931,7 +986,6 @@ export default function Analytics() {
               { key: 'human',     icon: <PersonIcon sx={{ fontSize: 20, color: '#4ade80' }} />, color: '#4ade80', value: `${humanPct}%`, label: t.analytics.pctHuman, percent: humanPct },
               { key: 'automatic', icon: <FlashOnIcon sx={{ fontSize: 20, color: '#facc15' }} />, color: '#facc15', value: `${autoPct}%`, label: t.analytics.automatic, percent: autoPct },
               { key: 'autoNoReply', icon: <TimerOffIcon sx={{ fontSize: 20, color: '#fb923c' }} />, color: '#fb923c', value: `${autoNoReplyPct}%`, label: t.analytics.autoNoReply, percent: autoNoReplyPct },
-              { key: 'hibridoBot',  icon: <SupportAgentIcon sx={{ fontSize: 20, color: '#38bdf8' }} />, color: '#38bdf8', value: `${hibridoBotPct}%`, label: t.analytics.hybridBot, percent: hibridoBotPct },
               { key: 'bot',       icon: <SmartToyIcon sx={{ fontSize: 20, color: '#a78bfa' }} />, color: '#a78bfa', value: `${botPct}%`, label: t.analytics.bot, percent: botPct },
               { key: 'botIa',     icon: <PsychologyIcon sx={{ fontSize: 20, color: '#c084fc' }} />, color: '#c084fc', value: `${botIaPct}%`, label: t.analytics.botAi, percent: botIaPct },
               { key: 'quality',   icon: <StarIcon sx={{ fontSize: 20, color: '#facc15' }} />, color: '#facc15', value: avgQuality, label: t.analytics.avgQuality, percent: (avgQualityNum / 5) * 100 },
@@ -943,7 +997,11 @@ export default function Analytics() {
       <ComparisonSummary />
 
       {/* ── Filtros ── */}
-      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', flexShrink: 0 }}>
+      <Box ref={filtersRef} data-analytics-filters sx={{
+        display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', flexShrink: 0,
+        position: 'sticky', top: 0, left: 0, zIndex: 3, py: 1,
+        bgcolor: 'var(--card-bg, #161d2e)',
+      }}>
         {/* Buscador */}
         <TextField size="small" placeholder={t.analytics.searchPh} value={searchText}
           onChange={e => setSearchText(e.target.value)}
@@ -968,7 +1026,6 @@ export default function Analytics() {
           { value: 'humano',        icon: PersonIcon,       label: t.analytics.human,   color: '#4ade80',                bg: 'rgba(74,222,128,0.1)'    },
           { value: 'automatico',    icon: FlashOnIcon,      label: t.analytics.automatic, color: '#facc15',              bg: 'rgba(250,204,21,0.1)'    },
           { value: 'automatico_sin_respuesta', icon: TimerOffIcon, label: t.analytics.autoNoReply, color: '#fb923c',      bg: 'rgba(251,146,60,0.1)'    },
-          { value: 'hibrido_bot',      icon: SupportAgentIcon,   label: t.analytics.hybridBot,  color: '#38bdf8',             bg: 'rgba(56,189,248,0.1)'    },
           { value: 'bot',           icon: SmartToyIcon,     label: t.analytics.bot,     color: '#a78bfa',                bg: 'rgba(167,139,250,0.1)'   },
           { value: 'bot_ia',        icon: PsychologyIcon,   label: t.analytics.botAi,   color: '#c084fc',                bg: 'rgba(192,132,252,0.1)'   },
           // "sin_respuesta" (confirmado, ya se cumplió el tiempo de espera y
@@ -1080,12 +1137,21 @@ export default function Analytics() {
           })}
         </Menu>
 
+        <Select size="small" value={reviewFilter} onChange={e => { setReviewFilter(e.target.value); setPage(1) }}
+          inputProps={{ 'aria-label': lang === 'en' ? 'Analysis review status' : 'Estado de revisión del análisis' }}
+          sx={{ color: 'var(--text)', fontSize: '0.75rem', borderRadius: 99, minWidth: 160,
+            '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--border)' } }}>
+          <MenuItem value="all">{lang === 'en' ? 'All analysis states' : 'Todos los estados'}</MenuItem>
+          <MenuItem value="pending">{lang === 'en' ? 'Pending analysis' : 'Análisis pendiente'}</MenuItem>
+          <MenuItem value="new_messages">{lang === 'en' ? 'New messages' : 'Mensajes nuevos'}</MenuItem>
+          <MenuItem value="different_results">{lang === 'en' ? 'Different results' : 'Resultados diferentes'}</MenuItem>
+        </Select>
         {/* Estado de filtro activo — Limpiar + contador, agrupados aparte */}
-        {(filterCat !== 'all' || searchText || filterAgents.length > 0) && (
+        {(filterCat !== 'all' || reviewFilter !== 'all' || searchText || filterAgents.length > 0) && (
           <>
             <Divider orientation="vertical" flexItem sx={{ borderColor: 'rgba(255,255,255,0.08)', height: 20, alignSelf: 'center', ml: 'auto', display: { xs: 'none', sm: 'block' } }} />
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: { xs: 'auto', sm: 0 } }}>
-              <Box onClick={() => { setFilterCat('all'); setSearchText(''); setFilterAgents([]); setPage(1) }} sx={{
+              <Box onClick={() => { setFilterCat('all'); setReviewFilter('all'); setSearchText(''); setFilterAgents([]); setPage(1) }} sx={{
                 display: 'flex', alignItems: 'center', gap: 0.4,
                 px: 1, py: 0.45, borderRadius: 99, cursor: 'pointer',
                 border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.35)',
@@ -1104,10 +1170,10 @@ export default function Analytics() {
       </Box>
 
       {/* Table / states */}
-      <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <Box ref={tableRegionRef} data-analytics-table-region sx={{ minHeight: 0, minWidth: 0, width: '100%', display: 'flex', flexDirection: 'column' }}>
         {loading ? (
           <TableContainer sx={{
-            flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'auto',
+            minHeight: 0, overflow: 'visible',
             scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent',
             '&::-webkit-scrollbar': { width: 4, height: 4 },
             '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 },
@@ -1179,14 +1245,14 @@ export default function Analytics() {
           </Box>
         ) : (
           <TableContainer sx={{
-            flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'auto',
+            minHeight: 0, overflow: 'visible',
             scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.1) transparent',
             '&::-webkit-scrollbar': { width: 4, height: 4 },
             '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 },
           }}>
             <Table size="small" stickyHeader sx={{ minWidth: 800 }}>
               <TableHead>
-                <TableRow>
+                <TableRow ref={headerRowRef}>
                   {/* Columna expand — sin label */}
                   <TableCell rowSpan={2} sx={{ ...HEADER_CELL_LAST_SX, width: 32, px: 0.5 }} />
                   {/* Empresa */}
@@ -1375,6 +1441,7 @@ export default function Analytics() {
                             })}
                           </Box>
                         )}
+                        {quickActions(row, hasMultiple ? null : validNumbers[0]?.number)}
                       </TableCell>
 
                       {/* Número */}
@@ -1467,13 +1534,15 @@ export default function Analytics() {
                         {!hasMultiple && (notesText
                           ? <Tooltip title={notesText} placement="top"><Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.75rem', cursor: 'default' }}>{notesTruncated}</Typography></Tooltip>
                           : <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.75rem' }}>—</Typography>)}
+
                       </TableCell>
 
                       {/* Andy */}
                       <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
                         {(() => {
-                          const noAnalysis = !row.category
-                          const andyTip = noAnalysis ? t.analytics.noAnalysis : hasMultiple ? t.analytics.sendAllToAndy : t.analytics.sendToAndy
+                          const noReply = row.total_responses === 0
+                          const noAnalysis = !row.category || noReply
+                          const andyTip = noReply ? t.analytics.noReply : noAnalysis ? t.analytics.noAnalysis : hasMultiple ? t.analytics.sendAllToAndy : t.analytics.sendToAndy
                           return (
                             <Tooltip title={andyTip}>
                               <span>
@@ -1583,6 +1652,7 @@ export default function Analytics() {
                                 </Box>
                               )}
                             </Box>
+                            {quickActions(row, n.number, n.review)}
                           </TableCell>
                           {/* Número */}
                           <TableCell sx={{ ...NSUB, textAlign: 'center' }}>
@@ -1646,6 +1716,7 @@ export default function Analytics() {
                           </TableCell>
                           {/* Notas */}
                           <TableCell sx={{ ...NSUB, maxWidth: 200 }}>
+
                             {!replied
                               ? <Typography sx={{ color: 'rgba(248,113,113,0.5)', fontSize: '0.72rem', fontStyle: 'italic' }}>{t.analytics.noReply}</Typography>
                               : n.notes
@@ -1706,54 +1777,71 @@ export default function Analytics() {
         )}
       </Box>
 
-      {/* Paginación */}
-      {totalPages > 1 && (
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2, py: 1, borderTop: '1px solid var(--border)', flexShrink: 0 }}>
-          <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-            {totalItems} {t.analytics.companies} · {t.analytics.page} {page} {t.analytics.of} {totalPages}
-          </Typography>
-          <Box sx={{ display: 'flex', gap: 0.5 }}>
-            <Box onClick={() => setPage(p => Math.max(1, p - 1))} sx={{
-              width: 30, height: 30, borderRadius: 1.5, cursor: page > 1 ? 'pointer' : 'default',
-              bgcolor: 'var(--item-hover)', border: '1px solid var(--border)',
-              color: page > 1 ? 'var(--text-muted)' : 'var(--border)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              transition: 'all 0.15s',
-              '&:hover': page > 1 ? { bgcolor: 'var(--border)' } : {},
-            }}>
-              <ChevronLeftIcon sx={{ fontSize: 18 }} />
-            </Box>
-            {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-              const pg = totalPages <= 7 ? i + 1
-                : page <= 4 ? i + 1
-                : page >= totalPages - 3 ? totalPages - 6 + i
-                : page - 3 + i
-              return (
-                <Box key={pg} onClick={() => setPage(pg)} sx={{
-                  width: 32, height: 30, borderRadius: 1.5, cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  bgcolor: pg === page ? 'var(--accent,#3b82f6)' : 'var(--item-hover)',
-                  border: `1px solid ${pg === page ? 'var(--accent,#3b82f6)' : 'var(--border)'}`,
-                  color: pg === page ? '#ffffff' : 'var(--text-muted)',
-                  fontSize: '0.78rem', fontWeight: pg === page ? 700 : 400,
-                  transition: 'all 0.15s',
-                  '&:hover': pg !== page ? { bgcolor: 'var(--border)' } : {},
-                }}>{pg}</Box>
-              )
-            })}
-            <Box onClick={() => setPage(p => Math.min(totalPages, p + 1))} sx={{
-              width: 30, height: 30, borderRadius: 1.5, cursor: page < totalPages ? 'pointer' : 'default',
-              bgcolor: 'var(--item-hover)', border: '1px solid var(--border)',
-              color: page < totalPages ? 'var(--text-muted)' : 'var(--border)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              transition: 'all 0.15s',
-              '&:hover': page < totalPages ? { bgcolor: 'var(--border)' } : {},
-            }}>
-              <ChevronRightIcon sx={{ fontSize: 18 }} />
-            </Box>
+    </Box>
+
+      {/* Pagination stays outside the scroll area so it is always reachable. */}
+      <Box data-analytics-pagination sx={{
+        display: 'flex', flexWrap: 'wrap', columnGap: 2, rowGap: 1,
+        alignItems: 'center', justifyContent: 'space-between',
+        px: 1.5, py: 1.25, borderTop: '1px solid var(--border)', flexShrink: 0,
+        bgcolor: 'var(--card-bg, #161d2e)',
+      }}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 1.25, rowGap: 0.75 }}>
+        <Typography component="label" id="analytics-page-size-label" htmlFor="analytics-page-size"
+          sx={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+          {t.db.rowsPerPage.replace(/:$/, '')}
+        </Typography>
+        <Select size="small" id="analytics-page-size" labelId="analytics-page-size-label" value={rowsPerPage}
+          onChange={event => {
+            setRowsPerPage(Number(event.target.value))
+            setPage(1)
+          }}
+          sx={{ width: 68, height: 30, borderRadius: 1.5, bgcolor: 'var(--item-hover)',
+            '& .MuiSelect-icon': { color: 'var(--text-muted)', fontSize: 18 },
+            '& .MuiSelect-select': { color: 'var(--text)', fontSize: '0.75rem', fontWeight: 600, py: 0.5, pl: 1.25 },
+            '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--border)' },
+            '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--accent)' },
+          }}>
+          {[15, 25, 50].map(count => <MenuItem key={count} value={count}>{count}</MenuItem>)}
+        </Select>
+        <Divider orientation="vertical" sx={{ height: 16, borderColor: 'var(--border)', mx: 0.25, display: { xs: 'none', md: 'block' } }} />
+        <Typography sx={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+          <Box component="span" sx={{ color: 'var(--text)', fontWeight: 600 }}>
+            {totalItems ? (page - 1) * rowsPerPage + 1 : 0}–{Math.min(page * rowsPerPage, totalItems)}
           </Box>
+          {' '}{t.analytics.of}{' '}<Box component="span" sx={{ color: 'var(--text)', fontWeight: 600 }}>{totalItems}</Box>{' '}{t.analytics.companies}
+        </Typography>
         </Box>
-      )}
+        <Pagination count={totalPages} page={page} size="small" siblingCount={0} showFirstButton showLastButton
+          onChange={(_, nextPage) => {
+            setPage(nextPage)
+            const scroll = scrollRef.current
+            const filters = filtersRef.current
+            const table = tableRegionRef.current
+            if (scroll && filters && table) scroll.scrollTo({
+              top: Math.max(0, table.offsetTop - filters.getBoundingClientRect().height),
+            })
+          }}
+          getItemAriaLabel={(type, itemPage) => type === 'page'
+            ? `${t.analytics.page} ${itemPage}`
+            : (lang === 'en'
+              ? { first: 'First page', last: 'Last page', next: 'Next page', previous: 'Previous page' }
+              : { first: 'Primera página', last: 'Última página', next: 'Página siguiente', previous: 'Página anterior' })[type]}
+          sx={{ ml: 'auto',
+            '& .MuiPagination-ul': { gap: 0.25, flexWrap: 'nowrap' },
+            '& .MuiPaginationItem-root': {
+              color: 'var(--text-muted)', borderRadius: 1.5, minWidth: 30, height: 30,
+              mx: 0, fontSize: '0.75rem', border: '1px solid transparent',
+              '&:hover': { bgcolor: 'var(--item-hover)', color: 'var(--text)' },
+              '&.Mui-disabled': { opacity: 0.25 },
+              '&.Mui-selected': {
+                bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.15)', color: 'var(--accent, #3b82f6)',
+                borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.3)', fontWeight: 700,
+                '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.23)' },
+              },
+            },
+          }} />
+      </Box>
 
       <AndyBotBuilder open={botBuilderOpen} initialData={botBuilderRow} onClose={() => { setBotBuilderOpen(false); setBotBuilderRow(null) }} />
 

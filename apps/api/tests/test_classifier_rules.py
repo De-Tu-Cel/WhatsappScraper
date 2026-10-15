@@ -1566,11 +1566,11 @@ class TestAuditFixes20261006:
         assert r["category"] == "humano"
         assert "1 min 20 s" in (r.get("notes") or "")
 
-    def test_menu_at_68s_stays_automatic(self):
-        # Come Bien: menú a los 68 s. No es el saludo lento de una persona.
+    def test_menu_at_68s_with_human_handoff_is_grouped_as_bot(self):
+        # A slow menu with a later human remains Bot under the merged taxonomy.
         menu = "Selecciona una opción:\n1. Menú del día\n2. Sucursales\n3. Promociones"
         r = self._fix([("out", 0, "Hola"), ("in", 68, menu), ("out", 200, "el menú"), ("in", 400, "Soy Ale, te ayudo")])
-        assert r["category"] == "automatico"
+        assert r["category"] == "hibrido_bot"
 
     def test_one_fast_paste_in_a_slow_chat_is_human(self):
         # Whato: primera respuesta a las 14 h y un precio de 74 caracteres a los 0.7 s.

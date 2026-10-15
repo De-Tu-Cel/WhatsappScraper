@@ -7,7 +7,7 @@
 //
 // Fondo, texto y bordes siguen el tema y la paleta del usuario; los colores con
 // significado (Sí/No, reglas, categorías, cada clasificador) son fijos.
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import useSWR, { mutate as swrMutate } from 'swr'
 import Box from '@mui/material/Box'
 import Chip from '@mui/material/Chip'
@@ -39,6 +39,8 @@ import { authFetch } from '@/lib/api'
 import { COMMON_CONFIG, getCategoryConfig, getCommonConfig } from '@/lib/categoryConfig'
 import { parseUtc, MX_TZ } from '@/lib/dates'
 import { STAT_STRIP_BG } from '@/lib/surfaces'
+import AnalysisOverview from './AnalysisOverview'
+import { analysisModelInfo } from '@/lib/analysisModel'
 
 export const METHODS = ['timing', 'ia', 'hibrido']
 const METHOD_META = {
@@ -54,6 +56,15 @@ const C = {
   faint: 'var(--item-hover, rgba(255,255,255,0.06))', card: 'var(--card-bg, #161d2e)',
   text: 'var(--text, #f1f5f9)', muted: 'var(--text-muted, rgba(255,255,255,0.45))',
   yes: '#4ade80', no: '#fbbf24', rule: '#f59e0b', note: '#94a3b8',
+}
+const LOG_CARD_SX = { display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100%', border: `1px solid ${C.border}`, borderRadius: 2.5, bgcolor: C.surface, overflow: 'hidden' }
+const LOG_BODY_SX = { overflowY: 'auto', overflowX: 'hidden', flex: 1, minHeight: 0, px: 2, pt: 1.5, pb: 1.5, scrollbarWidth: 'thin', '&:focus-visible': { outline: `2px solid ${C.note}`, outlineOffset: -2 } }
+const LOG_GRID_SX = { display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: 'repeat(2, minmax(0, 1fr))', xl: 'repeat(4, minmax(0, 1fr))' }, gridAutoRows: 'clamp(420px, calc(92dvh - 180px), 700px)', alignContent: 'start', gap: 1.5, flex: '1 0 auto', minHeight: 0 }
+
+function LogDescription({ children }) {
+  return <Tooltip describeChild title={children}>
+    <Typography sx={{ fontSize: '0.74rem', color: C.muted, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{children}</Typography>
+  </Tooltip>
 }
 const SUMMARY_KEY = '/api/classification/comparisons/summary'
 
@@ -210,8 +221,8 @@ function parecidoTip(t, hibrido, it, fresh, items) {
   const lo = Math.round(Number(it.min))
   const hi = Math.round(Number(it.max))
   const exact = Number.isFinite(lo) && Number.isFinite(hi) && lo !== hi
-    ? fillTip(t.analytics.rangeExact, { pct: parecidoPct(it), min: Math.min(lo, hi), max: Math.max(lo, hi) })
-    : fillTip(t.analytics.rangeExactSame, { pct: parecidoPct(it) })
+    ? fillTip(t.analytics.rangeExact, { cat: categoryLabel(t, it), pct: parecidoPct(it), min: Math.min(lo, hi), max: Math.max(lo, hi) })
+    : fillTip(t.analytics.rangeExactSame, { cat: categoryLabel(t, it), pct: parecidoPct(it) })
   if (!fresh) return `${t.analytics.rangeLegacy || ''} ${exact}`.trim()
   return items.length > 1 ? `${exact} ${t.analytics.rangeMixed || ''}`.trim() : exact
 }
@@ -271,7 +282,13 @@ function ParecidoLog({ hibrido }) {
   const items = parecidoItems(hibrido)
   const fresh = Array.isArray(hibrido?.parecido?.items)
   const steps = fresh
-    ? (hibrido.parecido.trace || []).filter(s => s?.paso && s.paso !== 'Resultado')
+    ? (hibrido.parecido.trace || []).filter(s => s?.paso && s.paso !== 'Resultado').map(step => {
+        if (step.paso === 'Petición aparte') return { ...step, detalle: t.analytics.helpRange }
+        if (step.paso === 'Un solo parecido' || step.paso === 'Varios parecidos') {
+          return { ...step, detalle: items.map(it => parecidoTip(t, hibrido, it, true, [])).join(' ') + (items.length > 1 ? ` ${t.analytics.rangeMixed}` : '') }
+        }
+        return step
+      })
     : items.length
       ? [{ paso: t.analytics.rangeLegacyTitle, detalle: t.analytics.rangeLegacy }]
       : [{ paso: t.analytics.rangeEmptyTitle, detalle: t.analytics.rangeEmpty }]
@@ -279,23 +296,26 @@ function ParecidoLog({ hibrido }) {
     ? t.analytics.rangeCountMixed.replace('{n}', String(items.length))
     : items.length === 1 ? t.analytics.rangeCountOne : t.analytics.rangeEmptyTitle
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100%', border: `1px solid ${C.border}`, borderRadius: 2.5, bgcolor: C.surface, overflow: 'hidden' }}>
+    <Box sx={LOG_CARD_SX}>
       <Box sx={{ p: 2, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 1.1, borderBottom: `1px solid ${C.border}` }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Box sx={{ width: 30, height: 30, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: `${meta.color}1f`, color: meta.color, flexShrink: 0 }}>
             <Icon sx={{ fontSize: 18 }} />
           </Box>
           <Typography sx={{ fontWeight: 800, fontSize: '1rem', color: C.text, letterSpacing: '0.01em' }}>{t.analytics[meta.label]}</Typography>
-          <ClassifierHelp method="rango" size={17} />
+          <ClassifierHelp method="rango" model={hibrido?.parecido?.model} size={17} />
         </Box>
-        <Typography sx={{ fontSize: '0.74rem', color: C.muted, lineHeight: 1.5 }}>{t.analytics[meta.help]}</Typography>
+        <LogDescription>{t.analytics[meta.help]}</LogDescription>
+      </Box>
+      <Box data-classifier-log-body="rango" role="region" aria-label={`${t.analytics[meta.label]}: ${t.analytics.logTitle}`} tabIndex={0} sx={LOG_BODY_SX}>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6 }}>
           <Pill color={items.length > 1 ? meta.color : undefined}>{countLabel}</Pill>
           {hibrido?.parecido?.model && <Pill>{hibrido.parecido.model}</Pill>}
         </Box>
-      </Box>
-      <Box component="ol" sx={{ listStyle: 'none', m: 0, px: 2, pt: 2, pb: 1.5, overflowY: 'auto', flex: 1, minHeight: 0 }}>
-        {steps.map((step, i) => <Step key={i} step={step} n={i + 1} isLast={i === steps.length - 1} />)}
+
+        <Box component="ol" sx={{ listStyle: 'none', m: 0, p: 0, mt: 1.5 }}>
+          {steps.map((step, i) => <Step key={i} step={step} n={i + 1} isLast={i === steps.length - 1} />)}
+        </Box>
       </Box>
       <Box sx={{ flexShrink: 0 }}>
       {items.length > 0 ? items.map((it, i) => {
@@ -310,7 +330,7 @@ function ParecidoLog({ hibrido }) {
           }}>
             <Box sx={{ minWidth: 0 }}>
               <Typography sx={{ fontSize: '0.64rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: cfg.color, [LIGHT]: { color: inkOnLight(cfg.color) } }}>
-                {i === 0 ? t.analytics.logResult : t.analytics.rangeAlso}
+                {t.analytics.rangeAlso}
               </Typography>
               <Typography sx={{ fontSize: '0.84rem', fontWeight: 800, color: cfg.color, lineHeight: 1.25, mt: 0.25, [LIGHT]: { color: inkOnLight(cfg.color) } }}>
                 {name}
@@ -352,7 +372,7 @@ export function RangeReadout({ rango, category, isAi, onClick, wide = false }) {
   const color = shifted ? '#f59e0b' : (lo >= 75 ? '#4ade80' : '#93c5fd')
   const tip = shifted
     ? fillTip(t.analytics.rangeShifted, { range: text, cat: categoryLabel(t, rango) })
-    : (t.analytics.colRangeHelp || '')
+    : parecidoTip(t, { category, is_ai: isAi }, rango, false, [rango])
   return (
     <Tooltip title={tip}
       slotProps={{ tooltip: { className: 'classifier-help-tip', sx: {
@@ -378,8 +398,8 @@ export function RangeReadout({ rango, category, isAi, onClick, wide = false }) {
 }
 
 function MethodFacts({ method, result }) {
-  const { t } = useLang()
-  const pills = [<Pill key="m">{result.model || t.analytics.logNoModel}</Pill>]
+  const { t, lang } = useLang()
+  const pills = [<Pill key="m">{analysisModelInfo(result, lang === 'en', method).label}</Pill>]
   // Con la tabla de condiciones (ConditionsTable) T1/T2 ya se ven ahí; los pills quedan
   // solo para comparaciones guardadas antes de que existiera la tabla.
   if (method === 'timing' && result.inputs && !result.checks) {
@@ -409,7 +429,8 @@ function ConditionsTable({ checks, resultCfg }) {
   return (
     <Box>
       <Typography sx={{ ...head, mb: 0.6 }}>{t.analytics.logConditions}</Typography>
-      <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(150px, 1fr) auto minmax(64px, 112px) minmax(86px, auto)', border: `1px solid ${C.border}`, borderRadius: 1.5, overflow: 'hidden' }}>
+      <Box sx={{ overflowX: 'auto', scrollbarWidth: 'thin' }}>
+      <Box sx={{ display: 'grid', minWidth: 330, gridTemplateColumns: 'minmax(110px, 1.4fr) minmax(56px, 0.7fr) minmax(55px, 0.65fr) minmax(74px, 0.9fr)', border: `1px solid ${C.border}`, borderRadius: 1.5, overflow: 'hidden' }}>
         {[t.analytics.logCondition, t.analytics.logMeasured, t.analytics.logLimit, t.analytics.logOutcome].map(h => (
           <Box key={h} sx={{ px: 1, py: 0.6, bgcolor: C.faint, minWidth: 0 }}><Typography noWrap sx={head}>{h}</Typography></Box>
         ))}
@@ -428,14 +449,14 @@ function ConditionsTable({ checks, resultCfg }) {
                 <Typography sx={{ fontSize: '0.74rem', fontWeight: decisive ? 700 : 500, color: C.text, lineHeight: 1.35 }}>{c.cond}</Typography>
               </Box>
               <Box sx={{ ...rowSx, justifyContent: 'flex-end' }}>
-                <Typography sx={{ fontSize: '0.74rem', fontWeight: 600, color: C.text, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{c.medido || '—'}</Typography>
+                <Typography sx={{ fontSize: '0.74rem', fontWeight: 600, color: C.text, fontVariantNumeric: 'tabular-nums' }}>{c.medido || '—'}</Typography>
               </Box>
               <Box sx={rowSx}>
                 <Typography sx={{ fontSize: '0.7rem', color: C.muted, lineHeight: 1.3, fontVariantNumeric: 'tabular-nums' }}>{c.limite}</Typography>
               </Box>
               <Box sx={{ ...rowSx, flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', gap: 0.4 }}>
                 {skipped
-                  ? <Typography sx={{ fontSize: '0.68rem', color: C.muted, fontStyle: 'italic', whiteSpace: 'nowrap' }}>{t.analytics.logNotEvaluated}</Typography>
+                  ? <Typography sx={{ fontSize: '0.68rem', color: C.muted, fontStyle: 'italic' }}>{t.analytics.logNotEvaluated}</Typography>
                   : <Pill color={color}>{label}</Pill>}
                 {decisive && resultCfg && (
                   <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, color: resultCfg.color, lineHeight: 1.25, [LIGHT]: { color: inkOnLight(resultCfg.color) } }}>
@@ -446,6 +467,7 @@ function ConditionsTable({ checks, resultCfg }) {
             </Box>
           )
         })}
+      </Box>
       </Box>
     </Box>
   )
@@ -576,14 +598,15 @@ function HelpSection({ label, tone, children }) {
 // "?" junto al nombre de un clasificador: al pasar el mouse (o con el teclado) explica qué
 // revisa, cómo decide, qué resultados puede dar y dónde se puede equivocar. limits = los
 // umbrales del diagrama (inputs de un resultado de Timing); sin ellos, los de fábrica.
-export function ClassifierHelp({ method, limits, size = 15 }) {
-  const { t } = useLang()
+export function ClassifierHelp({ method, limits, model, size = 15 }) {
+  const { t, lang } = useLang()
   const how = t.analytics.classifierHow
   const h = how?.[method]
   const meta = METHOD_META[method]
   if (!h || !meta) return null
   const Icon = meta.icon
   const fill = (s) => s
+    .replace(/\{model\}/g, model || (lang === 'en' ? 'the saved model' : 'el modelo registrado'))
     .replace(/\{t1\}/g, `${limits?.umbral_t1_s ?? 10} s`)
     .replace(/\{t2\}/g, `${limits?.umbral_t2_s ?? 5} s`)
     .replace(/\{wait\}/g, `${limits?.espera_h ?? 1} h`)
@@ -643,32 +666,34 @@ export function ClassifierHelp({ method, limits, size = 15 }) {
 }
 
 function MethodLog({ method, result }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const meta = METHOD_META[method]
   const Icon = meta.icon
   const cfg = resultConfig(method, result)
   const steps = (result?.trace || []).filter(s => s.paso !== 'Resultado')
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100%', border: `1px solid ${C.border}`, borderRadius: 2.5, bgcolor: C.surface, overflow: 'hidden' }}>
+    <Box sx={LOG_CARD_SX}>
       <Box sx={{ p: 2, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 1.1, borderBottom: `1px solid ${C.border}` }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Box sx={{ width: 30, height: 30, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: `${meta.color}1f`, color: meta.color, flexShrink: 0 }}>
             <Icon sx={{ fontSize: 18 }} />
           </Box>
           <Typography sx={{ fontWeight: 800, fontSize: '1rem', color: C.text, letterSpacing: '0.01em' }}>{t.analytics[meta.label]}</Typography>
-          <ClassifierHelp method={method} limits={method === 'timing' ? result?.inputs : undefined} size={17} />
+          <ClassifierHelp method={method} model={result?.model} limits={method === 'timing' ? result?.inputs : undefined} size={17} />
         </Box>
-        <Typography sx={{ fontSize: '0.74rem', color: C.muted, lineHeight: 1.5 }}>{t.analytics[meta.help]}</Typography>
-        {result && <MethodFacts method={method} result={result} />}
-        {result?.ran_at && (
-          <Typography sx={{ fontSize: '0.68rem', color: C.muted, fontVariantNumeric: 'tabular-nums' }}>
-            {t.analytics.logRanAt} {fmtRanAt(result.ran_at)}
-          </Typography>
-        )}
-        {method === 'timing' && result?.checks && <ConditionsTable checks={result.checks} resultCfg={cfg} />}
+        <LogDescription>{t.analytics[meta.help].replaceAll('{model}', analysisModelInfo(result, lang === 'en', method).label)}</LogDescription>
       </Box>
-      <Box component="ol" sx={{ listStyle: 'none', m: 0, px: 2, pt: 2, pb: 1.5, overflowY: 'auto', flex: 1, minHeight: 0 }}>
-        {steps.map((step, i) => <Step key={i} step={step} n={i + 1} isLast={i === steps.length - 1} />)}
+      <Box data-classifier-log-body={method} role="region" aria-label={`${t.analytics[meta.label]}: ${t.analytics.logTitle}`} tabIndex={0} sx={LOG_BODY_SX}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 1.5 }}>
+          {result && <MethodFacts method={method} result={result} />}
+          {result?.ran_at && <Typography sx={{ fontSize: '0.68rem', color: C.muted, fontVariantNumeric: 'tabular-nums' }}>
+            {t.analytics.logRanAt} {fmtRanAt(result.ran_at)}
+          </Typography>}
+          {method === 'timing' && result?.checks && <ConditionsTable checks={result.checks} resultCfg={cfg} />}
+        </Box>
+        <Box component="ol" sx={{ listStyle: 'none', m: 0, p: 0 }}>
+          {steps.map((step, i) => <Step key={i} step={step} n={i + 1} isLast={i === steps.length - 1} />)}
+        </Box>
       </Box>
       {result && cfg && (
         <Box sx={{ m: 1.5, mt: 0, flexShrink: 0, p: 1.4, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, bgcolor: cfg.bg, border: `1px solid ${cfg.color}55` }}>
@@ -690,7 +715,7 @@ function MethodLogSkeleton({ method }) {
   const meta = METHOD_META[method]
   const Icon = meta.icon
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100%', border: `1px solid ${C.border}`, borderRadius: 2.5, bgcolor: C.surface, overflow: 'hidden' }}>
+    <Box sx={LOG_CARD_SX}>
       <Box sx={{ p: 2, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 1.1, borderBottom: `1px solid ${C.border}` }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Box sx={{ width: 30, height: 30, borderRadius: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: `${meta.color}1f`, color: meta.color, flexShrink: 0 }}>
@@ -705,6 +730,9 @@ function MethodLogSkeleton({ method }) {
           {method !== 'timing' && <Skeleton variant="rounded" width={110} height={20} sx={{ ...SK, borderRadius: 99 }} />}
         </Box>
         <Skeleton variant="text" width={118} height={12} sx={SK} />
+
+      </Box>
+      <Box sx={{ ...LOG_BODY_SX, display: 'flex', flexDirection: 'column', gap: 1.6, '& > *': { flexShrink: 0 } }}>
         {method === 'timing' && (
           <Box sx={{ border: `1px solid ${C.border}`, borderRadius: 1.5, overflow: 'hidden', mt: 0.4 }}>
             {Array.from({ length: 7 }).map((_, i) => (
@@ -718,8 +746,6 @@ function MethodLogSkeleton({ method }) {
             ))}
           </Box>
         )}
-      </Box>
-      <Box sx={{ px: 2, pt: 2, pb: 1.5, flex: 1, display: 'flex', flexDirection: 'column', gap: 1.6 }}>
         {Array.from({ length: method === 'timing' ? 4 : 6 }).map((_, i) => (
           <Box key={i} sx={{ display: 'grid', gridTemplateColumns: '22px 1fr', columnGap: 1.2 }}>
             <Skeleton variant="circular" width={22} height={22} sx={SK} />
@@ -742,14 +768,23 @@ function MethodLogSkeleton({ method }) {
 const fmtNumber = (n) => last10(n).replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')
 
 // number: en empresas con varios números, abre la comparación de ese número.
-export function ComparisonDialog({ companyId, companyName, number, onClose, onChanged }) {
-  const { t } = useLang()
+export function ComparisonDialog({ companyId, companyName, number, onClose, onChanged, readOnly = false, allowCompanyFallback = false, showCompanyScope = false }) {
+  const { t, lang } = useLang()
   const [doc, setDoc] = useState(null)
   const [state, setState] = useState('loading') // loading | ready | empty | running | error
   const [error, setError] = useState('')
+  const [details, setDetails] = useState(false)
+  const [confirmRun, setConfirmRun] = useState(false)
+  const runInFlight = useRef(false)
+  const { data: mode, error: modeError, mutate: retryMode } = useSWR(readOnly ? null : '/api/classification/mode', async url => {
+    const response = await authFetch(url)
+    if (!response.ok) throw new Error(`Error ${response.status}`)
+    return response.json()
+  })
 
   const load = useCallback(async () => {
     setState('loading')
+    setError('')
     try {
       const res = await authFetch(`/api/classification/comparisons/${companyId}`)
       if (res.status === 404) { setDoc(null); setState('empty'); return }
@@ -762,19 +797,26 @@ export function ComparisonDialog({ companyId, companyName, number, onClose, onCh
   useEffect(() => { if (companyId) load() }, [companyId, load])
 
   async function rerun() {
+    if (runInFlight.current) return
+    runInFlight.current = true
     setState('running'); setError('')
     try {
-      const res = await authFetch(`/api/classification/comparisons/${companyId}/run`, { method: 'POST' })
+      const res = await authFetch(`/api/classification/comparisons/${companyId}/run${number ? `?number=${encodeURIComponent(number)}` : ''}`, { method: 'POST' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || `Error ${res.status}`)
       setDoc(data); setState('ready'); onChanged?.(); refreshComparisonSummary()
     } catch (e) { setError(e.message); setState(doc ? 'ready' : 'error') }
+    finally { runInFlight.current = false }
   }
 
-  const view = number ? (doc?.numbers || []).find(x => x.number === last10(number)) : doc
+  const view = number
+    ? (doc?.numbers || []).find(x => last10(x.number) === last10(number))
+      || (allowCompanyFallback && !doc?.numbers?.length ? doc : null)
+    : doc
+  const companyScope = !!doc && showCompanyScope && number && view === doc && !doc?.numbers?.length
   return (
-    <Dialog open={!!companyId} onClose={onClose} maxWidth="xl" fullWidth
-      slotProps={{ paper: { sx: { bgcolor: C.card, backgroundImage: 'none', color: C.text, border: `1px solid ${C.border}`, borderRadius: 3, height: { md: 'min(92vh, 900px)' }, display: 'flex', flexDirection: 'column' } } }}>
+    <><Dialog open={!!companyId} onClose={state === 'running' ? undefined : onClose} maxWidth="xl" fullWidth
+      slotProps={{ paper: { sx: { bgcolor: C.card, backgroundImage: 'none', color: C.text, border: `1px solid ${C.border}`, borderRadius: 3, height: details ? 'min(92dvh, 900px)' : 'auto', maxHeight: 'calc(100dvh - 24px)', m: { xs: 1.5, sm: 3 }, width: { xs: 'calc(100% - 24px)', sm: 'calc(100% - 48px)' }, display: 'flex', flexDirection: 'column' } } }}>
       <DialogTitle sx={{ pb: 1.5, pt: 2.5, px: 3 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
           <Box>
@@ -789,35 +831,68 @@ export function ComparisonDialog({ companyId, companyName, number, onClose, onCh
           {view?.agreement && <AgreementBadge agreement={view.agreement} />}
         </Box>
       </DialogTitle>
-      <DialogContent sx={{ px: 3, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <DialogContent data-classifier-dialog-content sx={{ px: { xs: 1.5, sm: 3 }, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
+        <AnalysisOverview companyId={companyId} number={number} view={view} savedAt={doc?.updated_at}
+          companyScope={companyScope} preview={doc?.preview} loading={state === 'loading'} onShowDetails={() => setDetails(true)} />
         {state === 'loading' && (
           <Box aria-busy="true" aria-label={t.analytics.logLoading}
-            sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr', xl: 'repeat(4, minmax(0, 1fr))' }, gridAutoRows: { xs: 'auto', md: 'minmax(0, 1fr)' }, gap: 1.5, flex: 1, minHeight: 0 }}>
+            sx={{ ...LOG_GRID_SX }}>
             {METHODS.map(m => <MethodLogSkeleton key={m} method={m} />)}
             <MethodLogSkeleton method="rango" />
           </Box>
         )}
         {(state === 'empty' || (state === 'ready' && !view)) && (
-          <Typography sx={{ py: 4, fontSize: '0.85rem', color: C.muted, textAlign: 'center' }}>{t.analytics.logEmpty}</Typography>
+          <Typography sx={{ py: 4, fontSize: '0.85rem', color: C.muted, textAlign: 'center' }}>{readOnly
+            ? (lang === 'en' ? 'No classifier logs saved for this number yet.' : 'Todavía no hay logs de clasificación guardados para este número.')
+            : t.analytics.logEmpty}</Typography>
         )}
         {error && <Typography sx={{ mb: 1, fontSize: '0.8rem', color: '#f87171' }}>{t.analytics.compareFailed}: {error}</Typography>}
-        {view && (state === 'ready' || state === 'running') && (
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr', xl: 'repeat(4, minmax(0, 1fr))' }, gridAutoRows: { xs: 'auto', md: 'minmax(0, 1fr)' }, gap: 1.5, flex: 1, minHeight: 0, opacity: state === 'running' ? 0.5 : 1, transition: 'opacity 0.2s' }}>
+        {details && view && (state === 'ready' || state === 'running') && (
+          <Box sx={{ ...LOG_GRID_SX, opacity: state === 'running' ? 0.5 : 1, transition: 'opacity 0.2s' }}>
             {METHODS.map(m => <MethodLog key={m} method={m} result={view[m]} />)}
             <ParecidoLog hibrido={view.hibrido} />
           </Box>
         )}
       </DialogContent>
       <Divider sx={{ borderColor: C.border, mx: 3, mt: 1 }} />
-      <DialogActions sx={{ px: 3, pt: 1.5, pb: 2, gap: 1 }}>
-        <Button onClick={onClose} sx={{ color: C.muted, textTransform: 'none' }}>Cerrar</Button>
-        <Button variant="contained" onClick={rerun} disabled={state === 'running' || state === 'loading'}
+      <DialogActions sx={{ px: { xs: 1.5, sm: 3 }, pt: 1.5, pb: 2, gap: 1, flexWrap: 'wrap' }}>
+        <Button onClick={onClose} disabled={state === 'running'} sx={{ color: C.muted, textTransform: 'none' }}>{lang === 'en' ? 'Close' : 'Cerrar'}</Button>
+        {view && <Button onClick={() => setDetails(value => !value)} aria-expanded={details}
+          sx={{ textTransform: 'none', color: 'var(--accent)' }}>{details
+            ? (lang === 'en' ? 'Hide details' : 'Ocultar detalles') : (lang === 'en' ? 'View classifier details' : 'Ver detalles de los clasificadores')}</Button>}
+        {readOnly && state === 'error' && <Button onClick={load}>{lang === 'en' ? 'Retry' : 'Reintentar'}</Button>}
+        {modeError && <Button onClick={() => retryMode()}>{lang === 'en' ? 'Check availability' : 'Reintentar disponibilidad'}</Button>}
+        {!readOnly && <Tooltip title={!mode ? (lang === 'en' ? 'Checking analysis availability' : 'Comprobando disponibilidad del análisis') : ''}><span><Button variant="contained" onClick={() => setConfirmRun(true)} disabled={!mode || state === 'running' || state === 'loading'}
           startIcon={state === 'running' ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <ReplayIcon />}
           sx={{ textTransform: 'none', fontWeight: 700, bgcolor: 'var(--accent, #3b82f6)', '&:hover': { bgcolor: 'var(--accent, #3b82f6)', filter: 'brightness(1.1)' } }}>
-          {state === 'running' ? t.analytics.compareRunning : (doc ? t.analytics.logRerun : t.analytics.compareRun)}
-        </Button>
+          {state === 'running' ? t.analytics.compareRunning : (doc
+            ? (lang === 'en' ? 'Reanalyze' : 'Reanalizar') : (lang === 'en' ? 'Analyze' : 'Analizar'))}
+        </Button></span></Tooltip>}
       </DialogActions>
     </Dialog>
+    <Dialog open={confirmRun} onClose={() => setConfirmRun(false)} maxWidth="xs" fullWidth
+      slotProps={{ paper: { sx: { bgcolor: C.card, color: C.text, backgroundImage: 'none', borderRadius: 3, border: `1px solid ${C.border}` } } }}>
+      <DialogTitle>{lang === 'en' ? 'Reanalyze conversation' : 'Reanalizar conversación'}</DialogTitle>
+      <DialogContent>
+        <Typography sx={{ fontWeight: 700, mb: 1 }}>{companyName}{number ? ` · ${fmtNumber(number)}` : ''}</Typography>
+        {mode?.model && <Typography data-testid="next-analysis-model" sx={{ fontSize: '.82rem', mb: 1, color: C.muted }}>
+          {lang === 'en' ? 'Model for this new analysis' : 'Modelo para este nuevo análisis'}: <Box component="span" sx={{ fontFamily: 'monospace', color: C.text }}>{mode.model}</Box>
+        </Typography>}
+        <Typography sx={{ fontSize: '0.86rem', mb: 1 }}>{number
+          ? (lang === 'en' ? 'Only the selected number will be analyzed. Other numbers keep their results.' : 'Se analizará únicamente el número seleccionado. Los demás números conservan sus resultados.')
+          : (lang === 'en' ? 'The company and its contacted numbers will be analyzed.' : 'Se analizará la empresa y sus números contactados.')}</Typography>
+        <Typography sx={{ fontSize: '0.86rem', mb: 1 }}>{lang === 'en'
+          ? 'Timing, AI, Timing + AI and Range will be reviewed. This uses AI calls. No WhatsApp messages are sent.'
+          : 'Se revisarán Timing, IA, Timing + IA y Rango. Esta operación consume consultas de IA. No envía mensajes de WhatsApp.'}</Typography>
+        <Typography sx={{ fontSize: '0.86rem', color: C.muted }}>{mode?.replaces_official
+          ? (lang === 'en' ? 'The saved official result for this scope will be replaced.' : 'Se reemplazará el resultado oficial guardado para este alcance.')
+          : (lang === 'en' ? 'This environment saves a test comparison. The production result will remain unchanged.' : 'Este entorno guardará una comparación de pruebas. El resultado de producción se conserva.')}</Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setConfirmRun(false)} sx={{ color: C.muted, textTransform: 'none' }}>{lang === 'en' ? 'Cancel' : 'Cancelar'}</Button>
+        <Button variant="contained" onClick={() => { setConfirmRun(false); rerun() }} sx={{ bgcolor: 'var(--accent)', textTransform: 'none' }}>{lang === 'en' ? 'Reanalyze' : 'Reanalizar'}</Button>
+      </DialogActions>
+    </Dialog></>
   )
 }
 

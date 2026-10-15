@@ -3,6 +3,11 @@ from app.config import WWEBJS_URL
 
 API_SECRET = os.environ.get("WWEBJS_API_SECRET", "")
 
+
+class SendWindowClosed(Exception):
+    """El servicio rechazó el envío antes de contactar WhatsApp por horario."""
+
+
 def _headers():
     h = {"Content-Type": "application/json"}
     if API_SECRET:
@@ -35,8 +40,11 @@ def get_pairing_code(session_id: str) -> dict:
     return r.json()
 
 def send_message(session_id: str, to: str, message: str, typing_ms: int = 0,
-                 save_contact: bool = False, contact_first_name: str = "", contact_last_name: str = "") -> dict:
+                 save_contact: bool = False, contact_first_name: str = "", contact_last_name: str = "",
+                 send_before: str | None = None) -> dict:
     payload = {"to": to, "message": message, "typingMs": typing_ms}
+    if send_before:
+        payload['sendBefore'] = send_before
     if save_contact and contact_first_name:
         payload["saveContact"] = True
         payload["contactFirstName"] = contact_first_name
@@ -65,6 +73,8 @@ def send_message(session_id: str, to: str, message: str, typing_ms: int = 0,
         # 150s gives ~100s of margin on top of the ~48s of deliberate pacing.
         timeout=150,
     )
+    if r.status_code == 409 and r.json().get('code') == 'SEND_WINDOW_CLOSED':
+        raise SendWindowClosed('El horario de Chat IA terminó antes del envío')
     if not r.ok:
         raise Exception(r.json().get("error", r.text))
     return r.json()
@@ -86,6 +96,12 @@ def send_media(session_id: str, to: str, media_url: str,
     if not r.ok:
         raise Exception(r.json().get("error", r.text))
     return r.json()
+
+def registration_status(result: dict) -> bool | None:
+    """The service returns registered; missing/error responses are not invalid numbers."""
+    value = result.get("registered", result.get("exists"))
+    return value if isinstance(value, bool) else None
+
 
 def verify_number(session_id: str, phone: str) -> dict:
     r = _req.post(
@@ -233,7 +249,7 @@ class WWebjsClient:
         self.instance_name = instance_name or session_id
 
     def send(self, to: str, message: str, delay_ms: int | None = None,
-             save_contact: bool = False, contact_name: str = "") -> dict:
+             save_contact: bool = False, contact_name: str = "", send_before: str | None = None) -> dict:
         ms = delay_ms if delay_ms is not None else random.randint(800, 2500)
         first = contact_name.strip()
         last = ""
@@ -241,6 +257,7 @@ class WWebjsClient:
         return send_message(
             self.session_id, to, message, typing_ms=ms,
             save_contact=save_contact, contact_first_name=first, contact_last_name=last,
+            **({'send_before': send_before} if send_before else {}),
         )
 
     def verify(self, phone: str) -> dict:

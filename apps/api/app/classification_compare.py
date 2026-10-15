@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger(__name__)
 
@@ -64,9 +64,13 @@ def _quote(text: str, n: int = 90) -> str:
 
 def to_common(category: str | None, is_ai: bool | None = None) -> str | None:
     """Categoría del clasificador de producción → categoría común de la comparación."""
-    if category in ("bot", "menu"):
-        return "agente_ia" if is_ai else "bot"
-    if category in ("hibrido", "hibrido_bot", "hibrido_automatico", "automatico"):
+    from app.classification_categories import display_category
+    category = display_category(category, bool(is_ai))
+    if category == "bot_ia":
+        return "agente_ia"
+    if category == "bot":
+        return "bot"
+    if category == "automatico":
         return "automatico_humano"
     if category == "automatico_sin_respuesta":
         return category
@@ -92,6 +96,26 @@ def agreement(timing: str | None, ia: str | None, hibrido: str | None) -> dict:
     vals = list(pairs.values())
     pairs["todos"] = None if None in vals else all(vals)
     return pairs
+
+
+def group_bot_human(doc: dict | None) -> dict | None:
+    """Adapt saved comparisons to Bot without updating their stored diagnosis."""
+    if doc is None:
+        return None
+    from copy import deepcopy
+    from app.classification_categories import BOT_HUMAN_CATEGORIES
+    doc = deepcopy(doc)
+    for entry in [doc, *(doc.get("numbers") or [])]:
+        changed = False
+        for method in METHODS:
+            result = entry.get(method) or {}
+            if result.get("category") in BOT_HUMAN_CATEGORIES:
+                result["common"] = "bot"
+                result["label"] = "Bot"
+                changed = True
+        if changed:
+            entry["agreement"] = agreement(*((entry.get(method) or {}).get("common") for method in METHODS))
+    return doc
 
 
 def _failed_sends(db, company_id: str, number: str | None = None) -> int:
@@ -122,7 +146,7 @@ def _messages(db, company_id: str, limit: int = 0, number: str | None = None) ->
     msgs = [m for m in db.db.message_logs.find(
         {"company_id": company_id, "direction": {"$in": ["inbound", "outbound"]}, **NOT_FAILED},
         {"direction": 1, "message_body": 1, "created_at": 1, "ai_generated": 1, "sent_by_name": 1,
-         "to_number": 1, "from_number": 1},
+         "to_number": 1, "from_number": 1, "related_to_number": 1, "status": 1, "message_id": 1},
         sort=[("created_at", 1)],
     ) if m.get("created_at")]
     if number:
@@ -163,7 +187,7 @@ def _result(method: str, common: str, trace: list, **extra) -> dict:
 
 # ── 1. Timing: el diagrama de flujo, paso por paso ─────────────────────────────
 def run_timing(db, company_id: str, settings: dict | None = None, now: datetime | None = None,
-               number: str | None = None) -> dict:
+               number: str | None = None, messages: list | None = None) -> dict:
     from app.classifier import (
         _VIRTUAL_ASSISTANT_RE, _is_choice_menu, _is_ignorable_body, _looks_like_menu,
     )
@@ -179,7 +203,7 @@ def run_timing(db, company_id: str, settings: dict | None = None, now: datetime 
     wait = s["probe_wait_hours"] * 3600
     wait_label = f"{s['probe_wait_hours']:g} h"
     now = now or datetime.utcnow()
-    msgs = _messages(db, company_id, number=number)
+    msgs = messages if messages is not None else _messages(db, company_id, number=number)
     trace = []
     # Las condiciones del diagrama, en orden: qué se midió, contra qué límite y cómo salió
     # ("si" / "no" / "pendiente"); las que no se alcanzaron quedan "no_evaluada". La que
@@ -393,12 +417,13 @@ horarios ni tiempos de respuesta: no los supongas.
 Elige UNA categoría:
 - "sin_respuesta": el negocio no mandó ningún mensaje.
 - "humano": una persona escribe todas las respuestas del negocio.
-- "automatico_humano": hay un mensaje automático (bienvenida de WhatsApp Business, plantilla, aviso de
-  horario, menú inicial) y además escribe una persona.
+- "automatico_humano": hay un aviso automático (bienvenida de WhatsApp Business, plantilla o aviso de
+  horario/ausencia, sin menú interactivo) y además escribe una persona.
 - "automatico_sin_respuesta": el negocio solo mandó un mensaje automático (bienvenida, plantilla, aviso
   de horario o de ausencia) y nada más: nadie contestó después.
-- "bot": todo es automático con un flujo fijo que sí sigue la plática: menús de opciones, botones,
-  plantillas, textos repetidos; no entiende texto libre.
+- "bot": hay un flujo fijo que sí sigue la plática: menús de opciones, botones o selección de opciones.
+  Incluye un bot de menú que después transfiere a una persona: Bot + Humano se agrupa como Bot.
+  Una lista de precios o de datos solicitados (nombre, correo, teléfono) por sí sola no es un menú.
 - "agente_ia": una inteligencia artificial conversacional: entiende texto libre y responde a lo que se le
   pregunta con frases naturales, sin que se vea una persona detrás (suele presentarse con un nombre,
   contestar con listas y resúmenes, repetir confirmaciones y no dejar terminar la plática).
@@ -407,6 +432,9 @@ Conversación — [Nosotros] = lo que mandamos, [Negocio] = lo que respondieron:
 {thread}
 
 Responde SOLO con JSON, sin texto alrededor:
+Revisa todo el historial incluido, no solo el último saludo: "sin_respuesta" exige que no exista
+ningún mensaje del negocio. Un saliente nuevo sin contestar no borra las respuestas anteriores.
+No infieras tiempos ni uses una lista de datos solicitados como prueba suficiente de un bot de flujo.
 {{"categoria": "...", "pasos": ["...", "..."], "evidencia": ["...", "..."], "confianza": 0.0}}
 - "pasos": de 2 a 5 frases cortas en español que expliquen cómo llegaste a la conclusión.
 - "evidencia": hasta 3 frases copiadas tal cual de los mensajes del negocio que lo demuestran.
@@ -415,11 +443,11 @@ Responde SOLO con JSON, sin texto alrededor:
 _AI_CATEGORIES = ("sin_respuesta", "humano", "automatico_humano", "automatico_sin_respuesta", "bot", "agente_ia")
 
 
-def run_ai_only(db, company_id: str, model: str | None = None, number: str | None = None) -> dict:
-    from app.classifier import NON_TEXT_PLACEHOLDERS, _looks_like_binary_blob
+def run_ai_only(db, company_id: str, model: str | None = None, number: str | None = None, messages: list | None = None) -> dict:
+    from app.classifier import NON_TEXT_PLACEHOLDERS, _looks_like_binary_blob, classifier_messages
     from app.config import CLASSIFIER_MODEL
     model = model or CLASSIFIER_MODEL
-    msgs = _messages(db, company_id, limit=40, number=number)
+    msgs = classifier_messages(messages if messages is not None else _messages(db, company_id, number=number))
     trace = []
     n_in = sum(1 for m in msgs if m["direction"] == "inbound")
     trace.append({"paso": "Arma la conversación para la IA",
@@ -453,10 +481,13 @@ def run_ai_only(db, company_id: str, model: str | None = None, number: str | Non
     try:
         from app.llm import PRIORITY_BATCH, call_llm
         raw = call_llm([{"role": "user", "content": prompt}], max_tokens=500, temperature=0,
-                       priority=PRIORITY_BATCH, model=model)
+                       priority=PRIORITY_BATCH, model=model, json_output=True)
     except Exception as e:
         trace.append({"paso": f"Consulta al modelo ({model})", "detalle": f"Falló: {e}"})
         return {"method": "ia", "common": None, "label": "Error", "trace": trace, "model": model, "error": str(e)}
+    from app.llm import response_metadata
+    metadata = response_metadata(raw, model)
+    model = metadata['model']
     try:
         data = json.loads(re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip())
     except Exception:
@@ -477,22 +508,27 @@ def run_ai_only(db, company_id: str, model: str | None = None, number: str | Non
         conf = max(0.0, min(1.0, float(data.get("confianza"))))
     except (TypeError, ValueError):
         conf = None
-    return _result("ia", category, trace, model=model, confidence=conf)
+    return _result("ia", category, trace, **metadata, confidence=conf)
 
 
 # ── 3. Timing + IA (producción) y guardado de la comparación ───────────────────
 def _hybrid_result(analysis: dict, trace: list) -> dict:
     from app.classifier import verdict_label
-    from app.config import CLASSIFIER_MODEL
     category, is_ai = analysis.get("category"), bool(analysis.get("is_ai"))
     out = {"method": "hibrido", "category": category, "is_ai": is_ai, "common": to_common(category, is_ai),
            "label": verdict_label(category, is_ai), "notes": analysis.get("notes") or "",
            "scores": {k: analysis[k] for k in _SCORE_FIELDS if analysis.get(k) is not None},
-           "model": CLASSIFIER_MODEL, "trace": trace, "error": bool(analysis.get("error"))}
+           "model": analysis.get('model'), "provider": analysis.get('provider'),
+           "model_requested": analysis.get('model_requested'),
+           "analysis_origin": analysis.get('analysis_origin') or ('rules' if category == 'sin_respuesta' else None),
+           "trace": trace, "error": bool(analysis.get("error"))}
     if analysis.get("rango"):
         out["rango"] = analysis["rango"]
     if analysis.get("parecido"):
         out["parecido"] = analysis["parecido"]
+    for key in ('input_last_at', 'input_messages'):
+        if key in analysis:
+            out[key] = analysis[key]
     return out
 
 
@@ -537,6 +573,12 @@ def report_verdict(db, company_id: str, number: str | None = None) -> dict | Non
     out = {"category": hybrid["category"], "is_ai": bool(hybrid.get("is_ai")), **(hybrid.get("scores") or {})}
     if hybrid.get("notes"):
         out["notes"] = hybrid["notes"]
+    corrections = [step for step in hybrid.get('trace', []) if step.get('paso', '').startswith('Corrección') and step.get('detalle')]
+    if corrections:
+        out['notes'] = corrections[-1]['detalle']
+    for key in ('model', 'provider', 'model_requested', 'analysis_origin'):
+        if hybrid.get(key) is not None:
+            out[key] = hybrid[key]
     return out
 
 
@@ -615,7 +657,7 @@ def _per_number(db, company_id: str, company: dict | None, company_results: dict
     return out
 
 
-def run_comparison(company_id: str, save_prod: bool | None = None) -> dict:
+def run_comparison(company_id: str, save_prod: bool | None = None, number: str | None = None) -> dict:
     """Corre los tres clasificadores para una empresa ahora mismo y guarda la comparación.
     Con save_prod, el resultado de Timing + IA reemplaza la categoría de la conversación
     (es el mismo clasificador de producción)."""
@@ -623,6 +665,8 @@ def run_comparison(company_id: str, save_prod: bool | None = None) -> dict:
     from app.classifier import (_apply_last_message_corrections, _trace, classify_conversation,
                                 classify_conversation_and_save, verdict_label)
     from app.database import MongoDBManager
+    if number is not None:
+        return run_number_comparison(company_id, number)
     save_prod = SAVE_PROD if save_prod is None else save_prod
     db = MongoDBManager()
     try:
@@ -649,6 +693,60 @@ def run_comparison(company_id: str, save_prod: bool | None = None) -> dict:
         _trace(trace, "Resultado", verdict_label(hybrid.get("category"), hybrid.get("is_ai")))
         finish_parecido(hybrid, company.get("name", ""), company.get("industry", ""))
     return save_comparison(db, company_id, company, hybrid=hybrid, hybrid_trace=trace)
+
+
+def run_number_comparison(company_id: str, number: str) -> dict:
+    """Revisar un número conserva los resultados de los otros (2026-10-13)."""
+    from bson import ObjectId
+    from copy import deepcopy
+    from app.database import MongoDBManager
+    from app.classifier import classify_conversation, _apply_last_message_corrections, phone_last10
+    num = phone_last10(number)
+    if len(num) != 10 or not ObjectId.is_valid(company_id):
+        raise ValueError('Empresa o número inválido.')
+    manager = MongoDBManager()
+    company = manager.db.companies.find_one({'_id': ObjectId(company_id)})
+    if not company:
+        raise ValueError('La empresa ya no existe.')
+    messages = _messages(manager, company_id, number=num)
+    if not messages:
+        raise ValueError('Este número no tiene mensajes válidos para analizar.')
+    trace = []
+    analysis = classify_conversation(company_id, company.get('name', ''), company.get('industry', ''),
+                                     messages=messages, trace=trace, with_thread=True)
+    last = next((m for m in reversed(messages) if m['direction'] == 'inbound'), {})
+    analysis = _apply_last_message_corrections(analysis, last.get('message_body') or '', trace)
+    finish_parecido(analysis, company.get('name', ''), company.get('industry', ''))
+    if analysis.get('error'):
+        raise ValueError('No se pudo completar el análisis; se conserva el resultado anterior.')
+    now = datetime.utcnow()
+    entry = {'number': num, 'timing': run_timing(manager, company_id, number=num, messages=messages),
+             'ia': run_ai_only(manager, company_id, number=num, messages=messages), 'hibrido': _hybrid_result(analysis, trace),
+             'replied': bool(last), 'updated_at': now,
+             'input_last_at': analysis.get('input_last_at')}
+    if any(entry[m].get('error') for m in METHODS):
+        raise ValueError('Un clasificador falló; se conserva el resultado anterior.')
+    if analysis.get('category') != 'sin_respuesta' and not (analysis.get('parecido') or {}).get('items'):
+        raise ValueError('Rango no se completó; se conserva el resultado anterior.')
+    for method in METHODS:
+        entry[method]['ran_at'] = now
+    entry['agreement'] = agreement(*(entry[m].get('common') for m in METHODS))
+    collection = manager.db[COMPARISONS]
+    # Inicializar la copia de pruebas con resultados existentes, sin modificar producción.
+    existing = manager.db['classification_comparisons'].find_one({'company_id': company_id}, {'_id': 0}) or {}
+    seed = deepcopy(existing) or {'company_id': company_id, 'company_name': company.get('name', ''), 'numbers': []}
+    collection.update_one({'company_id': company_id}, {'$setOnInsert': seed}, upsert=True)
+    updated = collection.update_one({'company_id': company_id, 'numbers.number': num},
+                                    {'$set': {'numbers.$': entry, 'updated_at': now}})
+    if not updated.matched_count:
+        collection.update_one({'company_id': company_id, 'numbers': {'$not': {'$elemMatch': {'number': num}}}},
+                              {'$push': {'numbers': entry}, '$set': {'updated_at': now}})
+    if len(_contacted_numbers(manager, company_id)) == 1:
+        collection.update_one({'company_id': company_id}, {'$set': {m: entry[m] for m in METHODS} | {
+            'agreement': entry['agreement'], 'replied': entry['replied'], 'input_last_at': entry['input_last_at']}})
+    manager.db[LOGS].insert_one({'company_id': company_id, 'company_name': company.get('name', ''),
+                                 'number': num, 'updated_at': now, **entry})
+    return get_comparison(manager, company_id)
 
 
 # ── Lectura para Análisis ───────────────────────────────────────────────────────
@@ -699,25 +797,52 @@ def fill_parecido_from_prod(db, doc: dict | None) -> dict | None:
     return doc
 
 
+def _saved_date(doc: dict | None) -> datetime:
+    value = (doc or {}).get("updated_at")
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            value = None
+    if not isinstance(value, datetime):
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def _saved_comparisons(db, query: dict, projection: dict) -> dict:
+    """Local reads use the newest saved run, without modifying either collection."""
+    out = {d["company_id"]: d for d in db.db[COMPARISONS].find(query, projection)}
+    if _PREFIX:
+        for prod in db.db["classification_comparisons"].find(query, projection):
+            qa = out.get(prod["company_id"])
+            if qa is None or _saved_date(prod) > _saved_date(qa):
+                out[prod["company_id"]] = prod
+    return out
+
+
 def comparisons_for(db, company_ids: list) -> dict:
     """{company_id: comparación sin los logs} — para las filas de Análisis."""
     if not company_ids:
         return {}
-    out = {d["company_id"]: d for d in db.db[COMPARISONS].find(
-        {"company_id": {"$in": list(company_ids)}}, _LIST_PROJECTION)}
+    out = _saved_comparisons(db, {"company_id": {"$in": list(company_ids)}}, _LIST_PROJECTION)
     if _PREFIX:
         for d in out.values():
             fill_parecido_from_prod(db, d)
-    return out
+    return {company_id: group_bot_human(doc) for company_id, doc in out.items()}
 
 
 def get_comparison(db, company_id: str) -> dict | None:
     doc = db.db[COMPARISONS].find_one({"company_id": company_id}, {"_id": 0})
     if _PREFIX:
+        prod = db.db["classification_comparisons"].find_one({"company_id": company_id}, {"_id": 0})
+        if prod and (not doc or _saved_date(prod) > _saved_date(doc)):
+            return group_bot_human(prod)
         if doc:
-            return fill_parecido_from_prod(db, doc)
-        return db.db["classification_comparisons"].find_one({"company_id": company_id}, {"_id": 0})
-    return doc
+            result = group_bot_human(fill_parecido_from_prod(db, doc))
+            result['preview'] = True
+            return result
+        return None
+    return group_bot_human(doc)
 
 
 def _replied(entry: dict) -> bool:
@@ -732,7 +857,10 @@ def summary(db) -> dict:
     empresas con varios números, cada número que contestó es una conversación. Las que
     nunca contestaron coinciden siempre ("sin respuesta") e inflarían el porcentaje."""
     docs = []
-    for d in db.db[COMPARISONS].find({}, _LIST_PROJECTION):
+    saved = (_saved_comparisons(db, {}, _LIST_PROJECTION).values() if _PREFIX
+             else db.db[COMPARISONS].find({}, _LIST_PROJECTION))
+    for d in saved:
+        d = group_bot_human(d)
         docs += [n for n in d["numbers"] if _replied(n)] if d.get("numbers") else ([d] if _replied(d) else [])
     out = {"total": len(docs), "coincidencia": {}, "por_metodo": {m: {} for m in METHODS}}
     for key in ("todos", "timing_ia", "timing_hibrido", "ia_hibrido"):

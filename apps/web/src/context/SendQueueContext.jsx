@@ -123,15 +123,17 @@ export function SendQueueProvider({ children }) {
   // Groups several jobs (e.g. every company in one "Enviar todos" click) under a
   // single batch_id so the completion notification fires once for the whole group.
   const addBatch = useCallback(async (jobs, label = '') => {
-    if (!jobs?.length) return
+    if (!jobs?.length) return false
     recentEnqueueAtRef.current = Date.now()
     try {
-      await authFetch('/api/send-queue', {
+      const response = await authFetch('/api/send-queue', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobs, label, send_config: loadSendConfig() }),
       })
-    } catch {}
+      if (!response.ok) return false
+    } catch { return false }
     poll()
+    return true
   }, [poll])
 
   const cancel = useCallback(async () => {

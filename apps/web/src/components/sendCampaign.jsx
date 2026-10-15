@@ -1,5 +1,5 @@
 'use client'
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useLang } from '../context/LangContext'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { useSendQueue } from '../context/SendQueueContext'
@@ -8,7 +8,6 @@ import { CompanyPicker, extractPhoneDigits } from './scheduledSends'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { SendConfigPanel } from './SendConfigPanel'
 import { InstanceDisconnectedBanner } from './InstanceStatusBanner'
-import DailyCapBadge from './DailyCapBadge'
 import { getOverBy, capOverflowKind } from '../lib/dailyCap'
 import { sendBlockReason } from './BulkSendPanel'
 import { isPhoneBlacklisted } from '@/lib/phoneBlacklist'
@@ -17,7 +16,11 @@ import { getMinTemplatesRequired, pickMessageVariant } from '@/lib/messageVarian
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Chip from '@mui/material/Chip'
-import Divider from '@mui/material/Divider'
+import Dialog from '@mui/material/Dialog'
+import DialogTitle from '@mui/material/DialogTitle'
+import DialogContent from '@mui/material/DialogContent'
+import DialogActions from '@mui/material/DialogActions'
+import Alert from '@mui/material/Alert'
 import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
 import LinearProgress from '@mui/material/LinearProgress'
@@ -26,9 +29,9 @@ import SendIcon from '@mui/icons-material/Send'
 import CampaignIcon from '@mui/icons-material/Campaign'
 import GroupsIcon from '@mui/icons-material/Groups'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
-import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import DescriptionIcon from '@mui/icons-material/Description'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
+import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 
 // Per-recipient variable check — TemplateLibraryPicker only blocks a template
 // when NONE of the selection has the data it needs, so a mixed selection (some
@@ -42,7 +45,7 @@ const TARGET_VARS = [
   { re: /\{\{web\}\}/,       get: info => info.web },
 ]
 function templateFitsTarget(text, info) {
-  return TARGET_VARS.every(v => !v.re.test(text) || !!v.get(info))
+  return TARGET_VARS.every(v => !v.re.test(text) || !!String(v.get(info) || '').trim())
 }
 
 function StepHint({ hint }) {
@@ -61,9 +64,9 @@ function StepHint({ hint }) {
 // secuencia real de pasos, no solo decoración.
 function StepBadge({ n, icon }) {
   return (
-    <Box sx={{ position: 'relative', flexShrink: 0 }}>
+    <Box data-step-badge sx={{ position: 'relative', flexShrink: 0, width: 38, height: 36 }}>
       <Box sx={{
-        width: 28, height: 28, borderRadius: '9px', flexShrink: 0,
+        position: 'absolute', left: 0, bottom: 0, width: 30, height: 30, borderRadius: '9px', flexShrink: 0,
         background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.28) 0%, rgba(var(--accent-rgb,59,130,246),0.1) 100%)',
         border: '1px solid rgba(var(--accent-rgb,59,130,246),0.4)',
         boxShadow: '0 0 10px rgba(var(--accent-rgb,59,130,246),0.18)',
@@ -71,8 +74,8 @@ function StepBadge({ n, icon }) {
       }}>
         {icon}
       </Box>
-      <Box sx={{
-        position: 'absolute', top: -5, right: -5,
+      <Box data-step-marker sx={{
+        position: 'absolute', top: 0, right: 0,
         width: 15, height: 15, borderRadius: '50%',
         bgcolor: 'var(--accent, #3b82f6)', border: '1.5px solid var(--card-bg, #161d2e)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -85,7 +88,7 @@ function StepBadge({ n, icon }) {
 
 function StepHeader({ n, title, hint, icon }) {
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+    <Box data-campaign-step={n} sx={{ display: 'flex', alignItems: 'center', gap: 1.2, flexShrink: 0 }}>
       <StepBadge n={n} icon={icon} />
       <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.88rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
         {title}
@@ -95,44 +98,25 @@ function StepHeader({ n, title, hint, icon }) {
   )
 }
 
-function StepSection({ n, title, hint, icon, children, isLast = false }) {
-  return (
-    <Box sx={{ display: 'flex', gap: 1.2 }}>
-      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0, width: 28 }}>
-        <StepBadge n={n} icon={icon} />
-        {!isLast && (
-          <Box sx={{
-            flex: 1, width: 2, mt: 0.75,
-            background: 'linear-gradient(180deg, rgba(var(--accent-rgb,59,130,246),0.28) 0%, transparent 100%)',
-            borderRadius: 1,
-          }} />
-        )}
-      </Box>
-      <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, mt: '2px', mb: 1 }}>
-          <Typography sx={{
-            color: 'var(--text)', fontWeight: 700, fontSize: '0.88rem',
-            textTransform: 'uppercase', letterSpacing: '0.05em', lineHeight: 1,
-          }}>
-            {title}
-          </Typography>
-          <StepHint hint={hint} />
-        </Box>
-        {children}
-      </Box>
-    </Box>
-  )
-}
-
 function SectionCard({ children, sx }) {
   return (
     <Box sx={{
       borderRadius: 3, border: '1px solid var(--border)', bgcolor: 'var(--surface)',
-      p: 1.8, display: 'flex', flexDirection: 'column', gap: 1.2, ...sx,
+      p: 1.8, display: 'flex', flexDirection: 'column', flexShrink: 0, gap: 1.2, ...sx,
     }}>
       {children}
     </Box>
   )
+}
+
+function CampaignMetric({ value, label, accent = false, icon }) {
+  return <Box data-campaign-metric={label} sx={{ minWidth: 0, textAlign: 'center', ...(icon ? { p: 1.2, border: '1px solid var(--border)', borderRadius: 2, bgcolor: 'var(--card-bg)', '@container campaign (max-width: 550px)': { p: .7 } } : {}) }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: .8 }}>
+      {icon && <Box sx={{ color: 'var(--accent)', display: 'flex', '& svg': { fontSize: 17 } }}>{icon}</Box>}
+      <Typography sx={{ fontSize: '1.45rem', fontWeight: 800, lineHeight: 1.15, fontVariantNumeric: 'tabular-nums', color: accent || (icon && value > 0) ? 'var(--accent)' : value === 0 ? 'var(--text-muted)' : 'var(--text)', '@container campaign (max-width: 550px)': { fontSize: '1.15rem' } }}>{value}</Typography>
+    </Box>
+    <Typography sx={{ fontSize: '.8rem', color: 'var(--text-muted)', mt: .45, lineHeight: 1.3 }}>{label}</Typography>
+  </Box>
 }
 
 export default function SendCampaign() {
@@ -150,6 +134,13 @@ export default function SendCampaign() {
   // ── Message + timing ──
   const [templateTexts, setTemplateTexts] = useState([])
   const [sendCfg,       setSendCfg]       = useState(() => loadSendConfig())
+  const [reviewOpen, setReviewOpen] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [sendError, setSendError] = useState('')
+  const sendLock = useRef(false)
+  const workspaceRef = useRef(null)
+  const messageSectionRef = useRef(null)
+  const recipientSectionRef = useRef(null)
 
   // ── Done state: captured from context on success phase ──
   const [done,                setDone]                = useState(false)
@@ -194,23 +185,6 @@ export default function SendCampaign() {
     web:       targetCompanies.filter(n => n.web).length,
   }), [targetCompanies])
   const cleanMessages = useMemo(() => templateTexts.map(m => m.trim()).filter(Boolean), [templateTexts])
-  // Preview of what the first selected recipient could actually receive —
-  // same eligible-template filtering + variable substitution handleSend()
-  // uses at send time. Shows EVERY eligible variant, not just one: with
-  // several templates selected, pickMessageVariant() picks one at random
-  // per send, so previewing only the first one hid which other messages
-  // could just as likely go out.
-  const previewTarget = targets[0] ?? null
-  const previewMessages = useMemo(() => {
-    if (!previewTarget || cleanMessages.length === 0) return []
-    const eligible = cleanMessages.filter(m => templateFitsTarget(m, previewTarget))
-    const pool = eligible.length ? eligible : cleanMessages
-    return pool.map(m => m
-      .replace(/\{\{nombre\}\}/g,    previewTarget.company_name || '')
-      .replace(/\{\{ciudad\}\}/g,    previewTarget.city || '')
-      .replace(/\{\{industria\}\}/g, previewTarget.industry || '')
-      .replace(/\{\{web\}\}/g,       previewTarget.web || ''))
-  }, [previewTarget, cleanMessages])
   const minTemplatesRequired = getMinTemplatesRequired(targets.length)
   const belowMinTemplates = targets.length > 1 && cleanMessages.length < minTemplatesRequired
   // Already-contacted numbers don't use the new-contacts quota — counting every
@@ -221,9 +195,12 @@ export default function SendCampaign() {
   const overBy      = getOverBy(capStats, targets.length, newSelCount, { requireStats: true })
   const overKind    = capOverflowKind(capStats, targets.length, newSelCount)
   const capBlocked  = capPending || overBy > 0
-  const canSend = targets.length > 0 && cleanMessages.length > 0 && !belowMinTemplates && !capBlocked && !isSending
-  const blockReason = sendBlockReason({
-    lang, isSending, allSent: false, isDisconnected,
+  const unmatchedTargets = targets.filter(n => cleanMessages.length && !cleanMessages.some(m => templateFitsTarget(m, n)))
+  const canSend = targets.length > 0 && cleanMessages.length > 0 && !belowMinTemplates && !capBlocked && !isSending && instanceStatus === 'connected' && !unmatchedTargets.length
+  const blockReason = unmatchedTargets.length
+    ? (lang === 'en' ? `${unmatchedTargets.length} ${unmatchedTargets.length === 1 ? 'recipient needs' : 'recipients need'} a template with available variables.` : `${unmatchedTargets.length} ${unmatchedTargets.length === 1 ? 'destinatario necesita' : 'destinatarios necesitan'} una plantilla con datos disponibles.`)
+    : sendBlockReason({
+    lang, isSending, allSent: false, isDisconnected: isDisconnected || instanceStatus !== 'connected',
     selectedCount: targets.length,
     templateCount: cleanMessages.length,
     minTemplates: targets.length > 1 ? minTemplatesRequired : 1,
@@ -231,325 +208,157 @@ export default function SendCampaign() {
   })
 
   async function handleSend() {
-    if (!canSend) return
-    const fresh = await refreshCapStats()
-    if (getOverBy(fresh || capStats, targets.length, newSelCount, { requireStats: true }) > 0) return
-    setDone(false)
-    // Pre-compute per-recipient messages (variant selection + variable substitution)
-    // before enqueuing so all randomization happens at click time, not during send.
-    let lastVariant = null
-    // A number blocked a moment ago may still be in the selection — never send it
-    // (the backend re-checks every message too).
-    const jobs = targets.filter(info => !isPhoneBlacklisted(info.number)).map(info => {
-      const eligible = cleanMessages.filter(m => templateFitsTarget(m, info))
-      const pool = eligible.length ? eligible : cleanMessages
-      const variant = pickMessageVariant(pool, lastVariant)
-      lastVariant = variant
-      const message = variant
-        .replace(/\{\{nombre\}\}/g,    info.company_name || '')
-        .replace(/\{\{ciudad\}\}/g,    info.city || '')
-        .replace(/\{\{industria\}\}/g, info.industry || '')
-        .replace(/\{\{web\}\}/g,       info.web || '')
-      const cleanNumber = extractPhoneDigits(info.number) || info.number
-      return { numbers: [cleanNumber], messages: [message], companyId: info.company_id, website: info.web }
-    })
-    if (!jobs.length) return
-    addBatch(jobs, t.campaign.title)
+    if (!canSend || sendLock.current) return
+    sendLock.current = true
+    setConfirming(true)
+    setSendError('')
+    try {
+      const fresh = await refreshCapStats()
+      if (!fresh || getOverBy(fresh, targets.length, newSelCount, { requireStats: true }) > 0) {
+        setSendError(lang === 'en' ? 'Available capacity changed or could not be checked. Review your selection.' : 'El cupo disponible cambió o no pudo comprobarse. Revisa tu selección.')
+        return
+      }
+      setDone(false)
+      // Pre-compute per-recipient messages (variant selection + variable substitution)
+      // before enqueuing so all randomization happens at click time, not during send.
+      let lastVariant = null
+      // A number blocked a moment ago may still be in the selection — never send it
+      // (the backend re-checks every message too).
+      const jobs = targets.filter(info => !isPhoneBlacklisted(info.number)).map(info => {
+        const eligible = cleanMessages.filter(m => templateFitsTarget(m, info))
+        const variant = pickMessageVariant(eligible, lastVariant)
+        lastVariant = variant
+        const message = variant
+          .replace(/\{\{nombre\}\}/g,    info.company_name || '')
+          .replace(/\{\{ciudad\}\}/g,    info.city || '')
+          .replace(/\{\{industria\}\}/g, info.industry || '')
+          .replace(/\{\{web\}\}/g,       info.web || '')
+        const cleanNumber = extractPhoneDigits(info.number) || info.number
+        return { numbers: [cleanNumber], messages: [message], companyId: info.company_id, website: info.web }
+      })
+      if (!jobs.length) {
+        setSendError(lang === 'en' ? 'The selected numbers are no longer available.' : 'Los números seleccionados ya no están disponibles.')
+        return
+      }
+      const accepted = await addBatch(jobs, t.campaign.title)
+      if (accepted === false) {
+        setSendError(lang === 'en' ? 'The campaign could not be queued. Try again later.' : 'No se pudo iniciar la campaña. Vuelve a intentarlo más tarde.')
+        return
+      }
+      setReviewOpen(false)
+    } finally {
+      sendLock.current = false
+      setConfirming(false)
+    }
   }
 
   // Countdown label derived from global queue state
   const isWaiting    = active?.phase === 'waiting' && active.countdown > 0
   const isBatchBreak = isWaiting && active.batch
 
+  const en = lang === 'en'
+  const counts = en
+    ? `${targetCompanies.length} ${targetCompanies.length === 1 ? 'company' : 'companies'} · ${targets.length} ${targets.length === 1 ? 'number' : 'numbers'} · ${cleanMessages.length} ${cleanMessages.length === 1 ? 'template' : 'templates'}`
+    : `${targetCompanies.length} ${targetCompanies.length === 1 ? 'empresa' : 'empresas'} · ${targets.length} ${targets.length === 1 ? 'número' : 'números'} · ${cleanMessages.length} ${cleanMessages.length === 1 ? 'plantilla' : 'plantillas'}`
+  const scrollColumn = { minWidth: 0, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2, px: .5, pt: .5,
+    '@container campaign (max-width: 850px)': { overflowY: 'visible', flexShrink: 0 } }
+  function jumpTo(section) {
+    const workspace = workspaceRef.current
+    if (!workspace || !section.current) return
+    workspace.scrollTo({ top: workspace.scrollTop + section.current.getBoundingClientRect().top - workspace.getBoundingClientRect().top, behavior: 'smooth' })
+  }
+
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {/* Header — mismo detalle de ícono en caja degradada + línea de brillo
-         inferior que ya usan Performance/Instances/Warmup, en vez del ícono
-         de fondo plano y sin glow de antes. */}
-      <Box sx={{ flexShrink: 0, mb: 2, pb: 1.4, position: 'relative' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, mb: 0.4 }}>
-          <Box sx={{
-            width: 34, height: 34, borderRadius: 2, flexShrink: 0,
-            background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.28) 0%, rgba(var(--accent-rgb,59,130,246),0.1) 100%)',
-            border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <CampaignIcon sx={{ color: 'var(--accent)', fontSize: 18 }} />
-          </Box>
-          <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '1.05rem' }}>{t.campaign.title}</Typography>
+    <Box data-campaign sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, minWidth: 0, containerType: 'inline-size', containerName: 'campaign', gap: 2 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexShrink: 0 }}>
+        <Box sx={{ width: 42, height: 42, borderRadius: 3, bgcolor: 'rgba(var(--accent-rgb,59,130,246),.12)', border: '1px solid rgba(var(--accent-rgb,59,130,246),.25)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><CampaignIcon sx={{ color: 'var(--accent)', fontSize: 23 }} /></Box>
+        <Box>
+          <Typography sx={{ color: 'var(--text)', fontWeight: 800, fontSize: '1.25rem' }}>{t.campaign.title}</Typography>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '.85rem' }}>{en ? 'Prepare your message, choose recipients and review before sending.' : 'Prepara tu mensaje, elige destinatarios y revisa antes de enviar.'}</Typography>
         </Box>
-        <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{t.campaign.subtitle}</Typography>
-        <Box sx={{
-          position: 'absolute', bottom: 0, left: 0, right: '40%', height: '1px',
-          background: 'linear-gradient(90deg, rgba(var(--accent-rgb,59,130,246),0.4), transparent)',
-        }} />
       </Box>
 
-      {/* Two columns: message+timing / recipients table.
-          overflow:hidden + no flex-wrap is deliberate — with wrap enabled, expanding
-          the Send Timing panel made this row's height content-driven, which pushed
-          the sticky send button (and the recipients column) further down the page
-          instead of staying put while the LEFT column scrolls internally. */}
-      <Box sx={{ flex: 1, minHeight: 0, display: 'flex', gap: 2.5, overflow: 'hidden' }}>
-        {/* Left — templates, timing, send */}
-        <Box sx={{ flex: '1 1 420px', minWidth: 320, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          {/* flex 0 1 auto: as tall as its content (the send bar sits right
-              under it, no empty gap) and only shrinks + scrolls when the
-              content outgrows the column. */}
-          <Box sx={{ flex: '0 1 auto', minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1.8, pr: 0.5, pt: 1 }}>
-            <StepSection n={1} title={t.campaign.stepTemplates} hint={t.campaign.hintTemplates}
-              icon={<DescriptionIcon sx={{ fontSize: 14, color: 'var(--accent, #3b82f6)' }} />}>
-              <SectionCard>
-                <TemplateLibraryPicker
-                  onChange={setTemplateTexts}
-                  recipientCount={targets.length}
-                  baseCount={0}
-                  singleSelect={targets.length === 1}
-                  hasName={hasNameData}
-                  hasCity={hasCityData}
-                  hasIndustry={hasIndustryData}
-                  hasWeb={hasWebData}
-                  varCounts={tplVarCounts}
-                  totalSelected={targetCompanies.length}
-                />
-              </SectionCard>
-            </StepSection>
+      <Box sx={{ display: 'none', flexShrink: 0, gap: 1, '@container campaign (max-width: 850px)': { display: 'flex' } }}>
+        <Button onClick={() => jumpTo(messageSectionRef)} size="small" startIcon={<DescriptionIcon />} sx={{ color: 'var(--text-muted)', textTransform: 'none' }}>{en ? 'Message' : 'Mensaje'}</Button>
+        <Button onClick={() => jumpTo(recipientSectionRef)} size="small" startIcon={<GroupsIcon />} sx={{ color: 'var(--accent)', textTransform: 'none' }}>{en ? 'Recipients' : 'Destinatarios'}</Button>
+      </Box>
+      <Box ref={workspaceRef} data-campaign-workspace sx={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 3fr)', gap: 2.5, overflow: 'hidden', '@container campaign (max-width: 850px)': { display: 'flex', flexDirection: 'column', overflowY: 'auto' } }}>
+        <Box ref={messageSectionRef} sx={scrollColumn}>
+          <StepHeader n={1} title={t.campaign.stepTemplates} hint={t.campaign.hintTemplates} icon={<DescriptionIcon sx={{ fontSize: 15, color: 'var(--accent)' }} />} />
+          <SectionCard sx={{ p: 2 }}>
+            <TemplateLibraryPicker campaignCards onChange={setTemplateTexts} recipientCount={targets.length} baseCount={0} singleSelect={targets.length === 1}
+              hasName={hasNameData} hasCity={hasCityData} hasIndustry={hasIndustryData} hasWeb={hasWebData} varCounts={tplVarCounts} totalSelected={targetCompanies.length} />
+          </SectionCard>
 
-            <StepSection n={2} title={t.campaign.stepTiming} hint={t.campaign.hintTiming} isLast
-              icon={<AccessTimeIcon sx={{ fontSize: 14, color: 'var(--accent, #3b82f6)' }} />}>
-              <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending} />
-            </StepSection>
+          <SectionCard sx={{ gap: 1, p: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}><AccessTimeIcon sx={{ fontSize: 18, color: 'var(--accent)' }} /><Typography sx={{ color: 'var(--text)', fontSize: '.88rem', fontWeight: 700 }}>{en ? 'Sending pace' : 'Ritmo de envío'}</Typography></Box>
+            <Typography sx={{ fontSize: '.78rem', color: 'var(--text-muted)' }}>{en ? `${sendCfg.msgDelay[0]}–${sendCfg.msgDelay[1]} s between messages · pauses between batches` : `${sendCfg.msgDelay[0]}–${sendCfg.msgDelay[1]} s entre mensajes · pausas entre lotes`}</Typography>
+            <SendConfigPanel config={sendCfg} onChange={setSendCfg} disabled={isSending || confirming} />
+          </SectionCard>
 
-            {/* Vista previa — antes este hueco entre "Send timing" y la barra
-               de enviar se quedaba vacío hasta que una campaña estuviera en
-               curso; ahora muestra el mensaje real (con variables ya
-               sustituidas) que recibiría el primer destinatario seleccionado.
-               Con varias plantillas elegidas se muestran TODAS las variantes
-               elegibles, no solo una — pickMessageVariant() elige al azar
-               entre ellas al enviar, así que mostrar solo la primera
-               escondía cuáles otros mensajes podían salir igual de probable. */}
-            <SectionCard>
-              {/* Header — mismo detalle de ícono en caja degradada que el
-                 resto de la app, en vez del label plano de antes. */}
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Box sx={{
-                  width: 26, height: 26, borderRadius: '8px', flexShrink: 0,
-                  background: 'linear-gradient(135deg, rgba(34,197,94,0.26) 0%, rgba(34,197,94,0.1) 100%)',
-                  border: '1px solid rgba(34,197,94,0.32)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  <WhatsAppIcon sx={{ fontSize: 14, color: '#4ade80' }} />
-                </Box>
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.8rem', lineHeight: 1.2 }}>
-                    {lang === 'en' ? 'Preview' : 'Vista previa'}
-                  </Typography>
-                  <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem', lineHeight: 1.2 }}>
-                    {lang === 'en' ? 'Real example, variables already filled in' : 'Ejemplo real, con variables ya sustituidas'}
-                  </Typography>
-                </Box>
-              </Box>
+          <InstanceDisconnectedBanner status={instanceStatus} />
+        </Box>
 
-              {previewMessages.length > 0 ? (
-                <>
-                  {/* Chip del destinatario de ejemplo — antes el texto solo
-                     nombraba ese número sin dejar claro que es apenas UNO de
-                     varios seleccionados, lo que sonaba como si la vista
-                     previa fuera solo sobre ese contacto. */}
-                  <Box sx={{
-                    display: 'inline-flex', alignSelf: 'flex-start', alignItems: 'center', gap: 0.7,
-                    px: 1.1, py: 0.45, borderRadius: 10,
-                    bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)',
-                  }}>
-                    <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#4ade80', flexShrink: 0 }} />
-                    <Typography sx={{ fontSize: '0.72rem', color: 'var(--text)', fontWeight: 600 }}>
-                      {previewTarget.company_name || previewTarget.number}
-                    </Typography>
-                    {targets.length > 1 && (
-                      <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                        · {lang === 'en' ? `example 1 of ${targets.length} recipients` : `ejemplo 1 de ${targets.length} destinatarios`}
-                      </Typography>
-                    )}
-                  </Box>
-                  <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
-                    {previewMessages.length > 1
-                      ? (lang === 'en' ? `Any of these ${previewMessages.length} variants could be picked at random:` : `Cualquiera de estas ${previewMessages.length} variantes puede tocarle al azar:`)
-                      : (lang === 'en' ? 'Would receive:' : 'Recibiría:')}
-                  </Typography>
-                  {/* Con más de 3 templates elegidos esta lista escala su
-                     propio scroll en vez de empujar toda la página hacia
-                     abajo. Cada burbuja ahora usa la misma forma/color que
-                     los mensajes salientes reales en Conversaciones
-                     (esquina inferior derecha recta + var(--accent)) en vez
-                     de un verde WhatsApp genérico sin relación con el resto
-                     de la app — y un divider separa cada variante de la
-                     siguiente. */}
-                  <Box sx={{
-                    display: 'flex', flexDirection: 'column', gap: 1.2,
-                    maxHeight: 300, overflowY: 'auto', pr: 0.5,
-                    '&::-webkit-scrollbar': { width: 4 },
-                    '&::-webkit-scrollbar-button': { display: 'none' },
-                    '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(100,116,139,0.3)', borderRadius: 4 },
-                    '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
-                  }}>
-                    {previewMessages.map((msg, i) => (
-                      <Box key={i} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                        {i > 0 && <Divider sx={{ borderColor: 'var(--border)', mb: 0.7 }} />}
-                        {previewMessages.length > 1 && (
-                          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem', fontWeight: 700 }}>
-                            {lang === 'en' ? `Variant ${i + 1}` : `Variante ${i + 1}`}
-                          </Typography>
-                        )}
-                        <Box sx={{
-                          alignSelf: 'flex-start', maxWidth: '85%', position: 'relative',
-                          bgcolor: 'var(--accent, #6366f1)', color: 'rgba(255,255,255,0.9)',
-                          borderRadius: '14px 14px 4px 14px', px: 1.4, py: 0.9,
-                          border: '1px solid rgba(0,0,0,0.15)',
-                          fontSize: '0.82rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                          boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
-                        }}>
-                          {msg}
-                        </Box>
-                      </Box>
-                    ))}
-                  </Box>
-                  {targets.length > 1 && (
-                    <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.68rem', fontStyle: 'italic' }}>
-                      {lang === 'en'
-                        ? `Each of the other ${targets.length - 1} selected recipient${targets.length - 1 !== 1 ? 's' : ''} gets their own variables substituted the same way.`
-                        : `Cada uno de los otros ${targets.length - 1} destinatario${targets.length - 1 !== 1 ? 's' : ''} seleccionados recibe sus propias variables sustituidas de la misma forma.`}
-                    </Typography>
-                  )}
-                </>
-              ) : (
-                <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem', fontStyle: 'italic' }}>
-                  {lang === 'en'
-                    ? 'Pick a template and at least one recipient to preview the actual message.'
-                    : 'Elige una plantilla y al menos un destinatario para ver el mensaje real.'}
-                </Typography>
-              )}
-            </SectionCard>
-
-            <InstanceDisconnectedBanner status={instanceStatus} />
-
-            {/* Progress — driven by global queue state so it persists across navigation */}
-            {(isSending || done) && (
-              <Box>
-                {isSending && active && (
-                  <Box sx={{ mb: 1 }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.6 }}>
-                      <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                        {isWaiting
-                          ? (isBatchBreak
-                              ? `${t.campaign.sendingProgress(active.sent, active.total)} — pausa ${active.countdown}s`
-                              : `${t.campaign.sendingProgress(active.sent, active.total)} — ${active.countdown}s`)
-                          : t.campaign.sendingProgress(active.sent, active.total)
-                        }
-                      </Typography>
-                      <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.82rem' }}>{progress}%</Typography>
-                    </Box>
-                    <LinearProgress variant="determinate" value={progress}
-                      sx={{ borderRadius: 4, height: 5, bgcolor: 'rgba(34,197,94,0.1)', '& .MuiLinearProgress-bar': { background: 'linear-gradient(90deg,#22c55e,#4ade80)', borderRadius: 4 } }} />
-                  </Box>
-                )}
-                {done && !isSending && (
-                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                    <Chip label={`${doneCount} enviado${doneCount !== 1 ? 's' : ''}`} size="small"
-                      sx={{ bgcolor: 'rgba(34,197,94,0.12)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', fontSize: '0.72rem', height: 24 }} />
-                  </Box>
-                )}
-              </Box>
-            )}
+        <Box ref={recipientSectionRef} sx={scrollColumn}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
+            <StepHeader n={2} title={t.campaign.stepRecipients} hint={t.campaign.hintRecipients} icon={<GroupsIcon sx={{ fontSize: 15, color: 'var(--accent)' }} />} />
+            <Chip label={en ? `${targets.length} selected numbers` : `${targets.length} números seleccionados`} size="small" sx={{ bgcolor: 'var(--item-hover)', color: 'var(--accent)', border: '1px solid var(--border)', fontSize: '.74rem' }} />
           </Box>
+          <CompanyPicker campaignStyle selectedNums={selectedNums} numInfoMap={numInfoMap} onChange={(ns, nm) => { setSelectedNums(ns); setNumInfoMap(nm) }}
+            listMaxHeight="min(64vh, 680px)" contactedRefreshKey={contactedRefreshKey} newContactsCap={capStats ? (capStats.new_contacts_capacity ?? 0) : 0} onNewCountChange={setNewSelCount} showTitle={false} />
+        </Box>
+      </Box>
 
-          {/* Send bar — antes vivía DENTRO del área con scroll usando
-             position:sticky, lo que forzaba trucos de blur/degradado para
-             que no se viera como un parche sobre el contenido que pasaba
-             detrás. Ahora es un hermano fuera del Box con overflowY:auto:
-             solo el scroll de arriba (templates/timing/vista previa) se
-             mueve, esta barra se queda fija como un tope real, con fondo
-             sólido normal, sin necesitar ningún truco de transparencia. */}
-          <Box sx={{
-            flexShrink: 0, pt: 1.5, pb: 0.5, mt: 1,
-            borderTop: '1px solid var(--border)',
-            // Cualquier color fijo (var(--bg), var(--card-bg), lo que sea)
-            // es una adivinanza que puede desalinearse del fondo real
-            // configurado dinámicamente. Ya no hay nada scrolleando detrás
-            // de esta barra (vive fuera del área con scroll), así que ya no
-            // necesita ningún color propio — transparent simplemente hereda
-            // el fondo real de su contenedor, sea cual sea, sin adivinar.
-            bgcolor: 'transparent',
-            display: 'flex', flexDirection: 'column', gap: 0.6,
-          }}>
-            {/* Same capacity indicator as the post-scrape send panels (new
-                contacts first), next to a button that says why it can't send. */}
-            <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1.5, flexWrap: 'wrap' }}>
-              <DailyCapBadge stats={capStats} selectionCount={targets.length} newSelectionCount={newSelCount} oneLine sx={{ flexShrink: 0 }} />
-              <Button
-                onClick={handleSend}
-                disabled={!canSend || isDisconnected}
-                startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 16 }} />}
-                sx={{
-                  flex: 1, minWidth: 220,
-                  bgcolor: canSend ? 'rgba(34,197,94,0.85)' : 'var(--item-hover)',
-                  color:   canSend ? '#fff' : 'var(--text-muted)',
-                  border:  `1px solid ${canSend ? 'rgba(34,197,94,0.9)' : 'var(--border)'}`,
-                  borderRadius: 2, px: 3, py: 1.1, fontWeight: 700, textTransform: 'none', fontSize: '0.9rem',
-                  boxShadow: 'none',
-                  transition: 'all 0.25s ease',
-                  '&:hover': { bgcolor: canSend ? '#22c55e' : 'rgba(255,255,255,0.05)', boxShadow: 'none' },
-                  // MUI's own .Mui-disabled base style otherwise overrides the
-                  // custom border/background above with its generic light-gray
-                  // default, producing a bright outline that clashes with the
-                  // dark theme — force ours to actually win.
-                  '&.Mui-disabled': {
-                    bgcolor: 'var(--item-hover) !important',
-                    color: 'var(--text-muted) !important',
-                    border: '1px solid var(--border) !important',
-                  },
-                }}
-              >
-                {isSending ? t.campaign.sending : (blockReason || `${t.campaign.sendBtn} (${targets.length})`)}
-              </Button>
+      <Box data-campaign-send-bar sx={{ flexShrink: 0, borderRadius: 3, border: '1px solid var(--border)', bgcolor: 'var(--surface)', overflow: 'hidden' }}>
+        {isSending && active && <Box sx={{ px: 2, pt: 1.5 }}><Typography sx={{ color: 'var(--text-muted)', fontSize: '.84rem', mb: .5 }}>{t.campaign.sendingProgress(active.sent, active.total)}{isWaiting ? ` · ${en ? 'pause' : 'pausa'} ${active.countdown}s${isBatchBreak ? ` (${en ? 'batch' : 'lote'})` : ''}` : ''}</Typography><LinearProgress variant="determinate" value={progress} sx={{ height: 4, borderRadius: 2, bgcolor: 'var(--item-hover)', '& .MuiLinearProgress-bar': { bgcolor: 'var(--accent)' } }} /></Box>}
+        {done && !isSending && <Typography sx={{ color: 'var(--accent)', fontSize: '.84rem', px: 2, pt: 1.5 }}>{doneCount} {en ? 'messages sent' : 'mensajes enviados'}</Typography>}
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(230px, 1.2fr) minmax(230px, 1fr) minmax(200px, .85fr)', gap: 2.5, alignItems: 'center', p: 2,
+          '@container campaign (max-width: 1000px)': { gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 1.5 },
+          '@container campaign (max-width: 550px)': { gridTemplateColumns: 'minmax(0, 1fr)', gap: 1, p: 1.5 } }}>
+          <Box>
+            <Typography sx={{ fontSize: '.78rem', color: 'var(--text-muted)', mb: .8, textAlign: 'center' }}>{en ? 'Your selection' : 'Tu selección'}</Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 1 }} aria-live="polite">
+              <CampaignMetric value={targetCompanies.length} label={en ? 'Companies' : 'Empresas'} icon={<GroupsIcon />} />
+              <CampaignMetric value={targets.length} label={en ? 'Numbers' : 'Números'} icon={<SendIcon />} />
+              <CampaignMetric value={cleanMessages.length} label={en ? 'Templates' : 'Plantillas'} icon={<DescriptionIcon />} />
             </Box>
           </Box>
-        </Box>
-
-        {/* Right — recipients table, ~half the screen */}
-        <Box sx={{ flex: '1 1 480px', minWidth: 320, display: 'flex', flexDirection: 'column', minHeight: 0, gap: 1, overflowY: 'auto', pt: 1 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <StepHeader n={3} title={t.campaign.stepRecipients} hint={t.campaign.hintRecipients}
-              icon={<GroupsIcon sx={{ fontSize: 14, color: 'var(--accent, #3b82f6)' }} />} />
-            {targets.length > 0 && (
-              <Box sx={{
-                display: 'flex', alignItems: 'center', gap: 0.8,
-                px: 1.2, py: 0.5, borderRadius: 2,
-                background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.2), rgba(var(--accent-rgb,59,130,246),0.07))',
-                border: '1px solid rgba(var(--accent-rgb,59,130,246),0.4)',
-                boxShadow: '0 0 12px rgba(var(--accent-rgb,59,130,246),0.12)',
-              }}>
-                <GroupsIcon sx={{ fontSize: 14, color: 'var(--accent,#60a5fa)' }} />
-                <Typography sx={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--accent,#60a5fa)', fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
-                  {targets.length}
-                </Typography>
-                <Typography sx={{ fontSize: '0.66rem', color: 'rgba(var(--accent-rgb,59,130,246),0.55)', lineHeight: 1 }}>
-                  sel.
-                </Typography>
-              </Box>
-            )}
+          <Box sx={{ px: 2, py: 1.25, borderRadius: 2, bgcolor: 'rgba(var(--accent-rgb,59,130,246),.055)', border: '1px solid rgba(var(--accent-rgb,59,130,246),.15)',
+            '@container campaign (max-width: 550px)': { px: 1.25, py: .8 } }}>
+            <Typography sx={{ fontSize: '.78rem', color: 'var(--text-muted)', mb: .7, textAlign: 'center' }}>{targets.length ? (en ? 'Remaining after selection' : 'Disponible tras la selección') : (en ? 'Available today' : 'Disponible hoy')}</Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1 }}>
+              <CampaignMetric value={typeof capStats?.new_contacts_capacity === 'number' ? Math.max(0, capStats.new_contacts_capacity - newSelCount) : '—'} label={en ? 'New contacts' : 'Contactos nuevos'} accent />
+              <CampaignMetric value={typeof capStats?.total_available === 'number' ? Math.max(0, capStats.total_available - targets.length) : '—'} label={en ? 'Sends' : 'Envíos'} accent />
+            </Box>
           </Box>
-          <CompanyPicker
-            selectedNums={selectedNums}
-            numInfoMap={numInfoMap}
-            onChange={(ns, nm) => { setSelectedNums(ns); setNumInfoMap(nm) }}
-            listMaxHeight="60vh"
-            contactedRefreshKey={contactedRefreshKey}
-            newContactsCap={capStats ? (capStats.new_contacts_capacity ?? 0) : 0}
-            onNewCountChange={setNewSelCount}
-            showTitle={false}
-          />
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: .75, minWidth: 0,
+            '@container campaign (max-width: 1000px)': { gridColumn: '1 / -1', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+            '@container campaign (max-width: 550px)': { flexDirection: 'column', alignItems: 'stretch' } }}>
+            <Button data-campaign-review onClick={() => { setSendError(''); setReviewOpen(true) }} disabled={!canSend || confirming} variant="contained" startIcon={isSending ? <CircularProgress size={16} color="inherit" /> : <CheckCircleIcon />} sx={{ order: 1, textTransform: 'none', bgcolor: 'var(--accent)', color: 'var(--accent-contrast, #071c23)', fontWeight: 700, borderRadius: 2, px: 2.5, py: 1.3, boxShadow: 'none', fontSize: '.88rem', whiteSpace: 'nowrap', '&:hover': { bgcolor: 'var(--accent)', filter: 'brightness(.95)' }, '&.Mui-disabled': { bgcolor: 'var(--item-hover)', color: 'var(--text-muted)' } }}>
+              {isSending ? t.campaign.sending : en ? 'Review campaign' : 'Revisar campaña'}
+            </Button>
+            {!canSend && !isSending && (targets.length > 0 || cleanMessages.length > 0) && <Typography sx={{ order: 2, fontSize: '.78rem', lineHeight: 1.4, color: 'var(--text-muted)', '@container campaign (max-width: 1000px)': { order: 0 }, '@container campaign (max-width: 550px)': { order: 2 } }}>
+              {!targets.length && !cleanMessages.length ? (en ? 'Choose recipients and templates to continue.' : 'Selecciona destinatarios y plantillas para continuar.') : blockReason}
+            </Typography>}
+          </Box>
         </Box>
       </Box>
+
+      <Dialog open={reviewOpen} onClose={() => { if (!confirming) setReviewOpen(false) }} maxWidth="sm" fullWidth slotProps={{ paper: { sx: { bgcolor: 'var(--card-bg)', color: 'var(--text)', backgroundImage: 'none', borderRadius: 3, border: '1px solid var(--border)', m: 2 } } }}>
+        <DialogTitle sx={{ fontWeight: 800 }}>{en ? 'Review your campaign' : 'Revisa tu campaña'}</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <Typography sx={{ fontWeight: 700, fontSize: '.95rem' }}>{counts}</Typography>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '.84rem' }}>{en ? 'Sending starts immediately after confirmation. Each number receives one personalized message.' : 'El envío empieza inmediatamente después de confirmar. Cada número recibe un mensaje personalizado.'}</Typography>
+          <Box sx={{ maxHeight: 170, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 2, p: 1.5 }}>{targets.map(n => <Box key={n.number} sx={{ display: 'flex', gap: 1, justifyContent: 'space-between', flexWrap: 'wrap', py: .6 }}><Typography sx={{ fontSize: '.84rem' }}>{n.company_name || (en ? 'Recipient' : 'Destinatario')}</Typography><Typography sx={{ fontSize: '.78rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{n.number}</Typography></Box>)}</Box>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '.8rem' }}>{en ? 'Intervals' : 'Intervalos'}: {sendCfg.msgDelay[0]}–{sendCfg.msgDelay[1]} s · {en ? 'Batches' : 'Lotes'}: {sendCfg.batchSize[0]}–{sendCfg.batchSize[1]} · {en ? 'Pauses' : 'Pausas'}: {sendCfg.batchDelay[0]}–{sendCfg.batchDelay[1]} min</Typography>
+          {sendError && <Alert severity="warning">{sendError}</Alert>}
+          {!canSend && blockReason && <Alert severity="warning">{blockReason}</Alert>}
+        </DialogContent>
+        <DialogActions sx={{ p: 2, flexWrap: 'wrap' }}>
+          <Button onClick={() => setReviewOpen(false)} disabled={confirming} sx={{ textTransform: 'none', color: 'var(--text-muted)' }}>{en ? 'Keep editing' : 'Seguir editando'}</Button>
+          <Button onClick={handleSend} disabled={!canSend || confirming} variant="contained" startIcon={confirming ? <CircularProgress size={15} color="inherit" /> : <SendIcon />} sx={{ textTransform: 'none', bgcolor: 'var(--accent)', color: 'var(--accent-contrast, #071c23)', fontWeight: 700, '&:hover': { bgcolor: 'var(--accent)', filter: 'brightness(.95)' } }}>{confirming ? (en ? 'Checking…' : 'Verificando…') : en ? 'Start campaign' : 'Iniciar campaña'}</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

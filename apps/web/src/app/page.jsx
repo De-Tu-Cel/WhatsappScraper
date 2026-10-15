@@ -101,7 +101,7 @@ import { NavigationProvider, useNavigation } from '../context/NavigationContext'
 // 11 nav components from mounting simultaneously on page load.
 // After 2s, remaining sections preload one-by-one (350ms apart) so their data
 // fetches run in the background before the user ever clicks them.
-const NavContent = React.memo(function NavContent({ items, active, settingsOpen, mounted }) {
+const NavContent = React.memo(function NavContent({ items, active, settingsOpen, mounted, onNavigateToConv }) {
   const visitedRef = useRef(new Set())
   const [, forceUpdate] = useState(0)
   if (mounted && !settingsOpen) visitedRef.current.add(active)
@@ -125,7 +125,7 @@ const NavContent = React.memo(function NavContent({ items, active, settingsOpen,
         const isActive = mounted && !settingsOpen && active === i
         return (
           <Box key={i} sx={{ display: isActive ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-            {React.cloneElement(item.component, { isActive })}
+            {React.cloneElement(item.component, { isActive, onNavigateToConv })}
           </Box>
         )
       })}
@@ -193,6 +193,7 @@ function DashboardInner() {
   useIsomorphicLayoutEffect(() => {
     const saved = Number(localStorage.getItem('activeTab') ?? 0)
     setActive(saved)
+    if (window.innerWidth < 768) setOpen(false)
     applySettings(loadSettings())
     setMounted(true)
   }, [])
@@ -295,13 +296,11 @@ function DashboardInner() {
           borderRadius: '16px',
           boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
           border: '1px solid var(--border, rgba(255,255,255,0.06))',
-          p: 4,
-          // TopControls es un pill absoluto que flota sobre esta tarjeta (top: 3.2,
-          // ver más abajo) — su borde/padding lo hace más alto que el simple ícono
-          // suelto de antes, así que el padding superior normal (p:4) ya no alcanza
-          // para que el contenido de cada panel (ej. el botón "Nuevo" de Admin) no
-          // quede debajo de él. pt más grande reserva ese espacio para todos los paneles.
-          pt: 9,
+          p: { xs: 1.5, md: 4 },
+          // Programar (2026-10-14): el p responsive sobrescribía el pt fijo.
+          // Reservar la franja de controles en los mismos breakpoints evita
+          // que los botones del encabezado se coloquen debajo de la campana.
+          pt: { xs: '64px', md: '72px' },
           display: 'flex', flexDirection: 'column',
           flex: 1,
           minHeight: 0,
@@ -323,6 +322,7 @@ function DashboardInner() {
           {/* TopControls: se desliza a la izquierda cuando un panel derecho está abierto */}
           <Box sx={{
             position: 'absolute', top: 3.2, zIndex: 6,
+            display: notifOpen ? { xs: 'none', sm: 'block' } : 'block',
             // Panels have different widths (Appearance 340px, Notifications 360px) —
             // offset per panel so there's a consistent ~16px gap to its left edge
             // instead of reusing one value that left the icons pressed against
@@ -343,7 +343,7 @@ function DashboardInner() {
               <Settings settingsOpen={settingsOpen} />
             </Box>
             {/* Nav items — memo-wrapped so rightPanel state changes don't re-render the stack */}
-            <NavContent items={visibleNavItems} active={active} settingsOpen={settingsOpen} mounted={mounted} />
+            <NavContent items={visibleNavItems} active={active} settingsOpen={settingsOpen} mounted={mounted} onNavigateToConv={handleNavigateToConv} />
           </Box>
           {/* Invisible click-catcher — closes whichever right panel is open when
               clicking anywhere outside it. Nothing inside those panels is lost on

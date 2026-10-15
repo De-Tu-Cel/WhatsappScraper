@@ -34,6 +34,8 @@ async def lifespan(app: FastAPI):
         import logging as _log
         _logger = _log.getLogger(__name__)
         db = MongoDBManager()
+        from app.service_health import configure_store
+        configure_store(db.db.service_health)
 
         # 1. Reset any stuck ai_typing flags
         r1 = db.db.ai_followup_sessions.update_many(
@@ -97,7 +99,15 @@ async def lifespan(app: FastAPI):
     from app.database import MongoDBManager as _ProxyDB
     _proxies.start_sync_on_boot(_ProxyDB)
     _proxies.start_health_worker(_ProxyDB, SESSION_DISCONNECT_ALERT_EMAILS)
-    yield
+    from app.service_health import start_balance_monitor
+    _balance_stop = start_balance_monitor()
+    from app.phone_verification import start_phone_verification_worker
+    _phone_verification_stop = start_phone_verification_worker()
+    try:
+        yield
+    finally:
+        _balance_stop.set()
+        _phone_verification_stop.set()
 
 
 app = FastAPI(title="Lector Comercial API", lifespan=lifespan)

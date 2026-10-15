@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 _q = queue.Queue()
 _worker_thread: threading.Thread | None = None
 _cleanup_thread: threading.Thread | None = None
+_recovery_thread: threading.Thread | None = None
 _lock = threading.Lock()
 
 # Debounce: accumulate rapid-fire messages from the same number before processing.
@@ -69,6 +70,17 @@ def _process_one(item: dict) -> None:
     """Body of one queue iteration — pulled out of _worker()'s while-loop so
     tests can drive it directly with fake items instead of spinning up the
     real background thread/queue."""
+    recovery = item.get('recovery')
+    recovery_db = None
+    if recovery:
+        from app.database import MongoDBManager
+        from app.ai_reply_recovery import current_reason, finish
+        recovery_db = MongoDBManager()
+        reason = current_reason(recovery_db, recovery)
+        if reason:
+            finish(recovery_db, recovery, 'pending' if reason == 'lease_expired' else 'cancelled', reason,
+                   retry_at=datetime.utcnow() + timedelta(minutes=1))
+            return
     instance = _resolve_instance(item.get("company_id"))
 
     # Enforce gap between different chats on this same instance
@@ -82,14 +94,24 @@ def _process_one(item: dict) -> None:
             time.sleep(wait)
 
     from app.ai_followup import process_inbound_reply
-    process_inbound_reply(
-        phone_number=item["phone_number"],
-        company_id=item["company_id"],
-        inbound_body=item.get("inbound_body"),
-        inbound_log_id=item.get("inbound_log_id"),
-        manual_activation=item.get("manual_activation", False),
-        proactive=item.get("proactive", False),
-    )
+    from app.service_health import ServiceUnavailable
+    try:
+        sent = process_inbound_reply(
+            phone_number=item["phone_number"], company_id=item["company_id"],
+            inbound_body=item.get("inbound_body"), inbound_log_id=item.get("inbound_log_id"),
+            manual_activation=item.get("manual_activation", False), proactive=item.get("proactive", False),
+            **({'recovery': recovery} if recovery else {}),
+        )
+    except ServiceUnavailable:
+        # _generate_reply ya dejó la respuesta en Mongo; no insistir sin saldo.
+        return
+    if recovery:
+        if sent:
+            finish(recovery_db, recovery, 'completed')
+        else:
+            reason = current_reason(recovery_db, recovery)
+            finish(recovery_db, recovery, 'cancelled' if reason and reason != 'lease_expired' else 'pending', reason,
+                   retry_at=datetime.utcnow() + timedelta(minutes=5))
     _last_send_ts[instance] = time.time()
 
 
@@ -229,8 +251,22 @@ def _cleanup_worker():
             log.error("[FollowupQ] cleanup error: %s", e)
 
 
+def _recovery_worker():
+    while True:
+        time.sleep(60)
+        try:
+            from app.database import MongoDBManager
+            from app.ai_reply_recovery import queue_due
+            # No acumular leases mientras el worker está ocupado con otras
+            # conversaciones; así no vencen esperando detrás de una tanda.
+            if _q.empty():
+                queue_due(MongoDBManager(), _q.put, limit=1)
+        except Exception:
+            log.exception('[FollowupQ] recuperación de respuestas pendientes falló')
+
+
 def _ensure_worker():
-    global _worker_thread, _cleanup_thread
+    global _worker_thread, _cleanup_thread, _recovery_thread
     with _lock:
         if _worker_thread is None or not _worker_thread.is_alive():
             _worker_thread = threading.Thread(
@@ -244,6 +280,9 @@ def _ensure_worker():
             )
             _cleanup_thread.start()
             log.info("[FollowupQ] cleanup worker started")
+        if _recovery_thread is None or not _recovery_thread.is_alive():
+            _recovery_thread = threading.Thread(target=_recovery_worker, daemon=True, name='ai-reply-recovery')
+            _recovery_thread.start()
 
 
 def start_followup_workers():

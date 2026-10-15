@@ -30,6 +30,7 @@ function _startPolling(token) {
   _userToken = token
 
   async function _tick() {
+    const previous = `${_status}:${_connectedCount}:${_totalCount}`
     let allFailed = false
     try {
       const headers = { 'x-user-token': _userToken }
@@ -58,6 +59,9 @@ function _startPolling(token) {
       allFailed = true
     }
     _notify()
+    if (previous !== `${_status}:${_connectedCount}:${_totalCount}`) {
+      window.dispatchEvent(new Event('wa-instances-changed'))
+    }
     if (_subscribers.size > 0) {
       const delay = _status === 'connected' ? POLL_CONNECTED : allFailed ? POLL_UNREACHABLE : POLL_DISCONNECTED
       _timerId = setTimeout(_tick, delay)

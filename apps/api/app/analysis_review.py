@@ -49,6 +49,7 @@ def attach_reviews(manager, rows, comparisons):
     Se calcula antes de paginar para que los filtros incluyan todas las empresas.
     """
     from app.classifier import assign_thread_numbers, phone_last10
+    from app.classification_compare import single_reply_thread_comparison
     ids = [r['company_id'] for r in rows]
     if not ids:
         return
@@ -62,6 +63,7 @@ def attach_reviews(manager, rows, comparisons):
     for row in rows:
         doc = comparisons.get(row['company_id'])
         messages = assign_thread_numbers(histories.get(row['company_id'], []))
+        doc = single_reply_thread_comparison(manager, doc, messages)
         latest = max((m['created_at'] for m in messages if m.get('created_at')), default=None)
         replied = any(m['direction'] == 'inbound' for m in messages)
         row['comparison'] = doc
@@ -73,6 +75,11 @@ def attach_reviews(manager, rows, comparisons):
             thread = [m for m in messages if (phone_last10(m.get('related_to_number')) or m['_num']) == n10]
             last = max((m['created_at'] for m in thread if m.get('created_at')), default=None)
             entry = entries.get(n10)
+            if not thread and not entry:
+                # Un contacto que nunca recibió un envío no es un análisis pendiente.
+                number['review'] = {'flags': [], 'status': 'not_contacted',
+                                    'latest_message_at': None, 'analyzed_at': None, 'replied': False}
+                continue
             if not entries and len(row.get('numbers', [])) == 1:
                 entry = doc
             number['review'] = review_state(entry, last, any(m['direction'] == 'inbound' for m in thread), (doc or {}).get('updated_at'))

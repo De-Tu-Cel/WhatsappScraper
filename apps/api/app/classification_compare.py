@@ -831,18 +831,43 @@ def comparisons_for(db, company_ids: list) -> dict:
     return {company_id: group_bot_human(doc) for company_id, doc in out.items()}
 
 
+def single_reply_thread_comparison(db, doc: dict | None, messages: list | None = None) -> dict | None:
+    """Claro (2026-10-15): dos contactos registrados, solo uno respondió.
+
+    El resultado de empresa representa ese único hilo. Asociarlo en lectura
+    conserva modelo/fechas/rango originales y no lo atribuye al otro teléfono.
+    """
+    if not doc or doc.get('numbers'):
+        return doc
+    from copy import deepcopy
+    from app.classifier import assign_thread_numbers
+    messages = assign_thread_numbers(messages if messages is not None else _messages(db, doc['company_id']))
+    inbound = [m for m in messages if m.get('direction') == 'inbound']
+    answered = {m['_num'] for m in inbound}
+    if len(answered) != 1 or '' in answered:
+        return doc
+    number = next(iter(answered))
+    if not any(m.get('direction') == 'outbound' and m['_num'] == number for m in messages):
+        return doc
+    result = deepcopy(doc)
+    entry = {key: deepcopy(doc[key]) for key in (*METHODS, 'agreement', 'updated_at', 'input_last_at') if key in doc}
+    entry.update(number=number, replied=True, result_scope='single_reply_thread')
+    result['numbers'] = [entry]
+    return result
+
+
 def get_comparison(db, company_id: str) -> dict | None:
     doc = db.db[COMPARISONS].find_one({"company_id": company_id}, {"_id": 0})
     if _PREFIX:
         prod = db.db["classification_comparisons"].find_one({"company_id": company_id}, {"_id": 0})
         if prod and (not doc or _saved_date(prod) > _saved_date(doc)):
-            return group_bot_human(prod)
+            return group_bot_human(single_reply_thread_comparison(db, prod))
         if doc:
-            result = group_bot_human(fill_parecido_from_prod(db, doc))
+            result = group_bot_human(single_reply_thread_comparison(db, fill_parecido_from_prod(db, doc)))
             result['preview'] = True
             return result
         return None
-    return group_bot_human(doc)
+    return group_bot_human(single_reply_thread_comparison(db, doc))
 
 
 def _replied(entry: dict) -> bool:

@@ -1877,6 +1877,37 @@ export default function InstancesPanel({ isActive } = {}) {
   }, [])
 
   useEffect(() => { fetchInstances(); fetchUsers() }, [fetchInstances, fetchUsers])
+
+  // Poll the service's in-memory activity snapshot, without querying WhatsApp
+  // or repeatedly refreshing every provider/profile in the admin listing.
+  useEffect(() => {
+    if (isActive === false) return
+    let stopped = false
+    let pending = false
+    const refreshActivity = async () => {
+      if (pending || document.visibilityState === 'hidden') return
+      pending = true
+      try {
+        const response = await fetch('/api/wwebjs/sessions', {
+          headers: { 'x-user-token': token() }, cache: 'no-store',
+        })
+        const snapshots = response.ok ? await response.json() : {}
+        if (!stopped) setInstances(previous => previous.map(instance => instance.provider === 'wwebjs'
+          ? { ...instance, activity: snapshots[instance.name]?.activity || null }
+          : instance))
+      } catch {
+        if (!stopped) setInstances(previous => previous.map(instance => instance.provider === 'wwebjs'
+          ? { ...instance, activity: null } : instance))
+      } finally { pending = false }
+    }
+    const timer = setInterval(refreshActivity, 10000)
+    document.addEventListener('visibilitychange', refreshActivity)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshActivity)
+    }
+  }, [isActive])
   useEffect(() => { fetchMetrics(metricsRange, periodYear, periodMonth) }, [fetchMetrics, metricsRange, periodYear, periodMonth])
   useEffect(() => { fetchBalances() }, [fetchBalances])
   // Cleanup QR polls on unmount / hot reload

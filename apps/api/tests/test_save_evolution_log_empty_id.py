@@ -74,3 +74,25 @@ def test_real_message_id_still_dedups():
     )
     assert log_id == str(existing_id)
     assert logs.inserted == []
+
+
+def test_history_echo_guard_uses_original_time_phone_and_message_identity():
+    import re
+    from datetime import datetime, timedelta
+    mgr, logs = _mgr()
+    queries = []
+    def find(query, *args):
+        queries.append(query)
+        return None
+    logs.find_one = find
+    stamp = datetime(2026, 10, 8, 18)
+    mgr.save_evolution_log('inbound', '6a74ba6becf84e0f0eedb588', '+525578432154',
+                           'Hola', message_id='real-whatsapp-id', created_at=stamp)
+    query = next(q for q in queries if q.get('direction') == 'inbound')
+    pattern = query['from_number']['$regex']
+    assert re.search(pattern, '+52 55 7843 2154')
+    assert re.search(pattern, '5215578432154')
+    assert not re.search(pattern, '+575578432154')
+    assert not re.search(pattern, '+525578432155')
+    assert query['created_at'] == {'$gte': stamp - timedelta(seconds=5), '$lte': stamp + timedelta(seconds=5)}
+    assert query['$or'] == [{'message_id': None}, {'message_id': 'real-whatsapp-id'}]

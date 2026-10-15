@@ -8,6 +8,7 @@ import { useUser } from '../context/UserContext'
 import { useNavigation } from '../context/NavigationContext'
 import { useDailyCapStats } from '../hooks/useDailyCapStats'
 import { useBlacklistedPhones, phoneKey } from '../lib/phoneBlacklist'
+import { conversationPhoneKey, uniqueConversationPhones, formatConversationPhone, conversationMessageKeys, conversationNumberStats } from '../lib/conversationPhones'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -434,7 +435,7 @@ function InteractiveMessage({ interactive, isOut, onReply }) {
   )
 }
 
-const normPhone = n => (n || '').replace(/\D/g, '').slice(-10)
+const normPhone = conversationPhoneKey
 
 function formatSenderNumber(raw) {
   let d = String(raw).replace(/\D/g, '')
@@ -870,15 +871,16 @@ export default function Conversations({ isActive } = {}) {
     pendingNumRef.current = null
   }, [waNumbers])
 
-  const fetchThread = useCallback(async (companyId, scrollToBottom = false, silent = false, numFilter = null) => {
+  const fetchThread = useCallback(async (companyId, scrollToBottom = false, silent = false) => {
     const requestId = ++threadRequestRef.current
     const isCurrent = () => requestId === threadRequestRef.current && currentCompanyRef.current === companyId
     if (!silent) {
       if (scrollToBottom) setThreadLoad(true)
     }
     try {
-      const params = numFilter && numFilter !== 'all' ? `?number=${encodeURIComponent(numFilter)}` : ''
-      const res = await authFetch(`/api/conversations/${companyId}${params}`)
+      // Mantener el historial completo para que cambiar de pestaña no borre las
+      // estadísticas de los otros números; el filtro visual se aplica abajo.
+      const res = await authFetch(`/api/conversations/${companyId}`)
       const data = await res.json()
       if (!isCurrent()) return
       if (!res.ok || !Array.isArray(data)) throw new Error('Conversation could not be loaded')
@@ -940,11 +942,11 @@ export default function Conversations({ isActive } = {}) {
       const res = await authFetch(`/api/companies/${companyId}`)
       const data = await res.json()
       if (currentCompanyRef.current !== companyId) return []
-      const numbers = [...new Set(
+      const numbers = uniqueConversationPhones(
         (data.contacts || [])
           .filter(c => c.type === 'whatsapp')
           .map(c => c.value)
-      )]
+      )
       setWaNumbers(numbers)
       const validation = Object.fromEntries(Object.entries(data.whatsapp_validation || {}).map(([num, value]) => [normPhone(num), value]))
       setWaValidation(validation)
@@ -1297,36 +1299,16 @@ export default function Conversations({ isActive } = {}) {
 
   // Stats per registered company number — O(N) with pre-built normMap
   const numStats = useMemo(() => {
-    const stats = {}
-    waNumbers.forEach(n => { stats[n] = { sent: 0, received: 0 } })
-    const normMap = new Map(waNumbers.map(n => [normPhone(n), n]))
-    thread.forEach(m => {
-      const msgNum = normPhone(m.to_number || m.from_number || m.number)
-      const match  = normMap.get(msgNum)
-      if (match) {
-        if (m.direction === 'outbound' && m.status !== 'failed') stats[match].sent++
-        else if (m.direction === 'inbound') stats[match].received++
-      }
-    })
-    return stats
+    return conversationNumberStats(thread, waNumbers)
   }, [thread, waNumbers])
 
   // Messages for the active tab — O(N) with pre-built normSet
   const visibleThread = useMemo(() => {
     if (!activeNum || activeNum === 'all') return thread
     const target  = normPhone(activeNum)
-    const normSet = new Set(waNumbers.map(n => normPhone(n)))
-    const sentToThisNum = thread.some(m =>
-      m.direction === 'outbound' && m.status !== 'failed' && normPhone(m.to_number || m.number) === target
-    )
-    return thread.filter(m => {
-      const msgNum = normPhone(m.to_number || m.from_number || m.number)
-      if (msgNum === target) return true
-      // Include inbound from business/unknown numbers only if we sent to this tab's number
-      if (m.direction === 'inbound' && !normSet.has(msgNum)) return sentToThisNum
-      return false
-    })
-  }, [thread, activeNum, waNumbers])
+    const keys = conversationMessageKeys(thread)
+    return thread.filter((m, index) => keys[index] === target)
+  }, [thread, activeNum])
 
   // Instance that sent the most recent outbound message for the ACTIVE number tab.
   // Only shown when a specific number is selected (not "all") or when there's only one number.
@@ -1709,18 +1691,21 @@ export default function Conversations({ isActive } = {}) {
                   {waNumbers.map(num => {
                     const isActive  = activeNum === num
                     const stats     = numStats[num] || { sent: 0, received: 0 }
-                    const replied   = stats.sent > 0 || stats.received > 0
+                    const contacted = stats.sent > 0
+                    const replied   = stats.received > 0
                     const validation = waValidation[normPhone(num)]
                     const invalid = validation?.valid === false
-                    const verified = validation?.valid === true
-                    const formatted = num.replace(/\D/g, '').slice(-10)
-                      .replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')
+                    const formatted = formatConversationPhone(num)
+                    const contactState = replied ? (lang === 'en' ? 'Replied' : 'Con respuesta')
+                      : contacted ? (lang === 'en' ? 'Contacted' : 'Contactado')
+                      : stats.failed > 0 ? (lang === 'en' ? 'Failed attempt' : 'Intento fallido')
+                      : (lang === 'en' ? 'Not contacted' : 'Sin contactar')
                     return (
                       <Tooltip key={num} title={invalid
                         ? (lang === 'en' ? 'Not registered on WhatsApp according to the last check. Sending disabled.' : 'Sin WhatsApp según la última validación. Envío deshabilitado.')
-                        : ''}>
+                        : `${contactState} · ${stats.sent} ${lang === 'en' ? 'sent' : 'enviados'} · ${stats.received} ${lang === 'en' ? 'received' : 'recibidos'}`}>
                         <Box component="span" sx={{ display: 'inline-flex', flexShrink: 0 }}>
-                      <Box component="button" type="button" disabled={invalid} data-wa-number={num}
+                      <Box component="button" type="button" disabled={invalid} data-wa-number={num} data-contact-state={replied ? 'replied' : contacted ? 'contacted' : 'not-contacted'}
                         onClick={() => setActiveNum(isActive ? 'all' : num)} sx={{
                         display: 'flex', alignItems: 'center', gap: 0.6, flexShrink: 0,
                         px: 1.2, py: 0.5, borderRadius: 99, cursor: invalid ? 'not-allowed' : 'pointer',
@@ -1731,8 +1716,8 @@ export default function Conversations({ isActive } = {}) {
                       }}>
                         <WhatsAppIcon sx={{
                           fontSize: 13, flexShrink: 0,
-                          color: invalid ? '#f87171' : verified || replied ? '#4ade80' : 'rgba(255,255,255,0.22)',
-                          filter: !invalid && (verified || replied) ? 'drop-shadow(0 0 4px #4ade8066)' : 'none',
+                          color: invalid ? '#f87171' : replied ? '#4ade80' : contacted ? 'var(--accent, #a5b4fc)' : 'var(--text-muted)',
+                          filter: !invalid && replied ? 'drop-shadow(0 0 4px #4ade8066)' : 'none',
                         }} />
                         <Typography component="span" sx={{
                           fontSize: '0.72rem', fontFamily: 'monospace', letterSpacing: '0.03em',
@@ -1741,6 +1726,7 @@ export default function Conversations({ isActive } = {}) {
                         }}>
                           {formatted}
                         </Typography>
+                        <Typography component="span" sx={{ fontSize: '0.6rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{contactState}</Typography>
                       </Box>
                         </Box>
                       </Tooltip>
@@ -1753,7 +1739,7 @@ export default function Conversations({ isActive } = {}) {
             {waNumbers.length > 1 && activeNum && activeNum !== 'all' && (
               <Box sx={{ px: 2, py: 0.6, borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
                 <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.2)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-                  {lang === 'en' ? 'Filtering · ' : 'Filtrando · '}{activeNum.replace(/\D/g,'').slice(-10).replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')}
+                  {lang === 'en' ? 'Filtering · ' : 'Filtrando · '}{formatConversationPhone(activeNum)}
                 </Typography>
               </Box>
             )}

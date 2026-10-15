@@ -10,3 +10,14 @@ def clean_digits(number: str) -> str:
     if len(digits) == 10:
         digits = "52" + digits
     return digits
+
+
+def conversation_phone_key(number: str) -> str:
+    """Identidad completa del chat; solo 52/521 mexicanos son equivalentes."""
+    value = str(number or '')
+    if '@lid' in value or '@g.us' in value:
+        return value
+    digits = ''.join(filter(str.isdigit, value))
+    if len(digits) == 13 and digits.startswith('521'):
+        digits = '52' + digits[3:]
+    return digits

@@ -143,22 +143,35 @@ def collapse_echoed_messages(messages: list, window_sec: int = 5) -> list:
     """Quita el eco de un mismo inbound/outbound que se grabó dos veces en
     segundos. Supergas LP (2026-10-08): "Hola", "Disculpa estas equivocado"
     y "Dnd" salían dobles porque el webhook no trajo message_id."""
-    out = []
+    from app.phone_utils import conversation_phone_key
+    out, recent = [], {}
     for msg in messages:
         body = (msg.get("message_body") or msg.get("message_text") or msg.get("body") or "").strip()
-        if out and body:
-            prev = out[-1]
-            prev_body = (prev.get("message_body") or prev.get("message_text") or prev.get("body") or "").strip()
+        address = 'to_number' if msg.get('direction') == 'outbound' else 'from_number'
+        key = (msg.get('company_id'), msg.get('direction'), conversation_phone_key(msg.get(address)), body)
+        duplicate = False
+        # Flamazul/Gas 1 (2026-10-15): el sync con 52 e ID y el webhook con
+        # 521 sin ID pueden estar intercalados con otros mensajes del mismo segundo.
+        for index in reversed(recent.get(key, [])) if body else []:
+            prev = out[index]
             t1, t2 = prev.get("created_at"), msg.get("created_at")
             close = False
             if t1 and t2 and hasattr(t1, "timestamp") and hasattr(t2, "timestamp"):
                 close = abs((t2 - t1).total_seconds()) <= window_sec
-            # Dos destinatarios distintos pueden recibir el mismo saludo en segundos.
-            address = 'to_number' if msg.get('direction') == 'outbound' else 'from_number'
-            same_address = prev.get(address) == msg.get(address)
             same_id = not (prev.get('message_id') and msg.get('message_id')) or prev['message_id'] == msg['message_id']
-            if close and same_address and same_id and prev.get("direction") == msg.get("direction") and prev_body == body:
-                continue
+            inst1 = prev.get('received_on_instance') or prev.get('instance_name')
+            inst2 = msg.get('received_on_instance') or msg.get('instance_name')
+            same_instance = not (inst1 and inst2) or inst1 == inst2
+            media1, media2 = prev.get('media_url'), msg.get('media_url')
+            safe_media = media1 == media2 and (body != '[media]' or bool(media1))
+            if close and same_id and same_instance and safe_media:
+                if not prev.get('message_id') and msg.get('message_id'):
+                    out[index] = {**prev, 'message_id': msg['message_id']}
+                duplicate = True
+                break
+        if duplicate:
+            continue
+        recent.setdefault(key, []).append(len(out))
         out.append(msg)
     return out
 
@@ -669,8 +682,8 @@ class MongoDBManager:
         # the number selector never lists it. Fix: any number that actually
         # appears in this company's message_logs gets synthesized as a
         # type="whatsapp" contact if it isn't already represented by one
-        # (matched on the last 10 digits, same normalization the frontend
-        # itself uses for these chips).
+        # (identidad internacional completa, igual que las pestañas del chat;
+        # no confundir Colombia 57 y México 52 por sus últimos diez dígitos).
         def _conversation_numbers():
             nums = set()
             for m in self.db.message_logs.find(
@@ -692,18 +705,17 @@ class MongoDBManager:
             contacts = f_contacts.result()
             conv_numbers = f_conv_numbers.result()
 
-            def _last10(v):
-                return "".join(ch for ch in str(v) if ch.isdigit())[-10:]
+            from app.phone_utils import conversation_phone_key
 
-            existing_wa_last10 = {
-                _last10(c["value"]) for c in contacts
+            existing_wa_keys = {
+                conversation_phone_key(c["value"]) for c in contacts
                 if c.get("type") == "whatsapp" and c.get("value")
             }
             for num in conv_numbers:
-                last10 = _last10(num)
-                if last10 and len(last10) == 10 and last10 not in existing_wa_last10:
+                key = conversation_phone_key(num)
+                if key.isdigit() and 10 <= len(key) <= 13 and key not in existing_wa_keys:
                     contacts.append({"type": "whatsapp", "value": num, "source": "message_logs"})
-                    existing_wa_last10.add(last10)
+                    existing_wa_keys.add(key)
 
             company["whatsapp_validation"] = self.get_whatsapp_validation(
                 [c["value"] for c in contacts if c.get("type") == "whatsapp" and c.get("value")]
@@ -1210,12 +1222,25 @@ class MongoDBManager:
         # guardó a 2 ms. Sin id no aplica el índice único; este eco cercano
         # es el mismo mensaje.
         if direction == "inbound" and (message_body or "").strip():
-            echo = self.db.message_logs.find_one({
+            from app.phone_utils import conversation_phone_key
+            phone = conversation_phone_key(number)
+            aliases = {phone}
+            if phone.startswith('52') and len(phone) == 12:
+                aliases.add('521' + phone[2:])
+            phone_pattern = r'^\D*(?:' + '|'.join(r'\D*'.join(re.escape(c) for c in n) for n in aliases) + r')(?:@.*)?\D*$'
+            stamp = created_at or datetime.utcnow()
+            echo_query = {
                 "company_id": company_id,
                 "direction": "inbound",
+                "from_number": {"$regex": phone_pattern},
                 "message_body": message_body,
-                "created_at": {"$gte": datetime.utcnow() - timedelta(seconds=5)},
-            }, {"_id": 1})
+                "created_at": {"$gte": stamp - timedelta(seconds=5), "$lte": stamp + timedelta(seconds=5)},
+            }
+            if message_id:
+                echo_query['$or'] = [{'message_id': None}, {'message_id': message_id}]
+            if instance_name:
+                echo_query['received_on_instance'] = {'$in': [None, instance_name]}
+            echo = self.db.message_logs.find_one(echo_query, {"_id": 1})
             if echo:
                 return str(echo["_id"])
         doc = {
@@ -1728,11 +1753,18 @@ class MongoDBManager:
         if not include_failed:
             query["status"] = {"$ne": "failed"}
         if number:
-            clean10 = "".join(filter(str.isdigit, number))[-10:]
+            from app.phone_utils import conversation_phone_key
+            full = conversation_phone_key(number)
+            aliases = {full}
+            if full.startswith('52') and len(full) == 12:
+                aliases.add('521' + full[2:])
+            pattern = r'^\D*(?:' + '|'.join(r'\D*'.join(re.escape(c) for c in n) for n in aliases) + r')(?:@.*)?\D*$'
+            if len(full) == 10:  # Llamadores históricos que solo guardaban el número nacional.
+                pattern = full
             query["$or"] = [
-                {"direction": "outbound", "to_number": {"$regex": clean10}},
-                {"direction": "inbound",  "related_to_number": {"$regex": clean10}},
-                {"direction": "inbound",  "from_number": {"$regex": clean10}},
+                {"direction": "outbound", "to_number": {"$regex": pattern}},
+                {"direction": "inbound",  "related_to_number": {"$regex": pattern}},
+                {"direction": "inbound",  "from_number": {"$regex": pattern}},
             ]
         messages = list(self.db.message_logs.find(
             query,

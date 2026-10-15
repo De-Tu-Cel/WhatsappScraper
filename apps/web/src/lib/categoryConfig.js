@@ -5,7 +5,6 @@
 import PersonIcon from '@mui/icons-material/Person'
 import FlashOnIcon from '@mui/icons-material/FlashOn'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
-import SupportAgentIcon from '@mui/icons-material/SupportAgent'
 import PsychologyIcon from '@mui/icons-material/Psychology'
 import SpeakerNotesOffIcon from '@mui/icons-material/SpeakerNotesOff'
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
@@ -17,18 +16,6 @@ export const CATEGORY_CONFIG = {
   automatico: { tKey: 'automatic', color: '#facc15', bg: 'rgba(250,204,21,0.12)',  icon: FlashOnIcon },
   // Respuesta automática al instante y después nadie contestó el 2do mensaje.
   automatico_sin_respuesta: { tKey: 'autoNoReply', color: '#fb923c', bg: 'rgba(251,146,60,0.12)', icon: TimerOffIcon },
-  // "hibrido" solía cubrir dos situaciones muy distintas bajo una sola etiqueta:
-  // un bot CONFIRMADO (menú/plantilla/autoidentificación) mezclado con un humano,
-  // vs. una señal automática ambigua mezclada con un humano — separadas en dos
-  // categorías el 2026-09-18 para que la etiqueta ya no encasille ambas por igual.
-  // Íconos propios (no heredados de "bot"/"automatico") — reusar el mismo ícono
-  // que la categoría pura y solo cambiar el color no se distinguía lo suficiente
-  // a simple vista (reporte 2026-09-18).
-  // "hibrido" a secas se conserva solo para análisis viejos guardados antes del
-  // split (y para el veredicto holístico del LLM, que aún no distingue los dos
-  // casos) — se muestra igual que "hibrido_bot".
-  hibrido:            { tKey: 'hybridBot',  color: '#38bdf8', bg: 'rgba(56,189,248,0.12)', icon: SupportAgentIcon },
-  hibrido_bot:        { tKey: 'hybridBot',  color: '#38bdf8', bg: 'rgba(56,189,248,0.12)', icon: SupportAgentIcon },
   // Mismo concepto que "automatico" (Automático + Humano) — se muestra igual.
   hibrido_automatico: { tKey: 'automatic', color: '#facc15', bg: 'rgba(250,204,21,0.12)', icon: FlashOnIcon },
   bot:        { tKey: 'bot',       color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', icon: SmartToyIcon },
@@ -41,9 +28,11 @@ export const CATEGORY_CONFIG = {
 
 export const NO_CLASS_CONFIG = { tKey: 'noClass', color: '#94a3b8', bg: 'rgba(148,163,184,0.08)', icon: HourglassEmptyIcon }
 
-// Normaliza la categoría legado "menu" a la vigente "bot" para filtros/conteos — la
-// categoría mostrada en la tabla ya se resuelve vía CATEGORY_CONFIG.
-export const normCategory = cat => (cat === 'menu' ? 'bot' : cat)
+// Stored diagnoses remain available; public categories group human-assisted bots.
+export const normCategory = cat => {
+  if (['menu', 'hibrido', 'hibrido_bot'].includes(cat)) return 'bot'
+  return cat === 'hibrido_automatico' ? 'automatico' : cat
+}
 
 // "bot" y "bot_ia" son mutuamente excluyentes según el flag is_ai, no dos
 // categorías independientes — se usa para que stats y filtros cuenten igual
@@ -51,12 +40,14 @@ export const normCategory = cat => (cat === 'menu' ? 'bot' : cat)
 export const matchesCategory = (row, cat) => {
   const nc = normCategory(row.category)
   if (nc !== 'bot') return nc === cat
+  if (['hibrido', 'hibrido_bot'].includes(row.category)) return cat === 'bot'
   return cat === 'bot_ia' ? !!row.is_ai : cat === 'bot' ? !row.is_ai : false
 }
 
 export function getCategoryConfig(row) {
-  if (row.category === 'bot' && row.is_ai) return CATEGORY_CONFIG.bot_ia
-  return CATEGORY_CONFIG[row.category] || NO_CLASS_CONFIG
+  const nc = normCategory(row.category)
+  if (['bot', 'menu'].includes(row.category) && row.is_ai) return CATEGORY_CONFIG.bot_ia
+  return CATEGORY_CONFIG[nc] || NO_CLASS_CONFIG
 }
 
 // Resultados de la comparación de clasificadores (Timing / IA / Timing + IA — ver

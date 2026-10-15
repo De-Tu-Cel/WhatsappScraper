@@ -36,6 +36,13 @@ app.use(express.json({ limit: '10mb' }))
 const PORT         = process.env.PORT         || 3001
 const FASTAPI_URL  = process.env.FASTAPI_URL  || 'http://backend:8000'
 const API_SECRET   = process.env.API_SECRET   || ''
+// Versión fija de WhatsApp Web (p. ej. "2.3000.1028456789"). Sin fijarla, cada sesión carga la
+// más nueva al arrancar, y cuando WhatsApp actualiza, la página se recarga sola — tania-sesion-3
+// (2026-10-12) quedó duplicada en una de esas recargas y WhatsApp la desvinculó. Vacía = como
+// antes. La versión que carga cada sesión sale en su línea "Ready" del log.
+const WA_WEB_VERSION     = (process.env.WA_WEB_VERSION || '').trim()
+const WA_WEB_REMOTE_PATH = process.env.WA_WEB_REMOTE_PATH ||
+  'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html'
 const SESSIONS_PATH = process.env.SESSIONS_PATH || '/app/sessions'
 // e2e_notification y similares no son texto de un humano. Lo usa el webhook
 // y el historial (SIMAGAS/GUVAL, 2026-10-08: NON_CONTENT_MSG_TYPES quedó
@@ -577,6 +584,10 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
     // gives a much wider window than a QR frame (~20s), useful when the phone being
     // linked isn't in the same room as whoever's running this.
     ...(phoneNumber ? { pairWithPhoneNumber: { phoneNumber, showNotification: true } } : {}),
+    // strict: false — si esa versión ya no está en el archivo, carga la más nueva en vez de
+    // dejar la sesión sin arrancar.
+    ...(WA_WEB_VERSION ? { webVersion: WA_WEB_VERSION,
+      webVersionCache: { type: 'remote', remotePath: WA_WEB_REMOTE_PATH, strict: false } } : {}),
     // Sin proxyAuthentication: las credenciales del proxy las pone el intermediario local
     // (relayFor, arriba) — page.authenticate no cubría al service worker de WhatsApp Web.
     puppeteer: {
@@ -720,7 +731,8 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
     session.status = 'connected'
     session.qr = null; session.pairingCode = null
     session.phone = client.info?.wid?.user || null
-    console.log(`[${sessionId}] Ready | phone=${session.phone}`)
+    const waWeb = await client.getWWebVersion().catch(() => null)
+    console.log(`[${sessionId}] Ready | phone=${session.phone} | whatsapp-web=${waWeb || '?'}${WA_WEB_VERSION ? ` (fija: ${WA_WEB_VERSION})` : ''}`)
     startPresenceHeartbeat(sessionId)
     startProfileSyncPoll(sessionId)
     startLivenessHeartbeat(sessionId)
@@ -732,6 +744,15 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
     session.lastPushname = pushname
     if (profilePicUrl) session.lastProfilePicUrl = profilePicUrl
 
+    // Same check again: the profile-pic fetch above takes a few seconds, and a LOGOUT can land
+    // during it too. tania-sesion-3 (2026-10-12, 6:01 p.m.): WhatsApp Web reloaded itself, the
+    // session got "ready" twice, WhatsApp logged it out 4 s later, and these two stale
+    // "connected" webhooks arrived after the "need_scan" one — the panel showed it connected and
+    // the disconnect email never went out.
+    if (sessions.get(sessionId) !== session || session.status !== 'connected') {
+      console.log(`[${sessionId}] stale ready event ignored after profile fetch (session status is now ${sessions.get(sessionId)?.status ?? 'destroyed'})`)
+      return
+    }
     forwardWebhook({ event: 'session.status', sessionId, data: { status: 'connected', phone: session.phone, pushname, profile_pic_url: profilePicUrl } })
 
     // getProfilePicUrl fetching OUR OWN profile pic fails consistently as of
@@ -1228,8 +1249,13 @@ app.post('/session/:id/send', async (req, res) => {
   if (!session) return res.status(404).json({ error: 'Session not found' })
   if (session.status !== 'connected') return res.status(400).json({ error: `Not connected: ${session.status}` })
 
-  const { to, message, typingMs, saveContact, contactFirstName, contactLastName } = req.body
+  const { to, message, typingMs, saveContact, contactFirstName, contactLastName, sendBefore } = req.body
   if (!to || !message) return res.status(400).json({ error: 'to and message required' })
+  const deadline = sendBefore === undefined ? null : Date.parse(sendBefore)
+  if (deadline !== null && !Number.isFinite(deadline)) return res.status(400).json({ error: 'Invalid sendBefore' })
+  const windowClosed = () => deadline !== null && Date.now() >= deadline
+  const rejectClosedWindow = () => res.status(409).json({ code: 'SEND_WINDOW_CLOSED', error: 'AI sending hours ended' })
+  if (windowClosed()) return rejectClosedWindow()
 
   const digits = to.replace(/\D/g, '')
 
@@ -1287,6 +1313,8 @@ app.post('/session/:id/send', async (req, res) => {
       }
     }
 
+    // Chat IA (2026-10-14): los delays no deben empujar un envío fuera del horario.
+    if (windowClosed()) return rejectClosedWindow()
     const msg = await session.client.sendMessage(numberId._serialized, message)
     session.lastSendAt = Date.now()
     console.log(`[${id}] → ${digits} (${message.length} chars, ${delay}ms typing, gap=${elapsed}ms)`)
@@ -1451,8 +1479,8 @@ app.post('/session/:id/messages', async (req, res) => {
       return {
         via: (chat.id && chat.id._serialized) || '',
         messages: slice.map((m) => ({
-          id: (m.id && m.id._serialized) || '',
-          fromMe: !!(m.id && m.id.fromMe),
+          id: (m.id && (m.id._serialized || m.id.id)) || (typeof m.id === 'string' ? m.id : ''),
+          fromMe: !!(m.id?.fromMe ?? m.fromMe),
           body: m.body || m.caption || '',
           timestamp: m.t || 0,
           type: m.type,

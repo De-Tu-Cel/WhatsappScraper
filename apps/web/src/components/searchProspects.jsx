@@ -352,6 +352,67 @@ const SearchBarForm = React.memo(function SearchBarForm({
   )
 })
 
+// Preserve unchanged rows when appending another batch or updating search status.
+const ProspectResultRow = React.memo(function ProspectResultRow({ item, realIdx, toggleOne, t, lang }) {
+  const domain = getDomain(item.url)
+  return (
+    <Box key={realIdx} onClick={() => !item.blocked && toggleOne(realIdx)}
+      sx={{ display: 'flex', alignItems: 'center', gap: 1.5, pl: 1.5, pr: 2, py: 1.1, cursor: item.blocked ? 'not-allowed' : 'pointer', borderBottom: '1px solid var(--border)', borderLeft: item.blocked ? '3px solid rgba(239,68,68,0.4)' : item.scraped ? '3px solid rgba(251,191,36,0.35)' : '3px solid rgba(34,197,94,0.35)', opacity: item.blocked ? 0.6 : 1, bgcolor: item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.05)' : 'transparent', '&:hover': { bgcolor: item.blocked ? 'transparent' : item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.08)' : 'var(--item-hover)' }, '&:last-of-type': { borderBottom: 'none' }, transition: 'background-color 0.15s', animation: `${fadeSlideIn} 0.22s ease both`, animationDelay: `${Math.min(realIdx, 7) * 0.025}s` }}>
+      <Checkbox size="small" checked={item.selected} disabled={item.blocked} onChange={() => toggleOne(realIdx)} onClick={e => e.stopPropagation()}
+        sx={{ color: 'var(--text-muted)', '&.Mui-checked': { color: 'var(--accent, #3b82f6)' }, p: 0.5, flexShrink: 0 }} />
+      {item.kind === 'maps' ? (() => {
+        const l = item.lead
+        const social = listedSiteLabel(l.listed_url)
+        const meta = [l.category, l.rating ? `★ ${l.rating}${l.reviews ? ` (${l.reviews})` : ''}` : null, l.city].filter(Boolean).join(' · ')
+        return (
+          <>
+            <CompanyAvatar key={item.url} photoUrl={l.photo_url} name={l.name} size={30} dimmed={item.scraped} />
+            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+              <Tooltip title={l.address || item.url} placement="top" arrow>
+                <Typography component="a" href={item.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
+                  sx={{ display: 'block', fontSize: '0.82rem', fontWeight: item.scraped ? 400 : 500, color: item.scraped ? 'var(--text-muted)' : item.selected ? 'var(--accent, #60a5fa)' : 'var(--text)', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', '&:hover': { textDecoration: 'underline' } }}>
+                  {l.name}
+                </Typography>
+              </Tooltip>
+              <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {meta}
+              </Typography>
+            </Box>
+            <Tooltip placement="top" arrow title={social
+              ? (lang === 'en' ? `Only has a ${social} page: ${l.listed_url}` : `Solo tiene página de ${social}: ${l.listed_url}`)
+              : (lang === 'en' ? 'No website — data from Google Maps' : 'Sin sitio web — datos de Google Maps')}>
+              <Chip label={social || (lang === 'en' ? 'No website' : 'Sin web')} size="small"
+                sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(45,212,191,0.1)', color: '#2dd4bf', border: '1px solid rgba(45,212,191,0.25)', flexShrink: 0 }} />
+            </Tooltip>
+          </>
+        )
+      })() : (<>
+      {/* Favicon */}
+      <Box component="img"
+        src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`}
+        width={16} height={16}
+        sx={{ borderRadius: 0.5, flexShrink: 0, opacity: item.scraped || item.blocked ? 0.4 : 0.8 }}
+        onError={e => { e.target.style.display = 'none' }}
+      />
+      {/* Dominio + URL completa al hover */}
+      <Tooltip title={item.blocked ? `🚫 ${t.search.tagBlockedTip} "${item.blockReason}" · ${item.url}` : item.url} placement="top" arrow>
+        <Typography component="a" href={item.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
+          sx={{ fontSize: '0.82rem', fontWeight: item.scraped ? 400 : 500, color: item.blocked ? 'var(--text-muted)' : item.scraped ? 'var(--text-muted)' : item.selected ? 'var(--accent, #60a5fa)' : 'var(--text)', textDecoration: 'none', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', '&:hover': { textDecoration: 'underline' } }}>
+          {domain}
+        </Typography>
+      </Tooltip>
+      </>)}
+      {item.blocked
+        ? <Chip label={t.search.tagBlocked} size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(239,68,68,0.12)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)', flexShrink: 0 }} />
+        : item.scraped
+        ? <Chip label={t.search.tagVisited} size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)', flexShrink: 0 }} />
+        : <Chip label={t.search.tagNew}     size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(34,197,94,0.1)',  color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)',  flexShrink: 0 }} />
+      }
+    </Box>
+  )
+})
+
+
 export default function SearchProspects() {
   const { t, lang } = useLang()
   const abortSearchRef = useRef(null)
@@ -367,6 +428,7 @@ export default function SearchProspects() {
   // outright) — showing the SAME "add a location" hint for this case is
   // actively misleading, since the problem has nothing to do with the query.
   const [searchError,  setSearchError]  = useState(false)
+  const [serviceWarnings, setServiceWarnings] = useState([])
   // The searched trade is on the industry blacklist (backend: blocked_industry) —
   // every result of that trade is discarded when processed, so say it up front.
   const [blockedIndustry, setBlockedIndustry] = useState(null)
@@ -377,6 +439,7 @@ export default function SearchProspects() {
   const [requestedCount, setRequestedCount] = useState(10)
   const [nextOffset,   setNextOffset]   = useState(0)
   const [serverExhausted, setServerExhausted] = useState(false)
+  const [emptyBatches, setEmptyBatches] = useState(0)
   const [fetchingMore, setFetchingMore] = useState(false)
   const [found,         setFound]         = useState([])
   // El scraping en sí corre en el backend (useScrapeJob) — estos dos solo cubren
@@ -635,7 +698,7 @@ export default function SearchProspects() {
     const ctrl = new AbortController()
     abortSearchRef.current = ctrl
     setSearching(true); setFound([]); setVisibleCount(numResults); setRequestedCount(numResults); setFilterScraped('all'); setFilterContacted('all'); setSearchError(false)
-    setServerExhausted(false); setNextOffset(0); setBlockedIndustry(null)
+    setServerExhausted(false); setEmptyBatches(0); setNextOffset(0); setBlockedIndustry(null)
     setSentOverlay({}); setRetryBase([]); scrapeJob.reset()
     try {
       const res = await authFetch('/api/search', {
@@ -644,14 +707,16 @@ export default function SearchProspects() {
         signal: ctrl.signal,
       })
       if (!res.ok) throw new Error()
-      const { urls, results: searchResults, next_offset, maps_leads = [], blocked_industry = null } = await res.json()
+      const { urls, results: searchResults, next_offset, maps_leads = [], blocked_industry = null, service_warnings = [] } = await res.json()
+      setServiceWarnings(service_warnings)
+      window.dispatchEvent(new Event('service-health-refresh'))
       setBlockedIndustry(blocked_industry)
       const blockedMap = Object.fromEntries((searchResults || []).map(r => [r.url, r]))
       const marked = await fetchAndMark(urls, blockedMap, maps_leads)
       setFound(marked)
       setVisibleCount(Math.max(numResults, marked.length))
       setNextOffset(next_offset || 0)
-      if (marked.length === 0) setSearchError('empty')
+      if (marked.length === 0) setSearchError(service_warnings.length ? 'partial' : 'empty')
     } catch (err) {
       if (err?.name !== 'AbortError') setSearchError('failed')
     } finally {
@@ -680,15 +745,21 @@ export default function SearchProspects() {
         }),
       })
       if (!res.ok) throw new Error()
-      const { urls, results: searchResults, next_offset, maps_leads = [] } = await res.json()
+      const { urls, results: searchResults, next_offset, maps_leads = [], service_warnings = [] } = await res.json()
+      setServiceWarnings(service_warnings)
+      window.dispatchEvent(new Event('service-health-refresh'))
       setNextOffset(next_offset || nextOffset)
       const blockedMap = Object.fromEntries((searchResults || []).map(r => [r.url, r]))
       const marked = await fetchAndMark(urls, blockedMap, maps_leads)
       const seen = new Set(alreadyShown)
       const fresh = marked.filter(m => !seen.has(resultKey(m.url)))
       if (fresh.length === 0) {
-        setServerExhausted(true)
+        // One empty batch may be all duplicates or one failed source.
+        // Keep manual pagination available for up to three empty batches.
+        setEmptyBatches(emptyBatches + 1)
+        setServerExhausted(emptyBatches + 1 >= 3)
       } else {
+        setEmptyBatches(0)
         setFound(prev => [...prev, ...fresh])
         setVisibleCount(vc => vc + fresh.length)
       }
@@ -703,7 +774,7 @@ export default function SearchProspects() {
   function toggleAll(val) {
     setFound(f => f.map(r => ({ ...r, selected: val ? (!r.scraped && !r.blocked) : false })))
   }
-  function toggleOne(i)   { setFound(f => f.map((r, idx) => idx === i && !r.blocked ? { ...r, selected: !r.selected } : r)) }
+  const toggleOne = useCallback(i => { setFound(f => f.map((r, idx) => idx === i && !r.blocked ? { ...r, selected: !r.selected } : r)) }, [])
   function selectOnlyNew()   { setFound(f => f.map(r => ({ ...r, selected: !r.scraped && !r.blocked }))) }
   function deselectScraped() { setFound(f => f.map(r => ({ ...r, selected: r.scraped ? false : r.selected }))) }
 
@@ -732,7 +803,7 @@ export default function SearchProspects() {
   function handleNewSearch() {
     scrapeJob.reset()
     setFound([]); setSentOverlay({}); setRetryBase([])
-    setSearchError(false); setServerExhausted(false); setNextOffset(0); setBlockedIndustry(null)
+    setSearchError(false); setServerExhausted(false); setEmptyBatches(0); setNextOffset(0); setBlockedIndustry(null)
   }
 
   function handleCancelSearch() {
@@ -1000,16 +1071,21 @@ export default function SearchProspects() {
         </Box>
       )}
 
+      {serviceWarnings.length > 0 && <Box role="status" sx={{ p: 1.5, border: '1px solid var(--border)', borderRadius: 2, mb: 1, bgcolor: 'var(--card-bg)' }}>
+        <Typography sx={{ color: 'var(--text)', fontSize: '.8rem' }}>
+          {lang === 'en' ? 'Search incomplete. The available results are shown.' : 'Búsqueda incompleta. Se muestran los resultados disponibles.'}
+        </Typography>
+      </Box>}
       {/* ── Sin resultados / error ── */}
       {searchError && !searching && (
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 1.5, py: 4, px: 2 }}>
           <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.45))', fontSize: '0.9rem', textAlign: 'center' }}>
-            {searchError === 'failed' ? t.search.searchFailedFor : t.search.noResultsFor} <strong style={{ color: 'var(--text, #f1f5f9)' }}>{lastIndustry}</strong>
+            {searchError === 'partial' ? (lang === 'en' ? 'Search incomplete for' : 'Búsqueda incompleta para') : searchError === 'failed' ? t.search.searchFailedFor : t.search.noResultsFor} <strong style={{ color: 'var(--text, #f1f5f9)' }}>{lastIndustry}</strong>
           </Typography>
           <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.28))', fontSize: '0.78rem', textAlign: 'center', maxWidth: 420, lineHeight: 1.6 }}>
-            {searchError === 'failed' ? t.search.searchFailedHint : t.search.tryOther}
+            {searchError === 'partial' ? (lang === 'en' ? 'You can retry later.' : 'Puedes reintentar más tarde.') : searchError === 'failed' ? t.search.searchFailedHint : t.search.tryOther}
           </Typography>
-          {searchError !== 'failed' && (
+          {searchError === 'empty' && (
             <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.18))', fontSize: '0.72rem', textAlign: 'center', maxWidth: 460, lineHeight: 1.6, mt: 0.5 }}>
               {t.search.noResultsHint}
             </Typography>
@@ -1145,67 +1221,15 @@ export default function SearchProspects() {
 
           {/* Lista URL con favicon + dominio */}
           <Box sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 2 }}>
-            {visibleFound.map((item) => {
-              const realIdx = found.indexOf(item)
-              const domain = getDomain(item.url)
-              return (
-                <Box key={realIdx} onClick={() => !item.blocked && toggleOne(realIdx)}
-                  sx={{ display: 'flex', alignItems: 'center', gap: 1.5, pl: 1.5, pr: 2, py: 1.1, cursor: item.blocked ? 'not-allowed' : 'pointer', borderBottom: '1px solid var(--border)', borderLeft: item.blocked ? '3px solid rgba(239,68,68,0.4)' : item.scraped ? '3px solid rgba(251,191,36,0.35)' : '3px solid rgba(34,197,94,0.35)', opacity: item.blocked ? 0.6 : 1, bgcolor: item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.05)' : 'transparent', '&:hover': { bgcolor: item.blocked ? 'transparent' : item.selected ? 'rgba(var(--accent-rgb, 59,130,246), 0.08)' : 'var(--item-hover)' }, '&:last-of-type': { borderBottom: 'none' }, transition: 'background-color 0.15s', animation: `${fadeSlideIn} 0.22s ease both`, animationDelay: `${realIdx * 0.025}s` }}>
-                  <Checkbox size="small" checked={item.selected} disabled={item.blocked} onChange={() => toggleOne(realIdx)} onClick={e => e.stopPropagation()}
-                    sx={{ color: 'var(--text-muted)', '&.Mui-checked': { color: 'var(--accent, #3b82f6)' }, p: 0.5, flexShrink: 0 }} />
-                  {item.kind === 'maps' ? (() => {
-                    const l = item.lead
-                    const social = listedSiteLabel(l.listed_url)
-                    const meta = [l.category, l.rating ? `★ ${l.rating}${l.reviews ? ` (${l.reviews})` : ''}` : null, l.city].filter(Boolean).join(' · ')
-                    return (
-                      <>
-                        <CompanyAvatar key={item.url} photoUrl={l.photo_url} name={l.name} size={30} dimmed={item.scraped} />
-                        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                          <Tooltip title={l.address || item.url} placement="top" arrow>
-                            <Typography component="a" href={item.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
-                              sx={{ display: 'block', fontSize: '0.82rem', fontWeight: item.scraped ? 400 : 500, color: item.scraped ? 'var(--text-muted)' : item.selected ? 'var(--accent, #60a5fa)' : 'var(--text)', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', '&:hover': { textDecoration: 'underline' } }}>
-                              {l.name}
-                            </Typography>
-                          </Tooltip>
-                          <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {meta}
-                          </Typography>
-                        </Box>
-                        <Tooltip placement="top" arrow title={social
-                          ? (lang === 'en' ? `Only has a ${social} page: ${l.listed_url}` : `Solo tiene página de ${social}: ${l.listed_url}`)
-                          : (lang === 'en' ? 'No website — data from Google Maps' : 'Sin sitio web — datos de Google Maps')}>
-                          <Chip label={social || (lang === 'en' ? 'No website' : 'Sin web')} size="small"
-                            sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(45,212,191,0.1)', color: '#2dd4bf', border: '1px solid rgba(45,212,191,0.25)', flexShrink: 0 }} />
-                        </Tooltip>
-                      </>
-                    )
-                  })() : (<>
-                  {/* Favicon */}
-                  <Box component="img"
-                    src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`}
-                    width={16} height={16}
-                    sx={{ borderRadius: 0.5, flexShrink: 0, opacity: item.scraped || item.blocked ? 0.4 : 0.8 }}
-                    onError={e => { e.target.style.display = 'none' }}
-                  />
-                  {/* Dominio + URL completa al hover */}
-                  <Tooltip title={item.blocked ? `🚫 ${t.search.tagBlockedTip} "${item.blockReason}" · ${item.url}` : item.url} placement="top" arrow>
-                    <Typography component="a" href={item.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
-                      sx={{ fontSize: '0.82rem', fontWeight: item.scraped ? 400 : 500, color: item.blocked ? 'var(--text-muted)' : item.scraped ? 'var(--text-muted)' : item.selected ? 'var(--accent, #60a5fa)' : 'var(--text)', textDecoration: 'none', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', '&:hover': { textDecoration: 'underline' } }}>
-                      {domain}
-                    </Typography>
-                  </Tooltip>
-                  </>)}
-                  {item.blocked
-                    ? <Chip label={t.search.tagBlocked} size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(239,68,68,0.12)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)', flexShrink: 0 }} />
-                    : item.scraped
-                    ? <Chip label={t.search.tagVisited} size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(251,191,36,0.1)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.25)', flexShrink: 0 }} />
-                    : <Chip label={t.search.tagNew}     size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(34,197,94,0.1)',  color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)',  flexShrink: 0 }} />
-                  }
-                </Box>
-              )
-            })}
+            {visibleFound.map(item => (
+              <ProspectResultRow key={item.url} item={item} realIdx={found.indexOf(item)}
+                toggleOne={toggleOne} t={t} lang={lang} />
+            ))}
             {(visibleCount < found.length || (!serverExhausted && found.length > 0 && !searching)) && (
-              <Box sx={{ p: 1.5, display: 'flex', justifyContent: 'center', borderTop: '1px solid var(--border)' }}>
+              <Box sx={{ p: 1.5, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.7, borderTop: '1px solid var(--border)' }}>
+                {emptyBatches > 0 && <Typography sx={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+                  {lang === 'en' ? 'This attempt found no new businesses. You can try the next batch.' : 'Este intento no encontró nuevos negocios. Puedes probar el siguiente lote.'}
+                </Typography>}
                 <Button size="small" onClick={handleLoadMore} disabled={fetchingMore}
                   sx={{ color: 'var(--accent, #60a5fa)', fontSize: '0.78rem', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.2)', borderRadius: 1.5, px: 2, textTransform: 'none', gap: 0.8, '&:hover': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)' }, '&.Mui-disabled': { color: 'rgba(96,165,250,0.4)', borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.1)' } }}>
                   {fetchingMore

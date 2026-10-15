@@ -12,7 +12,7 @@ from app.schemas.company import (
 )
 from app.utils import serialize
 from app.pipeline import process_url, run_pipeline_batch, _check_blacklist   # ← app.pipeline
-from app.searcher import search_prospects, pages_per_query_for  # ← app.searcher
+from app.searcher import search_prospects  # ← app.searcher
 from app.database import MongoDBManager
 from app.daily_cap import DAILY_CAP, WARMUP_CAP, get_daily_count, get_instance_cap, get_capacity_for_date, daily_stats_for_user
 from app.phone_utils import clean_digits
@@ -34,14 +34,40 @@ SESSION_DISCONNECT_ALERT_EMAILS = ["marco@detucel.mx"]
 SESSION_DISCONNECT_ALERT_DELAY_SECONDS = 300
 
 
+def _wwebjs_live_status(inst: dict) -> str | None:
+    """Estado real de la sesión según wwebjs ("connected", "need_scan", …); None si no es de
+    wwebjs o no se pudo preguntar (en ese caso se confía en la base)."""
+    if inst.get("provider") != "wwebjs":
+        return None
+    try:
+        from app import whatsapp_wwebjs as _ww
+        return _ww.get_status(inst["name"]).get("status")
+    except Exception:
+        return None
+
+
 async def _notify_disconnect_if_still_down(instance_name: str, reason_label_at_trigger: str):
     """Reconfirma el estado tras el margen de espera antes de avisar por
     correo — si para entonces ya reconectó sola (redeploy), no manda nada."""
     await asyncio.sleep(SESSION_DISCONNECT_ALERT_DELAY_SECONDS)
     db = MongoDBManager()
     inst = db.db.instances.find_one({"name": instance_name})
-    if not inst or inst.get("status") == "connected":
+    if not inst:
         return
+    if inst.get("status") == "connected":
+        # La base puede decir "conectada" por un aviso viejo que llegó después de la caída: se le
+        # pregunta a wwebjs. tania-sesion-3 (2026-10-12): WhatsApp la desconectó, pero dos avisos
+        # tardíos de "conectada" la dejaron así en la base y el correo nunca salió.
+        live = await asyncio.to_thread(_wwebjs_live_status, inst)
+        if live in (None, "connected"):
+            return
+        label = {"need_scan": "Requiere volver a escanear QR/código", "disconnected": "Sesión desconectada",
+                 "auth_failure": "Fallo de autenticación", "not_found": "Sesión desconectada"}.get(live, live)
+        db.db.instances.update_one({"name": instance_name}, {"$set": {
+            "status": live if live != "not_found" else "disconnected",
+            "disconnect_reason": live, "disconnect_reason_label": label}})
+        reason_label_at_trigger = label
+        inst["disconnect_reason_label"] = label
     current_label = inst.get("disconnect_reason_label") or reason_label_at_trigger
     from app.email_service import send_session_disconnected_email
     for _alert_email in SESSION_DISCONNECT_ALERT_EMAILS:
@@ -1005,10 +1031,9 @@ def api_search(req: SearchRequest, x_user_token: Optional[str] = Header(None)):
                 "block_reason": hit["matched"] if hit else None,
             })
 
-        # El frontend usa esto para saber desde dónde continuar la próxima vez
-        # que pida "cargar más" (paginación real de Bright Data, ver searcher.py).
-        # Use fetch_count (not target) so the offset reflects actual BD pages consumed.
-        next_offset = (req.offset or 0) + pages_per_query_for(fetch_count) * 10
+        # One cursor step per batch. City windows also use offset // 10;
+        # the retired Bright Data page count skipped entire city blocks.
+        next_offset = (req.offset or 0) + 10
 
         # Guardar cada resultado no bloqueado como "idea" pendiente — así si el
         # usuario no selecciona/procesa nada (o solo una parte), lo que quedó fuera
@@ -1040,6 +1065,7 @@ def api_search(req: SearchRequest, x_user_token: Optional[str] = Header(None)):
                         # last-resort location for a site that shows none and
                         # whose phones don't tell either (scraper._finalize_location).
                         "target_city": search_meta.get("city") or None,
+                        "target_country": search_meta.get("country") or req.country,
                         "created_by": (_searcher or {}).get("display_name") or (_searcher or {}).get("username"),
                         "created_at": datetime.utcnow(),
                     }},
@@ -1055,6 +1081,8 @@ def api_search(req: SearchRequest, x_user_token: Optional[str] = Header(None)):
                         "url": lead["url"], "domain": "", "industry": req.industry,
                         "industry_giro": industry_giro,
                         "status": "pending", "target_state": target_state,
+                        "target_city": search_meta.get("city") or None,
+                        "target_country": search_meta.get("country") or req.country,
                         "maps_lead": lead,
                         "created_by": (_searcher or {}).get("display_name") or (_searcher or {}).get("username"),
                         "created_at": datetime.utcnow(),
@@ -1064,6 +1092,10 @@ def api_search(req: SearchRequest, x_user_token: Optional[str] = Header(None)):
             except Exception:
                 pass
 
+        from app.service_health import warnings as service_warnings
+        provider_warnings = service_warnings()
+        if provider_warnings:
+            provider_warnings = [{'service': 'search', 'message': 'No se pudo completar toda la búsqueda. Puedes reintentar más tarde.'}]
         return {
             "maps_leads": maps_leads,
             "blocked_industry": blocked_industry,
@@ -1074,6 +1106,7 @@ def api_search(req: SearchRequest, x_user_token: Optional[str] = Header(None)):
             # resultado se degradaba a fuentes más débiles sin que nadie del
             # lado del cliente pudiera saberlo (confirmado en vivo 2026-09-28).
             "degraded_sources": degraded_sources,
+            "service_warnings": provider_warnings,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1497,7 +1530,7 @@ def api_get_conversation_thread(company_id: str, number: Optional[str] = None, x
     _require_user(x_user_token)
     try:
         db = MongoDBManager()
-        return serialize(db.get_conversation_thread(company_id, number=number))
+        return serialize(db.get_conversation_thread(company_id, number=number, include_failed=True))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1528,6 +1561,7 @@ def api_get_ai_status(company_id: str, x_user_token: Optional[str] = Header(None
             "ai_enabled": ai_enabled,
             "ai_active": bool(session),
             "ai_typing": bool(session.get("ai_typing")) if session else False,
+            "provider_blocked": 'No se pudo generar la respuesta. Puedes responder manualmente.' if session and session.get('provider_blocked') else None,
             "turn_count": session.get("turn_count", 0) if session else 0,
             "max_turns": session.get("max_turns", pref_max) if session else pref_max,
         }
@@ -4242,7 +4276,7 @@ def api_wwebjs_pairing_code(session_id: str):
 def api_wwebjs_bulk_verify(body: dict, x_user_token: Optional[str] = Header(None)):
     """Verify a list of phone numbers against WhatsApp. Returns per-number result + caches in jid_map."""
     from app.auth import get_user_by_token
-    from app.whatsapp_wwebjs import verify_number
+    from app.whatsapp_wwebjs import verify_number, registration_status
     from app.config import WWEBJS_URL as _ww_url
     from datetime import datetime as _dt
     import concurrent.futures as _cf
@@ -4278,7 +4312,7 @@ def api_wwebjs_bulk_verify(body: dict, x_user_token: Optional[str] = Header(None
         original, digits = item
         try:
             r = verify_number(session, digits)
-            valid = bool(r.get("exists", False))
+            valid = registration_status(r)
         except Exception:
             valid = None  # unknown
         return original, digits, valid
@@ -5296,17 +5330,15 @@ def api_get_analytics(
     category:  str | None = Query(None),
     agents:    str | None = Query(None),  # comma-separated usernames
     search:    str | None = Query(None),
+    review: str | None = Query(None, pattern="^(pending|new_messages|different_results)$"),
+    x_user_token: Optional[str] = Header(None),
 ):
+    _require_user(x_user_token)
     try:
         db = MongoDBManager()
         agent_list = [a for a in (agents or "").split(",") if a] or None
-        data = db.get_analytics(page=page, page_size=page_size, category=category, agents=agent_list, search=search)
-        # Resultado de los tres clasificadores (Timing / IA / Timing + IA) por fila, sin
-        # los logs — esos se piden aparte al abrir el detalle.
-        from app.classification_compare import comparisons_for
-        cmp = comparisons_for(db, [r.get("company_id") for r in data.get("items", [])])
-        for r in data.get("items", []):
-            r["comparison"] = cmp.get(r.get("company_id"))
+        data = db.get_analytics(page=page, page_size=page_size, category=category, agents=agent_list, search=search, review_filter=review)
+        # get_analytics adjunta comparaciones y vigencia antes de filtrar/paginar.
         return serialize(data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -5333,12 +5365,27 @@ def api_classification_comparison(company_id: str, x_user_token: Optional[str] =
     return serialize(doc)
 
 
+@router.get('/classification/mode')
+def api_classification_mode(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    from app.classification_compare import COMPARISONS
+    from app.llm import active_provider
+    from app.config import CLASSIFIER_MODEL
+    return {'replaces_official': COMPARISONS == 'classification_comparisons',
+            'provider': active_provider(), 'model': CLASSIFIER_MODEL}
+
+
 @router.post("/classification/comparisons/{company_id}/run")
-def api_classification_run(company_id: str, x_user_token: Optional[str] = Header(None)):
+def api_classification_run(company_id: str, number: Optional[str] = Query(None), x_user_token: Optional[str] = Header(None)):
     _require_user(x_user_token)
     from app.classification_compare import run_comparison
+    from app.classifier import LLMQuotaExceeded
     try:
-        return serialize(run_comparison(company_id))
+        return serialize(run_comparison(company_id, number=number))
+    except LLMQuotaExceeded:
+        raise HTTPException(status_code=503, detail='No se pudo completar el análisis en este momento. Se conserva el análisis anterior; vuelve a intentarlo más tarde.')
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"No se pudo correr la comparación: {e}")
 
@@ -5707,7 +5754,9 @@ def api_notifications_count(
             "created_at": {"$gte": cutoff},
             "user_id": requester_id,
         })
-        return {"count": reply_count + event_count}
+        from app.service_health import admin_notifications
+        service_count = len(admin_notifications(cutoff)) if user.get('role') == 'admin' else 0
+        return {"count": reply_count + event_count + service_count}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -5805,6 +5854,9 @@ def api_notifications_list(x_user_token: Optional[str] = Header(None)):
                 "cap": e.get("cap", 0),
             })
 
+        if user.get('role') == 'admin':
+            from app.service_health import admin_notifications
+            result.extend(admin_notifications())
         result.sort(key=lambda x: x.get("created_at") or "", reverse=True)
         return result[:50]
     except Exception as e:
@@ -6130,61 +6182,18 @@ def _build_requeue_filter():
 
 @router.post("/admin/verify-phone-contacts")
 def api_verify_phone_contacts(limit: int = 10, x_user_token: Optional[str] = Header(None)):
-    """Check 'phone' contacts (scraped without an explicit WhatsApp icon/link)
-    against real WhatsApp registration via isRegisteredUser() — the same
-    lookup already done before every real send (getNumberId()), no message
-    sent. Promotes a match to type='whatsapp' so it stops being a wasted
-    contact opportunity (real ask, 2026-09-18: numbers scraped as "just a
-    phone" that turn out to have WhatsApp too). Processes at most `limit` per
-    call; use `remaining` to know if another call is needed — same
-    claim-then-process pattern as /admin/requeue-unanalyzed, so concurrent
-    calls don't double-check the same contact."""
+    """Solicita un turno de la cola; nunca acelera las pausas."""
     _require_admin(x_user_token)
-    from app.whatsapp_wwebjs import get_all_connected_instances, verify_number
+    if not 1 <= limit <= 100:
+        raise HTTPException(422, 'limit debe estar entre 1 y 100')
+    from app.phone_verification import process_next
     db = MongoDBManager()
-    connected = get_all_connected_instances(db)
-    if not connected:
-        return {"ok": True, "checked": 0, "promoted": 0, "remaining": 0, "paused": True,
-                "reason": "No hay ninguna sesión de WhatsApp conectada para verificar."}
-    instance = connected[0]
-
-    _filter = {"type": "phone", "verified": {"$exists": False}}
-    claimed = []
-    for _ in range(limit):
-        doc = db.db.contacts.find_one_and_update(
-            _filter,
-            {"$set": {"verified": "checking"}},
-            projection={"_id": 1, "company_id": 1, "value": 1},
-        )
-        if not doc:
-            break
-        claimed.append(doc)
-
-    promoted = 0
-    for doc in claimed:
-        try:
-            is_wa = bool(verify_number(instance, doc["value"]).get("registered"))
-        except Exception as e:
-            print(f"[verify-phone-contacts] check failed for {doc['value']}: {e}")
-            is_wa = None
-
-        if is_wa is True:
-            db.db.contacts.update_one(
-                {"_id": doc["_id"]},
-                {"$set": {"type": "whatsapp", "verified": True, "detected_via": "phone_verification"}},
-            )
-            db.update_company(str(doc["company_id"]), {"has_whatsapp": True})
-            promoted += 1
-        elif is_wa is False:
-            db.db.contacts.update_one({"_id": doc["_id"]}, {"$set": {"verified": False}})
-        else:
-            # Verification itself failed (network blip, instance disconnected mid-batch)
-            # — release the claim instead of permanently marking verified=False, so this
-            # contact gets retried on the next call rather than being wrongly skipped forever.
-            db.db.contacts.update_one({"_id": doc["_id"]}, {"$unset": {"verified": ""}})
-
-    remaining = db.db.contacts.count_documents(_filter)
-    return {"ok": True, "checked": len(claimed), "promoted": promoted, "remaining": remaining}
+    result = process_next(db)
+    remaining = db.db.contacts.count_documents({
+        'type': 'phone', '$or': [{'verified': {'$exists': False}}, {'verified': 'checking'},
+                               {'verified': False, 'wa_checked_at': {'$exists': False}}],
+    })
+    return {'ok': True, **result, 'remaining': remaining}
 
 @router.post("/admin/requeue-unanalyzed")
 def api_requeue_unanalyzed(background_tasks: BackgroundTasks, limit: int = 20, x_user_token: Optional[str] = Header(None)):
@@ -6361,6 +6370,56 @@ def api_admin_balances(x_user_token: Optional[str] = Header(None)):
         "openai": get_openai_spend(),
         "dataforseo": get_dataforseo_balance(),
     }
+
+
+@router.get('/services/status')
+def api_service_status(x_user_token: Optional[str] = Header(None)):
+    _require_admin(x_user_token)
+    from app.service_health import public_status
+    return {'services': serialize(public_status())}
+
+
+@router.post('/services/check')
+def api_service_check(body: dict, x_user_token: Optional[str] = Header(None)):
+    user = _require_user(x_user_token)
+    if user.get('role') != 'admin':
+        raise HTTPException(403, 'Solo admins')
+    service = body.get('service')
+    if service not in ('ai', 'dataforseo'):
+        raise HTTPException(422, 'Servicio inválido')
+    from app.service_health import configured_services, public_status, reset, ServiceUnavailable
+    provider, credentials = configured_services()[service]
+    if not public_status()[service]['configured']:
+        raise HTTPException(409, 'El proveedor no está configurado')
+    if service == 'dataforseo':
+        from app.billing import get_dataforseo_balance
+        result = get_dataforseo_balance(clear_block=True)  # Consulta gratuita; permite el próximo intento.
+        services = serialize(public_status())
+        checked = bool(result.get('ok'))
+        available = checked and float(result.get('balance') or 0) > 0
+        return {'services': services, 'ok': checked, 'check': {
+            'service': service, 'ok': checked, 'available': available,
+            'reason': services[service].get('reason'), 'balance': result.get('balance'), 'currency': 'usd',
+            'message': 'Saldo consultado. Un saldo positivo permite reintentar Maps; no verifica los límites de gasto de ese endpoint.' if checked else 'No se pudo consultar el saldo de DataForSEO. Inténtalo de nuevo.',
+        }}
+    reset(provider, credentials)
+    from app.llm_guard import reset_circuit
+    reset_circuit()
+    try:
+        from app.llm import call_llm
+        call_llm([{'role': 'user', 'content': 'Responde OK.'}], max_tokens=3)
+    except ServiceUnavailable:
+        pass  # El estado conserva la causa; nunca se envía un WhatsApp.
+    except Exception:
+        from app.service_health import record
+        record(provider, credentials, 'unavailable')
+    services = serialize(public_status())
+    available = services[service].get('status') == 'available'
+    return {'services': services, 'ok': available, 'check': {
+        'service': service, 'ok': True, 'available': available,
+        'reason': services[service].get('reason'),
+        'message': 'La IA respondió correctamente. El proveedor está disponible.' if available else 'La IA sigue sin estar disponible.',
+    }}
 
 
 @router.get("/admin/instances/metrics")

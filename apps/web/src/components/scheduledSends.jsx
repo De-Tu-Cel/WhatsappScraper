@@ -311,7 +311,7 @@ export const CompanyCard = memo(function CompanyCard({
       : { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', color: 'var(--accent,#60a5fa)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)' }
   const statusLabel = sc === 0 ? t.campaign.statusNone : allCompanySel ? t.campaign.statusComplete : t.campaign.statusPartial(sc, total)
   return (
-    <Box sx={{
+    <Box data-company-card sx={{
       flexShrink: 0, borderRadius: 2, overflow: 'hidden',
       border: `1px solid ${sc > 0 ? 'rgba(var(--accent-rgb,59,130,246),0.3)' : 'var(--border)'}`,
       bgcolor: 'var(--card-bg, rgba(255,255,255,0.015))', transition: 'border-color 0.15s',
@@ -325,7 +325,7 @@ export const CompanyCard = memo(function CompanyCard({
         </Tooltip>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-            <Typography sx={{ color: 'var(--text)', fontSize: '0.8rem', fontWeight: 600, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayCompanyName(company, t)}</Typography>
+            <Typography data-company-name sx={{ color: 'var(--text)', fontSize: '0.8rem', fontWeight: 600, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayCompanyName(company, t)}</Typography>
             {company.contacted && (
               <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.3, flexShrink: 0, bgcolor: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 1, px: 0.6, py: 0.15 }}>
                 <CheckCircleIcon sx={{ fontSize: 9, color: '#fbbf24' }} />
@@ -337,7 +337,7 @@ export const CompanyCard = memo(function CompanyCard({
              dominio (ver displayCompanyName) — repetirlo aquí abajo se veía
              como una entrada duplicada. Solo mostrar cuando aporta info nueva. */}
           {company.domain && company.name && !looksLikePhone(company.name) && (
-            <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>{company.domain}</Typography>
+            <Typography data-company-domain sx={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>{company.domain}</Typography>
           )}
         </Box>
         {single && company.numbers.length === 1 && (() => {
@@ -351,7 +351,7 @@ export const CompanyCard = memo(function CompanyCard({
                 {nBlk
                   ? <BlockIcon sx={{ fontSize: 13, color: '#ef4444' }} />
                   : <WhatsAppIcon sx={{ fontSize: 13, color: isSel ? '#25d366' : nCont ? '#fbbf24' : 'var(--text-muted)' }} />}
-                <Typography sx={{ color: nBlk ? 'rgba(239,68,68,0.75)' : isSel ? 'var(--text)' : nCont ? 'rgba(251,191,36,0.75)' : 'var(--text-muted)', fontSize: '0.72rem', fontFamily: 'monospace', whiteSpace: 'nowrap', textDecoration: nBlk ? 'line-through' : 'none' }}>
+                <Typography data-company-number sx={{ color: nBlk ? 'rgba(239,68,68,0.75)' : isSel ? 'var(--text)' : nCont ? 'rgba(251,191,36,0.75)' : 'var(--text-muted)', fontSize: '0.72rem', fontFamily: 'monospace', whiteSpace: 'nowrap', textDecoration: nBlk ? 'line-through' : 'none' }}>
                   {fmtNumber(n.number)}
                 </Typography>
               </Box>
@@ -439,7 +439,7 @@ const PICKER_PAGE_SIZE = 25
 // showTitle: false where the page already titles this list (Send Campaign's
 // "Destinatarios" step). onNewCountChange: reports how many selected numbers
 // were never messaged — only those use the daily new-contacts quota.
-export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeight = 240, contactedRefreshKey = 0, newContactsCap = null, onNewCountChange, showTitle = true }) {
+export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeight = 240, contactedRefreshKey = 0, newContactsCap = null, onNewCountChange, showTitle = true, campaignStyle = false }) {
   const { t, lang } = useLang()
   const en = lang === 'en'
   // Blocked numbers: shown struck through, never selectable, dropped from the
@@ -455,7 +455,10 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
   const [industryAnchor,     setIndustryAnchor]     = useState(null)
   const [industrySearch,     setIndustrySearch]     = useState('')
   const [page,               setPage]               = useState(0)
+  const [pageSize,           setPageSize]           = useState(PICKER_PAGE_SIZE)
+  const recipientListRef = useRef(null)
   const [expandedSel,        setExpandedSel]        = useState(new Set())
+  const [selectionExpanded, setSelectionExpanded] = useState(true)
   const MAX_IND = 4
   const companiesRef = useRef([])
 
@@ -573,10 +576,13 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
   // is what was causing the borders/checkboxes to visually collapse into a mess of
   // overlapping lines and the scrollbar to disappear: too many DOM nodes for the
   // browser to lay out and paint reliably in one shot.
-  useEffect(() => { setPage(0) }, [industryFilters, filterContacted, search, sortRecent])
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PICKER_PAGE_SIZE))
+  useEffect(() => { setPage(0) }, [industryFilters, filterContacted, search, sortRecent, pageSize])
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const pageSafe   = Math.min(page, totalPages - 1)
-  const paged      = filtered.slice(pageSafe * PICKER_PAGE_SIZE, (pageSafe + 1) * PICKER_PAGE_SIZE)
+  const paged      = filtered.slice(pageSafe * pageSize, (pageSafe + 1) * pageSize)
+  useEffect(() => {
+    if (campaignStyle) recipientListRef.current?.scrollTo({ top: 0 })
+  }, [campaignStyle, pageSafe, pageSize, industryFilters, filterContacted, search, sortRecent])
 
   const activeSet = useMemo(() => { const s = new Set(); companies.forEach(c => c.numbers.forEach(n => { if (n.active) s.add(n.number) })); return s }, [companies])
 
@@ -706,6 +712,16 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
   const allSel  = allFilteredNums.length > 0 && allFilteredNums.every(n => selectedNums.has(n))
   const someSel = !allSel && allFilteredNums.some(n => selectedNums.has(n))
   const selCount = selectedNums.size
+  const selectedCompanies = useMemo(() => {
+    const groups = new Map()
+    for (const number of selectedNums) {
+      const info = numInfoMap.get(number)
+      const key = info?.company_id || number
+      if (!groups.has(key)) groups.set(key, { key, name: info?.company_name, numbers: [] })
+      groups.get(key).numbers.push(number)
+    }
+    return [...groups.values()]
+  }, [selectedNums, numInfoMap])
   const activeSelCount = [...selectedNums].filter(n => activeSet.has(n)).length
 
   // Deliberadamente SIN azul de acento — ese color ya significa "estos números
@@ -714,7 +730,7 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
   // usar el mismo azul para ambos hacía que todo se viera "igual de importante" y
   // costaba distinguir un filtro activo de una selección real de destinatarios.
   const chipSx = active => ({
-    fontSize: '0.68rem', height: 22, fontWeight: active ? 700 : 400,
+    fontSize: campaignStyle ? '.78rem' : '0.68rem', height: campaignStyle ? 30 : 22, fontWeight: active ? 700 : 400,
     bgcolor: active ? 'var(--item-hover)' : 'transparent',
     border: `1px solid ${active ? 'var(--text-muted)' : 'var(--border)'}`,
     color: active ? 'var(--text)' : 'var(--text-muted)', cursor: 'pointer',
@@ -726,7 +742,11 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
     // sin esto flexbox lo encoge por debajo de su contenido real cuando la ventana baja
     // de altura, y como el Box tiene overflow:hidden esa parte (paginación, resumen de
     // selección) se recorta en silencio en vez de quedar accesible con scroll.
-    <Box sx={{ border: '1px solid var(--border)', borderRadius: 2, overflow: 'hidden', flexShrink: 0 }}>
+    <Box data-campaign-recipients={campaignStyle || undefined} sx={{ border: '1px solid var(--border)', borderRadius: campaignStyle ? 3 : 2, overflow: 'hidden', flexShrink: 0,
+      ...(campaignStyle ? { bgcolor: 'var(--surface)', display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0,
+        '& > div:not([data-campaign-recipient-list])': { flexShrink: 0 },
+        '& input': { minWidth: 0, fontSize: '.94rem', py: 1 }, '& .MuiCheckbox-root': { p: .8 }, '& [data-company-name]': { fontSize: '.98rem', lineHeight: 1.4 }, '& [data-company-domain]': { fontSize: '.8rem', mt: .4 }, '& [data-company-number]': { fontSize: '.85rem' }, '& [data-company-card] > div:first-of-type': { minHeight: 76, flexWrap: 'wrap', gap: 1.5, px: 2, py: 1.5 },
+        '@container campaign (max-width: 850px)': { flex: '0 0 auto' } } : {}) }}>
       {showTitle && (
         <Box sx={{ px: 1.5, py: 1, bgcolor: 'var(--surface)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 0.8, background: 'linear-gradient(90deg, rgba(var(--accent-rgb,59,130,246),0.06) 0%, transparent 60%)' }}>
           <Box sx={{ width: 3, height: 12, borderRadius: 2, bgcolor: 'var(--accent,#3b82f6)', opacity: 0.55, flexShrink: 0 }} />
@@ -735,7 +755,46 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
         </Box>
       )}
 
-      {selectedNums.size > 0 && (() => {
+      {campaignStyle && selectedNums.size > 0 && (
+        <Box data-campaign-selected sx={{ px: 2, py: 1.5, borderBottom: '1px solid var(--border)', bgcolor: 'var(--surface)', backgroundImage: 'radial-gradient(ellipse at top left, rgba(var(--accent-rgb),0.09), transparent 70%)' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+            <Typography sx={{ fontSize: '.85rem', fontWeight: 700, color: 'var(--text)' }}>
+              {en ? 'Selected recipients' : 'Destinatarios seleccionados'}
+              <Box component="span" sx={{ display: 'block', fontSize: '.75rem', fontWeight: 400, color: 'var(--text-muted)', mt: .3 }}>
+                {en
+                  ? `${selectedCompanies.length} ${selectedCompanies.length === 1 ? 'company' : 'companies'} · ${selCount} ${selCount === 1 ? 'number' : 'numbers'}`
+                  : `${selectedCompanies.length} ${selectedCompanies.length === 1 ? 'empresa' : 'empresas'} · ${selCount} ${selCount === 1 ? 'número' : 'números'}`}
+              </Box>
+            </Typography>
+            <Button size="small" aria-expanded={selectionExpanded} onClick={() => setSelectionExpanded(prev => !prev)}
+              endIcon={<ChevronRightIcon sx={{ transform: selectionExpanded ? 'rotate(-90deg)' : 'rotate(90deg)' }} />}
+              sx={{ color: 'var(--accent)', flexShrink: 0, textTransform: 'none' }}>
+              {selectionExpanded ? (en ? 'Hide' : 'Ocultar') : (en ? 'Show' : 'Mostrar')}
+            </Button>
+          </Box>
+          {selectionExpanded && (
+            <Box data-campaign-selected-details sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', alignItems: 'start', gap: 1, mt: 1.2, maxHeight: 168, overflowY: 'auto', scrollbarWidth: 'thin' }}>
+              {selectedCompanies.map(company => (
+                <Box key={company.key} data-selected-company sx={{ px: 1.4, py: 1.2, border: '1px solid var(--border)', borderRadius: 2, bgcolor: 'var(--card-bg)', backgroundImage: 'linear-gradient(145deg, rgba(var(--accent-rgb),0.065), transparent 75%)', boxShadow: '0 2px 6px rgba(0,0,0,0.04)', minWidth: 0 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 1, mb: .8 }}>
+                    <Typography sx={{ fontSize: '.82rem', fontWeight: 600, color: 'var(--text)', overflowWrap: 'anywhere' }}>{company.name || (en ? 'Recipient' : 'Destinatario')}</Typography>
+                    <Typography sx={{ fontSize: '.7rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                      {company.numbers.length} {en ? (company.numbers.length === 1 ? 'number' : 'numbers') : (company.numbers.length === 1 ? 'número' : 'números')}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: .5, borderTop: '1px solid var(--border)', pt: .8 }}>
+                    {company.numbers.map(number => (
+                      <Typography key={number} data-selected-number sx={{ fontSize: '.78rem', fontFamily: 'monospace', color: 'var(--accent)', overflowWrap: 'anywhere' }}>{fmtNumber(number)}</Typography>
+                    ))}
+                  </Box>
+                </Box>
+              ))}
+            </Box>
+          )}
+        </Box>
+      )}
+
+      {selectedNums.size > 0 && !campaignStyle && (() => {
         const selCosRaw = companies.filter(c => c.numbers.some(n => selectedNums.has(n.number)))
         const seen = new Set(); const selCos = selCosRaw.filter(c => seen.has(c._id) ? false : (seen.add(c._id), true))
         if (!selCos.length) return null
@@ -814,7 +873,7 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
         )
       })()}
 
-      <Box sx={{ px: 1.5, pt: 1.2, pb: 0.8, borderBottom: '1px solid var(--border)' }}>
+      <Box sx={{ px: campaignStyle ? 2 : 1.5, pt: campaignStyle ? 2 : 1.2, pb: campaignStyle ? 1.5 : 0.8, borderBottom: '1px solid var(--border)' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, bgcolor: 'var(--surface)', borderRadius: 1.5, border: '1px solid var(--border)', px: 1, py: 0.4, mb: 0.4 }}>
           <SearchIcon sx={{ fontSize: 13, color: 'var(--text-muted)' }} />
           <Box component="input" value={search} onChange={e => setSearch(e.target.value)} placeholder={t.sched.searchCo} sx={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', color: 'var(--text,#f1f5f9)', fontSize: '0.78rem', '&::placeholder': { color: 'var(--text-muted)' } }} />
@@ -823,11 +882,11 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
         {/* Conteo de EMPRESAS que coinciden con el filtro actual — distinto y
             separado del conteo de NÚMEROS que muestra "Select all" más abajo,
             para no mezclar dos unidades distintas bajo el mismo número. */}
-        <Typography sx={{ fontSize: '0.66rem', color: 'var(--text-muted)', mb: 1 }}>
+        <Typography sx={{ fontSize: campaignStyle ? '.8rem' : '0.66rem', color: 'var(--text-muted)', mb: 1 }}>
           {t.campaign.companiesFound(filtered.length)}
         </Typography>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center', justifyContent: 'space-between' }}>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: campaignStyle ? 1.2 : 0.5, alignItems: 'center', justifyContent: 'space-between' }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: campaignStyle ? 1 : 0.5, alignItems: 'center' }}>
             {industries.length > 0 && (<>
               <Chip label={t.sched.allIndustries} size="small" onClick={() => setIndustryFilters(new Set())} sx={chipSx(industryFilters.size === 0)} />
               {industries.slice(0, MAX_IND).map(ind => (
@@ -907,7 +966,7 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
         </Box>
       </Box>
 
-      <Box sx={{ display: 'flex', gap: 0.5, px: 1.5, py: 0.8, borderBottom: '1px solid var(--border)' }}>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: campaignStyle ? 1 : 0.5, px: campaignStyle ? 2 : 1.5, py: campaignStyle ? 1.5 : 0.8, borderBottom: '1px solid var(--border)' }}>
         {[
           { key: 'all',       label: t.sched.filterAll(industrySearchFiltered.length) },
           { key: 'new',       label: t.sched.filterNew(industrySearchFiltered.filter(c => !c.already_contacted?.contacted).length) },
@@ -918,7 +977,7 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
       </Box>
 
       {filtered.length > 0 && (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.15, px: 1.5, py: 0.5, borderBottom: '1px solid var(--border)', bgcolor: 'var(--surface)' }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: campaignStyle ? .75 : 0.15, px: campaignStyle ? 2 : 1.5, py: campaignStyle ? 1.25 : 0.5, borderBottom: '1px solid var(--border)', bgcolor: 'var(--surface)' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
             <Checkbox size="small" checked={allSel} indeterminate={someSel} onChange={toggleAll} sx={{ p: 0.3, color: 'var(--border)', '&.Mui-checked,&.MuiCheckbox-indeterminate': { color: 'var(--accent,#3b82f6)' } }} />
             <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
@@ -936,7 +995,8 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
         </Box>
       )}
 
-      <Box sx={{ maxHeight: listMaxHeight, overflowY: 'auto', p: 1, display: 'flex', flexDirection: 'column', gap: 0.8 }}>
+      <Box ref={recipientListRef} data-campaign-recipient-list={campaignStyle || undefined} sx={{ maxHeight: listMaxHeight, overflowY: 'auto', p: campaignStyle ? 1.5 : 1, display: 'flex', flexDirection: 'column', gap: campaignStyle ? 1.4 : 0.8,
+        ...(campaignStyle ? { flex: '1 1 auto', minHeight: 80, maxHeight: 'none', '@container campaign (max-width: 850px)': { flex: '0 0 auto', minHeight: 0, maxHeight: 440 } } : {}) }}>
         {loadingCo ? (
           Array.from({ length: 6 }).map((_, i) => <CompanyCardSkeleton key={i} />)
         ) : filtered.length === 0 ? (
@@ -956,15 +1016,21 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
         ))}
       </Box>
 
-      {totalPages > 1 && (
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, px: 1.5, py: 0.6, borderTop: '1px solid var(--border)' }}>
-          <IconButton size="small" disabled={pageSafe === 0} onClick={() => setPage(p => Math.max(0, p - 1))} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
+      {(totalPages > 1 || campaignStyle) && (
+        <Box data-recipient-pagination sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', gap: campaignStyle ? 1.5 : 1, px: campaignStyle ? 2 : 1.5, py: campaignStyle ? 1.25 : 0.6, borderTop: '1px solid var(--border)' }}>
+          {campaignStyle && <Box component="label" sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'var(--text-muted)', fontSize: '.78rem' }}>
+            {en ? 'Companies per page' : 'Empresas por página'}
+            <Box component="select" aria-label={en ? 'Companies per page' : 'Empresas por página'} value={pageSize} onChange={e => setPageSize(Number(e.target.value))} sx={{ p: .7, bgcolor: 'var(--card-bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 1, fontSize: '.8rem' }}>
+              {[10, 25, 50, 100].map(size => <option key={size} value={size}>{size}</option>)}
+            </Box>
+          </Box>}
+          <IconButton size="small" aria-label={en ? 'Previous page' : 'Página anterior'} disabled={pageSafe === 0} onClick={() => setPage(p => Math.max(0, p - 1))} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
             <ChevronLeftIcon sx={{ fontSize: 16 }} />
           </IconButton>
           <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', fontVariantNumeric: 'tabular-nums' }}>
             {t.campaign.pageOf(pageSafe + 1, totalPages)}
           </Typography>
-          <IconButton size="small" disabled={pageSafe >= totalPages - 1} onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
+          <IconButton size="small" aria-label={en ? 'Next page' : 'Página siguiente'} disabled={pageSafe >= totalPages - 1} onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
             <ChevronRightIcon sx={{ fontSize: 16 }} />
           </IconButton>
         </Box>
@@ -1109,7 +1175,8 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale={lang}>
-    <Box component="form" onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, p: 2.5, position: 'relative' }}>
+    <Box component="form" data-schedule-form onSubmit={handleSubmit} sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: 1.8, p: 2.5, position: 'relative',
+      '@container schedule-panel (max-width: 400px)': { p: 1.5 } }}>
       {saved && (
         <Box sx={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', bgcolor: 'rgba(13,17,23,0.93)', zIndex: 10, borderRadius: 1, gap: 1.2 }}>
           <CheckCircleIcon sx={{ fontSize: 50, color: '#4ade80' }} />
@@ -1146,7 +1213,8 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
         </Typography>
       </Box>
       <Box sx={{ bgcolor: 'var(--surface,rgba(255,255,255,0.04))', borderRadius: 2, p: 1.5, display: 'flex', flexDirection: 'column', gap: 1, border: '1px solid rgba(255,255,255,0.055)', borderLeft: '3px solid rgba(var(--accent-rgb,59,130,246),0.38)', mt: -0.5 }}>
-        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+        <Box data-schedule-datetime sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1.5,
+          '@container schedule-panel (max-width: 400px)': { gridTemplateColumns: 'minmax(0, 1fr)' } }}>
           <DatePicker label={t.sched.dateLabel} value={dateVal} onChange={v => setDateVal(v)} disablePast
             slotProps={{ textField: { size: 'small', fullWidth: true, sx: PICKER_FIELD_SX }, popper: { sx: PICKER_POPPER_SX } }} />
           <TimePicker label={t.sched.timeLabel} value={timeVal} onChange={v => setTimeVal(v)} ampm
@@ -1613,9 +1681,10 @@ function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicat
   }, [panel?.job?._id, isReadOnly]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <Box sx={{
+    <Box data-schedule-panel sx={{
       position: 'absolute', top: 0, right: 0, bottom: 0,
       width: isOpen ? 'min(390px, 55%)' : 0,
+      '@container scheduled-sends (max-width: 800px)': { width: isOpen ? '100%' : 0, borderLeft: 'none' },
       overflow: 'hidden',
       transition: 'width 0.25s cubic-bezier(0.4,0,0.2,1)',
       borderLeft: isOpen ? '1px solid rgba(255,255,255,0.08)' : 'none',
@@ -1624,7 +1693,7 @@ function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicat
       zIndex: 2,
     }}>
       {isOpen && (
-        <Box sx={{ width: 'min(390px, 55vw)', display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
+        <Box data-schedule-panel-scroll sx={{ width: '100%', minWidth: 0, containerType: 'inline-size', containerName: 'schedule-panel', display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', '& > *': { flexShrink: 0 } }}>
           {/* Mismo lenguaje de header que Warmup/Performance/Instances: fondo
              en degradado diagonal de 3 paradas + línea de brillo inferior
              centrada, en vez del degradado plano de arriba-a-abajo sin ese
@@ -1649,7 +1718,7 @@ function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicat
                 <Chip label={panel.job.name} size="small" sx={{ height: 17, fontSize: '0.62rem', bgcolor: `rgba(${modeRgb},0.1)`, color: modeColor, border: `1px solid rgba(${modeRgb},0.2)`, '& .MuiChip-label': { px: 0.8 }, maxWidth: '100%', mt: 0.3 }} />
               )}
             </Box>
-            <IconButton size="small" onClick={() => onDone(null, false)} sx={{ color: 'rgba(255,255,255,0.3)', '&:hover': { color: 'var(--text,#f1f5f9)' } }}>
+            <IconButton aria-label={t.common.close || 'Cerrar'} size="small" onClick={() => onDone(null, false)} sx={{ color: 'rgba(255,255,255,0.3)', '&:hover': { color: 'var(--text,#f1f5f9)' } }}>
               <CloseIcon sx={{ fontSize: 17 }} />
             </IconButton>
           </Box>
@@ -1893,9 +1962,9 @@ export default function ScheduledSends() {
   const VIEWS = [{ key: 'month', icon: <CalendarMonthIcon sx={{ fontSize: 15 }} />, label: t.sched.viewMonth }, { key: 'week', icon: <ViewWeekIcon sx={{ fontSize: 15 }} />, label: t.sched.viewWeek }, { key: 'list', icon: <ViewListIcon sx={{ fontSize: 15 }} />, label: t.sched.viewList }]
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+    <Box data-scheduled-sends sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', containerType: 'inline-size', containerName: 'scheduled-sends' }}>
       {/* Header */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2, flexShrink: 0 }}>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.5, mb: 2, flexShrink: 0 }}>
         <Box sx={{ width: 36, height: 36, borderRadius: 2, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <ScheduleSendIcon sx={{ fontSize: 19, color: 'var(--accent,#3b82f6)' }} />
         </Box>
@@ -1920,7 +1989,7 @@ export default function ScheduledSends() {
       <Box sx={{ flex: 1, display: 'flex', minHeight: 0, bgcolor: 'var(--item-hover)', border: '1px solid var(--border)', borderRadius: 3, overflow: 'hidden', position: 'relative' }}>
         <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
           {/* Toolbar */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 1.5, py: 1.2, borderBottom: '1px solid var(--border)', flexShrink: 0, overflow: 'hidden' }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0.5, px: 1.5, py: 1.2, borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
             {/* Nav group */}
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
               <IconButton size="small" onClick={navPrev} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text,#f1f5f9)' } }}><ChevronLeftIcon sx={{ fontSize: 18 }} /></IconButton>

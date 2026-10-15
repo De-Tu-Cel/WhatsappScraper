@@ -50,7 +50,8 @@ export default function TopControls({ appearanceOpen, onToggleAppearance, notifO
   useEffect(() => {
     fetchNotifCount()
     const id = setInterval(() => { if (!document.hidden) fetchNotifCount() }, 30_000)
-    return () => clearInterval(id)
+    window.addEventListener('service-health-refresh', fetchNotifCount)
+    return () => { clearInterval(id); window.removeEventListener('service-health-refresh', fetchNotifCount) }
   }, [fetchNotifCount])
 
   useEffect(() => {

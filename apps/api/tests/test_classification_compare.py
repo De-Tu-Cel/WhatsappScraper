@@ -112,7 +112,8 @@ class TestAgreement:
         assert a == {"timing_ia": True, "timing_hibrido": False, "ia_hibrido": False, "todos": False}
 
     @pytest.mark.parametrize("category,is_ai,common", [
-        ("bot", True, "agente_ia"), ("bot", False, "bot"), ("hibrido_bot", False, "automatico_humano"),
+        ("bot", True, "agente_ia"), ("bot", False, "bot"), ("hibrido_bot", False, "bot"),
+        ("hibrido", False, "bot"), ("hibrido_bot", True, "bot"),
         ("automatico", False, "automatico_humano"), ("automatico_sin_respuesta", False, "automatico_sin_respuesta"),
         ("humano", False, "humano"),
         ("hibrido_automatico", False, "automatico_humano"),
@@ -528,3 +529,46 @@ def test_local_does_not_paste_range_on_a_number_that_did_not_reply():
         out = cc.fill_parecido_from_prod(db, qa)
     assert (out["numbers"][0].get("hibrido") or {}).get("parecido") is None
     assert out["hibrido"]["parecido"]["items"][0]["pct"] == 80
+
+
+@pytest.mark.parametrize("local_newer", [False, True])
+def test_local_reads_latest_saved_run_in_logs_table_and_summary(local_newer):
+    """Gas 1: a stale QA 'no reply' must not hide the newer real conversation."""
+    from copy import deepcopy
+    from unittest.mock import MagicMock
+
+    def saved(at, replied, common):
+        block = {"common": common, "category": common, "trace": [{"paso": "Saved log"}],
+                 "parecido": {"items": []}}
+        return {"company_id": "gas1", "updated_at": at, "replied": replied,
+                **{m: deepcopy(block) for m in cc.METHODS},
+                "numbers": [{"number": "2228120419", "replied": replied,
+                             **{m: deepcopy(block) for m in cc.METHODS}}]}
+
+    qa_doc = saved(datetime(2026, 10, 10) if local_newer else datetime(2026, 10, 6),
+                   local_newer, "humano" if local_newer else "sin_respuesta")
+    prod_doc = saved(datetime(2026, 10, 9), True, "automatico_humano")
+    qa, prod = MagicMock(), MagicMock()
+    qa.find_one.side_effect = lambda *a: deepcopy(qa_doc)
+    prod.find_one.side_effect = lambda *a: deepcopy(prod_doc)
+    qa.find.side_effect = lambda *a: [deepcopy(qa_doc)]
+    prod.find.side_effect = lambda *a: [deepcopy(prod_doc)]
+    db = MagicMock()
+    db.db = {"qa_classification_comparisons": qa, "classification_comparisons": prod}
+    expected = "humano" if local_newer else "automatico_humano"
+    with patch.object(cc, "_PREFIX", "qa_"), patch.object(cc, "COMPARISONS", "qa_classification_comparisons"):
+        detail = cc.get_comparison(db, "gas1")
+        table = cc.comparisons_for(db, ["gas1"])["gas1"]
+        totals = cc.summary(db)
+    assert detail["numbers"][0]["hibrido"]["common"] == expected
+    assert detail["numbers"][0]["hibrido"]["trace"] == [{"paso": "Saved log"}]
+    assert table["numbers"][0]["hibrido"]["common"] == expected
+    assert totals["total"] == 1
+    assert totals["por_metodo"]["hibrido"] == {expected: 1}
+    qa.update_one.assert_not_called()
+    prod.update_one.assert_not_called()
+
+
+def test_local_saved_date_supports_utc_iso_and_missing_dates():
+    assert cc._saved_date({"updated_at": "2026-10-09T00:46:51Z"}) == cc._saved_date({"updated_at": datetime(2026, 10, 9, 0, 46, 51)})
+    assert cc._saved_date(None) < cc._saved_date({"updated_at": datetime(2026, 10, 9)})

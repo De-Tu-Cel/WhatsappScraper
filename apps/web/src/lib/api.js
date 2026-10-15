@@ -13,5 +13,8 @@ export async function authFetch(url, options = {}) {
   if (res.status === 401 && typeof window !== 'undefined') {
     localStorage.removeItem('user_token')
   }
+  if (res.status === 503 && typeof window !== 'undefined' && !String(url).includes('/api/services/')) {
+    window.dispatchEvent(new Event('service-health-refresh'))
+  }
   return res
 }

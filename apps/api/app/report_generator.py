@@ -3,6 +3,7 @@ import base64
 import io
 import math
 import os
+from html import escape
 from datetime import datetime
 
 from reportlab.lib.pagesizes import A4
@@ -48,15 +49,9 @@ CATEGORY_INFO = {
     "humano":         ("Humano",              C["humano"]),
     "automatico":     ("Automatico + Humano", C["amber"]),
     "automatico_sin_respuesta": ("Automatico + Sin respuesta", C["amber"]),
-    # "hibrido" separado en dos categorías el 2026-09-18: un bot CONFIRMADO
-    # (menú/plantilla/autoidentificación) mezclado con un humano ("hibrido_bot")
-    # vs. una señal automática ambigua mezclada con un humano ("hibrido_automatico") —
-    # antes ambas caían en una sola etiqueta "Auto+Humano" que las encasillaba igual.
-    # "hibrido" a secas se conserva para análisis viejos guardados antes del split
-    # (y para el veredicto holístico del LLM, que aún no distingue los dos casos) —
-    # se muestra igual que "hibrido_bot", mismo patrón que categoryConfig.js.
-    "hibrido":            ("Bot+Humano",         C["primary"]),
-    "hibrido_bot":        ("Bot+Humano",         C["primary"]),
+    # Human-assisted bots share Bot's public label/color; their diagnosis remains below.
+    "hibrido":            ("Chatbot",            C["bot"]),
+    "hibrido_bot":        ("Chatbot",            C["bot"]),
     "hibrido_automatico": ("Automatico + Humano", C["amber"]),
     "bot":            ("Chatbot",             C["bot"]),
     # "menu" ya no es categoría propia en el reporte — un IVR numérico se fusionó con
@@ -875,6 +870,9 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     right_items.append(Paragraph("CLASIFICACION DEL CANAL", _st("clabel",
         fontSize=7, fontName="Helvetica-Bold", textColor=C["muted"],
         leading=9, spaceAfter=3)))
+    model_label = analytics.get('model') or ('Sin llamada a IA' if analytics.get('analysis_origin') == 'rules' else 'Modelo no registrado')
+    right_items.append(Paragraph(escape(_safe(f"Modelo del analisis: {model_label}")),
+        _st('model_identity', fontSize=7, textColor=C['muted'], leading=10, spaceAfter=6)))
 
     # — Large classification card —
     cat_tbl = Table(

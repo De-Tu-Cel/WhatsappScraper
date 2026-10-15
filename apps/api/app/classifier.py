@@ -8,7 +8,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from app.database import MongoDBManager
+from app.database import MongoDBManager, collapse_echoed_messages
 
 log = logging.getLogger(__name__)
 
@@ -241,6 +241,10 @@ AGENTE DE IA: entiende texto libre y contesta a lo que se le pregunta con frases
 PERSONA: responde a lo que le preguntamos en concreto, tarda minutos u horas, comete errores de dedo,
   escribe corto o casual ("mande", "diga", "buen día"), manda audios o contactos, contesta a medias, se
   disculpa por la demora. Puede usar respuestas guardadas y saludos formales.
+Después de un aviso de ausencia, revisa los mensajes posteriores: un saludo breve y una invitación
+a atender al cliente al reabrir el negocio pueden ser la reanudación humana. No los agrupes con el
+aviso de ausencia por ser genéricos. Explica la evidencia y evita afirmar que nadie escribió después
+si el hilo contiene esos mensajes. Un saludo repetido en días distintos no demuestra por sí solo un bot.
 ⚠️ "asesor/a digital BDC", "ejecutivo/a de cuenta digital", "consultor digital" = título de una persona en
   agencias automotrices. "Digital" = el canal (WhatsApp), no inteligencia artificial — pero su bienvenida
   sí puede ser automática (ver arriba).
@@ -459,9 +463,12 @@ def _call_deepseek(messages: list, max_tokens: int = 280) -> str:
     """Call active LLM provider with BATCH priority. Raises LLMQuotaExceeded on billing errors."""
     from app.llm import call_llm, PRIORITY_BATCH
     from app.config import CLASSIFIER_MODEL
+    from app.service_health import ServiceUnavailable
     try:
         return call_llm(messages, max_tokens=max_tokens, temperature=0, priority=PRIORITY_BATCH,
-                        model=CLASSIFIER_MODEL)
+                        model=CLASSIFIER_MODEL, json_output=True)
+    except ServiceUnavailable as e:
+        raise LLMQuotaExceeded(str(e)) from e
     except Exception as e:
         err = str(e).lower()
         if "402" in str(e) or "insufficient_balance" in err:
@@ -835,7 +842,7 @@ _PICK_ONE_RE = re.compile(r"opci[oó]n|elige|selecciona|escribe|responde|marca|d
 # IA también enumera precios, pasos o datos ("1. Tu nombre completo 2. Dirección…").
 _CHOICE_PHRASE_RE = re.compile(
     r"\b(elige|elija|selecciona|seleccione|escoge|escoja|escribe|escriba|responde|responda|marca|marque|"
-    r"digita|digite|teclea|env[ií]a)\b[^.?!\n]{0,40}\b(opci[oó]n|n[uú]mero|letra)|\bsiguientes opciones\b",
+    r"digita|digite|teclea|env[ií][aeé])\b[^.?!\n]{0,40}\b(opci[oó]n|n[uú]mero|letra)|\bsiguientes opciones\b",
     re.IGNORECASE)
 
 
@@ -1231,6 +1238,9 @@ def classify_response(inbound_body: str, outbound_body: str, reaction_time_min: 
     try:
         raw = _call_deepseek([{"role": "user", "content": prompt}])
         result = _parse_llm_response(raw)
+        from app.llm import response_metadata
+        from app.config import CLASSIFIER_MODEL
+        result.update(response_metadata(raw, CLASSIFIER_MODEL))
         return _apply_response_deterministic_corrections(result, inbound_body)
     except LLMQuotaExceeded:
         raise
@@ -1290,7 +1300,7 @@ def assign_thread_numbers(messages: list) -> list:
             if m.get("status") != "failed":
                 last_out = m["_num"]
         else:
-            m["_num"] = phone_last10(m.get("from_number")) or last_out
+            m["_num"] = phone_last10(m.get("related_to_number")) or phone_last10(m.get("from_number")) or last_out
     return messages
 
 
@@ -1309,6 +1319,23 @@ def drop_unanswered_threads(messages: list) -> list:
     if not answered:
         return messages
     return [m for m in messages if m.get("direction") == "inbound" or m["_num"] in answered or not m["_num"]]
+
+
+def classifier_messages(messages: list, limit: int = 120) -> list:
+    """Nissan La Capilla (2026-10-13): conservar el final y el inicio del chat.
+
+    Antes se leían solo los primeros 40; un traspaso reciente podía desaparecer.
+    Los ecos del webhook no son nuevas respuestas (Supergas y Moragas).
+    """
+    messages = collapse_echoed_messages([m for m in messages if m.get('status') != 'failed'])
+    if len(messages) <= limit:
+        return messages
+    # Conservar el primer contacto y el saliente anterior al inicio de la cola.
+    tail_start = len(messages) - (limit - 12)
+    previous_out = next((i for i in range(tail_start - 1, 11, -1)
+                         if messages[i].get('direction') == 'outbound'), None)
+    context = [messages[previous_out]] if previous_out is not None else []
+    return messages[:12] + context + messages[tail_start:]
 
 
 def _trace(trace: list | None, paso: str, detalle: str) -> None:
@@ -1370,7 +1397,7 @@ def verdict_label(category: str | None, is_ai: bool | None = None) -> str:
     if category == "bot":
         return "Agente IA" if is_ai else "Bot"
     return {
-        "humano": "Humano", "hibrido": "Bot + Humano", "hibrido_bot": "Bot + Humano",
+        "humano": "Humano", "hibrido": "Bot", "hibrido_bot": "Bot",
         "hibrido_automatico": "Automático + Humano", "automatico": "Automático + Humano",
         "sin_respuesta": "Sin respuesta", "menu": "Bot", "automatico_sin_respuesta": "Automático + Sin respuesta",
     }.get(category or "", category or "Sin definir")
@@ -1379,7 +1406,7 @@ def verdict_label(category: str | None, is_ai: bool | None = None) -> str:
 # Categorías del prompt de conversación completa (la taxonomía de Análisis, real ask
 # 2026-10-05) → (categoría guardada, is_ai). Las guardadas no cambian, así la lista, los
 # filtros y el reporte siguen igual: "automatico" se muestra como Automático + Humano y
-# "hibrido_bot" como Bot + Humano.
+# "hibrido_bot" conserva el diagnóstico, pero se muestra y agrupa como Bot.
 _CONV_CATEGORY_MAP = {
     "humano": ("humano", False),
     "automatico_humano": ("automatico", False),
@@ -1540,10 +1567,87 @@ Devuelve de 1 a 3 parecidos, los que de verdad compiten. Si el caso es claro, un
 con un intervalo alto y estrecho (por ejemplo 88 y 96). Si está mixto, cada tipo que
 compite con su propio piso y techo: no inventes un tercero para llenar. Cada intervalo
 es independiente; no tienen que sumar 100. Enteros de 0 a 100.
+Una lista de datos para una cita (nombre, placa, correo) no demuestra por sí sola un bot de flujo.
+Para bot/bot_humano debe haber opciones o pasos fijos que realmente gobiernen la conversación.
+Si entiende preguntas libres y adapta fechas, sucursales y respuestas, evalúa humano o agente_ia
+con la evidencia completa. Un aviso de ausencia seguido de atención no equivale a solo ausencia.
 
-Responde SOLO con JSON:
-{{"parecidos":[{{"category":"humano","min":55,"max":75}}]}}
+REGLA DE EVIDENCIA (Gases del Pacífico y Transestrella, 2026-10-14):
+"automatico_humano" y "bot_humano" requieren DOS etapas observadas: una automática y
+una intervención humana POSTERIOR en OTRO mensaje del negocio. No basta con anunciar
+"un asesor te atenderá", pedir datos, firmar una bienvenida o listar teléfonos y enlaces.
+No supongas que la persona respondió si esa respuesta no aparece en el historial.
+Con solo una bienvenida automática, aunque pida datos, evalúa automatico_sin_respuesta;
+si realmente hay un menú o flujo fijo, evalúa bot. Repetir avisos no demuestra un relevo humano.
+Un solo mensaje SÍ puede demostrar un bot cuando exige elegir opciones para continuar,
+incluido el consentimiento de privacidad (por ejemplo, "1 SÍ / 2 NO"). La falta de una
+persona posterior no convierte ese menú en una simple bienvenida automática.
+Lee TODOS los mensajes: un asistente virtual que después exige elegir las opciones
+anteriores o envía recordatorios del flujo es un bot, aunque no se hayan guardado los
+botones del primer mensaje. No lo reduzcas a una bienvenida aislada.
+Para cada parecido mixto incluye "evidencia_automatica" y "evidencia_humana": fragmentos
+literales de esos dos mensajes del NEGOCIO, en ese orden. No cites nuestros mensajes.
+Si no puedes identificar ambas etapas, omite ese parecido. Las respuestas humanas pueden
+ser breves o guardadas; el tono formal por sí solo tampoco demuestra automatización.
+Mantén tu evaluación independiente: no conoces ni debes imitar el veredicto oficial.
+
+Antes de asignar intervalos, identifica la evidencia de bienvenida, flujo fijo y relevo
+humano. Usa fragmentos literales del negocio; usa null donde no exista evidencia.
+"flujo_fijo" incluye recordatorios que exigen elegir opciones anteriores, aunque no
+se vean los botones. Si existe ese flujo y nadie tomó el relevo, el parecido principal
+es bot. Una lista de enlaces externos a otros contactos no es por sí sola ese flujo.
+
+Responde SOLO con JSON (observaciones primero y después los parecidos):
+{{"observaciones":{{"bienvenida":null,"flujo_fijo":null,"relevo_humano":null}},"parecidos":[{{"category":"humano","min":55,"max":75}}]}}
 """
+
+
+def _business_thread_messages(thread: str) -> list[str]:
+    # Conservar cuerpos multilínea y distinguirlos de lo que escribimos nosotros.
+    headers = list(re.finditer(r"^\[(Representante|Prospecto)(?: \[.*?\])?\]: ", thread, re.MULTILINE))
+    return [thread[m.end():headers[i + 1].start() if i + 1 < len(headers) else len(thread)].strip()
+            for i, m in enumerate(headers) if m.group(1) == "Prospecto"]
+
+
+def _validated_parecidos(raw: str, thread: str, trace: list) -> list[dict]:
+    """No publicar relevos humanos sin dos mensajes que los sustenten (2026-10-14)."""
+    try:
+        data = json.loads(raw)
+        candidates = data.get("parecidos", [])
+    except (ValueError, TypeError, AttributeError):
+        return []
+    if not isinstance(candidates, list):
+        return []
+    normalize = lambda text: " ".join(text.split())
+    business = [normalize(body) for body in _business_thread_messages(thread)]
+    observations = data.get("observaciones")
+    if isinstance(observations, dict):
+        for key, label in (("bienvenida", "Aviso inicial"), ("flujo_fijo", "Flujo fijo"),
+                           ("relevo_humano", "Posible intervención humana")):
+            quote = observations.get(key)
+            if isinstance(quote, str) and normalize(quote) and any(normalize(quote) in body for body in business):
+                trace.append({"paso": label, "detalle": f"Fragmento del negocio que evaluó Rangos: «{quote}»."})
+    accepted = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        if item.get("category") in ("automatico_humano", "bot_humano"):
+            automatic = item.get("evidencia_automatica")
+            human = item.get("evidencia_humana")
+            supported = (isinstance(automatic, str) and isinstance(human, str)
+                         and normalize(automatic) and normalize(human)
+                         and normalize(automatic) != normalize(human)
+                         and any(normalize(automatic) in first and normalize(human) in later
+                                 for i, first in enumerate(business) for later in business[i + 1:]))
+            if not supported:
+                trace.append({"paso": "Parecido sin evidencia suficiente",
+                              "detalle": f"Se omitió {item['category']}: no aportó un aviso automático "
+                                         "y una respuesta humana posterior en mensajes distintos del negocio."})
+                continue
+            trace.append({"paso": "Evidencia del relevo humano",
+                          "detalle": f"Etapa automática: «{automatic}». Intervención posterior: «{human}»."})
+        accepted.append(item)
+    return parse_parecidos(json.dumps({"parecidos": accepted}, ensure_ascii=False))
 
 
 def score_parecido(thread: str, company_name: str = "", industry: str = "") -> dict:
@@ -1563,6 +1667,11 @@ def score_parecido(thread: str, company_name: str = "", industry: str = "") -> d
         industry=_esc(industry or "desconocido"),
         thread=_esc(thread),
     )
+    count = len(_business_thread_messages(thread))
+    if count < 2:
+        prompt += (f"\nCOMPROBACIÓN: solo hay {count} mensaje(s) del negocio. "
+                   "No existen dos etapas en mensajes distintos: automatico_humano y bot_humano "
+                   "NO son opciones admisibles. Elige entre los demás tipos según el contenido.")
     # La misma nota del giro que lee Timing + IA: si no, el parecido contradice la
     # plantilla (gaseras con precio guardado de una persona, 2026-10-07).
     try:
@@ -1574,13 +1683,13 @@ def score_parecido(thread: str, company_name: str = "", industry: str = "") -> d
         prompt = "NOTA DEL EQUIPO PARA ESTE GIRO:\n" + safe + "\n\n" + prompt
         trace.append({"paso": "Nota del giro", "detalle": f"Usó la plantilla de {industry}."})
     try:
-        raw = _call_deepseek([{"role": "user", "content": prompt}], max_tokens=220)
+        raw = _call_deepseek([{"role": "user", "content": prompt}], max_tokens=700)
     except LLMQuotaExceeded:
         raise
     except Exception as e:
         trace.append({"paso": "Consulta al modelo", "detalle": f"Falló: {e}"})
         return {"items": [], "trace": trace, "model": CLASSIFIER_MODEL, "error": True}
-    items = parse_parecidos(raw)
+    items = _validated_parecidos(raw, thread, trace)
     if not items:
         trace.append({"paso": "Respuesta", "detalle": "El modelo no devolvió un parecido usable."})
     elif len(items) == 1:
@@ -1595,7 +1704,9 @@ def score_parecido(thread: str, company_name: str = "", industry: str = "") -> d
         )
         trace.append({"paso": "Varios parecidos",
                       "detalle": f"El chat está mixto. Cada porcentaje es el centro de su piso y su techo. {bits}."})
-    return {"items": items, "trace": trace, "model": CLASSIFIER_MODEL}
+    from app.llm import response_metadata
+    return {"items": items, "trace": trace, **response_metadata(raw, CLASSIFIER_MODEL),
+            **({"error": True} if not items else {})}
 
 
 def classify_conversation(company_id: str, company_name: str = "", industry: str = "",
@@ -1615,10 +1726,11 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
     if messages is None:
         messages = drop_unanswered_threads(list(db.db.message_logs.find(
             {"company_id": company_id, "direction": {"$in": ["inbound", "outbound"]}, **NOT_FAILED},
-            {"direction": 1, "message_body": 1, "sent_by_name": 1, "created_at": 1, "to_number": 1, "from_number": 1},
+            {"direction": 1, "message_body": 1, "sent_by_name": 1, "created_at": 1, "to_number": 1,
+             "from_number": 1, "related_to_number": 1, "message_id": 1, "status": 1},
             sort=[("created_at", 1)],
         )))
-    messages = messages[:40]
+    messages = classifier_messages(messages)
     if not messages:
         return dict(_ERROR_RESULT)
 
@@ -1627,7 +1739,10 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
     # "humano" porque la regla "no hay evidencia automática" reescribía un hilo sin respuesta.
     no_reply = _no_reply_verdict(messages)
     if no_reply:
+        no_reply.update(model=None, provider=None, analysis_origin='rules')
         _trace(trace, "No hubo contestación", no_reply["notes"])
+        no_reply['input_last_at'] = max((m['created_at'] for m in messages if m.get('created_at')), default=None)
+        no_reply['input_messages'] = len(messages)
         return no_reply
 
     lines, line_secs = [], []
@@ -1736,6 +1851,9 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
         # El parecido no va en esta petición: es otra llamada, con su propio log.
         raw = _call_deepseek([{"role": "user", "content": prompt}], max_tokens=450)
         result = _parse_llm_response(raw)
+        from app.llm import response_metadata
+        from app.config import CLASSIFIER_MODEL
+        result.update(response_metadata(raw, CLASSIFIER_MODEL))
         mapped = _conv_category(raw)
         if mapped:
             result["category"], result["is_ai"] = mapped
@@ -1750,12 +1868,14 @@ def classify_conversation(company_id: str, company_name: str = "", industry: str
         return {"category": "humano", "response_quality": 3, "bot_quality": None, "notes": "Error al analizar conversación", "error": True}
 
     from app.config import CLASSIFIER_MODEL
-    _trace(trace, f"La IA ({CLASSIFIER_MODEL}) busca patrones y decide",
+    _trace(trace, f"La IA ({result.get('model') or CLASSIFIER_MODEL}) busca patrones y decide",
            "Con la conversación y los tiempos revisa menús, plantillas, textos repetidos, respuestas en segundos, "
            f"cambios de nombre y trato personal. Decide: {verdict_label(result.get('category'), result.get('is_ai'))}. "
            f"Su explicación: {result.get('notes') or '—'}")
     result = _apply_deterministic_corrections(result, messages, thread, trace)
     # La comparación pide el hilo para la petición de parecido. No se guarda en el mensaje.
+    result['input_last_at'] = max((m['created_at'] for m in messages if m.get('created_at')), default=None)
+    result['input_messages'] = len(messages)
     if with_thread and thread and not result.get("error") and result.get("category") != "sin_respuesta":
         result["_thread"] = thread
     return result
@@ -2211,6 +2331,23 @@ def _apply_deterministic_corrections(result: dict, messages: list, thread: str,
             _trace(trace, "Corrección fija: nada contestó como sistema",
                    f"El modelo vio algo automático, pero la primera respuesta tardó {_fmt_elapsed(replies[0][0])} "
                    "y ninguna llegó como sistema. Resultado: Humano.")
+    # An interactive menu followed by a person is still a Bot in the public
+    # taxonomy. Keep the subtype so the diagnosis retains the human handoff.
+    # A welcome/away notice, price list or requested contact fields is not a menu.
+    if result.get("category") in ("automatico", "hibrido_automatico") and any(
+        (_MENU_MARKERS.search(m.get("message_body") or "")
+         or _CHOICE_PHRASE_RE.search(m.get("message_body") or ""))
+        and _is_options_menu(m.get("message_body") or "")
+        for m in messages if m.get("direction") == "inbound"
+    ):
+        result["category"] = "hibrido_bot"
+        result["is_ai"] = False
+        result["notes"] = (
+            "El negocio usó un menú de opciones y después intervino una persona. "
+            "Resultado: Bot (con intervención humana)."
+        )
+        _trace(trace, "Corrección fija: menú con intervención humana", result["notes"])
+
     replies = _business_reply_timings(messages)
     if replies and result.get("category") != "sin_respuesta":
         fact = f"Primera respuesta real: {_fmt_elapsed(replies[0][0])}."
@@ -3186,11 +3323,14 @@ def _sweep_pending():
                 "direction": "outbound",
                 "created_at": {"$gte": outbound_lower, "$lte": cutoff},
                 "analysis": {"$exists": False},
+                **NOT_FAILED,  # Colombia 2026-10-14: un envío fallido no es falta de respuesta.
             },
-            {"_id": 1, "company_id": 1, "to_number": 1, "created_at": 1},
+            {"_id": 1, "company_id": 1, "to_number": 1, "created_at": 1, "status": 1},
         ))
 
         for ob in outbounds:
+            if ob.get('status') == 'failed':
+                continue
             company_id = str(ob.get("company_id", ""))
             sent_at    = ob.get("created_at")
             to_number  = ob.get("to_number", "")

@@ -183,6 +183,24 @@ def get_new_contacts_limit(warmup_mode: bool) -> int:
     return WARMUP_NEW_CONTACTS_CAP if warmup_mode else NORMAL_NEW_CONTACTS_CAP
 
 
+import threading as _threading
+import time as _time
+_connected_cache_lock = _threading.Lock()
+_connected_cache = None
+
+
+def connected_session_names(db) -> set[str]:
+    from app.whatsapp_wwebjs import get_all_connected_instances
+    global _connected_cache
+    with _connected_cache_lock:
+        now = _time.monotonic()
+        if _connected_cache and now - _connected_cache[0] < 10:
+            return _connected_cache[1]
+        names = set(get_all_connected_instances(db))
+        _connected_cache = (now, names)
+        return names
+
+
 def daily_stats_for_user(db, user_id: str) -> dict:
     """Cupo de hoy solo de las sesiones asignadas a este usuario.
 
@@ -193,6 +211,9 @@ def daily_stats_for_user(db, user_id: str) -> dict:
         {"assigned_to": user_id},
         {"_id": 0, "name": 1, "label": 1, "number": 1, "warmup_mode": 1},
     )) if user_id else []
+    # 2026-10-14: una sesión warmup desconectada no aporta sus cinco contactos.
+    # Consultar el estado real; el campo guardado puede seguir diciendo connected.
+    connected = connected_session_names(db) if instances else set()
 
     rows = []
     for inst in instances:
@@ -202,26 +223,31 @@ def daily_stats_for_user(db, user_id: str) -> dict:
         cap = WARMUP_CAP if warmup else DAILY_CAP
         nc_today = count_new_contacts_today_for_instance(db, name)
         nc_limit = get_new_contacts_limit(warmup)
+        online = name in connected
+        available = max(0, cap - sent) if online else 0
         rows.append({
             "instance":           name,
             "label":              inst.get("label") or name,
             "number":             inst.get("number"),
             "sent_today":         sent,
             "cap":                cap,
-            "available":          max(0, cap - sent),
+            "available":          available,
+            "connected":          online,
             "warmup_mode":        warmup,
             "new_contacts_today": nc_today,
             "new_contacts_limit": nc_limit,
-            "new_contacts_left":  max(0, nc_limit - nc_today),
+            "new_contacts_left":  min(available, max(0, nc_limit - nc_today)),
         })
 
-    total_sent = sum(r["sent_today"] for r in rows)
-    scheduled_today = get_scheduled_count_today(db)
-    total_cap = sum(r["cap"] for r in rows) if rows else 0
-    total_available = max(0, total_cap - total_sent - scheduled_today)
+    total_sent = sum(r["sent_today"] for r in rows if r["connected"])
+    from datetime import date
+    scheduled_today = get_scheduled_count_for_date(db, date.fromisoformat(_today()), user_id=user_id) if user_id else 0
+    total_cap = sum(r["cap"] for r in rows if r["connected"])
+    total_available = max(0, sum(r["available"] for r in rows) - scheduled_today)
     return {
         "instances":             rows,
         "total_sent":            total_sent,
+        "total_sent_all":        sum(r["sent_today"] for r in rows),
         "scheduled_today":       scheduled_today,
         "total_cap":             total_cap,
         "total_available":       total_available,

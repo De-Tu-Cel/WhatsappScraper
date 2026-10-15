@@ -184,6 +184,7 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
         _idea = db.db.search_ideas.find_one_and_delete({"url": website})
         _target_state = (_idea or {}).get("target_state")
         _target_city = (_idea or {}).get("target_city")
+        country = country or (_idea or {}).get("target_country")
         _target_industry = (_idea or {}).get("industry_giro") or (_idea or {}).get("industry")
         _maps_name = (_idea or {}).get("maps_name")
         _maps_category = (_idea or {}).get("maps_category")
@@ -435,72 +436,16 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
     # como oportunidad de contacto aunque sí tuviera cuenta (2026-09-18).
     MAX_PHONES = 20
     MAX_EMAILS = 10
-    _MAX_PHONES_TO_VERIFY = 5  # no estancar el scraping en empresas con muchos números listados
+    # 2026-10-14: todos los telefonos guardados quedan para el worker pausado.
     all_wa = _cr.get("all_whatsapp_numbers", [])
-    _connected = []
-    try:
-        from whatsapp_wwebjs import get_all_connected_instances
-        _connected = get_all_connected_instances(db) or []
-    except Exception:
-        _connected = []
-
-    _verified_wa_found = False
-    for _pidx, phone in enumerate(_cr.get("phone_numbers", [])[:MAX_PHONES]):
+    _phone_label_map = {contact['number']: contact.get('label', '') for contact in _cr.get('phone_contacts', [])}
+    for phone in _cr.get("phone_numbers", [])[:MAX_PHONES]:
         if phone in all_wa:
             continue
-        _is_wa = None
-        if _connected and _pidx < _MAX_PHONES_TO_VERIFY:
-            try:
-                import random, time
-                from daily_cap import reserve_verification_slot
-                from whatsapp_wwebjs import verify_number
-                # Randomize instance order each lookup instead of always the
-                # same one — spreads the "does this number exist?" exposure
-                # across every connected account instead of concentrating it
-                # on whichever sorts first, forever. Skip any that already
-                # used up today's verification quota.
-                _candidates = _connected[:]
-                random.shuffle(_candidates)
-                _verify_instance = next((i for i in _candidates if reserve_verification_slot(db, i)), None)
-                if _verify_instance:
-                    if _pidx > 0:
-                        time.sleep(random.uniform(2.0, 6.0))  # space out lookups — no burst pattern
-                    _is_wa = bool(verify_number(_verify_instance, phone).get("registered"))
-            except Exception as _verify_err:
-                print(f"⚠️  No se pudo verificar WhatsApp para {phone}: {_verify_err}")
-                _is_wa = None
-        if _is_wa:
-            print(f"📱 Teléfono {phone} sí tiene WhatsApp — guardado como contacto de WhatsApp")
-            db.insert_contact({
-                "company_id": company_id,
-                "type": "whatsapp",
-                "value": phone,
-                "source": website,
-                "is_primary": False,
-                "detected_via": "phone_verification",
-            })
-            all_wa.append(phone)
-            _verified_wa_found = True
-        else:
-            db.insert_contact({
-                "company_id": company_id,
-                "type": "phone",
-                "value": phone,
-                "source": website,
-                # Only a real negative check (not "verification unavailable") should
-                # be recorded — otherwise a re-scrape with no connected instance
-                # would wrongly stamp verified=False and the backlog script would
-                # skip a number that was actually never checked.
-                **({"verified": False} if _is_wa is False else {}),
-            })
-
-    # has_whatsapp was computed above from the scraper's own whatsapp_numbers
-    # BEFORE this verification loop ran — a company whose only WhatsApp-capable
-    # number was listed as a plain "phone" would otherwise stay flagged
-    # has_whatsapp=False forever despite now having a verified WA contact.
-    if _verified_wa_found and not has_whatsapp:
-        db.update_company(company_id, {"has_whatsapp": True})
-        has_whatsapp = True
+        db.insert_contact({
+            "company_id": company_id, "type": "phone", "value": phone,
+            "source": website, "label": _phone_label_map.get(phone, ''),
+        })
 
     # ========================================================================
     # GUARDAR EMAILS (cap: 10 por empresa)
@@ -706,45 +651,12 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
         "evolution_result": evolution_result,
     }
     
-_VERIFY_LOCK = threading.Lock()
-_last_verify_at = 0.0
-
-
 def _verify_whatsapp_paced(db, phone: str):
-    """isRegisteredUser lookup (no message sent) on a random connected
-    instance with verification quota left — True/False, or None when no
-    instance could check. Lookups are spaced 3-7s apart process-wide: a Maps
-    lead has no page to scrape in between, so a batch of them would otherwise
-    fire lookups back-to-back from the same accounts."""
-    global _last_verify_at
-    import random
-    import time
-    from daily_cap import reserve_verification_slot
-    from whatsapp_wwebjs import get_all_connected_instances, verify_number
+    """Compatibilidad con Maps: la verificaci?n real queda para el worker.
 
-    candidates = get_all_connected_instances(db) or []
-    if not candidates:
-        time.sleep(2)  # the sessions lookup has a 5s timeout; one blip shouldn't skip the check
-        candidates = get_all_connected_instances(db) or []
-    if not candidates:
-        print(f"⚠️  Sin sesión de WhatsApp conectada para verificar {phone}")
-        return None
-    random.shuffle(candidates)
-    with _VERIFY_LOCK:
-        wait = _last_verify_at + random.uniform(3.0, 7.0) - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
-        instance = next((i for i in candidates if reserve_verification_slot(db, i)), None)
-        if not instance:
-            print(f"⚠️  Cupo diario de verificaciones agotado en todas las sesiones — {phone} queda sin verificar")
-            return None
-        try:
-            return bool(verify_number(instance, phone).get("registered"))
-        except Exception as e:
-            print(f"⚠️  No se pudo verificar WhatsApp para {phone}: {e}")
-            return None
-        finally:
-            _last_verify_at = time.monotonic()
+    El contacto se guarda como phone pendiente, sin consultas al scrapear.
+    """
+    return None
 
 
 _SOCIAL_KEYS = {"facebook.com": "facebook", "fb.com": "facebook", "instagram.com": "instagram",

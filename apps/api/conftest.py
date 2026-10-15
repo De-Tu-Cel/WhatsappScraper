@@ -4,6 +4,7 @@
 same way under pytest as they do under uvicorn."""
 import os
 import sys
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "app"))
 
@@ -37,3 +38,14 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "llm_eval" in item.keywords:
             item.add_marker(skip_llm)
+
+
+@pytest.fixture(autouse=True)
+def no_live_anthropic_key_in_unit_tests(monkeypatch, request):
+    """La clave local de la prueba real nunca debe utilizarse en unit tests."""
+    if 'llm_eval' in request.keywords:
+        return
+    from app import llm
+    monkeypatch.setenv('LLM_PROVIDER', 'auto')
+    monkeypatch.setattr(llm, 'ANTHROPIC_API_KEY', '')
+    monkeypatch.setenv('ANTHROPIC_API_KEY', '')

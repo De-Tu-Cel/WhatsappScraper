@@ -288,6 +288,7 @@ def test_get_capacity_for_date_never_goes_negative():
 def test_daily_stats_sums_every_session_of_this_user_and_ignores_the_rest(monkeypatch):
     """Antonio con una sesión en warmup tiene 5. Con una segunda, normal, el
     tope pasa a 5+12. La sesión de otro usuario no se suma (2026-10-07)."""
+    monkeypatch.setattr('app.daily_cap.connected_session_names', lambda db: {i['name'] for i in db.db.instances.docs})
     used = {"wa-warmup": 2, "wa-normal": 0, "wa-other": 5}
     monkeypatch.setattr(
         "app.daily_cap.count_new_contacts_today_for_instance",
@@ -351,3 +352,47 @@ def test_reserve_verification_slot_is_per_instance():
     # of spreading verification lookups across instances instead of always
     # hammering the same one.
     assert reserve_verification_slot(db, "wa-2") is True
+
+
+def test_disconnected_warmup_adds_zero_and_reconnection_restores_five(monkeypatch):
+    online = {'normal', 'other-user'}
+    monkeypatch.setattr('app.daily_cap.connected_session_names', lambda db: online)
+    monkeypatch.setattr('app.daily_cap.count_new_contacts_today_for_instance', lambda *args: 0)
+    db = FakeMongoDBManager(instances=[
+        {'name':'normal', 'assigned_to':'u1', 'warmup_mode':False},
+        {'name':'warmup', 'assigned_to':'u1', 'warmup_mode':True, 'status':'connected'},
+        {'name':'other-user', 'assigned_to':'u2', 'warmup_mode':False},
+    ])
+    stats = daily_stats_for_user(db, 'u1')
+    assert stats['new_contacts_capacity'] == 12
+    assert stats['total_cap'] == DAILY_CAP
+    assert next(r for r in stats['instances'] if r['instance']=='warmup')['available'] == 0
+    online.add('warmup')
+    assert daily_stats_for_user(db, 'u1')['new_contacts_capacity'] == 17
+    online.clear()
+    stats = daily_stats_for_user(db, 'u1')
+    assert stats['new_contacts_capacity'] == stats['total_available'] == 0
+
+
+def test_offline_history_and_other_users_schedules_do_not_reduce_live_capacity(monkeypatch):
+    monkeypatch.setattr('app.daily_cap._today', lambda:'2026-10-14')
+    monkeypatch.setattr('app.daily_cap.connected_session_names', lambda db:{'normal'})
+    monkeypatch.setattr('app.daily_cap.count_new_contacts_today_for_instance', lambda *args:0)
+    db = FakeMongoDBManager(instances=[
+        {'name':'normal', 'assigned_to':'u1', 'warmup_mode':False},
+        {'name':'warmup', 'assigned_to':'u1', 'warmup_mode':True},
+    ], instance_daily_sends=[{'instance':'warmup','date':'2026-10-14','companies':['a','b']}],
+       scheduled_sends=[_pending(datetime(2026,10,14,9), total_count=100, user_id='u2')])
+    stats = daily_stats_for_user(db, 'u1')
+    assert stats['total_sent'] == 0
+    assert stats['total_sent_all'] == 2
+    assert stats['scheduled_today'] == 0
+    assert stats['total_available'] == DAILY_CAP
+
+
+def test_new_contacts_cannot_exceed_remaining_send_capacity(monkeypatch):
+    monkeypatch.setattr('app.daily_cap.connected_session_names', lambda db:{'warmup'})
+    monkeypatch.setattr('app.daily_cap.count_new_contacts_today_for_instance', lambda *args:0)
+    monkeypatch.setattr('app.daily_cap.get_daily_count', lambda *args:19)
+    db = FakeMongoDBManager(instances=[{'name':'warmup','assigned_to':'u1','warmup_mode':True}])
+    assert daily_stats_for_user(db, 'u1')['new_contacts_capacity'] == 1

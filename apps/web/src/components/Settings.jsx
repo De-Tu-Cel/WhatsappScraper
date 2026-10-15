@@ -84,6 +84,12 @@ export function applySettings(settings) {
   const root = document.documentElement
   root.style.setProperty('--accent',      accentObj.value)
   root.style.setProperty('--accent-rgb',  hexToRgb(accentObj.value))
+  const channels = accentObj.value.replace('#', '').match(/.{2}/g).map(v => {
+    const c = parseInt(v, 16) / 255
+    return c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4
+  })
+  const luminance = channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722
+  root.style.setProperty('--accent-contrast', luminance > .179 ? '#000' : '#fff')
   root.style.setProperty('--accent-glow', accentObj.glow)
   root.style.setProperty('--bg',          themeObj.bg)
   root.style.setProperty('--sidebar-bg',  themeObj.sidebar)

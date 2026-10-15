@@ -4,6 +4,7 @@ import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import IconButton from '@mui/material/IconButton'
 import CircularProgress from '@mui/material/CircularProgress'
+import Alert from '@mui/material/Alert'
 import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone'
 import CloseIcon from '@mui/icons-material/Close'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
@@ -13,6 +14,9 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import ErrorIcon from '@mui/icons-material/Error'
 import { useLang } from '../context/LangContext'
 import { authFetch } from '@/lib/api'
+import { useUser } from '@/context/UserContext'
+import ServiceHealthNotice from './ServiceHealthNotice'
+import ServiceBalanceNotice from './ServiceBalanceNotice'
 
 function timeAgo(iso, lang) {
   if (!iso) return ''
@@ -33,7 +37,9 @@ function timeAgo(iso, lang) {
 // otherwise fight for the same edge of the screen.
 export default function NotificationsPanel({ open, onClose, onNavigateToConv, onNavigateToSchedule }) {
   const { t, lang } = useLang()
+  const { user } = useUser()
   const [items,     setItems]     = useState(null)
+  const [checks, setChecks] = useState({})
   const [clearedAt, setClearedAt] = useState(() => {
     try { return localStorage.getItem('notif_cleared_at') || '' } catch { return '' }
   })
@@ -46,6 +52,12 @@ export default function NotificationsPanel({ open, onClose, onNavigateToConv, on
   }, [])
 
   useEffect(() => { if (open) load() }, [open, load])
+  useEffect(() => {
+    if (!open) return
+    const timer = setInterval(() => { if (!document.hidden) load() }, 30000)
+    window.addEventListener('service-health-refresh', load)
+    return () => { clearInterval(timer); window.removeEventListener('service-health-refresh', load) }
+  }, [open, load])
 
   const clearAll = useCallback(() => {
     const now = new Date().toISOString()
@@ -55,6 +67,7 @@ export default function NotificationsPanel({ open, onClose, onNavigateToConv, on
   }, [])
 
   const visibleItems = items === null ? null : items.filter(n => {
+    if (['service_health', 'service_balance'].includes(n.type) && user?.role !== 'admin') return false
     if (!clearedAt || !n.created_at) return true
     const normalized = /[Z+]|[-]\d{2}:\d{2}$/.test(n.created_at) ? n.created_at : n.created_at + 'Z'
     return new Date(normalized) > new Date(clearedAt)
@@ -77,9 +90,9 @@ export default function NotificationsPanel({ open, onClose, onNavigateToConv, on
   }, [visibleItems])
 
   return (
-    <Box sx={{
+    <Box data-testid="notifications-panel" sx={{
       position: 'absolute', top: 0, right: 0, bottom: 0,
-      width: open ? 'min(360px, 60%)' : 0,
+      width: open ? { xs: '100%', sm: 'min(360px, 60%)' } : 0,
       overflow: 'hidden',
       transition: 'width 0.25s cubic-bezier(0.4,0,0.2,1)',
       borderLeft: open ? '1px solid var(--border, rgba(255,255,255,0.08))' : 'none',
@@ -88,7 +101,7 @@ export default function NotificationsPanel({ open, onClose, onNavigateToConv, on
       zIndex: 5,
     }}>
       {open && (
-        <Box sx={{ width: 'min(360px, 60vw)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', height: '100%' }}>
 
           {/* ── Header ── */}
           <Box sx={{
@@ -128,7 +141,7 @@ export default function NotificationsPanel({ open, onClose, onNavigateToConv, on
                   </svg>
                 </IconButton>
               )}
-              <IconButton size="small" onClick={onClose} sx={{
+              <IconButton size="small" aria-label={lang === 'en' ? 'Close notifications' : 'Cerrar notificaciones'} onClick={onClose} sx={{
                 color: 'rgba(255,255,255,0.3)', width: 26, height: 26,
                 '&:hover': { color: 'var(--text,#f1f5f9)', bgcolor: 'rgba(255,255,255,0.07)' },
               }}>
@@ -143,6 +156,13 @@ export default function NotificationsPanel({ open, onClose, onNavigateToConv, on
             '&::-webkit-scrollbar': { width: 3 },
             '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.1)', borderRadius: 2 },
           }}>
+            {user?.role === 'admin' && Object.values(checks).map(result => (
+              <Alert key={result.service} data-testid={`service-check-${result.service}`} severity={result.severity}
+                onClose={() => setChecks(prev => { const next = { ...prev }; delete next[result.service]; return next })}
+                sx={{ flexShrink: 0, bgcolor: 'var(--card-bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 2 }}>
+                {result.message}
+              </Alert>
+            ))}
             {grouped === null ? (
               <Box sx={{ display: 'flex', justifyContent: 'center', py: 5 }}>
                 <CircularProgress size={20} sx={{ color: 'var(--accent, #60a5fa)' }} />
@@ -165,6 +185,9 @@ export default function NotificationsPanel({ open, onClose, onNavigateToConv, on
                 </Typography>
               </Box>
             ) : grouped.map((n, idx) => {
+              if (n.type === 'service_balance') return <ServiceBalanceNotice key={n._id} notification={n} />
+              if (n.type === 'service_health') return <ServiceHealthNotice key={n._id} notification={n} onRefresh={load}
+                onCheckResult={result => setChecks(prev => ({ ...prev, [result.service]: result }))} />
               const isBatch    = n.type === 'batch_complete'
               const isReminder = n.type === 'schedule_reminder'
               const isCap      = n.type === 'cap_reached'

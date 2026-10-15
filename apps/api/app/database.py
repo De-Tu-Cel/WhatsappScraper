@@ -153,7 +153,11 @@ def collapse_echoed_messages(messages: list, window_sec: int = 5) -> list:
             close = False
             if t1 and t2 and hasattr(t1, "timestamp") and hasattr(t2, "timestamp"):
                 close = abs((t2 - t1).total_seconds()) <= window_sec
-            if close and prev.get("direction") == msg.get("direction") and prev_body == body:
+            # Dos destinatarios distintos pueden recibir el mismo saludo en segundos.
+            address = 'to_number' if msg.get('direction') == 'outbound' else 'from_number'
+            same_address = prev.get(address) == msg.get(address)
+            same_id = not (prev.get('message_id') and msg.get('message_id')) or prev['message_id'] == msg['message_id']
+            if close and same_address and same_id and prev.get("direction") == msg.get("direction") and prev_body == body:
                 continue
         out.append(msg)
     return out
@@ -701,12 +705,39 @@ class MongoDBManager:
                     contacts.append({"type": "whatsapp", "value": num, "source": "message_logs"})
                     existing_wa_last10.add(last10)
 
+            company["whatsapp_validation"] = self.get_whatsapp_validation(
+                [c["value"] for c in contacts if c.get("type") == "whatsapp" and c.get("value")]
+            )
             company["contacts"] = contacts
             company["person_contacts"] = f_person_contacts.result()
             company["social_media"] = f_social_media.result()
             company["last_message_log_id"] = f_last_log_id.result()
 
         return company
+
+    def get_whatsapp_validation(self, numbers):
+        """Expose saved verification without looking up WhatsApp or changing contacts."""
+        variants = {}
+        for number in numbers:
+            digits = "".join(c for c in str(number) if c.isdigit())
+            keys = {digits}
+            if digits.startswith("52") and len(digits) == 12:
+                keys.add("521" + digits[2:])
+            elif digits.startswith("521") and len(digits) == 13:
+                keys.add("52" + digits[3:])
+            variants[number] = keys
+        keys = set().union(*variants.values()) if variants else set()
+        documents = list(self.db.jid_map.find(
+            {"jid": {"$in": list(keys)}, "wa_valid": {"$exists": True}},
+            {"jid": 1, "wa_valid": 1, "wa_checked_at": 1},
+        )) if keys else []
+        result = {}
+        for number, keys in variants.items():
+            candidates = [d for d in documents if d.get("jid") in keys
+                          and isinstance(d.get("wa_valid"), bool)]
+            latest = max(candidates, key=lambda d: d.get("wa_checked_at") or datetime.min, default={})
+            result[number] = {"valid": latest.get("wa_valid"), "checked_at": latest.get("wa_checked_at")}
+        return result
 
     def get_distinct_values(self, field):
         return sorted([v for v in self.db.companies.distinct(field) if v])
@@ -1403,6 +1434,7 @@ class MongoDBManager:
                 "last_direction": {"$first": "$direction"},
                 "last_at":        {"$first": "$created_at"},
                 "last_status":    {"$first": "$status"},
+                "last_error":     {"$first": "$error"},
                 "total":          {"$sum": 1},
                 "unread": {"$sum": {"$cond": [
                     {"$and": [
@@ -1628,6 +1660,7 @@ class MongoDBManager:
                 "last_direction":     g["last_direction"],
                 "last_at":            g["last_at"].isoformat() if g["last_at"] else None,
                 "last_status":        g["last_status"],
+                "last_error":         g.get("last_error"),
                 "total":              g["total"],
                 "unread":             g["unread"],
                 "sent_by_name":        _sender.get("sent_by_name", ""),
@@ -1683,15 +1716,17 @@ class MongoDBManager:
 
         return deduped
 
-    def get_conversation_thread(self, company_id: str, number: str = None):
+    def get_conversation_thread(self, company_id: str, number: str = None, *, include_failed: bool = False):
         """Returns messages for a company sorted by time, deduplicated.
         If `number` is given, only returns messages relevant to that specific number.
+        Chat history can opt into failed attempts; reports retain delivered history.
         """
         query = {
             "company_id": company_id,
             "direction": {"$in": ["outbound", "inbound"]},
-            "status": {"$ne": "failed"},
         }
+        if not include_failed:
+            query["status"] = {"$ne": "failed"}
         if number:
             clean10 = "".join(filter(str.isdigit, number))[-10:]
             query["$or"] = [
@@ -1705,6 +1740,7 @@ class MongoDBManager:
              "status": 1, "created_at": 1, "sent_at": 1, "platform": 1,
              "to_number": 1, "from_number": 1, "message_id": 1, "interactive": 1,
              "related_to_number": 1, "ai_generated": 1, "sent_by_name": 1,
+             "error": 1,
              "instance_name": 1, "instance_number": 1, "received_on_instance": 1,
              "media_url": 1, "media_content_type": 1}
         ).sort("created_at", 1))
@@ -1787,7 +1823,7 @@ class MongoDBManager:
         )
 
     def get_analytics(self, page: int = 1, page_size: int = 20, category: str | None = None, company_id: str | None = None,
-                       agents: list[str] | None = None, search: str | None = None):
+                       agents: list[str] | None = None, search: str | None = None, review_filter: str | None = None):
         """Aggregate response analysis data per company for the dashboard.
         Pass company_id to fetch analytics for a single company (e.g. for report generation)
         — drastically faster than loading all companies and filtering in Python."""
@@ -2308,42 +2344,15 @@ class MongoDBManager:
                 "analyzing": analyzing,
             })
         _use_hybrid_verdict(self.db, results)
-        # Compute global category distribution from ALL results before any filtering.
-        # Replicates frontend matchesCategory: "menu" normalizes to "bot", and
-        # bot/bot_ia split is determined by the is_ai flag (not the category field).
+        # Normalize before counting and filtering; several Bot/Bot+Human numbers
+        # belonging to one company must contribute only once to the Bot bucket.
         from collections import Counter
-        def _eff_cat(r):
-            rc = r.get("category")
-            nc = "bot" if rc == "menu" else rc
-            # Bare "hibrido" only ever comes from a raw LLM holistic verdict, which
-            # doesn't yet distinguish a confirmed bot fingerprint from an unclear
-            # automated one the way the deterministic aggregation does — treat it
-            # as the "confirmed" variant rather than adding a third bucket nobody
-            # filters by.
-            if nc == "hibrido":
-                nc = "hibrido_bot"
-            # "hibrido_automatico" (mezcla de una respuesta automática y una persona en la
-            # conversación) es lo mismo que "automatico": los dos son "Automático + Humano".
-            # Un solo conteo y un solo filtro (real ask, 2026-10-05); el valor guardado no cambia.
-            if nc == "hibrido_automatico":
-                nc = "automatico"
-            if nc == "bot":
-                return "bot_ia" if r.get("is_ai") else "bot"
-            return nc if nc is not None else "sin_clasificar"
-        def _eff_cats(r):
-            # Una empresa con varios números aparece en el filtro de cada número que contestó
-            # (Hidrogaspedidos, 2026-10-06: Hermosillo es Bot + Humano y San Luis es Bot).
-            cats = {_eff_cat(r)}
-            for n in r.get("numbers") or []:
-                if n.get("hybrid_verdict"):
-                    cats.add(_eff_cat(n))
-            return cats
-        cat_counts = Counter(c for r in results for c in _eff_cats(r))
+        from app.classification_categories import company_categories, display_category
+        cat_counts = Counter(c for r in results for c in company_categories(r))
         category_counts = {
             "humano":             cat_counts.get("humano", 0),
             "automatico":         cat_counts.get("automatico", 0),
             "automatico_sin_respuesta": cat_counts.get("automatico_sin_respuesta", 0),
-            "hibrido_bot":        cat_counts.get("hibrido_bot", 0),
             "bot":                cat_counts.get("bot", 0),
             "bot_ia":             cat_counts.get("bot_ia", 0),
             "sin_respuesta":      cat_counts.get("sin_respuesta", 0),
@@ -2352,7 +2361,8 @@ class MongoDBManager:
         }
         # Apply server-side category filter after computing global counts
         if category and category != "all":
-            results = [r for r in results if category in _eff_cats(r)]
+            category = display_category(category)
+            results = [r for r in results if category in company_categories(r)]
         # Same treatment for the agent filter — applied after category_counts so the
         # summary chips at the top keep showing totals for the whole dataset, not just
         # whoever is currently selected (matches how the category filter already behaves).
@@ -2370,6 +2380,11 @@ class MongoDBManager:
                        _q in (r.get("company_name") or "").lower() or
                        _q in (r.get("industry") or "").lower() or
                        _q in (r.get("domain") or "").lower()]
+        from app.classification_compare import comparisons_for
+        from app.analysis_review import attach_reviews
+        attach_reviews(self, results, comparisons_for(self, [r['company_id'] for r in results]))
+        if review_filter:
+            results = [r for r in results if review_filter in r['review']['flags']]
         total = len(results)
         start = (page - 1) * page_size
         # Same bug, same fix as search: this was computed client-side from just the

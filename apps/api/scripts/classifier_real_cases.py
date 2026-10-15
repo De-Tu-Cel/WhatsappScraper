@@ -2,7 +2,7 @@
 Práctica del clasificador con conversaciones reales.
 
 classifier_cases.json guarda solo el nombre de la empresa y la clasificación
-correcta (confirmada a mano) — el hilo se lee de Mongo al correr, así que no se
+esperada (algunas confirmadas, otras pendientes) — el hilo se lee de Mongo al correr, así que no se
 sube contenido de producción al repo. El script corre el mismo análisis de
 conversación completa que prod (classify_conversation + las correcciones por el
 último mensaje) y dice cuántos acierta. Solo lectura: no guarda nada.
@@ -19,7 +19,8 @@ Uso (desde apps/api):
   python scripts/classifier_real_cases.py --agregar "Empresa" humano "por qué"
 
 Etiquetas (las de Análisis): humano · automatico_humano · automatico_sin_respuesta ·
-bot · agente_ia. "Bot + Humano" cuenta como automatico_humano, igual que en la comparación.
+bot · agente_ia. "Bot + Humano" cuenta como bot, igual que en la comparación.
+Estos casos sirven para regresiones; no son una muestra independiente de precisión.
 """
 import argparse
 import json

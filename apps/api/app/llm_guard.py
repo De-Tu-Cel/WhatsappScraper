@@ -164,6 +164,10 @@ def guarded_call(
 
             except Exception as exc:
                 last_exc = exc
+                from app.service_health import ServiceUnavailable
+                if isinstance(exc, ServiceUnavailable):
+                    # No gastar cuatro consultas idénticas cuando el saldo ya se agotó.
+                    raise
 
                 if not _is_retryable(exc):
                     # Permanent error (401, 402, 400…) — count as hard failure and bail.

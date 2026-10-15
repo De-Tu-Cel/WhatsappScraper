@@ -14,6 +14,7 @@ const {
   isTransientInitError,
   reserveLaunch,
   LAUNCH_GAP_MS,
+  queueSessionRecovery,
 } = require('./sessionRecovery')
 
 puppeteerExtra.use(StealthPlugin())
@@ -380,6 +381,17 @@ function scheduleAutoLaunch(fn) {
   setTimeout(fn, slot.delay)
 }
 
+function recoverSession(sessionId, session, allowed) {
+  return queueSessionRecovery({
+    locks: _startLocks, sessions, sessionId, session,
+    schedule: scheduleAutoLaunch,
+    stopping: () => _shuttingDown,
+    allowed,
+    destroy: s => destroySessionClient(s.client, sessionId, s.initPromise),
+    create: createClient,
+  }).catch(error => console.error(`[${sessionId}] Recovery failed: ${error.message}`))
+}
+
 function startLivenessHeartbeat(sessionId) {
   const session = sessions.get(sessionId)
   if (!session) return
@@ -429,14 +441,7 @@ function startLivenessHeartbeat(sessionId) {
         clearInterval(current.presenceTimer)
         clearInterval(current.profileSyncTimer)
         forwardWebhook({ event: 'session.status', sessionId, data: { status: 'disconnected', reason: 'HEARTBEAT_TIMEOUT' } })
-        scheduleAutoLaunch(async () => {
-          const still = sessions.get(sessionId)
-          if (!still || still !== captured) return
-          await destroySessionClient(still.client, sessionId, still.initPromise)
-          if (sessions.get(sessionId) !== captured) return
-          sessions.delete(sessionId)
-          createClient(sessionId, captured.phoneNumber)
-        })
+        recoverSession(sessionId, captured, status => status === 'connected')
       }, 1000)
     }
   }, (Math.random() * 5 + 15) * 1000)
@@ -574,6 +579,7 @@ function stripMediaCollisionId(media) {
 }
 
 function createClient(sessionId, phoneNumber, initAttempt = 0) {
+  if (_shuttingDown) return null
   const proxy = proxyFor(sessionId)
   const lean = isLean(sessionId)
   const client = new Client({
@@ -691,9 +697,7 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
       // the stuck one it was actually watching (audit finding, 2026-09-30).
       if (!s || s !== session || s.status === 'connected') return
       console.warn(`[${sessionId}] Stuck in "${s.status}" — never reached ready, recreating session`)
-      await destroySessionClient(s.client, sessionId, s.initPromise)
-      sessions.delete(sessionId)
-      createClient(sessionId, session.phoneNumber)
+      await recoverSession(sessionId, session, status => status === 'authenticated' || status === 'initializing')
     }, 90_000)
   })
 
@@ -788,6 +792,7 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
   })
 
   client.on('disconnected', async (reason) => {
+    if (_shuttingDown || sessions.get(sessionId) !== session) return
     clearTimeout(session.readyWatchdog)
     clearInterval(session.presenceTimer)
     clearInterval(session.profileSyncTimer)
@@ -840,9 +845,7 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
       // (audit finding, 2026-09-30).
       if (!s || s !== session || s.status === 'connected') return
       console.log(`[${sessionId}] Auto-reconnecting...`)
-      await destroySessionClient(s.client, sessionId, s.initPromise)
-      sessions.delete(sessionId)
-      createClient(sessionId, session.phoneNumber)
+      await recoverSession(sessionId, session, status => status === 'disconnected')
     }, delay)
   })
 
@@ -2017,11 +2020,19 @@ let _shuttingDown = false
 async function _gracefulShutdown(signal) {
   if (_shuttingDown) return
   _shuttingDown = true
+  // Auditoría 2026-10-15: no lanzar otro Chrome mientras se guardan los perfiles.
+  for (const s of sessions.values()) {
+    clearInterval(s.presenceTimer)
+    clearInterval(s.profileSyncTimer)
+    clearInterval(s.heartbeatTimer)
+    clearTimeout(s.reconnectTimer)
+    clearTimeout(s.readyWatchdog)
+  }
   console.log(`[shutdown] ${signal} received — closing ${sessions.size} session(s) cleanly`)
   const closes = Array.from(sessions.values()).map(s => (s.client?.destroy() || Promise.resolve()).catch(() => {}))
   await Promise.race([
     Promise.all(closes),
-    new Promise((r) => setTimeout(r, 8000)), // don't hang forever if a browser is stuck
+    new Promise((r) => setTimeout(r, 20000)), // menos que los 30s de stop_grace_period
   ])
   console.log('[shutdown] done')
   process.exit(0)

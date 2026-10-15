@@ -35,6 +35,28 @@ function reserveLaunch(now, nextLaunchAt, gapMs = LAUNCH_GAP_MS) {
   return { delay: at - now, nextLaunchAt: at + gapMs }
 }
 
+// Auditoría 2026-10-15: watchdog, latido y desconexión podían competir con
+// /start por el mismo perfil de Chrome. Revalidar también después del cierre:
+// mientras esperamos puede llegar un LOGOUT que exige un QR, no otro arranque.
+function queueSessionRecovery({ locks, sessions, sessionId, session, schedule, destroy, create, allowed, stopping }) {
+  const eligible = () => !stopping() && sessions.get(sessionId) === session && allowed(session.status)
+  const prior = locks.get(sessionId) || Promise.resolve()
+  const operation = prior.catch(() => {}).then(() => new Promise((resolve, reject) => {
+    schedule(async () => {
+      try {
+        if (!eligible()) return resolve(false)
+        await destroy(session)
+        if (!eligible()) return resolve(false)
+        sessions.delete(sessionId)
+        create(sessionId, session.phoneNumber)
+        resolve(true)
+      } catch (error) { reject(error) }
+    })
+  }))
+  locks.set(sessionId, operation.catch(() => {}))
+  return operation
+}
+
 module.exports = {
   HEARTBEAT_STAMPEDE_MS,
   LAUNCH_GAP_MS,
@@ -42,4 +64,5 @@ module.exports = {
   stampedeSessionIds,
   isTransientInitError,
   reserveLaunch,
+  queueSessionRecovery,
 }

@@ -7,6 +7,19 @@ on:
     branches: [main, dev]
 
 jobs:
+  wwebjs-tests:
+    name: WhatsApp session recovery tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check service syntax and isolated session tests
+        run: |
+          node --check apps/wwebjs/index.js
+          node --test apps/wwebjs/*.test.js
+
   backend-tests:
     name: Backend tests (pytest)
     runs-on: ubuntu-latest

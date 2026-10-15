@@ -62,6 +62,9 @@ services:
 
   # ── wwebjs (WhatsApp personal number — active provider) ───────
   wwebjs:
+    # Dar tiempo a Chromium para guardar LocalAuth y recoger sus procesos hijos.
+    init: true
+    stop_grace_period: 30s
     build:
       context: ./apps/wwebjs
       dockerfile: Dockerfile

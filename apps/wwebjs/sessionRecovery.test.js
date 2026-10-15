@@ -6,6 +6,7 @@ const {
   isTransientInitError,
   reserveLaunch,
   LAUNCH_GAP_MS,
+  queueSessionRecovery,
 } = require('./sessionRecovery')
 
 describe('heartbeat stampede', () => {
@@ -29,6 +30,93 @@ describe('heartbeat stampede', () => {
     let log = recordHeartbeatFailure([], 'sender666', first)
     log = recordHeartbeatFailure(log, 'marco-wa', second)
     assert.deepEqual(stampedeSessionIds(log, second), ['marco-wa'])
+  })
+})
+
+describe('serialized session recovery', () => {
+  function setup() {
+    const session = { status: 'disconnected', phoneNumber: 'test-phone' }
+    const sessions = new Map([['test', session]])
+    const locks = new Map()
+    const launches = []
+    const calls = []
+    const options = {
+      locks, sessions, sessionId: 'test', session,
+      schedule: fn => launches.push(fn),
+      destroy: async () => { calls.push('destroy') },
+      create: (id, phone) => { calls.push(['create', id, phone]); sessions.set(id, { status: 'initializing' }) },
+      allowed: status => status === 'disconnected',
+      stopping: () => false,
+    }
+    return { session, sessions, locks, launches, calls, options }
+  }
+  const tick = () => new Promise(resolve => setImmediate(resolve))
+
+  it('runs only one recovery when two disconnect handlers target the same profile', async () => {
+    const s = setup()
+    const first = queueSessionRecovery(s.options)
+    const second = queueSessionRecovery(s.options)
+    await tick()
+    assert.equal(s.launches.length, 1)
+    await s.launches.shift()()
+    assert.equal(await first, true)
+    await tick()
+    await s.launches.shift()()
+    assert.equal(await second, false)
+    assert.deepEqual(s.calls, ['destroy', ['create', 'test', 'test-phone']])
+  })
+
+  it('waits for a manual reconnect and leaves the replacement client untouched', async () => {
+    const s = setup()
+    let completeManual
+    s.locks.set('test', new Promise(resolve => { completeManual = resolve }))
+    const recovery = queueSessionRecovery(s.options)
+    await tick()
+    assert.equal(s.launches.length, 0)
+    s.sessions.set('test', { status: 'connected' })
+    completeManual()
+    await tick()
+    await s.launches.shift()()
+    assert.equal(await recovery, false)
+    assert.deepEqual(s.calls, [])
+  })
+
+  for (const status of ['need_scan', 'auth_failure', 'connected']) {
+    it(`does not relaunch if ${status} arrives during browser teardown`, async () => {
+      const s = setup()
+      s.options.destroy = async () => { s.session.status = status }
+      const recovery = queueSessionRecovery(s.options)
+      await tick()
+      await s.launches.shift()()
+      assert.equal(await recovery, false)
+      assert.deepEqual(s.calls, [])
+      assert.equal(s.sessions.get('test'), s.session)
+    })
+  }
+
+  it('cancels a queued recovery once shutdown begins', async () => {
+    const s = setup()
+    let stopping = false
+    s.options.stopping = () => stopping
+    const recovery = queueSessionRecovery(s.options)
+    await tick()
+    stopping = true
+    await s.launches.shift()()
+    assert.equal(await recovery, false)
+    assert.deepEqual(s.calls, [])
+  })
+
+  it('releases the lock after a teardown failure so a manual retry can proceed', async () => {
+    const s = setup()
+    s.options.destroy = async () => { throw new Error('close failed') }
+    const recovery = queueSessionRecovery(s.options)
+    const rejected = assert.rejects(recovery, /close failed/)
+    await tick()
+    await s.launches.shift()()
+    await rejected
+    await s.locks.get('test')
+    assert.deepEqual(s.calls, [])
+    assert.equal(s.sessions.get('test'), s.session)
   })
 })
 

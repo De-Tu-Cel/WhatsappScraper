@@ -4571,6 +4571,9 @@ async def api_wwebjs_webhook(request: Request, background_tasks: BackgroundTasks
         # creada que nunca llegó a conectarse (ver el aviso por correo más
         # abajo).
         was_connected = inst_doc.get("status") == "connected"
+        # Auditoría 2026-10-15: conservar LOGOUT/UNPAIRED/HEARTBEAT_TIMEOUT;
+        # antes sólo quedaba el estado genérico y se perdía la causa real.
+        disconnect_reason = data.get("reason") or status
         label_map = {
             "connected": "Sesión activa",
             "disconnected": "Sesión desconectada",
@@ -4582,7 +4585,7 @@ async def api_wwebjs_webhook(request: Request, background_tasks: BackgroundTasks
             {"name": instance_name},
             {"$set": {
                 "status": status,
-                "disconnect_reason": status if status != "connected" else None,
+                "disconnect_reason": disconnect_reason if status != "connected" else None,
                 "disconnect_reason_label": label_map.get(status, status),
             }},
         )
@@ -4590,15 +4593,13 @@ async def api_wwebjs_webhook(request: Request, background_tasks: BackgroundTasks
         # cliente (ready/disconnected/auth_failure), no en un polling — igual
         # que Evolution/WAHA/Wasender más abajo, cada evento aquí ya es una
         # transición real, así que se registra sin comparar contra el estado
-        # anterior. "need_scan" es transitorio (esperando escaneo de QR, no
-        # una caída real) y no se registra, igual que WAHA no registra su
-        # SCAN_QR_CODE — evita ensuciar el uptime con el intervalo normal de
-        # conexión inicial.
+        # anterior. Un QR inicial no cuenta como caída; un need_scan que
+        # sucede mientras estaba conectado sí debe quedar en el historial.
         if status == "connected":
             db.save_instance_health_log(instance_name, "connected")
-        elif status in ("disconnected", "auth_failure"):
+        elif status in ("disconnected", "auth_failure") or (status == "need_scan" and was_connected):
             db.save_instance_health_log(instance_name, "disconnected",
-                                         reason=status, reason_label=label_map.get(status, status))
+                                         reason=disconnect_reason, reason_label=label_map.get(status, status))
         # Correo a los admins cuando una sesión que SÍ estaba conectada deja
         # de estarlo — incluye "need_scan" (un LOGOUT real, el caso más
         # importante de avisar, ya que necesita que un humano vuelva a

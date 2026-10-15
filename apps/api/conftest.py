@@ -49,3 +49,18 @@ def no_live_anthropic_key_in_unit_tests(monkeypatch, request):
     monkeypatch.setenv('LLM_PROVIDER', 'auto')
     monkeypatch.setattr(llm, 'ANTHROPIC_API_KEY', '')
     monkeypatch.setenv('ANTHROPIC_API_KEY', '')
+
+
+@pytest.fixture(autouse=True)
+def deterministic_activity_clock(monkeypatch):
+    """Sending tests must not depend on the wall-clock time of the CI runner."""
+    from datetime import datetime, timezone
+    from app import activity_hours
+
+    class Daytime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = datetime(2026, 10, 15, 18, tzinfo=timezone.utc)
+            return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+
+    monkeypatch.setattr(activity_hours, 'datetime', Daytime)

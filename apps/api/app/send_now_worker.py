@@ -512,6 +512,18 @@ def _process_item(db, partition: str, item, msgs_in_batch: int, next_break_at: i
         sent_by_username=item.get("sent_by_username") or "", sent_by_name=item.get("sent_by_name") or "",
         user_id=user_id,
     )
+    if ok in ('deferred_hours', 'deferred_busy'):
+        from app.activity_hours import next_activity_opening
+        retry = (next_activity_opening() if ok == 'deferred_hours'
+                 else datetime.now(timezone.utc) + timedelta(seconds=30))
+        db.db.send_queue_items.update_one(
+            {'_id': item_id, 'status': 'sending'}, {'$set': {'status': 'pending', 'started_at': None}},
+        )
+        _set_state(db, partition, phase='paused', active_item_id=None,
+                   next_action_at=retry, wait_reason=ok,
+                   wait_message=('Fuera de horario; continuará a las 08:00' if ok == 'deferred_hours'
+                                 else 'Línea ocupada; envío pendiente'))
+        return 'activity_paused', msgs_in_batch, next_break_at
     # Daily cap exhausted: reset item to pending so it retries tomorrow, then
     # signal this partition to pause for 5 min before its next attempt —
     # other partitions are untouched.
@@ -650,6 +662,17 @@ def _partition_worker(partition: str, user_id: str):
                 return  # lost leadership — another process's dispatcher will take over
 
             result, msgs_in_batch, next_break_at = _process_item(db, partition, item, msgs_in_batch, next_break_at)
+            if result == 'activity_paused':
+                from app.activity_hours import activity_allowed, next_activity_opening
+                outside_hours = not activity_allowed()
+                seconds = (max(1, (next_activity_opening() - datetime.now(timezone.utc)).total_seconds())
+                           if outside_hours else 30)
+                reason = 'deferred_hours' if outside_hours else 'deferred_busy'
+                message = ('Fuera de horario; continuará a las 08:00' if outside_hours
+                           else 'Línea ocupada; envío pendiente')
+                if not _paused_wait(db, partition, reason, message, seconds):
+                    return
+                continue
             if result in ("daily_cap_paused", "new_contact_cap_paused"):
                 is_new_contact_cap = result == "new_contact_cap_paused"
                 reason = "new_contact_cap" if is_new_contact_cap else "daily_cap"

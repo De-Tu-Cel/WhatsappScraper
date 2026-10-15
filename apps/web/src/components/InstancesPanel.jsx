@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { createPortal } from 'react-dom'
+import LineActivityStatus from './LineActivityStatus'
 import { INSTANCES_CHANGED_EVENT } from '../hooks/useDailyCapStats'
 
 // Las pantallas de envío se quedan montadas al cambiar de pestaña. Si solo
@@ -1071,6 +1072,7 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {inst.profile_name ? `${inst.profile_name} · ` : ''}{inst.number ? `+${inst.number}` : t.inst.noNumber}
         </Typography>
+        {isConnected && <LineActivityStatus activity={inst.activity} lang={lang} />}
       </Box>
       {/* Right side: status label (resting) or action icons (hover) */}
       {showActions ? (
@@ -3454,6 +3456,7 @@ export default function InstancesPanel({ isActive } = {}) {
                               color: reasonLabel && !isConn ? dotColor : 'var(--text-muted)' }}>
                               {reasonLabel && !isConn ? reasonLabel : (inst.number ? `+${inst.number}` : t.inst.noNumber)}
                             </Typography>
+                            {isConn && <LineActivityStatus activity={inst.activity} lang={lang} />}
                           </Box>
                           <Box sx={{ display: 'flex', gap: 0.2, alignItems: 'center', flexShrink: 0 }}>
                             <Tooltip title={t.inst.connectQr}>

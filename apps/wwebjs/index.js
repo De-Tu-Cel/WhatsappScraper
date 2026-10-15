@@ -4,6 +4,7 @@ const puppeteerExtra = require('puppeteer-extra')
 const StealthPlugin  = require('puppeteer-extra-plugin-stealth')
 const QRCode = require('qrcode')
 const { cachedContactName } = require('./contactNames')
+const { createLineActivity } = require('./lineActivity')
 const fs = require('fs')
 const path = require('path')
 const dns = require('dns')
@@ -193,6 +194,7 @@ function proxyServerArg(sessionId, proxy) {
 
 // sessionId → { client, status, qr, phone, presenceTimer, reconnectTimer }
 const sessions = new Map()
+const lineActivity = createLineActivity({ sessions })
 
 // A single flaky Chromium target (protocol timeout, "Execution context was
 // destroyed", etc. — routine when several sessions boot concurrently and
@@ -321,9 +323,11 @@ function startPresenceHeartbeat(sessionId) {
     const s = sessions.get(sessionId)
     if (!s || s.status !== 'connected') return
     try {
-      await s.client.sendPresenceAvailable()
-      await new Promise(r => setTimeout(r, Math.random() * 5000 + 2000))
-      await s.client.sendPresenceUnavailable()
+      await lineActivity.runBackground(sessionId, 'presence', async () => {
+        await s.client.sendPresenceAvailable()
+        await new Promise(r => setTimeout(r, Math.random() * 5000 + 2000))
+        await s.client.sendPresenceUnavailable()
+      })
     } catch (_) {}
   }, (Math.random() * 30 + 15) * 60 * 1000)
 }
@@ -346,15 +350,17 @@ function startProfileSyncPoll(sessionId) {
     const s = sessions.get(sessionId)
     if (!s || s.status !== 'connected') return
     try {
-      const pushname = s.client.info?.pushname || null
-      const profilePicUrl = await fetchProfilePicUrl(s.client, sessionId)
-      const changed = pushname !== s.lastPushname || (profilePicUrl && profilePicUrl !== s.lastProfilePicUrl)
-      if (changed) {
-        console.log(`[${sessionId}] profile change detected outside the app — syncing`)
-        s.lastPushname = pushname
-        if (profilePicUrl) s.lastProfilePicUrl = profilePicUrl
-        forwardWebhook({ event: 'profile.updated', sessionId, data: { pushname, profile_pic_url: profilePicUrl } })
-      }
+      await lineActivity.runBackground(sessionId, 'profile-sync', async () => {
+        const pushname = s.client.info?.pushname || null
+        const profilePicUrl = await fetchProfilePicUrl(s.client, sessionId)
+        const changed = pushname !== s.lastPushname || (profilePicUrl && profilePicUrl !== s.lastProfilePicUrl)
+        if (changed) {
+          console.log(`[${sessionId}] profile change detected outside the app — syncing`)
+          s.lastPushname = pushname
+          if (profilePicUrl) s.lastProfilePicUrl = profilePicUrl
+          forwardWebhook({ event: 'profile.updated', sessionId, data: { pushname, profile_pic_url: profilePicUrl } })
+        }
+      })
     } catch (_) {}
   }, 30 * 60 * 1000)
 }
@@ -1246,10 +1252,10 @@ app.get('/session/:id/status', (req, res) => {
   if (session.status === 'need_scan' || session.status === 'initializing') {
     session.lastPolledAt = Date.now()
   }
-  res.json({ status: session.status, phone: session.phone })
+  res.json({ status: session.status, phone: session.phone, activity: lineActivity.snapshot(id) })
 })
 
-app.post('/session/:id/send', async (req, res) => {
+app.post('/session/:id/send', lineActivity.wrap('send', async (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)
   if (!session) return res.status(404).json({ error: 'Session not found' })
@@ -1276,6 +1282,7 @@ app.post('/session/:id/send', async (req, res) => {
     }
 
     // Optionally save contact to addressbook before first message (looks human)
+    req.checkLineActivity?.()
     if (saveContact && contactFirstName) {
       try {
         await session.client.saveOrEditAddressbookContact(digits, contactFirstName, contactLastName || '')
@@ -1295,6 +1302,7 @@ app.post('/session/:id/send', async (req, res) => {
       } catch (_) {}
     }
 
+    req.checkLineActivity?.()
     const numberId = await session.client.getNumberId(digits).catch(() => null)
     if (!numberId) return res.status(400).json({ error: `Number ${digits} not found on WhatsApp` })
 
@@ -1321,17 +1329,19 @@ app.post('/session/:id/send', async (req, res) => {
 
     // Chat IA (2026-10-14): los delays no deben empujar un envío fuera del horario.
     if (windowClosed()) return rejectClosedWindow()
+    req.checkLineActivity?.()
     const msg = await session.client.sendMessage(numberId._serialized, message)
     session.lastSendAt = Date.now()
     console.log(`[${id}] → ${digits} (${message.length} chars, ${delay}ms typing, gap=${elapsed}ms)`)
     res.json({ success: true, messageId: msg?.id?._serialized })
   } catch (e) {
+    if (e.code && ['SEND_WINDOW_CLOSED', 'LINE_UNAVAILABLE', 'ACTIVITY_CANCELLED'].includes(e.code)) throw e
     console.error(`[${id}] send error:`, e.message)
     res.status(500).json({ error: e.message })
   }
-})
+}))
 
-app.post('/session/:id/send-media', async (req, res) => {
+app.post('/session/:id/send-media', lineActivity.wrap('send-media', async (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)
   if (!session) return res.status(404).json({ error: 'Session not found' })
@@ -1353,6 +1363,7 @@ app.post('/session/:id/send-media', async (req, res) => {
       await new Promise(r => setTimeout(r, wait))
     }
 
+    req.checkLineActivity?.()
     const numberId = await session.client.getNumberId(digits)
     if (!numberId) return res.status(400).json({ error: 'Number not on WhatsApp', phone: digits })
 
@@ -1370,6 +1381,7 @@ app.post('/session/:id/send-media', async (req, res) => {
     const media = stripMediaCollisionId(await MessageMedia.fromUrl(mediaUrl, { unsafeMime: true }))
     if (filename) media.filename = filename
 
+    req.checkLineActivity?.()
     const msg = await session.client.sendMessage(numberId._serialized, media, asSticker
       ? { sendMediaAsSticker: true }
       : { caption: caption || '', sendMediaAsDocument: !media.mimetype.startsWith('image/') },
@@ -1384,12 +1396,13 @@ app.post('/session/:id/send-media', async (req, res) => {
     // successful send into a reported failure.
     res.json({ success: true, messageId: msg?.id?._serialized || null, phone: digits, mimetype: media.mimetype })
   } catch (e) {
+    if (e.code && ['SEND_WINDOW_CLOSED', 'LINE_UNAVAILABLE', 'ACTIVITY_CANCELLED'].includes(e.code)) throw e
     console.error(`[${id}] send-media error:`, e.message)
     res.status(500).json({ error: e.message })
   }
-})
+}))
 
-app.post('/session/:id/typing', async (req, res) => {
+app.post('/session/:id/typing', lineActivity.wrap('typing', async (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)
   if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected' })
@@ -1406,13 +1419,13 @@ app.post('/session/:id/typing', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
-})
+}))
 
 // Historial de un chat (SIMAGAS/GUVAL, 2026-10-08): el webhook tragó inbound
 // sin id y el botón Sincronizar decía que wwebjs no tenía historial. Sí lo
 // tiene: chat.fetchMessages. Solo se usa para recuperar lo que ya está en
 // WhatsApp; no manda nada.
-app.post('/session/:id/messages', async (req, res) => {
+app.post('/session/:id/messages', lineActivity.wrap('messages', async (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)
   if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected' })
@@ -1512,9 +1525,9 @@ app.post('/session/:id/messages', async (req, res) => {
     console.error(`[${id}] history error:`, e.message)
     res.status(500).json({ error: e.message })
   }
-})
+}, { manual: true }))
 
-app.post('/session/:id/read', async (req, res) => {
+app.post('/session/:id/read', lineActivity.wrap('read', async (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)
   if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected' })
@@ -1532,10 +1545,10 @@ app.post('/session/:id/read', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
-})
+}))
 
 // Verify if a phone number is registered on WhatsApp
-app.post('/session/:id/verify', async (req, res) => {
+app.post('/session/:id/verify', lineActivity.wrap('verify', async (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)
   if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected' })
@@ -1549,10 +1562,10 @@ app.post('/session/:id/verify', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
-})
+}))
 
 // Save a contact to the addressbook
-app.post('/session/:id/contact/save', async (req, res) => {
+app.post('/session/:id/contact/save', lineActivity.wrap('contact/save', async (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)
   if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected' })
@@ -1564,7 +1577,7 @@ app.post('/session/:id/contact/save', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
-})
+}))
 
 // Get session info (phone, pushname, platform)
 app.get('/session/:id/info', (req, res) => {
@@ -1583,7 +1596,7 @@ app.get('/session/:id/info', (req, res) => {
 })
 
 // Set profile status/about text
-app.post('/session/:id/profile/status', async (req, res) => {
+app.post('/session/:id/profile/status', lineActivity.wrap('profile/status', async (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)
   if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected' })
@@ -1595,7 +1608,7 @@ app.post('/session/:id/profile/status', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
-})
+}, { manual: true }))
 
 // WhatsApp Web lazy-loads the WAWebSetPushnameConnAction module (used by
 // setDisplayName() internally) only after a human opens the "You" profile
@@ -1733,7 +1746,7 @@ async function ensureProfileModuleLoaded(page) {
 // (which InstancesPanel.jsx already lets you edit) and from Andy's
 // conversation persona name (which now reads THIS value so it never claims a
 // name that doesn't match the connected profile).
-app.post('/session/:id/profile/name', async (req, res) => {
+app.post('/session/:id/profile/name', lineActivity.wrap('profile/name', async (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)
   if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected' })
@@ -1752,10 +1765,10 @@ app.post('/session/:id/profile/name', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
-})
+}, { manual: true }))
 
 // Set the real WhatsApp profile picture from a public image URL.
-app.post('/session/:id/profile/picture', async (req, res) => {
+app.post('/session/:id/profile/picture', lineActivity.wrap('profile/picture', async (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)
   if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected' })
@@ -1781,10 +1794,10 @@ app.post('/session/:id/profile/picture', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
-})
+}, { manual: true }))
 
 // React to a received message
-app.post('/session/:id/react', async (req, res) => {
+app.post('/session/:id/react', lineActivity.wrap('react', async (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)
   if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected' })
@@ -1796,7 +1809,7 @@ app.post('/session/:id/react', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
-})
+}))
 
 app.delete('/session/:id', async (req, res) => {
   const { id } = req.params
@@ -1831,7 +1844,7 @@ app.delete('/session/:id', async (req, res) => {
 app.get('/sessions', (req, res) => {
   const result = {}
   for (const [id, s] of sessions) {
-    result[id] = { status: s.status, phone: s.phone }
+    result[id] = { status: s.status, phone: s.phone, activity: lineActivity.snapshot(id) }
   }
   res.json(result)
 })

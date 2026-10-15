@@ -8,6 +8,19 @@ class SendWindowClosed(Exception):
     """El servicio rechazó el envío antes de contactar WhatsApp por horario."""
 
 
+class LineBusy(Exception):
+    """La operación no comenzó; la cola persistente puede reintentarlo."""
+
+
+def _check_activity_response(response):
+    if response.status_code == 409:
+        code = response.json().get('code')
+        if code == 'SEND_WINDOW_CLOSED':
+            raise SendWindowClosed('Actividad automática fuera de horario')
+        if code in ('LINE_BUSY', 'LINE_UNAVAILABLE', 'ACTIVITY_CANCELLED'):
+            raise LineBusy('La línea está ocupada; operación pendiente')
+
+
 def _headers():
     h = {"Content-Type": "application/json"}
     if API_SECRET:
@@ -41,8 +54,10 @@ def get_pairing_code(session_id: str) -> dict:
 
 def send_message(session_id: str, to: str, message: str, typing_ms: int = 0,
                  save_contact: bool = False, contact_first_name: str = "", contact_last_name: str = "",
-                 send_before: str | None = None) -> dict:
+                 send_before: str | None = None, automatic: bool = True) -> dict:
     payload = {"to": to, "message": message, "typingMs": typing_ms}
+    if not automatic:
+        payload['automatic'] = False
     if send_before:
         payload['sendBefore'] = send_before
     if save_contact and contact_first_name:
@@ -73,16 +88,17 @@ def send_message(session_id: str, to: str, message: str, typing_ms: int = 0,
         # 150s gives ~100s of margin on top of the ~48s of deliberate pacing.
         timeout=150,
     )
-    if r.status_code == 409 and r.json().get('code') == 'SEND_WINDOW_CLOSED':
-        raise SendWindowClosed('El horario de Chat IA terminó antes del envío')
+    _check_activity_response(r)
     if not r.ok:
         raise Exception(r.json().get("error", r.text))
     return r.json()
 
 def send_media(session_id: str, to: str, media_url: str,
                caption: str = "", filename: str = "", typing_ms: int = 0,
-               as_sticker: bool = False) -> dict:
+               as_sticker: bool = False, automatic: bool = True) -> dict:
     payload = {"to": to, "mediaUrl": media_url, "caption": caption, "typingMs": typing_ms}
+    if not automatic:
+        payload['automatic'] = False
     if filename:
         payload["filename"] = filename
     if as_sticker:
@@ -93,6 +109,7 @@ def send_media(session_id: str, to: str, media_url: str,
         headers=_headers(),
         timeout=120,
     )
+    _check_activity_response(r)
     if not r.ok:
         raise Exception(r.json().get("error", r.text))
     return r.json()
@@ -103,13 +120,17 @@ def registration_status(result: dict) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
-def verify_number(session_id: str, phone: str) -> dict:
+def verify_number(session_id: str, phone: str, send_before: str | None = None) -> dict:
+    payload = {"phone": phone}
+    if send_before:
+        payload['sendBefore'] = send_before
     r = _req.post(
         f"{WWEBJS_URL}/session/{session_id}/verify",
-        json={"phone": phone},
+        json=payload,
         headers=_headers(),
         timeout=15,
     )
+    _check_activity_response(r)
     if not r.ok:
         raise Exception(r.json().get("error", r.text))
     return r.json()
@@ -249,7 +270,8 @@ class WWebjsClient:
         self.instance_name = instance_name or session_id
 
     def send(self, to: str, message: str, delay_ms: int | None = None,
-             save_contact: bool = False, contact_name: str = "", send_before: str | None = None) -> dict:
+             save_contact: bool = False, contact_name: str = "", send_before: str | None = None,
+             automatic: bool = True) -> dict:
         ms = delay_ms if delay_ms is not None else random.randint(800, 2500)
         first = contact_name.strip()
         last = ""
@@ -258,6 +280,7 @@ class WWebjsClient:
             self.session_id, to, message, typing_ms=ms,
             save_contact=save_contact, contact_first_name=first, contact_last_name=last,
             **({'send_before': send_before} if send_before else {}),
+            **({'automatic': False} if not automatic else {}),
         )
 
     def verify(self, phone: str) -> dict:

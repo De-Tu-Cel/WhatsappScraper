@@ -2687,7 +2687,18 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         return True
 
     except Exception as e:
-        from app.whatsapp_wwebjs import SendWindowClosed
+        from app.whatsapp_wwebjs import SendWindowClosed, LineBusy
+        if isinstance(e, LineBusy):
+            if _cap_reserved_new:
+                from app.daily_cap import release_daily_slot
+                release_daily_slot(db, instance, _phone_digits_cap)
+            from app.ai_reply_recovery import defer_reply
+            db.db.ai_followup_sessions.update_one({'_id': sid}, {'$set': {'ai_typing': False}})
+            defer_reply(db, session_id=sid, phone_number=phone_number, company_id=company_id,
+                        inbound_body=inbound_body, inbound_log_id=inbound_log_id,
+                        manual_activation=manual_activation, proactive=proactive,
+                        retry_at=datetime.utcnow() + timedelta(seconds=30))
+            return
         if isinstance(e, SendWindowClosed):
             if _cap_reserved_new:
                 from app.daily_cap import release_daily_slot

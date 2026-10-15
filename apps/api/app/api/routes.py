@@ -1420,6 +1420,18 @@ def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks, x_
                 if cutoff and created < cutoff:
                     continue
                 if db.db.message_logs.find_one({"message_id": msg_id}):
+                    # El historial puede aportar el nombre público que faltaba
+                    # en un webhook antiguo, sin duplicar ni reclasificar nada.
+                    if _provider == "wwebjs" and not from_me:
+                        from app.contact_identity import payload_whatsapp_name
+                        public_name = payload_whatsapp_name(m)
+                        if public_name:
+                            db.db.message_logs.update_one(
+                                {"message_id": msg_id, "company_id": company_id,
+                                 "direction": "inbound"},
+                                {"$set": {"whatsapp_name": public_name,
+                                          "whatsapp_name_source": "whatsapp"}},
+                            )
                     continue
 
                 log_id = db.save_evolution_log(

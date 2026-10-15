@@ -117,3 +117,46 @@ def test_invalid_number_never_opens_a_database(monkeypatch):
     with pytest.raises(ValueError):
         cc.run_number_comparison('6a74ae6becf84e0f0eecaa81', '123')
     db.assert_not_called()
+
+
+def test_single_answered_number_reuses_complete_saved_company_result_without_writes():
+    doc = {'company_id': 'claro', 'numbers': [], **comparison()}
+    original = deepcopy(doc)
+    messages = [{'direction': 'outbound', 'to_number': '+573112000000', 'created_at': T0},
+                {'direction': 'inbound', 'from_number': '+573112000000', 'created_at': T0}]
+    db = Mock()
+    result = cc.single_reply_thread_comparison(db, doc, messages)
+    assert result['numbers'][0]['number'] == '3112000000'
+    assert result['numbers'][0]['hibrido'] == doc['hibrido']
+    assert result['numbers'][0]['ia']['ran_at'] == T0
+    assert doc == original
+    assert not db.mock_calls
+
+
+@pytest.mark.parametrize('case', ['two_replied', 'unknown_inbound', 'no_reply', 'no_outbound', 'existing_numbers'])
+def test_ambiguous_threads_and_existing_number_results_are_never_overwritten(case):
+    doc = {'company_id': 'claro', 'numbers': [], **comparison()}
+    messages = [{'direction': 'outbound', 'to_number': '+573112000000'},
+                {'direction': 'inbound', 'from_number': '+573112000000'}]
+    if case == 'two_replied': messages.append({'direction': 'inbound', 'from_number': '+573205000000'})
+    if case == 'unknown_inbound': messages = [{'direction': 'inbound', 'from_number': 'unknown@lid'}]
+    if case == 'no_reply': messages = messages[:1]
+    if case == 'no_outbound': messages = messages[1:]
+    if case == 'existing_numbers': doc['numbers'] = [{'number': '3205000000', **comparison()}]
+    assert cc.single_reply_thread_comparison(Mock(), doc, messages) is doc
+
+
+def test_extra_uncontacted_phone_does_not_mark_complete_analysis_pending():
+    from app.analysis_review import attach_reviews
+    manager = Mock()
+    manager.db.message_logs.find.return_value = [
+        {'company_id': 'claro', 'direction': 'outbound', 'to_number': '+573112000000', 'created_at': T0},
+        {'company_id': 'claro', 'direction': 'inbound', 'from_number': '+573112000000', 'created_at': T0}]
+    rows = [{'company_id': 'claro', 'numbers': [{'number': '+573112000000'}, {'number': '+573205000000'}]}]
+    doc = {'company_id': 'claro', 'numbers': [], **comparison()}
+    attach_reviews(manager, rows, {'claro': doc})
+    assert rows[0]['review']['flags'] == []
+    assert rows[0]['numbers'][0]['review']['status'] == 'current'
+    assert rows[0]['numbers'][1]['review']['status'] == 'not_contacted'
+    assert [n['number'] for n in rows[0]['comparison']['numbers']] == ['3112000000']
+    assert doc['numbers'] == []

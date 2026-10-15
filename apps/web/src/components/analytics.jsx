@@ -454,6 +454,7 @@ function ConversationCapture({ thread, captureRef, visible }) {
     }}>
       <Box
         ref={captureRef}
+        data-report-capture
         sx={{
           width: 500,
           bgcolor: '#f8fafc',

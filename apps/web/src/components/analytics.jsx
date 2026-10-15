@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react'
 import useSWR from 'swr'
+import WhatsAppText from './WhatsAppText'
 import { useLang } from '../context/LangContext'
 import { useUser } from '../context/UserContext'
 import { authFetch } from '@/lib/api'
@@ -339,7 +340,7 @@ function CaptureBody({ msg, isOut }) {
   if (interactive && (interactive.options || []).length) {
     return (
       <Box>
-        {interactive.text && <Box sx={{ ...textSx, mb: '8px' }}>{interactive.text}</Box>}
+        {interactive.text && <Box sx={{ ...textSx, mb: '8px' }}><WhatsAppText text={interactive.text} /></Box>}
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: '5px', borderTop: `1px solid ${line}`, pt: '8px' }}>
           {interactive.options.map((opt, i) => (
             <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: '8px', px: '8px', py: '5px',
@@ -388,7 +389,7 @@ function CaptureBody({ msg, isOut }) {
         <Box component="img" src={src} alt=""
           sx={sticker ? { width: 96, height: 96, objectFit: 'contain', display: 'block' }
                       : { maxWidth: 240, maxHeight: 280, width: '100%', borderRadius: '8px', display: 'block', objectFit: 'cover' }} />
-        {caption && <Box sx={{ ...textSx, mt: '6px' }}>{caption}</Box>}
+        {caption && <Box sx={{ ...textSx, mt: '6px' }}><WhatsAppText text={caption} /></Box>}
       </Box>
     )
   }
@@ -405,7 +406,7 @@ function CaptureBody({ msg, isOut }) {
             fontFamily: CAPTURE_EMOJI_FONT }}>📄</Box>
           <Box sx={{ color: ink, fontSize: '12.5px', fontWeight: 700 }}>{doc.label}</Box>
         </Box>
-        {caption && <Box sx={{ ...textSx, mt: '6px' }}>{caption}</Box>}
+        {caption && <Box sx={{ ...textSx, mt: '6px' }}><WhatsAppText text={caption} /></Box>}
       </Box>
     )
   }
@@ -420,7 +421,7 @@ function CaptureBody({ msg, isOut }) {
     )
   }
 
-  return <Box sx={textSx}>{raw}</Box>
+  return <Box sx={textSx}><WhatsAppText text={raw} /></Box>
 }
 
 // Separador de día del screenshot del reporte, como el de Conversaciones pero siempre con la

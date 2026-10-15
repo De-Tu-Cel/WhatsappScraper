@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment, memo, useTransition } from 'react'
 import { MAX_WA_MSG } from '@/lib/validators'
+import WhatsAppText from './WhatsAppText'
 import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
 import { parseVCards, documentType, splitInlineOptions, mediaCaption } from '../lib/messageFormat'
@@ -378,7 +379,7 @@ function InteractiveMessage({ interactive, isOut, onReply }) {
       {text && (
         <Typography sx={{ color: 'rgba(255,255,255,0.88)', fontSize: '0.83rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', mb: options.length ? 1 : 0,
           fontFamily: '"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",system-ui,sans-serif' }}>
-          {text}
+          <WhatsAppText text={text} />
         </Typography>
       )}
 
@@ -554,7 +555,7 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
                 unlike the document branch below which already showed it. */}
             {mediaCaption(body, msg.media_url) && (
               <Typography sx={{ color: 'rgba(255,255,255,0.88)', fontSize: '0.83rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', mt: 0.8 }}>
-                {body}
+                <WhatsAppText text={body} />
               </Typography>
             )}
           </>
@@ -583,7 +584,7 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
             </Box>
             {mediaCaption(body, msg.media_url) && (
               <Typography sx={{ color: 'rgba(255,255,255,0.88)', fontSize: '0.83rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', mt: 0.8 }}>
-                {body}
+                <WhatsAppText text={body} />
               </Typography>
             )}
           </>
@@ -598,7 +599,7 @@ const MessageBubble = memo(function MessageBubbleImpl({ msg, onReply }) {
           </Box>
         ) : (
           <Typography sx={{ color: 'rgba(255,255,255,0.88)', fontSize: '0.83rem', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: '"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",system-ui,sans-serif' }}>
-            {body}
+            <WhatsAppText text={body} />
           </Typography>
         )}
         {(sentLabel || sentByName) && (

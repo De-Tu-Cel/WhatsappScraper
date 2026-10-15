@@ -53,3 +53,5 @@ jobs:
         run: npm ci
       - name: Run lint
         run: npm run lint
+      - name: Verify WhatsApp text formatting and safe links
+        run: node --test src/lib/whatsappText.test.mjs

@@ -7,6 +7,7 @@ import { useDailyCapStats } from '../hooks/useDailyCapStats'
 import { CompanyPicker, extractPhoneDigits } from './scheduledSends'
 import { TemplateLibraryPicker } from './messageTemplateLibrary'
 import { SendConfigPanel } from './SendConfigPanel'
+import CampaignAvailability from './CampaignAvailability'
 import { InstanceDisconnectedBanner } from './InstanceStatusBanner'
 import { getOverBy, capOverflowKind } from '../lib/dailyCap'
 import { sendBlockReason } from './BulkSendPanel'
@@ -323,14 +324,7 @@ export default function SendCampaign() {
               <CampaignMetric value={cleanMessages.length} label={en ? 'Templates' : 'Plantillas'} icon={<DescriptionIcon />} />
             </Box>
           </Box>
-          <Box sx={{ px: 2, py: 1.25, borderRadius: 2, bgcolor: 'rgba(var(--accent-rgb,59,130,246),.055)', border: '1px solid rgba(var(--accent-rgb,59,130,246),.15)',
-            '@container campaign (max-width: 550px)': { px: 1.25, py: .8 } }}>
-            <Typography sx={{ fontSize: '.78rem', color: 'var(--text-muted)', mb: .7, textAlign: 'center' }}>{targets.length ? (en ? 'Remaining after selection' : 'Disponible tras la selección') : (en ? 'Available today' : 'Disponible hoy')}</Typography>
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 1 }}>
-              <CampaignMetric value={typeof capStats?.new_contacts_capacity === 'number' ? Math.max(0, capStats.new_contacts_capacity - newSelCount) : '—'} label={en ? 'New contacts' : 'Contactos nuevos'} accent />
-              <CampaignMetric value={typeof capStats?.total_available === 'number' ? Math.max(0, capStats.total_available - targets.length) : '—'} label={en ? 'Sends' : 'Envíos'} accent />
-            </Box>
-          </Box>
+          <CampaignAvailability stats={capStats} selectedCount={targets.length} newSelectedCount={newSelCount} en={en} />
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: .75, minWidth: 0,
             '@container campaign (max-width: 1000px)': { gridColumn: '1 / -1', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
             '@container campaign (max-width: 550px)': { flexDirection: 'column', alignItems: 'stretch' } }}>

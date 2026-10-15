@@ -761,6 +761,21 @@ def _run(mgr, llm, inbound="Mande", log_id="log1", ww=None):
     return mock_llm
 
 
+def test_busy_line_persists_reply_for_retry_without_recording_a_failed_send(_common_patches):
+    from app.whatsapp_wwebjs import LineBusy
+    mgr = FakeMgrWithSend(_session_doc())
+    ww = _ww_client()
+    ww.send.side_effect = LineBusy('busy')
+    with patch('app.ai_reply_recovery.defer_reply') as defer:
+        _run(mgr, {'return_value': 'Me pueden decir el precio?'},
+             inbound='Buenas tardes, en qué te ayudo?', ww=ww)
+    ww.send.assert_called_once()
+    defer.assert_called_once()
+    assert defer.call_args.kwargs['phone_number'] == '5214428079840'
+    assert defer.call_args.kwargs['retry_at'] > datetime.utcnow()
+    assert mgr.logged == []
+
+
 class TestBusinessHoursAndDeferredReplies:
     @pytest.mark.parametrize('hour,minute,expected', [
         (0, 0, False), (7, 59, False), (8, 0, True),

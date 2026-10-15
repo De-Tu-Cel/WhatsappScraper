@@ -514,8 +514,8 @@ def _load_config(db) -> dict:
     cfg = db.db.warmup_config.find_one({"_id": "global"}) or {}
     return {
         "enabled":       cfg.get("enabled", True),
-        "hour_start":    cfg.get("business_hour_start", 9),
-        "hour_end":      cfg.get("business_hour_end", 21),
+        "hour_start":    max(8, cfg.get("business_hour_start", 9)),
+        "hour_end":      min(19, cfg.get("business_hour_end", 19)),
         "min_msgs":      cfg.get("min_msgs_per_pair", 6),
         "max_msgs":      cfg.get("max_msgs_per_pair", _MAX_MSGS_PER_PAIR),
         "min_delay":     cfg.get("min_delay_min", _MIN_DELAY_MIN),

@@ -460,7 +460,10 @@ def _verify_wa_number(db, phone_digits: str, session: str) -> bool:
         result = verify_number(session, phone_digits)
         # wwebjs service returns "registered"; "exists" was never in the response
         valid = bool(result.get("registered", result.get("exists", False)))
-    except Exception:
+    except Exception as exc:
+        from app.whatsapp_wwebjs import SendWindowClosed, LineBusy
+        if isinstance(exc, (SendWindowClosed, LineBusy)):
+            raise
         return True  # on error, allow send (don't block on verify failure)
     db.db.jid_map.update_one(
         {"jid": phone_digits},
@@ -554,6 +557,13 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
         log.info("[Scheduler] wwebjs job=%s company=%s to=%s status=%s", job_id, company_id, to_number, status)
         return status == "sent"
     except Exception as e:
+        from app.whatsapp_wwebjs import SendWindowClosed, LineBusy
+        if isinstance(e, (SendWindowClosed, LineBusy)):
+            if _reserved_new:
+                release_daily_slot(db, session, _phone_digits)
+            if _nc_reserved_new:
+                release_new_contact_slot(db, session, company_id)
+            return 'deferred_hours' if isinstance(e, SendWindowClosed) else 'deferred_busy'
         # Previously: logged to app logs only (log.exception) and returned
         # bare False — the actual reason (often the real error surfaced by
         # wwebjs-service's /send, e.g. instance disconnected, timeout) never
@@ -604,6 +614,9 @@ def _send_message(db, company_id: str, to_number: str, message: str, job_id: str
     instances owned by that user. This ensures each user always sends from their
     own WA session instead of the globally-stamped assigned_instance.
     """
+    from app.activity_hours import activity_allowed
+    if not activity_allowed():
+        return 'deferred_hours'
     try:
         from bson import ObjectId
         # When user_id is given, restrict candidates to the user's own instances.
@@ -688,6 +701,19 @@ def _send_message(db, company_id: str, to_number: str, message: str, job_id: str
                                 sent_by_username=sent_by_username, sent_by_name=sent_by_name)
 
 
+def _defer_campaign(db, job_id, reason):
+    from bson import ObjectId
+    from datetime import timedelta, timezone
+    from app.activity_hours import next_activity_opening
+    retry = (next_activity_opening() if reason == 'deferred_hours'
+             else datetime.now(timezone.utc) + timedelta(seconds=30))
+    db.db.scheduled_sends.update_one(
+        {'_id': ObjectId(job_id), 'status': {'$ne': 'cancelled'}},
+        {'$set': {'status': 'pending', 'activity_resume': True,
+                  'wait_reason': reason, 'retry_not_before': retry.replace(tzinfo=None)}},
+    )
+
+
 def _execute_send_job(job_id: str):
     """Run a scheduled send job end-to-end in a worker thread."""
     from bson import ObjectId
@@ -700,6 +726,13 @@ def _execute_send_job(job_id: str):
         if not job:
             log.error("[Scheduler] Job %s not found", job_id)
             return
+
+        from app.activity_hours import activity_allowed
+        if not activity_allowed():
+            _defer_campaign(db, job_id, 'deferred_hours')
+            return
+        completed = set(job.get('activity_completed') or [])
+        resuming = bool(job.get('activity_resume'))
 
         industry = job.get("industry", "")
         job_user_id = job.get("user_id") or job.get("created_by") or ""
@@ -796,7 +829,7 @@ def _execute_send_job(job_id: str):
                     "skipped_nc_cap_count": skipped_nc,
                     "skipped_daily_cap_count": skipped_daily,
                     "finished_at": now,
-                }},
+                }, '$unset': {'wait_reason': '', 'retry_not_before': ''}},
             )
             # Notificación en el panel de notificaciones del usuario
             job_name = job.get("name") or job.get("industry") or "Campaña"
@@ -823,10 +856,10 @@ def _execute_send_job(job_id: str):
                 {"_id": ObjectId(job_id)},
                 {"$set": {"total_count": len(selected_numbers), "status": "running", "started_at": datetime.now()}},
             )
-            sent_count = 0
-            error_count = 0
-            skipped_nc_count = 0
-            skipped_daily_count = 0
+            sent_count = int(job.get('sent_count', 0)) if resuming else 0
+            error_count = int(job.get('error_count', 0)) if resuming else 0
+            skipped_nc_count = int(job.get('skipped_nc_cap_count', 0)) if resuming else 0
+            skipped_daily_count = int(job.get('skipped_daily_cap_count', 0)) if resuming else 0
             skipped_blocked_count = 0
             last_text = None
             log.warning("[Scheduler] job=%s 🚀 starting Branch A — %d numbers, %d template variant(s)",
@@ -842,6 +875,9 @@ def _execute_send_job(job_id: str):
                 company_name = num_info.get("company_name", "") or cid
                 to_number = num_info.get("number", "")
                 if not to_number:
+                    continue
+                activity_key = cid + ':' + clean_digits(to_number)
+                if activity_key in completed:
                     continue
                 # Blocked number / company — checked at send time, so a block added
                 # after the campaign was scheduled still stops it (app/send_guard.py).
@@ -865,6 +901,9 @@ def _execute_send_job(job_id: str):
                 )
                 ok = _send_message(db, cid, to_number, message, job_id, delay_ms=typing_ms, user_id=job_user_id,
                                    **job_sender)
+                if ok in ('deferred_hours', 'deferred_busy'):
+                    _defer_campaign(db, job_id, ok)
+                    return
                 if ok is True:
                     sent_count += 1
                 elif ok == "skipped_nc_cap":
@@ -883,7 +922,7 @@ def _execute_send_job(job_id: str):
                         "error_count": error_count,
                         "skipped_nc_cap_count": skipped_nc_count,
                         "skipped_daily_cap_count": skipped_daily_count,
-                    }},
+                    }, "$addToSet": {"activity_completed": activity_key}},
                 )
 
             _finish(sent_count, error_count, skipped_nc_count, skipped_daily_count)
@@ -922,10 +961,10 @@ def _execute_send_job(job_id: str):
             {"$set": {"total_count": total, "status": "running", "started_at": datetime.now()}},
         )
 
-        sent_count = 0
-        error_count = 0
-        skipped_nc_count = 0
-        skipped_daily_count = 0
+        sent_count = int(job.get('sent_count', 0)) if resuming else 0
+        error_count = int(job.get('error_count', 0)) if resuming else 0
+        skipped_nc_count = int(job.get('skipped_nc_cap_count', 0)) if resuming else 0
+        skipped_daily_count = int(job.get('skipped_daily_cap_count', 0)) if resuming else 0
         skipped_blocked_count = 0
         send_index = 0
         last_text = None
@@ -953,6 +992,9 @@ def _execute_send_job(job_id: str):
                 to_number = contact.get("value", "")
                 if not to_number:
                     continue
+                activity_key = cid + ':' + clean_digits(to_number)
+                if activity_key in completed:
+                    continue
                 if send_block_reason(db, cid, to_number):
                     skipped_blocked_count += 1
                     log.warning("[Scheduler] job=%s ⛔ blacklisted — skipped %s", job_id, to_number[-4:])
@@ -968,6 +1010,9 @@ def _execute_send_job(job_id: str):
                 message = _render_message(message_variant, company_name, company_industry, company_city, company_web)
                 ok = _send_message(db, cid, to_number, message, job_id, delay_ms=typing_ms, user_id=job_user_id,
                                    **job_sender)
+                if ok in ('deferred_hours', 'deferred_busy'):
+                    _defer_campaign(db, job_id, ok)
+                    return
                 send_index += 1
                 if ok is True:
                     sent_count += 1
@@ -987,7 +1032,7 @@ def _execute_send_job(job_id: str):
                         "error_count": error_count,
                         "skipped_nc_cap_count": skipped_nc_count,
                         "skipped_daily_cap_count": skipped_daily_count,
-                    }},
+                    }, "$addToSet": {"activity_completed": activity_key}},
                 )
 
         _finish(sent_count, error_count, skipped_nc_count, skipped_daily_count)

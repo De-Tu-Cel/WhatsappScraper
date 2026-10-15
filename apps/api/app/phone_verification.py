@@ -92,7 +92,21 @@ def process_next(db):
         if not moved.matched_count:
             _retry(db, doc, token, now)
             return {'checked': 0, 'promoted': 0, 'paused': True, 'reason': 'lease_lost'}
-        result = registration_status(verify_number(instance, doc['value']))
+        local = datetime.now(timezone.utc).astimezone(pytz.timezone('America/Mexico_City'))
+        closing = local.replace(hour=min(19, int(os.getenv('PHONE_VERIFICATION_END_HOUR', '18'))),
+                                minute=0, second=0, microsecond=0)
+        try:
+            result = registration_status(verify_number(instance, doc['value'], send_before=closing.isoformat()))
+        except Exception as exc:
+            from app.whatsapp_wwebjs import LineBusy, SendWindowClosed
+            if isinstance(exc, (LineBusy, SendWindowClosed)):
+                # The service explicitly confirmed no lookup started.
+                from app.daily_cap import _today
+                db.db.instance_daily_verifications.update_one(
+                    {'instance': instance, 'date': _today(), 'count': {'$gt': 0}},
+                    {'$inc': {'count': -1}},
+                )
+            raise
         if result is None:
             _retry(db, doc, token, now)
             return {'checked': 1, 'promoted': 0, 'pending': 1, 'paused': True, 'reason': 'unavailable'}

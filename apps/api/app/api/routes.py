@@ -726,16 +726,16 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
             if req.image_url:
                 _ww_result = _ww_send_media(instance, req.to_number, req.image_url,
                                             caption=req.message or "", typing_ms=_typing_ms,
-                                            as_sticker=bool(req.as_sticker))
+                                            as_sticker=bool(req.as_sticker), automatic=False)
                 _msg_type = "sticker" if req.as_sticker else "image"
             elif req.document_url:
                 _ww_result = _ww_send_media(instance, req.to_number, req.document_url,
                                             caption=req.message or "", filename=req.file_name or "",
-                                            typing_ms=_typing_ms)
+                                            typing_ms=_typing_ms, automatic=False)
                 _msg_type = "document"
             else:
                 _ww_result = ww_client.send(req.to_number, req.message, delay_ms=_typing_ms,
-                                            save_contact=bool(_co_name_ww), contact_name=_co_name_ww)
+                                            save_contact=bool(_co_name_ww), contact_name=_co_name_ww, automatic=False)
                 _msg_type = "text"
             db.db.jid_map.update_one({"jid": _phone_digits_ww},
                 {"$set": {"company_id": req.company_id, "updated_at": _dt.now()}}, upsert=True)
@@ -868,6 +868,14 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
     except HTTPException:
         raise
     except Exception as e:
+        from app.whatsapp_wwebjs import LineBusy
+        if isinstance(e, LineBusy):
+            from app.daily_cap import release_daily_slot, release_new_contact_slot
+            if _cap_reserved_new:
+                release_daily_slot(db, instance, clean_digits(req.to_number))
+            if _nc_reserved_new:
+                release_new_contact_slot(db, instance, req.company_id)
+            raise HTTPException(409, 'La línea está ocupada. El mensaje no se envió; vuelve a intentarlo.')
         raise HTTPException(status_code=500, detail=str(e))
 
 # ── Send queue (backend-persisted immediate bulk sending — survives a page
@@ -6653,6 +6661,7 @@ def api_list_instances(x_user_token: Optional[str] = Header(None)):
             elif prov == "wwebjs":
                 r = _req.get(f"{_ww_url}/session/{inst['name']}/status", headers=_ww_headers(), timeout=3)
                 ww_data = r.json() if r.ok else {}
+                inst['activity'] = ww_data.get('activity')
                 ww_st = ww_data.get("status", "unknown")
                 if ww_st in ("need_scan", "initializing", "authenticated"):
                     inst["live_status_detail"] = ww_st

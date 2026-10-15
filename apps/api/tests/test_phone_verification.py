@@ -67,6 +67,21 @@ def ready(db):
     db.db.phone_verification_control.docs[0]['next_at']=datetime.now(timezone.utc)-timedelta(seconds=1)
 
 
+@pytest.mark.parametrize('error_name', ['LineBusy', 'SendWindowClosed'])
+def test_service_deferral_keeps_phone_pending_and_releases_unused_lookup_cap(db, monkeypatch, error_name):
+    from app import whatsapp_wwebjs
+    db.db.instance_daily_verifications = Mock()
+    monkeypatch.setattr(worker, 'verify_number', Mock(side_effect=getattr(whatsapp_wwebjs, error_name)()))
+    result = worker.process_next(db)
+    assert result['pending'] == 1
+    assert all(c.get('type') == 'phone' for c in db.db.contacts.docs)
+    assert not any(c.get('verified') == 'checking' for c in db.db.contacts.docs)
+    update = db.db.instance_daily_verifications.update_one.call_args
+    assert update.args[0]['instance'] == 'qa-connected'
+    assert update.args[1] == {'$inc': {'count': -1}}
+    assert 'send_before' in worker.verify_number.call_args.kwargs
+
+
 def test_all_eight_phones_are_processed_once_and_after_restart(db):
     for _ in range(8):
         assert worker.process_next(db)['promoted']==1

@@ -1435,6 +1435,51 @@ class TestCloseWhenGoalReached:
 
 # ── Hallazgos del simulador del Chat IA (2026-10-06) ─────────────────────────
 class TestSimulatorFindings:
+    def test_changing_price_does_not_hide_a_repeated_closing(self):
+        previous = ['ah ok 450 no está mal\ndéjame pensarlo y te aviso']
+        assert af._repeated_wording('300 está razonable\ndéjame pensarlo y te aviso', previous)
+
+    def test_repeated_required_information_is_not_a_closing(self):
+        assert af._repeated_closing_wording('como 100 litros más o menos', ['como 100 litros más o menos']) is None
+        assert af._repeated_closing_wording('Ana Pérez', ['Ana Pérez']) is None
+
+    def test_final_guard_preserves_price_while_removing_repeated_closing(self, _common_patches):
+        mgr, ww = FakeMgrWithSend(_session_doc()), _ww_client()
+        mgr.db.message_logs.find.return_value = [{'message_body': '450 está razonable\ndéjame pensarlo y te aviso'}]
+        _run(mgr, {'return_value': '300 está razonable\ndéjame pensarlo y te aviso[FIN]'},
+             inbound='El diagnóstico cuesta $300.', ww=ww)
+        assert '300' in ww.send.call_args.args[1]
+        assert 'pensarlo' not in ww.send.call_args.args[1]
+        assert mgr.db.ai_followup_sessions._doc['status'] == 'ended'
+
+    @pytest.mark.parametrize('inbound', [
+        'No tenemos cobertura en Puebla y no podemos ofrecerte el servicio.',
+        'No hay cobertura en tu código postal.',
+        'Lo sentimos, no contamos con cobertura en esa zona.',
+        'Lamentablemente no llegamos a tu colonia.',
+        'No atendemos en esa ciudad.',
+        'Por ahora no damos servicio en tu zona.',
+    ])
+    def test_explicit_coverage_refusal_is_a_closing_goal(self, inbound):
+        assert af._goal_reached(inbound) == 'negativa'
+
+    @pytest.mark.parametrize('inbound', [
+        'Si no hay cobertura, te avisamos antes de instalar.',
+        'No tenemos cobertura en toda la ciudad, dime tu colonia para verificar.',
+        'No contamos con cobertura total, necesitamos revisar tu código postal.',
+        'Estamos revisando si tenemos cobertura en tu colonia.',
+        'Sí tenemos cobertura. Qué paquete necesitas?',
+    ])
+    def test_conditional_or_partial_coverage_does_not_close_early(self, inbound):
+        assert af._goal_reached(inbound) is None
+
+    def test_coverage_refusal_closes_even_when_model_omits_fin(self, _common_patches):
+        mgr, ww = FakeMgrWithSend(_session_doc()), _ww_client()
+        _run(mgr, {'return_value': 'ah ok gracias por avisar'},
+             inbound='No tenemos cobertura en Puebla y no podemos ofrecerte el servicio.', ww=ww)
+        assert mgr.db.ai_followup_sessions._doc['status'] == 'ended'
+        ww.send.assert_called_once()
+
     def test_repeated_long_closing_can_finish_silently(self, _common_patches):
         mgr, ww = FakeMgrWithSend(_session_doc()), _ww_client()
         text = 'ah ok no está mal déjame pensarlo y te aviso'

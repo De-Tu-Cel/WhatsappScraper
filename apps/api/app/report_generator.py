@@ -731,9 +731,9 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     company_name = _safe(company.get("name") or company.get("domain") or "Empresa")
     industry     = _safe(company.get("industry") or analytics.get("industry") or "-")
     domain       = _safe(company.get("domain") or "")
-    wa_number    = ""
+    wa_number    = _safe(company.get("report_number") or "")
     for ct in (company.get("contacts") or []):
-        if ct.get("type") == "whatsapp":
+        if not wa_number and ct.get("type") == "whatsapp":
             wa_number = _safe(ct.get("value", ""))
             break
 
@@ -804,6 +804,9 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
             _st("wn", fontSize=9, leading=12, alignment=TA_RIGHT)))
     if domain:
         meta_lines.append(Paragraph(domain, _st("dm", fontSize=8, textColor=C["muted"], leading=11, alignment=TA_RIGHT)))
+    if company.get("report_contact_label"):
+        meta_lines.append(Paragraph(escape(_safe(company["report_contact_label"])),
+            _st("contact_label", fontSize=8, textColor=C["muted"], leading=11, alignment=TA_RIGHT)))
     meta_lines.append(Paragraph(now_str, _st("dt2", fontSize=7.5, textColor=C["muted"], leading=10, alignment=TA_RIGHT)))
 
     header_tbl = Table(
@@ -893,10 +896,15 @@ def generate_report(company: dict, analytics: dict, thread: list, screenshot_b64
     right_items.append(cat_tbl)
     right_items.append(Spacer(1, 3 * mm))
 
-    # — Description of this category —
-    if cat_description:
+    # Diesgas (2026-10-15): mostrar el fundamento guardado de esta conversación;
+    # la descripción genérica era idéntica para todos los canales de la categoría.
+    description = notes or cat_description
+    if description:
+        if notes:
+            right_items.append(Paragraph("Resultado del analisis", _st("verdict_label",
+                fontSize=7.5, fontName="Helvetica-Bold", textColor=C["muted"], leading=10, spaceAfter=3)))
         desc_tbl = Table(
-            [[Paragraph(cat_description, _st("cdesc", fontSize=9, textColor=C["text"], leading=13))]],
+            [[Paragraph(escape(description), _st("cdesc", fontSize=9, textColor=C["text"], leading=13))]],
             colWidths=[RIGHT_W],
         )
         desc_tbl.setStyle(TableStyle([

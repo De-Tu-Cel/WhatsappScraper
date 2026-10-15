@@ -564,10 +564,10 @@ def report_verdict(db, company_id: str, number: str | None = None) -> dict | Non
         return None
     hybrid = doc.get("hibrido")
     if number:
-        n10 = "".join(filter(str.isdigit, number))[-10:]
-        entry = next((e for e in doc.get("numbers") or [] if e.get("number") == n10), None)
-        if entry:
-            hybrid = entry.get("hibrido")
+        from app.report_scope import select_number_analytics
+        entry = select_number_analytics(doc, number)
+        # No sustituir el análisis de un número por el de otra sucursal.
+        hybrid = entry.get("hibrido") if entry else None
     if not hybrid or hybrid.get("error") or not hybrid.get("category"):
         return None
     out = {"category": hybrid["category"], "is_ai": bool(hybrid.get("is_ai")), **(hybrid.get("scores") or {})}

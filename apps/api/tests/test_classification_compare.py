@@ -336,8 +336,8 @@ class TestReportVerdict:
                                    {"number": "4429999999", "hibrido": self._hybrid("sin_respuesta")}]})
         assert cc.report_verdict(db, "c1", "+52 1 442 123 4834")["category"] == "humano"
         assert cc.report_verdict(db, "c1", "4429999999")["category"] == "sin_respuesta"
-        # Un número que no está en el desplegable: la de la empresa.
-        assert cc.report_verdict(db, "c1", "5500000000")["category"] == "hibrido_bot"
+        # Diesgas (2026-10-15): nunca rellenar otro número con el resultado general.
+        assert cc.report_verdict(db, "c1", "5500000000") is None
 
     def test_without_a_usable_comparison_the_saved_analysis_stays(self):
         assert cc.report_verdict(self._db(None), "c1") is None

@@ -26,6 +26,17 @@ test('missing cache and browser failures fall back to public notify name', async
   assert.equal(await cachedContactName({ pupPage: { evaluate: async () => { throw Error('page closed') } } }, 'jid'), '')
 })
 
+test('LID contacts can use the public name already present in the cached chat', async () => {
+  const client = { pupPage: { evaluate: async fn => {
+    global.window = { require: () => ({
+      Contact: { get: () => null },
+      Chat: { get: id => { assert.equal(id, '123@lid'); return { contact: { verifiedName: 'Gas Uno Puebla' } } } },
+    }) }
+    try { return fn('123@lid') } finally { delete global.window }
+  } } }
+  assert.equal(await cachedContactName(client, '123@lid'), 'Gas Uno Puebla')
+})
+
 test('a stalled browser cannot indefinitely block inbound processing', async () => {
   assert.equal(await cachedContactName({ pupPage: { evaluate: () => new Promise(() => {}) } }, 'jid', 'Gas Uno'), 'Gas Uno')
 })

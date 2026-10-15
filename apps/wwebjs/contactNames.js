@@ -13,9 +13,13 @@ async function cachedContactName(client, jid, notifyName) {
   try {
     const contact = await Promise.race([
       client.pupPage.evaluate(id => {
-        const store = window.require('WAWebCollections').Contact
-        const c = store.get(id) // Sólo caché: no find(), consultas ni verificaciones WA.
-        return c ? { verifiedName: c.verifiedName, pushname: c.pushname } : null
+        const store = window.require('WAWebCollections')
+        const c = store.Contact.get(id) // Sólo caché: no find(), consultas ni verificaciones WA.
+        const chatContact = store.Chat?.get(id)?.contact
+        return {
+          verifiedName: chatContact?.verifiedName || c?.verifiedName,
+          pushname: chatContact?.pushname || c?.pushname,
+        }
       }, jid),
       new Promise(resolve => { timer = setTimeout(() => resolve(null), 1500) }),
     ])

@@ -2092,7 +2092,9 @@ class MongoDBManager:
             {"company_id": {"$in": _all_cids}},
             {"direction": 1, "to_number": 1, "from_number": 1, "number": 1,
              "analysis": 1, "created_at": 1, "company_id": 1, "status": 1,
-             "sent_by_username": 1, "sent_by_name": 1}
+             "sent_by_username": 1, "sent_by_name": 1, "related_to_number": 1,
+             "whatsapp_name": 1, "whatsapp_name_source": 1,
+             "raw_data.whatsappName": 1, "raw_data.pushName": 1, "raw_data.notifyName": 1}
         ))
         _msgs_by_cid = defaultdict(list)
         for _m in _msgs_all:
@@ -2100,19 +2102,12 @@ class MongoDBManager:
 
         _contacts_all = list(self.db.contacts.find(
             {"company_id": {"$in": _all_cids}, "type": "whatsapp"},
-            {"company_id": 1, "value": 1, "label": 1, "source": 1}
+            {"company_id": 1, "value": 1, "label": 1, "source": 1,
+             "whatsapp_name": 1, "whatsapp_name_source": 1}
         ))
         _contacts_by_cid = defaultdict(list)
         for _c in _contacts_all:
             _contacts_by_cid[_c.get("company_id", "")].append(_c)
-
-        _pcs_all = list(self.db.person_contacts.find(
-            {"company_id": {"$in": _all_cids}},
-            {"company_id": 1, "name": 1, "phone": 1, "whatsapp": 1}
-        ))
-        _pcs_by_cid = defaultdict(list)
-        for _pc in _pcs_all:
-            _pcs_by_cid[_pc.get("company_id", "")].append(_pc)
 
         _fresh_threshold = datetime.utcnow() - timedelta(minutes=10)
         _pending_counts = {
@@ -2175,14 +2170,6 @@ class MongoDBManager:
             registered_contacts = _contacts_by_cid.get(company_id, [])
             registered_norms = {_norm(c["value"]) for c in registered_contacts}
             contact_meta = {_norm(c["value"]): c for c in registered_contacts}
-
-            # Build name map from person_contacts: normalized phone → first name found
-            _person_name_map = {}
-            for pc in _pcs_by_cid.get(company_id, []):
-                for _field in ("whatsapp", "phone"):
-                    _pnum = _norm(pc.get(_field, "") or "")
-                    if _pnum and _pnum not in _person_name_map and pc.get("name"):
-                        _person_name_map[_pnum] = pc["name"]
 
             def _primary_num():
                 for rn in registered_norms:
@@ -2256,16 +2243,16 @@ class MongoDBManager:
                 analyzed = [m for m in data["inbound"] if m.get("analysis")]
                 _meta = contact_meta.get(n, {})
                 _src = _meta.get("source", "") or ""
-                _raw_label = (_meta.get("label", "") or "").strip()
-                _GENERIC_LABELS = {"whatsapp", "wa", "contacto", "chat", "mensaje", "escríbenos",
-                                   "escribenos", "comunícate", "comunicate", "envíanos", "envianos"}
-                _label = "" if _raw_label.lower() in _GENERIC_LABELS else _raw_label
-                # Fallback: usar nombre de persona/sucursal si el contacto no tiene label
-                if not _label:
-                    _label = _person_name_map.get(n, "")
+                # Gas 1 (2026-10-15): "Reportar fuga" era un botón de la web,
+                # no el nombre del perfil. Sin nombre público, mostrar el teléfono.
+                from app.contact_identity import whatsapp_name_for_number
+                _label = whatsapp_name_for_number(num_raw[n], msgs, registered_contacts)
                 entry = {
                     "number": num_raw[n],
                     "label": _label,
+                    "whatsapp_name": _label,
+                    "label_source": "whatsapp" if _label else None,
+                    "contact_label": _meta.get("label") or "",
                     "source": re.sub(r"^https?://(www\.)?", "", _src).rstrip("/") if _src else "",
                     "sent": data["sent"],
                     "responses": len(data["inbound"]),

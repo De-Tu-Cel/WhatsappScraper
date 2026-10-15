@@ -3,6 +3,7 @@ const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js')
 const puppeteerExtra = require('puppeteer-extra')
 const StealthPlugin  = require('puppeteer-extra-plugin-stealth')
 const QRCode = require('qrcode')
+const { cachedContactName } = require('./contactNames')
 const fs = require('fs')
 const path = require('path')
 const dns = require('dns')
@@ -958,6 +959,7 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
       }
     }
 
+    const whatsappName = await cachedContactName(client, msg.from, msg.rawData?.notifyName)
     forwardWebhook({
       event: 'messages.received',
       sessionId,
@@ -967,6 +969,7 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
         fromMe: false,
         number,
         body: messageBody,
+        whatsappName,
         type: msg.type,
         messageId: msg.id._serialized,
         timestamp: msg.timestamp,
@@ -1479,12 +1482,14 @@ app.post('/session/:id/messages', async (req, res) => {
         }
       } catch (_) { /* con lo que ya esté en memoria alcanza */ }
       const slice = msgs.filter((m) => m && !m.isNotification).slice(-limit)
+      const publicName = chat.contact && (chat.contact.verifiedName || chat.contact.pushname)
       return {
         via: (chat.id && chat.id._serialized) || '',
         messages: slice.map((m) => ({
           id: (m.id && (m.id._serialized || m.id.id)) || (typeof m.id === 'string' ? m.id : ''),
           fromMe: !!(m.id?.fromMe ?? m.fromMe),
           body: m.body || m.caption || '',
+          whatsappName: m.id?.fromMe || m.fromMe ? '' : publicName || m.notifyName || '',
           timestamp: m.t || 0,
           type: m.type,
           from: (m.from && (m.from._serialized || m.from)) || '',

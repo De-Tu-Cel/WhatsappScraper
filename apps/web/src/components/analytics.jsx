@@ -64,7 +64,6 @@ import MenuItem from '@mui/material/MenuItem'
 import Checkbox from '@mui/material/Checkbox'
 import GroupIcon from '@mui/icons-material/Group'
 import AndyBotBuilder from './AndyBotBuilder'
-import { isPlausibleLabel } from './scheduledSends'
 import GasBotModal from './GasBotModal'
 import ClassificationSettingsModal from './ClassificationSettingsModal'
 import TimerOffIcon from '@mui/icons-material/TimerOff'
@@ -1604,7 +1603,8 @@ export default function Analytics({ onNavigateToConv }) {
                       const hasAnalysis = !!n.category
                       const shortNum = (n.number || '').replace(/\D/g,'').slice(-10)
                         .replace(/(\d{2})(\d{4})(\d{4})/, '$1 $2 $3')
-                      const showLabel = isPlausibleLabel(n.label)
+                      const whatsappName = (n.whatsapp_name || (n.label_source === 'whatsapp' ? n.label : '') || '').trim()
+                      const showLabel = Boolean(whatsappName)
                       const numKey  = `${row.company_id}_${n.number}`
                       const genKey  = numKey
                       const isGenNum = generating === genKey
@@ -1615,8 +1615,8 @@ export default function Analytics({ onNavigateToConv }) {
                           {/* Empresa — nombre de sucursal o número como fallback */}
                           <TableCell sx={{ ...NSUB, pl: 3 }}>
                             <Box>
-                              <Typography sx={{ fontSize: '0.75rem', fontWeight: showLabel ? 600 : 400, color: replied ? (showLabel ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.55)') : 'rgba(255,255,255,0.3)', lineHeight: 1.3, fontFamily: showLabel ? 'inherit' : 'monospace' }}>
-                                {showLabel ? n.label : shortNum}
+                              <Typography data-analysis-contact-name title={showLabel ? (lang === 'en' ? 'WhatsApp profile name' : 'Nombre del perfil de WhatsApp') : ''} sx={{ fontSize: '0.75rem', fontWeight: showLabel ? 600 : 400, color: replied ? (showLabel ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.55)') : 'rgba(255,255,255,0.3)', lineHeight: 1.3, fontFamily: showLabel ? 'inherit' : 'monospace' }}>
+                                {showLabel ? whatsappName : shortNum}
                               </Typography>
                               {n.source && (
                                 <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.22)', lineHeight: 1.2 }}>

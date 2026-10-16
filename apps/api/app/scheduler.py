@@ -110,15 +110,15 @@ def _nc_aware_pick(db, candidates: list, company_id: str) -> str | None:
     NC cap is shared evenly across sessions. Returns None if all instances are
     at their NC cap — the caller should treat this as "skipped_nc_cap".
 
-    For existing contacts: returns the first instance not at its daily send cap
-    (same as the old pick_connected_instance behavior).
+    For existing contacts without an eligible preferred line: choose the lowest
+    daily contact count. New-contact scoring also accounts for in-flight reservations.
 
     Returns None when candidates is empty (nothing connected) or when all
     instances are at their NC cap for a new contact.
     """
     from app.daily_cap import (
         is_new_contact, get_new_contacts_limit,
-        count_new_contacts_today_for_instance,
+        count_new_contacts_today_for_instance, _today,
     )
     if not candidates:
         return None
@@ -142,6 +142,14 @@ def _nc_aware_pick(db, candidates: list, company_id: str) -> str | None:
         warmup = bool((inst or {}).get("warmup_mode"))
         limit = get_new_contacts_limit(warmup)
         count = count_new_contacts_today_for_instance(db, name)
+        reservation = db.db.instance_new_contacts_today.find_one(
+            {'instance': name, 'date': _today()}, {'companies': 1},
+        ) or {}
+        reserved = reservation.get('companies', [])
+        if isinstance(reserved, list):
+            if company_id in reserved:
+                return name  # Another phone of this same company is already in flight here.
+            count = max(count, len(reserved))
         scored.append((limit - count, name))
     scored.sort(reverse=True)
     # If the best candidate has no capacity left, all are saturated → skip.
@@ -643,8 +651,12 @@ def _send_message(db, company_id: str, to_number: str, message: str, job_id: str
                     inst_doc = db.db.instances.find_one({"name": inst_name}, {"provider": 1})
                     provider = (inst_doc or {}).get("provider", "")
                     if provider == "wwebjs":
-                        return _send_via_wwebjs(db, company_id, to_number, message, job_id, delay_ms, session=inst_name,
-                                                 sent_by_username=sent_by_username, sent_by_name=sent_by_name)
+                        from app.whatsapp_wwebjs import get_all_connected_instances
+                        if inst_name in get_all_connected_instances(db):
+                            return _send_via_wwebjs(db, company_id, to_number, message, job_id, delay_ms, session=inst_name,
+                                                     sent_by_username=sent_by_username, sent_by_name=sent_by_name)
+                        # A stored company assignment is not evidence of a live session.
+                        # Continue with this user's connected lines, keeping the original assignment.
                     if provider == "wasender":
                         return _send_via_wasender(db, company_id, to_number, message, job_id, delay_ms, session=inst_name,
                                                    sent_by_username=sent_by_username, sent_by_name=sent_by_name)

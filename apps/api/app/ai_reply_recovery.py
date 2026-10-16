@@ -131,6 +131,8 @@ def queue_due(db, enqueue, limit=3):
             continue
         co = db.db.companies.find_one({'_id': ObjectId(job['company_id'])}) if ObjectId.is_valid(job['company_id']) else None
         assigned = (co or {}).get('assigned_instance')
+        from app.reply_routing import reply_source_instance
+        assigned = reply_source_instance(db, job['company_id'], job['phone_number'], job.get('inbound_log_id')) or assigned
         if assigned and assigned not in connected:
             finish(db, job, 'pending', 'instance_disconnected', now + timedelta(minutes=1))
             continue

@@ -1854,6 +1854,14 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         else:
             _close_session_without_reply(db, sid, company_id, phone_number, 'no_instance')
 
+    def _defer_unavailable_instance():
+        from app.ai_reply_recovery import defer_reply
+        db.db.ai_followup_sessions.update_one({'_id': sid}, {'$set': {'ai_typing': False}})
+        defer_reply(db, session_id=sid, phone_number=phone_number, company_id=company_id,
+                    inbound_body=inbound_body, inbound_log_id=inbound_log_id,
+                    manual_activation=manual_activation, proactive=proactive,
+                    retry_at=datetime.utcnow() + timedelta(minutes=1))
+
     session_max_turns = session.get("max_turns", MAX_TURNS)
 
     # Skip if max turns already reached
@@ -2026,6 +2034,8 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         if company_id and len(company_id) == 24:
             co = db.db.companies.find_one({"_id": ObjectId(company_id)}, {"assigned_instance": 1})
             preferred_instance = (co or {}).get("assigned_instance")
+            from app.reply_routing import reply_source_instance
+            preferred_instance = reply_source_instance(db, company_id, phone_number, inbound_log_id) or preferred_instance
             if preferred_instance:
                 _doc = db.db.instances.find_one({"name": preferred_instance}, {"provider": 1})
                 _provider = (_doc or {}).get("provider", "")
@@ -2060,6 +2070,11 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
             log.warning("[AIFollowup] wwebjs: sin sesión asignada — Andy no puede enviar a %s", phone_number)
             _pause_without_instance()
             return
+        from app.whatsapp_wwebjs import get_all_connected_instances
+        if instance not in get_all_connected_instances(db):
+            # Do not move an established conversation to a different sender.
+            _defer_unavailable_instance()
+            return
     else:
         # No assigned_instance (or one whose provider we couldn't resolve) means
         # we don't actually know which provider this company uses — this used to
@@ -2074,6 +2089,11 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         from app.whatsapp_wwebjs import get_all_connected_instances as _ww_all_connected
         _ww_candidates = _ww_all_connected(db)
         if _ww_candidates:
+            if ((preferred_instance and preferred_instance not in _ww_candidates)
+                    or (not preferred_instance and len(_ww_candidates) > 1)):
+                # No safe sender identity: never choose another user's first line.
+                _defer_unavailable_instance()
+                return
             instance = preferred_instance if preferred_instance in _ww_candidates else _ww_candidates[0]
             _inst_provider = "wwebjs"
         else:

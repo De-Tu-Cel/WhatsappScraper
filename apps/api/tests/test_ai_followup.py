@@ -776,6 +776,46 @@ def test_busy_line_persists_reply_for_retry_without_recording_a_failed_send(_com
     assert mgr.logged == []
 
 
+def test_ai_defers_offline_sender_before_llm_instead_of_using_other_available_lines(_common_patches):
+    mgr = FakeMgrWithSend(_session_doc())
+    mgr.db.companies = MagicMock()
+    mgr.db.companies.find_one.return_value = {'assigned_instance': 'original'}
+    mgr.db.instances.find_one.return_value = {'provider': 'wwebjs'}
+    ww = _ww_client()
+    with (patch('app.whatsapp_wwebjs.get_all_connected_instances', return_value=['backup', 'foreign']),
+          patch('app.ai_reply_recovery.defer_reply') as defer):
+        llm = _run(mgr, {'return_value': 'Precio?'}, ww=ww)
+    llm.assert_not_called()
+    ww.send.assert_not_called()
+    defer.assert_called_once()
+    assert mgr.db.ai_followup_sessions._doc['status'] == 'active'
+
+
+def test_ai_without_sender_identity_does_not_choose_first_line_from_other_users(_common_patches):
+    mgr = FakeMgrWithSend(_session_doc())
+    ww = _ww_client()
+    with (patch('app.whatsapp_wwebjs.get_all_connected_instances', return_value=['unrelated-a', 'unrelated-b']),
+          patch('app.ai_reply_recovery.defer_reply') as defer):
+        llm = _run(mgr, {'return_value': 'Precio?'}, ww=ww)
+    llm.assert_not_called()
+    ww.send.assert_not_called()
+    defer.assert_called_once()
+
+
+def test_ai_uses_receiving_line_for_the_exact_chat_instead_of_company_default(_common_patches):
+    mgr = FakeMgrWithSend(_session_doc())
+    mgr.db.companies = MagicMock()
+    mgr.db.companies.find_one.return_value = {'assigned_instance': 'other-company-phone-line'}
+    mgr.db.instances.find_one.return_value = {'provider': 'wwebjs', 'profile_name': 'Ana'}
+    mgr.db.message_logs.find_one.return_value = {'received_on_instance': 'actual-chat'}
+    ww = _ww_client()
+    with patch('app.whatsapp_wwebjs.get_all_connected_instances', return_value=['actual-chat']):
+        llm = _run(mgr, {'return_value': 'Me dicen el precio?'}, log_id=str(ObjectId()), ww=ww)
+    ww.send.assert_called_once()
+    assert mgr.logged[0]['instance_name'] == 'actual-chat'
+    assert llm.call_args.args[1]['persona_name'] == 'Ana'
+
+
 class TestBusinessHoursAndDeferredReplies:
     @pytest.mark.parametrize('hour,minute,expected', [
         (0, 0, False), (7, 59, False), (8, 0, True),

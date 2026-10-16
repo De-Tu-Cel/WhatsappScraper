@@ -142,6 +142,18 @@ def test_disconnected_assigned_session_waits_without_closing_chat(db, monkeypatc
     assert db.db.ai_followup_sessions.docs[0]['status']=='active'
 
 
+@pytest.mark.parametrize('actual_connected', [True, False])
+def test_recovery_checks_the_actual_receiving_line_not_another_company_phone(db, monkeypatch, actual_connected):
+    db.db.message_logs.docs[0]['received_on_instance'] = 'actual-chat'
+    connected = {'actual-chat'} if actual_connected else {'wa1'}
+    monkeypatch.setattr('app.daily_cap.connected_session_names', lambda db: connected)
+    queued = []
+    recovery.queue_due(db, queued.append)
+    assert len(queued) == int(actual_connected)
+    assert db.db.ai_reply_pending.docs[0]['status'] == ('processing' if actual_connected else 'pending')
+    assert db.db.ai_followup_sessions.docs[0]['status'] == 'active'
+
+
 def test_provider_change_resumes_saved_reply_with_current_provider(db, monkeypatch):
     from app import service_health
     ensure=MagicMock()

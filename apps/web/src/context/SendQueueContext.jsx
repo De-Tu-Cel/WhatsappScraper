@@ -7,8 +7,8 @@ const SendQueueCtx = createContext(null)
 export const useSendQueue = () => useContext(SendQueueCtx)
 
 // The actual sending now runs entirely server-side (backEnd/app/send_now_worker.py)
-// as a single global FIFO worker — this context just submits jobs and polls the
-// shared queue's status, so a page refresh never drops what's mid-send. The
+// with independent partitions per authenticated user. This context submits jobs
+// and polls that user's status, so a refresh never drops what's mid-send. The
 // public API (addJob/addBatch/cancel/active/queueLen/completedCount/queueError)
 // is kept byte-identical to the old in-browser-loop version so none of the 6
 // call sites (searchProspects/batchProcessor/csvImporter/sendCampaign/

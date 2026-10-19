@@ -171,6 +171,7 @@ def test_scheduler_uncached_lookup_is_audited_with_origin(db, monkeypatch):
 
 
 def test_manual_single_lookup_is_audited(db, monkeypatch):
+    monkeypatch.setattr('app.api.routes._require_session_access', lambda *args: {'role': 'admin'})
     from app.api import routes
     from app import whatsapp_wwebjs
     monkeypatch.setattr(routes, 'MongoDBManager', lambda: db)

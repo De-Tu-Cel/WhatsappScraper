@@ -2980,6 +2980,10 @@ def _maps_lead_from_item(item: dict, phone_code: str | None, listed_url: str = "
     cid = str(item.get("cid") or "")
     if not phone or not cid or re.search(r"[a-z]", phone, re.IGNORECASE):
         return None
+    from app.international_phone import normalize_extracted_phone
+    phone = normalize_extracted_phone(phone, phone_code) or ''
+    if not phone:
+        return None
     digits = re.sub(r"\D", "", phone)
     if phone_code and not digits.startswith(phone_code.lstrip("+")):
         return None

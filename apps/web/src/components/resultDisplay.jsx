@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
 import { useLang } from '../context/LangContext'
+import { phoneVerification } from '../lib/phoneVerification'
 import Box from '@mui/material/Box'
 import Grid from '@mui/material/Grid'
 import Card from '@mui/material/Card'
@@ -208,7 +209,7 @@ function InfoRow({ label, value }) {
 }
 
 // ─── Metric card ──────────────────────────────────────────────────────────────
-function ContactColumn({ icon, title, items, emptyMsg, contactedNums, lang, verified, columns = false }) {
+function ContactColumn({ icon, title, items, emptyMsg, contactedNums, lang, validation, columns = false }) {
   const [copied, setCopied] = useState('')
   const [copyError, setCopyError] = useState(false)
   const shown = [...new Set(items || [])]
@@ -220,7 +221,7 @@ function ContactColumn({ icon, title, items, emptyMsg, contactedNums, lang, veri
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: .7 }}><Box sx={{ color: 'var(--accent)', display: 'flex', '& svg': { fontSize: 18 } }}>{icon}</Box><Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '.83rem' }}>{title}</Typography><Typography sx={{ color: 'var(--text-muted)', fontSize: '.73rem' }}>{shown.length}</Typography></Box>
     {shown.length ? <Box sx={{ display: 'grid', gridTemplateColumns: columns && shown.length > 1 ? { xs: 'minmax(0,1fr)', sm: 'repeat(2,minmax(0,1fr))' } : 'minmax(0,1fr)', gap: .75, maxHeight: 220, overflowY: 'auto' }}>{shown.map(value => <Box key={value} sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.25, py: .8, minWidth: 0, border: '1px solid var(--border)', borderRadius: '9px', bgcolor: 'var(--surface)', '&:hover': { bgcolor: 'var(--item-hover)' } }}>
       <Typography sx={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere', fontVariantNumeric: 'tabular-nums', fontSize: '.83rem', color: 'var(--text)' }}>{value}</Typography>
-      {verified === value && <Chip size="small" label={lang === 'en' ? 'Verified' : 'Verificado'} sx={{ height: 21, fontSize: '.65rem', color: 'var(--text)', bgcolor: 'rgba(34,197,94,.1)' }} />}
+      {phoneVerification(validation, value)?.valid === true && <Tooltip title={lang === 'en' ? 'Registration on WhatsApp was checked. This does not verify identity or location.' : 'Se comprobo su registro en WhatsApp. No verifica la identidad ni la ubicacion.'}><Chip size="small" label={lang === 'en' ? 'Verified' : 'Verificado'} sx={{ height: 21, fontSize: '.65rem', color: 'var(--text)', bgcolor: 'rgba(34,197,94,.1)' }} /></Tooltip>}
       {contactedNums?.has(value) && <Typography sx={{ fontSize: '.65rem', color: 'var(--text-muted)' }}>{lang === 'en' ? 'Messaged' : 'Contactado'}</Typography>}
       <Tooltip title={copied === value ? (lang === 'en' ? 'Copied' : 'Copiado') : (lang === 'en' ? 'Copy' : 'Copiar')}><IconButton size="small" aria-label={`${lang === 'en' ? 'Copy' : 'Copiar'} ${value}`} onClick={() => copy(value)} sx={{ color: copied === value ? 'var(--accent)' : 'var(--text-muted)' }}>{copied === value ? <CheckIcon sx={{ fontSize: 16 }} /> : <ContentCopyIcon sx={{ fontSize: 16 }} />}</IconButton></Tooltip>
     </Box>)}</Box> : <Typography sx={{ color: 'var(--text-muted)', fontSize: '.78rem', py: .5 }}>{emptyMsg}</Typography>}
@@ -261,7 +262,7 @@ export default function ResultDisplay({ result, aside }) {
           </Box>
         </Box>
         <Box data-single-metrics sx={{ order: { xs: 3, md: 0 }, flex: { xs: '1 1 100%', md: '0 1 auto' }, display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', borderTop: { xs: '1px solid var(--border)', md: 0 }, pt: { xs: 1.5, md: 0 } }}>
-          {[{ value: `${completeness * 20}%`, label: en ? 'Data completeness' : 'Completitud de datos' }, { value: result.primary_whatsapp_number ? (en ? 'Yes' : 'Sí') : '—', label: en ? 'Verified WhatsApp' : 'WhatsApp verificado' }, { value: totalContacts, label: en ? 'Contact methods' : 'Datos de contacto' }].map((metric,index) => <Box key={metric.label} sx={{ px: { xs: 1, md: 2.5 }, textAlign: 'center', minWidth: 0, borderLeft: index ? '1px solid var(--border)' : 0, maxWidth: { md: 160 } }}><Typography sx={{ fontWeight: 800, color: 'var(--text)', fontSize: '1.25rem', lineHeight: 1.25, fontVariantNumeric: 'tabular-nums' }}>{metric.value}</Typography><Typography sx={{ fontSize: '.72rem', color: 'var(--text-muted)', mt: .6, lineHeight: 1.4 }}>{metric.label}</Typography></Box>)}
+          {[{ value: `${completeness * 20}%`, label: en ? 'Data completeness' : 'Completitud de datos' }, { value: result.primary_whatsapp_number ? (en ? 'Yes' : 'Sí') : '—', label: en ? 'WhatsApp detected' : 'WhatsApp detectado' }, { value: totalContacts, label: en ? 'Contact methods' : 'Datos de contacto' }].map((metric,index) => <Box key={metric.label} sx={{ px: { xs: 1, md: 2.5 }, textAlign: 'center', minWidth: 0, borderLeft: index ? '1px solid var(--border)' : 0, maxWidth: { md: 160 } }}><Typography sx={{ fontWeight: 800, color: 'var(--text)', fontSize: '1.25rem', lineHeight: 1.25, fontVariantNumeric: 'tabular-nums' }}>{metric.value}</Typography><Typography sx={{ fontSize: '.72rem', color: 'var(--text-muted)', mt: .6, lineHeight: 1.4 }}>{metric.label}</Typography></Box>)}
         </Box>
         {(s.website || s.maps_url) && <Button component="a" href={s.website || s.maps_url} target="_blank" rel="noopener noreferrer" endIcon={<OpenInNewIcon sx={{ fontSize: 16 }} />} variant="outlined" sx={{ color: 'var(--accent)', borderColor: 'var(--border)', textTransform: 'none', borderRadius: '10px', fontWeight: 600 }}>{s.website ? (en ? 'Visit website' : 'Visitar sitio') : 'Google Maps'}</Button>}
       </Box>
@@ -269,7 +270,7 @@ export default function ResultDisplay({ result, aside }) {
         <Box data-single-details sx={{ minWidth: 0 }}>
           <Section icon={<ContactsIcon fontSize="small" />} title={r.contactInfo}>
             <Box sx={{ display: 'grid', gap: 2 }}>
-              <ContactColumn icon={<WhatsAppIcon />} title="WhatsApp" items={cr.all_whatsapp_numbers?.length ? cr.all_whatsapp_numbers : result.primary_whatsapp_number ? [result.primary_whatsapp_number] : []} emptyMsg={r.notFound} contactedNums={new Set(contacted?.contacted_numbers || [])} lang={lang} verified={result.primary_whatsapp_number} />
+              <ContactColumn icon={<WhatsAppIcon />} title="WhatsApp" items={cr.all_whatsapp_numbers?.length ? cr.all_whatsapp_numbers : result.primary_whatsapp_number ? [result.primary_whatsapp_number] : []} emptyMsg={r.notFound} contactedNums={new Set(contacted?.contacted_numbers || [])} lang={lang} validation={result.whatsapp_validation || s.whatsapp_validation} />
               <ContactColumn columns icon={<PhoneIcon />} title={en ? 'Phones' : 'Teléfonos'} items={cr.phone_numbers} emptyMsg={r.notFoundPl} lang={lang} />
               <ContactColumn icon={<EmailIcon />} title={en ? 'Email addresses' : 'Correos'} items={cr.emails} emptyMsg={r.notFoundPl} lang={lang} />
             </Box>

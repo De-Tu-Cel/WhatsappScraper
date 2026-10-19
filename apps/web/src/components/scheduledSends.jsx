@@ -1338,18 +1338,20 @@ function CampaignForm({ editJob, defaultDate, duplicateFrom, onDone }) {
 
 // ─── Campaign pill ────────────────────────────────────────────────────────────
 
-function CampaignPill({ job, onClick }) {
+function CampaignPill({ job, onClick, compact = false }) {
   const meta = STATUS_META[job.status] || STATUS_META.pending
   return (
-    <Box onClick={e => { e.stopPropagation(); onClick(job) }} sx={{
-      display: 'flex', alignItems: 'center', gap: 0.4,
-      bgcolor: meta.bg, borderLeft: `2px solid ${meta.color}`,
-      borderRadius: '0 3px 3px 0', px: 0.6, py: 0.1,
-      cursor: 'pointer', overflow: 'hidden',
-      '&:hover': { filter: 'brightness(1.15)' }, transition: 'filter 0.12s',
+    <Box component="button" type="button" title={`${fmtTime(job.scheduled_at)} · ${job.name}`} onClick={e => { e.stopPropagation(); onClick(job) }} sx={{
+      display: 'flex', flexDirection: compact ? 'row' : 'column', alignItems: compact ? 'center' : 'stretch', gap: compact ? 0.6 : 0.35, width: '100%', textAlign: 'left', font: 'inherit',
+      bgcolor: meta.bg, border: `1px solid ${meta.color}33`,
+      borderRadius: compact ? '5px' : '8px', px: compact ? 0.6 : 0.9, py: compact ? 0.25 : 0.7,
+      cursor: 'pointer', overflow: 'hidden', minWidth: 0,
+      '&:hover': { borderColor: meta.color, bgcolor: `${meta.color}25` },
+      '&:focus-visible': { outline: '2px solid var(--accent)', outlineOffset: 2 }, transition: 'background-color 0.15s',
     }}>
-      <Typography sx={{ color: meta.color, fontSize: '0.62rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {fmtTime(job.scheduled_at)} {job.name}
+      <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: meta.color, fontSize: '0.65rem', fontWeight: 700, flexShrink: 0, whiteSpace: 'nowrap' }}>{!compact && <AccessTimeIcon sx={{ fontSize: 12 }} />}{fmtTime(job.scheduled_at)}</Box>
+      <Typography component="span" sx={{ color: compact ? meta.color : 'var(--text)', fontSize: compact ? '0.67rem' : '0.73rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {job.name}
       </Typography>
     </Box>
   )
@@ -1364,21 +1366,21 @@ function DayCell({ date, jobs, inCurrentMonth, isToday, isSelected, onDayClick, 
   const dayJobs  = jobs.filter(j => { try { return isSameDay(new Date(j.scheduled_at), date) } catch { return false } })
   return (
     <Box onClick={() => !isPast && onDayClick(date)} sx={{
-      minHeight: 90,
+      minHeight: 108, minWidth: 0,
       border: isSelected ? '1px solid rgba(var(--accent-rgb,59,130,246),0.6)' : '1px solid var(--border)',
       bgcolor: isSelected ? 'rgba(var(--accent-rgb,59,130,246),0.1)'
         : isToday ? 'rgba(var(--accent-rgb,59,130,246),0.05)'
         : isWeekend ? 'rgba(255,255,255,0.02)' : 'transparent',
-      p: 0.5, cursor: isPast ? 'not-allowed' : 'pointer',
-      opacity: isPast ? 0.35 : (inCurrentMonth ? 1 : 0.3),
+      p: 0.8, cursor: isPast ? 'default' : 'pointer',
+      opacity: inCurrentMonth ? 1 : 0.45,
       '&:hover': isPast ? {} : { bgcolor: isSelected ? 'rgba(var(--accent-rgb,59,130,246),0.14)' : isToday ? 'rgba(var(--accent-rgb,59,130,246),0.09)' : 'var(--item-hover)' },
       transition: 'background-color 0.12s, border-color 0.12s',
     }}>
-      <Box sx={{ width: 22, height: 22, borderRadius: '50%', mb: 0.4, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: isToday ? 'var(--accent,#3b82f6)' : 'transparent' }}>
+      <Box sx={{ width: 28, height: 28, borderRadius: '9px', mb: 0.8, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: isToday ? 'var(--accent,#3b82f6)' : 'transparent' }}>
         <Typography sx={{ color: isToday ? '#fff' : 'var(--text)', opacity: isToday ? 1 : 0.6, fontSize: '0.72rem', fontWeight: isToday ? 700 : 500, lineHeight: 1 }}>{date.getDate()}</Typography>
       </Box>
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.3 }}>
-        {dayJobs.slice(0, 3).map(j => <CampaignPill key={j._id} job={j} onClick={onJobClick} />)}
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6 }}>
+        {dayJobs.slice(0, 3).map(j => <CampaignPill key={j._id} job={j} onClick={onJobClick} compact />)}
         {dayJobs.length > 3 && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.6rem', pl: 0.5 }}>+{dayJobs.length - 3} más</Typography>}
       </Box>
     </Box>
@@ -1393,20 +1395,20 @@ function MonthGridSkeleton() {
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', borderBottom: '1px solid var(--border)', bgcolor: 'var(--surface, rgba(255,255,255,0.03))' }}>
         {Array.from({ length: 7 }).map((_, i) => (
           <Box key={i} sx={{ display: 'flex', justifyContent: 'center', py: 0.9 }}>
-            <Skeleton variant="text" width={26} sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
+            <Skeleton variant="text" width={26} sx={{ bgcolor: 'var(--item-hover)' }} />
           </Box>
         ))}
       </Box>
-      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', flex: 1, minHeight: 0 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gridTemplateRows: 'repeat(6,minmax(108px,1fr))', flex: 1 }}>
         {Array.from({ length: 42 }).map((_, i) => {
           const pillCount = i % 5 === 0 ? 2 : i % 3 === 0 ? 1 : 0
           return (
-            <Box key={i} sx={{ minHeight: 90, border: '1px solid var(--border)', p: 0.5 }}>
-              <Skeleton variant="circular" width={22} height={22} sx={{ mb: 0.6, bgcolor: 'rgba(255,255,255,0.07)' }} />
+            <Box key={i} sx={{ minHeight: 108, border: '1px solid var(--border)', p: 0.5 }}>
+              <Skeleton variant="circular" width={22} height={22} sx={{ mb: 0.6, bgcolor: 'var(--item-hover)' }} />
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
                 {Array.from({ length: pillCount }).map((_, j) => (
-                  <Skeleton key={j} variant="rounded" height={14} width={j === 0 ? '80%' : '55%'}
-                    sx={{ borderRadius: '0 3px 3px 0', bgcolor: 'rgba(255,255,255,0.05)' }} />
+                  <Skeleton key={j} variant="rounded" height={38} width={j === 0 ? '80%' : '55%'}
+                    sx={{ borderRadius: '8px', bgcolor: 'var(--item-hover)' }} />
                 ))}
               </Box>
             </Box>
@@ -1423,16 +1425,16 @@ function WeekGridSkeleton() {
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', borderBottom: '1px solid var(--border)' }}>
         {Array.from({ length: 7 }).map((_, i) => (
           <Box key={i} sx={{ textAlign: 'center', py: 1, borderRight: i < 6 ? '1px solid var(--border)' : 'none' }}>
-            <Skeleton variant="text" width={30} sx={{ mx: 'auto', bgcolor: 'rgba(255,255,255,0.08)' }} />
-            <Skeleton variant="circular" width={30} height={30} sx={{ mx: 'auto', mt: 0.3, bgcolor: 'rgba(255,255,255,0.07)' }} />
+            <Skeleton variant="text" width={30} sx={{ mx: 'auto', bgcolor: 'var(--item-hover)' }} />
+            <Skeleton variant="circular" width={30} height={30} sx={{ mx: 'auto', mt: 0.3, bgcolor: 'var(--item-hover)' }} />
           </Box>
         ))}
       </Box>
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', flex: 1 }}>
         {Array.from({ length: 7 }).map((_, i) => (
           <Box key={i} sx={{ borderRight: i < 6 ? '1px solid var(--border)' : 'none', minHeight: 160, p: 0.75, display: 'flex', flexDirection: 'column', gap: 0.4 }}>
-            {i % 3 !== 2 && <Skeleton variant="rounded" height={16} width="75%" sx={{ borderRadius: '0 3px 3px 0', bgcolor: 'rgba(255,255,255,0.05)' }} />}
-            {i % 4 === 0 && <Skeleton variant="rounded" height={16} width="55%" sx={{ borderRadius: '0 3px 3px 0', bgcolor: 'rgba(255,255,255,0.05)' }} />}
+            {i % 3 !== 2 && <Skeleton variant="rounded" height={48} width="75%" sx={{ borderRadius: '8px', bgcolor: 'var(--item-hover)' }} />}
+            {i % 4 === 0 && <Skeleton variant="rounded" height={48} width="55%" sx={{ borderRadius: '8px', bgcolor: 'var(--item-hover)' }} />}
           </Box>
         ))}
       </Box>
@@ -1445,19 +1447,19 @@ function ListRowsSkeleton() {
     <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ display: 'flex', gap: 0.5, px: 2, py: 1, borderBottom: '1px solid var(--border)' }}>
         {Array.from({ length: 4 }).map((_, i) => (
-          <Skeleton key={i} variant="rounded" width={i === 0 ? 60 : 78} height={22} sx={{ borderRadius: 10, bgcolor: 'rgba(255,255,255,0.06)' }} />
+          <Skeleton key={i} variant="rounded" width={i === 0 ? 60 : 78} height={22} sx={{ borderRadius: 10, bgcolor: 'var(--item-hover)' }} />
         ))}
       </Box>
       <Box sx={{ px: 2, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.2 }}>
         {Array.from({ length: 5 }).map((_, i) => (
           <Box key={i} sx={{ display: 'flex', alignItems: 'stretch', borderRadius: 2, overflow: 'hidden', border: '1px solid var(--border)', bgcolor: 'var(--card-bg)' }}>
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', px: 1.8, py: 1.5, borderRight: '1px solid var(--border)', minWidth: 58, gap: 0.4 }}>
-              <Skeleton variant="text" width={22} height={22} sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
-              <Skeleton variant="text" width={26} sx={{ bgcolor: 'rgba(255,255,255,0.06)' }} />
+              <Skeleton variant="text" width={22} height={22} sx={{ bgcolor: 'var(--item-hover)' }} />
+              <Skeleton variant="text" width={26} sx={{ bgcolor: 'var(--item-hover)' }} />
             </Box>
             <Box sx={{ flex: 1, minWidth: 0, px: 1.8, py: 1.4, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 0.6 }}>
-              <Skeleton variant="text" width="40%" sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
-              <Skeleton variant="text" width="65%" sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
+              <Skeleton variant="text" width="40%" sx={{ bgcolor: 'var(--item-hover)' }} />
+              <Skeleton variant="text" width="65%" sx={{ bgcolor: 'var(--item-hover)' }} />
             </Box>
           </Box>
         ))}
@@ -1478,13 +1480,13 @@ function MonthView({ jobs, viewYear, viewMonth, selectedDate, onDayClick, onJobC
   }).length, [jobs, viewYear, viewMonth])
 
   return (
-    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' }}>
+    <Box sx={{ flex: '1 0 auto', display: 'flex', flexDirection: 'column', minWidth: 700, position: 'relative' }}>
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', borderBottom: '1px solid var(--border)', bgcolor: 'var(--surface, rgba(255,255,255,0.03))' }}>
         {t.sched.daysShort.map(d => (
           <Typography key={d} sx={{ textAlign: 'center', color: 'var(--text)', opacity: 0.65, fontSize: '0.7rem', fontWeight: 700, py: 0.8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{d}</Typography>
         ))}
       </Box>
-      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', flex: 1, minHeight: 0 }}>
+      <Box data-schedule-month-grid sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,minmax(0,1fr))', gridTemplateRows: 'repeat(6,minmax(108px,1fr))', flex: 1 }}>
         {days.map((date, i) => (
           <DayCell key={i} date={date} jobs={jobs}
             inCurrentMonth={date.getMonth() === viewMonth}
@@ -1508,7 +1510,7 @@ function MonthView({ jobs, viewYear, viewMonth, selectedDate, onDayClick, onJobC
 // ─── Week view ────────────────────────────────────────────────────────────────
 
 function WeekView({ jobs, weekStart, selectedDate, onDayClick, onJobClick }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const today  = new Date()
   const selDay = selectedDate ? new Date(selectedDate) : null
   const days   = useMemo(() => Array.from({ length: 7 }, (_, i) => {
@@ -1516,13 +1518,13 @@ function WeekView({ jobs, weekStart, selectedDate, onDayClick, onJobClick }) {
   }), [weekStart])
 
   return (
-    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 840 }}>
       {/* Day headers */}
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', borderBottom: '1px solid var(--border)' }}>
         {days.map((d, i) => {
           const isTod = isSameDay(d, today)
           return (
-            <Box key={i} sx={{ textAlign: 'center', py: 1, borderRight: i < 6 ? '1px solid var(--border)' : 'none' }}>
+            <Box key={i} sx={{ textAlign: 'center', py: 1.6, bgcolor: isTod ? 'rgba(var(--accent-rgb),0.07)' : 'var(--card-bg)', borderRight: i < 6 ? '1px solid var(--border)' : 'none' }}>
               <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t.sched.daysLong[i]}</Typography>
               <Box sx={{ width: 30, height: 30, borderRadius: '50%', mx: 'auto', mt: 0.3, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: isTod ? 'var(--accent,#3b82f6)' : 'transparent' }}>
                 <Typography sx={{ color: isTod ? '#fff' : 'var(--text)', fontSize: '0.88rem', fontWeight: 700 }}>{d.getDate()}</Typography>
@@ -1541,14 +1543,15 @@ function WeekView({ jobs, weekStart, selectedDate, onDayClick, onJobClick }) {
           return (
             <Box key={i} onClick={() => !isPast && onDayClick(d)} sx={{
               borderRight: i < 6 ? '1px solid var(--border)' : 'none',
-              minHeight: 160, p: 0.75, cursor: isPast ? 'not-allowed' : 'pointer',
-              opacity: isPast ? 0.35 : 1,
+              minHeight: 320, minWidth: 0, p: 1, cursor: isPast ? 'default' : 'pointer',
+              opacity: 1,
               bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.08)' : 'transparent',
               border: isSel ? '1px solid rgba(var(--accent-rgb,59,130,246),0.4)' : '1px solid transparent',
               '&:hover': isPast ? {} : { bgcolor: isSel ? 'rgba(var(--accent-rgb,59,130,246),0.12)' : 'var(--item-hover)' },
               transition: 'background-color 0.12s',
-              display: 'flex', flexDirection: 'column', gap: 0.4,
+              display: 'flex', flexDirection: 'column', gap: 1,
             }}>
+              <Typography sx={{ fontSize: '0.64rem', color: 'var(--text-muted)', pb: 0.5 }}>{dayJobs.length} {lang === 'en' ? 'campaigns' : 'campañas'}</Typography>
               {dayJobs.map(j => <CampaignPill key={j._id} job={j} onClick={onJobClick} />)}
               {dayJobs.length === 0 && !isPast && (
                 <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1571,24 +1574,24 @@ function ListView({ jobs, onJobClick, onRequestCancel, onRequestDelete, onDuplic
   const filtered = statusFilter === 'all' ? jobs : jobs.filter(j => j.status === statusFilter)
 
   const filterChipSx = active => ({
-    fontSize: '0.68rem', height: 22,
-    bgcolor: active ? 'var(--accent,#3b82f6)' : 'var(--card-bg)',
+    fontSize: '0.73rem', height: 30, borderRadius: '8px',
+    bgcolor: active ? 'rgba(var(--accent-rgb),0.12)' : 'transparent',
     border: `1px solid ${active ? 'var(--accent,#3b82f6)' : 'var(--border)'}`,
-    color: active ? '#fff' : 'var(--text-muted)',
+    color: active ? 'var(--accent)' : 'var(--text-muted)',
     fontWeight: active ? 600 : 400,
     cursor: 'pointer',
-    boxShadow: active ? '0 0 8px rgba(var(--accent-rgb,59,130,246),0.4)' : 'none',
+    boxShadow: 'none',
     transition: 'all 0.15s',
-    '&:hover': { bgcolor: active ? 'var(--accent,#3b82f6)' : 'rgba(var(--accent-rgb,59,130,246),0.07)', opacity: active ? 0.88 : 1 },
+    '&:hover': { bgcolor: 'rgba(var(--accent-rgb),0.1)', opacity: active ? 0.88 : 1 },
   })
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
       {/* Status filter */}
       <Box sx={{ display: 'flex', gap: 0.5, px: 2, py: 1, borderBottom: '1px solid var(--border)', flexWrap: 'wrap', flexShrink: 0 }}>
-        <Chip label={t.sched.allStatuses} size="small" onClick={() => setStatusFilter('all')} sx={filterChipSx(statusFilter === 'all')} />
+        <Chip label={`${t.sched.allStatuses} · ${jobs.length}`} size="small" onClick={() => setStatusFilter('all')} sx={filterChipSx(statusFilter === 'all')} />
         {Object.entries(STATUS_META).map(([k, v]) => (
-          <Chip key={k} label={t.sched[v.tKey]} size="small" onClick={() => setStatusFilter(s => s === k ? 'all' : k)} sx={filterChipSx(statusFilter === k)} />
+          <Chip key={k} label={`${t.sched[v.tKey]} · ${jobs.filter(j => j.status === k).length}`} size="small" onClick={() => setStatusFilter(s => s === k ? 'all' : k)} sx={filterChipSx(statusFilter === k)} />
         ))}
       </Box>
 
@@ -1611,10 +1614,10 @@ function ListView({ jobs, onJobClick, onRequestCancel, onRequestDelete, onDuplic
             return (
               <Box key={job._id} onClick={() => onJobClick(job)} sx={{
                 display: 'flex', alignItems: 'stretch', borderRadius: 2, cursor: 'pointer', overflow: 'hidden',
-                border: `1px solid ${meta.color}55`,
+                border: '1px solid var(--border)',
                 bgcolor: 'var(--card-bg)',
                 transition: 'border-color 0.18s, box-shadow 0.18s, background-color 0.18s',
-                '&:hover': { borderColor: `${meta.color}99`, bgcolor: `${meta.color}10`, boxShadow: `0 2px 16px ${meta.color}22` },
+                '&:hover': { borderColor: `${meta.color}99`, bgcolor: `${meta.color}10`, boxShadow: 'none' },
               }}>
                 {/* Date badge */}
                 <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', px: 1.8, py: 1.5, borderRight: `1px solid ${meta.color}22`, minWidth: 58, flexShrink: 0, bgcolor: `${meta.color}08` }}>
@@ -1878,7 +1881,7 @@ function SidePanel({ panel, onDone, onRequestCancel, onRequestDelete, onDuplicat
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function ScheduledSends() {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const today = new Date()
   const [jobs,      setJobs]      = useState([])
   const [loading,   setLoading]   = useState(true)
@@ -1996,7 +1999,7 @@ export default function ScheduledSends() {
         </Box>
         <Box>
           <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 800, fontSize: '1.1rem', lineHeight: 1.2 }}>{t.sched.title}</Typography>
-          <Typography sx={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.72rem' }}>{t.sched.subtitle}</Typography>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.77rem', mt: 0.5 }}>{t.sched.subtitle}</Typography>
         </Box>
         <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 1 }}>
           {hasActive && <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
@@ -2011,30 +2014,47 @@ export default function ScheduledSends() {
         </Box>
       </Box>
 
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 1.5, mb: 2, flexShrink: 0 }}>
+        {['pending', 'running', 'done'].map(status => {
+          const meta = STATUS_META[status]
+          return <Box key={status} sx={{ display: 'flex', alignItems: 'center', gap: 1.3, px: { xs: 1.2, sm: 2 }, py: 1.5, borderRadius: '14px', bgcolor: 'var(--card-bg)', border: '1px solid var(--border)', minWidth: 0 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, flexShrink: 0, borderRadius: '10px', color: meta.color, bgcolor: meta.bg }}>{status === 'running' && !hasActive ? <SendIcon sx={{ fontSize: 17 }} /> : meta.icon}</Box>
+            <Box sx={{ minWidth: 0 }}>
+              {loading ? <Skeleton width={28} /> : <Typography sx={{ color: 'var(--text)', fontSize: '1.25rem', fontWeight: 800, lineHeight: 1.2 }}>{jobs.filter(j => j.status === status).length}</Typography>}
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', overflowWrap: 'anywhere' }}>{t.sched[meta.tKey]}</Typography>
+            </Box>
+          </Box>
+        })}
+      </Box>
+
       {/* Main area */}
-      <Box sx={{ flex: 1, display: 'flex', minHeight: 0, bgcolor: 'var(--item-hover)', border: '1px solid var(--border)', borderRadius: 3, overflow: 'hidden', position: 'relative' }}>
+      <Box sx={{ flex: 1, display: 'flex', minHeight: 0, bgcolor: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: '18px', overflow: 'hidden', position: 'relative' }}>
         <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
           {/* Toolbar */}
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0.5, px: 1.5, py: 1.2, borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.5, px: 2, py: 1.8, borderBottom: '1px solid var(--border)', flexShrink: 0, bgcolor: 'rgba(var(--accent-rgb),0.035)' }}>
             {/* Nav group */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
-              <IconButton size="small" onClick={navPrev} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text,#f1f5f9)' } }}><ChevronLeftIcon sx={{ fontSize: 18 }} /></IconButton>
+            {calView === 'list' ? <Typography sx={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text)' }}>{lang === 'en' ? 'All campaigns' : 'Todas las campañas'}</Typography> : <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+              <IconButton aria-label={lang === 'en' ? 'Previous period' : 'Periodo anterior'} size="small" onClick={navPrev} sx={{ color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: '9px', width: 32, height: 32, '&:hover': { color: 'var(--text,#f1f5f9)' } }}><ChevronLeftIcon sx={{ fontSize: 18 }} /></IconButton>
               <Typography sx={{ color: 'var(--text,#f1f5f9)', fontWeight: 700, fontSize: '0.9rem', whiteSpace: 'nowrap' }}>{toolbarLabel}</Typography>
-              <IconButton size="small" onClick={navNext} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text,#f1f5f9)' } }}><ChevronRightIcon sx={{ fontSize: 18 }} /></IconButton>
+              <IconButton aria-label={lang === 'en' ? 'Next period' : 'Periodo siguiente'} size="small" onClick={navNext} sx={{ color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: '9px', width: 32, height: 32, '&:hover': { color: 'var(--text,#f1f5f9)' } }}><ChevronRightIcon sx={{ fontSize: 18 }} /></IconButton>
               <Button size="small" onClick={goToday} sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', textTransform: 'none', borderRadius: 1.5, border: '1px solid var(--border)', px: 1.2, py: 0.3, '&:hover': { bgcolor: 'var(--item-hover)' } }}>{t.sched.today}</Button>
-            </Box>
+            </Box>}
             {/* View switcher */}
-            <Box sx={{ ml: 'auto', flexShrink: 0, display: 'flex', bgcolor: 'var(--item-hover)', borderRadius: 1.5, border: '1px solid var(--border)', overflow: 'hidden' }}>
+            <Box role="group" aria-label={lang === 'en' ? 'Calendar view' : 'Vista del calendario'} sx={{ ml: 'auto', display: 'flex', gap: 0.5, p: 0.5, bgcolor: 'var(--sidebar-bg)', borderRadius: '12px', border: '1px solid var(--border)' }}>
               {VIEWS.map(v => (
-                <Box key={v.key} onClick={() => setCalView(v.key)} sx={{ display: 'flex', alignItems: 'center', gap: 0.4, px: 1.2, py: 0.4, cursor: 'pointer', bgcolor: calView === v.key ? 'var(--border)' : 'transparent', color: calView === v.key ? 'var(--text,#f1f5f9)' : 'var(--text-muted)', transition: 'background-color 0.12s' }}>
-                  {v.icon}
-                  <Typography sx={{ fontSize: '0.7rem', fontWeight: calView === v.key ? 600 : 400, display: { xs: 'none', sm: 'block' } }}>{v.label}</Typography>
-                </Box>
+                <Button key={v.key} aria-pressed={calView === v.key} onClick={() => setCalView(v.key)} startIcon={v.icon} sx={{ minWidth: 0, gap: 0.3, px: 1.5, py: 0.7, borderRadius: '8px', textTransform: 'none', fontSize: '0.77rem', fontWeight: 600, border: '1px solid', borderColor: calView === v.key ? 'rgba(var(--accent-rgb),0.3)' : 'transparent', bgcolor: calView === v.key ? 'rgba(var(--accent-rgb),0.14)' : 'transparent', color: calView === v.key ? 'var(--accent)' : 'var(--text-muted)' }}>
+                  {v.label}
+                </Button>
               ))}
             </Box>
           </Box>
 
+          <Box sx={{ px: 2, py: 1, borderBottom: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: '0.7rem', display: 'flex', flexWrap: 'wrap', gap: 1, justifyContent: 'space-between' }}>
+            <span>{calView === 'list' ? (lang === 'en' ? 'Filter by status to find a campaign.' : 'Filtra por estado para encontrar una campaña.') : (lang === 'en' ? 'Select a date to schedule or a campaign to see its details.' : 'Elige un día para programar o una campaña para ver sus detalles.')}</span>
+            <span>{USER_TZ}</span>
+          </Box>
           {/* Content */}
+          <Box data-schedule-viewport sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'auto' }}>
           {loading ? (
             calView === 'week' ? <WeekGridSkeleton /> : calView === 'list' ? <ListRowsSkeleton /> : <MonthGridSkeleton />
           ) : calView === 'month' ? (
@@ -2049,6 +2069,7 @@ export default function ScheduledSends() {
             <ListView jobs={jobs} onJobClick={handleJobClick}
               onRequestCancel={requestCancel} onRequestDelete={requestDelete} onDuplicate={handleDuplicate} />
           )}
+          </Box>
         </Box>
 
         {/* Side panel */}

@@ -16,7 +16,7 @@ def operation_key(*parts):
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
-def dispatch_once(db, key, send, *, message_body=None, fingerprint=None):
+def dispatch_once(db, key, send, *, message_body=None, fingerprint=None, authorize=None):
     collection = db.db.delivery_receipts
     try:
         collection.insert_one({'_id': key, 'status': 'dispatching', 'fingerprint': fingerprint,
@@ -29,7 +29,9 @@ def dispatch_once(db, key, send, *, message_body=None, fingerprint=None):
             return previous['result']
         raise DeliveryUncertain('Entrega pendiente de revisión; no se repetirá automáticamente.')
     try:
-        result = dict(send())
+        block = authorize() if authorize else None
+        result = ({'success': False, 'error': 'recipient_blocked', 'blocked_reason': block.get('reason')}
+                  if block else dict(send()))
         if not isinstance(result.get('success'), bool):
             raise ValueError('Provider did not confirm a delivery outcome')
         if message_body is not None:

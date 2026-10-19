@@ -166,7 +166,7 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
     Pipeline completo con scraper extenso
     """
     db = MongoDBManager()
-    scraper = WebsiteScraper()  # Ya usa el nuevo scraper extenso
+    scraper = WebsiteScraper(db=db.db)  # Reuse the existing Mongo connection pool.
     wa = WhatAppClient(WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN)
 
     # Si esta URL estaba guardada como "idea" pendiente (ver /api/search), ya se

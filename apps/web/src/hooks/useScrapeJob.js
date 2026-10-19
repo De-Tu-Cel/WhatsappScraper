@@ -1,6 +1,25 @@
 'use client'
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { authFetch } from '@/lib/api'
+import { createScrapePoller } from '@/lib/sharedScrapePoll'
+
+let sharedPoller
+function pollSnapshot(url, force = false) {
+  if (!sharedPoller) {
+    const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('scrape-progress-v1') : null
+    sharedPoller = createScrapePoller({
+      fetcher: async (url, token) => {
+        if ((localStorage.getItem('user_token') || '') !== token) throw new Error('Login changed')
+        return authFetch(url)
+      }, channel, locks: navigator.locks,
+      digest: async value => {
+        const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+        return Array.from(new Uint8Array(hash), n => n.toString(16).padStart(2, '0')).join('')
+      },
+    })
+  }
+  return sharedPoller(url, localStorage.getItem('user_token') || '', force)
+}
 
 // Polls a backend-persisted scrape job (see backEnd/app/scrape_jobs.py) instead
 // of running the scrape loop in the browser — a page refresh no longer kills an
@@ -22,25 +41,34 @@ export function useScrapeJob(surface) {
   const [jobId, setJobId] = useState(null)
   const timerRef    = useRef(null)
   const mountedRef  = useRef(true)
+  const pollEpochRef = useRef(0)
+  const invalidatePoll = useCallback(() => { pollEpochRef.current++ }, [])
 
   // Named function expression so the recursive self-reference below resolves
   // to this function's own binding instead of the outer `const poll` (still
   // in its temporal dead zone from the closure's point of view).
-  const poll = useCallback(async function poll(id) {
+  const poll = useCallback(async function poll(id, force = false) {
     if (!id) return
+    const login = localStorage.getItem('user_token')
+    if (!login) return
+    const epoch = ++pollEpochRef.current
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
     try {
-      const res = await authFetch(`/api/scrape-jobs/${id}`)
-      if (!res.ok) {
+      const res = await pollSnapshot(`/api/scrape-jobs/${id}`, force)
+      if (localStorage.getItem('user_token') !== login || epoch !== pollEpochRef.current) return
+      if (res.status !== 200) {
         // Only forget the job on 404 (truly gone). 5xx/other transient errors
         // (e.g. MongoDB briefly down) should not erase localStorage — the job
         // still exists on the server and will be recoverable once it's back.
         if (res.status === 404 && mountedRef.current) {
           setJob(null); setJobId(null)
           localStorage.removeItem(storageKey)
+        } else if (mountedRef.current) {
+          timerRef.current = setTimeout(() => poll(id), POLL_IDLE)
         }
         return
       }
-      const data = await res.json()
+      const data = res.data
       if (!mountedRef.current) return
       // Guard: job belongs to a different surface (e.g. a stale search job ID
       // stored under scrape_job_batch). Clear and show empty state.
@@ -64,9 +92,9 @@ export function useScrapeJob(surface) {
         timerRef.current = setTimeout(() => poll(id), delay)
       }
     } catch {
-      timerRef.current = setTimeout(() => poll(id), POLL_IDLE)
+      if (mountedRef.current && epoch === pollEpochRef.current) timerRef.current = setTimeout(() => poll(id), POLL_IDLE)
     }
-  }, [storageKey])
+  }, [storageKey, surface])
 
   useEffect(() => {
     mountedRef.current = true
@@ -87,14 +115,14 @@ export function useScrapeJob(surface) {
         })
         .catch(() => {})
     }
-    return () => { mountedRef.current = false; if (timerRef.current) clearTimeout(timerRef.current) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    return () => { mountedRef.current = false; invalidatePoll(); if (timerRef.current) clearTimeout(timerRef.current) }
+  }, [storageKey, poll, invalidatePoll, surface])
 
   // mapsLeads: Google Maps businesses with no website (their url is a Maps
   // link) — the backend builds them from this data instead of scraping.
   // query: the search that produced these URLs, shown above the results.
   const start = useCallback(async (urls, mapsLeads = [], query = '') => {
+    pollEpochRef.current++
     if (timerRef.current) clearTimeout(timerRef.current)
     setJob(null)
     const res = await authFetch('/api/scrape-jobs', {
@@ -123,7 +151,7 @@ export function useScrapeJob(surface) {
       // shows up as soon as the click lands.
       if (!TERMINAL.includes(data.status)) {
         if (timerRef.current) clearTimeout(timerRef.current)
-        timerRef.current = setTimeout(() => poll(jobId), 800)
+        timerRef.current = setTimeout(() => poll(jobId, true), 800)
       }
       // On cancel: keep the job in localStorage so the "N pending URLs / Reanudar"
       // banner survives a page refresh. reset() (the X button) is the explicit clear.
@@ -131,7 +159,7 @@ export function useScrapeJob(surface) {
         // Job went back to 'pending' — ensure it's in localStorage and restart poll.
         localStorage.setItem(storageKey, jobId)
         if (timerRef.current) clearTimeout(timerRef.current)
-        poll(jobId)
+        poll(jobId, true)
       }
     }
   }, [jobId, storageKey, poll])
@@ -139,6 +167,7 @@ export function useScrapeJob(surface) {
   // The user is done with these results. Also tells the backend, otherwise the
   // /latest fallback above handed the same job back on the next refresh.
   const reset = useCallback(() => {
+    pollEpochRef.current++
     if (timerRef.current) clearTimeout(timerRef.current)
     if (jobId) {
       authFetch(`/api/scrape-jobs/${jobId}`, {

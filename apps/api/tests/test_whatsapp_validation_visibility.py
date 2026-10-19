@@ -41,7 +41,8 @@ def test_bulk_verifier_does_not_cache_false_for_a_registered_or_unknown_response
     collection = MagicMock()
     collection.find.return_value = []
     monkeypatch.setattr(routes, 'MongoDBManager', lambda: SimpleNamespace(db=SimpleNamespace(
-        jid_map=collection, phone_verification_attempts=MagicMock())))
+        jid_map=collection, phone_verification_attempts=MagicMock(),
+        instances=SimpleNamespace(find_one=lambda query: {'name': 'local-test', 'assigned_to': 'local-test'}))))
     monkeypatch.setattr(auth, 'get_user_by_token', lambda token: {'id': 'local-test'})
     monkeypatch.setattr(whatsapp_wwebjs, 'verify_number', lambda session, phone, **kwargs: response)
     result = routes.api_wwebjs_bulk_verify({'numbers': ['+525512345678'], 'session': 'local-test'}, 'local-token')

@@ -125,24 +125,30 @@ def test_unrelated_text_is_not_opt_out(text):
     assert not requests_opt_out(text)
 
 
-def test_permissions_do_not_follow_from_scraping_or_inbound(db):
+def test_first_contact_is_allowed_and_only_an_opt_out_blocks(db):
+    """Decisión 2026-10-19: a un prospecto se le puede escribir por primera vez
+    sin consentimiento registrado; lo único que bloquea (aparte de la
+    blacklist) es que la persona haya pedido la baja."""
     number = '525500000001'
-    assert permission_block_reason(db, number)['reason'] == 'missing_consent'
+    assert permission_block_reason(db, number) is None
     record_inbound_permission(db, number, 'Hola')
-    assert permission_block_reason(db, number, purpose='reply') is None
-    assert permission_block_reason(db, number)['reason'] == 'missing_consent'
+    assert permission_block_reason(db, number) is None
     record_inbound_permission(db, number, 'No me escribas')
+    # Un mensaje posterior sin relación no deshace la baja.
     record_inbound_permission(db, number, 'Hola otra vez')
-    assert permission_block_reason(db, number, purpose='reply')['reason'] == 'opt_out'
+    assert permission_block_reason(db, number)['reason'] == 'opt_out'
+    assert permission_block_reason(db, '+52 1 5500000001', purpose='reply')['reason'] == 'opt_out'
+    # Un consentimiento registrado explícitamente sí reactiva el contacto.
     record_consent(db, number, source='form', evidence='Formulario firmado 1234', actor='admin')
     assert permission_block_reason(db, '+52 1 5500000001') is None
     assert db.db.contact_permissions.rows[0]['consent']['actor'] == 'admin'
 
 
-def test_reply_permission_expires_and_old_webhook_cannot_extend_it(db):
+def test_an_old_reply_window_never_blocks_a_new_contact(db):
     now = datetime.now(timezone.utc)
     record_inbound_permission(db, '525500000001', 'Hola', now - timedelta(days=2))
-    assert permission_block_reason(db, '525500000001', purpose='reply')['reason'] == 'missing_consent'
+    assert permission_block_reason(db, '525500000001') is None
+    assert permission_block_reason(db, '525500000001', purpose='reply') is None
 
 
 def test_permission_cannot_be_granted_without_a_source_and_evidence(db):
@@ -255,9 +261,11 @@ def test_only_admin_can_record_permission_and_unauthorized_send_stops_early():
         with pytest.raises(HTTPException) as error:
             routes.api_record_contact_consent({'number': '525500000001'}, 'token')
         assert error.value.status_code == 403
+    # Ya no se exige consentimiento para el primer contacto (2026-10-19): lo que
+    # debe frenar el envío antes de tocar al proveedor es una baja del destinatario.
     db = MagicMock()
     db.db.blacklist.find_one.return_value = None
-    db.db.contact_permissions.find_one.return_value = None
+    db.db.contact_permissions.find_one.return_value = {'revoked': True}
     with (patch.object(routes, '_require_user', return_value={'id': 'qa'}),
           patch('app.database.MongoDBManager', return_value=db),
           patch('app.config.EVOLUTION_API_KEY', 'mock'),
@@ -266,7 +274,7 @@ def test_only_admin_can_record_permission_and_unauthorized_send_stops_early():
         with pytest.raises(HTTPException) as error:
             routes.api_send_message(req, 'token')
         assert error.value.status_code == 403
-        assert 'consentimiento' in error.value.detail
+        assert 'no recibir mensajes' in error.value.detail
         client.assert_not_called()
 
 
@@ -331,6 +339,8 @@ def test_nested_domain_lookup_failure_cannot_authorize_a_send():
 @pytest.mark.parametrize('uncertain', [False, True])
 def test_scheduler_preserves_confirmed_delivery_and_uncertain_quota(uncertain):
     db = MagicMock()
+    db.db.blacklist.find_one.return_value = None
+    db.db.contact_permissions.find_one.return_value = {'outreach_allowed': True, 'revoked': False}
     db.insert_message_log.side_effect = RuntimeError('log unavailable')
     client = MagicMock()
     client.send.return_value = {'success': True, 'messageId': 'confirmed'}

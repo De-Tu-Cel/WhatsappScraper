@@ -42,20 +42,20 @@ def record_inbound_permission(db, number, text, received_at=None):
 
 
 def permission_block_reason(db, number, *, purpose='outreach', now=None):
+    """Solo bloquea a quien pidió la baja ("stop", "baja", "no me escribas"…).
+
+    Del 2026-10-18 (cf7a74d) al 2026-10-19 también exigía consentimiento
+    registrado (outreach_allowed) para cualquier primer mensaje; como no había
+    pantalla para registrarlo, en la práctica no salía ningún mensaje a
+    prospectos. Decisión del dueño (2026-10-19): para prospectos se vuelve a
+    permitir el primer contacto; la baja y la blacklist se respetan siempre.
+    record_consent / reply_allowed_until se conservan por si se vuelve a exigir.
+    `purpose` y `now` se mantienen por compatibilidad con los llamadores."""
     key = recipient_key(number)
     doc = db.db.contact_permissions.find_one({'_id': key}) if key else None
-    if not doc or doc.get('revoked'):
-        return {'reason': 'opt_out' if doc and doc.get('revoked') else 'missing_consent', 'matched': ''}
-    if doc.get('outreach_allowed') is True:
-        return None
-    until = doc.get('reply_allowed_until')
-    stamp = now or datetime.now(timezone.utc)
-    if isinstance(until, datetime):
-        until = until.replace(tzinfo=timezone.utc) if until.tzinfo is None else until
-        stamp = stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
-        if purpose == 'reply' and until > stamp:
-            return None
-    return {'reason': 'missing_consent', 'matched': ''}
+    if doc and doc.get('revoked'):
+        return {'reason': 'opt_out', 'matched': ''}
+    return None
 
 
 def record_consent(db, number, *, source, evidence, actor):

@@ -32,6 +32,11 @@ import PublicIcon from '@mui/icons-material/Public'
 import SmartphoneIcon from '@mui/icons-material/Smartphone'
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz'
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew'
+import PlaceIcon from '@mui/icons-material/Place'
+import ScheduleIcon from '@mui/icons-material/Schedule'
+import AutorenewIcon from '@mui/icons-material/Autorenew'
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz'
+import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import { useLang } from '../context/LangContext'
 import { parseUtc } from '../lib/dates'
 
@@ -240,48 +245,116 @@ function StatCard({ icon, color, value, label, subtitle, percent }) {
   )
 }
 
-function SettingTile({ title, children, action }) {
+function SettingTile({ icon, color = 'var(--accent, #60a5fa)', title, children, action }) {
   return (
     <Box sx={{ flex: '1 1 320px', minWidth: 0, border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 2.5,
-      px: 1.8, py: 1.4, display: 'flex', flexDirection: 'column', gap: 0.8, bgcolor: 'rgba(255,255,255,0.015)' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, minHeight: 28 }}>
-        <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text)' }}>{title}</Typography>
-        {action}
+      px: 1.8, py: 1.5, display: 'flex', gap: 1.4, bgcolor: 'rgba(255,255,255,0.015)' }}>
+      <Box sx={{ ...ICON_BOX_SX, width: 34, height: 34, color }}>{icon}</Box>
+      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 0.6 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, minHeight: 30 }}>
+          <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text)' }}>{title}</Typography>
+          {action}
+        </Box>
+        {children}
       </Box>
-      {children}
     </Box>
   )
 }
 
-function GroupLabel({ color, label, count }) {
+// Encabezado de cada grupo (en uso / libres / …): punto + nombre + conteo, y una
+// línea de qué significa el grupo, para no tener que adivinarlo por el color.
+function GroupLabel({ color, label, count, hint, open, onToggle }) {
+  const clickable = !!onToggle
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mt: 0.4, mb: 0.8 }}>
-      <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color }} />
-      <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+    <Box onClick={onToggle} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, cursor: clickable ? 'pointer' : 'default', userSelect: 'none' }}>
+      <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
+      <Typography sx={{ fontSize: '0.66rem', fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text)', whiteSpace: 'nowrap' }}>
         {label}
       </Typography>
-      <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--text-muted)', opacity: 0.7 }}>{count}</Typography>
+      <Box sx={{ px: 0.8, borderRadius: 99, fontSize: '0.64rem', fontWeight: 800, lineHeight: '18px', color: 'var(--text-muted)',
+        bgcolor: 'var(--item-hover, rgba(255,255,255,0.05))', border: '1px solid var(--border)', fontVariantNumeric: 'tabular-nums' }}>{count}</Box>
+      {hint && (
+        <Typography sx={{ fontSize: '0.66rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+          {hint}
+        </Typography>
+      )}
+      <Box sx={{ flex: 1, height: '1px', minWidth: 16, background: 'linear-gradient(90deg, var(--border, rgba(255,255,255,0.12)), transparent)' }} />
+      {clickable && (
+        <ExpandMoreIcon sx={{ fontSize: 18, color: 'var(--text-muted)', transition: 'transform 0.2s', transform: open ? 'rotate(180deg)' : 'none' }} />
+      )}
     </Box>
   )
 }
 
-function ProxyTile({ p, lang, busy, onCheck, onToggle, onDelete, dim }) {
+// Barra de cómo se reparte el pool: cuánto está ocupado, libre, caído o fuera de uso.
+function PoolBar({ segments, lang }) {
+  const total = segments.reduce((sum, s) => sum + s.count, 0)
+  if (!total) return null
+  return (
+    <Box sx={{ border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 2.5, px: 1.8, py: 1.4, bgcolor: 'rgba(255,255,255,0.015)' }}>
+      <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 1, mb: 1 }}>
+        <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text)' }}>
+          {lang === 'en' ? 'How the pool is used' : 'Cómo se usa el pool'}
+        </Typography>
+        <Typography sx={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>
+          {total} {lang === 'en' ? 'proxies' : 'proxies'}
+        </Typography>
+      </Box>
+      <Box sx={{ display: 'flex', gap: '3px', height: 10, borderRadius: 99, overflow: 'hidden', bgcolor: 'var(--item-hover, rgba(255,255,255,0.05))' }}>
+        {segments.filter(s => s.count > 0).map(s => (
+          <Tooltip key={s.key} title={`${s.label}: ${s.count}`} placement="top">
+            <Box sx={{ flex: s.count, bgcolor: s.color, opacity: s.dim ? 0.55 : 1, transition: 'flex 0.4s ease' }} />
+          </Tooltip>
+        ))}
+      </Box>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, mt: 1 }}>
+        {segments.map(s => (
+          <Box key={s.key} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.7 }}>
+            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: s.color, opacity: s.dim ? 0.55 : 1 }} />
+            <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+              {s.label} <Box component="span" sx={{ fontWeight: 800, color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>{s.count}</Box>
+            </Typography>
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+// Estado del proxy cuando no tiene número: en el pie de la tarjeta, en vez de
+// un "sin número" en cursiva que se veía igual en libres, caídos y desactivados.
+const IDLE_STATE = {
+  free:     { es: 'Disponible',   en: 'Available',      color: '#4ade80' },
+  failing:  { es: 'No responde',  en: 'Not responding', color: '#f87171' },
+  disabled: { es: 'Desactivado',  en: 'Disabled',       color: '#94a3b8' },
+  other:    { es: 'Otro país',    en: 'Other country',  color: '#94a3b8' },
+}
+
+function ProxyTile({ p, lang, busy, onCheck, onToggle, onDelete, dim, idle }) {
   const L = (es, en) => (lang === 'en' ? en : es)
   const [anchor, setAnchor] = useState(null)
   const s = STATUS[p.status] || STATUS.unchecked
   const inUse = p.instances.length > 0
+  const idleState = IDLE_STATE[idle] || IDLE_STATE.other
+  const place = [p.city, p.region && p.region !== p.city ? p.region : null].filter(Boolean).join(', ')
   return (
     <Box sx={{
-      border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 2.5, px: 1.5, py: 1.2,
-      bgcolor: 'var(--card-bg)', display: 'flex', flexDirection: 'column', gap: 0.7, minWidth: 0,
-      opacity: dim ? 0.55 : 1, transition: 'border-color 0.2s, box-shadow 0.2s',
-      '&:hover': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.45)', boxShadow: '0 6px 20px rgba(0,0,0,0.25)', opacity: 1 },
+      border: '1px solid', borderColor: inUse ? 'rgba(var(--accent-rgb,59,130,246),0.28)' : 'var(--border, rgba(255,255,255,0.08))',
+      borderRadius: 2.5, px: 1.5, pt: 1.3, pb: 1.1, height: '100%', boxSizing: 'border-box',
+      background: inUse
+        ? 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.09) 0%, transparent 60%), var(--card-bg)'
+        : 'var(--card-bg)',
+      display: 'flex', flexDirection: 'column', gap: 0.8, minWidth: 0,
+      opacity: dim ? 0.6 : 1, transition: 'border-color 0.2s, box-shadow 0.2s, transform 0.2s, opacity 0.2s',
+      '&:hover': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.5)', boxShadow: '0 8px 24px rgba(0,0,0,0.28)', transform: 'translateY(-1px)', opacity: 1 },
     }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.9, minWidth: 0 }}>
         <Tooltip title={`${s[lang === 'en' ? 'en' : 'es']} · ${L('revisado', 'checked')} ${ago(p.last_checked_at, lang)}${p.last_error ? ` · ${p.last_error}` : ''}`} placement="top">
-          <Box sx={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, bgcolor: s.color, boxShadow: p.status === 'ok' ? `0 0 6px ${s.color}aa` : 'none' }} />
+          <Box sx={{ position: 'relative', width: 9, height: 9, flexShrink: 0 }}>
+            <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: s.color, boxShadow: p.status === 'ok' ? `0 0 7px ${s.color}aa` : 'none' }} />
+          </Box>
         </Tooltip>
-        <Typography sx={{ fontFamily: 'monospace', fontSize: '0.8rem', fontWeight: 700, color: 'var(--text)', flex: 1, minWidth: 0,
+        <Typography sx={{ fontFamily: 'monospace', fontSize: '0.84rem', fontWeight: 700, color: 'var(--text)', flex: 1, minWidth: 0,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {p.host}<Box component="span" sx={{ color: 'var(--text-muted)', fontWeight: 500 }}>:{p.port}</Box>
         </Typography>
@@ -291,20 +364,46 @@ function ProxyTile({ p, lang, busy, onCheck, onToggle, onDelete, dim }) {
           {busy === p.id ? <CircularProgress size={14} /> : <MoreHorizIcon sx={{ fontSize: 17 }} />}
         </IconButton>
       </Box>
-      <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted)', pl: 2.1, lineHeight: 1.2,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {p.city || '—'} · {ago(p.last_checked_at, lang)}{!p.enabled ? ` · ${L('desactivado', 'disabled')}` : ''}
-      </Typography>
-      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, pl: 2.1 }}>
-        {inUse ? p.instances.map(n => (
-          <Box key={n} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4, px: 0.8, py: 0.15, borderRadius: 99,
-            bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)' }}>
-            <SmartphoneIcon sx={{ fontSize: 11, color: 'var(--accent,#60a5fa)' }} />
-            <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, color: 'var(--accent,#60a5fa)' }}>{n}</Typography>
-          </Box>
-        )) : (
-          <Typography sx={{ fontSize: '0.66rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>{L('sin número', 'no number')}</Typography>
+      <Tooltip title={p.org || ''} placement="top-start">
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+          <PlaceIcon sx={{ fontSize: 13, color: 'var(--text-muted)', flexShrink: 0 }} />
+          <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {place || '—'}{p.org ? <Box component="span" sx={{ opacity: 0.75 }}> · {p.org}</Box> : null}
+          </Typography>
+        </Box>
+      </Tooltip>
+      {/* Pie fijo: a quién está asignado (o su estado si está libre) + hace cuánto se revisó. */}
+      <Box sx={{ mt: 'auto', pt: 0.9, borderTop: '1px dashed var(--border, rgba(255,255,255,0.1))',
+        display: 'flex', alignItems: 'center', gap: 0.8, minWidth: 0 }}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, flex: 1, minWidth: 0 }}>
+          {inUse ? p.instances.map(n => (
+            <Box key={n} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4, px: 0.8, py: 0.2, borderRadius: 99, maxWidth: '100%',
+              bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.14)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.32)' }}>
+              <SmartphoneIcon sx={{ fontSize: 11, color: 'var(--accent,#60a5fa)' }} />
+              <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--accent,#60a5fa)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n}</Typography>
+            </Box>
+          )) : (
+            <Box sx={{ display: 'inline-flex', alignItems: 'center', px: 0.8, py: 0.2, borderRadius: 99,
+              border: `1px solid ${idleState.color}55`, bgcolor: `${idleState.color}14` }}>
+              <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, color: idleState.color }}>{idleState[lang === 'en' ? 'en' : 'es']}</Typography>
+            </Box>
+          )}
+        </Box>
+        {p.exit_ip_change_count > 0 && (
+          <Tooltip placement="top" title={L(`La IP de salida cambió ${p.exit_ip_change_count} ${p.exit_ip_change_count === 1 ? 'vez' : 'veces'}`,
+            `The exit IP changed ${p.exit_ip_change_count} time${p.exit_ip_change_count === 1 ? '' : 's'}`)}>
+            <SwapHorizIcon sx={{ fontSize: 15, color: '#fbbf24', flexShrink: 0 }} />
+          </Tooltip>
         )}
+        {p.fail_streak > 0 && (
+          <Tooltip placement="top" title={L(`${p.fail_streak} revisiones seguidas sin responder`, `${p.fail_streak} checks in a row without answering`)}>
+            <WarningAmberIcon sx={{ fontSize: 14, color: '#f87171', flexShrink: 0 }} />
+          </Tooltip>
+        )}
+        <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.3, flexShrink: 0 }}>
+          <ScheduleIcon sx={{ fontSize: 11, color: 'var(--text-muted)' }} />
+          <Typography sx={{ fontSize: '0.64rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{ago(p.last_checked_at, lang)}</Typography>
+        </Box>
       </Box>
       <Menu anchorEl={anchor} open={!!anchor} onClose={() => setAnchor(null)} elevation={0}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }} transformOrigin={{ vertical: 'top', horizontal: 'right' }}
@@ -333,64 +432,86 @@ const SK = { bgcolor: 'var(--border, rgba(255,255,255,0.08))' }
 // Silueta de los ajustes y de las tarjetas mientras llega la lista: mismas cajas que
 // SettingTile y ProxyTile para que la página no brinque al cargar.
 function ProxiesSkeleton() {
-  const widths = ['78%', '62%', '86%', '70%', '74%', '58%', '82%', '67%']
+  const widths = ['74%', '60%', '82%', '68%', '71%', '56%', '79%', '64%']
+  const places = [62, 48, 70, 55, 66, 44, 58, 72]
+  const card = { border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 2.5, bgcolor: 'rgba(255,255,255,0.015)' }
   return (
-    <>
+    <Box sx={{
+      display: 'flex', flexDirection: 'column', gap: 2,
+      '@keyframes proxySkeletonIn': { from: { opacity: 0, transform: 'translateY(4px)' }, to: { opacity: 1, transform: 'none' } },
+      '& [data-sk-in]': { animation: 'proxySkeletonIn 0.3s ease both' },
+      '@media (prefers-reduced-motion: reduce)': { '& [data-sk-in]': { animation: 'none' } },
+    }}>
+      {/* Ajustes: caja de ícono + título + control a la derecha + 3 líneas */}
       <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
         {[0, 1].map(i => (
-          <Box key={i} sx={{ flex: '1 1 320px', minWidth: 0, border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 2.5,
-            px: 1.8, py: 1.4, display: 'flex', flexDirection: 'column', gap: 0.8, bgcolor: 'rgba(255,255,255,0.015)' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, minHeight: 28 }}>
-              <Skeleton variant="text" width={i ? 142 : 92} height={17} sx={SK} />
-              {i ? <Skeleton variant="rounded" width={34} height={18} sx={{ ...SK, borderRadius: 99 }} />
-                 : <Skeleton variant="rounded" width={150} height={32} sx={{ ...SK, borderRadius: 2 }} />}
-            </Box>
-            <Box>
-              <Skeleton variant="text" width="98%" height={13} sx={SK} />
-              <Skeleton variant="text" width={i ? '91%' : '94%'} height={13} sx={SK} />
-              <Skeleton variant="text" width={i ? '74%' : '69%'} height={13} sx={SK} />
+          <Box key={i} data-sk-in sx={{ ...card, flex: '1 1 320px', minWidth: 0, px: 1.8, py: 1.5, display: 'flex', gap: 1.4 }}>
+            <Skeleton variant="rounded" width={34} height={34} sx={{ ...SK, borderRadius: '9px', flexShrink: 0 }} />
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, minHeight: 30, mb: 0.6 }}>
+                <Skeleton variant="rounded" width={i ? 150 : 104} height={13} sx={SK} />
+                {i ? <Skeleton variant="rounded" width={78} height={20} sx={{ ...SK, borderRadius: 99 }} />
+                   : <Skeleton variant="rounded" width={150} height={32} sx={{ ...SK, borderRadius: 2 }} />}
+              </Box>
+              <Skeleton variant="rounded" width="96%" height={9} sx={{ ...SK, mb: 0.7 }} />
+              <Skeleton variant="rounded" width={i ? '90%' : '93%'} height={9} sx={{ ...SK, mb: 0.7 }} />
+              <Skeleton variant="rounded" width={i ? '62%' : '70%'} height={9} sx={SK} />
             </Box>
           </Box>
         ))}
       </Box>
-      {/* En una carga normal se ven primero los proxies asignados y después los libres.
-          Se dibujan varias filas para conservar la altura y densidad del pool real. */}
-      {[6, 8].map((n, g) => (
+
+      {/* Barra "Cómo se usa el pool" */}
+      <Box data-sk-in sx={{ ...card, px: 1.8, py: 1.4 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1.2 }}>
+          <Skeleton variant="rounded" width={140} height={12} sx={SK} />
+          <Skeleton variant="rounded" width={60} height={10} sx={SK} />
+        </Box>
+        <Box sx={{ display: 'flex', gap: '3px', height: 10, borderRadius: 99, overflow: 'hidden' }}>
+          {[46, 8, 32, 14].map((f, i) => <Skeleton key={i} variant="rectangular" height={10} sx={{ ...SK, flex: f }} />)}
+        </Box>
+        <Box sx={{ display: 'flex', gap: 2, mt: 1.1 }}>
+          {[62, 88, 54, 70].map((w, i) => <Skeleton key={i} variant="rounded" width={w} height={10} sx={SK} />)}
+        </Box>
+      </Box>
+
+      {/* Grupos: en uso primero y libres después, con la forma de la tarjeta nueva */}
+      {[6, 5].map((n, g) => (
         <Box key={g}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mt: 0.4, mb: 0.8 }}>
-            <Skeleton variant="circular" width={6} height={6} sx={SK} />
-            <Skeleton variant="text" width={g ? 42 : 50} height={12} sx={SK} />
-            <Skeleton variant="text" width={12} height={12} sx={SK} />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+            <Skeleton variant="circular" width={8} height={8} sx={SK} />
+            <Skeleton variant="rounded" width={g ? 48 : 58} height={11} sx={SK} />
+            <Skeleton variant="rounded" width={22} height={18} sx={{ ...SK, borderRadius: 99 }} />
+            <Skeleton variant="rounded" width={g ? 150 : 210} height={10} sx={{ ...SK, opacity: 0.7 }} />
           </Box>
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 1.2 }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 1.2 }}>
             {Array.from({ length: n }).map((_, i) => (
-              <Box key={i} sx={{ border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 2.5, px: 1.5, py: 1.2,
-                bgcolor: 'var(--card-bg)', display: 'flex', flexDirection: 'column', gap: 0.7, minWidth: 0 }}>
+              <Box key={i} data-sk-in sx={{
+                border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 2.5, px: 1.5, pt: 1.3, pb: 1.1,
+                bgcolor: 'var(--card-bg)', display: 'flex', flexDirection: 'column', gap: 0.8, minWidth: 0,
+                animationDelay: `${(g * 6 + i) * 40}ms`,
+              }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.9 }}>
-                  <Skeleton variant="circular" width={8} height={8} sx={{ ...SK, flexShrink: 0 }} />
-                  <Box sx={{ display: 'flex', alignItems: 'baseline', flex: 1, minWidth: 0, gap: 0.4 }}>
-                    <Skeleton variant="text" width={widths[i % widths.length]} height={18} sx={SK} />
-                    <Skeleton variant="text" width={30} height={15} sx={{ ...SK, flexShrink: 0 }} />
-                  </Box>
-                  <Skeleton variant="rounded" width={23} height={15} sx={{ ...SK, borderRadius: 0.8 }} />
-                  <Skeleton variant="circular" width={20} height={20} sx={SK} />
+                  <Skeleton variant="circular" width={9} height={9} sx={{ ...SK, flexShrink: 0 }} />
+                  <Skeleton variant="rounded" height={13} sx={{ ...SK, width: widths[(g * 3 + i) % widths.length], borderRadius: 1 }} />
+                  <Skeleton variant="rounded" width={24} height={16} sx={{ ...SK, borderRadius: 0.8, ml: 'auto', flexShrink: 0 }} />
+                  <Skeleton variant="circular" width={20} height={20} sx={{ ...SK, flexShrink: 0 }} />
                 </Box>
-                <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', ml: 2.1 }}>
-                  <Skeleton variant="text" width={i % 3 === 0 ? 78 : 56} height={13} sx={SK} />
-                  <Skeleton variant="text" width={i % 2 ? 66 : 48} height={13} sx={SK} />
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                  <Skeleton variant="circular" width={11} height={11} sx={{ ...SK, flexShrink: 0 }} />
+                  <Skeleton variant="rounded" height={10} sx={{ ...SK, width: `${places[(g * 2 + i) % places.length]}%` }} />
                 </Box>
-                {g === 0
-                  ? <Box sx={{ display: 'flex', gap: 0.5, ml: 2.1 }}>
-                      <Skeleton variant="rounded" width={i % 2 ? 92 : 76} height={18} sx={{ ...SK, borderRadius: 99 }} />
-                      {i === 0 && <Skeleton variant="rounded" width={70} height={18} sx={{ ...SK, borderRadius: 99 }} />}
-                    </Box>
-                  : <Skeleton variant="text" width={58} height={12} sx={{ ...SK, ml: 2.1 }} />}
+                <Box sx={{ mt: 0.2, pt: 0.9, borderTop: '1px dashed var(--border, rgba(255,255,255,0.1))', display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                  <Skeleton variant="rounded" width={g ? 72 : 94} height={20} sx={{ ...SK, borderRadius: 99,
+                    bgcolor: g ? 'rgba(74,222,128,0.12)' : 'rgba(var(--accent-rgb,59,130,246),0.14)' }} />
+                  <Skeleton variant="rounded" width={62} height={10} sx={{ ...SK, ml: 'auto', opacity: 0.7 }} />
+                </Box>
               </Box>
             ))}
           </Box>
         </Box>
       ))}
-    </>
+    </Box>
   )
 }
 
@@ -401,6 +522,9 @@ export function ProxiesSection({ onChanged }) {
   const [err, setErr] = useState('')
   const [importOpen, setImportOpen] = useState(false)
   const [busy, setBusy] = useState('')
+  // "No se usan" (otro país / desactivados) empieza plegado: no se pueden asignar
+  // y antes ocupaban una fila completa de tarjetas en gris.
+  const [showUnused, setShowUnused] = useState(false)
 
   // Qué número usa qué proxy: si cambia sin que hayas hecho nada aquí (asignación automática,
   // un proxy caído que movió sus números, o el menú ⋯ de una fila), se recarga también la
@@ -448,13 +572,22 @@ export function ProxiesSection({ onChanged }) {
   const pct = (a, b) => (b > 0 ? Math.round((a / b) * 100) : 0)
 
   const usable = p => p.enabled && p.status === 'ok' && p.country === settings.country
-  const groups = [
-    { key: 'used', color: 'var(--accent,#60a5fa)', label: L('En uso', 'In use'), items: proxies.filter(p => p.instances.length > 0) },
-    { key: 'failing', color: '#f87171', label: L('No responden', 'Not responding'), items: proxies.filter(p => !p.instances.length && p.enabled && p.status === 'failing') },
-    { key: 'free', color: '#4ade80', label: L('Libres', 'Free'), items: proxies.filter(p => !p.instances.length && usable(p)) },
-    { key: 'other', color: '#94a3b8', label: L(`No se usan · otro país o desactivados`, 'Not used · other country or disabled'),
-      items: proxies.filter(p => !p.instances.length && !usable(p) && !(p.enabled && p.status === 'failing')), dim: true },
-  ].filter(g => g.items.length)
+  const allGroups = [
+    { key: 'used', color: 'var(--accent,#60a5fa)', label: L('En uso', 'In use'),
+      hint: L('cada uno con el número que sale por él', 'each with the number going out through it'),
+      items: proxies.filter(p => p.instances.length > 0) },
+    { key: 'failing', color: '#f87171', label: L('No responden', 'Not responding'), idle: 'failing',
+      hint: L('no se asignan hasta que vuelvan a responder', 'not assigned until they answer again'),
+      items: proxies.filter(p => !p.instances.length && p.enabled && p.status === 'failing') },
+    { key: 'free', color: '#4ade80', label: L('Libres', 'Free'), idle: 'free',
+      hint: L(`listos para asignar en ${settings.country}`, `ready to assign in ${settings.country}`),
+      items: proxies.filter(p => !p.instances.length && usable(p)) },
+    { key: 'other', color: '#94a3b8', label: L('No se usan', 'Not used'), dim: true, collapsible: true,
+      hint: L('otro país o desactivados', 'other country or disabled'),
+      items: proxies.filter(p => !p.instances.length && !usable(p) && !(p.enabled && p.status === 'failing')) },
+  ]
+  const groups = allGroups.filter(g => g.items.length)
+  const poolSegments = allGroups.map(g => ({ key: g.key, label: g.label, color: g.color, count: g.items.length, dim: g.dim }))
 
   return (
     <Box sx={{ borderRadius: 3, border: '1px solid var(--border, rgba(255,255,255,0.08))', bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))', overflow: 'hidden', flexShrink: 0 }}>
@@ -529,7 +662,7 @@ export function ProxiesSection({ onChanged }) {
         {/* Ajustes */}
         {proxies.length > 0 && (
           <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-            <SettingTile title={L('País de las IPs', 'IP country')}
+            <SettingTile icon={<PublicIcon sx={{ fontSize: 17 }} />} title={L('País de las IPs', 'IP country')}
               action={
                 <TextField select size="small" value={settings.country} disabled={busy === 'settings'}
                   onChange={e => run('settings', () => api('/settings', { method: 'PUT', body: JSON.stringify({ country: e.target.value }) }))}
@@ -542,9 +675,18 @@ export function ProxiesSection({ onChanged }) {
                    'Only IPs from this country are assigned. Each number keeps its own; when there are more numbers than proxies, the least used are shared first.')}
               </Typography>
             </SettingTile>
-            <SettingTile title={L('Asignación automática', 'Automatic assignment')}
-              action={<Switch size="small" checked={!!settings.auto_assign} disabled={busy === 'settings'}
-                onChange={e => run('settings', () => api('/settings', { method: 'PUT', body: JSON.stringify({ auto_assign: e.target.checked }) }))} />}>
+            <SettingTile icon={<AutorenewIcon sx={{ fontSize: 17 }} />} title={L('Asignación automática', 'Automatic assignment')}
+              color={settings.auto_assign ? (settings.migrate_paused ? '#fbbf24' : '#4ade80') : 'var(--text-muted)'}
+              action={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                  <Typography sx={{ fontSize: '0.66rem', fontWeight: 700,
+                    color: settings.auto_assign ? (settings.migrate_paused ? '#fbbf24' : '#4ade80') : 'var(--text-muted)' }}>
+                    {settings.auto_assign ? (settings.migrate_paused ? L('En pausa', 'Paused') : L('Prendida', 'On')) : L('Apagada', 'Off')}
+                  </Typography>
+                  <Switch size="small" checked={!!settings.auto_assign} disabled={busy === 'settings'}
+                    onChange={e => run('settings', () => api('/settings', { method: 'PUT', body: JSON.stringify({ auto_assign: e.target.checked }) }))} />
+                </Box>
+              }>
               <Typography sx={{ fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
                 {settings.auto_assign && settings.migrate_paused
                   ? L(`En pausa: ${settings.migrate_paused.name} no volvió a conectarse por su proxy (${settings.migrate_paused.status}). Revisa si pide QR; luego apágala y vuelve a prenderla para seguir con los demás.`,
@@ -570,17 +712,23 @@ export function ProxiesSection({ onChanged }) {
             </Typography>
           </Box>
         )}
+        {proxies.length > 0 && <PoolBar segments={poolSegments} lang={lang} />}
+
         {groups.map(g => (
           <Box key={g.key}>
-            <GroupLabel color={g.color} label={g.label} count={g.items.length} />
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 1.2 }}>
+            <GroupLabel color={g.color} label={g.label} count={g.items.length} hint={g.hint}
+              open={g.collapsible ? showUnused : undefined} onToggle={g.collapsible ? () => setShowUnused(v => !v) : undefined} />
+            {(!g.collapsible || showUnused) && (
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 1.2, alignItems: 'stretch' }}>
               {g.items.map(p => (
                 <ProxyTile key={p.id} p={p} lang={lang} busy={busy} dim={g.dim}
+                  idle={g.key === 'other' ? (p.enabled ? 'other' : 'disabled') : g.idle}
                   onCheck={() => run(p.id, () => api(`/${p.id}/check`, { method: 'POST' }))}
                   onToggle={() => run(p.id, () => api(`/${p.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: !p.enabled }) }))}
                   onDelete={() => run(p.id, () => api(`/${p.id}`, { method: 'DELETE' }))} />
               ))}
             </Box>
+            )}
           </Box>
         ))}
       </Box>

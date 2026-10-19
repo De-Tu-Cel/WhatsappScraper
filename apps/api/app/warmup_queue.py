@@ -465,6 +465,21 @@ def _contact_already_saved(db, instance_name: str, number: str) -> bool:
     ) is not None
 
 
+def _internal_guard(db, number):
+    """Guard del warmup: el destinatario es OTRA línea propia, no un prospecto,
+    así que no aplica el consentimiento de contacto (dispatch_guard exige
+    outreach_allowed, que ninguna línea propia tiene: bloqueaba todo el warmup).
+    Sí respeta la blacklist de teléfonos y, como dispatch_guard, falla cerrado."""
+    def check():
+        try:
+            from app.send_guard import is_phone_blacklisted
+            return {'reason': 'phone', 'matched': ''} if is_phone_blacklisted(db, number) else None
+        except Exception:
+            log.exception('Warmup recipient check failed; send blocked')
+            return {'reason': 'permission_check_failed', 'matched': ''}
+    return check
+
+
 def _send_warmup_message(db, from_inst: dict, to_inst: dict, text: str, session_id, save_contact: bool = False) -> str:
     """Send via wwebjs and write an is_warmup log entry. Returns message_id."""
     from app.whatsapp_wwebjs import send_message
@@ -475,12 +490,19 @@ def _send_warmup_message(db, from_inst: dict, to_inst: dict, text: str, session_
     # Skip save_contact if already saved in a previous session
     should_save = save_contact and not _contact_already_saved(db, from_inst["name"], to_inst["number"])
 
-    result = send_message(
-        from_inst["name"], to_wa, text,
-        typing_ms=random.randint(800, 2500),
-        save_contact=should_save,
-        contact_first_name=contact_name if should_save else "",
-    )
+    from app.delivery_receipts import dispatch_once, operation_key
+    step = db.db.warmup_sessions.find_one({'_id': session_id})
+    if not step:
+        raise ValueError('Unknown internal conversation')
+    result = dispatch_once(db,
+        operation_key('internal', str(session_id), from_inst['name'], step.get('total_messages_today', 0)),
+        lambda: send_message(
+            from_inst["name"], to_wa, text,
+            typing_ms=random.randint(800, 2500), save_contact=should_save,
+            contact_first_name=contact_name if should_save else ""),
+        message_body=text, authorize=_internal_guard(db, to_inst['number']))
+    if result.get('success') is not True:
+        raise ValueError(result.get('blocked_reason') or result.get('error') or 'Send not confirmed')
     from bson import ObjectId as _ObjId
     msg_id = (result.get("id") or {}).get("id") or result.get("messageId") or str(_ObjId())
 

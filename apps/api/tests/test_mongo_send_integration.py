@@ -98,7 +98,7 @@ def test_consent_and_opt_out_remain_after_reconnect(mongo):
     name, db = mongo
     from app.contact_permissions import record_consent, record_inbound_permission, permission_block_reason
     number = '525500000001'
-    assert permission_block_reason(db, number)['reason'] == 'missing_consent'
+    assert permission_block_reason(db, number) is None  # primer contacto permitido (2026-10-19)
     record_consent(db, number, source='recorded_request', evidence='Synthetic test evidence only', actor='qa-admin')
     assert permission_block_reason(db, number) is None
     record_inbound_permission(db, '+5215500000001', 'No me escribas')

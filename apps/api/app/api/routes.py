@@ -1,3 +1,4 @@
+from app.send_guard import dispatch_guard
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Header, Request, UploadFile, File, Body
 from fastapi.responses import StreamingResponse
 from typing import Optional
@@ -88,6 +89,17 @@ def _require_admin(x_user_token: Optional[str] = Header(None)):
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Se requiere rol de administrador")
     return user
+
+def _require_session_access(session_id, token):
+    user = _require_user(token)
+    doc = MongoDBManager().db.instances.find_one({"name": session_id, "provider": "wwebjs"})
+    if not doc:
+        raise HTTPException(404, "Instancia no encontrada")
+    owner = str(user.get("id") or user.get("_id") or "")
+    if user.get("role") != "admin" and (not owner or str(doc.get("assigned_to") or "") != owner):
+        raise HTTPException(403, "La instancia no pertenece a este usuario")
+    return user
+
 
 def _check_otp_webhook_secret(secret: Optional[str], endpoint: str):
     """Shared-secret gate for /otp/webhook, /telnyx/inbound, /telnyx/otp — see
@@ -294,7 +306,10 @@ def api_admin_change_role(body: dict, x_user_token: Optional[str] = Header(None)
 def api_update_evolution(body: dict, x_user_token: Optional[str] = Header(None)):
     from app.auth import update_evolution
     _require_user(x_user_token)
-    update_evolution(x_user_token, body.get("instance", ""), body.get("number", ""))
+    try:
+        update_evolution(x_user_token, body.get("instance", ""), body.get("number", ""))
+    except PermissionError:
+        raise HTTPException(403, 'La instancia no esta asignada a este usuario')
     return {"ok": True}
 
 @router.post("/process-url")
@@ -745,7 +760,9 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
             _ww_result = dispatch_once(db,
                 operation_key('manual', str(actor.get('id') or actor.get('_id')), req.request_id),
                 _send_manual_wwebjs, message_body=req.message,
-                fingerprint=operation_key(req.model_dump(exclude={'request_id'})))
+                fingerprint=operation_key(req.model_dump(exclude={'request_id'})),
+                authorize=dispatch_guard(
+                    db, req.company_id, req.to_number, purpose=req.purpose))
             status = 'sent' if _ww_result.get('success') else 'failed'
             message_id = _ww_result.get('messageId')
             _msg_type = ('sticker' if req.as_sticker else 'image') if req.image_url else 'document' if req.document_url else 'text'
@@ -4332,7 +4349,8 @@ def api_sync_wwebjs_instances(x_user_token: Optional[str] = Header(None)):
 # ─── wwebjs endpoints ──────────────────────────────────────────────────────────
 
 @router.post("/wwebjs/session/{session_id}/start")
-def api_wwebjs_start(session_id: str, body: dict = None):
+def api_wwebjs_start(session_id: str, body: dict = None, x_user_token: Optional[str] = Header(None)):
+    _require_session_access(session_id, x_user_token)
     from app.whatsapp_wwebjs import start_session
     phone_number = (body or {}).get("phone_number")
     try:
@@ -4341,7 +4359,8 @@ def api_wwebjs_start(session_id: str, body: dict = None):
         raise HTTPException(500, str(e))
 
 @router.get("/wwebjs/session/{session_id}/status")
-def api_wwebjs_status(session_id: str):
+def api_wwebjs_status(session_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_session_access(session_id, x_user_token)
     from app.whatsapp_wwebjs import get_status
     try:
         return get_status(session_id)
@@ -4349,7 +4368,8 @@ def api_wwebjs_status(session_id: str):
         raise HTTPException(500, str(e))
 
 @router.get("/wwebjs/session/{session_id}/qr")
-def api_wwebjs_qr(session_id: str):
+def api_wwebjs_qr(session_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_session_access(session_id, x_user_token)
     from app.whatsapp_wwebjs import get_qr
     try:
         return get_qr(session_id)
@@ -4357,7 +4377,8 @@ def api_wwebjs_qr(session_id: str):
         raise HTTPException(400, str(e))
 
 @router.get("/wwebjs/session/{session_id}/pairing-code")
-def api_wwebjs_pairing_code(session_id: str):
+def api_wwebjs_pairing_code(session_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_session_access(session_id, x_user_token)
     from app.whatsapp_wwebjs import get_pairing_code
     try:
         return get_pairing_code(session_id)
@@ -4383,6 +4404,7 @@ def api_wwebjs_bulk_verify(body: dict, x_user_token: Optional[str] = Header(None
     if len(numbers) > 500:
         raise HTTPException(status_code=400, detail="Máximo 500 números por solicitud")
 
+    _require_session_access(session, x_user_token)
     _db = MongoDBManager()
     digits_map = {n: "".join(filter(str.isdigit, str(n))) for n in numbers}
 
@@ -4434,7 +4456,8 @@ def api_wwebjs_bulk_verify(body: dict, x_user_token: Optional[str] = Header(None
 
 
 @router.post("/wwebjs/session/create")
-def api_wwebjs_create_session(body: dict):
+def api_wwebjs_create_session(body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_admin(x_user_token)
     """Create a new wwebjs session in the service and register it in MongoDB."""
     import re as _re, requests as _req
     from app.config import WWEBJS_URL as _ww_url
@@ -4457,7 +4480,10 @@ def api_wwebjs_create_session(body: dict):
     start_body = {"phoneNumber": phone_number} if phone_number else {}
     # Número nuevo: su proxy queda puesto antes de que su Chrome arranque por primera vez.
     from app import proxies as _px
-    _proxy_fields = _px.prepare_new_instance(_db.db, name)
+    try:
+        _proxy_fields = _px.prepare_new_instance(_db.db, name)
+    except Exception as exc:
+        raise HTTPException(503, 'No se pudo confirmar el proxy requerido; no se inicio la sesion.') from exc
     try:
         r = _req.post(f"{_ww_url}/session/{name}/start", json=start_body, headers=_ww_headers(), timeout=15)
     except Exception as e:
@@ -4488,16 +4514,22 @@ def api_wwebjs_create_session(body: dict):
 
 
 @router.delete("/wwebjs/session/{session_id}")
-def api_wwebjs_delete(session_id: str):
+def api_wwebjs_delete(session_id: str, x_user_token: Optional[str] = Header(None)):
+    """DETIENE el navegador de la sesión (el diálogo de QR lo llama al cerrarse
+    sin haber vinculado). NO borra la instancia: eso es DELETE
+    /admin/instances/{name}. Llegó a apuntar a api_delete_instance y cerrar
+    el diálogo de "Reconectar" borraba el número y soltaba su proxy (2026-10-19)."""
+    _require_session_access(session_id, x_user_token)
     from app.whatsapp_wwebjs import delete_session
     try:
         delete_session(session_id)
-        return {"ok": True}
-    except Exception as e:
-        raise HTTPException(500, str(e))
+    except Exception as exc:
+        raise HTTPException(502, "No se pudo detener la sesión; vuelve a intentarlo.") from exc
+    return {"ok": True}
 
 @router.get("/wwebjs/sessions")
-def api_wwebjs_list():
+def api_wwebjs_list(x_user_token: Optional[str] = Header(None)):
+    _require_admin(x_user_token)
     from app.whatsapp_wwebjs import list_sessions
     try:
         return list_sessions()
@@ -4505,7 +4537,8 @@ def api_wwebjs_list():
         raise HTTPException(500, str(e))
 
 @router.get("/wwebjs/session/{session_id}/info")
-def api_wwebjs_info(session_id: str):
+def api_wwebjs_info(session_id: str, x_user_token: Optional[str] = Header(None)):
+    _require_session_access(session_id, x_user_token)
     from app.whatsapp_wwebjs import get_info
     try:
         return get_info(session_id)
@@ -4513,7 +4546,8 @@ def api_wwebjs_info(session_id: str):
         raise HTTPException(500, str(e))
 
 @router.post("/wwebjs/session/{session_id}/verify")
-def api_wwebjs_verify(session_id: str, body: dict):
+def api_wwebjs_verify(session_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_session_access(session_id, x_user_token)
     from app.whatsapp_wwebjs import verify_number
     phone = body.get("phone", "")
     if not phone:
@@ -4525,7 +4559,8 @@ def api_wwebjs_verify(session_id: str, body: dict):
         raise HTTPException(500, str(e))
 
 @router.post("/wwebjs/session/{session_id}/contact/save")
-def api_wwebjs_save_contact(session_id: str, body: dict):
+def api_wwebjs_save_contact(session_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_session_access(session_id, x_user_token)
     from app.whatsapp_wwebjs import save_contact
     phone = body.get("phone", "")
     first_name = body.get("firstName") or body.get("first_name", "")
@@ -4538,7 +4573,8 @@ def api_wwebjs_save_contact(session_id: str, body: dict):
         raise HTTPException(500, str(e))
 
 @router.post("/wwebjs/session/{session_id}/profile/status")
-def api_wwebjs_profile_status(session_id: str, body: dict):
+def api_wwebjs_profile_status(session_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_session_access(session_id, x_user_token)
     from app.whatsapp_wwebjs import set_profile_status
     status_text = body.get("status", "")
     if not isinstance(status_text, str):
@@ -4549,7 +4585,8 @@ def api_wwebjs_profile_status(session_id: str, body: dict):
         raise HTTPException(500, str(e))
 
 @router.post("/wwebjs/session/{session_id}/profile/name")
-def api_wwebjs_profile_name(session_id: str, body: dict):
+def api_wwebjs_profile_name(session_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_session_access(session_id, x_user_token)
     """Changes the real WhatsApp profile name (pushname) — distinct from the
     app's own instance label (already editable via InstancesPanel). Also
     updates instances.profile_name so Andy's conversation persona (which reads
@@ -4568,7 +4605,8 @@ def api_wwebjs_profile_name(session_id: str, body: dict):
         raise HTTPException(500, str(e))
 
 @router.post("/wwebjs/session/{session_id}/profile/picture")
-def api_wwebjs_profile_picture(session_id: str, body: dict):
+def api_wwebjs_profile_picture(session_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_session_access(session_id, x_user_token)
     """Changes the real WhatsApp profile picture. Also updates
     instances.profile_pic_url — same reasoning as the /profile/name route
     above: without this, the app kept showing the OLD photo after a real,
@@ -4589,7 +4627,8 @@ def api_wwebjs_profile_picture(session_id: str, body: dict):
         raise HTTPException(500, str(e))
 
 @router.post("/wwebjs/session/{session_id}/react")
-def api_wwebjs_react(session_id: str, body: dict):
+def api_wwebjs_react(session_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
+    _require_session_access(session_id, x_user_token)
     from app.whatsapp_wwebjs import send_reaction
     message_id = body.get("messageId", "")
     emoji = body.get("emoji", "")
@@ -4619,27 +4658,48 @@ def api_wwebjs_user_status(x_user_token: Optional[str] = Header(None)):
     user_id = user.get("id") or str(user.get("_id", ""))
     instances = list(db.db.instances.find(
         {"assigned_to": user_id, "provider": "wwebjs"},
-        {"_id": 0, "name": 1, "number": 1, "disconnect_reason": 1},
+        {"_id": 0, "name": 1, "number": 1, "label": 1, "profile_name": 1, "profile_pic_url": 1,
+         "status": 1, "disconnect_reason": 1, "disconnect_reason_label": 1},
     )) if user_id else []
 
     if not instances:
-        return {"connected": False, "connected_count": 0, "total": 0}
+        return {"connected": False, "connected_count": 0, "total": 0, "instances": []}
 
     def _check(inst):
+        # (estado a mostrar, estado en vivo). Si el servicio no contesta se
+        # muestra el último que dejó el webhook, pero eso nunca cuenta como
+        # "conectado" (igual que antes: sin respuesta en vivo = no conectado).
         try:
             r = _req.get(f"{_ww_url}/session/{inst['name']}/status", headers=_ww_headers(), timeout=2)
-            return r.ok and r.json().get("status") == "connected" and bool(inst.get("number"))
+            if r.ok:
+                live = r.json().get("status") or "unknown"
+                return live, live
         except Exception:
-            return False
+            pass
+        stored = inst.get("status") or "unknown"
+        return ("unknown" if stored == "connected" else stored), None
 
     with ThreadPoolExecutor(max_workers=len(instances)) as ex:
-        results = list(ex.map(_check, instances))
+        checks = list(ex.map(_check, instances))
+    statuses = [shown for shown, _ in checks]
 
-    connected_count = sum(1 for r in results if r)
+    # Para Configuración: cada número del usuario con su estado, para que pueda
+    # verlos aunque estén desconectados y reconectarlos ahí mismo.
+    detailed = [
+        {
+            "name": inst["name"], "number": inst.get("number") or "", "label": inst.get("label") or "",
+            "profile_name": inst.get("profile_name") or "", "profile_pic_url": inst.get("profile_pic_url") or "",
+            "live_status": status, "disconnect_reason": inst.get("disconnect_reason"),
+            "disconnect_reason_label": inst.get("disconnect_reason_label"),
+        }
+        for inst, status in zip(instances, statuses)
+    ]
+    connected_count = sum(1 for inst, (_, live) in zip(instances, checks) if live == "connected" and inst.get("number"))
     return {
         "connected": connected_count > 0,
         "connected_count": connected_count,
         "total": len(instances),
+        "instances": detailed,
     }
 
 
@@ -4647,6 +4707,12 @@ def api_wwebjs_user_status(x_user_token: Optional[str] = Header(None)):
 
 @router.post("/wwebjs/webhook")
 async def api_wwebjs_webhook(request: Request, background_tasks: BackgroundTasks):
+    import hmac
+    from app.whatsapp_wwebjs import API_SECRET
+    if not API_SECRET:
+        raise HTTPException(503, 'El secreto de wwebjs no esta configurado')
+    if not hmac.compare_digest(request.headers.get('x-api-secret', ''), API_SECRET):
+        raise HTTPException(401, 'Webhook no autorizado')
     body = await request.json()
     event = body.get("event", "")
     session_id = body.get("sessionId", "")
@@ -4674,14 +4740,21 @@ async def api_wwebjs_webhook(request: Request, background_tasks: BackgroundTasks
             "disconnected": "Sesión desconectada",
             "auth_failure": "Fallo de autenticación",
             "need_scan": "Requiere volver a escanear QR/código",
+            "error": "Sesión detenida tras varios intentos de recuperación",
         }
-        print(f"[wwebjs Webhook] session={instance_name} {status} → {label_map.get(status, status)}")
+        # Causas que merecen su propio texto (el estado "error" sale por varias razones).
+        reason_labels = {
+            "PROXY_INVALID": "El proxy asignado no es válido o falta: revísalo en Instancias → Proxies",
+            "RECOVERY_LIMIT": "Sesión detenida tras varios intentos de recuperación",
+        }
+        status_label = reason_labels.get(data.get("reason")) or label_map.get(status, status)
+        print(f"[wwebjs Webhook] session={instance_name} {status} → {status_label}")
         db.db.instances.update_one(
             {"name": instance_name},
             {"$set": {
                 "status": status,
                 "disconnect_reason": disconnect_reason if status != "connected" else None,
-                "disconnect_reason_label": label_map.get(status, status),
+                "disconnect_reason_label": status_label,
             }},
         )
         # wwebjs-service solo emite session.status en transiciones reales del
@@ -4691,10 +4764,11 @@ async def api_wwebjs_webhook(request: Request, background_tasks: BackgroundTasks
         # anterior. Un QR inicial no cuenta como caída; un need_scan que
         # sucede mientras estaba conectado sí debe quedar en el historial.
         if status == "connected":
-            db.save_instance_health_log(instance_name, "connected")
-        elif status in ("disconnected", "auth_failure") or (status == "need_scan" and was_connected):
+            db.save_instance_health_log(instance_name, "connected", diagnostics=data.get('diagnostics'))
+        elif status in ("disconnected", "auth_failure", "error") or (status == "need_scan" and was_connected):
             db.save_instance_health_log(instance_name, "disconnected",
-                                         reason=disconnect_reason, reason_label=label_map.get(status, status))
+                                         reason=disconnect_reason, reason_label=status_label,
+                                         diagnostics=data.get('diagnostics'))
         # Correo a los admins cuando una sesión que SÍ estaba conectada deja
         # de estarlo — incluye "need_scan" (un LOGOUT real, el caso más
         # importante de avisar, ya que necesita que un humano vuelva a
@@ -4704,8 +4778,12 @@ async def api_wwebjs_webhook(request: Request, background_tasks: BackgroundTasks
         # BackgroundTasks — smtplib es bloqueante y esta ruta es async, así
         # que mandarlo inline aquí congelaría el event loop del worker entero
         # mientras dura el round-trip SMTP.
-        if was_connected and status != "connected":
-            background_tasks.add_task(_notify_disconnect_if_still_down, instance_name, label_map.get(status, status))
+        # "error" = wwebjs agotó sus reintentos (RECOVERY_LIMIT) y dejó de
+        # intentar: para entonces el estado guardado casi siempre ya era
+        # "disconnected" (was_connected=False), así que sin esto la línea
+        # quedaba muerta sin correo ni registro.
+        if (was_connected and status != "connected") or (status == "error" and inst_doc.get("status") != "error"):
+            background_tasks.add_task(_notify_disconnect_if_still_down, instance_name, status_label)
         if data.get("phone"):
             db.db.instances.update_one({"name": instance_name}, {"$set": {"number": data["phone"]}})
         _profile_fields = {}
@@ -4745,7 +4823,7 @@ async def api_wwebjs_webhook(request: Request, background_tasks: BackgroundTasks
             # Update delivery/read status in message_logs so the chat thread shows ticks
             if data.get("messageId"):
                 status = "read" if ack >= 3 else "delivered"
-                db.update_evolution_message_status(data["messageId"], status)
+                db.update_message_ack_status(data["messageId"], status)
         elif ack == 1:
             # Only sent to server, not delivered — wwebjs-service tracks streak,
             # it fires session.degraded when threshold is hit
@@ -6583,14 +6661,23 @@ def api_instances_metrics(x_user_token: Optional[str] = Header(None), range: str
     _prev_since_bound = _prev_start_mx.astimezone(pytz.utc).replace(tzinfo=None)
 
     db = MongoDBManager()
-    match = {"direction": "outbound", "created_at": {"$gte": since, "$lt": until}, "instance_name": {"$exists": True, "$ne": None}}
+    from app.instance_metrics import CONFIRMED_STATUSES
+    # `match` = todos los INTENTOS de prospección (base del resultado de envíos
+    # y del primer paso del embudo). El calentamiento entre líneas propias
+    # (is_warmup) no es prospección: antes inflaba "Mensajes enviados" (818
+    # mensajes contra 44 contactos en octubre 2026).
+    match = {"direction": "outbound", "created_at": {"$gte": since, "$lt": until},
+             "instance_name": {"$exists": True, "$ne": None}, "is_warmup": {"$ne": True}}
+    # "Enviados"/"alcanzados" = solo lo que WhatsApp sí aceptó; los fallidos y
+    # los frenados por reglas se ven aparte en el resultado de envíos.
+    sent_match = {**match, "status": {"$in": list(CONFIRMED_STATUSES)}}
     # A chunk of outbound logs have no company_id (not every send path stamps
     # one) — without this filter $addToSet would count that gap itself as a
     # bogus extra "contact" per instance that has any such message.
-    match_with_company = {**match, "company_id": {"$exists": True, "$ne": None}}
+    match_with_company = {**sent_match, "company_id": {"$exists": True, "$ne": None}}
 
     by_instance = list(db.db.message_logs.aggregate([
-        {"$match": match},
+        {"$match": sent_match},
         {"$group": {
             "_id": "$instance_name",
             "messages_sent": {"$sum": 1},
@@ -6611,7 +6698,8 @@ def api_instances_metrics(x_user_token: Optional[str] = Header(None), range: str
     ]
     instances.sort(key=lambda r: r["messages_sent"], reverse=True)
 
-    total_messages = db.db.message_logs.count_documents(match)
+    total_messages = db.db.message_logs.count_documents(sent_match)
+    warmup_messages = db.db.message_logs.count_documents({**sent_match, "is_warmup": True})
     contacted_ids = set(db.db.message_logs.distinct("company_id", match_with_company))
     total_contacts = len(contacted_ids)
 
@@ -6639,7 +6727,14 @@ def api_instances_metrics(x_user_token: Optional[str] = Header(None), range: str
     # Equivalent PRIOR calendar period (previous day/week/month/year), for real
     # (not invented) percent-change badges on the summary cards.
     prev_since = _prev_since_bound
-    prev_match = {"direction": "outbound", "created_at": {"$gte": prev_since, "$lt": since}, "instance_name": {"$exists": True, "$ne": None}}
+    # Periodo en curso (sin año/mes fijo): comparar contra el MISMO tramo
+    # transcurrido del periodo anterior, no contra el periodo anterior
+    # completo — un lunes daba "-93% vs semana anterior" (1 día contra 7).
+    # Tope en `since` porque un mes anterior más corto no alcanza el tramo.
+    prev_until = min(prev_since + (until - since), since) if _end_mx is _now_mx else since
+    prev_match = {"direction": "outbound", "created_at": {"$gte": prev_since, "$lt": prev_until},
+                  "instance_name": {"$exists": True, "$ne": None}, "is_warmup": {"$ne": True},
+                  "status": {"$in": list(CONFIRMED_STATUSES)}}
     prev_match_with_company = {**prev_match, "company_id": {"$exists": True, "$ne": None}}
     prev_total_messages = db.db.message_logs.count_documents(prev_match)
     prev_contacted_ids = set(db.db.message_logs.distinct("company_id", prev_match_with_company))
@@ -6668,7 +6763,7 @@ def api_instances_metrics(x_user_token: Optional[str] = Header(None), range: str
     # actually read as a trend.
     bucket_format = {"day": "%Y-%m-%d %H:00", "week": "%Y-%m-%d", "month": "%Y-%m-%d", "year": "%Y-%m"}.get(range, "%Y-%m-%d")
     timeseries_rows = list(db.db.message_logs.aggregate([
-        {"$match": match},
+        {"$match": sent_match},
         {"$group": {
             "_id": {"$dateToString": {"format": bucket_format, "date": "$created_at"}},
             "messages_sent": {"$sum": 1},
@@ -6678,11 +6773,21 @@ def api_instances_metrics(x_user_token: Optional[str] = Header(None), range: str
         {"$sort": {"bucket": 1}},
     ]))
 
+    from app.instance_metrics import extended_metrics
+    extra = extended_metrics(
+        db, match=match, match_with_company=match_with_company, match_in=match_in,
+        prev_match_with_company=prev_match_with_company, prev_match_in=prev_match_in,
+        contacted_ids=contacted_ids, replied_ids=replied_ids, since=since, until=until,
+        instance_names=names, uptime=uptime, bucket_format=bucket_format,
+    )
+
     return {
+        **extra,
         "range": range,
         "since": since.isoformat(),
         "until": until.isoformat(),
         "total_messages": total_messages,
+        "warmup_messages": warmup_messages,
         "total_contacts": total_contacts,
         "replied_contacts": replied_of_contacted,
         "response_rate": response_rate,
@@ -6803,7 +6908,11 @@ def api_proxies_import(body: dict, x_user_token: Optional[str] = Header(None)):
     _require_admin(x_user_token)
     from app import proxies as _px
     text = (body or {}).get("text") or ""
-    if not _px.parse_proxy_text(text):
+    try:
+        parsed = _px.parse_proxy_text(text)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not parsed:
         raise HTTPException(400, "No encontré proxies en el texto. Formato: ip:puerto:usuario:contraseña, uno por renglón.")
     return _px.import_text(MongoDBManager().db, text)
 
@@ -6882,7 +6991,7 @@ def api_instance_set_proxy(name: str, body: dict, x_user_token: Optional[str] = 
     except ValueError as e:
         raise HTTPException(409, str(e))
     except Exception as e:
-        raise HTTPException(502, f"Se guardó, pero wwebjs no confirmó el cambio: {e}")
+        raise HTTPException(502, "No se pudo confirmar el cambio de proxy. Revisa su estado antes de reintentarlo.") from e
 
 
 @router.post("/proxies/instances/{name}/lean")
@@ -6926,7 +7035,10 @@ def api_create_instance(body: dict, x_user_token: Optional[str] = Header(None)):
         from app.whatsapp_wwebjs import _headers as _ww_headers
         from app import proxies as _px
         # Número nuevo: su proxy queda puesto antes de que su Chrome arranque por primera vez.
-        _proxy_fields = {} if db.db.instances.find_one({"name": name}) else _px.prepare_new_instance(db.db, name)
+        try:
+            _proxy_fields = {} if db.db.instances.find_one({'name': name}) else _px.prepare_new_instance(db.db, name)
+        except Exception as exc:
+            raise HTTPException(503, 'No se pudo confirmar el proxy requerido; no se inicio la sesion.') from exc
         r = _req.post(f"{_ww_url}/session/{name}/start", headers=_ww_headers(), timeout=10)
         if not r.ok:
             raise HTTPException(500, f"Error wwebjs-service: {r.text[:200]}")
@@ -7015,9 +7127,12 @@ def api_delete_instance(name: str, x_user_token: Optional[str] = Header(None)):
         from app.config import WWEBJS_URL as _ww_url
         from app.whatsapp_wwebjs import _headers as _ww_headers
         try:
-            _req.delete(f"{_ww_url}/session/{name}", headers=_ww_headers(), timeout=10)
-        except Exception:
-            pass
+            stopped = _req.delete(f"{_ww_url}/session/{name}", headers=_ww_headers(), timeout=35)
+            stopped.raise_for_status()
+        except Exception as exc:
+            # Keep the registry and proxy assignment until the provider confirms
+            # its durable stop. Otherwise a failed delete can resurrect on boot.
+            raise HTTPException(502, "No se pudo confirmar la baja de la sesión; vuelve a intentarlo.") from exc
         # Libera su proxy: el lugar en el pool se libera solo al borrar el documento,
         # y wwebjs olvida su copia para que un número nuevo con el mismo nombre no la herede.
         from app import proxies as _px

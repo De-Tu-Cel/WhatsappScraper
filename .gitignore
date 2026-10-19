@@ -106,3 +106,5 @@ apps/wwebjs/wg/*.log
 
 # DB backups — contienen datos reales de contactos/prospectos, nunca deben subirse
 backups/
+*.wa-session-backup
+*.wa-session-key

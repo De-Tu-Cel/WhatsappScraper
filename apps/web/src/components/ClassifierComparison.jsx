@@ -228,14 +228,14 @@ function parecidoTip(t, hibrido, it, fresh, items) {
 }
 
 export function ParecidoCell({ hibrido, onClick }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const items = parecidoItems(hibrido)
   if (!items.length) {
     return (
       <Typography sx={{
         fontSize: '0.7rem', lineHeight: 1, textAlign: 'center', fontStyle: 'italic',
         color: 'var(--text-muted, rgba(255,255,255,0.28))',
-      }}>{t.analytics.noCategory}</Typography>
+      }}>{lang === 'en' ? 'Not analyzed' : 'Sin analizar'}</Typography>
     )
   }
   const fresh = Array.isArray(hibrido?.parecido?.items) && hibrido.parecido.items.length > 0

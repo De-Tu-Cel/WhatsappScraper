@@ -1100,11 +1100,11 @@ function SkeletonRows({ count }) {
           <Skeleton variant="rounded" width={38} height={38} sx={SKEL_SX} />
         </Box>
       </TableCell>
-      <TableCell align="right" sx={{ pr: 1 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 0.5 }}>
-          <Skeleton variant="circular" width={22} height={22} sx={SKEL_SX} />
-          <Skeleton variant="circular" width={22} height={22} sx={SKEL_SX} />
-          <Skeleton variant="circular" width={22} height={22} sx={SKEL_SX} />
+      <TableCell align="center">
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 0.5 }}>
+          <Skeleton variant="rounded" width={30} height={30} sx={{ ...SKEL_SX, borderRadius: '7px' }} />
+          <Skeleton variant="rounded" width={30} height={30} sx={{ ...SKEL_SX, borderRadius: '7px' }} />
+          <Skeleton variant="rounded" width={30} height={30} sx={{ ...SKEL_SX, borderRadius: '7px' }} />
         </Box>
       </TableCell>
     </TableRow>
@@ -1776,6 +1776,7 @@ export default function DatabaseViewer({ isActive }) {
       const data = await res.json()
       // Adapt to the format ResultDisplay expects
       setViewData({
+        whatsapp_validation: data.whatsapp_validation || {},
         website: data.website,
         scraped: {
           name: data.name,
@@ -1796,6 +1797,9 @@ export default function DatabaseViewer({ isActive }) {
           _extra: {
             city: data.city,
             state: data.state,
+            country: data.country,
+            postal_code: data.postal_code,
+            location_source: data.location_source,
             address: data.address,
             business_hours: data.business_hours,
             services: data.services,

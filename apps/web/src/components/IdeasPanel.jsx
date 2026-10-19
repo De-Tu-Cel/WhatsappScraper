@@ -238,8 +238,16 @@ function FilterDropdown({ selected, onToggle, label, searchPh, noItemsLabel, end
           }}
         />
         {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', py: 2.5 }}>
-            <CircularProgress size={16} sx={{ color: ACCENT }} />
+          // Misma forma que los renglones del filtro (casilla + punto de color + texto + conteo).
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.4 }}>
+            {[62, 48, 74, 55, 40].map((w, i) => (
+              <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 0.9, px: 0.8, py: 0.6 }}>
+                <Box sx={{ width: 14, height: 14, borderRadius: '3px', border: '2px solid var(--border, rgba(255,255,255,0.15))', flexShrink: 0 }} />
+                <Skeleton variant="circular" width={8} height={8} sx={{ ...SKEL_SX, flexShrink: 0 }} />
+                <Skeleton variant="rounded" height={10} sx={{ ...SKEL_SX, width: `${w}%` }} />
+                <Skeleton variant="rounded" width={18} height={10} sx={{ ...SKEL_SX, ml: 'auto', opacity: 0.6 }} />
+              </Box>
+            ))}
           </Box>
         ) : rows.length === 0 ? (
           <Typography sx={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', py: 2.5, fontStyle: 'italic' }}>
@@ -393,32 +401,55 @@ const SKEL_SX = {
   '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.06), transparent)' },
 }
 
-// Misma forma que IdeaRow (checkbox + favicon + dominio + chip + meta + basura)
+// Anchos que varían por renglón: con todos iguales el esqueleto se veía como
+// una rejilla plana en vez de una lista de sitios reales.
+const SKEL_SITE_W = [54, 38, 62, 45, 57, 34, 49, 66]
+const SKEL_CHIP_W = [72, 96, 58, 86, 64, 104, 78, 60]
+const SKEL_BY_W = [96, 78, 110, 88, 70, 102, 84, 92]
+
+// Misma forma que IdeaRow — casilla, favicon + dominio + ícono de enlace,
+// chip de industria, fecha en caja + "agregado por" en dos líneas, basura —
 // para que no salte el layout cuando llegan los datos reales.
 function IdeaRowSkeleton({ index }) {
   const zebra = index % 2 === 1
+  const i = index % SKEL_SITE_W.length
   return (
-    <TableRow sx={{ bgcolor: zebra ? 'var(--surface, rgba(255,255,255,0.02))' : 'transparent' }}>
+    <TableRow sx={{
+      bgcolor: zebra ? 'var(--surface, rgba(255,255,255,0.02))' : 'transparent',
+      '@keyframes ideaSkeletonIn': { from: { opacity: 0 }, to: { opacity: 1 } },
+      animation: 'ideaSkeletonIn 0.3s ease both', animationDelay: `${index * 45}ms`,
+      '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
+    }}>
       <TableCell padding="checkbox" sx={IDEAS_CELL_SX}>
-        <Skeleton variant="rounded" width={18} height={18} sx={{ ...SKEL_SX, ml: 1.2 }} />
+        <Box sx={{ width: 16, height: 16, ml: 1.3, borderRadius: '3px', border: '2px solid var(--border, rgba(255,255,255,0.15))' }} />
       </TableCell>
       <TableCell sx={IDEAS_CELL_SX}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Skeleton variant="rounded" width={18} height={18} sx={{ ...SKEL_SX, flexShrink: 0 }} />
-          <Skeleton variant="text" width="45%" sx={{ ...SKEL_SX, fontSize: '0.8rem' }} />
+          <Skeleton variant="rounded" width={18} height={18} sx={{ ...SKEL_SX, flexShrink: 0, borderRadius: 0.5 }} />
+          <Skeleton variant="rounded" height={12} sx={{ ...SKEL_SX, width: `${SKEL_SITE_W[i]}%`, borderRadius: 1 }} />
+          <Skeleton variant="rounded" width={10} height={10} sx={{ ...SKEL_SX, flexShrink: 0, opacity: 0.6 }} />
         </Box>
       </TableCell>
       <TableCell sx={{ ...IDEAS_CELL_SX, textAlign: 'center' }}>
-        <Skeleton variant="rounded" width={62} height={16} sx={{ ...SKEL_SX, display: 'inline-block' }} />
+        <Skeleton variant="rounded" width={SKEL_CHIP_W[i]} height={20}
+          sx={{ ...SKEL_SX, display: 'inline-block', borderRadius: 0.6, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' }} />
       </TableCell>
       <TableCell sx={{ ...IDEAS_CELL_SX, textAlign: 'center' }}>
-        <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 1 }}>
-          <Skeleton variant="rounded" width={38} height={38} sx={{ ...SKEL_SX, flexShrink: 0 }} />
-          <Skeleton variant="text" width={90} sx={{ ...SKEL_SX, fontSize: '0.76rem' }} />
+        <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 1, textAlign: 'left' }}>
+          {/* Caja de fecha con su borde, como MiniDateBadge (mes + día). */}
+          <Box sx={{ width: 38, height: 38, borderRadius: 1.4, flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 0.5,
+            bgcolor: 'var(--surface, rgba(255,255,255,0.04))', border: '1px solid var(--border, rgba(255,255,255,0.1))' }}>
+            <Skeleton variant="rounded" width={18} height={6} sx={SKEL_SX} />
+            <Skeleton variant="rounded" width={14} height={10} sx={SKEL_SX} />
+          </Box>
+          <Box>
+            <Skeleton variant="rounded" width={SKEL_BY_W[i]} height={10} sx={{ ...SKEL_SX, mb: 0.7 }} />
+            <Skeleton variant="rounded" width={SKEL_BY_W[i] * 0.6} height={8} sx={{ ...SKEL_SX, opacity: 0.7 }} />
+          </Box>
         </Box>
       </TableCell>
       <TableCell sx={{ ...IDEAS_CELL_SX, textAlign: 'center', width: 48 }}>
-        <Skeleton variant="circular" width={16} height={16} sx={{ ...SKEL_SX, display: 'inline-block' }} />
+        <Skeleton variant="rounded" width={22} height={22} sx={{ ...SKEL_SX, display: 'inline-block', borderRadius: '6px', opacity: 0.7 }} />
       </TableCell>
     </TableRow>
   )

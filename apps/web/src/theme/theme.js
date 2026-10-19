@@ -39,12 +39,15 @@ const theme = createTheme({
     MuiButton: {
       styleOverrides: {
         root: { textTransform: 'none', fontWeight: 600, borderRadius: 8 },
-        containedPrimary: {
-          background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
-          boxShadow: '0 4px 14px rgba(59,130,246,0.4)',
-          '&:hover': {
-            background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)',
-            boxShadow: '0 6px 20px rgba(59,130,246,0.5)',
+        contained: {
+          '&.MuiButton-colorPrimary:not(.Mui-disabled)': {
+            background: 'var(--accent, #3b82f6)',
+            color: 'var(--accent-contrast, #fff)',
+            boxShadow: '0 3px 10px var(--accent-glow, rgba(59,130,246,0.12))',
+            '&:hover': {
+              background: 'var(--accent, #3b82f6)',
+              boxShadow: '0 5px 14px var(--accent-glow, rgba(59,130,246,0.18))',
+            },
           },
         },
       },

@@ -103,7 +103,7 @@ def _stamp_assigned_instance(db, company_id: str, instance_name: str) -> None:
         pass
 
 
-def _nc_aware_pick(db, candidates: list, company_id: str) -> str | None:
+def _nc_aware_pick(db, candidates: list, company_id: str, to_number: str = '') -> str | None:
     """Pick the best connected instance for this send.
 
     For new contacts: prefer the instance with the most NC capacity left so the
@@ -128,7 +128,9 @@ def _nc_aware_pick(db, candidates: list, company_id: str) -> str | None:
     available = [n for n in candidates if get_daily_count(db, n) < get_instance_cap(db, n)]
     pool = available or candidates
 
-    if not company_id or not is_new_contact(db, company_id):
+    existing = (not is_new_contact(db, company_id, to_number) if to_number
+                else not company_id or not is_new_contact(db, company_id))
+    if existing:
         # Existing contact: load-balance across instances by daily send count.
         if len(pool) == 1:
             return pool[0]
@@ -142,13 +144,15 @@ def _nc_aware_pick(db, candidates: list, company_id: str) -> str | None:
         warmup = bool((inst or {}).get("warmup_mode"))
         limit = get_new_contacts_limit(warmup)
         count = count_new_contacts_today_for_instance(db, name)
-        reservation = db.db.instance_new_contacts_today.find_one(
-            {'instance': name, 'date': _today()}, {'companies': 1},
-        ) or {}
-        reserved = reservation.get('companies', [])
+        query = ({'_id': f'newcontacts:{_today()}:{name}'} if to_number
+                 else {'instance': name, 'date': _today()})
+        reservation = db.db.instance_new_contacts_today.find_one(query, {'companies': 1, 'recipients': 1}) or {}
+        reserved = reservation.get('recipients' if to_number else 'companies', [])
         if isinstance(reserved, list):
-            if company_id in reserved:
-                return name  # Another phone of this same company is already in flight here.
+            from app.contact_permissions import recipient_key
+            reservation_key = recipient_key(to_number) if to_number else company_id
+            if reservation_key in reserved:
+                return name  # This recipient already has an in-flight reservation here.
             count = max(count, len(reserved))
         scored.append((limit - count, name))
     scored.sort(reverse=True)
@@ -188,7 +192,7 @@ def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_i
         # Atomic reservation — check_new_contact_cap was a pure read with no
         # reservation of any kind (audit finding, 2026-09-30, CRITICAL — the one
         # cap in the whole anti-ban system with no atomic gate anywhere).
-        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, EVOLUTION_INSTANCE, company_id)
+        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, EVOLUTION_INSTANCE, company_id, to_number)
         if not _nc_ok:
             if _reserved_new:
                 release_daily_slot(db, EVOLUTION_INSTANCE, _to_digits)
@@ -214,7 +218,7 @@ def _send_via_evolution(db, company_id: str, to_number: str, message: str, job_i
             if _reserved_new:
                 release_daily_slot(db, EVOLUTION_INSTANCE, _to_digits)
             if _nc_reserved_new:
-                release_new_contact_slot(db, EVOLUTION_INSTANCE, company_id)
+                release_new_contact_slot(db, EVOLUTION_INSTANCE, company_id, to_number)
 
         # Learn JID from send response as fallback
         if not real_jid_num and status == "sent":
@@ -267,7 +271,7 @@ def _send_via_waha(db, company_id: str, to_number: str, message: str, job_id: st
         if session:
             active_session = session
         else:
-            active_session = _nc_aware_pick(db, _waha_all(db, WAHA_API_URL, WAHA_API_KEY), company_id)
+            active_session = _nc_aware_pick(db, _waha_all(db, WAHA_API_URL, WAHA_API_KEY), company_id, to_number)
         if not active_session:
             log.warning("[Scheduler] WAHA: no session connected — skipping %s", to_number)
             return False
@@ -280,7 +284,7 @@ def _send_via_waha(db, company_id: str, to_number: str, message: str, job_id: st
             notify_cap_reached_once(db, active_session)
             return "skipped_daily_cap"
 
-        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, active_session, company_id)
+        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, active_session, company_id, to_number)
         if not _nc_ok:
             if _reserved_new:
                 release_daily_slot(db, active_session, _phone_digits)
@@ -328,7 +332,7 @@ def _send_via_waha(db, company_id: str, to_number: str, message: str, job_id: st
             if _reserved_new:
                 release_daily_slot(db, active_session, _phone_digits)
             if _nc_reserved_new:
-                release_new_contact_slot(db, active_session, company_id)
+                release_new_contact_slot(db, active_session, company_id, to_number)
             return False
 
         status      = "sent" if waha_result.get("status_code") in (200, 201) else "failed"
@@ -338,7 +342,7 @@ def _send_via_waha(db, company_id: str, to_number: str, message: str, job_id: st
             if _reserved_new:
                 release_daily_slot(db, active_session, _phone_digits)
             if _nc_reserved_new:
-                release_new_contact_slot(db, active_session, company_id)
+                release_new_contact_slot(db, active_session, company_id, to_number)
 
         db.insert_message_log({
             "channel": "whatsapp",
@@ -378,7 +382,7 @@ def _send_via_wasender(db, company_id: str, to_number: str, message: str, job_id
         if session:
             active_session = session
         else:
-            active_session = _nc_aware_pick(db, _wasender_all(db, WASENDER_PAT, WASENDER_BASE_URL), company_id)
+            active_session = _nc_aware_pick(db, _wasender_all(db, WASENDER_PAT, WASENDER_BASE_URL), company_id, to_number)
         if not active_session:
             log.warning("[Scheduler] Wasender: no session connected — skipping %s", to_number)
             return False
@@ -390,7 +394,7 @@ def _send_via_wasender(db, company_id: str, to_number: str, message: str, job_id
             notify_cap_reached_once(db, active_session)
             return "skipped_daily_cap"
 
-        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, active_session, company_id)
+        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, active_session, company_id, to_number)
         if not _nc_ok:
             if _reserved_new:
                 release_daily_slot(db, active_session, _phone_digits)
@@ -404,7 +408,7 @@ def _send_via_wasender(db, company_id: str, to_number: str, message: str, job_id
             if _reserved_new:
                 release_daily_slot(db, active_session, _phone_digits)
             if _nc_reserved_new:
-                release_new_contact_slot(db, active_session, company_id)
+                release_new_contact_slot(db, active_session, company_id, to_number)
             return False
 
         client = WasenderClient(WASENDER_BASE_URL, api_key, active_session,
@@ -430,7 +434,7 @@ def _send_via_wasender(db, company_id: str, to_number: str, message: str, job_id
             if _reserved_new:
                 release_daily_slot(db, active_session, _phone_digits)
             if _nc_reserved_new:
-                release_new_contact_slot(db, active_session, company_id)
+                release_new_contact_slot(db, active_session, company_id, to_number)
 
         db.insert_message_log({
             "channel": "whatsapp",
@@ -465,7 +469,8 @@ def _verify_wa_number(db, phone_digits: str, session: str) -> bool:
         return cached["wa_valid"]
     try:
         from app.whatsapp_wwebjs import verify_number
-        result = verify_number(session, phone_digits)
+        from app.verification_audit import verify_with_audit
+        result = verify_with_audit(db, session, phone_digits, source='scheduled_send', lookup=verify_number)
         # wwebjs service returns "registered"; "exists" was never in the response
         valid = bool(result.get("registered", result.get("exists", False)))
     except Exception as exc:
@@ -475,7 +480,8 @@ def _verify_wa_number(db, phone_digits: str, session: str) -> bool:
         return True  # on error, allow send (don't block on verify failure)
     db.db.jid_map.update_one(
         {"jid": phone_digits},
-        {"$set": {"wa_valid": valid, "wa_checked_at": datetime.now()}},
+        {"$set": {"wa_valid": valid, "wa_checked_at": datetime.now(),
+                  "wa_checked_by": session, "wa_check_source": "scheduled_send"}},
         upsert=True,
     )
     if not valid:
@@ -495,6 +501,7 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
     _phone_digits = clean_digits(to_number)
     _reserved_new = False
     _nc_reserved_new = False
+    provider_sent = False
     try:
         _reserved, _reserved_new = reserve_daily_slot(db, session, get_instance_cap(db, session), _phone_digits)
         if not _reserved:
@@ -502,7 +509,7 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
             notify_cap_reached_once(db, session)
             return "skipped_daily_cap"
 
-        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, session, company_id)
+        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, session, company_id, to_number)
         if not _nc_ok:
             if _reserved_new:
                 release_daily_slot(db, session, _phone_digits)
@@ -513,7 +520,7 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
             if _reserved_new:
                 release_daily_slot(db, session, _phone_digits)
             if _nc_reserved_new:
-                release_new_contact_slot(db, session, company_id)
+                release_new_contact_slot(db, session, company_id, to_number)
             db.insert_message_log({
                 "channel": "whatsapp", "platform": "wwebjs", "direction": "outbound",
                 "company_id": company_id, "to_number": to_number, "message_body": message,
@@ -533,17 +540,22 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
         _co_ww = db.db.companies.find_one({"_id": _OIdWW(company_id)}, {"name": 1, "business_name": 1}) if company_id and len(company_id) == 24 else None
         _co_name_ww = (_co_ww or {}).get("name") or (_co_ww or {}).get("business_name") or ""
         ww_client = WWebjsClient(session, instance_name=session)
-        ww_result = ww_client.send(to_number, message, delay_ms=delay_ms,
-                                   save_contact=bool(_co_name_ww), contact_name=_co_name_ww)
+        from app.delivery_receipts import dispatch_once, operation_key
+        from app.contact_permissions import recipient_key
+        ww_result = dispatch_once(db, operation_key('campaign', job_id, recipient_key(to_number)),
+            lambda: ww_client.send(to_number, message, delay_ms=delay_ms,
+                                   save_contact=False, contact_name=_co_name_ww), message_body=message)
+        message = ww_result.get('sent_message_body', message)
         message_id = ww_result.get("messageId")
         status = "sent" if ww_result.get("success") else "failed"
+        provider_sent = status == "sent"
         if status == "sent":
             _stamp_assigned_instance(db, company_id, session)
         else:
             if _reserved_new:
                 release_daily_slot(db, session, _phone_digits)
             if _nc_reserved_new:
-                release_new_contact_slot(db, session, company_id)
+                release_new_contact_slot(db, session, company_id, to_number)
 
         db.insert_message_log({
             "channel": "whatsapp",
@@ -565,12 +577,19 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
         log.info("[Scheduler] wwebjs job=%s company=%s to=%s status=%s", job_id, company_id, to_number, status)
         return status == "sent"
     except Exception as e:
+        from app.delivery_receipts import DeliveryUncertain
+        if provider_sent:
+            log.exception("Confirmed delivery; bookkeeping failed for job=%s", job_id)
+            return True
+        if isinstance(e, DeliveryUncertain):
+            log.warning("Delivery requires manual review for job=%s", job_id)
+            return 'delivery_uncertain'
         from app.whatsapp_wwebjs import SendWindowClosed, LineBusy
         if isinstance(e, (SendWindowClosed, LineBusy)):
             if _reserved_new:
                 release_daily_slot(db, session, _phone_digits)
             if _nc_reserved_new:
-                release_new_contact_slot(db, session, company_id)
+                release_new_contact_slot(db, session, company_id, to_number)
             return 'deferred_hours' if isinstance(e, SendWindowClosed) else 'deferred_busy'
         # Previously: logged to app logs only (log.exception) and returned
         # bare False — the actual reason (often the real error surfaced by
@@ -593,7 +612,7 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
         if _reserved_new:
             release_daily_slot(db, session, _phone_digits)
         if _nc_reserved_new:
-            release_new_contact_slot(db, session, company_id)
+            release_new_contact_slot(db, session, company_id, to_number)
         try:
             db.insert_message_log({
                 "channel": "whatsapp", "platform": "wwebjs", "direction": "outbound",
@@ -625,6 +644,10 @@ def _send_message(db, company_id: str, to_number: str, message: str, job_id: str
     from app.activity_hours import activity_allowed
     if not activity_allowed():
         return 'deferred_hours'
+    block = send_block_reason(db, company_id, to_number)
+    if block:
+        return {'phone': 'skipped_blacklisted', 'domain': 'skipped_blacklisted',
+                'industry': 'skipped_blacklisted'}.get(block['reason'], 'skipped_' + block['reason'])
     try:
         from bson import ObjectId
         # When user_id is given, restrict candidates to the user's own instances.
@@ -646,7 +669,7 @@ def _send_message(db, company_id: str, to_number: str, message: str, job_id: str
                 # that the caller can't distinguish from True, causing a silent loss).
                 from app.daily_cap import check_new_contact_cap as _check_nc
                 _daily_ok = get_daily_count(db, inst_name) < get_instance_cap(db, inst_name)
-                _nc_ok, _, _ = _check_nc(db, inst_name, company_id)
+                _nc_ok, _, _ = _check_nc(db, inst_name, company_id, to_number)
                 if _daily_ok and _nc_ok:
                     inst_doc = db.db.instances.find_one({"name": inst_name}, {"provider": 1})
                     provider = (inst_doc or {}).get("provider", "")
@@ -687,7 +710,7 @@ def _send_message(db, company_id: str, to_number: str, message: str, job_id: str
                 if (db.db.instances.find_one({"name": n}, {"assigned_to": 1}) or {}).get("assigned_to")
             ]
         if _ww_candidates:
-            _picked = _nc_aware_pick(db, _ww_candidates, company_id)
+            _picked = _nc_aware_pick(db, _ww_candidates, company_id, to_number)
             if _picked:
                 return _send_via_wwebjs(db, company_id, to_number, message, job_id, delay_ms, session=_picked,
                                         sent_by_username=sent_by_username, sent_by_name=sent_by_name)
@@ -924,7 +947,7 @@ def _execute_send_job(job_id: str):
                 elif ok == "skipped_daily_cap":
                     skipped_daily_count += 1
                     log.warning("[Scheduler] job=%s ⏭ daily cap reached — skipped %s", job_id, to_number[-4:])
-                elif ok is False:
+                elif ok is False or ok == "delivery_uncertain":
                     error_count += 1
 
                 db.db.scheduled_sends.update_one(
@@ -1034,7 +1057,7 @@ def _execute_send_job(job_id: str):
                 elif ok == "skipped_daily_cap":
                     skipped_daily_count += 1
                     log.warning("[Scheduler] job=%s ⏭ daily cap reached — skipped %s", job_id, to_number[-4:])
-                elif ok is False:
+                elif ok is False or ok == "delivery_uncertain":
                     error_count += 1
 
                 db.db.scheduled_sends.update_one(

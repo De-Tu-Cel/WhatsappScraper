@@ -19,6 +19,8 @@ def matches(doc, query):
             for op,value in expected.items():
                 if op == '$exists' and (key in doc) != value: return False
                 if op == '$lte' and (doc.get(key) is None or doc[key] > value): return False
+                if op == '$lt' and (doc.get(key) is None or doc[key] >= value): return False
+                if op == '$gt' and (doc.get(key) is None or doc[key] <= value): return False
         elif doc.get(key) != expected: return False
     return True
 
@@ -26,6 +28,14 @@ def matches(doc, query):
 class Collection:
     def __init__(self, docs=()):
         self.docs=deepcopy(list(docs)); self.lock=RLock()
+    def insert_one(self, doc):
+        with self.lock:
+            self.docs.append(deepcopy(doc))
+    def find_one(self, query, sort=None):
+        with self.lock:
+            docs=[d for d in self.docs if matches(d,query)]
+            for key,direction in reversed(sort or []):docs.sort(key=lambda d:d.get(key,0),reverse=direction<0)
+            return deepcopy(docs[0]) if docs else None
     def update_one(self, query, update, upsert=False):
         with self.lock:
             doc=next((d for d in self.docs if matches(d,query)),None)
@@ -56,7 +66,7 @@ def db(monkeypatch):
                'value':f'+5255123456{i:02}', 'created_at':now-timedelta(minutes=10)} for i in range(8)]
     mgr=SimpleNamespace(db=SimpleNamespace(contacts=Collection(contacts),
         phone_verification_control=Collection([{'_id':'pace','next_at':now-timedelta(seconds=1)}]),
-        jid_map=Collection()),update_company=Mock())
+        jid_map=Collection(), phone_verification_attempts=Collection()),update_company=Mock())
     monkeypatch.setattr(worker,'get_all_connected_instances',lambda db:['qa-connected'])
     monkeypatch.setattr(worker,'reserve_verification_slot',lambda *args:True)
     monkeypatch.setattr(worker,'verify_number',Mock(return_value={'registered':True}))

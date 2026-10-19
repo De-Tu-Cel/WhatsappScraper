@@ -1220,7 +1220,7 @@ function WarmupStatsRowSkeleton() {
 
 function WarmupCardsSkeleton() {
   return (
-    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1fr 1fr 1fr' }, gap: 2 }}>
+    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: 'repeat(3, minmax(0, 1fr))', xl: 'repeat(4, minmax(0, 1fr))' }, gap: 2 }}>
       {[1, 2, 3, 4, 5, 6].map(i => (
         <Box key={i} sx={{
           borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
@@ -1269,7 +1269,7 @@ function WarmupStatCard({ icon, color, value, label, subtitle, percent }) {
           {label}
         </Typography>
         {subtitle && (
-          <Typography sx={{ fontSize: '0.66rem', color: 'var(--text-muted)', fontWeight: 500, lineHeight: 1.3, whiteSpace: 'nowrap' }}>
+          <Typography sx={{ fontSize: '0.76rem', color: 'var(--text-muted)', fontWeight: 500, lineHeight: 1.3, whiteSpace: 'nowrap' }}>
             {subtitle}
           </Typography>
         )}
@@ -1333,7 +1333,7 @@ export default function WarmupPanel() {
   const nextRot     = data?.next_rotation_at
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 960, mx: 'auto', width: '100%' }}>
+    <Box data-ui-section="warmup" sx={{ p: { xs: 0, md: 1 }, maxWidth: 1320, mx: 'auto', width: '100%' }}>
 
       {/* ── Header — mismo lenguaje de banner (ícono en caja degradada +
          línea de brillo inferior) que ya usan Performance e Instances, en el
@@ -1367,7 +1367,7 @@ export default function WarmupPanel() {
               <Typography id="tour-nav-warmup" sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2 }}>
                 {w.title}
               </Typography>
-              <Typography sx={{ fontSize: '0.65rem', color: 'var(--text-muted, rgba(255,255,255,0.3))', lineHeight: 1, mt: 0.2 }}>
+              <Typography sx={{ fontSize: '0.76rem', color: 'var(--text-muted, rgba(255,255,255,0.3))', lineHeight: 1, mt: 0.2 }}>
                 {w.subtitle}
               </Typography>
             </Box>
@@ -1578,7 +1578,7 @@ export default function WarmupPanel() {
                     </Typography>
                   </Box>
                 ) : (
-                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1fr 1fr 1fr' }, gap: 2 }}>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: 'repeat(3, minmax(0, 1fr))', xl: 'repeat(4, minmax(0, 1fr))' }, gap: 2 }}>
                     {filtered.map(inst => (
                       <InstanceCard
                         key={inst.name} inst={inst} token={user?.token} onRefresh={load}

@@ -123,7 +123,7 @@ def _industry_matches(industry: str, blocked: str) -> bool:
     return re.search(rf"\b{re.escape(blocked)}{tail}", _fold(industry)) is not None
 
 
-def _check_blacklist(domain: str, industry: str, name: str = "") -> dict:
+def _check_blacklist(domain: str, industry: str, name: str = "", *, db=None, strict=False) -> dict:
     """Returns {reason, matched} if blacklisted, else None.
 
     An industry entry is checked against the detected industry AND the business
@@ -132,7 +132,7 @@ def _check_blacklist(domain: str, industry: str, name: str = "") -> dict:
     locksmith through (tested 2026-10-04). For Maps leads `industry` is Google's
     category."""
     try:
-        db = MongoDBManager()
+        db = db if db is not None else MongoDBManager()
         entries = list(db.db.blacklist.find({"type": {"$in": ["domain", "industry"]}}))
         domain = (domain or "").lower().strip()
         for e in entries:
@@ -144,7 +144,8 @@ def _check_blacklist(domain: str, industry: str, name: str = "") -> dict:
             if e.get("type") == "industry" and any(t and _industry_matches(t, val) for t in (industry, name)):
                 return {"reason": "industry", "matched": val}
     except Exception:
-        pass
+        if strict:
+            raise
     return None
 
 def _render_message(template: str, scraped: dict, website: str) -> str:
@@ -526,6 +527,9 @@ def process_url(website: str, message_template: str = None, skip_send: bool = Tr
     MESSAGE_TEXT = _render_message(message_template, scraped, website)
 
     if to_number and not skip_send:
+        from app.send_guard import send_block_reason
+        if send_block_reason(db, company_id, to_number):
+            raise ValueError('Envío no autorizado: revisa consentimiento y bloqueos del destinatario.')
         print(f"📤 Enviando mensaje de WhatsApp a {to_number}...")
         send_result = wa.send_template_message(to_number, WHATSAPP_TEMPLATE, WHATSAPP_LANG)
 

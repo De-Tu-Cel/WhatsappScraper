@@ -32,7 +32,7 @@ import { loadSendConfig, saveSendConfig, DEFAULT_SEND_CONFIG } from '@/lib/sendC
 import { RiskBadge } from './SendConfigPanel'
 import { TemplateManagerDialog } from './messageTemplateLibrary'
 
-import { ACCENTS, THEMES } from '@/lib/themeConfig'
+import { ACCENTS, THEMES, resolveAccent } from '@/lib/themeConfig'
 export { ACCENTS, THEMES }
 
 export const LANGS = [
@@ -66,10 +66,6 @@ export function saveAndyConfig(cfg) {
   localStorage.setItem('andy_config', JSON.stringify({ ...DEFAULT_ANDY, ...cfg }))
 }
 
-function hexToRgb(hex) {
-  return [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)].join(',')
-}
-
 export function loadSettings() {
   if (typeof window === 'undefined') return DEFAULT_SETTINGS
   try {
@@ -82,15 +78,11 @@ export function applySettings(settings) {
   const accentObj = ACCENTS.find(a => a.value === settings.accent) || ACCENTS[0]
   const themeObj  = THEMES.find(t => t.value === settings.theme)   || THEMES[0]
   const root = document.documentElement
-  root.style.setProperty('--accent',      accentObj.value)
-  root.style.setProperty('--accent-rgb',  hexToRgb(accentObj.value))
-  const channels = accentObj.value.replace('#', '').match(/.{2}/g).map(v => {
-    const c = parseInt(v, 16) / 255
-    return c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4
-  })
-  const luminance = channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722
-  root.style.setProperty('--accent-contrast', luminance > .179 ? '#000' : '#fff')
-  root.style.setProperty('--accent-glow', accentObj.glow)
+  const accent = resolveAccent(accentObj.value, themeObj)
+  root.style.setProperty('--accent', accent.value)
+  root.style.setProperty('--accent-rgb', accent.rgb)
+  root.style.setProperty('--accent-contrast', accent.contrast)
+  root.style.setProperty('--accent-glow', accent.glow)
   root.style.setProperty('--bg',          themeObj.bg)
   root.style.setProperty('--sidebar-bg',  themeObj.sidebar)
   root.style.setProperty('--surface',     themeObj.surface)
@@ -100,10 +92,10 @@ export function applySettings(settings) {
   root.style.setProperty('--text',
     isMono ? '#1a2234' : '#f1f5f9')
   root.style.setProperty('--text-muted',
-    isMono  ? 'rgba(15,23,42,0.58)'    :
+    isMono  ? '#1f2f42'    :
     isVivid ? 'rgba(255,255,255,0.70)' : 'rgba(255,255,255,0.45)')
   root.style.setProperty('--border',
-    isMono  ? 'rgba(0,0,0,0.16)'       :
+    isMono  ? 'rgba(30,41,59,0.20)'       :
     isVivid ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.07)')
   root.style.setProperty('--item-hover',
     isMono  ? 'rgba(0,0,0,0.07)'       :

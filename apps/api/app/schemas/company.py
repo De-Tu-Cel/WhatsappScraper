@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Optional, List, Dict, Any, Union
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any, Union, Literal
 
 class ProcessUrlRequest(BaseModel):
     url: str
@@ -9,6 +9,8 @@ class ProcessUrlRequest(BaseModel):
     force: Optional[bool] = False
 
 class SendMessageRequest(BaseModel):
+    request_id: str = Field(min_length=1, max_length=128)
+    purpose: Literal['outreach', 'reply'] = 'outreach'
     company_id: str
     to_number: str
     message: Optional[str] = ""

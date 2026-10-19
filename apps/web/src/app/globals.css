@@ -1,3 +1,14 @@
+/* Accent buttons use the foreground chosen for their actual fill, including
+   icons/labels that otherwise inherit the light-mode text overrides below. */
+[data-theme-mode] .MuiButton-contained.MuiButton-colorPrimary:not(.Mui-disabled),
+[data-theme-mode] .MuiButton-contained.MuiButton-colorPrimary:not(.Mui-disabled) .MuiSvgIcon-root,
+[data-theme-mode] .MuiButton-contained.MuiButton-colorPrimary:not(.Mui-disabled) .MuiTypography-root {
+  color: var(--accent-contrast, #fff) !important;
+}
+[data-theme-mode] [data-accent-option] .MuiSvgIcon-root {
+  color: inherit !important;
+}
+
 /* Hide scrollbar arrow buttons globally */
 *::-webkit-scrollbar-button {
   display: none;
@@ -173,25 +184,25 @@
 [data-theme-mode="light"] .MuiTreeItem-label,
 [data-theme-mode="light"] .MuiDataGrid-cell,
 [data-theme-mode="light"] .MuiDataGrid-columnHeaderTitle {
-  color: #1e293b !important;
+  color: var(--text, #1e293b) !important;
 }
 
 /* Autocomplete lista dropdown */
 [data-theme-mode="light"] .MuiAutocomplete-listbox {
-  background-color: #ffffff !important;
+  background-color: var(--card-bg) !important;
 }
 [data-theme-mode="light"] .MuiAutocomplete-option:hover,
 [data-theme-mode="light"] .MuiAutocomplete-option[aria-selected="true"] {
   background-color: rgba(var(--accent-rgb,59,130,246),0.08) !important;
-  color: #1e293b !important;
+  color: var(--text, #1e293b) !important;
 }
 
 [data-theme-mode="light"] .MuiTableCell-head {
-  color: rgba(0,0,0,0.55) !important;
+  color: var(--text-muted) !important;
 }
 
 [data-theme-mode="light"] .MuiInputBase-input::placeholder {
-  color: rgba(0,0,0,0.32) !important;
+  color: var(--text-muted) !important;
   opacity: 1;
 }
 
@@ -224,7 +235,7 @@
   border-bottom-color: rgba(0,0,0,0.08) !important;
 }
 [data-theme-mode="light"] .MuiTableRow-root:hover {
-  background-color: rgba(0,0,0,0.03) !important;
+  background-color: var(--item-hover) !important;
 }
 
 /* ── Chips ── */
@@ -243,14 +254,15 @@
 
 /* ── Paper / Cards ── */
 [data-theme-mode="light"] .MuiPaper-root {
-  border-color: rgba(0,0,0,0.07) !important;
-  color: #1e293b !important;
+  border-color: var(--border) !important;
+  color: var(--text, #1e293b) !important;
 }
 [data-theme-mode="light"] .MuiPaper-elevation,
 [data-theme-mode="light"] .MuiDialog-paper,
 [data-theme-mode="light"] .MuiMenu-paper,
 [data-theme-mode="light"] .MuiPopover-paper {
-  background-color: var(--surface, #eaecf2) !important;
+  background-color: var(--card-bg) !important;
+  background-image: none !important;
   box-shadow: 0 2px 16px rgba(0,0,0,0.08), 0 1px 4px rgba(0,0,0,0.06) !important;
 }
 /* Dropdowns y autocomplete usan card (que es el tono más contrastado) */
@@ -262,7 +274,7 @@
 
 /* ── Tabs ── */
 [data-theme-mode="light"] .MuiTab-root {
-  color: rgba(0,0,0,0.48) !important;
+  color: var(--text-muted) !important;
 }
 [data-theme-mode="light"] .MuiTab-root.Mui-selected {
   color: var(--accent, #3b82f6) !important;
@@ -289,7 +301,7 @@
 
 /* ── Tooltip ── */
 [data-theme-mode="light"] .MuiTooltip-tooltip {
-  background-color: #1e293b !important;
+  background-color: var(--text, #1e293b) !important;
   color: #ffffff !important;
 }
 /* El "?" de los clasificadores sigue el tema de la pantalla, no el tooltip fijo oscuro. */
@@ -321,7 +333,7 @@
 }
 [data-theme-mode="light"] .MuiIconButton-root:hover {
   background-color: rgba(0,0,0,0.06) !important;
-  color: #1e293b !important;
+  color: var(--text, #1e293b) !important;
 }
 
 /* ── TableSortLabel (tiene !important en sx, necesitamos más especificidad) ── */
@@ -330,7 +342,7 @@
 }
 [data-theme-mode="light"] .MuiTableSortLabel-root:hover,
 [data-theme-mode="light"] .MuiTableSortLabel-root.Mui-active {
-  color: #1e293b !important;
+  color: var(--text, #1e293b) !important;
 }
 [data-theme-mode="light"] .MuiTableSortLabel-icon {
   color: rgba(0,0,0,0.35) !important;
@@ -338,15 +350,15 @@
 
 /* ── Inputs y textareas nativos ── */
 [data-theme-mode="light"] input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]) {
-  color: #1e293b !important;
+  color: var(--text, #1e293b) !important;
 }
 [data-theme-mode="light"] textarea {
-  color: #1e293b !important;
+  color: var(--text, #1e293b) !important;
 }
 
 /* ── Fondo de inputs (convierte rgba(255,255,255,0.04) → gris muy suave) ── */
 [data-theme-mode="light"] .MuiOutlinedInput-root {
-  background-color: rgba(0,0,0,0.03) !important;
+  background-color: var(--surface) !important;
 }
 [data-theme-mode="light"] .MuiOutlinedInput-root:hover {
   background-color: rgba(0,0,0,0.05) !important;
@@ -354,7 +366,7 @@
 
 /* ── Selects ── */
 [data-theme-mode="light"] .MuiSelect-nativeInput {
-  color: #1e293b !important;
+  color: var(--text, #1e293b) !important;
 }
 
 /* ── Chips filled sin color explícito ── */
@@ -394,7 +406,7 @@
 
 /* ── Chip text en colores de industria/categoría ── */
 [data-theme-mode="light"] .MuiChip-label {
-  color: #1e293b !important;
+  color: var(--text, #1e293b) !important;
 }
 
 /* ── Botones deshabilitados ── */

@@ -19,6 +19,9 @@ const STATUS = {
   sent:        { label: 'Enviado', color: '#4ade80' },
   failed:      { label: 'Falló', color: '#f87171' },
   interrupted: { label: 'Revisar', color: '#fb923c' },
+  needs_review: { label: 'Entrega incierta', color: '#fb923c' },
+  skipped_missing_consent: { label: 'Sin consentimiento', color: '#fbbf24' },
+  skipped_opt_out: { label: 'Baja solicitada', color: '#64748b' },
   cancelled:   { label: 'Cancelado', color: '#64748b' },
   skipped_blocked:     { label: 'Bloqueado', color: '#64748b' },
   skipped_blacklisted: { label: 'Blacklist', color: '#64748b' },
@@ -280,7 +283,7 @@ function StateIcon({ state, color, large = false }) {
     }} />
   }
   if (state === 'sent') return <span className="sqp-check" style={{ color }}>✓</span>
-  if (state === 'failed' || state === 'interrupted') return <span className="sqp-check" style={{ color }}>!</span>
+  if (state === 'failed' || state === 'interrupted' || state === 'needs_review') return <span className="sqp-check" style={{ color }}>!</span>
   return <span className="sqp-dot" style={{ background: color }} />
 }
 

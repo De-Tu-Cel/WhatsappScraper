@@ -112,12 +112,14 @@ export function SendQueueProvider({ children }) {
   const addJob = useCallback(async (job, label = '') => {
     recentEnqueueAtRef.current = Date.now()
     try {
-      await authFetch('/api/send-queue', {
+      const response = await authFetch('/api/send-queue', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobs: [job], label, send_config: loadSendConfig() }),
       })
-    } catch {}
+      if (!response.ok) return false
+    } catch { return false }
     poll()  // refresh right away instead of waiting for the next tick
+    return true
   }, [poll])
 
   // Groups several jobs (e.g. every company in one "Enviar todos" click) under a

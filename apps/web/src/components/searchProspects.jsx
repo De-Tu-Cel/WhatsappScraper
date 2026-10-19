@@ -17,7 +17,10 @@ import { useScrapeJob } from '../hooks/useScrapeJob'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { keyframes } from '@mui/system'
 import Box from '@mui/material/Box'
+import ScrapeProgress from './ScrapeProgress'
+import ScrapeSummary from './ScrapeSummary'
 import Typography from '@mui/material/Typography'
+import TablePagination from '@mui/material/TablePagination'
 import TextField from '@mui/material/TextField'
 import Button from '@mui/material/Button'
 import IconButton from '@mui/material/IconButton'
@@ -25,25 +28,31 @@ import Checkbox from '@mui/material/Checkbox'
 import Chip from '@mui/material/Chip'
 import Tooltip from '@mui/material/Tooltip'
 import LinearProgress from '@mui/material/LinearProgress'
-import Slider from '@mui/material/Slider'
 import CircularProgress from '@mui/material/CircularProgress'
 import Skeleton from '@mui/material/Skeleton'
 import Divider from '@mui/material/Divider'
 import SearchIcon from '@mui/icons-material/Search'
+import AddIcon from '@mui/icons-material/Add'
+import RemoveIcon from '@mui/icons-material/Remove'
+import RestaurantIcon from '@mui/icons-material/Restaurant'
+import LocalHospitalIcon from '@mui/icons-material/LocalHospital'
+import ContentCutIcon from '@mui/icons-material/ContentCut'
+import BuildIcon from '@mui/icons-material/Build'
+import StorefrontIcon from '@mui/icons-material/Storefront'
+import BusinessCenterIcon from '@mui/icons-material/BusinessCenter'
+import SchoolIcon from '@mui/icons-material/School'
+import HotelIcon from '@mui/icons-material/Hotel'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import PauseIcon from '@mui/icons-material/Pause'
 import HighlightOffIcon from '@mui/icons-material/HighlightOff'
 import ClearIcon from '@mui/icons-material/Clear'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
-import ErrorIcon from '@mui/icons-material/Error'
-import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import TravelExploreIcon from '@mui/icons-material/TravelExplore'
 import DownloadIcon from '@mui/icons-material/Download'
 import ReplayIcon from '@mui/icons-material/Replay'
 import CheckBoxIcon from '@mui/icons-material/CheckBox'
 import IndeterminateCheckBoxIcon from '@mui/icons-material/IndeterminateCheckBox'
 import HistoryIcon from '@mui/icons-material/History'
-import SendIcon from '@mui/icons-material/Send'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import BlockIcon from '@mui/icons-material/Block'
 import Table from '@mui/material/Table'
@@ -55,6 +64,7 @@ import TableContainer from '@mui/material/TableContainer'
 import { pickMessageVariant } from '@/lib/messageVariants'
 import { loadSendConfig } from '@/lib/sendConfig'
 import CompanyAvatar from './CompanyAvatar'
+import { ProspectSearchSkeleton, ScrapingPlaceholders } from './ProspectLoading'
 
 // INDUSTRY_GROUPS and INDUSTRY_EXAMPLES are built inside the component from translations
 
@@ -64,60 +74,45 @@ const fadeSlideIn = keyframes`
 `
 
 function CountSelector({ numResults, setNumResults, showCount, show, size = 'md', disabled = false }) {
+  const { lang } = useLang()
   const [draft, setDraft] = useState(String(numResults))
-  const isMd = size === 'md'
-
   useEffect(() => { setDraft(String(numResults)) }, [numResults])
-
-  function commitDraft(raw) {
-    const n = parseInt(raw, 10)
-    const clamped = Number.isFinite(n) ? Math.min(200, Math.max(1, n)) : numResults
-    setNumResults(clamped)
-    setDraft(String(clamped))
+  function apply(raw) {
+    const n = Number(raw)
+    const value = String(raw).trim() && Number.isFinite(n) ? Math.max(1, Math.min(200, Math.floor(n))) : numResults
+    setNumResults(value)
+    setDraft(String(value))
   }
-
-  return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, width: isMd ? 220 : 170, opacity: disabled ? 0.55 : 1 }}>
-      {isMd && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>{showCount}</Typography>}
-      {!isMd && <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>{show}</Typography>}
-      <Slider
-        value={numResults}
-        onChange={disabled ? undefined : (_, v) => setNumResults(v)}
-        disabled={disabled}
-        min={1} max={200} step={1}
-        size="small"
-        sx={{
-          color: 'var(--accent, #3b82f6)',
-          '& .MuiSlider-track': { border: 'none' },
-          '& .MuiSlider-thumb': { width: 14, height: 14, '&:hover, &.Mui-active': { boxShadow: '0 0 0 6px rgba(var(--accent-rgb,59,130,246),0.16)' } },
-        }}
-      />
-      <Box
-        component="input"
-        type="text"
-        inputMode="numeric"
-        disabled={disabled}
-        value={draft}
-        onChange={e => {
-          const v = e.target.value.replace(/\D/g, '')
-          if (v === '') { setDraft(''); return }
-          const n = parseInt(v, 10)
-          setDraft(n > 200 ? '200' : v)
-        }}
-        onBlur={e => commitDraft(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitDraft(draft) } }}
-        sx={{
-          px: isMd ? 1.2 : 1, py: 0.3, borderRadius: 10, width: isMd ? 48 : 42, textAlign: 'center', flexShrink: 0,
-          bgcolor: disabled ? 'rgba(255,255,255,0.06)' : 'rgba(var(--accent-rgb, 59,130,246), 0.2)',
-          color:   disabled ? 'rgba(255,255,255,0.5)'  : 'var(--accent, #60a5fa)',
-          border: `1px solid ${disabled ? 'rgba(255,255,255,0.1)' : 'rgba(var(--accent-rgb, 59,130,246), 0.4)'}`,
-          fontSize: isMd ? '0.75rem' : '0.72rem', fontWeight: 700,
-          outline: 'none', appearance: 'none',
-          '&:focus': { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.8)', boxShadow: '0 0 0 2px rgba(var(--accent-rgb,59,130,246),0.15)' },
-        }}
-      />
+  function step(delta) { apply((draft.trim() ? Number(draft) : numResults) + delta) }
+  const value = draft.trim() ? Number(draft) : numResults
+  return <Box data-prospect-quantity sx={{ display: 'flex', flexDirection: 'column', gap: 1, maxWidth: '100%' }}>
+    <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, fontSize: '0.76rem', color: 'var(--text-muted)' }}>
+      <Box component="span" sx={{ fontWeight: 600, color: 'var(--text)' }}>{size === 'md' ? showCount : show}</Box>
+      {size !== 'sm' && <Box component="span">1–200</Box>}
     </Box>
-  )
+    <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.25 }}>
+      <Box sx={{ display: size === 'sm' ? 'none' : 'flex', p: 0.4, gap: 0.4, bgcolor: 'var(--sidebar-bg)', border: '1px solid var(--border)', borderRadius: '11px' }}>
+        {[25, 50, 100].map(preset => <Button key={preset} type="button" disabled={disabled} aria-pressed={preset === numResults}
+          onClick={() => apply(preset)} sx={{ minWidth: 44, height: 34, px: 1.2, borderRadius: '8px', fontSize: '0.82rem',
+            fontWeight: preset === numResults ? 800 : 500, color: 'var(--text)',
+            border: '1px solid', borderColor: preset === numResults ? 'rgba(var(--accent-rgb),0.45)' : 'transparent',
+            bgcolor: preset === numResults ? 'rgba(var(--accent-rgb),0.15)' : 'transparent' }}>{preset}</Button>)}
+      </Box>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, p: 0.4, border: '1px solid var(--border)', borderRadius: '11px', bgcolor: 'var(--sidebar-bg)', '&:focus-within': { borderColor: 'var(--accent)' } }}>
+        <IconButton type="button" aria-label={lang === 'en' ? 'Decrease quantity' : 'Disminuir cantidad'} disabled={disabled || value <= 1}
+          onClick={() => step(-1)} sx={{ width: 34, height: 34, borderRadius: '8px', color: 'var(--text)', bgcolor: 'var(--item-hover)' }}><RemoveIcon sx={{ fontSize: 19 }} /></IconButton>
+        <Box component="input" type="text" inputMode="numeric" role="spinbutton" aria-label={lang === 'en' ? 'Quantity' : 'Cantidad'}
+          aria-valuemin={1} aria-valuemax={200} aria-valuenow={numResults} disabled={disabled} value={draft}
+          onChange={e => setDraft(e.target.value.replace(/\D/g, ''))} onBlur={() => apply(draft)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') { e.preventDefault(); apply(draft) }
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); step(e.key === 'ArrowUp' ? 1 : -1) }
+          }} sx={{ width: 52, minWidth: 0, p: 0, textAlign: 'center', border: 0, outline: 'none', background: 'transparent', color: 'var(--text)', fontFamily: 'inherit', fontSize: '0.95rem', fontWeight: 800, fontVariantNumeric: 'tabular-nums' }} />
+        <IconButton type="button" aria-label={lang === 'en' ? 'Increase quantity' : 'Aumentar cantidad'} disabled={disabled || value >= 200}
+          onClick={() => step(1)} sx={{ width: 34, height: 34, borderRadius: '8px', color: 'var(--text)', bgcolor: 'var(--item-hover)' }}><AddIcon sx={{ fontSize: 19 }} /></IconButton>
+      </Box>
+    </Box>
+  </Box>
 }
 
 function getDomain(url) {
@@ -188,43 +183,6 @@ function listedSiteLabel(url) {
   return null
 }
 
-function useTypewriter(strings, active) {
-  const [display, setDisplay] = useState('')
-  const ref = useRef({ wordIdx: 0, charIdx: 0, deleting: false })
-  useEffect(() => {
-    if (!active) { setDisplay(''); return }
-    let timer
-    function tick() {
-      const s = ref.current
-      const word = strings[s.wordIdx]
-      if (!s.deleting) {
-        if (s.charIdx < word.length) {
-          const next = s.charIdx + 1
-          ref.current = { ...s, charIdx: next }
-          setDisplay(word.slice(0, next))
-          timer = setTimeout(tick, 75)
-        } else {
-          ref.current = { ...s, deleting: true }
-          timer = setTimeout(tick, 1600)
-        }
-      } else {
-        if (s.charIdx > 0) {
-          const next = s.charIdx - 1
-          ref.current = { ...s, charIdx: next }
-          setDisplay(word.slice(0, next))
-          timer = setTimeout(tick, 40)
-        } else {
-          ref.current = { wordIdx: (s.wordIdx + 1) % strings.length, charIdx: 0, deleting: false }
-          timer = setTimeout(tick, 350)
-        }
-      }
-    }
-    timer = setTimeout(tick, 500)
-    return () => clearTimeout(timer)
-  }, [active, strings])
-  return display
-}
-
 function renderTemplate(text, scraped) {
   if (!text) return ''
   const extra = scraped?._extra || {}
@@ -235,121 +193,59 @@ function renderTemplate(text, scraped) {
     .replace(/\{\{web\}\}/g,       scraped?.website || '')
 }
 
-const SearchBarForm = React.memo(function SearchBarForm({
-  allIndustries, searching, typewriterActive, labels, onSearch, onCancel,
-  compact, defaultIndustry = '',
-}) {
-  const [industry,   setIndustry]   = useState(defaultIndustry)
-  const [acOpen,     setAcOpen]     = useState(false)
-  const [acIdx,      setAcIdx]      = useState(0)
-
+const SearchBarForm = React.memo(function SearchBarForm({ allIndustries, searching, labels, onSearch, onCancel, compact, draft, onDraftChange, quantityControl }) {
+  const { lang } = useLang()
+  const industry = draft.industry
+  const [acOpen, setAcOpen] = useState(false)
+  const [acIdx, setAcIdx] = useState(0)
   const deferredIndustry = useDeferredValue(industry)
-
-  const acMatches = useMemo(() =>
-    deferredIndustry.trim().length > 0
-      ? allIndustries.filter(({ item }) =>
-          item.toLowerCase().startsWith(deferredIndustry.toLowerCase()) &&
-          item.toLowerCase() !== deferredIndustry.toLowerCase()
-        )
-      : [],
-    [deferredIndustry, allIndustries]
-  )
-
-  const placeholder = useTypewriter(labels.examples, typewriterActive && !industry)
-
-  function triggerSearch(overrideIndustry) {
-    const q = typeof overrideIndustry === 'string' ? overrideIndustry : industry
-    if (!q.trim()) return
+  const acMatches = useMemo(() => deferredIndustry.trim()
+    ? allIndustries.filter(({ item }) => item.toLowerCase().startsWith(deferredIndustry.trim().toLowerCase()) && item.toLowerCase() !== deferredIndustry.trim().toLowerCase()).slice(0, 6)
+    : [], [deferredIndustry, allIndustries])
+  const setIndustry = value => onDraftChange(prev => ({ ...prev, industry: value }))
+  function choose(value) { setIndustry(value); setAcOpen(false) }
+  function submit(e) {
+    e.preventDefault()
+    if (searching || !industry.trim()) return
     setAcOpen(false)
-    onSearch(q.trim())
+    const city = draft.location.trim()
+    onSearch(city ? `${industry.trim()} ${lang === 'en' ? 'in' : 'en'} ${city}` : industry.trim())
   }
-
-  return (
-    <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1 }}>
-      {/* ── Pill principal: industria ── */}
-      <Box sx={{ position: 'relative', width: '100%' }}>
-        <Box sx={{
-          display: 'flex', alignItems: 'center',
-          bgcolor: 'var(--sidebar-bg, #0d1117)', borderRadius: '50px',
-          boxShadow: compact ? '0 2px 8px rgba(0,0,0,0.3)' : '0 4px 28px rgba(0,0,0,0.55)',
-          border: '1.5px solid rgba(var(--accent-rgb, 59,130,246), 0.22)',
-          px: 2.5, py: 0.4,
-          transition: 'box-shadow 0.2s, border-color 0.2s',
-          '&:focus-within': { boxShadow: '0 6px 30px rgba(var(--accent-rgb, 59,130,246), 0.25)', borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.5)' },
-          '&:hover': { borderColor: 'rgba(var(--accent-rgb, 59,130,246), 0.38)' },
-        }}>
-          <TravelExploreIcon sx={{ color: 'rgba(255,255,255,0.2)', fontSize: 18, mr: 1, flexShrink: 0 }} />
-          <TextField
-            fullWidth variant="standard"
-            value={industry}
-            onChange={e => { setIndustry(e.target.value); setAcOpen(true); setAcIdx(0) }}
-            onBlur={() => setTimeout(() => setAcOpen(false), 150)}
-            onFocus={() => setAcOpen(true)}
-            onKeyDown={e => {
-              if (e.key === 'Tab' && acMatches.length > 0) {
-                e.preventDefault()
-                const chosen = acMatches[acIdx]?.item
-                if (chosen) { setIndustry(chosen); setAcOpen(false) }
-              } else if (e.key === 'ArrowDown') {
-                e.preventDefault(); setAcIdx(i => Math.min(i + 1, acMatches.length - 1))
-              } else if (e.key === 'ArrowUp') {
-                e.preventDefault(); setAcIdx(i => Math.max(i - 1, 0))
-              } else if (e.key === 'Enter') {
-                if (acOpen && acMatches.length > 0) {
-                  const chosen = acMatches[acIdx]?.item
-                  if (chosen) { setIndustry(chosen); setAcOpen(false); triggerSearch(chosen); return }
-                }
-                setAcOpen(false); triggerSearch()
-              } else if (e.key === 'Escape') {
-                setAcOpen(false)
-              }
-            }}
-            placeholder={placeholder || labels.examplePh}
-            slotProps={{ input: { disableUnderline: true } }}
-            sx={{ '& input': { fontSize: compact ? '0.92rem' : '1rem', py: 0.9, color: 'var(--text, #f1f5f9)', '&::placeholder': { color: 'var(--text-muted, rgba(255,255,255,0.28))', opacity: 1 } } }}
-          />
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mr: -1, ml: 1, flexShrink: 0 }}>
-            {industry && !searching && (
-              <IconButton size="small" onClick={() => { setIndustry(''); setAcOpen(false) }}
-                sx={{ color: 'var(--text-muted, rgba(255,255,255,0.35))', width: 30, height: 30, '&:hover': { color: 'var(--text, #f1f5f9)' } }}>
-                <ClearIcon sx={{ fontSize: 16 }} />
-              </IconButton>
-            )}
-            <IconButton onClick={() => triggerSearch()} disabled={searching || !industry.trim()} sx={{ bgcolor: 'var(--accent, #3b82f6)', color: 'white', width: 38, height: 38, '&:hover': { bgcolor: 'var(--accent, #2563eb)' }, '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.25)', color: 'rgba(255,255,255,0.3)' } }}>
-              {searching ? <CircularProgress size={18} sx={{ color: 'white' }} /> : <SearchIcon fontSize="small" />}
-            </IconButton>
-            {searching && (
-              <Tooltip title={labels.cancelSearch}>
-                <IconButton onClick={onCancel} sx={{
-                  bgcolor: 'rgba(239,68,68,0.12)', color: 'rgba(248,113,113,0.8)', width: 38, height: 38,
-                  border: '1px solid rgba(239,68,68,0.2)',
-                  '&:hover': { bgcolor: 'rgba(239,68,68,0.25)', color: '#f87171' },
-                }}>
-                  <HighlightOffIcon sx={{ fontSize: 20 }} />
-                </IconButton>
-              </Tooltip>
-            )}
-          </Box>
-        </Box>
-
-        {/* Industry autocomplete */}
-        {acOpen && acMatches.length > 0 && (
-          <Box sx={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 30, bgcolor: 'var(--sidebar-bg, #0d1117)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.28)', borderRadius: 2, overflow: 'hidden', boxShadow: '0 8px 28px rgba(0,0,0,0.6)' }}>
-            {acMatches.slice(0, 6).map(({ item, color }, i) => (
-              <Box key={item} onMouseDown={() => { setIndustry(item); setAcOpen(false); triggerSearch(item) }} onMouseEnter={() => setAcIdx(i)}
-                sx={{ px: 2, py: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 1, bgcolor: i === acIdx ? 'rgba(var(--accent-rgb, 59,130,246), 0.1)' : 'transparent', transition: 'all 0.1s' }}>
-                <Box component="span" sx={{ fontSize: '0.85rem' }}>
-                  <Box component="span" sx={{ color: 'var(--text-muted)' }}>{industry}</Box>
-                  <Box component="span" sx={{ color: i === acIdx ? color : 'var(--text)', fontWeight: 600 }}>{item.slice(industry.length)}</Box>
-                </Box>
-                {i === 0 && <Box sx={{ ml: 'auto', px: 0.8, py: 0.2, borderRadius: 0.8, bgcolor: 'var(--item-hover)', color: 'var(--text-muted)', fontSize: '0.65rem', fontFamily: 'monospace', flexShrink: 0 }}>Tab</Box>}
-              </Box>
-            ))}
-          </Box>
-        )}
-      </Box>
+  return <Box component="form" onSubmit={submit} aria-label={lang === 'en' ? 'Prospect search' : 'Buscar prospectos'}
+    sx={{ display: 'grid', gridTemplateColumns: compact ? 'minmax(0, 1.1fr) minmax(0, 0.8fr) auto auto' : { xs: 'minmax(0, 1fr)', md: 'minmax(0, 1.2fr) minmax(0, 0.85fr) auto' }, alignItems: 'end', gap: 1.5, width: '100%', ...(compact ? { '@container prospect-controls (max-width: 850px)': { gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)' }, '@container prospect-controls (max-width: 480px)': { gridTemplateColumns: 'minmax(0, 1fr)' } } : {}) }}>
+    <Box sx={{ position: 'relative', minWidth: 0 }}>
+      <TextField id={compact ? 'prospect-industry-compact' : 'prospect-industry'} fullWidth size="small" disabled={searching}
+        label={lang === 'en' ? 'Business or industry' : 'Negocio o industria'} placeholder={lang === 'en' ? 'E.g. gas suppliers, restaurants' : 'Ej. gaseras, restaurantes'}
+        value={industry} onChange={e => { setIndustry(e.target.value); setAcOpen(true); setAcIdx(0) }}
+        onBlur={() => setAcOpen(false)} onFocus={() => setAcOpen(true)}
+        onKeyDown={e => {
+          if ((e.key === 'Tab' || e.key === 'Enter') && acOpen && acMatches.length) {
+            e.preventDefault(); choose(acMatches[acIdx]?.item || acMatches[0].item)
+          } else if (e.key === 'ArrowDown' && acMatches.length) {
+            e.preventDefault(); setAcOpen(true); setAcIdx(i => Math.min(i + 1, acMatches.length - 1))
+          } else if (e.key === 'ArrowUp' && acMatches.length) {
+            e.preventDefault(); setAcIdx(i => Math.max(0, i - 1))
+          } else if (e.key === 'Escape') setAcOpen(false)
+        }}
+        slotProps={{ inputLabel: { shrink: true }, htmlInput: { role: 'combobox', 'aria-autocomplete': 'list', 'aria-expanded': acOpen && !!acMatches.length, 'aria-controls': acOpen && acMatches.length ? 'prospect-suggestions' : undefined, autoComplete: 'off' } }}
+        sx={{ '& .MuiInputBase-root': { height: 48, borderRadius: '10px' } }} />
+      {acOpen && acMatches.length > 0 && <Box id="prospect-suggestions" role="listbox" sx={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 30, p: 0.5, bgcolor: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: '10px', boxShadow: '0 8px 24px rgba(0,0,0,0.15)' }}>
+        {acMatches.map(({ item }, i) => <Box component="button" type="button" role="option" aria-selected={i === acIdx} key={item}
+          onMouseDown={e => e.preventDefault()} onClick={() => choose(item)} onMouseEnter={() => setAcIdx(i)}
+          sx={{ display: 'block', width: '100%', textAlign: 'left', border: 0, borderRadius: '6px', p: 1.2, cursor: 'pointer', font: 'inherit', fontSize: '0.85rem', color: 'var(--text)', bgcolor: i === acIdx ? 'var(--item-hover)' : 'transparent' }}>{item}</Box>)}
+      </Box>}
     </Box>
-  )
+    <TextField id={compact ? 'prospect-location-compact' : 'prospect-location'} fullWidth size="small" disabled={searching}
+      label={lang === 'en' ? 'City or area (optional)' : 'Ciudad o zona (opcional)'} placeholder={lang === 'en' ? 'E.g. Hermosillo, Sonora' : 'Ej. Hermosillo, Sonora'}
+      value={draft.location} onChange={e => onDraftChange(prev => ({ ...prev, location: e.target.value }))}
+      slotProps={{ inputLabel: { shrink: true } }} sx={{ '& .MuiInputBase-root': { height: 48, borderRadius: '10px' } }} />
+    {quantityControl}
+    <Button data-prospect-primary type={searching ? 'button' : 'submit'} variant="contained" disabled={!searching && !industry.trim()}
+      onClick={searching ? onCancel : undefined} startIcon={searching ? <HighlightOffIcon /> : <SearchIcon />}
+      sx={{ height: 48, px: 2.2, borderRadius: '10px', whiteSpace: 'nowrap' }}>
+      {searching ? (lang === 'en' ? 'Searching… · Cancel' : 'Buscando… · Cancelar') : lang === 'en' ? 'Find prospects' : 'Buscar prospectos'}
+    </Button>
+  </Box>
 })
 
 // Preserve unchanged rows when appending another batch or updating search status.
@@ -419,6 +315,8 @@ export default function SearchProspects() {
   const scrapeJob = useScrapeJob('search')
 
   const [lastIndustry, setLastIndustry] = useState('')
+  const [searchDraft, setSearchDraft] = useState({ industry: '', location: '' })
+  const [showAllHistory, setShowAllHistory] = useState(false)
   const [numResults,  setNumResults]  = useState(50)
   const [searching,    setSearching]    = useState(false)
   // false = no error. 'empty' = request succeeded, genuinely found nothing
@@ -448,6 +346,8 @@ export default function SearchProspects() {
   // job nuevo (solo con las fallidas) no traería de vuelta.
   const [sentOverlay, setSentOverlay] = useState({})
   const [retryBase,   setRetryBase]   = useState([])
+  const [resultPage, setResultPage] = useState(0)
+  const [resultPageSize, setResultPageSize] = useState(25)
   const [filterScraped,    setFilterScraped]    = useState('all')
   const [filterContacted,  setFilterContacted]  = useState('all') // 'all' | 'new' | 'contacted'
   const [history,     setHistory]     = useState([])
@@ -470,9 +370,7 @@ export default function SearchProspects() {
   // Companies sent to in this session — augments already_contacted so a second
   // "Send All" from the same scrape warns about them even before the backend
   // scrape-result data is re-fetched (which only happens on a new job).
-  const [localContactedIds, setLocalContactedIds] = useState(new Set())
   // Numbers sent in this session: company_id → Set<number> — for real-time amber coloring
-  const [sessionSentNums, setSessionSentNums] = useState({})
   // Fresh already_contacted data from the API — overrides stale scrape-job stamps
   // so "Ya contactados" count is accurate even after a page refresh.
   const [freshContactedMap, setFreshContactedMap] = useState({})
@@ -497,13 +395,17 @@ export default function SearchProspects() {
       : deduped
   }, [retryBase, scrapeJob.results, sentOverlay])
 
+  // Paginate only the rendered table. Counts, exports and sending use all results.
+  const safeResultPage = Math.min(resultPage, Math.max(0, Math.ceil(results.length / resultPageSize) - 1))
+  const pageResults = results.slice(safeResultPage * resultPageSize, (safeResultPage + 1) * resultPageSize)
+
   // Reset selection state only when a new scrape job starts — NOT on every
   // results update (polling/retry during a paused send would re-select everything).
   useEffect(() => {
+    setResultPage(0)
     setWaSelected(new Set())
     setExtraSelected(new Set())
     setExpandedCo(new Set())
-    setLocalContactedIds(new Set())
     setFreshContactedMap({})
   }, [scrapeJob.job?._id])
 
@@ -532,31 +434,13 @@ export default function SearchProspects() {
 
   // waRows y waRowsUnique deben ir ANTES de effectiveWaSelected
   const waRowsAll    = results.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
+  // Queue acceptance is not delivery. Refresh confirmed contact state after completion.
   const waRowsUnique = useMemo(() =>
-    dedupeByCompany(waRowsAll).map(r => {
-      const sessionNums = sessionSentNums[r.company_id]
-      // freshContactedMap > r.already_contacted (stale job stamp) > localContactedIds (session)
-      const fresh = freshContactedMap[r.company_id]
-      const base = (fresh?.contacted ? fresh : null)
-        || r.already_contacted
-        || (localContactedIds.has(r.company_id) ? { contacted: true } : null)
-      const already_contacted = base
-        ? {
-            ...base,
-            contacted: true,
-            contacted_numbers: [
-              ...new Set([
-                ...(base.contacted_numbers || []),
-                ...(sessionNums ? [...sessionNums] : []),
-              ]),
-            ],
-          }
-        : sessionNums?.size > 0
-          ? { contacted: true, contacted_numbers: [...sessionNums] }
-          : null
-      return { ...r, already_contacted }
-    }),
-  [waRowsAll, localContactedIds, sessionSentNums, freshContactedMap])
+    dedupeByCompany(waRowsAll).map(r => ({
+      ...r,
+      already_contacted: freshContactedMap[r.company_id] ?? r.already_contacted ?? null,
+    })),
+  [waRowsAll, freshContactedMap])
 
   // ids como string estable — evita releer check-contacted en cada render solo
   // porque waRowsAll cambió de referencia (misma lista de companies, objeto nuevo).
@@ -908,23 +792,9 @@ export default function SearchProspects() {
       queuedUrls[row.url] = 'queued'
     }
     if (!jobs.length) return   // every selected number was blocked
-    addBatch(jobs, lang === 'en' ? 'Prospect search' : 'Búsqueda de prospectos')
+    const accepted = await addBatch(jobs, lang === 'en' ? 'Prospect search' : 'Búsqueda de prospectos')
+    if (!accepted) return false
     setSentOverlay(prev => ({ ...prev, ...queuedUrls }))
-    setLocalContactedIds(prev => {
-      const next = new Set(prev)
-      jobs.forEach(j => j.companyId && next.add(j.companyId))
-      return next
-    })
-    setSessionSentNums(prev => {
-      const next = { ...prev }
-      jobs.forEach(j => {
-        if (!j.companyId) return
-        const existing = new Set(next[j.companyId] || [])
-        j.numbers.forEach(n => existing.add(n))
-        next[j.companyId] = existing
-      })
-      return next
-    })
   }
 
   function exportUrlsTxt() {
@@ -1004,43 +874,51 @@ export default function SearchProspects() {
 
       {/* ── Estado inicial: centrado ── */}
       {!hasResults && (
-        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 2.5, pb: 4, px: 2.5, width: '100%' }}>
-          <Box sx={{ textAlign: 'center' }}>
-            <Typography sx={{ fontWeight: 800, fontSize: '1.5rem', mb: 0.5, background: 'linear-gradient(135deg, var(--text,#f1f5f9) 20%, var(--accent,#60a5fa) 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
+        <Box data-prospect-start sx={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 2.5, py: { xs: 1, md: 2.5 }, px: { xs: 0, md: 1 }, width: '100%', maxWidth: 1080, mx: 'auto' }}>
+          <Box sx={{ textAlign: 'left', maxWidth: 680 }}>
+            <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.8, color: 'var(--accent)', mb: 1.5, fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}><TravelExploreIcon sx={{ fontSize: 17 }} />{lang === 'en' ? 'Discover opportunities' : 'Descubre oportunidades'}</Box>
+            <Typography sx={{ fontWeight: 800, fontSize: { xs: '1.6rem', md: '2.25rem' }, letterSpacing: '-0.035em', lineHeight: 1.2, mb: 1, background: 'linear-gradient(135deg, var(--text,#f1f5f9) 20%, var(--accent,#60a5fa) 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
               {t.search.heading}
             </Typography>
             <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>{t.search.headingSub}</Typography>
           </Box>
 
-          <SearchBarForm compact={false} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !scrapeJob.processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancelSearch} defaultIndustry={lastIndustry} />
-          <CountSelector size="md" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} disabled={searching || scrapeJob.processing} />
+          <Box sx={{ p: { xs: 2, md: 3 }, borderRadius: '20px', background: 'linear-gradient(rgba(var(--accent-rgb),0.045), rgba(var(--accent-rgb),0.045)), var(--card-bg)', border: '1px solid var(--border)', boxShadow: '0 12px 32px rgba(0,0,0,0.08)' }}>
+            <Box sx={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text)', mb: 1.5 }}>{lang === 'en' ? 'What business are you looking for?' : 'Qué negocio quieres encontrar?'}</Box>
+            <SearchBarForm compact={false} allIndustries={allIndustries} searching={searching} draft={searchDraft} onDraftChange={setSearchDraft} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancelSearch} />
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2, mt: 2, pt: 2, borderTop: '1px solid var(--border)' }}>
+              <Box sx={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>{lang === 'en' ? 'Include a city for more relevant results' : 'Agrega una ciudad para encontrar resultados más relevantes'}</Box>
+              <CountSelector size="md" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} disabled={searching || scrapeJob.processing} />
+            </Box>
+          </Box>
 
           {/* Historial reciente */}
           {history.length > 0 && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', width: '100%' }}>
               <HistoryIcon sx={{ fontSize: 13, color: 'var(--text-muted)' }} />
               <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>{t.search.recent}</Typography>
-              {history.map(h => (
-                <Box key={h} onClick={() => handleSearch(h, '')}
-                  sx={{ px: 1.2, py: 0.3, borderRadius: 10, cursor: 'pointer', fontSize: '0.72rem', color: 'var(--text-muted)', bgcolor: 'var(--item-hover)', border: '1px solid var(--border)', transition: 'all 0.15s', '&:hover': { color: 'var(--accent, #60a5fa)', bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.1)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)' } }}>
+              {(showAllHistory ? history : history.slice(0, 4)).map(h => (
+                <Box component="button" type="button" disabled={searching} key={h} onClick={() => { setSearchDraft({ industry: h, location: '' }); document.getElementById('prospect-industry')?.focus() }}
+                  sx={{ px: 1.2, py: 0.3, borderRadius: 10, cursor: 'pointer', fontSize: '0.72rem', color: 'var(--text)', fontFamily: 'inherit', minHeight: 32, bgcolor: 'var(--item-hover)', border: '1px solid var(--border)', transition: 'all 0.15s', '&:hover': { color: 'var(--accent, #60a5fa)', bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.1)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)' } }}>
                   {h}
                 </Box>
               ))}
+              {history.length > 4 && <Button size="small" onClick={() => setShowAllHistory(v => !v)} sx={{ color: 'var(--accent)', fontSize: '0.75rem' }}>{showAllHistory ? (lang === 'en' ? 'Show less' : 'Ver menos') : (lang === 'en' ? 'View history' : 'Ver historial')}</Button>}
             </Box>
           )}
 
           {/* Grid de industrias */}
-          <Box sx={{ width: '100%', overflowY: 'auto', maxHeight: 'clamp(200px, 35vh, 340px)' }}>
-            {INDUSTRY_GROUPS.map(group => (
-              <Box key={group.label} sx={{ mb: 1.8 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mb: 0.65 }}>
-                  <Box sx={{ width: 3, height: 12, borderRadius: 2, bgcolor: group.color, opacity: 0.65, flexShrink: 0 }} />
-                  <Typography sx={{ color: group.color, fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', opacity: 0.85 }}>{group.label}</Typography>
+          <Box sx={{ width: '100%', display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(3, minmax(0, 1fr))' }, gap: 1.5 }}>
+            {INDUSTRY_GROUPS.map((group, groupIndex) => (
+              <Box key={group.label} sx={{ p: 2, borderRadius: '16px', background: 'linear-gradient(rgba(var(--accent-rgb),0.025), rgba(var(--accent-rgb),0.025)), var(--card-bg)', border: '1px solid var(--border)', borderTop: `2px solid ${group.color}66` }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mb: 1.5 }}>
+                  <Box sx={{ display: 'flex', p: 0.75, borderRadius: '8px', bgcolor: `${group.color}14`, color: 'var(--text)', '& svg': { fontSize: 18 } }}>{[<RestaurantIcon key="food" />, <LocalHospitalIcon key="health" />, <ContentCutIcon key="beauty" />, <BuildIcon key="service" />, <StorefrontIcon key="retail" />, <BusinessCenterIcon key="work" />, <SchoolIcon key="education" />, <HotelIcon key="hotel" />][groupIndex]}</Box>
+                  <Typography sx={{ color: group.color, fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{group.label}</Typography>
                 </Box>
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.8 }}>
                   {group.items.map(item => (
-                    <Box key={item} onClick={() => handleSearch(item, '')}
-                      sx={{ px: 1.5, py: 0.5, borderRadius: '20px', cursor: 'pointer', fontSize: '0.77rem', fontWeight: 500, bgcolor: `${group.color}0d`, color: 'var(--text-muted)', border: `1px solid ${group.color}25`, transition: 'all 0.15s', '&:hover': { bgcolor: `${group.color}22`, color: group.color, border: `1px solid ${group.color}55`, transform: 'translateY(-1px)', boxShadow: `0 3px 10px ${group.color}1a` } }}>
+                    <Box component="button" type="button" key={item} disabled={searching} onClick={() => { setSearchDraft(prev => ({ ...prev, industry: item })); document.getElementById('prospect-location')?.focus() }}
+                      sx={{ px: 1.5, py: 0.5, borderRadius: '8px', cursor: 'pointer', fontSize: '0.83rem', fontFamily: 'inherit', minHeight: 34, fontWeight: 500, bgcolor: 'var(--item-hover)', color: 'var(--text)', border: `1px solid ${group.color}25`, transition: 'all 0.15s', '&:hover': { bgcolor: `${group.color}22`, color: group.color, border: `1px solid ${group.color}55`, transform: 'translateY(-1px)', boxShadow: `0 3px 10px ${group.color}1a` } }}>
                       {item}
                     </Box>
                   ))}
@@ -1053,9 +931,9 @@ export default function SearchProspects() {
 
       {/* ── Barra compacta cuando hay resultados ── */}
       {hasResults && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', p: 1.5, borderRadius: 2, border: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg, #0d1117)', flexShrink: 0 }}>
-          <SearchBarForm compact={true} allIndustries={allIndustries} searching={searching} typewriterActive={found.length === 0 && !scrapeJob.processing && !searching} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancelSearch} defaultIndustry={lastIndustry} />
-          <CountSelector size="sm" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} disabled={searching || scrapeJob.processing} />
+        <Box data-search-controls sx={{ p: 2, borderRadius: '16px', border: '1px solid var(--border)', bgcolor: 'var(--card-bg)', flexShrink: 0, containerType: 'inline-size', containerName: 'prospect-controls' }}>
+          <SearchBarForm compact={true} allIndustries={allIndustries} searching={searching} draft={searchDraft} onDraftChange={setSearchDraft} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancelSearch}
+            quantityControl={<CountSelector size="sm" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} disabled={searching || scrapeJob.processing} />} />
         </Box>
       )}
 
@@ -1093,59 +971,17 @@ export default function SearchProspects() {
         </Box>
       )}
 
-      {/* ── Skeleton de carga ── */}
-      {searching && (
-        <Box sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minHeight: 0, gap: 1.5 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 0.5 }}>
-            <Skeleton variant="circular" width={18} height={18} sx={{ flexShrink: 0 }} />
-            <Skeleton variant="text" width={160} height={14} />
-          </Box>
-          <Box sx={{ border: '1px solid var(--border)', borderRadius: 2, overflow: 'hidden', flexGrow: 1 }}>
-            {[72, 58, 83, 65, 77, 54, 69, 80, 61, 75].slice(0, Math.min(numResults, 8)).map((w, i) => (
-              <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.3, borderBottom: '1px solid var(--border)' }}>
-                <Skeleton variant="circular" width={16} height={16} sx={{ flexShrink: 0 }} />
-                <Skeleton variant="circular" width={16} height={16} sx={{ flexShrink: 0 }} />
-                <Skeleton variant="text" width={`${w}%`} height={14} sx={{ flexGrow: 1 }} />
-                <Skeleton variant="rounded" width={54} height={16} sx={{ borderRadius: 10, flexShrink: 0 }} />
-              </Box>
-            ))}
-          </Box>
-        </Box>
-      )}
+      {searching && <ProspectSearchSkeleton query={lastIndustry} count={numResults} lang={lang} />}
 
       {/* ── Lista de URLs encontradas ── */}
       {found.length > 0 && !scrapeJob.processing && !scrapeJob.done && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, flexGrow: 1, minHeight: 0 }}>
 
-          {/* Banner resumen */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, px: 2, py: 1, bgcolor: 'var(--item-hover)', borderRadius: 1.5, border: '1px solid var(--border)', flexWrap: 'wrap' }}>
-            <Typography sx={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              <Box component="span" sx={{ color: 'var(--text)', fontWeight: 700 }}>{found.length}</Box> {t.search.foundCount}
-              {found.length < requestedCount && !searching && !fetchingMore && (
-                <> {t.search.fewerThanRequested.replace('{n}', requestedCount)}</>
-              )}
-            </Typography>
-            {mapsCount > 0 && (
-              <Tooltip placement="top" arrow title={lang === 'en'
-                ? 'Google Maps businesses with no website of their own (or only a Facebook/Instagram page). There is no site to scrape: their data comes from Google Maps, and "Process" checks whether their phone has WhatsApp.'
-                : 'Negocios de Google Maps sin sitio web propio (o solo con página de Facebook/Instagram). No hay sitio que escanear: sus datos vienen de Google Maps y "Procesar" verifica si su teléfono tiene WhatsApp.'}>
-                <Typography sx={{ fontSize: '0.75rem', color: '#2dd4bf', cursor: 'help' }}>
-                  <Box component="span" sx={{ fontWeight: 700 }}>{mapsCount}</Box> {lang === 'en' ? 'without website (Google Maps)' : 'sin sitio web (Google Maps)'}
-                </Typography>
-              </Tooltip>
-            )}
-            <Box sx={{ width: 1, height: 12, bgcolor: 'var(--border)' }} />
-            <Typography sx={{ fontSize: '0.75rem', color: '#4ade80' }}>
-              <Box component="span" sx={{ fontWeight: 700 }}>{newCount}</Box> {t.search.newCount}
-            </Typography>
-            <Typography sx={{ fontSize: '0.75rem', color: '#fbbf24' }}>
-              <Box component="span" sx={{ fontWeight: 700 }}>{scrapedCount}</Box> {t.search.inDbCount}
-            </Typography>
-            {blockedCount > 0 && (
-              <Typography sx={{ fontSize: '0.75rem', color: '#f87171' }}>
-                <Box component="span" sx={{ fontWeight: 700 }}>{blockedCount}</Box> {t.search.blockedCount}
-              </Typography>
-            )}
+          <Box data-search-result-heading sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography component="h2" sx={{ fontSize: '1.08rem', fontWeight: 800, color: 'var(--text)', m: 0 }}>{lang === 'en' ? 'Results for' : 'Resultados de'} {lastIndustry}</Typography>
+              <Typography sx={{ color: 'var(--text-muted)', fontSize: '.78rem', mt: .3 }}>{lang === 'en' ? 'Choose the businesses you want to process.' : 'Selecciona los negocios que quieres procesar.'}</Typography>
+            </Box>
             <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
               <Tooltip title={selectedCount === 0 ? t.search.exportUrlsTip : t.search.exportUrlsTip2} placement="top">
                 <span>
@@ -1166,8 +1002,35 @@ export default function SearchProspects() {
             </Box>
           </Box>
 
+          <Box data-search-summary sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr))' }, gap: 1.25 }}>
+            {[
+              { value: found.length, label: lang === 'en' ? 'Found' : 'Encontradas', icon: <SearchIcon /> },
+              { value: newCount, label: lang === 'en' ? 'New' : 'Nuevas', icon: <AddIcon /> },
+              { value: scrapedCount, label: lang === 'en' ? 'Already registered' : 'Ya registradas', icon: <CheckCircleIcon /> },
+              { value: mapsCount, label: lang === 'en' ? 'Without website' : 'Sin sitio web', icon: <TravelExploreIcon /> },
+            ].map(metric => <Box key={metric.label} sx={{ display: 'flex', alignItems: 'center', gap: 1.25, p: 1.5, borderRadius: '12px', border: '1px solid var(--border)', bgcolor: 'var(--card-bg)' }}>
+              <Box sx={{ display: 'grid', placeItems: 'center', width: 32, height: 32, borderRadius: '9px', bgcolor: 'var(--item-hover)', color: 'var(--accent)', '& svg': { fontSize: 18 } }}>{metric.icon}</Box>
+              <Box><Typography sx={{ fontSize: '1.25rem', fontWeight: 800, lineHeight: 1.2, color: 'var(--text)' }}>{metric.value}</Typography><Typography sx={{ fontSize: '.76rem', color: 'var(--text-muted)', mt: .3 }}>{metric.label}</Typography></Box>
+            </Box>)}
+          </Box>
+          {(found.length < requestedCount || blockedCount > 0) && <Typography sx={{ color: 'var(--text-muted)', fontSize: '.76rem' }}>
+            {found.length < requestedCount && (lang === 'en' ? `Showing ${found.length} of ${requestedCount} requested.` : `Se muestran ${found.length} de ${requestedCount} solicitadas.`)}
+            {blockedCount > 0 && ` · ${blockedCount} ${t.search.blockedCount}`}
+          </Typography>}
+
+          <Box data-search-filters sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+              {/* Filtros */}
+              {[
+                { key: 'all',     label: `${t.search.filterAll} (${found.length})`,        color: '#60a5fa', bg: 'rgba(59,130,246,0.1)',  border: 'rgba(59,130,246,0.25)' },
+                { key: 'new',     label: `${t.search.filterNew} (${newCount})`,            color: '#4ade80', bg: 'rgba(34,197,94,0.1)',   border: 'rgba(34,197,94,0.25)'  },
+                { key: 'scraped', label: `${t.search.filterInDB} (${scrapedCount})`,      color: '#fbbf24', bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.25)' },
+                ...(mapsCount > 0 ? [{ key: 'maps', label: `${lang === 'en' ? 'No website' : 'Sin sitio web'} (${mapsCount})`, color: '#2dd4bf', bg: 'rgba(45,212,191,0.1)', border: 'rgba(45,212,191,0.25)' }] : []),
+              ].map(f => (
+                <Chip key={f.key} label={f.label} size="small" onClick={() => setFilterScraped(f.key)}
+                  sx={{ height: 30, borderRadius: '8px', fontSize: '0.76rem', cursor: 'pointer', bgcolor: filterScraped === f.key ? f.bg : 'var(--item-hover)', color: filterScraped === f.key ? f.color : 'var(--text-muted)', border: `1px solid ${filterScraped === f.key ? f.border : 'var(--border)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
+              ))}          </Box>
           {/* Barra de acciones */}
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+          <Box data-search-selection sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1.5, p: 1.5, borderRadius: '12px', border: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg)' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
               <Tooltip title={newCount === 0 ? t.search.noNewTip : t.search.toggleNewTip} placement="top">
                 <span>
@@ -1178,7 +1041,7 @@ export default function SearchProspects() {
                 </span>
               </Tooltip>
               <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>
-                {processableCount > 0 ? `${processableCount} ${t.search.newCount}` : '0'} {t.search.of} {found.length}
+                {selectedCount} {lang === 'en' ? 'selected' : selectedCount === 1 ? 'seleccionada' : 'seleccionadas'}
                 {skippedCount > 0 && (
                   <Box component="span" sx={{ color: '#fbbf24', ml: 0.8 }}>· {skippedCount} {t.search.inDbCount}</Box>
                 )}
@@ -1196,23 +1059,14 @@ export default function SearchProspects() {
                 </Box>
               </Tooltip>
 
-              {/* Filtros */}
-              {[
-                { key: 'all',     label: `${t.search.filterAll} (${found.length})`,        color: '#60a5fa', bg: 'rgba(59,130,246,0.1)',  border: 'rgba(59,130,246,0.25)' },
-                { key: 'new',     label: `${t.search.filterNew} (${newCount})`,            color: '#4ade80', bg: 'rgba(34,197,94,0.1)',   border: 'rgba(34,197,94,0.25)'  },
-                { key: 'scraped', label: `${t.search.filterInDB} (${scrapedCount})`,      color: '#fbbf24', bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.25)' },
-                ...(mapsCount > 0 ? [{ key: 'maps', label: `${lang === 'en' ? 'No website' : 'Sin sitio web'} (${mapsCount})`, color: '#2dd4bf', bg: 'rgba(45,212,191,0.1)', border: 'rgba(45,212,191,0.25)' }] : []),
-              ].map(f => (
-                <Chip key={f.key} label={f.label} size="small" onClick={() => setFilterScraped(f.key)}
-                  sx={{ height: 22, fontSize: '0.68rem', cursor: 'pointer', bgcolor: filterScraped === f.key ? f.bg : 'var(--item-hover)', color: filterScraped === f.key ? f.color : 'var(--text-muted)', border: `1px solid ${filterScraped === f.key ? f.border : 'var(--border)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
-              ))}
+
             </Box>
 
             <Tooltip title={skippedCount > 0 ? t.search.skippingTip.replace('{n}', skippedCount) : ''} placement="top">
               <span>
-                <Button variant="contained" onClick={handleProcess} disabled={processableCount === 0} startIcon={<PlayArrowIcon />}
+                <Button data-prospect-primary variant="contained" onClick={handleProcess} disabled={processableCount === 0} startIcon={<PlayArrowIcon />}
                   sx={{ bgcolor: 'var(--accent, #3b82f6)', fontWeight: 600, textTransform: 'none', px: 2, py: 0.8, borderRadius: 1.5, fontSize: '0.85rem', '&:hover': { bgcolor: 'var(--accent, #2563eb)' }, '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.15)', color: 'rgba(255,255,255,0.3)' } }}>
-                  {t.search.processNew} {processableCount > 0 ? processableCount : ''} {processableCount !== 1 ? t.search.newPlural : t.search.newSingular}
+                  {lang === 'en' ? `Process ${processableCount} ${processableCount === 1 ? 'prospect' : 'prospects'}` : `Procesar ${processableCount} ${processableCount === 1 ? 'prospecto' : 'prospectos'}`}
                   {skippedCount > 0 && ` (${t.search.omitting} ${skippedCount})`}
                 </Button>
               </span>
@@ -1220,7 +1074,7 @@ export default function SearchProspects() {
           </Box>
 
           {/* Lista URL con favicon + dominio */}
-          <Box sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 2 }}>
+          <Box data-search-result-list sx={{ flexGrow: 1, minHeight: 220, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '14px', bgcolor: 'var(--card-bg)' }}>
             {visibleFound.map(item => (
               <ProspectResultRow key={item.url} item={item} realIdx={found.indexOf(item)}
                 toggleOne={toggleOne} t={t} lang={lang} />
@@ -1244,44 +1098,15 @@ export default function SearchProspects() {
         </Box>
       )}
 
-      {/* ── Progress (fase 2) ── */}
-      {scrapeJob.processing && (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Box sx={{ px: 2.5, py: 2, bgcolor: (scrapeJob.paused || scrapeJob.pausing) ? 'rgba(251,191,36,0.05)' : 'rgba(var(--accent-rgb, 59,130,246), 0.05)', border: `1px solid ${(scrapeJob.paused || scrapeJob.pausing) ? 'rgba(251,191,36,0.2)' : 'rgba(var(--accent-rgb, 59,130,246), 0.15)'}`, borderRadius: 2, transition: 'all 0.3s' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                {scrapeJob.pausing
-                  ? <CircularProgress size={14} sx={{ color: '#fbbf24' }} />
-                  : scrapeJob.paused ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} /> : <CircularProgress size={14} sx={{ color: 'var(--accent, #3b82f6)' }} />}
-                <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
-                  {scrapeJob.pausing ? (lang === 'en' ? `Pausing… finishing ${scrapeJob.inFlight} in progress —` : `Pausando… terminando ${scrapeJob.inFlight} en curso —`) : scrapeJob.paused ? (lang === 'en' ? 'Paused —' : 'Pausado —') : (lang === 'en' ? 'Processing' : 'Procesando')} {scrapeJob.processed ?? results.length} {lang === 'en' ? 'of' : 'de'} {scrapeJob.total || found.filter(r => r.selected).length}
-                </Typography>
-              </Box>
-              <Typography sx={{ color: (scrapeJob.paused || scrapeJob.pausing) ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>{scrapeJob.progress}%</Typography>
-            </Box>
-            <LinearProgress variant="determinate" value={scrapeJob.progress}
-              sx={{ borderRadius: 4, height: 6, bgcolor: (scrapeJob.paused || scrapeJob.pausing) ? 'rgba(251,191,36,0.1)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)', '& .MuiLinearProgress-bar': { background: (scrapeJob.paused || scrapeJob.pausing) ? 'linear-gradient(90deg,#f59e0b,#fbbf24)' : 'linear-gradient(90deg, var(--accent, #3b82f6), var(--accent, #60a5fa))', borderRadius: 4 } }} />
-            {scrapeJob.currentUrl && !scrapeJob.paused && (
-              <Typography sx={{ mt: 1, color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{scrapeJob.currentUrl}</Typography>
-            )}
-          </Box>
-          <Box sx={{ display: 'flex', gap: 1.5 }}>
-            <Button fullWidth
-              disabled={scrapeJob.pausing}
-              onClick={() => scrapeJob.paused ? scrapeJob.resume() : scrapeJob.pause()}
-              startIcon={scrapeJob.pausing
-                ? <CircularProgress size={14} sx={{ color: '#fbbf24' }} />
-                : scrapeJob.paused ? <PlayArrowIcon /> : <PauseIcon />}
-              sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' }, '&.Mui-disabled': { color: 'rgba(251,191,36,0.4)', bgcolor: 'rgba(251,191,36,0.04)', border: '1px solid rgba(251,191,36,0.12)' } }}>
-              {scrapeJob.pausing ? (lang === 'en' ? 'Pausing…' : 'Pausando…') : scrapeJob.paused ? t.search.resume : t.search.pause}
-            </Button>
-            <Button fullWidth onClick={scrapeJob.cancel} startIcon={<HighlightOffIcon />}
-              sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>
-              {t.search.cancel}
-            </Button>
-          </Box>
-        </Box>
-      )}
+      {/* Shared scraping progress; each surface keeps its own inputs and actions. */}
+      {scrapeJob.processing && <ScrapeProgress
+        processed={scrapeJob.processed ?? results.length} total={scrapeJob.total || found.filter(r => r.selected).length} progress={scrapeJob.progress}
+        paused={scrapeJob.paused} pausing={scrapeJob.pausing} inFlight={scrapeJob.inFlight} currentUrl={scrapeJob.currentUrl}
+        onPause={() => scrapeJob.paused ? scrapeJob.resume() : scrapeJob.pause()} onCancel={scrapeJob.cancel} lang={lang}
+      ></ScrapeProgress>}
+      {scrapeJob.processing && results.length === 0 && <ScrapingPlaceholders lang={lang} paused={scrapeJob.paused} />}
+
+
 
       {/* ── Cancelled + pending URLs banner ── */}
       {scrapeJob.done && scrapeJob.job?.status === 'cancelled' && scrapeJob.pendingCount > 0 && (
@@ -1328,64 +1153,11 @@ export default function SearchProspects() {
         </Box>
       )}
 
-      {/* ── Resumen — una sola tira. Antes eran dos (Procesadas/Con WhatsApp/
-           Errores y luego Scrapeadas/Con WhatsApp/Seleccionadas/Enviadas) que
-           repetían cifras, y el relleno parcial de fondo de cada etapa se leía
-           como un bloque roto. flexShrink: 0 — sin él, una ventana baja aplasta
-           la tira por debajo de su propio contenido. ── */}
-      {results.length > 0 && (() => {
-        const en = lang === 'en'
-        const total = scrapeJob.total || results.length
-        const totalAvailableNumbers = waRowsUnique.reduce((sum, r) => sum + (r.all_whatsapp?.length || (r.whatsapp ? 1 : 0)), 0)
-        const pct = (a, b) => (b > 0 ? Math.round((a / b) * 100) : 0)
-        const cells = [
-          { key: 'done', color: '#60a5fa', icon: <TravelExploreIcon sx={{ fontSize: 20 }} />, value: results.length,
-            label: en ? 'Processed' : 'Procesadas', sub: results.length < total ? (en ? `of ${total}` : `de ${total}`) : null,
-            alert: errCount > 0 ? (en ? `${errCount} with error` : `${errCount} con error`) : null },
-          { key: 'wa', color: '#4ade80', icon: <WhatsAppIcon sx={{ fontSize: 20 }} />, value: waCount,
-            label: en ? 'With WhatsApp' : 'Con WhatsApp', sub: okCount > 0 ? `${pct(waCount, okCount)}%` : null },
-          { key: 'sel', color: '#a78bfa', icon: <CheckBoxIcon sx={{ fontSize: 20 }} />, value: totalContactPoints,
-            label: en ? 'Numbers selected' : 'Números seleccionados', sub: totalAvailableNumbers > 0 ? (en ? `of ${totalAvailableNumbers}` : `de ${totalAvailableNumbers}`) : null },
-          { key: 'sent', color: '#fbbf24', icon: <SendIcon sx={{ fontSize: 20 }} />, value: sentCids.size,
-            label: en ? 'Sent' : 'Enviadas', sub: null },
-        ]
-        return (
-          <Box sx={{
-            display: 'flex', flexWrap: 'wrap', overflow: 'hidden', flexShrink: 0,
-            borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
-            bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
-          }}>
-            {cells.map((c, i) => (
-              <React.Fragment key={c.key}>
-                {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 1.6 }} />}
-                <Box sx={{ flex: '1 1 0', minWidth: 170, display: 'flex', alignItems: 'center', gap: 1.5, px: 2.4, py: 1.6 }}>
-                  <Box sx={{
-                    width: 38, height: 38, borderRadius: 2, flexShrink: 0, color: c.color,
-                    background: `linear-gradient(135deg, ${c.color}28 0%, ${c.color}0a 100%)`, border: `1px solid ${c.color}4d`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}>
-                    {c.icon}
-                  </Box>
-                  <Box sx={{ minWidth: 0 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.7 }}>
-                      <Typography sx={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.15, fontVariantNumeric: 'tabular-nums' }}>
-                        {c.value}
-                      </Typography>
-                      {c.sub && (
-                        <Typography sx={{ fontSize: '0.74rem', fontWeight: 600, color: c.color, fontVariantNumeric: 'tabular-nums' }}>{c.sub}</Typography>
-                      )}
-                    </Box>
-                    <Typography sx={{ fontSize: '0.74rem', color: 'var(--text-muted, rgba(255,255,255,0.45))', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                      {c.label}
-                      {c.alert && <Box component="span" sx={{ color: '#f87171', ml: 0.8 }}>· {c.alert}</Box>}
-                    </Typography>
-                  </Box>
-                </Box>
-              </React.Fragment>
-            ))}
-          </Box>
-        )
-      })()}
+      {results.length > 0 && <ScrapeSummary
+        processed={results.length} total={scrapeJob.total || found.filter(r => r.selected).length} ok={okCount} errors={errCount} withWa={waCount}
+        selected={totalContactPoints} available={waRowsUnique.reduce((sum, r) => sum + (r.all_whatsapp?.length || (r.whatsapp ? 1 : 0)), 0)}
+        sent={sentCids.size} lang={lang}
+      />}
 
       {/* ── Panel de envío masivo ── */}
       {(scrapeJob.done || scrapeJob.processing) && results.length > 0 && (
@@ -1408,7 +1180,7 @@ export default function SearchProspects() {
       {results.length > 0 && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, flexShrink: 0 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem', fontWeight: 600, letterSpacing: 0.5 }}>{t.search.results.toUpperCase()}</Typography>
+            <Typography sx={{ color: 'var(--text-muted)', fontSize: '.8rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 1 }}>{t.search.results}<Box component="span" sx={{ px: 1, py: .3, borderRadius: '7px', bgcolor: 'rgba(var(--accent-rgb),.1)', color: 'var(--accent)', fontVariantNumeric: 'tabular-nums' }}>{results.length}</Box></Typography>
             <Box sx={{ display: 'flex', gap: 1 }}>
               {scrapeJob.done && errCount > 0 && (
                 <Button size="small" startIcon={<ReplayIcon sx={{ fontSize: 14 }} />} onClick={handleRetryFailed}
@@ -1425,9 +1197,8 @@ export default function SearchProspects() {
             </Box>
           </Box>
 
+          <Box data-scrape-results-table sx={{ border: '1px solid var(--border)', borderRadius: '16px', overflow: 'hidden', bgcolor: 'var(--card-bg)', '& .MuiTableContainer-root': { border: 0, borderRadius: 0 } }}>
           <TableContainer sx={{
-            borderRadius: 2,
-            border: '1px solid rgba(255,255,255,0.07)',
             maxHeight: 'clamp(240px, 45vh, 560px)',
             overflow: 'auto',
             scrollbarWidth: 'thin',
@@ -1438,17 +1209,18 @@ export default function SearchProspects() {
             '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 },
             '&::-webkit-scrollbar-thumb:hover': { background: 'rgba(255,255,255,0.28)' },
           }}>
-            <Table size="small" stickyHeader>
+            <Table size="small" stickyHeader sx={{ minWidth: 780, '& th:first-of-type': { width: '44%' }, '& th:nth-of-type(2)': { width: '19%' }, '& th:last-of-type': { width: '17%' }, '& td, & th': { px: 2.25 }, '& tbody tr:last-of-type td': { borderBottom: 0 } }}>
               <TableHead>
                 <TableRow>
                   {[t.batch.colCompany, t.batch.colIndustry, 'WhatsApp', sentCids.size > 0 ? t.batch.colMessage : null, t.batch.colStatus].filter(Boolean).map(h => (
                     <TableCell key={h} sx={{
-                      bgcolor: 'var(--card-bg, #161d2e)',
-                      color: 'rgba(255,255,255,0.5)',
+                      bgcolor: 'var(--sidebar-bg)',
+                      color: 'var(--text-muted)',
                       fontWeight: 700,
-                      fontSize: '0.7rem',
-                      letterSpacing: 0.5,
-                      borderBottom: '1px solid rgba(255,255,255,0.08)',
+                      fontSize: '.72rem',
+                      letterSpacing: '.055em',
+                      py: 1.6,
+                      borderBottom: '1px solid var(--border)',
                       whiteSpace: 'nowrap',
                     }}>
                       {h}
@@ -1457,7 +1229,7 @@ export default function SearchProspects() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {results.map((r, i) => {
+                {pageResults.map((r, i) => {
                   const en          = lang === 'en'
                   const domain      = getDomain(r.url)
                   const hasWa       = r.all_whatsapp?.length > 0 || !!r.whatsapp
@@ -1469,18 +1241,18 @@ export default function SearchProspects() {
                   const im          = r.industry_mismatch
 
                   return (
-                    <TableRow key={i} sx={{
-                      bgcolor: isContacted ? 'rgba(251,191,36,0.03)' : 'transparent',
-                      '&:hover': { bgcolor: isContacted ? 'rgba(251,191,36,0.06)' : 'rgba(255,255,255,0.04)' },
-                      '& td': { borderBottom: '1px solid rgba(255,255,255,0.06)', fontSize: '0.8rem', py: 1 },
+                    <TableRow key={r.url || i} sx={{
+                      bgcolor: isContacted ? 'rgba(251,191,36,0.03)' : i % 2 ? 'rgba(var(--accent-rgb),.018)' : 'transparent',
+                      '&:hover': { bgcolor: 'rgba(var(--accent-rgb),.07)' },
+                      '& td': { borderBottom: '1px solid var(--border)', fontSize: '.84rem', py: 1.5 },
                       animation: `${fadeSlideIn} 0.22s ease both`,
                       animationDelay: `${i * 0.025}s`,
                       transition: 'background-color 0.15s',
                     }}>
-                      <TableCell sx={{ borderLeft: `3px solid ${st.color}`, minWidth: 280, maxWidth: 460 }}>
+                      <TableCell sx={{ minWidth: 280, maxWidth: 460 }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, minWidth: 0 }}>
                           <CompanyAvatar key={r.url} photoUrl={r.no_website ? r.photo_url : null}
-                            domain={r.no_website ? null : domain} name={name} size={r.no_website ? 30 : 22} dimmed={!r.ok} />
+                            domain={r.no_website ? null : domain} name={name} size={32} dimmed={!r.ok} />
                           <Box sx={{ minWidth: 0, flex: 1 }}>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, minWidth: 0 }}>
                               <Tooltip title={name} placement="top" arrow disableHoverListener={name.length < 40}>
@@ -1496,7 +1268,7 @@ export default function SearchProspects() {
                             </Box>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, minWidth: 0 }}>
                               <Typography component="a" href={r.url} target="_blank" rel="noopener" noWrap
-                                sx={{ fontSize: '0.72rem', color: r.no_website ? '#2dd4bf' : '#60a5fa', textDecoration: 'none', flexShrink: 1, minWidth: 0, '&:hover': { textDecoration: 'underline' } }}>
+                                sx={{ fontSize: '.75rem', color: 'var(--accent)', textDecoration: 'none', flexShrink: 1, minWidth: 0, '&:hover': { textDecoration: 'underline' } }}>
                                 {r.no_website ? (en ? 'Google Maps · no website' : 'Google Maps · sin web') : domain}
                               </Typography>
                               {place && (
@@ -1542,7 +1314,7 @@ export default function SearchProspects() {
                       </TableCell>
                       <TableCell sx={{ color: 'rgba(255,255,255,0.55)' }}>
                         {r.industria && r.industria !== '—'
-                          ? <Chip label={r.industria} size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(139,92,246,0.1)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.2)' }} />
+                          ? <Chip label={r.industria} size="small" sx={{ height: 25, fontSize: '.72rem', borderRadius: '7px', bgcolor: 'rgba(var(--accent-rgb),.07)', color: 'var(--text)', border: '1px solid var(--border)' }} />
                           : <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>
                         }
                       </TableCell>
@@ -1577,7 +1349,7 @@ export default function SearchProspects() {
                       <TableCell sx={{ whiteSpace: 'nowrap' }}>
                         <Tooltip title={st.tip || ''} placement="top" arrow disableHoverListener={!st.tip}>
                           <Chip label={st.label} size="small"
-                            sx={{ height: 20, fontSize: '0.68rem', fontWeight: 600, cursor: st.tip ? 'help' : 'default',
+                            sx={{ height: 26, fontSize: '.72rem', borderRadius: '7px', fontWeight: 600, cursor: st.tip ? 'help' : 'default',
                               bgcolor: `${st.color}1a`, color: st.color, border: `1px solid ${st.color}40` }} />
                         </Tooltip>
                       </TableCell>
@@ -1587,6 +1359,26 @@ export default function SearchProspects() {
               </TableBody>
             </Table>
           </TableContainer>
+          <TablePagination
+            component="div" data-scrape-pagination
+            count={results.length} page={safeResultPage} rowsPerPage={resultPageSize}
+            rowsPerPageOptions={[25, 50, 100]}
+            onPageChange={(_, page) => setResultPage(page)}
+            onRowsPerPageChange={event => { setResultPageSize(Number(event.target.value)); setResultPage(0) }}
+            labelRowsPerPage={lang === 'en' ? 'Rows per page:' : 'Filas por página:'}
+            labelDisplayedRows={({ from, to, count }) => `${from}–${to} ${lang === 'en' ? 'of' : 'de'} ${count}`}
+            slotProps={{ select: { variant: 'outlined', size: 'small', MenuProps: { slotProps: { paper: { sx: { bgcolor: 'var(--card-bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '10px', backgroundImage: 'none', '& .MuiMenuItem-root': { fontSize: '.82rem', borderRadius: '6px', mx: .5, '&.Mui-selected': { bgcolor: 'rgba(var(--accent-rgb),.12)', color: 'var(--accent)' } } } } } }, sx: { width: 78, ml: 1, mr: 1.5, bgcolor: 'var(--surface)', borderRadius: '9px', color: 'var(--text)', '& .MuiSelect-select': { minWidth: '0 !important', width: '100%', boxSizing: 'border-box', padding: '8px 30px 8px 12px !important', fontWeight: 600 }, '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--border)' }, '&:hover .MuiOutlinedInput-notchedOutline, &.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--accent)' }, '& .MuiSelect-icon': { right: 8, pointerEvents: 'none' } } } }}
+            sx={{
+              color: 'var(--text-muted)', borderTop: '1px solid var(--border)', bgcolor: 'rgba(var(--accent-rgb),.035)',
+              '& .MuiTablePagination-toolbar': { px: { xs: 1.5, sm: 2 }, py: .75, minHeight: 58, gap: .75, flexWrap: 'wrap' },
+              '& .MuiTablePagination-spacer': { display: { xs: 'none', sm: 'block' } },
+              '& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows': { fontSize: '.78rem', my: .5 },
+              '& .MuiSelect-icon': { color: 'var(--text-muted)' },
+              '& .MuiTablePagination-actions': { display: 'flex', gap: .75, ml: { xs: 'auto', sm: 1.5 } },
+              '& .MuiIconButton-root': { width: 32, height: 32, color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: '9px', bgcolor: 'var(--surface)', '&:hover': { color: 'var(--accent)', bgcolor: 'rgba(var(--accent-rgb),.12)' }, '&.Mui-disabled': { color: 'var(--text-muted)', opacity: .35 } },
+            }}
+          />
+          </Box>
         </Box>
       )}
     </Box>

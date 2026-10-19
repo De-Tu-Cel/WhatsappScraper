@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Header, Request, UploadFile, File, Body
 from fastapi.responses import StreamingResponse
 from typing import Optional
+from datetime import datetime as _AuditDateTime, timezone as _AuditTimezone, timedelta as _AuditTimedelta
 import asyncio, json as _json, re, os, logging
 _log = logging.getLogger(__name__)
 from app.schemas.company import (
@@ -412,12 +413,12 @@ def api_update_scrape_job(job_id: str, body: dict, x_user_token: Optional[str] =
 def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Header(None)):
     _require_user(x_user_token)
     try:
-        from app.config import EVOLUTION_API_KEY, EVOLUTION_API_URL, EVOLUTION_INSTANCE, WAHA_API_KEY, WASENDER_PAT, WASENDER_BASE_URL
+        from app.config import EVOLUTION_API_KEY, EVOLUTION_API_URL, EVOLUTION_INSTANCE, WAHA_API_KEY, WASENDER_PAT, WASENDER_BASE_URL, WWEBJS_URL
         from app.providers.legacy.evolution import EvolutionClient
         from app.auth import get_user_by_token
         from app.database import MongoDBManager
         db = MongoDBManager()
-        if not EVOLUTION_API_KEY and not WAHA_API_KEY and not WASENDER_PAT:
+        if not any((EVOLUTION_API_KEY, WAHA_API_KEY, WASENDER_PAT, WWEBJS_URL)):
             raise HTTPException(status_code=400, detail="Sin proveedor de WhatsApp configurado")
         if not (req.message or "").strip() and not req.image_url and not req.document_url:
             raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío")
@@ -427,9 +428,11 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         # (any 52/521/+ format), then the company's blocked flag, domain, industry.
         from bson import ObjectId
         from app.send_guard import send_block_reason
-        _block = send_block_reason(db, req.company_id or "", req.to_number or "")
+        _block = send_block_reason(db, req.company_id or "", req.to_number or "", purpose=req.purpose)
         if _block:
             _why = {
+                "missing_consent": "falta registrar el consentimiento del destinatario",
+                "opt_out": "el destinatario solicitó no recibir mensajes",
                 "phone": "número en lista negra",
                 "blocked": "este chat está bloqueado",
                 "domain": f"dominio en lista negra ({_block['matched']})",
@@ -573,7 +576,7 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                         if preferred and req.company_id:
                             from app.daily_cap import check_new_contact_cap as _check_nc_pref
                             _daily_ok_p = get_daily_count(db, preferred) < get_instance_cap(db, preferred)
-                            _nc_ok_p, _, _ = _check_nc_pref(db, preferred, req.company_id)
+                            _nc_ok_p, _, _ = _check_nc_pref(db, preferred, req.company_id, req.to_number)
                             if not _daily_ok_p or not _nc_ok_p:
                                 _log.info("[SendMsg] preferred=%s at %s limit — falling back to nc-aware pick (no reassign)",
                                           preferred, "daily" if not _daily_ok_p else "NC")
@@ -587,9 +590,9 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                             # For new contacts: pick the instance with most NC capacity left so the
                             # warmup/NC cap is shared evenly. For existing contacts: round-robin.
                             from app.daily_cap import is_new_contact as _is_new
-                            if req.company_id and _is_new(db, req.company_id):
+                            if req.company_id and _is_new(db, req.company_id, req.to_number):
                                 from app.scheduler import _nc_aware_pick as _ncp
-                                instance = _ncp(db, connected, req.company_id) or connected[0]
+                                instance = _ncp(db, connected, req.company_id, req.to_number) or connected[0]
                                 _log.info("[SendMsg] instance=nc-aware:%s company=%s", instance, req.company_id)
                             else:
                                 # Round-robin: incrementa contador atómico por usuario
@@ -659,7 +662,7 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
         # above (audit finding, 2026-09-30, CRITICAL — this cap had no atomic
         # gate anywhere in the codebase before this).
         from app.daily_cap import reserve_new_contact_slot, get_new_contacts_limit
-        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, instance, req.company_id)
+        _nc_ok, _nc_reserved_new = reserve_new_contact_slot(db, instance, req.company_id, req.to_number)
         if not _nc_ok:
             if _cap_reserved_new:
                 from app.daily_cap import release_daily_slot as _release_daily_send_nc
@@ -723,24 +726,33 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 _co_name_ww = (_co_ww or {}).get("name", "")
             except Exception:
                 _co_name_ww = ""
-            if req.image_url:
-                _ww_result = _ww_send_media(instance, req.to_number, req.image_url,
-                                            caption=req.message or "", typing_ms=_typing_ms,
-                                            as_sticker=bool(req.as_sticker), automatic=False)
-                _msg_type = "sticker" if req.as_sticker else "image"
-            elif req.document_url:
-                _ww_result = _ww_send_media(instance, req.to_number, req.document_url,
-                                            caption=req.message or "", filename=req.file_name or "",
-                                            typing_ms=_typing_ms, automatic=False)
-                _msg_type = "document"
-            else:
-                _ww_result = ww_client.send(req.to_number, req.message, delay_ms=_typing_ms,
-                                            save_contact=bool(_co_name_ww), contact_name=_co_name_ww, automatic=False)
-                _msg_type = "text"
+            def _send_manual_wwebjs():
+                if req.image_url:
+                    return _ww_send_media(instance, req.to_number, req.image_url,
+                                                caption=req.message or "", typing_ms=_typing_ms,
+                                                as_sticker=bool(req.as_sticker), automatic=False)
+                elif req.document_url:
+                    return _ww_send_media(instance, req.to_number, req.document_url,
+                                                caption=req.message or "", filename=req.file_name or "",
+                                                typing_ms=_typing_ms, automatic=False)
+                else:
+                    return ww_client.send(req.to_number, req.message, delay_ms=_typing_ms,
+                                                save_contact=False, contact_name=_co_name_ww, automatic=False)
+            from app.delivery_receipts import dispatch_once, operation_key
+            from app.contact_permissions import recipient_key
+            import uuid
+            actor = get_user_by_token(x_user_token) or {}
+            _ww_result = dispatch_once(db,
+                operation_key('manual', str(actor.get('id') or actor.get('_id')), req.request_id),
+                _send_manual_wwebjs, message_body=req.message,
+                fingerprint=operation_key(req.model_dump(exclude={'request_id'})))
+            status = 'sent' if _ww_result.get('success') else 'failed'
+            message_id = _ww_result.get('messageId')
+            _msg_type = ('sticker' if req.as_sticker else 'image') if req.image_url else 'document' if req.document_url else 'text'
             db.db.jid_map.update_one({"jid": _phone_digits_ww},
                 {"$set": {"company_id": req.company_id, "updated_at": _dt.now()}}, upsert=True)
             from bson import ObjectId as _ObjId
-            message_id = _ww_result.get("messageId") or str(_ObjId())
+            message_id = _ww_result.get("messageId")
             status = "sent" if _ww_result.get("success") else "failed"
             send_to = _phone_digits_ww
             send_result = {"status_code": 200 if status == "sent" else 400}
@@ -862,25 +874,45 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
                 _release_daily_send(db, instance, clean_digits(req.to_number))
             if _nc_reserved_new:
                 from app.daily_cap import release_new_contact_slot as _release_nc_send
-                _release_nc_send(db, instance, req.company_id)
+                _release_nc_send(db, instance, req.company_id, req.to_number)
 
         return {"ok": True, "status": status, "log_id": log_id, "message_id": message_id}
     except HTTPException:
         raise
     except Exception as e:
+        if locals().get('status') == 'sent':
+            return {'ok': True, 'status': 'sent', 'message_id': locals().get('message_id'),
+                    'warning': 'Mensaje enviado; no se pudo completar su registro. No lo repitas.'}
+        from app.delivery_receipts import DeliveryUncertain
+        if isinstance(e, DeliveryUncertain):
+            raise HTTPException(409, 'Entrega incierta: revisa el chat antes de repetir. No se reenviará automáticamente.')
         from app.whatsapp_wwebjs import LineBusy
         if isinstance(e, LineBusy):
             from app.daily_cap import release_daily_slot, release_new_contact_slot
             if _cap_reserved_new:
                 release_daily_slot(db, instance, clean_digits(req.to_number))
             if _nc_reserved_new:
-                release_new_contact_slot(db, instance, req.company_id)
+                release_new_contact_slot(db, instance, req.company_id, req.to_number)
             raise HTTPException(409, 'La línea está ocupada. El mensaje no se envió; vuelve a intentarlo.')
         raise HTTPException(status_code=500, detail=str(e))
 
 # ── Send queue (backend-persisted immediate bulk sending — survives a page
 # refresh). Used by SendQueueContext.jsx instead of processing its queue with
 # an in-browser loop. See app/send_now_worker.py. ───────────────────────────
+
+@router.post('/contacts/consent')
+def api_record_contact_consent(body: dict, x_user_token: Optional[str] = Header(None)):
+    admin = _require_admin(x_user_token)
+    from app.contact_permissions import record_consent
+    from app.database import MongoDBManager
+    try:
+        record_consent(MongoDBManager(), str(body.get('number') or ''),
+                       source=str(body.get('source') or ''), evidence=str(body.get('evidence') or ''),
+                       actor=admin.get('id') or admin.get('_id'))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {'ok': True}
+
 
 @router.post("/send-queue")
 def api_enqueue_send(body: dict, x_user_token: Optional[str] = Header(None)):
@@ -892,8 +924,20 @@ def api_enqueue_send(body: dict, x_user_token: Optional[str] = Header(None)):
         jobs = body.get("jobs") or []
         if not jobs:
             raise HTTPException(status_code=400, detail="Sin destinatarios para encolar")
-        batch_id = f"b{int(datetime.now().timestamp()*1000)}{_uuid.uuid4().hex[:6]}"
+        from app.delivery_receipts import operation_key
+        from pymongo.errors import DuplicateKeyError
+        request_id = body.get('request_id')
+        if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 128:
+            raise HTTPException(400, 'request_id no válido')
+        batch_id = operation_key('queue', str(user.get('id') or user.get('_id')), request_id)
         db = MongoDBManager()
+        fingerprint = operation_key(jobs, body.get('send_config') or {})
+        try:
+            db.db.send_queue_requests.insert_one({'_id': batch_id, 'fingerprint': fingerprint})
+        except DuplicateKeyError:
+            previous = db.db.send_queue_requests.find_one({'_id': batch_id}) or {}
+            if previous.get('fingerprint') != fingerprint:
+                raise HTTPException(409, 'La misma solicitud ya existe con otros destinatarios o mensajes.')
         count = enqueue_send_items(
             db, jobs, batch_id, body.get("label", ""), body.get("send_config") or {},
             sent_by_username=user.get("username", ""),
@@ -2277,6 +2321,23 @@ def api_get_blacklist(
         limit=limit,
     ))
     return {"items": serialize(entries), "total": total, "page": page, "limit": limit}
+
+
+@router.get('/blacklist/stats')
+def api_blacklist_stats(x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    collection = MongoDBManager().db.blacklist
+    return {kind: collection.count_documents({'type': kind}) for kind in ('domain', 'industry', 'phone')}
+
+
+@router.get('/blacklist/check')
+def api_blacklist_check(type: str, value: str, x_user_token: Optional[str] = Header(None)):
+    _require_user(x_user_token)
+    from app.blacklist_preview import check_saved_rules
+    try:
+        return check_saved_rules(MongoDBManager(), type, value)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
 
 
 @router.get("/blacklist/industry-preview")
@@ -4342,7 +4403,8 @@ def api_wwebjs_bulk_verify(body: dict, x_user_token: Optional[str] = Header(None
     def _check(item):
         original, digits = item
         try:
-            r = verify_number(session, digits)
+            from app.verification_audit import verify_with_audit
+            r = verify_with_audit(_db, session, digits, source='manual_bulk', lookup=verify_number)
             valid = registration_status(r)
         except Exception:
             valid = None  # unknown
@@ -4354,7 +4416,8 @@ def api_wwebjs_bulk_verify(body: dict, x_user_token: Optional[str] = Header(None
             if valid is not None:
                 _db.db.jid_map.update_one(
                     {"jid": digits},
-                    {"$set": {"wa_valid": valid, "wa_checked_at": _dt.utcnow()}},
+                    {"$set": {"wa_valid": valid, "wa_checked_at": _dt.utcnow(),
+                              "wa_checked_by": session, "wa_check_source": "manual_bulk"}},
                     upsert=True,
                 )
 
@@ -4456,7 +4519,8 @@ def api_wwebjs_verify(session_id: str, body: dict):
     if not phone:
         raise HTTPException(400, "phone required")
     try:
-        return verify_number(session_id, phone)
+        from app.verification_audit import verify_with_audit
+        return verify_with_audit(MongoDBManager(), session_id, phone, source='manual_single', lookup=verify_number)
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -5757,40 +5821,25 @@ def api_notifications_count(
     x_user_token: Optional[str] = Header(None),
     since: Optional[str] = None,
 ):
-    user = _require_user(x_user_token)
+    # Count exactly the notifications the panel can display, including its
+    # personal-contact exclusions, per-user events, admin filters and limit.
+    items = api_notifications_list(x_user_token=x_user_token)
+    if not since:
+        return {"count": len(items)}
+    from datetime import datetime, timezone
     try:
-        from datetime import datetime, timedelta
-        db = MongoDBManager()
-        requester_id = str(user.get("id") or user.get("_id") or "")
-        window_cutoff = datetime.utcnow() - timedelta(hours=_NOTIFICATIONS_WINDOW_HOURS)
-        cutoff = window_cutoff
-        if since:
-            try:
-                since_dt = datetime.fromisoformat(since.rstrip("Z"))
-                if since_dt > window_cutoff:
-                    cutoff = since_dt
-            except Exception:
-                pass
-        reply_count = db.db.message_logs.count_documents({
-            "direction": "inbound",
-            "created_at": {"$gte": cutoff},
-            # Excluir remitentes no reconocidos (company_id="unknown") — no aparecen
-            # en Chats (ver get_conversations) porque no hay empresa a la cual
-            # asociarlos, así que tampoco deberían generar ruido en la campanita.
-            "company_id": {"$nin": [None, "", "unknown", "undefined", "manual"]},
-        })
-        # Strictly per-user: every app_notifications writer now stamps user_id
-        # (see daily_cap.py, scheduler.py, send_now_worker.py) so an event never
-        # inflates another user's badge count.
-        event_count = db.db.app_notifications.count_documents({
-            "created_at": {"$gte": cutoff},
-            "user_id": requester_id,
-        })
-        from app.service_health import admin_notifications
-        service_count = len(admin_notifications(cutoff)) if user.get('role') == 'admin' else 0
-        return {"count": reply_count + event_count + service_count}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        cutoff = datetime.fromisoformat(since.replace('Z', '+00:00'))
+        cutoff = cutoff.replace(tzinfo=timezone.utc) if cutoff.tzinfo is None else cutoff
+    except (ValueError, TypeError):
+        return {"count": len(items)}
+    def unread(item):
+        try:
+            stamp = datetime.fromisoformat((item.get('created_at') or '').replace('Z', '+00:00'))
+            stamp = stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
+            return stamp > cutoff
+        except (ValueError, TypeError):
+            return False
+    return {"count": sum(unread(item) for item in items)}
 
 
 @router.get("/notifications")
@@ -5889,6 +5938,8 @@ def api_notifications_list(x_user_token: Optional[str] = Header(None)):
         if user.get('role') == 'admin':
             from app.service_health import admin_notifications
             result.extend(admin_notifications())
+            from app.activity_notices import automation_notifications
+            result.extend(automation_notifications(cutoff))
         result.sort(key=lambda x: x.get("created_at") or "", reverse=True)
         return result[:50]
     except Exception as e:
@@ -6220,12 +6271,37 @@ def api_verify_phone_contacts(limit: int = 10, x_user_token: Optional[str] = Hea
         raise HTTPException(422, 'limit debe estar entre 1 y 100')
     from app.phone_verification import process_next
     db = MongoDBManager()
-    result = process_next(db)
+    result = process_next(db, source='admin_queue')
     remaining = db.db.contacts.count_documents({
         'type': 'phone', '$or': [{'verified': {'$exists': False}}, {'verified': 'checking'},
                                {'verified': False, 'wa_checked_at': {'$exists': False}}],
     })
     return {'ok': True, **result, 'remaining': remaining}
+
+@router.get('/admin/phone-verification/history')
+def api_phone_verification_history(instance: Optional[str] = None,
+                                   since: Optional[_AuditDateTime] = None,
+                                   until: Optional[_AuditDateTime] = None,
+                                   limit: int = 100, offset: int = 0,
+                                   x_user_token: Optional[str] = Header(None)):
+    """Read-only audit; unfinished attempts remain visible as uncertain."""
+    _require_admin(x_user_token)
+    if not 1 <= limit <= 200 or offset < 0 or offset > 10000:
+        raise HTTPException(422, 'Paginación inválida')
+    until = until or _AuditDateTime.now(_AuditTimezone.utc)
+    since = since or until - _AuditTimedelta(days=1)
+    if since.tzinfo is None or until.tzinfo is None:
+        raise HTTPException(422, 'Incluye la zona horaria en since y until')
+    if since > until or until - since > _AuditTimedelta(days=31):
+        raise HTTPException(422, 'El rango debe estar ordenado y no superar 31 días')
+    query = {'started_at': {'$gte': since, '$lte': until}}
+    if instance:
+        query['instance_name'] = instance
+    collection = MongoDBManager().db.phone_verification_attempts
+    items = list(collection.find(query).sort([('started_at', -1), ('_id', -1)]).skip(offset).limit(limit))
+    return {'items': serialize(items), 'total': collection.count_documents(query),
+            'timezone': 'UTC', 'limit': limit, 'offset': offset}
+
 
 @router.post("/admin/requeue-unanalyzed")
 def api_requeue_unanalyzed(background_tasks: BackgroundTasks, limit: int = 20, x_user_token: Optional[str] = Header(None)):
@@ -6390,16 +6466,13 @@ def api_instances_health(x_user_token: Optional[str] = Header(None),
 
 @router.get("/admin/balances")
 def api_admin_balances(x_user_token: Optional[str] = Header(None)):
-    """Spend/balance for the external paid services actually in use today
-    (OpenAI, DataForSEO) — added so the team can watch spend without leaving
-    the app. Each service reports {"configured": False} until its credentials
-    are set, so a missing key shows as "not set up" rather than an error."""
+    """Claude workspace API spend and DataForSEO balance, without fabricated totals."""
     user = _require_user(x_user_token)
     if user.get("role") != "admin":
         raise HTTPException(403, "Solo admins")
-    from app.billing import get_openai_spend, get_dataforseo_balance
+    from app.billing import get_anthropic_spend, get_dataforseo_balance
     return {
-        "openai": get_openai_spend(),
+        "anthropic": get_anthropic_spend(),
         "dataforseo": get_dataforseo_balance(),
     }
 

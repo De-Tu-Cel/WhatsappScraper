@@ -185,13 +185,15 @@ def start_balance_monitor(interval=300):
     stop = threading.Event()
 
     def run():
-        from app.billing import get_dataforseo_balance, get_openai_spend
+        from app.billing import get_dataforseo_balance, get_openai_spend, get_anthropic_spend
         while not stop.is_set():
             try:
                 get_dataforseo_balance()
                 # Costs es una consulta administrativa; no genera completions ni búsquedas.
                 if configured_services()['ai'][0] == 'openai':
                     get_openai_spend()
+                elif configured_services()['ai'][0] == 'anthropic':
+                    get_anthropic_spend()
             except Exception:
                 logging.getLogger(__name__).warning('No se pudo comprobar el saldo de búsqueda.')
             stop.wait(interval)

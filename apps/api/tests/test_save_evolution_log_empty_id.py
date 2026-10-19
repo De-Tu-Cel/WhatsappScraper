@@ -35,10 +35,24 @@ class _Companies:
 
 
 def _mgr():
+    from unittest.mock import MagicMock
     mgr = MongoDBManager.__new__(MongoDBManager)
     logs = _Logs()
-    mgr.db = type("DB", (), {"message_logs": logs, "companies": _Companies()})()
+    mgr.db = type("DB", (), {"message_logs": logs, "companies": _Companies(),
+                            "contact_permissions": MagicMock()})()
     return mgr, logs
+
+
+def test_inbound_opt_out_is_persisted_before_message_deduplication():
+    mgr, logs = _mgr()
+    existing_id = ObjectId()
+    logs.find_one = lambda *a, **k: {'_id': existing_id}
+    mgr.save_evolution_log('inbound', '6a74ba6becf84e0f0eedb588', '5215528842109',
+                           'No me escribas', message_id='existing-id')
+    args, kwargs = mgr.db.contact_permissions.update_one.call_args
+    assert args[0] == {'_id': '525528842109'}
+    assert args[1]['$set']['revoked'] is True
+    assert not logs.inserted
 
 
 def test_empty_message_id_does_not_reuse_warmup_doc():

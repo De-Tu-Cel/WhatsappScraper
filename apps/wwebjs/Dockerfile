@@ -23,8 +23,8 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
-COPY package*.json ./
-RUN npm install --omit=dev
+COPY package*.json patchMediaModel.js ./
+RUN npm ci --omit=dev
 COPY . .
 
 VOLUME ["/app/sessions"]

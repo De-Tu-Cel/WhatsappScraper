@@ -73,9 +73,7 @@ QUIÉN ERES:
   y quiere saber si le pueden ayudar con algo que necesita. (Eso es para ti: no lo digas — "no vendo nada"
   solo si te preguntan si vendes algo o de qué empresa eres.)
 - Tu nombre es {persona_name}. Si piden apellido y no tienes uno natural, evita el tema ("nomás dime así" / cambia de tema).
-- Bots/IA: jamás hagas referencia a que eres un bot, una IA, un robot o un asistente virtual, ni
-  siquiera para negarlo. Si te lo preguntan, ignora esa parte y sigue con lo que buscas, sin usar
-  esas palabras ni decir que eres una persona real.
+- Transparencia: eres un asistente automatizado. Si te preguntan si eres IA o un bot, responde con claridad y ofrece atención humana; nunca finjas ser una persona.
 - ⚠️ NOMBRE: solo dilo UNA VEZ y si te lo preguntan directamente. Nunca espontáneamente, nunca dos veces.
   Si te piden el nombre completo: {persona_full_name}
 - TU NÚMERO: escribes desde tu propio WhatsApp, el {own_number}. Si te preguntan si ese es tu número, o a
@@ -628,6 +626,16 @@ def _leaks_internal_context(reply: str) -> bool:
 
 def _references_being_bot(reply: str) -> bool:
     return bool(_BOT_REFERENCE_RE.search(_norm_text(reply)))
+
+
+def _identity_disclosure(inbound, reply):
+    question = _norm_text(inbound)
+    answer = _norm_text(reply)
+    asks = bool(re.search(r'\b(?:eres|es usted|son|esto es|hablo con)\b.{0,35}\b(?:bot|robot|ia|humano|persona real|inteligencia artificial)\b', question))
+    misleading = bool(re.search(r'\bno soy (?:un |una )?(?:bot|robot|ia|inteligencia artificial)\b|\bsoy (?:un |una )?(?:humano|persona real)\b', answer))
+    if asks or misleading:
+        return 'Soy un asistente automatizado. Si prefieres atención humana, puedes solicitarla.'
+    return None
 
 
 def _denies_being_bot(reply: str, recent_inbound: str = "") -> bool:
@@ -1558,6 +1566,7 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
     # El prompt editable puede cambiar tono y objetivo, pero nunca quitar las barreras
     # que evitan acciones reales o datos inventados.
     system += _IMMUTABLE_SAFETY_PROMPT + _CHAT_BEHAVIOR_PROMPT
+    system += "\nTRANSPARENCIA OBLIGATORIA: eres un asistente automatizado. Si preguntan si eres IA, bot o humano, contesta de forma veraz y ofrece atención humana. No inventes que eres una persona. Respeta cualquier solicitud de no recibir más mensajes."
     if is_cold_start:
         system += (
             "\n\n⚠️ PRIMER MENSAJE DE ESTA SESIÓN: es tu primera respuesta a esta persona. "
@@ -1635,10 +1644,10 @@ def _is_blocked_or_blacklisted(db, company_id: str, phone_number: str | None = N
         # as 52… — the old exact-digits match never caught them, so Andy kept
         # answering a number someone had blocked.
         from app.send_guard import send_block_reason
-        return send_block_reason(db, company_id or "", phone_number or "") is not None
+        return send_block_reason(db, company_id or "", phone_number or "", purpose="reply") is not None
     except Exception as exc:
-        log.warning("[AIFollowup] blacklist check failed (failing safe, allowing send): %s", exc)
-        return False
+        log.warning("[AIFollowup] blacklist check failed (blocking send): %s", exc)
+        return True
 
 
 def _send_typing_presence(phone_number: str, instance: str):
@@ -2353,24 +2362,6 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
             ai_text = TRANSACTION_DEFLECT_REPLY
         ai_wants_end = True
 
-    # Hablar de bots, IA o "persona real" delata al Chat IA, aunque sea para negarlo
-    # (Nissan Autocom, 2026-10-04). Si el reintento lo repite, no se manda nada.
-    if ai_text and _references_being_bot(ai_text):
-        print(f"[AIFollowup] reply mentions being a bot — retrying: {ai_text[:80]!r}")
-        _raw_retry = _generate_reply(
-            _llm_turns, _llm_context, is_cold_start=is_cold_start, prefs=_prefs, db=db,
-            proactive_minutes=_proactive_minutes, used_fillers=_used,
-            correction="tu respuesta hablaba de bots, IA, robots o de ser una persona real. está prohibido "
-                       "mencionarlo, también para negarlo, aunque te lo hayan preguntado. responde corto "
-                       "solo a lo que buscas, sin esas palabras.",
-        )
-        _retry_text, _retry_end = _clean_reply(_raw_retry, _inbound_text)
-        if (_retry_text and not _references_being_bot(_retry_text)
-                and not _looks_copied_from_prompt(_retry_text)):
-            ai_text, ai_wants_end = _retry_text, _retry_end
-        else:
-            ai_text = ""
-
     # Ya tiene lo que vino a buscar (cita ofrecida, precio, contacto a donde llamar):
     # esta respuesta cierra la plática, sin más preguntas (ver _goal_reached).
     _goal = None if proactive else _goal_reached(_business_since_last_reply(_llm_turns, _inbound_text))
@@ -2443,7 +2434,7 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
     ai_text = _trim_repeated_opening(ai_text, _recent_wording)
     # Auditoría 2026-10-14: ningún reintento/cierre posterior puede saltarse
     # el bloqueo. Ante autorreferencias o instrucciones internas, cerrar sin enviar.
-    if ai_text and (_references_being_bot(ai_text) or _leaks_internal_context(ai_text)):
+    if ai_text and _leaks_internal_context(ai_text):
         log.info('[AIFollowup] respuesta final con autorreferencia o contexto interno bloqueada')
         ai_text = ''
         ai_wants_end = True
@@ -2457,6 +2448,11 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         # el precio u otro dato significativo anterior debe permanecer intacto.
         tail = _CLOSING_TAIL_RE.search(ai_text)
         ai_text = ai_text[:tail.start()].rstrip(' ,\n.')
+
+    disclosure = _identity_disclosure(inbound_body, ai_text)
+    if disclosure:
+        ai_text = disclosure
+        ai_wants_end = True
 
     # Nothing left to send — a bare "[FIN]" (the model decided the conversation is
     # over with nothing to add) or a reply that was only markers like "[2]". Every
@@ -2613,9 +2609,13 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
             db.db.jid_map.update_one({"jid": _ww_phone},
                 {"$set": {"company_id": company_id, "updated_at": datetime.now()}}, upsert=True)
             typing_delay_ms = _typing_duration_ms(ai_text)
-            send_result = ww_client.send(phone_number, ai_text, delay_ms=typing_delay_ms,
-                                         save_contact=bool(_co_name_ai), contact_name=_co_name_ai,
-                                         send_before=send_deadline)
+            from app.delivery_receipts import dispatch_once, operation_key
+            send_result = dispatch_once(db,
+                operation_key('ai', str(sid), inbound_log_id or session.get('turn_count', 0), proactive),
+                lambda: ww_client.send(phone_number, ai_text, delay_ms=typing_delay_ms,
+                                         save_contact=False, contact_name=_co_name_ai,
+                                         send_before=send_deadline), message_body=ai_text)
+            ai_text = send_result.get('sent_message_body', ai_text)
             message_id = send_result.get("messageId")
             status = "sent" if send_result.get("success") else "failed"
             resp_json = send_result
@@ -2707,6 +2707,13 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
         return True
 
     except Exception as e:
+        from app.delivery_receipts import DeliveryUncertain
+        if isinstance(e, DeliveryUncertain):
+            db.db.ai_followup_sessions.update_one({'_id': sid}, {'$set': {
+                'ai_typing': False, 'status': 'ended', 'end_reason': 'delivery_uncertain'}})
+            db.db.conversation_ai_prefs.update_one({'company_id': company_id}, {'$set': {
+                'ai_enabled': False, 'auto_disabled': False}}, upsert=True)
+            return False
         from app.whatsapp_wwebjs import SendWindowClosed, LineBusy
         if isinstance(e, LineBusy):
             if _cap_reserved_new:

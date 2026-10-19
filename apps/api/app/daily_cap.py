@@ -272,132 +272,136 @@ def _today_utc_range():
     return today_start, today_start + timedelta(days=1)
 
 
+CONFIRMED_SEND_STATUSES = ['sent', 'delivered', 'read']
+
+
+def _recipient_aliases(number):
+    from app.contact_permissions import recipient_key
+    key = recipient_key(number)
+    aliases = {key, '+' + key}
+    if key.startswith('52') and len(key) == 12:
+        aliases.update({key[2:], '521' + key[2:], '+521' + key[2:]})
+    return aliases
+
+
 def count_new_contacts_today_for_instance(db, instance_name: str) -> int:
-    """How many first-ever contacts this instance made today.
-    'New' = company_id has no outbound log from ANY instance before today."""
+    """Unique recipients first contacted today, including in-flight reservations."""
+    from app.contact_permissions import recipient_key
     today_start, tomorrow = _today_utc_range()
-
-    companies_today = db.db.message_logs.distinct(
-        "company_id",
-        {
-            "direction":     "outbound",
-            "instance_name": instance_name,
-            "company_id":    {"$exists": True, "$ne": None},
-            "created_at":    {"$gte": today_start, "$lt": tomorrow},
-        },
-    )
-    if not companies_today:
-        return 0
-
-    prior = set(db.db.message_logs.distinct(
-        "company_id",
-        {
-            "direction":  "outbound",
-            "company_id": {"$in": companies_today},
-            "created_at": {"$lt": today_start},
-        },
-    ))
-    return sum(1 for c in companies_today if c not in prior)
+    rows = db.db.message_logs.find({'direction': 'outbound', 'instance_name': instance_name,
+        'status': {'$in': CONFIRMED_SEND_STATUSES},
+        'created_at': {'$gte': today_start, '$lt': tomorrow}}, {'to_number': 1})
+    today = {recipient_key(r.get('to_number')) for r in rows if r.get('to_number')}
+    aliases = set().union(*(_recipient_aliases(k) for k in today)) if today else set()
+    prior = {recipient_key(r.get('to_number')) for r in db.db.message_logs.find({
+        'direction': 'outbound', 'status': {'$in': CONFIRMED_SEND_STATUSES},
+        'to_number': {'$in': sorted(aliases)}, 'created_at': {'$lt': today_start}},
+        {'to_number': 1})} if aliases else set()
+    reservations = list(db.db.instance_new_contacts_today.find({'instance': instance_name, 'date': _today()}))
+    reserved = {key for row in reservations for key in (row.get('recipients') or [])}
+    legacy = {key for row in reservations for key in (row.get('companies') or [])}
+    return len((today - prior) | reserved) + len(legacy)
 
 
-def is_new_contact(db, company_id: str) -> bool:
-    """True if this company_id has never received an outbound message from any instance."""
-    return db.db.message_logs.find_one(
-        {"direction": "outbound", "company_id": company_id},
-        {"_id": 1},
-    ) is None
+def is_new_contact(db, company_id: str, to_number: str = '') -> bool:
+    query = {'direction': 'outbound', 'status': {'$in': CONFIRMED_SEND_STATUSES}}
+    if to_number:
+        query['to_number'] = {'$in': sorted(_recipient_aliases(to_number))}
+    else:
+        query['company_id'] = company_id
+    return db.db.message_logs.find_one(query, {'_id': 1}) is None
 
 
-def check_new_contact_cap(db, instance_name: str, company_id: str) -> tuple:
-    """Returns (allowed, count_today, limit).
-    Existing contacts always pass. New contacts are gated against per-instance cap."""
-    if not company_id or not is_new_contact(db, company_id):
+def check_new_contact_cap(db, instance_name: str, company_id: str, to_number: str = '') -> tuple:
+    if not is_new_contact(db, company_id, to_number):
         return True, 0, 0
-    inst    = db.db.instances.find_one({"name": instance_name}, {"warmup_mode": 1})
-    warmup  = bool((inst or {}).get("warmup_mode"))
-    limit   = get_new_contacts_limit(warmup)
-    count   = count_new_contacts_today_for_instance(db, instance_name)
+    inst = db.db.instances.find_one({'name': instance_name}, {'warmup_mode': 1})
+    limit = get_new_contacts_limit(bool((inst or {}).get('warmup_mode')))
+    count = count_new_contacts_today_for_instance(db, instance_name)
     return count < limit, count, limit
 
 
-def reserve_new_contact_slot(db, instance_name: str, company_id: str) -> tuple[bool, bool]:
-    """Atomic analog of reserve_daily_slot(), but for the new-contact (not total
-    message) cap. check_new_contact_cap() above is a pure read — distinct() over
-    message_logs rows that only exist AFTER a send's network round-trip
-    completes, with no reservation of any kind. Two concurrent first-contact
-    sends through the same instance (a scheduled campaign + a manual reply + an
-    Andy follow-up, or just two queue items dispatched close together) could
-    both read "under cap" before either's message_logs row existed, both pass,
-    and the instance ends up contacting more brand-new people than its
-    warmup/normal cap allows — precisely the risk this cap exists to bound
-    (audit finding, 2026-09-30, CRITICAL — this was the one cap in the whole
-    anti-ban system with no atomic gate anywhere).
-
-    Existing contacts (is_new_contact() is False) always pass and never touch
-    the reservation set — matches check_new_contact_cap()'s existing behavior.
-
-    Returns (allowed, was_new_reservation) — same contract as reserve_daily_slot():
-      allowed=False           → cap is full, nothing changed, do not send.
-      allowed=True,  new=False → not a new contact, OR already reserved today
-                                  (a repeat/multi-number send to the same company).
-      allowed=True,  new=True  → a fresh slot was claimed for company_id. If the
-                                  send this was reserved for ultimately fails,
-                                  call release_new_contact_slot with the SAME
-                                  company_id."""
-    if not company_id or not is_new_contact(db, company_id):
-        return True, False
+def reserve_new_contact_slot(db, instance_name: str, company_id: str, to_number: str = '') -> tuple[bool, bool]:
+    """Reserve one slot per physical recipient, not one per company."""
+    from app.contact_permissions import recipient_key
     from pymongo import ReturnDocument
-    inst   = db.db.instances.find_one({"name": instance_name}, {"warmup_mode": 1})
-    limit  = get_new_contacts_limit(bool((inst or {}).get("warmup_mode")))
-    today  = _today()
-    before = db.db.instance_new_contacts_today.find_one_and_update(
-        {"instance": instance_name, "date": today},
-        {"$addToSet": {"companies": company_id}},
-        upsert=True,
-        return_document=ReturnDocument.BEFORE,
-    )
-    if company_id in ((before or {}).get("companies") or []):
-        return True, False  # already reserved today — repeat/multi-number send
-
-    after = db.db.instance_new_contacts_today.find_one({"instance": instance_name, "date": today}, {"companies": 1})
-    if len((after or {}).get("companies", [])) > limit:
-        db.db.instance_new_contacts_today.update_one(
-            {"instance": instance_name, "date": today},
-            {"$pull": {"companies": company_id}},
-        )
+    if not is_new_contact(db, company_id, to_number):
+        return True, False
+    key = recipient_key(to_number) if to_number else company_id
+    if not key:
         return False, False
-    return True, True
+    inst = db.db.instances.find_one({'name': instance_name}, {'warmup_mode': 1})
+    limit = get_new_contacts_limit(bool((inst or {}).get('warmup_mode')))
+    # _id uniqueness is always present; no optional compound index is required.
+    today = _today()
+    query = {'_id': f'newcontacts:{today}:{instance_name}'}
+    legacy = {key for row in db.db.instance_new_contacts_today.find({'instance': instance_name, 'date': today})
+              for key in (row.get('companies') or [])}
+    # Seed from confirmed logs so an upgrade cannot reset today's already used quota.
+    # Existing legacy company reservations are retained conservatively until reset.
+    today_start, tomorrow = _today_utc_range()
+    logs = db.db.message_logs.find({'direction': 'outbound', 'instance_name': instance_name,
+        'status': {'$in': CONFIRMED_SEND_STATUSES},
+        'created_at': {'$gte': today_start, '$lt': tomorrow}}, {'to_number': 1})
+    seed = {recipient_key(r.get('to_number')) for r in logs if r.get('to_number')
+            and db.db.message_logs.find_one({'direction': 'outbound',
+                'status': {'$in': CONFIRMED_SEND_STATUSES},
+                'to_number': {'$in': sorted(_recipient_aliases(r['to_number']))},
+                'created_at': {'$lt': today_start}}, {'_id': 1}) is None}
+    initial = {'$setOnInsert': {'instance': instance_name, 'date': today}, '$addToSet': {
+        'recipients': {'$each': sorted(seed)}, 'companies': {'$each': sorted(legacy)},
+    }}
+    from pymongo.errors import DuplicateKeyError
+    try:
+        db.db.instance_new_contacts_today.update_one(query, initial, upsert=True)
+    except DuplicateKeyError:
+        db.db.instance_new_contacts_today.update_one(query, initial)
+    before = db.db.instance_new_contacts_today.find_one_and_update({**query, '$or': [
+        {'recipients': key}, {'$expr': {'$lt': [{'$add': [
+            {'$size': {'$ifNull': ['$recipients', []]}},
+            {'$size': {'$ifNull': ['$companies', []]}}
+        ]}, limit]}}
+    ]}, {'$addToSet': {'recipients': key}}, return_document=ReturnDocument.BEFORE)
+    if before is None:
+        return False, False
+    return True, key not in (before.get('recipients') or [])
 
 
-def release_new_contact_slot(db, instance_name: str, company_id: str) -> None:
-    """Gives back a slot from reserve_new_contact_slot() when the send it was
-    reserved for ultimately failed. Only call when that call returned
-    was_new_reservation=True."""
-    if not company_id:
-        return
-    db.db.instance_new_contacts_today.update_one(
-        {"instance": instance_name, "date": _today()},
-        {"$pull": {"companies": company_id}},
-    )
+def release_new_contact_slot(db, instance_name: str, company_id: str, to_number: str = '') -> None:
+    from app.contact_permissions import recipient_key
+    key = recipient_key(to_number) if to_number else company_id
+    if key:
+        db.db.instance_new_contacts_today.update_one({'_id': f'newcontacts:{_today()}:{instance_name}'},
+            {'$pull': {'recipients': key}})
 
 
 def reserve_verification_slot(db, instance_name: str) -> bool:
     """Atomically claims one of today's phone-verification lookups for this
     instance. Returns False once VERIFY_DAILY_CAP is already used up today —
     the caller should skip verifying (leave the phone unconfirmed) rather than
-    fall back to some other unlimited path. Unlike reserve_daily_slot, there's
-    no release-on-failure: the network round-trip already happened (or was
-    attempted) the moment this is called, so it counts against the cap either
-    way — nothing to give back."""
+    fall back to some other unlimited path. This reserves capacity BEFORE the
+    lookup; it is not proof of a completed WhatsApp query. Keep the reservation
+    on uncertain failures, releasing it only when the service confirms that
+    no lookup started."""
     from pymongo import ReturnDocument
     today = _today()
-    doc = db.db.instance_daily_verifications.find_one_and_update(
-        {"instance": instance_name, "date": today},
-        {"$inc": {"count": 1}},
-        upsert=True,
-        return_document=ReturnDocument.AFTER,
+    collection = db.db.instance_daily_verifications
+    # Preserve an existing day's conservative count; never reset it on deploy.
+    # A deterministic _id serializes concurrent creation without a new unique index.
+    existing = collection.find_one({"instance": instance_name, "date": today}, sort=[("count", -1)])
+    key = existing["_id"] if existing else f"verification:{today}:{instance_name}"
+    from pymongo.errors import DuplicateKeyError
+    try:
+        collection.update_one({"_id": key}, {"$setOnInsert": {
+            "instance": instance_name, "date": today, "count": 0,
+        }}, upsert=True)
+    except DuplicateKeyError:
+        pass  # Another worker created the same day while we were initializing it.
+    doc = collection.find_one_and_update(
+        {"_id": key, "count": {"$lt": VERIFY_DAILY_CAP}},
+        {"$inc": {"count": 1}}, return_document=ReturnDocument.AFTER,
     )
-    return doc["count"] <= VERIFY_DAILY_CAP
+    return doc is not None
 
 
 def get_capacity_for_date(db, user_id: str, target_date, exclude_id=None) -> dict:

@@ -437,6 +437,11 @@ def _get_client() -> MongoClient:
         except Exception:
             pass
         try:
+            db.phone_verification_attempts.create_index([('instance_name', 1), ('started_at', -1)])
+            db.phone_verification_attempts.create_index([('started_at', -1), ('_id', -1)])
+        except Exception:
+            pass
+        try:
             # Ideas nav panel: un resultado de búsqueda no procesado se guarda como
             # "pendiente" apenas /api/search responde — el índice único evita que la
             # misma URL se guarde dos veces si el usuario repite una búsqueda similar.
@@ -573,6 +578,11 @@ class MongoDBManager:
         return str(result.inserted_id)
 
     def insert_message_log(self, log_data):
+        if log_data.get('direction') == 'inbound':
+            from app.contact_permissions import record_inbound_permission
+            record_inbound_permission(self, log_data.get('from_number'),
+                                      log_data.get('message_body') or log_data.get('message_text'),
+                                      log_data.get('created_at'))
         # Naive-pero-UTC: is_business_hours() asume UTC cuando el datetime no
         # tiene tzinfo. datetime.now() (hora local del servidor) rompía eso.
         log_data["created_at"] = log_data.get("created_at", datetime.now(timezone.utc).replace(tzinfo=None))
@@ -809,7 +819,7 @@ class MongoDBManager:
             query["has_whatsapp"] = has_whatsapp
 
         # Fetch the full contacted ID set once (used for filter + global stats)
-        all_contacted_ids_str = set(self.db.message_logs.distinct("company_id", {"direction": "outbound"}))
+        all_contacted_ids_str = set(self.db.message_logs.distinct("company_id", {"direction": "outbound", "status": {"$in": ["sent", "delivered", "read"]}}))
         _contacted_oids_all = [ObjectId(cid) for cid in all_contacted_ids_str if ObjectId.is_valid(cid)]
 
         # Snapshot of the query BEFORE the contacted filter narrows it — needed
@@ -924,7 +934,7 @@ class MongoDBManager:
             contacted_numbers_map = {}
             if page_contacted:
                 for doc in self.db.message_logs.find(
-                    {"company_id": {"$in": page_contacted}, "direction": "outbound", "to_number": {"$exists": True, "$ne": None}},
+                    {"company_id": {"$in": page_contacted}, "direction": "outbound", "status": {"$in": ["sent", "delivered", "read"]}, "to_number": {"$exists": True, "$ne": None}},
                     {"company_id": 1, "to_number": 1},
                 ):
                     cid = doc["company_id"]
@@ -1011,7 +1021,7 @@ class MongoDBManager:
         # per company, matching the old find_one(sort=[("created_at", 1)]) behavior.
         result = {cid: {"contacted": False} for cid in company_ids}
         pipeline = [
-            {"$match": {"company_id": {"$in": company_ids}, "direction": "outbound"}},
+            {"$match": {"company_id": {"$in": company_ids}, "direction": "outbound", "status": {"$in": ["sent", "delivered", "read"]}}},
             {"$sort": {"created_at": 1}},
             {"$group": {
                 "_id": "$company_id",
@@ -1217,6 +1227,9 @@ class MongoDBManager:
                            created_at: datetime = None,
                            media_url: str = None,
                            media_content_type: str = None):
+        if direction == 'inbound' and '@g.us' not in str(number) and '@lid' not in str(number):
+            from app.contact_permissions import record_inbound_permission
+            record_inbound_permission(self, number, message_body, created_at)
         # "" no es un id. Un warmup de gely-test2 (2026-08-28) tiene message_id=""
         # y el índice único de strings tragaba todo inbound sin id: el insert
         # chocaba y devolvía ese documento de agosto (SIMAGAS/GUVAL, 2026-10-08).

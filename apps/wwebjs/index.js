@@ -1,4 +1,7 @@
+const { withTypingPresence } = require('./typingPresence')
 const express = require('express')
+// Must run before Client imports the injected LoadUtils function.
+require('./patchMediaModel').ensureMediaModelPatch()
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js')
 const puppeteerExtra = require('puppeteer-extra')
 const StealthPlugin  = require('puppeteer-extra-plugin-stealth')
@@ -569,20 +572,6 @@ async function destroySessionClient(client, sessionId, initPromise) {
   // createClient() — a SIGKILL'd Chromium never runs the exit handler that
   // normally removes its own lock, so it was still sitting there.
   clearSessionLockFiles(sessionId)
-}
-
-// Upstream whatsapp-web.js bug (github.com/wwebjs/whatsapp-web.js#201921,
-// fixed upstream in PR #201923 but not yet in the 1.34.7 release this project
-// pins): MessageMedia carries an internal `__x_id` property that collides
-// with the outgoing Msg model's own id field once spread into it, making
-// getValidatedSender() resolve against the wrong id and throw "Data passed
-// to getter must include an id property" — every media send failed with
-// this, confirmed live 2026-09-21 (100% reproducible, any session, any
-// media type). Stripping it before the media object is used is the same
-// workaround the upstream fix applies.
-function stripMediaCollisionId(media) {
-  delete media.__x_id
-  return media
 }
 
 function createClient(sessionId, phoneNumber, initAttempt = 0) {
@@ -1269,6 +1258,9 @@ app.post('/session/:id/send', lineActivity.wrap('send', async (req, res) => {
   const rejectClosedWindow = () => res.status(409).json({ code: 'SEND_WINDOW_CLOSED', error: 'AI sending hours ended' })
   if (windowClosed()) return rejectClosedWindow()
 
+  if (typingMs !== undefined && (typeof typingMs !== 'number' || !Number.isFinite(typingMs) || typingMs < 0 || typingMs > 25000)) {
+    return res.status(400).json({ error: 'typingMs must be between 0 and 25000' })
+  }
   const digits = to.replace(/\D/g, '')
 
   try {
@@ -1306,34 +1298,17 @@ app.post('/session/:id/send', lineActivity.wrap('send', async (req, res) => {
     const numberId = await session.client.getNumberId(digits).catch(() => null)
     if (!numberId) return res.status(400).json({ error: `Number ${digits} not found on WhatsApp` })
 
-    // Human-like typing delay. Goes straight through window.WWebJS.sendChatstate()
-    // instead of chat.sendStateTyping() — confirmed against whatsapp-web.js's own
-    // source (util/Injected/Utils.js) that sendStateTyping() itself does nothing
-    // but forward the chat's raw id to that same bridge call, so resolving a full
-    // Chat object via getChatById() first was an unnecessary step, and one that
-    // throws for a brand-new contact with no existing chat thread yet (confirmed
-    // live: silently ate the error and skipped the typing bubble for every
-    // first-ever message to a number — exactly the "single send never shows the
-    // bubble" case, same family of bug as the getChat()-can't-resolve-self issue
-    // fixed above for fetchProfilePicUrl). This bypasses that resolution entirely.
     const delay = typingMs !== undefined ? typingMs : humanTypingMs(message)
-    if (delay > 0) {
-      try {
-        await session.client.pupPage.evaluate((chatId) => window.WWebJS.sendChatstate('typing', chatId), numberId._serialized)
-        await new Promise(r => setTimeout(r, delay))
-        await session.client.pupPage.evaluate((chatId) => window.WWebJS.sendChatstate('stop', chatId), numberId._serialized)
-      } catch (typingErr) {
-        console.log(`[${id}] typing indicator failed for ${digits}: ${typingErr.message}`)
-      }
-    }
-
-    // Chat IA (2026-10-14): los delays no deben empujar un envío fuera del horario.
-    if (windowClosed()) return rejectClosedWindow()
-    req.checkLineActivity?.()
-    const msg = await session.client.sendMessage(numberId._serialized, message)
+    const closedMarker = {}
+    const { value: msg, presence } = await withTypingPresence(session.client, numberId._serialized, delay, async () => {
+      if (windowClosed()) return closedMarker
+      req.checkLineActivity?.()
+      return session.client.sendMessage(numberId._serialized, message)
+    })
+    if (msg === closedMarker) return rejectClosedWindow()
     session.lastSendAt = Date.now()
     console.log(`[${id}] → ${digits} (${message.length} chars, ${delay}ms typing, gap=${elapsed}ms)`)
-    res.json({ success: true, messageId: msg?.id?._serialized })
+    res.json({ success: true, messageId: msg?.id?._serialized, typing: presence })
   } catch (e) {
     if (e.code && ['SEND_WINDOW_CLOSED', 'LINE_UNAVAILABLE', 'ACTIVITY_CANCELLED'].includes(e.code)) throw e
     console.error(`[${id}] send error:`, e.message)
@@ -1351,6 +1326,9 @@ app.post('/session/:id/send-media', lineActivity.wrap('send-media', async (req, 
   if (!to || !mediaUrl) return res.status(400).json({ error: 'to and mediaUrl required' })
   if (await isBlockedUrl(mediaUrl)) return res.status(400).json({ error: 'mediaUrl not allowed' })
 
+  if (typingMs !== undefined && (typeof typingMs !== 'number' || !Number.isFinite(typingMs) || typingMs < 0 || typingMs > 25000)) {
+    return res.status(400).json({ error: 'typingMs must be between 0 and 25000' })
+  }
   const digits = to.replace(/\D/g, '')
 
   try {
@@ -1367,34 +1345,20 @@ app.post('/session/:id/send-media', lineActivity.wrap('send-media', async (req, 
     const numberId = await session.client.getNumberId(digits)
     if (!numberId) return res.status(400).json({ error: 'Number not on WhatsApp', phone: digits })
 
-    // Typing simulation
-    const delay = typingMs || humanTypingMs(caption || filename || 'media')
-    if (delay > 0) {
-      try {
-        const chat = await session.client.getChatById(numberId._serialized)
-        await chat.sendStateTyping()
-        await new Promise(r => setTimeout(r, delay))
-        await chat.clearState()
-      } catch (_) {}
-    }
-
-    const media = stripMediaCollisionId(await MessageMedia.fromUrl(mediaUrl, { unsafeMime: true }))
+    const media = await MessageMedia.fromUrl(mediaUrl, { unsafeMime: true })
     if (filename) media.filename = filename
-
-    req.checkLineActivity?.()
-    const msg = await session.client.sendMessage(numberId._serialized, media, asSticker
-      ? { sendMediaAsSticker: true }
-      : { caption: caption || '', sendMediaAsDocument: !media.mimetype.startsWith('image/') },
-    )
+    const delay = typingMs !== undefined ? typingMs : humanTypingMs(caption || filename || 'media')
+    const { value: msg, presence } = await withTypingPresence(session.client, numberId._serialized, delay, async () => {
+      req.checkLineActivity?.()
+      return session.client.sendMessage(numberId._serialized, media, asSticker
+        ? { sendMediaAsSticker: true }
+        : { caption: caption || '', sendMediaAsDocument: !media.mimetype.startsWith('image/') })
+    })
     session.lastSendAt = Date.now()
 
     console.log(`[${id}] ✓ media sent → ${digits} (${media.mimetype}) ${filename || ''}`)
-    // msg.id can come back undefined here as a side effect of the __x_id
-    // patch above (Utils.js) — the send itself genuinely succeeds (confirmed
-    // live, 2026-09-21: message + caption both arrived), this is just our own
-    // response failing to build afterward. Don't let a missing id turn a real
-    // successful send into a reported failure.
-    res.json({ success: true, messageId: msg?.id?._serialized || null, phone: digits, mimetype: media.mimetype })
+    // A missing optional message ID must not turn an accepted send into a failure.
+    res.json({ success: true, messageId: msg?.id?._serialized || null, phone: digits, mimetype: media.mimetype, typing: presence })
   } catch (e) {
     if (e.code && ['SEND_WINDOW_CLOSED', 'LINE_UNAVAILABLE', 'ACTIVITY_CANCELLED'].includes(e.code)) throw e
     console.error(`[${id}] send-media error:`, e.message)
@@ -1551,16 +1515,20 @@ app.post('/session/:id/read', lineActivity.wrap('read', async (req, res) => {
 app.post('/session/:id/verify', lineActivity.wrap('verify', async (req, res) => {
   const { id } = req.params
   const session = sessions.get(id)
-  if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected' })
+  const requestId = /^[a-f0-9]{32}$/.test(req.body?.requestId || '') ? req.body.requestId : null
+  const notStarted = { request_id: requestId, lookup_started: false }
+  if (!session || session.status !== 'connected') return res.status(400).json({ error: 'Not connected', verification: notStarted })
   const { phone } = req.body
-  if (!phone) return res.status(400).json({ error: 'phone required' })
+  if (!phone) return res.status(400).json({ error: 'phone required', verification: notStarted })
   try {
     const digits = phone.replace(/\D/g, '')
-    const isRegistered = await session.client.isRegisteredUser(`${digits}@c.us`)
-    const numberId = isRegistered ? await session.client.getNumberId(digits).catch(() => null) : null
-    res.json({ registered: isRegistered, chatId: numberId?._serialized || null, phone: digits })
+    const { verifyRegistration } = require('./numberVerification')
+    const result = await verifyRegistration(session.client, digits, {
+      requestId, onEvent: event => console.log(JSON.stringify({ ...event, instance_name: id })),
+    })
+    res.json({ ...result, phone: digits })
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    res.status(500).json({ error: 'Verification failed', verification: e.verification || notStarted })
   }
 }))
 
@@ -1776,7 +1744,7 @@ app.post('/session/:id/profile/picture', lineActivity.wrap('profile/picture', as
   if (typeof imageUrl !== 'string' || !imageUrl.trim()) return res.status(400).json({ error: 'imageUrl string required' })
   if (await isBlockedUrl(imageUrl)) return res.status(400).json({ error: 'imageUrl not allowed' })
   try {
-    const media = stripMediaCollisionId(await MessageMedia.fromUrl(imageUrl, { unsafeMime: true }))
+    const media = await MessageMedia.fromUrl(imageUrl, { unsafeMime: true })
     if (!media.mimetype.startsWith('image/')) return res.status(400).json({ error: `URL is not an image (${media.mimetype})` })
     const moduleStatus = await ensureProfileModuleLoaded(session.client.pupPage)
     if (!moduleStatus.ok) return res.status(503).json({ error: 'WhatsApp Web profile module did not load — try again in a moment', debug: moduleStatus })

@@ -79,6 +79,7 @@ const InstancesPanel     = dynamic(() => import('../components/InstancesPanel'),
 const WarmupPanel        = dynamic(() => import('../components/WarmupPanel'),         { ssr: false })
 import CampaignIcon from '@mui/icons-material/Campaign'
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
+import SettingsIcon from '@mui/icons-material/Settings'
 import RouterIcon from '@mui/icons-material/Router'
 import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment'
 import Settings, { loadSettings, applySettings } from '../components/Settings'
@@ -99,24 +100,11 @@ import { NavigationProvider, useNavigation } from '../context/NavigationContext'
 // Lazy-mount + memo: each tab mounts only on first visit, then stays mounted
 // (hidden via display:none) so returning to it is instant. This prevents all
 // 11 nav components from mounting simultaneously on page load.
-// After 2s, remaining sections preload one-by-one (350ms apart) so their data
-// fetches run in the background before the user ever clicks them.
+// Unvisited sections stay unmounted: opening one section must not fetch all
+// the others or start their polling loops. Visited sections retain their state.
 const NavContent = React.memo(function NavContent({ items, active, settingsOpen, mounted, onNavigateToConv }) {
   const visitedRef = useRef(new Set())
-  const [, forceUpdate] = useState(0)
   if (mounted && !settingsOpen) visitedRef.current.add(active)
-
-  useEffect(() => {
-    if (!mounted) return
-    const timers = items.map((_, i) => {
-      if (visitedRef.current.has(i)) return null
-      return setTimeout(() => {
-        visitedRef.current.add(i)
-        forceUpdate(c => c + 1)
-      }, 2000 + i * 350)
-    })
-    return () => timers.forEach(t => t && clearTimeout(t))
-  }, [mounted, items])
 
   return (
     <>
@@ -173,7 +161,7 @@ function DashboardInner() {
   const notifOpen = rightPanel === 'notifications'
   const helpOpen = rightPanel === 'help'
 
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const NAV_ITEMS = useMemo(
     () => NAV_KEYS.map(item => ({ ...item, label: t.nav[item.key] || item.key })),
     [t]
@@ -240,7 +228,7 @@ function DashboardInner() {
   if (!user) return <LoginScreen hasUsers={hasUsers} />
 
   return (
-    <Box sx={{ display: 'flex', height: '100vh', bgcolor: 'var(--bg, #080c14)', backgroundImage: 'radial-gradient(circle, rgba(148,163,184,0.055) 1px, transparent 1px)', backgroundSize: '24px 24px', p: 1.5, gap: 1.5, boxSizing: 'border-box', position: 'relative' }}>
+    <Box sx={{ display: 'flex', height: '100vh', bgcolor: 'var(--bg, #080c14)', backgroundImage: 'radial-gradient(circle, rgba(148,163,184,0.055) 1px, transparent 1px)', backgroundSize: '24px 24px', p: { xs: 0.75, md: 1.5 }, gap: { xs: 0.75, md: 1.5 }, boxSizing: 'border-box', position: 'relative' }}>
 
       {/* ── Inactivity warning banner ── */}
       {showWarning && (
@@ -296,48 +284,39 @@ function DashboardInner() {
           borderRadius: '16px',
           boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
           border: '1px solid var(--border, rgba(255,255,255,0.06))',
-          p: { xs: 1.5, md: 4 },
-          // Programar (2026-10-14): el p responsive sobrescribía el pt fijo.
-          // Reservar la franja de controles en los mismos breakpoints evita
-          // que los botones del encabezado se coloquen debajo de la campana.
-          pt: { xs: '64px', md: '72px' },
+          p: 0,
           display: 'flex', flexDirection: 'column',
           flex: 1,
           minHeight: 0,
           position: 'relative',
           overflow: 'hidden',
           color: 'var(--text, #f1f5f9)',
-          background: `
-            radial-gradient(circle, rgba(148,163,184,0.045) 1px, transparent 1px),
-            linear-gradient(160deg, rgba(var(--accent-rgb, 59,130,246), 0.08) 0%, rgba(var(--accent-rgb, 59,130,246), 0.04) 35%, var(--card-bg, #161d2e) 65%)
-          `,
-          backgroundSize: '24px 24px, 100% 100%',
+          bgcolor: 'var(--surface, #111827)',
+          background: 'linear-gradient(145deg, rgba(var(--accent-rgb), 0.025), transparent 45%), var(--surface, #111827)',
         }}>
-          <Box sx={{
-            position: 'absolute', top: -60, left: -60,
-            width: 300, height: 300, borderRadius: '50%',
-            background: 'radial-gradient(circle, rgba(var(--accent-rgb, 99,102,241), 0.04) 0%, transparent 70%)',
-            pointerEvents: 'none', zIndex: 0,
-          }} />
-          {/* TopControls: se desliza a la izquierda cuando un panel derecho está abierto */}
-          <Box sx={{
-            position: 'absolute', top: 3.2, zIndex: 6,
-            display: notifOpen ? { xs: 'none', sm: 'block' } : 'block',
-            // Panels have different widths (Appearance 340px, Notifications 360px) —
-            // offset per panel so there's a consistent ~16px gap to its left edge
-            // instead of reusing one value that left the icons pressed against
-            // (or overlapping into) the wider Notifications panel.
-            right: notifOpen ? 376 : appearanceOpen ? 356 : helpOpen ? 436 : 16,
-            transition: 'right 0.25s cubic-bezier(0.4,0,0.2,1)',
-            whiteSpace: 'nowrap',
+          <Box data-workspace-header sx={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5,
+            px: { xs: 1.5, md: 3 }, py: { xs: 1.5, md: 2 }, height: 78, boxSizing: 'border-box', flexShrink: 0,
+            borderBottom: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg)',
           }}>
-            <TopControls
-              appearanceOpen={appearanceOpen} onToggleAppearance={toggleAppearance}
-              notifOpen={notifOpen} onToggleNotifications={toggleNotifications}
-              helpOpen={helpOpen} onToggleHelp={toggleHelp}
-            />
+            <Box sx={{ minWidth: 0 }}>
+              <Box sx={{ fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--text-muted)', mb: 0.5 }}>
+                {lang === 'en' ? 'Workspace' : 'Espacio de trabajo'}
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, fontSize: { xs: '0.85rem', md: '1rem' }, fontWeight: 700, color: 'var(--text)', whiteSpace: 'nowrap' }}>
+                <Box sx={{ display: { xs: 'none', sm: 'flex' }, color: 'var(--accent)', '& svg': { fontSize: 19 } }}>{settingsOpen ? <SettingsIcon /> : visibleNavItems[active]?.icon}</Box>
+                <Box sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{settingsOpen ? t.settings.title : visibleNavItems[active]?.label}</Box>
+              </Box>
+            </Box>
+            <Box sx={{ position: 'relative', zIndex: 6, flexShrink: 0 }}>
+              <TopControls
+                appearanceOpen={appearanceOpen} onToggleAppearance={toggleAppearance}
+                notifOpen={notifOpen} onToggleNotifications={toggleNotifications}
+                helpOpen={helpOpen} onToggleHelp={toggleHelp}
+              />
+            </Box>
           </Box>
-          <Box sx={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          <Box sx={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, p: { xs: 1.5, md: 3 } }}>
             {/* Settings panel */}
             <Box sx={{ display: settingsOpen ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
               <Settings settingsOpen={settingsOpen} />
@@ -352,9 +331,11 @@ function DashboardInner() {
             <Box onClick={() => setRightPanel(null)}
               sx={{ position: 'absolute', inset: 0, zIndex: 4 }} />
           )}
+          <Box sx={{ position: 'absolute', top: 78, left: 0, right: 0, bottom: 0, pointerEvents: 'none', zIndex: 5, '& > *': { pointerEvents: 'auto' } }}>
           <AppearancePanel open={appearanceOpen} onClose={closeRightPanel} />
-          <NotificationsPanel open={notifOpen} onClose={closeRightPanel} onNavigateToConv={handleNavigateToConv} onNavigateToSchedule={handleNavigateToSchedule} />
+          <NotificationsPanel key={user?.id || user?._id || user?.username || 'anonymous'} open={notifOpen} onClose={closeRightPanel} onNavigateToConv={handleNavigateToConv} onNavigateToSchedule={handleNavigateToSchedule} />
           <HelpPanel open={helpOpen} onClose={closeRightPanel} />
+          </Box>
         </Box>
       </Box>
       <SendQueuePanel />

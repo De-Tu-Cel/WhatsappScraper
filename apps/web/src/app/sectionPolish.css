@@ -1,0 +1,206 @@
+/* Presentation only: scopes keep these refinements out of dialogs and chat. */
+[data-ui-section] {
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+[data-ui-section] .MuiPaper-root {
+  border-color: var(--border);
+  border-radius: 16px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.07);
+  background-image: none;
+}
+
+[data-ui-section] .MuiButton-root {
+  min-height: 34px;
+  border-radius: 9px;
+  letter-spacing: 0;
+}
+
+[data-ui-section] .MuiOutlinedInput-root {
+  border-radius: 10px;
+}
+
+[data-ui-section] .MuiTableContainer-root {
+  background: var(--card-bg);
+  scrollbar-gutter: stable;
+}
+
+[data-ui-section] .MuiTableCell-root {
+  font-size: 0.83rem;
+  line-height: 1.45;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  border-bottom-color: var(--border);
+}
+
+[data-ui-section] .MuiTableCell-head {
+  background: var(--sidebar-bg);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding-top: 15px;
+  padding-bottom: 15px;
+}
+
+[data-ui-section] .MuiTableBody-root .MuiTableRow-root:nth-of-type(even) {
+  background-color: color-mix(in srgb, var(--item-hover) 45%, var(--card-bg));
+}
+
+[data-ui-section] .MuiTableBody-root .MuiTableRow-root:hover {
+  background-color: var(--item-hover);
+}
+
+[data-ui-section] .MuiTableBody-root .MuiTableRow-root:has(input:checked) {
+  background-color: rgba(var(--accent-rgb), 0.09);
+}
+
+[data-ui-section] .MuiTablePagination-root {
+  background: var(--sidebar-bg);
+  border-top: 1px solid var(--border);
+  padding: 4px 12px;
+}
+
+[data-ui-section] .MuiTablePagination-selectLabel,
+[data-ui-section] .MuiTablePagination-displayedRows {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+[data-ui-section="prospects"] > .MuiPaper-root,
+[data-ui-section="ideas"] {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: none;
+}
+
+[data-ui-section="prospects"] .MuiTable-root {
+  min-width: 1000px;
+  table-layout: fixed;
+}
+[data-ui-section="prospects"] th:first-child { width: 42px; }
+[data-ui-section="prospects"] th:nth-child(2) { width: 18%; }
+[data-ui-section="prospects"] th:nth-child(3) { width: 17%; }
+[data-ui-section="prospects"] th:nth-child(4) { width: 12%; }
+[data-ui-section="prospects"] th:nth-child(5) { width: 8%; }
+[data-ui-section="prospects"] th:nth-child(6) { width: 7%; }
+[data-ui-section="prospects"] th:nth-child(7),
+[data-ui-section="prospects"] th:nth-child(8) { width: 10%; }
+[data-ui-section="prospects"] th:last-child { width: 132px; }
+[data-ui-section="prospects"] .MuiTableCell-root:nth-child(6) {
+  padding-inline: 6px;
+}
+[data-ui-section="prospects"] .MuiTableCell-root:last-child {
+  white-space: nowrap;
+  min-width: 132px;
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  background: var(--card-bg);
+  border-left: 1px solid var(--border);
+}
+[data-ui-section="prospects"] .MuiTableCell-head:last-child {
+  z-index: 4;
+  background: var(--sidebar-bg);
+}
+[data-ui-section="ideas"] .MuiTable-root { min-width: 720px; }
+[data-ui-section="ideas"] .MuiTableCell-root { text-align: left; }
+[data-ui-section="ideas"] .MuiTableCell-paddingCheckbox { width: 44px; }
+
+[data-ui-section="batch"] {
+  width: 100%;
+  max-width: 1280px;
+  margin-inline: auto;
+}
+
+[data-batch-input] {
+  min-height: 190px;
+  background: var(--card-bg) !important;
+  padding: 26px 24px 60px !important;
+  border-color: var(--border) !important;
+  border-radius: 16px !important;
+  line-height: 1.85 !important;
+}
+
+
+
+
+
+
+
+
+
+
+
+[data-ui-section="campaign"] [data-campaign-send-bar] {
+  background: var(--card-bg);
+  border-radius: 16px;
+  border-top: 2px solid rgba(var(--accent-rgb), 0.28);
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.06);
+}
+
+[data-ui-section="campaign"] [data-campaign-metric] {
+  border-radius: 10px;
+  border-color: transparent;
+  background: var(--item-hover);
+}
+
+[data-ui-section="campaign"] [data-template-card],
+[data-ui-section="campaign"] [data-company-card] {
+  border-radius: 12px;
+  background: var(--card-bg);
+}
+
+[data-ui-section="campaign"] [data-template-card]:has(input:checked),
+[data-ui-section="campaign"] [data-company-card]:has(input:checked) {
+  border-color: rgba(var(--accent-rgb), 0.45);
+  background: linear-gradient(rgba(var(--accent-rgb), 0.07), rgba(var(--accent-rgb), 0.07)), var(--card-bg);
+}
+
+[data-ui-section="warmup"] {
+  height: 100%;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+@media (max-width: 600px) {
+  [data-ui-section] .MuiTableCell-root {
+    padding-top: 11px;
+    padding-bottom: 11px;
+  }
+  [data-ui-section] .MuiTablePagination-root { padding-inline: 0; }
+  [data-batch-input] { min-height: 210px; }
+
+}
+
+[data-prospect-actions] { width: 112px; margin-inline: auto; }
+[data-prospect-actions] .MuiIconButton-root {
+  width: 32px;
+  height: 32px;
+  padding: 7px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--item-hover);
+}
+[data-prospect-actions] .MuiIconButton-root:hover { border-color: var(--accent); }
+
+[data-prospect-primary].MuiButton-root:not(.Mui-disabled) {
+  transition: background 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+[data-prospect-primary].MuiButton-root:not(.Mui-disabled):hover {
+  background: color-mix(in srgb, var(--accent) 86%, var(--text)) !important;
+  box-shadow: 0 5px 16px rgba(var(--accent-rgb), 0.2);
+  transform: translateY(-1px);
+}
+[data-prospect-primary].MuiButton-root:not(.Mui-disabled):active { transform: translateY(0); }
+[data-prospect-primary].MuiButton-root:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+[data-search-result-list] .MuiChip-root { height: 23px; font-size: 0.73rem; }
+[data-search-result-list] .MuiCheckbox-root { padding: 7px; }
+@media (prefers-reduced-motion: reduce) {
+  [data-prospect-primary].MuiButton-root { transition: none; transform: none !important; }
+}

@@ -9,7 +9,7 @@ export async function GET(request) {
     const url = since
       ? `${B}/api/notifications/count?since=${encodeURIComponent(since)}`
       : `${B}/api/notifications/count`
-    const res = await fetch(url, { headers: { 'x-user-token': token } })
+    const res = await fetch(url, { headers: { 'x-user-token': token }, cache: 'no-store', signal: AbortSignal.timeout(20000) })
     const data = await res.json()
     return NextResponse.json(data, { status: res.status })
   } catch (e) {

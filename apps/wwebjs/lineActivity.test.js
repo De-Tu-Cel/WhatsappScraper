@@ -109,7 +109,8 @@ test('real send handler is serialized and cannot send after its composing delay 
   const { sessions, gate } = setup({ now: () => now }); const hold = deferred()
   sessions.get('a').client = { getNumberId: async () => ({ _serialized: 'mock@c.us' }), pupPage: { evaluate: async () => {} },
     sendMessage: async () => { sends++; active++; max = Math.max(max, active); if (sends === 1) await hold.promise; active--; return { id: { _serialized: 'mock' } } } }
-  vm.runInNewContext(route, { lineActivity: gate, app: { post: (_, fn) => { handler = fn } }, sessions, Math,
+  vm.runInNewContext(route, {
+    withTypingPresence: (client, id, ms, fn) => require('./typingPresence').withTypingPresence(client, id, ms, fn, async delay => { if (typeof now !== 'undefined') now += delay }), lineActivity: gate, app: { post: (_, fn) => { handler = fn } }, sessions, Math,
     Date: class extends Date { static now() { return now } }, setTimeout: (fn, ms) => { now += ms; fn() }, console: { log() {}, error() {} } })
   const req = typingMs => request('a', { to: '525500000001', message: 'isolated', typingMs })
   const first = handler(req(0), response()); const next = handler(req(0), response())

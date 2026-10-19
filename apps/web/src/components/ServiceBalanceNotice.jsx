@@ -9,11 +9,13 @@ export default function ServiceBalanceNotice({ notification: n }) {
   const { lang } = useLang()
   const en = lang === 'en'
   const ai = n.service === 'ai'
+  const claude = n.provider === 'anthropic'
+  const providerLabel = claude ? 'Claude' : 'OpenAI'
   const dollars = value => new Intl.NumberFormat(en ? 'en-US' : 'es-MX', {
     style: 'currency', currency: 'USD', minimumFractionDigits: 2,
   }).format(Number(value))
   const title = ai
-    ? (en ? 'OpenAI: budget nearly used' : 'OpenAI: presupuesto próximo a agotarse')
+    ? `${providerLabel}: ${en ? 'budget nearly used' : 'presupuesto próximo a agotarse'}`
     : (en ? 'DataForSEO: low balance' : 'DataForSEO: saldo próximo a agotarse')
   const detail = ai
     ? (en ? `${dollars(n.amount)} of ${dollars(n.budget)} spent this month.` : `${dollars(n.amount)} de ${dollars(n.budget)} gastados este mes.`)
@@ -27,7 +29,7 @@ export default function ServiceBalanceNotice({ notification: n }) {
         {en ? 'Budget reference, not prepaid credit. Costs may take time to update. This alert does not pause AI.' : 'Referencia de presupuesto, no saldo prepago. El gasto puede tardar en actualizarse. Este aviso no pausa la IA.'}
       </Typography>}
       <Box sx={{ mt: 1 }}>
-        <Link href={ai ? 'https://platform.openai.com/settings/organization/billing/overview' : 'https://app.dataforseo.com/'}
+        <Link href={ai ? (claude ? 'https://platform.claude.com/cost' : 'https://platform.openai.com/settings/organization/billing/overview') : 'https://app.dataforseo.com/'}
           target="_blank" rel="noopener noreferrer" sx={{ color: 'var(--accent)', fontSize: '0.75rem', fontWeight: 600 }}>
           {en ? 'Review billing' : 'Revisar saldo y facturación'}
         </Link>

@@ -18,6 +18,9 @@ import Button from '@mui/material/Button'
 import TextField from '@mui/material/TextField'
 import InputAdornment from '@mui/material/InputAdornment'
 import Popover from '@mui/material/Popover'
+import Select from '@mui/material/Select'
+import MenuItem from '@mui/material/MenuItem'
+import CheckIcon from '@mui/icons-material/Check'
 import Chip from '@mui/material/Chip'
 import LinearProgress from '@mui/material/LinearProgress'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -1017,20 +1020,43 @@ export function CompanyPicker({ selectedNums, numInfoMap, onChange, listMaxHeigh
       </Box>
 
       {(totalPages > 1 || campaignStyle) && (
-        <Box data-recipient-pagination sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', gap: campaignStyle ? 1.5 : 1, px: campaignStyle ? 2 : 1.5, py: campaignStyle ? 1.25 : 0.6, borderTop: '1px solid var(--border)' }}>
-          {campaignStyle && <Box component="label" sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'var(--text-muted)', fontSize: '.78rem' }}>
+        <Box data-recipient-pagination sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', gap: campaignStyle ? 1.5 : 1, px: campaignStyle ? 2 : 1.5, py: campaignStyle ? 1.25 : 0.6, borderTop: '1px solid var(--border)', ...(campaignStyle ? { bgcolor: 'var(--card-bg)' } : {}) }}>
+          {campaignStyle && <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'var(--text-muted)', fontSize: '.78rem' }}>
             {en ? 'Companies per page' : 'Empresas por página'}
-            <Box component="select" aria-label={en ? 'Companies per page' : 'Empresas por página'} value={pageSize} onChange={e => setPageSize(Number(e.target.value))} sx={{ p: .7, bgcolor: 'var(--card-bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 1, fontSize: '.8rem' }}>
-              {[10, 25, 50, 100].map(size => <option key={size} value={size}>{size}</option>)}
-            </Box>
+            <Select
+              size="small" value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
+              renderValue={value => String(value)}
+              inputProps={{ 'aria-label': en ? 'Companies per page' : 'Empresas por página' }}
+              IconComponent={ArrowDropDownIcon}
+              sx={{ minWidth: 76, height: 34, bgcolor: 'var(--surface)', color: 'var(--text)', borderRadius: '10px', fontSize: '.82rem', fontWeight: 700,
+                '& .MuiSelect-select': { py: .75, pl: 1.5, pr: '30px !important', fontVariantNumeric: 'tabular-nums' },
+                '& .MuiSelect-icon': { color: 'var(--text-muted)', fontSize: 20 },
+                '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--border)' },
+                '&:hover .MuiOutlinedInput-notchedOutline, &.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--accent)' },
+                '&.Mui-focused': { boxShadow: '0 0 0 3px rgba(var(--accent-rgb),0.12)' },
+              }}
+              MenuProps={{
+                slotProps: {
+                  paper: { sx: { mt: .75, minWidth: 96, bgcolor: 'var(--card-bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '12px', backgroundImage: 'none', boxShadow: '0 8px 24px rgba(0,0,0,0.2)' } },
+                  list: { sx: { p: .5 } },
+                },
+              }}
+            >
+              {[10, 25, 50, 100].map(size => <MenuItem key={size} value={size} sx={{ minHeight: '34px !important', px: 1.25, py: .75, my: .25, borderRadius: '8px', gap: 2, justifyContent: 'space-between', fontSize: '.82rem', fontWeight: 600,
+                '&:hover, &.Mui-focusVisible': { bgcolor: 'var(--item-hover)' },
+                '&.Mui-selected, &.Mui-selected:hover, &.Mui-selected.Mui-focusVisible': { bgcolor: 'rgba(var(--accent-rgb),0.12)', color: 'var(--accent)' },
+              }}>
+                {size}<CheckIcon aria-hidden="true" sx={{ fontSize: 16, visibility: pageSize === size ? 'visible' : 'hidden' }} />
+              </MenuItem>)}
+            </Select>
           </Box>}
-          <IconButton size="small" aria-label={en ? 'Previous page' : 'Página anterior'} disabled={pageSafe === 0} onClick={() => setPage(p => Math.max(0, p - 1))} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
+          <IconButton size="small" aria-label={en ? 'Previous page' : 'Página anterior'} disabled={pageSafe === 0} onClick={() => setPage(p => Math.max(0, p - 1))} sx={{ color: 'var(--text-muted)', ...(campaignStyle ? { width: 34, height: 34, borderRadius: '10px', border: '1px solid var(--border)', bgcolor: 'var(--surface)', '&.Mui-disabled': { color: 'var(--text-muted)', opacity: .35 } } : {}), '&:hover': { color: 'var(--accent)', bgcolor: 'var(--item-hover)' } }}>
             <ChevronLeftIcon sx={{ fontSize: 16 }} />
           </IconButton>
-          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.7rem', fontVariantNumeric: 'tabular-nums' }}>
+          <Typography sx={{ color: 'var(--text-muted)', fontSize: campaignStyle ? '.78rem' : '0.7rem', fontVariantNumeric: 'tabular-nums', ...(campaignStyle ? { minWidth: 100, textAlign: 'center', fontWeight: 600 } : {}) }}>
             {t.campaign.pageOf(pageSafe + 1, totalPages)}
           </Typography>
-          <IconButton size="small" aria-label={en ? 'Next page' : 'Página siguiente'} disabled={pageSafe >= totalPages - 1} onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} sx={{ color: 'var(--text-muted)', '&:hover': { color: 'var(--text)' } }}>
+          <IconButton size="small" aria-label={en ? 'Next page' : 'Página siguiente'} disabled={pageSafe >= totalPages - 1} onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} sx={{ color: 'var(--text-muted)', ...(campaignStyle ? { width: 34, height: 34, borderRadius: '10px', border: '1px solid var(--border)', bgcolor: 'var(--surface)', '&.Mui-disabled': { color: 'var(--text-muted)', opacity: .35 } } : {}), '&:hover': { color: 'var(--accent)', bgcolor: 'var(--item-hover)' } }}>
             <ChevronRightIcon sx={{ fontSize: 16 }} />
           </IconButton>
         </Box>

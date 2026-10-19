@@ -97,6 +97,7 @@ def test_snapshots_survive_worker_restart_without_touching_health():
 
 @pytest.mark.parametrize('role,count', [('admin',2),('agent',0)])
 def test_notifications_and_counter_are_admin_only(monkeypatch, role, count):
+    monkeypatch.setattr('app.activity_notices.automation_notifications', lambda *args, **kwargs: [])
     monkeypatch.setattr(routes, '_require_user', lambda token: {'id':'qa','role':token})
     db = Mock()
     for collection in ('message_logs','companies','app_notifications'):

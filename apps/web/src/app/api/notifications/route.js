@@ -7,6 +7,7 @@ export async function GET(request) {
     const token = request.headers.get('x-user-token') || ''
     const res = await backendFetch('/api/notifications', {
       headers: { 'x-user-token': token },
+      cache: 'no-store',
     })
     const data = await res.json()
     return NextResponse.json(data, { status: res.status })

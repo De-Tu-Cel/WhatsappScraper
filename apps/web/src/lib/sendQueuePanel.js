@@ -65,6 +65,9 @@ export function itemClockLine(item, countdown) {
   if (item.status === 'sent') return `Enviado ${formatSendWhen(item.finished_at)}`
   if (item.status === 'failed') return `${item.error || 'No se pudo enviar'} · ${formatSendWhen(item.finished_at)}`
   if (item.status === 'interrupted') return `Resultado incierto · ${formatSendWhen(item.finished_at)}`
+  if (item.status === 'needs_review') return 'Entrega incierta · revisa el chat antes de repetir'
+  if (item.status === 'skipped_missing_consent') return 'No enviado: falta registrar el consentimiento'
+  if (item.status === 'skipped_opt_out') return 'No enviado: el destinatario solicitó la baja'
   if (item.status === 'cancelled') return `Cancelado ${formatSendWhen(item.finished_at)}`
   return item.created_at ? `En cola desde ${formatSendWhen(item.created_at)}` : 'En cola'
 }

@@ -1,11 +1,14 @@
 'use client'
-import { useState, useEffect, useRef, useMemo, Fragment } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { isValidUrl } from '@/lib/validators'
 import { authFetch } from '@/lib/api'
 import { useLang } from '../context/LangContext'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { keyframes } from '@mui/system'
 import Box from '@mui/material/Box'
+import ScrapeProgress from './ScrapeProgress'
+import ScrapeSummary from './ScrapeSummary'
+import { ScrapingPlaceholders } from './ProspectLoading'
 import Typography from '@mui/material/Typography'
 import LinearProgress from '@mui/material/LinearProgress'
 import Table from '@mui/material/Table'
@@ -27,14 +30,10 @@ import CloseIcon from '@mui/icons-material/Close'
 import HighlightOffIcon from '@mui/icons-material/HighlightOff'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import ErrorIcon from '@mui/icons-material/Error'
-import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import LinkIcon from '@mui/icons-material/Link'
 import InboxIcon from '@mui/icons-material/Inbox'
 import PauseIcon from '@mui/icons-material/Pause'
-import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import ReplayIcon from '@mui/icons-material/Replay'
-import TravelExploreIcon from '@mui/icons-material/TravelExplore'
-import CheckBoxIcon from '@mui/icons-material/CheckBox'
 import { pickMessageVariant } from '@/lib/messageVariants'
 import { loadSendConfig } from '@/lib/sendConfig'
 import { useSendQueue } from '../context/SendQueueContext'
@@ -54,45 +53,6 @@ const EXAMPLES = [
   'https://hotel-sierra-madre.com/\nhttps://farmacia-central-gdl.mx/\nhttps://veterinaria-lopez.com.mx/\nhttps://gym-fitness-monterrey.mx/\nhttps://dentista-perez-qro.com/',
   'https://panaderia-flor-de-lis.mx/\nhttps://mecanico-express-cdmx.com/\nhttps://estetica-canina-gdl.mx/\nhttps://plomero-24hrs-mty.com/\nhttps://abogados-garcia-y-soc.mx/',
 ]
-
-function useTypewriter(strings, active) {
-  const [display, setDisplay] = useState('')
-  const ref = useRef({ wordIdx: 0, charIdx: 0, deleting: false })
-
-  useEffect(() => {
-    if (!active) { setDisplay(''); return }
-    let timer
-    function tick() {
-      const s    = ref.current
-      const word = strings[s.wordIdx]
-      if (!s.deleting) {
-        if (s.charIdx < word.length) {
-          const next = s.charIdx + 1
-          ref.current = { ...s, charIdx: next }
-          setDisplay(word.slice(0, next))
-          timer = setTimeout(tick, 38)
-        } else {
-          ref.current = { ...s, deleting: true }
-          timer = setTimeout(tick, 1600)
-        }
-      } else {
-        if (s.charIdx > 0) {
-          const next = s.charIdx - 1
-          ref.current = { ...s, charIdx: next }
-          setDisplay(word.slice(0, next))
-          timer = setTimeout(tick, 22)
-        } else {
-          ref.current = { wordIdx: (s.wordIdx + 1) % strings.length, charIdx: 0, deleting: false }
-          timer = setTimeout(tick, 400)
-        }
-      }
-    }
-    timer = setTimeout(tick, 700)
-    return () => clearTimeout(timer)
-  }, [active, strings])
-
-  return display
-}
 
 const fadeSlideIn = keyframes`
   from { opacity: 0; transform: translateY(6px); }
@@ -123,7 +83,7 @@ function EmptyState({ t }) {
         <Typography sx={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.83rem', fontWeight: 600 }}>
           {t.batch.emptyTitle}
         </Typography>
-        <Typography sx={{ color: 'rgba(255,255,255,0.22)', fontSize: '0.73rem' }}>
+        <Typography sx={{ color: 'rgba(255,255,255,0.22)', fontSize: '0.76rem' }}>
           {t.batch.emptyHint}
         </Typography>
       </Box>
@@ -137,10 +97,10 @@ function UrlPreviewList({ urlList }) {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.1 }}>
-        <Typography sx={{ fontSize: '0.66rem', color: 'rgba(255,255,255,0.28)', textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 600 }}>
+        <Typography sx={{ fontSize: '0.76rem', color: 'rgba(255,255,255,0.28)', textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 600 }}>
           URLs detectadas
         </Typography>
-        <Typography sx={{ fontSize: '0.66rem', color: 'rgba(255,255,255,0.18)', fontVariantNumeric: 'tabular-nums' }}>
+        <Typography sx={{ fontSize: '0.76rem', color: 'rgba(255,255,255,0.18)', fontVariantNumeric: 'tabular-nums' }}>
           {validCount} / {urlList.length} válidas
         </Typography>
       </Box>
@@ -171,7 +131,7 @@ function UrlPreviewList({ urlList }) {
               px: 1.1, py: 0.5, borderRadius: 1.5,
               bgcolor: bgColor, border: `1px solid ${borderColor}`,
             }}>
-              <Typography sx={{ fontSize: '0.59rem', color: 'rgba(255,255,255,0.18)', fontVariantNumeric: 'tabular-nums', minWidth: 16, textAlign: 'right', flexShrink: 0 }}>
+              <Typography sx={{ fontSize: '0.76rem', color: 'rgba(255,255,255,0.18)', fontVariantNumeric: 'tabular-nums', minWidth: 16, textAlign: 'right', flexShrink: 0 }}>
                 {i + 1}
               </Typography>
               <Box sx={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, bgcolor: dotColor, boxShadow: `0 0 5px ${dotColor}88` }} />
@@ -188,12 +148,12 @@ function UrlPreviewList({ urlList }) {
               </Typography>
               {isDup && (
                 <Box sx={{ px: 0.65, py: 0.1, borderRadius: '4px', bgcolor: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.22)', flexShrink: 0 }}>
-                  <Typography sx={{ fontSize: '0.57rem', color: '#fbbf24', fontWeight: 700, letterSpacing: '0.04em' }}>DUP</Typography>
+                  <Typography sx={{ fontSize: '0.76rem', color: '#fbbf24', fontWeight: 700, letterSpacing: '0.04em' }}>DUP</Typography>
                 </Box>
               )}
               {!valid && (
                 <Box sx={{ px: 0.65, py: 0.1, borderRadius: '4px', bgcolor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.22)', flexShrink: 0 }}>
-                  <Typography sx={{ fontSize: '0.57rem', color: '#f87171', fontWeight: 700, letterSpacing: '0.04em' }}>INV</Typography>
+                  <Typography sx={{ fontSize: '0.76rem', color: '#f87171', fontWeight: 700, letterSpacing: '0.04em' }}>INV</Typography>
                 </Box>
               )}
             </Box>
@@ -241,7 +201,6 @@ export default function BatchProcessor() {
   // de una empresa — clave `${company_id}::${number}`.
   const [extraSelected, setExtraSelected] = useState(new Set())
   const [expandedCo, setExpandedCo] = useState(new Set())
-  const [localContactedIds, setLocalContactedIds] = useState(new Set())
   // Filtro "ya contactados" — mismo patrón que searchProspects.jsx/csvImporter.jsx,
   // faltaba aquí (Batch mandaba waRowsUnique sin filtrar al RecipientsBox).
   const [filterContacted, setFilterContacted] = useState('all') // 'all' | 'new' | 'contacted'
@@ -287,7 +246,7 @@ export default function BatchProcessor() {
     }
   }, [queueActive, refreshCapStats])
 
-  const placeholder = useTypewriter(EXAMPLES, !rawUrls && !loading)
+  const placeholder = EXAMPLES[0]
 
   const urlList = useMemo(
     () => rawUrls.split('\n').map(u => u.trim()).filter(Boolean),
@@ -309,11 +268,9 @@ export default function BatchProcessor() {
   const waRowsUnique = useMemo(() =>
     dedupeByCompany(waRowsAll).map(r => ({
       ...r,
-      already_contacted: (r.company_id && freshContactedMap[r.company_id])
-        || r.already_contacted
-        || (localContactedIds.has(r.company_id) ? { contacted: true } : null),
+      already_contacted: freshContactedMap[r.company_id] ?? r.already_contacted ?? null,
     })),
-  [waRowsAll, localContactedIds, freshContactedMap])
+  [waRowsAll, freshContactedMap])
 
   // ids como string estable — evita releer check-contacted en cada render solo
   // porque waRowsAll cambió de referencia (misma lista de companies, objeto nuevo).
@@ -367,7 +324,6 @@ export default function BatchProcessor() {
     setWaSelected(prev => prev.size ? new Set() : prev)
     setExtraSelected(prev => prev.size ? new Set() : prev)
     setExpandedCo(prev => prev.size ? new Set() : prev)
-    setLocalContactedIds(new Set())
   }, [scrapeJob.job?._id])
   // Filtro de "ya contactados": se aplica sobre waRowsUnique antes de calcular la selección
   const filteredWaRows = useMemo(() => {
@@ -472,13 +428,9 @@ export default function BatchProcessor() {
       queuedUrls[row.url] = { msg_status: 'queued', msgSent: message }
     }
     if (!jobs.length) return   // every selected number was blocked
-    addBatch(jobs, lang === 'en' ? 'URL batch' : 'Lote de URLs')
+    const accepted = await addBatch(jobs, lang === 'en' ? 'URL batch' : 'Lote de URLs')
+    if (!accepted) return false
     setSentOverlay(prev => ({ ...prev, ...queuedUrls }))
-    setLocalContactedIds(prev => {
-      const next = new Set(prev)
-      jobs.forEach(j => j.companyId && next.add(j.companyId))
-      return next
-    })
   }
 
   const sentCount  = rows.filter(r => r.msg_status === 'sent').length
@@ -503,29 +455,11 @@ export default function BatchProcessor() {
 
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, height: '100%', minHeight: 0, overflowY: 'auto', pb: 2, pr: 0.5 }}>
+    <Box data-ui-section="batch" sx={{ display: 'flex', flexDirection: 'column', gap: 3, height: '100%', minHeight: 0, overflowY: 'auto', pb: 2, pr: 0.5 }}>
 
       {/* ── Header ── */}
       <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-          <Box sx={{
-            width: 38, height: 38, flexShrink: 0,
-            bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.12)',
-            border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)',
-            borderRadius: 2,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <ListAltIcon sx={{ color: 'var(--accent, #60a5fa)', fontSize: 20 }} />
-          </Box>
-          <Box>
-            <Typography sx={{ color: 'var(--text, white)', fontWeight: 700, fontSize: '1rem', lineHeight: 1.3 }}>
-              {t.batch.heading}
-            </Typography>
-            <Typography sx={{ color: 'var(--text-muted, rgba(255,255,255,0.35))', fontSize: '0.75rem' }}>
-              {t.batch.subtitle}
-            </Typography>
-          </Box>
-        </Box>
+        <Typography sx={{ color: 'var(--text-muted)', fontSize: '.8rem' }}>{t.batch.subtitle}</Typography>
 
         {/* Contador de URLs detectadas */}
         {urlList.length > 0 && !loading && (
@@ -538,7 +472,7 @@ export default function BatchProcessor() {
               color: 'var(--accent, #60a5fa)',
               border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)',
               fontWeight: 600,
-              fontSize: '0.72rem',
+              fontSize: '0.76rem',
               height: 24,
               '& .MuiChip-icon': { color: 'var(--accent, #60a5fa)' },
             }}
@@ -561,7 +495,7 @@ export default function BatchProcessor() {
               border: `1px solid ${overLimit ? 'rgba(239,68,68,0.35)' : 'rgba(var(--accent-rgb, 59,130,246), 0.3)'}`,
             }}>
               <LinkIcon sx={{ fontSize: 12, color: overLimit ? '#f87171' : 'var(--accent, #60a5fa)' }} />
-              <Typography sx={{ fontSize: '0.74rem', fontWeight: 800, color: overLimit ? '#f87171' : 'var(--accent, #60a5fa)', fontVariantNumeric: 'tabular-nums' }}>
+              <Typography sx={{ fontSize: '0.76rem', fontWeight: 800, color: overLimit ? '#f87171' : 'var(--accent, #60a5fa)', fontVariantNumeric: 'tabular-nums' }}>
                 {urlList.length}
                 <Box component="span" sx={{ fontWeight: 600, color: overLimit ? 'rgba(248,113,113,0.65)' : 'rgba(255,255,255,0.35)' }}>/50</Box>
               </Typography>
@@ -582,6 +516,7 @@ export default function BatchProcessor() {
 
         <Box
           component="textarea"
+          data-batch-input
           ref={urlsRef}
           defaultValue=""
           onInput={e => setRawUrls(e.target.value)}
@@ -629,7 +564,7 @@ export default function BatchProcessor() {
         {/* Hint Ctrl+Enter */}
         {!loading && (
           <Typography variant="caption" sx={{
-            position: 'absolute', bottom: 25, right: 54,
+            position: 'absolute', bottom: 25, right: 172,
             color: 'rgba(255,255,255,0.18)', userSelect: 'none',
           }}>
             Ctrl+Enter
@@ -640,21 +575,21 @@ export default function BatchProcessor() {
         {!loading && urlList.length > 0 && (overLimit || invalidUrls.length > 0 || duplicateUrls.length > 0) && (
           <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 0.4 }}>
             {overLimit && (
-              <Typography sx={{ color: '#f87171', fontSize: '0.72rem' }}>
+              <Typography sx={{ color: '#f87171', fontSize: '0.76rem' }}>
                 ⚠ {lang === 'en'
                   ? `Maximum 50 URLs. You are pasting ${urlList.length} — remove ${urlList.length - 50}.`
                   : `Máximo 50 URLs. Estás pegando ${urlList.length} — elimina ${urlList.length - 50}.`}
               </Typography>
             )}
             {invalidUrls.length > 0 && (
-              <Typography sx={{ color: '#f87171', fontSize: '0.72rem' }}>
+              <Typography sx={{ color: '#f87171', fontSize: '0.76rem' }}>
                 ⚠ {lang === 'en'
                   ? `${invalidUrls.length} invalid URL${invalidUrls.length > 1 ? 's' : ''} (must start with https:// or http://): ${invalidUrls.slice(0, 2).join(', ')}${invalidUrls.length > 2 ? `… and ${invalidUrls.length - 2} more` : ''}`
                   : `${invalidUrls.length} URL${invalidUrls.length > 1 ? 's inválidas' : ' inválida'} (deben empezar con https:// o http://): ${invalidUrls.slice(0, 2).join(', ')}${invalidUrls.length > 2 ? `… y ${invalidUrls.length - 2} más` : ''}`}
               </Typography>
             )}
             {duplicateUrls.length > 0 && (
-              <Typography sx={{ color: '#fbbf24', fontSize: '0.72rem' }}>
+              <Typography sx={{ color: '#fbbf24', fontSize: '0.76rem' }}>
                 ⚠ {lang === 'en'
                   ? `${duplicateUrls.length} duplicate URL${duplicateUrls.length > 1 ? 's' : ''}: ${[...new Set(duplicateUrls)].slice(0, 2).join(', ')}${duplicateUrls.length > 2 ? '…' : ''}`
                   : `${duplicateUrls.length} URL${duplicateUrls.length > 1 ? 's duplicadas' : ' duplicada'}: ${[...new Set(duplicateUrls)].slice(0, 2).join(', ')}${duplicateUrls.length > 2 ? '…' : ''}`}
@@ -664,15 +599,15 @@ export default function BatchProcessor() {
         )}
 
         {/* Botón enviar */}
-        <IconButton
+        <Button
           onClick={handleBatch}
           disabled={loading || !canBatch}
           size="small"
           sx={{
             position: 'absolute', bottom: 20, right: 10,
             bgcolor: canBatch && !loading ? 'var(--accent, #3b82f6)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)',
-            color: canBatch && !loading ? 'white' : 'rgba(255,255,255,0.25)',
-            width: 36, height: 36,
+            color: canBatch && !loading ? 'var(--accent-contrast)' : 'rgba(255,255,255,0.25)',
+            minWidth: 146, height: 38, gap: 1, px: 1.5, borderRadius: '9px',
             transition: 'all 0.2s',
             '&:hover': { bgcolor: canBatch && !loading ? 'var(--accent, #2563eb)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)' },
             '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.08)', color: 'rgba(255,255,255,0.15)' },
@@ -681,77 +616,21 @@ export default function BatchProcessor() {
           {loading
             ? <CircularProgress size={16} sx={{ color: 'inherit' }} />
             : <SendIcon sx={{ fontSize: 16 }} />}
-        </IconButton>
+          <Box component="span" sx={{ fontSize: '0.8rem', fontWeight: 700 }}>{lang === 'en' ? 'Process batch' : 'Procesar lote'}</Box>
+        </Button>
       </Box>
 
-      {/* ── Progress ── */}
-      {loading && (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
-          <Box sx={{
-            px: 2.5, py: 2,
-            bgcolor: (paused || pausing) ? 'rgba(251,191,36,0.05)' : 'rgba(var(--accent-rgb, 59,130,246), 0.05)',
-            border: `1px solid ${(paused || pausing) ? 'rgba(251,191,36,0.2)' : 'rgba(var(--accent-rgb, 59,130,246), 0.15)'}`,
-            borderRadius: 2, transition: 'all 0.3s',
-          }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                {paused ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} /> : <CircularProgress size={14} sx={{ color: pausing ? '#fbbf24' : 'var(--accent, #3b82f6)' }} />}
-                <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
-                  {paused
-                    ? (lang === 'en' ? `Paused — ${doneCount} of ${totalCount}` : `Pausado — ${doneCount} de ${totalCount}`)
-                    : pausing
-                      ? (lang === 'en' ? `Pausing… finishing ${scrapeJob.inFlight} in progress — ${doneCount} of ${totalCount}` : `Pausando… terminando ${scrapeJob.inFlight} en curso — ${doneCount} de ${totalCount}`)
-                      : (lang === 'en' ? `Scraping — ${doneCount} of ${totalCount}` : `Scrapeando — ${doneCount} de ${totalCount}`)}
-                </Typography>
-              </Box>
-              <Typography sx={{ color: (paused || pausing) ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>
-                {progress}%
-              </Typography>
-            </Box>
-            <LinearProgress
-              variant="determinate"
-              value={progress}
-              sx={{
-                borderRadius: 4, height: 6,
-                bgcolor: (paused || pausing) ? 'rgba(251,191,36,0.1)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)',
-                '& .MuiLinearProgress-bar': {
-                  background: (paused || pausing)
-                    ? 'linear-gradient(90deg,#f59e0b,#fbbf24)'
-                    : 'linear-gradient(90deg, var(--accent, #3b82f6), var(--accent, #60a5fa))',
-                  borderRadius: 4,
-                },
-              }}
-            />
-            {currentUrl && !paused && (
-              <Typography sx={{
-                mt: 1, color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem',
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              }}>
-                {currentUrl}
-              </Typography>
-            )}
-          </Box>
-          <Box sx={{ display: 'flex', gap: 1.5 }}>
-            <Button fullWidth onClick={handlePause} disabled={pausing}
-              startIcon={pausing ? <CircularProgress size={14} sx={{ color: '#fbbf24' }} /> : paused ? <PlayArrowIcon /> : <PauseIcon />}
-              sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(251,191,36,0.15)' }, '&.Mui-disabled': { color: 'rgba(251,191,36,0.4)', bgcolor: 'rgba(251,191,36,0.04)', border: '1px solid rgba(251,191,36,0.12)' } }}>
-              {paused ? t.batch.resume : pausing ? (lang === 'en' ? 'Pausing…' : 'Pausando…') : t.batch.pause}
-            </Button>
-            <Button fullWidth onClick={handleCancelBatch} startIcon={<HighlightOffIcon />}
-              sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(239,68,68,0.15)' } }}>
-              {t.batch.cancel}
-            </Button>
-            {rows.some(r => r.ok) && (
-              <Tooltip title={t.batch.stopAndSendTip}>
-                <Button fullWidth onClick={handleCancelBatch} startIcon={<SendIcon />}
-                  sx={{ flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem', color: '#4ade80', bgcolor: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', borderRadius: 1.5, '&:hover': { bgcolor: 'rgba(34,197,94,0.15)' } }}>
-                  {t.batch.stopAndSend}
-                </Button>
-              </Tooltip>
-            )}
-          </Box>
-        </Box>
-      )}
+      {/* Shared scraping progress; each surface keeps its own inputs and actions. */}
+      {loading && <ScrapeProgress
+        processed={doneCount} total={totalCount} progress={progress}
+        paused={paused} pausing={pausing} inFlight={scrapeJob.inFlight} currentUrl={currentUrl}
+        onPause={handlePause} onCancel={handleCancelBatch} lang={lang}
+      >
+          {rows.some(r => r.ok) && <Tooltip title={t.batch.stopAndSendTip}>
+            <Button onClick={handleCancelBatch} startIcon={<SendIcon />} sx={{ textTransform: 'none', color: 'var(--accent)' }}>{t.batch.stopAndSend}</Button>
+          </Tooltip>}
+        </ScrapeProgress>}
+      {loading && rows.length === 0 && <ScrapingPlaceholders lang={lang} paused={paused} />}
 
       {/* ── Cancelled + pending URLs banner ── */}
       {done && isCancelled && pendingCount > 0 && (
@@ -785,120 +664,11 @@ export default function BatchProcessor() {
         </Box>
       )}
 
-      {/* ── Stat cards — una tira con dividers en vez de cards sueltas.
-           Va ANTES del panel de envío (como en Búsqueda) — antes vivía
-           después y la estructura no coincidía entre pantallas. ── */}
-      {rows.length > 0 && (
-        <Box sx={{
-          display: 'flex', flexWrap: 'wrap', overflow: 'hidden', flexShrink: 0,
-          borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
-          bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
-        }}>
-          {[
-            { icon: <CheckCircleIcon sx={{ fontSize: 18 }} />, label: t.batch.processed, value: okCount,  color: '#4ade80' },
-            { icon: <WhatsAppIcon    sx={{ fontSize: 18 }} />, label: t.batch.withWa,    value: waCount,  color: '#60a5fa' },
-            ...(alreadySent ? [{ icon: <SendIcon sx={{ fontSize: 18 }} />, label: t.batch.msgSent, value: sentCount, color: '#a78bfa' }] : []),
-            { icon: <ErrorIcon       sx={{ fontSize: 18 }} />, label: t.batch.errors,    value: errCount, color: '#f87171' },
-          ].map((c, i) => (
-            <Fragment key={c.label}>
-              {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 2 }} />}
-              <Box sx={{ flex: '1 1 0', minWidth: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.6, px: 2.4, py: 2 }}>
-                <Box sx={{
-                  width: 40, height: 40, borderRadius: 2, flexShrink: 0, color: c.color,
-                  background: `linear-gradient(135deg, ${c.color}28 0%, ${c.color}0a 100%)`,
-                  border: `1px solid ${c.color}4d`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  {c.icon}
-                </Box>
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography sx={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.2, fontVariantNumeric: 'tabular-nums' }}>
-                    {c.value}
-                  </Typography>
-                  <Typography sx={{ fontSize: '0.74rem', color: 'var(--text-muted, rgba(255,255,255,0.4))', fontWeight: 500, whiteSpace: 'nowrap' }}>
-                    {c.label}
-                  </Typography>
-                </Box>
-              </Box>
-            </Fragment>
-          ))}
-        </Box>
-      )}
-
-      {/* ── Funnel de conversión: Scrapeadas → Con WhatsApp → Seleccionadas →
-           Enviadas — mismo widget que Búsqueda, portado para que ambas
-           pantallas midan igual dónde se pierden prospectos. ── */}
-      {rows.length > 0 && (() => {
-        // "Seleccionadas" mide NÚMEROS de WhatsApp (no empresas): el número
-        // grande y su % son totalContactPoints/totalAvailableNumbers — cuánto
-        // de lo disponible para enviar ya está marcado, en vez de contar
-        // empresas (donde marcar 1 de 4 números de una sola empresa ya salía
-        // "100%", sin reflejar lo que realmente se iba a enviar).
-        const totalAvailableNumbers = waRowsUnique.reduce((sum, r) => sum + (r.all_whatsapp?.length || (r.whatsapp ? 1 : 0)), 0)
-        const selectedPct = totalAvailableNumbers > 0 ? Math.round((totalContactPoints / totalAvailableNumbers) * 100) : 0
-        const stages = [
-          { key: 'scraped',  label: lang === 'en' ? 'Scraped'       : 'Scrapeadas',    value: rows.length,               color: '#60a5fa', icon: <TravelExploreIcon sx={{ fontSize: 22 }} /> },
-          { key: 'wa',       label: lang === 'en' ? 'With WhatsApp' : 'Con WhatsApp',  value: waCount,                   color: '#4ade80', icon: <WhatsAppIcon      sx={{ fontSize: 22 }} /> },
-          { key: 'selected', label: lang === 'en' ? 'Selected'      : 'Seleccionadas', value: totalContactPoints,        color: '#a78bfa', icon: <CheckBoxIcon      sx={{ fontSize: 22 }} />,
-            pctOverride: selectedPct },
-          { key: 'sent',     label: lang === 'en' ? 'Sent'          : 'Enviadas',      value: sentCount,                 color: '#fbbf24', icon: <SendIcon          sx={{ fontSize: 22 }} /> },
-        ]
-        return (
-          <Box sx={{
-            display: 'flex', flexWrap: 'wrap', overflow: 'hidden', flexShrink: 0,
-            borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
-            bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
-          }}>
-            {stages.map((s, i) => {
-              const prev = i > 0 ? stages[i - 1] : null
-              const convRate = s.pctOverride !== undefined ? s.pctOverride : (prev && prev.value > 0 ? Math.round((s.value / prev.value) * 100) : null)
-              const pct = i === 0 ? 100 : (s.value === 0 ? 0 : Math.max(4, convRate ?? 0))
-              return (
-                <Fragment key={s.key}>
-                  {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))' }} />}
-                  <Box sx={{ flex: '1 1 0', minWidth: 190, position: 'relative', overflow: 'hidden' }}>
-                    <Box sx={{
-                      position: 'absolute', inset: 0, left: 0, width: `${pct}%`,
-                      background: `linear-gradient(90deg, ${s.color}40 0%, ${s.color}12 100%)`,
-                      transition: 'width 0.4s ease', pointerEvents: 'none',
-                    }} />
-                    <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.8, px: 2.6, py: 2.2 }}>
-                      <Box sx={{
-                        width: 46, height: 46, borderRadius: 2.5, flexShrink: 0, color: s.color,
-                        background: `linear-gradient(135deg, ${s.color}28 0%, ${s.color}0a 100%)`,
-                        border: `1px solid ${s.color}4d`,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      }}>
-                        {s.icon}
-                      </Box>
-                      <Box sx={{ minWidth: 0 }}>
-                        <Typography sx={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.15, fontVariantNumeric: 'tabular-nums' }}>
-                          {s.value}
-                        </Typography>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-                          <Typography sx={{ fontSize: '0.76rem', color: 'var(--text-muted, rgba(255,255,255,0.45))', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                            {s.label}
-                          </Typography>
-                          {convRate !== null && (
-                            <Box sx={{
-                              px: 0.7, py: 0.1, borderRadius: 999, whiteSpace: 'nowrap',
-                              bgcolor: `${s.color}18`, border: `1px solid ${s.color}40`,
-                            }}>
-                              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: s.color }}>
-                                {convRate}%
-                              </Typography>
-                            </Box>
-                          )}
-                        </Box>
-                      </Box>
-                    </Box>
-                  </Box>
-                </Fragment>
-              )
-            })}
-          </Box>
-        )
-      })()}
+      {rows.length > 0 && <ScrapeSummary
+        processed={rows.length} total={totalCount} ok={okCount} errors={errCount} withWa={waCount}
+        selected={totalContactPoints} available={waRowsUnique.reduce((sum, r) => sum + (r.all_whatsapp?.length || (r.whatsapp ? 1 : 0)), 0)}
+        sent={sentCount} lang={lang}
+      />}
 
       {/* ── Post-scraping: template + send — visible también durante el
            scraping, para poder empezar a enviar a lo ya encontrado ── */}
@@ -966,7 +736,7 @@ export default function BatchProcessor() {
                       bgcolor: 'var(--card-bg, #161d2e)',
                       color: 'rgba(255,255,255,0.5)',
                       fontWeight: 700,
-                      fontSize: '0.7rem',
+                      fontSize: '0.76rem',
                       letterSpacing: 0.5,
                       borderBottom: '1px solid rgba(255,255,255,0.08)',
                       whiteSpace: 'nowrap',
@@ -1028,7 +798,7 @@ export default function BatchProcessor() {
                     <TableCell sx={{ color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{r.empresa}</TableCell>
                     <TableCell sx={{ color: 'rgba(255,255,255,0.55)' }}>
                       {r.industria && r.industria !== '—'
-                        ? <Chip label={r.industria} size="small" sx={{ height: 18, fontSize: '0.62rem', bgcolor: 'rgba(139,92,246,0.1)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.2)' }} />
+                        ? <Chip label={r.industria} size="small" sx={{ height: 18, fontSize: '0.76rem', bgcolor: 'rgba(139,92,246,0.1)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.2)' }} />
                         : <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>
                       }
                     </TableCell>
@@ -1041,18 +811,18 @@ export default function BatchProcessor() {
                     </TableCell>
                     {alreadySent && (
                       <TableCell>
-                        {r.msg_status === 'sent'    && <Chip label={t.batch.chipSent}   size="small" sx={{ bgcolor: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)', height: 20, fontSize: '0.68rem' }} />}
-                        {r.msg_status === 'failed'  && <Chip label={t.batch.chipFailed} size="small" sx={{ bgcolor: 'rgba(239,68,68,0.1)',   color: '#f87171', border: '1px solid rgba(239,68,68,0.25)',   height: 20, fontSize: '0.68rem' }} />}
-                        {r.msg_status === 'no_wa'   && <Chip label={t.batch.chipNoWa}   size="small" sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.08)', height: 20, fontSize: '0.68rem' }} />}
-                        {r.msg_status === 'skipped' && <Chip label={lang === 'en' ? 'Skipped' : 'Saltado'} size="small" sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.08)', height: 20, fontSize: '0.68rem' }} />}
+                        {r.msg_status === 'sent'    && <Chip label={t.batch.chipSent}   size="small" sx={{ bgcolor: 'rgba(167,139,250,0.1)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)', height: 20, fontSize: '0.76rem' }} />}
+                        {r.msg_status === 'failed'  && <Chip label={t.batch.chipFailed} size="small" sx={{ bgcolor: 'rgba(239,68,68,0.1)',   color: '#f87171', border: '1px solid rgba(239,68,68,0.25)',   height: 20, fontSize: '0.76rem' }} />}
+                        {r.msg_status === 'no_wa'   && <Chip label={t.batch.chipNoWa}   size="small" sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.08)', height: 20, fontSize: '0.76rem' }} />}
+                        {r.msg_status === 'skipped' && <Chip label={lang === 'en' ? 'Skipped' : 'Saltado'} size="small" sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.3)', border: '1px solid rgba(255,255,255,0.08)', height: 20, fontSize: '0.76rem' }} />}
                         {!r.msg_status && <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.78rem' }}>—</Typography>}
                       </TableCell>
                     )}
                     {alreadySent && (
                       <TableCell sx={{ maxWidth: 200 }}>
                         {r.msgSent ? (
-                          <Tooltip title={r.msgSent} placement="top" arrow componentsProps={{ tooltip: { sx: { maxWidth: 320, fontSize: '0.72rem', whiteSpace: 'pre-wrap' } } }}>
-                            <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', cursor: 'help', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
+                          <Tooltip title={r.msgSent} placement="top" arrow componentsProps={{ tooltip: { sx: { maxWidth: 320, fontSize: '0.76rem', whiteSpace: 'pre-wrap' } } }}>
+                            <Typography sx={{ fontSize: '0.76rem', color: 'rgba(255,255,255,0.45)', cursor: 'help', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
                               {r.msgSent.length > 45 ? r.msgSent.slice(0, 45) + '…' : r.msgSent}
                             </Typography>
                           </Tooltip>
@@ -1065,18 +835,18 @@ export default function BatchProcessor() {
                       {r.blacklisted ? (
                         <Tooltip title={`🚫 Blacklist · "${r.blockReason}"`} placement="top" arrow>
                             <Chip label={t.batch.chipBlocked} size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
-                            sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' }, cursor: 'help' }} />
+                            sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', height: 20, fontSize: '0.76rem', '& .MuiChip-icon': { color: '#f87171' }, cursor: 'help' }} />
                         </Tooltip>
                       ) : r.ok && !r.whatsapp ? (
                         <Chip label={t.batch.chipEmpty} size="small" icon={<HighlightOffIcon sx={{ fontSize: '12px !important' }} />}
-                          sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.12)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: 'rgba(255,255,255,0.4)' } }} />
+                          sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.12)', height: 20, fontSize: '0.76rem', '& .MuiChip-icon': { color: 'rgba(255,255,255,0.4)' } }} />
                       ) : r.ok ? (
                         <Chip label="OK" size="small" icon={<CheckCircleIcon sx={{ fontSize: '12px !important' }} />}
-                          sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#4ade80' } }} />
+                          sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.76rem', '& .MuiChip-icon': { color: '#4ade80' } }} />
                       ) : (
                         <Tooltip title={r.errorReason || (lang === 'en' ? 'Unknown error' : 'Error desconocido')} placement="top" arrow>
                           <Chip label="Error" size="small" icon={<ErrorIcon sx={{ fontSize: '12px !important' }} />}
-                            sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', height: 20, fontSize: '0.68rem', '& .MuiChip-icon': { color: '#f87171' }, cursor: 'help' }} />
+                            sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', height: 20, fontSize: '0.76rem', '& .MuiChip-icon': { color: '#f87171' }, cursor: 'help' }} />
                         </Tooltip>
                       )}
                     </TableCell>

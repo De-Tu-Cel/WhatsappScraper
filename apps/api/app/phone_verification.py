@@ -10,6 +10,7 @@ from pymongo import ReturnDocument
 import pytz
 from app.daily_cap import reserve_verification_slot
 from app.whatsapp_wwebjs import get_all_connected_instances, verify_number, registration_status
+from app.verification_audit import verify_with_audit, cap_rejected
 
 log = logging.getLogger(__name__)
 INITIAL_DELAY = 30
@@ -49,7 +50,7 @@ def pending_filter(now):
     ]}
 
 
-def process_next(db):
+def process_next(db, source='automatic'):
     """Un número por turno, con exclusión y pausa compartidas entre procesos."""
     now = datetime.now(timezone.utc)
     if not within_working_hours(now):
@@ -84,7 +85,12 @@ def process_next(db):
         if not within_working_hours():
             _retry(db, doc, token, now)
             return {'checked': 0, 'promoted': 0, 'paused': True, 'reason': 'outside_schedule'}
-        instance = next((name for name in candidates if reserve_verification_slot(db, name)), None)
+        instance = None
+        for name in candidates:
+            if reserve_verification_slot(db, name):
+                instance = name
+                break
+            cap_rejected(db, name, source, doc)
         if not instance:
             _retry(db, doc, token, now)
             return {'checked': 0, 'promoted': 0, 'paused': True, 'reason': 'daily_cap'}
@@ -96,21 +102,32 @@ def process_next(db):
         closing = local.replace(hour=min(19, int(os.getenv('PHONE_VERIFICATION_END_HOUR', '18'))),
                                 minute=0, second=0, microsecond=0)
         try:
-            result = registration_status(verify_number(instance, doc['value'], send_before=closing.isoformat()))
+            result = registration_status(verify_with_audit(
+                db, instance, doc['value'], source=source, contact_id=doc['_id'],
+                company_id=doc.get('company_id'), send_before=closing.isoformat(),
+                lookup=verify_number, cap_reserved=True,
+            ))
         except Exception as exc:
             from app.whatsapp_wwebjs import LineBusy, SendWindowClosed
-            if isinstance(exc, (LineBusy, SendWindowClosed)):
+            metadata = getattr(exc, 'verification', {}) or {}
+            if isinstance(exc, (LineBusy, SendWindowClosed)) or metadata.get('lookup_started') is False:
                 # The service explicitly confirmed no lookup started.
                 from app.daily_cap import _today
-                db.db.instance_daily_verifications.update_one(
+                released = db.db.instance_daily_verifications.update_one(
                     {'instance': instance, 'date': _today(), 'count': {'$gt': 0}},
                     {'$inc': {'count': -1}},
                 )
+                attempt_id = getattr(exc, 'verification_attempt_id', None)
+                if attempt_id:
+                    db.db.phone_verification_attempts.update_one({'_id': attempt_id}, {
+                        '$set': {'cap_released': bool(released.modified_count)},
+                    })
             raise
         if result is None:
             _retry(db, doc, token, now)
             return {'checked': 1, 'promoted': 0, 'pending': 1, 'paused': True, 'reason': 'unavailable'}
-        fields = {'verified': result, 'wa_valid': result, 'wa_checked_at': now}
+        fields = {'verified': result, 'wa_valid': result, 'wa_checked_at': now,
+                  'wa_checked_by': instance, 'wa_check_source': source}
         if result:
             fields.update(type='whatsapp', detected_via='phone_verification')
         updated = db.db.contacts.update_one(
@@ -119,7 +136,8 @@ def process_next(db):
         )
         if updated.modified_count:
             db.db.jid_map.update_one({'jid': ''.join(filter(str.isdigit, doc['value']))},
-                                    {'$set': {'wa_valid': result, 'wa_checked_at': now}}, upsert=True)
+                                    {'$set': {'wa_valid': result, 'wa_checked_at': now,
+                                              'wa_checked_by': instance, 'wa_check_source': source}}, upsert=True)
         if result and updated.modified_count:
             db.update_company(str(doc['company_id']), {'has_whatsapp': True})
         return {'checked': 1, 'promoted': int(result and bool(updated.modified_count)), 'paused': False}

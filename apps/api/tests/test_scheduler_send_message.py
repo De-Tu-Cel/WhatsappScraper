@@ -21,6 +21,8 @@ from app import scheduler as sched
 def _fake_db(user_instances_docs=None, company_doc=None):
     """Minimal db stand-in exposing only what _send_message touches on this path."""
     db = MagicMock()
+    db.db.blacklist.find_one.return_value = None
+    db.db.contact_permissions.find_one.return_value = {"outreach_allowed": True}
     db.db.instances.find.return_value = user_instances_docs or []
     db.db.instances.find_one.return_value = None
     db.db.companies.find_one.return_value = company_doc
@@ -68,7 +70,7 @@ class TestSendMessageUserScoping:
               patch.object(sched, 'get_daily_count', return_value=0),
               patch.object(sched, 'get_instance_cap', return_value=20),
               patch.object(daily_cap, 'check_new_contact_cap', return_value=(True, 0, 5)),
-              patch.object(sched, '_nc_aware_pick', side_effect=lambda db, names, cid: names[0]),
+              patch.object(sched, '_nc_aware_pick', side_effect=lambda db, names, cid, *rest: names[0]),
               patch.object(sched, '_send_via_wwebjs', return_value=True) as send):
             assert sched._send_message(db, '6a7633cbecf84e0f0e0336e1', '525500000001', 'test', 'job', user_id='owner') is True
             live[:] = ['backup', 'foreign']

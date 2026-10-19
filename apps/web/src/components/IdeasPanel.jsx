@@ -1193,29 +1193,33 @@ export default function IdeasPanel({ isActive }) {
               </TableBody>
             </Table>
           </TableContainer>
-        </Box>
-      )}
 
-      {!showResultsView && total > 0 && (
-        <TablePagination
-          rowsPerPageOptions={[12, 24, 50, 100]}
-          component="div"
-          count={total}
-          rowsPerPage={rowsPerPage}
-          page={page - 1}
-          onPageChange={(_, p) => goPage(p + 1)}
-          onRowsPerPageChange={e => handleRowsPerPageChange(parseInt(e.target.value, 10))}
-          labelRowsPerPage={t.db.rowsPerPage}
-          labelDisplayedRows={({ from, to, count }) => `${from}–${to} ${t.db.displayedRowsOf} ${count}`}
-          sx={{
-            flexShrink: 0, color: 'var(--text-muted)',
-            '& .MuiTablePagination-toolbar': { minHeight: 44, px: 0 },
-            '& .MuiTablePagination-selectIcon': { color: 'var(--text-muted)' },
-            '& .MuiIconButton-root': { color: 'var(--text-muted)' },
-            '& .Mui-disabled': { opacity: 0.3 },
-            '& .MuiSelect-select': { color: 'var(--text)' },
-          }}
-        />
+          {/* Paginación DENTRO de la tarjeta de la tabla, como su pie: antes iba
+             afuera, en una franja de todo el ancho, y las esquinas redondeadas
+             de la tabla no cuadraban con ella. */}
+          {total > 0 && (
+            <TablePagination
+              rowsPerPageOptions={[12, 24, 50, 100]}
+              component="div"
+              count={total}
+              rowsPerPage={rowsPerPage}
+              page={page - 1}
+              onPageChange={(_, p) => goPage(p + 1)}
+              onRowsPerPageChange={e => handleRowsPerPageChange(parseInt(e.target.value, 10))}
+              labelRowsPerPage={t.db.rowsPerPage}
+              labelDisplayedRows={({ from, to, count }) => `${from}–${to} ${t.db.displayedRowsOf} ${count}`}
+              sx={{
+                flexShrink: 0, color: 'var(--text-muted)',
+                borderTop: '1px solid var(--border, rgba(255,255,255,0.08))',
+                '& .MuiTablePagination-toolbar': { minHeight: 44, px: 1 },
+                '& .MuiTablePagination-selectIcon': { color: 'var(--text-muted)' },
+                '& .MuiIconButton-root': { color: 'var(--text-muted)' },
+                '& .Mui-disabled': { opacity: 0.3 },
+                '& .MuiSelect-select': { color: 'var(--text)' },
+              }}
+            />
+          )}
+        </Box>
       )}
 
       {/* Modal — empresas ya contactadas */}

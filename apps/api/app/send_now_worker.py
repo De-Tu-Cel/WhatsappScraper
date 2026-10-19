@@ -197,7 +197,7 @@ def _display_queue_items(db, user_id: str, state: dict, limit: int = 80) -> list
             "created_at": row.get("created_at"),
             "started_at": row.get("started_at"),
             "finished_at": row.get("finished_at"),
-            "error": row.get("error") if status == "failed" else None,
+            "error": row.get("error") if status in ("failed", "needs_review", "interrupted") else None,
             "next_action_at": state.get("next_action_at") if is_next else None,
             "wait_reason": state.get("wait_reason") if is_next else None,
             "wait_message": state.get("wait_message") if is_next else None,
@@ -295,11 +295,17 @@ def enqueue_send_items(db, jobs: list, batch_id: str, label: str, send_config: d
     SendQueueContext.jsx used to push into its in-memory queueRef."""
     now = datetime.now(timezone.utc)
     docs = []
+    seen_numbers = set()
+    from app.contact_permissions import recipient_key
+    from app.delivery_receipts import operation_key
     for job_idx, job in enumerate(jobs):
         numbers  = job.get("numbers") or []
         messages = job.get("messages") or []
         job_key  = f"{batch_id}#{job_idx}"
         for i, number in enumerate(numbers):
+            key = recipient_key(number)
+            if not key or key in seen_numbers:
+                continue
             message = messages[i] if i < len(messages) else (messages[-1] if messages else "")
             # Backend safety net — the UI is supposed to block sending with no
             # message selected, but a blank message here would otherwise burn
@@ -310,7 +316,10 @@ def enqueue_send_items(db, jobs: list, batch_id: str, label: str, send_config: d
             # guard). Skip silently rather than enqueue a send that can't work.
             if not message.strip():
                 continue
+            seen_numbers.add(key)
             docs.append({
+                "_id": operation_key(batch_id, key),
+                "queue_order": len(docs),
                 "batch_id": batch_id, "job_key": job_key, "label": label[:80],
                 "company_id": job.get("companyId", ""), "to_number": number, "message": message,
                 "website": job.get("website", ""),
@@ -323,12 +332,22 @@ def enqueue_send_items(db, jobs: list, batch_id: str, label: str, send_config: d
             })
     if not docs:
         return 0
-    db.db.send_queue_items.insert_many(docs)
+    # Atomic _id uniqueness works across processes and repeat HTTP requests.
+    inserted = 0
+    for doc in docs:
+        from pymongo.errors import DuplicateKeyError
+        try:
+            result = db.db.send_queue_items.update_one({'_id': doc['_id']}, {'$setOnInsert': doc}, upsert=True)
+            inserted += int(result.upserted_id is not None)
+        except DuplicateKeyError:
+            # Another API process inserted this exact recipient concurrently.
+            if db.db.send_queue_items.find_one({'_id': doc['_id']}) is None:
+                raise
     if send_config:
         partition = user_id or _LEGACY_PARTITION
         db.db.send_queue_state.update_one({"_id": _config_id(partition)}, {"$set": {"send_config": send_config}}, upsert=True)
     _wake_event.set()  # instant wake if the leader happens to be in this same process
-    return len(docs)
+    return inserted
 
 
 def cancel_pending_send_items(db, user_id: str = "") -> int:
@@ -362,7 +381,8 @@ def _check_send_allowed(db, company_id: str, to_number: str = ""):
     block = send_block_reason(db, company_id, to_number)
     if not block:
         return True, ""
-    return False, "skipped_blocked" if block["reason"] == "blocked" else "skipped_blacklisted"
+    return False, {'blocked': 'skipped_blocked', 'missing_consent': 'skipped_missing_consent',
+                   'opt_out': 'skipped_opt_out'}.get(block['reason'], 'skipped_blacklisted')
 
 
 def _user_has_connected_instance(db, user_id: str) -> bool:
@@ -452,7 +472,7 @@ def _maybe_finish_batch(db, batch_id: str):
     nc_skip  = sum(1 for i in items if i.get("status") == "skipped_nc_cap")
     # Skipped on purpose because of a block — not a failure, and used to be
     # counted as one in the "batch finished" notification.
-    blocked  = sum(1 for i in items if i.get("status") in ("skipped_blocked", "skipped_blacklisted"))
+    blocked  = sum(1 for i in items if i.get("status") in ("skipped_blocked", "skipped_blacklisted", "skipped_missing_consent", "skipped_opt_out"))
     failed   = len(items) - sent - nc_skip - blocked
     label    = items[0].get("label", "") if items else ""
     user_id  = items[0].get("user_id", "") if items else ""
@@ -577,8 +597,11 @@ def _process_item(db, partition: str, item, msgs_in_batch: int, next_break_at: i
             log.warning("[SendQueue] partition=%s instance disconnected mid-campaign — resetting item %s, pausing 2 min", partition, item_id)
             return "disconnected_pause", msgs_in_batch, next_break_at
 
-    status = ok if isinstance(ok, str) else ("sent" if ok else "failed")
+    status = ('needs_review' if ok == 'delivery_uncertain' else
+              ok if isinstance(ok, str) else ('sent' if ok else 'failed'))
     update_fields = {"status": status, "finished_at": datetime.now(timezone.utc)}
+    if status == 'needs_review':
+        update_fields['error'] = 'Entrega incierta. Revisa el chat antes de repetir; no se reenviará automáticamente.'
     if status == "failed":
         # _send_message's return value carries no error text by design (its
         # True/False/"skipped_X" contract is also used for control flow
@@ -645,7 +668,7 @@ def _partition_worker(partition: str, user_id: str):
             item = db.db.send_queue_items.find_one_and_update(
                 pending_filter,
                 {"$set": {"status": "sending", "started_at": datetime.now(timezone.utc)}},
-                sort=[("_id", 1)],
+                sort=[("created_at", 1), ("queue_order", 1), ("_id", 1)],
             )
             if item is None:
                 _set_state(db, partition, phase="idle", active_total=None, active_sent=None,

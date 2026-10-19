@@ -100,7 +100,7 @@ const IDEAS_HEADER_CELL_SX = {
   bgcolor: 'var(--card-bg, #161d2e)',
   borderBottom: '1px solid rgba(255,255,255,0.07)',
   color: 'rgba(255,255,255,0.4)',
-  fontSize: '0.7rem',
+  fontSize: '0.76rem',
   fontWeight: 600,
   textTransform: 'uppercase',
   letterSpacing: '0.05em',
@@ -140,7 +140,7 @@ function SelectedChip({ value, label, onRemove }) {
       border: `1px solid ${color}55`, bgcolor: `${color}1a`,
       '&:hover': { bgcolor: `${color}30` },
     }}>
-      <Typography sx={{ fontSize: '0.7rem', fontWeight: 600, color, whiteSpace: 'nowrap' }}>{label}</Typography>
+      <Typography sx={{ fontSize: '0.76rem', fontWeight: 600, color, whiteSpace: 'nowrap' }}>{label}</Typography>
       <HighlightOffIcon sx={{ fontSize: 13, color }} />
     </Box>
   )
@@ -264,7 +264,7 @@ function FilterDropdown({ selected, onToggle, label, searchPh, noItemsLabel, end
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {displayLabel}
                   </Typography>
-                  <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{row.count}</Typography>
+                  <Typography sx={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>{row.count}</Typography>
                 </Box>
               )
             })}
@@ -275,7 +275,7 @@ function FilterDropdown({ selected, onToggle, label, searchPh, noItemsLabel, end
             <IconButton size="small" disabled={page <= 1} onClick={() => goPage(page - 1)} sx={{ color: 'var(--text-muted)', '&.Mui-disabled': { opacity: 0.25 } }}>
               <ChevronLeftIcon sx={{ fontSize: 16 }} />
             </IconButton>
-            <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{page} / {totalPages}</Typography>
+            <Typography sx={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>{page} / {totalPages}</Typography>
             <IconButton size="small" disabled={page >= totalPages} onClick={() => goPage(page + 1)} sx={{ color: 'var(--text-muted)', '&.Mui-disabled': { opacity: 0.25 } }}>
               <ChevronRightIcon sx={{ fontSize: 16 }} />
             </IconButton>
@@ -300,7 +300,7 @@ function MiniDateBadge({ iso, lang }) {
         width: 38, height: 38, borderRadius: 1.4, flexShrink: 0,
         bgcolor: 'var(--surface, rgba(255,255,255,0.04))', border: '1px solid var(--border, rgba(255,255,255,0.1))',
       }}>
-        <Typography sx={{ fontSize: '0.52rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.03em', lineHeight: 1.3 }}>
+        <Typography sx={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.03em', lineHeight: 1.3 }}>
           {month}
         </Typography>
         <Typography sx={{ fontSize: '0.92rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.1 }}>
@@ -345,7 +345,7 @@ function IdeaRow({ idea, checked, onToggle, onDiscard, lang, it, index }) {
           {idea.maps_lead && (
             <Tooltip placement="top" arrow title={lang === 'en' ? 'No website — data from Google Maps' : 'Sin sitio web — datos de Google Maps'}>
               <Chip label={lang === 'en' ? 'No website' : 'Sin web'} size="small"
-                sx={{ height: 16, fontSize: '0.6rem', bgcolor: 'rgba(45,212,191,0.1)', color: '#2dd4bf', border: '1px solid rgba(45,212,191,0.25)', flexShrink: 0 }} />
+                sx={{ height: 16, fontSize: '0.76rem', bgcolor: 'rgba(45,212,191,0.1)', color: '#2dd4bf', border: '1px solid rgba(45,212,191,0.25)', flexShrink: 0 }} />
             </Tooltip>
           )}
         </Box>
@@ -356,7 +356,7 @@ function IdeaRow({ idea, checked, onToggle, onDiscard, lang, it, index }) {
             display: 'inline-block', px: 0.6, py: 0.05, borderRadius: 0.6,
             bgcolor: `${termColor}1a`, border: `1px solid ${termColor}44`,
           }}>
-            <Typography sx={{ fontSize: '0.68rem', fontWeight: 700, color: termColor }}>
+            <Typography sx={{ fontSize: '0.76rem', fontWeight: 700, color: termColor }}>
               {idea.industry}
             </Typography>
           </Box>
@@ -366,11 +366,11 @@ function IdeaRow({ idea, checked, onToggle, onDiscard, lang, it, index }) {
         <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 1, textAlign: 'left' }}>
           <MiniDateBadge iso={idea.created_at} lang={lang} />
           <Box sx={{ minWidth: 0 }}>
-            <Typography sx={{ fontSize: '0.72rem', color: 'var(--text)', fontWeight: 600, lineHeight: 1.3,
+            <Typography sx={{ fontSize: '0.76rem', color: 'var(--text)', fontWeight: 600, lineHeight: 1.3,
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {it.addedBy(idea.created_by || it.unknownUser)}
             </Typography>
-            <Typography sx={{ fontSize: '0.65rem', color: 'var(--text-muted)', lineHeight: 1.3 }}>
+            <Typography sx={{ fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: 1.3 }}>
               {relativeTime(idea.created_at, lang)}
             </Typography>
           </Box>
@@ -414,7 +414,7 @@ function IdeaRowSkeleton({ index }) {
       <TableCell sx={{ ...IDEAS_CELL_SX, textAlign: 'center' }}>
         <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 1 }}>
           <Skeleton variant="rounded" width={38} height={38} sx={{ ...SKEL_SX, flexShrink: 0 }} />
-          <Skeleton variant="text" width={90} sx={{ ...SKEL_SX, fontSize: '0.72rem' }} />
+          <Skeleton variant="text" width={90} sx={{ ...SKEL_SX, fontSize: '0.76rem' }} />
         </Box>
       </TableCell>
       <TableCell sx={{ ...IDEAS_CELL_SX, textAlign: 'center', width: 48 }}>
@@ -474,11 +474,11 @@ function IdeaResultRow({ result: r, index, lang, t }) {
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mt: 0.1 }}>
             {indColor && (
               <Box sx={{ px: 0.6, py: 0.05, borderRadius: 0.6, flexShrink: 0, bgcolor: `${indColor}1a`, border: `1px solid ${indColor}44` }}>
-                <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: indColor }}>{r.industria}</Typography>
+                <Typography sx={{ fontSize: '0.76rem', fontWeight: 700, color: indColor }}>{r.industria}</Typography>
               </Box>
             )}
             {r.empresa !== '—' && (
-              <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted)', lineHeight: 1.3,
+              <Typography sx={{ fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: 1.3,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {r.empresa}
               </Typography>
@@ -489,20 +489,20 @@ function IdeaResultRow({ result: r, index, lang, t }) {
       {r.blacklisted ? (
         <Tooltip title={`🚫 ${r.blockReason || (lang === 'en' ? 'Blocked domain' : 'Dominio bloqueado')}`} placement="top" arrow>
           <Chip label={t.batch.chipBlocked} size="small"
-            sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', height: 20, fontSize: '0.62rem', flexShrink: 0 }} />
+            sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', height: 20, fontSize: '0.76rem', flexShrink: 0 }} />
         </Tooltip>
       ) : !r.ok ? (
         <Tooltip title={r.errorReason || (lang === 'en' ? 'Unknown error' : 'Error desconocido')} placement="top" arrow>
           <Chip label={lang === 'en' ? 'Error' : 'Error'} size="small"
-            sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', height: 20, fontSize: '0.62rem', flexShrink: 0 }} />
+            sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', height: 20, fontSize: '0.76rem', flexShrink: 0 }} />
         </Tooltip>
       ) : hasWa ? (
         <Chip icon={<CheckCircleIcon sx={{ fontSize: '12px !important' }} />}
           label={lang === 'en' ? `${waCount} WhatsApp` : `${waCount} WhatsApp`} size="small"
-          sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.62rem', flexShrink: 0, '& .MuiChip-icon': { color: '#4ade80' } }} />
+          sx={{ bgcolor: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)', height: 20, fontSize: '0.76rem', flexShrink: 0, '& .MuiChip-icon': { color: '#4ade80' } }} />
       ) : (
         <Chip label={t.batch.chipEmpty} size="small"
-          sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.12)', height: 20, fontSize: '0.62rem', flexShrink: 0 }} />
+          sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.12)', height: 20, fontSize: '0.76rem', flexShrink: 0 }} />
       )}
     </Box>
   )
@@ -538,8 +538,6 @@ export default function IdeasPanel({ isActive }) {
   const [expandedCo, setExpandedCo] = useState(new Set())
   const [filterContacted, setFilterContacted] = useState('all') // 'all' | 'new' | 'contacted'
   const [resultFilter, setResultFilter] = useState('all') // 'all' | 'wa' | 'none' — filtro del feed de resultados
-  const [localContactedIds, setLocalContactedIds] = useState(new Set())
-  const [sessionSentNums, setSessionSentNums] = useState({})
   const [freshContactedMap, setFreshContactedMap] = useState({})
   const [sentOverlay, setSentOverlay] = useState({})
   const [confirmDialog, setConfirmDialog] = useState({ open: false, names: '', resolve: null })
@@ -568,7 +566,6 @@ export default function IdeasPanel({ isActive }) {
     setWaSelected(new Set())
     setExtraSelected(new Set())
     setExpandedCo(new Set())
-    setLocalContactedIds(new Set())
     setFreshContactedMap({})
     setSentOverlay({})
     setResultFilter('all')
@@ -596,21 +593,13 @@ export default function IdeasPanel({ isActive }) {
   }, [queueActive, refreshCapStats])
 
   const waRowsAll = displayResults.filter(r => r.ok && (r.all_whatsapp?.length > 0 || r.whatsapp) && r.company_id)
+  // Queue acceptance is not delivery. Refresh confirmed contact state after completion.
   const waRowsUnique = useMemo(() =>
-    dedupeByCompany(waRowsAll).map(r => {
-      const sessionNums = sessionSentNums[r.company_id]
-      const fresh = freshContactedMap[r.company_id]
-      const base = (fresh?.contacted ? fresh : null)
-        || r.already_contacted
-        || (localContactedIds.has(r.company_id) ? { contacted: true } : null)
-      const already_contacted = base
-        ? { ...base, contacted: true, contacted_numbers: [...new Set([...(base.contacted_numbers || []), ...(sessionNums ? [...sessionNums] : [])])] }
-        : sessionNums?.size > 0
-          ? { contacted: true, contacted_numbers: [...sessionNums] }
-          : null
-      return { ...r, already_contacted }
-    }),
-  [waRowsAll, localContactedIds, sessionSentNums, freshContactedMap])
+    dedupeByCompany(waRowsAll).map(r => ({
+      ...r,
+      already_contacted: freshContactedMap[r.company_id] ?? r.already_contacted ?? null,
+    })),
+  [waRowsAll, freshContactedMap])
 
   const waCompanyIdsKey = useMemo(() => waRowsAll.map(r => r.company_id).filter(Boolean).join(','), [waRowsAll])
 
@@ -726,23 +715,9 @@ export default function IdeasPanel({ isActive }) {
       queuedUrls[row.url] = 'queued'
     }
     if (!jobs.length) return   // every selected number was blocked
-    addBatch(jobs, lang === 'en' ? 'Ideas' : 'Ideas')
+    const accepted = await addBatch(jobs, lang === 'en' ? 'Ideas' : 'Ideas')
+    if (!accepted) return false
     setSentOverlay(prev => ({ ...prev, ...queuedUrls }))
-    setLocalContactedIds(prev => {
-      const next = new Set(prev)
-      jobs.forEach(j => j.companyId && next.add(j.companyId))
-      return next
-    })
-    setSessionSentNums(prev => {
-      const next = { ...prev }
-      jobs.forEach(j => {
-        if (!j.companyId) return
-        const existing = new Set(next[j.companyId] || [])
-        j.numbers.forEach(n => existing.add(n))
-        next[j.companyId] = existing
-      })
-      return next
-    })
   }
 
   const load = useCallback((p, s, termSet, userSet, dir, limit) => {
@@ -885,7 +860,7 @@ export default function IdeasPanel({ isActive }) {
       : displayResults
 
   return (
-    <Paper sx={{
+    <Paper data-ui-section="ideas" sx={{
       width: '100%', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
       border: '1px solid rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'hidden', position: 'relative',
       background: 'var(--sidebar-bg, #0d1117)',
@@ -894,26 +869,6 @@ export default function IdeasPanel({ isActive }) {
       {/* brillo radial */}
       <Box sx={{ position: 'absolute', top: -50, left: -50, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle, rgba(var(--accent-rgb, 99,102,241), 0.07) 0%, transparent 70%)', pointerEvents: 'none', zIndex: 0 }} />
       <Box sx={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden', p: 2 }}>
-      {/* Header */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2, flexShrink: 0, px: 2, py: 1.5, borderRadius: 2, background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.08) 0%, transparent 60%)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.12)' }}>
-        <Box sx={{
-          width: 36, height: 36, borderRadius: 2,
-          bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)', border: `1px solid rgba(var(--accent-rgb,59,130,246),0.3)`,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          boxShadow: '0 0 16px rgba(var(--accent-rgb,59,130,246),0.18)',
-        }}>
-          <LightbulbIcon sx={{ color: ACCENT, fontSize: 19 }} />
-        </Box>
-        <Box>
-          <Typography sx={{ color: 'var(--text, white)', fontWeight: 700, fontSize: '1.05rem', lineHeight: 1.2 }}>
-            {it.title}
-          </Typography>
-          <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
-            {it.subtitle}
-          </Typography>
-        </Box>
-      </Box>
-
       {/* Pausar/Cancelar — solo mientras corre el scraping en vivo (feed de
          resultados); "Descartar/Procesar seleccionadas" vive dentro de la
          tabla de la cola, ver más abajo, y solo aparece con selección activa. */}
@@ -970,7 +925,7 @@ export default function IdeasPanel({ isActive }) {
             }} />
           {scrapeJob.currentUrl && !scrapeJob.paused && (
             <Typography sx={{
-              mt: 1, color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem',
+              mt: 1, color: 'rgba(255,255,255,0.28)', fontSize: '0.76rem',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>
               {scrapeJob.currentUrl}
@@ -989,7 +944,7 @@ export default function IdeasPanel({ isActive }) {
             {scrapeJob.done && (
               <Box onClick={() => scrapeJob.reset()} sx={{
                 display: 'inline-flex', alignItems: 'center', gap: 0.4, alignSelf: 'flex-start',
-                fontSize: '0.72rem', color: 'var(--text-muted)', cursor: 'pointer',
+                fontSize: '0.76rem', color: 'var(--text-muted)', cursor: 'pointer',
                 '&:hover': { color: 'var(--text)' },
               }}>
                 <ArrowBackIcon sx={{ fontSize: 13 }} /> {lang === 'en' ? 'Back to ideas list' : 'Volver a la lista de ideas'}
@@ -1023,7 +978,7 @@ export default function IdeasPanel({ isActive }) {
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6 }}>
               {displayResults.length > 0 && (
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 0.8, px: 0.2 }}>
-                  <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  <Typography sx={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                     {lang === 'en' ? 'Results' : 'Resultados'}
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap' }}>
@@ -1033,7 +988,7 @@ export default function IdeasPanel({ isActive }) {
                       { key: 'none', label: `${lang === 'en' ? 'No result' : 'Sin resultado'} (${feedNoneCount})`, color: 'rgba(255,255,255,0.4)', bg: 'rgba(255,255,255,0.05)', border: 'rgba(255,255,255,0.12)' },
                     ].map(f => (
                       <Chip key={f.key} label={f.label} size="small" onClick={() => setResultFilter(f.key)}
-                        sx={{ height: 22, fontSize: '0.66rem', cursor: 'pointer', bgcolor: resultFilter === f.key ? f.bg : 'var(--item-hover)', color: resultFilter === f.key ? f.color : 'var(--text-muted)', border: `1px solid ${resultFilter === f.key ? f.border : 'var(--border)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
+                        sx={{ height: 22, fontSize: '0.76rem', cursor: 'pointer', bgcolor: resultFilter === f.key ? f.bg : 'var(--item-hover)', color: resultFilter === f.key ? f.color : 'var(--text-muted)', border: `1px solid ${resultFilter === f.key ? f.border : 'var(--border)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
                     ))}
                   </Box>
                 </Box>
@@ -1166,9 +1121,9 @@ export default function IdeasPanel({ isActive }) {
                       onChange={() => allSelectedOnPage ? clearSelection() : selectAll()}
                       sx={{ p: 0.5, color: 'var(--text-muted)', '&.Mui-checked, &.MuiCheckbox-indeterminate': { color: ACCENT } }} />
                   </TableCell>
-                  <TableCell sx={{ ...IDEAS_HEADER_CELL_SX, width: 'auto' }}>{lang === 'en' ? 'Site' : 'Sitio'}</TableCell>
-                  <TableCell sx={{ ...IDEAS_HEADER_CELL_SX, textAlign: 'center', width: 160 }}>{lang === 'en' ? 'Industry' : 'Industria'}</TableCell>
-                  <TableCell sx={{ ...IDEAS_HEADER_CELL_SX, textAlign: 'center', width: 210 }}>{lang === 'en' ? 'Added' : 'Agregado'}</TableCell>
+                  <TableCell sx={{ ...IDEAS_HEADER_CELL_SX, width: '46%' }}>{lang === 'en' ? 'Site' : 'Sitio'}</TableCell>
+                  <TableCell sx={{ ...IDEAS_HEADER_CELL_SX, textAlign: 'left', width: '23%' }}>{lang === 'en' ? 'Industry' : 'Industria'}</TableCell>
+                  <TableCell sx={{ ...IDEAS_HEADER_CELL_SX, textAlign: 'left', width: '27%' }}>{lang === 'en' ? 'Added' : 'Agregado'}</TableCell>
                   <TableCell sx={{ ...IDEAS_HEADER_CELL_LAST_SX, width: 48 }} />
                 </TableRow>
               </TableHead>
@@ -1182,7 +1137,7 @@ export default function IdeasPanel({ isActive }) {
                         <Typography sx={{ fontSize: '0.8rem', color: '#f87171', fontWeight: 600, textAlign: 'center' }}>
                           {loadError}
                         </Typography>
-                        <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+                        <Typography sx={{ fontSize: '0.76rem', color: 'var(--text-muted)', textAlign: 'center' }}>
                           {lang === 'en' ? 'Try logging out and back in.' : 'Intenta cerrar sesión y volver a entrar.'}
                         </Typography>
                       </Box>

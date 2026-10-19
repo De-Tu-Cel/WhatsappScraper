@@ -2,6 +2,32 @@
 // en vivo desde la UI) y app/layout.jsx (script de pre-hidratación que pinta el
 // tema correcto antes del primer paint, para no depender de un duplicado que
 // se puede desincronizar cada vez que se agrega un tema nuevo).
+// Shared by the first paint and live settings: accents adapt to every surface.
+// Keep this function self-contained so layout can embed it before hydration.
+export function resolveAccent(hex, theme) {
+  const rgb = value => [1, 3, 5].map(i => parseInt(value.slice(i, i + 2), 16))
+  const luminance = channels => channels.map(v => {
+    const c = v / 255
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  }).reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0)
+  const ratio = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+  const source = rgb(hex)
+  const gray = source.reduce((a, b) => a + b, 0) / 3
+  const softened = source.map(c => c * 0.82 + gray * 0.18)
+  const backgrounds = [theme.bg, theme.sidebar, theme.surface, theme.card].map(c => luminance(rgb(c)))
+  const target = theme.cat === 'mono' ? 0 : 255
+  let channels = softened.map(Math.round)
+  for (let step = 0; step <= 100; step++) {
+    channels = softened.map(c => Math.round(c + (target - c) * step / 100))
+    if (backgrounds.every(bg => ratio(luminance(channels), bg) >= 4.5)) break
+  }
+  const value = '#' + channels.map(c => c.toString(16).padStart(2, '0')).join('')
+  const light = ratio(luminance(channels), 1)
+  const dark = ratio(luminance(channels), 0)
+  return { value, rgb: channels.join(','), contrast: light >= dark ? '#fff' : '#000',
+    glow: `rgba(${channels.join(',')},0.12)` }
+}
+
 export const ACCENTS = [
   // Marca
   { tKey: 'accentDtcBlue',     value: '#1557f5', glow: 'rgba(21,87,245,0.35)'   },
@@ -46,6 +72,12 @@ export const ACCENTS = [
   { tKey: 'accentVioletDeep',  value: '#6d28d9', glow: 'rgba(109,40,217,0.35)'  },
   { tKey: 'accentStone',       value: '#78716c', glow: 'rgba(120,113,108,0.3)'  },
   { tKey: 'accentMagenta',     value: '#d946ef', glow: 'rgba(217,70,239,0.3)'   },
+  { tKey: 'accentSapphireSoft', value: '#5979b3' },
+  { tKey: 'accentPetrolSoft',   value: '#4f8d96' },
+  { tKey: 'accentSageSoft',     value: '#709080' },
+  { tKey: 'accentHeatherSoft',  value: '#9277a6' },
+  { tKey: 'accentBrickSoft',    value: '#b37468' },
+  { tKey: 'accentHoneySoft',    value: '#ac8b52' },
 ]
 
 export const THEMES = [
@@ -85,47 +117,47 @@ export const THEMES = [
   { tKey: 'themeTwilight',  value: 'crepusculo',bg: '#0b0b1e', sidebar: '#121228', surface: '#181835', card: '#1e1e40', preview: ['#0b0b1e','#121228','#1e1e40'] },
   { tKey: 'themeCinnamon',  value: 'canela',    bg: '#130a04', sidebar: '#1f1207', surface: '#261609', card: '#2e1a0b', preview: ['#130a04','#1f1207','#2e1a0b'] },
   { tKey: 'themeDaytime',   value: 'diurna',    bg: '#15100a', sidebar: '#1e170b', surface: '#25200d', card: '#2d2610', preview: ['#15100a','#1e170b','#2d2610'] },
-  // ── Monocromático (fondo blanco, texto negro) ──
-  { tKey: 'themeMonochrome', value: 'mono', cat:'mono', bg: '#a0aac2', sidebar: '#96a0b7', surface: '#9ca4bb', card: '#8e97ae', preview: ['#a0aac2','#96a0b7','#8e97ae'] },
+  // Matte light themes: tinted surfaces, no pure white.
+  { tKey: 'themeMonochrome', value: 'mono', cat:'mono', bg: '#a4adb9', sidebar: '#939eae', surface: '#afb8c3', card: '#bbc3cd', preview: ['#939eae','#afb8c3','#bbc3cd'] },
 
   // ── Neutros sofisticados (claros sin saturación, elegantes) ──
-  { tKey: 'themeSnow',       value: 'nieve',    cat:'mono', bg: '#c5beb7', sidebar: '#bbb6ac', surface: '#bfbaaf', card: '#b1aba2', preview: ['#c5beb7','#bbb6ac','#b1aba2'] },
-  { tKey: 'themeParchment',  value: 'pergamino',cat:'mono', bg: '#cab792', sidebar: '#beac8b', surface: '#c2af8c', card: '#b29e7c', preview: ['#cab792','#beac8b','#b29e7c'] },
-  { tKey: 'themeCement',     value: 'cemento',  cat:'mono', bg: '#a4a09c', sidebar: '#9a9693', surface: '#9e9a96', card: '#908986', preview: ['#a4a09c','#9a9693','#908986'] },
-  { tKey: 'themeSand',       value: 'arena',    cat:'mono', bg: '#baac8f', sidebar: '#afa289', surface: '#b4a58a', card: '#a5977c', preview: ['#baac8f','#afa289','#a5977c'] },
-  { tKey: 'themeSilver',     value: 'plata',    cat:'mono', bg: '#a8a8a8', sidebar: '#9c9c9c', surface: '#a2a2a2', card: '#929292', preview: ['#a8a8a8','#9c9c9c','#929292'] },
-  { tKey: 'themeFog',        value: 'niebla',   cat:'mono', bg: '#9facba', sidebar: '#92a2b2', surface: '#97a6b6', card: '#8a98a7', preview: ['#9facba','#92a2b2','#8a98a7'] },
+  { tKey: 'themeSnow',       value: 'nieve',    cat:'mono', bg: '#b5b0a8', sidebar: '#a39e96', surface: '#beb9b0', card: '#c8c3ba', preview: ['#a39e96','#beb9b0','#c8c3ba'] },
+  { tKey: 'themeParchment',  value: 'pergamino',cat:'mono', bg: '#b3a58d', sidebar: '#a3957e', surface: '#bbae97', card: '#c7baa3', preview: ['#a3957e','#bbae97','#c7baa3'] },
+  { tKey: 'themeCement',     value: 'cemento',  cat:'mono', bg: '#aaa7a3', sidebar: '#999692', surface: '#b5b2ae', card: '#c0bdb9', preview: ['#999692','#b5b2ae','#c0bdb9'] },
+  { tKey: 'themeSand',       value: 'arena',    cat:'mono', bg: '#b0a58f', sidebar: '#9f947f', surface: '#baaf99', card: '#c5baa5', preview: ['#9f947f','#baaf99','#c5baa5'] },
+  { tKey: 'themeSilver',     value: 'plata',    cat:'mono', bg: '#a6adb2', sidebar: '#959da3', surface: '#b1b8bd', card: '#bdc4c8', preview: ['#959da3','#b1b8bd','#bdc4c8'] },
+  { tKey: 'themeFog',        value: 'niebla',   cat:'mono', bg: '#a0adb7', sidebar: '#8e9da9', surface: '#acb8c1', card: '#bac5cd', preview: ['#8e9da9','#acb8c1','#bac5cd'] },
 
-  // ── Pasteles (fondos muy claros, texto oscuro) ──
-  { tKey: 'themeCloud',      value: 'nube',     cat:'mono', bg: '#8aa2ba', sidebar: '#7f98b1', surface: '#93a8bd', card: '#778fab', preview: ['#8aa2ba','#7f98b1','#778fab'] },
-  { tKey: 'themeMintFresh',  value: 'menta',    cat:'mono', bg: '#8fbaa8', sidebar: '#84b09e', surface: '#96c3ac', card: '#78a894', preview: ['#8fbaa8','#84b09e','#78a894'] },
-  { tKey: 'themeBlush',      value: 'rubor',    cat:'mono', bg: '#b69ba3', sidebar: '#ad929d', surface: '#bea2a7', card: '#a6838d', preview: ['#b69ba3','#ad929d','#a6838d'] },
-  { tKey: 'themePowderBlue', value: 'polvos',   cat:'mono', bg: '#87a1cd', sidebar: '#7d98c3', surface: '#8aa3da', card: '#7b98be', preview: ['#87a1cd','#7d98c3','#7b98be'] },
-  { tKey: 'themeChampagne',  value: 'champan',  cat:'mono', bg: '#bbb28a', sidebar: '#b0a584', surface: '#c8bb8e', card: '#a8a178', preview: ['#bbb28a','#b0a584','#a8a178'] },
-  { tKey: 'themeLilacMist',  value: 'lila',     cat:'mono', bg: '#a493bd', sidebar: '#9a87b5', surface: '#ab98c8', card: '#8f81ab', preview: ['#a493bd','#9a87b5','#8f81ab'] },
+  // Muted pastels with dark text.
+  { tKey: 'themeCloud',      value: 'nube',     cat:'mono', bg: '#9cabbc', sidebar: '#8a9bae', surface: '#a8b6c5', card: '#b7c3cf', preview: ['#8a9bae','#a8b6c5','#b7c3cf'] },
+  { tKey: 'themeMintFresh',  value: 'menta',    cat:'mono', bg: '#9faea5', sidebar: '#8e9f94', surface: '#acb9b0', card: '#bac6bd', preview: ['#8e9f94','#acb9b0','#bac6bd'] },
+  { tKey: 'themeBlush',      value: 'rubor',    cat:'mono', bg: '#b3a3a6', sidebar: '#a29296', surface: '#bdaeaf', card: '#c9bcbd', preview: ['#a29296','#bdaeaf','#c9bcbd'] },
+  { tKey: 'themePowderBlue', value: 'polvos',   cat:'mono', bg: '#9caabe', sidebar: '#8a99af', surface: '#aab7c9', card: '#b9c4d3', preview: ['#8a99af','#aab7c9','#b9c4d3'] },
+  { tKey: 'themeChampagne',  value: 'champan',  cat:'mono', bg: '#b2ab97', sidebar: '#a19a85', surface: '#bdb6a3', card: '#c9c2af', preview: ['#a19a85','#bdb6a3','#c9c2af'] },
+  { tKey: 'themeLilacMist',  value: 'lila',     cat:'mono', bg: '#aba3b8', sidebar: '#9a91a8', surface: '#b6afc2', card: '#c3bdcd', preview: ['#9a91a8','#b6afc2','#c3bdcd'] },
 
   // ── Claros (tonos medios ~33-40% L, saturación ~22-35% — elegantes, no chillan) ──
-  { tKey: 'themeSlateBlue',  value: 'pizarra',  cat:'light', bg: '#445c6e', sidebar: '#526a7c', surface: '#3c5264', card: '#5a6e80', preview: ['#445c6e','#526a7c','#5a6e80'] },
-  { tKey: 'themePaper',      value: 'paper',    cat:'light', bg: '#58493a', sidebar: '#665748', surface: '#503f30', card: '#726050', preview: ['#58493a','#665748','#726050'] },
-  { tKey: 'themeSteelBlue',  value: 'acero',    cat:'light', bg: '#2e4e72', sidebar: '#3a5c80', surface: '#284468', card: '#40607e', preview: ['#2e4e72','#3a5c80','#40607e'] },
-  { tKey: 'themeMoss',       value: 'musgo',    cat:'light', bg: '#2c5840', sidebar: '#386848', surface: '#265038', card: '#3e6e52', preview: ['#2c5840','#386848','#3e6e52'] },
-  { tKey: 'themeLavender',   value: 'lavanda',  cat:'light', bg: '#3e3070', sidebar: '#4c3e7e', surface: '#382866', card: '#564880', preview: ['#3e3070','#4c3e7e','#564880'] },
-  { tKey: 'themeTerracotta', value: 'terracota',cat:'light', bg: '#6e4232', sidebar: '#7c5040', surface: '#623a28', card: '#886050', preview: ['#6e4232','#7c5040','#886050'] },
-  { tKey: 'themeDustyRose',  value: 'palo',     cat:'light', bg: '#5e3042', sidebar: '#6c3e50', surface: '#56283a', card: '#7a4858', preview: ['#5e3042','#6c3e50','#7a4858'] },
-  { tKey: 'themeDeepTeal',   value: 'teal',     cat:'light', bg: '#1e5e70', sidebar: '#2a6c7e', surface: '#185466', card: '#307080', preview: ['#1e5e70','#2a6c7e','#307080'] },
-  { tKey: 'themeLeather',    value: 'cuero',    cat:'light', bg: '#624a1e', sidebar: '#705828', surface: '#583e16', card: '#806030', preview: ['#624a1e','#705828','#806030'] },
-  { tKey: 'themeDenim',      value: 'denim',    cat:'light', bg: '#2a3c5e', sidebar: '#38506e', surface: '#243452', card: '#445270', preview: ['#2a3c5e','#38506e','#445270'] },
-  { tKey: 'themeWalnut',     value: 'nogal',    cat:'light', bg: '#4c3826', sidebar: '#5a4634', surface: '#44301e', card: '#624e38', preview: ['#4c3826','#5a4634','#624e38'] },
-  { tKey: 'themeSage',       value: 'salvia',   cat:'light', bg: '#2c4a38', sidebar: '#3a5846', surface: '#264230', card: '#3e5e48', preview: ['#2c4a38','#3a5846','#3e5e48'] },
-  { tKey: 'themeSteel',      value: 'steel',    cat:'light', bg: '#2e3e52', sidebar: '#3c4c60', surface: '#283648', card: '#445462', preview: ['#2e3e52','#3c4c60','#445462'] },
-  { tKey: 'themeWine',       value: 'vino',     cat:'light', bg: '#502030', sidebar: '#5e2e3e', surface: '#481828', card: '#6c3848', preview: ['#502030','#5e2e3e','#6c3848'] },
-  { tKey: 'themeInk',        value: 'tinta',    cat:'light', bg: '#1e2e48', sidebar: '#2a3c58', surface: '#182638', card: '#344460', preview: ['#1e2e48','#2a3c58','#344460'] },
-  { tKey: 'themeClay',       value: 'arcilla',  cat:'light', bg: '#6b4c3b', sidebar: '#795a48', surface: '#5e4030', card: '#886254', preview: ['#6b4c3b','#795a48','#886254'] },
-  { tKey: 'themeGunmetal',   value: 'grafito',  cat:'light', bg: '#3d5060', surface: '#35465a', sidebar: '#4a5e6e', card: '#546878', preview: ['#3d5060','#4a5e6e','#546878'] },
-  { tKey: 'themeKhaki',      value: 'caqui',    cat:'light', bg: '#6b6240', sidebar: '#79704e', surface: '#5e5636', card: '#847a56', preview: ['#6b6240','#79704e','#847a56'] },
-  { tKey: 'themeMauve',      value: 'malva',    cat:'light', bg: '#5e3d52', sidebar: '#6c4b60', surface: '#543444', card: '#7a5870', preview: ['#5e3d52','#6c4b60','#7a5870'] },
-  { tKey: 'themeJade',       value: 'jade',     cat:'light', bg: '#2d6b50', sidebar: '#387a5e', surface: '#276046', card: '#428868', preview: ['#2d6b50','#387a5e','#428868'] },
-  { tKey: 'themeAsh',        value: 'ceniza',   cat:'light', bg: '#4a5058', surface: '#424850', sidebar: '#585e66', card: '#626870', preview: ['#4a5058','#585e66','#626870'] },
+  { tKey: 'themeSlateBlue',  value: 'pizarra',  cat:'light', bg: '#485c6a', sidebar: '#566a78', surface: '#405260', card: '#5e6e7c', preview: ['#485c6a','#566a78','#5e6e7c'] },
+  { tKey: 'themePaper',      value: 'paper',    cat:'light', bg: '#55493d', sidebar: '#63574b', surface: '#4d3f33', card: '#6f6053', preview: ['#55493d','#63574b','#6f6053'] },
+  { tKey: 'themeSteelBlue',  value: 'acero',    cat:'light', bg: '#354e6b', sidebar: '#415c79', surface: '#2e4561', card: '#466078', preview: ['#354e6b','#415c79','#466078'] },
+  { tKey: 'themeMoss',       value: 'musgo',    cat:'light', bg: '#305340', sidebar: '#3c6349', surface: '#2a4c38', card: '#436953', preview: ['#305340','#3c6349','#436953'] },
+  { tKey: 'themeLavender',   value: 'lavanda',  cat:'light', bg: '#403568', sidebar: '#4e4376', surface: '#3a2d5f', card: '#584d79', preview: ['#403568','#4e4376','#584d79'] },
+  { tKey: 'themeTerracotta', value: 'terracota',cat:'light', bg: '#674437', sidebar: '#755245', surface: '#5b3b2d', card: '#826255', preview: ['#674437','#755245','#826255'] },
+  { tKey: 'themeDustyRose',  value: 'palo',     cat:'light', bg: '#593443', sidebar: '#674251', surface: '#512c3b', card: '#744c59', preview: ['#593443','#674251','#744c59'] },
+  { tKey: 'themeDeepTeal',   value: 'teal',     cat:'light', bg: '#285b69', sidebar: '#346977', surface: '#215160', card: '#3a6d7a', preview: ['#285b69','#346977','#3a6d7a'] },
+  { tKey: 'themeLeather',    value: 'cuero',    cat:'light', bg: '#5c4925', sidebar: '#6a5630', surface: '#523d1d', card: '#795f39', preview: ['#5c4925','#6a5630','#795f39'] },
+  { tKey: 'themeDenim',      value: 'denim',    cat:'light', bg: '#2f3d58', sidebar: '#3d5068', surface: '#28354d', card: '#48536b', preview: ['#2f3d58','#3d5068','#48536b'] },
+  { tKey: 'themeWalnut',     value: 'nogal',    cat:'light', bg: '#48382a', sidebar: '#564638', surface: '#403022', card: '#5e4e3c', preview: ['#48382a','#564638','#5e4e3c'] },
+  { tKey: 'themeSage',       value: 'salvia',   cat:'light', bg: '#2f4738', sidebar: '#3d5546', surface: '#293f31', card: '#415a49', preview: ['#2f4738','#3d5546','#415a49'] },
+  { tKey: 'themeSteel',      value: 'steel',    cat:'light', bg: '#313e4e', sidebar: '#3f4c5c', surface: '#2b3645', card: '#47545f', preview: ['#313e4e','#3f4c5c','#47545f'] },
+  { tKey: 'themeWine',       value: 'vino',     cat:'light', bg: '#4b2431', sidebar: '#59323f', surface: '#431c29', card: '#663d49', preview: ['#4b2431','#59323f','#663d49'] },
+  { tKey: 'themeInk',        value: 'tinta',    cat:'light', bg: '#222f43', sidebar: '#2e3d53', surface: '#1b2635', card: '#38455b', preview: ['#222f43','#2e3d53','#38455b'] },
+  { tKey: 'themeClay',       value: 'arcilla',  cat:'light', bg: '#664d3f', sidebar: '#745b4c', surface: '#594134', card: '#826458', preview: ['#664d3f','#745b4c','#826458'] },
+  { tKey: 'themeGunmetal',   value: 'grafito',  cat:'light', bg: '#41505d', surface: '#394656', sidebar: '#4e5e6b', card: '#586875', preview: ['#41505d','#4e5e6b','#586875'] },
+  { tKey: 'themeKhaki',      value: 'caqui',    cat:'light', bg: '#686045', sidebar: '#766e53', surface: '#5b543b', card: '#776f55', preview: ['#686045','#766e53','#776f55'] },
+  { tKey: 'themeMauve',      value: 'malva',    cat:'light', bg: '#5b4151', sidebar: '#694f5f', surface: '#513744', card: '#775c6f', preview: ['#5b4151','#694f5f','#775c6f'] },
+  { tKey: 'themeJade',       value: 'jade',     cat:'light', bg: '#33654f', sidebar: '#3f745d', surface: '#2d5a46', card: '#437860', preview: ['#33654f','#3f745d','#437860'] },
+  { tKey: 'themeAsh',        value: 'ceniza',   cat:'light', bg: '#4b5057', surface: '#43484f', sidebar: '#595e65', card: '#63686f', preview: ['#4b5057','#595e65','#63686f'] },
 
   // ── Oscuros nuevos ──
   { tKey: 'themeCosmos',     value: 'cosmos',   bg: '#080612', sidebar: '#0e0c1e', surface: '#120f26', card: '#171330', preview: ['#080612','#0e0c1e','#171330'] },
@@ -134,4 +166,16 @@ export const THEMES = [
   { tKey: 'themeMagma',      value: 'magma',    bg: '#0e0504', sidebar: '#1a0806', surface: '#200a07', card: '#260d09', preview: ['#0e0504','#1a0806','#260d09'] },
   { tKey: 'themeArcade',     value: 'arcade',   bg: '#060610', sidebar: '#0c0c1e', surface: '#0f0f26', card: '#13132e', preview: ['#060610','#0c0c1e','#13132e'] },
   { tKey: 'themeWetAsphalt', value: 'asfalto',  bg: '#07090c', sidebar: '#0e1014', surface: '#13151a', card: '#181a20', preview: ['#07090c','#0e1014','#181a20'] },
+  { tKey: 'themeBlueHour', value: 'hora-azul', bg: '#101722', sidebar: '#141e2c', surface: '#1a2738', card: '#223247' },
+  { tKey: 'themeDarkFir', value: 'abeto', bg: '#101b18', sidebar: '#14231e', surface: '#1b2c26', card: '#24392f' },
+  { tKey: 'themeAubergine', value: 'berenjena', bg: '#1b1420', sidebar: '#241b2c', surface: '#2c2236', card: '#392c44' },
+  { tKey: 'themeBlackTea', value: 'te-negro', bg: '#1c1814', sidebar: '#26201b', surface: '#302821', card: '#3e3329' },
+  { tKey: 'themeDeepFjord', value: 'fiordo', bg: '#101c21', sidebar: '#14262d', surface: '#1b3038', card: '#233f48' },
+  { tKey: 'themeVolcanic', value: 'volcanico', bg: '#1b1a1d', sidebar: '#242328', surface: '#2e2c33', card: '#3a3740' },
+  { tKey: 'themeLinen', value: 'lino', cat: 'mono', bg: '#b2aca1', sidebar: '#a39c90', surface: '#beb7ac', card: '#c9c3b8' },
+  { tKey: 'themeSeaGlass', value: 'vidrio-marino', cat: 'mono', bg: '#a0afa9', sidebar: '#909f99', surface: '#adbab4', card: '#bbc7c1' },
+  { tKey: 'themeBluePorcelain', value: 'porcelana-azul', cat: 'mono', bg: '#a5aeba', sidebar: '#939eae', surface: '#b1bac6', card: '#bfc7d1' },
+  { tKey: 'themeOat', value: 'avena', cat: 'mono', bg: '#b5ad9b', sidebar: '#a59c89', surface: '#c0b8a6', card: '#cbc3b2' },
+  { tKey: 'themeRoseQuartz', value: 'cuarzo-rosa', cat: 'mono', bg: '#b1a4ad', sidebar: '#a1939e', surface: '#bdb0b9', card: '#c9bec6' },
+  { tKey: 'themeEucalyptus', value: 'eucalipto', cat: 'mono', bg: '#a7afa0', sidebar: '#959f8e', surface: '#b3bbac', card: '#c1c9ba' },
 ]

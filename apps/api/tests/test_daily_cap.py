@@ -52,7 +52,7 @@ class _FakeCollection:
     def __init__(self, docs=None):
         self.docs = docs or []
 
-    def find_one(self, query=None, projection=None):
+    def find_one(self, query=None, projection=None, sort=None):
         query = query or {}
         for d in self.docs:
             if _matches(d, query):
@@ -105,6 +105,9 @@ class _FakeCollection:
             elif op == "$inc":
                 for k, v in fields.items():
                     doc[k] = doc.get(k, 0) + v
+            elif op == "$setOnInsert":
+                for k, v in fields.items():
+                    doc.setdefault(k, v)
             else:
                 raise NotImplementedError(f"fake collection doesn't support {op}")
 

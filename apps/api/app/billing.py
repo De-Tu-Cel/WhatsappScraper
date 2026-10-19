@@ -6,6 +6,7 @@ the user as no longer in use, despite BRIGHTDATA_SERP_KEY still being set.
 import os
 import base64
 import requests
+from decimal import Decimal
 from datetime import datetime, timezone
 
 OPENAI_ADMIN_API_KEY = os.getenv("OPENAI_ADMIN_API_KEY", "")
@@ -17,6 +18,52 @@ OPENAI_ADMIN_API_KEY = os.getenv("OPENAI_ADMIN_API_KEY", "")
 # matches the "Mystery Shopper" branding in the app sidebar) — set via env so
 # it isn't a hardcoded assumption if the project ever gets recreated.
 OPENAI_PROJECT_ID = os.getenv("OPENAI_PROJECT_ID", "proj_i2ae697uaN9JVQ5kNIgROAeY")
+
+
+def get_anthropic_spend() -> dict:
+    """Monthly Claude API costs for the configured workspace, never org-wide by accident."""
+    key = os.getenv('ANTHROPIC_ADMIN_API_KEY', '')
+    workspace = os.getenv('ANTHROPIC_WORKSPACE_ID', '').strip()
+    if not key or not workspace:
+        return {'configured': False, 'reason': 'missing_admin_key' if not key else 'missing_workspace'}
+    now = datetime.now(timezone.utc)
+    params = {'starting_at': now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat(),
+              'ending_at': now.isoformat(), 'bucket_width': '1d', 'limit': 31,
+              'group_by[]': 'workspace_id'}
+    total = Decimal('0')
+    seen = set()
+    try:
+        while True:
+            response = requests.get('https://api.anthropic.com/v1/organizations/cost_report',
+                                    headers={'x-api-key': key, 'anthropic-version': '2023-06-01'},
+                                    params=dict(params), timeout=10)
+            response.raise_for_status()
+            report = response.json()
+            for bucket in report['data']:
+                for result in bucket['results']:
+                    if result.get('workspace_id') != (None if workspace == 'default' else workspace):
+                        continue
+                    if result.get('currency', '').upper() != 'USD':
+                        raise ValueError('Unexpected currency')
+                    amount = Decimal(result['amount'])
+                    if not amount.is_finite():
+                        raise ValueError('Invalid amount')
+                    total += amount
+            if not report.get('has_more'):
+                break
+            page = report.get('next_page')
+            if not page or page in seen or len(seen) >= 31:
+                raise ValueError('Invalid pagination')
+            seen.add(page)
+            params['page'] = page
+        from app.balance_alerts import record_balance, ai_budget
+        # Anthropic reports decimal cents, not dollars.
+        value = {'configured': True, 'ok': True, 'spend_this_month': float(round(total / 100, 2)),
+                 'currency': 'usd', 'monthly_budget_usd': ai_budget('anthropic'), 'provider': 'anthropic'}
+        record_balance('ai', value)
+        return value
+    except Exception:
+        return {'configured': True, 'ok': False, 'error': 'No se pudo consultar el gasto de Claude.'}
 
 
 def get_openai_spend() -> dict:
@@ -49,7 +96,7 @@ def get_openai_spend() -> dict:
                 total += (result.get("amount") or {}).get("value", 0) or 0
         from app.balance_alerts import record_balance, limits
         value = {"configured": True, "ok": True, "spend_this_month": round(total, 2), "currency": "usd",
-                 "monthly_budget_usd": limits()['openai_monthly_budget_usd']}
+                 "monthly_budget_usd": limits()['openai_monthly_budget_usd'], "provider": "openai"}
         record_balance('ai', value)
         return value
     except Exception as e:

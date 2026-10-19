@@ -52,6 +52,7 @@ class FakeCompaniesCollection:
 
 class FakeDb:
     def __init__(self, blacklist=None, companies=None):
+        self.contact_permissions = type("PermittedRecipients", (), {"find_one": lambda self, *args: {"outreach_allowed": True}})()
         self.blacklist = FakeBlacklistCollection(blacklist or [])
         self.companies = FakeCompaniesCollection(companies or [])
 
@@ -72,7 +73,7 @@ class TestIsBlockedOrBlacklisted:
 
     def test_no_company_no_phone_hit_defaults_false(self):
         mgr = FakeMgr(blacklist=[])
-        assert _is_blocked_or_blacklisted(mgr, None, None) is False
+        assert _is_blocked_or_blacklisted(mgr, None, None) is True
 
     def test_company_blocked_flag_still_works(self):
         from bson import ObjectId
@@ -86,14 +87,14 @@ class TestIsBlockedOrBlacklisted:
         mgr = FakeMgr(blacklist=[{"type": "phone", "value": "5215512345678"}])
         assert _is_blocked_or_blacklisted(mgr, "not-a-real-id", "5215512345678") is True
 
-    def test_exception_fails_safe_allowing_send(self):
+    def test_exception_blocks_send(self):
         class BrokenDb:
             @property
             def blacklist(self):
                 raise RuntimeError("boom")
         class BrokenMgr:
             db = BrokenDb()
-        assert _is_blocked_or_blacklisted(BrokenMgr(), None, "5215512345678") is False
+        assert _is_blocked_or_blacklisted(BrokenMgr(), None, "5215512345678") is True
 
 
 # ── Any phone format, every send path (2026-10-04) ────────────────────────────

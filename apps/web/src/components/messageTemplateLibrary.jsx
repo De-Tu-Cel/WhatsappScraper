@@ -362,7 +362,7 @@ export function TemplateLibraryPicker({
   onChange, recipientCount = 0, baseCount = 0, label,
   hasName = true, hasCity = true, hasIndustry = true, hasWeb = true,
   varCounts = null, totalSelected = 0,
-  campaignCards = false,
+  campaignCards = false, postScrape = false,
   // Con 1 solo destinatario real no hay nada que "rotar" — dejar marcar varias
   // plantillas ahí sugiere que el sistema alterna entre ellas cuando en
   // realidad solo una se va a usar. En ese caso el checklist se comporta como
@@ -474,12 +474,20 @@ export function TemplateLibraryPicker({
   const totalCount = baseCount + selectedIds.length
   const ok = totalCount >= minRequired
 
+  const cardLayout = campaignCards || postScrape
+
+  // Returning from multiple recipients to one must match the single-choice UI.
+  useEffect(() => {
+    if (singleSelect) setSelectedIds(previous => previous.length > 1 ? previous.slice(-1) : previous)
+  }, [singleSelect])
+
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+    <Box data-post-scrape-templates={postScrape || undefined} data-campaign-templates={campaignCards || undefined} sx={{ display: 'flex', flexDirection: 'column', gap: cardLayout ? 1.5 : 1, minWidth: 0, width: '100%' }}>
 
       {/* ── Header row ── */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Typography sx={{ color: 'var(--text-muted)', fontSize: campaignCards ? '.88rem' : '0.78rem', fontWeight: 600, flex: 1 }}>{label || t.tplLib.title}</Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
+        <Typography sx={{ color: cardLayout ? 'var(--text)' : 'var(--text-muted)', fontSize: cardLayout ? '.88rem' : '0.78rem', fontWeight: 700, flex: 1 }}>{label || t.tplLib.title}</Typography>
+        {cardLayout && <Box component="span" role="status" sx={{ color: 'var(--accent)', bgcolor: 'rgba(var(--accent-rgb),.08)', border: '1px solid var(--border)', borderRadius: '7px', px: 1, py: .4, fontSize: '.72rem', fontWeight: 600 }}>{selectedIds.length} {lang === 'en' ? 'selected' : selectedIds.length === 1 ? 'seleccionada' : 'seleccionadas'}</Box>}
         <Button size="small" onClick={() => setManagerOpen(true)}
           sx={{ color: 'var(--accent,#3b82f6)', textTransform: 'none', fontSize: '0.72rem', fontWeight: 600,
             borderRadius: 1.5, px: 1, py: 0.3, '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)' } }}>
@@ -487,7 +495,7 @@ export function TemplateLibraryPicker({
         </Button>
       </Box>
 
-      <Typography sx={{ color: 'var(--text-muted)', fontSize: campaignCards ? '.78rem' : '0.7rem', opacity: 0.75 }}>
+      <Typography sx={{ color: 'var(--text-muted)', fontSize: cardLayout ? '.78rem' : '0.7rem', lineHeight: 1.6 }}>
         {singleSelect ? t.tplLib.pickHintSingle : baseCount > 0 ? t.tplLib.pickHintWithBase : t.tplLib.pickHint}
       </Typography>
 
@@ -521,11 +529,11 @@ export function TemplateLibraryPicker({
 
       {/* ── Template list ── */}
       {loading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 1.5 }}><CircularProgress size={16} sx={{ color: 'var(--accent,#3b82f6)' }} /></Box>
+        cardLayout ? <Box aria-label={lang === 'en' ? 'Loading templates' : 'Cargando plantillas'} sx={{ display: 'grid', gap: 1 }}>{[0,1,2].map(index => <Box key={index} sx={{ p: 1.5, border: '1px solid var(--border)', borderRadius: '10px' }}><Skeleton variant="rounded" width="45%" height={14} sx={{ bgcolor: 'var(--item-hover)' }} /><Skeleton variant="rounded" width="85%" height={10} sx={{ mt: 1.5, bgcolor: 'var(--item-hover)' }} /></Box>)}</Box> : <Box sx={{ display: 'flex', justifyContent: 'center', py: 1.5 }}><CircularProgress size={16} sx={{ color: 'var(--accent,#3b82f6)' }} /></Box>
       ) : templates.length === 0 ? (
         <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.76rem', py: 1 }}>{t.tplLib.noTemplates}</Typography>
       ) : (
-        <Box data-template-cards={campaignCards || undefined} sx={{ display: 'flex', flexDirection: 'column', gap: campaignCards ? 1 : 0.5, maxHeight: campaignCards ? 'clamp(320px, 43vh, 480px)' : 260, overflowY: 'auto',
+        <Box data-template-cards={cardLayout || undefined} sx={{ display: postScrape ? 'grid' : 'flex', gridTemplateColumns: { xs: 'minmax(0,1fr)', xl: 'repeat(2,minmax(0,1fr))' }, alignItems: postScrape ? 'start' : 'stretch', flexDirection: 'column', gap: cardLayout ? 1 : 0.5, maxHeight: cardLayout ? 'clamp(320px, 43vh, 480px)' : 260, overflowY: 'auto', pr: .5,
           scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.08) transparent',
           '&::-webkit-scrollbar': { width: 3 }, '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.1)', borderRadius: 2 },
         }}>
@@ -536,13 +544,13 @@ export function TemplateLibraryPicker({
             const blocked  = missing.length > 0
             const usedVars = VAR_CHECKS.filter(v => v.re.test(tpl.text))
             const row = (
-              <Box key={tpl._id} data-template-card={campaignCards ? tpl._id : undefined} onClick={e => {
+              <Box key={tpl._id} data-template-card={cardLayout ? tpl._id : undefined} onClick={e => {
                 if (!e.target.closest('input, button, .MuiCheckbox-root')) toggle(tpl._id, blocked)
               }} sx={{
                 display: 'flex', alignItems: 'flex-start', gap: 0.6, cursor: blocked ? 'not-allowed' : 'pointer',
-                borderRadius: campaignCards ? 2 : 1.5, p: campaignCards ? 1.2 : 0.7,
+                borderRadius: cardLayout ? 2 : 1.5, p: cardLayout ? 1.2 : 0.7, minHeight: cardLayout ? 94 : undefined, minWidth: 0, width: '100%', boxSizing: 'border-box', flexShrink: 0,
                 border: `1px solid ${blocked ? 'rgba(239,68,68,0.2)' : isSel ? 'rgba(var(--accent-rgb,59,130,246),0.35)' : 'var(--border)'}`,
-                borderLeft: `3px solid ${blocked ? 'rgba(239,68,68,0.4)' : isSel ? 'var(--accent,#3b82f6)' : 'transparent'}`,
+                borderLeft: cardLayout ? undefined : `3px solid ${blocked ? 'rgba(239,68,68,0.4)' : isSel ? 'var(--accent,#3b82f6)' : 'transparent'}`,
                 bgcolor: blocked ? 'rgba(239,68,68,0.03)' : isSel ? 'rgba(var(--accent-rgb,59,130,246),0.07)' : 'transparent',
                 opacity: blocked ? 0.55 : 1,
                 transition: 'border-color 0.15s, background-color 0.15s, border-left-color 0.15s',
@@ -553,24 +561,26 @@ export function TemplateLibraryPicker({
                 },
               }}>
                 <Checkbox size="small" checked={isSel} disabled={blocked}
+                  slotProps={{ input: { 'aria-label': `${lang === 'en' ? 'Select template' : 'Seleccionar plantilla'} ${tpl.name}` } }}
                   onChange={e => toggle(tpl._id, blocked, e.target.checked)} onClick={e => e.stopPropagation()}
                   sx={{ p: 0.3, mt: 0.1, color: 'var(--border)', '&.Mui-checked': { color: 'var(--accent,#3b82f6)' } }} />
                 <Box sx={{ minWidth: 0, flex: 1 }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
-                    <Typography sx={{ color: isSel ? 'var(--text)' : 'var(--text-muted)', fontWeight: isSel ? 700 : 600, fontSize: campaignCards ? '.88rem' : '0.78rem', lineHeight: 1.3, transition: 'color 0.15s', flex: 1 }}>
+                    <Typography sx={{ color: cardLayout || isSel ? 'var(--text)' : 'var(--text-muted)', fontWeight: isSel ? 700 : 600, fontSize: cardLayout ? '.88rem' : '0.78rem', lineHeight: 1.4, transition: 'color 0.15s', flex: 1 }}>
                       {tpl.name}
                     </Typography>
                     <IconButton size="small" onClick={e => { e.stopPropagation(); setExpandedId(id => id === tpl._id ? null : tpl._id) }}
+                      aria-label={`${isExpanded ? (lang === 'en' ? 'Collapse' : 'Contraer') : (lang === 'en' ? 'Expand' : 'Expandir')} ${tpl.name}`} aria-expanded={isExpanded}
                       sx={{ p: 0.2, color: 'var(--text-muted)', transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>
                       <ExpandMoreIcon sx={{ fontSize: 15 }} />
                     </IconButton>
                   </Box>
                   {/* Preview — 1-line clamp collapsed, full text expanded */}
                   <HighlightedPreview text={tpl.text} lang={lang} sx={isExpanded ? {
-                    color: 'var(--text-muted)', fontSize: campaignCards ? '.78rem' : '0.68rem', mt: 0.3, lineHeight: 1.5,
+                    color: 'var(--text-muted)', fontSize: cardLayout ? '.78rem' : '0.68rem', mt: 0.3, lineHeight: 1.5,
                   } : {
-                    display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 1, overflow: 'hidden',
-                    color: 'var(--text-muted)', fontSize: campaignCards ? '.78rem' : '0.68rem', mt: 0.3, lineHeight: 1.5,
+                    display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: cardLayout ? 2 : 1, overflow: 'hidden',
+                    color: 'var(--text-muted)', fontSize: cardLayout ? '.78rem' : '0.68rem', mt: 0.3, lineHeight: 1.5,
                   }} />
                   {/* Variable pills */}
                   {usedVars.length > 0 && (

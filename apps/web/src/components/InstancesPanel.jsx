@@ -278,7 +278,7 @@ function DashStatCard({ color, value, title, pctChange, sparkData, categories, r
 // number. Deliberately simpler than DashStatCard (no sparkline/%-change,
 // there's no meaningful trend data for a single point-in-time balance).
 function BalanceCard({ label, lang, loading, data, unit }) {
-  const notConfigured = !loading && data && data.configured === false
+  const notConfigured = !loading && (!data || data.configured === false)
   const errored = !loading && data && data.configured && data.ok === false
   const dotColor = notConfigured ? 'var(--text-muted)' : errored ? '#f87171' : '#4ade80'
   let display = '—'
@@ -308,7 +308,7 @@ function BalanceCard({ label, lang, loading, data, unit }) {
         <Typography sx={{ fontSize: '0.64rem', color: 'var(--text-muted)', lineHeight: 1.3, mt: 0.2 }}>{subtitle}</Typography>
         {unit === 'spend' && notConfigured && (
           <Typography sx={{ fontSize: '0.64rem', color: 'var(--text-muted)', mt: 0.4 }}>
-            {lang === 'en' ? 'Budget alerts require an OpenAI Admin API key and project ID.' : 'Las alertas de presupuesto requieren una clave Admin de OpenAI y el ID del proyecto.'}
+            {lang === 'en' ? 'Connect an Anthropic Admin API key and workspace to view Claude costs.' : 'Configura una clave Admin de Anthropic y su workspace para consultar el gasto de Claude.'}
           </Typography>
         )}
         {unit === 'spend' && data?.ok && data.monthly_budget_usd > 0 && (
@@ -756,11 +756,11 @@ function InstancesDashboard({ metrics, loading, range, onRangeChange, lang, char
 
       <Box sx={{ p: 2 }}>
 
-      {/* Saldo/gasto de los servicios de pago activos (OpenAI, DataForSEO) —
+      {/* Saldo/gasto de los servicios de pago activos (Claude, DataForSEO) —
          solo para tener a la vista si algo se está disparando, no un
          dashboard de facturación completo. */}
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 1.5, mb: 2 }}>
-        <BalanceCard label="OpenAI" lang={lang} loading={balancesLoading} data={balances?.openai} unit="spend" />
+        <BalanceCard label="Claude" lang={lang} loading={balancesLoading} data={balances?.anthropic} unit="spend" />
         <BalanceCard label="DataForSEO" lang={lang} loading={balancesLoading} data={balances?.dataforseo} unit="balance" />
       </Box>
 
@@ -1533,7 +1533,7 @@ export default function InstancesPanel({ isActive } = {}) {
   const [periodYear,  setPeriodYear]  = useState(() => new Date().getFullYear())
   const [periodMonth, setPeriodMonth] = useState(() => new Date().getMonth() + 1)
 
-  // ── Balances (OpenAI spend, DataForSEO balance) — just a glance, not a
+  // ── Balances (Claude spend, DataForSEO balance) — just a glance, not a
   // full billing dashboard, so it's fetched once on mount, not per range. ──
   const [balances,        setBalances]        = useState(null)
   const [balancesLoading, setBalancesLoading] = useState(true)

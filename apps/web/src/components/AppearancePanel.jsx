@@ -10,6 +10,7 @@ import CheckIcon from '@mui/icons-material/Check'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import { useLang } from '../context/LangContext'
 import { ACCENTS, THEMES, loadSettings, applySettings } from './Settings'
+import { resolveAccent } from '../lib/themeConfig'
 
 // A bordered card with its label shown as a pill overlapping the top edge —
 // the info icon's tooltip explains what the section controls on hover.
@@ -40,6 +41,37 @@ function SectionBox({ label, hint, children, sx }) {
       {children}
     </Box>
   )
+}
+
+function ThemeOptions({ themes, settings, onSelect, t }) {
+  return <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 0.8 }}>
+    {themes.map(th => {
+      const active = settings.theme === th.value
+      const label = t.settings[th.tKey] || th.tKey
+      return (
+        <Tooltip key={th.value} title={label} placement="top" arrow>
+          <Box component="button" type="button" aria-label={label} aria-pressed={active}
+            onClick={() => onSelect(th.value)} sx={{
+            minWidth: 0, cursor: 'pointer', borderRadius: 1.5, p: 0.5,
+            border: `1.5px solid ${active ? 'var(--accent, #3b82f6)' : 'var(--border, rgba(255,255,255,0.08))'}`,
+            bgcolor: active ? 'rgba(var(--accent-rgb,59,130,246),0.08)' : 'transparent',
+            transition: 'border-color 150ms, transform 150ms',
+            '&:hover': { borderColor: 'var(--accent)', transform: 'translateY(-1px)' },
+            '&:focus-visible': { outline: '2px solid var(--accent)', outlineOffset: 2 },
+          }}>
+            <Box sx={{ display: 'flex', height: 38, borderRadius: 1, overflow: 'hidden', bgcolor: th.bg }}>
+              <Box sx={{ width: '23%', bgcolor: th.sidebar }} />
+              <Box sx={{ flex: 1, p: 0.6, display: 'flex', flexDirection: 'column', gap: 0.45 }}>
+                <Box sx={{ height: 4, width: '65%', borderRadius: 1, bgcolor: th.cat === 'mono' ? '#596576' : '#cbd5e1', opacity: 0.7 }} />
+                <Box sx={{ flex: 1, borderRadius: 0.6, bgcolor: th.card, border: '1px solid rgba(30,41,59,0.15)' }} />
+              </Box>
+            </Box>
+            <Box component="span" sx={{ display: 'block', mt: 0.6, fontFamily: 'inherit', fontSize: '0.62rem', fontWeight: active ? 700 : 500, color: 'var(--text)', minHeight: '2.5em', lineHeight: 1.25, overflowWrap: 'anywhere' }}>{label}</Box>
+          </Box>
+        </Tooltip>
+      )
+    })}
+  </Box>
 }
 
 const SUB_LABEL_SX = {
@@ -74,7 +106,7 @@ export default function AppearancePanel({ open, onClose }) {
   return (
     <Box sx={{
       position: 'absolute', top: 0, right: 0, bottom: 0,
-      width: open ? 'min(340px, 60%)' : 0,
+      width: open ? { xs: '100%', sm: 'min(340px, 60%)' } : 0,
       overflow: 'hidden',
       transition: 'width 0.25s cubic-bezier(0.4,0,0.2,1)',
       borderLeft: open ? '1px solid var(--border, rgba(255,255,255,0.08))' : 'none',
@@ -83,7 +115,7 @@ export default function AppearancePanel({ open, onClose }) {
       zIndex: 5,
     }}>
       {open && settings && (
-        <Box sx={{ width: 'min(340px, 60vw)', display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
+        <Box sx={{ width: '100%', minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
           <Box sx={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2.2, py: 1.6,
             borderBottom: '1px solid rgba(255,255,255,0.07)',
@@ -120,20 +152,24 @@ export default function AppearancePanel({ open, onClose }) {
           <Box sx={{ p: 2.2, pt: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
             {/* Accent color */}
             <SectionBox label={t.settings.accent} hint={t.settings.accentHint}>
-              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 0.9 }}>
+              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 0.9 }}>
                 {ACCENTS.map(a => {
                   const active = settings.accent === a.value
+                  const resolved = resolveAccent(a.value, THEMES.find(th => th.value === settings.theme) || THEMES[0])
+                  const label = t.settings[a.tKey] || a.tKey
                   return (
-                    <Tooltip key={a.value} title={t.settings[a.tKey] || a.tKey} placement="top" arrow>
-                      <Box onClick={() => save({ accent: a.value })} sx={{
+                    <Tooltip key={a.value} title={label} placement="top" arrow>
+                      <Box component="button" type="button" data-accent-option aria-label={label} aria-pressed={active} onClick={() => save({ accent: a.value })} sx={{
                         width: 28, height: 28, borderRadius: '50%', cursor: 'pointer',
-                        bgcolor: a.value,
+                        bgcolor: resolved.value,
+                        color: resolved.contrast,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         border: active ? '2px solid var(--text, #fff)' : '2px solid transparent',
-                        boxShadow: active ? `0 0 10px ${a.glow}` : 'none',
+                        boxShadow: active ? `0 0 0 3px rgba(${resolved.rgb},0.18)` : 'none',
+                        '&:focus-visible': { outline: '2px solid var(--text)', outlineOffset: 3 },
                         transition: 'transform 0.12s', '&:hover': { transform: 'scale(1.1)' },
                       }}>
-                        {active && <CheckIcon sx={{ fontSize: 14, color: '#fff' }} />}
+                        {active && <CheckIcon sx={{ fontSize: 14 }} />}
                       </Box>
                     </Tooltip>
                   )
@@ -144,44 +180,10 @@ export default function AppearancePanel({ open, onClose }) {
             {/* Base theme */}
             <SectionBox label={t.settings.theme} hint={t.settings.themeHint}>
               <Typography sx={SUB_LABEL_SX}>{t.settings.themesDark}</Typography>
-              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0.8, mb: 2 }}>
-                {darkThemes.map(th => {
-                  const active = settings.theme === th.value
-                  return (
-                    <Tooltip key={th.value} title={t.settings[th.tKey] || th.tKey} placement="top" arrow>
-                      <Box onClick={() => save({ theme: th.value })} sx={{
-                        cursor: 'pointer', borderRadius: 1.5, p: 0.5,
-                        border: `1.5px solid ${active ? 'var(--accent, #3b82f6)' : 'var(--border, rgba(255,255,255,0.08))'}`,
-                        bgcolor: active ? 'rgba(var(--accent-rgb,59,130,246),0.08)' : 'transparent',
-                      }}>
-                        <Box sx={{ display: 'flex', height: 24, borderRadius: 1, overflow: 'hidden' }}>
-                          {th.preview.map((c, i) => <Box key={i} sx={{ flex: 1, bgcolor: c }} />)}
-                        </Box>
-                      </Box>
-                    </Tooltip>
-                  )
-                })}
-              </Box>
-
+              <Box sx={{ mb: 2 }}><ThemeOptions themes={darkThemes} settings={settings} onSelect={theme => save({ theme })} t={t} /></Box>
               <Typography sx={SUB_LABEL_SX}>{t.settings.themesLight}</Typography>
-              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0.8 }}>
-                {lightThemes.map(th => {
-                  const active = settings.theme === th.value
-                  return (
-                    <Tooltip key={th.value} title={t.settings[th.tKey] || th.tKey} placement="top" arrow>
-                      <Box onClick={() => save({ theme: th.value })} sx={{
-                        cursor: 'pointer', borderRadius: 1.5, p: 0.5,
-                        border: `1.5px solid ${active ? 'var(--accent, #3b82f6)' : 'var(--border, rgba(255,255,255,0.08))'}`,
-                        bgcolor: active ? 'rgba(var(--accent-rgb,59,130,246),0.08)' : 'transparent',
-                      }}>
-                        <Box sx={{ display: 'flex', height: 24, borderRadius: 1, overflow: 'hidden' }}>
-                          {th.preview.map((c, i) => <Box key={i} sx={{ flex: 1, bgcolor: c }} />)}
-                        </Box>
-                      </Box>
-                    </Tooltip>
-                  )
-                })}
-              </Box>
+              <ThemeOptions themes={lightThemes} settings={settings} onSelect={theme => save({ theme })} t={t} />
+
             </SectionBox>
           </Box>
         </Box>

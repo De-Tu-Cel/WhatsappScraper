@@ -63,6 +63,7 @@ class FakeDB:
         self.ai_followup_sessions = FakeSessionsCollection(session_doc)
         self.conversation_ai_prefs = FakePrefsCollection()
         self.ai_global_config = FakeGlobalConfigCollection()
+        self.delivery_receipts = MagicMock()
         self.message_logs = MagicMock()
         # is_cold_start now counts real inbound message_logs docs (see
         # ai_followup.py) instead of the session's own turn_count — default to
@@ -120,7 +121,7 @@ def _common_patches():
          patch("app.ai_followup._is_blocked_or_blacklisted", return_value=False), \
          patch("app.classifier._looks_like_auto_reply", return_value=False), \
          patch("app.whatsapp_wwebjs.get_all_connected_instances", return_value=["sender666"]), \
-         patch("app.whatsapp_wwebjs.WWebjsClient"), \
+         patch("app.whatsapp_wwebjs.WWebjsClient", return_value=MagicMock(send=MagicMock(return_value={"success": True, "messageId": "qa-default"}))), \
          patch("app.whatsapp_wwebjs.mark_read"):
         yield
 
@@ -470,21 +471,21 @@ class TestTransientFailuresDoNotKillTheSession:
         assert 'provider_blocked' in mgr.db.ai_followup_sessions._doc
         assert mgr.db.conversation_ai_prefs.updates == []
 
-    def test_send_exception_leaves_session_active(self, _common_patches):
+    def test_uncertain_send_stops_automatic_replies_for_review(self, _common_patches):
         mgr = FakeMgr(_session_doc())
         with patch("app.ai_followup.MongoDBManager", return_value=mgr), \
              patch("app.ai_followup._call_llm_for_reply", return_value="ah ok, gracias"), \
-             patch("app.providers.legacy.evolution.pick_connected_instance", return_value="sender666"), \
-             patch("app.providers.legacy.evolution.EvolutionClient", side_effect=RuntimeError("network blip")):
+             patch("app.whatsapp_wwebjs.WWebjsClient", return_value=MagicMock(send=MagicMock(side_effect=RuntimeError("network blip")))):
             af.process_inbound_reply(
                 phone_number="5214428079840",
                 company_id="aabbccddeeff001122334455",
                 inbound_body="Mande",
                 inbound_log_id="log1",
             )
-        assert mgr.db.ai_followup_sessions._doc["status"] == "active"
+        assert mgr.db.ai_followup_sessions._doc["status"] == "ended"
+        assert mgr.db.ai_followup_sessions._doc["end_reason"] == "delivery_uncertain"
         assert mgr.db.ai_followup_sessions._doc["ai_typing"] is False
-        assert mgr.db.conversation_ai_prefs.updates == []
+        assert mgr.db.conversation_ai_prefs.updates[-1]["$set"]["ai_enabled"] is False
 
     def test_daily_cap_reached_leaves_session_active(self, _common_patches):
         mgr = FakeMgr(_session_doc())
@@ -1426,10 +1427,11 @@ class TestUnpromptedBotDenial:
         ww.send.assert_called_once()
         assert "bot" not in ww.send.call_args.args[1]
 
-    def test_insisting_on_the_denial_sends_nothing(self, _common_patches):
+    def test_false_human_denial_is_replaced_with_honest_disclosure(self, _common_patches):
         mgr, ww = FakeMgrWithSend(_session_doc()), _ww_client()
         _run(mgr, {"return_value": "oye no soy un bot, solo busco servicio para mi carro"}, inbound=self.FOLLOWUP, ww=ww)
-        ww.send.assert_not_called()
+        ww.send.assert_called_once()
+        assert 'Soy un asistente automatizado' in ww.send.call_args.args[1]
         assert mgr.db.ai_followup_sessions._doc["status"] == "ended"
 
     def test_direct_accusation_still_cannot_mention_bots(self, _common_patches):

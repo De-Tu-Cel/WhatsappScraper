@@ -1,10 +1,11 @@
 'use client'
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import IconButton from '@mui/material/IconButton'
 import CircularProgress from '@mui/material/CircularProgress'
 import Alert from '@mui/material/Alert'
+import Button from '@mui/material/Button'
 import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone'
 import CloseIcon from '@mui/icons-material/Close'
 import WhatsAppIcon from '@mui/icons-material/WhatsApp'
@@ -17,6 +18,7 @@ import { authFetch } from '@/lib/api'
 import { useUser } from '@/context/UserContext'
 import ServiceHealthNotice from './ServiceHealthNotice'
 import ServiceBalanceNotice from './ServiceBalanceNotice'
+import { notificationMark, markNotifications } from '@/lib/notificationState'
 
 function timeAgo(iso, lang) {
   if (!iso) return ''
@@ -40,18 +42,30 @@ export default function NotificationsPanel({ open, onClose, onNavigateToConv, on
   const { user } = useUser()
   const [items,     setItems]     = useState(null)
   const [checks, setChecks] = useState({})
-  const [clearedAt, setClearedAt] = useState(() => {
-    try { return localStorage.getItem('notif_cleared_at') || '' } catch { return '' }
-  })
+  const userId = user?.id || user?._id || user?.username || ''
+  const [clearMark, setClearMark] = useState(null)
+  const clearedAt = clearMark?.userId === userId ? clearMark.stamp : typeof window !== 'undefined' ? notificationMark(localStorage, 'cleared', userId) : ''
+  const [loadError, setLoadError] = useState(false)
+  const requestRef = useRef(null)
 
   const load = useCallback(() => {
-    authFetch('/api/notifications')
-      .then(r => r.json())
-      .then(d => setItems(Array.isArray(d) ? d : []))
-      .catch(() => setItems([]))
-  }, [])
+    if (!open || !userId) return
+    requestRef.current?.abort()
+    const request = new AbortController(); requestRef.current = request
+    const readAt = new Date().toISOString()
+    authFetch('/api/notifications', { signal: request.signal, cache: 'no-store' })
+      .then(r => { if (!r.ok) throw new Error('load'); return r.json() })
+      .then(data => {
+        if (!Array.isArray(data)) throw new Error('shape')
+        if (request.signal.aborted) return
+        setItems(data); setLoadError(false)
+        markNotifications(localStorage, 'read', userId, readAt)
+        window.dispatchEvent(new CustomEvent('notifications-read', { detail: { userId } }))
+      })
+      .catch(() => { if (!request.signal.aborted) setLoadError(true) })
+  }, [open, userId])
 
-  useEffect(() => { if (open) load() }, [open, load])
+  useEffect(() => { if (open) load(); return () => requestRef.current?.abort() }, [open, load])
   useEffect(() => {
     if (!open) return
     const timer = setInterval(() => { if (!document.hidden) load() }, 30000)
@@ -61,13 +75,14 @@ export default function NotificationsPanel({ open, onClose, onNavigateToConv, on
 
   const clearAll = useCallback(() => {
     const now = new Date().toISOString()
-    localStorage.setItem('notif_cleared_at', now)
-    localStorage.setItem('notif_last_read',  now)
-    setClearedAt(now)
-  }, [])
+    markNotifications(localStorage, 'cleared', userId, now)
+    markNotifications(localStorage, 'read', userId, now)
+    setClearMark({ userId, stamp: now })
+    window.dispatchEvent(new CustomEvent('notifications-read', { detail: { userId } }))
+  }, [userId])
 
   const visibleItems = items === null ? null : items.filter(n => {
-    if (['service_health', 'service_balance'].includes(n.type) && user?.role !== 'admin') return false
+    if (['service_health', 'service_balance', 'automation_rest'].includes(n.type) && user?.role !== 'admin') return false
     if (!clearedAt || !n.created_at) return true
     const normalized = /[Z+]|[-]\d{2}:\d{2}$/.test(n.created_at) ? n.created_at : n.created_at + 'Z'
     return new Date(normalized) > new Date(clearedAt)
@@ -163,11 +178,12 @@ export default function NotificationsPanel({ open, onClose, onNavigateToConv, on
                 {result.message}
               </Alert>
             ))}
-            {grouped === null ? (
+            {loadError && <Alert severity="error" action={<Button color="inherit" size="small" onClick={load}>{lang === 'en' ? 'Retry' : 'Reintentar'}</Button>} sx={{ bgcolor: 'var(--card-bg)', color: 'var(--text)', border: '1px solid var(--border)' }}>{lang === 'en' ? 'Notifications could not be loaded.' : 'No se pudieron cargar las notificaciones.'}</Alert>}
+            {grouped === null && loadError ? null : grouped === null ? (
               <Box sx={{ display: 'flex', justifyContent: 'center', py: 5 }}>
                 <CircularProgress size={20} sx={{ color: 'var(--accent, #60a5fa)' }} />
               </Box>
-            ) : grouped.length === 0 ? (
+            ) : grouped.length === 0 && loadError ? null : grouped.length === 0 ? (
               <Box sx={{
                 display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.2, py: 6,
                 background: 'radial-gradient(ellipse at 50% 40%, rgba(59,130,246,0.04) 0%, transparent 70%)',
@@ -185,6 +201,10 @@ export default function NotificationsPanel({ open, onClose, onNavigateToConv, on
                 </Typography>
               </Box>
             ) : grouped.map((n, idx) => {
+              if (n.type === 'automation_rest') return <Alert key={n._id} severity="info" icon={<ScheduleSendIcon />} sx={{ border: '1px solid var(--border)', bgcolor: 'var(--card-bg)', color: 'var(--text)', borderRadius: '12px' }}>
+                <Typography sx={{ fontSize: '.84rem', fontWeight: 700, color: 'var(--text)' }}>{lang === 'en' ? 'Automatic activity outside working hours' : 'Actividad automática fuera de horario'}</Typography>
+                <Typography sx={{ fontSize: '.78rem', lineHeight: 1.6, mt: .5, color: 'var(--text-muted)' }}>{lang === 'en' ? 'Automatic sending resumes from 08:00 (Mexico City), respecting its intervals. This does not mean WhatsApp is disconnected.' : 'Los envíos automáticos se reanudan a partir de las 08:00 (CDMX), respetando sus intervalos. Esto no significa que WhatsApp esté desconectado.'}</Typography>
+              </Alert>
               if (n.type === 'service_balance') return <ServiceBalanceNotice key={n._id} notification={n} />
               if (n.type === 'service_health') return <ServiceHealthNotice key={n._id} notification={n} onRefresh={load}
                 onCheckResult={result => setChecks(prev => ({ ...prev, [result.service]: result }))} />

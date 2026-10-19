@@ -15,6 +15,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/wwebjs/package-lock.json
+      - name: Install service dependencies without downloading a browser
+        working-directory: apps/wwebjs
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+        run: npm ci
       - name: Check service syntax and isolated session tests
         run: |
           node --check apps/wwebjs/index.js
@@ -53,5 +61,7 @@ jobs:
         run: npm ci
       - name: Run lint
         run: npm run lint
+      - name: Test send request recovery
+        run: npm run test:send
       - name: Verify WhatsApp text formatting and safe links
         run: node --test src/lib/whatsappText.test.mjs

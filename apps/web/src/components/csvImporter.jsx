@@ -1,9 +1,12 @@
 'use client'
-import { useState, useRef, useEffect, useMemo, Fragment } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { useInstanceStatus } from '../hooks/useInstanceStatus'
 import { keyframes } from '@mui/system'
 import * as XLSX from 'xlsx'
 import Box from '@mui/material/Box'
+import ScrapeProgress from './ScrapeProgress'
+import ScrapeSummary from './ScrapeSummary'
+import { ScrapingPlaceholders } from './ProspectLoading'
 import Typography from '@mui/material/Typography'
 import LinearProgress from '@mui/material/LinearProgress'
 import Table from '@mui/material/Table'
@@ -28,14 +31,9 @@ import HighlightOffIcon from '@mui/icons-material/Stop'
 import CloseIcon from '@mui/icons-material/Close'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import ErrorIcon from '@mui/icons-material/Error'
-import WhatsAppIcon from '@mui/icons-material/WhatsApp'
 import TableChartIcon from '@mui/icons-material/TableChart'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
-import SendIcon from '@mui/icons-material/Send'
-import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import ReplayIcon from '@mui/icons-material/Replay'
-import TravelExploreIcon from '@mui/icons-material/TravelExplore'
-import CheckBoxIcon from '@mui/icons-material/CheckBox'
 import { authFetch } from '@/lib/api'
 import { pickMessageVariant } from '@/lib/messageVariants'
 import { loadSendConfig } from '@/lib/sendConfig'
@@ -148,7 +146,6 @@ export default function CsvImporter() {
   const [extraSelected, setExtraSelected] = useState(new Set())
   const [expandedCo, setExpandedCo] = useState(new Set())
   const [filterContacted,  setFilterContacted]  = useState('all') // 'all' | 'new' | 'contacted'
-  const [localContactedIds, setLocalContactedIds] = useState(new Set())
   const wasActiveRef = useRef(false)
 
   function parseFile(file) {
@@ -274,11 +271,9 @@ export default function CsvImporter() {
   const waRowsUnique = useMemo(() =>
     dedupeByCompany(waRowsAll).map(r => ({
       ...r,
-      already_contacted: (r.company_id && freshContactedMap[r.company_id])
-        || r.already_contacted
-        || (localContactedIds.has(r.company_id) ? { contacted: true } : null),
+      already_contacted: freshContactedMap[r.company_id] ?? r.already_contacted ?? null,
     })),
-  [waRowsAll, localContactedIds, freshContactedMap])
+  [waRowsAll, freshContactedMap])
 
   // ids como string estable — evita releer check-contacted en cada render solo
   // porque waRowsAll cambió de referencia (misma lista de companies, objeto nuevo).
@@ -329,7 +324,6 @@ export default function CsvImporter() {
     setExpandedCo(prev => prev.size ? new Set() : prev)
   }, [results])
   useEffect(() => {
-    setLocalContactedIds(new Set())
     setFilterContacted('all')
   }, [scrapeJob.job?._id])
   const filteredWaRows = useMemo(() => {
@@ -407,13 +401,9 @@ export default function CsvImporter() {
       queuedUrls[row.url] = 'queued'
     }
     if (!jobs.length) return   // every selected number was blocked
-    addBatch(jobs, lang === 'en' ? 'CSV import' : 'Importación CSV')
+    const accepted = await addBatch(jobs, lang === 'en' ? 'CSV import' : 'Importación CSV')
+    if (!accepted) return false
     setSentOverlay(prev => ({ ...prev, ...queuedUrls }))
-    setLocalContactedIds(prev => {
-      const next = new Set(prev)
-      jobs.forEach(j => j.companyId && next.add(j.companyId))
-      return next
-    })
   }
 
   const hasFile    = allUrls.length > 0
@@ -435,28 +425,6 @@ export default function CsvImporter() {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, height: '100%', minHeight: 0, overflowY: 'auto', pb: 2, pr: 0.5 }}>
 
-      {/* ── Header ── */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexShrink: 0 }}>
-        <Box sx={{
-          width: 38, height: 38, flexShrink: 0,
-          bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.12)',
-          border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.25)',
-          borderRadius: 2,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <TableChartIcon sx={{ color: 'var(--accent, #60a5fa)', fontSize: 20 }} />
-        </Box>
-        <Box>
-          <Typography sx={{ color: 'white', fontWeight: 700, fontSize: '1rem', lineHeight: 1.3 }}>
-            {t.csv.title}
-          </Typography>
-          <Typography sx={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.75rem' }}>
-            {t.csv.subtitle}
-          </Typography>
-        </Box>
-      </Box>
-
-      {/* ── File-level error (wrong type, too large, too many URLs) ── */}
       {fileError && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.9, mb: 1.5, bgcolor: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5 }}>
           <ErrorIcon sx={{ fontSize: 15, color: '#f87171', flexShrink: 0 }} />
@@ -566,79 +534,17 @@ export default function CsvImporter() {
             >
               {t.csv.process} {allUrls.length} URLs
             </Button>
-          ) : (
-            <Box sx={{ display: 'flex', gap: 1.5 }}>
-              <Button
-                fullWidth
-                onClick={handlePause}
-                disabled={pausing}
-                startIcon={pausing ? <CircularProgress size={14} sx={{ color: '#fbbf24' }} /> : paused ? <PlayArrowIcon /> : <PauseIcon />}
-                sx={{
-                  flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem',
-                  color: '#fbbf24', bgcolor: 'rgba(251,191,36,0.08)',
-                  border: '1px solid rgba(251,191,36,0.25)', borderRadius: 1.5,
-                  '&:hover': { bgcolor: 'rgba(251,191,36,0.15)', borderColor: 'rgba(251,191,36,0.45)' },
-                  '&.Mui-disabled': { color: 'rgba(251,191,36,0.4)', bgcolor: 'rgba(251,191,36,0.04)', border: '1px solid rgba(251,191,36,0.12)' },
-                }}
-              >
-                {paused ? t.csv.resume : pausing ? (lang === 'en' ? 'Pausing…' : 'Pausando…') : t.csv.pause}
-              </Button>
-              <Button
-                fullWidth
-                onClick={handleCancel}
-                startIcon={<HighlightOffIcon />}
-                sx={{
-                  flex: 1, py: 1, textTransform: 'none', fontWeight: 600, fontSize: '0.88rem',
-                  color: '#f87171', bgcolor: 'rgba(239,68,68,0.08)',
-                  border: '1px solid rgba(239,68,68,0.25)', borderRadius: 1.5,
-                  '&:hover': { bgcolor: 'rgba(239,68,68,0.15)', borderColor: 'rgba(239,68,68,0.45)' },
-                }}
-              >
-                {t.csv.cancel}
-              </Button>
-            </Box>
-          )}
+          ) : null}
         </Box>
       )}
 
-      {/* ── Progress card ── */}
-      {loading && (
-        <Box sx={{ px: 2.5, py: 2, bgcolor: paused ? 'rgba(251,191,36,0.05)' : 'rgba(var(--accent-rgb, 59,130,246), 0.05)', border: `1px solid ${paused ? 'rgba(251,191,36,0.2)' : 'rgba(var(--accent-rgb, 59,130,246), 0.15)'}`, borderRadius: 2, transition: 'all 0.3s', flexShrink: 0 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              {paused
-                ? <PauseIcon sx={{ fontSize: 14, color: '#fbbf24' }} />
-                : <CircularProgress size={14} sx={{ color: pausing ? '#fbbf24' : 'var(--accent, #3b82f6)' }} />
-              }
-              <Typography sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.78rem' }}>
-                {paused ? t.csv.paused : pausing ? (lang === 'en' ? `Pausing… finishing ${scrapeJob.inFlight} in progress —` : `Pausando… terminando ${scrapeJob.inFlight} en curso —`) : t.csv.processing} {completedCount} {t.csv.of} {allUrls.length}
-              </Typography>
-            </Box>
-            <Typography sx={{ color: paused ? '#fbbf24' : 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '0.82rem' }}>
-              {progress}%
-            </Typography>
-          </Box>
-          <LinearProgress
-            variant="determinate"
-            value={progress}
-            sx={{
-              borderRadius: 4, height: 6,
-              bgcolor: paused ? 'rgba(251,191,36,0.1)' : 'rgba(var(--accent-rgb, 59,130,246), 0.1)',
-              '& .MuiLinearProgress-bar': {
-                background: paused
-                  ? 'linear-gradient(90deg, #f59e0b, #fbbf24)'
-                  : 'linear-gradient(90deg, var(--accent, #3b82f6), var(--accent, #60a5fa))',
-                borderRadius: 4,
-              },
-            }}
-          />
-          {currentUrl && !paused && (
-            <Typography sx={{ mt: 1, color: 'rgba(255,255,255,0.28)', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {currentUrl}
-            </Typography>
-          )}
-        </Box>
-      )}
+      {/* Shared scraping progress; each surface keeps its own inputs and actions. */}
+      {loading && <ScrapeProgress
+        processed={completedCount} total={scrapeJob.total || allUrls.length} progress={progress}
+        paused={paused} pausing={pausing} inFlight={scrapeJob.inFlight} currentUrl={currentUrl}
+        onPause={handlePause} onCancel={handleCancel} lang={lang}
+      ></ScrapeProgress>}
+      {loading && results.length === 0 && <ScrapingPlaceholders lang={lang} paused={paused} />}
 
       {/* ── Cancelled + pending URLs banner ── */}
       {done && scrapeJob.job?.status === 'cancelled' && scrapeJob.pendingCount > 0 && (
@@ -662,120 +568,12 @@ export default function CsvImporter() {
         </Box>
       )}
 
-      {/* ── Stat cards — una tira con dividers en vez de cards sueltas ── */}
-      {results.length > 0 && (
-        <Box sx={{
-          display: 'flex', flexWrap: 'wrap', overflow: 'hidden', flexShrink: 0,
-          borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
-          bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
-        }}>
-          {[
-            { icon: <CheckCircleIcon sx={{ fontSize: 18 }} />, label: t.csv.processed, value: okCount, color: '#4ade80' },
-            { icon: <WhatsAppIcon    sx={{ fontSize: 18 }} />, label: t.csv.withWa,    value: waCount,  color: '#60a5fa' },
-            { icon: <ErrorIcon       sx={{ fontSize: 18 }} />, label: t.csv.errors,    value: errCount, color: '#f87171' },
-          ].map((c, i) => (
-            <Fragment key={c.label}>
-              {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))', my: 2 }} />}
-              <Box sx={{ flex: '1 1 0', minWidth: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.6, px: 2.4, py: 2 }}>
-                <Box sx={{
-                  width: 40, height: 40, borderRadius: 2, flexShrink: 0, color: c.color,
-                  background: `linear-gradient(135deg, ${c.color}28 0%, ${c.color}0a 100%)`,
-                  border: `1px solid ${c.color}4d`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  {c.icon}
-                </Box>
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography sx={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.2, fontVariantNumeric: 'tabular-nums' }}>
-                    {c.value}
-                  </Typography>
-                  <Typography sx={{ fontSize: '0.74rem', color: 'var(--text-muted, rgba(255,255,255,0.4))', fontWeight: 500, whiteSpace: 'nowrap' }}>
-                    {c.label}
-                  </Typography>
-                </Box>
-              </Box>
-            </Fragment>
-          ))}
-        </Box>
-      )}
+      {results.length > 0 && <ScrapeSummary
+        processed={results.length} total={scrapeJob.total || allUrls.length} ok={okCount} errors={errCount} withWa={waCount}
+        selected={totalContactPoints} available={waRowsUnique.reduce((sum, r) => sum + (r.all_whatsapp?.length || (r.whatsapp ? 1 : 0)), 0)}
+        sent={sentCount} lang={lang}
+      />}
 
-      {/* ── Funnel de conversión: Scrapeadas → Con WhatsApp → Seleccionadas →
-           Enviadas — mismo widget que Búsqueda, portado para que ambas
-           pantallas midan igual dónde se pierden prospectos. ── */}
-      {results.length > 0 && (() => {
-        // "Seleccionadas" mide NÚMEROS de WhatsApp (no empresas): el número
-        // grande y su % son totalContactPoints/totalAvailableNumbers — cuánto
-        // de lo disponible para enviar ya está marcado, en vez de contar
-        // empresas (donde marcar 1 de 4 números de una sola empresa ya salía
-        // "100%", sin reflejar lo que realmente se iba a enviar).
-        const totalAvailableNumbers = waRowsUnique.reduce((sum, r) => sum + (r.all_whatsapp?.length || (r.whatsapp ? 1 : 0)), 0)
-        const selectedPct = totalAvailableNumbers > 0 ? Math.round((totalContactPoints / totalAvailableNumbers) * 100) : 0
-        const stages = [
-          { key: 'scraped',  label: lang === 'en' ? 'Scraped'       : 'Scrapeadas',    value: results.length,            color: '#60a5fa', icon: <TravelExploreIcon sx={{ fontSize: 22 }} /> },
-          { key: 'wa',       label: lang === 'en' ? 'With WhatsApp' : 'Con WhatsApp',  value: waCount,                   color: '#4ade80', icon: <WhatsAppIcon      sx={{ fontSize: 22 }} /> },
-          { key: 'selected', label: lang === 'en' ? 'Selected'      : 'Seleccionadas', value: totalContactPoints,        color: '#a78bfa', icon: <CheckBoxIcon      sx={{ fontSize: 22 }} />,
-            pctOverride: selectedPct },
-          { key: 'sent',     label: lang === 'en' ? 'Sent'          : 'Enviadas',      value: sentCount,                 color: '#fbbf24', icon: <SendIcon          sx={{ fontSize: 22 }} /> },
-        ]
-        return (
-          <Box sx={{
-            display: 'flex', flexWrap: 'wrap', overflow: 'hidden', flexShrink: 0,
-            borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))',
-            bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
-          }}>
-            {stages.map((s, i) => {
-              const prev = i > 0 ? stages[i - 1] : null
-              const convRate = s.pctOverride !== undefined ? s.pctOverride : (prev && prev.value > 0 ? Math.round((s.value / prev.value) * 100) : null)
-              const pct = i === 0 ? 100 : (s.value === 0 ? 0 : Math.max(4, convRate ?? 0))
-              return (
-                <Fragment key={s.key}>
-                  {i > 0 && <Divider orientation="vertical" flexItem sx={{ borderColor: 'var(--border, rgba(255,255,255,0.08))' }} />}
-                  <Box sx={{ flex: '1 1 0', minWidth: 190, position: 'relative', overflow: 'hidden' }}>
-                    <Box sx={{
-                      position: 'absolute', inset: 0, left: 0, width: `${pct}%`,
-                      background: `linear-gradient(90deg, ${s.color}40 0%, ${s.color}12 100%)`,
-                      transition: 'width 0.4s ease', pointerEvents: 'none',
-                    }} />
-                    <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.8, px: 2.6, py: 2.2 }}>
-                      <Box sx={{
-                        width: 46, height: 46, borderRadius: 2.5, flexShrink: 0, color: s.color,
-                        background: `linear-gradient(135deg, ${s.color}28 0%, ${s.color}0a 100%)`,
-                        border: `1px solid ${s.color}4d`,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      }}>
-                        {s.icon}
-                      </Box>
-                      <Box sx={{ minWidth: 0 }}>
-                        <Typography sx={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.15, fontVariantNumeric: 'tabular-nums' }}>
-                          {s.value}
-                        </Typography>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-                          <Typography sx={{ fontSize: '0.76rem', color: 'var(--text-muted, rgba(255,255,255,0.45))', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                            {s.label}
-                          </Typography>
-                          {convRate !== null && (
-                            <Box sx={{
-                              px: 0.7, py: 0.1, borderRadius: 999, whiteSpace: 'nowrap',
-                              bgcolor: `${s.color}18`, border: `1px solid ${s.color}40`,
-                            }}>
-                              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: s.color }}>
-                                {convRate}%
-                              </Typography>
-                            </Box>
-                          )}
-                        </Box>
-                      </Box>
-                    </Box>
-                  </Box>
-                </Fragment>
-              )
-            })}
-          </Box>
-        )
-      })()}
-
-      {/* ── Toggle de envío masivo — visible mientras haya resultados, incluso
-           durante scraping activo, para poder enviar a lo ya encontrado ── */}
       {(done || loading) && results.length > 0 && waRowsUnique.length > 0 && (
         <BulkSendPanel
           title={t.batch.sendMessages}

@@ -120,8 +120,17 @@ def registration_status(result: dict) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
-def verify_number(session_id: str, phone: str, send_before: str | None = None) -> dict:
+class VerificationLookupError(Exception):
+    def __init__(self, status_code, verification):
+        super().__init__(f'Verification service HTTP {status_code}')
+        self.verification = verification
+
+
+def verify_number(session_id: str, phone: str, send_before: str | None = None,
+                  request_id: str | None = None) -> dict:
     payload = {"phone": phone}
+    if request_id:
+        payload['requestId'] = request_id
     if send_before:
         payload['sendBefore'] = send_before
     r = _req.post(
@@ -132,7 +141,11 @@ def verify_number(session_id: str, phone: str, send_before: str | None = None) -
     )
     _check_activity_response(r)
     if not r.ok:
-        raise Exception(r.json().get("error", r.text))
+        try:
+            metadata = r.json().get('verification', {})
+        except (ValueError, AttributeError):
+            metadata = {}
+        raise VerificationLookupError(r.status_code, metadata)
     return r.json()
 
 def save_contact(session_id: str, phone: str, first_name: str, last_name: str = "") -> dict:
@@ -284,7 +297,9 @@ class WWebjsClient:
         )
 
     def verify(self, phone: str) -> dict:
-        return verify_number(self.session_id, phone)
+        from app.database import MongoDBManager
+        from app.verification_audit import verify_with_audit
+        return verify_with_audit(MongoDBManager(), self.session_id, phone, source='client_adapter', lookup=verify_number)
 
     def save_contact(self, phone: str, first_name: str, last_name: str = "") -> dict:
         return save_contact(self.session_id, phone, first_name, last_name)

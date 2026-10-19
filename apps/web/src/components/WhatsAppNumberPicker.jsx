@@ -161,8 +161,8 @@ export default function WhatsAppNumberPicker({
           sx={{ p: 0.3, color: numberStyle(primary, selected).checkboxColor, '&.Mui-checked': { color: numberStyle(primary, selected).checkedColor } }} />
         {label && (
           <MarqueeText title={labelTitle} sx={{
-            flex: 1, fontSize: '0.75rem', mr: 0.6, lineHeight: 1.5,
-            color: selected ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.35)',
+            flex: 1, fontSize: '.8rem', mr: 0.6, lineHeight: 1.5,
+            color: selected ? 'var(--text)' : 'var(--text-muted)',
           }}>{label}</MarqueeText>
         )}
         {!collapseNumber && (() => {

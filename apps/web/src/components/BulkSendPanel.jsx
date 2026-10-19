@@ -1,5 +1,5 @@
 'use client'
-import { useMemo } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Button from '@mui/material/Button'
@@ -122,6 +122,9 @@ export default function BulkSendPanel({
   // false when the panel already lives inside a scrolling column (Ideas)
   scrollBody = true,
 }) {
+  const submissionLock = useRef(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [submissionError, setSubmissionError] = useState(null)
   const { t, lang } = useLang()
   const en = lang === 'en'
   const contactedCount = waRows.filter(r => r.already_contacted?.contacted).length
@@ -135,7 +138,21 @@ export default function BulkSendPanel({
     capPending: guards.capPending,
     overKind: guards.overKind,
   })
-  const disabled = isSending || allSent || !!blockReason
+  const disabled = isSending || submitting || allSent || !!blockReason
+  async function handleQueueClick() {
+    if (disabled || submissionLock.current) return
+    submissionLock.current = true
+    setSubmitting(true)
+    setSubmissionError(null)
+    try {
+      if (await onSend() === false) throw new Error('queue_not_confirmed')
+    } catch {
+      setSubmissionError(en ? 'The request could not be confirmed. Check the queue before retrying.' : 'No se pudo confirmar la solicitud. Revisa la cola antes de volver a enviarla.')
+    } finally {
+      submissionLock.current = false
+      setSubmitting(false)
+    }
+  }
   const n = unsentCount ?? selected.size
   const readyLabel = en
     ? `Send to ${n} ${n === 1 ? 'company' : 'companies'} with WhatsApp`
@@ -148,15 +165,15 @@ export default function BulkSendPanel({
   ]
 
   return (
-    <Box sx={{ borderRadius: 2.5, border: '1px solid rgba(34,197,94,0.2)', overflow: 'hidden', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-      <Box sx={{ px: 2, py: 1.4, background: 'linear-gradient(180deg, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.02) 100%)', borderBottom: '1px solid rgba(34,197,94,0.1)', display: 'flex', alignItems: 'center', gap: 1.2 }}>
-        <Box sx={{ width: 30, height: 30, borderRadius: 1.5, bgcolor: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.28)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 12px rgba(34,197,94,0.12)', flexShrink: 0 }}>
-          <MessageIcon sx={{ fontSize: 14, color: '#4ade80' }} />
+    <Box data-post-scrape-send sx={{ borderRadius: '16px', border: '1px solid var(--border)', bgcolor: 'var(--card-bg)', overflow: 'hidden', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+      <Box sx={{ px: 2.5, py: 1.8, bgcolor: 'rgba(var(--accent-rgb),.045)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 1.2 }}>
+        <Box sx={{ width: 36, height: 36, borderRadius: '10px', bgcolor: 'rgba(var(--accent-rgb),.1)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <MessageIcon sx={{ fontSize: 18, color: 'var(--accent)' }} />
         </Box>
         <Box>
-          <Typography sx={{ color: '#4ade80', fontWeight: 700, fontSize: '0.84rem', lineHeight: 1.2 }}>{title}</Typography>
+          <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '.95rem', lineHeight: 1.2 }}>{title}</Typography>
           {waRows.length > 0 && (
-            <Typography sx={{ color: 'rgba(255,255,255,0.28)', fontSize: '0.62rem' }}>{waRows.length} {en ? 'with WhatsApp' : 'con WhatsApp'}</Typography>
+            <Typography sx={{ color: 'var(--text-muted)', fontSize: '.75rem', mt: .35 }}>{waRows.length} {en ? 'with WhatsApp' : 'con WhatsApp'}</Typography>
           )}
         </Box>
       </Box>
@@ -174,14 +191,14 @@ export default function BulkSendPanel({
           <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mb: 1 }}>
             {filters.map(f => (
               <Chip key={f.key} label={f.label} size="small" onClick={() => onFilterContacted(f.key)}
-                sx={{ height: 22, fontSize: '0.68rem', cursor: 'pointer', bgcolor: filterContacted === f.key ? f.bg : 'var(--item-hover)', color: filterContacted === f.key ? f.color : 'var(--text-muted)', border: `1px solid ${filterContacted === f.key ? f.border : 'var(--border)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: f.bg, color: f.color } }} />
+                sx={{ height: 28, fontSize: '.74rem', borderRadius: '8px', cursor: 'pointer', bgcolor: filterContacted === f.key ? 'rgba(var(--accent-rgb),.1)' : 'var(--surface)', color: filterContacted === f.key ? 'var(--accent)' : 'var(--text-muted)', border: `1px solid ${filterContacted === f.key ? 'rgba(var(--accent-rgb),.35)' : 'var(--border)'}`, transition: 'all 0.15s', '&:hover': { bgcolor: 'rgba(var(--accent-rgb),.1)', color: 'var(--accent)' } }} />
             ))}
           </Box>
         )}
 
         {/* alignItems flex-start: the recipients list has its own scroll, so it
             shouldn't stretch to the height of the templates column next to it. */}
-        <Box sx={{ display: 'flex', gap: 2.5, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', md: 'minmax(280px,.8fr) minmax(0,1.6fr)', xl: 'minmax(320px,1fr) minmax(0,2fr)' }, gap: 2.5, alignItems: 'start', mt: 2 }}>
           <RecipientsBox rows={filteredRows}
             effectiveSelected={selected}
             expandedCo={expandedCo}
@@ -190,12 +207,12 @@ export default function BulkSendPanel({
             setExpandedCo={setExpandedCo}
             setExtraSelected={setExtraSelected}
             title={t.search.recipients}
-            maxHeight={320}
-            sx={{ width: 260, flexShrink: 0 }} />
+            maxHeight={400}
+            sx={{ width: '100%', minWidth: 0, p: 1.5, border: '1px solid var(--border)', borderRadius: '12px', bgcolor: 'var(--surface)' }} />
 
-          <Box sx={{ flex: 1, minWidth: 300, opacity: filteredRows.length === 0 ? 0.35 : 1, pointerEvents: filteredRows.length === 0 ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
-            <Box sx={{ mb: 1.5, p: 1.6, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
-              <TemplateLibraryPicker onChange={onVariantsChange} recipientCount={guards.totalContactPoints} baseCount={0}
+          <Box sx={{ minWidth: 0, opacity: filteredRows.length === 0 ? 0.35 : 1, pointerEvents: filteredRows.length === 0 ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
+            <Box sx={{ mb: 1.5, p: { xs: 1.5, md: 2 }, borderRadius: '12px', border: '1px solid var(--border)', bgcolor: 'var(--surface)' }}>
+              <TemplateLibraryPicker postScrape onChange={onVariantsChange} recipientCount={guards.totalContactPoints} baseCount={0}
                 singleSelect={guards.totalContactPoints === 1}
                 hasName={varFlags.hasName} hasCity={varFlags.hasCity}
                 hasIndustry={varFlags.hasIndustry} hasWeb={varFlags.hasWeb}
@@ -204,7 +221,7 @@ export default function BulkSendPanel({
             <Box sx={{ mb: 1.5 }}>
               <SendConfigPanel config={sendCfg} onChange={onSendCfgChange} disabled={isSending} />
             </Box>
-            <SendErrorBanner error={sendError} onDismiss={onDismissError} sx={{ mb: 1 }} />
+            <SendErrorBanner error={submissionError || sendError} onDismiss={() => { setSubmissionError(null); onDismissError?.() }} sx={{ mb: 1 }} />
             {isSending && (
               <Button fullWidth onClick={onCancel} startIcon={<HighlightOffIcon />}
                 sx={{
@@ -221,15 +238,16 @@ export default function BulkSendPanel({
             <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1.5, flexWrap: 'wrap' }}>
               <DailyCapBadge stats={capStats} selectionCount={guards.totalContactPoints} newSelectionCount={guards.newContactPoints} oneLine sx={{ flexShrink: 0 }} />
               <Button
-                onClick={onSend}
+                variant="contained"
+                onClick={handleQueueClick}
                 disabled={disabled}
-                startIcon={isSending ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 15 }} />}
+                startIcon={isSending || submitting ? <CircularProgress size={14} sx={{ color: 'inherit' }} /> : <SendIcon sx={{ fontSize: 15 }} />}
                 sx={{
                   flex: 1, minWidth: 220, fontSize: '0.84rem', fontWeight: 700,
                   py: 1.1, borderRadius: 1.8, textTransform: 'none', transition: 'all 0.2s',
-                  bgcolor: 'rgba(34,197,94,0.18)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.38)',
-                  '&:hover': { bgcolor: 'rgba(34,197,94,0.28)', borderColor: 'rgba(34,197,94,0.6)', boxShadow: '0 0 18px rgba(34,197,94,0.18)' },
-                  '&.Mui-disabled': { color: 'rgba(255,255,255,0.3)', bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)' },
+                  bgcolor: 'var(--accent)', color: 'var(--accent-contrast)', border: '1px solid transparent',
+                  '&:hover': { bgcolor: 'var(--accent)', filter: 'brightness(1.08)', boxShadow: '0 3px 12px rgba(var(--accent-rgb),.18)' },
+                  '&.Mui-disabled': { color: 'var(--text-muted)', bgcolor: 'var(--item-hover)', border: '1px solid var(--border)' },
                 }}
               >
                 {allSent ? sentLabel : (blockReason || readyLabel)}

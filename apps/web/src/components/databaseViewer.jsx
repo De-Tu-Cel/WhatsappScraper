@@ -155,7 +155,7 @@ function StatCard({ icon, color, value, label, subtitle, onClick, active, percen
           {label}
         </Typography>
         {subtitle && (
-          <Typography sx={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontWeight: 500, lineHeight: 1.4, whiteSpace: 'nowrap' }}>
+          <Typography sx={{ fontSize: '0.76rem', color: 'var(--text-muted)', fontWeight: 500, lineHeight: 1.4, whiteSpace: 'nowrap' }}>
             {subtitle}
           </Typography>
         )}
@@ -383,7 +383,7 @@ function MiniDateBadge({ iso, lang }) {
         width: 38, height: 38, borderRadius: 1.4,
         bgcolor: 'var(--surface, rgba(255,255,255,0.04))', border: '1px solid var(--border, rgba(255,255,255,0.1))',
       }}>
-        <Typography sx={{ fontSize: '0.52rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.03em', lineHeight: 1.3 }}>
+        <Typography sx={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.03em', lineHeight: 1.3 }}>
           {month}
         </Typography>
         <Typography sx={{ fontSize: '0.92rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.1 }}>
@@ -443,7 +443,7 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
             {t.db.heading}
           </Typography>
           {total > 0 && (
-            <Typography sx={{ fontSize: '0.65rem', color: 'var(--text-muted, rgba(255,255,255,0.3))', lineHeight: 1, mt: 0.2 }}>
+            <Typography sx={{ fontSize: '0.76rem', color: 'var(--text-muted, rgba(255,255,255,0.3))', lineHeight: 1, mt: 0.2 }}>
               {total.toLocaleString()} {total === 1 ? t.db.companySingular : t.db.companySingular + 's'} {t.db.registradas}
             </Typography>
           )}
@@ -452,7 +452,7 @@ function EnhancedToolbar({ numSelected, onDelete, onCampaign, onRescrape, rescra
           <Chip
             label={`${numSelected} ${numSelected !== 1 ? t.db.selected : t.db.selectedSingle}`}
             size="small"
-            sx={{ height: 22, fontSize: '0.7rem', fontWeight: 600, bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.15)', color: 'var(--accent, #60a5fa)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.3)' }}
+            sx={{ height: 22, fontSize: '0.76rem', fontWeight: 600, bgcolor: 'rgba(var(--accent-rgb, 59,130,246), 0.15)', color: 'var(--accent, #60a5fa)', border: '1px solid rgba(var(--accent-rgb, 59,130,246), 0.3)' }}
           />
         )}
       </Box>
@@ -851,7 +851,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
 
       <DialogContent sx={{ px: 3, pt: 2.5, pb: 1, display: 'flex', flexDirection: 'column', gap: 0, bgcolor: 'var(--sidebar-bg, #0d1117)' }}>
         {/* Sección: General */}
-        <Typography variant="overline" sx={{ color: 'var(--accent, #3b82f6)', fontSize: '0.65rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
+        <Typography variant="overline" sx={{ color: 'var(--accent, #3b82f6)', fontSize: '0.76rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
           {t.db.generalInfo}
         </Typography>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.8, mb: 2.5 }}>
@@ -882,7 +882,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
         <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', mb: 2.5 }} />
 
         {/* Sección: Descripción */}
-        <Typography variant="overline" sx={{ color: 'var(--accent, #3b82f6)', fontSize: '0.65rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
+        <Typography variant="overline" sx={{ color: 'var(--accent, #3b82f6)', fontSize: '0.76rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
           {t.db.descLabel}
         </Typography>
         <TextField
@@ -919,7 +919,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
               <Typography sx={{ color: form.has_whatsapp ? '#4ade80' : 'rgba(255, 255, 255, 0.49)', fontSize: '0.85rem', fontWeight: 500 }}>
                 {t.db.hasWhatsApp}
               </Typography>
-              <Typography sx={{ color: 'rgba(255, 255, 255, 0.26)', fontSize: '0.72rem' }}>
+              <Typography sx={{ color: 'rgba(255, 255, 255, 0.26)', fontSize: '0.76rem' }}>
                 {form.has_whatsapp ? t.db.registeredNum : t.db.noRegisteredNum}
               </Typography>
             </Box>
@@ -935,7 +935,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
         </Box>
 
         <Divider sx={{ borderColor: 'rgba(255,255,255,0.06)', my: 2 }} />
-        <Typography variant="overline" sx={{ color: 'var(--accent, #3b82f6)', fontSize: '0.65rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
+        <Typography variant="overline" sx={{ color: 'var(--accent, #3b82f6)', fontSize: '0.76rem', letterSpacing: 1.5, mb: 1.5, display: 'block' }}>
           {t.db.whatsappNums}
         </Typography>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.8, mb: 1.5 }}>
@@ -957,7 +957,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
                       '& .MuiInputBase-root.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: i === 0 ? '#4ade80' : '#3b82f6' },
                     }}
                   />
-                  {editingError && <Typography sx={{ color: '#f87171', fontSize: '0.68rem', mt: 0.3 }}>{editingError}</Typography>}
+                  {editingError && <Typography sx={{ color: '#f87171', fontSize: '0.76rem', mt: 0.3 }}>{editingError}</Typography>}
                 </Box>
               </Box>
             ) : (
@@ -968,7 +968,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
                 cursor: 'pointer', '&:hover': { bgcolor: i === 0 ? 'rgba(34,197,94,0.14)' : 'rgba(255,255,255,0.07)' },
               }}>
                 {i === 0 && (
-                  <Typography sx={{ fontSize: '0.6rem', color: '#4ade80', fontWeight: 700,
+                  <Typography sx={{ fontSize: '0.76rem', color: '#4ade80', fontWeight: 700,
                     bgcolor: 'rgba(34,197,94,0.15)', px: 0.6, borderRadius: 0.5, lineHeight: '16px' }}>
                     {t.db.primaryNum}
                   </Typography>
@@ -1010,7 +1010,7 @@ function EditDialog({ open, company, contacts, onClose, onSave }) {
             </Button>
           </Box>
           {newNumError && (
-            <Typography sx={{ color: '#f87171', fontSize: '0.72rem', pl: 0.5 }}>{newNumError}</Typography>
+            <Typography sx={{ color: '#f87171', fontSize: '0.76rem', pl: 0.5 }}>{newNumError}</Typography>
           )}
         </Box>
       </DialogContent>
@@ -1445,14 +1445,14 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
           return (
             <Box sx={{ mb: 1.5, p: 1.6, borderRadius: 2, border: '1px solid rgba(255,255,255,0.08)', bgcolor: 'rgba(255,255,255,0.02)' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.4 }}>
-                <Typography sx={{ fontSize: '0.63rem', color: 'rgba(255,255,255,0.4)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                <Typography sx={{ fontSize: '0.76rem', color: 'rgba(255,255,255,0.4)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                   {lang === 'en' ? `Recipients — ${selectedNums.size} number${selectedNums.size !== 1 ? 's' : ''} selected` : `Destinatarios — ${selectedNums.size} número${selectedNums.size !== 1 ? 's' : ''} seleccionado${selectedNums.size !== 1 ? 's' : ''}`}
                 </Typography>
                 {recipientsLoading && <CircularProgress size={12} sx={{ color: 'rgba(255,255,255,0.3)' }} />}
               </Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, mb: 1 }}>
                 <WhatsAppIcon sx={{ fontSize: 11, color: 'rgba(255,255,255,0.3)' }} />
-                <Typography sx={{ fontSize: '0.63rem', color: 'rgba(255,255,255,0.35)' }}>{t.campaign.pickerHint}</Typography>
+                <Typography sx={{ fontSize: '0.76rem', color: 'rgba(255,255,255,0.35)' }}>{t.campaign.pickerHint}</Typography>
               </Box>
               <Divider sx={{ borderColor: 'var(--border)', mb: 1 }} />
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6, maxHeight: 220, overflowY: 'auto', p: 0.2,
@@ -1510,14 +1510,14 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
             {done && (
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                 <Chip label={lang === 'en' ? `${sentCount} sent` : `${sentCount} enviado${sentCount !== 1 ? 's' : ''}`} size="small"
-                  sx={{ bgcolor: 'rgba(34,197,94,0.12)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', fontSize: '0.72rem', height: 24 }} />
+                  sx={{ bgcolor: 'rgba(34,197,94,0.12)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)', fontSize: '0.76rem', height: 24 }} />
                 {failedCount > 0 && (
                   <Chip label={lang === 'en' ? `${failedCount} failed` : `${failedCount} fallido${failedCount !== 1 ? 's' : ''}`} size="small"
-                    sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', fontSize: '0.72rem', height: 24 }} />
+                    sx={{ bgcolor: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', fontSize: '0.76rem', height: 24 }} />
                 )}
                 {noWaCount > 0 && (
                   <Chip label={lang === 'en' ? `${noWaCount} no number` : `${noWaCount} sin número`} size="small"
-                    sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.1)', fontSize: '0.72rem', height: 24 }} />
+                    sx={{ bgcolor: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)', border: '1px solid rgba(255,255,255,0.1)', fontSize: '0.76rem', height: 24 }} />
                 )}
               </Box>
             )}
@@ -1534,7 +1534,7 @@ export function CampaignDialog({ open, selectedRows, onClose, onNotify, instance
           {done ? t.common.close : t.common.cancel}
         </Button>
         {!done && capOverBy > 0 && (
-          <Typography sx={{ width: '100%', color: '#f59e0b', fontSize: '0.72rem' }}>
+          <Typography sx={{ width: '100%', color: '#f59e0b', fontSize: '0.76rem' }}>
             {capPending
               ? (lang === 'en' ? 'Loading today\'s quota…' : 'Cargando el cupo de hoy…')
               : overKind === 'new'
@@ -1864,17 +1864,19 @@ export default function DatabaseViewer({ isActive }) {
   // `messagesOrText` is either one string or an array parallel to `numbers` —
   // MessageComposer sends an array with a different rotated variant per
   // number once a company has more than one WhatsApp contact selected.
-  const handleSendFromDB = (messagesOrText, numbers) => {
+  const handleSendFromDB = async (messagesOrText, numbers) => {
     if (!msgData) return
     const nums = Array.isArray(numbers) ? numbers : [numbers]
     if (nums.length === 0) return
-    addJob({
+    const accepted = await addJob({
       numbers:   nums,
       messages:  messagesOrText,
       companyId: msgData.company_id,
       website:   msgData.website,
     }, msgData.scraped?.name || msgData.website || '')
+    if (!accepted) return false
     setMsgTarget(null)
+    return true
   }
 
   const handleSaveEdit = async (id, fields, waNumbers) => {
@@ -1924,7 +1926,7 @@ export default function DatabaseViewer({ isActive }) {
   )
 
   return (
-    <Box sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Box data-ui-section="prospects" sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Paper sx={{ width: '100%', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'hidden', display: 'flex', flexDirection: 'column', flexGrow: 1, position: 'relative', background: 'var(--sidebar-bg, #0d1117)', boxShadow: '0 8px 40px rgba(0,0,0,0.55), 0 2px 12px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04) inset' }}>
         {/* brillo radial */}
         <Box sx={{ position: 'absolute', top: -50, left: -50, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle, rgba(var(--accent-rgb, 99,102,241), 0.07) 0%, transparent 70%)', pointerEvents: 'none', zIndex: 0 }} />
@@ -2052,7 +2054,7 @@ export default function DatabaseViewer({ isActive }) {
                 {filters.search && (
                   <Chip size="small" label={`"${filters.search}"`}
                     onDelete={() => handleFilterChange('search', '')}
-                    sx={{ height: 20, fontSize: '0.63rem', bgcolor: 'rgba(var(--accent-rgb, 96,165,250), 0.1)', color: 'var(--accent, #60a5fa)',
+                    sx={{ height: 20, fontSize: '0.76rem', bgcolor: 'rgba(var(--accent-rgb, 96,165,250), 0.1)', color: 'var(--accent, #60a5fa)',
                       border: '1px solid rgba(var(--accent-rgb, 96,165,250), 0.22)',
                       '& .MuiChip-deleteIcon': { color: 'var(--accent, #60a5fa)', fontSize: 12, '&:hover': { color: 'var(--accent, #93c5fd)' } } }} />
                 )}
@@ -2061,7 +2063,7 @@ export default function DatabaseViewer({ isActive }) {
                   return (
                     <Chip key={`ind-${v}`} size="small" label={v}
                       onDelete={() => handleFilterChange('industry', filters.industry.filter((x) => x !== v))}
-                      sx={{ height: 20, fontSize: '0.63rem', bgcolor: `${color}1a`, color,
+                      sx={{ height: 20, fontSize: '0.76rem', bgcolor: `${color}1a`, color,
                         border: `1px solid ${color}38`,
                         '& .MuiChip-deleteIcon': { color, fontSize: 12, '&:hover': { opacity: 0.75 } } }} />
                   )
@@ -2071,7 +2073,7 @@ export default function DatabaseViewer({ isActive }) {
                   return (
                     <Chip key={`city-${v}`} size="small" label={v}
                       onDelete={() => handleFilterChange('city', filters.city.filter((x) => x !== v))}
-                      sx={{ height: 20, fontSize: '0.63rem', bgcolor: `${color}1a`, color,
+                      sx={{ height: 20, fontSize: '0.76rem', bgcolor: `${color}1a`, color,
                         border: `1px solid ${color}38`,
                         '& .MuiChip-deleteIcon': { color, fontSize: 12, '&:hover': { opacity: 0.75 } } }} />
                   )
@@ -2080,7 +2082,7 @@ export default function DatabaseViewer({ isActive }) {
                   <Chip size="small"
                     label={filters.has_whatsapp === 'true' ? (lang === 'en' ? 'Has WA' : 'Con WA') : (lang === 'en' ? 'No WA' : 'Sin WA')}
                     onDelete={() => handleFilterChange('has_whatsapp', '')}
-                    sx={{ height: 20, fontSize: '0.63rem',
+                    sx={{ height: 20, fontSize: '0.76rem',
                       bgcolor: filters.has_whatsapp === 'true' ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
                       color: filters.has_whatsapp === 'true' ? '#22c55e' : '#f87171',
                       border: `1px solid ${filters.has_whatsapp === 'true' ? 'rgba(34,197,94,0.22)' : 'rgba(239,68,68,0.22)'}`,
@@ -2090,7 +2092,7 @@ export default function DatabaseViewer({ isActive }) {
                   <Chip size="small"
                     label={filters.contacted === 'true' ? (lang === 'en' ? 'Contacted' : 'Ya contactadas') : (lang === 'en' ? 'Not contacted' : 'Sin contactar')}
                     onDelete={() => handleFilterChange('contacted', '')}
-                    sx={{ height: 20, fontSize: '0.63rem',
+                    sx={{ height: 20, fontSize: '0.76rem',
                       bgcolor: filters.contacted === 'true' ? 'rgba(251,191,36,0.12)' : 'rgba(148,163,184,0.1)',
                       color: filters.contacted === 'true' ? '#fbbf24' : 'rgba(148,163,184,0.7)',
                       border: `1px solid ${filters.contacted === 'true' ? 'rgba(251,191,36,0.25)' : 'rgba(148,163,184,0.18)'}`,
@@ -2181,7 +2183,7 @@ export default function DatabaseViewer({ isActive }) {
                    ese mismo "stacking context" que el resto del header
                    sticky sí tiene, viéndose como un recuadro aparte al
                    hacer scroll. */}
-                <TableCell sx={{ bgcolor: 'var(--card-bg, #161d2e)', borderBottom: '1px solid rgba(255,255,255,0.08)', position: 'relative' }} />
+                <TableCell align="center" sx={{ bgcolor: 'var(--card-bg, #161d2e)', borderBottom: '1px solid rgba(255,255,255,0.08)', position: 'relative', textAlign: 'center' }}>{lang === 'en' ? 'Actions' : 'Acciones'}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -2231,7 +2233,7 @@ export default function DatabaseViewer({ isActive }) {
                               placement="top"
                               title={row.contacted_numbers?.length > 0 ? (
                                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.8 }}>
-                                  <Typography sx={{ fontSize: '0.63rem', color: 'rgba(255,255,255,0.45)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                  <Typography sx={{ fontSize: '0.76rem', color: 'rgba(255,255,255,0.45)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                                     {lang === 'en' ? 'Numbers messaged' : 'Números contactados'}
                                   </Typography>
                                   {row.contacted_numbers.map(n => {
@@ -2239,7 +2241,7 @@ export default function DatabaseViewer({ isActive }) {
                                     let disp = n.replace(/^521(\d{10})$/, '52$1')
                                     if (!disp.startsWith('+')) disp = '+' + disp
                                     return (
-                                      <Typography key={n} sx={{ fontSize: '0.72rem', fontFamily: 'monospace', color: '#fbbf24', letterSpacing: '0.02em' }}>
+                                      <Typography key={n} sx={{ fontSize: '0.76rem', fontFamily: 'monospace', color: '#fbbf24', letterSpacing: '0.02em' }}>
                                         {disp}
                                       </Typography>
                                     )
@@ -2251,7 +2253,7 @@ export default function DatabaseViewer({ isActive }) {
                                 bgcolor: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.3)',
                                 borderRadius: 1, px: 0.6, py: 0.15, cursor: row.contacted_numbers?.length > 0 ? 'default' : 'default' }}>
                                 <Box component="span" sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: '#4ade80', flexShrink: 0 }} />
-                                <Typography sx={{ fontSize: '0.6rem', color: '#4ade80', fontWeight: 700, whiteSpace: 'nowrap',
+                                <Typography sx={{ fontSize: '0.76rem', color: '#4ade80', fontWeight: 700, whiteSpace: 'nowrap',
                                   '[data-theme-mode="light"] &': { color: '#16a34a' } }}>
                                   {t.campaign?.contacted || 'Contactada'}
                                 </Typography>
@@ -2328,10 +2330,10 @@ export default function DatabaseViewer({ isActive }) {
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>
                         {row.has_whatsapp ? (
                           <Chip icon={<WhatsAppIcon sx={{ fontSize: '12px !important' }} />} label={t.db.yes} size="small"
-                            sx={{ bgcolor: 'rgba(34,197,94,0.16)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.4)', height: 22, fontSize: '0.7rem', fontWeight: 700, px: 0.3, boxShadow: '0 0 8px rgba(34,197,94,0.2)', '& .MuiChip-icon': { color: '#22c55e' } }} />
+                            sx={{ bgcolor: 'rgba(34,197,94,0.16)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.4)', height: 22, fontSize: '0.76rem', fontWeight: 700, px: 0.3, boxShadow: '0 0 8px rgba(34,197,94,0.2)', '& .MuiChip-icon': { color: '#22c55e' } }} />
                         ) : (
                           <Chip label={t.db.no} size="small"
-                            sx={{ bgcolor: 'rgba(239,68,68,0.08)', color: 'rgba(248,113,113,0.55)', border: '1px solid rgba(239,68,68,0.18)', height: 22, fontSize: '0.7rem', fontWeight: 600, px: 0.3 }} />
+                            sx={{ bgcolor: 'rgba(239,68,68,0.08)', color: 'rgba(248,113,113,0.55)', border: '1px solid rgba(239,68,68,0.18)', height: 22, fontSize: '0.76rem', fontWeight: 600, px: 0.3 }} />
                         )}
                       </TableCell>
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>
@@ -2340,7 +2342,8 @@ export default function DatabaseViewer({ isActive }) {
                       <TableCell align="center" onClick={() => handleSelectRow(row._id)}>
                         <MiniDateBadge iso={row.last_scraped_at} lang={lang} />
                       </TableCell>
-                      <TableCell align="right" sx={{ pr: 1 }}>
+                      <TableCell align="center" sx={{ px: 1 }}>
+                        <Box data-prospect-actions sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.75 }}>
                         {/* Hover antes iba en morado/azul fijos, sin relación
                            con el color de paleta elegido en Ajustes. */}
                         <Tooltip title={t.db.viewInfo}>
@@ -2369,6 +2372,8 @@ export default function DatabaseViewer({ isActive }) {
                             <EditIcon sx={{ fontSize: 15 }} />
                           </IconButton>
                         </Tooltip>
+
+                        </Box>
                       </TableCell>
                     </TableRow>
                   )

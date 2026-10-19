@@ -81,7 +81,7 @@ function StepBadge({ n, icon }) {
         bgcolor: 'var(--accent, #3b82f6)', border: '1.5px solid var(--card-bg, #161d2e)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
-        <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, color: '#fff', lineHeight: 1 }}>{n}</Typography>
+        <Typography sx={{ fontSize: '0.76rem', fontWeight: 800, color: '#fff', lineHeight: 1 }}>{n}</Typography>
       </Box>
     </Box>
   )
@@ -270,7 +270,7 @@ export default function SendCampaign() {
   }
 
   return (
-    <Box data-campaign sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, minWidth: 0, containerType: 'inline-size', containerName: 'campaign', gap: 2 }}>
+    <Box data-ui-section="campaign" data-campaign sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, minWidth: 0, containerType: 'inline-size', containerName: 'campaign', gap: 2 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexShrink: 0 }}>
         <Box sx={{ width: 42, height: 42, borderRadius: 3, bgcolor: 'rgba(var(--accent-rgb,59,130,246),.12)', border: '1px solid rgba(var(--accent-rgb,59,130,246),.25)', display: 'grid', placeItems: 'center', flexShrink: 0 }}><CampaignIcon sx={{ color: 'var(--accent)', fontSize: 23 }} /></Box>
         <Box>
@@ -303,7 +303,7 @@ export default function SendCampaign() {
         <Box ref={recipientSectionRef} sx={scrollColumn}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
             <StepHeader n={2} title={t.campaign.stepRecipients} hint={t.campaign.hintRecipients} icon={<GroupsIcon sx={{ fontSize: 15, color: 'var(--accent)' }} />} />
-            <Chip label={en ? `${targets.length} selected numbers` : `${targets.length} números seleccionados`} size="small" sx={{ bgcolor: 'var(--item-hover)', color: 'var(--accent)', border: '1px solid var(--border)', fontSize: '.74rem' }} />
+            <Chip label={en ? `${targets.length} selected numbers` : `${targets.length} números seleccionados`} size="small" sx={{ bgcolor: 'var(--item-hover)', color: 'var(--accent)', border: '1px solid var(--border)', fontSize: '0.76rem' }} />
           </Box>
           <CompanyPicker campaignStyle selectedNums={selectedNums} numInfoMap={numInfoMap} onChange={(ns, nm) => { setSelectedNums(ns); setNumInfoMap(nm) }}
             listMaxHeight="min(64vh, 680px)" contactedRefreshKey={contactedRefreshKey} newContactsCap={capStats ? (capStats.new_contacts_capacity ?? 0) : 0} onNewCountChange={setNewSelCount} showTitle={false} />

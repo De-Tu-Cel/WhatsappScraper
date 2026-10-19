@@ -17,6 +17,7 @@ async function simulate({ remaining = 500, typingMs = 1000, withDeadline = true,
   } }
   let handler
   vm.runInNewContext(route, {
+    withTypingPresence: (client, id, ms, fn) => require('./typingPresence').withTypingPresence(client, id, ms, fn, async delay => { if (typeof now !== 'undefined') now += delay }),
     lineActivity: { wrap: (_, fn) => fn },
     app: { post: (_, fn) => { handler = fn } }, sessions: new Map([['qa', session]]),
     Date: class extends Date { static now() { return now } }, Math,

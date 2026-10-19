@@ -43,10 +43,10 @@ function NavItem({ item, index, isActive, open, onClick }) {
         id={`tour-nav-${item.key}`}
         onClick={() => onClick(index)}
         sx={{
-          borderRadius: 2, mb: 0.5, minHeight: 42,
-          color: isActive ? 'white' : C.dimText,
-          bgcolor: isActive ? C.accentGlow : 'transparent',
-          outline: isActive ? '1px solid rgba(59,130,246,0.25)' : '1px solid transparent',
+          position: 'relative', borderRadius: 2, mb: 0.5, minHeight: 44,
+          color: isActive ? C.text : C.dimText,
+          bgcolor: isActive ? 'rgba(var(--accent-rgb),0.10)' : 'transparent',
+          outline: 'none',
           justifyContent: open ? 'flex-start' : 'center',
           px: open ? 1.5 : 1,
           transition: 'padding 0.28s cubic-bezier(0.4,0,0.2,1)',
@@ -86,7 +86,7 @@ function GroupLabel({ label, open }) {
       opacity: open ? 1 : 0,
       maxHeight: open ? 28 : 0,
       transition: 'opacity 0.2s ease, max-height 0.25s cubic-bezier(0.4,0,0.2,1)',
-      px: 1.5, mb: 0.5,
+      px: 1.5, mb: 1,
     }}>
       <Typography sx={{
         fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.08em',
@@ -116,9 +116,9 @@ export default React.memo(function Sidebar({ open, setOpen, active, setActive, n
       border: `1px solid ${C.sidebarBorder}`,
       borderRadius: '16px',
       overflow: 'hidden',
-      boxShadow: '0 4px 24px rgba(0,0,0,0.4)',
+      boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
       position: 'relative',
-      background: 'linear-gradient(160deg, rgba(var(--accent-rgb,59,130,246),0.10) 0%, rgba(var(--accent-rgb,59,130,246),0.03) 45%, var(--sidebar-bg, #0d1117) 70%)',
+      bgcolor: 'var(--sidebar-bg, #0d1117)',
     }}>
       {/* brillo radial en esquina superior */}
       <Box sx={{
@@ -130,7 +130,7 @@ export default React.memo(function Sidebar({ open, setOpen, active, setActive, n
 
       {/* Logo / toggle */}
       <Box sx={{
-        height: 64, px: 1.5, flexShrink: 0, position: 'relative', zIndex: 1,
+        height: 78, px: 1.5, flexShrink: 0, position: 'relative', zIndex: 1,
         display: 'flex', alignItems: 'center',
         justifyContent: open ? 'flex-start' : 'center',
       }}>
@@ -183,7 +183,7 @@ export default React.memo(function Sidebar({ open, setOpen, active, setActive, n
 
           const isLast = gi === GROUP_KEYS.length - 1
           return (
-            <Box key={group.labelKey} sx={{ mb: isLast ? 0 : 1 }}>
+            <Box key={group.labelKey} sx={{ mb: isLast ? 0 : 2 }}>
               <GroupLabel label={groupLabel} open={open} />
               {groupItems.map(({ item, index }) => (
                 <NavItem
@@ -202,7 +202,7 @@ export default React.memo(function Sidebar({ open, setOpen, active, setActive, n
                     id="tour-settings"
                     onClick={onSettingsClick}
                     sx={{
-                      borderRadius: 2, mb: 0.5, minHeight: 42,
+                      position: 'relative', borderRadius: 2, mb: 0.5, minHeight: 44,
                       color: settingsOpen ? 'white' : C.dimText,
                       bgcolor: settingsOpen ? C.accentGlow : 'transparent',
                       outline: settingsOpen ? `1px solid rgba(59,130,246,0.25)` : '1px solid transparent',

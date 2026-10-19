@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import Box from '@mui/material/Box'
 import IconButton from '@mui/material/IconButton'
 import Badge from '@mui/material/Badge'
@@ -13,6 +13,8 @@ import { useLang } from '../context/LangContext'
 import { authFetch } from '@/lib/api'
 import { LANGS } from './Settings'
 import FlagIcon from './FlagIcon'
+import { useUser } from '@/context/UserContext'
+import { notificationSince } from '@/lib/notificationState'
 
 const ICON_BTN_SX = (active) => ({
   width: 28, height: 28, borderRadius: '50%', p: 0,
@@ -35,41 +37,48 @@ export default function TopControls({ appearanceOpen, onToggleAppearance, notifO
   const { lang, setLang, t } = useLang()
   const [anchorEl, setAnchorEl] = useState(null)
   const [notifCount, setNotifCount] = useState(0)
+  const { user } = useUser()
+  const userId = user?.id || user?._id || user?.username || ''
+  const countRequest = useRef(null)
   const current = LANGS.find(l => l.value === lang) || LANGS[0]
 
   const fetchNotifCount = useCallback(() => {
-    if (typeof window === 'undefined' || !localStorage.getItem('user_token')) return
-    const since = localStorage.getItem('notif_last_read') || ''
+    if (typeof window === 'undefined' || !userId || notifOpen || !localStorage.getItem('user_token')) return
+    countRequest.current?.abort()
+    const request = new AbortController(); countRequest.current = request
+    const since = notificationSince(localStorage, userId)
     const url = since ? `/api/notifications/count?since=${encodeURIComponent(since)}` : '/api/notifications/count'
-    authFetch(url)
-      .then(r => r.json())
-      .then(d => setNotifCount(Number(d?.count) || 0))
+    authFetch(url, { signal: request.signal, cache: 'no-store' })
+      .then(r => { if (!r.ok) throw new Error('load'); return r.json() })
+      .then(d => { if (!request.signal.aborted) setNotifCount(Number(d?.count) || 0) })
       .catch(() => {})
-  }, [])
+  }, [userId, notifOpen])
 
   useEffect(() => {
     fetchNotifCount()
     const id = setInterval(() => { if (!document.hidden) fetchNotifCount() }, 30_000)
     window.addEventListener('service-health-refresh', fetchNotifCount)
-    return () => { clearInterval(id); window.removeEventListener('service-health-refresh', fetchNotifCount) }
+    return () => { countRequest.current?.abort(); clearInterval(id); window.removeEventListener('service-health-refresh', fetchNotifCount) }
   }, [fetchNotifCount])
 
   useEffect(() => {
-    if (notifOpen) {
-      const now = new Date().toISOString()
-      localStorage.setItem('notif_last_read', now)
+    function onRead(event) {
+      if (event.detail?.userId !== userId) return
+      countRequest.current?.abort()
       setNotifCount(0)
     }
-  }, [notifOpen])
+    window.addEventListener('notifications-read', onRead)
+    return () => window.removeEventListener('notifications-read', onRead)
+  }, [userId])
 
   return (
     <Box id="tour-top-controls" sx={{
       display: 'flex', alignItems: 'center', gap: 0.5,
-      px: 0.75, py: 0.5, borderRadius: 99,
+      px: 0.5, py: 0.5, borderRadius: 2.5,
       bgcolor: 'var(--card-bg, rgba(255,255,255,0.04))',
       border: '1px solid var(--border, rgba(255,255,255,0.1))',
       backdropFilter: 'blur(12px)',
-      boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+      boxShadow: 'none',
     }}>
       <Tooltip title={t.settings.language}>
         <IconButton size="small" onClick={e => setAnchorEl(e.currentTarget)}
@@ -107,7 +116,7 @@ export default function TopControls({ appearanceOpen, onToggleAppearance, notifO
       </Menu>
 
       <Tooltip title={t.notifications.title}>
-        <IconButton size="small" onClick={onToggleNotifications} sx={ICON_BTN_SX(notifOpen)}>
+        <IconButton size="small" aria-label={t.notifications.title} onClick={onToggleNotifications} sx={ICON_BTN_SX(notifOpen)}>
           <Badge
             badgeContent={notifCount}
             max={99}

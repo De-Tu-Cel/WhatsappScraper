@@ -201,7 +201,8 @@ class FakeCollection:
     @staticmethod
     def _sorted(docs, sort):
         for field, direction in reversed(sort):
-            docs = sorted(docs, key=lambda d: d.get(field), reverse=(direction < 0))
+            # Mongo sorts missing/null fields together; Python cannot compare None.
+            docs = sorted(docs, key=lambda d: (d.get(field) is not None, d.get(field)), reverse=(direction < 0))
         return docs
 
 
@@ -219,6 +220,7 @@ class FakeMgr:
             "companies":          FakeCollection(),
             "instances":          FakeCollection(),
             "blacklist":          FakeCollection(),
+            "contact_permissions": type("PermittedRecipients", (), {"find_one": lambda self, *args, **kw: {"outreach_allowed": True}})(),
         })()
 
 
@@ -720,7 +722,7 @@ class TestBatchCompleteNotification:
 
 class TestCheckSendAllowed:
     def test_no_company_id_is_allowed(self, mgr):
-        assert sw._check_send_allowed(mgr, "") == (True, "")
+        assert sw._check_send_allowed(mgr, "") == (False, "skipped_missing_consent")
 
     def test_blacklisted_number_is_not_allowed_in_any_format(self, mgr):
         """The queue used to check only the company — a blocked number inside a
@@ -732,7 +734,7 @@ class TestCheckSendAllowed:
     def test_malformed_company_id_is_allowed(self, mgr):
         # Length check only (`len(company_id) != 24`) — anything else short-
         # circuits to fail-open rather than crashing on a bad ObjectId().
-        assert sw._check_send_allowed(mgr, "not-a-real-id") == (True, "")
+        assert sw._check_send_allowed(mgr, "not-a-real-id") == (False, "skipped_missing_consent")
 
     def test_blocked_company_is_not_allowed(self, mgr):
         cid = ObjectId()
@@ -750,12 +752,12 @@ class TestCheckSendAllowed:
         cid = ObjectId()
         mgr.db.companies.insert_one({"_id": cid, "domain": "normal.com", "industry": "gas", "blocked": False})
         with patch("app.pipeline._check_blacklist", return_value=None):
-            assert sw._check_send_allowed(mgr, str(cid)) == (True, "")
+            assert sw._check_send_allowed(mgr, str(cid)) == (False, "skipped_missing_consent")
 
     def test_company_not_found_is_allowed(self, mgr):
         # Deleted/moved company between enqueue and send — fail open rather
         # than silently dropping an otherwise-valid queued item.
-        assert sw._check_send_allowed(mgr, str(ObjectId())) == (True, "")
+        assert sw._check_send_allowed(mgr, str(ObjectId())) == (False, "skipped_missing_consent")
 
 
 # ══════════════════════════════════════════════════════════════════════════

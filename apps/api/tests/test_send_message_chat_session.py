@@ -81,7 +81,7 @@ def _send(instances, statuses, user_id=GILAD_ID):
         chosen["instance"] = instance
         return False, False  # cupo "lleno": corta antes de enviar
 
-    req = SendMessageRequest(company_id=CID, to_number="+525597184834", message="Saludos", instance="gely-wa")
+    req = SendMessageRequest(request_id='qa-message', company_id=CID, to_number="+525597184834", message="Saludos", instance="gely-wa")
     with patch("app.api.routes._require_user"), \
          patch("app.auth.get_user_by_token", return_value={"id": user_id, "username": "gilad"}), \
          patch("app.database.MongoDBManager", return_value=_Mgr(db)), \

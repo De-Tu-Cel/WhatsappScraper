@@ -25,8 +25,14 @@ def _key(service):
     provider, credentials = health.configured_services()[service]
     if service == 'ai':
         from app.billing import OPENAI_PROJECT_ID
-        credentials = f'{credentials}:{OPENAI_PROJECT_ID}'
+        scope = os.getenv('ANTHROPIC_WORKSPACE_ID', '') if provider == 'anthropic' else OPENAI_PROJECT_ID
+        credentials = f'{credentials}:{scope}'
     return 'balance:' + health.account_id(provider, credentials)
+
+
+def ai_budget(provider=None):
+    provider = provider or health.configured_services()['ai'][0]
+    return _limit('ANTHROPIC_MONTHLY_BUDGET_USD', 10) if provider == 'anthropic' else limits()['openai_monthly_budget_usd']
 
 
 def _read(key):
@@ -44,6 +50,8 @@ def record_balance(service, data):
     """Solo muestras válidas; una consulta fallida no inventa un saldo nuevo."""
     if not data.get('ok'):
         return
+    if service == 'ai' and data.get('provider') and data['provider'] != health.configured_services()['ai'][0]:
+        return
     try:
         amount = float(data['balance' if service == 'dataforseo' else 'spend_this_month'])
     except (KeyError, ValueError, TypeError):
@@ -59,7 +67,7 @@ def record_balance(service, data):
         period = None
         budget = None
     else:
-        budget = settings['openai_monthly_budget_usd']
+        budget = ai_budget()
         level = ('critical' if amount >= budget * .95 else 'warning' if amount >= budget * .8 else None) if budget > 0 else None
         period = now.strftime('%Y-%m')
     key = _key(service)
@@ -84,10 +92,10 @@ def admin_notifications(since=None):
     result = []
     for service in ('ai', 'dataforseo'):
         provider, _ = health.configured_services()[service]
-        if service == 'ai' and provider != 'openai':
+        if service == 'ai' and provider not in ('openai', 'anthropic'):
             continue
         value = _read(_key(service))
-        if service == 'ai' and (value.get('period') != now.strftime('%Y-%m') or value.get('budget') != limits()['openai_monthly_budget_usd']):
+        if service == 'ai' and (value.get('period') != now.strftime('%Y-%m') or value.get('budget') != ai_budget()):
             continue
         checked = value.get('checked_at')
         if isinstance(checked, datetime) and checked.tzinfo is None:
@@ -103,7 +111,7 @@ def admin_notifications(since=None):
         if since and stamp <= since:
             continue
         result.append({'_id': f'balance:{service}:{stamp.isoformat()}', 'type': 'service_balance',
-                       'service': service, 'label': 'OpenAI' if service == 'ai' else 'DataForSEO',
+                       'service': service, 'provider': provider, 'label': ('Claude' if provider == 'anthropic' else 'OpenAI') if service == 'ai' else 'DataForSEO',
                        'severity': value['level'], 'amount': value['amount'], 'budget': value['budget'],
                        'period': value['period'], 'checked_at': checked.isoformat(),
                        'created_at': stamp.isoformat()})

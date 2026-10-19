@@ -50,12 +50,17 @@ def company_block_reason(db, company_id: str):
         return {"reason": "blocked", "matched": ""}
     # Not gated on domain — a company with no stored domain still gets its
     # industry checked (WhatsApp-only businesses, Maps leads without a website).
-    return _check_blacklist(company.get("domain") or "", company.get("industry") or "", company.get("name") or "")
+    return _check_blacklist(company.get("domain") or "", company.get("industry") or "", company.get("name") or "",
+                            db=db, strict=True)
 
 
-def send_block_reason(db, company_id: str, number):
+def send_block_reason(db, company_id: str, number, *, purpose='outreach'):
     """Why this message must not go out, or None. The number is checked first —
     it can be blocked without its company being flagged at all."""
     if number and is_phone_blacklisted(db, number):
         return {"reason": "phone", "matched": phone_key(number)}
-    return company_block_reason(db, company_id)
+    block = company_block_reason(db, company_id)
+    if block:
+        return block
+    from app.contact_permissions import permission_block_reason
+    return permission_block_reason(db, number, purpose=purpose)

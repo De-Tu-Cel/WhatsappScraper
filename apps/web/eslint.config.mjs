@@ -6,6 +6,8 @@ const eslintConfig = [
     ignores: ['.next/**', 'node_modules/**', 'backEnd/**', 'wwebjs-service/**', '.claude/**'],
   },
   {
+    // Match Next's React plugin scope; Node .cjs tests do not load that plugin.
+    files: ['**/*.{js,jsx,mjs,ts,tsx,mts,cts}'],
     // These two "React Compiler readiness" rules flag long-standing, working
     // patterns in this codebase (setState in useEffect, reading ref.current
     // during render) as hard errors — real for compiler-memoized code, not

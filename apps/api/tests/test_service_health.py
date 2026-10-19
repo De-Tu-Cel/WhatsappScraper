@@ -207,6 +207,9 @@ def test_pending_reply_reason_is_visible_to_authenticated_agent(client, monkeypa
 
 @pytest.mark.parametrize('role,expected', [('admin', 2), ('agent', 0)])
 def test_service_notifications_and_badges_are_admin_only(client, monkeypatch, role, expected):
+    # This test counts provider alerts only; rest-window notices have their own
+    # coverage and must not make this assertion depend on the runner's clock.
+    monkeypatch.setattr('app.activity_notices.automation_notifications', lambda *args: [])
     manager = Mock()
     manager.db.message_logs.find.return_value = []
     manager.db.companies.find.return_value = []

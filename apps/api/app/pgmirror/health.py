@@ -8,7 +8,8 @@ Un hilo por proceso del backend, cada minuto:
 - Concilia: a cada colección activa (dual/shadow/postgres) le toca una vez cada
   PGMIRROR_RECONCILE_HOURS horas (3 por defecto; 0 = apagado), y antes si quedó
   "por conciliar". Una colección recién agregada a DB_MODES recibe así su carga
-  inicial al minuto (queda como kind='initial', no cuenta como error). Compara Mongo contra Postgres y lo que difiere NO lo copia
+  inicial al minuto: su primera conciliación queda como kind='initial' y no cuenta
+  como corrección. Compara Mongo contra Postgres y lo que difiere NO lo copia
   directo: manda esos _id al SyncWorker, que relee de Mongo al aplicar, así nunca
   pisa una escritura más nueva. Lo corregido queda en mongo._reconcile_log: si
   aparece algo ahí, el espejo en vivo se saltó algo y hay que revisarlo antes de
@@ -47,6 +48,9 @@ _META = [
     "kind text NOT NULL, collection text NOT NULL, mongo integer, postgres integer, missing integer, "
     "different integer, extra integer, queued integer, process text)",
     "CREATE INDEX IF NOT EXISTS _reconcile_log__collection_at ON mongo._reconcile_log (collection, at)",
+    # Registros de antes de la regla "la primera conciliación es la carga inicial": se corrigen solos.
+    "UPDATE mongo._reconcile_log l SET kind = 'initial' WHERE kind <> 'initial' "
+    "AND id = (SELECT min(f.id) FROM mongo._reconcile_log f WHERE f.collection = l.collection)",
     # Colecciones "por conciliar" vistas por TODOS los procesos: en modo postgres sus lecturas
     # vuelven a Mongo hasta que una conciliación posterior a la marca la borre.
     "CREATE TABLE IF NOT EXISTS mongo._dirty (collection text PRIMARY KEY, "
@@ -100,10 +104,13 @@ def auto_reconcile(raw_db, store, worker, collections, kind: str = "periodic") -
             started = store.query("SELECT now()")[0][0]
             # Se quita la marca ANTES de revisar: un fallo nuevo durante la revisión la vuelve a poner.
             worker.dirty.discard(name)
+            # La primera conciliación de una colección ES su carga inicial, aunque el espejo en vivo
+            # ya haya copiado unos cuantos documentos escritos desde que se activó (contacts:
+            # 75 925 de 75 927 en producción el 2026-10-20 salían como "corregidos").
+            first = not store.query("SELECT 1 FROM mongo._reconcile_log WHERE collection = %s LIMIT 1", (name,))
             result = reconcile(raw_db, store, name, want_ids=True)
             ids = result.pop("mongo_ids") + store.id_values(name, result.pop("extra_keys"))
-            # Tabla vacía: es la carga inicial de una colección recién activada, no un error del espejo.
-            kind_here = "initial" if result["postgres_before"] == 0 and ids else kind
+            kind_here = "initial" if first else kind
             applied = True
             for i in range(0, len(ids), CHUNK):
                 worker.enqueue(name, ids[i:i + CHUNK])

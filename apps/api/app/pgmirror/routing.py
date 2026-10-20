@@ -7,9 +7,12 @@
   comparan contra Postgres en un hilo aparte (la petición no espera) y se registra
   cualquier diferencia. Siempre se responde con Mongo.
 - `postgres`: como dual, pero find / find_one / count_documents / distinct /
-  estimated_document_count se leen de Postgres. Lo que el traductor no soporta, o
-  cualquier error de Postgres (también a mitad de un cursor), se lee de Mongo — nunca
-  se adivina.
+  estimated_document_count se leen de Postgres, y la copia de cada escritura se hace
+  en línea, antes de responder (lo que se escribe se lee enseguida, desde cualquier
+  proceso). Lo que el traductor no soporta, cualquier error de Postgres (también a
+  mitad de un cursor) o una colección "por conciliar" se lee de Mongo — nunca se adivina.
+Cada copia toma un candado por documento en Postgres (Store.replace_from_source): dos
+procesos copiando el mismo documento nunca dejan una versión vieja encima de una nueva.
 Todo lo demás (aggregate, create_index, …) va directo a Mongo.
 """
 import json
@@ -24,6 +27,10 @@ log = logging.getLogger(__name__)
 MAX_PREQUERY = 1000
 SHADOW_FIND_MAX = 1000  # resultados más grandes no se comparan (bump shadow_skipped_large)
 _PG_READ_KWARGS = {"projection", "sort", "skip", "limit", "max_time_ms", "batch_size"}
+
+
+class _NotReadable(Exception):
+    """La colección está por conciliar: en modo postgres esa lectura se resuelve en Mongo."""
 
 
 class _ShadowQueue:
@@ -64,9 +71,16 @@ class _Runtime:
         from app.pgmirror.sync import SyncWorker
         self.store = Store(config.postgres_url(), max_size=6)
         self.worker = SyncWorker(raw_db, self.store)
+        self.worker.on_dirty = self.persist_dirty
         self.shadow = _ShadowQueue()
         self.stats = {}
         self.stats_lock = threading.Lock()
+        self._dirty_cache, self._dirty_cache_at = None, float("-inf")
+        try:
+            from app.pgmirror.health import ensure_meta
+            ensure_meta(self.store)
+        except Exception:
+            log.exception("pgmirror could not prepare its tables (will retry on use)")
         # Guarda estadísticas en Postgres y concilia solo (health.py).
         self.monitor = Monitor(self, raw_db, start=monitor)
 
@@ -74,6 +88,30 @@ class _Runtime:
         with self.stats_lock:
             bucket = self.stats.setdefault(collection, {})
             bucket[key] = bucket.get(key, 0) + n
+
+    def persist_dirty(self, collection, reason):
+        """La marca "por conciliar" también va a Postgres, para que TODOS los procesos lean de Mongo."""
+        self._dirty_cache_at = float("-inf")
+        try:
+            self.store.query("INSERT INTO mongo._dirty (collection, reason) VALUES (%s, %s) "
+                             "ON CONFLICT (collection) DO UPDATE SET since = now(), reason = EXCLUDED.reason",
+                             (collection, reason[:200]))
+        except Exception:
+            log.exception("pgmirror could not persist dirty mark for %s", collection)
+
+    def pg_readable(self, collection) -> bool:
+        """¿Se puede leer esta colección de Postgres? No si está por conciliar aquí o en otro
+        proceso (cache de 2 s), ni si no se pudo averiguar."""
+        if collection in self.worker.dirty:
+            return False
+        now = time.monotonic()
+        if now - self._dirty_cache_at > 2:
+            try:
+                self._dirty_cache = {row[0] for row in self.store.query("SELECT collection FROM mongo._dirty")}
+            except Exception:
+                self._dirty_cache = None
+            self._dirty_cache_at = now
+        return self._dirty_cache is not None and collection not in self._dirty_cache
 
 
 _runtime = None
@@ -361,8 +399,22 @@ class RoutedCollection:
 
     # ── Escrituras: Mongo primero, luego copiar esos _id ─────────────────────────
     def _mirror(self, ids):
+        ids = [i for i in ids if i is not None]
+        if not ids:
+            return
+        if self._mode == "postgres":
+            # Leer-lo-que-escribiste: aquí las lecturas salen de Postgres, así que la copia se
+            # hace antes de responder. Si falla, la colección queda "por conciliar" y sus lecturas
+            # vuelven a Mongo (en todos los procesos) hasta que se concilie.
+            try:
+                self._rt.worker.sync_ids(self._name, ids)
+                self._rt.worker.stats["synced_inline"] += len(ids)
+                return
+            except Exception:
+                log.exception("pgmirror inline copy failed for %s", self._name)
+                self._dirty("inline copy failed")
         try:
-            self._rt.worker.enqueue(self._name, list(ids))
+            self._rt.worker.enqueue(self._name, ids)
         except Exception:
             log.exception("pgmirror enqueue failed for %s", self._name)
 
@@ -425,11 +477,19 @@ class RoutedCollection:
         return self._write_by_filter("delete_many", filter, *args, **kwargs)
 
     def _find_and_modify(self, method, filter_, *args, **kwargs):
-        ids = self._ids_for(filter_, **kwargs)
+        # Toca UN solo documento y lo regresa (antes o después): su _id basta, sin consulta previa
+        # (importa en las colas, que reclaman con esto a cada rato). Solo si la proyección oculta
+        # el _id hace falta averiguarlo antes.
+        p_index = 0 if method == "find_one_and_delete" else 1
+        projection = kwargs.get("projection", args[p_index] if len(args) > p_index else None)
+        hides_id = isinstance(projection, dict) and "_id" in projection and not projection["_id"]
+        upsert = kwargs.get("upsert", args[3] if method != "find_one_and_delete" and len(args) > 3 else False)
+        ids = self._ids_for(filter_, **kwargs) if hides_id else []
         doc = getattr(self._raw, method)(filter_, *args, **kwargs)
         if isinstance(doc, dict) and "_id" in doc:
             ids.append(doc["_id"])
-        if not ids and kwargs.get("upsert"):
+        if not ids and upsert:
+            # ReturnDocument.BEFORE de un upsert que insertó: regresa None; el nuevo cumple el filtro.
             ids = self._ids_for(filter_, **kwargs)
             if not ids:
                 self._dirty(f"{method} upsert without a resolvable _id")
@@ -458,7 +518,12 @@ class RoutedCollection:
             self._dirty("drop")
 
     # ── Lecturas ────────────────────────────────────────────────────────────────
+    def _check_readable(self):
+        if self._mode == "postgres" and not self._rt.pg_readable(self._name):
+            raise _NotReadable(self._name)
+
     def _pg_find(self, filter_, projection, sort, skip, limit):
+        self._check_readable()
         where = sqlfilter.where(filter_)
         plan = sqlfilter.sort_plan(sort)
         sqlfilter.check_projection(projection)
@@ -466,6 +531,9 @@ class RoutedCollection:
         return [sqlfilter.apply_projection(d, projection) for d in docs]
 
     def _fallback(self, op, exc):
+        if isinstance(exc, _NotReadable):
+            self._rt.bump(self._name, "pg_fallback_dirty")
+            return
         self._rt.bump(self._name, f"pg_fallback_{op}")
         if not isinstance(exc, sqlfilter.Unsupported):
             log.warning("pgmirror %s.%s read fell back to Mongo: %s", self._name, op, exc)
@@ -487,7 +555,8 @@ class RoutedCollection:
             self._rt.bump(self._name, "pg_fallback_find_args")
             return self._raw.find(filter, *args, **kwargs)
         try:
-            # Validar antes de prometer un cursor de Postgres.
+            # Validar antes de prometer un cursor de Postgres (se vuelve a revisar al leerlo).
+            self._check_readable()
             sqlfilter.where(filter)
             sqlfilter.sort_items(kwargs.get("sort"))
             sqlfilter.check_projection(projection)
@@ -532,6 +601,7 @@ class RoutedCollection:
                                                      lambda: self._rt.store.count(self._name, sqlfilter.where(filter))))
             return result
         try:
+            self._check_readable()
             return self._rt.store.count(self._name, sqlfilter.where(filter))
         except Exception as exc:
             self._fallback("count_documents", exc)
@@ -541,6 +611,7 @@ class RoutedCollection:
         if self._mode != "postgres" or args or kwargs:
             return self._raw.estimated_document_count(*args, **kwargs)
         try:
+            self._check_readable()
             return self._rt.store.count(self._name, sqlfilter.where(None))
         except Exception as exc:
             self._fallback("estimated_document_count", exc)

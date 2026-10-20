@@ -18,6 +18,7 @@ Mongo solo se lee. No importa app.database (ese módulo crea índices al conecta
 """
 import argparse
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -58,34 +59,38 @@ def _check(raw_db, store) -> int:
     if not active:
         print("Ninguna colección activa: todo está solo en Mongo.")
         return 0
-    window = health.WAIT_DAYS
-    modes = {c: (m, float(age) / 86400) for c, m, age in store.query(
+    wait = health.wait_hours()
+    window_days = max(1, math.ceil(wait / 24))  # los contadores van por día: hoy y los N anteriores
+    modes = {c: (m, float(age) / 3600) for c, m, age in store.query(
         "SELECT collection, mode, extract(epoch FROM now() - since) FROM mongo._modes")}
     counters = {(c, k): int(n) for c, k, n in store.query(
-        "SELECT collection, key, sum(n) FROM mongo._counters WHERE day > current_date - %s GROUP BY 1, 2", (window,))}
+        "SELECT collection, key, sum(n) FROM mongo._counters WHERE day >= current_date - %s GROUP BY 1, 2", (window_days,))}
     fixed = {c: int(n) for c, n in store.query(
         "SELECT collection, sum(queued) FROM mongo._reconcile_log WHERE kind <> 'initial' "
-        "AND at > now() - make_interval(days => %s) GROUP BY 1", (window,))}
+        "AND at > now() - make_interval(secs => %s) GROUP BY 1", (wait * 3600,))}
     last_auto = {c: float(age) / 3600 for c, age in store.query(
         "SELECT collection, extract(epoch FROM now() - max(at)) FROM mongo._reconcile_log GROUP BY 1")}
+    dirty = {row[0] for row in store.query("SELECT collection FROM mongo._dirty")}
 
-    print(f"\n{'COLECCIÓN':28} {'MODO':8} {'DÍAS':>5} {'MONGO':>8} {'POSTGRES':>9}  {'AHORA':6} "
+    print(f"\n{'COLECCIÓN':30} {'MODO':8} {'HORAS':>6} {'MONGO':>8} {'POSTGRES':>9}  {'AHORA':6} "
           f"{'CORREGIDOS':>10} {'SHADOW ok/dif':>14} {'ÚLT.CONC.':>10}  →")
     all_ok = True
     for name, mode in sorted(active.items()):
         result = reconcile(raw_db, store, name)
         recorded = modes.get(name)
-        days = recorded[1] if recorded and recorded[0] == mode else None
+        hours = recorded[1] if recorded and recorded[0] == mode else None
         ok, diffs = counters.get((name, "shadow_ok"), 0), counters.get((name, "shadow_diffs"), 0)
         fallbacks = sum(v for (c, k), v in counters.items() if c == name and k.startswith("pg_fallback"))
-        verdict = health.readiness(mode, days, result["in_sync"], fixed.get(name, 0), ok, diffs, fallbacks)
+        verdict = health.readiness(mode, hours, result["in_sync"], fixed.get(name, 0), ok, diffs, fallbacks, wait)
+        if name in dirty:
+            verdict = "POR CONCILIAR (lecturas en Mongo hasta que se concilie, ~1 min) · " + verdict
         all_ok &= result["in_sync"]
         last = f"hace {last_auto[name]:.1f} h" if name in last_auto else "aún no"
-        print(f"{name:28} {mode:8} {'?' if days is None else f'{days:.1f}':>5} {result['mongo']:>8} "
+        print(f"{name:30} {mode:8} {'?' if hours is None else f'{hours:.1f}':>6} {result['mongo']:>8} "
               f"{result['mongo'] - result['missing_in_postgres'] + result['extra_in_postgres']:>9}  "
               f"{'OK' if result['in_sync'] else 'DIF':6} {fixed.get(name, 0):>10} {f'{ok}/{diffs}':>14} {last:>10}  {verdict}")
-    print(f"\n(CORREGIDOS y SHADOW: últimos {window} días. Para avanzar una colección se espera {window} días "
-          "en su modo sin correcciones ni diferencias.)")
+    print(f"\n(Para avanzar una colección: {wait:g} h en su modo sin correcciones ni diferencias "
+          f"(PGMIRROR_WAIT_HOURS). CORREGIDOS: últimas {wait:g} h; SHADOW: hoy y {window_days} día(s) antes.)")
 
     print("\nProcesos del backend:")
     procs = store.query("SELECT process, extract(epoch FROM now() - updated_at), status FROM mongo._runtime ORDER BY 2")
@@ -99,8 +104,8 @@ def _check(raw_db, store) -> int:
 
     if store.query("SELECT to_regclass('mongo._shadow_diffs')")[0][0]:
         rows = store.query("SELECT at, collection, operation, left(detail, 160) FROM mongo._shadow_diffs "
-                           "WHERE at > now() - make_interval(days => %s) ORDER BY at DESC LIMIT 5", (window,))
-        print(f"\nDiferencias de shadow (últimos {window} días): {'ninguna' if not rows else ''}")
+                           "WHERE at > now() - make_interval(secs => %s) ORDER BY at DESC LIMIT 5", (wait * 3600,))
+        print(f"\nDiferencias de shadow (últimas {wait:g} h): {'ninguna' if not rows else ''}")
         for at, collection, operation, detail in rows:
             print(f"  {at:%Y-%m-%d %H:%M} {collection}.{operation}: {detail}")
     return 0 if all_ok else 2

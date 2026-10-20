@@ -152,7 +152,8 @@ def test_compose_passes_the_migration_variables_to_the_backend():
     import yaml
     compose = yaml.safe_load((pathlib.Path(__file__).resolve().parents[3] / "docker-compose.yml").read_text(encoding="utf-8"))
     env = compose["services"]["backend"]["environment"]
-    assert "POSTGRES_URL=${POSTGRES_URL:-}" in env and "DB_MODES=${DB_MODES:-}" in env
+    for name in ("POSTGRES_URL", "DB_MODES", "PGMIRROR_WAIT_HOURS", "PGMIRROR_RECONCILE_HOURS"):
+        assert f"{name}=${{{name}:-}}" in env, name
 
 
 def test_mongo_mode_returns_the_plain_collection(routed):

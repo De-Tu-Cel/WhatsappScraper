@@ -16,8 +16,8 @@ BATCH = 500
 def _copy_fresh(raw_db, store, collection, docs) -> int:
     if not docs:
         return 0
-    fresh = list(raw_db[collection].find({"_id": {"$in": [d["_id"] for d in docs]}}))
-    return store.upsert(collection, fresh)
+    return store.replace_from_source(collection, [d["_id"] for d in docs],
+                                     lambda ids: list(raw_db[collection].find({"_id": {"$in": ids}})))
 
 
 def reconcile(raw_db, store, collection: str, *, fix: bool = False, samples: int = 5, want_ids: bool = False) -> dict:

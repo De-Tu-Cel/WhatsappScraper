@@ -598,7 +598,8 @@ class RoutedCollection:
         if self._mode == "shadow":
             result = self._raw.count_documents(filter)
             self._shadow(lambda: self._compare_value("count_documents", filter, result,
-                                                     lambda: self._rt.store.count(self._name, sqlfilter.where(filter))))
+                                                     lambda: self._rt.store.count(self._name, sqlfilter.where(filter)),
+                                                     lambda: self._raw.count_documents(filter)))
             return result
         try:
             self._check_readable()
@@ -637,10 +638,13 @@ class RoutedCollection:
             return self._raw.distinct(key, filter, *args, **kwargs)
         if self._mode == "shadow":
             result = self._raw.distinct(key, filter)
-            expected = sorted(map(repr, (sqlfilter.distinct_marker(v) for v in result)))
+            def markers(values):
+                return sorted(map(repr, (sqlfilter.distinct_marker(v) for v in values)))
+            expected = markers(result)  # ahora: la app puede modificar la lista que recibe
             self._shadow(lambda: self._compare_value(
                 f"distinct:{key}", filter, expected,
-                lambda: sorted(map(repr, (sqlfilter.distinct_marker(v) for v in self._pg_distinct(key, filter))))))
+                lambda: markers(self._pg_distinct(key, filter)),
+                lambda: markers(self._raw.distinct(key, filter))))
             return result
         try:
             return self._pg_distinct(key, filter)
@@ -661,14 +665,29 @@ class RoutedCollection:
         if not self._rt.shadow.submit(run):
             self._rt.bump(self._name, "shadow_skipped_busy")
 
-    def _settled(self, check) -> bool:
+    def _settled(self, check, refresh=None) -> bool:
         """La copia es asíncrona: si no cuadra y hay copias pendientes, espera un
-        momento y vuelve a comparar antes de llamarlo diferencia."""
-        if check():
+        momento y vuelve a comparar antes de llamarlo diferencia.
+
+        Y la foto de Mongo es de cuando respondió la petición: si la app escribió justo
+        después (leer y enseguida $inc, como reserve_verification_slot), Postgres ya trae lo
+        nuevo y la foto quedó vieja. En prod (2026-10-20) eso dio 245 "diferencias" falsas en
+        instance_daily_verifications con Postgres idéntico a Mongo. Antes de llamarlo
+        diferencia, refresh() vuelve a leer Mongo en este momento y se compara contra eso."""
+        def once():
+            if check():
+                return True
+            if self._rt.worker.pending():
+                self._rt.worker.flush(timeout=2)
+                return check()
+            return False
+        if once():
             return True
-        if self._rt.worker.pending():
-            self._rt.worker.flush(timeout=2)
-            return check()
+        for _ in range(2 if refresh else 0):  # un documento muy activo puede volver a cambiar entre lecturas
+            refresh()
+            if once():
+                self._rt.bump(self._name, "shadow_raced")
+                return True
         return False
 
     def _report(self, operation, filter_, detail):
@@ -676,32 +695,43 @@ class RoutedCollection:
         self._rt.store.record_diff(self._name, operation, f"filter={filter_!r} {detail}")
         log.warning("pgmirror shadow diff %s.%s: %s", self._name, operation, detail)
 
-    def _compare_value(self, operation, filter_, mongo_value, pg_value_fn):
-        holder = {}
+    def _compare_value(self, operation, filter_, mongo_value, pg_value_fn, mongo_again=None):
+        holder = {"mongo": mongo_value}
 
         def check():
             holder["pg"] = pg_value_fn()
-            return holder["pg"] == mongo_value
-        if self._settled(check):
+            return holder["pg"] == holder["mongo"]
+
+        def refresh():
+            holder["mongo"] = mongo_again()
+        if self._settled(check, refresh if mongo_again else None):
             self._rt.bump(self._name, "shadow_ok")
         else:
-            self._report(operation, filter_, f"mongo={mongo_value!r} postgres={holder.get('pg')!r}")
+            self._report(operation, filter_, f"mongo={holder['mongo']!r} postgres={holder.get('pg')!r}")
 
     def _submit_find_compare(self, filter_, projection, sort, skip, limit, mongo_rows, op="find"):
         def compare():
             sort_fields = [f for f, _ in sqlfilter.sort_items(sort)]
-            holder = {}
+            holder = {"mongo": mongo_rows}
 
             def check():
                 docs = self._pg_find(filter_, projection, sort, skip, limit)
                 holder["pg"] = [_snapshot(d, sort_fields) for d in docs]
-                holder["kind"] = _same_result(mongo_rows, holder["pg"], bool(sort_fields), bool(skip or limit))
+                holder["kind"] = _same_result(holder["mongo"], holder["pg"], bool(sort_fields), bool(skip or limit))
                 return holder["kind"] is None
-            if self._settled(check):
+
+            def refresh():
+                # La misma consulta, ahora. Sin límite se corta en SHADOW_FIND_MAX: más grande no se compara.
+                cursor = self._raw.find(filter_, projection, sort=_sort_list(sort) if sort else None, skip=skip or 0,
+                                        limit=limit or SHADOW_FIND_MAX + 1)
+                fresh = [_snapshot(d, sort_fields) for d in cursor]
+                if limit or len(fresh) <= SHADOW_FIND_MAX:
+                    holder["mongo"] = fresh
+            if self._settled(check, refresh):
                 self._rt.bump(self._name, "shadow_ok")
             else:
                 self._report(f"{op}:{holder['kind']}", filter_,
-                             f"sort={sort!r} skip={skip} limit={limit} mongo={len(mongo_rows)} postgres={len(holder['pg'])}")
+                             f"sort={sort!r} skip={skip} limit={limit} mongo={len(holder['mongo'])} postgres={len(holder['pg'])}")
         self._shadow(compare)
 
 

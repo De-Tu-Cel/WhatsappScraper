@@ -131,6 +131,30 @@ def test_without_postgres_url_the_database_is_untouched(monkeypatch):
     assert config.collection_mode("anything") == "mongo"
 
 
+def test_modes_come_from_one_variable_and_typos_never_activate_anything(monkeypatch):
+    monkeypatch.setenv("POSTGRES_URL", "postgresql://x@127.0.0.1:1/x")
+    monkeypatch.setenv("DB_MODES", " settings=dual, message_templates=DUAL,blacklist=shadow ,users=postgress,bad")
+    assert config.collection_mode("settings") == "dual"
+    assert config.collection_mode("message_templates") == "dual"
+    assert config.collection_mode("blacklist") == "shadow"
+    assert config.collection_mode("users") == "mongo"  # mal escrito → se queda en Mongo
+    assert config.collection_mode("contacts") == "mongo"
+    monkeypatch.setenv("DB_MODE_SETTINGS", "mongo")  # la variable por colección gana
+    assert config.collection_mode("settings") == "mongo"
+    monkeypatch.delenv("POSTGRES_URL")
+    assert config.collection_mode("blacklist") == "mongo"
+
+
+def test_compose_passes_the_migration_variables_to_the_backend():
+    # El backend solo recibe las variables que lista docker-compose.yml: sin estas
+    # líneas, ponerlas en Coolify no haría nada.
+    import pathlib
+    import yaml
+    compose = yaml.safe_load((pathlib.Path(__file__).resolve().parents[3] / "docker-compose.yml").read_text(encoding="utf-8"))
+    env = compose["services"]["backend"]["environment"]
+    assert "POSTGRES_URL=${POSTGRES_URL:-}" in env and "DB_MODES=${DB_MODES:-}" in env
+
+
 def test_mongo_mode_returns_the_plain_collection(routed):
     raw, db = routed("mongo")
     assert not isinstance(db["whatever"], routing.RoutedCollection)

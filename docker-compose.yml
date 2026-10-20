@@ -40,6 +40,10 @@ services:
       - WWEBJS_API_SECRET=${WWEBJS_API_SECRET}
       - WARMUP_ENABLED=${WARMUP_ENABLED}
       - OTP_WEBHOOK_SECRET=${OTP_WEBHOOK_SECRET}
+      # Migración a Postgres (docs/MIGRACION_POSTGRES.md). Vacías = solo Mongo, como siempre.
+      # DB_MODES lista el modo de cada colección: settings=dual,message_templates=dual,...
+      - POSTGRES_URL=${POSTGRES_URL:-}
+      - DB_MODES=${DB_MODES:-}
     expose:
       - "8000"
     depends_on:

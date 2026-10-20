@@ -1,0 +1,55 @@
+# WhatsApp (wwebjs) como recurso APARTE en Coolify: desplegar el backend o el frontend ya no
+# reinicia las sesiones de WhatsApp (2026-10-20: cada merge las reiniciaba y gely se cayó).
+# Paso a paso, verificación y vuelta atrás: docs/WWEBJS_RECURSO_APARTE.md
+#
+# En Coolify: recurso Docker Compose del mismo repo, rama main, "Docker Compose Location"
+# /docker-compose.wwebjs.yml, con Auto Deploy APAGADO (se despliega a mano solo cuando cambia
+# apps/wwebjs). Variables: WWEBJS_API_SECRET, PROXY_SERVER, PROXY_USERNAME, PROXY_PASSWORD,
+# PROXY_ONLY_SESSIONS (los mismos valores del recurso principal) y WWEBJS_SESSIONS_VOLUME.
+services:
+  wwebjs:
+    # Dar tiempo a Chromium para guardar LocalAuth y recoger sus procesos hijos.
+    init: true
+    stop_grace_period: 30s
+    build:
+      context: ./apps/wwebjs
+      dockerfile: Dockerfile
+    environment:
+      - PORT=3001
+      # El backend vive en el otro recurso: se le encuentra por su alias en la red "coolify".
+      - FASTAPI_URL=${FASTAPI_URL:-http://detucel-backend:8000}
+      - API_SECRET=${WWEBJS_API_SECRET}
+      - PROXY_SERVER=${PROXY_SERVER}
+      - PROXY_USERNAME=${PROXY_USERNAME}
+      - PROXY_PASSWORD=${PROXY_PASSWORD}
+      - PROXY_ONLY_SESSIONS=${PROXY_ONLY_SESSIONS}
+      # Si el volumen montado no trae perfiles, no arranca (storage-entrypoint.sh): sería el
+      # volumen equivocado y nadie debe vincular números ahí.
+      - REQUIRE_EXISTING_SESSIONS=1
+    expose:
+      - "3001"
+    volumes:
+      - wwebjs_sessions:/app/sessions
+    networks:
+      coolify:
+        aliases:
+          - detucel-wwebjs
+    restart: unless-stopped
+    mem_limit: 6g
+    logging:
+      driver: json-file
+      options:
+        max-size: 100m
+        max-file: "10"
+
+volumes:
+  # El MISMO volumen de siempre (no una copia): el candado de storage-entrypoint.sh impide
+  # que dos servicios usen estos perfiles a la vez. Nombre: `docker inspect` del contenedor
+  # wwebjs actual, el volumen montado en /app/sessions.
+  wwebjs_sessions:
+    external: true
+    name: ${WWEBJS_SESSIONS_VOLUME:?Falta WWEBJS_SESSIONS_VOLUME (nombre del volumen de sesiones actual)}
+
+networks:
+  coolify:
+    external: true

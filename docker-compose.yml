@@ -36,7 +36,9 @@ services:
       - ANTHROPIC_ADMIN_API_KEY=${ANTHROPIC_ADMIN_API_KEY:-}
       - ANTHROPIC_WORKSPACE_ID=${ANTHROPIC_WORKSPACE_ID:-}
       - ANTHROPIC_MONTHLY_BUDGET_USD=${ANTHROPIC_MONTHLY_BUDGET_USD:-10}
-      - WWEBJS_URL=http://wwebjs:3001
+      # Al pasar wwebjs a su propio recurso (docs/WWEBJS_RECURSO_APARTE.md) será
+      # http://detucel-wwebjs:3001, su alias en la red "coolify".
+      - WWEBJS_URL=${WWEBJS_URL:-http://wwebjs:3001}
       - WWEBJS_API_SECRET=${WWEBJS_API_SECRET}
       - WARMUP_ENABLED=${WARMUP_ENABLED}
       - OTP_WEBHOOK_SECRET=${OTP_WEBHOOK_SECRET}
@@ -63,9 +65,13 @@ services:
     # silently lost that connectivity, since nothing in this file declared
     # it. `default` keeps the existing backend/wwebjs/frontend service-name
     # DNS the other two services rely on.
+    # Alias fijo en "coolify": así lo encuentra wwebjs cuando corre como recurso
+    # aparte (docker-compose.wwebjs.yml), donde "backend" no existe.
     networks:
-      - default
-      - coolify
+      default:
+      coolify:
+        aliases:
+          - detucel-backend
     logging:
       driver: json-file
       options:
@@ -90,6 +96,13 @@ services:
       - PROXY_ONLY_SESSIONS=${PROXY_ONLY_SESSIONS}
     volumes:
       - wwebjs_sessions:/app/sessions
+    # El mismo alias que tendrá como recurso aparte: antes del corte se comprueba desde el
+    # backend que Coolify lo respeta (`getent hosts detucel-wwebjs`).
+    networks:
+      default:
+      coolify:
+        aliases:
+          - detucel-wwebjs
     restart: unless-stopped
     mem_limit: 6g
     logging:

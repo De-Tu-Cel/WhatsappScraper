@@ -1217,7 +1217,10 @@ export default function Analytics({ onNavigateToConv }) {
       </Box>
 
       {/* Table / states */}
-      <Box ref={tableRegionRef} data-analytics-table-region sx={{ minHeight: 0, minWidth: 0, width: '100%', display: 'flex', flexDirection: 'column', border: '1px solid var(--border)', borderRadius: '14px' }}>
+      {/* Tan ancho como la tabla, no como la ventana: con la ventana angosta la tabla se desplaza
+          de lado y el borde derecho quedaba a media tabla (2026-10-20). fit-content y no
+          max-content: el max-content de una tabla al 100% en Chrome es de un millón de px. */}
+      <Box ref={tableRegionRef} data-analytics-table-region sx={{ minHeight: 0, minWidth: '100%', width: 'fit-content', display: 'flex', flexDirection: 'column', border: '1px solid var(--border)', borderRadius: '14px' }}>
         {loading ? (
           <TableContainer sx={{
             minHeight: 0, overflow: 'visible',

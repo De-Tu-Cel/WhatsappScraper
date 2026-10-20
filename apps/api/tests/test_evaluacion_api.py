@@ -1,5 +1,6 @@
 """Endpoints de la evaluación: arma el borrador desde la conversación guardada, se edita sin
 aceptar HTML, la liga pública no pide sesión y las demás rutas sí."""
+import re
 from datetime import datetime
 
 import pytest
@@ -145,6 +146,50 @@ def test_live_preview_shows_unsaved_changes_and_saves_nothing(client):
     negocio = next(m for m in ev["conversacion"] if m["tipo"] == "negocio")
     assert negocio["resumen"] and "<" not in negocio["resumen"]
     assert ev["info"]["hechos"]["oportunidades"][0]["tipo"] == "sin_respuesta"
+
+
+def test_the_level_is_the_one_analytics_shows_even_for_a_single_number_company(client, monkeypatch):
+    # Rayogas (2026-10-20): un solo número, Timing + IA guardado solo a nivel empresa ("bot").
+    c, cid = client
+    db = MongoDBManager()
+    db.db.classification_comparisons.delete_many({})
+    db.db.classification_comparisons.insert_one({"company_id": cid, "hibrido": {"category": "bot", "notes": "Menú con opciones"}, "numbers": []})
+    monkeypatch.setattr(evaluaciones, "_elegir_numero", lambda db, cid, pedido: {"number": NUMERO, "category": "bot", "is_ai": False})
+    ev = c.post("/api/evaluaciones", json={"company_id": cid, "usar_llm": False}, headers=H).json()
+    assert ev["info"]["nivel_fuente"] == "clasificacion" and ev["info"]["categoria"] == "bot"
+    assert ev["editable"]["nivel"] == 4 and ev["info"]["nivel_analisis"] == 4
+    assert not any("se estimó" in a for a in ev["info"]["avisos"])
+
+
+def test_pdf_download_for_sharing(client, monkeypatch):
+    c, cid = client
+    ev = c.post("/api/evaluaciones", json={"company_id": cid, "usar_llm": False}, headers=H).json()
+    vistas = []
+    monkeypatch.setattr(evaluaciones, "_pdf", lambda pagina: vistas.append(pagina) or b"%PDF-1.7 prueba")
+    r = c.get(f"/api/evaluaciones/{ev['id']}/pdf", headers=H)
+    assert r.status_code == 200 and r.content == b"%PDF-1.7 prueba" and r.headers["content-type"] == "application/pdf"
+    assert r.headers["content-disposition"] == 'attachment; filename="evaluacion-whatsapp-Diesgas.pdf"'
+    assert "Evaluación del canal WhatsApp de Diesgas" in vistas[0]  # el PDF es de lo guardado
+    assert c.get(f"/api/evaluaciones/{ev['id']}/pdf").status_code == 401
+
+    def falla(pagina):
+        raise RuntimeError("sin chromium")
+    monkeypatch.setattr(evaluaciones, "_pdf", falla)
+    r = c.get(f"/api/evaluaciones/{ev['id']}/pdf", headers=H)
+    assert r.status_code == 503 and "descarga el HTML" in r.json()["detail"]
+
+
+def test_pdf_is_two_letter_pages_rendered_offline():
+    pytest.importorskip("playwright")
+    from app.evaluacion import generador
+    from tests.test_evaluacion import FX, _cfg
+    try:
+        pdf = evaluaciones._pdf(generador.generar_evaluacion(_cfg("diesgas"), raices_assets=[FX]))
+    except Exception as exc:  # CI sin Chromium instalado
+        pytest.skip(f"Chromium no disponible: {exc}")
+    assert pdf.startswith(b"%PDF")
+    assert len(re.findall(rb"/Type\s*/Page(?!s)", pdf)) == 2  # hoy y con De Tu Cel
+    assert b"[0 0 612 792]" in pdf  # carta: 8.5 × 11 in
 
 
 def test_session_is_required_except_for_the_public_link(client):

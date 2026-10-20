@@ -20,7 +20,11 @@ import Tooltip from '@mui/material/Tooltip'
 import Snackbar from '@mui/material/Snackbar'
 import ToggleButton from '@mui/material/ToggleButton'
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
+import Menu from '@mui/material/Menu'
 import CloseIcon from '@mui/icons-material/Close'
+import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdfOutlined'
+import CodeIcon from '@mui/icons-material/Code'
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import LinkIcon from '@mui/icons-material/Link'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import DownloadIcon from '@mui/icons-material/Download'
@@ -51,6 +55,13 @@ const ANCHO_HOJA = 880
 const ALTO_HOJA = 1124
 const MAX_OPORTUNIDADES = 3 // lo que cabe en la hoja carta (el servidor pide de 1 a 3)
 const QUIEN = { cliente: 'Cliente', negocio: 'Negocio', nota: 'Nota' }
+// Los mismos nombres que la columna Resultado (Timing + IA) de Análisis.
+const CATEGORIA = {
+  sin_respuesta: 'Sin respuesta', automatico_sin_respuesta: 'Automático + sin respuesta', humano: 'Humano',
+  automatico: 'Automático + humano', hibrido_automatico: 'Automático + humano',
+  bot: 'Bot', menu: 'Bot', hibrido: 'Bot', hibrido_bot: 'Bot',
+}
+const nombreCategoria = (info) => (info?.es_ia && ['bot', 'menu'].includes(info?.categoria) ? 'Agente IA' : CATEGORIA[info?.categoria] || info?.categoria)
 const GUIA_KEY = 'evaluacion_guia_oculta'
 // Ámbar y rojo de texto: en los temas claros de la app (data-theme-mode) se oscurecen para leerse.
 const ambar = { color: '#f59e0b', '[data-theme-mode="light"] &': { color: '#b45309' } }
@@ -67,7 +78,7 @@ const AYUDA = {
   empresa: 'Nombre y logo que salen en el encabezado de la hoja. El logo también es la foto de perfil del negocio en el chat.',
   logoUrl: 'Pega la liga directa a la imagen (PNG, JPG o WEBP). Se descarga y revisa al guardar.',
   nombreBot: 'El nombre con el que aparece el negocio arriba del chat, como en su perfil de WhatsApp.',
-  nivel: 'Dónde está hoy su WhatsApp en la escala de 5 niveles. El 5 (bot de pedidos 24/7) es a donde lo lleva De Tu Cel.',
+  nivel: 'Dónde está hoy su WhatsApp en la escala de 5 niveles. Se elige solo con la clasificación Timing + IA de Análisis (la columna Resultado); puedes cambiarlo si revisaste la conversación. El 5 (bot de pedidos 24/7) es a donde lo lleva De Tu Cel.',
   diagnostico: 'La frase en negritas bajo la escala: el resumen del canal en una línea.',
   falta: 'Sigue al diagnóstico: qué le hace falta para pasar de “contestar mensajes” a vender por el chat.',
   fortalezas: 'Lo que el negocio ya hace bien. Reconocerlo hace que la evaluación se sienta justa. Cada una se marca con ✓ verde en un mensaje del negocio.',
@@ -308,6 +319,8 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
   const [cambios, setCambios] = useState(false)
   const [aviso, setAviso] = useState('')
   const [deshacer, setDeshacer] = useState(null) // {item, k}: la oportunidad que se acaba de quitar
+  const [menuDescarga, setMenuDescarga] = useState(null)
+  const [descargando, setDescargando] = useState(null) // 'pdf' | 'html' | null
   const [verAvisos, setVerAvisos] = useState(true)
   const [guiaOculta, setGuiaOculta] = useState(() => {
     try { return localStorage.getItem(GUIA_KEY) === '1' } catch { return false }
@@ -416,13 +429,27 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
     try { await navigator.clipboard.writeText(liga); setAviso('Liga copiada: ya la puedes mandar por WhatsApp') }
     catch { setAviso(liga) }
   }
-  const descargar = async () => {
-    const res = await authFetch(`/api/evaluaciones/${ev.id}/html?descargar=1`)
-    if (!res.ok) { setError('No se pudo descargar'); return }
-    const url = URL.createObjectURL(await res.blob())
-    const a = document.createElement('a')
-    a.href = url; a.download = `evaluacion-${(form?.nombre || 'empresa').replace(/\s+/g, '-')}.html`; a.click()
-    URL.revokeObjectURL(url)
+  // PDF para mandarlo como archivo (dos hojas carta) o el HTML interactivo; ambos de lo guardado.
+  const descargar = async (formato) => {
+    setMenuDescarga(null); setDescargando(formato); setError('')
+    try {
+      const res = await authFetch(formato === 'pdf' ? `/api/evaluaciones/${ev.id}/pdf` : `/api/evaluaciones/${ev.id}/html?descargar=1`)
+      if (!res.ok) {
+        const d = (await res.json().catch(() => ({})))?.detail
+        throw new Error(typeof d === 'string' ? d : 'No se pudo descargar')
+      }
+      const nombre = (res.headers.get('content-disposition') || '').match(/filename="([^"]+)"/)?.[1]
+        || `evaluacion-whatsapp.${formato}`
+      const url = URL.createObjectURL(await res.blob())
+      const a = document.createElement('a')
+      a.href = url; a.download = nombre; a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      setAviso(formato === 'pdf' ? 'PDF descargado: listo para mandarlo por WhatsApp o correo' : 'HTML descargado')
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setDescargando(null)
+    }
   }
   const cerrar = () => {
     if (cambios && !window.confirm('Tienes cambios sin guardar. ¿Cerrar de todos modos?')) return
@@ -584,7 +611,31 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
                 : <><CheckIcon sx={{ fontSize: 15, ...verde }} />Guardado</>}
             </Box>
             {guiaOculta && <Accion titulo="Ver la guía de uso" onClick={() => mostrarGuia(true)}><HelpOutlineIcon /></Accion>}
-            <Accion titulo={cambios ? 'Guarda primero para descargar' : 'Descargar la página (HTML)'} onClick={descargar} disabled={ocupado || cambios}><DownloadIcon /></Accion>
+            <Tooltip {...tooltipProps} title={cambios ? 'Guarda primero: se descarga lo guardado' : 'PDF para mandarlo como archivo, o la página HTML'}>
+              <span><Button size="small" onClick={(e) => setMenuDescarga(e.currentTarget)} disabled={ocupado || cambios || !!descargando}
+                aria-haspopup="menu" aria-expanded={!!menuDescarga}
+                startIcon={descargando ? <CircularProgress size={14} color="inherit" /> : <DownloadIcon />} endIcon={<ArrowDropDownIcon />}
+                sx={{ ...botonSx, color: 'var(--text)', '& .MuiButton-endIcon': { ml: 0 }, '&.Mui-disabled': { color: 'var(--text-muted)' } }}>
+                {descargando === 'pdf' ? 'Generando PDF…' : 'Descargar'}
+              </Button></span>
+            </Tooltip>
+            <Menu anchorEl={menuDescarga} open={!!menuDescarga} onClose={() => setMenuDescarga(null)}
+              slotProps={{ paper: { sx: { ...menuProps.slotProps.paper.sx, mt: 0.5, maxWidth: 320 } } }}>
+              <MenuItem onClick={() => descargar('pdf')} sx={{ gap: 1.25 }}>
+                <PictureAsPdfIcon sx={{ fontSize: 20, mt: 0.25, ...rojo }} />
+                <Box>
+                  <Typography sx={{ fontSize: '0.84rem', fontWeight: 700 }}>PDF</Typography>
+                  <Typography sx={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Para mandarlo como archivo por WhatsApp o correo. Dos hojas carta: hoy y con De Tu Cel.</Typography>
+                </Box>
+              </MenuItem>
+              <MenuItem onClick={() => descargar('html')} sx={{ gap: 1.25 }}>
+                <CodeIcon sx={{ fontSize: 20, mt: 0.25, color: 'var(--accent)' }} />
+                <Box>
+                  <Typography sx={{ fontSize: '0.84rem', fontWeight: 700 }}>HTML</Typography>
+                  <Typography sx={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>La página interactiva en un solo archivo (se abre en el navegador).</Typography>
+                </Box>
+              </MenuItem>
+            </Menu>
             <Accion titulo={cambios ? 'Guarda primero: la liga muestra lo guardado' : 'Abrir la liga como la verá el cliente'}
               onClick={() => window.open(liga, '_blank', 'noopener')} disabled={ocupado || cambios}><OpenInNewIcon /></Accion>
             <Tooltip {...tooltipProps} title={cambios ? 'Guarda primero: la liga muestra lo guardado' : 'Liga pública para mandar por WhatsApp. No pide sesión.'}>
@@ -730,10 +781,13 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
               </Seccion>
 
               <Seccion icono={<SpeedIcon />} titulo="Nivel de experiencia" ayuda={AYUDA.nivel}
-                descripcion={ev.info?.nivel_fuente === 'clasificacion' ? 'Sale de la clasificación de Análisis.' : 'Estimado por los tiempos de respuesta: revísalo.'}>
+                descripcion={ev.info?.nivel_fuente === 'clasificacion'
+                  ? <>Lo eligió Análisis (Timing + IA): <b style={{ color: 'var(--text)' }}>{nombreCategoria(ev.info)}</b>.</>
+                  : 'Este número no tiene clasificación en Análisis: se estimó con los tiempos de respuesta. Revísalo.'}>
                 <Box role="radiogroup" aria-label="Nivel hoy" sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0.75 }}>
                   {ev.escala.slice(0, 4).map((nombre, k) => {
                     const activo = Number(form.nivel) === k + 1
+                    const deAnalisis = ev.info?.nivel_analisis === k + 1
                     return (
                       <Box key={nombre} component="button" type="button" role="radio" aria-checked={activo} onClick={() => set('nivel', k + 1)}
                         sx={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', borderRadius: '10px', p: 1, textAlign: 'center',
@@ -744,10 +798,25 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
                           bgcolor: activo ? NIVEL_COLOR[k] : 'transparent', border: `2px solid ${NIVEL_COLOR[k]}`,
                           color: activo ? '#fff' : NIVEL_COLOR[k], fontSize: '0.72rem', fontWeight: 800 }}>{k + 1}</Box>
                         <Typography sx={{ fontSize: '0.66rem', lineHeight: 1.2, fontWeight: activo ? 700 : 500, color: activo ? 'var(--text)' : 'var(--text-muted)' }}>{nombre}</Typography>
+                        {deAnalisis && (
+                          <Typography component="span" sx={{ display: 'inline-block', mt: 0.5, px: 0.75, borderRadius: '999px', fontSize: '0.58rem', fontWeight: 700,
+                            bgcolor: 'rgba(var(--accent-rgb),0.14)', color: 'var(--accent)' }}>Análisis</Typography>
+                        )}
                       </Box>
                     )
                   })}
                 </Box>
+                {ev.info?.nivel_analisis && Number(form.nivel) !== ev.info.nivel_analisis && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, borderRadius: '10px', border: '1px solid rgba(245,158,11,0.35)', bgcolor: 'rgba(245,158,11,0.08)' }}>
+                    <WarningAmberIcon sx={{ fontSize: 17, ...ambar }} />
+                    <Typography sx={{ flex: 1, fontSize: '0.74rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                      Lo cambiaste: Análisis lo clasificó en el nivel {ev.info.nivel_analisis} ({ev.escala[ev.info.nivel_analisis - 1]}).
+                    </Typography>
+                    <Button size="small" onClick={() => set('nivel', ev.info.nivel_analisis)} sx={{ ...botonSx, fontSize: '0.74rem', color: 'var(--accent)', whiteSpace: 'nowrap' }}>
+                      Usar el de Análisis
+                    </Button>
+                  </Box>
+                )}
                 <Campo etiqueta="Diagnóstico (va en negritas)" ayuda={AYUDA.diagnostico} valor={form.sintesis_titular} onChange={(v) => set('sintesis_titular', v)} max={lim.sintesis_titular} />
                 <Campo etiqueta="Qué le falta para vender por el chat" ayuda={AYUDA.falta} valor={form.sintesis_texto} onChange={(v) => set('sintesis_texto', v)} max={lim.sintesis_texto} multiline />
               </Seccion>

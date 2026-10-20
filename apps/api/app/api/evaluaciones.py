@@ -16,6 +16,8 @@ import html
 import logging
 import re
 import secrets
+import threading
+import unicodedata
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -200,6 +202,26 @@ def _elegir_numero(db, company_id: str, pedido: Optional[str]) -> dict:
     return max(numeros, key=lambda n: (n.get("responses") or 0, n.get("sent") or 0))
 
 
+def _veredicto(db, company_id: str, numero: str, entrada: dict) -> dict | None:
+    """La clasificación Timing + IA que Análisis muestra para ese número: de ella sale el nivel.
+    Una empresa con un solo número la guarda solo a nivel empresa, sin entrada por número
+    (Rayogas, 2026-10-20: Análisis decía Bot y la evaluación "estimaba" el nivel); entonces vale
+    la de la fila de Análisis de ese número, que es la que ve el equipo."""
+    try:
+        from app.classification_compare import report_verdict
+        verdict = report_verdict(db, company_id, numero)
+        if verdict:
+            return verdict
+        if entrada.get("category"):
+            empresa = report_verdict(db, company_id)
+            if empresa and empresa.get("category") == entrada["category"]:
+                return empresa  # la misma, con su diagnóstico
+            return {"category": entrada["category"], "is_ai": bool(entrada.get("is_ai"))}
+    except Exception as exc:
+        log.warning("evaluación %s: sin clasificación (%s)", company_id, exc)
+    return None
+
+
 @router.post("/evaluaciones")
 def crear_evaluacion(req: NuevaEvaluacion, x_user_token: Optional[str] = Header(None)):
     user = _usuario(x_user_token)
@@ -215,12 +237,7 @@ def crear_evaluacion(req: NuevaEvaluacion, x_user_token: Optional[str] = Header(
     numero = entrada["number"]
     from app.report_scope import report_thread_for_number
     thread = report_thread_for_number(db.get_conversation_thread(req.company_id), numero)
-    try:
-        from app.classification_compare import report_verdict
-        verdict = report_verdict(db, req.company_id, numero)
-    except Exception as exc:
-        log.warning("evaluación %s: sin clasificación (%s)", req.company_id, exc)
-        verdict = None
+    verdict = _veredicto(db, req.company_id, numero, entrada)
     try:
         capa, info = armador.armar_cliente(company=company, thread=thread, numero=numero, verdict=verdict,
                                            industria=industria, whatsapp_name=entrada.get("whatsapp_name"),
@@ -288,15 +305,58 @@ def _html(doc: dict) -> str:
         raise HTTPException(422, str(exc))
 
 
+def _adjunto(doc: dict, ext: str) -> str:
+    """Content-Disposition con un nombre de archivo que cualquier sistema acepta (sin acentos)."""
+    nombre = unicodedata.normalize("NFKD", doc.get("company_name") or "empresa").encode("ascii", "ignore").decode()
+    nombre = re.sub(r"[^A-Za-z0-9]+", "-", nombre).strip("-") or "empresa"
+    return f'attachment; filename="evaluacion-whatsapp-{nombre}.{ext}"'
+
+
 @router.get("/evaluaciones/{evaluacion_id}/html", response_class=HTMLResponse)
 def html_evaluacion(evaluacion_id: str, descargar: bool = False, x_user_token: Optional[str] = Header(None)):
     _usuario(x_user_token)
     doc = _cargar(MongoDBManager(), evaluacion_id)
     headers = {"Cache-Control": "no-store"}
     if descargar:
-        nombre = "".join(c for c in (doc.get("company_name") or "evaluacion") if c.isalnum() or c in " -_").strip() or "evaluacion"
-        headers["Content-Disposition"] = f'attachment; filename="evaluacion-{nombre.replace(" ", "-")}.html"'
+        headers["Content-Disposition"] = _adjunto(doc, "html")
     return HTMLResponse(_html(doc), headers=headers)
+
+
+# Cada PDF abre un Chromium (~150 MB): pocos a la vez para no ahogar al servidor.
+_PDF_A_LA_VEZ = threading.BoundedSemaphore(2)
+
+
+def _pdf(pagina: str) -> bytes:
+    """La hoja como la imprime el navegador con el @media print de la plantilla: dos hojas carta,
+    el chat de hoy y el de la experiencia con De Tu Cel. Siempre en claro y sin red: todo va
+    incrustado, así que cualquier petición http(s) se corta."""
+    from playwright.sync_api import sync_playwright
+    pagina = re.sub(r"<html\b", '<html data-theme="light"', pagina, count=1)
+    with _PDF_A_LA_VEZ, sync_playwright() as pw:
+        navegador = pw.chromium.launch(headless=True)
+        try:
+            hoja = navegador.new_page()
+            hoja.route(re.compile(r"^https?://"), lambda ruta: ruta.abort())
+            hoja.set_content(pagina, wait_until="load", timeout=30_000)
+            hoja.evaluate("document.fonts.ready.then(() => true)")
+            return hoja.pdf(format="Letter", print_background=True, prefer_css_page_size=True)
+        finally:
+            navegador.close()
+
+
+@router.get("/evaluaciones/{evaluacion_id}/pdf")
+def pdf_evaluacion(evaluacion_id: str, x_user_token: Optional[str] = Header(None)):
+    """Para mandarla como archivo (WhatsApp, correo): el PDF de lo guardado."""
+    _usuario(x_user_token)
+    doc = _cargar(MongoDBManager(), evaluacion_id)
+    pagina = _html(doc)
+    try:
+        contenido = _pdf(pagina)
+    except Exception as exc:
+        log.warning("evaluación %s: no se pudo generar el PDF (%s)", evaluacion_id, exc)
+        raise HTTPException(503, "No se pudo generar el PDF. Intenta de nuevo o descarga el HTML.")
+    return Response(contenido, media_type="application/pdf",
+                    headers={"Content-Disposition": _adjunto(doc, "pdf"), "Cache-Control": "no-store"})
 
 
 @router.get("/evaluaciones/publica/{token}", response_class=HTMLResponse)

@@ -775,7 +775,9 @@ def armar_cliente(*, company: dict, thread: list, numero: str, verdict: dict | N
     # Los hechos van al editor: "Partir de un hallazgo detectado" llena una tarjeta con ellos.
     campos = {"oportunidades": ("id", "tipo", "dato", "mensaje", "titulo", "vimos", "oportunidad", "ventaja"),
               "fortalezas": ("id", "tipo", "mensaje", "titulo", "texto")}
+    # El editor muestra de qué clasificación salió el nivel y deja volver a ella si se cambia.
     info = {"origen": origen, "nivel_fuente": fuente_nivel, "categoria": (verdict or {}).get("category"),
+            "es_ia": bool((verdict or {}).get("is_ai")), "nivel_analisis": nivel if fuente_nivel == "clasificacion" else None,
             "avisos": avisos, "mensajes": metricas["mensajes"],
             "hechos": {lista: [{k: h[k] for k in claves} for h in hechos[lista]] for lista, claves in campos.items()}}
     return capa, info

@@ -93,10 +93,18 @@ momento** hasta el final.
   - `distinct`: 482 de 485 iguales; las 3 restantes son una rareza de Mongo (con índice devuelve `null` por documentos *sin* el campo, sin índice no). La capa ya no adivina: si algún documento no tiene el campo, ese `distinct` lo resuelve Mongo. `send_now_worker` dependía de ese `null` para arrancar la partición "legacy" (items sin `user_id`); ahora lo revisa explícitamente (`tests/test_send_partitions_legacy.py`).
   - Rendimiento: el JIT de Postgres tardaba ~12 s en compilar las expresiones de orden (la consulta tarda <1 s). Las conexiones de la capa lo apagan (`jit=off`).
 - [ ] Respaldos automáticos en el servidor (Coolify tiene respaldos programados para bases de datos, o `backup_mongo.py` por cron) y una restauración de prueba.
-- [ ] Crear el Postgres de producción en Coolify.
+- [x] Postgres de producción en Coolify (2026-10-20): PostgreSQL 17.11, destino `coolify` (misma red que el backend y `mongodb-detucel`), privado, base `postgres`. `POSTGRES_URL` y `DB_MODES` en el backend.
 
 ### Etapa 1 — Configuración y catálogos (bajo riesgo)
 `settings`, `warmup_config`, `ai_global_config`, `message_templates`, `stickers`, `proxies`, `blacklist`, `app_notifications`, `security_counters`, `social_media`, `person_contacts`, `evidence`.
+
+| Colección | dual | shadow | postgres |
+|---|---|---|---|
+| `settings` | 2026-10-20 (2 docs, carga + conciliación `[OK]`) | | |
+| `message_templates` | 2026-10-20 (72 docs, `[OK]`) | | |
+| `blacklist` | 2026-10-20 (361 docs, `[OK]`) | | |
+
+Revisión diaria mientras estén en `dual` (terminal del contenedor backend): `python scripts/pg_mirror.py reconcile settings,message_templates,blacklist` → las tres en `[OK]`.
 
 ### Etapa 2 — Bitácoras e históricos (solo se agregan)
 `instance_health_logs`, `phone_verification_attempts`, `search_ideas`, `classification_comparisons` y sus logs.

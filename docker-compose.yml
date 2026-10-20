@@ -36,9 +36,9 @@ services:
       - ANTHROPIC_ADMIN_API_KEY=${ANTHROPIC_ADMIN_API_KEY:-}
       - ANTHROPIC_WORKSPACE_ID=${ANTHROPIC_WORKSPACE_ID:-}
       - ANTHROPIC_MONTHLY_BUDGET_USD=${ANTHROPIC_MONTHLY_BUDGET_USD:-10}
-      # Al pasar wwebjs a su propio recurso (docs/WWEBJS_RECURSO_APARTE.md) será
-      # http://detucel-wwebjs:3001, su alias en la red "coolify".
-      - WWEBJS_URL=${WWEBJS_URL:-http://wwebjs:3001}
+      # wwebjs es un recurso aparte en Coolify (docker-compose.wwebjs.yml,
+      # docs/WWEBJS_RECURSO_APARTE.md): se le encuentra por su alias en "coolify".
+      - WWEBJS_URL=${WWEBJS_URL:-http://detucel-wwebjs:3001}
       - WWEBJS_API_SECRET=${WWEBJS_API_SECRET}
       - WARMUP_ENABLED=${WARMUP_ENABLED}
       - OTP_WEBHOOK_SECRET=${OTP_WEBHOOK_SECRET}
@@ -51,8 +51,6 @@ services:
       - PGMIRROR_RECONCILE_HOURS=${PGMIRROR_RECONCILE_HOURS:-}
     expose:
       - "8000"
-    depends_on:
-      - wwebjs
     restart: unless-stopped
     mem_limit: 1.5g
     # A Docker Compose app gets its own project-scoped network by default,
@@ -78,40 +76,9 @@ services:
         max-size: 100m
         max-file: "10"
 
-  # ── wwebjs (WhatsApp personal number — active provider) ───────
-  wwebjs:
-    # Dar tiempo a Chromium para guardar LocalAuth y recoger sus procesos hijos.
-    init: true
-    stop_grace_period: 30s
-    build:
-      context: ./apps/wwebjs
-      dockerfile: Dockerfile
-    environment:
-      - PORT=3001
-      - FASTAPI_URL=http://backend:8000
-      - API_SECRET=${WWEBJS_API_SECRET}
-      - PROXY_SERVER=${PROXY_SERVER}
-      - PROXY_USERNAME=${PROXY_USERNAME}
-      - PROXY_PASSWORD=${PROXY_PASSWORD}
-      - PROXY_ONLY_SESSIONS=${PROXY_ONLY_SESSIONS}
-    volumes:
-      - wwebjs_sessions:/app/sessions
-    # El mismo alias que tendrá como recurso aparte: antes del corte se comprueba desde el
-    # backend que Coolify lo respeta (`getent hosts detucel-wwebjs`).
-    networks:
-      default:
-      coolify:
-        aliases:
-          - detucel-wwebjs
-    restart: unless-stopped
-    mem_limit: 6g
-    logging:
-      driver: json-file
-      options:
-        max-size: 100m
-        max-file: "10"
-
 volumes:
+  # Ya no lo usa ningún servicio de este archivo: lo monta el recurso wwebjs como volumen
+  # externo. Se deja declarado a propósito para que nada lo borre y volver atrás sea trivial.
   wwebjs_sessions:
 
 networks:

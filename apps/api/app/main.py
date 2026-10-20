@@ -90,6 +90,17 @@ async def lifespan(app: FastAPI):
     start_scrape_worker()
     start_send_now_worker()
     start_followup_workers()
+    # Migración a Postgres: con colecciones activas en DB_MODES, arranca la vigilancia y la
+    # conciliación automática (app/pgmirror/health.py). Sin POSTGRES_URL no hace nada.
+    try:
+        from app.pgmirror import config as _pg_config
+        if _pg_config.enabled():
+            from app.database import MongoDBManager as _PgDB
+            from app.pgmirror import routing as _pg_routing
+            _pg_routing.start(_PgDB().raw_db)
+    except Exception:
+        import logging as _pg_log
+        _pg_log.getLogger(__name__).exception("pgmirror start failed")
     if os.getenv("WARMUP_ENABLED", "false").lower() == "true":
         start_warmup_worker()
     # Proxies por número: re-sincroniza los ajustes con wwebjs (se despliegan juntos) y

@@ -13,6 +13,7 @@ partiendo de estas.
 Los filtros llegan ya armados con sql.Literal (sqlfilter), así que las consultas se
 ejecutan sin parámetros: un '%' dentro de una búsqueda no se confunde con uno.
 """
+import contextlib
 import logging
 import threading
 
@@ -39,6 +40,31 @@ class Store:
 
     def close(self):
         self._pool.close()
+
+    def query(self, statement, params=None):
+        """Consulta/sentencia suelta (tablas de vigilancia de health.py). Filas o None."""
+        with self._pool.connection() as conn:
+            cur = conn.execute(statement, params)
+            return cur.fetchall() if cur.description else None
+
+    @contextlib.contextmanager
+    def advisory_lock(self, key: int):
+        """True si este proceso obtuvo el candado (y lo suelta al salir); False si otro lo tiene."""
+        with self._pool.connection() as conn:
+            got = conn.execute("SELECT pg_try_advisory_lock(%s)", (key,)).fetchone()[0]
+            try:
+                yield got
+            finally:
+                if got:
+                    conn.execute("SELECT pg_advisory_unlock(%s)", (key,))
+
+    def id_values(self, collection: str, keys: list[str]) -> list:
+        """Los _id originales (ObjectId, texto, número…) de esas filas."""
+        if not keys:
+            return []
+        self.ensure_table(collection)
+        rows = self.query(sql.SQL("SELECT id, id_type FROM {} WHERE id = ANY(%s)").format(self.table(collection)), (list(keys),))
+        return [codec.id_from_key(key, kind) for key, kind in rows]
 
     @staticmethod
     def table(collection: str):

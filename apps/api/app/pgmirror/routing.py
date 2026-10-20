@@ -58,14 +58,17 @@ class _ShadowQueue:
 
 
 class _Runtime:
-    def __init__(self, raw_db):
+    def __init__(self, raw_db, *, monitor: bool = True):
+        from app.pgmirror.health import Monitor
         from app.pgmirror.store import Store
         from app.pgmirror.sync import SyncWorker
-        self.store = Store(config.postgres_url())
+        self.store = Store(config.postgres_url(), max_size=6)
         self.worker = SyncWorker(raw_db, self.store)
         self.shadow = _ShadowQueue()
         self.stats = {}
         self.stats_lock = threading.Lock()
+        # Guarda estadísticas en Postgres y concilia solo (health.py).
+        self.monitor = Monitor(self, raw_db, start=monitor)
 
     def bump(self, collection, key, n=1):
         with self.stats_lock:
@@ -102,6 +105,20 @@ def route_collection(raw_db, name: str):
         return raw
     rt = get_runtime(raw_db)
     return raw if rt is None else RoutedCollection(raw, name, mode, rt)
+
+
+def start(raw_db):
+    """Arranca la capa al iniciar el backend si hay alguna colección activa, para que la
+    vigilancia y la conciliación corran aunque esas colecciones no tengan tráfico."""
+    if not config.enabled():
+        return None
+    try:
+        from app.pgmirror.health import active_collections
+        if active_collections(raw_db):
+            return get_runtime(raw_db)
+    except Exception:
+        log.exception("pgmirror start failed; collections stay on Mongo only")
+    return None
 
 
 class RoutedDatabase:

@@ -76,9 +76,22 @@ services:
         max-size: 100m
         max-file: "10"
 
+  # ── Ancla del volumen de sesiones de WhatsApp ────────────────
+  # wwebjs corre en su propio recurso (docker-compose.wwebjs.yml) y monta estos mismos
+  # archivos por medio de un volumen alias (docs/WWEBJS_RECURSO_APARTE.md). Para Docker eso
+  # no cuenta como uso: sin este contenedor el volumen original quedaría "sin usar" y una
+  # limpieza de volúmenes lo borraría con todas las sesiones. Solo lectura; no hace nada más.
+  wwebjs-sessions-anchor:
+    image: busybox:1.36.1
+    init: true
+    command: ["tail", "-f", "/dev/null"]
+    volumes:
+      - wwebjs_sessions:/sessions:ro
+    restart: unless-stopped
+    mem_limit: 16m
+
 volumes:
-  # Ya no lo usa ningún servicio de este archivo: lo monta el recurso wwebjs como volumen
-  # externo. Se deja declarado a propósito para que nada lo borre y volver atrás sea trivial.
+  # Coolify lo nombra dpwlknbsbuvups4fy4kahcyk_wwebjs-sessions: el volumen de siempre.
   wwebjs_sessions:
 
 networks:

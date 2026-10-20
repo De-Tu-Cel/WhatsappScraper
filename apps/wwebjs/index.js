@@ -1,4 +1,4 @@
-const { withTypingPresence } = require('./typingPresence')
+const { withTypingPresence, setIdlePresence } = require('./typingPresence')
 const express = require('express')
 // Must run before Client imports the injected LoadUtils function.
 require('./patchMediaModel').ensureMediaModelPatch()
@@ -8,6 +8,11 @@ const StealthPlugin  = require('puppeteer-extra-plugin-stealth')
 const QRCode = require('qrcode')
 const { cachedContactName } = require('./contactNames')
 const { createLineActivity } = require('./lineActivity')
+const { withTimeout } = require('./sessionAsync')
+const { normalizeProxy, launchKey: proxyLaunchKey, proxyForSession } = require('./proxySettings')
+const { checkSessionHealth, createRecoveryBudget, heartbeatVerdict } = require('./sessionHealth')
+const { statusEvidence } = require('./sessionDiagnostics')
+const { createSessionRegistry, restoreSession, closeBrowserProfile, shutdownSessions, serializeSession } = require('./sessionLifecycle')
 const fs = require('fs')
 const path = require('path')
 const dns = require('dns')
@@ -20,6 +25,8 @@ const {
   reserveLaunch,
   LAUNCH_GAP_MS,
   queueSessionRecovery,
+  readyWatchdogMs,
+  canExtendReadyWatchdog,
 } = require('./sessionRecovery')
 
 puppeteerExtra.use(StealthPlugin())
@@ -50,6 +57,7 @@ const WA_WEB_VERSION     = (process.env.WA_WEB_VERSION || '').trim()
 const WA_WEB_REMOTE_PATH = process.env.WA_WEB_REMOTE_PATH ||
   'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html'
 const SESSIONS_PATH = process.env.SESSIONS_PATH || '/app/sessions'
+const sessionRegistry = createSessionRegistry(SESSIONS_PATH)
 // e2e_notification y similares no son texto de un humano. Lo usa el webhook
 // y el historial (SIMAGAS/GUVAL, 2026-10-08: NON_CONTENT_MSG_TYPES quedó
 // dentro de createClient y Sync tiraba "is not defined" al filtrar).
@@ -89,9 +97,16 @@ function sessionUsesProxy(sessionId) {
 // carpetas de login. Un proxy propio tiene prioridad sobre el global de PROXY_SERVER.
 const SETTINGS_FILE = path.join(SESSIONS_PATH, 'wwebjs-settings.json')
 let sessionSettings = {}
-try { sessionSettings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) || {} } catch (_) {}
+let settingsLoadError = null
+try {
+  sessionSettings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'))
+  if (!sessionSettings || typeof sessionSettings !== 'object' || Array.isArray(sessionSettings)) throw Error('Invalid settings file')
+} catch (error) {
+  if (error.code !== 'ENOENT') settingsLoadError = error
+}
 
 function saveSessionSettings() {
+  if (settingsLoadError) throw Error('Cannot overwrite unreadable proxy settings')
   fs.mkdirSync(SESSIONS_PATH, { recursive: true })
   const tmp = `${SETTINGS_FILE}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(sessionSettings), { mode: 0o600 })
@@ -99,10 +114,10 @@ function saveSessionSettings() {
 }
 
 function proxyFor(sessionId) {
-  const own = sessionSettings[sessionId]?.proxy
-  if (own?.server) return own
-  if (sessionUsesProxy(sessionId)) return { server: PROXY_SERVER, username: PROXY_USERNAME, password: PROXY_PASSWORD }
-  return null
+  return proxyForSession({ id: sessionId, settings: sessionSettings, loadError: settingsLoadError,
+    required: fs.existsSync(path.join(SESSIONS_PATH, `.proxy-required-${sessionId}`)),
+    globalProxy: sessionUsesProxy(sessionId)
+      ? { server: PROXY_SERVER, username: PROXY_USERNAME, password: PROXY_PASSWORD } : null })
 }
 
 // Modo ligero: menos procesos de Chrome por sesión. El de gráficos y el de audio corren
@@ -131,6 +146,7 @@ function isLean(sessionId) {
 // por la IP del servidor: el intermediario siempre responde, y con un 502 si el proxy no.
 const relays = new Map() // sessionId -> { key, server, port }
 let nextRelayPort = Number(process.env.PROXY_RELAY_BASE_PORT || 41000)
+const PROXY_HANDSHAKE_TIMEOUT_MS = 15000
 
 function relayFor(sessionId, proxy) {
   const key = `${proxy.server}|${proxy.username}|${proxy.password}`
@@ -147,6 +163,9 @@ function relayFor(sessionId, proxy) {
       headers: { ...req.headers, 'proxy-authorization': auth } })
     up.on('response', r => { res.writeHead(r.statusCode, r.headers); r.pipe(res) })
     up.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end() })
+    up.setTimeout(PROXY_HANDSHAKE_TIMEOUT_MS, () => up.destroy())
+    up.on('response', () => up.setTimeout(0))
+    req.on('aborted', () => up.destroy())
     req.pipe(up)
   })
   server.on('connect', (req, client, head) => {
@@ -154,6 +173,8 @@ function relayFor(sessionId, proxy) {
       up.write(`CONNECT ${req.url} HTTP/1.1\r\nHost: ${req.url}\r\nProxy-Authorization: ${auth}\r\n\r\n`)
     })
     let buf = Buffer.alloc(0)
+    // Limit only the handshake, never the idle lifetime of an established WA socket.
+    up.setTimeout(PROXY_HANDSHAKE_TIMEOUT_MS, () => { client.destroy(); up.destroy() })
     const onData = (chunk) => {
       buf = Buffer.concat([buf, chunk])
       const end = buf.indexOf('\r\n\r\n')
@@ -162,6 +183,7 @@ function relayFor(sessionId, proxy) {
         return
       }
       up.removeListener('data', onData)
+      up.setTimeout(0)
       if (!/^HTTP\/1\.[01] 200/.test(buf.subarray(0, buf.indexOf('\r\n')).toString())) {
         client.end('HTTP/1.1 502 Bad Gateway\r\n\r\n')
         up.destroy()
@@ -177,6 +199,8 @@ function relayFor(sessionId, proxy) {
     up.on('data', onData)
     up.on('error', () => client.destroy())
     client.on('error', () => up.destroy())
+    client.on('close', () => up.destroy())
+    up.on('close', () => client.destroy())
   })
   server.on('error', (e) => console.error(`[${sessionId}] Proxy relay error: ${e.message}`))
   const port = nextRelayPort++
@@ -195,7 +219,7 @@ function proxyServerArg(sessionId, proxy) {
   return proxy.username ? relayFor(sessionId, proxy) : proxy.server
 }
 
-// sessionId → { client, status, qr, phone, presenceTimer, reconnectTimer }
+// sessionId → { client, status, qr, phone, reconnectTimer }
 const sessions = new Map()
 const lineActivity = createLineActivity({ sessions })
 
@@ -293,12 +317,20 @@ const _sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // short, growing delay covers a brief restart window without blocking the
 // event loop for long if the backend is genuinely down.
 async function forwardWebhook(payload, attempt = 1) {
+  if (attempt === 1 && payload.event === 'session.status') {
+    payload = { ...payload, data: { ...payload.data, diagnostics: statusEvidence({
+      id: payload.sessionId, session: sessions.get(payload.sessionId),
+      activity: lineActivity, memory: sessionMemory,
+    }) } }
+  }
   try {
-    await fetch(`${FASTAPI_URL}/api/wwebjs/webhook`, {
+    const response = await fetch(`${FASTAPI_URL}/api/wwebjs/webhook`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-api-secret': API_SECRET },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10000),
     })
+    if (!response.ok) throw Error(`Webhook HTTP ${response.status}`)
   } catch (e) {
     if (attempt >= 3) {
       console.error(`[Webhook forward error] giving up after ${attempt} attempts:`, e.message)
@@ -317,24 +349,6 @@ function humanTypingMs(message) {
   return Math.max(800, base + jitter)
 }
 
-// Simulate human presence: go online briefly every 15-45 minutes
-function startPresenceHeartbeat(sessionId) {
-  const session = sessions.get(sessionId)
-  if (!session) return
-  clearInterval(session.presenceTimer)
-  session.presenceTimer = setInterval(async () => {
-    const s = sessions.get(sessionId)
-    if (!s || s.status !== 'connected') return
-    try {
-      await lineActivity.runBackground(sessionId, 'presence', async () => {
-        await s.client.sendPresenceAvailable()
-        await new Promise(r => setTimeout(r, Math.random() * 5000 + 2000))
-        await s.client.sendPresenceUnavailable()
-      })
-    } catch (_) {}
-  }, (Math.random() * 30 + 15) * 60 * 1000)
-}
-
 // Catch a name/photo change made OUTSIDE this app (straight from the phone).
 // whatsapp-web.js exposes no real-time event for it — `contact_changed` only
 // fires for a phone NUMBER change, not name/photo. The WhatsApp Web page
@@ -351,11 +365,12 @@ function startProfileSyncPoll(sessionId) {
   clearInterval(session.profileSyncTimer)
   session.profileSyncTimer = setInterval(async () => {
     const s = sessions.get(sessionId)
-    if (!s || s.status !== 'connected') return
+    if (!s || s !== session || s.status !== 'connected' || s.client.lifecycleClosing) return
     try {
       await lineActivity.runBackground(sessionId, 'profile-sync', async () => {
         const pushname = s.client.info?.pushname || null
         const profilePicUrl = await fetchProfilePicUrl(s.client, sessionId)
+        if (_shuttingDown || sessions.get(sessionId) !== s || s.client.lifecycleClosing) return
         const changed = pushname !== s.lastPushname || (profilePicUrl && profilePicUrl !== s.lastProfilePicUrl)
         if (changed) {
           console.log(`[${sessionId}] profile change detected outside the app — syncing`)
@@ -382,6 +397,7 @@ function startProfileSyncPoll(sessionId) {
 // Varias sesiones que fallan el latido en la misma ventana son el proceso
 // trabado, no un zombi cada una. Se espera un segundo para verlas juntas
 // antes de matar a nadie (las seis cayeron en el mismo milisegundo, 2026-10-07).
+const recoveryBudget = createRecoveryBudget()
 let heartbeatFailureLog = []
 let nextAutoLaunchAt = 0
 
@@ -391,13 +407,36 @@ function scheduleAutoLaunch(fn) {
   setTimeout(fn, slot.delay)
 }
 
+function reportProxyProblem(sessionId, error) {
+  console.error(`[${sessionId}] cannot start: ${error.message}`)
+  forwardWebhook({ event: 'session.status', sessionId, data: { status: 'error', reason: 'PROXY_INVALID' } })
+}
+
 function recoverSession(sessionId, session, allowed) {
   return queueSessionRecovery({
     locks: _startLocks, sessions, sessionId, session,
     schedule: scheduleAutoLaunch,
-    stopping: () => _shuttingDown,
+    stopping: () => _shuttingDown || sessionRegistry.disabled(sessionId),
+    admit: id => {
+      // Revisar el proxy ANTES de cerrar el navegador: si no se podrá volver a
+      // arrancar, no tiene caso tumbarla (ni gastar un intento de recuperación).
+      try { proxyFor(id) } catch (error) {
+        session.status = 'error'
+        clearInterval(session.heartbeatTimer)
+        clearInterval(session.profileSyncTimer)
+        reportProxyProblem(id, error)
+        return false
+      }
+      if (recoveryBudget.admit(id)) return true
+      session.status = 'error'
+      clearInterval(session.heartbeatTimer)
+      clearInterval(session.profileSyncTimer)
+      console.error(`[${id}] automatic recovery paused: three attempts in 15 minutes`)
+      forwardWebhook({ event: 'session.status', sessionId: id, data: { status: 'error', reason: 'RECOVERY_LIMIT' } })
+      return false
+    },
     allowed,
-    destroy: s => destroySessionClient(s.client, sessionId, s.initPromise),
+    destroy: s => destroySessionClient(s.client, sessionId, s.initPromise, { forceAfterDrain: true }),
     create: createClient,
   }).catch(error => console.error(`[${sessionId}] Recovery failed: ${error.message}`))
 }
@@ -407,6 +446,7 @@ function startLivenessHeartbeat(sessionId) {
   if (!session) return
   clearInterval(session.heartbeatTimer)
   session.heartbeatFailStreak = 0
+  session.heartbeatTransientStreak = 0
   session.heartbeatTimer = setInterval(async () => {
     const s = sessions.get(sessionId)
     // Identity check (s !== session) as well as status — without it, this
@@ -421,13 +461,35 @@ function startLivenessHeartbeat(sessionId) {
     if (!s || s !== session) { clearInterval(session.heartbeatTimer); return }
     if (s.status !== 'connected') return
     try {
-      await Promise.race([
-        s.client.getState(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('getState() timed out')), 10000)),
-      ])
+      const health = await checkSessionHealth({ sessions, id: sessionId, session: s, stopping: () => _shuttingDown })
+      if (health.kind === 'discarded') return
+      if (health.kind === 'attention') {
+        const needsScan = ['UNPAIRED', 'UNPAIRED_IDLE'].includes(health.state)
+        s.status = needsScan ? 'need_scan' : 'error'
+        clearInterval(s.heartbeatTimer)
+        clearInterval(s.profileSyncTimer)
+        forwardWebhook({ event: 'session.status', sessionId, data: { status: s.status, reason: health.state } })
+        // Stop the browser without attempting to reactivate revoked credentials.
+        await serializeSession(_startLocks, sessionId, async () => {
+          if (sessions.get(sessionId) === s) await destroySessionClient(s.client, sessionId, s.initPromise, { forceAfterDrain: true })
+        })
+        return
+      }
+      if (health.kind === 'failed') throw Error(health.error)
+      // TIMEOUT/OPENING/PAIRING/CONFLICT: WhatsApp Web reconectando por su
+      // cuenta. Solo si se queda así varios latidos seguidos cuenta como falla.
+      const { verdict, transientStreak } = heartbeatVerdict(health, s.heartbeatTransientStreak || 0)
+      s.heartbeatTransientStreak = transientStreak
+      if (verdict === 'wait') {
+        console.warn(`[${sessionId}] WhatsApp Web state ${health.state} (${transientStreak} in a row) — waiting before recovery`)
+        return
+      }
+      if (verdict === 'failed') throw Error(`Still ${health.state} after ${transientStreak} heartbeats`)
       s.heartbeatFailStreak = 0
     } catch (e) {
+      if (_shuttingDown || sessions.get(sessionId) !== s || s.status !== 'connected' || s.client.lifecycleClosing) return
       s.heartbeatFailStreak = (s.heartbeatFailStreak || 0) + 1
+      s.lastDiagnosticError = { source: 'heartbeat', code: 'HEARTBEAT_FAILED', at: new Date().toISOString() }
       heartbeatFailureLog = recordHeartbeatFailure(heartbeatFailureLog, sessionId, Date.now())
       console.warn(`[${sessionId}] Heartbeat failed (${s.heartbeatFailStreak}/2): ${e.message}`)
       if (s.heartbeatFailStreak < 2) return
@@ -448,7 +510,6 @@ function startLivenessHeartbeat(sessionId) {
         }
         console.warn(`[${sessionId}] Session looks zombie (no live disconnect event) — recreating`)
         clearInterval(current.heartbeatTimer)
-        clearInterval(current.presenceTimer)
         clearInterval(current.profileSyncTimer)
         forwardWebhook({ event: 'session.status', sessionId, data: { status: 'disconnected', reason: 'HEARTBEAT_TIMEOUT' } })
         recoverSession(sessionId, captured, status => status === 'connected')
@@ -484,19 +545,22 @@ const _PROFILE_PIC_RETRIES = 2
 const _PROFILE_PIC_RETRY_DELAY_MS = 1500
 
 async function fetchProfilePicUrl(client, sessionId) {
+  const deadline = Date.now() + 7000
   for (let attempt = 0; attempt <= _PROFILE_PIC_RETRIES; attempt++) {
+    if (client.lifecycleClosing || _shuttingDown || Date.now() >= deadline) return null
     if (attempt > 0) await new Promise(r => setTimeout(r, _PROFILE_PIC_RETRY_DELAY_MS))
+    if (Date.now() >= deadline) return null
     try {
       const ownId = client.info?.wid?._serialized
       if (ownId) {
         try {
-          const url = await client.pupPage.evaluate(async (contactId) => {
+          const url = await withTimeout(() => client.pupPage.evaluate(async (contactId) => {
             const wid = window.require('WAWebWidFactory').createWid(contactId)
             const profilePic = await window
               .require('WAWebContactProfilePicThumbBridge')
               .requestProfilePicFromServer({ id: wid })
             return profilePic ? profilePic.eurl : null
-          }, ownId)
+          }, ownId), Math.max(1, Math.min(3000, deadline - Date.now())), 'Profile picture')
           if (url) {
             console.log(`[${sessionId}] getProfilePicUrl (direct-wid workaround) -> ok (${url.length} chars)${attempt > 0 ? ` [retry ${attempt}]` : ''}`)
             return url
@@ -506,7 +570,9 @@ async function fetchProfilePicUrl(client, sessionId) {
           console.log(`[${sessionId}] getProfilePicUrl (direct-wid workaround) failed: ${workaroundErr.message} — falling back`)
         }
       }
-      const url = await client.getProfilePicUrl(client.info.wid._serialized)
+      if (client.lifecycleClosing || _shuttingDown || Date.now() >= deadline) return null
+      const url = await withTimeout(() => client.getProfilePicUrl(client.info.wid._serialized),
+        Math.max(1, Math.min(3000, deadline - Date.now())), 'Profile picture fallback')
       console.log(`[${sessionId}] getProfilePicUrl -> ${url ? 'ok (' + url.length + ' chars)' : 'empty/null'}${attempt > 0 ? ` [retry ${attempt}]` : ''}`)
       if (url) return url
     } catch (e) {
@@ -536,47 +602,64 @@ async function fetchProfilePicUrl(client, sessionId) {
 // process (SIGKILL, right below) skips its own cleanup entirely and leaves
 // the same files behind mid-runtime. Any code recreating a session right
 // after tearing the old one down needs this, not just the boot path.
-function clearSessionLockFiles(sessionId) {
+function clearSessionLockFiles(sessionId, { processExited = false } = {}) {
   const dir = path.join(SESSIONS_PATH, `session-${sessionId}`)
+  if (!processExited && process.env.SESSION_STORAGE_LOCKED !== '1' && fs.existsSync(dir) &&
+      fs.readdirSync(dir).includes('SingletonLock')) {
+    throw Error('Cannot clear an unowned profile lock without the storage lease')
+  }
   for (const lockFile of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
-    try { fs.rmSync(path.join(dir, lockFile), { force: true }) } catch (_) {}
+    fs.rmSync(path.join(dir, lockFile), { force: true })
   }
 }
 
-async function destroySessionClient(client, sessionId, initPromise) {
-  // A client whose initialize() launch is still in flight has no pupBrowser
-  // yet — grabbing `proc` before waiting misses the process entirely, the
-  // launch finishes moments later on its own (orphaned), and claims the
-  // profile's lock right out from under the NEXT createClient() for this
-  // same session. Confirmed live 2026-09-22 under rapid QR<->pairing-code
-  // switching: destroy() had nothing to kill, then a session recreated
-  // immediately after hit "browser is already running" once the orphaned
-  // launch caught up. initPromise already swallows its own rejection inside
-  // createClient(), so this race never rejects — it just bounds the wait.
-  if (initPromise) await Promise.race([initPromise, new Promise(r => setTimeout(r, 5000))])
-  const proc = client.pupBrowser?.process ? client.pupBrowser.process() : null
+// forceAfterDrain: solo para recuperación automática, LOGOUT/desvinculación y
+// apagado — ahí la página ya está muerta (o el proceso se va), y una operación
+// colgada en ella nunca terminaría: sin forzar, drain() lanzaba LINE_BUSY para
+// siempre y la línea quedaba sin recuperar. Cerrar el navegador hace que esa
+// operación colgada falle (el backend la marca como entrega incierta).
+// DELETE y /start manuales siguen respondiendo "línea ocupada" para no cortar
+// un envío sano.
+async function destroySessionClient(client, sessionId, initPromise, { forceAfterDrain = false } = {}) {
+  client.lifecycleClosing = true
   try {
-    await Promise.race([
-      client.destroy(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('destroy() timed out')), 8000)),
-    ])
-  } catch (e) {
-    console.log(`[${sessionId}] destroy() didn't finish cleanly (${e.message}) — checking for a leftover process`)
+    try {
+      await lineActivity.drain(sessionId)
+    } catch (error) {
+      if (!forceAfterDrain || error?.code !== 'LINE_BUSY') throw error
+      console.warn(`[${sessionId}] an operation is still running after drain; closing the browser anyway`)
+    }
+    await closeBrowserProfile(client, initPromise, proof => clearSessionLockFiles(sessionId, proof))
+  } catch (error) {
+    console.error(`[${sessionId}] profile closure not confirmed: ${error.message}`)
+    throw error
   }
-  if (proc && proc.exitCode === null && !proc.killed) {
-    console.log(`[${sessionId}] Chrome process ${proc.pid} still alive after destroy() — force-killing it`)
-    try { proc.kill('SIGKILL') } catch (_) {}
-  }
-  // Confirmed live 2026-09-22: rapid QR<->pairing-code switching hit "The
-  // browser is already running for .../userDataDir" on the very next
-  // createClient() — a SIGKILL'd Chromium never runs the exit handler that
-  // normally removes its own lock, so it was still sitting there.
-  clearSessionLockFiles(sessionId)
+}
+
+function armReadyWatchdog(sessionId, session, timeoutMs = 90000) {
+  clearTimeout(session.readyWatchdog)
+  // Recordado para que el evento loading_screen lo pueda reiniciar con el mismo plazo.
+  session.readyWatchdogMs = timeoutMs
+  session.readyWatchdog = setTimeout(async () => {
+    if (_shuttingDown || session.client.lifecycleClosing || sessions.get(sessionId) !== session ||
+        !['initializing', 'authenticated'].includes(session.status)) return
+    console.warn(`[${sessionId}] initialization timed out in ${session.status}`)
+    await recoverSession(sessionId, session, status => ['initializing', 'authenticated'].includes(status))
+  }, timeoutMs)
 }
 
 function createClient(sessionId, phoneNumber, initAttempt = 0) {
-  if (_shuttingDown) return null
-  const proxy = proxyFor(sessionId)
+  if (_shuttingDown || sessionRegistry.disabled(sessionId)) return null
+  let proxy
+  try {
+    proxy = proxyFor(sessionId)
+  } catch (error) {
+    // Proxy inválido o requerido y ausente: antes la sesión solo dejaba una línea
+    // en el log (y en una recuperación desaparecía del mapa sin aviso). Ahora el
+    // backend la marca en "error" con la causa, y eso dispara el correo.
+    reportProxyProblem(sessionId, error)
+    throw error
+  }
   const lean = isLean(sessionId)
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: sessionId, dataPath: SESSIONS_PATH }),
@@ -637,10 +720,23 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
   // tell "someone has the reconnect dialog open" from "nobody's watching, stop
   // burning CPU generating QR/codes forever" (see that function's own comment
   // for the real incident this fixes).
-  const session = { client, status: 'initializing', qr: null, pairingCode: null, phoneNumber, initAttempt, phone: null, presenceTimer: null, reconnectTimer: null, readyWatchdog: null, ackFailStreak: 0, ackDegraded: false, profileSyncTimer: null, heartbeatTimer: null, heartbeatFailStreak: 0, initPromise: null, lastPushname: null, lastProfilePicUrl: null, lastPolledAt: Date.now() }
+  const session = { client, status: 'initializing', qr: null, pairingCode: null, phoneNumber, initAttempt, phone: null, reconnectTimer: null, readyWatchdog: null, ackFailStreak: 0, ackDegraded: false, profileSyncTimer: null, heartbeatTimer: null, heartbeatFailStreak: 0, initPromise: null, lastPushname: null, lastProfilePicUrl: null, lastPolledAt: Date.now() }
+  session.launchKey = proxyLaunchKey(proxy, lean)
+  session.launchProxy = proxy ? { ...proxy } : null
+  session.bootStartedAt = Date.now()
   sessions.set(sessionId, session)
 
+  // Avance real de la carga de WhatsApp Web: reinicia el límite de arranque
+  // (ver canExtendReadyWatchdog) en vez de recrear una sesión que sí avanza.
+  client.on('loading_screen', () => {
+    if (_shuttingDown || client.lifecycleClosing || sessions.get(sessionId) !== session) return
+    if (!canExtendReadyWatchdog(session.status, session.bootStartedAt)) return
+    armReadyWatchdog(sessionId, session, session.readyWatchdogMs || 90000)
+  })
+
   client.on('qr', (qr) => {
+    if (_shuttingDown || client.lifecycleClosing || sessions.get(sessionId) !== session) return
+    clearTimeout(session.readyWatchdog)
     // Only notify the backend on the actual TRANSITION into need_scan, not on
     // every QR refresh while a dialog is already open — otherwise this fires
     // repeatedly (QR regenerates every ~20s while unscanned) for no benefit.
@@ -659,6 +755,8 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
   })
 
   client.on('code', (code) => {
+    if (_shuttingDown || client.lifecycleClosing || sessions.get(sessionId) !== session) return
+    clearTimeout(session.readyWatchdog)
     if (session.status !== 'need_scan') forwardWebhook({ event: 'session.status', sessionId, data: { status: 'need_scan' } })
     session.status = 'need_scan'
     session.pairingCode = code
@@ -670,6 +768,7 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
   })
 
   client.on('authenticated', () => {
+    if (client.lifecycleClosing || _shuttingDown || sessions.get(sessionId) !== session) return
     session.status = 'authenticated'
     session.qr = null; session.pairingCode = null
     clearTimeout(session.reconnectTimer)
@@ -681,20 +780,7 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
     // event fires in that case, so nothing else would ever notice or recover.
     // Self-heal: if still not connected after a generous window, recreate this
     // one session — cheaper and less disruptive than restarting the whole service.
-    clearTimeout(session.readyWatchdog)
-    session.readyWatchdog = setTimeout(async () => {
-      const s = sessions.get(sessionId)
-      // Identity check (s !== session), not just status — this timer was
-      // scheduled for THIS specific client generation. Without it, a user
-      // retrying via /start (destroy+recreate) while this watchdog was still
-      // pending left the NEW session in 'initializing'/'need_scan' (not yet
-      // 'connected'), so the stale watchdog didn't bail out on the status
-      // check alone — it tore down the brand-new client, mistaking it for
-      // the stuck one it was actually watching (audit finding, 2026-09-30).
-      if (!s || s !== session || s.status === 'connected') return
-      console.warn(`[${sessionId}] Stuck in "${s.status}" — never reached ready, recreating session`)
-      await recoverSession(sessionId, session, status => status === 'authenticated' || status === 'initializing')
-    }, 90_000)
+    armReadyWatchdog(sessionId, session)
   })
 
   client.on('ready', async () => {
@@ -723,17 +809,19 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
     // disconnected/auth_failure/error) while we were waiting — 'connected'
     // is also allowed through as a harmless no-op for a genuine duplicate
     // 'ready' firing on an already-healthy session.
+    if (client.lifecycleClosing || _shuttingDown) return
     const _liveStatus = sessions.get(sessionId)?.status
     if (sessions.get(sessionId) !== session || (_liveStatus !== 'authenticated' && _liveStatus !== 'connected')) {
       console.log(`[${sessionId}] stale ready event ignored (session status is now ${_liveStatus ?? 'destroyed'})`)
       return
     }
+    await setIdlePresence(client)
+    if (client.lifecycleClosing || _shuttingDown || sessions.get(sessionId) !== session || !['authenticated', 'connected'].includes(session.status)) return
     session.status = 'connected'
     session.qr = null; session.pairingCode = null
     session.phone = client.info?.wid?.user || null
-    const waWeb = await client.getWWebVersion().catch(() => null)
+    const waWeb = await withTimeout(() => client.getWWebVersion(), 5000, 'Web version').catch(() => null)
     console.log(`[${sessionId}] Ready | phone=${session.phone} | whatsapp-web=${waWeb || '?'}${WA_WEB_VERSION ? ` (fija: ${WA_WEB_VERSION})` : ''}`)
-    startPresenceHeartbeat(sessionId)
     startProfileSyncPoll(sessionId)
     startLivenessHeartbeat(sessionId)
 
@@ -749,7 +837,7 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
     // session got "ready" twice, WhatsApp logged it out 4 s later, and these two stale
     // "connected" webhooks arrived after the "need_scan" one — the panel showed it connected and
     // the disconnect email never went out.
-    if (sessions.get(sessionId) !== session || session.status !== 'connected') {
+    if (_shuttingDown || client.lifecycleClosing || sessions.get(sessionId) !== session || session.status !== 'connected') {
       console.log(`[${sessionId}] stale ready event ignored after profile fetch (session status is now ${sessions.get(sessionId)?.status ?? 'destroyed'})`)
       return
     }
@@ -778,19 +866,19 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
   })
 
   client.on('auth_failure', (msg) => {
+    if (_shuttingDown || client.lifecycleClosing || sessions.get(sessionId) !== session) return
     clearTimeout(session.readyWatchdog)
     session.status = 'auth_failure'
-    clearInterval(session.presenceTimer)
+    session.lastDiagnosticError = { source: 'auth_failure', at: new Date().toISOString() }
     clearInterval(session.profileSyncTimer)
     clearInterval(session.heartbeatTimer)
     console.error(`[${sessionId}] Auth failure:`, msg)
-    forwardWebhook({ event: 'session.status', sessionId, data: { status: 'auth_failure' } })
+    forwardWebhook({ event: 'session.status', sessionId, data: { status: 'auth_failure', reason: 'AUTH_FAILURE' } })
   })
 
   client.on('disconnected', async (reason) => {
-    if (_shuttingDown || sessions.get(sessionId) !== session) return
+    if (_shuttingDown || client.lifecycleClosing || sessions.get(sessionId) !== session) return
     clearTimeout(session.readyWatchdog)
-    clearInterval(session.presenceTimer)
     clearInterval(session.profileSyncTimer)
     clearInterval(session.heartbeatTimer)
     // reconnectTimer wasn't cleared here — if an EARLIER network-blip
@@ -818,7 +906,7 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
       // LOGOUT'd, and the very next reconnect attempt failed repeatedly with
       // "The browser is already running for .../userDataDir" — an orphaned
       // Chrome from this exact destroy() call was still holding it.
-      await destroySessionClient(session.client, sessionId, session.initPromise)
+      await destroySessionClient(session.client, sessionId, session.initPromise, { forceAfterDrain: true })
       return
     }
 
@@ -1013,8 +1101,14 @@ function createClient(sessionId, phoneNumber, initAttempt = 0) {
 
   // Stored so destroySessionClient() can wait for this launch to actually
   // finish (or fail) before tearing down — see its own comment for why.
+  // 3 min de base, más margen si hay otras arrancando a la vez (ver readyWatchdogMs).
+  const concurrentStarting = [...sessions.entries()]
+    .filter(([id, s]) => id !== sessionId && ['initializing', 'authenticated'].includes(s.status)).length
+  armReadyWatchdog(sessionId, session, readyWatchdogMs(concurrentStarting))
   session.initPromise = client.initialize().catch((e) => {
+    if (client.lifecycleClosing || _shuttingDown || sessions.get(sessionId) !== session) return
     console.error(`[${sessionId}] Initialize error:`, e.message)
+    clearTimeout(session.readyWatchdog)
     session.status = 'error'
     scheduleInitRetry(sessionId, session, e.message)
   })
@@ -1034,28 +1128,21 @@ function scheduleInitRetry(sessionId, session, message) {
   const attempt = session.initAttempt || 0
   if (!isTransientInitError(message) || attempt >= INIT_RETRY_DELAYS_MS.length) return
   setTimeout(() => {
-    const prior = _startLocks.get(sessionId) || Promise.resolve()
-    const thisCall = prior.then(() => new Promise((resolve) => {
-      scheduleAutoLaunch(async () => {
-        try {
-          // Ya la reemplazó otro /start o /settings, o ya no está en error: no tocarla.
-          if (sessions.get(sessionId) !== session || session.status !== 'error') return
-          clearInterval(session.presenceTimer)
-          clearInterval(session.profileSyncTimer)
-          clearInterval(session.heartbeatTimer)
-          clearTimeout(session.reconnectTimer)
-          clearTimeout(session.readyWatchdog)
-          await destroySessionClient(session.client, sessionId, session.initPromise)
-          if (sessions.get(sessionId) !== session) return
-          sessions.delete(sessionId)
-          console.log(`[${sessionId}] Retrying after Chrome failed to start (attempt ${attempt + 1}/${INIT_RETRY_DELAYS_MS.length})`)
-          createClient(sessionId, session.phoneNumber, attempt + 1)
-        } finally {
-          resolve()
-        }
-      })
-    }))
-    _startLocks.set(sessionId, thisCall.catch(() => {}))
+    if (_shuttingDown || sessionRegistry.disabled(sessionId)) return
+    scheduleAutoLaunch(() => {
+      serializeSession(_startLocks, sessionId, async () => {
+        if (_shuttingDown || sessionRegistry.disabled(sessionId) || sessions.get(sessionId) !== session || session.status !== 'error') return
+        clearInterval(session.profileSyncTimer)
+        clearInterval(session.heartbeatTimer)
+        clearTimeout(session.reconnectTimer)
+        clearTimeout(session.readyWatchdog)
+        await destroySessionClient(session.client, sessionId, session.initPromise)
+        if (_shuttingDown || sessionRegistry.disabled(sessionId) || sessions.get(sessionId) !== session) return
+        sessions.delete(sessionId)
+        console.log(`[${sessionId}] Retrying Chrome launch (attempt ${attempt + 1}/${INIT_RETRY_DELAYS_MS.length})`)
+        createClient(sessionId, session.phoneNumber, attempt + 1)
+      }).catch(error => console.error(`[${sessionId}] init retry refused: ${error.message}`))
+    })
   }, INIT_RETRY_DELAYS_MS[attempt])
 }
 
@@ -1065,20 +1152,22 @@ function scheduleInitRetry(sessionId, session, message) {
 // esa carrera se puede quedar atorada en "authenticated" sin llegar nunca a
 // "ready" (visto en la práctica). Espaciar el arranque evita esa competencia.
 function autoRestoreSessions() {
-  if (!fs.existsSync(SESSIONS_PATH)) return
-  const dirs = fs.readdirSync(SESSIONS_PATH).filter(d => d.startsWith('session-'))
-  // A container that's just booting can never have a legitimate live process
-  // holding these — Chrome's SingletonLock/-Cookie/-Socket only survive an
-  // unclean shutdown (e.g. a redeploy that recreates the container without
-  // Chromium exiting cleanly first), and a stale one makes the NEXT launch
-  // refuse to start ("profile in use by another Chromium process"). Clearing
-  // them unconditionally on boot is safe — no other process can hold them.
-  for (const dir of dirs) clearSessionLockFiles(dir.replace('session-', ''))
-  dirs.forEach((dir, i) => {
-    const sessionId = dir.replace('session-', '')
+  sessionRegistry.profiles().forEach((id, i) => {
     setTimeout(() => {
-      console.log(`[startup] Restoring session: ${sessionId}`)
-      createClient(sessionId)
+      restoreSession({ locks: _startLocks, sessions, registry: sessionRegistry, id,
+        stopping: () => _shuttingDown,
+        prepare: () => {
+          // Docker's entrypoint holds an exclusive flock on this volume. Direct
+          // node invocations may only open a profile without stale Chrome locks.
+          const lock = path.join(SESSIONS_PATH, `session-${id}`, 'SingletonLock')
+          if (process.env.SESSION_STORAGE_LOCKED !== '1' && fs.existsSync(path.dirname(lock)) &&
+              fs.readdirSync(path.dirname(lock)).includes('SingletonLock')) {
+            throw Error('Profile lock present; start through the storage-lock entrypoint')
+          }
+          clearSessionLockFiles(id)
+        },
+        create: createClient,
+      }).catch(e => console.error(`[${id}] restore refused: ${e.message}`))
     }, i * 15000)
   })
 }
@@ -1124,7 +1213,6 @@ function sweepIdleReconnectSessions() {
       if (!current || current !== session) return
       if (Date.now() - (current.lastPolledAt || 0) < IDLE_RECONNECT_TIMEOUT_MS) return
       console.log(`[${id}] idle reconnect (no poll in ${Math.round(IDLE_RECONNECT_TIMEOUT_MS / 60000)}min) — stopping QR/code generation until requested again`)
-      clearInterval(current.presenceTimer)
       clearInterval(current.profileSyncTimer)
       clearInterval(current.heartbeatTimer)
       clearTimeout(current.reconnectTimer)
@@ -1153,6 +1241,8 @@ app.post('/session/:id/start', async (req, res) => {
   const phoneNumber = (req.body && req.body.phoneNumber) || undefined
   const prior = _startLocks.get(id) || Promise.resolve()
   const thisCall = prior.then(async () => {
+    if (_shuttingDown) throw Error('Service shutting down')
+    sessionRegistry.enable(id)
     const existing = sessions.get(id)
     if (existing) {
       // A mode switch is either direction: no phoneNumber before, one now (QR
@@ -1172,7 +1262,7 @@ app.post('/session/:id/start', async (req, res) => {
       // forever instead of recreating; only switching link mode (which
       // happens to trigger the recreate branch below) or an explicit DELETE
       // then a fresh /start actually recovered it (audit finding, 2026-09-30).
-      if (!phoneNumber && !modeChanged && existing.status !== 'error') {
+      if (!phoneNumber && !modeChanged && existing.status !== 'error' && !existing.client.lifecycleClosing) {
         // No phone number given, mode hasn't changed, and it's not stuck
         // erroring — just report current status.
         return { status: existing.status, phone: existing.phone }
@@ -1184,7 +1274,6 @@ app.post('/session/:id/start', async (req, res) => {
       // goes through destroySessionClient() so a slow/stuck browser.close()
       // can't leave an orphaned Chrome process holding this same userDataDir
       // for the createClient() call right below.
-      clearInterval(existing.presenceTimer)
       clearInterval(existing.profileSyncTimer)
       clearInterval(existing.heartbeatTimer)
       clearTimeout(existing.reconnectTimer)
@@ -1377,9 +1466,10 @@ app.post('/session/:id/typing', lineActivity.wrap('typing', async (req, res) => 
   try {
     const numberId = await session.client.getNumberId(to.replace(/\D/g, '')).catch(() => null)
     const chatId = numberId?._serialized || `${to.replace(/\D/g, '')}@s.whatsapp.net`
-    const chat = await session.client.getChatById(chatId)
-    await chat.sendStateTyping()
-    res.json({ success: true })
+    const { presence } = await withTypingPresence(session.client, chatId, req.body.typingMs ?? 1000, async () => {
+      req.checkLineActivity?.()
+    })
+    res.json({ success: true, typing: presence })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -1781,14 +1871,16 @@ app.post('/session/:id/react', lineActivity.wrap('react', async (req, res) => {
 
 app.delete('/session/:id', async (req, res) => {
   const { id } = req.params
+  // Persist before waiting for other lifecycle work: queued restores must stop.
+  try { sessionRegistry.disable(id) } catch (e) { return res.status(500).json({ error: e.message }) }
   // Same lock as /start and the idle sweep — without it, this could race a
   // concurrent /start for the same id and both end up fighting over the same
   // Chromium userDataDir.
   const prior = _startLocks.get(id) || Promise.resolve()
   const thisCall = prior.then(async () => {
+    sessionRegistry.disable(id)
     const session = sessions.get(id)
-    if (!session) return { notFound: true }
-    clearInterval(session.presenceTimer)
+    if (!session) return { notFound: false }
     clearInterval(session.profileSyncTimer)
     clearInterval(session.heartbeatTimer)
     clearTimeout(session.reconnectTimer)
@@ -1819,9 +1911,15 @@ app.get('/sessions', (req, res) => {
 
 function publicSettings(id) {
   const s = sessionSettings[id] || {}
+  const running = sessions.get(id)
+  const key = proxyLaunchKey(proxyFor(id), s.lean)
+  const matches = Boolean(running && running.launchKey === key)
   return {
     proxy: s.proxy?.server ? { server: s.proxy.server, username: s.proxy.username || null } : null,
-    lean: Boolean(s.lean),
+    lean: Boolean(s.lean), proxy_required: Boolean(s.proxy_required || s.proxy?.server),
+    stored: true, running: Boolean(running),
+    applied: Boolean(matches && running.status === 'connected'),
+    pending_restart: Boolean(running && !matches),
   }
 }
 
@@ -1838,22 +1936,42 @@ app.put('/session/:id/settings', async (req, res) => {
   const next = { ...prev }
   if ('proxy' in body) {
     const p = body.proxy
-    if (p && (typeof p.server !== 'string' || !/^((https?|socks5?):\/\/)?[\w.-]+:\d{2,5}$/.test(p.server))) {
-      return res.status(400).json({ error: 'proxy.server debe ser host:puerto' })
-    }
-    next.proxy = p ? { server: p.server, username: p.username || '', password: p.password || '' } : null
+    try { next.proxy = normalizeProxy(p) }
+    catch (error) { return res.status(400).json({ error: error.message }) }
+    next.proxy_required = Boolean(next.proxy)
+  }
+  if ('proxy_required' in body) next.proxy_required = body.proxy_required === true
+  if (next.proxy?.server) next.proxy_required = true
+  if (next.proxy_required && !next.proxy?.server) {
+    return res.status(400).json({ error: 'La sesión requiere un proxy válido' })
   }
   if ('lean' in body) next.lean = Boolean(body.lean)
-  // Se compara lo que de verdad cambia el arranque de Chrome: "sin ajustes" y "sin proxy
-  // ni modo ligero" son lo mismo. Sin esto, el backend al re-sincronizar en cada deploy
-  // reiniciaría sesiones que no lo necesitan.
-  const launchKey = s => JSON.stringify([s.proxy?.server ? [s.proxy.server, s.proxy.username || '', s.proxy.password || ''] : null, Boolean(s.lean)])
-  const changed = launchKey(prev) !== launchKey(next)
+  // Compare against the browser's effective launch configuration, including the global proxy.
+  const requiredMarker = path.join(SESSIONS_PATH, `.proxy-required-${id}`)
+  // Persist the requirement independently of the JSON configuration. Losing
+  // that JSON must not make an assigned session silently use a direct route.
+  if (next.proxy_required) {
+    try {
+      fs.mkdirSync(SESSIONS_PATH, { recursive: true, mode: 0o700 })
+      const marker = fs.openSync(requiredMarker, 'a', 0o600)
+      try { fs.fsyncSync(marker) } finally { fs.closeSync(marker) }
+    } catch (_) { return res.status(500).json({ error: 'No se pudo guardar el requisito del proxy' }) }
+  }
   sessionSettings[id] = next
-  try { saveSessionSettings() } catch (e) { return res.status(500).json({ error: e.message }) }
+  try {
+    saveSessionSettings()
+    if (!next.proxy_required) fs.rmSync(requiredMarker, { force: true })
+  } catch (e) {
+    sessionSettings[id] = prev
+    return res.status(500).json({ error: e.message })
+  }
 
   let restarted = false
-  if (changed && body.restart !== false && sessions.has(id)) {
+  // proxyFor puede lanzar (proxy global inválido): antes estaba fuera del try y
+  // en Express 4 la petición se quedaba colgada sin respuesta.
+  let effectiveKey
+  try { effectiveKey = proxyLaunchKey(proxyFor(id), next.lean) } catch (e) { return res.status(400).json({ error: e.message }) }
+  if (body.restart === true && sessions.has(id) && sessions.get(id).launchKey !== effectiveKey) {
     try { restarted = await restartSession(id) } catch (e) { return res.status(500).json({ error: e.message }) }
     console.log(`[${id}] Settings changed — session restarted (proxy: ${next.proxy?.server ? 'own' : 'none'}, lean: ${Boolean(next.lean)})`)
   }
@@ -1867,8 +1985,7 @@ function restartSession(id) {
   const prior = _startLocks.get(id) || Promise.resolve()
   const thisCall = prior.then(async () => {
     const s = sessions.get(id)
-    if (!s) return false
-    clearInterval(s.presenceTimer)
+    if (_shuttingDown || sessionRegistry.disabled(id) || !s) return false
     clearInterval(s.profileSyncTimer)
     clearInterval(s.heartbeatTimer)
     clearTimeout(s.reconnectTimer)
@@ -1973,7 +2090,7 @@ app.get('/proxy-check', async (req, res) => {
     await page.goto('https://ipinfo.io/json', { waitUntil: 'networkidle0', timeout: 15000 })
     const body = await page.evaluate(() => document.body.innerText)
     const info = JSON.parse(body)
-    const proxy = proxyFor(sessionId || [...sessions.entries()].find(([, s]) => s === session)?.[0])
+    const proxy = session.launchProxy
     res.json({
       proxy_configured: Boolean(proxy),
       proxy_server: proxy?.server || null,
@@ -2008,20 +2125,18 @@ async function _gracefulShutdown(signal) {
   _shuttingDown = true
   // Auditoría 2026-10-15: no lanzar otro Chrome mientras se guardan los perfiles.
   for (const s of sessions.values()) {
-    clearInterval(s.presenceTimer)
     clearInterval(s.profileSyncTimer)
     clearInterval(s.heartbeatTimer)
     clearTimeout(s.reconnectTimer)
     clearTimeout(s.readyWatchdog)
   }
-  console.log(`[shutdown] ${signal} received — closing ${sessions.size} session(s) cleanly`)
-  const closes = Array.from(sessions.values()).map(s => (s.client?.destroy() || Promise.resolve()).catch(() => {}))
-  await Promise.race([
-    Promise.all(closes),
-    new Promise((r) => setTimeout(r, 20000)), // menos que los 30s de stop_grace_period
-  ])
-  console.log('[shutdown] done')
-  process.exit(0)
+  console.log(`[shutdown] ${signal} received - closing ${sessions.size} session(s)`)
+  const result = await shutdownSessions({ sessions, locks: _startLocks,
+    stopActivity: () => lineActivity.stop(),
+    close: (s, id) => destroySessionClient(s.client, id, s.initPromise, { forceAfterDrain: true }),
+  })
+  console.log(`[shutdown] ${result.complete ? 'done' : 'incomplete'}; failures=${result.failures}`)
+  process.exit(result.complete ? 0 : 1)
 }
 process.on('SIGTERM', () => _gracefulShutdown('SIGTERM'))
 process.on('SIGINT', () => _gracefulShutdown('SIGINT'))

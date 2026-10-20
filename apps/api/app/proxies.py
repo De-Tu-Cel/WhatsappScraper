@@ -1,4 +1,4 @@
-"""Proxies por número de WhatsApp (wwebjs): un pool en Mongo y una IP fija por número.
+"""Proxies por número de WhatsApp (wwebjs): pool en Mongo y asignación estable por número.
 
 - La lista se pega una vez en Instancias → Proxies; cada proxy se revisa saliendo por él
   (ipinfo.io), que dice si funciona y de qué país es la IP. No hace falta capturar el país.
@@ -16,10 +16,12 @@
 - Una revisión cada 30 min avisa por correo si un proxy con números lleva 1 h sin responder.
 """
 import logging
+import ipaddress
 import random
 import re
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from urllib.parse import quote
@@ -31,8 +33,9 @@ log = logging.getLogger(__name__)
 
 SETTINGS_ID = "proxies"
 # migrate_paused: el número que no volvió a conectarse al pasarlo a su proxy (ver migrate_all).
-DEFAULT_SETTINGS = {"country": "US", "auto_assign": False, "migrate_paused": None}
+DEFAULT_SETTINGS = {"country": "US", "auto_assign": False, "migrate_paused": None, "failover_paused": None}
 CHECK_URL = "https://ipinfo.io/json"
+CHECK_FALLBACK_URL = "https://api.ipify.org?format=json"
 HEALTH_EVERY = timedelta(minutes=30)
 ALERT_AFTER_FAILS = 2       # 1 h sin responder (revisión cada 30 min): correo
 FAILOVER_AFTER_FAILS = 4    # 2 h sin responder: con asignación automática, sus números se mueven
@@ -51,6 +54,8 @@ _PLAIN_FORM = re.compile(
 
 def parse_proxy_text(text: str) -> list[dict]:
     """Proxies que vienen en un texto pegado, sin repetidos (host + puerto)."""
+    if re.search(r'\b(?:https|socks\d*)://', text or '', re.I):
+        raise ValueError('Solo se admiten proxies HTTP; HTTPS y SOCKS no están implementados.')
     found, seen = [], set()
     for rx in (_URL_FORM, _PLAIN_FORM):
         for m in rx.finditer(text or ""):
@@ -71,18 +76,20 @@ def proxy_url(p: dict) -> str:
 
 def check_proxy(p: dict, timeout: int = 15) -> dict:
     """Sale por el proxy y pregunta la IP y el país. Nunca regresa la contraseña, ni en el error."""
-    try:
-        url = proxy_url(p)
-        r = requests.get(CHECK_URL, proxies={"http": url, "https": url}, timeout=timeout)
-        r.raise_for_status()
-        j = r.json()
-        return {"ok": True, "ip": j.get("ip"), "country": j.get("country"), "city": j.get("city"),
-                "region": j.get("region"), "org": j.get("org"), "error": None}
-    except Exception as e:
-        msg = str(e)
-        for secret in {p.get("password"), quote(p.get("password") or "", safe="")} - {None, ""}:
-            msg = msg.replace(secret, "***")
-        return {"ok": False, "error": msg[:300]}
+    url = proxy_url(p)
+    for endpoint in (CHECK_URL, CHECK_FALLBACK_URL):
+        try:
+            r = requests.get(endpoint, proxies={"http": url, "https": url}, timeout=timeout)
+            r.raise_for_status()
+            j = r.json()
+            ip = str(ipaddress.ip_address(j.get("ip", "")))
+            metadata = j if endpoint == CHECK_URL else (p if p.get('exit_ip') == ip else {})
+            return {"ok": True, "ip": ip, "country": metadata.get("country"), "city": metadata.get("city"),
+                    "region": metadata.get("region"), "org": metadata.get("org"), "error": None,
+                    "check_source": endpoint, "geo_verified": endpoint == CHECK_URL}
+        except Exception:
+            continue
+    return {"ok": False, "error": "El proxy no pudo completar ninguna de las dos comprobaciones de salida."}
 
 
 def choose_least_used(pool: list[dict], usage: dict, rng=random) -> dict | None:
@@ -100,6 +107,7 @@ def launch_payload(proxy: dict | None, lean: bool, restart: bool = True) -> dict
         "proxy": ({"server": f"{proxy['host']}:{proxy['port']}", "username": proxy.get("username") or "",
                    "password": proxy.get("password") or ""} if proxy else None),
         "lean": bool(lean),
+        "proxy_required": proxy is not None,
         "restart": restart,
     }
 
@@ -119,6 +127,7 @@ def save_settings(db, values: dict) -> dict:
         clean["auto_assign"] = bool(values["auto_assign"])
         if clean["auto_assign"]:
             clean["migrate_paused"] = None  # volver a prenderla reanuda los que faltan
+            clean["failover_paused"] = None
     if clean:
         db.settings.update_one({"_id": SETTINGS_ID}, {"$set": clean}, upsert=True)
     return get_settings(db)
@@ -141,6 +150,7 @@ def public_proxy(p: dict, usage: dict | None = None) -> dict:
         "status": p.get("status", "unchecked"), "exit_ip": p.get("exit_ip"), "country": p.get("country"),
         "city": p.get("city"), "region": p.get("region"), "org": p.get("org"),
         "last_checked_at": p.get("last_checked_at"), "last_error": p.get("last_error"),
+        "exit_ip_changed_at": p.get("exit_ip_changed_at"), "exit_ip_change_count": p.get("exit_ip_change_count", 0),
         "fail_streak": p.get("fail_streak", 0), "instances": (usage or {}).get(pid, []),
     }
 
@@ -151,6 +161,12 @@ def record_check(db, proxy: dict, res: dict) -> dict:
         upd = {"$set": {"status": "ok", "exit_ip": res["ip"], "country": res["country"], "city": res["city"],
                         "region": res.get("region"), "org": res.get("org"), "last_error": None,
                         "fail_streak": 0, "last_checked_at": now}}
+        upd['$set']['geo_verified'] = bool(res.get('geo_verified'))
+        previous = proxy.get('exit_ip')
+        if previous and previous != res['ip']:
+            upd['$set'].update(previous_exit_ip=previous, exit_ip_changed_at=now)
+            upd['$inc'] = {'exit_ip_change_count': 1}
+            upd['$push'] = {'exit_ip_history': {'$each': [{'from': previous, 'to': res['ip'], 'at': now}], '$slice': -30}}
     else:
         upd = {"$set": {"status": "failing", "last_error": res["error"], "last_checked_at": now},
                "$inc": {"fail_streak": 1}}
@@ -215,15 +231,53 @@ def _proxy_doc(db, proxy_id: str | None) -> dict | None:
     return db.proxies.find_one({"_id": ObjectId(proxy_id)})
 
 
-def push_instance_settings(db, name: str, restart: bool = True) -> dict:
-    """Le manda a wwebjs el proxy y el modo ligero de una instancia. wwebjs solo reinicia la
-    sesión si algo cambió de verdad."""
+def _push_payload(name: str, body: dict) -> dict:
     from app import whatsapp_wwebjs as ww
-    inst = db.instances.find_one({"name": name}, {"proxy_id": 1, "lean_mode": 1}) or {}
-    body = launch_payload(_proxy_doc(db, inst.get("proxy_id")), inst.get("lean_mode", False), restart)
     r = requests.put(f"{ww.WWEBJS_URL}/session/{name}/settings", json=body, headers=ww._headers(), timeout=45)
     r.raise_for_status()
-    return r.json()
+    result = r.json()
+    if result.get('success') is not True or result.get('stored') is not True or result.get('proxy_required') != body['proxy_required']:
+        raise RuntimeError('El servicio no confirmó la configuración del proxy.')
+    return result
+
+
+def _sync_fields(result: dict, proxy_id) -> dict:
+    state = 'applied' if result.get('applied') else ('pending_restart' if result.get('pending_restart') else 'stored')
+    fields = {'proxy_sync_status': state, 'proxy_synced_at': datetime.utcnow()}
+    if result.get('applied'):
+        fields['proxy_applied_id'] = proxy_id
+    return fields
+
+
+def _claim_proxy_change(db, inst):
+    token, now = uuid.uuid4().hex, datetime.utcnow()
+    owner = {'_id': inst['_id'], 'proxy_change_token': token}
+    claimed = db.instances.find_one_and_update({'_id': inst['_id'], 'proxy_id': inst.get('proxy_id'), '$or': [
+        {'proxy_change_token': {'$exists': False}}, {'proxy_change_until': {'$lt': now}},
+    ]}, {'$set': {'proxy_change_token': token, 'proxy_change_until': now + timedelta(minutes=2)}})
+    if not claimed:
+        raise RuntimeError('Ya hay un cambio de proxy en curso o la asignacion cambio; vuelve a intentarlo.')
+    return owner
+
+
+def push_instance_settings(db, name: str, restart: bool = False) -> dict:
+    """Persist desired settings; synchronization never restarts an active browser."""
+    inst = db.instances.find_one({'name': name}) or {}
+    if not inst:
+        raise LookupError('No existe la instancia')
+    owner = _claim_proxy_change(db, inst)
+    try:
+        proxy = _proxy_doc(db, inst.get('proxy_id'))
+        if inst.get('proxy_id') and not proxy:
+            raise RuntimeError('Falta el proxy asignado; no se iniciara sin el.')
+        result = _push_payload(name, launch_payload(proxy, inst.get('lean_mode', False), restart))
+        db.instances.update_one(owner, {'$set': _sync_fields(result, inst.get('proxy_id'))})
+        return result
+    except Exception:
+        db.instances.update_one(owner, {'$set': {'proxy_sync_status': 'unknown'}})
+        raise
+    finally:
+        db.instances.update_one(owner, {'$unset': {'proxy_change_token': '', 'proxy_change_until': ''}})
 
 
 def assign(db, name: str, proxy_id: str | None, push: bool = True) -> dict:
@@ -237,42 +291,55 @@ def assign(db, name: str, proxy_id: str | None, push: bool = True) -> dict:
             raise ValueError(f"No hay proxies de {get_settings(db)['country']} que funcionen")
         new_id = str(chosen["_id"])
     elif proxy_id:
-        if not _proxy_doc(db, proxy_id):
+        candidate = _proxy_doc(db, proxy_id)
+        if not candidate:
             raise LookupError("Ese proxy no existe")
+        if candidate.get('enabled') is False or candidate.get('status') != 'ok':
+            raise ValueError('Comprueba que el proxy esté habilitado y funcionando antes de aplicarlo.')
         new_id = proxy_id
     else:
         new_id = None
-    db.instances.update_one({"_id": inst["_id"]}, {"$set": {"proxy_id": new_id, "proxy_assigned_at": datetime.utcnow()}})
-    result = {"proxy_id": new_id}
-    if push:
-        result["wwebjs"] = push_instance_settings(db, name)
-    return result
+    owner = _claim_proxy_change(db, inst)
+    now = datetime.utcnow()
+    try:
+        result = {'proxy_id': new_id}
+        fields = {'proxy_id': new_id, 'proxy_assigned_at': now, 'proxy_sync_status': 'pending_sync'}
+        if push:
+            proxy = _proxy_doc(db, new_id) if new_id else None
+            if new_id and not proxy:
+                raise RuntimeError('El proxy seleccionado dejó de estar disponible.')
+            if proxy and (proxy.get('enabled') is False or proxy.get('status') != 'ok'):
+                raise ValueError('El proxy ya no está disponible; la sesión actual se conserva.')
+            result['wwebjs'] = _push_payload(name, launch_payload(proxy, inst.get('lean_mode', False)))
+            fields.update(_sync_fields(result['wwebjs'], new_id))
+        db.instances.update_one(owner, {'$set': fields})
+        return result
+    except Exception:
+        # A lost response cannot prove the service kept the old configuration.
+        db.instances.update_one(owner, {'$set': {'proxy_sync_status': 'unknown', 'proxy_requested_id': new_id}})
+        raise
+    finally:
+        db.instances.update_one(owner, {'$unset': {'proxy_change_token': '', 'proxy_change_until': ''}})
 
 
 def set_lean(db, name: str, enabled: bool, push: bool = True) -> dict:
     res = db.instances.update_one({"name": name, "provider": "wwebjs"}, {"$set": {"lean_mode": bool(enabled)}})
     if not res.matched_count:
         raise LookupError(f"No existe la instancia {name}")
-    return {"lean": bool(enabled), **({"wwebjs": push_instance_settings(db, name)} if push else {})}
+    return {"lean": bool(enabled), **({"wwebjs": push_instance_settings(db, name, restart=True)} if push else {})}
 
 
 def prepare_new_instance(db, name: str) -> dict:
     """Al crear un número: si está activada la asignación automática, le toca un proxy ANTES
     de que su Chrome arranque por primera vez. Regresa los campos para el documento nuevo."""
-    try:
-        if not get_settings(db)["auto_assign"]:
-            return {}
-        chosen = pick_proxy(db)
-        if not chosen:
-            log.warning("[Proxies] %s se crea sin proxy: no hay proxies disponibles del país elegido", name)
-            return {}
-        from app import whatsapp_wwebjs as ww
-        requests.put(f"{ww.WWEBJS_URL}/session/{name}/settings", headers=ww._headers(), timeout=15,
-                     json=launch_payload(chosen, False, restart=False)).raise_for_status()
-        return {"proxy_id": str(chosen["_id"]), "proxy_assigned_at": datetime.utcnow()}
-    except Exception:
-        log.exception("[Proxies] no se pudo asignar proxy a %s", name)
+    if not get_settings(db)["auto_assign"]:
         return {}
+    chosen = pick_proxy(db)
+    if not chosen:
+        raise RuntimeError('No hay proxy disponible; la sesión no se iniciará sin el proxy requerido.')
+    result = _push_payload(name, launch_payload(chosen, False, restart=False))
+    return {"proxy_id": str(chosen["_id"]), "proxy_assigned_at": datetime.utcnow(),
+            **_sync_fields(result, str(chosen['_id']))}
 
 
 def forget_instance(name: str) -> None:
@@ -303,8 +370,7 @@ def session_exit_check(db, name: str) -> dict:
 # ── Arranque y revisión periódica ─────────────────────────────────────────────
 
 def sync_all(db) -> int:
-    """Le vuelve a mandar a wwebjs los ajustes de todas las instancias. wwebjs solo reinicia
-    las que de verdad cambiaron (p. ej. si su volumen se perdió)."""
+    """Sincroniza sin reiniciar: los cambios de una sesión activa quedan pendientes."""
     n = 0
     for inst in db.instances.find({"provider": "wwebjs"}, {"name": 1}):
         push_instance_settings(db, inst["name"])
@@ -348,7 +414,9 @@ def health_round(db, alert_emails: list[str]) -> None:
     if not proxies:
         return
     usage = usage_by_proxy(db)
-    auto = get_settings(db)["auto_assign"]
+    settings = get_settings(db)
+    auto = settings["auto_assign"] and not settings.get('failover_paused')
+    failover_attempted = False
     for p in check_many(db, proxies):
         names = usage.get(str(p["_id"]), [])
         if p.get("status") != "failing" or not names:
@@ -356,19 +424,48 @@ def health_round(db, alert_emails: list[str]) -> None:
         label = f"{p['host']}:{p['port']}"
         streak = p.get("fail_streak", 0)
         moved = {}
-        if auto and streak == FAILOVER_AFTER_FAILS:
+        failover_failed = False
+        if auto and streak >= FAILOVER_AFTER_FAILS and not failover_attempted:
             for name in names:
                 try:
+                    # A failed IP-check service is not proof that a working WA
+                    # connection needs to be interrupted. Uncertain status is
+                    # also insufficient authorization for an automatic restart.
+                    if _live_status(name) not in {'disconnected', 'error', 'not_found'}:
+                        continue
+                    failover_attempted = True
                     new_id = assign(db, name, "auto")["proxy_id"]
                     np = _proxy_doc(db, new_id)
-                    moved[name] = f"{np['host']}:{np['port']}" if np else "?"
+                    status = _wait_connected(name)
+                    if status == 'connected':
+                        moved[name] = f"{np['host']}:{np['port']}" if np else "?"
+                    else:
+                        failover_failed = True
+                        db.settings.update_one({'_id': SETTINGS_ID}, {'$set': {'failover_paused': {
+                            'name': name, 'status': status, 'at': datetime.utcnow(),
+                        }}})
+                        log.warning('[Proxies] failover not confirmed for %s; stopping this round', name)
                 except Exception as e:
-                    log.warning("[Proxies] no se pudo mover %s fuera de %s: %s", name, label, e)
-        if streak == ALERT_AFTER_FAILS or moved:
+                    failover_failed = True
+                    db.settings.update_one({'_id': SETTINGS_ID}, {'$set': {'failover_paused': {
+                        'name': name, 'status': 'unconfirmed', 'at': datetime.utcnow(),
+                    }}})
+                    log.warning("[Proxies] no se pudo confirmar el cambio de %s", name)
+                if failover_attempted:
+                    break
+        if streak == ALERT_AFTER_FAILS or moved or failover_failed:
             from app.email_service import send_proxy_failing_email
             for to in alert_emails:
                 send_proxy_failing_email(to, label, names, p.get("last_error") or "", moved_to=moved or None)
             log.warning("[Proxies] %s sin respuesta %d veces — números: %s — movidos: %s", label, streak, names, moved)
+
+
+def _live_status(name: str):
+    from app.whatsapp_wwebjs import get_status
+    try:
+        return get_status(name).get('status')
+    except Exception:
+        return None
 
 
 def _wait_connected(name: str, timeout: int = MIGRATE_READY_TIMEOUT) -> str:

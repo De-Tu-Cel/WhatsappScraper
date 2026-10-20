@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react'
 import useSWR from 'swr'
+import { createPortal } from 'react-dom'
 import WhatsAppText from './WhatsAppText'
 import { useLang } from '../context/LangContext'
 import { useUser } from '../context/UserContext'
@@ -97,20 +98,17 @@ function isGasIndustry(industry) {
 }
 
 function QualityDots({ score, color }) {
-  const filled = Math.round(score || 0)
-  return (
-    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.3 }}>
-      {[1, 2, 3, 4, 5].map(i => (
-        <Box key={i} sx={{
-          fontSize: '0.75rem',
-          color: i <= filled ? color : 'var(--border, rgba(255,255,255,0.15))',
-          lineHeight: 1,
-        }}>
-          ●
-        </Box>
-      ))}
+  const { lang } = useLang()
+  const rated = typeof score === 'number' && Number.isFinite(score) && score >= 1 && score <= 5
+  if (!rated) return <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.75rem', textAlign: 'center' }}>—</Typography>
+  const filled = Math.round(score)
+  const label = `${Number(score.toFixed(1))} / 5`
+  return <Tooltip title={lang === 'en' ? `${label}. Estimated service quality: professionalism, understanding, empathy, solution, next step and initiative. It is not classification confidence.` : `${label}. Calidad estimada de atención: profesionalismo, comprensión, empatía, solución, siguiente paso e iniciativa. No es confianza de clasificación.`}>
+    <Box aria-label={label} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.7 }}>
+      <Box sx={{ display: 'flex', gap: 0.3 }}>{[1,2,3,4,5].map(i => <Box key={i} sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: i <= filled ? color : 'var(--border)' }} />)}</Box>
+      <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.68rem', fontVariantNumeric: 'tabular-nums' }}>{Number(score.toFixed(1))}</Typography>
     </Box>
-  )
+  </Tooltip>
 }
 
 function formatReactionTime(minutes, seconds) {
@@ -162,11 +160,49 @@ function formatLastAt(iso) {
 }
 
 const CELL_SX = {
-  borderBottom: '1px solid rgba(255,255,255,0.04)',
-  color: 'rgba(255,255,255,0.8)',
-  fontSize: '0.8rem',
-  py: 1.2,
+  borderBottom: '1px solid var(--border)',
+  color: 'var(--text)',
+  fontSize: '0.82rem',
+  py: 1.5,
   px: 1.5,
+}
+
+const COMPANY_PIN_SX = {
+  position: 'sticky', left: 32, zIndex: 1, width: 260, minWidth: 260, maxWidth: 260,
+  bgcolor: 'var(--card-bg)', boxShadow: '3px 0 8px rgba(0,0,0,0.08)',
+}
+const EXPAND_PIN_SX = {
+  position: 'sticky', left: 0, zIndex: 1, width: 32, minWidth: 32, maxWidth: 32,
+  boxSizing: 'border-box', bgcolor: 'var(--card-bg)',
+}
+const ACTION_GROUP_SX = {
+  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.7,
+  '& .MuiIconButton-root': { width: 32, height: 32, borderRadius: '9px', border: '1px solid var(--border)', bgcolor: 'var(--item-hover)' },
+}
+// Shared geometry keeps the loading state aligned with the populated table.
+function AnalyticsColumns() {
+  return <colgroup>{[32, 260, 130, 150, 112, 112, 112, 148, 90, 130, 110, 240, 45, 45, 45].map((width, i) => <col key={i} style={{ width }} />)}</colgroup>
+}
+
+function AnalyticsRowsSkeleton({ count }) {
+  return <TableBody data-analytics-loading aria-label="Loading analysis" sx={{ '& .MuiSkeleton-root': { bgcolor: 'var(--item-hover)' }, '@media (prefers-reduced-motion: reduce)': { '& .MuiSkeleton-root::after': { animation: 'none' } } }}>
+    {Array.from({ length: Math.min(count, 15) }, (_, row) => <TableRow key={row} sx={{ height: 96 }}>
+      <TableCell sx={{ ...CELL_SX, ...EXPAND_PIN_SX, px: 0.5 }}><Skeleton variant="rounded" width={18} height={18} /></TableCell>
+      <TableCell sx={{ ...CELL_SX, ...COMPANY_PIN_SX }}>
+        <Skeleton width={row % 2 ? '72%' : '88%'} height={19} />
+        <Skeleton width="56%" height={14} sx={{ mb: 0.8 }} />
+        <Box sx={{ display: 'flex', gap: 0.7 }}><Skeleton variant="rounded" width={102} height={26} sx={{ borderRadius: '9px' }} /><Skeleton variant="rounded" width={26} height={26} sx={{ borderRadius: '9px' }} /></Box>
+      </TableCell>
+      <TableCell sx={CELL_SX}><Skeleton width="88%" height={17} sx={{ mx: 'auto' }} /></TableCell>
+      <TableCell sx={CELL_SX}><Skeleton width="80%" height={17} sx={{ mx: 'auto' }} /></TableCell>
+      {[0, 1, 2].map(i => <TableCell key={i} sx={{ ...CELL_SX, ...ANALYSIS_CELL_SX }}><Skeleton variant="rounded" width={78} height={22} sx={{ mx: 'auto', borderRadius: '6px' }} /></TableCell>)}
+      <TableCell sx={CELL_SX}><Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6, alignItems: 'center' }}><Skeleton variant="rounded" width={90} height={20} /><Skeleton variant="rounded" width={112} height={20} /></Box></TableCell>
+      <TableCell sx={CELL_SX}><Box sx={{ display: 'flex', justifyContent: 'center', gap: 0.4 }}>{[0,1,2,3,4].map(i => <Skeleton key={i} variant="circular" width={6} height={6} />)}</Box></TableCell>
+      {[0,1].map(i => <TableCell key={i} sx={CELL_SX}><Skeleton width={i ? 48 : 38} height={17} sx={{ mx: 'auto' }} /></TableCell>)}
+      <TableCell sx={CELL_SX}><Skeleton width="90%" height={16} sx={{ mx: 'auto' }} /><Skeleton width="70%" height={16} sx={{ mx: 'auto' }} /></TableCell>
+      <TableCell colSpan={3} sx={CELL_SX}><Box sx={ACTION_GROUP_SX}>{[0,1,2].map(i => <Skeleton key={i} variant="rounded" width={32} height={32} sx={{ borderRadius: '9px' }} />)}</Box></TableCell>
+    </TableRow>)}
+  </TableBody>
 }
 
 const SORT_LABEL_CENTER_SX = {
@@ -446,11 +482,8 @@ function CaptureDayDivider({ label, first }) {
 // Must be in the viewport (not left:-9999) so html2canvas can read it
 function ConversationCapture({ thread, captureRef, visible }) {
   if (!visible) return null
-  return (
-    <Box sx={{
-      position: 'fixed', top: '-9999px', left: '0',
-      pointerEvents: 'none', width: 520,
-    }}>
+  return createPortal(
+    <Box data-report-capture-host aria-hidden="true" style={{ position: 'fixed', top: 0, left: -20000, pointerEvents: 'none', width: 520 }}>
       <Box
         ref={captureRef}
         data-report-capture
@@ -496,7 +529,7 @@ function ConversationCapture({ thread, captureRef, visible }) {
           )
         })}
       </Box>
-    </Box>
+    </Box>, document.body
   )
 }
 
@@ -554,9 +587,8 @@ export default function Analytics({ onNavigateToConv }) {
     if (!filters || !scroll) return
     // Measure wrapping filters and the actual group row, including font scaling.
     const updateHeights = () => {
-      // The table can exceed the viewport. Its natural width also defines the
-      // dashboards and filters, so horizontal scrolling keeps their edges aligned.
-      const width = Math.ceil(Math.max(scroll.clientWidth, table?.getBoundingClientRect().width || 0))
+      // Keep dashboards and wrapping filters at viewport width while the table scrolls.
+      const width = Math.ceil(scroll.clientWidth)
       const value = `${width}px`
       if (scroll.style.getPropertyValue('--analytics-content-width') !== value) {
         scroll.style.setProperty('--analytics-content-width', value)
@@ -758,6 +790,10 @@ export default function Analytics({ onNavigateToConv }) {
             useCORS: true,
             allowTaint: true,
             foreignObjectRendering: false,
+            onclone: doc => {
+              const host = doc.querySelector('[data-report-capture-host]')
+              if (host) { host.style.left = '0px'; host.style.top = '0px' }
+            },
             windowWidth: 520,
             windowHeight: captureRef.current.scrollHeight || 600,
           })
@@ -895,15 +931,22 @@ export default function Analytics({ onNavigateToConv }) {
   const avgQuality = avgQualityServer != null ? avgQualityServer.toFixed(1) : '—'
 
   const { t, lang } = useLang()
+  const [notesFor, setNotesFor] = useState(null)
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+    <Dialog open={!!notesFor} onClose={() => setNotesFor(null)} fullWidth maxWidth="sm" slotProps={{ paper: { sx: { bgcolor: 'var(--card-bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: '16px' } } }}>
+      <DialogTitle>{notesFor?.name}</DialogTitle>
+      <DialogContent><Typography sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{notesFor?.text}</Typography></DialogContent>
+      <DialogActions><Button onClick={() => setNotesFor(null)}>{lang === 'en' ? 'Close' : 'Cerrar'}</Button></DialogActions>
+    </Dialog>
     <Box ref={scrollRef} data-analytics-scroll sx={{
       display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 2,
       position: 'relative', overflow: 'auto', scrollbarWidth: 'thin',
       scrollbarColor: 'rgba(255,255,255,0.1) transparent',
       '& > *': { flexShrink: 0 },
       '& > :not([data-analytics-table-region])': {
+        position: 'sticky', left: 0,
         width: 'var(--analytics-content-width, 100%)',
         minWidth: 'var(--analytics-content-width, 100%)',
         boxSizing: 'border-box',
@@ -1000,7 +1043,7 @@ export default function Analytics({ onNavigateToConv }) {
       {/* ── Filtros ── */}
       <Box ref={filtersRef} data-analytics-filters sx={{
         display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', flexShrink: 0,
-        position: 'sticky', top: 0, left: 0, zIndex: 3, py: 1,
+        position: 'sticky', top: 0, left: 0, zIndex: 3, p: 1.5, border: '1px solid var(--border)', borderRadius: '14px',
         bgcolor: 'var(--card-bg, #161d2e)',
       }}>
         {/* Buscador */}
@@ -1017,7 +1060,7 @@ export default function Analytics({ onNavigateToConv }) {
               </IconButton>
             </InputAdornment>
           ) : null }}}
-          sx={{ width: 220, '& .MuiOutlinedInput-root': { fontSize: '0.8rem', bgcolor: 'var(--card-bg,#161d2e)', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(255,255,255,0.2)' } }, '& input': { color: 'white', py: 0.7 } }} />
+          sx={{ width: { xs: '100%', sm: 280 }, flexShrink: 0, '& .MuiOutlinedInput-root': { fontSize: '0.8rem', bgcolor: 'var(--card-bg,#161d2e)', '& fieldset': { borderColor: 'rgba(255,255,255,0.1)' }, '&:hover fieldset': { borderColor: 'rgba(255,255,255,0.2)' } }, '& input': { color: 'white', py: 0.7 } }} />
 
         <Divider orientation="vertical" flexItem sx={{ borderColor: 'rgba(255,255,255,0.08)', height: 20, alignSelf: 'center', display: { xs: 'none', sm: 'block' } }} />
 
@@ -1043,7 +1086,7 @@ export default function Analytics({ onNavigateToConv }) {
                          : (categoryCounts[f.value] || 0)
           const Icon = f.icon
           return (
-            <Box key={f.value} onClick={() => { setFilterCat(f.value); setPage(1) }} sx={{
+            <Box component="button" type="button" aria-pressed={isActive} key={f.value} onClick={() => { setFilterCat(f.value); setPage(1) }} sx={{ font: 'inherit',
               display: 'flex', alignItems: 'center', gap: 0.5,
               px: 1.2, py: 0.45, borderRadius: 99, cursor: 'pointer',
               bgcolor: isActive ? f.bg : 'transparent',
@@ -1171,7 +1214,7 @@ export default function Analytics({ onNavigateToConv }) {
       </Box>
 
       {/* Table / states */}
-      <Box ref={tableRegionRef} data-analytics-table-region sx={{ minHeight: 0, minWidth: 0, width: '100%', display: 'flex', flexDirection: 'column' }}>
+      <Box ref={tableRegionRef} data-analytics-table-region sx={{ minHeight: 0, minWidth: 0, width: '100%', display: 'flex', flexDirection: 'column', border: '1px solid var(--border)', borderRadius: '14px' }}>
         {loading ? (
           <TableContainer sx={{
             minHeight: 0, overflow: 'visible',
@@ -1179,59 +1222,20 @@ export default function Analytics({ onNavigateToConv }) {
             '&::-webkit-scrollbar': { width: 4, height: 4 },
             '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 },
           }}>
-            <Table size="small" stickyHeader sx={{ minWidth: 800 }}>
+            <Table size="small" stickyHeader sx={{ minWidth: 1600, tableLayout: 'fixed', '& tbody tr:not([data-analysis-child]):hover > td': { bgcolor: 'var(--item-hover)' }, '& tbody tr:not([data-analysis-child]):hover > td:nth-of-type(-n+2)': { bgcolor: 'var(--card-bg)' } }}>
+              <AnalyticsColumns />
               <TableHead>
-                <TableRow>
-                  {/* anchos espejo de la tabla real: expand, empresa, número, industria, timing, IA, timing + IA, calidad, reacción, última resp, notas, chatIA, modBot, reporte */}
-                  {[32, '22%', 115, 130, 112, 112, 112, 60, 55, 65, 220, 45, 65, 45].map((w, i, arr) => (
-                    <TableCell key={i} sx={{ ...(i === 0 || i === arr.length - 1 ? HEADER_CELL_LAST_SX : HEADER_CELL_SX), width: i === 0 ? 32 : undefined, px: i === 0 ? 0.5 : undefined }}>
-                      {i > 0 && (
-                        <Skeleton variant="text" width={typeof w === 'number' ? Math.min(w * 0.55, 70) : 55} height={11}
-                          sx={{ bgcolor: 'rgba(255,255,255,0.1)',
-                            '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent)' } }} />
-                      )}
-                    </TableCell>
-                  ))}
+                <TableRow ref={headerRowRef}>
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_LAST_SX, ...EXPAND_PIN_SX, zIndex: 4, px: 0.5 }} />
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, ...COMPANY_PIN_SX, zIndex: 4, textAlign: 'center' }}>{t.analytics.company}</TableCell>
+                  {[t.analytics.phoneNum, t.analytics.industry].map(label => <TableCell key={label} rowSpan={2} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>{label}</TableCell>)}
+                  <TableCell colSpan={4} sx={{ ...HEADER_CELL_SX, ...ANALYSIS_GROUP_SX, height: ANALYSIS_ROW_H, py: 0, textAlign: 'center', borderBottom: ANALYSIS_FRAME }}>{t.analytics.analysisGroup}</TableCell>
+                  {[t.analytics.quality, t.analytics.reaction, t.analytics.lastResp, t.analytics.notes].map(label => <TableCell key={label} rowSpan={2} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>{label}</TableCell>)}
+                  <TableCell rowSpan={2} colSpan={3} sx={{ ...HEADER_CELL_LAST_SX, textAlign: 'center' }}>{lang === 'en' ? 'Actions' : 'Acciones'}<Typography sx={{ fontSize: '0.64rem', textTransform: 'none', color: 'var(--text-muted)', mt: 0.5 }}>Chat IA · Bot · PDF</Typography></TableCell>
                 </TableRow>
+                <TableRow>{[t.analytics.colTiming, t.analytics.colIa, lang === 'en' ? 'Result' : 'Resultado', t.analytics.colRange].map(label => <TableCell key={label} sx={{ ...HEADER_CELL_SX, ...ANALYSIS_SUB_SX, textAlign: 'center', px: 0.75 }}>{label}</TableCell>)}</TableRow>
               </TableHead>
-              <TableBody>
-                {Array.from({ length: 18 }).map((_, row) => (
-                  <TableRow key={row} sx={{
-                    '@keyframes skRowIn': { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
-                    animation: 'skRowIn 0.28s ease both',
-                    animationDelay: `${row * 0.03}s`,
-                  }}>
-                    {[32, '22%', 115, 130, 112, 112, 112, 60, 55, 65, 220, 45, 65, 45].map((w, col) => {
-                      const isChip = col === 4
-                      const isIcon = col === 9 || col === 10 || col === 11
-                      const numBg  = col === 5 ? 'rgba(96,165,250,0.1)'
-                                   : col === 4 ? 'rgba(139,92,246,0.12)'
-                                   : col === 6 ? 'rgba(250,204,21,0.1)'
-                                   : isIcon    ? 'rgba(255,255,255,0.05)'
-                                   : 'rgba(255,255,255,0.07)'
-                      // variación determinista de ancho para que las filas no sean idénticas
-                      const RATIOS = [0.72, 0.58, 0.85, 0.65, 0.78, 0.52, 0.68, 0.81, 0.60, 0.74, 0.56, 0.83, 0.63, 0.70, 0.55, 0.77, 0.62, 0.80]
-                      const ratio  = RATIOS[(row * 7 + col) % RATIOS.length]
-                      if (col === 0) return (
-                        <TableCell key={col} sx={{ borderBottom: '1px solid rgba(255,255,255,0.04)', width: 32, px: 0.5 }}>
-                          <Skeleton variant="circular" width={10} height={10}
-                            sx={{ bgcolor: 'rgba(255,255,255,0.08)', '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent)' } }} />
-                        </TableCell>
-                      )
-                      return (
-                        <TableCell key={col} sx={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                          <Skeleton
-                            variant={isChip || isIcon ? 'rounded' : 'text'}
-                            width={isIcon ? 22 : typeof w === 'number' ? Math.round(w * ratio) : w}
-                            height={isChip ? 20 : isIcon ? 22 : col === 1 ? 13 : 11}
-                            sx={{ bgcolor: numBg, borderRadius: isChip ? 10 : isIcon ? 6 : undefined,
-                              '&::after': { background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent)' } }} />
-                        </TableCell>
-                      )
-                    })}
-                  </TableRow>
-                ))}
-              </TableBody>
+              <AnalyticsRowsSkeleton count={rowsPerPage} />
             </Table>
           </TableContainer>
         ) : data.length === 0 ? (
@@ -1251,13 +1255,14 @@ export default function Analytics({ onNavigateToConv }) {
             '&::-webkit-scrollbar': { width: 4, height: 4 },
             '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.12)', borderRadius: 2 },
           }}>
-            <Table size="small" stickyHeader sx={{ minWidth: 800 }}>
+            <Table size="small" stickyHeader sx={{ minWidth: 1600, tableLayout: 'fixed', '& tbody tr:not([data-analysis-child]):hover > td': { bgcolor: 'var(--item-hover)' }, '& tbody tr:not([data-analysis-child]):hover > td:nth-of-type(-n+2)': { bgcolor: 'var(--card-bg)' } }}>
+              <AnalyticsColumns />
               <TableHead>
                 <TableRow ref={headerRowRef}>
                   {/* Columna expand — sin label */}
-                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_LAST_SX, width: 32, px: 0.5 }} />
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_LAST_SX, ...EXPAND_PIN_SX, zIndex: 4, px: 0.5 }} />
                   {/* Empresa */}
-                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, ...COMPANY_PIN_SX, zIndex: 4, textAlign: 'left' }}>
                     <TableSortLabel active={sortField === 'company_name'} direction={sortField === 'company_name' ? sortDir : 'asc'}
                       onClick={() => handleSort('company_name')}
                       sx={SORT_LABEL_CENTER_SX}>
@@ -1265,7 +1270,7 @@ export default function Analytics({ onNavigateToConv }) {
                     </TableSortLabel>
                   </TableCell>
                   {/* Número */}
-                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, whiteSpace: 'nowrap', textAlign: 'center' }}>
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, minWidth: 130, whiteSpace: 'nowrap', textAlign: 'center' }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
                       <WhatsAppIcon sx={{ fontSize: 12 }} /> {t.analytics.phoneNum}
                     </Box>
@@ -1291,7 +1296,7 @@ export default function Analytics({ onNavigateToConv }) {
                       </Box>
                     </TableSortLabel>
                   </TableCell>
-                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, whiteSpace: 'nowrap', textAlign: 'center' }}>
+                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, minWidth: 130, whiteSpace: 'nowrap', textAlign: 'center' }}>
                     <TableSortLabel active={sortField === 'reaction_time_min'} direction={sortField === 'reaction_time_min' ? sortDir : 'asc'}
                       onClick={() => handleSort('reaction_time_min')}
                       sx={SORT_LABEL_CENTER_SX}>
@@ -1308,23 +1313,10 @@ export default function Analytics({ onNavigateToConv }) {
                     </TableSortLabel>
                   </TableCell>
                   <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>{t.analytics.notes}</TableCell>
-                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
-                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4 }}>
-                      Chat IA
-                      <Tooltip title={t.analytics.chatIaHelp}>
-                        <HelpOutlineIcon sx={{ fontSize: 13, color: 'rgba(255,255,255,0.3)', cursor: 'help', position: 'relative', top: -1 }} />
-                      </Tooltip>
-                    </Box>
+                  <TableCell rowSpan={2} colSpan={3} sx={{ ...HEADER_CELL_LAST_SX, textAlign: 'center', minWidth: 134 }}>
+                    {lang === 'en' ? 'Actions' : 'Acciones'}
+                    <Typography sx={{ fontSize: '0.64rem', textTransform: 'none', color: 'var(--text-muted)', mt: 0.5 }}>Chat IA · Bot · PDF</Typography>
                   </TableCell>
-                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_SX, textAlign: 'center' }}>
-                    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.4 }}>
-                      {t.analytics.modifyBot}
-                      <Tooltip title={t.analytics.modifyBotHelp}>
-                        <HelpOutlineIcon sx={{ fontSize: 13, color: 'rgba(255,255,255,0.3)', cursor: 'help', position: 'relative', top: -1 }} />
-                      </Tooltip>
-                    </Box>
-                  </TableCell>
-                  <TableCell rowSpan={2} sx={{ ...HEADER_CELL_LAST_SX, textAlign: 'center' }}>{t.analytics.report}</TableCell>
                 </TableRow>
                 <TableRow>
                   {/* "?" de cada clasificador: cómo decide (ClassifierHelp). Los límites del
@@ -1332,7 +1324,7 @@ export default function Analytics({ onNavigateToConv }) {
                   {[['timing', 'colTiming'], ['ia', 'colIa'], ['hibrido', 'colHybrid']].map(([method, label]) => (
                     <TableCell key={method} sx={{ ...HEADER_CELL_SX, ...ANALYSIS_SUB_SX, width: ANALYSIS_COL_W, px: 0.75, textAlign: 'center', whiteSpace: 'nowrap' }}>
                       <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
-                        {t.analytics[label]}
+                        {method === 'hibrido' ? (lang === 'en' ? 'Result' : 'Resultado') : t.analytics[label]}
                         <ClassifierHelp method={method} size={13}
                           limits={method === 'timing' ? sortedData.find(r => r.comparison?.timing?.inputs)?.comparison.timing.inputs : undefined} />
                       </Box>
@@ -1357,7 +1349,7 @@ export default function Analytics({ onNavigateToConv }) {
                 {sortedData.map((row) => {
                   const cat = getCategoryConfig(row)
                   const notesText = row.notes || ''
-                  const notesTruncated = notesText.length > 60 ? notesText.slice(0, 60) + '…' : notesText
+                  const notesTruncated = notesText
                   const isGenerating = generating === row.company_id
                   const validNumbers = (row.numbers || []).filter(n => (n.number || '').replace(/\D/g,'').length >= 10)
                   const hasMultiple = validNumbers.length > 1
@@ -1370,9 +1362,9 @@ export default function Analytics({ onNavigateToConv }) {
                       transition: 'background 0.15s',
                     }}>
                       {/* Expand button */}
-                      <TableCell sx={{ ...CELL_SX, px: 0.5, width: 32 }}>
+                      <TableCell sx={{ ...CELL_SX, ...EXPAND_PIN_SX, px: 0.5 }}>
                         {hasMultiple && (
-                          <IconButton size="small" onClick={() => toggleExpand(row.company_id)}
+                          <IconButton aria-label={`${isExpanded ? (lang === 'en' ? 'Collapse' : 'Contraer') : (lang === 'en' ? 'Expand' : 'Expandir')} ${row.company_name}`} aria-expanded={isExpanded} size="small" onClick={() => toggleExpand(row.company_id)}
                             sx={{ color: 'rgba(255,255,255,0.3)', p: 0.3, '&:hover': { color: 'var(--accent,#a5b4fc)' } }}>
                             {isExpanded
                               ? <KeyboardArrowDownIcon sx={{ fontSize: 16 }} />
@@ -1382,9 +1374,9 @@ export default function Analytics({ onNavigateToConv }) {
                       </TableCell>
 
                       {/* Empresa */}
-                      <TableCell sx={CELL_SX}>
+                      <TableCell sx={{ ...CELL_SX, ...COMPANY_PIN_SX }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
-                          <Typography sx={{ color: 'rgba(255,255,255,0.85)', fontWeight: 600, fontSize: '0.8rem' }}>
+                          <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.84rem' }}>
                             {row.company_name || row.company_id}
                           </Typography>
                           {row.analyzing && (
@@ -1454,7 +1446,7 @@ export default function Analytics({ onNavigateToConv }) {
                           return (
                             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
                               <WhatsAppIcon sx={{ fontSize: 12, color: replied0 ? '#4ade80' : 'rgba(255,255,255,0.18)', filter: replied0 ? 'drop-shadow(0 0 3px #4ade8066)' : 'grayscale(1)', flexShrink: 0 }} />
-                              <Typography sx={{ fontSize: '0.72rem', fontFamily: 'monospace', color: replied0 ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.35)' }}>{sn}</Typography>
+                              <Typography sx={{ fontSize: '0.75rem', fontFamily: 'monospace', whiteSpace: 'nowrap', color: replied0 ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.35)' }}>{sn}</Typography>
                             </Box>
                           )
                         })()}
@@ -1475,7 +1467,9 @@ export default function Analytics({ onNavigateToConv }) {
                           {/* La comparación va en cada número del desplegable. El rango
                               de la empresa aquí se leía como si fuera de un número que
                               no contestó (Gas 1 / 2228120419, 2026-10-08). */}
-                          {!row.comparison && compareButton(row)}
+                          <Button size="small" onClick={() => toggleExpand(row.company_id)} aria-expanded={isExpanded} sx={{ textTransform: 'none', color: 'var(--accent)', fontSize: '0.76rem', bgcolor: 'rgba(var(--accent-rgb),0.07)', borderRadius: '8px', px: 1.5 }}>
+                            {isExpanded ? (lang === 'en' ? 'Hide numbers' : 'Ocultar números') : (lang === 'en' ? `See analysis of ${validNumbers.length} numbers` : `Ver análisis de ${validNumbers.length} números`)}
+                          </Button>
                         </TableCell>
                       ) : (
                         <>
@@ -1485,7 +1479,7 @@ export default function Analytics({ onNavigateToConv }) {
                                 ? <ResultChip compact method={m} result={row.comparison[m]} onClick={() => setCompareFor({ id: row.company_id, name: row.company_name })} />
                                 : m === 'timing'
                                   ? compareButton(row)
-                                  : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.28)', fontStyle: 'italic' }}>{t.analytics.noCategory}</Typography>}
+                                  : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.28)', fontStyle: 'italic' }}>{lang === 'en' ? 'Not analyzed' : 'Sin analizar'}</Typography>}
                             </TableCell>
                           ))}
                           <TableCell sx={{ ...CELL_SX, ...ANALYSIS_CELL_SX, textAlign: 'center' }}>
@@ -1493,7 +1487,7 @@ export default function Analytics({ onNavigateToConv }) {
                               ? <ResultChip compact method="hibrido" result={row.comparison.hibrido} onClick={() => setCompareFor({ id: row.company_id, name: row.company_name })} />
                               : row.category
                                 ? <ResultChip compact method="hibrido" result={{ category: row.category, is_ai: row.is_ai, common: row.category }} />
-                                : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>{t.analytics.noCategory}</Typography>}
+                                : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.2)', fontStyle: 'italic' }}>{lang === 'en' ? 'Not analyzed' : 'Sin analizar'}</Typography>}
                           </TableCell>
                           <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
                             <ParecidoCell hibrido={row.comparison?.hibrido}
@@ -1531,15 +1525,16 @@ export default function Analytics({ onNavigateToConv }) {
                       </TableCell>
 
                       {/* Notas */}
-                      <TableCell sx={{ ...CELL_SX, maxWidth: 200, textAlign: 'center' }}>
+                      <TableCell sx={{ ...CELL_SX, minWidth: 200, maxWidth: 240, textAlign: 'center' }}>
                         {!hasMultiple && (notesText
-                          ? <Tooltip title={notesText} placement="top"><Typography sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.75rem', cursor: 'default' }}>{notesTruncated}</Typography></Tooltip>
+                          ? <Tooltip title={notesText} placement="top"><Typography component="button" onClick={() => setNotesFor({ name: row.company_name, text: notesText })} sx={{ p: 0, border: 0, background: 'none', fontFamily: 'inherit', textAlign: 'center', width: '100%', mx: 'auto', color: 'var(--text-muted)', fontSize: '0.78rem', lineHeight: 1.6, cursor: 'pointer', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{notesTruncated}</Typography></Tooltip>
                           : <Typography sx={{ color: 'rgba(255,255,255,0.2)', fontSize: '0.75rem' }}>—</Typography>)}
 
                       </TableCell>
 
+                      <TableCell colSpan={3} sx={CELL_SX}><Box sx={ACTION_GROUP_SX}>
                       {/* Andy */}
-                      <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
+                      <Box>
                         {(() => {
                           const noReply = row.total_responses === 0
                           const noAnalysis = !row.category || noReply
@@ -1555,10 +1550,10 @@ export default function Analytics({ onNavigateToConv }) {
                             </Tooltip>
                           )
                         })()}
-                      </TableCell>
+                      </Box>
 
                       {/* Modificar Bot — solo industrias de gas */}
-                      <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
+                      <Box>
                         {(() => {
                           const isGas = isGasIndustry(row.industry)
                           return (
@@ -1572,10 +1567,10 @@ export default function Analytics({ onNavigateToConv }) {
                             </Tooltip>
                           )
                         })()}
-                      </TableCell>
+                      </Box>
 
                       {/* Reporte */}
-                      <TableCell sx={{ ...CELL_SX, textAlign: 'center' }}>
+                      <Box>
                         {!hasMultiple && (() => {
                           // "sin_respuesta" se puede reportar igual — el PDF sirve
                           // justamente para dejar constancia de que no hubo respuesta.
@@ -1592,11 +1587,12 @@ export default function Analytics({ onNavigateToConv }) {
                             </Tooltip>
                           )
                         })()}
-                      </TableCell>
+                      </Box>
+                      </Box></TableCell>
                     </TableRow>
 
                     {/* Filas expandibles — una por número, alineadas con columnas */}
-                    {hasMultiple && isExpanded && row.numbers.filter(n => (n.number || '').replace(/\D/g,'').length >= 10).map(n => {
+                    {hasMultiple && isExpanded && row.numbers.filter(n => (n.number || '').replace(/\D/g,'').length >= 10).map((n, numberIndex) => {
                       const nCat     = getCategoryConfig({ category: n.category, is_ai: n.is_ai })
                       const replied  = n.responses > 0
                       const inherited = n.inherited_analysis === true
@@ -1608,12 +1604,17 @@ export default function Analytics({ onNavigateToConv }) {
                       const numKey  = `${row.company_id}_${n.number}`
                       const genKey  = numKey
                       const isGenNum = generating === genKey
-                      const NSUB = { ...CELL_SX, bgcolor: 'rgba(0,0,0,0.15)', borderBottom: '1px solid rgba(255,255,255,0.04)' }
+                      const isLastNumber = numberIndex === validNumbers.length - 1
+                      const NSUB = { ...CELL_SX, borderBottom: isLastNumber ? '2px solid var(--border)' : '1px solid var(--border)' }
                       return (
-                        <TableRow key={numKey} sx={{ opacity: replied ? 1 : 0.45 }}>
-                          <TableCell sx={{ ...NSUB, px: 0.5, width: 32 }} />
+                        <TableRow key={numKey} data-analysis-child={row.company_id} sx={{
+                          '& > td': { color: 'var(--text-muted)', bgcolor: 'var(--card-bg)', backgroundImage: 'linear-gradient(rgba(var(--accent-rgb),0.055),rgba(var(--accent-rgb),0.055))' },
+                          '&:hover > td': { backgroundImage: 'linear-gradient(rgba(var(--accent-rgb),0.095),rgba(var(--accent-rgb),0.095))' },
+                        }}>
+                          <TableCell sx={{ ...NSUB, ...EXPAND_PIN_SX, px: 0.5 }} />
                           {/* Empresa — nombre de sucursal o número como fallback */}
-                          <TableCell sx={{ ...NSUB, pl: 3 }}>
+                          <TableCell sx={{ ...NSUB, ...COMPANY_PIN_SX }}>
+                            <Typography sx={{ fontSize: '0.61rem', color: 'var(--text-muted)', mb: 0.5, letterSpacing: '0.03em' }}>{lang === 'en' ? `Number ${numberIndex + 1} of ${validNumbers.length}` : `Número ${numberIndex + 1} de ${validNumbers.length}`}</Typography>
                             <Box>
                               <Typography data-analysis-contact-name title={showLabel ? (lang === 'en' ? 'WhatsApp profile name' : 'Nombre del perfil de WhatsApp') : ''} sx={{ fontSize: '0.75rem', fontWeight: showLabel ? 600 : 400, color: replied ? (showLabel ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.55)') : 'rgba(255,255,255,0.3)', lineHeight: 1.3, fontFamily: showLabel ? 'inherit' : 'monospace' }}>
                                 {showLabel ? whatsappName : shortNum}
@@ -1665,7 +1666,7 @@ export default function Analytics({ onNavigateToConv }) {
                                 filter: replied ? 'drop-shadow(0 0 3px #4ade8066)' : 'grayscale(1)',
                                 flexShrink: 0,
                               }} />
-                              <Typography sx={{ fontSize: '0.72rem', fontFamily: 'monospace', color: replied ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.28)' }}>
+                              <Typography sx={{ fontSize: '0.75rem', fontFamily: 'monospace', whiteSpace: 'nowrap', color: replied ? 'rgba(255,255,255,0.65)' : 'rgba(255,255,255,0.28)' }}>
                                 {shortNum}
                               </Typography>
                             </Box>
@@ -1684,7 +1685,7 @@ export default function Analytics({ onNavigateToConv }) {
                                     ? <Box sx={{ opacity: inherited ? 0.65 : 1, display: 'inline-flex' }}>
                                         <ResultChip compact method="hibrido" result={{ category: n.category, is_ai: n.is_ai, common: n.category }} />
                                       </Box>
-                                    : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.28)', fontStyle: 'italic' }}>{t.analytics.noCategory}</Typography>)}
+                                    : <Typography sx={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.28)', fontStyle: 'italic' }}>{lang === 'en' ? 'Not analyzed' : 'Sin analizar'}</Typography>)}
                               </TableCell>
                             ))
                             cells.push(
@@ -1717,20 +1718,21 @@ export default function Analytics({ onNavigateToConv }) {
                             </Typography>
                           </TableCell>
                           {/* Notas */}
-                          <TableCell sx={{ ...NSUB, maxWidth: 200 }}>
+                          <TableCell sx={{ ...NSUB, minWidth: 200, maxWidth: 240, textAlign: 'center' }}>
 
                             {!replied
                               ? <Typography sx={{ color: 'rgba(248,113,113,0.5)', fontSize: '0.72rem', fontStyle: 'italic' }}>{t.analytics.noReply}</Typography>
                               : n.notes
                                 ? <Tooltip title={n.notes} placement="top">
-                                    <Typography sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.72rem', cursor: 'default', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>
-                                      {n.notes.length > 55 ? n.notes.slice(0, 55) + '…' : n.notes}
+                                    <Typography component="button" onClick={() => setNotesFor({ name: row.company_name, text: n.notes })} sx={{ p: 0, border: 0, background: 'none', fontFamily: 'inherit', color: 'var(--text-muted)', fontSize: '0.78rem', cursor: 'pointer', textAlign: 'center', width: '100%', mx: 'auto', lineHeight: 1.6, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', maxWidth: 220 }}>
+                                      {n.notes}
                                     </Typography>
                                   </Tooltip>
                                 : <Typography sx={{ color: 'rgba(255,255,255,0.15)', fontSize: '0.72rem' }}>—</Typography>}
                           </TableCell>
+                          <TableCell colSpan={3} sx={NSUB}><Box sx={ACTION_GROUP_SX}>
                           {/* Andy por número — deshabilitado si no respondió o sin análisis */}
-                          <TableCell sx={NSUB}>
+                          <Box>
                             <Tooltip title={!replied ? t.analytics.noReply : !hasAnalysis ? t.analytics.noAnalysis : t.analytics.sendToAndy}>
                               <span>
                                 <IconButton size="small" disabled={!replied || !hasAnalysis} onClick={() => openBotBuilder(row)}
@@ -1739,9 +1741,9 @@ export default function Analytics({ onNavigateToConv }) {
                                 </IconButton>
                               </span>
                             </Tooltip>
-                          </TableCell>
+                          </Box>
                           {/* Modificar Bot por número — solo industrias de gas */}
-                          <TableCell sx={NSUB}>
+                          <Box>
                             {(() => {
                               const isGas = isGasIndustry(row.industry)
                               return (
@@ -1755,9 +1757,9 @@ export default function Analytics({ onNavigateToConv }) {
                                 </Tooltip>
                               )
                             })()}
-                          </TableCell>
+                          </Box>
                           {/* PDF por número */}
-                          <TableCell sx={NSUB}>
+                          <Box>
                             <Tooltip title={isGenNum ? t.analytics.generating : generating ? t.analytics.pleaseWait : !replied ? t.analytics.noReply : `${t.analytics.reportPdf} ${shortNum}`}>
                               <span>
                                 <IconButton size="small" disabled={!!generating || (!replied && n.category !== 'sin_respuesta')} onClick={() => handleGenerateReport(row, n.number)}
@@ -1766,7 +1768,8 @@ export default function Analytics({ onNavigateToConv }) {
                                 </IconButton>
                               </span>
                             </Tooltip>
-                          </TableCell>
+                          </Box>
+                          </Box></TableCell>
                         </TableRow>
                       )
                     })}
@@ -1907,8 +1910,8 @@ export default function Analytics({ onNavigateToConv }) {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={!!reportPreview} onClose={closeReportPreview} maxWidth="md" fullWidth
-        slotProps={{ paper: { sx: { bgcolor: 'var(--card-bg,#1e293b)', backgroundImage: 'none', color: 'var(--text,#f1f5f9)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 3, height: '90vh' } } }}>
+      <Dialog open={!!reportPreview} onClose={closeReportPreview} maxWidth={false} fullWidth
+        slotProps={{ paper: { sx: { bgcolor: 'var(--card-bg,#1e293b)', backgroundImage: 'none', color: 'var(--text,#f1f5f9)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 3, width: 'min(1400px, calc(100vw - 32px))', maxWidth: 'none', height: '94dvh', maxHeight: 'calc(100dvh - 24px)', m: 1.5 } } }}>
         <DialogTitle sx={{ pb: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, minWidth: 0 }}>
             <PictureAsPdfIcon sx={{ fontSize: 20, color: '#ef4444' }} />
@@ -1920,9 +1923,9 @@ export default function Analytics({ onNavigateToConv }) {
             <CloseIcon sx={{ fontSize: 18 }} />
           </IconButton>
         </DialogTitle>
-        <DialogContent sx={{ p: 0, flex: 1, display: 'flex' }}>
+        <DialogContent sx={{ p: 0, flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', bgcolor: '#303134' }}>
           {reportPreview?.url && (
-            <embed src={reportPreview.url} type="application/pdf" style={{ width: '100%', height: '100%', border: 'none' }} />
+            <iframe title={lang === 'en' ? 'Report preview' : 'Vista previa del reporte'} src={`${reportPreview.url}#view=FitH&pagemode=none&navpanes=0`} style={{ flex: 1, width: '100%', height: '100%', minHeight: 0, border: 0 }} />
           )}
         </DialogContent>
         <DialogActions sx={{ px: 3, py: 1.5, gap: 1 }}>

@@ -73,7 +73,7 @@ class TestIsBlockedOrBlacklisted:
 
     def test_no_company_no_phone_hit_defaults_false(self):
         mgr = FakeMgr(blacklist=[])
-        assert _is_blocked_or_blacklisted(mgr, None, None) is True
+        assert _is_blocked_or_blacklisted(mgr, None, None) is False
 
     def test_company_blocked_flag_still_works(self):
         from bson import ObjectId

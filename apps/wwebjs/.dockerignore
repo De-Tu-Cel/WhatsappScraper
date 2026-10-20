@@ -4,3 +4,6 @@ node_modules
 .git
 *.log
 sessions
+local-sessions
+*.wa-session-backup
+*.wa-session-key

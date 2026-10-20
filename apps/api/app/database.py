@@ -1,4 +1,4 @@
-# database.py
+﻿# database.py
 import re
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
@@ -448,14 +448,21 @@ def _get_client() -> MongoClient:
             db.search_ideas.create_index("url", unique=True)
         except Exception:
             pass
+        from app.scrape_indexes import ensure_scrape_indexes
+        ensure_scrape_indexes(db)
     return _mongo_client
 
 
 class MongoDBManager:
     def __init__(self):
         self.client = _get_client()
-        self.db = self.client[DATABASE_NAME]
-        self.fs = GridFS(self.db)
+        # raw_db: pymongo puro. db: lo mismo, salvo que la migración a Postgres
+        # (app/pgmirror, docs/MIGRACION_POSTGRES.md) esté activa para alguna
+        # colección — sin POSTGRES_URL es exactamente el mismo objeto.
+        self.raw_db = self.client[DATABASE_NAME]
+        from app.pgmirror import wrap_database
+        self.db = wrap_database(self.raw_db)
+        self.fs = GridFS(self.raw_db)
 
     def get_classifier_settings(self) -> dict:
         """Umbrales configurables del flujo T1/T2 (Settings > Clasificación). Sin
@@ -754,7 +761,8 @@ class MongoDBManager:
             company["social_media"] = f_social_media.result()
             company["last_message_log_id"] = f_last_log_id.result()
 
-        return company
+        from app.company_location import resolve_company_location
+        return resolve_company_location(company)
 
     def get_whatsapp_validation(self, numbers):
         """Expose saved verification without looking up WhatsApp or changing contacts."""
@@ -899,7 +907,9 @@ class MongoDBManager:
                     # after confirming live that a real Mérida/Yucatán search returned companies
                     # actually located in Zacatecas and Ciudad de México, silently.
                     {"name": 1, "domain": 1, "website": 1, "industry": 1, "city": 1, "state": 1, "has_whatsapp": 1, "status": 1, "created_at": 1, "last_scraped_at": 1, "location_mismatch": 1,
-                     "source": 1, "maps_url": 1, "rating": 1, "reviews": 1, "logo_url": 1, "photo_url": 1}
+                     "source": 1, "maps_url": 1, "rating": 1, "reviews": 1, "logo_url": 1, "photo_url": 1,
+                     "country": 1, "address": 1, "postal_code": 1, "location_source": 1,
+                     "_extra.city": 1, "_extra.state": 1, "_extra.country": 1, "_extra.address": 1, "location": 1}
                 )
                 .sort("created_at", -1)
                 .skip((page - 1) * page_size)
@@ -921,6 +931,8 @@ class MongoDBManager:
             total_contacted = f_total_contacted.result()
             latest_scrape_at = f_latest.result()
             companies = f_companies.result()
+        from app.company_location import resolve_company_location
+        companies = [resolve_company_location(company) for company in companies]
 
         if total_contacted is None:
             total_contacted = total  # contacted=True → all results are contacted by definition
@@ -1357,15 +1369,17 @@ class MongoDBManager:
 
     def save_instance_health_log(self, instance_name: str, event: str,
                                   reason: str = None, reason_label: str = None,
-                                  reason_code: int = None):
+                                  reason_code: int = None, diagnostics: dict = None):
         """Record a state-change event (connected/disconnected) for an instance.
         Only called on actual transitions — not on every poll — to keep the collection small."""
+        from app.session_diagnostics import sanitize_diagnostics
         self.db.instance_health_logs.insert_one({
             "instance_name": instance_name,
             "event":         event,           # "connected" | "disconnected"
             "reason":        reason,          # disconnect_reason key or None
             "reason_label":  reason_label,
             "reason_code":   reason_code,
+            "diagnostics":   sanitize_diagnostics(diagnostics),
             "ts":            datetime.utcnow(),
         })
 
@@ -1456,6 +1470,20 @@ class MongoDBManager:
     def update_evolution_message_status(self, message_id: str, status: str):
         result = self.db.message_logs.update_one(
             {"message_id": message_id, "platform": "evolution"},
+            {"$set": {"status": status, "updated_at": datetime.now()}},
+        )
+        return result.modified_count > 0
+
+    def update_message_ack_status(self, message_id: str, status: str):
+        """Ack de wwebjs (entregado/leído) sobre su outbound. update_evolution_
+        message_status filtra platform="evolution", así que los acks de wwebjs
+        nunca marcaban nada. Los acks pueden llegar desordenados: un
+        "delivered" tardío nunca baja un "read", y un envío fallido no cambia."""
+        allowed_from = {"delivered": ["sent", "synced", None], "read": ["sent", "synced", "delivered", None]}.get(status)
+        if not message_id or allowed_from is None:
+            return False
+        result = self.db.message_logs.update_one(
+            {"message_id": message_id, "direction": "outbound", "status": {"$in": allowed_from}},
             {"$set": {"status": status, "updated_at": datetime.now()}},
         )
         return result.modified_count > 0
@@ -2384,7 +2412,7 @@ class MongoDBManager:
                 "handled_by": handled_by,
                 "category": g["category"] if has_real_analysis else None,
                 "is_ai": g.get("is_ai") if has_real_analysis else None,
-                "response_quality": round(g["response_quality"] or 0, 1) if has_real_analysis else None,
+                "response_quality": round(g["response_quality"], 1) if (has_real_analysis and isinstance(g.get("response_quality"), (int, float)) and not isinstance(g["response_quality"], bool) and 1 <= g["response_quality"] <= 5) else None,
                 "reaction_time_min": round(g["reaction_time_min"], 1) if (has_real_analysis and g.get("reaction_time_min") is not None) else None,
                 "reaction_time_seconds": round(g["reaction_time_seconds"], 1) if (has_real_analysis and g.get("reaction_time_seconds") is not None) else None,
                 "business_hours": g.get("business_hours") if has_real_analysis else None,
@@ -2447,7 +2475,7 @@ class MongoDBManager:
         # materially deflating the stat, since sin_respuesta is a large, steady
         # real-world bucket, not an edge case (audit finding, 2026-09-30). Only
         # average over companies that actually have a rated response.
-        _rated = [r for r in results if r.get("response_quality") is not None]
+        _rated = [r for r in results if isinstance(r.get("response_quality"), (int, float)) and not isinstance(r["response_quality"], bool) and 1 <= r["response_quality"] <= 5]
         avg_quality = (
             round(sum(r["response_quality"] for r in _rated) / len(_rated), 1)
             if _rated else None

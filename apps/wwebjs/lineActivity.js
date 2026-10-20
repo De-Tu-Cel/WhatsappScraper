@@ -18,6 +18,7 @@ function lineKey(session, id) {
 
 function createLineActivity({ sessions, now = Date.now, maxWaitMs = 3000 } = {}) {
   const lines = new Map()
+  let stopping = false
   function state(id) {
     const key = lineKey(sessions.get(id), id)
     if (!lines.has(key)) lines.set(key, { active: null, waiting: [], lastFinishedAt: null, deferred: 0 })
@@ -26,10 +27,12 @@ function createLineActivity({ sessions, now = Date.now, maxWaitMs = 3000 } = {})
   function snapshot(id) {
     const s = state(id)
     return { operation: s.active, queued: s.waiting.length, last_finished_at: s.lastFinishedAt,
+      last_operation: s.lastOperation || null,
       deferred: s.deferred, automatic_allowed: workingHours(now()), start_hour: 8, end_hour: 19,
       timezone: 'America/Mexico_City' }
   }
   function check(req) {
+    if (stopping) throw new ActivityDeferred('LINE_UNAVAILABLE')
     if (req.body?.automatic !== false && !workingHours(now())) throw new ActivityDeferred('SEND_WINDOW_CLOSED')
     if (req.body?.sendBefore !== undefined) {
       const deadline = Date.parse(req.body.sendBefore)
@@ -69,7 +72,7 @@ function createLineActivity({ sessions, now = Date.now, maxWaitMs = 3000 } = {})
         req.checkLineActivity = () => {
           check(req)
           if (res.destroyed) throw new ActivityDeferred('ACTIVITY_CANCELLED')
-          if (generation && (sessions.get(req.params.id) !== generation || generation.status !== 'connected')) {
+          if (generation && (sessions.get(req.params.id) !== generation || generation.status !== 'connected' || generation.client?.lifecycleClosing)) {
             throw new ActivityDeferred('LINE_UNAVAILABLE')
           }
         }
@@ -84,18 +87,25 @@ function createLineActivity({ sessions, now = Date.now, maxWaitMs = 3000 } = {})
         }
       } finally {
         // Never release on socket close while the actual operation is still in flight.
-        if (owned) { s.lastFinishedAt = new Date(now()).toISOString(); release(s) }
+        if (owned) { s.lastOperation = operation; s.lastFinishedAt = new Date(now()).toISOString(); release(s) }
       }
     }
   }
   async function runBackground(id, operation, fn) {
     const s = state(id)
-    if (!workingHours(now()) || s.active) return false
+    if (stopping || !workingHours(now()) || s.active) return false
     s.active = operation
     try { await fn(); return true }
-    finally { s.lastFinishedAt = new Date(now()).toISOString(); release(s) }
+    finally { s.lastOperation = operation; s.lastFinishedAt = new Date(now()).toISOString(); release(s) }
   }
-  return { wrap, snapshot, runBackground }
+  async function drain(id, timeoutMs = 5000) {
+    const deadline = Date.now() + timeoutMs
+    while (state(id).active) {
+      if (Date.now() >= deadline) throw new ActivityDeferred('LINE_BUSY')
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+  }
+  return { wrap, snapshot, runBackground, drain, stop: () => { stopping = true } }
 }
 
 module.exports = { createLineActivity, workingHours, lineKey, ActivityDeferred }

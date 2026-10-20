@@ -14,6 +14,18 @@ same phone stored as 52… (how contacts are scraped) never matched 521… (how
 WhatsApp delivers inbound messages).
 """
 import re
+import logging
+
+
+def dispatch_guard(db, company_id, number, *, purpose='outreach'):
+    """Recheck at dispatch; DB failures never authorize a message."""
+    def check():
+        try:
+            return send_block_reason(db, company_id, number, purpose=purpose)
+        except Exception:
+            logging.getLogger(__name__).exception('Recipient permission check failed; send blocked')
+            return {'reason': 'permission_check_failed', 'matched': ''}
+    return check
 
 
 def phone_key(number) -> str:

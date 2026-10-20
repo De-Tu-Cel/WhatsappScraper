@@ -1,0 +1,4 @@
+# Dependencias solo para pruebas (no van en la imagen de producción).
+-r requirements.txt
+# Base Mongo en memoria: conftest.py la usa para que ningún test toque la real.
+mongomock>=4.3

@@ -220,18 +220,17 @@ def heartbeat(token: str):
 
 def update_evolution(token: str, instance: str, number: str = ""):
     db = _db()
-    user = db.users.find_one({"session_token": token})
+    user = db.users.find_one({"session_token": token, "active": True})
+    if not user:
+        raise PermissionError('Invalid session')
+    if instance:
+        assigned = db.instances.find_one({'name': instance, 'assigned_to': str(user['_id'])})
+        if not assigned:
+            raise PermissionError('Instance is not assigned to this user')
     db.users.update_one(
         {"session_token": token},
         {"$set": {"evolution_instance": instance, "connected_number": number}},
     )
-    # Keep instances collection in sync so round-robin includes self-registered instances
-    if user and instance:
-        user_id = str(user["_id"])
-        set_fields = {"name": instance, "assigned_to": user_id}
-        if number:
-            set_fields["number"] = number
-        db.instances.update_one({"name": instance}, {"$set": set_fields}, upsert=True)
 
 
 def list_users() -> list:

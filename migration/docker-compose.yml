@@ -1,0 +1,63 @@
+# SOLO LOCAL — entorno para la migración Mongo → Postgres (docs/MIGRACION_POSTGRES.md).
+# No es el docker-compose.yml que despliega Coolify (ese vive en la raíz).
+#
+#   docker compose -f migration/docker-compose.yml up -d
+#
+# mongo-staging: aquí se restaura el respaldo de producción para trabajar con
+#   datos reales SIN tocar producción. Todo diagnóstico y ensayo de copia corre aquí.
+# postgres: destino de la migración.
+# mongo-test: Mongo 7 vacío y desechable (en memoria) para comparar la capa contra el
+#   motor real (tests/test_pgmirror_vs_mongo.py). El puerto 27029 es el único Mongo real
+#   que conftest.py deja usar a las pruebas.
+# Todos escuchan solo en 127.0.0.1 de esta máquina.
+name: whatsapp-migration-local
+
+services:
+  mongo-staging:
+    image: mongo:7.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:27030:27017"
+    volumes:
+      - mongo_staging:/data/db
+      - ../backups:/backups:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app_local_only
+      POSTGRES_DB: commercial
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./pg-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d commercial"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mongo-test:
+    image: mongo:7.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:27029:27017"
+    tmpfs:
+      - /data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  mongo_staging:
+  pg_data:

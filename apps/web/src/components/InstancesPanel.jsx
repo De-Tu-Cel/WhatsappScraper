@@ -1,6 +1,11 @@
 'use client'
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { createPortal } from 'react-dom'
+import { authFetch } from '../lib/api'
+
+function instanceFetch(url, options) {
+  return String(url).startsWith('/api/wwebjs/') ? authFetch(url, options) : fetch(url, options)
+}
 import LineActivityStatus from './LineActivityStatus'
 import { INSTANCES_CHANGED_EVENT } from '../hooks/useDailyCapStats'
 
@@ -33,9 +38,6 @@ import Divider from '@mui/material/Divider'
 import Switch from '@mui/material/Switch'
 import CloseIcon from '@mui/icons-material/Close'
 import AddIcon from '@mui/icons-material/Add'
-import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
-import ChevronRightIcon from '@mui/icons-material/ChevronRight'
-import CalendarMonthIcon from '@mui/icons-material/CalendarMonth'
 import SearchIcon from '@mui/icons-material/Search'
 import PhonelinkRingIcon from '@mui/icons-material/PhonelinkRing'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
@@ -54,18 +56,9 @@ import MoreHorizIcon from '@mui/icons-material/MoreHoriz'
 import { ProxiesSection, InstanceNetworkDialog } from './ProxiesPanel'
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
-import TrendingUpIcon from '@mui/icons-material/TrendingUp'
-import InsightsIcon from '@mui/icons-material/Insights'
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment'
-import DonutLargeIcon from '@mui/icons-material/DonutLarge'
 import BarChartIcon from '@mui/icons-material/BarChart'
-import ShowChartIcon from '@mui/icons-material/ShowChart'
-import TrendingDownIcon from '@mui/icons-material/TrendingDown'
-import { alpha } from '@mui/material/styles'
-import { Chart } from './chart/Chart'
-import { ChartLegends } from './chart/ChartLegends'
-import { useApexChart } from './chart/useApexChart'
+import InstancesDashboard from './PerformanceDashboard'
 import { useLang } from '../context/LangContext'
 
 const token = () => typeof window !== 'undefined' ? localStorage.getItem('user_token') : ''
@@ -164,753 +157,6 @@ function InstStatCard({ icon, color, value, label, subtitle, percent }) {
   )
 }
 
-// Header for each chart sub-card (pie/bar/trend) — a colored icon in a
-// small gradient box next to the title, same visual language as the
-// Performance banner's own icon box, instead of plain flat text that read
-// dull/washed-out next to the rest of the panel's more designed sections.
-function ChartCardHeader({ icon, color, title }) {
-  return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.2 }}>
-      <Box sx={{
-        width: 24, height: 24, borderRadius: '7px', flexShrink: 0,
-        background: `linear-gradient(135deg, ${alpha(color, 0.24)} 0%, ${alpha(color, 0.08)} 100%)`,
-        border: `1px solid ${alpha(color, 0.32)}`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        {icon}
-      </Box>
-      <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text)' }}>
-        {title}
-      </Typography>
-    </Box>
-  )
-}
-
-// Gradient stat card ported from minimal-ui-kit/material-kit-react's
-// AnalyticsWidgetSummary (icon + real %-change badge + value + sparkline),
-// adapted to our theme tokens and real backend fields instead of their mock data.
-// "vs prior" por sí solo no decía prior QUÉ (el usuario lo reportó confuso)
-// — como cada tarjeta ya sabe qué rango está activo (day/week/month/year),
-// se puede nombrar exactamente el periodo con el que se compara en vez de
-// un genérico "anterior".
-const RANGE_COMPARE_LABEL = {
-  day:   { en: 'vs previous day',   es: 'vs día anterior' },
-  week:  { en: 'vs previous week',  es: 'vs semana anterior' },
-  month: { en: 'vs previous month', es: 'vs mes anterior' },
-  year:  { en: 'vs previous year',  es: 'vs año anterior' },
-}
-
-function DashStatCard({ color, value, title, pctChange, sparkData, categories, range, lang }) {
-  const chartOptions = useApexChart({
-    chart: { sparkline: { enabled: true } },
-    colors: [color],
-    stroke: { width: 2 },
-    fill: { opacity: 1, gradient: { opacityFrom: 0.4, opacityTo: 0 } },
-    // Antes tooltip:false dejaba la curva puramente decorativa — no se
-    // podía saber qué valor representaba cada punto. Ahora sí muestra el
-    // valor real (y la fecha del bucket, si se pasó) al pasar el mouse.
-    // followCursor:true se quitó — en sparklines minúsculos (44x26) que se
-    // vuelven a montar en cada cambio de rango, ese modo se quedaba con el
-    // tooltip pegado en pantalla tras salir con el mouse; el anclaje fijo
-    // (default de ApexCharts) sí se oculta bien en mouseleave.
-    // fixed.position lo ancla arriba a la derecha en vez de flotar justo
-    // sobre el cursor — en un espacio tan chico, el tooltip por defecto
-    // terminaba tapando el número grande de al lado en vez de solo indicar
-    // el punto de la curva.
-    tooltip: {
-      enabled: true,
-      x: { show: !!categories },
-      y: { formatter: (v) => v == null ? '' : v.toLocaleString() },
-      fixed: { enabled: true, position: 'topRight', offsetX: 6, offsetY: -32 },
-    },
-    markers: { size: 0, hover: { size: 4 } },
-    // La base comparte yaxis.tickAmount y xaxis.tooltip/crosshairs con las
-    // gráficas grandes (que sí muestran eje) — en sparkline mode ApexCharts
-    // no siempre suprime los ticks solo, dejando unos numeritos diminutos
-    // pegados a la izquierda del mini-gráfico; y la "pill" flotante de
-    // categoría (xaxis.tooltip) no cabe en 44px de ancho — ambos se apagan
-    // aquí, dejando el crosshair + punto de color como única señal de "aquí
-    // está el mouse" en un espacio tan chico.
-    xaxis: {
-      categories, labels: { show: false }, axisBorder: { show: false }, axisTicks: { show: false },
-      tooltip: { enabled: false },
-    },
-    yaxis: { labels: { show: false } },
-  })
-  const up = (pctChange ?? 0) >= 0
-  return (
-    <Box sx={{
-      minWidth: 0, p: 1.2, borderRadius: 2.5,
-      bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
-      border: '1px solid var(--border, rgba(255,255,255,0.08))',
-    }}>
-      <Typography sx={{ fontSize: '0.66rem', fontWeight: 600, color: 'var(--text-muted)', mb: 0.6,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</Typography>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.6 }}>
-        <Typography sx={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.1 }}>{value}</Typography>
-        {sparkData && sparkData.length > 1 && (
-          <Chart type="line" series={[{ name: title, data: sparkData }]} options={chartOptions} height={26} width={44} sx={{ mr: 0.8 }} />
-        )}
-      </Box>
-      {pctChange != null && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.8 }}>
-          <Box sx={{
-            width: 15, height: 15, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            bgcolor: up ? 'rgba(74,222,128,0.15)' : 'rgba(248,113,113,0.15)',
-          }}>
-            {up ? <TrendingUpIcon sx={{ fontSize: 10, color: '#4ade80' }} /> : <TrendingDownIcon sx={{ fontSize: 10, color: '#f87171' }} />}
-          </Box>
-          <Typography sx={{ fontSize: '0.65rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            <Box component="span" sx={{ fontWeight: 700, color: up ? '#4ade80' : '#f87171' }}>{up ? '+' : ''}{pctChange}%</Box>
-            <Box component="span" sx={{ color: 'var(--text-muted)' }}>
-              {' '}{(RANGE_COMPARE_LABEL[range] ?? RANGE_COMPARE_LABEL.week)[lang === 'en' ? 'en' : 'es']}
-            </Box>
-          </Typography>
-        </Box>
-      )}
-    </Box>
-  )
-}
-
-// Small glance card for an external paid service's spend/balance — not a
-// full billing dashboard, just enough to notice if something's off. Three
-// states: not configured yet (no key set), error (call failed), or the real
-// number. Deliberately simpler than DashStatCard (no sparkline/%-change,
-// there's no meaningful trend data for a single point-in-time balance).
-function BalanceCard({ label, lang, loading, data, unit }) {
-  const notConfigured = !loading && (!data || data.configured === false)
-  const errored = !loading && data && data.configured && data.ok === false
-  const dotColor = notConfigured ? 'var(--text-muted)' : errored ? '#f87171' : '#4ade80'
-  let display = '—'
-  if (!loading && data?.ok) {
-    const n = unit === 'balance' ? data.balance : data.spend_this_month
-    display = n == null ? '—' : `$${Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-  }
-  const subtitle = notConfigured
-    ? (lang === 'en' ? 'Not set up' : 'No configurado')
-    : errored
-      ? (lang === 'en' ? 'Check failed' : 'Error al consultar')
-      : (unit === 'balance' ? (lang === 'en' ? 'Current balance' : 'Saldo actual') : (lang === 'en' ? 'Spend this month' : 'Gasto este mes'))
-  return (
-    <Box sx={{
-      minWidth: 0, p: 1.2, borderRadius: 2.5,
-      bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
-      border: '1px solid var(--border, rgba(255,255,255,0.08))',
-      display: 'flex', alignItems: 'center', gap: 1,
-    }}>
-      <Box sx={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, bgcolor: dotColor }} />
-      <Box sx={{ minWidth: 0 }}>
-        <Typography sx={{ fontSize: '0.66rem', fontWeight: 600, color: 'var(--text-muted)',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</Typography>
-        <Typography sx={{ fontSize: '1.05rem', fontWeight: 800, color: notConfigured || errored ? 'var(--text-muted)' : 'var(--text)', lineHeight: 1.1 }}>
-          {loading ? '…' : display}
-        </Typography>
-        <Typography sx={{ fontSize: '0.64rem', color: 'var(--text-muted)', lineHeight: 1.3, mt: 0.2 }}>{subtitle}</Typography>
-        {unit === 'spend' && notConfigured && (
-          <Typography sx={{ fontSize: '0.64rem', color: 'var(--text-muted)', mt: 0.4 }}>
-            {lang === 'en' ? 'Connect an Anthropic Admin API key and workspace to view Claude costs.' : 'Configura una clave Admin de Anthropic y su workspace para consultar el gasto de Claude.'}
-          </Typography>
-        )}
-        {unit === 'spend' && data?.ok && data.monthly_budget_usd > 0 && (
-          <Typography sx={{ fontSize: '0.64rem', color: 'var(--text-muted)', mt: 0.4 }}>
-            {lang === 'en' ? `Alert budget: $${data.monthly_budget_usd} USD · not prepaid credit` : `Presupuesto de alerta: $${data.monthly_budget_usd} USD · no es saldo prepago`}
-          </Typography>
-        )}
-      </Box>
-    </Box>
-  )
-}
-
-const MONTH_NAMES = {
-  es: ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'],
-  en: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'],
-}
-
-// How many past calendar years the "Año" menu and the "Mes" menu's year
-// switcher offer — arbitrary but generous lookback; picking a year with no
-// data just shows zeros (see the backend's month/year bounds), it's not an
-// error case that needs guarding against here.
-const PERIOD_YEARS_BACK = 5
-
-// Lets "Mes"/"Año" jump to any past calendar period — previously those tabs
-// only ever showed the current month/year with no way to look further back,
-// so checking e.g. March's numbers meant waiting for March to come around
-// again. The center label opens a menu to jump directly to any month/year in
-// one click (a prev/next-only stepper meant clicking 8 times to go from
-// September back to January); the arrows stay for quick one-step nudges.
-// Hidden entirely for "Hoy"/"Semana", which stay rolling lookbacks (a
-// "specific past day/week" picker wasn't asked for).
-function PeriodStepper({ range, year, month, lang, onChange }) {
-  const [anchorEl, setAnchorEl] = useState(null)
-  // The year being browsed inside the month-picker menu — separate from the
-  // committed `year` prop so paging through years while choosing a month
-  // doesn't change the dashboard's data until an actual month is clicked.
-  const [menuYear, setMenuYear] = useState(year)
-  if (range !== 'month' && range !== 'year') return null
-  const now = new Date()
-  const curYear = now.getFullYear()
-  const curMonth = now.getMonth() + 1
-  const atLatest = range === 'month' ? (year === curYear && month === curMonth) : (year === curYear)
-  const label = range === 'month' ? `${MONTH_NAMES[lang === 'en' ? 'en' : 'es'][month - 1]} ${year}` : `${year}`
-  const step = (dir) => {
-    if (range === 'month') {
-      let m = month + dir, y = year
-      if (m < 1) { m = 12; y -= 1 }
-      if (m > 12) { m = 1; y += 1 }
-      onChange(y, m)
-    } else {
-      onChange(year + dir, month)
-    }
-  }
-  const openMenu = (e) => { setMenuYear(year); setAnchorEl(e.currentTarget) }
-  const closeMenu = () => setAnchorEl(null)
-  const monthLabels = MONTH_NAMES[lang === 'en' ? 'en' : 'es']
-
-  return (
-    <Box sx={{
-      display: 'flex', alignItems: 'center', gap: 0.2, px: 0.4, py: 0.2, borderRadius: 2,
-      bgcolor: 'var(--surface, rgba(255,255,255,0.03))', border: '1px solid var(--border, rgba(255,255,255,0.1))',
-    }}>
-      <IconButton size="small" onClick={() => step(-1)} sx={{ p: 0.4 }}
-        aria-label={lang === 'en' ? 'Previous period' : 'Periodo anterior'}>
-        <ChevronLeftIcon sx={{ fontSize: 16, color: 'var(--text-muted)' }} />
-      </IconButton>
-      <Typography onClick={openMenu} sx={{
-        fontSize: '0.72rem', fontWeight: 700, color: 'var(--text)', minWidth: 92, textAlign: 'center',
-        userSelect: 'none', cursor: 'pointer', borderRadius: 1, px: 0.4,
-        '&:hover': { bgcolor: 'var(--item-hover, rgba(255,255,255,0.06))' },
-      }}>
-        {label}
-      </Typography>
-      <IconButton size="small" onClick={() => step(1)} disabled={atLatest} sx={{ p: 0.4 }}
-        aria-label={lang === 'en' ? 'Next period' : 'Periodo siguiente'}>
-        <ChevronRightIcon sx={{ fontSize: 16, color: atLatest ? 'var(--border)' : 'var(--text-muted)' }} />
-      </IconButton>
-
-      <Menu anchorEl={anchorEl} open={!!anchorEl} onClose={closeMenu}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-        transformOrigin={{ vertical: 'top', horizontal: 'center' }}
-        elevation={0}
-        slotProps={{
-          list: { sx: { p: 0 } },
-          paper: {
-            sx: {
-              mt: 0.7, borderRadius: 3,
-              // MUI's Menu paper defaults to overflowY:'auto' with a fairly
-              // tight maxHeight — with only a handful of years/12 months this
-              // never actually needs to scroll, so the default was showing a
-              // pointless scrollbar on a list that fully fits.
-              maxHeight: 'none', overflow: 'visible',
-              bgcolor: 'var(--card-bg, #16181d)',
-              border: '1px solid var(--border, rgba(255,255,255,0.1))',
-              boxShadow: '0 16px 40px rgba(0,0,0,0.45)',
-            },
-          },
-        }}>
-        {/* Mismo encabezado (ícono en caja degradada + texto) que usan las
-           cabeceras de las gráficas — para que el menú se sienta parte del
-           mismo diseño en vez de un <select> genérico del navegador. */}
-        <Box sx={{
-          display: 'flex', alignItems: 'center', gap: 1, px: 1.4, py: 1,
-          background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.14) 0%, rgba(var(--accent-rgb,59,130,246),0.03) 70%, transparent 100%)',
-          borderBottom: '1px solid var(--border, rgba(255,255,255,0.08))',
-        }}>
-          <Box sx={{
-            width: 22, height: 22, borderRadius: '7px', flexShrink: 0,
-            background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.28) 0%, rgba(var(--accent-rgb,59,130,246),0.1) 100%)',
-            border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <CalendarMonthIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 13 }} />
-          </Box>
-          <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text)' }}>
-            {range === 'year'
-              ? (lang === 'en' ? 'Jump to year' : 'Ir a un año')
-              : (lang === 'en' ? 'Jump to month' : 'Ir a un mes')}
-          </Typography>
-        </Box>
-
-        {range === 'year' ? (
-          <Box sx={{ p: 0.6, minWidth: 130 }}>
-            {Array.from({ length: PERIOD_YEARS_BACK + 1 }, (_, i) => curYear - i).map(y => {
-              const active = y === year
-              return (
-                <MenuItem key={y} selected={active} onClick={() => { onChange(y, month); closeMenu() }}
-                  sx={{
-                    fontSize: '0.78rem', fontWeight: active ? 700 : 500, justifyContent: 'center', borderRadius: 1.6, my: 0.15,
-                    color: active ? '#fff' : 'var(--text)',
-                    bgcolor: active ? 'var(--accent, #3b82f6) !important' : 'transparent',
-                    '&:hover': { bgcolor: active ? 'var(--accent, #3b82f6)' : 'var(--item-hover, rgba(255,255,255,0.06))' },
-                  }}>
-                  {y}
-                </MenuItem>
-              )
-            })}
-          </Box>
-        ) : (
-          <Box sx={{ px: 1, py: 0.8, minWidth: 230 }}>
-            {/* Pill del año, mismo lenguaje visual que el segmented control de
-               Hoy/Semana/Mes/Año — no flechas + número sueltos. */}
-            <Box sx={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.5, mb: 0.8,
-              borderRadius: 2, bgcolor: 'var(--surface, rgba(255,255,255,0.03))', border: '1px solid var(--border, rgba(255,255,255,0.1))',
-              px: 0.3, py: 0.2,
-            }}>
-              <IconButton size="small" onClick={() => setMenuYear(y => y - 1)} sx={{ p: 0.3 }}
-                aria-label={lang === 'en' ? 'Previous year' : 'Año anterior'}>
-                <ChevronLeftIcon sx={{ fontSize: 15, color: 'var(--text-muted)' }} />
-              </IconButton>
-              <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text)', textAlign: 'center' }}>
-                {menuYear}
-              </Typography>
-              <IconButton size="small" onClick={() => setMenuYear(y => y + 1)} disabled={menuYear >= curYear} sx={{ p: 0.3 }}
-                aria-label={lang === 'en' ? 'Next year' : 'Año siguiente'}>
-                <ChevronRightIcon sx={{ fontSize: 15, color: menuYear >= curYear ? 'var(--border)' : 'var(--text-muted)' }} />
-              </IconButton>
-            </Box>
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 0.5, pb: 0.4 }}>
-              {monthLabels.map((label, idx) => {
-                const m = idx + 1
-                const disabled = menuYear === curYear && m > curMonth
-                const active = menuYear === year && m === month
-                return (
-                  <Box key={m} onClick={() => { if (disabled) return; onChange(menuYear, m); closeMenu() }}
-                    sx={{
-                      px: 0.8, py: 0.6, borderRadius: 1.6, textAlign: 'center', fontSize: '0.72rem', fontWeight: 700,
-                      cursor: disabled ? 'default' : 'pointer', userSelect: 'none', transition: 'background-color 0.15s ease, color 0.15s ease',
-                      color: disabled ? 'var(--border)' : active ? '#fff' : 'var(--text)',
-                      bgcolor: active ? 'var(--accent, #3b82f6)' : 'transparent',
-                      boxShadow: active ? '0 2px 8px rgba(var(--accent-rgb,59,130,246),0.4)' : 'none',
-                      '&:hover': disabled ? {} : { bgcolor: active ? 'var(--accent, #3b82f6)' : 'var(--item-hover, rgba(255,255,255,0.06))' },
-                    }}>
-                    {label.slice(0, 3)}
-                  </Box>
-                )
-              })}
-            </Box>
-          </Box>
-        )}
-      </Menu>
-    </Box>
-  )
-}
-
-// Wide card, different shape from DashStatCard on purpose — a gauge for the
-// combined average (real aggregate over the range) next to a per-instance
-// breakdown (real per-instance %, same instance_health_logs data, just not
-// collapsed into one number) so the extra width is actually used for more
-// information instead of the same small card just stretched out.
-function InstanceHealthCard({ avgUptime, uptimeMap, instances, lang }) {
-  const gaugeOptions = useApexChart({
-    chart: { sparkline: { enabled: true } },
-    colors: ['#f59e0b'],
-    // 'round' line caps draw a filled dot at the arc's start even at 0% —
-    // with real uptime data still at 0% for these instances, that floating
-    // dot was the only visible thing on the ring, reading as a stray
-    // ornament instead of "no progress yet". 'butt' caps draw nothing when
-    // the arc length is zero, which is the honest empty state.
-    stroke: { lineCap: 'butt' },
-    plotOptions: {
-      radialBar: {
-        hollow: { size: '48%' },
-        track: { background: 'rgba(255,255,255,0.12)', strokeWidth: '100%', margin: 0 },
-        dataLabels: {
-          // ApexCharts' radialBar shows a "name" sub-label ("Total" by
-          // default) alongside the value unless explicitly turned off —
-          // that stray "Total" text overlapping the number was the bug.
-          name: { show: false },
-          value: { show: true, offsetY: 2, fontSize: '0.72rem', fontWeight: 800, color: 'var(--text)', formatter: (v) => `${v}%` },
-        },
-      },
-    },
-    tooltip: { enabled: false },
-  })
-  // El detalle por instancia ya no vive siempre expandido en la tarjeta
-  // (con varias instancias crecía hacia abajo sin control) — ahora vive en
-  // un tooltip informativo al pasar el mouse, para que la tarjeta se quede
-  // del mismo tamaño que sus vecinas sin importar cuántas instancias haya.
-  const breakdown = (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.6, py: 0.3, minWidth: 170 }}>
-      {instances.map(inst => {
-        // uptime_pct is null (not 0) when this instance has NO connect/
-        // disconnect log at all — e.g. its webhook never fired since this
-        // logging was added. That's "no data", not "was down all week";
-        // showing a confident 0% there would be actively misleading.
-        const raw = uptimeMap[inst.instance_name]?.uptime_pct
-        const pct = raw == null ? null : Math.round(raw)
-        return (
-          <Box key={inst.instance_name} sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
-            <Typography sx={{ flex: 1, minWidth: 0, fontSize: '0.68rem', fontWeight: 600, color: '#fff',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {inst.instance_name}
-            </Typography>
-            <Box sx={{ width: 50, height: 4, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.18)', overflow: 'hidden', flexShrink: 0 }}>
-              <Box sx={{ width: `${pct ?? 0}%`, height: '100%', bgcolor: '#f59e0b', borderRadius: 2 }} />
-            </Box>
-            <Typography sx={{ width: 28, flexShrink: 0, textAlign: 'right', fontSize: '0.68rem', fontWeight: 700, color: pct == null ? 'var(--text-muted)' : '#f59e0b' }}>
-              {pct == null ? '—' : `${pct}%`}
-            </Typography>
-          </Box>
-        )
-      })}
-    </Box>
-  )
-  return (
-    <Box sx={{
-      minWidth: 0, height: '100%', p: 1.2, borderRadius: 2.5, bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))',
-      border: '1px solid var(--border, rgba(255,255,255,0.08))',
-      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    }}>
-      {/* La fila (gauge + texto) antes se estiraba a todo el ancho de la
-         tarjeta (heredado del alignItems:stretch de arriba) y el texto
-         quedaba pegado a la izquierda con un hueco vacío a la derecha; ahora
-         el contenedor centra la fila como bloque en vez de estirarla. */}
-      <Tooltip title={instances.length > 0 ? breakdown : ''} arrow placement="bottom-start">
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: instances.length > 0 ? 'help' : 'default' }}>
-          <Chart type="radialBar" series={[avgUptime == null ? 0 : Math.round(avgUptime)]} options={gaugeOptions} height={58} width={58} />
-          <Box sx={{ minWidth: 0 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
-              <Typography sx={{ fontSize: '0.66rem', fontWeight: 600, color: 'var(--text-muted)',
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {lang === 'en' ? 'Avg. uptime' : 'Uptime prom.'}
-              </Typography>
-              {instances.length > 0 && <InfoOutlinedIcon sx={{ fontSize: 11, color: 'var(--text-muted)', opacity: 0.7, flexShrink: 0 }} />}
-            </Box>
-            <Typography sx={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text)', lineHeight: 1.1 }}>
-              {avgUptime == null ? '—' : `${avgUptime}%`}
-            </Typography>
-          </Box>
-        </Box>
-      </Tooltip>
-    </Box>
-  )
-}
-
-// Real, non-invented metrics: messages sent + distinct contacts reached per
-// instance (from message_logs, GET /admin/instances/metrics), real period-
-// over-period %-change, and uptime % (from instance_health_logs, reused from
-// the existing health endpoint). Chart components ported from
-// minimal-ui-kit/material-kit-react (ApexCharts + its theming), adapted to
-// this app's own theme tokens and data.
-// chartsReady=false keeps every chart in its skeleton state even once data
-// has loaded — needed because page.jsx's tab system pre-mounts every panel
-// in the background a few seconds after boot (kept alive forever via
-// display:none instead of unmounting), so this dashboard's 6 ApexCharts
-// instances were rendering into a still-hidden, zero-size container the
-// very first time. ApexCharts can't measure a display:none container and
-// throws deep inside its own render pipeline ("Cannot read properties of
-// undefined (reading 'filter')", no app stack frame — confirmed by testing:
-// it reproduced with the tab never opened, in a burst of exactly 6, one per
-// chart instance). Real charts only render once this tab has genuinely been
-// activated at least once; until then they show the same loading skeleton.
-function InstancesDashboard({ metrics, loading, range, onRangeChange, lang, chartsReady = true, balances, balancesLoading,
-  periodYear, periodMonth, onPeriodChange }) {
-  const showCharts = !loading && chartsReady
-  const RANGES = [
-    { key: 'day',   label: lang === 'en' ? 'Today' : 'Hoy' },
-    { key: 'week',  label: lang === 'en' ? 'Week' : 'Semana' },
-    { key: 'month', label: lang === 'en' ? 'Month' : 'Mes' },
-    { key: 'year',  label: lang === 'en' ? 'Year' : 'Año' },
-  ]
-  const rows = metrics?.instances ?? []
-  const uptimeMap = metrics?.uptime ?? {}
-  const withActivity = rows.filter(r => r.messages_sent > 0)
-  // Solo promedia instancias con dato REAL de uptime — antes un `?? 0`
-  // trataba "sin ningún log de conexión" igual que "confirmado 0% conectado",
-  // arrastrando el promedio hacia abajo con instancias de las que en
-  // realidad no sabemos nada (ver InstanceHealthCard más abajo).
-  const uptimeValues = withActivity
-    .map(r => uptimeMap[r.instance_name]?.uptime_pct)
-    .filter(v => v != null)
-  const avgUptime = uptimeValues.length
-    ? Math.round(uptimeValues.reduce((sum, v) => sum + v, 0) / uptimeValues.length)
-    : null
-  const timeseries = metrics?.timeseries ?? []
-
-  // Leyendas clicleables (mostrar/ocultar serie) para el bar y el trend —
-  // el pastel no la necesita, cada slice ya es su propia serie visual.
-  // toggleSeries() es imperativo (ApexCharts no expone esto por props), de
-  // ahí la ref hacia la instancia real detrás de nuestro wrapper <Chart>.
-  const barChartRef = useRef(null)
-  const trendChartRef = useRef(null)
-  const [hiddenBarSeries, setHiddenBarSeries] = useState(() => new Set())
-  const [hiddenTrendSeries, setHiddenTrendSeries] = useState(() => new Set())
-  const toggleSeries = (chartRef, hiddenSet, setHiddenSet) => (label) => {
-    // Este react-apexcharts (2.1.1, la reescritura basada en hooks) asigna
-    // la instancia directo a chartRef.current, sin el wrapper `.chart` que
-    // sí tenía la versión de clase anterior.
-    chartRef.current?.toggleSeries(label)
-    setHiddenSet(prev => {
-      const next = new Set(prev)
-      next.has(label) ? next.delete(label) : next.add(label)
-      return next
-    })
-  }
-
-  const pieOptions = useApexChart({
-    chart: { sparkline: { enabled: true } },
-    colors: ['#3b82f6', '#22c55e', '#f59e0b', '#8b5cf6', '#ef4444', '#60a5fa'],
-    labels: withActivity.map(r => r.instance_name),
-    stroke: { width: 0 },
-    dataLabels: { enabled: true, dropShadow: { enabled: false } },
-    tooltip: { y: { formatter: (v) => `${v.toLocaleString()} ${lang === 'en' ? 'messages' : 'mensajes'}` } },
-    plotOptions: { pie: { donut: { labels: { show: false } } } },
-  })
-
-  // legend:false en ambas — la leyenda nativa de ApexCharts incrusta un
-  // <foreignObject><style>...</style></foreignObject> con el CSS del layout
-  // de su leyenda directamente en el SVG; en ciertos hovers ese bloque se
-  // renderizaba como texto plano visible en vez de aplicarse como estilo
-  // (el bug de CSS crudo apareciendo en pantalla). El pie ya usaba nuestro
-  // propio <ChartLegends> en DOM normal en vez de la leyenda nativa — se
-  // hace lo mismo aquí para bar/trend, evitando el bug de raíz en vez de
-  // parchar el renderer interno de la librería.
-  const barOptions = useApexChart({
-    colors: [alpha('#3b82f6', 0.85), alpha('#22c55e', 0.85)],
-    stroke: { width: 2, colors: ['transparent'] },
-    plotOptions: { bar: { borderRadius: 6, borderRadiusApplication: 'end', columnWidth: '55%' } },
-    xaxis: { categories: withActivity.map(r => r.instance_name), labels: { style: { fontSize: '10px' }, rotate: -35 } },
-    legend: { show: false },
-    tooltip: { y: { formatter: (v) => v.toLocaleString() } },
-  })
-
-  const trendOptions = useApexChart({
-    colors: ['#3b82f6', '#22c55e'],
-    xaxis: { categories: timeseries.map(r => r.bucket), labels: { style: { fontSize: '10px' } } },
-    legend: { show: false },
-    tooltip: { y: { formatter: (v) => v.toLocaleString() } },
-  })
-
-  const emptyState = (msg) => (
-    <Box sx={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <Typography sx={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>{msg}</Typography>
-    </Box>
-  )
-  const noActivityMsg = lang === 'en' ? 'No activity in this range' : 'Sin actividad en este rango'
-
-  return (
-    <Box sx={{
-      borderRadius: 3, border: '1px solid var(--border, rgba(255,255,255,0.08))',
-      bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))', overflow: 'hidden', flexShrink: 0,
-    }}>
-      {/* Mismo banner de encabezado (glow + ícono en caja degradada) que usa
-         el título de Prospects, en vez del texto plano de antes que se veía
-         apagado comparado con el resto de la app. */}
-      <Box sx={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap',
-        px: 2, py: 1.6, position: 'relative',
-        background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.12) 0%, rgba(var(--accent-rgb,59,130,246),0.04) 60%, transparent 100%)',
-        borderBottom: '1px solid rgba(var(--accent-rgb,59,130,246),0.15)',
-        '&::after': {
-          content: '""', position: 'absolute', bottom: 0, left: 16, right: 16, height: '1px',
-          background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.4) 40%, rgba(var(--accent-rgb,59,130,246),0.4) 60%, transparent)',
-        },
-      }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-          <Box sx={{
-            width: 32, height: 32, borderRadius: '9px', flexShrink: 0,
-            background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.25) 0%, rgba(var(--accent-rgb,59,130,246),0.1) 100%)',
-            border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <InsightsIcon sx={{ color: 'var(--accent, #3b82f6)', fontSize: 16 }} />
-          </Box>
-          <Box>
-            <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2 }}>
-              {lang === 'en' ? 'Performance' : 'Desempeño'}
-            </Typography>
-            <Typography sx={{ fontSize: '0.65rem', color: 'var(--text-muted, rgba(255,255,255,0.3))', lineHeight: 1, mt: 0.2 }}>
-              {lang === 'en' ? 'Messages, contacts & uptime by instance' : 'Mensajes, contactos y uptime por instancia'}
-            </Typography>
-          </Box>
-        </Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-          <PeriodStepper range={range} year={periodYear} month={periodMonth} lang={lang} onChange={onPeriodChange} />
-          {/* Segmented control — un solo contenedor "pastilla" donde el rango
-             activo lleva su propio fondo sólido (con sombra sutil), en vez de
-             chips sueltos todos con el mismo peso visual. */}
-          <Box sx={{
-            display: 'flex', gap: 0.2, p: 0.3, borderRadius: 2,
-            bgcolor: 'var(--surface, rgba(255,255,255,0.03))', border: '1px solid var(--border, rgba(255,255,255,0.1))',
-          }}>
-            {RANGES.map(r => {
-              const active = range === r.key
-              return (
-                <Box key={r.key} onClick={() => onRangeChange(r.key)}
-                  sx={{
-                    px: 1.5, py: 0.5, borderRadius: 1.6, cursor: 'pointer', userSelect: 'none',
-                    fontSize: '0.7rem', fontWeight: 700, lineHeight: 1.8,
-                    color: active ? '#fff' : 'var(--text-muted)',
-                    bgcolor: active ? 'var(--accent, #3b82f6)' : 'transparent',
-                    boxShadow: active ? '0 2px 8px rgba(var(--accent-rgb,59,130,246),0.4)' : 'none',
-                    transition: 'background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease',
-                    '&:hover': active ? {} : { bgcolor: 'var(--item-hover, rgba(255,255,255,0.06))', color: 'var(--text)' },
-                  }}>
-                  {r.label}
-                </Box>
-              )
-            })}
-          </Box>
-        </Box>
-      </Box>
-
-      <Box sx={{ p: 2 }}>
-
-      {/* Saldo/gasto de los servicios de pago activos (Claude, DataForSEO) —
-         solo para tener a la vista si algo se está disparando, no un
-         dashboard de facturación completo. */}
-      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 1.5, mb: 2 }}>
-        <BalanceCard label="Claude" lang={lang} loading={balancesLoading} data={balances?.anthropic} unit="spend" />
-        <BalanceCard label="DataForSEO" lang={lang} loading={balancesLoading} data={balances?.dataforseo} unit="balance" />
-      </Box>
-
-      {!showCharts ? (
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 1.5, mb: 2 }}>
-          <Skeleton variant="rounded" sx={{ height: 110, bgcolor: 'var(--border)', borderRadius: 3 }} />
-          <Skeleton variant="rounded" sx={{ height: 110, bgcolor: 'var(--border)', borderRadius: 3 }} />
-          <Skeleton variant="rounded" sx={{ height: 110, bgcolor: 'var(--border)', borderRadius: 3 }} />
-          <Skeleton variant="rounded" sx={{ height: 110, bgcolor: 'var(--border)', borderRadius: 3 }} />
-        </Box>
-      ) : (
-        // Grid fijo de 4 columnas — las cuatro tarjetas (mensajes, contactos,
-        // tasa de respuesta, uptime) reducidas y compactadas para caber
-        // juntas en una sola fila.
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 1.5, mb: 2 }}>
-          <DashStatCard range={range} color="#3b82f6" lang={lang}
-            value={(metrics?.total_messages ?? 0).toLocaleString()} title={lang === 'en' ? 'Messages sent' : 'Mensajes enviados'}
-            pctChange={metrics?.messages_pct_change} sparkData={timeseries.map(r => r.messages_sent)}
-            categories={timeseries.map(r => r.bucket)} />
-          <DashStatCard range={range} color="#22c55e" lang={lang}
-            value={(metrics?.total_contacts ?? 0).toLocaleString()} title={lang === 'en' ? 'Contacts reached' : 'Contactos alcanzados'}
-            pctChange={metrics?.contacts_pct_change} sparkData={timeseries.map(r => r.contacts_reached)}
-            categories={timeseries.map(r => r.bucket)} />
-          {/* % de contactos que respondieron al menos una vez — no
-             "mensajes entrantes ÷ salientes" (verificado contra producción:
-             ese conteo crudo daba 115%-245%, ya que un contacto puede
-             responder varias veces al mismo envío). Contar contactos
-             distintos mantiene un porcentaje real y acotado. */}
-          <DashStatCard range={range} color="#a78bfa" lang={lang}
-            value={metrics?.response_rate != null ? `${metrics.response_rate}%` : '—'}
-            title={lang === 'en' ? 'Response rate' : 'Tasa de respuesta'}
-            pctChange={metrics?.response_rate_pct_change} />
-          <InstanceHealthCard avgUptime={avgUptime} uptimeMap={uptimeMap} instances={withActivity} lang={lang} />
-        </Box>
-      )}
-
-      {/* Pie (share of volume by instance) + trend over time, side by side —
-         skeleton placeholders match each real section's shape (circle for
-         the pie, rectangle for the line chart) instead of just disappearing
-         until the data lands. */}
-      {/* Pastel + barras conviven en una fila (los dos son "reparto por
-         instancia", pero en formas distintas) para que quepan cómodos en la
-         columna angosta; la de tendencia en el tiempo, que necesita ancho
-         real para las fechas del eje X, va sola abajo a todo lo ancho. Así
-         los tres no terminan apilados uno igual al otro (repetitivo). */}
-      {!showCharts ? (
-        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'flex-start', mb: 1.5 }}>
-          <Box sx={{ flex: '1 1 190px', minWidth: 180, borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))', p: 1.5 }}>
-            <Skeleton variant="text" width="65%" sx={{ mb: 1, bgcolor: 'var(--border)', fontSize: '0.8rem' }} />
-            <Skeleton variant="circular" width={140} height={140} sx={{ my: 1.5, mx: 'auto', bgcolor: 'var(--border)' }} />
-          </Box>
-          <Box sx={{ flex: '1 1 220px', minWidth: 200, borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))', p: 1.5 }}>
-            <Skeleton variant="text" width="50%" sx={{ mb: 1, bgcolor: 'var(--border)', fontSize: '0.8rem' }} />
-            <Skeleton variant="rounded" height={220} sx={{ bgcolor: 'var(--border)' }} />
-          </Box>
-        </Box>
-      ) : (
-        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'flex-start', mb: 1.5 }}>
-          <Box sx={{ flex: '1 1 190px', minWidth: 180, borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))', p: 1.5 }}>
-            <ChartCardHeader icon={<DonutLargeIcon sx={{ fontSize: 14, color: '#8b5cf6' }} />} color="#8b5cf6"
-              title={lang === 'en' ? 'Share by instance' : 'Reparto por instancia'} />
-            {withActivity.length === 0 ? emptyState(noActivityMsg) : (
-              <>
-                {/* width/height van como props reales (no solo dentro de sx)
-                   — sx solo estilaba el div contenedor; el <ReactApexChart>
-                   interno recibía width='100%' (default) y height
-                   undefined, lo que puede dejar el SVG sin altura real. */}
-                <Chart type="pie" width={150} height={150} series={withActivity.map(r => r.messages_sent)} options={pieOptions}
-                  sx={{ my: 1.5, mx: 'auto' }} />
-                <Divider sx={{ borderStyle: 'dashed', mb: 1.2 }} />
-                {/* Con varias instancias esta leyenda crecía sin límite hacia
-                   abajo (una fila por cada una); ahora tiene una altura fija
-                   con scroll propio, así no importa cuántas instancias
-                   tengan actividad, la tarjeta no crece con ellas. */}
-                <Box sx={{
-                  maxHeight: 64, overflowY: 'auto', pr: 0.5,
-                  '&::-webkit-scrollbar': { width: 4 },
-                  '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(100,116,139,0.3)', borderRadius: 4 },
-                  '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
-                }}>
-                  <ChartLegends
-                    labels={pieOptions.labels}
-                    colors={pieOptions.colors}
-                    values={withActivity.map(r => r.messages_sent.toLocaleString())}
-                    sx={{ justifyContent: 'center', flexWrap: 'wrap' }}
-                  />
-                </Box>
-              </>
-            )}
-          </Box>
-          {/* Per-instance breakdown — solo instancias con actividad real en
-             el rango: con 21+ instancias registradas (la mayoría inactivas
-             en cualquier rango dado), listarlas todas sería una pared de
-             barras en cero que no dice nada y no escala. */}
-          <Box sx={{ flex: '1 1 220px', minWidth: 200, borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))', p: 1.5 }}>
-            <ChartCardHeader icon={<BarChartIcon sx={{ fontSize: 14, color: '#3b82f6' }} />} color="#3b82f6"
-              title={lang === 'en' ? 'Per-instance breakdown' : 'Detalle por instancia'} />
-            {withActivity.length === 0 ? emptyState(noActivityMsg) : (
-              <>
-                <ChartLegends
-                  labels={[lang === 'en' ? 'Messages sent' : 'Mensajes enviados', lang === 'en' ? 'Contacts reached' : 'Contactos alcanzados']}
-                  colors={[alpha('#3b82f6', 0.85), alpha('#22c55e', 0.85)]}
-                  hidden={hiddenBarSeries}
-                  onToggle={toggleSeries(barChartRef, hiddenBarSeries, setHiddenBarSeries)}
-                  sx={{ mb: 1 }}
-                />
-                <Chart chartRef={barChartRef} type="bar" height={Math.max(180, Math.min(260, withActivity.length * 40))}
-                  series={[
-                    { name: lang === 'en' ? 'Messages sent' : 'Mensajes enviados', data: withActivity.map(r => r.messages_sent) },
-                    { name: lang === 'en' ? 'Contacts reached' : 'Contactos alcanzados', data: withActivity.map(r => r.contacts_reached) },
-                  ]}
-                  options={barOptions} />
-              </>
-            )}
-          </Box>
-        </Box>
-      )}
-
-      {!showCharts ? (
-        <Box sx={{ borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))', p: 1.5 }}>
-          <Skeleton variant="text" width="45%" sx={{ mb: 1, bgcolor: 'var(--border)', fontSize: '0.8rem' }} />
-          <Skeleton variant="rounded" height={240} sx={{ bgcolor: 'var(--border)' }} />
-        </Box>
-      ) : (
-        <Box sx={{ borderRadius: 2.5, border: '1px solid var(--border, rgba(255,255,255,0.08))', p: 1.5 }}>
-          <ChartCardHeader icon={<ShowChartIcon sx={{ fontSize: 14, color: '#22c55e' }} />} color="#22c55e"
-            title={lang === 'en' ? 'Messages & contacts over time' : 'Mensajes y contactos en el tiempo'} />
-          {timeseries.length === 0 ? emptyState(noActivityMsg) : (
-            <>
-              <ChartLegends
-                labels={[lang === 'en' ? 'Messages' : 'Mensajes', lang === 'en' ? 'Contacts' : 'Contactos']}
-                colors={['#3b82f6', '#22c55e']}
-                hidden={hiddenTrendSeries}
-                onToggle={toggleSeries(trendChartRef, hiddenTrendSeries, setHiddenTrendSeries)}
-                sx={{ mb: 1 }}
-              />
-              <Chart chartRef={trendChartRef} type="area" height={240}
-                series={[
-                  { name: lang === 'en' ? 'Messages' : 'Mensajes', data: timeseries.map(r => r.messages_sent) },
-                  { name: lang === 'en' ? 'Contacts' : 'Contactos', data: timeseries.map(r => r.contacts_reached) },
-                ]}
-                options={trendOptions} />
-            </>
-          )}
-        </Box>
-      )}
-      </Box>
-    </Box>
-  )
-}
 
 const STATUS_LABEL_ES = { open: 'Conectada', connected: 'Conectada', connecting: 'Conectando', close: 'Desconectada', disconnected: 'Desconectada', WORKING: 'Conectada', SCAN_QR_CODE: 'Escanear QR', STARTING: 'Iniciando', STOPPED: 'Detenida', FAILED: 'Error', unknown: 'Desconocida', initializing: 'Iniciando', authenticated: 'Autenticando', need_scan: 'Escanear QR', auth_failure: 'Error auth', error: 'Error', not_found: 'No iniciada' }
 const STATUS_LABEL_EN = { open: 'Connected', connected: 'Connected', connecting: 'Connecting', close: 'Disconnected', disconnected: 'Disconnected', WORKING: 'Connected', SCAN_QR_CODE: 'Scan QR', STARTING: 'Starting', STOPPED: 'Stopped', FAILED: 'Failed', unknown: 'Unknown', initializing: 'Starting', authenticated: 'Authenticating', need_scan: 'Scan QR', auth_failure: 'Auth error', error: 'Error', not_found: 'Not started' }
@@ -991,6 +237,9 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile
   // Con el menú "⋯" abierto el mouse ya está sobre el menú (fuera de la fila): sin esto
   // los íconos se ocultaban y el menú perdía su ancla.
   const [menuOpen, setMenuOpen] = useState(false)
+  // URL de foto de WhatsApp expirada/caída: volver a las iniciales en vez de
+  // dejar el ícono de imagen rota.
+  const [picFailed, setPicFailed] = useState(false)
   const showActions = hover || menuOpen
   const status = inst.live_status || 'unknown'
   const color = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
@@ -1007,12 +256,16 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       sx={{
-        display: 'flex', alignItems: 'center', gap: 1,
-        px: 1.2, py: 0.9, borderRadius: 1.5,
-        bgcolor: hover ? 'var(--item-hover, rgba(255,255,255,0.04))' : 'transparent',
-        border: '1px solid transparent',
-        transition: 'all 0.15s',
-        ...(hover && { borderColor: 'var(--border, rgba(255,255,255,0.08))' }),
+        // Misma caja para todas las filas (antes solo aparecía al hover y cada
+        // fila medía distinto según su etiqueta de estado); nowrap para que los
+        // íconos de acción no bajen a otra línea y cambien la altura al pasar el mouse.
+        display: 'flex', alignItems: 'center', gap: 1.1, flexWrap: 'nowrap',
+        minHeight: 64, boxSizing: 'border-box',
+        px: 1.2, py: 0.9, borderRadius: 2,
+        bgcolor: hover ? 'var(--item-hover, rgba(255,255,255,0.05))' : 'rgba(255,255,255,0.018)',
+        border: '1px solid var(--border, rgba(255,255,255,0.06))',
+        transition: 'background-color 0.15s, border-color 0.15s',
+        ...(hover && { borderColor: 'rgba(var(--accent-rgb,59,130,246),0.35)' }),
       }}
     >
       {/* Status dot */}
@@ -1038,12 +291,15 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile
       {/* WhatsApp profile avatar — real photo when the provider exposed one (wwebjs),
           initials fallback otherwise (also covers providers we don't fetch a photo for yet) */}
       <Box sx={{
-        width: 26, height: 26, borderRadius: '50%', flexShrink: 0, overflow: 'hidden',
+        width: 32, height: 32, borderRadius: '50%', flexShrink: 0, overflow: 'hidden',
         bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)', border: '1.5px solid rgba(var(--accent-rgb,59,130,246),0.35)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
-        {inst.profile_pic_url
-          ? <Box component="img" src={inst.profile_pic_url} alt="" sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+        {inst.profile_pic_url && !picFailed
+          ? <Box component="img" src={inst.profile_pic_url} alt="" onError={() => setPicFailed(true)}
+              // Si la foto falló antes de hidratar, onError ya no se dispara:
+              // revisar al montar si quedó cargada sin pixeles.
+              ref={el => { if (el && el.complete && el.naturalWidth === 0) setPicFailed(true) }} sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
           : <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, color: 'var(--accent,#60a5fa)' }}>
               {(inst.profile_name || inst.label || inst.name || '?').slice(0, 2).toUpperCase()}
             </Typography>}
@@ -1072,11 +328,12 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {inst.profile_name ? `${inst.profile_name} · ` : ''}{inst.number ? `+${inst.number}` : t.inst.noNumber}
         </Typography>
+        <Box sx={{ display: 'inline-flex', alignItems: 'center', mt: 0.5, px: 0.7, py: 0.15, borderRadius: '6px', border: `1px solid ${displayColor}44`, bgcolor: `${displayColor}12`, maxWidth: '100%' }}><Typography sx={{ fontSize: '0.68rem', fontWeight: 600, color: displayColor, lineHeight: 1.4 }}>{displayLabel}</Typography></Box>
         {isConnected && <LineActivityStatus activity={inst.activity} lang={lang} />}
       </Box>
       {/* Right side: status label (resting) or action icons (hover) */}
       {showActions ? (
-        <Box sx={{ display: 'flex', gap: 0.2, flexShrink: 0, alignItems: 'center' }}>
+        <Box sx={{ display: 'flex', gap: 0.2, flexShrink: 0, alignItems: 'center', justifyContent: 'flex-end', minWidth: 72 }}>
           <Tooltip title={inst.warmup_mode ? (lang === 'en' ? 'Warmup ON — 20 msg/day' : 'Calentamiento ON — 20 msg/día') : (lang === 'en' ? 'Warmup OFF — 150 msg/day' : 'Calentamiento OFF — 150 msg/día')} placement="top">
             <Switch
               size="small"
@@ -1103,7 +360,7 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile
           ]} />
         </Box>
       ) : (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 0.5, flexShrink: 0, minWidth: 72 }}>
           <ProxyChip inst={inst} lang={lang} />
           {inst.ack_degraded && (
             <Tooltip title={lang === 'en' ? 'Delivery degraded — messages not reaching recipients' : 'Entrega degradada — mensajes no llegan a destinatarios'} placement="top">
@@ -1119,9 +376,7 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile
                 px: 0.5, borderRadius: 0.8, lineHeight: 1.6, cursor: 'default' }}>20/d</Typography>
             </Tooltip>
           )}
-          <Typography sx={{ fontSize: '0.65rem', fontWeight: 600, color: displayColor, letterSpacing: '0.01em', maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {displayLabel}
-          </Typography>
+
         </Box>
       )}
     </Box>
@@ -1129,6 +384,9 @@ function InstanceRow({ inst, onQr, onEditNumber, onRemove, onWarmup, onWaProfile
 }
 
 // ── UserCard ─────────────────────────────────────────────────────────────────
+// Alto mínimo del área de instancias = 2 filas (64px c/u + separación), para
+// que una tarjeta con 0 o 1 instancia no quede más chaparra que sus vecinas.
+const USER_CARD_LIST_MIN_H = 134
 function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, onWarmup, onWaProfile, onNetwork, cardIndex = 0 }) {
   const { t, lang } = useLang()
   const connectedCount = instances.filter(i => ['open', 'connected'].includes(i.live_status)).length
@@ -1155,7 +413,9 @@ function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, on
   const glowColor = roleAlpha(0.22)
   return (
     <Box sx={{
-      bgcolor: 'var(--card-bg)', borderRadius: 3, p: 2,
+      // height 100% + footer con mt:auto: las tarjetas de una misma fila del
+      // grid miden igual y su pie queda alineado, tengan 0, 1 o 2 instancias.
+      bgcolor: 'var(--card-bg)', borderRadius: 3, p: 2, height: '100%', boxSizing: 'border-box',
       display: 'flex', flexDirection: 'column', gap: 0,
       border: '1px solid var(--border)',
       transition: 'border-color 0.25s, box-shadow 0.25s',
@@ -1198,7 +458,8 @@ function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, on
         /* ── Empty state ── */
         <Box onClick={onAddSlot} sx={{
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          py: 2, gap: 1, cursor: 'pointer', borderRadius: 2, mt: 1,
+          flex: 1, minHeight: USER_CARD_LIST_MIN_H, boxSizing: 'border-box',
+          py: 2, gap: 1, cursor: 'pointer', borderRadius: 2, mt: 1.2,
           border: `1px dashed ${roleAlpha(0.188)}`,
           bgcolor: roleAlpha(0.05),
           transition: 'all 0.18s',
@@ -1217,7 +478,7 @@ function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, on
             px: 1.4, py: 0.45, borderRadius: 1.5, fontSize: '0.63rem', fontWeight: 700,
             bgcolor: roleAlpha(0.094), color: roleColor, border: `1px solid ${roleAlpha(0.157)}` }}>
             <AddIcon sx={{ fontSize: 12 }} />
-            {lang === 'en' ? 'Assign from sidebar' : 'Asignar del sidebar'}
+            {lang === 'en' ? 'Assign instance' : 'Asignar instancia'}
           </Box>
         </Box>
       ) : (
@@ -1225,8 +486,9 @@ function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, on
           {/* Instance rows — capped height + scroll so a user with many instances
               doesn't stretch their card taller than everyone else's in the grid. */}
           <Box sx={{
-            display: 'flex', flexDirection: 'column', gap: 0.2, mb: 1.2,
-            maxHeight: 180, overflowY: instances.length > 3 ? 'auto' : 'visible', pr: 0.3,
+            display: 'flex', flexDirection: 'column', gap: 0.75, mb: 1.4, flex: 1,
+            minHeight: USER_CARD_LIST_MIN_H,
+            maxHeight: 214, overflowY: instances.length > 3 ? 'auto' : 'visible', pr: 0.3,
             scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.15) transparent',
             '&::-webkit-scrollbar': { width: 5 },
             '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.15)', borderRadius: 3 },
@@ -1235,8 +497,9 @@ function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, on
               <InstanceRow key={inst.name} inst={inst} onQr={onQr} onEditNumber={onEditNumber} onRemove={onRemove} onWarmup={onWarmup} onWaProfile={onWaProfile} onNetwork={onNetwork} />
             ))}
           </Box>
-          {/* Capacity bar — 5 slot dots + add button */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, pt: 1, borderTop: '1px solid var(--border)' }}>
+          {/* Capacity bar — 5 slot dots + conteo de conectadas + add button, en
+             una sola fila al pie (antes el conteo iba en otra línea suelta). */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, pt: 1.2, mt: 'auto', borderTop: '1px solid var(--border)' }}>
             <Box sx={{ display: 'flex', gap: 0.7, alignItems: 'center', flex: 1 }}>
               {Array.from({ length: 5 }).map((_, i) => {
                 const inst = instances[i]
@@ -1260,6 +523,9 @@ function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, on
                   </Tooltip>
                 )
               })}
+              <Typography sx={{ fontSize: '0.64rem', color: 'var(--text-muted)', ml: 0.6, whiteSpace: 'nowrap' }}>
+                {connectedCount}/{instances.length} {connectedWord}
+              </Typography>
             </Box>
             {hasRotation ? (
               <Chip label={t.inst.rotationActive} size="small"
@@ -1276,13 +542,6 @@ function UserCard({ user, instances, onAddSlot, onQr, onEditNumber, onRemove, on
             ) : null}
           </Box>
         </>
-      )}
-
-      {/* Stats line (only when instances exist) */}
-      {instances.length > 0 && (
-        <Typography sx={{ fontSize: '0.62rem', color: 'var(--text-muted)', mt: 1 }}>
-          {connectedCount} {t.inst.connectedOf} {instances.length} {connectedWord}
-        </Typography>
       )}
     </Box>
   )
@@ -1508,6 +767,7 @@ function BulkPickDialog({ open, onClose, selectedNames, users, instances, onAssi
 
 // ── Main panel ───────────────────────────────────────────────────────────────
 export default function InstancesPanel({ isActive } = {}) {
+  const [managementView, setManagementView] = useState('sessions')
   const { t, lang } = useLang()
   // page.jsx's tab system mounts every panel in the background a few
   // seconds after boot (kept alive via display:none once "visited", never
@@ -1677,7 +937,7 @@ export default function InstancesPanel({ isActive } = {}) {
   const fetchInstances = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await fetch('/api/instances', { headers: { 'x-user-token': token() }, cache: 'no-store' })
+      const r = await instanceFetch('/api/instances', { headers: { 'x-user-token': token() }, cache: 'no-store' })
       if (r.ok) setInstances(await r.json())
     } catch {}
     finally { setLoading(false) }
@@ -1686,7 +946,7 @@ export default function InstancesPanel({ isActive } = {}) {
   const handleSync = useCallback(async () => {
     setSyncing(true)
     try {
-      await fetch('/api/instances?action=sync', { method: 'POST', headers: { 'x-user-token': token() } })
+      await instanceFetch('/api/instances?action=sync', { method: 'POST', headers: { 'x-user-token': token() } })
       await fetchInstances()
     } catch {}
     finally { setSyncing(false) }
@@ -1696,9 +956,9 @@ export default function InstancesPanel({ isActive } = {}) {
     setWahaSyncing(true)
     try {
       await Promise.allSettled([
-        fetch('/api/admin/instances/sync-waha',    { method: 'POST', headers: { 'x-user-token': token() } }),
-        fetch('/api/admin/instances/sync-wasender',{ method: 'POST', headers: { 'x-user-token': token() } }),
-        fetch('/api/admin/instances/sync-wwebjs',  { method: 'POST', headers: { 'x-user-token': token() } }),
+        instanceFetch('/api/admin/instances/sync-waha',    { method: 'POST', headers: { 'x-user-token': token() } }),
+        instanceFetch('/api/admin/instances/sync-wasender',{ method: 'POST', headers: { 'x-user-token': token() } }),
+        instanceFetch('/api/admin/instances/sync-wwebjs',  { method: 'POST', headers: { 'x-user-token': token() } }),
       ])
       await fetchInstances()
       setSnack({ open: true, msg: lang === 'en' ? 'Sessions synced' : 'Sesiones sincronizadas' })
@@ -1725,7 +985,7 @@ export default function InstancesPanel({ isActive } = {}) {
     }
     setWahaLoading(true); setWahaErr(''); setWahaQr(null); setWahaPairingCode(null); setWahaConnected(false); setWahaScanned(false)
     try {
-      const r = await fetch('/api/wwebjs/session/create', {
+      const r = await instanceFetch('/api/wwebjs/session/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
         body: JSON.stringify(isCode ? { name, phone_number: phone } : { name }),
@@ -1738,8 +998,8 @@ export default function InstancesPanel({ isActive } = {}) {
       wahaQrPollRef.current = setInterval(async () => {
         try {
           const [linkRes, stRes] = await Promise.all([
-            fetch(isCode ? `/api/wwebjs/session/${name}/pairing-code` : `/api/wwebjs/session/${name}/qr`),
-            fetch(`/api/wwebjs/session/${name}/status`),
+            instanceFetch(isCode ? `/api/wwebjs/session/${name}/pairing-code` : `/api/wwebjs/session/${name}/qr`),
+            instanceFetch(`/api/wwebjs/session/${name}/status`),
           ])
           if (stRes.ok) {
             const sd = await stRes.json()
@@ -1792,7 +1052,7 @@ export default function InstancesPanel({ isActive } = {}) {
     if (!phone) { setWsErr(lang === 'en' ? 'Phone number required (e.g. +521234567890)' : 'Número requerido (ej. +521234567890)'); return }
     setWsLoading(true); setWsErr(''); setWsQr(null); setWsConnected(false)
     try {
-      const r = await fetch('/api/wasender/session/create', {
+      const r = await instanceFetch('/api/wasender/session/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
         body: JSON.stringify({ name, phone_number: phone }),
@@ -1805,7 +1065,7 @@ export default function InstancesPanel({ isActive } = {}) {
       // If create already returned a QR (from auto-connect), show it immediately
       if (d.qrCode) {
         try {
-          const qrRes = await fetch(`/api/wasender/session/qr/${wid}`)
+          const qrRes = await instanceFetch(`/api/wasender/session/qr/${wid}`)
           if (qrRes.ok) {
             const qd = await qrRes.json()
             if (qd.base64) { wsQrShownRef.current = true; setWsQr(qd.base64); setWsLoading(false) }
@@ -1816,8 +1076,8 @@ export default function InstancesPanel({ isActive } = {}) {
       wsQrPollRef.current = setInterval(async () => {
         try {
           const [qrRes, stRes] = await Promise.all([
-            fetch(`/api/wasender/session/qr/${wid}`),
-            fetch(`/api/wasender/session/status/${wid}`),
+            instanceFetch(`/api/wasender/session/qr/${wid}`),
+            instanceFetch(`/api/wasender/session/status/${wid}`),
           ])
           if (stRes.ok) {
             const sd = await stRes.json()
@@ -1850,7 +1110,7 @@ export default function InstancesPanel({ isActive } = {}) {
 
   const fetchUsers = useCallback(async () => {
     try {
-      const r = await fetch('/api/auth/users', { headers: { 'x-user-token': token() } })
+      const r = await instanceFetch('/api/auth/users', { headers: { 'x-user-token': token() } })
       if (r.ok) setUsers(await r.json())
     } catch {}
   }, [])
@@ -1863,7 +1123,7 @@ export default function InstancesPanel({ isActive } = {}) {
       // "week" stay a rolling lookback from now, unaffected by these.
       if (range === 'month') { qs.set('year', py); qs.set('month', pm) }
       else if (range === 'year') { qs.set('year', py) }
-      const r = await fetch(`/api/admin/instances/metrics?${qs}`, { headers: { 'x-user-token': token() } })
+      const r = await instanceFetch(`/api/admin/instances/metrics?${qs}`, { headers: { 'x-user-token': token() } })
       if (r.ok) setMetrics(await r.json())
     } catch {} finally { setMetricsLoading(false) }
   }, [])
@@ -1871,7 +1131,7 @@ export default function InstancesPanel({ isActive } = {}) {
   const fetchBalances = useCallback(async () => {
     setBalancesLoading(true)
     try {
-      const r = await fetch('/api/admin/balances', { headers: { 'x-user-token': token() } })
+      const r = await instanceFetch('/api/admin/balances', { headers: { 'x-user-token': token() } })
       if (r.ok) setBalances(await r.json())
     } catch {} finally { setBalancesLoading(false) }
   }, [])
@@ -1888,7 +1148,7 @@ export default function InstancesPanel({ isActive } = {}) {
       if (pending || document.visibilityState === 'hidden') return
       pending = true
       try {
-        const response = await fetch('/api/wwebjs/sessions', {
+        const response = await instanceFetch('/api/wwebjs/sessions', {
           headers: { 'x-user-token': token() }, cache: 'no-store',
         })
         const snapshots = response.ok ? await response.json() : {}
@@ -1936,7 +1196,7 @@ export default function InstancesPanel({ isActive } = {}) {
     ;(async () => {
       try {
         const phone = wizardPhoneRef.current.replace(/\D/g, '')
-        const r = await fetch(`/api/evolution/instance/${wizardInstNameRef.current}?action=pairing-code`, {
+        const r = await instanceFetch(`/api/evolution/instance/${wizardInstNameRef.current}?action=pairing-code`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ phone }),
         })
@@ -1970,7 +1230,7 @@ export default function InstancesPanel({ isActive } = {}) {
         : isWwebjs
         ? `/api/wwebjs/session/${name}/qr`
         : `/api/evolution/instance/${name}?type=qr`
-      const r = await fetch(url)
+      const r = await instanceFetch(url)
       if (!r.ok) {
         if (isWwebjs) {
           // wwebjs returns 400 with status when no QR yet — check if already connected
@@ -2005,7 +1265,7 @@ export default function InstancesPanel({ isActive } = {}) {
   // Pairing-code equivalent of fetchQrOnce — wwebjs only (see api_wwebjs_pairing_code).
   const fetchPairingCodeOnce = useCallback(async (name) => {
     try {
-      const r = await fetch(`/api/wwebjs/session/${name}/pairing-code`)
+      const r = await instanceFetch(`/api/wwebjs/session/${name}/pairing-code`)
       if (!r.ok) {
         const d = await r.json().catch(() => ({}))
         if (d?.status === 'connected') return 'scanned'
@@ -2032,9 +1292,9 @@ export default function InstancesPanel({ isActive } = {}) {
         const isWasender = resolvedProvider === 'wasender'
         const wid        = wasenderId ?? qrTarget?.wasender_id
         if (isWasender) {
-          await fetch(`/api/wasender/session/${wid}/restart`, { method: 'POST' })
+          await instanceFetch(`/api/wasender/session/${wid}/restart`, { method: 'POST' })
         } else if (resolvedProvider === 'waha') {
-          await fetch(`/api/waha/session/logout/${name}`, { method: 'POST' })
+          await instanceFetch(`/api/waha/session/logout/${name}`, { method: 'POST' })
         } else if (resolvedProvider === 'wwebjs') {
           // Re-start the session so it generates a fresh QR — or, if reconnecting
           // via pairing code, pass the instance's own number so the backend
@@ -2042,13 +1302,13 @@ export default function InstancesPanel({ isActive } = {}) {
           // wwebjs-service's /session/:id/start: an existing session ignores a
           // phoneNumber unless it's actually recreated).
           const body = usingCode ? { phone_number: (qrTarget?.number || '').replace(/\D/g, '') } : {}
-          await fetch(`/api/wwebjs/session/${name}/start`, {
+          await instanceFetch(`/api/wwebjs/session/${name}/start`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
           }).catch(() => {})
         } else {
-          await fetch(`/api/evolution/instance/${name}?action=logout`, { method: 'POST' })
+          await instanceFetch(`/api/evolution/instance/${name}?action=logout`, { method: 'POST' })
         }
       } catch {}
       await new Promise(r => setTimeout(r, 700))
@@ -2100,7 +1360,7 @@ export default function InstancesPanel({ isActive } = {}) {
     // right away instead of leaving it generating QR/codes nobody's watching
     // until the server's own idle sweep catches it later (~3min safety net).
     if (qrTarget?.provider === 'wwebjs' && qrStatus !== 'connecting') {
-      fetch(`/api/wwebjs/session/${qrTarget.name}`, { method: 'DELETE' }).catch(() => {})
+      instanceFetch(`/api/wwebjs/session/${qrTarget.name}`, { method: 'DELETE' }).catch(() => {})
     }
     setQrOpen(false); setQrTarget(null); setQrImage(null); setQrStatus('loading')
     setQrLinkMethod('qr'); setPairingCode(null); setCodeCopied(false)
@@ -2124,7 +1384,7 @@ export default function InstancesPanel({ isActive } = {}) {
           : isWwebjs
           ? `/api/wwebjs/session/${name}/status`
           : `/api/evolution/instance/${name}`
-        const r = await fetch(url)
+        const r = await instanceFetch(url)
         if (!r.ok) return
         const d = await r.json()
         // wwebjs: { status: 'connected' | 'need_scan' | ... }
@@ -2165,7 +1425,7 @@ export default function InstancesPanel({ isActive } = {}) {
       const wid = inst.wasender_id
       if (!wid) { setQrStatus('error'); return }
       try {
-        const stRes = await fetch(`/api/wasender/session/status/${wid}`)
+        const stRes = await instanceFetch(`/api/wasender/session/status/${wid}`)
         const stData = stRes.ok ? await stRes.json() : {}
         const wsState  = stData.state  || ''
         const wsStatus = (stData.status || '').toLowerCase()
@@ -2174,12 +1434,12 @@ export default function InstancesPanel({ isActive } = {}) {
           setQrStatus('retrying')
           if (isLoggedOut) {
             // logged_out: use /connect which clears proxy, generates QR, restores proxy
-            await fetch(`/api/wasender/session/${wid}/connect`, { method: 'POST' }).catch(() => {})
+            await instanceFetch(`/api/wasender/session/${wid}/connect`, { method: 'POST' }).catch(() => {})
           } else {
-            await fetch(`/api/wasender/session/${wid}/restart`, { method: 'POST' }).catch(() => {})
+            await instanceFetch(`/api/wasender/session/${wid}/restart`, { method: 'POST' }).catch(() => {})
             for (let i = 0; i < 13; i++) {
               await new Promise(r => setTimeout(r, 1500))
-              const sRes = await fetch(`/api/wasender/session/status/${wid}`).catch(() => null)
+              const sRes = await instanceFetch(`/api/wasender/session/status/${wid}`).catch(() => null)
               if (sRes?.ok) {
                 const sd = await sRes.json()
                 if (sd.state === 'open' || (sd.status || '').toLowerCase() === 'connected') break
@@ -2197,7 +1457,7 @@ export default function InstancesPanel({ isActive } = {}) {
     if (inst.provider === 'wwebjs') {
       // Ensure session is started in wwebjs-service
       try {
-        const stRes = await fetch(`/api/wwebjs/session/${inst.name}/status`)
+        const stRes = await instanceFetch(`/api/wwebjs/session/${inst.name}/status`)
         const stData = stRes.ok ? await stRes.json() : {}
         const st = stData.status || ''
         if (st === 'connected') {
@@ -2207,7 +1467,7 @@ export default function InstancesPanel({ isActive } = {}) {
         }
         if (st === 'not_found') {
           setQrStatus('retrying')
-          await fetch(`/api/wwebjs/session/${inst.name}/start`, { method: 'POST' }).catch(() => {})
+          await instanceFetch(`/api/wwebjs/session/${inst.name}/start`, { method: 'POST' }).catch(() => {})
           setQrStatus('loading')
         }
         // For need_scan/disconnected/initializing just show QR
@@ -2219,21 +1479,21 @@ export default function InstancesPanel({ isActive } = {}) {
 
     if (inst.provider === 'waha') {
       try {
-        const stRes = await fetch(`/api/waha/session/status/${inst.name}`)
+        const stRes = await instanceFetch(`/api/waha/session/status/${inst.name}`)
         const stData = stRes.ok ? await stRes.json() : {}
         const wahaStatus = stData.status || ''
 
         if (['FAILED', 'STOPPED'].includes(wahaStatus)) {
           setQrStatus('retrying')
           // 1. Logout to clear stored auth — forces a fresh QR instead of reconnect attempt
-          await fetch(`/api/waha/session/logout/${inst.name}`, { method: 'POST' }).catch(() => {})
+          await instanceFetch(`/api/waha/session/logout/${inst.name}`, { method: 'POST' }).catch(() => {})
           await new Promise(r => setTimeout(r, 1500))
           // 2. Restart the session
-          await fetch(`/api/waha/session/restart/${inst.name}`, { method: 'POST' }).catch(() => {})
+          await instanceFetch(`/api/waha/session/restart/${inst.name}`, { method: 'POST' }).catch(() => {})
           // 3. Poll until SCAN_QR_CODE (max 20s)
           for (let i = 0; i < 13; i++) {
             await new Promise(r => setTimeout(r, 1500))
-            const sRes = await fetch(`/api/waha/session/status/${inst.name}`).catch(() => null)
+            const sRes = await instanceFetch(`/api/waha/session/status/${inst.name}`).catch(() => null)
             if (sRes?.ok) {
               const sd = await sRes.json()
               if (sd.status === 'SCAN_QR_CODE' || sd.status === 'WORKING') break
@@ -2304,7 +1564,7 @@ export default function InstancesPanel({ isActive } = {}) {
     try {
       const fd = new FormData()
       fd.append('file', file)
-      const res = await fetch('/api/files/upload', { method: 'POST', headers: { 'x-user-token': token() }, body: fd })
+      const res = await instanceFetch('/api/files/upload', { method: 'POST', headers: { 'x-user-token': token() }, body: fd })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) { setWaProfileErr(data.detail || (lang === 'en' ? 'Error uploading image' : 'Error al subir la imagen')); return }
       setWaProfileImgUrl(data.url)
@@ -2335,7 +1595,7 @@ export default function InstancesPanel({ isActive } = {}) {
     const errors = []
     if (nameChanged) {
       try {
-        const res = await fetch(`/api/wwebjs/session/${encodeURIComponent(waProfileInst.name)}/profile/name`, {
+        const res = await instanceFetch(`/api/wwebjs/session/${encodeURIComponent(waProfileInst.name)}/profile/name`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
           body: JSON.stringify({ name: waProfileName.trim() }),
@@ -2347,7 +1607,7 @@ export default function InstancesPanel({ isActive } = {}) {
     }
     if (picChanged) {
       try {
-        const res = await fetch(`/api/wwebjs/session/${encodeURIComponent(waProfileInst.name)}/profile/picture`, {
+        const res = await instanceFetch(`/api/wwebjs/session/${encodeURIComponent(waProfileInst.name)}/profile/picture`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
           body: JSON.stringify({ image_url: waProfileImgUrl.trim() }),
@@ -2392,7 +1652,7 @@ export default function InstancesPanel({ isActive } = {}) {
     if (editLabelValue.trim() !== (editNumberInst?.label || editNumberInst?.name || '')) payload.label = editLabelValue.trim()
     if (!Object.keys(payload).length) { setEditNumberOpen(false); setEditNumberSaving(false); return }
     try {
-      const res = await fetch(`/api/instances?name=${encodeURIComponent(editNumberInst.name)}`, {
+      const res = await instanceFetch(`/api/instances?name=${encodeURIComponent(editNumberInst.name)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
         body: JSON.stringify(payload),
@@ -2432,7 +1692,7 @@ export default function InstancesPanel({ isActive } = {}) {
   async function handleEmuPreview() {
     setEmuPreviewLoading(true)
     try {
-      const r = await fetch('/api/register/preview', {
+      const r = await instanceFetch('/api/register/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ instance: emuInst, country: emuCountry }),
@@ -2495,7 +1755,7 @@ export default function InstancesPanel({ isActive } = {}) {
     setWizardLoading(true); setWizardErr('')
     try {
       const phone = wizardPhone.replace(/\D/g, '')
-      const r = await fetch(`/api/evolution/instance/${wizardInstName}?action=pairing-code`, {
+      const r = await instanceFetch(`/api/evolution/instance/${wizardInstName}?action=pairing-code`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone }),
@@ -2512,7 +1772,7 @@ export default function InstancesPanel({ isActive } = {}) {
     stopWizardPoll()
     wizardPollRef.current = setInterval(async () => {
       try {
-        const r = await fetch(`/api/evolution/instance/${instName}?type=status`)
+        const r = await instanceFetch(`/api/evolution/instance/${instName}?type=status`)
         if (!r.ok) return
         const d = await r.json()
         const state = (d.instance?.state || d.state || '').toLowerCase()
@@ -2545,7 +1805,7 @@ export default function InstancesPanel({ isActive } = {}) {
   async function fetchSfInfo(country) {
     setSfInfoLoading(true); setSfInfo(null)
     try {
-      const r = await fetch(`/api/smsfast/info?country=${country}`, { headers: { 'x-user-token': token() }, cache: 'no-store' })
+      const r = await instanceFetch(`/api/smsfast/info?country=${country}`, { headers: { 'x-user-token': token() }, cache: 'no-store' })
       const d = await r.json()
       setSfInfo(d)
     } catch {}
@@ -2566,7 +1826,7 @@ export default function InstancesPanel({ isActive } = {}) {
   async function handleSfBuy() {
     setSfBuying(true); setWizardErr('')
     try {
-      const r = await fetch('/api/smsfast/buy', {
+      const r = await instanceFetch('/api/smsfast/buy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
         body: JSON.stringify({ country: sfCountry, maxPrice: sfInfo?.price }),
@@ -2589,7 +1849,7 @@ export default function InstancesPanel({ isActive } = {}) {
     if (!sfActivationId) return
     setSfCancelling(true)
     try {
-      await fetch('/api/smsfast/cancel', {
+      await instanceFetch('/api/smsfast/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
         body: JSON.stringify({ id: sfActivationId }),
@@ -2607,7 +1867,7 @@ export default function InstancesPanel({ isActive } = {}) {
     const instName = wizardName.trim()
     setWizardLoading(true); setWizardErr('')
     try {
-      const r = await fetch('/api/instances', {
+      const r = await instanceFetch('/api/instances', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
         body: JSON.stringify({ name: instName, number: phone || undefined }),
@@ -2619,7 +1879,7 @@ export default function InstancesPanel({ isActive } = {}) {
       if (!phone) { fetchInstances(); setWizardOpen(false); setWizardLoading(false); return }
 
       // With phone — request pairing code
-      const r2 = await fetch(`/api/evolution/instance/${instName}?action=pairing-code`, {
+      const r2 = await instanceFetch(`/api/evolution/instance/${instName}?action=pairing-code`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone }),
@@ -2653,7 +1913,7 @@ export default function InstancesPanel({ isActive } = {}) {
       const pairUrl = isWaha
         ? `/api/waha/session/pairing-code/${pairTarget?.name}`
         : `/api/evolution/instance/${pairTarget?.name}?action=pairing-code`
-      const r = await fetch(pairUrl, {
+      const r = await instanceFetch(pairUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: pairPhone.replace(/\D/g, '') }),
@@ -2676,7 +1936,7 @@ export default function InstancesPanel({ isActive } = {}) {
     }
     setCreating(true); setCreateErr('')
     try {
-      const r = await fetch('/api/instances', {
+      const r = await instanceFetch('/api/instances', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
         body: JSON.stringify({ name: newName.trim(), number: newNumber.trim() }),
@@ -2700,7 +1960,7 @@ export default function InstancesPanel({ isActive } = {}) {
       ? { user_id: assignUserId, user_name: resolvedName }
       : {}
     try {
-      await fetch(`/api/instances/${assignTarget.name}?action=${action}`, {
+      await instanceFetch(`/api/instances/${assignTarget.name}?action=${action}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
         body: JSON.stringify(body),
@@ -2719,7 +1979,7 @@ export default function InstancesPanel({ isActive } = {}) {
   async function handleDelete() {
     setDeleting(true)
     try {
-      const r = await fetch(`/api/instances/${deleteTarget.name}`, {
+      const r = await instanceFetch(`/api/instances/${deleteTarget.name}`, {
         method: 'DELETE', headers: { 'x-user-token': token() },
       })
       setDeleteTarget(null); fetchInstances()
@@ -2743,7 +2003,7 @@ export default function InstancesPanel({ isActive } = {}) {
     if (!pickTargetUser) return
     const userId = pickTargetUser._id || pickTargetUser.id || pickTargetUser.username
     const userName = pickTargetUser.display_name || pickTargetUser.username || ''
-    const r = await fetch(`/api/instances/${instanceName}?action=assign`, {
+    const r = await instanceFetch(`/api/instances/${instanceName}?action=assign`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
       body: JSON.stringify({ user_id: userId, user_name: userName }),
@@ -2761,7 +2021,7 @@ export default function InstancesPanel({ isActive } = {}) {
     setInstances(prev => prev.map(i => names.includes(i.name) ? { ...i, assigned_to: uid, assigned_name: userName } : i))
     closePick()
     const results = await Promise.all(names.map(name =>
-      fetch(`/api/instances/${name}?action=assign`, {
+      instanceFetch(`/api/instances/${name}?action=assign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
         body: JSON.stringify({ user_id: uid, user_name: userName }),
@@ -2779,7 +2039,7 @@ export default function InstancesPanel({ isActive } = {}) {
     const userName = user.display_name || user.username || ''
     setInstances(prev => prev.map(i => i.name === instanceName ? { ...i, assigned_to: userId, assigned_name: userName } : i))
     setExpandedAssign(null)
-    const r = await fetch(`/api/instances/${instanceName}?action=assign`, {
+    const r = await instanceFetch(`/api/instances/${instanceName}?action=assign`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
       body: JSON.stringify({ user_id: userId, user_name: userName }),
@@ -2800,7 +2060,7 @@ export default function InstancesPanel({ isActive } = {}) {
     setUnassigning(true)
     setInstances(prev => prev.map(i => i.name === inst.name ? { ...i, assigned_to: null, assigned_name: null } : i))
     try {
-      const r = await fetch(`/api/instances/${inst.name}?action=unassign`, {
+      const r = await instanceFetch(`/api/instances/${inst.name}?action=unassign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
         body: JSON.stringify({}),
@@ -2835,7 +2095,7 @@ export default function InstancesPanel({ isActive } = {}) {
     setBulkPickOpen(false)
     setSelectedInsts(new Set())
     const results = await Promise.all(toAssign.map(name =>
-      fetch(`/api/instances/${name}?action=assign`, {
+      instanceFetch(`/api/instances/${name}?action=assign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
         body: JSON.stringify({ user_id: uid, user_name: userName }),
@@ -2856,7 +2116,7 @@ export default function InstancesPanel({ isActive } = {}) {
   async function handleWarmupToggle(inst) {
     const optimisticVal = !inst.warmup_mode
     setInstances(prev => prev.map(i => i.name === inst.name ? { ...i, warmup_mode: optimisticVal } : i))
-    const res = await fetch(`/api/instances/${inst.name}?action=warmup`, {
+    const res = await instanceFetch(`/api/instances/${inst.name}?action=warmup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-user-token': token() },
       body: JSON.stringify({}),
@@ -2882,9 +2142,356 @@ export default function InstancesPanel({ isActive } = {}) {
   const disconnected = instances.filter(i => !['open','connected','connecting'].includes(i.live_status) && i.live_status).length
   const warmupCount  = instances.filter(i => i.warmup_mode).length
 
+  const visibleUsers = users.filter(user => {
+    const query = userSearch.trim().toLowerCase()
+    if (!query) return true
+    const uid = user._id || user.id || user.username
+    return [user.display_name, user.username, user.email].some(value => (value || '').toLowerCase().includes(query))
+      || instances.some(inst => inst.assigned_to === uid && [inst.name, inst.label, inst.number, inst.profile_name].some(value => String(value || '').toLowerCase().includes(query)))
+  })
+  const unassignedCard = (
+loading ? (
+          <Box sx={{
+            width: '100%', minWidth: 0,
+            border: '1px solid rgba(245,158,11,0.2)', borderRadius: 2.5,
+            background: 'linear-gradient(rgba(245,158,11,0.035),rgba(245,158,11,0.035)),var(--card-bg)', alignSelf: 'stretch', overflow: 'hidden',
+            '@keyframes skCardIn': { '0%': { opacity: 0, transform: 'translateY(12px)' }, '100%': { opacity: 1, transform: 'translateY(0)' } },
+            animation: 'skCardIn 0.35s ease both', animationDelay: '0.3s',
+          }}>
+            {/* Header: mismo lenguaje de ícono-en-caja-degradada que Performance
+               e Instances, en tono ámbar (mismo acento que ya usaba esta
+               barra) en vez del punto + texto plano de antes. */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 1.6, py: 1.4,
+              background: 'linear-gradient(135deg, rgba(245,158,11,0.14) 0%, rgba(245,158,11,0.04) 60%, transparent 100%)',
+              borderBottom: '1px solid rgba(245,158,11,0.15)' }}>
+              <Skeleton variant="rounded" width={26} height={26} sx={{ borderRadius: '8px', flexShrink: 0,
+                bgcolor: 'rgba(245,158,11,0.16)',
+                '&::after': { background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.15), transparent)' } }} />
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Skeleton variant="text" width="60%" height={13} sx={{ mb: 0.2,
+                  bgcolor: 'rgba(255,255,255,0.1)',
+                  '&::after': { background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.12), transparent)' } }} />
+                <Skeleton variant="text" width="80%" height={9} sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
+              </Box>
+              <Skeleton variant="rounded" width={22} height={16} sx={{ borderRadius: 10, bgcolor: 'rgba(245,158,11,0.12)', flexShrink: 0 }} />
+              <Skeleton variant="circular" width={12} height={12} sx={{ bgcolor: 'rgba(255,255,255,0.06)', flexShrink: 0 }} />
+            </Box>
+            {/* Group label row — mirrors the "SIN CONEXIÓN" section header */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1.5, py: 0.55,
+              bgcolor: 'rgba(255,255,255,0.025)',
+              borderBottom: '1px solid var(--border)', borderTop: '1px solid var(--border)',
+              '@keyframes skRowIn': { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
+              animation: 'skRowIn 0.2s ease both', animationDelay: '0.32s' }}>
+              <Skeleton variant="circular" width={5} height={5} sx={{ bgcolor: 'rgba(148,163,184,0.35)', flexShrink: 0 }} />
+              <Skeleton variant="text" width="44%" height={10} sx={{ bgcolor: 'rgba(148,163,184,0.15)',
+                '&::after': { background: 'linear-gradient(90deg, transparent, rgba(148,163,184,0.12), transparent)' } }} />
+              <Skeleton variant="rounded" width={16} height={12} sx={{ borderRadius: 10, ml: 'auto', bgcolor: 'rgba(255,255,255,0.06)' }} />
+            </Box>
+            {/* Instance rows */}
+            {[...Array(skeletonCounts.current.unassigned || 2)].map((_, r) => (
+              <Box key={r} sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1.2, py: 0.65,
+                borderBottom: '1px solid var(--border)',
+                '@keyframes skRowIn': { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
+                animation: 'skRowIn 0.25s ease both', animationDelay: `${r * 0.06 + 0.38}s` }}>
+                <Skeleton variant="circular" width={8} height={8} sx={{ flexShrink: 0,
+                  bgcolor: 'rgba(255,255,255,0.12)' }} />
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Skeleton variant="text" width={`${42 + (r * 13) % 28}%`} height={11} sx={{ mb: 0.2,
+                    bgcolor: 'rgba(255,255,255,0.09)',
+                    '&::after': { background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.08), transparent)' } }} />
+                  <Skeleton variant="text" width={`${52 + (r * 9) % 24}%`} height={9} sx={{ bgcolor: 'rgba(255,255,255,0.06)' }} />
+                </Box>
+                {/* Action buttons: QR, assign, edit, delete */}
+                <Box sx={{ display: 'flex', gap: 0.3, flexShrink: 0 }}>
+                  {[
+                    'rgba(96,165,250,0.25)',
+                    'rgba(96,165,250,0.2)',
+                    'rgba(167,139,250,0.2)',
+                    'rgba(248,113,113,0.2)',
+                  ].map((bg, b) => (
+                    <Skeleton key={b} variant="circular" width={20} height={20} sx={{ bgcolor: bg }} />
+                  ))}
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        ) : (() => {
+          const unassigned = instances.filter(i => !i.assigned_to)
+          if (unassigned.length === 0) return null
+          const connGroup   = unassigned.filter(i => ['open','connected'].includes(i.live_status))
+          const pendGroup   = unassigned.filter(i => i.live_status === 'connecting')
+          const restGroup   = unassigned.filter(i => !['open','connected','connecting'].includes(i.live_status))
+          const grouped = [
+            ...(connGroup.length   ? [{ _group: lang === 'en' ? 'Connected' : 'Conectadas',   color: '#4ade80', items: connGroup }] : []),
+            ...(pendGroup.length   ? [{ _group: lang === 'en' ? 'Connecting' : 'Conectando',  color: '#fbbf24', items: pendGroup }] : []),
+            ...(restGroup.length   ? [{ _group: lang === 'en' ? 'Disconnected' : 'Sin conexión', color: '#94a3b8', items: restGroup }] : []),
+          ]
+          return (
+            <Box sx={{
+              width: '100%', minWidth: 0,
+              border: '1px solid rgba(245,158,11,0.2)', borderRadius: 2.5,
+              background: 'linear-gradient(rgba(245,158,11,0.035),rgba(245,158,11,0.035)),var(--card-bg)', alignSelf: 'stretch',
+              display: 'flex', flexDirection: 'column',
+              maxHeight: 360,
+              overflow: 'hidden',
+            }}>
+              {/* Sidebar header — fixed, click to collapse/expand (lives outside
+                 the scroll area). Mismo lenguaje de ícono-en-caja-degradada que
+                 usan Performance e Instances, en tono ámbar (el acento que ya
+                 traía esta barra), en vez del punto + texto plano de antes. */}
+              <Box onClick={() => setSidebarCollapsed(c => !c)}
+                sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 1.6, py: 1.4, position: 'relative',
+                  cursor: 'pointer', userSelect: 'none', flexShrink: 0,
+                  background: 'linear-gradient(135deg, rgba(245,158,11,0.14) 0%, rgba(245,158,11,0.04) 60%, transparent 100%)',
+                  borderBottom: sidebarCollapsed ? 'none' : '1px solid rgba(245,158,11,0.15)',
+                  borderRadius: '10px 10px 0 0',
+                  '&:hover': { background: 'linear-gradient(135deg, rgba(245,158,11,0.2) 0%, rgba(245,158,11,0.06) 60%, transparent 100%)' },
+                  transition: 'background 0.15s',
+                  ...(!sidebarCollapsed && { '&::after': {
+                    content: '""', position: 'absolute', bottom: 0, left: 14, right: 14, height: '1px',
+                    background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.4) 40%, rgba(245,158,11,0.4) 60%, transparent)',
+                  } }),
+                }}>
+                <Box sx={{
+                  width: 26, height: 26, borderRadius: '8px', flexShrink: 0,
+                  background: 'linear-gradient(135deg, rgba(245,158,11,0.28) 0%, rgba(245,158,11,0.1) 100%)',
+                  border: '1px solid rgba(245,158,11,0.35)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <SmartphoneIcon sx={{ color: 'var(--accent,#3b82f6)', fontSize: 14 }} />
+                </Box>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography sx={{ color: 'var(--text)', fontSize: '0.8rem', fontWeight: 700, lineHeight: 1.2 }}>
+                    {lang === 'en' ? 'Unassigned' : 'Sin asignar'}
+                  </Typography>
+                  <Typography sx={{ fontSize: '0.6rem', color: 'var(--text-muted, rgba(255,255,255,0.35))', lineHeight: 1, mt: 0.2, whiteSpace: 'nowrap' }}>
+                    {lang === 'en' ? 'Instances without a user' : 'Instancias sin usuario'}
+                  </Typography>
+                </Box>
+                <Typography sx={{ fontSize: '0.67rem', color: 'rgba(245,158,11,0.85)',
+                  bgcolor: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)',
+                  px: 1, py: 0.2, borderRadius: 10, fontWeight: 700, flexShrink: 0 }}>
+                  {unassigned.length}
+                </Typography>
+                <KeyboardArrowDownIcon sx={{ fontSize: 15, color: 'rgba(245,158,11,0.6)', flexShrink: 0,
+                  transition: 'transform 0.2s', transform: sidebarCollapsed ? 'rotate(-90deg)' : 'none' }} />
+              </Box>
+
+              {/* Compact list — grouped by status; this is the ONLY scrollable region now */}
+              {!sidebarCollapsed && (
+              <Box sx={{
+                flex: 1, minHeight: 0, overflowY: 'auto',
+                '&::-webkit-scrollbar': { width: 4 },
+                '&::-webkit-scrollbar-button': { display: 'none' },
+                '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(245,158,11,0.25)', borderRadius: 4 },
+                '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
+              }}>
+              {grouped.map(({ _group, color: gColor, items }) => (
+                <Box key={_group}>
+                  {/* Group label */}
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1.5, py: 0.55,
+                    bgcolor: 'rgba(255,255,255,0.025)', borderBottom: '1px solid var(--border)',
+                    borderTop: '1px solid var(--border)' }}>
+                    <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: gColor, flexShrink: 0,
+                      boxShadow: `0 0 4px ${gColor}99` }} />
+                    <Typography sx={{ fontSize: '0.57rem', fontWeight: 700, color: gColor,
+                      textTransform: 'uppercase', letterSpacing: '0.07em', flex: 1 }}>
+                      {_group}
+                    </Typography>
+                    <Typography sx={{ fontSize: '0.57rem', color: gColor, opacity: 0.6, fontWeight: 600 }}>
+                      {items.length}
+                    </Typography>
+                  </Box>
+                  {/* Rows */}
+                  {items.map((inst, idx) => {
+                    const isExp = expandedAssign === inst.name
+                    const status = inst.live_status || 'unknown'
+                    const icolor = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
+                    const isConn = ['open','connected'].includes(status)
+                    const _RC = { banned: '#f87171', logged_out: '#fbbf24', conflict: '#fbbf24', multidevice: '#fbbf24', server_error: '#f87171', restart: '#fb923c', timeout: '#94a3b8', closed: '#94a3b8', replaced: '#fb923c', disconnected: '#f87171', failed: '#f87171' }
+                    const dotColor = (!isConn && status !== 'connecting' && inst.disconnect_reason) ? (_RC[inst.disconnect_reason] ?? '#f87171') : icolor
+                    const reasonLabel = inst.disconnect_reason ? ((lang === 'en' ? DISCONNECT_LABEL_EN : DISCONNECT_LABEL_ES)[inst.disconnect_reason] ?? inst.disconnect_reason_label) : null
+                    return (
+                      <Box key={inst.name}
+                        ref={el => { sidebarRowRefs.current[inst.name] = el }}
+                        sx={{ position: 'relative', ...(isExp && { zIndex: 201 }) }}>
+                        <Box sx={{
+                          display: 'flex', alignItems: 'center', gap: 0.8, px: 1.2, py: 0.65,
+                          borderBottom: idx < items.length - 1 ? '1px solid var(--border)' : 'none',
+                          '&:hover': { bgcolor: 'var(--item-hover)' }, transition: 'background 0.12s',
+                          '&:hover .inst-check': { opacity: 1 },
+                          ...(isExp && { bgcolor: 'rgba(59,130,246,0.04)' }),
+                        }}>
+                          {/* Multi-select checkbox */}
+                          <Box className="inst-check"
+                            onClick={e => { e.stopPropagation(); toggleSelectInst(inst.name) }}
+                            sx={{
+                              width: 13, height: 13, flexShrink: 0, borderRadius: 0.4,
+                              border: selectedInsts.has(inst.name) ? '1.5px solid #60a5fa' : '1.5px solid rgba(255,255,255,0.22)',
+                              bgcolor: selectedInsts.has(inst.name) ? 'rgba(59,130,246,0.85)' : 'transparent',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              cursor: 'pointer', transition: 'all 0.1s',
+                              opacity: selectedInsts.size > 0 ? 1 : 0,
+                              zIndex: 1,
+                            }}>
+                            {selectedInsts.has(inst.name) && (
+                              <Typography sx={{ fontSize: '9px', lineHeight: 1, color: 'white', fontWeight: 700, userSelect: 'none', mt: '1px' }}>✓</Typography>
+                            )}
+                          </Box>
+                          <Box sx={{ position: 'relative', width: 8, height: 8, flexShrink: 0 }}>
+                            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: dotColor,
+                              boxShadow: isConn ? `0 0 6px ${dotColor}aa` : 'none', position: 'relative', zIndex: 1 }} />
+                            {isConn && (
+                              <Box sx={{
+                                position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
+                                width: 8, height: 8, borderRadius: '50%', bgcolor: dotColor, opacity: 0.4,
+                                '@keyframes ping': {
+                                  '0%':   { transform: 'translate(-50%,-50%) scale(1)', opacity: 0.4 },
+                                  '75%':  { transform: 'translate(-50%,-50%) scale(2.2)', opacity: 0 },
+                                  '100%': { transform: 'translate(-50%,-50%) scale(2.2)', opacity: 0 },
+                                },
+                                animation: 'ping 2s cubic-bezier(0,0,0.2,1) infinite',
+                              }} />
+                            )}
+                          </Box>
+                          <Box sx={{ flex: 1, minWidth: 0 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                              <Typography sx={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text)', lineHeight: 1.2,
+                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {inst.label || inst.name}
+                              </Typography>
+                              {/* Badge de proveedor — mismo detalle que ya tienen las
+                                 instancias asignadas dentro de las tarjetas de usuario
+                                 (InstanceRow); aquí faltaba, y se veían más "en blanco"
+                                 en comparación. */}
+                              {inst.provider === 'waha' && (
+                                <Typography sx={{ fontSize: '0.5rem', fontWeight: 700, color: '#60a5fa',
+                                  bgcolor: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.25)',
+                                  px: 0.45, borderRadius: 0.8, lineHeight: 1.5, flexShrink: 0, letterSpacing: '0.03em' }}>
+                                  WAHA
+                                </Typography>
+                              )}
+                              {inst.provider === 'wasender' && (
+                                <Typography sx={{ fontSize: '0.5rem', fontWeight: 700, color: '#a78bfa',
+                                  bgcolor: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.25)',
+                                  px: 0.45, borderRadius: 0.8, lineHeight: 1.5, flexShrink: 0, letterSpacing: '0.03em' }}>
+                                  WS
+                                </Typography>
+                              )}
+                            </Box>
+                            <Typography sx={{ fontSize: '0.65rem', fontFamily: 'monospace', lineHeight: 1.2,
+                              color: reasonLabel && !isConn ? dotColor : 'var(--text-muted)' }}>
+                              {reasonLabel && !isConn ? reasonLabel : (inst.number ? `+${inst.number}` : t.inst.noNumber)}
+                            </Typography>
+                            {isConn && <LineActivityStatus activity={inst.activity} lang={lang} />}
+                          </Box>
+                          <Box sx={{ display: 'flex', gap: 0.2, alignItems: 'center', flexShrink: 0 }}>
+                            <Tooltip title={t.inst.connectQr}>
+                              <IconButton size="small" onClick={() => handleQrClick(inst)}
+                                sx={{ color: 'var(--accent, #60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(245,158,11,0.1)' } }}>
+                                <PhonelinkRingIcon sx={{ fontSize: 13 }} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title={isExp ? (lang === 'en' ? 'Close' : 'Cerrar') : t.inst.assignUser}>
+                              <IconButton size="small"
+                                onClick={e => {
+                                  e.stopPropagation()
+                                  if (isExp) {
+                                    setExpandedAssign(null); setSidebarAnchor(null)
+                                  } else {
+                                    const el = sidebarRowRefs.current[inst.name]
+                                    const rect = el ? el.getBoundingClientRect() : null
+                                    setExpandedAssign(inst.name)
+                                    if (rect) {
+                                      // The trigger can sit anywhere down the sidebar, including right
+                                      // at the bottom of the viewport (real case: the "Unassigned"
+                                      // widget) — always opening downward then let the dropdown run
+                                      // off the bottom of the screen with no way to scroll to the rest
+                                      // of it, since this is a position:fixed portal, not part of the
+                                      // page's own scroll flow. Flip upward when there's more room
+                                      // above than below, and cap height to whatever space actually
+                                      // exists in whichever direction wins.
+                                      const margin = 8
+                                      const spaceBelow = window.innerHeight - rect.bottom - margin
+                                      const spaceAbove = rect.top - margin
+                                      const openUpward = spaceBelow < 280 && spaceAbove > spaceBelow
+                                      setSidebarAnchor(openUpward
+                                        ? { bottom: window.innerHeight - rect.top + 2, left: rect.left, width: rect.width, maxHeight: Math.max(spaceAbove, 150) }
+                                        : { top: rect.bottom + 2, left: rect.left, width: rect.width, maxHeight: Math.max(spaceBelow, 150) })
+                                    } else {
+                                      setSidebarAnchor(null)
+                                    }
+                                  }
+                                }}
+                                sx={{ color: 'var(--accent, #60a5fa)', p: 0.4, ...(isExp && { bgcolor: 'rgba(245,158,11,0.08)' }),
+                                  '&:hover': { bgcolor: 'rgba(245,158,11,0.1)' } }}>
+                                <KeyboardArrowDownIcon sx={{ fontSize: 14, transition: 'transform 0.2s',
+                                  transform: isExp ? 'rotate(180deg)' : 'none' }} />
+                              </IconButton>
+                            </Tooltip>
+                            <RowActionsMenu size={13} items={[
+                              { label: lang === 'en' ? 'Edit number' : 'Editar número', icon: <EditIcon />, onClick: () => handleEditNumberClick(inst) },
+                              inst.provider === 'wwebjs' && { label: lang === 'en' ? 'WhatsApp profile' : 'Perfil de WhatsApp', icon: <BadgeIcon />, onClick: () => handleWaProfileClick(inst) },
+                              inst.provider === 'wwebjs' && { label: lang === 'en' ? 'Proxy and performance' : 'Proxy y rendimiento', icon: <VpnLockIcon />, onClick: () => setNetworkInst(inst) },
+                              { label: t.inst.delete, icon: <DeleteForeverIcon />, danger: true, onClick: () => handleDeleteClick(inst) },
+                            ]} />
+                          </Box>
+                        </Box>
+                      </Box>
+                    )
+                  })}
+                </Box>
+              ))}
+              </Box>
+              )}
+
+              {/* Multi-select footer bar — fixed, lives outside the scroll area */}
+              {selectedInsts.size > 0 && (
+                <Box sx={{
+                  flexShrink: 0,
+                  px: 1.5, py: 1,
+                  borderTop: '1px solid rgba(59,130,246,0.25)',
+                  bgcolor: 'var(--card-bg)',
+                  display: 'flex', alignItems: 'center', gap: 1,
+                }}>
+                  <Box sx={{
+                    width: 20, height: 20, borderRadius: 1, flexShrink: 0,
+                    bgcolor: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.35)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: '#60a5fa' }}>
+                      {selectedInsts.size}
+                    </Typography>
+                  </Box>
+                  <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)', flex: 1 }}>
+                    {lang === 'en' ? `selected` : `seleccionada${selectedInsts.size !== 1 ? 's' : ''}`}
+                  </Typography>
+                  <Box onClick={() => setSelectedInsts(new Set())}
+                    sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', cursor: 'pointer', px: 0.5,
+                      '&:hover': { color: 'rgba(255,255,255,0.6)' }, userSelect: 'none' }}>
+                    ✕
+                  </Box>
+                  <Box onClick={() => setBulkPickOpen(true)}
+                    sx={{
+                      px: 1.2, py: 0.45, borderRadius: 1.5, cursor: 'pointer',
+                      bgcolor: 'rgba(59,130,246,0.18)', border: '1px solid rgba(59,130,246,0.45)',
+                      transition: 'background 0.12s',
+                      '&:hover': { bgcolor: 'rgba(59,130,246,0.28)' },
+                    }}>
+                    <Typography sx={{ fontSize: '0.72rem', color: '#60a5fa', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      {lang === 'en' ? 'Assign' : 'Asignar'}
+                    </Typography>
+                  </Box>
+                </Box>
+              )}
+            </Box>
+          )
+        })()
+  )
+
   return (
     <Box sx={{
-      display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 2,
+      display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 2, containerType: 'inline-size', containerName: 'instance-workspace',
       overflowY: 'auto', overflowX: 'hidden', pr: 0.5,
       '&::-webkit-scrollbar': { width: 4 },
       '&::-webkit-scrollbar-button': { display: 'none' },
@@ -3024,21 +2631,40 @@ export default function InstancesPanel({ isActive } = {}) {
           </Box>
           )}
         </Box>
+      <Box role="group" aria-label={lang === 'en' ? 'Instances view' : 'Vista de instancias'} sx={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', width: 'calc(100% - 32px)', mx: 2, gap: 0.75, p: 0.75, borderRadius: '16px', border: '1px solid var(--border)', bgcolor: 'var(--sidebar-bg)', mb: 2, boxSizing: 'border-box' }}>
+        {[
+          { key: 'sessions', label: lang === 'en' ? 'Sessions' : 'Sesiones', hint: lang === 'en' ? 'Connections and assigned users' : 'Conexiones y usuarios asignados', icon: <GroupsIcon sx={{ fontSize: 22 }} /> },
+          { key: 'performance', label: lang === 'en' ? 'Performance' : 'Desempeño', hint: lang === 'en' ? 'Messages, contacts and metrics' : 'Mensajes, contactos y métricas', icon: <BarChartIcon sx={{ fontSize: 22 }} /> },
+          { key: 'proxies', label: 'Proxies', hint: lang === 'en' ? 'Network and IP assignment' : 'Red y asignación de IP', icon: <VpnLockIcon sx={{ fontSize: 22 }} /> },
+        ].map(({ key, label, hint, icon }) => {
+          const active = managementView === key
+          return <Button key={key} aria-label={label} aria-pressed={active} onClick={() => setManagementView(key)} sx={{
+            justifyContent: 'flex-start', gap: { xs: 1, sm: 1.5 }, minWidth: 0, minHeight: 64, textTransform: 'none', px: { xs: 1.2, sm: 2 }, py: 1.3, borderRadius: '11px',
+            border: '1px solid', borderColor: active ? 'rgba(var(--accent-rgb),0.45)' : 'transparent',
+            bgcolor: active ? 'rgba(var(--accent-rgb),0.12)' : 'transparent', color: 'var(--text)',
+            transition: 'background-color 0.18s, border-color 0.18s',
+            '&:hover': { bgcolor: 'rgba(var(--accent-rgb),0.09)', borderColor: active ? 'rgba(var(--accent-rgb),0.65)' : 'var(--border)' },
+            '&.Mui-focusVisible': { outline: '2px solid var(--accent)', outlineOffset: 2 },
+          }}>
+            <Box component="span" sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, flexShrink: 0, borderRadius: '11px', bgcolor: active ? 'rgba(var(--accent-rgb),0.16)' : 'var(--item-hover)', color: active ? 'var(--accent)' : 'var(--text-muted)' }}>{icon}</Box>
+            <Box component="span" sx={{ minWidth: 0, textAlign: 'left' }}>
+              <Typography component="span" sx={{ display: 'block', fontSize: '0.9rem', fontWeight: 700, lineHeight: 1.35 }}>{label}</Typography>
+              <Typography component="span" sx={{ display: { xs: 'none', sm: 'block' }, fontSize: '0.72rem', color: 'var(--text-muted)', mt: 0.4, lineHeight: 1.4 }}>{hint}</Typography>
+            </Box>
+          </Button>
+        })}
+      </Box>
       </Box>
 
-      {/* Performance al lado de la gestión de instancias, no arriba a todo el
-         ancho — el apretujamiento anterior venía de que la columna era
-         demasiado angosta (minWidth 360), no de estar al lado; ahora tiene
-         más espacio mínimo (520) para que las gráficas respiren. */}
-      <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        <Box ref={perfColRef} sx={{ flex: '1 1 520px', minWidth: 480 }}>
+      <Box data-instance-management sx={{ display: managementView === 'proxies' ? 'none' : 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <Box ref={perfColRef} sx={{ display: managementView === 'performance' ? 'block' : 'none', flex: '1 1 100%', minWidth: 0 }}>
           <InstancesDashboard metrics={metrics} loading={metricsLoading} range={metricsRange} onRangeChange={setMetricsRange} lang={lang} chartsReady={everActiveRef.current}
             balances={balances} balancesLoading={balancesLoading}
             periodYear={periodYear} periodMonth={periodMonth} onPeriodChange={(y, m) => { setPeriodYear(y); setPeriodMonth(m) }} />
         </Box>
 
         {/* User cards grid + unassigned sidebar */}
-        <Box sx={{ flex: '1 1 560px', minWidth: 0, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+        <Box data-session-layout sx={{ flex: '1 1 100%', minWidth: 0, display: managementView === 'sessions' ? 'grid' : 'none', gap: 2, gridTemplateColumns: 'minmax(0,1fr)', alignItems: 'start', '@container instance-workspace (min-width: 1100px)': { gridTemplateColumns: 'minmax(0,1fr) 300px' } }}>
         {/* Left: user cards — enclosed in the same bordered panel frame as
            Performance next to it (border/bg/radius), so both read as two
            self-contained panels side by side instead of Performance looking
@@ -3050,7 +2676,7 @@ export default function InstancesPanel({ isActive } = {}) {
           borderRadius: 3, border: '1px solid var(--border, rgba(255,255,255,0.08))',
           bgcolor: 'var(--card-bg, rgba(255,255,255,0.02))', overflow: 'hidden',
           display: 'flex', flexDirection: 'column',
-          ...(perfHeight ? { maxHeight: perfHeight } : {}),
+          ...(managementView === 'performance' && perfHeight ? { maxHeight: perfHeight } : {}),
         }}>
           {/* Header — same icon-in-gradient-box banner as Performance next to it,
              so this panel reads as its own titled panel instead of a bare box. */}
@@ -3104,7 +2730,7 @@ export default function InstancesPanel({ isActive } = {}) {
                 <path d="M13 13l3 3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
               </Box>
               <Box component="input"
-                placeholder={lang === 'en' ? 'Search users…' : 'Buscar usuarios…'}
+                placeholder={lang === 'en' ? 'Search users or sessions…' : 'Buscar usuarios o sesiones…'}
                 value={userSearch}
                 onChange={e => setUserSearch(e.target.value)}
                 sx={{
@@ -3122,8 +2748,9 @@ export default function InstancesPanel({ isActive } = {}) {
               )}
             </Box>
           )}
+        <Box data-team-cards sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(320px, 100%), 1fr))', gap: 2, width: '100%', alignItems: 'stretch' }}>
         {loading ? (
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 2 }}>
+          <Fragment>
             {(skeletonCounts.current.users.length ? skeletonCounts.current.users : [2, 3, 1, 2, 0, 1]).map((rowCount, i) => (
               <Box key={i} sx={{
                 bgcolor: 'var(--card-bg)', borderRadius: 3, p: 2,
@@ -3222,17 +2849,11 @@ export default function InstancesPanel({ isActive } = {}) {
                 )}
               </Box>
             ))}
-          </Box>
+          </Fragment>
 
         ) : (
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 2 }}>
-            {users
-              .filter(u => {
-                if (!userSearch.trim()) return true
-                const q = userSearch.toLowerCase()
-                return (u.display_name || u.username || '').toLowerCase().includes(q) ||
-                  (u.email || '').toLowerCase().includes(q)
-              })
+          <Fragment>
+            {visibleUsers
               .map((user, cardIndex) => {
                 const uid = user._id || user.id || user.username
                 const userInsts = instances.filter(i => i.assigned_to === uid)
@@ -3248,354 +2869,19 @@ export default function InstancesPanel({ isActive } = {}) {
                   />
                 )
               })}
-          </Box>
+          </Fragment>
         )}
+          </Box>
+          {!loading && visibleUsers.length === 0 && <Typography sx={{ color: 'var(--text-muted)', textAlign: 'center', py: 3 }}>{lang === 'en' ? 'No matching users or sessions' : 'No hay usuarios o sesiones que coincidan'}</Typography>}
+
         </Box>{/* end scrollable content */}
         </Box>{/* end left panel */}
-
-        {/* Right sidebar: unassigned instances */}
-        {loading ? (
-          <Box sx={{
-            width: 240, flexShrink: 0,
-            border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)', borderRadius: 2.5,
-            bgcolor: 'var(--card-bg)', alignSelf: 'flex-start', overflow: 'hidden',
-            '@keyframes skCardIn': { '0%': { opacity: 0, transform: 'translateY(12px)' }, '100%': { opacity: 1, transform: 'translateY(0)' } },
-            animation: 'skCardIn 0.35s ease both', animationDelay: '0.3s',
-          }}>
-            {/* Header: mismo lenguaje de ícono-en-caja-degradada que Performance
-               e Instances, en tono ámbar (mismo acento que ya usaba esta
-               barra) en vez del punto + texto plano de antes. */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 1.6, py: 1.4,
-              background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.14) 0%, rgba(var(--accent-rgb,59,130,246),0.04) 60%, transparent 100%)',
-              borderBottom: '1px solid rgba(var(--accent-rgb,59,130,246),0.15)' }}>
-              <Skeleton variant="rounded" width={26} height={26} sx={{ borderRadius: '8px', flexShrink: 0,
-                bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.16)',
-                '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.15), transparent)' } }} />
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Skeleton variant="text" width="60%" height={13} sx={{ mb: 0.2,
-                  bgcolor: 'rgba(255,255,255,0.1)',
-                  '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.12), transparent)' } }} />
-                <Skeleton variant="text" width="80%" height={9} sx={{ bgcolor: 'rgba(255,255,255,0.05)' }} />
-              </Box>
-              <Skeleton variant="rounded" width={22} height={16} sx={{ borderRadius: 10, bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)', flexShrink: 0 }} />
-              <Skeleton variant="circular" width={12} height={12} sx={{ bgcolor: 'rgba(255,255,255,0.06)', flexShrink: 0 }} />
-            </Box>
-            {/* Group label row — mirrors the "SIN CONEXIÓN" section header */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1.5, py: 0.55,
-              bgcolor: 'rgba(255,255,255,0.025)',
-              borderBottom: '1px solid var(--border)', borderTop: '1px solid var(--border)',
-              '@keyframes skRowIn': { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
-              animation: 'skRowIn 0.2s ease both', animationDelay: '0.32s' }}>
-              <Skeleton variant="circular" width={5} height={5} sx={{ bgcolor: 'rgba(148,163,184,0.35)', flexShrink: 0 }} />
-              <Skeleton variant="text" width="44%" height={10} sx={{ bgcolor: 'rgba(148,163,184,0.15)',
-                '&::after': { background: 'linear-gradient(90deg, transparent, rgba(148,163,184,0.12), transparent)' } }} />
-              <Skeleton variant="rounded" width={16} height={12} sx={{ borderRadius: 10, ml: 'auto', bgcolor: 'rgba(255,255,255,0.06)' }} />
-            </Box>
-            {/* Instance rows */}
-            {[...Array(skeletonCounts.current.unassigned || 4)].map((_, r) => (
-              <Box key={r} sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1.2, py: 0.65,
-                borderBottom: '1px solid var(--border)',
-                '@keyframes skRowIn': { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
-                animation: 'skRowIn 0.25s ease both', animationDelay: `${r * 0.06 + 0.38}s` }}>
-                <Skeleton variant="circular" width={8} height={8} sx={{ flexShrink: 0,
-                  bgcolor: 'rgba(255,255,255,0.12)' }} />
-                <Box sx={{ flex: 1, minWidth: 0 }}>
-                  <Skeleton variant="text" width={`${42 + (r * 13) % 28}%`} height={11} sx={{ mb: 0.2,
-                    bgcolor: 'rgba(255,255,255,0.09)',
-                    '&::after': { background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.08), transparent)' } }} />
-                  <Skeleton variant="text" width={`${52 + (r * 9) % 24}%`} height={9} sx={{ bgcolor: 'rgba(255,255,255,0.06)' }} />
-                </Box>
-                {/* Action buttons: QR, assign, edit, delete */}
-                <Box sx={{ display: 'flex', gap: 0.3, flexShrink: 0 }}>
-                  {[
-                    'rgba(96,165,250,0.25)',
-                    'rgba(96,165,250,0.2)',
-                    'rgba(167,139,250,0.2)',
-                    'rgba(248,113,113,0.2)',
-                  ].map((bg, b) => (
-                    <Skeleton key={b} variant="circular" width={20} height={20} sx={{ bgcolor: bg }} />
-                  ))}
-                </Box>
-              </Box>
-            ))}
-          </Box>
-        ) : (() => {
-          const unassigned = instances.filter(i => !i.assigned_to)
-          if (unassigned.length === 0) return null
-          const connGroup   = unassigned.filter(i => ['open','connected'].includes(i.live_status))
-          const pendGroup   = unassigned.filter(i => i.live_status === 'connecting')
-          const restGroup   = unassigned.filter(i => !['open','connected','connecting'].includes(i.live_status))
-          const grouped = [
-            ...(connGroup.length   ? [{ _group: lang === 'en' ? 'Connected' : 'Conectadas',   color: '#4ade80', items: connGroup }] : []),
-            ...(pendGroup.length   ? [{ _group: lang === 'en' ? 'Connecting' : 'Conectando',  color: '#fbbf24', items: pendGroup }] : []),
-            ...(restGroup.length   ? [{ _group: lang === 'en' ? 'Disconnected' : 'Sin conexión', color: '#94a3b8', items: restGroup }] : []),
-          ]
-          return (
-            <Box sx={{
-              width: 240, flexShrink: 0,
-              border: '1px solid rgba(var(--accent-rgb,59,130,246),0.2)', borderRadius: 2.5,
-              bgcolor: 'var(--card-bg)', alignSelf: 'flex-start',
-              display: 'flex', flexDirection: 'column',
-              maxHeight: 'calc(100vh - 200px)',
-              overflow: 'hidden',
-            }}>
-              {/* Sidebar header — fixed, click to collapse/expand (lives outside
-                 the scroll area). Mismo lenguaje de ícono-en-caja-degradada que
-                 usan Performance e Instances, en tono ámbar (el acento que ya
-                 traía esta barra), en vez del punto + texto plano de antes. */}
-              <Box onClick={() => setSidebarCollapsed(c => !c)}
-                sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 1.6, py: 1.4, position: 'relative',
-                  cursor: 'pointer', userSelect: 'none', flexShrink: 0,
-                  background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.14) 0%, rgba(var(--accent-rgb,59,130,246),0.04) 60%, transparent 100%)',
-                  borderBottom: sidebarCollapsed ? 'none' : '1px solid rgba(var(--accent-rgb,59,130,246),0.15)',
-                  borderRadius: '10px 10px 0 0',
-                  '&:hover': { background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.2) 0%, rgba(var(--accent-rgb,59,130,246),0.06) 60%, transparent 100%)' },
-                  transition: 'background 0.15s',
-                  ...(!sidebarCollapsed && { '&::after': {
-                    content: '""', position: 'absolute', bottom: 0, left: 14, right: 14, height: '1px',
-                    background: 'linear-gradient(90deg, transparent, rgba(var(--accent-rgb,59,130,246),0.4) 40%, rgba(var(--accent-rgb,59,130,246),0.4) 60%, transparent)',
-                  } }),
-                }}>
-                <Box sx={{
-                  width: 26, height: 26, borderRadius: '8px', flexShrink: 0,
-                  background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.28) 0%, rgba(var(--accent-rgb,59,130,246),0.1) 100%)',
-                  border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  <SmartphoneIcon sx={{ color: 'var(--accent,#3b82f6)', fontSize: 14 }} />
-                </Box>
-                <Box sx={{ flex: 1, minWidth: 0 }}>
-                  <Typography sx={{ color: 'var(--text)', fontSize: '0.8rem', fontWeight: 700, lineHeight: 1.2 }}>
-                    {lang === 'en' ? 'Unassigned' : 'Sin asignar'}
-                  </Typography>
-                  <Typography sx={{ fontSize: '0.6rem', color: 'var(--text-muted, rgba(255,255,255,0.35))', lineHeight: 1, mt: 0.2, whiteSpace: 'nowrap' }}>
-                    {lang === 'en' ? 'Instances without a user' : 'Instancias sin usuario'}
-                  </Typography>
-                </Box>
-                <Typography sx={{ fontSize: '0.67rem', color: 'rgba(var(--accent-rgb,59,130,246),0.85)',
-                  bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)', border: '1px solid rgba(var(--accent-rgb,59,130,246),0.25)',
-                  px: 1, py: 0.2, borderRadius: 10, fontWeight: 700, flexShrink: 0 }}>
-                  {unassigned.length}
-                </Typography>
-                <KeyboardArrowDownIcon sx={{ fontSize: 15, color: 'rgba(var(--accent-rgb,59,130,246),0.6)', flexShrink: 0,
-                  transition: 'transform 0.2s', transform: sidebarCollapsed ? 'rotate(-90deg)' : 'none' }} />
-              </Box>
-
-              {/* Compact list — grouped by status; this is the ONLY scrollable region now */}
-              {!sidebarCollapsed && (
-              <Box sx={{
-                flex: 1, minHeight: 0, overflowY: 'auto',
-                '&::-webkit-scrollbar': { width: 4 },
-                '&::-webkit-scrollbar-button': { display: 'none' },
-                '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.25)', borderRadius: 4 },
-                '&::-webkit-scrollbar-track': { bgcolor: 'transparent' },
-              }}>
-              {grouped.map(({ _group, color: gColor, items }) => (
-                <Box key={_group}>
-                  {/* Group label */}
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, px: 1.5, py: 0.55,
-                    bgcolor: 'rgba(255,255,255,0.025)', borderBottom: '1px solid var(--border)',
-                    borderTop: '1px solid var(--border)' }}>
-                    <Box sx={{ width: 5, height: 5, borderRadius: '50%', bgcolor: gColor, flexShrink: 0,
-                      boxShadow: `0 0 4px ${gColor}99` }} />
-                    <Typography sx={{ fontSize: '0.57rem', fontWeight: 700, color: gColor,
-                      textTransform: 'uppercase', letterSpacing: '0.07em', flex: 1 }}>
-                      {_group}
-                    </Typography>
-                    <Typography sx={{ fontSize: '0.57rem', color: gColor, opacity: 0.6, fontWeight: 600 }}>
-                      {items.length}
-                    </Typography>
-                  </Box>
-                  {/* Rows */}
-                  {items.map((inst, idx) => {
-                    const isExp = expandedAssign === inst.name
-                    const status = inst.live_status || 'unknown'
-                    const icolor = STATUS_COLOR[status] ?? STATUS_COLOR.unknown
-                    const isConn = ['open','connected'].includes(status)
-                    const _RC = { banned: '#f87171', logged_out: '#fbbf24', conflict: '#fbbf24', multidevice: '#fbbf24', server_error: '#f87171', restart: '#fb923c', timeout: '#94a3b8', closed: '#94a3b8', replaced: '#fb923c', disconnected: '#f87171', failed: '#f87171' }
-                    const dotColor = (!isConn && status !== 'connecting' && inst.disconnect_reason) ? (_RC[inst.disconnect_reason] ?? '#f87171') : icolor
-                    const reasonLabel = inst.disconnect_reason ? ((lang === 'en' ? DISCONNECT_LABEL_EN : DISCONNECT_LABEL_ES)[inst.disconnect_reason] ?? inst.disconnect_reason_label) : null
-                    return (
-                      <Box key={inst.name}
-                        ref={el => { sidebarRowRefs.current[inst.name] = el }}
-                        sx={{ position: 'relative', ...(isExp && { zIndex: 201 }) }}>
-                        <Box sx={{
-                          display: 'flex', alignItems: 'center', gap: 0.8, px: 1.2, py: 0.65,
-                          borderBottom: idx < items.length - 1 ? '1px solid var(--border)' : 'none',
-                          '&:hover': { bgcolor: 'var(--item-hover)' }, transition: 'background 0.12s',
-                          '&:hover .inst-check': { opacity: 1 },
-                          ...(isExp && { bgcolor: 'rgba(59,130,246,0.04)' }),
-                        }}>
-                          {/* Multi-select checkbox */}
-                          <Box className="inst-check"
-                            onClick={e => { e.stopPropagation(); toggleSelectInst(inst.name) }}
-                            sx={{
-                              width: 13, height: 13, flexShrink: 0, borderRadius: 0.4,
-                              border: selectedInsts.has(inst.name) ? '1.5px solid #60a5fa' : '1.5px solid rgba(255,255,255,0.22)',
-                              bgcolor: selectedInsts.has(inst.name) ? 'rgba(59,130,246,0.85)' : 'transparent',
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              cursor: 'pointer', transition: 'all 0.1s',
-                              opacity: selectedInsts.size > 0 ? 1 : 0,
-                              zIndex: 1,
-                            }}>
-                            {selectedInsts.has(inst.name) && (
-                              <Typography sx={{ fontSize: '9px', lineHeight: 1, color: 'white', fontWeight: 700, userSelect: 'none', mt: '1px' }}>✓</Typography>
-                            )}
-                          </Box>
-                          <Box sx={{ position: 'relative', width: 8, height: 8, flexShrink: 0 }}>
-                            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: dotColor,
-                              boxShadow: isConn ? `0 0 6px ${dotColor}aa` : 'none', position: 'relative', zIndex: 1 }} />
-                            {isConn && (
-                              <Box sx={{
-                                position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
-                                width: 8, height: 8, borderRadius: '50%', bgcolor: dotColor, opacity: 0.4,
-                                '@keyframes ping': {
-                                  '0%':   { transform: 'translate(-50%,-50%) scale(1)', opacity: 0.4 },
-                                  '75%':  { transform: 'translate(-50%,-50%) scale(2.2)', opacity: 0 },
-                                  '100%': { transform: 'translate(-50%,-50%) scale(2.2)', opacity: 0 },
-                                },
-                                animation: 'ping 2s cubic-bezier(0,0,0.2,1) infinite',
-                              }} />
-                            )}
-                          </Box>
-                          <Box sx={{ flex: 1, minWidth: 0 }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                              <Typography sx={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text)', lineHeight: 1.2,
-                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {inst.label || inst.name}
-                              </Typography>
-                              {/* Badge de proveedor — mismo detalle que ya tienen las
-                                 instancias asignadas dentro de las tarjetas de usuario
-                                 (InstanceRow); aquí faltaba, y se veían más "en blanco"
-                                 en comparación. */}
-                              {inst.provider === 'waha' && (
-                                <Typography sx={{ fontSize: '0.5rem', fontWeight: 700, color: '#60a5fa',
-                                  bgcolor: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.25)',
-                                  px: 0.45, borderRadius: 0.8, lineHeight: 1.5, flexShrink: 0, letterSpacing: '0.03em' }}>
-                                  WAHA
-                                </Typography>
-                              )}
-                              {inst.provider === 'wasender' && (
-                                <Typography sx={{ fontSize: '0.5rem', fontWeight: 700, color: '#a78bfa',
-                                  bgcolor: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.25)',
-                                  px: 0.45, borderRadius: 0.8, lineHeight: 1.5, flexShrink: 0, letterSpacing: '0.03em' }}>
-                                  WS
-                                </Typography>
-                              )}
-                            </Box>
-                            <Typography sx={{ fontSize: '0.65rem', fontFamily: 'monospace', lineHeight: 1.2,
-                              color: reasonLabel && !isConn ? dotColor : 'var(--text-muted)' }}>
-                              {reasonLabel && !isConn ? reasonLabel : (inst.number ? `+${inst.number}` : t.inst.noNumber)}
-                            </Typography>
-                            {isConn && <LineActivityStatus activity={inst.activity} lang={lang} />}
-                          </Box>
-                          <Box sx={{ display: 'flex', gap: 0.2, alignItems: 'center', flexShrink: 0 }}>
-                            <Tooltip title={t.inst.connectQr}>
-                              <IconButton size="small" onClick={() => handleQrClick(inst)}
-                                sx={{ color: 'var(--accent, #60a5fa)', p: 0.4, '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' } }}>
-                                <PhonelinkRingIcon sx={{ fontSize: 13 }} />
-                              </IconButton>
-                            </Tooltip>
-                            <Tooltip title={isExp ? (lang === 'en' ? 'Close' : 'Cerrar') : t.inst.assignUser}>
-                              <IconButton size="small"
-                                onClick={e => {
-                                  e.stopPropagation()
-                                  if (isExp) {
-                                    setExpandedAssign(null); setSidebarAnchor(null)
-                                  } else {
-                                    const el = sidebarRowRefs.current[inst.name]
-                                    const rect = el ? el.getBoundingClientRect() : null
-                                    setExpandedAssign(inst.name)
-                                    if (rect) {
-                                      // The trigger can sit anywhere down the sidebar, including right
-                                      // at the bottom of the viewport (real case: the "Unassigned"
-                                      // widget) — always opening downward then let the dropdown run
-                                      // off the bottom of the screen with no way to scroll to the rest
-                                      // of it, since this is a position:fixed portal, not part of the
-                                      // page's own scroll flow. Flip upward when there's more room
-                                      // above than below, and cap height to whatever space actually
-                                      // exists in whichever direction wins.
-                                      const margin = 8
-                                      const spaceBelow = window.innerHeight - rect.bottom - margin
-                                      const spaceAbove = rect.top - margin
-                                      const openUpward = spaceBelow < 280 && spaceAbove > spaceBelow
-                                      setSidebarAnchor(openUpward
-                                        ? { bottom: window.innerHeight - rect.top + 2, left: rect.left, width: rect.width, maxHeight: Math.max(spaceAbove, 150) }
-                                        : { top: rect.bottom + 2, left: rect.left, width: rect.width, maxHeight: Math.max(spaceBelow, 150) })
-                                    } else {
-                                      setSidebarAnchor(null)
-                                    }
-                                  }
-                                }}
-                                sx={{ color: 'var(--accent, #60a5fa)', p: 0.4, ...(isExp && { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.08)' }),
-                                  '&:hover': { bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.1)' } }}>
-                                <KeyboardArrowDownIcon sx={{ fontSize: 14, transition: 'transform 0.2s',
-                                  transform: isExp ? 'rotate(180deg)' : 'none' }} />
-                              </IconButton>
-                            </Tooltip>
-                            <RowActionsMenu size={13} items={[
-                              { label: lang === 'en' ? 'Edit number' : 'Editar número', icon: <EditIcon />, onClick: () => handleEditNumberClick(inst) },
-                              inst.provider === 'wwebjs' && { label: lang === 'en' ? 'WhatsApp profile' : 'Perfil de WhatsApp', icon: <BadgeIcon />, onClick: () => handleWaProfileClick(inst) },
-                              inst.provider === 'wwebjs' && { label: lang === 'en' ? 'Proxy and performance' : 'Proxy y rendimiento', icon: <VpnLockIcon />, onClick: () => setNetworkInst(inst) },
-                              { label: t.inst.delete, icon: <DeleteForeverIcon />, danger: true, onClick: () => handleDeleteClick(inst) },
-                            ]} />
-                          </Box>
-                        </Box>
-                      </Box>
-                    )
-                  })}
-                </Box>
-              ))}
-              </Box>
-              )}
-
-              {/* Multi-select footer bar — fixed, lives outside the scroll area */}
-              {selectedInsts.size > 0 && (
-                <Box sx={{
-                  flexShrink: 0,
-                  px: 1.5, py: 1,
-                  borderTop: '1px solid rgba(59,130,246,0.25)',
-                  bgcolor: 'var(--card-bg)',
-                  display: 'flex', alignItems: 'center', gap: 1,
-                }}>
-                  <Box sx={{
-                    width: 20, height: 20, borderRadius: 1, flexShrink: 0,
-                    bgcolor: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.35)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}>
-                    <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: '#60a5fa' }}>
-                      {selectedInsts.size}
-                    </Typography>
-                  </Box>
-                  <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)', flex: 1 }}>
-                    {lang === 'en' ? `selected` : `seleccionada${selectedInsts.size !== 1 ? 's' : ''}`}
-                  </Typography>
-                  <Box onClick={() => setSelectedInsts(new Set())}
-                    sx={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.3)', cursor: 'pointer', px: 0.5,
-                      '&:hover': { color: 'rgba(255,255,255,0.6)' }, userSelect: 'none' }}>
-                    ✕
-                  </Box>
-                  <Box onClick={() => setBulkPickOpen(true)}
-                    sx={{
-                      px: 1.2, py: 0.45, borderRadius: 1.5, cursor: 'pointer',
-                      bgcolor: 'rgba(59,130,246,0.18)', border: '1px solid rgba(59,130,246,0.45)',
-                      transition: 'background 0.12s',
-                      '&:hover': { bgcolor: 'rgba(59,130,246,0.28)' },
-                    }}>
-                    <Typography sx={{ fontSize: '0.72rem', color: '#60a5fa', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                      {lang === 'en' ? 'Assign' : 'Asignar'}
-                    </Typography>
-                  </Box>
-                </Box>
-              )}
-            </Box>
-          )
-        })()}
+        <Box data-unassigned-list sx={{ width: '100%', minWidth: 0 }}>{unassignedCard}</Box>
         </Box>
       </Box>
 
       {/* Proxies por número — el pool y cómo se asignan (ver ProxiesPanel.jsx) */}
-      <ProxiesSection onChanged={fetchInstances} />
+      <Box sx={{ display: managementView === 'proxies' ? 'block' : 'none' }}><ProxiesSection onChanged={fetchInstances} /></Box>
       <InstanceNetworkDialog key={networkInst?.name || 'none'} inst={networkInst} onClose={() => setNetworkInst(null)} onChanged={fetchInstances} />
 
       {/* Bulk assign dialog */}
@@ -4323,7 +3609,7 @@ export default function InstancesPanel({ isActive } = {}) {
           {wizardStep === 3 && !wizardConnected && (
             <Button onClick={async () => {
               stopWizardPoll()
-              try { await fetch(`/api/evolution/instance/${wizardInstName}`, { method: 'DELETE' }) } catch {}
+              try { await instanceFetch(`/api/evolution/instance/${wizardInstName}`, { method: 'DELETE' }) } catch {}
               fetchInstances()
               setWizardOpen(false)
             }}

@@ -541,10 +541,12 @@ def _send_via_wwebjs(db, company_id: str, to_number: str, message: str, job_id: 
         _co_name_ww = (_co_ww or {}).get("name") or (_co_ww or {}).get("business_name") or ""
         ww_client = WWebjsClient(session, instance_name=session)
         from app.delivery_receipts import dispatch_once, operation_key
+        from app.send_guard import dispatch_guard
         from app.contact_permissions import recipient_key
         ww_result = dispatch_once(db, operation_key('campaign', job_id, recipient_key(to_number)),
             lambda: ww_client.send(to_number, message, delay_ms=delay_ms,
-                                   save_contact=False, contact_name=_co_name_ww), message_body=message)
+                                   save_contact=False, contact_name=_co_name_ww), message_body=message,
+            authorize=dispatch_guard(db, company_id, to_number))
         message = ww_result.get('sent_message_body', message)
         message_id = ww_result.get("messageId")
         status = "sent" if ww_result.get("success") else "failed"

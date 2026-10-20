@@ -32,6 +32,8 @@ import CircularProgress from '@mui/material/CircularProgress'
 import Skeleton from '@mui/material/Skeleton'
 import Divider from '@mui/material/Divider'
 import SearchIcon from '@mui/icons-material/Search'
+import LocationOnOutlinedIcon from '@mui/icons-material/LocationOnOutlined'
+import InputAdornment from '@mui/material/InputAdornment'
 import AddIcon from '@mui/icons-material/Add'
 import RemoveIcon from '@mui/icons-material/Remove'
 import RestaurantIcon from '@mui/icons-material/Restaurant'
@@ -203,6 +205,18 @@ const SearchBarForm = React.memo(function SearchBarForm({ allIndustries, searchi
     ? allIndustries.filter(({ item }) => item.toLowerCase().startsWith(deferredIndustry.trim().toLowerCase()) && item.toLowerCase() !== deferredIndustry.trim().toLowerCase()).slice(0, 6)
     : [], [deferredIndustry, allIndustries])
   const setIndustry = value => onDraftChange(prev => ({ ...prev, industry: value }))
+  const fieldSx = {
+    '& .MuiInputBase-root': {
+      height: compact ? 48 : 56, borderRadius: '12px', bgcolor: 'var(--sidebar-bg)',
+      transition: 'box-shadow 0.18s',
+      '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(var(--accent-rgb),0.45)' },
+      '&.Mui-focused': { boxShadow: '0 0 0 3px rgba(var(--accent-rgb),0.1)' },
+    },
+    '& .MuiInputBase-input': { fontSize: '0.88rem' },
+    '& .MuiInputLabel-root': { fontSize: '0.82rem' },
+    '& .MuiInputAdornment-root': { color: 'var(--text-muted)' },
+    '&:focus-within .MuiInputAdornment-root': { color: 'var(--accent)' },
+  }
   function choose(value) { setIndustry(value); setAcOpen(false) }
   function submit(e) {
     e.preventDefault()
@@ -227,8 +241,8 @@ const SearchBarForm = React.memo(function SearchBarForm({ allIndustries, searchi
             e.preventDefault(); setAcIdx(i => Math.max(0, i - 1))
           } else if (e.key === 'Escape') setAcOpen(false)
         }}
-        slotProps={{ inputLabel: { shrink: true }, htmlInput: { role: 'combobox', 'aria-autocomplete': 'list', 'aria-expanded': acOpen && !!acMatches.length, 'aria-controls': acOpen && acMatches.length ? 'prospect-suggestions' : undefined, autoComplete: 'off' } }}
-        sx={{ '& .MuiInputBase-root': { height: 48, borderRadius: '10px' } }} />
+        slotProps={{ input: { startAdornment: <InputAdornment position="start"><StorefrontIcon sx={{ fontSize: 20 }} /></InputAdornment> }, inputLabel: { shrink: true }, htmlInput: { role: 'combobox', 'aria-autocomplete': 'list', 'aria-expanded': acOpen && !!acMatches.length, 'aria-controls': acOpen && acMatches.length ? 'prospect-suggestions' : undefined, autoComplete: 'off' } }}
+        sx={fieldSx} />
       {acOpen && acMatches.length > 0 && <Box id="prospect-suggestions" role="listbox" sx={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 30, p: 0.5, bgcolor: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: '10px', boxShadow: '0 8px 24px rgba(0,0,0,0.15)' }}>
         {acMatches.map(({ item }, i) => <Box component="button" type="button" role="option" aria-selected={i === acIdx} key={item}
           onMouseDown={e => e.preventDefault()} onClick={() => choose(item)} onMouseEnter={() => setAcIdx(i)}
@@ -236,13 +250,13 @@ const SearchBarForm = React.memo(function SearchBarForm({ allIndustries, searchi
       </Box>}
     </Box>
     <TextField id={compact ? 'prospect-location-compact' : 'prospect-location'} fullWidth size="small" disabled={searching}
-      label={lang === 'en' ? 'City or area (optional)' : 'Ciudad o zona (opcional)'} placeholder={lang === 'en' ? 'E.g. Hermosillo, Sonora' : 'Ej. Hermosillo, Sonora'}
+      label={lang === 'en' ? 'City, state or country (optional)' : 'Ciudad, estado o país (opcional)'} placeholder={lang === 'en' ? 'E.g. state of Chihuahua, Mexico' : 'Ej. estado de Chihuahua, México'}
       value={draft.location} onChange={e => onDraftChange(prev => ({ ...prev, location: e.target.value }))}
-      slotProps={{ inputLabel: { shrink: true } }} sx={{ '& .MuiInputBase-root': { height: 48, borderRadius: '10px' } }} />
+      slotProps={{ input: { startAdornment: <InputAdornment position="start"><LocationOnOutlinedIcon sx={{ fontSize: 20 }} /></InputAdornment> }, inputLabel: { shrink: true } }} sx={fieldSx} />
     {quantityControl}
     <Button data-prospect-primary type={searching ? 'button' : 'submit'} variant="contained" disabled={!searching && !industry.trim()}
       onClick={searching ? onCancel : undefined} startIcon={searching ? <HighlightOffIcon /> : <SearchIcon />}
-      sx={{ height: 48, px: 2.2, borderRadius: '10px', whiteSpace: 'nowrap' }}>
+      sx={{ height: compact ? 48 : 56, px: 2.6, borderRadius: '12px', whiteSpace: 'nowrap', fontWeight: 700, boxShadow: 'none', '&:hover': { boxShadow: '0 4px 16px rgba(var(--accent-rgb),0.2)' } }}>
       {searching ? (lang === 'en' ? 'Searching… · Cancel' : 'Buscando… · Cancelar') : lang === 'en' ? 'Find prospects' : 'Buscar prospectos'}
     </Button>
   </Box>
@@ -883,11 +897,17 @@ export default function SearchProspects() {
             <Typography sx={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>{t.search.headingSub}</Typography>
           </Box>
 
-          <Box sx={{ p: { xs: 2, md: 3 }, borderRadius: '20px', background: 'linear-gradient(rgba(var(--accent-rgb),0.045), rgba(var(--accent-rgb),0.045)), var(--card-bg)', border: '1px solid var(--border)', boxShadow: '0 12px 32px rgba(0,0,0,0.08)' }}>
+          <Box sx={{ p: { xs: 2, md: 3 }, borderRadius: '20px', background: 'linear-gradient(135deg, rgba(var(--accent-rgb),0.065), transparent 65%), var(--card-bg)', border: '1px solid rgba(var(--accent-rgb),0.18)', boxShadow: '0 12px 32px rgba(0,0,0,0.08)' }}>
             <Box sx={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text)', mb: 1.5 }}>{lang === 'en' ? 'What business are you looking for?' : 'Qué negocio quieres encontrar?'}</Box>
             <SearchBarForm compact={false} allIndustries={allIndustries} searching={searching} draft={searchDraft} onDraftChange={setSearchDraft} labels={searchLabels} onSearch={handleSearch} onCancel={handleCancelSearch} />
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2, mt: 2, pt: 2, borderTop: '1px solid var(--border)' }}>
-              <Box sx={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>{lang === 'en' ? 'Include a city for more relevant results' : 'Agrega una ciudad para encontrar resultados más relevantes'}</Box>
+              <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, maxWidth: 390 }}>
+                <LocationOnOutlinedIcon sx={{ fontSize: 18, mt: 0.2, color: 'var(--accent)' }} />
+                <Box>
+                  <Typography sx={{ fontSize: '0.77rem', fontWeight: 600, color: 'var(--text)', mb: 0.4 }}>{lang === 'en' ? 'Choose where to search' : 'Elige dónde buscar'}</Typography>
+                  <Typography sx={{ fontSize: '0.73rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>{lang === 'en' ? 'Business: gas stations · Location: state of Chihuahua, Mexico.' : 'Negocio: gasolineras · Ubicación: estado de Chihuahua, México.'}</Typography>
+                </Box>
+              </Box>
               <CountSelector size="md" numResults={numResults} setNumResults={setNumResults} showCount={t.search.showCount} show={t.search.show} disabled={searching || scrapeJob.processing} />
             </Box>
           </Box>

@@ -3,8 +3,10 @@ import { useState, useEffect } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import IconButton from '@mui/material/IconButton'
+import Collapse from '@mui/material/Collapse'
 import Tooltip from '@mui/material/Tooltip'
 import CloseIcon from '@mui/icons-material/Close'
+import SearchIcon from '@mui/icons-material/Search'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import SpeedIcon from '@mui/icons-material/Speed'
 import ForwardToInboxIcon from '@mui/icons-material/ForwardToInbox'
@@ -34,11 +36,11 @@ const FAQ = {
       items: [
         {
           q: 'What is the daily cap?',
-          a: 'Each WhatsApp instance can only send a limited number of messages per day. The cap resets every day at 00:00 UTC. "Total available" = total cap − messages already sent − already scheduled sends.',
+          a: 'Each WhatsApp instance can only send a limited number of messages per day. The cap resets every calendar day in Mexico City time. "Total available" = total cap − messages already sent − already scheduled sends.',
         },
         {
           q: 'What is warmup mode?',
-          a: 'A new number needs to be "warmed up" gradually to avoid being flagged as spam. In warmup mode the daily cap is much lower (e.g. 20–50 msgs/day). As the account ages and builds engagement, the cap grows. Never push a warm-up number to its limit on day one.',
+          a: 'A new number needs to be "warmed up" gradually to avoid being flagged as spam. In warmup mode an instance can send 20 messages a day and start at most 5 brand-new conversations (out of warmup: 150 and 12). New numbers start in warmup automatically; an admin switches it off from Instances once the number has matured.',
         },
         {
           q: 'When does the counter reset?',
@@ -73,7 +75,7 @@ const FAQ = {
         },
         {
           q: 'Why are there pauses between messages?',
-          a: 'Sending too fast looks like a bot and triggers WhatsApp bans. The send config lets you set a delay (recommended: 8–20 seconds). Batch mode groups sends with longer breaks between groups to mimic human behavior.',
+          a: 'Sending too fast looks like a bot and triggers WhatsApp bans. The send config lets you set a delay (recommended: 25 seconds or more; the default is 25–55 s — under 25 s the risk badge goes up). Batch mode groups sends with longer breaks between groups to mimic human behavior.',
         },
         {
           q: 'What do the delay/batch/break settings in Send Config mean?',
@@ -96,15 +98,15 @@ const FAQ = {
         },
         {
           q: 'How do I protect my numbers from being banned?',
-          a: '• Never send more than 50–80 messages/day on a new number.\n• Use template rotation (3+ variants).\n• Keep pauses of 8–20 s between messages.\n• Avoid links in early messages.\n• Keep your WhatsApp profile complete (photo, description, business category).\n• Respond to replies — genuine engagement is the best signal.',
+          a: '• Keep new numbers in warmup mode (20 messages/day) until they mature.\n• Use template rotation (3+ variants).\n• Keep pauses of 25 s or more between messages.\n• Avoid links in early messages.\n• Keep your WhatsApp profile complete (photo, description, business category).\n• Respond to replies — genuine engagement is the best signal.',
         },
         {
           q: "What does the 'ACK' warning on an instance mean?",
           a: "Messages are going out but WhatsApp isn't confirming delivery back to the app — a different problem than being disconnected (the session is technically online, but delivery receipts aren't arriving). Treat it as a warning sign for that number and check it manually.",
         },
         {
-          q: 'Why do I see different connect flows for different numbers (QR vs. code)?',
-          a: 'It depends on the provider behind that instance. wwebjs, WAHA and Wasender connect by scanning a QR code that refreshes automatically. Evolution (the default/legacy provider) instead shows a pairing code you type into WhatsApp, which expires and regenerates on a countdown.',
+          q: 'How do I connect or reconnect a number: QR or code?',
+          a: 'Either one. In the connect window choose:\n• QR code: in WhatsApp go to Linked devices → Link a device and scan it. It refreshes by itself.\n• Pairing code: Linked devices → Link a device → "Link with phone number instead", and type the 8-character code.\nAdmins do it from Instances; each user can reconnect their own numbers from Settings → WhatsApp. The window closes by itself once the number connects.',
         },
       ],
     },
@@ -142,7 +144,7 @@ const FAQ = {
       items: [
         {
           q: 'What does AI Chat do?',
-          a: 'When a prospect replies to your outreach message, AI Chat can continue the conversation automatically. It maintains context from the history and follows the personality/script you configure in Settings → AI Config.',
+          a: 'When a prospect replies to your outreach message, AI Chat can continue the conversation automatically. It maintains context from the history and follows the personality/script you configure for that chat (Conversations → the settings icon in the chat header).',
         },
         {
           q: 'How is it activated per conversation?',
@@ -150,7 +152,7 @@ const FAQ = {
         },
         {
           q: 'Does AI Chat respond immediately?',
-          a: 'No. By default it waits a few seconds to simulate a human reading the message before responding. You can tune this delay and response style in Settings → AI Config.',
+          a: 'No. By default it waits a few seconds to simulate a human reading the message before responding. You can tune this delay and response style per chat (Conversations → the settings icon in the chat header).',
         },
         {
           q: 'What does the AI health banner in Conversations mean?',
@@ -373,11 +375,11 @@ const FAQ = {
       items: [
         {
           q: '¿Qué es el límite diario?',
-          a: 'Cada instancia de WhatsApp solo puede enviar un número limitado de mensajes por día. El cupo se reinicia todos los días a las 00:00 UTC. "Disponibles" = cupo total − mensajes ya enviados − envíos ya programados para hoy.',
+          a: 'Cada instancia de WhatsApp solo puede enviar un número limitado de mensajes por día. El cupo se reinicia cada día calendario, en hora de Ciudad de México. "Disponibles" = cupo total − mensajes ya enviados − envíos ya programados para hoy.',
         },
         {
           q: '¿Qué es el modo warmup?',
-          a: 'Un número nuevo necesita "calentarse" gradualmente para no ser detectado como spam. En modo warmup el cupo diario es mucho menor (ej. 20–50 msgs/día). Con el tiempo y la actividad orgánica el cupo crece. Nunca empujes un número en warmup a su límite desde el primer día.',
+          a: 'Un número nuevo necesita "calentarse" gradualmente para no ser detectado como spam. En modo warmup una instancia puede enviar 20 mensajes al día e iniciar como máximo 5 conversaciones con contactos nuevos (sin warmup: 150 y 12). Los números nuevos arrancan en warmup automáticamente; un admin lo apaga desde Instancias cuando el número ya maduró.',
         },
         {
           q: '¿Cuándo se reinicia el contador?',
@@ -412,7 +414,7 @@ const FAQ = {
         },
         {
           q: '¿Por qué hay pausas entre mensajes?',
-          a: 'Enviar muy rápido parece un bot y activa el baneo. La configuración de envío permite definir el delay (recomendado: 8–20 s). El modo batch también agrupa envíos con pausas largas entre grupos para imitar comportamiento humano.',
+          a: 'Enviar muy rápido parece un bot y activa el baneo. La configuración de envío permite definir el delay (recomendado: 25 s o más; el predeterminado es 25–55 s — por debajo de 25 s sube el indicador de riesgo). El modo batch también agrupa envíos con pausas largas entre grupos para imitar comportamiento humano.',
         },
         {
           q: '¿Qué significan los ajustes de delay/lote/pausa en Config. de envío?',
@@ -435,15 +437,15 @@ const FAQ = {
         },
         {
           q: '¿Cómo protejo mis números de un baneo?',
-          a: '• No más de 50–80 mensajes/día en un número nuevo.\n• Rotación de plantillas (3+ variantes).\n• Pausas de 8–20 s entre mensajes.\n• Evita links en los primeros mensajes.\n• Perfil de WhatsApp completo (foto, descripción, categoría).\n• Responde a las respuestas — la interacción genuina es la mejor señal.',
+          a: '• Deja los números nuevos en modo warmup (20 mensajes/día) hasta que maduren.\n• Rotación de plantillas (3+ variantes).\n• Pausas de 25 s o más entre mensajes.\n• Evita links en los primeros mensajes.\n• Perfil de WhatsApp completo (foto, descripción, categoría).\n• Responde a las respuestas — la interacción genuina es la mejor señal.',
         },
         {
           q: "¿Qué significa la advertencia 'ACK' en una instancia?",
           a: 'Significa que los mensajes se están enviando pero WhatsApp no está confirmando la entrega de vuelta al sistema — es un problema distinto a estar desconectado (la sesión sigue en línea, pero no llegan los acuses de recibo). Trátalo como una señal de alerta para ese número y revísalo manualmente.',
         },
         {
-          q: '¿Por qué veo distintas formas de conectar según el número (QR vs. código)?',
-          a: 'Depende del proveedor detrás de esa instancia. wwebjs, WAHA y Wasender se conectan escaneando un código QR que se refresca solo. Evolution (el proveedor por defecto/legado) en cambio muestra un código de emparejamiento que se escribe en WhatsApp, y que expira y se regenera con una cuenta regresiva.',
+          q: '¿Cómo conecto o reconecto un número: QR o código?',
+          a: 'Con cualquiera de los dos. En la ventana de conexión elige:\n• Código QR: en WhatsApp entra a Dispositivos vinculados → Vincular un dispositivo y escanéalo. Se refresca solo.\n• Código de vinculación: Dispositivos vinculados → Vincular un dispositivo → "Vincular con el número de teléfono", y escribe el código de 8 caracteres.\nLos admins lo hacen desde Instancias; cada usuario puede reconectar sus propios números desde Configuración → WhatsApp. La ventana se cierra sola cuando el número queda conectado.',
         },
       ],
     },
@@ -481,7 +483,7 @@ const FAQ = {
       items: [
         {
           q: '¿Qué hace el Chat IA?',
-          a: 'Cuando un prospecto responde a tu mensaje, el Chat IA puede continuar la conversación automáticamente. Mantiene el contexto del historial y sigue la personalidad/guion que configures en Configuración → Config IA.',
+          a: 'Cuando un prospecto responde a tu mensaje, el Chat IA puede continuar la conversación automáticamente. Mantiene el contexto del historial y sigue la personalidad/guion que configures para ese chat (Conversaciones → ícono de ajustes en la cabecera del chat).',
         },
         {
           q: '¿Cómo se activa por conversación?',
@@ -489,7 +491,7 @@ const FAQ = {
         },
         {
           q: '¿El Chat IA responde de inmediato?',
-          a: 'No. Por defecto espera unos segundos para simular que un humano leyó el mensaje. Puedes ajustar ese delay y el estilo en Configuración → Config IA.',
+          a: 'No. Por defecto espera unos segundos para simular que un humano leyó el mensaje. Puedes ajustar ese delay y el estilo por chat (Conversaciones → ícono de ajustes en la cabecera del chat).',
         },
         {
           q: '¿Qué significa el aviso de salud de IA en Conversaciones?',
@@ -707,87 +709,78 @@ const FAQ = {
 }
 
 // ─── Accordion item ───────────────────────────────────────────────────────────
-function FaqItem({ q, a, index }) {
-  const [open, setOpen] = useState(false)
+// Controlado desde el panel (una sola pregunta abierta a la vez). Antes cada
+// pregunta guardaba su propio "abierto" con key={índice}: al cambiar de sección
+// React reutilizaba la pregunta en esa posición y aparecía ya abierta.
+function FaqItem({ q, a, index, open, onToggle, tag }) {
   return (
     <Box sx={{
-      borderRadius: 2,
-      mb: 0.8,
-      overflow: 'hidden',
-      border: `1px solid ${open ? 'rgba(var(--accent-rgb,59,130,246),0.25)' : 'rgba(255,255,255,0.06)'}`,
-      bgcolor: open ? 'rgba(var(--accent-rgb,59,130,246),0.04)' : 'rgba(255,255,255,0.025)',
-      transition: 'border-color 0.18s, background 0.18s',
+      borderRadius: '12px', mb: 0.9, overflow: 'hidden',
+      border: '1px solid', borderColor: open ? 'rgba(var(--accent-rgb,59,130,246),0.35)' : 'var(--border, rgba(255,255,255,0.08))',
+      bgcolor: open ? 'rgba(var(--accent-rgb,59,130,246),0.06)' : 'var(--surface, rgba(255,255,255,0.025))',
+      transition: 'border-color 0.18s, background-color 0.18s',
     }}>
-      <Box
-        onClick={() => setOpen(o => !o)}
+      <Box component="button" type="button" onClick={onToggle} aria-expanded={open}
         sx={{
-          display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
-          gap: 1, px: 1.4, py: 1.1, cursor: 'pointer',
-          '&:hover': { bgcolor: 'rgba(255,255,255,0.03)' },
-        }}
-      >
-        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.1, flex: 1 }}>
-          <Box sx={{
-            mt: 0.2, flexShrink: 0, width: 17, height: 17, borderRadius: '50%',
-            bgcolor: open ? 'rgba(var(--accent-rgb,59,130,246),0.22)' : 'rgba(255,255,255,0.07)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            transition: 'background 0.18s',
-          }}>
-            <Typography sx={{ fontSize: '0.58rem', fontWeight: 800, color: open ? 'var(--accent,#60a5fa)' : 'rgba(255,255,255,0.3)', lineHeight: 1 }}>
-              {String(index + 1).padStart(2, '0')}
-            </Typography>
-          </Box>
-          <Typography sx={{
-            fontSize: '0.77rem', fontWeight: 600, lineHeight: 1.45,
-            color: open ? 'var(--accent,#93c5fd)' : 'var(--text, #e2e8f0)',
-            transition: 'color 0.15s',
-          }}>
-            {q}
+          all: 'unset', boxSizing: 'border-box', width: '100%', cursor: 'pointer',
+          display: 'flex', alignItems: 'flex-start', gap: 1.1, px: 1.5, py: 1.2,
+          '&:hover': { bgcolor: 'var(--item-hover, rgba(255,255,255,0.04))' },
+          '&:focus-visible': { outline: '2px solid var(--accent)', outlineOffset: -2, borderRadius: '12px' },
+        }}>
+        <Box sx={{
+          mt: 0.1, flexShrink: 0, width: 22, height: 22, borderRadius: '7px',
+          bgcolor: open ? 'rgba(var(--accent-rgb,59,130,246),0.2)' : 'var(--item-hover, rgba(255,255,255,0.06))',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background-color 0.18s',
+        }}>
+          <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, color: open ? 'var(--accent,#60a5fa)' : 'var(--text-muted)', lineHeight: 1 }}>
+            {String(index + 1).padStart(2, '0')}
           </Typography>
         </Box>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          {tag && (
+            <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--accent,#60a5fa)', mb: 0.2 }}>
+              {tag}
+            </Typography>
+          )}
+          <Typography sx={{ fontSize: '0.82rem', fontWeight: 650, lineHeight: 1.45, color: 'var(--text, #e2e8f0)' }}>{q}</Typography>
+        </Box>
         <ExpandMoreIcon sx={{
-          fontSize: 15, flexShrink: 0, mt: 0.25,
-          color: open ? 'var(--accent,#60a5fa)' : 'rgba(255,255,255,0.28)',
-          transform: open ? 'rotate(180deg)' : 'none',
-          transition: 'transform 0.22s, color 0.15s',
+          fontSize: 18, flexShrink: 0, mt: 0.15,
+          color: open ? 'var(--accent,#60a5fa)' : 'var(--text-muted)',
+          transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.22s, color 0.15s',
         }} />
       </Box>
 
-      {open && (
-        <Box sx={{
-          px: 1.4, pb: 1.3, pt: 0.2,
-          borderTop: '1px solid rgba(var(--accent-rgb,59,130,246),0.1)',
-        }}>
+      <Collapse in={open} timeout={200} unmountOnExit>
+        <Box sx={{ px: 1.5, pb: 1.4, pl: 'calc(12px + 22px + 9px)', borderTop: '1px solid rgba(var(--accent-rgb,59,130,246),0.12)' }}>
           {a.split('\n').map((line, i) => {
             const isBullet = line.startsWith('•')
             return (
               <Typography key={i} sx={{
-                fontSize: '0.73rem', color: 'rgba(255,255,255,0.55)',
-                lineHeight: 1.65, mt: i > 0 ? (isBullet ? 0.25 : 0.5) : 0.7,
-                pl: isBullet ? 1.6 : 0,
-                position: 'relative',
+                fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.65,
+                mt: i > 0 ? (isBullet ? 0.35 : 0.6) : 1, pl: isBullet ? 1.6 : 0, position: 'relative',
               }}>
                 {isBullet && (
-                  <Box component="span" sx={{
-                    position: 'absolute', left: 0.5, top: '0.15em',
-                    color: 'rgba(var(--accent-rgb,59,130,246),0.55)', fontWeight: 700, fontSize: '0.7rem',
-                  }}>›</Box>
+                  <Box component="span" sx={{ position: 'absolute', left: 0.5, top: '0.1em', color: 'var(--accent,#60a5fa)', fontWeight: 800 }}>›</Box>
                 )}
                 {isBullet ? line.slice(2) : line}
               </Typography>
             )
           })}
         </Box>
-      )}
+      </Collapse>
     </Box>
   )
 }
+
+// Búsqueda sin acentos ni mayúsculas ("conexion" encuentra "conexión").
+const fold = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
 
 // ─── Rotating footer tips ──────────────────────────────────────────────────────
 const TIPS = {
   en: [
     'Tip: rotate 3+ message variants to protect your numbers.',
-    'Tip: keep 8–20s pauses between messages so you don’t look like a bot.',
+    'Tip: keep 25 s or more between messages so you don’t look like a bot.',
     'Tip: ramp up a new number gradually in warmup mode — never push it to its limit on day one.',
     'Tip: respond to replies — genuine engagement is the best signal for WhatsApp.',
     'Tip: avoid links in your very first message to a new contact.',
@@ -797,7 +790,7 @@ const TIPS = {
   ],
   es: [
     'Tip: rota 3+ variantes de mensaje para proteger tus números.',
-    'Tip: mantén pausas de 8–20 s entre mensajes para no parecer un bot.',
+    'Tip: deja 25 s o más entre mensajes para no parecer un bot.',
     'Tip: sube de intensidad un número nuevo gradualmente en modo warmup — nunca lo lleves al límite el primer día.',
     'Tip: responde a las respuestas — la interacción genuina es la mejor señal para WhatsApp.',
     'Tip: evita links en tu primer mensaje a un contacto nuevo.',
@@ -811,8 +804,11 @@ const TIP_INTERVAL_MS = 6000
 // ─── Panel ────────────────────────────────────────────────────────────────────
 export default function HelpPanel({ open, onClose }) {
   const { lang } = useLang()
+  const en = lang === 'en'
   const faq = FAQ[lang] || FAQ.es
   const [activeCat, setActiveCat] = useState(0)
+  const [openKey, setOpenKey] = useState(null)
+  const [query, setQuery] = useState('')
   const tips = TIPS[lang] || TIPS.es
   const [tipIndex, setTipIndex] = useState(0)
 
@@ -823,80 +819,111 @@ export default function HelpPanel({ open, onClose }) {
     return () => clearInterval(id)
   }, [open, lang])
 
+  const goCat = i => { setActiveCat(i); setOpenKey(null) }
+  const toggle = key => setOpenKey(k => (k === key ? null : key))
+  const q = fold(query.trim())
+  // Con búsqueda: preguntas de TODAS las secciones que coincidan, con su
+  // sección como etiqueta. Sin búsqueda: solo la sección elegida.
+  const results = q
+    ? faq.flatMap((section, ci) => section.items
+        .map((item, i) => ({ ...item, key: `${ci}-${i}`, tag: section.cat }))
+        .filter(item => fold(item.q).includes(q) || fold(item.a).includes(q)))
+    : (faq[activeCat]?.items || []).map((item, i) => ({ ...item, key: `${activeCat}-${i}` }))
+  const ActiveIcon = faq[activeCat]?.icon
+
   return (
     <Box sx={{
       position: 'absolute', top: 0, right: 0, bottom: 0,
-      width: open ? 'min(420px, 92%)' : 0,
+      width: open ? 'min(440px, 94%)' : 0,
       overflow: 'hidden',
       transition: 'width 0.25s cubic-bezier(0.4,0,0.2,1)',
       zIndex: 5,
     }}>
       {open && (
         <Box sx={{
-          width: 'min(420px, 92vw)', display: 'flex', flexDirection: 'column', height: '100%',
+          width: 'min(440px, 94vw)', display: 'flex', flexDirection: 'column', height: '100%',
           bgcolor: 'var(--card-bg, #161d2e)',
-          borderLeft: '1px solid rgba(255,255,255,0.07)',
+          borderLeft: '1px solid var(--border, rgba(255,255,255,0.08))',
+          boxShadow: '-12px 0 40px rgba(0,0,0,0.35)',
         }}>
-          {/* ── Header ── */}
+          {/* ── Header + búsqueda ── */}
           <Box sx={{
-            px: 2.2, py: 1.6, flexShrink: 0,
-            background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.13) 0%, rgba(var(--accent-rgb,59,130,246),0.04) 60%, transparent 100%)',
-            borderBottom: '1px solid rgba(255,255,255,0.07)',
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            px: 2, pt: 1.8, pb: 1.5, flexShrink: 0,
+            background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.16) 0%, rgba(var(--accent-rgb,59,130,246),0.04) 60%, transparent 100%)',
+            borderBottom: '1px solid var(--border, rgba(255,255,255,0.08))',
           }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.4 }}>
-              <Box sx={{
-                width: 32, height: 32, borderRadius: 2,
-                background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.4), rgba(var(--accent-rgb,59,130,246),0.15))',
-                border: '1px solid rgba(var(--accent-rgb,59,130,246),0.3)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                boxShadow: '0 2px 12px rgba(var(--accent-rgb,59,130,246),0.2)',
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 1.4 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.3 }}>
+                <Box sx={{
+                  width: 36, height: 36, borderRadius: '11px',
+                  background: 'linear-gradient(135deg, rgba(var(--accent-rgb,59,130,246),0.4), rgba(var(--accent-rgb,59,130,246),0.12))',
+                  border: '1px solid rgba(var(--accent-rgb,59,130,246),0.35)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  boxShadow: '0 4px 14px rgba(var(--accent-rgb,59,130,246),0.25)',
+                }}>
+                  <HelpOutlinedIcon sx={{ fontSize: 19, color: 'var(--accent,#60a5fa)' }} />
+                </Box>
+                <Box>
+                  <Typography sx={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--text,#f1f5f9)', lineHeight: 1.2 }}>
+                    {en ? 'Help & FAQ' : 'Ayuda y preguntas frecuentes'}
+                  </Typography>
+                  <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted)', mt: 0.15 }}>
+                    {en ? 'Quick answers about the app' : 'Respuestas rápidas sobre la app'}
+                  </Typography>
+                </Box>
+              </Box>
+              <IconButton size="small" onClick={onClose} aria-label={en ? 'Close help' : 'Cerrar ayuda'} sx={{
+                color: 'var(--text-muted)', width: 30, height: 30,
+                '&:hover': { color: 'var(--text,#f1f5f9)', bgcolor: 'var(--item-hover, rgba(255,255,255,0.07))' },
               }}>
-                <HelpOutlinedIcon sx={{ fontSize: 17, color: 'var(--accent,#60a5fa)' }} />
-              </Box>
-              <Box>
-                <Typography sx={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text,#f1f5f9)', lineHeight: 1.2 }}>
-                  {lang === 'en' ? 'Help & FAQ' : 'Ayuda y FAQ'}
-                </Typography>
-                <Typography sx={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.32)', mt: 0.1 }}>
-                  {faq[activeCat]?.cat}
-                </Typography>
-              </Box>
+                <CloseIcon sx={{ fontSize: 17 }} />
+              </IconButton>
             </Box>
-            <IconButton size="small" onClick={onClose} sx={{
-              color: 'rgba(255,255,255,0.3)', width: 26, height: 26,
-              '&:hover': { color: 'var(--text,#f1f5f9)', bgcolor: 'rgba(255,255,255,0.07)' },
+            <Box sx={{
+              display: 'flex', alignItems: 'center', gap: 1, px: 1.3, height: 38, borderRadius: '10px',
+              bgcolor: 'var(--surface, rgba(255,255,255,0.04))', border: '1px solid var(--border, rgba(255,255,255,0.1))',
+              '&:focus-within': { borderColor: 'var(--accent,#3b82f6)' }, transition: 'border-color 0.15s',
             }}>
-              <CloseIcon sx={{ fontSize: 15 }} />
-            </IconButton>
+              <SearchIcon sx={{ fontSize: 18, color: 'var(--text-muted)' }} />
+              <Box component="input" value={query} onChange={e => { setQuery(e.target.value); setOpenKey(null) }}
+                placeholder={en ? 'Search a question…' : 'Busca una pregunta…'} aria-label={en ? 'Search the FAQ' : 'Buscar en las preguntas'}
+                sx={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', bgcolor: 'transparent', color: 'var(--text)', fontSize: '0.82rem', fontFamily: 'inherit',
+                  '&::placeholder': { color: 'var(--text-muted)', opacity: 0.8 } }} />
+              {query && (
+                <IconButton size="small" onClick={() => setQuery('')} aria-label={en ? 'Clear search' : 'Borrar búsqueda'} sx={{ p: 0.3, color: 'var(--text-muted)' }}>
+                  <CloseIcon sx={{ fontSize: 15 }} />
+                </IconButton>
+              )}
+            </Box>
           </Box>
 
-          {/* ── Body: left nav + content ── */}
+          {/* ── Body: barra lateral de secciones + preguntas ── */}
           <Box sx={{ flex: 1, display: 'flex', minHeight: 0 }}>
-            {/* Category nav */}
-            <Box sx={{
+            <Box role="tablist" aria-orientation="vertical" aria-label={en ? 'FAQ sections' : 'Secciones'} sx={{
               width: 80, flexShrink: 0,
-              borderRight: '1px solid rgba(255,255,255,0.06)',
+              borderRight: '1px solid var(--border, rgba(255,255,255,0.06))',
               py: 1, display: 'flex', flexDirection: 'column', gap: 0.3,
               overflowY: 'auto',
               scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' },
             }}>
               {faq.map((section, i) => {
                 const Icon = section.icon
-                const isActive = activeCat === i
+                // Con búsqueda activa no hay sección elegida: los resultados vienen de todas.
+                const isActive = !q && activeCat === i
                 return (
-                  <Tooltip key={i} title={section.cat} placement="right" arrow>
-                    <Box
-                      onClick={() => setActiveCat(i)}
+                  <Tooltip key={section.key || i} title={section.cat} placement="right" arrow>
+                    <Box component="button" type="button" role="tab" aria-selected={isActive}
+                      onClick={() => { setQuery(''); goCat(i) }}
                       sx={{
-                        mx: 0.8, px: 0.5, py: 1, borderRadius: 2, cursor: 'pointer',
+                        all: 'unset', boxSizing: 'border-box', cursor: 'pointer',
+                        mx: 0.8, px: 0.5, py: 1, borderRadius: 2,
                         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.55,
                         position: 'relative', overflow: 'visible',
                         bgcolor: isActive ? 'rgba(var(--accent-rgb,59,130,246),0.1)' : 'transparent',
                         transition: 'background 0.15s',
-                        '&:hover': { bgcolor: isActive ? 'rgba(var(--accent-rgb,59,130,246),0.14)' : 'rgba(255,255,255,0.05)' },
-                      }}
-                    >
+                        '&:hover': { bgcolor: isActive ? 'rgba(var(--accent-rgb,59,130,246),0.14)' : 'var(--item-hover, rgba(255,255,255,0.05))' },
+                        '&:focus-visible': { outline: '2px solid var(--accent)', outlineOffset: -2 },
+                      }}>
                       {isActive && (
                         <Box sx={{
                           position: 'absolute', left: -6.4, top: '18%', bottom: '18%',
@@ -907,12 +934,12 @@ export default function HelpPanel({ open, onClose }) {
                       )}
                       <Icon sx={{
                         fontSize: 18,
-                        color: isActive ? 'var(--accent,#60a5fa)' : 'rgba(255,255,255,0.3)',
+                        color: isActive ? 'var(--accent,#60a5fa)' : 'var(--text-muted)',
                         transition: 'color 0.15s',
                       }} />
                       <Typography sx={{
-                        fontSize: '0.53rem', fontWeight: isActive ? 700 : 500,
-                        color: isActive ? 'var(--accent,#93c5fd)' : 'rgba(255,255,255,0.28)',
+                        fontSize: '0.56rem', fontWeight: isActive ? 700 : 500,
+                        color: isActive ? 'var(--accent,#93c5fd)' : 'var(--text-muted)',
                         textAlign: 'center', lineHeight: 1.3,
                         transition: 'color 0.15s',
                       }}>
@@ -924,48 +951,47 @@ export default function HelpPanel({ open, onClose }) {
               })}
             </Box>
 
-            {/* FAQ items */}
-            <Box sx={{
-              flex: 1, overflowY: 'auto', px: 1.3, py: 1.3, minWidth: 0,
-              scrollbarWidth: 'thin',
-              scrollbarColor: 'rgba(255,255,255,0.08) transparent',
-              '&::-webkit-scrollbar': { width: 3 },
-              '&::-webkit-scrollbar-thumb': { background: 'rgba(255,255,255,0.08)', borderRadius: 2 },
-            }}>
-              {/* Section label */}
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.9, mb: 1.3 }}>
-                {(() => { const Icon = faq[activeCat]?.icon; return Icon ? <Icon sx={{ fontSize: 14, color: 'var(--accent,#60a5fa)' }} /> : null })()}
-                <Typography sx={{
-                  fontSize: '0.68rem', fontWeight: 700,
-                  color: 'rgba(var(--accent-rgb,59,130,246),0.8)',
-                  letterSpacing: '0.05em', textTransform: 'uppercase',
-                }}>
-                  {faq[activeCat]?.cat}
-                </Typography>
-                <Box sx={{ flex: 1, height: '1px', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.12)' }} />
-              </Box>
-
-              {(faq[activeCat]?.items || []).map((item, i) => (
-                <FaqItem key={i} q={item.q} a={item.a} index={i} />
-              ))}
+          {/* ── Preguntas ── */}
+          <Box sx={{
+            flex: 1, overflowY: 'auto', px: 1.4, py: 1.4, minWidth: 0,
+            scrollbarWidth: 'thin', scrollbarColor: 'var(--scrollbar-thumb, rgba(255,255,255,0.1)) transparent',
+          }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.9, mb: 1.3 }}>
+              {!q && ActiveIcon && <ActiveIcon sx={{ fontSize: 15, color: 'var(--accent,#60a5fa)' }} />}
+              <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--accent,#60a5fa)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                {q ? (en ? `${results.length} result${results.length === 1 ? '' : 's'}` : `${results.length} resultado${results.length === 1 ? '' : 's'}`) : faq[activeCat]?.cat}
+              </Typography>
+              <Box sx={{ flex: 1, height: '1px', bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.15)' }} />
             </Box>
+
+            {results.length === 0 ? (
+              <Box sx={{ textAlign: 'center', py: 5, px: 2 }}>
+                <SearchIcon sx={{ fontSize: 28, color: 'var(--text-muted)', opacity: 0.6 }} />
+                <Typography sx={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--text)', mt: 1 }}>
+                  {en ? 'Nothing matches that' : 'No encontramos nada con eso'}
+                </Typography>
+                <Typography sx={{ fontSize: '0.76rem', color: 'var(--text-muted)', mt: 0.5 }}>
+                  {en ? 'Try a shorter word, like "QR" or "warmup".' : 'Prueba con una palabra más corta, como "QR" o "warmup".'}
+                </Typography>
+              </Box>
+            ) : results.map((item, i) => (
+              <FaqItem key={item.key} q={item.q} a={item.a} index={i} tag={item.tag}
+                open={openKey === item.key} onToggle={() => toggle(item.key)} />
+            ))}
+          </Box>
           </Box>
 
           {/* ── Footer ── */}
           <Box sx={{
-            px: 2, py: 0.9, flexShrink: 0,
-            borderTop: '1px solid rgba(255,255,255,0.06)',
-            bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.03)',
+            px: 2, py: 1, flexShrink: 0,
+            borderTop: '1px solid var(--border, rgba(255,255,255,0.06))',
+            bgcolor: 'rgba(var(--accent-rgb,59,130,246),0.05)',
             display: 'flex', alignItems: 'center', gap: 1,
           }}>
-            <Box sx={{
-              width: 5, height: 5, borderRadius: '50%', flexShrink: 0,
-              bgcolor: 'var(--accent,#60a5fa)',
-              boxShadow: '0 0 6px rgba(var(--accent-rgb,59,130,246),0.55)',
-            }} />
+            <LightbulbIcon sx={{ fontSize: 15, color: '#fbbf24', flexShrink: 0 }} />
             <Box sx={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
               <Typography key={tipIndex} sx={{
-                fontSize: '0.64rem', color: 'rgba(255,255,255,0.28)', fontStyle: 'italic',
+                fontSize: '0.7rem', color: 'var(--text-muted)',
                 whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                 '@keyframes tipSlideIn': {
                   '0%':   { transform: 'translateX(14px)', opacity: 0 },

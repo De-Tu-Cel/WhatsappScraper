@@ -211,10 +211,15 @@ class _Col:
         return SimpleNamespace(upserted_id=None)
 
 
+class _FakeDatabase(SimpleNamespace):
+    def __getitem__(self, name):
+        return getattr(self, name)
+
+
 class _FakeMgr:
     def __init__(self, companies=(), contacts=(), ideas=()):
-        self.db = SimpleNamespace(companies=_Col(companies), contacts=_Col(contacts),
-                                  social_media=_Col(), search_ideas=_Col(ideas))
+        self.db = _FakeDatabase(companies=_Col(companies), contacts=_Col(contacts),
+                               social_media=_Col(), search_ideas=_Col(ideas), scraping_runs=_Col())
 
     def insert_contact(self, c):
         self.db.contacts.docs.append(dict(c))

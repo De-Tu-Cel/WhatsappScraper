@@ -109,7 +109,10 @@ def test_processing_preserves_country_from_saved_search(monkeypatch, explicit, e
     scraper = Mock()
     scraper.scrape_site.side_effect = RuntimeError("stop after observing scraper arguments")
     monkeypatch.setattr(pipeline, "MongoDBManager", lambda: manager)
-    monkeypatch.setattr(pipeline, "WebsiteScraper", lambda: scraper)
+    def make_scraper(db):
+        assert db is manager.db
+        return scraper
+    monkeypatch.setattr(pipeline, "WebsiteScraper", make_scraper)
     monkeypatch.setattr(pipeline, "WhatAppClient", Mock())
     monkeypatch.setattr(pipeline, "_check_blacklist", lambda *args: None)
     with pytest.raises(RuntimeError, match="stop after observing"):

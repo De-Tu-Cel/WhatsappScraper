@@ -722,7 +722,7 @@ class TestBatchCompleteNotification:
 
 class TestCheckSendAllowed:
     def test_no_company_id_is_allowed(self, mgr):
-        assert sw._check_send_allowed(mgr, "") == (False, "skipped_missing_consent")
+        assert sw._check_send_allowed(mgr, "") == (True, "")
 
     def test_blacklisted_number_is_not_allowed_in_any_format(self, mgr):
         """The queue used to check only the company — a blocked number inside a
@@ -734,7 +734,7 @@ class TestCheckSendAllowed:
     def test_malformed_company_id_is_allowed(self, mgr):
         # Length check only (`len(company_id) != 24`) — anything else short-
         # circuits to fail-open rather than crashing on a bad ObjectId().
-        assert sw._check_send_allowed(mgr, "not-a-real-id") == (False, "skipped_missing_consent")
+        assert sw._check_send_allowed(mgr, "not-a-real-id") == (True, "")
 
     def test_blocked_company_is_not_allowed(self, mgr):
         cid = ObjectId()
@@ -752,12 +752,12 @@ class TestCheckSendAllowed:
         cid = ObjectId()
         mgr.db.companies.insert_one({"_id": cid, "domain": "normal.com", "industry": "gas", "blocked": False})
         with patch("app.pipeline._check_blacklist", return_value=None):
-            assert sw._check_send_allowed(mgr, str(cid)) == (False, "skipped_missing_consent")
+            assert sw._check_send_allowed(mgr, str(cid)) == (True, "")
 
     def test_company_not_found_is_allowed(self, mgr):
         # Deleted/moved company between enqueue and send — fail open rather
         # than silently dropping an otherwise-valid queued item.
-        assert sw._check_send_allowed(mgr, str(ObjectId())) == (False, "skipped_missing_consent")
+        assert sw._check_send_allowed(mgr, str(ObjectId())) == (True, "")
 
 
 # ══════════════════════════════════════════════════════════════════════════

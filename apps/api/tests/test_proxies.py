@@ -111,8 +111,8 @@ class TestLaunchPayload:
     def test_with_and_without_proxy(self):
         p = {"host": "1.2.3.4", "port": 80, "username": "u", "password": "s"}
         assert px.launch_payload(p, True) == {"proxy": {"server": "1.2.3.4:80", "username": "u", "password": "s"},
-                                              "lean": True, "restart": True}
-        assert px.launch_payload(None, False, restart=False) == {"proxy": None, "lean": False, "restart": False}
+                                              "lean": True, "restart": True, "proxy_required": True}
+        assert px.launch_payload(None, False, restart=False) == {"proxy": None, "lean": False, "restart": False, "proxy_required": False}
 
 
 class TestImportReappliesChangedPasswords:
@@ -239,6 +239,8 @@ class TestAutonomousAssignment:
         moved, mails = [], []
         monkeypatch.setattr(px, "assign", lambda db, name, pid: moved.append(name) or {"proxy_id": "p2"})
         monkeypatch.setattr(px, "_proxy_doc", lambda db, pid: {"host": "5.6.7.8", "port": 81})
+        monkeypatch.setattr(px, "_live_status", lambda name: 'disconnected')
+        monkeypatch.setattr(px, "_wait_connected", lambda name: 'connected')
         import app.email_service as es
         monkeypatch.setattr(es, "send_proxy_failing_email", lambda *a, **kw: mails.append(kw.get("moved_to")))
         px.health_round(_DB(), ["alertas@example.com"])

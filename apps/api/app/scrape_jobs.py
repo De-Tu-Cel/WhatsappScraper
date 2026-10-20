@@ -34,7 +34,7 @@ _STALE_AFTER_SEC    = 600  # A single slow URL (JS/SPA with 25 route probes) can
 _CONCURRENCY        = 4    # matches the CONCURRENCY the frontend loops used to hardcode.
 
 
-def _process_one_url(url: str, maps_lead: dict | None = None) -> dict:
+def _process_one_url(url: str, maps_lead: dict | None = None, country: str | None = None) -> dict:
     """Mirrors the per-URL result shape the 3 frontend components (searchProspects,
     batchProcessor, csvImporter) used to build client-side from the /process-url
     response — a superset covering every field any of the 3 read."""
@@ -44,7 +44,7 @@ def _process_one_url(url: str, maps_lead: dict | None = None) -> dict:
         if is_maps_lead_url(url):
             d = process_maps_lead(url, maps_lead)
         else:
-            d = process_url(url, skip_send=True)
+            d = process_url(url, skip_send=True, **({'country': country} if country else {}))
     except Exception as e:
         return {
             "url": url, "empresa": "—", "industria": "—", "whatsapp": "", "all_whatsapp": [],
@@ -170,8 +170,10 @@ def _run_scrape_job(job_id: str):
             ex = ThreadPoolExecutor(max_workers=len(chunk))
             try:
                 _leads = {l.get("url"): l for l in (job.get("maps_leads") or [])}
+                _countries = {item['url']: item['country'] for item in job.get('url_countries', [])}
                 future_map = {
                     (ex.submit(_process_one_url, url, _leads[url]) if url in _leads
+                     else ex.submit(_process_one_url, url, country=_countries[url]) if _countries.get(url)
                      else ex.submit(_process_one_url, url)): url
                     for url in chunk
                 }
@@ -377,7 +379,17 @@ def create_scrape_job(db, surface: str, urls: list, user: dict, maps_leads: dict
     # quick ones sat waiting behind them. Stable sort keeps each group's order.
     from app.searcher import is_maps_lead_url
     urls = sorted(urls, key=lambda u: not is_maps_lead_url(u))
+    # Persist the search country before process_url consumes search_ideas.
+    # A second user's job must not lose that context when the first starts.
+    url_countries = []
+    try:
+        url_countries = [{'url': item['url'], 'country': item['target_country']}
+                         for item in db.db.search_ideas.find({'url': {'$in': urls}}, {'url': 1, 'target_country': 1})
+                         if isinstance(item.get('target_country'), str) and item['target_country']]
+    except Exception:
+        log.warning('Search country snapshot unavailable; scraping will use URL country hints', exc_info=True)
     doc = {
+        'url_countries': url_countries,
         # A list, not a {url: lead} map — URLs contain dots, which aren't safe as Mongo field names.
         "maps_leads": [{**l, "url": u} for u, l in (maps_leads or {}).items() if u in set(urls)],
         "surface": surface,

@@ -1634,7 +1634,7 @@ def _call_llm_for_reply(turns: list, context: dict, is_cold_start: bool = False,
         return None
 
 
-def _is_blocked_or_blacklisted(db, company_id: str, phone_number: str | None = None) -> bool:
+def _is_blocked_or_blacklisted(db, company_id: str, phone_number: str | None = None, *, purpose='reply') -> bool:
     """Same check /send-message (routes.py) already does before a manual send —
     ai_followup.py had no equivalent anywhere, so a company blocked/blacklisted
     AFTER Andy's session started was never actually protected."""
@@ -1644,7 +1644,7 @@ def _is_blocked_or_blacklisted(db, company_id: str, phone_number: str | None = N
         # as 52… — the old exact-digits match never caught them, so Andy kept
         # answering a number someone had blocked.
         from app.send_guard import send_block_reason
-        return send_block_reason(db, company_id or "", phone_number or "", purpose="reply") is not None
+        return send_block_reason(db, company_id or "", phone_number or "", purpose=purpose) is not None
     except Exception as exc:
         log.warning("[AIFollowup] blacklist check failed (blocking send): %s", exc)
         return True
@@ -1781,7 +1781,7 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
     # se bloquea o se agrega a blacklist DESPUÉS de que Andy ya tiene una sesión
     # activa con ella, nada lo detenía — seguía mandándole mensajes a alguien
     # que ya se marcó como "no contactar".
-    if _is_blocked_or_blacklisted(db, company_id, phone_number):
+    if _is_blocked_or_blacklisted(db, company_id, phone_number, purpose='outreach' if proactive else 'reply'):
         print(f"[AIFollowup] EXIT: empresa bloqueada/en blacklist — {company_id}")
         return
 
@@ -1968,7 +1968,7 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
 
     # Same blacklist/blocked re-check as above, for the same reason as the status
     # re-check above it: the company can get blocked/blacklisted DURING the delay.
-    if _is_blocked_or_blacklisted(db, company_id, phone_number):
+    if _is_blocked_or_blacklisted(db, company_id, phone_number, purpose='outreach' if proactive else 'reply'):
         print(f"[AIFollowup] EXIT: empresa bloqueada/en blacklist durante el delay — {company_id}")
         return
 
@@ -2473,7 +2473,7 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
 
     # Blocked while the LLM was generating (the earlier checks ran before the
     # read delay and the LLM call) — don't send.
-    if _is_blocked_or_blacklisted(db, company_id, phone_number):
+    if _is_blocked_or_blacklisted(db, company_id, phone_number, purpose='outreach' if proactive else 'reply'):
         print(f"[AIFollowup] EXIT: blocked/blacklisted while generating — {company_id}")
         db.db.ai_followup_sessions.update_one({"_id": sid}, {"$set": {"ai_typing": False}})
         return
@@ -2610,12 +2610,21 @@ def process_inbound_reply(phone_number: str, company_id: str, inbound_body: str 
                 {"$set": {"company_id": company_id, "updated_at": datetime.now()}}, upsert=True)
             typing_delay_ms = _typing_duration_ms(ai_text)
             from app.delivery_receipts import dispatch_once, operation_key
+            from app.send_guard import dispatch_guard
             send_result = dispatch_once(db,
                 operation_key('ai', str(sid), inbound_log_id or session.get('turn_count', 0), proactive),
                 lambda: ww_client.send(phone_number, ai_text, delay_ms=typing_delay_ms,
                                          save_contact=False, contact_name=_co_name_ai,
-                                         send_before=send_deadline), message_body=ai_text)
+                                         send_before=send_deadline), message_body=ai_text,
+                authorize=dispatch_guard(
+                    db, company_id, phone_number, purpose='outreach' if proactive else 'reply'))
             ai_text = send_result.get('sent_message_body', ai_text)
+            if send_result.get('blocked_reason'):
+                if _cap_reserved_new:
+                    from app.daily_cap import release_daily_slot
+                    release_daily_slot(db, instance, _phone_digits_cap)
+                _close_session_without_reply(db, sid, company_id, phone_number, 'recipient_blocked')
+                return False
             message_id = send_result.get("messageId")
             status = "sent" if send_result.get("success") else "failed"
             resp_json = send_result

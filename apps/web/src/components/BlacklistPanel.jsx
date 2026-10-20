@@ -5,7 +5,6 @@ import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import TextField from '@mui/material/TextField'
 import IconButton from '@mui/material/IconButton'
-import Tooltip from '@mui/material/Tooltip'
 import InputAdornment from '@mui/material/InputAdornment'
 import CircularProgress from '@mui/material/CircularProgress'
 import BlockIcon from '@mui/icons-material/Block'
@@ -55,31 +54,57 @@ const FIELD_SX = {
   '& .MuiFormHelperText-root': { color: DANGER, fontSize: '0.68rem', mt: 0.3 },
 }
 
-function AddRow({ value, onChange, onAdd, error, placeholder, tip, label, adding }) {
+// Color e ícono por categoría — se repite en la tarjeta de arriba, en la caja
+// de "Nueva exclusión" y en cada fila, para que siempre sepas dónde estás.
+const TYPE_META = {
+  domain:   { Icon: LanguageIcon, color: 'var(--accent, #3b82f6)', rgb: 'var(--accent-rgb,59,130,246)' },
+  industry: { Icon: CategoryIcon, color: '#a855f7', rgb: '168,85,247' },
+  phone:    { Icon: WhatsAppIcon, color: DANGER, rgb: '239,68,68' },
+}
+
+function TypeIcon({ type, size = 30 }) {
+  const { Icon, color, rgb } = TYPE_META[type] || TYPE_META.domain
   return (
-    <Box component="form" onSubmit={event => { event.preventDefault(); onAdd() }} sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', sm: 'minmax(0,1fr) auto' }, gap: 1.25, alignItems: 'start' }}>
+    <Box sx={{
+      width: size, height: size, borderRadius: `${Math.round(size * 0.3)}px`, flexShrink: 0,
+      background: `linear-gradient(135deg, rgba(${rgb},0.24) 0%, rgba(${rgb},0.08) 100%)`,
+      border: `1px solid rgba(${rgb},0.32)`, color,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', '& svg': { fontSize: Math.round(size * 0.55) },
+    }}>
+      <Icon />
+    </Box>
+  )
+}
+
+function AddRow({ value, onChange, onAdd, error, placeholder, label, adding }) {
+  return (
+    <Box component="form" onSubmit={event => { event.preventDefault(); onAdd() }} sx={{ display: 'flex', flexDirection: 'column', gap: 1.2 }}>
       <TextField
         size="small" fullWidth
         value={value}
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
-        label={label}
         disabled={adding}
         error={!!error}
         helperText={error || ''}
-        slotProps={{ input: { endAdornment: (
-          <InputAdornment position="end">
-            <Tooltip title={tip} placement="top" arrow>
-              <InfoOutlinedIcon sx={{ fontSize: 14, color: 'var(--text-muted, rgba(255,255,255,0.4))', cursor: 'help' }} />
-            </Tooltip>
-          </InputAdornment>
-        ) } }}
-        sx={{ ...FIELD_SX, '& .MuiOutlinedInput-root': { ...FIELD_SX['& .MuiOutlinedInput-root'], '& fieldset': { borderColor: error ? DANGER : 'var(--border, rgba(255,255,255,0.1))' }, '&.Mui-focused fieldset': { borderColor: error ? DANGER : 'var(--accent, #3b82f6)' } } }}
+        slotProps={{ htmlInput: { 'aria-label': label } }}
+        sx={{ ...FIELD_SX, '& .MuiOutlinedInput-root': { ...FIELD_SX['& .MuiOutlinedInput-root'], minHeight: 42, '& fieldset': { borderColor: error ? DANGER : 'var(--border, rgba(255,255,255,0.1))' }, '&.Mui-focused fieldset': { borderColor: error ? DANGER : 'var(--accent, #3b82f6)' } } }}
       />
-      <Button type="submit" variant="contained" disabled={!value.trim() || adding} startIcon={adding ? <CircularProgress size={16} color="inherit" /> : <AddIcon />} sx={{ textTransform: 'none', fontWeight: 700, minHeight: 40, borderRadius: '10px', px: 2.5 }}>{label}</Button>
-      <Typography sx={{ gridColumn: '1 / -1', fontSize: '.78rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>{tip}</Typography>
+      <Button type="submit" variant="contained" disableElevation fullWidth disabled={!value.trim() || adding} startIcon={adding ? <CircularProgress size={16} color="inherit" /> : <AddIcon />}
+        sx={{ textTransform: 'none', fontWeight: 700, minHeight: 40, borderRadius: '10px', '&.Mui-disabled': { bgcolor: 'var(--item-hover)', color: 'var(--text-muted)' } }}>
+        {label}
+      </Button>
     </Box>
   )
+}
+
+// "Agregado el 12 oct 2026" — reemplaza la columna "Estado: Excluido", que
+// decía lo mismo en todas las filas.
+function addedOn(iso, en) {
+  if (!iso) return ''
+  const d = new Date(String(iso).endsWith('Z') || String(iso).includes('+') ? iso : `${iso}Z`)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleDateString(en ? 'en-US' : 'es-MX', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 // What an industry entry would actually block. The app assigns its own fixed
@@ -122,7 +147,7 @@ function IndustryPreview({ value, onPick }) {
   )
 
   return (
-    <Box sx={{ mt: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       {pending && <Typography sx={{ fontSize: '.78rem', color: 'var(--text-muted)' }}>{en ? 'Updating preview…' : 'Actualizando vista previa…'}</Typography>}
       {error && <Typography sx={{ fontSize: '.78rem', color: 'error.main' }}>{en ? 'The impact preview is unavailable.' : 'No se pudo calcular la vista previa.'}</Typography>}
       {typed && !pending && !error && (
@@ -171,16 +196,7 @@ function EntryRow({ entry, onDelete, onSave, dupError, genericError }) {
       transition: 'background-color 0.15s',
       '&:hover': { bgcolor: 'var(--item-hover)' },
     }}>
-      {/* Ícono suelto reemplazado por el mismo detalle de caja con degradado
-         que usa el resto de la app, en vez de un ícono flotando solo. */}
-      <Box sx={{
-        width: 30, height: 30, borderRadius: '9px', flexShrink: 0,
-        bgcolor: 'rgba(var(--accent-rgb),.08)',
-        border: '1px solid var(--border)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        {entry.type === 'domain' ? <LanguageIcon sx={{ fontSize: 16, color: 'var(--accent)' }} /> : entry.type === 'industry' ? <CategoryIcon sx={{ fontSize: 16, color: 'var(--accent)' }} /> : <WhatsAppIcon sx={{ fontSize: 16, color: 'var(--accent)' }} />}
-      </Box>
+      <TypeIcon type={entry.type} size={30} />
       {editing ? (
         <TextField
           size="small" autoFocus fullWidth value={val}
@@ -194,7 +210,7 @@ function EntryRow({ entry, onDelete, onSave, dupError, genericError }) {
           {entry.value}
         </Typography>
       )}
-      {!editing && <Box component="span" sx={{ display: { xs: 'none', sm: 'inline-flex' }, alignItems: 'center', gap: .6, mr: { sm: 2, md: 4 }, color: 'var(--text-muted)', fontSize: '.73rem' }}><BlockIcon sx={{ fontSize: 12 }} />{en ? 'Excluded' : 'Excluido'}</Box>}
+      {!editing && <Box component="span" sx={{ display: { xs: 'none', sm: 'block' }, width: 120, flexShrink: 0, color: 'var(--text-muted)', fontSize: '.74rem', fontVariantNumeric: 'tabular-nums' }}>{addedOn(entry.created_at, en) || '—'}</Box>}
       <Box sx={{ display: 'flex', gap: .5, flexShrink: 0, '& .MuiIconButton-root': { width: 32, height: 32, borderRadius: '8px', border: '1px solid var(--border)', bgcolor: 'var(--surface)' } }}>
       {editing ? (
         <>
@@ -680,14 +696,17 @@ function BlacklistList({ type, label, placeholder, tip, bl, isActive, onChanged,
       setPage(nextPage); load(nextPage, query); onChanged(); refreshBlacklistedPhones()
     } catch { setLoadError(bl.deleteError) }
   }
-  const blockedList = <Box data-blacklist-list sx={{ ...PANEL_SX, p: { xs: 1.5, md: 2 }, ...(type !== 'phone' && { border: 0, borderRadius: 0, bgcolor: 'transparent' }) }}>
+  const blockedList = <Box data-blacklist-list sx={{ ...PANEL_SX, p: { xs: 1.5, md: 2 } }}>
     <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 2, mb: 2 }}>
-      <Box sx={{ flex: '1 1 170px' }}>
-        <Typography sx={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text)' }}>{type === 'phone' ? (en ? 'Blocked numbers' : 'Números bloqueados') : (en ? 'Saved exclusions' : 'Exclusiones guardadas')}</Typography>
-        <Typography sx={{ fontSize: '.76rem', color: 'var(--text-muted)', mt: .4 }}>{loading ? (en ? 'Loading…' : 'Cargando…') : `${total} ${query ? (en ? 'results' : 'resultados') : (en ? 'rules' : 'reglas')}`}</Typography>
+      <Box sx={{ flex: '1 1 200px', display: 'flex', alignItems: 'center', gap: 1.2, minWidth: 0 }}>
+        <TypeIcon type={type} size={34} />
+        <Box sx={{ minWidth: 0 }}>
+          <Typography sx={{ fontSize: '.98rem', fontWeight: 800, color: 'var(--text)' }}>{type === 'phone' ? (en ? 'Blocked numbers' : 'Números bloqueados') : (en ? 'Saved exclusions' : 'Exclusiones guardadas')}</Typography>
+          <Typography sx={{ fontSize: '.74rem', color: 'var(--text-muted)', mt: .2 }}>{loading ? (en ? 'Loading…' : 'Cargando…') : `${total.toLocaleString()} ${query ? (en ? 'results' : 'resultados') : (en ? (total === 1 ? 'rule' : 'rules') : (total === 1 ? 'regla' : 'reglas'))}`}</Typography>
+        </Box>
       </Box>
-      <TextField size="small" label={type === 'phone' ? (en ? 'Search blocked numbers' : 'Buscar números bloqueados') : (en ? 'Search saved rules' : 'Buscar reglas guardadas')} value={search} onChange={event => setSearch(event.target.value)}
-        slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 18, color: 'var(--text-muted)' }} /></InputAdornment> } }} sx={{ ...FIELD_SX, flex: '1 1 240px', maxWidth: { xs: '100%', md: 360 } }} />
+      <TextField size="small" placeholder={type === 'phone' ? (en ? 'Search blocked numbers' : 'Buscar números bloqueados') : (en ? 'Search saved rules' : 'Buscar reglas guardadas')} value={search} onChange={event => setSearch(event.target.value)}
+        slotProps={{ htmlInput: { 'aria-label': type === 'phone' ? (en ? 'Search blocked numbers' : 'Buscar números bloqueados') : (en ? 'Search saved rules' : 'Buscar reglas guardadas') }, input: { startAdornment: <InputAdornment position="start"><SearchIcon sx={{ fontSize: 18, color: 'var(--text-muted)' }} /></InputAdornment> } }} sx={{ ...FIELD_SX, flex: '1 1 240px', maxWidth: { xs: '100%', md: 340 } }} />
     </Box>
     {loadError && <Alert severity="error" action={<Button onClick={() => load(page, query)} color="inherit" size="small">{en ? 'Retry' : 'Reintentar'}</Button>} sx={{ mb: 1.5 }}>{loadError}</Alert>}
     {loading ? <Box aria-label={en ? 'Loading rules' : 'Cargando reglas'} sx={{ display: 'grid', gap: 1 }}>{[0,1,2,3].map(i => <Skeleton key={i} variant="rounded" height={58} sx={{ bgcolor: 'var(--item-hover)' }} />)}</Box>
@@ -696,26 +715,63 @@ function BlacklistList({ type, label, placeholder, tip, bl, isActive, onChanged,
         <Typography sx={{ color: 'var(--text)', fontWeight: 700, fontSize: '.95rem' }}>{query ? bl.noResults : type === 'phone' ? (en ? 'No blocked numbers' : 'No hay números bloqueados') : type === 'industry' ? (en ? 'No blocked industries' : 'No has bloqueado industrias') : (en ? 'No blocked domains' : 'No has bloqueado dominios')}</Typography>
         <Typography sx={{ color: 'var(--text-muted)', fontSize: '.82rem', mt: .75 }}>{query ? (en ? 'Try another term or clear the search.' : 'Prueba otro término o borra la búsqueda.') : type === 'phone' ? (en ? 'Choose “Block numbers” to select saved contacts.' : 'Abre “Bloquear números” para seleccionar contactos guardados.') : (en ? 'Add a rule to exclude matching prospects.' : 'Agrega una regla para excluir los prospectos que coincidan.')}</Typography>
       </Box> : <Box sx={{ border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden', bgcolor: 'var(--surface)' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', px: 2, py: 1.1, bgcolor: 'rgba(var(--accent-rgb),.04)', color: 'var(--text-muted)', fontSize: '.68rem', fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase' }}><Box sx={{ flex: 1 }}>{label}</Box><Box sx={{ display: { xs: 'none', sm: 'block' }, width: 105 }}>{en ? 'Status' : 'Estado'}</Box><Box sx={{ width: 68, textAlign: 'center' }}>{en ? 'Actions' : 'Acciones'}</Box></Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', px: 2, py: 1.1, bgcolor: 'rgba(var(--accent-rgb),.04)', color: 'var(--text-muted)', fontSize: '.68rem', fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase' }}><Box sx={{ flex: 1, pl: '42px' }}>{label}</Box><Box sx={{ display: { xs: 'none', sm: 'block' }, width: 120 }}>{en ? 'Added' : 'Agregado'}</Box><Box sx={{ width: 68, textAlign: 'center' }}>{en ? 'Actions' : 'Acciones'}</Box></Box>
         {items.map(entry => <EntryRow key={entry._id} entry={{ ...entry, type }} onDelete={handleDelete} onSave={handleSave} />)}
       </Box>}
     {!loadError && total > 0 && <TablePagination component="div" count={total} page={Math.min(page, Math.max(0, Math.ceil(total / pageSize) - 1))} rowsPerPage={pageSize} rowsPerPageOptions={[10,25,50]}
       onPageChange={(_, next) => setPage(next)} onRowsPerPageChange={event => { setPageSize(Number(event.target.value)); setPage(0) }}
       labelRowsPerPage={en ? 'Rows:' : 'Filas:'} labelDisplayedRows={({ from, to, count }) => `${from}–${to} ${en ? 'of' : 'de'} ${count}`}
-      sx={{ mt: 2, color: 'var(--text-muted)', borderTop: '1px solid var(--border)', '& .MuiTablePagination-toolbar': { px: 0, flexWrap: 'wrap' }, '& .MuiSelect-icon, & .MuiIconButton-root': { color: 'var(--text-muted)' } }} />}
+      // !important: sectionPolish.css pinta toda paginación con --sidebar-bg y
+      // dentro de esta tarjeta se veía como una franja negra.
+      sx={{ mt: 1, color: 'var(--text-muted)', background: 'transparent !important', '& .MuiTablePagination-toolbar': { px: 0, flexWrap: 'wrap', minHeight: 44 }, '& .MuiSelect-icon, & .MuiIconButton-root': { color: 'var(--text-muted)' } }} />}
   </Box>
 
+  const meta = TYPE_META[type] || TYPE_META.domain
   return <Box data-blacklist-type={type}>
     {type === 'phone' ? <>
-      <Box role="tablist" aria-label={en ? 'Phone blacklist views' : 'Vistas de teléfonos'} sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
-        {[['blocked', en ? `Blocked numbers${count == null ? '' : ` · ${count}`}` : `Números bloqueados${count == null ? '' : ` · ${count}`}`], ['add', en ? 'Block numbers' : 'Bloquear números']].map(([key, text]) => <Button key={key} role="tab" aria-selected={phoneView === key} onClick={() => setPhoneView(key)} sx={{ textTransform: 'none', px: 2, py: 1, fontWeight: 700, color: phoneView === key ? 'var(--accent)' : 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: '10px', bgcolor: phoneView === key ? 'rgba(var(--accent-rgb),.1)' : 'var(--surface)' }}>{text}</Button>)}
+      {/* Mismo control segmentado que Desempeño (Hoy/Semana/…): una sola
+         pastilla, la vista activa con fondo sólido. */}
+      <Box role="tablist" aria-label={en ? 'Phone blacklist views' : 'Vistas de teléfonos'} sx={{
+        display: 'inline-flex', gap: .4, p: .5, mb: 2, borderRadius: '12px', bgcolor: 'var(--surface)', border: '1px solid var(--border)',
+      }}>
+        {[
+          ['blocked', <BlockIcon key="i" />, en ? 'Blocked numbers' : 'Números bloqueados', count],
+          ['add', <AddIcon key="i" />, en ? 'Block numbers' : 'Bloquear números', null],
+        ].map(([key, icon, text, n]) => {
+          const on = phoneView === key
+          return <Button key={key} role="tab" aria-selected={on} onClick={() => setPhoneView(key)} startIcon={icon} sx={{
+            textTransform: 'none', px: 1.8, py: .7, fontWeight: 700, fontSize: '.8rem', borderRadius: '9px', minHeight: 36,
+            color: on ? '#fff' : 'var(--text-muted)', bgcolor: on ? DANGER : 'transparent',
+            boxShadow: on ? '0 2px 10px rgba(239,68,68,0.35)' : 'none',
+            '&:hover': { bgcolor: on ? '#dc2626' : 'var(--item-hover)' }, '& svg': { fontSize: '17px !important' },
+          }}>
+            {text}{n != null && <Box component="span" sx={{ ml: .8, px: .7, borderRadius: 99, fontSize: '.7rem', lineHeight: '18px', bgcolor: on ? 'rgba(255,255,255,0.22)' : 'var(--item-hover)' }}>{n}</Box>}
+          </Button>
+        })}
       </Box>
       {phoneView === 'blocked' ? blockedList : <Box sx={PANEL_SX}><ContactBlockTable bl={bl} onBlocked={() => { load(page, query); onChanged() }} isActive={isActive} /></Box>}
-    </> : <Box sx={{ border: '1px solid var(--border)', borderRadius: '16px', bgcolor: 'var(--card-bg)', overflow: 'hidden' }}>
-      <Box sx={{ p: { xs: 1.5, md: 2 }, borderBottom: '1px solid var(--border)', bgcolor: 'rgba(var(--accent-rgb),.045)' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}><AddIcon sx={{ fontSize: 18, color: 'var(--accent)' }} /><Typography sx={{ fontWeight: 700, color: 'var(--text)', fontSize: '.9rem' }}>{en ? 'New exclusion' : 'Nueva exclusión'}</Typography></Box>
-        <AddRow value={addVal} onChange={setAddVal} onAdd={handleAdd} error={addErr} placeholder={placeholder} tip={tip} label={addLabel} adding={adding} />
-        {type === 'industry' && <IndustryPreview value={addVal} onPick={setAddVal} />}
+    </> : <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0,1fr)', lg: '360px minmax(0,1fr)' }, gap: 2, alignItems: 'start' }}>
+      {/* Agregar a la izquierda (fija al hacer scroll), lo guardado a la derecha. */}
+      <Box sx={{ ...PANEL_SX, p: 0, overflow: 'hidden', position: { lg: 'sticky' }, top: { lg: 0 } }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, px: 2, py: 1.6,
+          background: `linear-gradient(135deg, rgba(${meta.rgb},0.14) 0%, transparent 75%)`, borderBottom: '1px solid var(--border)' }}>
+          <Box sx={{ width: 34, height: 34, borderRadius: '10px', flexShrink: 0, display: 'grid', placeItems: 'center',
+            bgcolor: `rgba(${meta.rgb},0.18)`, border: `1px solid rgba(${meta.rgb},0.35)`, color: meta.color }}>
+            <AddIcon sx={{ fontSize: 19 }} />
+          </Box>
+          <Box>
+            <Typography sx={{ fontWeight: 800, color: 'var(--text)', fontSize: '.95rem' }}>{en ? 'New exclusion' : 'Nueva exclusión'}</Typography>
+            <Typography sx={{ fontSize: '.72rem', color: 'var(--text-muted)' }}>{type === 'domain' ? (en ? 'A website to skip' : 'Un sitio que se debe omitir') : (en ? 'A business category to exclude' : 'Una categoría de negocio a excluir')}</Typography>
+          </Box>
+        </Box>
+        <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 1.6 }}>
+          <AddRow value={addVal} onChange={setAddVal} onAdd={handleAdd} error={addErr} placeholder={placeholder} label={addLabel} adding={adding} />
+          <Box sx={{ display: 'flex', gap: 1, p: 1.3, borderRadius: '10px', bgcolor: 'var(--surface)', border: '1px dashed var(--border)' }}>
+            <InfoOutlinedIcon sx={{ fontSize: 16, color: meta.color, mt: .15, flexShrink: 0 }} />
+            <Typography sx={{ fontSize: '.74rem', color: 'var(--text-muted)', lineHeight: 1.55 }}>{tip}</Typography>
+          </Box>
+          {type === 'industry' && <IndustryPreview value={addVal} onPick={setAddVal} />}
+        </Box>
       </Box>
       {blockedList}
     </Box>}
@@ -744,8 +800,10 @@ function SystemBlacklist({ bl }) {
   }
   const filtered = (all || []).filter(domain => domain.includes(search.toLowerCase().trim()))
   return <Box data-blacklist-system sx={PANEL_SX}>
-    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, flexWrap: 'wrap' }}>
-      <LockIcon sx={{ fontSize: 20, color: 'var(--text-muted)', mt: .25 }} />
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+      <Box sx={{ width: 34, height: 34, borderRadius: '10px', flexShrink: 0, display: 'grid', placeItems: 'center', bgcolor: 'var(--item-hover)', border: '1px solid var(--border)' }}>
+        <LockIcon sx={{ fontSize: 17, color: 'var(--text-muted)' }} />
+      </Box>
       <Box sx={{ flex: '1 1 220px' }}><Typography sx={{ fontSize: '.95rem', fontWeight: 700, color: 'var(--text)' }}>{en ? 'System rules' : 'Reglas del sistema'} <Box component="span" sx={{ ml: .75, fontSize: '.7rem', fontWeight: 500, color: 'var(--text-muted)' }}>{en ? 'Read only' : 'Solo lectura'}</Box></Typography><Typography sx={{ fontSize: '.8rem', color: 'var(--text-muted)', mt: .5, maxWidth: 700 }}>{bl.systemDesc}</Typography></Box>
       <Button variant="outlined" aria-expanded={expanded} onClick={() => { if (!expanded && all === null && !loading) fetchSystem(); setExpanded(!expanded) }} endIcon={<ExpandMoreIcon sx={{ transform: expanded ? 'rotate(180deg)' : 'none' }} />} sx={{ textTransform: 'none', color: 'var(--text-muted)', borderColor: 'var(--border)', borderRadius: '10px', flexShrink: 0 }}>{expanded ? (en ? 'Hide rules' : 'Ocultar reglas') : all === null ? (en ? 'View rules' : 'Ver reglas') : `${all.length} ${bl.systemCount}`}</Button>
     </Box>
@@ -791,21 +849,48 @@ export default function BlacklistPanel({ isActive }) {
   useEffect(() => { if (isActive !== false) loadCounts(); return () => countRequest.current?.abort() }, [isActive, loadCounts])
   const changed = useCallback(() => { loadCounts() }, [loadCounts])
   const tabs = [
-    { type: 'domain', icon: <LanguageIcon />, label: en ? 'Domains' : 'Dominios', full: bl.domains, placeholder: 'ejemplo.com', tip: en ? 'Blocks this exact domain and its subdomains. Example: example.com also covers shop.example.com.' : 'Bloquea el dominio exacto y sus subdominios. Ejemplo: ejemplo.com también cubre tienda.ejemplo.com.' },
+    { type: 'domain', icon: <LanguageIcon />, label: en ? 'Domains' : 'Dominios', full: bl.domains, placeholder: en ? 'example.com' : 'ejemplo.com', tip: en ? 'Blocks this exact domain and its subdomains. Example: example.com also covers shop.example.com.' : 'Bloquea el dominio exacto y sus subdominios. Ejemplo: ejemplo.com también cubre tienda.ejemplo.com.' },
     { type: 'industry', icon: <CategoryIcon />, label: bl.industries, full: bl.industries, placeholder: bl.industryPh, tip: en ? 'Select a category or enter a term to exclude matching businesses.' : 'Elige una categoría o escribe un término para excluir los negocios que coincidan.' },
     { type: 'phone', icon: <BlockIcon />, label: bl.phones, full: bl.phones, placeholder: bl.phonePh, tip: bl.phoneTip },
   ]
   const tab = tabs[activeTab]
   return <Box data-ui-section="blacklist" sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflowY: 'auto', gap: 2, pr: .5, pb: 2 }}>
-    <Tabs value={activeTab} onChange={(_, next) => setActiveTab(next)} variant="fullWidth" aria-label={en ? 'Blacklist categories' : 'Categorías de blacklist'} sx={{ flexShrink: 0, minHeight: { xs: 104, sm: 124 }, '& .MuiTabs-indicator': { display: 'none' }, '& .MuiTabs-list': { gap: { xs: 1, md: 1.5 } } }}>
-      {tabs.map((item, i) => <Tab key={item.type} label={<Box sx={{ width: '100%', textAlign: 'left' }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1, mb: 1 }}>
-          <Box sx={{ width: { xs: 26, sm: 34 }, height: { xs: 26, sm: 34 }, display: 'grid', placeItems: 'center', borderRadius: '10px', color: activeTab === i ? 'var(--accent)' : 'var(--text-muted)', bgcolor: activeTab === i ? 'rgba(var(--accent-rgb),.14)' : 'var(--item-hover)', '& svg': { fontSize: { xs: 16, sm: 20 } } }}>{item.icon}</Box>
-          <Box component="span" sx={{ color: activeTab === i ? 'var(--accent)' : 'var(--text)', fontSize: { xs: '1.2rem', md: '1.55rem' }, fontWeight: 800, fontVariantNumeric: 'tabular-nums', letterSpacing: '-.04em' }}>{countsError ? '—' : counts?.[item.type] ?? '…'}</Box>
-        </Box>
-        <Typography component="span" sx={{ display: 'block', fontSize: { xs: '.75rem', sm: '.9rem' }, fontWeight: 700, color: 'var(--text)' }}>{item.label}</Typography>
-        <Typography component="span" sx={{ display: { xs: 'none', sm: 'block' }, color: 'var(--text-muted)', fontSize: '.73rem', mt: .4 }}>{[en ? 'Websites to skip' : 'Sitios que se omiten', en ? 'Business categories' : 'Categorías de negocio', en ? 'Contacts excluded from sends' : 'Contactos excluidos de envíos'][i]}</Typography>
-      </Box>} sx={{ textTransform: 'none', minWidth: 0, minHeight: { xs: 100, sm: 120 }, px: { xs: 1.5, md: 2.25 }, py: 1.75, borderRadius: '14px', border: '1px solid var(--border)', bgcolor: 'var(--card-bg)', transition: 'background-color .18s, border-color .18s', '&:hover': { bgcolor: 'var(--item-hover)', borderColor: 'rgba(var(--accent-rgb),.4)' }, '&.Mui-selected': { borderColor: 'rgba(var(--accent-rgb),.5)', background: 'linear-gradient(120deg, rgba(var(--accent-rgb),.12), rgba(var(--accent-rgb),.025)), var(--card-bg)' }, '&.Mui-focusVisible': { outline: '2px solid var(--accent)', outlineOffset: -3 } }} />)}
+    {/* Qué es esto, en una línea, antes de las categorías. */}
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.4, px: 2, py: 1.4, flexShrink: 0, borderRadius: '14px',
+      border: '1px solid rgba(239,68,68,0.22)', background: 'linear-gradient(120deg, rgba(239,68,68,0.1) 0%, transparent 60%), var(--card-bg)' }}>
+      <Box sx={{ width: 36, height: 36, borderRadius: '11px', flexShrink: 0, display: 'grid', placeItems: 'center',
+        bgcolor: DANGER_SOFT, border: `1px solid ${DANGER_BORDER}`, color: DANGER }}>
+        <BlockIcon sx={{ fontSize: 19 }} />
+      </Box>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography sx={{ fontSize: '.92rem', fontWeight: 800, color: 'var(--text)' }}>{en ? 'Who is never contacted' : 'A quién nunca se contacta'}</Typography>
+        <Typography sx={{ fontSize: '.76rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+          {en ? 'The searcher skips these domains, businesses in these industries are excluded, and sends skip these numbers.'
+              : 'El buscador omite estos dominios, se excluyen los negocios de estas industrias y los envíos se saltan estos números.'}
+        </Typography>
+      </Box>
+    </Box>
+    {/* pt/pb en el scroller: MUI Tabs recorta lo que sale de su caja, y la
+       tarjeta (que sube 1px al pasar el mouse, con sombra) quedaba pegada y
+       cortada contra el borde superior. */}
+    <Tabs value={activeTab} onChange={(_, next) => setActiveTab(next)} variant="fullWidth" aria-label={en ? 'Blacklist categories' : 'Categorías de blacklist'} sx={{ flexShrink: 0, minHeight: 0, mt: 0.5, '& .MuiTabs-indicator': { display: 'none' }, '& .MuiTabs-scroller': { pt: '6px', pb: '10px', px: '2px' }, '& .MuiTabs-list': { gap: { xs: 1, md: 1.5 } } }}>
+      {tabs.map((item, i) => {
+        const m = TYPE_META[item.type]
+        const on = activeTab === i
+        return <Tab key={item.type} label={<Box sx={{ width: '100%', display: 'flex', alignItems: 'center', gap: { xs: 1, sm: 1.5 }, textAlign: 'left' }}>
+          <Box sx={{ width: { xs: 32, sm: 42 }, height: { xs: 32, sm: 42 }, flexShrink: 0, display: 'grid', placeItems: 'center', borderRadius: '12px', color: m.color,
+            background: `linear-gradient(135deg, rgba(${m.rgb},${on ? 0.28 : 0.16}) 0%, rgba(${m.rgb},0.05) 100%)`, border: `1px solid rgba(${m.rgb},${on ? 0.45 : 0.25})`,
+            '& svg': { fontSize: { xs: 17, sm: 21 } } }}>{item.icon}</Box>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography component="span" sx={{ display: 'block', fontSize: { xs: '.78rem', sm: '.92rem' }, fontWeight: 800, color: 'var(--text)', lineHeight: 1.25 }}>{item.label}</Typography>
+            <Typography component="span" sx={{ display: { xs: 'none', sm: 'block' }, color: 'var(--text-muted)', fontSize: '.72rem', mt: .2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[en ? 'Websites to skip' : 'Sitios que se omiten', en ? 'Business categories' : 'Categorías de negocio', en ? 'Contacts excluded from sends' : 'Contactos excluidos de envíos'][i]}</Typography>
+          </Box>
+          <Box component="span" sx={{ color: 'var(--text)', fontSize: { xs: '1.15rem', md: '1.45rem' }, fontWeight: 800, fontVariantNumeric: 'tabular-nums', letterSpacing: '-.03em' }}>{countsError ? '—' : counts?.[item.type] ?? '…'}</Box>
+        </Box>} sx={{ textTransform: 'none', minWidth: 0, minHeight: { xs: 64, sm: 76 }, px: { xs: 1.3, md: 2 }, py: 1.4, borderRadius: '14px', border: '1px solid var(--border)', bgcolor: 'var(--card-bg)', opacity: 1, transition: 'background-color .18s, border-color .18s, transform .18s',
+          '&:hover': { borderColor: `rgba(${m.rgb},.45)`, transform: 'translateY(-1px)' },
+          '&.Mui-selected': { borderColor: `rgba(${m.rgb},.6)`, background: `linear-gradient(120deg, rgba(${m.rgb},.14), rgba(${m.rgb},.02)), var(--card-bg)`, boxShadow: `0 6px 22px rgba(${m.rgb},.12)` },
+          '&.Mui-focusVisible': { outline: '2px solid var(--accent)', outlineOffset: -3 } }} />
+      })}
     </Tabs>
     {countsError && <Alert severity="warning" action={<Button color="inherit" onClick={loadCounts}>{en ? 'Retry' : 'Reintentar'}</Button>}>{en ? 'Totals could not be refreshed.' : 'No se pudieron actualizar los totales.'}</Alert>}
     <BlacklistList key={tab.type} type={tab.type} label={tab.full} placeholder={tab.placeholder} tip={tab.tip} bl={bl} isActive={isActive} onChanged={changed} count={counts?.phone} />

@@ -17,6 +17,8 @@ wasenderapi>=0.1.0
 python-multipart>=0.0.9
 playwright>=1.44
 httpx>=0.27
+# Migración a Postgres (app/pgmirror). Solo se usa si POSTGRES_URL está definida.
+psycopg[binary,pool]>=3.2
 
 # dev / test only
 pytest>=8.0

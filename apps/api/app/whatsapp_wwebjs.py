@@ -239,10 +239,8 @@ def mark_read(session_id: str, to: str):
         pass
 
 def delete_session(session_id: str):
-    try:
-        _req.delete(f"{WWEBJS_URL}/session/{session_id}", headers=_headers(), timeout=10)
-    except Exception:
-        pass
+    response = _req.delete(f"{WWEBJS_URL}/session/{session_id}", headers=_headers(), timeout=35)
+    response.raise_for_status()
 
 def list_sessions() -> dict:
     r = _req.get(f"{WWEBJS_URL}/sessions", headers=_headers(), timeout=5)

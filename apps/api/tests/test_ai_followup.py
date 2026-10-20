@@ -73,6 +73,14 @@ class FakeDB:
         self.message_logs.count_documents.return_value = 1
         self.jid_map = MagicMock()
         self.ai_reply_pending = MagicMock()
+        self.blacklist = MagicMock()
+        self.blacklist.find_one.return_value = None
+        self.companies = MagicMock()
+        self.companies.find_one.return_value = None
+        self.contact_permissions = MagicMock()
+        self.contact_permissions.find_one.return_value = {'outreach_allowed': True, 'revoked': False}
+        self.instances = MagicMock()
+        self.instances.find_one.return_value = {}
 
 
 class FakeMgr:

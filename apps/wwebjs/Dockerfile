@@ -2,6 +2,7 @@ FROM node:20-slim
 
 RUN apt-get update && apt-get install -y \
     chromium \
+    util-linux \
     fonts-liberation \
     libatk-bridge2.0-0 \
     libatk1.0-0 \
@@ -30,4 +31,4 @@ COPY . .
 VOLUME ["/app/sessions"]
 EXPOSE 3001
 
-CMD ["node", "index.js"]
+CMD ["sh", "storage-entrypoint.sh"]

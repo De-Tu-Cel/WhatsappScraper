@@ -2,3 +2,5 @@
 -r requirements.txt
 # Base Mongo en memoria: conftest.py la usa para que ningún test toque la real.
 mongomock>=4.3
+# Leer docker-compose.yml en tests/test_pgmirror.py.
+pyyaml>=6

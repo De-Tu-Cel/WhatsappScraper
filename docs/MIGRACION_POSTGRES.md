@@ -114,14 +114,14 @@ GridFS → `files`; luego Mongo en solo lectura 30 días con un respaldo final, 
 
 ## 4. Procedimiento por colección (se repite en cada una)
 
-Interruptor: variable `DB_MODE_<COLECCION>` en el servicio backend de Coolify (p. ej. `DB_MODE_MESSAGE_TEMPLATES`). Cambiarla requiere reiniciar el backend, no cambiar código.
+Interruptor: variable `DB_MODES` del backend en Coolify, con el modo de cada colección separado por comas (p. ej. `settings=dual,message_templates=dual,blacklist=dual`). Es la única que hay que tocar: `docker-compose.yml` ya la pasa al contenedor junto con `POSTGRES_URL` (el backend solo recibe las variables que ese archivo lista). Una colección que no aparece, o un modo mal escrito, se queda en Mongo. Cambiarla requiere redesplegar el backend, no cambiar código. (`DB_MODE_<COLECCION>` también funciona y gana sobre `DB_MODES`, útil en local.)
 
-1. `DB_MODE_<X>=dual` y reiniciar. Desde ese momento cada escritura se copia sola.
+1. Agregar `<x>=dual` a `DB_MODES` y redesplegar. Desde ese momento cada escritura se copia sola.
 2. **Carga inicial** (lo que ya existía): `python scripts/pg_mirror.py reconcile <x> --fix` dentro del contenedor del backend (terminal de Coolify; ya tiene `MONGODB_URI` y `POSTGRES_URL`).
 3. **Conciliar** sin `--fix` dos veces: la segunda debe salir `[OK]`. Revisar `GET /api/admin/pgmirror/status` (`dirty` vacío, `errors` en 0).
 4. Unos días en `dual`. Si algo queda "por conciliar", repetir el paso 2.
-5. `DB_MODE_<X>=shadow`: lee de las dos, compara y responde con Mongo. Revisar `shadow_diffs` en el estado y la tabla `mongo._shadow_diffs`. Cada diferencia se entiende y se corrige antes de seguir.
-6. `DB_MODE_<X>=postgres`: lee de Postgres, sigue escribiendo en las dos. **Regresar = poner `dual` o `mongo` y reiniciar.**
+5. `<x>=shadow` en `DB_MODES`: lee de las dos, compara y responde con Mongo. Revisar `shadow_diffs` en el estado y la tabla `mongo._shadow_diffs`. Cada diferencia se entiende y se corrige antes de seguir.
+6. `<x>=postgres` en `DB_MODES`: lee de Postgres, sigue escribiendo en las dos. **Regresar = poner `dual` o quitarla de `DB_MODES` y redesplegar.**
 7. Tras días estables en `postgres`: se construye la tabla normalizada definitiva y Postgres pasa a ser la fuente de verdad (esa parte se diseña colección por colección, empezando por las de la etapa 1).
 
 ## 5. Cómo evitamos romper algo

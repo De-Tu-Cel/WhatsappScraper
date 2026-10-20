@@ -11,8 +11,10 @@ Es un BORRADOR: se guarda editable y una persona lo revisa antes de mandarlo al 
 """
 import base64
 import html
+import io
 import json
 import logging
+import math
 import re
 from datetime import datetime, timezone
 
@@ -439,6 +441,11 @@ def aplicar_acortados(datos: dict, excedidos: dict, cortos: dict) -> int:
     return usados
 
 
+# La hoja habla del negocio en tercera persona ("su marca"). El modelo a veces le habla de tú
+# ("Saluda con tu marca", Rayogas 2026-10-20) aunque el prompt lo pide: ese texto no se usa.
+_SEGUNDA_PERSONA = re.compile(r"\b(?:tú|tu|tus|te|ti|contigo)\b", re.I)
+
+
 def depurar_hallazgos(datos: dict, items: list, ventajas_ids: set, respaldo: dict,
                       hechos: dict | None = None) -> tuple[dict, dict]:
     """Recorta a los límites y valida. Si el modelo citó un hecho ("hecho": "H2"), la etiqueta, la
@@ -457,10 +464,10 @@ def depurar_hallazgos(datos: dict, items: list, ventajas_ids: set, respaldo: dic
         return None
 
     def cabe(texto, clave, del_hecho=None):
-        """El texto del modelo si cabe; si no, el del hecho (ya medido para la hoja) antes que
-        cortarlo con "…". Solo lo propio, sin hecho que lo respalde, se recorta."""
+        """El texto del modelo si cabe y habla del negocio en tercera persona; si no, el del hecho
+        (ya medido para la hoja) antes que cortarlo con "…". Solo lo propio se recorta."""
         t = formato.texto_plano(texto)
-        if t and len(t) <= LIMITES[clave]:
+        if t and len(t) <= LIMITES[clave] and not (del_hecho and _SEGUNDA_PERSONA.search(t)):
             return t
         if del_hecho:
             return formato.texto_plano(del_hecho, LIMITES[clave])
@@ -516,8 +523,11 @@ def depurar_hallazgos(datos: dict, items: list, ventajas_ids: set, respaldo: dic
                   if o.get("ventaja") not in usadas and o["dato"].lower() not in datos_usados][:3 - len(oport)]
         notas["completadas"] += len(faltan)
         oport += faltan
-    titular = datos.get("sintesis_titular") or respaldo["sintesis_titular"]
-    texto = datos.get("sintesis_texto") or respaldo["sintesis_texto"]
+    titular, texto = datos.get("sintesis_titular"), datos.get("sintesis_texto")
+    if not titular or _SEGUNDA_PERSONA.search(titular):
+        titular = respaldo["sintesis_titular"]
+    if not texto or _SEGUNDA_PERSONA.search(texto):
+        texto = respaldo["sintesis_texto"]
     return {"sintesis_titular": titular, "sintesis_texto": texto, "fortalezas": fort, "oportunidades": oport}, notas
 
 
@@ -643,6 +653,41 @@ def logo_subido(data_url: str, max_bytes: int = 1_000_000) -> str:
     return f"data:{tipo};base64,{base64.b64encode(datos).decode('ascii')}"
 
 
+def avatar_de_logo(logo: str | None, lado: int = 192) -> str | None:
+    """Foto de perfil del chat de la hoja: el logo completo, centrado sobre blanco. La plantilla
+    recorta el avatar en círculo (object-fit: cover) y un logo ancho quedaba cortado a la mitad."""
+    m = re.fullmatch(r"data:image/[\w.+-]+;base64,([A-Za-z0-9+/=\s]+)", logo or "")
+    if not m:
+        return None
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(base64.b64decode(m.group(1))))
+        if img.width * img.height > 25_000_000:  # antes de decodificar: nada de bombas de pixeles
+            return None
+        img = img.convert("RGBA")
+        escala = 0.9 * lado / math.hypot(img.width, img.height)  # que quepa entero en el círculo
+        img = img.resize((max(1, round(img.width * escala)), max(1, round(img.height * escala))), Image.LANCZOS)
+        fondo = Image.new("RGBA", (lado, lado), (255, 255, 255, 255))
+        fondo.alpha_composite(img, ((lado - img.width) // 2, (lado - img.height) // 2))
+        buf = io.BytesIO()
+        fondo.convert("RGB").save(buf, "PNG", optimize=True)
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception as exc:
+        log.info("Evaluación: no se pudo armar el avatar desde el logo (%s)", exc)
+        return None
+
+
+def poner_logo(cliente: dict, logo: str | None) -> None:
+    """Logo del encabezado y, con él, la foto de perfil del chat. Sin logo: nombre e iniciales."""
+    cliente.pop("logo", None)
+    cliente.pop("avatar", None)
+    if logo:
+        cliente["logo"] = logo
+        avatar = avatar_de_logo(logo)
+        if avatar:
+            cliente["avatar"] = avatar
+
+
 def industria_de(company: dict) -> str | None:
     from app.classifier import industry_profile
     texto = " ".join(str(company.get(k) or "") for k in ("industry", "name", "main_activity"))
@@ -692,8 +737,7 @@ def armar_cliente(*, company: dict, thread: list, numero: str, verdict: dict | N
     cliente = {"nombre": nombre, "logoAlt": nombre, "telefono": formato.telefono(numero),
                "nombreBot": formato.texto_plano(whatsapp_name, 40) or nombre}
     logo = bajar_logo(company.get("logo_url"))
-    if logo:
-        cliente["logo"] = logo
+    poner_logo(cliente, logo)
 
     # Avisos para el revisor: pocos, claros y accionables (Rayogas, 2026-10-20: salían 11).
     avisos = []

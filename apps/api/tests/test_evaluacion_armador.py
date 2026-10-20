@@ -238,6 +238,45 @@ def test_a_cited_fact_keeps_its_curated_remedy_and_is_never_cut(monkeypatch):
     generador.generar_evaluacion(capa)
 
 
+def test_the_page_never_speaks_to_the_business_as_tu(monkeypatch):
+    # Rayogas, 2026-10-20: "Saluda con tu marca" aunque el prompt pide tercera persona.
+    def fake(empresa, giro, renglones, metricas, verdict, nivel, escala, ventajas, hechos):
+        ids = {h["tipo"]: h["id"] for h in hechos["fortalezas"]}
+        return {"sintesis_titular": "Tu canal saluda, pero no vende.", "sintesis_texto": "Falta tomar el pedido en el chat.",
+                "fortalezas": [{"hecho": ids["bienvenida"], "titulo": "Bienvenida clara", "texto": "Saluda con tu marca."},
+                               {"hecho": ids["respuesta_rapida"], "titulo": "Respuesta al instante", "texto": "Contesta en segundos."}],
+                "oportunidades": []}
+    monkeypatch.setattr(armador, "hallazgos_con_llm", fake)
+    capa, info = _armar()
+    bienvenida = next(h for h in info["hechos"]["fortalezas"] if h["tipo"] == "bienvenida")
+    assert capa["fortalezas"][0] == {"titulo": "Bienvenida clara", "texto": bienvenida["texto"]}  # "Saluda con su marca."
+    assert capa["fortalezas"][1]["texto"] == "Contesta en segundos."  # lo que está bien escrito se respeta
+    assert not capa["nivel"]["sintesis"].startswith("<b>Tu ")  # la síntesis vuelve a la de su nivel
+    assert "Falta tomar el pedido en el chat." in capa["nivel"]["sintesis"]
+
+
+def test_the_chat_profile_picture_is_the_whole_logo_centered():
+    import base64
+    import io
+    from PIL import Image
+    ancho = Image.new("RGBA", (300, 100), (255, 0, 0, 255))  # logo ancho, como el de Rayogas
+    buf = io.BytesIO()
+    ancho.save(buf, "PNG")
+    logo = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    avatar = armador.avatar_de_logo(logo)
+    img = Image.open(io.BytesIO(base64.b64decode(avatar.split(",", 1)[1]))).convert("RGB")
+    assert img.size == (192, 192)
+    # Entero dentro del círculo: rojo al centro y en los extremos del logo, blanco en las esquinas.
+    assert img.getpixel((96, 96)) == (255, 0, 0) and img.getpixel((20, 96)) == (255, 0, 0)
+    assert img.getpixel((5, 5)) == (255, 255, 255) and img.getpixel((96, 20)) == (255, 255, 255)
+    assert armador.avatar_de_logo("data:image/png;base64,bm8gZXMgdW5hIGltYWdlbg==") is None  # no es imagen
+    cliente = {"nombre": "X"}
+    armador.poner_logo(cliente, logo)
+    assert cliente["logo"] == logo and cliente["avatar"] == avatar
+    armador.poner_logo(cliente, None)
+    assert cliente == {"nombre": "X"}
+
+
 def test_when_the_model_fails_the_rules_draft_is_used(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("sin crédito")

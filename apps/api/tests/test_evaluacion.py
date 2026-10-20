@@ -2,7 +2,7 @@
 generar.js (la herramienta original del equipo de diseño) con las mismas entradas.
 
 Las huellas son las de salida/diesgas.html y salida/ejemplo-restaurante.html generadas con
-`node generar.js` (2026-10-20). Si se cambia plantilla.html o un JSON a propósito, se
+`node generar.js` (2026-10-20, con las ligas largas partidas en la burbuja). Si se cambia plantilla.html o un JSON a propósito, se
 regeneran con node y se actualizan aquí.
 """
 import hashlib
@@ -17,8 +17,8 @@ from app.evaluacion import formato, generador
 
 FX = Path(__file__).resolve().parent / "fixtures" / "evaluacion"
 NODE_SHA256 = {
-    "diesgas": "fbf58eda2c8c65b2",
-    "ejemplo-restaurante": "3e84412f294aa4fe",
+    "diesgas": "2001b7da346b3e03",
+    "ejemplo-restaurante": "9153566faf68fd41",
 }
 
 

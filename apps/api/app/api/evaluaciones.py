@@ -115,7 +115,7 @@ class Edicion(BaseModel):
     sintesis_titular: Optional[str] = Field(None, max_length=_L["sintesis_titular"])
     sintesis_texto: Optional[str] = Field(None, max_length=_L["sintesis_texto"])
     fortalezas: Optional[list[Fortaleza]] = Field(None, max_length=3)
-    oportunidades: Optional[list[Oportunidad]] = Field(None, max_length=3)
+    oportunidades: Optional[list[Oportunidad]] = Field(None, min_length=1, max_length=3)  # la hoja carta da para 3
     resuelve: Optional[dict[str, str]] = None
     pines: Optional[dict[str, int]] = None  # {"1": índice del mensaje, "v2": …}
     # Logo: quitarlo (se muestra el nombre), subir uno (data URL) o tomarlo de una URL pública.
@@ -133,17 +133,17 @@ def aplicar_edicion(capa: dict, e: Edicion) -> dict:
             if campo == "nombre":
                 capa["cliente"]["logoAlt"] = plano(e.nombre)
     if e.quitar_logo:
-        capa["cliente"].pop("logo", None)
+        armador.poner_logo(capa["cliente"], None)
     elif e.logo_data:
         try:
-            capa["cliente"]["logo"] = armador.logo_subido(e.logo_data)
+            armador.poner_logo(capa["cliente"], armador.logo_subido(e.logo_data))
         except ValueError as exc:
             raise HTTPException(422, str(exc))
     elif e.logo_url:
         logo = armador.logo_incrustado(e.logo_url.strip())
         if not logo:
             raise HTTPException(422, "No se pudo usar esa URL: debe ser una imagen PNG, JPG o WEBP pública.")
-        capa["cliente"]["logo"] = logo
+        armador.poner_logo(capa["cliente"], logo)
     if e.nivel is not None:
         capa["nivel"]["hoy"] = e.nivel
     if e.sintesis_titular is not None or e.sintesis_texto is not None:

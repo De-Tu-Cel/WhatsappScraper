@@ -76,10 +76,29 @@ def test_edits_cannot_break_the_page(client):
     # Un pin a un mensaje que no existe, o dos marcas en el mismo mensaje.
     assert c.put(f"/api/evaluaciones/{ev['id']}", json={"pines": {"1": 999}}, headers=H).status_code == 422
     assert c.put(f"/api/evaluaciones/{ev['id']}", json={"pines": {"1": pines["v1"], "v1": pines["v1"]}}, headers=H).status_code == 422
-    # Una oportunidad marcada que ya no existe (se quitaron todas): el generador lo detecta.
-    r = c.put(f"/api/evaluaciones/{ev['id']}", json={"oportunidades": []}, headers=H)
+    # Se quita la 3.ª oportunidad pero su marca sigue en el chat: el generador lo detecta.
+    assert "3" in pines
+    dos = ev["editable"]["oportunidades"][:2]
+    r = c.put(f"/api/evaluaciones/{ev['id']}", json={"oportunidades": dos}, headers=H)
     assert r.status_code == 422 and "sin oportunidad" in r.text
+    assert c.put(f"/api/evaluaciones/{ev['id']}", json={"oportunidades": []}, headers=H).status_code == 422  # mínimo una
+    assert c.put(f"/api/evaluaciones/{ev['id']}", json={"oportunidades": dos * 2}, headers=H).status_code == 422  # la hoja da para 3
     assert c.put(f"/api/evaluaciones/{ev['id']}", json={"nivel": 5}, headers=H).status_code == 422  # 5 es la meta
+
+
+def test_opportunities_can_be_removed_and_reordered_with_their_marks(client):
+    c, cid = client
+    ev = c.post("/api/evaluaciones", json={"company_id": cid, "usar_llm": False}, headers=H).json()
+    o, pines = ev["editable"]["oportunidades"], ev["editable"]["pines"]
+    # Como lo manda el editor: se quita la 1.ª y las otras suben, con sus marcas y ventajas renumeradas.
+    r = c.put(f"/api/evaluaciones/{ev['id']}", headers=H, json={
+        "oportunidades": [o[2], o[1]], "pines": {"1": pines["3"], "2": pines["2"], "v1": pines["v1"]},
+        "resuelve": {"b3": "1", "b1": "2"}})
+    assert r.status_code == 200, r.text
+    ed = r.json()["editable"]
+    assert [x["dato"] for x in ed["oportunidades"]] == ["Pedido por llamada", "14 h de espera"]
+    assert ed["pines"] == {"1": pines["3"], "2": pines["2"], "v1": pines["v1"]} and ed["resuelve"] == {"b3": "1", "b1": "2"}
+    assert c.get(f"/api/evaluaciones/{ev['id']}/html", headers=H).status_code == 200
 
 
 def test_the_logo_can_be_replaced_or_removed_but_only_with_real_images(client):
@@ -98,12 +117,16 @@ def test_the_logo_can_be_replaced_or_removed_but_only_with_real_images(client):
     real = "data:image/png;base64," + base64.b64encode(png()).decode()
     r = c.put(f"/api/evaluaciones/{ev['id']}", json={"logo_data": real}, headers=H)
     assert r.status_code == 200 and r.json()["editable"]["logo"] == real
+    guardado = MongoDBManager().db.evaluaciones.find_one({"_id": ObjectId(ev["id"])})["cliente"]["cliente"]
+    assert guardado["avatar"].startswith("data:image/png;base64,")  # el logo también es la foto de perfil del chat
     falso = "data:image/png;base64," + base64.b64encode(b"<svg onload=alert(1)>").decode()
     assert c.put(f"/api/evaluaciones/{ev['id']}", json={"logo_data": falso}, headers=H).status_code == 422
     assert c.put(f"/api/evaluaciones/{ev['id']}", json={"logo_data": "data:image/svg+xml;base64,PHN2Zz4="}, headers=H).status_code == 422
     assert c.put(f"/api/evaluaciones/{ev['id']}", json={"logo_url": "http://10.0.1.2/logo.png"}, headers=H).status_code == 422
     r = c.put(f"/api/evaluaciones/{ev['id']}", json={"quitar_logo": True}, headers=H)
     assert r.status_code == 200 and r.json()["editable"]["logo"] is None
+    guardado = MongoDBManager().db.evaluaciones.find_one({"_id": ObjectId(ev["id"])})["cliente"]["cliente"]
+    assert "avatar" not in guardado  # sin logo, el chat muestra las iniciales
     pagina = c.get(f"/api/evaluaciones/{ev['id']}/html", headers=H).text
     datos_cliente = pagina.split('"cliente":', 1)[1].split("}", 1)[0]
     assert '"logo"' not in datos_cliente and '"nombre":"Diesgas"' in datos_cliente  # sin logo: se muestra el nombre

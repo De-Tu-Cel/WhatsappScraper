@@ -5,7 +5,7 @@
 # En Coolify: recurso Docker Compose del mismo repo, rama main, "Docker Compose Location"
 # /docker-compose.wwebjs.yml, con Auto Deploy APAGADO (se despliega a mano solo cuando cambia
 # apps/wwebjs). Variables: WWEBJS_API_SECRET, PROXY_SERVER, PROXY_USERNAME, PROXY_PASSWORD,
-# PROXY_ONLY_SESSIONS (los mismos valores del recurso principal) y WWEBJS_SESSIONS_VOLUME.
+# PROXY_ONLY_SESSIONS (los mismos valores del recurso principal).
 services:
   wwebjs:
     # Dar tiempo a Chromium para guardar LocalAuth y recoger sus procesos hijos.
@@ -29,6 +29,11 @@ services:
     expose:
       - "3001"
     volumes:
+      # Coolify 4.3 renombra todo volumen con nombre a "<uuid de este recurso>_wwebjs-sessions"
+      # (también los "external": solo respeta cifs/nfs). Antes del primer despliegue ese volumen
+      # se crea como ALIAS de la carpeta del volumen de siempre (docs/WWEBJS_RECURSO_APARTE.md):
+      # mismos archivos y mismo candado, no una copia. Borrar el alias no borra las sesiones.
+      # Si se olvida, Docker crea uno vacío y el servicio no arranca (REQUIRE_EXISTING_SESSIONS).
       - wwebjs_sessions:/app/sessions
     networks:
       coolify:
@@ -43,12 +48,7 @@ services:
         max-file: "10"
 
 volumes:
-  # El MISMO volumen de siempre (no una copia): el candado de storage-entrypoint.sh impide
-  # que dos servicios usen estos perfiles a la vez. Nombre: `docker inspect` del contenedor
-  # wwebjs actual, el volumen montado en /app/sessions.
   wwebjs_sessions:
-    external: true
-    name: ${WWEBJS_SESSIONS_VOLUME:?Falta WWEBJS_SESSIONS_VOLUME (nombre del volumen de sesiones actual)}
 
 networks:
   coolify:

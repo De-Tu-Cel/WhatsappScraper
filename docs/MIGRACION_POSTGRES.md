@@ -103,6 +103,14 @@ momento** hasta el final.
 | `settings` | 2026-10-20 (2 docs, carga + conciliación `[OK]`) | | |
 | `message_templates` | 2026-10-20 (72 docs, `[OK]`) | | |
 | `blacklist` | 2026-10-20 (361 docs, `[OK]`) | | |
+| `warmup_config`, `ai_global_config` | 2026-10-20 (1 doc c/u, carga automática `OK`) | | |
+| `proxies` | 2026-10-20 (20 docs, carga automática `OK`) | | |
+| `app_notifications` | 2026-10-20 (92 docs, carga automática `OK`) | | |
+| `security_counters` | 2026-10-20 (vacía; se copia al primer uso) | | |
+| `social_media` | 2026-10-20 (1 724 docs, carga automática `OK`) | | |
+| `person_contacts` | 2026-10-20 (370 docs, carga automática `OK`) | | |
+
+`stickers` y `evidence` no existen hoy en Mongo; se agregan cuando aparezcan. Primer `check` en producción (2026-10-20): las 10 en `OK`, 0 correcciones, dos procesos del backend reportando, 0 errores.
 
 Revisión (terminal del contenedor backend): `python scripts/pg_mirror.py check` → dice si cada una ya puede avanzar.
 

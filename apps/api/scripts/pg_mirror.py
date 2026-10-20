@@ -94,9 +94,13 @@ def _check(raw_db, store) -> int:
 
     print("\nProcesos del backend:")
     procs = store.query("SELECT process, extract(epoch FROM now() - updated_at), status FROM mongo._runtime ORDER BY 2")
-    if not procs:
-        print("  ninguno ha reportado todavía (se reporta cada minuto con la versión que trae health.py)")
-    for process, age, status in procs:
+    # Reportan cada minuto: los que llevan más de 5 min callados son de un contenedor anterior (redeploy).
+    live = [p for p in procs if float(p[1]) <= 300]
+    if not live:
+        print("  ninguno ha reportado en los últimos 5 min (se reporta cada minuto con la versión que trae health.py)")
+    if len(procs) > len(live):
+        print(f"  ({len(procs) - len(live)} de un contenedor anterior ya no reportan: normal tras un redeploy)")
+    for process, age, status in live:
         worker = status.get("worker", {})
         print(f"  {process}: hace {float(age):.0f} s · pendientes {status.get('pending', 0)} · "
               f"por conciliar {', '.join(status.get('dirty') or []) or 'ninguna'} · "

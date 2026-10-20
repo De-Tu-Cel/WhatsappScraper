@@ -107,7 +107,7 @@ def test_drift_is_repaired_through_the_worker_and_logged_as_a_correction(env, mo
     db[a].insert_many([{"i": i} for i in range(5)])
     rt.worker.flush(10)
     rt.monitor.tick()
-    assert _log(rt, a) == [("periodic", 0, 0, 0, 0)]  # el espejo en vivo ya lo tenía todo
+    assert _log(rt, a) == [("initial", 0, 0, 0, 0)]  # el espejo en vivo ya lo tenía todo
     # Alguien escribe en Mongo saltándose la capa, y sobra una fila en Postgres.
     raw[a].update_one({"i": 1}, {"$set": {"i": 100}})
     raw[a].insert_one({"i": 9})
@@ -118,6 +118,30 @@ def test_drift_is_repaired_through_the_worker_and_logged_as_a_correction(env, mo
     rt.worker.flush(10)
     assert reconcile(raw, rt.store, a)["in_sync"]
     assert _log(rt, a)[-1] == ("periodic", 1, 1, 1, 3)
+
+
+@needs_pg
+def test_live_writes_before_the_first_reconcile_do_not_turn_the_initial_load_into_corrections(env):
+    # Producción 2026-10-20: contacts tenía 2 docs copiados en vivo cuando llegó la primera
+    # conciliación, y los otros 75 925 salieron como "corregidos".
+    raw, rt, a, _b = env
+    raw[a].insert_many([{"i": i} for i in range(50)])  # ya existían en Mongo
+    pgmirror.wrap_database(raw)[a].insert_many([{"live": i} for i in range(2)])  # la app escribe tras el deploy
+    rt.worker.flush(10)
+    rt.monitor.tick()
+    rt.worker.flush(10)
+    assert _log(rt, a) == [("initial", 50, 0, 0, 50)]
+    assert reconcile(raw, rt.store, a)["in_sync"]
+
+
+@needs_pg
+def test_old_log_rows_are_reclassified_automatically(env):
+    raw, rt, a, _b = env
+    for queued in (75925, 0):
+        rt.store.query("INSERT INTO mongo._reconcile_log (kind, collection, queued) VALUES ('periodic', %s, %s)", (a, queued))
+    health._meta_ready.discard(id(rt.store))
+    health.ensure_meta(rt.store)  # corre al arrancar cada proceso (y en `check`)
+    assert [(k, q) for k, *_x, q in _log(rt, a)] == [("initial", 75925), ("periodic", 0)]
 
 
 @needs_pg

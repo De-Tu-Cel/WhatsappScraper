@@ -3,6 +3,10 @@
 Mongo: mongomock (conftest.py). Postgres: uno REAL y desechable — el local de
 migration/docker-compose.yml o el servicio de CI (TEST_POSTGRES_URL). Si no hay
 Postgres disponible estas pruebas se saltan; nunca usan POSTGRES_URL de producción.
+
+Los resultados "esperados" de las pruebas de semántica (rutas que cruzan arreglos,
+null, orden, proyecciones) se midieron en Mongo 7 real; tests/test_pgmirror_vs_mongo.py
+los vuelve a comparar contra el motor real cuando hay uno disponible.
 """
 import os
 import re
@@ -11,7 +15,7 @@ from datetime import datetime, timedelta
 
 import mongomock
 import pytest
-from bson import Binary, ObjectId
+from bson import Binary, Int64, ObjectId
 
 from app import pgmirror
 from app.pgmirror import codec, config, routing, sqlfilter
@@ -31,6 +35,18 @@ def _pg_available():
 
 
 needs_pg = pytest.mark.skipif(not _pg_available(), reason="sin Postgres de pruebas (docker compose -f migration/docker-compose.yml up -d)")
+
+
+def test_ci_never_skips_the_real_engine_tests():
+    """En CI (REQUIRE_REAL_ENGINES=1) Postgres y el Mongo 7 de pruebas tienen que estar: si no,
+    las pruebas contra los motores reales se saltarían y CI saldría verde sin haberlas corrido."""
+    if os.getenv("REQUIRE_REAL_ENGINES") != "1":
+        pytest.skip("solo se exige en CI")
+    import pymongo
+    assert _pg_available(), "no hay Postgres de pruebas"
+    client = pymongo.MongoClient(os.getenv("TEST_MONGO_URL", "mongodb://127.0.0.1:27029"), serverSelectionTimeoutMS=5000)
+    assert not type(client).__module__.startswith("mongomock"), "TEST_MONGO_URL debe ser el Mongo dedicado (puerto 27029)"
+    assert client.admin.command("ping")["ok"] == 1
 
 
 @pytest.fixture
@@ -62,6 +78,7 @@ def routed(monkeypatch, coll_name):
         return raw, pgmirror.wrap_database(raw)
     yield make
     if routing._runtime is not None:
+        routing.shadow_drain(5)
         routing._runtime.worker.flush(5)
         routing._runtime.store.close()
     routing._runtime = None
@@ -84,6 +101,27 @@ def test_codec_roundtrip_keeps_every_type():
     assert codec.doc_hash({"b": Binary(b"\x00\x01", 0)}) == codec.doc_hash({"b": b"\x00\x01"})
     for value in (ObjectId(), "settings", 7):
         assert codec.id_from_key(*codec.id_key(value)) == value
+
+
+def test_int64_comes_back_as_int_with_the_same_hash():
+    # fs.files.length es int64; el jsonb no guarda el ancho y para la app es el mismo número.
+    doc = {"_id": 1, "length": Int64(5), "huge": Int64(2**40), "plain": 5}
+    back = codec.decode_doc(codec.encode_doc(doc))
+    assert back == doc and codec.doc_hash(back) == codec.doc_hash(doc)
+    assert codec.doc_hash({"x": 5}) != codec.doc_hash({"x": 5.0})  # double sigue siendo distinto de int
+    # El orden de las llaves cuenta (Mongo y la app lo conservan): un reordenamiento no se esconde.
+    assert codec.doc_hash({"a": 1, "b": 2}) != codec.doc_hash({"b": 2, "a": 1})
+
+
+@needs_pg
+def test_documents_come_back_with_their_key_order(store, coll_name):
+    # jsonb ordena las llaves a su manera (p. ej. un horario lunes…domingo saldría revuelto).
+    doc = {"_id": 1, "zeta": 1, "hours": {"lunes": "9-18", "martes": "9-18", "miercoles": "9-14", "domingo": None}, "a": [{"y": 1, "b": 2}]}
+    store.upsert(coll_name, [doc])
+    back = store.query_docs(coll_name, sqlfilter.where({}))[0]
+    assert list(back) == ["_id", "zeta", "hours", "a"]
+    assert list(back["hours"]) == ["lunes", "martes", "miercoles", "domingo"] and list(back["a"][0]) == ["y", "b"]
+    assert codec.doc_hash(back) == codec.doc_hash(doc)
 
 
 def test_without_postgres_url_the_database_is_untouched(monkeypatch):
@@ -124,22 +162,147 @@ def test_filter_translation_matches_mongo(store, coll_name, filter_):
     raw[coll_name].insert_many([dict(d) for d in DOCS])
     store.upsert(coll_name, list(raw[coll_name].find()))
     expected = sorted(codec.id_key(d["_id"])[0] for d in raw[coll_name].find(filter_))
-    got = sorted(codec.id_key(d["_id"])[0] for d in store.query_docs(coll_name, sqlfilter.where(filter_), []))
+    got = sorted(codec.id_key(d["_id"])[0] for d in store.query_docs(coll_name, sqlfilter.where(filter_)))
     assert got == expected
 
 
 def test_untranslatable_filters_are_refused_not_guessed():
     for bad in ({"tags": {"$size": 2}}, {"$expr": {"$gt": ["$a", "$b"]}}, {"a": {"$elemMatch": {"b": 1}}},
-                {"name": {"$regex": "x", "$options": "m"}}):
+                {"name": {"$regex": "x", "$options": "m"}}, {"a.0.b": 1}, {"a": {"$not": {"$gt": 1}}},
+                # Igualdad con subdocumento: Mongo compara el orden de las llaves, jsonb no.
+                {"loc": {"city": "x", "state": "y"}}, {"loc": {"$in": [{"city": "x"}]}}, {"t": [{"a": 1}]},
+                # Sintaxis que significa otra cosa en Postgres que en PCRE (Mongo):
+                {"name": {"$regex": r"\bfoo"}}, {"name": {"$regex": r"\w+"}}, {"name": {"$regex": "(?i)x"}},
+                {"name": {"$regex": "[^a]"}}, {"name": {"$regex": "[[:alpha:]]"}}, {"name": re.compile("x", re.M)}):
         with pytest.raises(sqlfilter.Unsupported):
             sqlfilter.where(bad)
+    for bad_sort in ([("a", 2)], [("a.0", 1)], [("a", True)]):
+        with pytest.raises(sqlfilter.Unsupported):
+            sqlfilter.sort_plan(bad_sort)
 
 
-def test_projection_matches_mongo_shapes():
+# ── Semántica medida en Mongo 7 real (rutas por arreglos, null, orden, proyección) ──
+EDGE = {
+    1: {"a": {"b": 1}}, 2: {"a": {"b": None}}, 3: {"a": {}}, 4: {}, 5: {"a": [{"b": 1}, {"c": 2}]},
+    6: {"a": [{"b": 1}]}, 7: {"a": [{"b": None}]}, 8: {"a": []}, 9: {"a": [1, 2]}, 10: {"a": 5},
+    11: {"a": [{"b": [1, 2]}]}, 12: {"a": [[{"b": 1}]]}, 13: {"a": [{"b": 2}, {"b": 3}]}, 14: {"a": None},
+    15: {"a": [{"b": [None]}]}, 16: {"a": {"b": [None, 1]}}, 17: {"a": {"b": []}}, 18: {"a": [{"b": 0}, 7]},
+    20: {"a": [{"b": [{"c": 1}, {"c": 2}]}, {"b": {"c": 3}}]}, 21: {"a": {"b": [{"c": [1, 5]}]}},
+    22: {"s": "ÑANDÚ Éxito"}, 23: {"s": "nandu exito"}, 24: {"s": ["x", "ÉXITO"]}, 25: {"a": [{"b": 1, "c": 9}, {"b": 2}], "z": 1},
+}
+_FIRST = [k for k in EDGE if k <= 18]
+MONGO7_FILTERS = [
+    ({"a.b": None}, [2, 3, 4, 5, 7, 10, 14, 15, 16], _FIRST),
+    ({"a.b": {"$exists": True}}, [1, 2, 5, 6, 7, 11, 13, 15, 16, 17, 18], _FIRST),
+    ({"a.b": {"$exists": False}}, [3, 4, 8, 9, 10, 12, 14], _FIRST),
+    ({"a.b": {"$ne": None}}, [1, 6, 8, 9, 11, 12, 13, 17, 18], _FIRST),
+    ({"a.b": 1}, [1, 5, 6, 11, 16], _FIRST),
+    ({"a.b": {"$gt": 1}}, [11, 13], _FIRST),
+    ({"a.b": {"$in": [None, 1]}}, [1, 2, 3, 4, 5, 6, 7, 10, 11, 14, 15, 16], _FIRST),
+    ({"a": None}, [4, 14], _FIRST),
+    ({"a": {"$gt": 1}}, [9, 10, 18], _FIRST),
+    ({"a.b": []}, [17], _FIRST),
+    ({"a": []}, [8], _FIRST),
+    ({"a.b.c": 1}, [20, 21], [1, 2, 3, 4, 5, 8, 9, 10, 14, 20, 21, 22, 23, 24, 25]),
+    ({"a.b.c": {"$gt": 2}}, [20, 21], [1, 2, 3, 4, 5, 8, 9, 10, 14, 20, 21, 22, 23, 24, 25]),
+    ({"a.b.c": None}, [1, 2, 3, 4, 5, 10, 14, 22, 23, 24, 25], [1, 2, 3, 4, 5, 8, 9, 10, 14, 20, 21, 22, 23, 24, 25]),
+    ({"a.b.c": {"$exists": True}}, [20, 21], [1, 2, 3, 4, 5, 8, 9, 10, 14, 20, 21, 22, 23, 24, 25]),
+    ({"s": {"$regex": "ñandú éxito", "$options": "i"}}, [22], None),
+    ({"s": re.compile("^éxito", re.I)}, [24], None),
+    ({"s": {"$regex": "éxito$", "$options": "i"}}, [22, 24], None),
+]
+
+
+@pytest.fixture
+def edge_store(store, coll_name):
+    store.upsert(coll_name, [{"_id": k, **v} for k, v in EDGE.items()])
+    return store, coll_name
+
+
+def _ids(store, coll, filter_, among=None, sort=None):
+    flt = filter_ if among is None else {"$and": [filter_, {"_id": {"$in": among}}]}
+    plan = sqlfilter.sort_plan(sort) if sort else None
+    return [d["_id"] for d in store.query_docs(coll, sqlfilter.where(flt), plan=plan)]
+
+
+@needs_pg
+@pytest.mark.parametrize("filter_,expected,among", MONGO7_FILTERS, ids=[repr(f[0]) for f in MONGO7_FILTERS])
+def test_filters_follow_mongo7_through_arrays(edge_store, filter_, expected, among):
+    store, coll = edge_store
+    assert sorted(_ids(store, coll, filter_, among)) == expected
+
+
+MONGO7_SORTS = [
+    ("a.b", 1, _FIRST, [17, 2, 3, 4, 5, 7, 8, 9, 10, 12, 14, 15, 16, 18, 1, 6, 11, 13]),
+    ("a.b", -1, _FIRST, [13, 11, 1, 5, 6, 16, 18, 2, 3, 4, 7, 8, 9, 10, 12, 14, 15, 17]),
+    # Ordenar por un campo cuyo valor es objeto no se replica (orden de objetos BSON): solo escalares/arreglos.
+    ("a", 1, [4, 8, 9, 10, 14], [8, 4, 14, 9, 10]),
+    ("a", -1, [4, 8, 9, 10, 14], [10, 9, 4, 14, 8]),
+]
+
+
+@needs_pg
+@pytest.mark.parametrize("field,direction,among,expected", MONGO7_SORTS, ids=[f"{s[0]} {s[1]}" for s in MONGO7_SORTS])
+def test_sort_follows_mongo7(edge_store, field, direction, among, expected):
+    store, coll = edge_store
+    assert _ids(store, coll, {}, among, sort=[(field, direction), ("_id", 1)]) == expected
+
+
+ABSENT = "<sin a>"
+MONGO7_PROJECTIONS = [
+    ({"a.b": 1}, {1: {"b": 1}, 2: {"b": None}, 3: {}, 4: ABSENT, 5: [{"b": 1}, {}], 8: [], 9: [], 10: ABSENT, 14: ABSENT,
+                  11: [{"b": [1, 2]}], 12: [[{"b": 1}]], 18: [{"b": 0}], 20: [{"b": [{"c": 1}, {"c": 2}]}, {"b": {"c": 3}}],
+                  25: [{"b": 1}, {"b": 2}]}),
+    ({"a.b": 1, "a.c": 1}, {5: [{"b": 1}, {"c": 2}], 25: [{"b": 1, "c": 9}, {"b": 2}]}),
+    ({"a.b.c": 1}, {20: [{"b": [{"c": 1}, {"c": 2}]}, {"b": {"c": 3}}], 21: {"b": [{"c": [1, 5]}]}}),
+    ({"a.b": 0}, {3: {}, 8: [], 10: 5, 14: None, 25: [{"c": 9}, {}], 5: [{}, {"c": 2}], 9: [1, 2], 12: [[{}]], 18: [{}, 7]}),
+    ({"a.b.c": 0}, {20: [{"b": [{}, {}]}, {"b": {}}], 21: {"b": [{}]}}),
+]
+
+
+@pytest.mark.parametrize("projection,expected", MONGO7_PROJECTIONS, ids=[repr(p[0]) for p in MONGO7_PROJECTIONS])
+def test_projection_follows_mongo7(projection, expected):
+    for _id, a in expected.items():
+        out = sqlfilter.apply_projection({"_id": _id, **EDGE[_id]}, projection)
+        assert out["_id"] == _id
+        assert out.get("a", ABSENT) == a, _id
+
+
+def test_projection_shapes_and_never_touches_the_original():
     doc = {"_id": 1, "a": 1, "b": {"c": 2, "d": 3}, "e": 4}
     assert sqlfilter.apply_projection(doc, {"a": 1, "b.c": 1}) == {"_id": 1, "a": 1, "b": {"c": 2}}
     assert sqlfilter.apply_projection(doc, {"b.d": 0, "_id": 0}) == {"a": 1, "b": {"c": 2}, "e": 4}
+    assert sqlfilter.apply_projection(doc, {"_id": 1}) == {"_id": 1}
+    assert sqlfilter.apply_projection(doc, {"_id": 0}) == {"a": 1, "b": {"c": 2, "d": 3}, "e": 4}
     assert doc["b"] == {"c": 2, "d": 3}  # la proyección nunca modifica el original
+    for bad in ({"a": 1, "b": 0}, {"a": 1, "a.b": 1}, {"a": {"$slice": 1}}, {"numbers.$": 1}):
+        with pytest.raises(sqlfilter.Unsupported):
+            sqlfilter.apply_projection(doc, bad)
+
+
+def test_distinct_values_walk_arrays_like_mongo():
+    doc = {"a": [{"b": 1}, {"b": [2, 3]}, {"c": 4}, 5], "t": ["x", ["y"]], "n": None}
+    assert sqlfilter.path_values(doc, "a.b") == [1, 2, 3]
+    assert sqlfilter.path_values(doc, "t") == ["x", ["y"]]
+    assert sqlfilter.path_values(doc, "n") == [None]
+    assert sqlfilter.path_values(doc, "missing") == []
+    assert sqlfilter.distinct_marker(1) == sqlfilter.distinct_marker(1.0)
+
+
+@needs_pg
+def test_search_text_with_percent_does_not_break_the_query(edge_store):
+    store, coll = edge_store
+    store.upsert(coll, [{"_id": 99, "s": "descuento 100% real"}])
+    assert _ids(store, coll, {"s": {"$regex": re.escape("100%"), "$options": "i"}}) == [99]
+
+
+@needs_pg
+def test_without_sort_rows_come_back_in_insertion_order(store, coll_name):
+    ids = [ObjectId() for _ in range(5)]
+    for _id in (ids[3], ids[0], ids[4], ids[1], ids[2]):
+        store.upsert(coll_name, [{"_id": _id, "k": 1}])
+    store.upsert(coll_name, [{"_id": ids[3], "k": 2}])  # actualizar no cambia el orden (como Mongo/WiredTiger)
+    assert [d["_id"] for d in store.query_docs(coll_name, sqlfilter.where({}))] == [ids[3], ids[0], ids[4], ids[1], ids[2]]
 
 
 # ── Modo dual: cada escritura de Mongo queda igual en Postgres ─────────────────
@@ -203,9 +366,37 @@ def test_postgres_mode_reads_match_mongo(routed, coll_name):
     assert col.count_documents({"when": {"$gte": base + timedelta(days=10)}}) == raw_col.count_documents({"when": {"$gte": base + timedelta(days=10)}})
     assert sorted(col.distinct("tags")) == sorted(raw_col.distinct("tags"))
     assert col.estimated_document_count() == 30
+    # Sin sort: orden de inserción, como el orden natural de Mongo.
+    assert ids(col.find({"kind": "even"}).limit(4)) == ids(raw_col.find({"kind": "even"}).limit(4))
+    # Se usa como un cursor de pymongo.
+    cursor = col.find({"i": {"$lt": 3}}).sort("i", 1)
+    assert next(cursor)["i"] == 0 and [d["i"] for d in cursor] == [1, 2]
+    assert [d["i"] for d in cursor.rewind()] == [0, 1, 2] and [d["i"] for d in cursor.clone()] == [0, 1, 2]
     # Lo que no se puede traducir se resuelve en Mongo, con el mismo resultado.
     assert col.count_documents({"tags": {"$size": 1}}) == 30
     assert routing._runtime.stats[coll_name]["pg_fallback_count_documents"] == 1
+    # distinct con documentos sin el campo: Mongo devuelve null o no según use un índice;
+    # no se adivina (send_now_worker dependía de ese null para la partición legacy).
+    col.insert_one({"kind": "odd"})
+    routing._runtime.worker.flush(10)
+    assert sorted(col.distinct("tags"), key=str) == sorted(raw_col.distinct("tags"), key=str)
+    assert routing._runtime.stats[coll_name]["pg_fallback_distinct"] == 1
+
+
+@needs_pg
+def test_postgres_error_in_the_middle_of_a_cursor_falls_back_to_mongo(routed, coll_name, monkeypatch):
+    raw, db = routed("postgres")
+    col = db[coll_name]
+    col.insert_many([{"i": i} for i in range(5)])
+    routing._runtime.worker.flush(10)
+    cursor = col.find({"i": {"$gte": 2}}).sort("i", 1)
+
+    def broken(*_a, **_k):
+        raise RuntimeError("postgres se cayó")
+    monkeypatch.setattr(routing._runtime.store, "query_docs", broken)
+    assert [d["i"] for d in cursor] == [2, 3, 4]
+    assert col.find_one({"i": 4})["i"] == 4
+    assert routing._runtime.stats[coll_name]["pg_fallback_find"] == 1
 
 
 @needs_pg
@@ -215,12 +406,29 @@ def test_shadow_mode_reports_a_divergence_and_still_answers_with_mongo(routed, c
     _id = col.insert_one({"k": "v", "n": 1}).inserted_id
     routing._runtime.worker.flush(10)
     assert col.find_one({"_id": _id})["n"] == 1
+    assert routing.shadow_drain()
     assert routing._runtime.stats[coll_name].get("shadow_ok") == 1
-    # Alguien cambia la fila de Postgres a mano: la sombra lo detecta.
+    # Alguien cambia la fila de Postgres a mano: la sombra lo detecta (también en find).
     store.upsert(coll_name, [{"_id": _id, "k": "v", "n": 999}])
     assert col.find_one({"_id": _id})["n"] == 1  # sigue respondiendo con Mongo
-    assert routing._runtime.stats[coll_name]["shadow_diffs"] == 1
+    assert [d["n"] for d in col.find({"k": "v"})] == [1]
     assert col.count_documents({"k": "v"}) == 1
+    assert routing.shadow_drain()
+    assert routing._runtime.stats[coll_name]["shadow_diffs"] == 2
+
+
+@needs_pg
+def test_shadow_compares_in_the_background_and_tolerates_ties(routed, coll_name):
+    raw, db = routed("shadow")
+    col = db[coll_name]
+    col.insert_many([{"g": i % 2, "i": i} for i in range(10)])
+    routing._runtime.worker.flush(10)
+    docs = list(col.find({}).sort("g", 1).limit(3))  # empate en g=0: cualquier orden dentro del empate vale
+    for d in docs:
+        d.clear()  # la app modifica lo que recibe: la comparación usa una copia tomada antes
+    assert routing.shadow_drain()
+    stats = routing._runtime.stats[coll_name]
+    assert stats.get("shadow_diffs", 0) == 0 and stats.get("shadow_ok") == 1
 
 
 @needs_pg

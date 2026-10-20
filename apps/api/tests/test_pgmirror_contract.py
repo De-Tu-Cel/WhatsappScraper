@@ -66,7 +66,9 @@ def _scenario(db, coll, ids):
     # Lecturas (en dual/shadow responden desde Mongo).
     out.append(c.find_one({"_id": ids[0]}))
     out.append(c.find_one({"status": "claimed"}, {"name": 1, "_id": 0}))
-    out.append(list(c.find({}, {"name": 1}).sort("n", -1).skip(1).limit(3)))
+    # Sin _id: mongomock lo pone al final de la proyección y Mongo 7 al principio (la capa
+    # hace lo de Mongo 7; test_pgmirror_vs_mongo.py lo verifica contra el motor real).
+    out.append(list(c.find({}, {"name": 1, "_id": 0}).sort("n", -1).skip(1).limit(3)))
     out.append(c.count_documents({"n": {"$gte": 10}}))
     out.append(sorted(c.distinct("tags")))
     out.append(list(c.aggregate([{"$group": {"_id": "$status", "n": {"$sum": 1}}}, {"$sort": {"_id": 1}}])))
@@ -91,6 +93,7 @@ def test_layer_is_invisible_to_the_app_and_postgres_ends_identical(monkeypatch, 
         assert isinstance(layered[coll], routing.RoutedCollection)
         assert _scenario(layered, coll, ids) == expected
         rt = routing._runtime
+        assert routing.shadow_drain(15)  # las comparaciones de shadow corren en segundo plano
         assert rt.worker.flush(15)
         assert not rt.worker.dirty, rt.worker.dirty
         assert reconcile(raw, rt.store, coll)["in_sync"]

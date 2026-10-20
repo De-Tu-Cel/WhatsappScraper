@@ -34,8 +34,16 @@ jobs:
     defaults:
       run:
         working-directory: apps/api
-    # Postgres desechable para las pruebas de la migración (tests/test_pgmirror.py).
+    # Postgres y Mongo 7 desechables para las pruebas de la migración (tests/test_pgmirror*.py):
+    # la capa se compara contra el motor real de Mongo, no solo contra mongomock.
     services:
+      mongo:
+        image: mongo:7.0
+        ports:
+          - 27029:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping: 1}).ok'"
+          --health-interval 5s --health-timeout 5s --health-retries 20
       postgres:
         image: postgres:17-alpine
         env:
@@ -49,6 +57,9 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       TEST_POSTGRES_URL: postgresql://app:app_ci_only@127.0.0.1:5432/commercial
+      TEST_MONGO_URL: mongodb://127.0.0.1:27029
+      # Sin esto, si un servicio no levanta, las pruebas contra los motores reales se saltarían en silencio.
+      REQUIRE_REAL_ENGINES: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

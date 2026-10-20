@@ -6,7 +6,10 @@
 # mongo-staging: aquí se restaura el respaldo de producción para trabajar con
 #   datos reales SIN tocar producción. Todo diagnóstico y ensayo de copia corre aquí.
 # postgres: destino de la migración.
-# Ambos escuchan solo en 127.0.0.1 de esta máquina.
+# mongo-test: Mongo 7 vacío y desechable (en memoria) para comparar la capa contra el
+#   motor real (tests/test_pgmirror_vs_mongo.py). El puerto 27029 es el único Mongo real
+#   que conftest.py deja usar a las pruebas.
+# Todos escuchan solo en 127.0.0.1 de esta máquina.
 name: whatsapp-migration-local
 
 services:
@@ -38,6 +41,19 @@ services:
       - ./pg-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app -d commercial"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mongo-test:
+    image: mongo:7.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:27029:27017"
+    tmpfs:
+      - /data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
       interval: 5s
       timeout: 5s
       retries: 20

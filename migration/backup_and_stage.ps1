@@ -95,11 +95,17 @@ Write-Host "     OK: las $($dumped.Count) colecciones coinciden documento por do
 if (-not $SkipAudit) {
   Write-Host '4/4  Diagnóstico de migración sobre la copia local…'
   $prevUri = $env:MONGODB_URI; $prevDb = $env:DATABASE_NAME
+  $prevIo = $env:PYTHONIOENCODING; $prevConsole = [Console]::OutputEncoding
   try {
     $env:MONGODB_URI = 'mongodb://127.0.0.1:27030/?directConnection=true'
     $env:DATABASE_NAME = $Database
+    # Python escribe UTF-8 y la consola lo lee como UTF-8 (si no, "tamaño" sale "tama±o").
+    $env:PYTHONIOENCODING = 'utf-8'; [Console]::OutputEncoding = [Text.Encoding]::UTF8
     python (Join-Path $root 'apps\api\scripts\mongo_migration_audit.py') --out (Join-Path $backups "mongo_audit_$stamp.json") |
       Tee-Object -FilePath (Join-Path $backups "mongo_audit_$stamp.txt")
-  } finally { $env:MONGODB_URI = $prevUri; $env:DATABASE_NAME = $prevDb }
+  } finally {
+    $env:MONGODB_URI = $prevUri; $env:DATABASE_NAME = $prevDb
+    $env:PYTHONIOENCODING = $prevIo; [Console]::OutputEncoding = $prevConsole
+  }
 }
 Write-Host "`nListo. Respaldo verificado: backups\$name" -ForegroundColor Green

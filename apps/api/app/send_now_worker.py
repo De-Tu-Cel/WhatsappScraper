@@ -725,6 +725,19 @@ def _partition_worker(partition: str, user_id: str):
             _partition_threads.pop(partition, None)
 
 
+def _partitions_needed(db) -> dict:
+    """{partition: user_id} with pending work."""
+    raw_user_ids = db.db.send_queue_items.distinct("user_id", {"status": "pending"})
+    partitions_needed = {(uid or _LEGACY_PARTITION): (uid or "") for uid in raw_user_ids}
+    # Items without user_id go to the legacy partition. distinct() only reports None for
+    # items that LACK the field when Mongo answers from the user_id index (it depends on
+    # the query plan, and Postgres never does), so check for them explicitly.
+    if "" in raw_user_ids or None in raw_user_ids or db.db.send_queue_items.find_one(
+            {"status": "pending", "user_id": {"$in": [None, ""]}}, {"_id": 1}):
+        partitions_needed[_LEGACY_PARTITION] = ""
+    return partitions_needed
+
+
 def _dispatcher_loop():
     """Elected-leader loop: watches for partitions with pending work and keeps
     exactly one worker thread alive per partition. Does no sending itself —
@@ -749,11 +762,7 @@ def _dispatcher_loop():
 
             _sweep_interrupted_items(db)
 
-            raw_user_ids = db.db.send_queue_items.distinct("user_id", {"status": "pending"})
-            partitions_needed = {(uid or _LEGACY_PARTITION): (uid or "") for uid in raw_user_ids}
-            # Also normalise any bare "" that distinct() may return alongside None
-            if "" in raw_user_ids or None in raw_user_ids:
-                partitions_needed[_LEGACY_PARTITION] = ""
+            partitions_needed = _partitions_needed(db)
 
             with _partition_threads_lock:
                 for partition, uid in partitions_needed.items():

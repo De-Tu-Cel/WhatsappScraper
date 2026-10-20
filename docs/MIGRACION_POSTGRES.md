@@ -21,6 +21,9 @@ momento** hasta el final.
 | Búsquedas de texto | 41 `$regex` (cajas de búsqueda) → `ILIKE` + índice `pg_trgm` |
 | Fechas guardadas | Mezcla: 97 `utcnow()`, 76 `now(timezone.utc)`, **109 `datetime.now()` sin zona** |
 | Tests | 76 archivos; 45 simulan colecciones de Mongo |
+| Tamaño real (respaldo del 2026-10-19) | 43 colecciones, 91 316 documentos, respaldo comprimido de 4.7 MB. La más grande: `contacts` (75 927 docs, 18.8 MB); luego `message_logs` (6 538 docs, 8.2 MB). GridFS: 5 archivos, 0.01 MB. |
+| Duplicados que romperían `UNIQUE` | **Ninguno** en `companies.domain/maps_cid`, `message_logs.message_id`, `search_ideas.url`, `contacts.value`, `instances.name`, `users.username/email/session_token`. |
+| Llaves con tipos mezclados | `contacts.company_id`: 47 402 `ObjectId` y 28 525 texto. `instance_daily_verifications._id`: 41 `ObjectId` y 3 texto. La capa los conserva tal cual; se normalizan al crear las tablas definitivas. |
 
 ### Colecciones por volumen de uso en el código
 
@@ -28,7 +31,7 @@ momento** hasta el final.
 |---|---|---|
 | `message_logs` | 137 | Camino caliente (cada mensaje/webhook). Índice único parcial en `message_id`. Agregaciones de métricas y conversaciones. |
 | `instances` | 123 | Estado de cada línea; muchas escrituras desde webhooks. |
-| `companies` | 73 | Únicos `domain` y `maps_cid` (con `try/except`: **puede haber duplicados en producción**). |
+| `companies` | 73 | Únicos `domain` y `maps_cid` (creados con `try/except`; el diagnóstico del 2026-10-19 no encontró duplicados, se vuelve a revisar antes de crear `UNIQUE`). |
 | `ai_followup_sessions` | 51 | `turns` crece con `$push` → tabla hija. |
 | `contacts` | 34 | Único parcial (`source=inbound_whatsapp`). Reclamo atómico en verificación. |
 | `jid_map` | 33 | Caché de números verificados; muchos upserts. |
@@ -60,9 +63,13 @@ momento** hasta el final.
 6. **Capa de enrutamiento en vez de reescribir 805 llamadas** (`apps/api/app/pgmirror/`, implementada 2026-10-19). Se mete en el único punto por donde la app obtiene la base (`MongoDBManager.db`) y decide por colección:
    - `mongo` (por defecto, y siempre sin `POSTGRES_URL`): la colección de pymongo tal cual; la capa ni existe.
    - `dual`: todo va a Mongo igual que hoy; después de cada escritura, un hilo vuelve a leer de Mongo los documentos tocados y los deja iguales en `mongo.<colección>` de Postgres. Si Postgres falla, la app no se entera y la colección queda "por conciliar".
-   - `shadow`: dual + `find_one`/`count_documents`/`distinct` también consultan Postgres y registran diferencias (en `mongo._shadow_diffs`), respondiendo con Mongo.
-   - `postgres`: dual + `find`/`find_one`/`count_documents`/`distinct` se leen de Postgres; lo que el traductor de filtros no soporta se lee de Mongo, nunca se adivina.
-   Cada tabla espejo guarda el documento completo en Extended JSON relajado (sin pérdida: `ObjectId`, fechas y texto vs. ObjectId se conservan). Las tablas normalizadas definitivas se construyen después, colección por colección, a partir de estas.
+   - `shadow`: dual + `find`/`find_one`/`count_documents`/`distinct` se comparan contra Postgres **en un hilo aparte** (la petición no espera) y las diferencias quedan en `mongo._shadow_diffs` y en el estado. Siempre responde Mongo.
+   - `postgres`: dual + `find`/`find_one`/`count_documents`/`distinct` se leen de Postgres. Lo que el traductor no soporta, o cualquier error de Postgres (también a mitad de un cursor), se resuelve en Mongo: nunca se adivina ni se le muestra un error a la app.
+   Cada tabla espejo (`mongo.<colección>`) guarda el documento en Extended JSON relajado: `doc jsonb` para filtrar y `src` con el texto exacto, porque jsonb reordena las llaves y Mongo/la app conservan ese orden (p. ej. un horario lunes…domingo). `seq` guarda el orden de inserción, el equivalente del orden natural de Mongo. Así no se pierde nada: `ObjectId`, fechas, texto vs. `ObjectId` y el orden de las llaves vuelven iguales. Las tablas normalizadas definitivas se construyen después, colección por colección, a partir de estas.
+
+   **Semántica medida contra Mongo 7 real**, no supuesta. El traductor reproduce cómo recorre Mongo las rutas `a.b.c` a través de arreglos de objetos, `null` y campos faltantes, arreglos vacíos, comparaciones por tipo, orden (el arreglo ordena por su menor/mayor elemento, el vacío va antes que `null`) y proyecciones dentro de arreglos. `tests/test_pgmirror_vs_mongo.py` lo compara en cada corrida de CI contra un Mongo 7 de verdad (cientos de filtros, órdenes, proyecciones y `distinct` sobre documentos con formas difíciles).
+
+   **Lo que se deja a Mongo a propósito** (sale como `Unsupported` y se lee de Mongo): `$elemMatch`, `$size`, `$all`, `$not`, `$type`, `$expr`, rutas con índice (`a.0`), igualdad contra un subdocumento (Mongo compara el orden de sus llaves), regex con sintaxis que significa otra cosa en Postgres (`\b`, `\w`, `(?…)`, `[^…]`, clases POSIX, cuantificadores posesivos), agregaciones y opciones de cursor poco comunes. **Única diferencia conocida**: ordenar por un campo cuyo valor es un subdocumento no sigue el orden de objetos de BSON; la app no lo hace y el modo shadow lo detectaría.
 7. **Archivos de GridFS**: tabla `files` con `bytea` si el volumen es chico (lo dirá el diagnóstico); si es grande, almacenamiento tipo S3. GridFS sigue usando Mongo directo mientras tanto.
 
 **Alternativa descartada como destino final: FerretDB** (protocolo de Mongo sobre Postgres). Permitiría cambiar solo la URI, pero los datos quedan como documentos, no como tablas SQL reales, y hay incompatibilidades por confirmar (índices parciales con `$type`). Puede servir como paso temporal si alguna vez se necesita sacar Mongo de golpe.
@@ -74,11 +81,17 @@ momento** hasta el final.
 ### Etapa 0 — Red de seguridad (antes de tocar datos)
 - [x] **Tests nunca tocan la base real**: `apps/api/conftest.py` redirige todo `MongoClient` a una base en memoria (`mongomock`). Antes, `test_scraper`, `test_location` y `test_maps_leads` leían y escribían `companies`/`contacts` de **producción** cada vez que alguien corría pytest con el túnel abierto. Garantizado por `tests/test_no_real_mongo.py`. CI instala `requirements-dev.txt`.
 - [x] **Diagnóstico de solo lectura**: `apps/api/scripts/mongo_migration_audit.py` (tamaños, duplicados que romperían `UNIQUE`, llaves con tipos mezclados, forma de los documentos, GridFS).
-- [x] **Entorno local de ensayo**: `migration/docker-compose.yml` (Mongo de staging en `127.0.0.1:27030` + Postgres 17 en `127.0.0.1:55432`, solo esta PC).
+- [x] **Entorno local de ensayo**: `migration/docker-compose.yml` (Mongo de staging con la copia real en `127.0.0.1:27030`, Postgres 17 en `127.0.0.1:55432` y un Mongo 7 vacío para pruebas en `127.0.0.1:27029`; solo esta PC).
 - [x] **Respaldo verificado en un comando**: `migration/backup_and_stage.ps1` hace `mongodump` (solo lectura), lo restaura en el Mongo de staging, compara colección por colección, guarda un manifiesto con sha256 y corre el diagnóstico sobre la copia. Probado de punta a punta contra una "producción falsa".
 - [x] **Capa de migración** `app/pgmirror` + `scripts/pg_mirror.py` (conciliar / carga inicial) + endpoint `GET /api/admin/pgmirror/status`. Probado contra un Postgres real: traductor de filtros con los mismos resultados que Mongo, todos los tipos de escritura reflejados, Postgres caído sin romper escrituras, y un contrato que exige resultados idénticos con y sin capa (`tests/test_pgmirror*.py`, también en CI).
-- [ ] **Hacer el primer respaldo real** con el túnel abierto: `.\migration\backup_and_stage.ps1`. Guardar el resumen del diagnóstico (`backups/mongo_audit_<fecha>.txt`).
-- [ ] **Ensayo completo con datos reales en local**: carga de todas las colecciones de la copia de staging al Postgres local (ver sección 6).
+- [x] **Primer respaldo real** (2026-10-19): `backups/backup_20261019_183610.archive.gz` — 43 colecciones y 91 316 documentos, restaurado y verificado colección por colección, con manifiesto sha256. Diagnóstico en `backups/mongo_audit_20261019_183610.json`. `backups/` no se sube a git (datos reales).
+- [x] **Semántica contra Mongo 7 real**: el ensayo destapó diferencias que mongomock nunca habría mostrado (rutas que cruzan arreglos de objetos, `null`, orden con arreglos, orden de llaves de jsonb, `ObjectId` dentro de arreglos, `int64`). Corregidas; CI ahora corre un Mongo 7 desechable y falla si no puede comparar contra él (`REQUIRE_REAL_ENGINES`).
+- [x] **Ensayo completo con datos reales en local** (2026-10-19, ver sección 6): las 43 colecciones se cargan en ~13 s y la segunda conciliación sale `[OK]` en todas. Verificación estricta contra la copia real:
+  - Ida y vuelta: **91 316 de 91 316** documentos idénticos (tipos y orden de llaves).
+  - Filtros con valores reales: **9 833** consultas, **0** diferencias.
+  - Orden (`sort` + `skip`/`limit`): **976** consultas, **0** diferencias.
+  - `distinct`: 482 de 485 iguales; las 3 restantes son una rareza de Mongo (con índice devuelve `null` por documentos *sin* el campo, sin índice no). La capa ya no adivina: si algún documento no tiene el campo, ese `distinct` lo resuelve Mongo. `send_now_worker` dependía de ese `null` para arrancar la partición "legacy" (items sin `user_id`); ahora lo revisa explícitamente (`tests/test_send_partitions_legacy.py`).
+  - Rendimiento: el JIT de Postgres tardaba ~12 s en compilar las expresiones de orden (la consulta tarda <1 s). Las conexiones de la capa lo apagan (`jit=off`).
 - [ ] Respaldos automáticos en el servidor (Coolify tiene respaldos programados para bases de datos, o `backup_mongo.py` por cron) y una restauración de prueba.
 - [ ] Crear el Postgres de producción en Coolify.
 
@@ -138,8 +151,16 @@ python scripts\pg_mirror.py status
 
 Esto mide tiempos y tamaños reales y destapa cualquier documento que no se pueda copiar, sin riesgo para producción.
 
+Para correr las pruebas de la capa contra los motores reales (lo mismo que hace CI):
+
+```powershell
+docker compose -f migration/docker-compose.yml up -d     # incluye mongo-test (27029, vacío y desechable)
+cd apps\api
+python -m pytest tests/test_pgmirror.py tests/test_pgmirror_vs_mongo.py tests/test_pgmirror_contract.py -q
+```
+
 ## 7. Pendientes de decisión
 
-- [ ] ¿Dónde vive Postgres? (mismo servidor en Coolify vs. administrado: Supabase/Neon/RDS).
-- [ ] Reglas para fusionar duplicados (salen del diagnóstico).
-- [ ] Destino de los archivos de GridFS (`bytea` vs. S3), según su tamaño real.
+- [ ] ¿Dónde vive Postgres? (mismo servidor en Coolify vs. administrado: Supabase/Neon/RDS). Con ~30 MB de datos, un PostgreSQL 17 en el mismo Coolify sobra; lo importante es activarle respaldos programados.
+- [x] Reglas para fusionar duplicados: hoy no hay duplicados (diagnóstico del 2026-10-19). Se vuelve a correr el diagnóstico justo antes de crear cada `UNIQUE`.
+- [x] Destino de los archivos de GridFS: son 5 archivos (0.01 MB) → tabla con `bytea`, sin S3.

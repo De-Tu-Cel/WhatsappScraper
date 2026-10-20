@@ -1,34 +1,55 @@
 'use client'
 /**
  * Evaluación del canal WhatsApp: arma el one-pager para el prospecto desde la conversación
- * real y el análisis, deja corregir cada texto antes de mandarlo y da la liga pública.
- * Backend: apps/api/app/api/evaluaciones.py. Vista previa en un iframe aislado (sandbox).
+ * real y el análisis, deja corregir cada texto con vista previa en vivo y da la liga pública.
+ * Backend: apps/api/app/api/evaluaciones.py. Colores: solo las variables del tema de la app.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Dialog from '@mui/material/Dialog'
-import DialogTitle from '@mui/material/DialogTitle'
-import DialogContent from '@mui/material/DialogContent'
-import DialogActions from '@mui/material/DialogActions'
 import Button from '@mui/material/Button'
-import TextField from '@mui/material/TextField'
+import InputBase from '@mui/material/InputBase'
+import Select from '@mui/material/Select'
 import MenuItem from '@mui/material/MenuItem'
-import Alert from '@mui/material/Alert'
-import Chip from '@mui/material/Chip'
+import ListSubheader from '@mui/material/ListSubheader'
+import Collapse from '@mui/material/Collapse'
 import CircularProgress from '@mui/material/CircularProgress'
 import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
 import Snackbar from '@mui/material/Snackbar'
+import ToggleButton from '@mui/material/ToggleButton'
+import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
 import CloseIcon from '@mui/icons-material/Close'
 import LinkIcon from '@mui/icons-material/Link'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import DownloadIcon from '@mui/icons-material/Download'
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome'
 import SaveIcon from '@mui/icons-material/Save'
+import CheckIcon from '@mui/icons-material/Check'
+import WarningAmberIcon from '@mui/icons-material/WarningAmber'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import StorefrontIcon from '@mui/icons-material/StorefrontOutlined'
+import SpeedIcon from '@mui/icons-material/Speed'
+import ThumbUpIcon from '@mui/icons-material/ThumbUpAltOutlined'
+import TrackChangesIcon from '@mui/icons-material/TrackChanges'
+import DesktopIcon from '@mui/icons-material/DesktopWindowsOutlined'
+import PhoneIcon from '@mui/icons-material/PhoneIphone'
+import LightModeIcon from '@mui/icons-material/LightModeOutlined'
+import DarkModeIcon from '@mui/icons-material/DarkModeOutlined'
+import RefreshIcon from '@mui/icons-material/Refresh'
 import { authFetch } from '../lib/api'
 
+const NIVEL_COLOR = ['#EF4444', '#F97316', '#F59E0B', '#22C55E'] // los de la escala en la página
+// La plantilla se ve como hoja carta (816 × 1056) desde 860 px de ancho; más su margen.
+const ANCHO_HOJA = 880
+const ALTO_HOJA = 1124
+const QUIEN = { cliente: 'Cliente', negocio: 'Negocio', nota: 'Nota' }
+// Ámbar y rojo de texto: en los temas claros de la app (data-theme-mode) se oscurecen para leerse.
+const ambar = { color: '#f59e0b', '[data-theme-mode="light"] &': { color: '#b45309' } }
+const rojo = { color: '#ef4444', '[data-theme-mode="light"] &': { color: '#b91c1c' } }
 const ultimos10 = (n) => String(n || '').replace(/\D/g, '').slice(-10)
+const vacio = (v) => v === '' || v == null
 
 async function leer(res) {
   const data = await res.json().catch(() => ({}))
@@ -43,27 +64,147 @@ async function leer(res) {
 
 function formularioDesde(ev) {
   const e = ev.editable
+  const pin = (clave) => e.pines?.[clave] ?? ''
   const ventajaDe = (k) => Object.keys(e.resuelve || {}).find((v) => e.resuelve[v] === String(k + 1)) || ''
   return {
     logo: e.logo || null, logoCambio: null, logoUrl: '',
     nombre: e.nombre, nombreBot: e.nombreBot, telefono: e.telefono, nivel: e.nivel,
     sintesis_titular: e.sintesis_titular, sintesis_texto: e.sintesis_texto,
-    fortalezas: e.fortalezas.map((f) => ({ titulo: f.titulo, texto: f.texto })),
-    oportunidades: e.oportunidades.map((o, k) => ({ titulo: o.titulo, dato: o.dato, vimos: o.vimos, oportunidad: o.oportunidad, ventaja: ventajaDe(k) })),
+    fortalezas: e.fortalezas.map((f, k) => ({ titulo: f.titulo, texto: f.texto, mensaje: pin(`v${k + 1}`) })),
+    oportunidades: e.oportunidades.map((o, k) => ({
+      titulo: o.titulo, dato: o.dato, vimos: o.vimos, oportunidad: o.oportunidad, ventaja: ventajaDe(k), mensaje: pin(`${k + 1}`),
+    })),
   }
 }
 
-function Seccion({ titulo, children }) {
+/** Lo que se manda al backend, al guardar o para la vista previa. */
+function cuerpoDesde(form, { vistaPrevia = false } = {}) {
+  const resuelve = {}
+  const pines = {}
+  form.oportunidades.forEach((o, k) => {
+    if (o.ventaja) resuelve[o.ventaja] = String(k + 1)
+    if (!vacio(o.mensaje)) pines[String(k + 1)] = Number(o.mensaje)
+  })
+  form.fortalezas.forEach((f, k) => { if (!vacio(f.mensaje)) pines[`v${k + 1}`] = Number(f.mensaje) })
+  const c = form.logoCambio
+  return {
+    nombre: form.nombre, nombreBot: form.nombreBot, telefono: form.telefono, nivel: Number(form.nivel),
+    sintesis_titular: form.sintesis_titular, sintesis_texto: form.sintesis_texto,
+    fortalezas: form.fortalezas.map(({ titulo, texto }) => ({ titulo, texto })),
+    oportunidades: form.oportunidades.map(({ titulo, dato, vimos, oportunidad }) => ({ titulo, dato, vimos, oportunidad })),
+    resuelve, pines,
+    ...(c?.tipo === 'quitar' ? { quitar_logo: true } : {}),
+    ...(c?.tipo === 'data' ? { logo_data: c.valor } : {}),
+    // La URL del logo se descarga solo al guardar, no en cada tecla de la vista previa.
+    ...(c?.tipo === 'url' && !vistaPrevia ? { logo_url: c.valor } : {}),
+  }
+}
+
+// ── piezas visuales: todas con las variables del tema ─────────────────────────
+const campoSx = {
+  width: '100%', fontSize: '0.84rem', lineHeight: 1.45, color: 'var(--text)', bgcolor: 'var(--bg)',
+  border: '1px solid var(--border)', borderRadius: '10px', px: 1.25, py: 0.8,
+  transition: 'border-color .15s, box-shadow .15s',
+  '&:hover': { borderColor: 'rgba(var(--accent-rgb),0.45)' },
+  '&.Mui-focused': { borderColor: 'var(--accent)', boxShadow: '0 0 0 3px rgba(var(--accent-rgb),0.16)' },
+  '& input, & textarea': { p: 0 },
+  '& input::placeholder, & textarea::placeholder': { color: 'var(--text-muted)', opacity: 0.8 },
+  '& .MuiSelect-select': { p: 0, pr: '24px !important', minHeight: 'unset', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  '& .MuiSelect-icon': { color: 'var(--text-muted)', right: 6 },
+}
+const menuProps = {
+  slotProps: { paper: { sx: {
+    bgcolor: 'var(--card-bg)', backgroundImage: 'none', color: 'var(--text)', border: '1px solid var(--border)', maxHeight: 380, maxWidth: 460,
+    '& .MuiMenuItem-root': { fontSize: '0.82rem', whiteSpace: 'normal', alignItems: 'flex-start', py: 0.9 },
+    '& .MuiMenuItem-root:hover': { bgcolor: 'var(--item-hover)' },
+    '& .MuiMenuItem-root.Mui-selected': { bgcolor: 'rgba(var(--accent-rgb),0.14)' },
+    '& .MuiListSubheader-root': { bgcolor: 'var(--card-bg)', color: 'var(--text-muted)', fontSize: '0.7rem', fontWeight: 700, lineHeight: '30px' },
+  } } },
+}
+const toggleSx = {
+  '& .MuiToggleButton-root': { color: 'var(--text-muted)', borderColor: 'var(--border)', px: 1, py: 0.5,
+    '&.Mui-selected, &.Mui-selected:hover': { color: 'var(--accent)', bgcolor: 'rgba(var(--accent-rgb),0.14)' } },
+}
+const botonSx = { textTransform: 'none', fontWeight: 700, borderRadius: '10px' }
+const principalSx = { ...botonSx, bgcolor: 'var(--accent)', color: 'var(--accent-contrast, #fff)', boxShadow: 'none',
+  '&:hover': { bgcolor: 'var(--accent)', filter: 'brightness(1.08)', boxShadow: '0 4px 16px var(--accent-glow, transparent)' },
+  '&.Mui-disabled': { bgcolor: 'rgba(var(--accent-rgb),0.25)', color: 'var(--text-muted)' } }
+
+function Etiqueta({ texto, contador }) {
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-      <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted, rgba(255,255,255,0.5))' }}>
-        {titulo}
-      </Typography>
+    <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 1 }}>
+      <Typography component="span" sx={{ fontSize: '0.71rem', fontWeight: 600, color: 'var(--text-muted)' }}>{texto}</Typography>
+      {contador}
+    </Box>
+  )
+}
+
+function Campo({ etiqueta, valor, onChange, max, multiline = false, filas = 2, placeholder }) {
+  const n = (valor || '').length
+  const tono = max && n >= max ? rojo : max && n >= max * 0.85 ? ambar : { color: 'var(--text-muted)' }
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, minWidth: 0 }}>
+      <Etiqueta texto={etiqueta} contador={max ? (
+        <Typography component="span" sx={{ fontSize: '0.66rem', fontVariantNumeric: 'tabular-nums', ...tono }}>{n}/{max}</Typography>
+      ) : null} />
+      <InputBase value={valor ?? ''} onChange={(e) => onChange(e.target.value)} multiline={multiline} minRows={multiline ? filas : undefined}
+        placeholder={placeholder} sx={campoSx} inputProps={{ maxLength: max, 'aria-label': etiqueta }} />
+    </Box>
+  )
+}
+
+function Elegir({ etiqueta, valor, onChange, children, renderValue }) {
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, minWidth: 0 }}>
+      <Etiqueta texto={etiqueta} />
+      <Select variant="standard" value={valor ?? ''} onChange={(e) => onChange(e.target.value)} displayEmpty input={<InputBase sx={campoSx} />}
+        MenuProps={menuProps} SelectDisplayProps={{ 'aria-label': etiqueta }} renderValue={renderValue}>
+        {children}
+      </Select>
+    </Box>
+  )
+}
+
+const tenue = (texto) => <span style={{ color: 'var(--text-muted)' }}>{texto}</span>
+
+function Seccion({ icono, titulo, descripcion, children }) {
+  return (
+    <Box component="section" sx={{ p: 2, borderRadius: '14px', border: '1px solid var(--border)', bgcolor: 'var(--surface)',
+      display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
+        <Box sx={{ width: 30, height: 30, borderRadius: '9px', display: 'grid', placeItems: 'center', flexShrink: 0,
+          bgcolor: 'rgba(var(--accent-rgb),0.14)', color: 'var(--accent)', '& svg': { fontSize: 18 } }}>{icono}</Box>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography sx={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--text)', lineHeight: 1.3 }}>{titulo}</Typography>
+          {descripcion && <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.35 }}>{descripcion}</Typography>}
+        </Box>
+      </Box>
       {children}
     </Box>
   )
 }
 
+function Insignia({ color, children }) {
+  return (
+    <Box sx={{ width: 24, height: 24, borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0,
+      bgcolor: color, color: '#fff', fontSize: '0.75rem', fontWeight: 800, '& svg': { fontSize: 15 } }}>{children}</Box>
+  )
+}
+
+function Tarjeta({ insignia, titulo, extra, children }) {
+  return (
+    <Box sx={{ p: 1.5, borderRadius: '12px', border: '1px solid var(--border)', bgcolor: 'var(--card-bg)', display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minHeight: 28 }}>
+        {insignia}
+        <Typography sx={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text)', flex: 1, minWidth: 0 }} noWrap>{titulo}</Typography>
+        {extra}
+      </Box>
+      {children}
+    </Box>
+  )
+}
+
+// ── el editor ──────────────────────────────────────────────────────────────────
 export default function EvaluacionDialog({ open, onClose, companyId, companyName, number }) {
   const [ev, setEv] = useState(null)
   const [form, setForm] = useState(null)
@@ -73,8 +214,16 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
   const [industrias, setIndustrias] = useState(null)
   const [industria, setIndustria] = useState('')
   const [vista, setVista] = useState('')
+  const [actualizando, setActualizando] = useState(false)
+  const [errorVista, setErrorVista] = useState('')
   const [cambios, setCambios] = useState(false)
   const [aviso, setAviso] = useState('')
+  const [verAvisos, setVerAvisos] = useState(true)
+  const [modoVista, setModoVista] = useState('escritorio')
+  const [tema, setTema] = useState('light')
+  const [escala, setEscala] = useState(0.5)
+  const [marco, setMarco] = useState(null) // callback ref: el panel aparece hasta que hay evaluación
+  const enviado = useRef('')
 
   const cargarVista = useCallback(async (id) => {
     const res = await authFetch(`/api/evaluaciones/${id}/html`)
@@ -82,7 +231,8 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
   }, [])
 
   const mostrar = useCallback(async (data) => {
-    setEv(data); setForm(formularioDesde(data)); setCambios(false); setIndustrias(null)
+    setEv(data); setForm(formularioDesde(data)); setCambios(false); setIndustrias(null); setErrorVista('')
+    enviado.current = ''
     await cargarVista(data.id)
   }, [cargarVista])
 
@@ -104,6 +254,40 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
     return () => { vigente = false }
   }, [open, companyId, number, mostrar])
 
+  // Vista previa en vivo: cada cambio se ve en la hoja sin guardar (con una pausa al teclear).
+  const cuerpoVista = useMemo(() => (form ? JSON.stringify(cuerpoDesde(form, { vistaPrevia: true })) : ''), [form])
+  useEffect(() => {
+    if (!ev || !cambios || !cuerpoVista || cuerpoVista === enviado.current) return
+    let vigente = true
+    const t = setTimeout(async () => {
+      setActualizando(true)
+      try {
+        const res = await authFetch(`/api/evaluaciones/${ev.id}/vista-previa`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: cuerpoVista,
+        })
+        if (!vigente) return
+        if (res.ok) { setVista(await res.text()); setErrorVista(''); enviado.current = cuerpoVista }
+        else {
+          const d = (await res.json().catch(() => ({})))?.detail
+          setErrorVista(typeof d === 'string' ? d : 'Hay un dato que no se puede mostrar: revisa los campos')
+        }
+      } catch {
+        if (vigente) setErrorVista('No se pudo actualizar la vista previa')
+      } finally {
+        if (vigente) setActualizando(false)
+      }
+    }, 450)
+    return () => { vigente = false; clearTimeout(t) }
+  }, [cuerpoVista, ev, cambios])
+
+  // La hoja de escritorio se escala para caber completa a lo ancho del panel.
+  useEffect(() => {
+    if (!marco) return
+    const obs = new ResizeObserver(([e]) => setEscala(Math.max(0.3, Math.min(1, (e.contentRect.width - 8) / ANCHO_HOJA))))
+    obs.observe(marco)
+    return () => obs.disconnect()
+  }, [marco])
+
   const generar = async () => {
     setEstado('generando'); setError('')
     try {
@@ -120,21 +304,11 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
   }
 
   const guardar = async () => {
+    if (!ev || !form) return
     setEstado('guardando'); setError('')
     try {
-      const resuelve = {}
-      form.oportunidades.forEach((o, k) => { if (o.ventaja) resuelve[o.ventaja] = String(k + 1) })
-      const body = {
-        nombre: form.nombre, nombreBot: form.nombreBot, telefono: form.telefono, nivel: Number(form.nivel),
-        sintesis_titular: form.sintesis_titular, sintesis_texto: form.sintesis_texto,
-        fortalezas: form.fortalezas, resuelve,
-        oportunidades: form.oportunidades.map(({ ventaja, ...o }) => o),
-        ...(form.logoCambio?.tipo === 'quitar' ? { quitar_logo: true } : {}),
-        ...(form.logoCambio?.tipo === 'data' ? { logo_data: form.logoCambio.valor } : {}),
-        ...(form.logoCambio?.tipo === 'url' ? { logo_url: form.logoCambio.valor } : {}),
-      }
       await mostrar(await leer(await authFetch(`/api/evaluaciones/${ev.id}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cuerpoDesde(form)),
       })))
       setAviso('Cambios guardados')
     } catch (e) {
@@ -157,181 +331,371 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
     a.href = url; a.download = `evaluacion-${(form?.nombre || 'empresa').replace(/\s+/g, '-')}.html`; a.click()
     URL.revokeObjectURL(url)
   }
+  const cerrar = () => {
+    if (cambios && !window.confirm('Tienes cambios sin guardar. ¿Cerrar de todos modos?')) return
+    onClose()
+  }
+  const regenerar = () => {
+    if (!window.confirm('Se redactará una evaluación nueva desde la conversación; la actual se conserva. ¿Continuar?')) return
+    setEv(null); setForm(null); setVista(''); generar()
+  }
 
   const set = (campo, valor) => { setForm((f) => ({ ...f, [campo]: valor })); setCambios(true) }
+  const setItem = (lista, k, cambiosItem) => {
+    setForm((f) => ({ ...f, [lista]: f[lista].map((x, i) => (i === k ? { ...x, ...cambiosItem } : x)) }))
+    setCambios(true)
+  }
   const subirLogo = (archivo) => {
     if (!archivo) return
     if (!['image/png', 'image/jpeg', 'image/webp'].includes(archivo.type)) { setError('El logo debe ser PNG, JPG o WEBP.'); return }
     if (archivo.size > 1_000_000) { setError('El logo pesa más de 1 MB.'); return }
     const lector = new FileReader()
-    lector.onload = () => setForm((f) => { setCambios(true); return { ...f, logo: lector.result, logoCambio: { tipo: 'data', valor: lector.result } } })
+    lector.onload = () => { setForm((f) => ({ ...f, logo: lector.result, logoUrl: '', logoCambio: { tipo: 'data', valor: lector.result } })); setCambios(true) }
     lector.readAsDataURL(archivo)
   }
-  const setItem = (lista, k, campo, valor) => {
-    setForm((f) => ({ ...f, [lista]: f[lista].map((x, i) => (i === k ? { ...x, [campo]: valor } : x)) }))
-    setCambios(true)
-  }
+
   const ocupado = !!estado
   // Los mismos topes que el servidor: con ellos la hoja carta siempre cabe.
   const lim = ev?.limites || {}
+  const hechos = ev?.info?.hechos || { oportunidades: [], fortalezas: [] }
+  const mensajes = useMemo(() => (ev?.conversacion || []).filter((m) => m.tipo in QUIEN), [ev])
+  // Cada mensaje lleva una sola marca: los que ya usa otro hallazgo salen como ocupados.
+  const marcas = useMemo(() => {
+    const m = new Map()
+    form?.fortalezas.forEach((f, k) => { if (!vacio(f.mensaje)) m.set(Number(f.mensaje), `✓${k + 1}`) })
+    form?.oportunidades.forEach((o, k) => { if (!vacio(o.mensaje)) m.set(Number(o.mensaje), String(k + 1)) })
+    return m
+  }, [form])
+  const libre = (i, propia) => i == null || !marcas.has(i) || marcas.get(i) === propia
   const ventajasUsadas = (k) => new Set(form.oportunidades.filter((o, i) => i !== k && o.ventaja).map((o) => o.ventaja))
+  // El tema de la hoja se fuerza en la vista previa; el cliente ve el de su teléfono.
+  const vistaHtml = useMemo(() => vista.replace(/<html\b/i, `<html data-theme="${tema}"`), [vista, tema])
+
+  const opcionesMensaje = (propia, tipos) => [
+    <MenuItem key="ninguno" value=""><em>Sin marca en la conversación</em></MenuItem>,
+    ...mensajes.filter((m) => tipos.includes(m.tipo)).map((m) => {
+      const otra = marcas.get(m.i)
+      const usado = otra && otra !== propia
+      return (
+        <MenuItem key={m.i} value={m.i} disabled={!!usado}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            <Typography sx={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+              {[m.hora, QUIEN[m.tipo], usado ? `ya tiene la marca ${otra}` : ''].filter(Boolean).join(' · ')}
+            </Typography>
+            <Typography sx={{ fontSize: '0.8rem' }}>{m.resumen || '(sin texto)'}</Typography>
+          </Box>
+        </MenuItem>
+      )
+    }),
+  ]
+  const mensajeElegido = (v) => {
+    if (vacio(v)) return tenue('Sin marca en la conversación')
+    const m = mensajes.find((x) => x.i === Number(v))
+    return m ? `${m.hora ? `${m.hora} · ` : ''}${m.resumen}` : `Mensaje ${v}`
+  }
+
+  const usarFortaleza = (k, id) => {
+    const h = hechos.fortalezas.find((x) => x.id === id)
+    if (h) setItem('fortalezas', k, { titulo: h.titulo, texto: h.texto, mensaje: libre(h.mensaje, `✓${k + 1}`) ? (h.mensaje ?? '') : '' })
+  }
+  const usarOportunidad = (k, id) => {
+    const h = hechos.oportunidades.find((x) => x.id === id)
+    if (!h) return
+    setItem('oportunidades', k, {
+      titulo: h.titulo, dato: h.dato, vimos: h.vimos, oportunidad: h.oportunidad,
+      ventaja: ventajasUsadas(k).has(h.ventaja) ? '' : (h.ventaja || ''),
+      mensaje: libre(h.mensaje, String(k + 1)) ? (h.mensaje ?? '') : '',
+    })
+  }
+
+  const atajo = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (cambios && !ocupado) guardar() }
+  }
 
   return (
-    <Dialog open={open} onClose={ocupado ? undefined : onClose} fullWidth maxWidth="xl"
-      sx={{ '& .MuiDialog-paper': { height: { lg: '92vh' }, borderRadius: 3 } }}>
-      <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1.5, pr: 6 }}>
-        <AutoAwesomeIcon sx={{ color: 'var(--accent, #6366f1)' }} />
-        <Box sx={{ minWidth: 0 }}>
-          <Typography sx={{ fontWeight: 700, fontSize: '1rem' }}>Evaluación del canal WhatsApp</Typography>
-          <Typography sx={{ fontSize: '0.78rem', color: 'var(--text-muted, rgba(255,255,255,0.5))' }} noWrap>
-            {companyName}{number ? ` · ${number}` : ''}
+    <Dialog open={open} onClose={ocupado ? undefined : cerrar} fullWidth maxWidth={false} onKeyDown={atajo}
+      sx={{
+        '& .MuiDialog-paper': { width: 'min(1560px, 96vw)', height: { lg: '94vh' }, maxHeight: '96vh', m: 1, borderRadius: '18px', overflow: 'hidden',
+          bgcolor: 'var(--card-bg)', backgroundImage: 'none', color: 'var(--text)', border: '1px solid var(--border)',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.45)', display: 'flex', flexDirection: 'column' },
+        '& .MuiBackdrop-root': { backdropFilter: 'blur(4px)', backgroundColor: 'rgba(0,0,0,0.5)' },
+      }}>
+      {/* Encabezado: quién es y las acciones principales */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2.5, py: 1.5, borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+        <Box sx={{ width: 40, height: 40, borderRadius: '12px', display: 'grid', placeItems: 'center', flexShrink: 0,
+          bgcolor: 'rgba(var(--accent-rgb),0.14)', color: 'var(--accent)' }}><AutoAwesomeIcon /></Box>
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Typography sx={{ fontWeight: 800, fontSize: '1rem', color: 'var(--text)' }}>Evaluación del canal WhatsApp</Typography>
+          <Typography sx={{ fontSize: '0.78rem', color: 'var(--text-muted)' }} noWrap>
+            {companyName}{ev?.editable?.telefono ? ` · ${ev.editable.telefono}` : number ? ` · ${number}` : ''}
           </Typography>
         </Box>
         {ev && (
-          <Chip size="small" sx={{ ml: 1 }} color={ev.info?.origen === 'llm' ? 'primary' : 'default'}
-            label={ev.info?.origen === 'llm' ? 'Borrador redactado con IA' : 'Borrador por reglas'} />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Box sx={{ px: 1.25, py: 0.4, borderRadius: '999px', fontSize: '0.72rem', fontWeight: 700,
+              bgcolor: 'rgba(var(--accent-rgb),0.14)', color: 'var(--accent)' }}>
+              {ev.info?.origen === 'llm' ? 'Redactado con IA' : 'Texto de los hallazgos'}
+            </Box>
+            <Box role="status" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, fontSize: '0.74rem', mr: 0.5, ...(cambios ? ambar : { color: 'var(--text-muted)' }) }}>
+              {cambios
+                ? <><Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#f59e0b' }} />Sin guardar</>
+                : <><CheckIcon sx={{ fontSize: 15, color: '#22c55e' }} />Guardado</>}
+            </Box>
+            <Tooltip title={cambios ? 'Guarda primero' : 'Descargar HTML'}>
+              <span><IconButton size="small" onClick={descargar} disabled={ocupado || cambios} aria-label="Descargar HTML" sx={{ color: 'var(--text-muted)' }}><DownloadIcon fontSize="small" /></IconButton></span>
+            </Tooltip>
+            <Tooltip title={cambios ? 'Guarda primero' : 'Abrir la liga'}>
+              <span><IconButton size="small" onClick={() => window.open(liga, '_blank', 'noopener')} disabled={ocupado || cambios} aria-label="Abrir la liga" sx={{ color: 'var(--text-muted)' }}><OpenInNewIcon fontSize="small" /></IconButton></span>
+            </Tooltip>
+            <Tooltip title={cambios ? 'Guarda primero: la liga muestra lo guardado' : ''}>
+              <span><Button size="small" onClick={copiar} disabled={ocupado || cambios} startIcon={<LinkIcon />}
+                sx={{ ...botonSx, color: 'var(--accent)', '&.Mui-disabled': { color: 'var(--text-muted)' } }}>Copiar liga</Button></span>
+            </Tooltip>
+            <Button size="small" variant="contained" onClick={guardar} disabled={ocupado || !cambios}
+              startIcon={estado === 'guardando' ? <CircularProgress size={14} color="inherit" /> : <SaveIcon />} sx={principalSx}>
+              Guardar
+            </Button>
+          </Box>
         )}
-        <IconButton aria-label="Cerrar" onClick={onClose} disabled={ocupado} sx={{ position: 'absolute', right: 12, top: 12 }}>
-          <CloseIcon />
-        </IconButton>
-      </DialogTitle>
+        <IconButton aria-label="Cerrar" onClick={cerrar} disabled={ocupado} sx={{ color: 'var(--text-muted)' }}><CloseIcon /></IconButton>
+      </Box>
 
-      <DialogContent dividers sx={{ p: 0, display: 'flex', minHeight: 0 }}>
-        {estado === 'cargando' && (
-          <Box sx={{ m: 'auto', p: 6 }}><CircularProgress /></Box>
-        )}
+      {/* Cuerpo */}
+      <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
+        {estado === 'cargando' && <Box sx={{ m: 'auto', p: 6 }}><CircularProgress sx={{ color: 'var(--accent)' }} /></Box>}
 
         {!ev && estado !== 'cargando' && (
-          <Box sx={{ m: 'auto', p: 4, maxWidth: 520, display: 'flex', flexDirection: 'column', gap: 2, textAlign: 'center', alignItems: 'center' }}>
-            <Typography sx={{ fontSize: '0.95rem' }}>
-              Arma la evaluación con la conversación real{number ? ' de este número' : ''} y su análisis.
-              Una IA redacta el borrador: lo revisas y corriges antes de mandarlo.
+          <Box sx={{ m: 'auto', p: 4, maxWidth: 520, display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'center', textAlign: 'center' }}>
+            <Box sx={{ width: 64, height: 64, borderRadius: '18px', display: 'grid', placeItems: 'center',
+              bgcolor: 'rgba(var(--accent-rgb),0.14)', color: 'var(--accent)', '& svg': { fontSize: 34 } }}><AutoAwesomeIcon /></Box>
+            <Typography sx={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text)' }}>Arma la evaluación de {companyName}</Typography>
+            <Typography sx={{ fontSize: '0.86rem', color: 'var(--text-muted)', lineHeight: 1.55 }}>
+              Se detectan los hechos de la conversación real{number ? ' con este número' : ''}: esperas, mensajes sin respuesta,
+              avisos automáticos… La IA solo los redacta. Tú revisas y corriges antes de mandarla.
             </Typography>
-            {error && <Alert severity="warning" sx={{ textAlign: 'left', width: '100%' }}>{error}</Alert>}
+            {error && <Typography role="alert" sx={{ fontSize: '0.82rem', ...ambar }}>{error}</Typography>}
             {industrias && (
-              <TextField select size="small" label="Plantilla del giro" value={industria} onChange={(e) => setIndustria(e.target.value)} sx={{ minWidth: 240 }}>
-                {industrias.map((i) => <MenuItem key={i} value={i}>{i}</MenuItem>)}
-              </TextField>
+              <Box sx={{ width: 260, textAlign: 'left' }}>
+                <Elegir etiqueta="Plantilla del giro" valor={industria} onChange={setIndustria} renderValue={(v) => (v ? v : tenue('Elige una'))}>
+                  {industrias.map((i) => <MenuItem key={i} value={i}>{i}</MenuItem>)}
+                </Elegir>
+              </Box>
             )}
             <Button variant="contained" onClick={generar} disabled={ocupado || (industrias && !industria)}
               startIcon={estado === 'generando' ? <CircularProgress size={16} color="inherit" /> : <AutoAwesomeIcon />}
-              sx={{ textTransform: 'none', fontWeight: 700 }}>
+              sx={{ ...principalSx, borderRadius: '12px', px: 3, py: 1 }}>
               {estado === 'generando' ? 'Redactando la evaluación…' : 'Generar evaluación'}
             </Button>
           </Box>
         )}
 
         {ev && form && (
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '440px 1fr' }, width: '100%', minHeight: 0 }}>
-            <Box sx={{ p: 2.5, display: 'flex', flexDirection: 'column', gap: 2.5, overflowY: 'auto', borderRight: { lg: '1px solid rgba(127,127,127,0.18)' } }}>
-              {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}
-              {(ev.info?.avisos || []).length > 0 && (
-                <Alert severity="info" sx={{ '& ul': { m: 0, pl: 2 } }}>
-                  <ul>{ev.info.avisos.map((a) => <li key={a}>{a}</li>)}</ul>
-                </Alert>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '480px 1fr' }, width: '100%', minHeight: 0, overflow: { xs: 'auto', lg: 'hidden' } }}>
+            {/* Editor */}
+            <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 1.75, overflowY: { lg: 'auto' }, borderRight: { lg: '1px solid var(--border)' },
+              '&::-webkit-scrollbar': { width: 8 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'var(--scrollbar-thumb, var(--border))', borderRadius: 8 } }}>
+              {error && (
+                <Box role="alert" sx={{ p: 1.25, borderRadius: '10px', border: '1px solid rgba(239,68,68,0.35)', bgcolor: 'rgba(239,68,68,0.1)', color: 'var(--text)', fontSize: '0.8rem', display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+                  <WarningAmberIcon sx={{ fontSize: 18, ...rojo }} />
+                  <Box sx={{ flex: 1 }}>{error}</Box>
+                  <IconButton size="small" aria-label="Cerrar aviso" onClick={() => setError('')} sx={{ color: 'var(--text-muted)', p: 0.25 }}><CloseIcon sx={{ fontSize: 16 }} /></IconButton>
+                </Box>
               )}
 
-              <Seccion titulo="Empresa">
+              {(ev.info?.avisos || []).length > 0 && (
+                <Box sx={{ borderRadius: '12px', border: '1px solid rgba(245,158,11,0.35)', bgcolor: 'rgba(245,158,11,0.08)' }}>
+                  <Box component="button" type="button" onClick={() => setVerAvisos((v) => !v)} aria-expanded={verAvisos}
+                    sx={{ all: 'unset', boxSizing: 'border-box', width: '100%', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 1,
+                      borderRadius: '12px', '&:focus-visible': { outline: '2px solid var(--accent)' } }}>
+                    <WarningAmberIcon sx={{ fontSize: 18, ...ambar }} />
+                    <Typography sx={{ flex: 1, fontSize: '0.8rem', fontWeight: 700, color: 'var(--text)' }}>
+                      Revisa antes de enviar ({ev.info.avisos.length})
+                    </Typography>
+                    <ExpandMoreIcon sx={{ fontSize: 18, color: 'var(--text-muted)', transform: verAvisos ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }} />
+                  </Box>
+                  <Collapse in={verAvisos}>
+                    <Box component="ul" sx={{ m: 0, pl: 4.5, pr: 1.5, pb: 1.25, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                      {ev.info.avisos.map((a) => (
+                        <Typography component="li" key={a} sx={{ fontSize: '0.76rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>{a}</Typography>
+                      ))}
+                    </Box>
+                  </Collapse>
+                </Box>
+              )}
+
+              <Seccion icono={<StorefrontIcon />} titulo="Empresa" descripcion="Cómo aparece en el encabezado y en el chat.">
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                  <Box sx={{ width: 120, height: 56, flexShrink: 0, borderRadius: 2, bgcolor: '#fff', border: '1px solid rgba(127,127,127,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                  <Box sx={{ width: 132, height: 60, flexShrink: 0, borderRadius: '10px', bgcolor: '#fff', border: '1px solid var(--border)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', p: 0.75 }}>
                     {form.logo
                       // eslint-disable-next-line @next/next/no-img-element -- data URL del logo: next/image no aplica
                       ? <img src={form.logo} alt="Logo" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
-                      : <Typography sx={{ fontSize: '0.7rem', color: '#64748b', textAlign: 'center', px: 1 }}>Sin logo: se muestra el nombre</Typography>}
+                      : <Typography sx={{ fontSize: '0.68rem', color: '#64748b', textAlign: 'center', lineHeight: 1.3 }}>
+                          {form.logoCambio?.tipo === 'url' ? 'Se descarga al guardar' : 'Sin logo: se muestra el nombre'}
+                        </Typography>}
                   </Box>
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                    <Button component="label" size="small" sx={{ textTransform: 'none', justifyContent: 'flex-start' }}>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, alignItems: 'flex-start' }}>
+                    <Button component="label" size="small" sx={{ ...botonSx, color: 'var(--accent)', px: 1 }}>
                       Subir logo
                       <input hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => { subirLogo(e.target.files?.[0]); e.target.value = '' }} />
                     </Button>
-                    <Button size="small" disabled={!form.logo} onClick={() => setForm((f) => { setCambios(true); return { ...f, logo: null, logoCambio: { tipo: 'quitar' } } })}
-                      sx={{ textTransform: 'none', justifyContent: 'flex-start' }}>
-                      Quitar logo
-                    </Button>
+                    <Button size="small" disabled={!form.logo}
+                      onClick={() => { setForm((f) => ({ ...f, logo: null, logoUrl: '', logoCambio: { tipo: 'quitar' } })); setCambios(true) }}
+                      sx={{ ...botonSx, fontWeight: 600, color: 'var(--text-muted)', px: 1 }}>Quitar logo</Button>
                   </Box>
                 </Box>
-                <TextField size="small" label="…o pega la URL de la imagen del logo" value={form.logoUrl}
-                  onChange={(e) => setForm((f) => { setCambios(true); const v = e.target.value; return { ...f, logoUrl: v, logoCambio: v.trim() ? { tipo: 'url', valor: v.trim() } : null } })}
-                  helperText="Se descarga al guardar. Revisa que sea el logo de esta empresa." />
-                <TextField size="small" label="Nombre" value={form.nombre} onChange={(e) => set('nombre', e.target.value)} slotProps={{ htmlInput: { maxLength: 80 } }} />
-                <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
-                  <TextField size="small" label="Nombre en WhatsApp" value={form.nombreBot} onChange={(e) => set('nombreBot', e.target.value)} slotProps={{ htmlInput: { maxLength: 60 } }} />
-                  <TextField size="small" label="Teléfono" value={form.telefono} onChange={(e) => set('telefono', e.target.value)} slotProps={{ htmlInput: { maxLength: 30 } }} />
+                <Campo etiqueta="…o la URL de la imagen (se descarga al guardar)" valor={form.logoUrl} placeholder="https://…/logo.png"
+                  onChange={(v) => {
+                    setForm((f) => ({ ...f, logoUrl: v, ...(v.trim() ? { logo: null, logoCambio: { tipo: 'url', valor: v.trim() } } : { logo: ev.editable.logo || null, logoCambio: null }) }))
+                    setCambios(true)
+                  }} />
+                <Campo etiqueta="Nombre" valor={form.nombre} onChange={(v) => set('nombre', v)} max={80} />
+                <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.25 }}>
+                  <Campo etiqueta="Nombre en WhatsApp" valor={form.nombreBot} onChange={(v) => set('nombreBot', v)} max={60} />
+                  <Campo etiqueta="Teléfono" valor={form.telefono} onChange={(v) => set('telefono', v)} max={30} />
                 </Box>
               </Seccion>
 
-              <Seccion titulo="Nivel de experiencia">
-                <TextField select size="small" label="Nivel hoy" value={form.nivel} onChange={(e) => set('nivel', e.target.value)}
-                  helperText={ev.info?.nivel_fuente === 'clasificacion' ? 'Sale de la clasificación Timing + IA de Análisis.' : 'Estimado por los tiempos de respuesta.'}>
-                  {ev.escala.slice(0, 4).map((nombre, k) => <MenuItem key={nombre} value={k + 1}>{k + 1}. {nombre}</MenuItem>)}
-                </TextField>
-                <TextField size="small" label="Diagnóstico (en negritas)" value={form.sintesis_titular} onChange={(e) => set('sintesis_titular', e.target.value)} slotProps={{ htmlInput: { maxLength: lim.sintesis_titular } }} />
-                <TextField size="small" label="Qué falta para que sea experiencia" value={form.sintesis_texto} onChange={(e) => set('sintesis_texto', e.target.value)} multiline minRows={2} slotProps={{ htmlInput: { maxLength: lim.sintesis_texto } }} />
+              <Seccion icono={<SpeedIcon />} titulo="Nivel de experiencia"
+                descripcion={ev.info?.nivel_fuente === 'clasificacion' ? 'Sale de la clasificación de Análisis.' : 'Estimado por los tiempos de respuesta: revísalo.'}>
+                <Box role="radiogroup" aria-label="Nivel hoy" sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0.75 }}>
+                  {ev.escala.slice(0, 4).map((nombre, k) => {
+                    const activo = Number(form.nivel) === k + 1
+                    return (
+                      <Box key={nombre} component="button" type="button" role="radio" aria-checked={activo} onClick={() => set('nivel', k + 1)}
+                        sx={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', borderRadius: '10px', p: 1, textAlign: 'center',
+                          border: `1px solid ${activo ? NIVEL_COLOR[k] : 'var(--border)'}`,
+                          bgcolor: activo ? `${NIVEL_COLOR[k]}22` : 'var(--bg)', transition: 'border-color .15s, background-color .15s',
+                          '&:hover': { borderColor: NIVEL_COLOR[k] }, '&:focus-visible': { outline: '2px solid var(--accent)', outlineOffset: 2 } }}>
+                        <Box sx={{ mx: 'auto', mb: 0.5, width: 22, height: 22, borderRadius: '50%', display: 'grid', placeItems: 'center',
+                          bgcolor: activo ? NIVEL_COLOR[k] : 'transparent', border: `2px solid ${NIVEL_COLOR[k]}`,
+                          color: activo ? '#fff' : NIVEL_COLOR[k], fontSize: '0.72rem', fontWeight: 800 }}>{k + 1}</Box>
+                        <Typography sx={{ fontSize: '0.66rem', lineHeight: 1.2, fontWeight: activo ? 700 : 500, color: activo ? 'var(--text)' : 'var(--text-muted)' }}>{nombre}</Typography>
+                      </Box>
+                    )
+                  })}
+                </Box>
+                <Campo etiqueta="Diagnóstico (va en negritas)" valor={form.sintesis_titular} onChange={(v) => set('sintesis_titular', v)} max={lim.sintesis_titular} />
+                <Campo etiqueta="Qué le falta para ser una experiencia" valor={form.sintesis_texto} onChange={(v) => set('sintesis_texto', v)} max={lim.sintesis_texto} multiline />
               </Seccion>
 
-              <Seccion titulo="Lo que ya funciona">
+              <Seccion icono={<ThumbUpIcon />} titulo="Lo que ya funciona" descripcion="Cada una se marca con ✓ en un mensaje del negocio.">
                 {form.fortalezas.map((f, k) => (
-                  <Box key={k} sx={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 1 }}>
-                    <TextField size="small" label={`Título ${k + 1}`} value={f.titulo} onChange={(e) => setItem('fortalezas', k, 'titulo', e.target.value)} slotProps={{ htmlInput: { maxLength: lim.f_titulo } }} />
-                    <TextField size="small" label="Detalle" value={f.texto} onChange={(e) => setItem('fortalezas', k, 'texto', e.target.value)} slotProps={{ htmlInput: { maxLength: lim.f_texto } }} />
-                  </Box>
+                  <Tarjeta key={k} insignia={<Insignia color="#16a34a"><CheckIcon /></Insignia>} titulo={f.titulo || `Fortaleza ${k + 1}`}
+                    extra={hechos.fortalezas.length > 0 && (
+                      <Select variant="standard" value="" displayEmpty onChange={(e) => usarFortaleza(k, e.target.value)} MenuProps={menuProps}
+                        SelectDisplayProps={{ 'aria-label': `Usar una fortaleza detectada para la ${k + 1}` }}
+                        input={<InputBase sx={{ ...campoSx, width: 'auto', py: 0.3, fontSize: '0.72rem', bgcolor: 'transparent' }} />}
+                        renderValue={() => <span style={{ color: 'var(--accent)', fontWeight: 600 }}>Usar detectada</span>}>
+                        <ListSubheader>Detectado en la conversación</ListSubheader>
+                        {hechos.fortalezas.map((h) => (
+                          <MenuItem key={h.id} value={h.id}>
+                            <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                              <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: '#22c55e', '[data-theme-mode="light"] &': { color: '#15803d' } }}>{h.titulo}</Typography>
+                              <Typography sx={{ fontSize: '0.78rem' }}>{h.texto}</Typography>
+                            </Box>
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    )}>
+                    <Box sx={{ display: 'grid', gridTemplateColumns: '0.9fr 1.1fr', gap: 1 }}>
+                      <Campo etiqueta="Título" valor={f.titulo} onChange={(v) => setItem('fortalezas', k, { titulo: v })} max={lim.f_titulo} />
+                      <Campo etiqueta="Detalle" valor={f.texto} onChange={(v) => setItem('fortalezas', k, { texto: v })} max={lim.f_texto} />
+                    </Box>
+                    <Elegir etiqueta="Se ve en" valor={f.mensaje} onChange={(v) => setItem('fortalezas', k, { mensaje: v })} renderValue={mensajeElegido}>
+                      {opcionesMensaje(`✓${k + 1}`, ['negocio'])}
+                    </Elegir>
+                  </Tarjeta>
                 ))}
               </Seccion>
 
-              <Seccion titulo="Áreas de oportunidad">
+              <Seccion icono={<TrackChangesIcon />} titulo="Áreas de oportunidad" descripcion="De la más grave a la menos. El número aparece en la conversación.">
                 {form.oportunidades.map((o, k) => (
-                  <Box key={k} sx={{ display: 'flex', flexDirection: 'column', gap: 1, p: 1.5, borderRadius: 2, border: '1px solid rgba(127,127,127,0.2)' }}>
+                  <Tarjeta key={k} insignia={<Insignia color="#f59e0b">{k + 1}</Insignia>} titulo={o.titulo || `Oportunidad ${k + 1}`}
+                    extra={o.dato ? (
+                      <Box sx={{ px: 1, py: 0.25, borderRadius: '999px', fontSize: '0.66rem', fontWeight: 700, whiteSpace: 'nowrap',
+                        bgcolor: 'rgba(245,158,11,0.16)', ...ambar }}>{o.dato}</Box>
+                    ) : null}>
+                    {hechos.oportunidades.length > 0 && (
+                      <Elegir etiqueta="Partir de un hallazgo detectado" valor="" onChange={(id) => usarOportunidad(k, id)}
+                        renderValue={() => tenue('Texto listo, con su marca y etiqueta verificadas…')}>
+                        <ListSubheader>Detectado en la conversación</ListSubheader>
+                        {hechos.oportunidades.map((h) => (
+                          <MenuItem key={h.id} value={h.id}>
+                            <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                              <Typography sx={{ fontSize: '0.72rem', fontWeight: 700, ...ambar }}>{h.dato}</Typography>
+                              <Typography sx={{ fontSize: '0.8rem' }}>{h.vimos}</Typography>
+                            </Box>
+                          </MenuItem>
+                        ))}
+                      </Elegir>
+                    )}
                     <Box sx={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr', gap: 1 }}>
-                      <TextField size="small" label={`Oportunidad ${k + 1}`} value={o.titulo} onChange={(e) => setItem('oportunidades', k, 'titulo', e.target.value)} slotProps={{ htmlInput: { maxLength: lim.o_titulo } }} />
-                      <TextField size="small" label="Etiqueta" value={o.dato} onChange={(e) => setItem('oportunidades', k, 'dato', e.target.value)} slotProps={{ htmlInput: { maxLength: lim.o_dato } }} />
+                      <Campo etiqueta="Título" valor={o.titulo} onChange={(v) => setItem('oportunidades', k, { titulo: v })} max={lim.o_titulo} />
+                      <Campo etiqueta="Etiqueta" valor={o.dato} onChange={(v) => setItem('oportunidades', k, { dato: v })} max={lim.o_dato} />
                     </Box>
-                    <TextField size="small" label="Lo que vimos" value={o.vimos} onChange={(e) => setItem('oportunidades', k, 'vimos', e.target.value)} multiline slotProps={{ htmlInput: { maxLength: lim.o_vimos } }} />
-                    <TextField size="small" label="Oportunidad" value={o.oportunidad} onChange={(e) => setItem('oportunidades', k, 'oportunidad', e.target.value)} slotProps={{ htmlInput: { maxLength: lim.o_oportunidad } }} />
-                    <TextField select size="small" label="La resuelve" value={o.ventaja} onChange={(e) => setItem('oportunidades', k, 'ventaja', e.target.value)}>
-                      <MenuItem value=""><em>Ninguna</em></MenuItem>
-                      {ev.ventajas.map((v) => (
-                        <MenuItem key={v.id} value={v.id} disabled={ventajasUsadas(k).has(v.id)}>{v.titulo}</MenuItem>
-                      ))}
-                    </TextField>
-                  </Box>
+                    <Campo etiqueta="Lo que vimos" valor={o.vimos} onChange={(v) => setItem('oportunidades', k, { vimos: v })} max={lim.o_vimos} multiline />
+                    <Campo etiqueta="La oportunidad" valor={o.oportunidad} onChange={(v) => setItem('oportunidades', k, { oportunidad: v })} max={lim.o_oportunidad} />
+                    <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1.3fr', gap: 1 }}>
+                      <Elegir etiqueta="La resuelve" valor={o.ventaja} onChange={(v) => setItem('oportunidades', k, { ventaja: v })}
+                        renderValue={(v) => (v ? ev.ventajas.find((x) => x.id === v)?.titulo : tenue('Ninguna'))}>
+                        <MenuItem value=""><em>Ninguna</em></MenuItem>
+                        {ev.ventajas.map((v) => <MenuItem key={v.id} value={v.id} disabled={ventajasUsadas(k).has(v.id)}>{v.titulo}</MenuItem>)}
+                      </Elegir>
+                      <Elegir etiqueta="Se ve en" valor={o.mensaje} onChange={(v) => setItem('oportunidades', k, { mensaje: v })} renderValue={mensajeElegido}>
+                        {opcionesMensaje(String(k + 1), ['cliente', 'negocio', 'nota'])}
+                      </Elegir>
+                    </Box>
+                  </Tarjeta>
                 ))}
               </Seccion>
+
+              <Button onClick={regenerar} disabled={ocupado} startIcon={<RefreshIcon />}
+                sx={{ ...botonSx, fontWeight: 600, alignSelf: 'flex-start', color: 'var(--text-muted)', mb: 1 }}>
+                Redactar de nuevo desde la conversación
+              </Button>
             </Box>
 
-            <Box sx={{ position: 'relative', minHeight: { xs: 640, lg: 0 }, bgcolor: '#e9eef5' }}>
-              {estado === 'guardando' && (
-                <Box sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'rgba(0,0,0,0.15)', zIndex: 1 }}>
-                  <CircularProgress />
+            {/* Vista previa */}
+            <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: { xs: 760, lg: 0 }, bgcolor: 'var(--bg)' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1, borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography sx={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text)' }}>Vista previa</Typography>
+                  <Typography role="status" sx={{ fontSize: '0.72rem', ...(errorVista ? ambar : { color: 'var(--text-muted)' }) }} noWrap>
+                    {errorVista || (actualizando ? 'Actualizando…' : cambios ? 'Así se verá al guardar' : 'Así la verá el cliente')}
+                  </Typography>
                 </Box>
-              )}
-              {/* Aislada del resto de la app: sin allow-same-origin, sus scripts no ven la sesión. */}
-              <iframe title="Vista previa de la evaluación" srcDoc={vista} sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-                style={{ border: 0, width: '100%', height: '100%', minHeight: 640, display: 'block' }} />
+                {actualizando && <CircularProgress size={14} sx={{ color: 'var(--accent)' }} />}
+                <ToggleButtonGroup size="small" exclusive value={modoVista} onChange={(_, v) => v && setModoVista(v)} aria-label="Dispositivo" sx={toggleSx}>
+                  <ToggleButton value="escritorio" aria-label="Computadora"><DesktopIcon fontSize="small" /></ToggleButton>
+                  <ToggleButton value="celular" aria-label="Celular"><PhoneIcon fontSize="small" /></ToggleButton>
+                </ToggleButtonGroup>
+                <ToggleButtonGroup size="small" exclusive value={tema} onChange={(_, v) => v && setTema(v)} aria-label="Tema de la página" sx={toggleSx}>
+                  <ToggleButton value="light" aria-label="Claro"><LightModeIcon fontSize="small" /></ToggleButton>
+                  <ToggleButton value="dark" aria-label="Oscuro"><DarkModeIcon fontSize="small" /></ToggleButton>
+                </ToggleButtonGroup>
+              </Box>
+              <Box ref={setMarco} sx={{ flex: 1, minHeight: 0, overflow: 'auto', p: 2, display: 'flex', justifyContent: 'center', alignItems: 'flex-start',
+                position: 'relative', opacity: estado === 'guardando' ? 0.6 : 1, transition: 'opacity .2s' }}>
+                {/* Aislada del resto de la app: sin allow-same-origin, sus scripts no ven la sesión. */}
+                {modoVista === 'escritorio' ? (
+                  <Box sx={{ width: ANCHO_HOJA * escala, height: ALTO_HOJA * escala, flexShrink: 0, borderRadius: '10px', overflow: 'hidden',
+                    border: '1px solid var(--border)', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}>
+                    <iframe title="Vista previa de la evaluación" srcDoc={vistaHtml} sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+                      style={{ border: 0, width: ANCHO_HOJA, height: ALTO_HOJA, transform: `scale(${escala})`, transformOrigin: '0 0', display: 'block' }} />
+                  </Box>
+                ) : (
+                  <Box sx={{ width: 402, height: 812, flexShrink: 0, borderRadius: '40px', border: '6px solid #0f172a', overflow: 'hidden',
+                    boxShadow: '0 12px 40px rgba(0,0,0,0.3)', bgcolor: '#0f172a' }}>
+                    <iframe title="Vista previa de la evaluación en celular" srcDoc={vistaHtml} sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+                      style={{ border: 0, width: 390, height: 800, display: 'block', borderRadius: '34px' }} />
+                  </Box>
+                )}
+              </Box>
             </Box>
           </Box>
         )}
-      </DialogContent>
-
-      {ev && (
-        <DialogActions sx={{ px: 2.5, py: 1.5, gap: 1, flexWrap: 'wrap' }}>
-          <Tooltip title="Vuelve a redactar desde la conversación (la evaluación actual se conserva)">
-            <span>
-              <Button onClick={() => { setEv(null); setForm(null); generar() }} disabled={ocupado} sx={{ textTransform: 'none' }}>
-                Generar de nuevo
-              </Button>
-            </span>
-          </Tooltip>
-          <Box sx={{ flex: 1 }} />
-          <Button onClick={descargar} disabled={ocupado || cambios} startIcon={<DownloadIcon />} sx={{ textTransform: 'none' }}>Descargar HTML</Button>
-          <Button onClick={() => window.open(liga, '_blank', 'noopener')} disabled={ocupado || cambios} startIcon={<OpenInNewIcon />} sx={{ textTransform: 'none' }}>Abrir</Button>
-          <Button onClick={copiar} disabled={ocupado || cambios} startIcon={<LinkIcon />} sx={{ textTransform: 'none' }}>Copiar liga</Button>
-          <Button variant="contained" onClick={guardar} disabled={ocupado || !cambios}
-            startIcon={estado === 'guardando' ? <CircularProgress size={16} color="inherit" /> : <SaveIcon />}
-            sx={{ textTransform: 'none', fontWeight: 700 }}>
-            Guardar cambios
-          </Button>
-        </DialogActions>
-      )}
+      </Box>
 
       <Snackbar open={!!aviso} autoHideDuration={4000} onClose={() => setAviso('')} message={aviso}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }} />

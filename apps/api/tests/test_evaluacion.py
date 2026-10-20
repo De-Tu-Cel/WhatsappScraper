@@ -75,6 +75,9 @@ def test_dates_and_times_read_like_the_diesgas_example():
     assert formato.duracion(14 * 3600 + 21 * 60) == "14 h 21 min" and formato.duracion(3) == "3 s"
     assert formato.telefono("5213311171010") == "+52 33 1117 1010"
     assert formato.telefono("524422161010") == "+52 442 216 1010"
+    assert formato.telefono("573102388245") == "+57 310 238 8245"   # Colombia (Rayogas)
+    assert formato.telefono("12125551234") == "+1 212 555 1234"
+    assert formato.telefono("51987654321") == "+51 987 654 321"
 
 
 def test_trimmed_text_never_exceeds_its_limit():

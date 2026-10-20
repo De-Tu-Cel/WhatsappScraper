@@ -81,7 +81,7 @@ def test_business_text_never_becomes_html_or_a_template_variable():
 def test_the_model_draft_is_validated_and_completed(monkeypatch):
     real_idx = {}
 
-    def fake(empresa, giro, renglones, metricas, verdict, nivel, escala, ventajas):
+    def fake(empresa, giro, renglones, metricas, verdict, nivel, escala, ventajas, hechos=None):
         for r in renglones:
             n = int(r[1:r.index("]")])
             real_idx.setdefault("negocio" if "Negocio" in r else "cliente", []).append(n)
@@ -112,19 +112,21 @@ def test_the_model_draft_is_validated_and_completed(monkeypatch):
     assert [o["dato"] for o in capa["oportunidades"]] == ["Sin respuesta", "14 h de espera", "Pedido por llamada"]
     pines = [m.get("pin") for m in capa["conversacion"]["real"] if m.get("pin")]
     assert len(pines) == len(set(pines))  # un pin por mensaje, sin repetir
-    # Lo que el modelo marcó mal (fortaleza en un mensaje del cliente, mensaje 999) se avisa al revisor.
-    assert sum("no corresponde" in a for a in info["avisos"]) == 2 and any("reglas" in a for a in info["avisos"])
+    # Lo que el modelo marcó mal (fortaleza en un mensaje del cliente, mensaje 999) y lo que faltó se avisa, en corto.
+    assert any("no tienen su propio mensaje" in a for a in info["avisos"])
+    assert any("2 hallazgo(s) sin redactar" in a for a in info["avisos"])
     assert "v1" in pines and "1" in pines and "2" not in pines
+    assert len(info["avisos"]) <= 6
     generador.generar_evaluacion(capa)
 
 
 def test_two_findings_on_the_same_message_take_the_nearest_free_one():
     items = [{"tipo": "dia"}, {"tipo": "cliente"}, {"tipo": "negocio"}, {"tipo": "negocio"}, {"tipo": "cliente"}]
     hallazgos = {"oportunidades": [{"mensaje": 2}, {"mensaje": 2}], "fortalezas": [{"mensaje": 2}, {"mensaje": 4}]}
-    avisos = armador.poner_pines(items, hallazgos)
+    sin_lugar = armador.poner_pines(items, hallazgos)
     # La 2.ª oportunidad toma el siguiente mensaje libre; las fortalezas solo van en mensajes del
-    # negocio y ya no queda ninguno libre: se avisa en lugar de marcar uno del cliente.
-    assert [m.get("pin") for m in items] == [None, None, "1", "2", None] and len(avisos) == 2
+    # negocio y ya no queda ninguno libre: quedan sin marca en lugar de marcar uno del cliente.
+    assert [m.get("pin") for m in items] == [None, None, "1", "2", None] and sin_lugar == ["v1", "v2"]
 
 
 def test_texts_that_do_not_fit_are_rewritten_shorter_instead_of_cut(monkeypatch):
@@ -157,9 +159,83 @@ def test_labels_that_claim_a_fact_must_match_what_was_measured():
            {"titulo": "Espera nocturna", "dato": "14 h de espera", "mensaje": 9},           # sí: medido 13 h 55 min
            {"titulo": "Primera respuesta", "dato": "1492 h de espera", "mensaje": 9},       # no: no se midió
            {"titulo": "Sin cierre", "dato": "Sin cierre claro", "mensaje": 9}]              # etiqueta propia: se respeta
-    avisos = armador.verificar_datos(ops, metricas)
+    quitadas = armador.verificar_datos(ops, metricas)
     assert [o["dato"] for o in ops] == ["Sin respuesta", "", "", "14 h de espera", "", "Sin cierre claro"]
-    assert len(avisos) == 3 and "Cobertura sin confirmar" in avisos[0]
+    assert quitadas == ["Sin respuesta", "Pedido por llamada", "1492 h de espera"]
+
+
+def _rayogas_thread():
+    """Rayogas (2026-10-20): un solo mensaje nuestro y su bienvenida automática con aviso de privacidad."""
+    return [
+        {"direction": "outbound", "body": "Hola ¿cómo están? Soy Angie. ¿Me podrían ayudar con el contacto indicado?",
+         "created_at": "2026-10-14T20:13:00"},
+        {"direction": "inbound", "body": "Hola! 👋 Bienvenido(a) a Rayogas. Antes de continuar es necesario contar con su "
+                                         "autorización para el tratamiento de datos personales.",
+         "created_at": "2026-10-14T20:13:04"},
+    ]
+
+
+def test_a_short_chat_with_only_an_automatic_reply_is_read_correctly():
+    capa, info = armador.armar_cliente(company={"name": "Rayogas"}, thread=_rayogas_thread(), numero="573102388245",
+                                       verdict=None, industria="gaseras", usar_llm=False, bajar_logo=lambda u: None,
+                                       ahora=datetime(2026, 10, 20, tzinfo=timezone.utc))
+    tipos = [h["tipo"] for h in info["hechos"]["oportunidades"]]
+    assert tipos[:2] == ["solo_automatico", "privacidad"]
+    assert capa["nivel"]["hoy"] == 1  # solo el automático, como "Automático + sin respuesta"
+    assert [o["dato"] for o in capa["oportunidades"]] == ["Solo automático", "Trámite al inicio", "Sin pedido en chat"]
+    assert capa["cliente"]["telefono"] == "+57 310 238 8245"
+    assert [f["titulo"] for f in capa["fortalezas"]][:2] == ["Respuesta en 4 s", "Bienvenida clara"]
+    assert capa["fortalezas"][0]["texto"] == "Mensaje automático al instante."
+    assert any(a.startswith("Conversación corta (2 mensajes)") for a in info["avisos"])
+    assert any("se estimó" in a for a in info["avisos"]) and len(info["avisos"]) <= 5
+    generador.generar_evaluacion(capa)
+
+
+def test_the_model_only_writes_the_facts_it_cites(monkeypatch):
+    def fake(empresa, giro, renglones, metricas, verdict, nivel, escala, ventajas, hechos):
+        ids = {h["tipo"]: h["id"] for h in hechos["oportunidades"]}
+        return {"sintesis_titular": "El canal saluda, pero no atiende.", "sintesis_texto": "Falta atender y tomar el pedido.",
+                "fortalezas": [{"hecho": "F2", "titulo": "Bienvenida", "texto": "Saluda con su marca."}],
+                "oportunidades": [
+                    # El modelo intenta poner otra etiqueta y otro mensaje: mandan los del hecho.
+                    {"hecho": ids["solo_automatico"], "titulo": "Nadie atendió", "dato": "Sin respuesta", "mensaje": 0,
+                     "vimos": "Solo llegó el automático.", "oportunidad": "Atender a toda hora.", "ventaja": "b7"},
+                    {"hecho": ids["solo_automatico"], "titulo": "Repetido", "vimos": "x", "oportunidad": "y"},  # mismo hecho otra vez
+                ]}
+    monkeypatch.setattr(armador, "hallazgos_con_llm", fake)
+    capa, info = armador.armar_cliente(company={"name": "Rayogas"}, thread=_rayogas_thread(), numero="573102388245",
+                                       verdict=None, industria="gaseras", bajar_logo=lambda u: None)
+    o1 = capa["oportunidades"][0]
+    assert (o1["titulo"], o1["dato"]) == ("Nadie atendió", "Solo automático")
+    assert capa["resuelve"]["b1"] == "1" and "b7" not in capa["resuelve"]  # la del hecho (24/7), no la que propuso
+    pin_o1 = next(i for i, m in enumerate(capa["conversacion"]["real"]) if m.get("pin") == "1")
+    assert capa["conversacion"]["real"][pin_o1]["tipo"] == "negocio"  # el mensaje del hecho, no el 0 que dijo el modelo
+    # El repetido no cita un hecho válido: queda como propio y sin etiqueta inventada.
+    assert capa["oportunidades"][1]["titulo"] == "Repetido" and capa["oportunidades"][1]["dato"] == ""
+    generador.generar_evaluacion(capa)
+
+
+def test_a_cited_fact_keeps_its_curated_remedy_and_is_never_cut(monkeypatch):
+    # Diesgas, 2026-10-20: el modelo comprimía "la oportunidad" hasta dejarla cortada con "…".
+    def fake(empresa, giro, renglones, metricas, verdict, nivel, escala, ventajas, hechos):
+        ids = {h["tipo"]: h["id"] for h in hechos["oportunidades"]}
+        return {"sintesis_titular": "Canal activo, pero sin cierre.", "sintesis_texto": "Falta tomar el pedido en el chat.",
+                "fortalezas": [{"hecho": "F1", "titulo": "Responde rápido y con un mensaje muy completo", "texto": "Al instante."}],
+                "oportunidades": [{"hecho": ids["espera"], "titulo": "Espera de catorce horas",
+                                   "vimos": "Escribimos por la tarde y la primera respuesta humana llegó hasta la mañana del "
+                                            "día siguiente, casi catorce horas después, sin ningún aviso intermedio.",
+                                   "oportunidad": "Respuesta automática con horario y pronta atención"}]}
+    monkeypatch.setattr(armador, "hallazgos_con_llm", fake)
+    monkeypatch.setattr(armador, "acortar_con_llm", lambda excedidos: {})  # la segunda pasada tampoco lo logra
+    capa, info = _armar()
+    hecho = next(h for h in info["hechos"]["oportunidades"] if h["tipo"] == "espera")
+    o1 = capa["oportunidades"][0]
+    assert o1["titulo"] == "Espera de catorce horas"            # lo que cabe se queda como lo escribió
+    assert o1["oportunidad"] == hecho["oportunidad"]            # el remedio curado del hecho
+    assert o1["vimos"] == hecho["vimos"] and "…" not in o1["vimos"]  # no cupo: el del hecho, no cortado
+    assert capa["fortalezas"][0]["titulo"] == info["hechos"]["fortalezas"][0]["titulo"]
+    assert not any("se recortaron" in a for a in info["avisos"])
+    generador.generar_evaluacion(capa)
 
 
 def test_when_the_model_fails_the_rules_draft_is_used(monkeypatch):

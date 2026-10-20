@@ -87,8 +87,14 @@ def duracion(segundos: float) -> str:
     return f"{h} h {m} min" if m else f"{h} h"
 
 
+# Ladas de país más comunes para los clientes (América y algunos de Europa), de la más larga a la más corta.
+_PAISES = sorted(["1", "34", "51", "52", "53", "54", "55", "56", "57", "58", "502", "503", "504", "505", "506",
+                  "507", "591", "593", "595", "598"], key=len, reverse=True)
+_GRUPOS = {10: (3, 3, 4), 9: (3, 3, 3), 8: (4, 4)}
+
+
 def telefono(numero: str | None) -> str:
-    """5213311171010 / 523311171010 → '+52 33 1117 1010' (otros países: + y dígitos)."""
+    """5213311171010 → '+52 33 1117 1010'; 573102388245 → '+57 310 238 8245'; otro: '+' y dígitos."""
     d = re.sub(r"\D", "", numero or "")
     if d.startswith("521") and len(d) == 13:
         d = "52" + d[3:]
@@ -97,4 +103,12 @@ def telefono(numero: str | None) -> str:
         lada = 2 if n[:2] in ("33", "55", "56", "81") else 3
         resto = n[lada:]
         return f"+52 {n[:lada]} {resto[:len(resto) - 4]} {resto[-4:]}"
+    for pais in _PAISES:
+        nacional = d[len(pais):]
+        if d.startswith(pais) and len(nacional) in _GRUPOS:
+            partes, i = [], 0
+            for g in _GRUPOS[len(nacional)]:
+                partes.append(nacional[i:i + g])
+                i += g
+            return f"+{pais} " + " ".join(partes)
     return f"+{d}" if d else ""

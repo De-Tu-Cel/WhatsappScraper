@@ -109,6 +109,21 @@ def test_the_logo_can_be_replaced_or_removed_but_only_with_real_images(client):
     assert '"logo"' not in datos_cliente and '"nombre":"Diesgas"' in datos_cliente  # sin logo: se muestra el nombre
 
 
+def test_live_preview_shows_unsaved_changes_and_saves_nothing(client):
+    c, cid = client
+    ev = c.post("/api/evaluaciones", json={"company_id": cid, "usar_llm": False}, headers=H).json()
+    r = c.post(f"/api/evaluaciones/{ev['id']}/vista-previa", json={"sintesis_titular": "Vista previa sin guardar", "nivel": 2}, headers=H)
+    assert r.status_code == 200 and "Vista previa sin guardar" in r.text
+    guardado = c.get(f"/api/evaluaciones/{ev['id']}", headers=H).json()["editable"]
+    assert guardado["sintesis_titular"] != "Vista previa sin guardar" and guardado["nivel"] == 3
+    assert c.post(f"/api/evaluaciones/{ev['id']}/vista-previa", json={"pines": {"1": 999}}, headers=H).status_code == 422
+    assert c.post(f"/api/evaluaciones/{ev['id']}/vista-previa", json={}).status_code == 401
+    # Para elegir "Se ve en": cada mensaje en texto plano, y los hechos detectados para el editor.
+    negocio = next(m for m in ev["conversacion"] if m["tipo"] == "negocio")
+    assert negocio["resumen"] and "<" not in negocio["resumen"]
+    assert ev["info"]["hechos"]["oportunidades"][0]["tipo"] == "sin_respuesta"
+
+
 def test_session_is_required_except_for_the_public_link(client):
     c, cid = client
     assert c.post("/api/evaluaciones", json={"company_id": cid}).status_code == 401

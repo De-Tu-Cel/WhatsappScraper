@@ -46,7 +46,7 @@ LIMITES = {"sintesis_titular": 80, "sintesis_texto": 140, "f_titulo": 22, "f_tex
 # aviso "[Evaluación] El contenido excede la hoja carta" de la plantilla). Si se suben, volver a medir.
 PALABRAS = {"sintesis_titular": 10, "sintesis_texto": 18, "f_titulo": 3, "f_texto": 5,
             "o_titulo": 7, "o_dato": 3, "o_vimos": 14, "o_oportunidad": 7}
-_TELEFONO = re.compile(r"(?<!\d)(?:\+?52[\s.-]?)?(?:\(?\d{2,3}\)?[\s.-]?)\d{3,4}[\s.-]?\d{4}(?!\d)")
+_TELEFONO = re.compile(r"(?<!\d)(?:\+?\d{1,3}[\s.-]?)?(?:\(?\d{2,3}\)?[\s.-]?)\d{3,4}[\s.-]?\d{4}(?!\d)")
 _MEDIA = [("image", "📷 Imagen"), ("audio", "🎤 Audio"), ("video", "🎥 Video"), ("sticker", "Sticker"),
           ("application", "📎 Documento")]
 
@@ -75,11 +75,13 @@ def _texto_mensaje(m: dict) -> str:
 
 
 # ── conversación real ──────────────────────────────────────────────────────────
-def construir_conversacion(thread: list) -> tuple[list, list, dict]:
-    """(mensajes para la plantilla, renglones numerados para el LLM, métricas)."""
+def construir_conversacion(thread: list, pais: str = "52") -> tuple[list, list, dict]:
+    """(mensajes para la plantilla, renglones numerados para el LLM, métricas).
+    `pais`: lada del número evaluado, para leer los teléfonos que da el negocio (Rayogas: 57)."""
     items, renglones = [], []
     metricas = {"primera_respuesta_s": None, "esperas": [], "sin_respuesta": [], "telefonos": [],
-                "inicio": None, "fin": None, "mensajes": 0}
+                "inicio": None, "fin": None, "mensajes": 0, "detalle": []}
+    ultimo_cliente = None
     msgs = [(m, _fecha(m.get("created_at"))) for m in thread if m.get("status") != "failed"]
     msgs = [(m, _utc(dt)) for m, dt in msgs if dt and _texto_mensaje(m)]
     if len(msgs) > MAX_MENSAJES:  # pláticas largas: el principio y el final
@@ -116,7 +118,10 @@ def construir_conversacion(thread: list) -> tuple[list, list, dict]:
         metricas["inicio"] = metricas["inicio"] or dt
         metricas["fin"] = dt
         metricas["mensajes"] += 1
+        metricas["detalle"].append({"i": indice, "sale": sale, "dt": dt, "texto": texto,
+                                    "tras_cliente_s": None if sale or not ultimo_cliente else (dt - ultimo_cliente).total_seconds()})
         if sale:
+            ultimo_cliente = dt
             pendiente = pendiente or (dt, indice)
         else:
             # Desde el mensaje al que contesta, no desde el primero que mandamos: Gas de Tlalnepantla
@@ -128,7 +133,7 @@ def construir_conversacion(thread: list) -> tuple[list, list, dict]:
             for tel in _TELEFONO.findall(texto):
                 digitos = re.sub(r"\D", "", tel)
                 if len(digitos) >= 10:
-                    numero = digitos if len(digitos) > 10 else "52" + digitos
+                    numero = digitos if len(digitos) > 10 else pais + digitos
                     metricas["telefonos"].append({"telefono": formato.telefono(numero), "indice": indice})
     if pendiente:
         items.append({"tipo": "nota", "texto": "Sin respuesta en el chat"})
@@ -136,13 +141,162 @@ def construir_conversacion(thread: list) -> tuple[list, list, dict]:
     return items, renglones, metricas
 
 
+# ── hechos comprobables ────────────────────────────────────────────────────────
+# Lo que se puede comprobar en la conversación, con su mensaje y su hora. Con ellos se arma el
+# borrador por reglas; el modelo solo los REDACTA (la etiqueta y la marca salen del hecho, no del
+# modelo), y el editor los ofrece como textos listos para elegir.
+_AUTOMATICO = re.compile(r"bienvenid|gracias por (?:comunicarte|escribir|contactar|tu mensaje)|en un momento|"
+                         r"fuera de(?:l)? (?:nuestro )?horario|horario de atenci[oó]n|pronto (?:te|estaremos)|"
+                         r"no podemos responder|aviso de privacidad|datos personales|autoriza", re.I)
+_FUERA_HORARIO = re.compile(r"fuera de(?:l)? (?:nuestro )?horario|horario de atenci[oó]n|no podemos responder|"
+                            r"pronto estaremos|te responderemos", re.I)
+_BIENVENIDA = re.compile(r"bienvenid|gracias por (?:comunicarte|escribir|contactar)|te atiende", re.I)
+_PRIVACIDAD = re.compile(r"privacidad|datos personales|tratamiento de (?:tus |sus )?datos|autoriza", re.I)
+_PIDE_DATOS = re.compile(r"\b(?:nombre|direcci[oó]n|domicilio|colonia|correo|municipio|c[oó]digo postal|ubicaci[oó]n)\b", re.I)
+_ZONA = re.compile(r"\b(?:municipio|colonia|zona|cobertura)\b|d[oó]nde (?:se encuentra|est[aá])", re.I)
+_PRECIO = re.compile(r"\$\s?\d|\bprecios?\b|\bcostos?\b|\bpesos\b|\bpor litro\b", re.I)
+_MENU = re.compile(r"(?m)^\s*(?:\d+[.)]|[🔷🔹▪•*-]|\d️⃣)")
+
+
+def _es_automatico(d: dict) -> bool:
+    """Llegó al instante tras nuestro mensaje (≤10 s) o es un texto de plantilla (bienvenida, aviso…)."""
+    return (d["tras_cliente_s"] is not None and d["tras_cliente_s"] <= 10) or bool(_AUTOMATICO.search(d["texto"]))
+
+
+def detectar_hechos(items: list, metricas: dict) -> dict:
+    """Hechos de la conversación. Oportunidades en orden de gravedad: {id, tipo, dato, mensaje,
+    titulo, vimos, oportunidad, ventaja}; fortalezas: {id, tipo, mensaje, titulo, texto}."""
+    por_indice = {d["i"]: d for d in metricas["detalle"]}
+    negocio = [d for d in metricas["detalle"] if not d["sale"]]
+    cliente = [d for d in metricas["detalle"] if d["sale"]]
+    automaticos = [d for d in negocio if _es_automatico(d)]
+    humanos = [d for d in negocio if not _es_automatico(d)]
+
+    def dia(i):
+        return formato.fecha_dia(por_indice[i]["dt"]).split(",")[0].lower()
+
+    op = []
+
+    def oportunidad(tipo, dato, mensaje, titulo, vimos, texto, ventaja):
+        op.append({"tipo": tipo, "dato": dato, "mensaje": mensaje, "titulo": titulo, "vimos": vimos,
+                   "oportunidad": texto, "ventaja": ventaja})
+
+    for i in metricas["sin_respuesta"][:2]:
+        oportunidad("sin_respuesta", "Sin respuesta", i, "Un mensaje quedó sin respuesta",
+                    f"Nuestro mensaje del {dia(i)} a las {items[i]['hora']} no tuvo respuesta.",
+                    "Resolver al momento las dudas frecuentes.", "b2")
+    if automaticos and not humanos:
+        a = automaticos[0]
+        oportunidad("solo_automatico", "Solo automático", a["i"], "Solo respondió el mensaje automático",
+                    f"A las {items[a['i']]['hora']} llegó el mensaje automático; nadie más respondió.",
+                    "Atender y tomar pedidos a cualquier hora.", "b1")
+    if metricas["esperas"]:
+        e = max(metricas["esperas"], key=lambda x: x["segundos"])
+        horas = f"{int(e['segundos'] // 3600)} h" if e["segundos"] >= 3600 else formato.duracion(e["segundos"])
+        otro_dia = formato.a_mx(e["hasta"]).date() != formato.a_mx(e["desde"]).date()
+        oportunidad("espera", f"{horas} de espera", e["indice"], "El cliente espera la respuesta",
+                    f"Escribimos a las {formato.hora(e['desde'])} y respondieron a las {formato.hora(e['hasta'])}"
+                    f"{' del día siguiente' if otro_dia else ''}.", "Atender y tomar pedidos las 24 horas.", "b1")
+    fuera = next((d for d in negocio if _FUERA_HORARIO.search(d["texto"])), None)
+    if fuera:
+        oportunidad("fuera_horario", "Aviso fuera de horario", fuera["i"], "Fuera de horario, el cliente espera",
+                    f"A las {items[fuera['i']]['hora']} solo llegó un aviso de fuera de horario.",
+                    "Atender y tomar pedidos las 24 horas.", "b1")
+    if metricas["telefonos"]:
+        t = metricas["telefonos"][0]
+        oportunidad("telefono", "Pedido por llamada", t["indice"], "El pedido sale de WhatsApp",
+                    f"Para pedir, nos dieron el teléfono {t['telefono']}.", "Que pida y pague en la misma conversación.", "b3")
+    priv = next((d for d in negocio if _PRIVACIDAD.search(d["texto"])), None)
+    if priv:
+        oportunidad("privacidad", "Trámite al inicio", priv["i"], "Un trámite antes de atender",
+                    f"A las {items[priv['i']]['hora']}, antes de atender, pidieron autorizar el uso de datos.",
+                    "Atender primero; pedir datos solo al pedir.", "b2")
+    pide = next((d for d in humanos if "?" in d["texto"] and _PIDE_DATOS.search(d["texto"])), None)
+    if pide:
+        oportunidad("pide_datos", "Pide datos primero", pide["i"], "Datos antes de resolver",
+                    f"A las {items[pide['i']]['hora']} pidieron datos antes de resolver la duda.",
+                    "Reconocer el número y recordar su dirección.", "b4")
+    if any(_PRECIO.search(d["texto"]) for d in cliente) and not any(_PRECIO.search(d["texto"]) for d in negocio):
+        pregunta = next(d for d in cliente if _PRECIO.search(d["texto"]))
+        oportunidad("sin_precio", "Sin precio", pregunta["i"], "El precio no se compartió",
+                    f"Preguntamos el precio a las {items[pregunta['i']]['hora']} y no lo dieron en el chat.",
+                    "Dar precio y tomar el pedido al momento.", "b3")
+    oportunidad("sin_cierre", "Sin pedido en chat", negocio[-1]["i"] if negocio else None,
+                "El pedido no se cierra en el chat", "La plática no llegó a tomar el pedido.",
+                "Que pida y pague en la misma conversación.", "b3")
+    oportunidad("sin_seguimiento", "Sin seguimiento", None, "No hay seguimiento al cliente",
+                "Después de la plática nadie dio seguimiento.", "Dar seguimiento y medir la satisfacción.", "b7")
+    oportunidad("sin_historial", "Sin historial", None, "El cliente no queda reconocido",
+                "Cada vez hay que repetir los datos.", "Reconocer el número y recordar su dirección.", "b4")
+
+    fo = []
+
+    def fortaleza(tipo, mensaje, titulo, texto):
+        fo.append({"tipo": tipo, "mensaje": mensaje, "titulo": titulo, "texto": texto})
+
+    rapida = metricas.get("primera_respuesta_s")
+    if rapida is not None and rapida <= 60 and negocio:
+        auto = _es_automatico(negocio[0])
+        fortaleza("respuesta_rapida", negocio[0]["i"], f"Respuesta en {formato.duracion(rapida)}",
+                  "Mensaje automático al instante." if auto else "Contestan casi al instante.")
+    bienvenida = next((d for d in negocio if _BIENVENIDA.search(d["texto"])), None)
+    if bienvenida:
+        fortaleza("bienvenida", bienvenida["i"], "Bienvenida clara", "Saluda con su marca.")
+    menu = next((d for d in negocio if len(_MENU.findall(d["texto"])) >= 2), None)
+    if menu:
+        fortaleza("menu", menu["i"], "Menú que orienta", "Guía al cliente a su opción.")
+    zona = next((d for d in humanos if _ZONA.search(d["texto"])), None)
+    if zona:
+        fortaleza("cobertura", zona["i"], "Verifica cobertura", "Pregunta la zona de entrega.")
+    precio = next((d for d in negocio if _PRECIO.search(d["texto"])), None)
+    if precio:
+        fortaleza("precio", precio["i"], "Comparte precios", "Da costos en el chat.")
+    if humanos:
+        fortaleza("trato_personal", humanos[-1]["i"], "Trato personal", "Una persona atiende el chat.")
+    if negocio:
+        fortaleza("canal_activo", negocio[0]["i"], "Canal activo", "El WhatsApp sí recibe mensajes.")
+    else:
+        fortaleza("numero_activo", None, "Número en WhatsApp", "El número sí existe en WhatsApp.")
+    for k, h in enumerate(op, 1):
+        h["id"] = f"H{k}"
+    for k, h in enumerate(fo, 1):
+        h["id"] = f"F{k}"
+    return {"oportunidades": op, "fortalezas": fo, "humanos": len(humanos), "automaticos": len(automaticos)}
+
+
+def elegir_hechos(hechos: dict) -> tuple[list, list]:
+    """Las 3 oportunidades más graves con ventajas distintas y 3 fortalezas en mensajes distintos."""
+    oportunidades, ventajas = [], set()
+    for h in hechos["oportunidades"]:
+        if h["ventaja"] not in ventajas:
+            oportunidades.append(h)
+            ventajas.add(h["ventaja"])
+        if len(oportunidades) == 3:
+            break
+    fortalezas, mensajes = [], set()
+    for h in hechos["fortalezas"]:
+        if h["mensaje"] is None or h["mensaje"] not in mensajes:
+            fortalezas.append(h)
+            mensajes.add(h["mensaje"])
+        if len(fortalezas) == 3:
+            break
+    for h in hechos["fortalezas"]:  # conversación corta: se completa aunque repita mensaje
+        if len(fortalezas) < 3 and h not in fortalezas:
+            fortalezas.append(h)
+    return oportunidades, fortalezas
+
+
 # ── nivel ──────────────────────────────────────────────────────────────────────
-def nivel_desde(verdict: dict | None, metricas: dict) -> tuple[int, str]:
+def nivel_desde(verdict: dict | None, metricas: dict, hechos: dict | None = None) -> tuple[int, str]:
     if verdict and verdict.get("category") in NIVEL_POR_CATEGORIA:
         return NIVEL_POR_CATEGORIA[verdict["category"]], "clasificacion"
-    if metricas.get("primera_respuesta_s") is None:
-        return 1, "reglas"  # nunca contestaron
-    return (3 if metricas["primera_respuesta_s"] <= 10 else 2), "reglas"  # al instante = mensaje automático
+    if hechos is None:
+        if metricas.get("primera_respuesta_s") is None:
+            return 1, "reglas"
+        return (3 if metricas["primera_respuesta_s"] <= 10 else 2), "reglas"
+    if not hechos["humanos"]:
+        return 1, "reglas"  # nadie contestó, o solo el mensaje automático (como "Automático + sin respuesta")
+    return (3 if hechos["automaticos"] else 2), "reglas"
 
 
 def sintesis_html(titular: str, texto: str) -> str:
@@ -152,104 +306,65 @@ def sintesis_html(titular: str, texto: str) -> str:
 
 
 # ── hallazgos por reglas (respaldo) ────────────────────────────────────────────
-def hallazgos_por_reglas(items: list, metricas: dict, nivel: int) -> dict:
-    negocio = [i for i, m in enumerate(items) if m["tipo"] == "negocio"]
-    fortalezas, oportunidades = [], []
-    rapida = metricas.get("primera_respuesta_s")
-    if rapida is not None and rapida <= 60 and negocio:
-        fortalezas.append({"titulo": f"Respuesta en {formato.duracion(rapida)}", "texto": "Contestan casi al instante.",
-                           "mensaje": negocio[0]})
-    menu = next((i for i in negocio if len(re.findall(r"(?m)^\s*(?:\d+[.)]|[🔷🔹▪•*-]|\d️⃣)", items[i]["texto"].replace("<br>", "\n"))) >= 2), None)
-    if menu is not None:
-        fortalezas.append({"titulo": "Menú que orienta", "texto": "Guía al cliente a su opción.", "mensaje": menu})
-    if nivel in (2, 3) and len(negocio) > 1:
-        fortalezas.append({"titulo": "Trato personal", "texto": "Una persona atiende el chat.", "mensaje": negocio[-1]})
-    if negocio and len(fortalezas) < 3:
-        fortalezas.append({"titulo": "Canal activo", "texto": "El WhatsApp sí recibe mensajes.", "mensaje": negocio[0]})
-
-    if metricas["sin_respuesta"]:
-        i = metricas["sin_respuesta"][0]
-        oportunidades.append({"titulo": "Una pregunta quedó sin respuesta", "dato": "Sin respuesta",
-                              "vimos": f"El mensaje de las {items[i]['hora']} no tuvo respuesta.",
-                              "oportunidad": "Resolver al momento las dudas frecuentes.", "mensaje": i, "ventaja": "b2"})
-    if metricas["esperas"]:
-        e = max(metricas["esperas"], key=lambda x: x["segundos"])
-        horas = f"{int(e['segundos'] // 3600)} h" if e["segundos"] >= 3600 else formato.duracion(e["segundos"])
-        oportunidades.append({"titulo": "El cliente espera la respuesta", "dato": f"{horas} de espera",
-                              "vimos": f"Escribimos a las {formato.hora(e['desde'])} y respondieron a las {formato.hora(e['hasta'])}"
-                                       f"{' del día siguiente' if formato.a_mx(e['hasta']).date() != formato.a_mx(e['desde']).date() else ''}.",
-                              "oportunidad": "Atender y tomar pedidos las 24 horas.", "mensaje": e["indice"], "ventaja": "b1"})
-    if metricas["telefonos"]:
-        t = metricas["telefonos"][0]
-        oportunidades.append({"titulo": "El pedido sale de WhatsApp", "dato": "Pedido por llamada",
-                              "vimos": f"Para pedir, nos dieron el teléfono {t['telefono']}.",
-                              "oportunidad": "Que pida y pague en la misma conversación.", "mensaje": t["indice"], "ventaja": "b3"})
-    extra = [{"titulo": "El pedido no se cierra en el chat", "dato": "Sin pedido en chat",
-              "vimos": "La plática no llegó a tomar el pedido.", "oportunidad": "Que pida y pague en la misma conversación.",
-              "mensaje": None, "ventaja": "b3"},
-             {"titulo": "No hay seguimiento al cliente", "dato": "Sin seguimiento",
-              "vimos": "Después de la plática nadie dio seguimiento.", "oportunidad": "Dar seguimiento y medir la satisfacción.",
-              "mensaje": None, "ventaja": "b7"},
-             {"titulo": "El cliente no queda reconocido", "dato": "Sin historial",
-              "vimos": "Cada vez hay que repetir los datos.", "oportunidad": "Reconocer el número y recordar su dirección.",
-              "mensaje": None, "ventaja": "b4"}]
-    usadas = {o["ventaja"] for o in oportunidades}
-    for o in extra:
-        if len(oportunidades) >= 3:
-            break
-        if o["ventaja"] not in usadas:
-            oportunidades.append(o)
-            usadas.add(o["ventaja"])
+def hallazgos_por_reglas(items: list, metricas: dict, nivel: int, hechos: dict | None = None) -> dict:
+    hechos = hechos or detectar_hechos(items, metricas)
+    oportunidades, fortalezas = elegir_hechos(hechos)
     titular, texto = SINTESIS[nivel]
-    return {"sintesis_titular": titular, "sintesis_texto": texto, "fortalezas": fortalezas[:3],
-            "oportunidades": oportunidades[:3]}
+    campos_o = ("titulo", "dato", "vimos", "oportunidad", "mensaje", "ventaja")
+    return {"sintesis_titular": titular, "sintesis_texto": texto,
+            "fortalezas": [{k: f[k] for k in ("titulo", "texto", "mensaje")} for f in fortalezas],
+            "oportunidades": [{k: o[k] for k in campos_o} for o in oportunidades]}
 
 
 # ── hallazgos con el LLM ───────────────────────────────────────────────────────
 _PROMPT = """Eres analista de De Tu Cel. Escribimos al WhatsApp de "{empresa}" ({giro}) como si fuéramos un cliente nuevo.
-Esta es la conversación real, numerada. Solo puedes afirmar lo que se ve en ella.
+Conversación real, numerada:
 
 {conversacion}
 
-Datos medidos: {datos}
+HECHOS COMPROBADOS en esa conversación (no hay otros; no inventes):
+Oportunidades:
+{hechos_op}
+Lo que hace bien:
+{hechos_fo}
 Clasificación del canal: {clasificacion}. Nivel {nivel} de 5 ({nombre_nivel}).
 
-Redacta en español de México, tono profesional y cálido. REGLAS:
-- Todo debe salir de la conversación y de los datos medidos de arriba. Si algo no pasó, no lo digas.
-- Un mensaje que llega en 10 s o menos es automático, no una persona: no lo presentes como atención humana.
+Tu trabajo es REDACTAR, en español de México, tono profesional y cálido. REGLAS:
+- Cada oportunidad se basa en UN hecho H distinto y cada fortaleza en un hecho F: pon su id en "hecho".
+- Con tus palabras, pero sin cambiar los datos del hecho: horas, fechas y cifras tal cual.
+- Un mensaje que llega en 10 s o menos es automático, no una persona.
 - Respeta el máximo de PALABRAS de cada campo: es una hoja impresa y no cabe más. Sin puntos suspensivos.
+- Frases completas: nunca termines en "y", "con", "de" ni a medias. Si no cabe, di menos.
+- Habla del negocio en tercera persona ("su marca", "su chat"); nunca "tú" ni "tu".
 Campos:
 - "sintesis_titular": diagnóstico del canal en una frase (máx. {sintesis_titular} palabras).
 - "sintesis_texto": qué le falta para ser una experiencia de compra (máx. {sintesis_texto} palabras).
-- "fortalezas": exactamente 3 cosas que YA hace bien el negocio en esta conversación. "titulo" tipo
-  etiqueta (máx. {f_titulo} palabras), "texto" (máx. {f_texto} palabras), "mensaje": el número [n] de un mensaje del Negocio que lo muestra.
-- "oportunidades": exactamente 3, distintas, de la más grave a la menos. "titulo" (máx. {o_titulo} palabras);
-  "dato": etiqueta con el hecho verificable (máx. {o_dato} palabras): una espera medida (p. ej. "N h de espera"),
-  "Sin respuesta" SOLO si un mensaje nuestro quedó sin contestar, "Pedido por llamada" SOLO si nos mandaron
-  a llamar o nos dieron un teléfono para pedir; si no, una etiqueta propia del hecho;
-  "vimos": lo que pasó, con su hora o fecha (máx. {o_vimos} palabras); "oportunidad": cómo se resuelve (máx. {o_oportunidad} palabras);
-  "mensaje": el número [n] donde se ve; "ventaja": la que lo resuelve, una distinta por oportunidad, de: {ventajas}.
-Responde SOLO JSON: {{"sintesis_titular": "", "sintesis_texto": "", "fortalezas": [{{"titulo": "", "texto": "", "mensaje": 0}}], "oportunidades": [{{"titulo": "", "dato": "", "vimos": "", "oportunidad": "", "mensaje": 0, "ventaja": ""}}]}}"""
+- "fortalezas": exactamente 3 (si hay menos hechos F, repite uno con otro enfoque): "hecho", "titulo" tipo
+  etiqueta (máx. {f_titulo} palabras), "texto" (máx. {f_texto} palabras).
+- "oportunidades": exactamente 3, las que más pesan para el negocio, con hechos H distintos: "hecho",
+  "titulo" (máx. {o_titulo} palabras), "vimos": lo que pasó (máx. {o_vimos} palabras),
+  "oportunidad": cómo se resuelve (máx. {o_oportunidad} palabras).
+Responde SOLO JSON: {{"sintesis_titular": "", "sintesis_texto": "", "fortalezas": [{{"hecho": "F1", "titulo": "", "texto": ""}}], "oportunidades": [{{"hecho": "H1", "titulo": "", "vimos": "", "oportunidad": ""}}]}}"""
 
 
-def hallazgos_con_llm(empresa, giro, renglones, metricas, verdict, nivel, escala, ventajas) -> dict:
+def hallazgos_con_llm(empresa, giro, renglones, metricas, verdict, nivel, escala, ventajas, hechos=None) -> dict:
     from app.config import CLASSIFIER_MODEL
     from app.llm import PRIORITY_BATCH, call_llm
-    primera = metricas["primera_respuesta_s"]
-    datos = {
-        "primera respuesta": ("nunca" if primera is None else
-                              f"{formato.duracion(primera)}{' (automática: llegó al instante)' if primera <= 10 else ''}"),
-        "esperas de 1 h o más": [f"{formato.duracion(e['segundos'])} (de {formato.hora(e['desde'])} a {formato.hora(e['hasta'])})"
-                                 for e in metricas["esperas"]] or "ninguna",
-        "mensajes nuestros que quedaron sin respuesta": [f"[{i}]" for i in metricas["sin_respuesta"]] or "ninguno",
-        "teléfonos que dio el negocio": [t["telefono"] for t in metricas["telefonos"]] or "ninguno",
-    }
+    hechos = hechos or {"oportunidades": [], "fortalezas": []}
+
+    def linea_op(h):
+        donde = f" · mensaje [{h['mensaje']}]" if h["mensaje"] is not None else ""
+        return f"{h['id']} · {h['dato']}{donde}: {h['vimos']}"
+
+    def linea_fo(h):
+        donde = f" · mensaje [{h['mensaje']}]" if h["mensaje"] is not None else ""
+        return f"{h['id']}{donde}: {h['titulo']}. {h['texto']}"
     clasificacion = (verdict or {}).get("notes") or (verdict or {}).get("category") or "sin clasificación"
     prompt = _PROMPT.format(
         empresa=empresa, giro=giro, conversacion="\n".join(renglones).replace("{", "(").replace("}", ")"),
-        datos=json.dumps(datos, ensure_ascii=False), clasificacion=clasificacion, nivel=nivel,
-        nombre_nivel=escala[nivel - 1]["nombre"],
-        ventajas="; ".join(f'{v["id"]} = {v["titulo"]}' for v in ventajas if v["id"] != "b5"), **PALABRAS)
+        hechos_op="\n".join(linea_op(h) for h in hechos["oportunidades"]) or "(ninguno)",
+        hechos_fo="\n".join(linea_fo(h) for h in hechos["fortalezas"]) or "(ninguno)",
+        clasificacion=clasificacion, nivel=nivel, nombre_nivel=escala[nivel - 1]["nombre"], **PALABRAS)
     raw = call_llm([{"role": "user", "content": prompt}], max_tokens=1200, temperature=0.2,
                    priority=PRIORITY_BATCH, model=CLASSIFIER_MODEL, json_output=True)
     return json.loads(re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip())
@@ -324,54 +439,86 @@ def aplicar_acortados(datos: dict, excedidos: dict, cortos: dict) -> int:
     return usados
 
 
-def depurar_hallazgos(datos: dict, items: list, ventajas_ids: set, respaldo: dict) -> tuple[dict, list]:
-    """Recorta a los límites, valida pines y ventajas; lo que no cuadra se toma del respaldo."""
-    avisos = []
+def depurar_hallazgos(datos: dict, items: list, ventajas_ids: set, respaldo: dict,
+                      hechos: dict | None = None) -> tuple[dict, dict]:
+    """Recorta a los límites y valida. Si el modelo citó un hecho ("hecho": "H2"), la etiqueta, la
+    marca y la ventaja salen del hecho, no del modelo. Lo que falta se completa con el respaldo.
+    Devuelve (hallazgos, notas) con lo que hubo que corregir, para avisarle al revisor."""
+    notas = {"marcas_invalidas": 0, "completadas": 0, "recortados": 0}
     tipos = {i: m["tipo"] for i, m in enumerate(items)}
+    hechos = hechos or {"oportunidades": [], "fortalezas": []}
+    por_id = {h["id"]: h for h in hechos["oportunidades"] + hechos["fortalezas"]}
 
-    def pin_valido(n, permitidos, titulo=""):
+    def marca(n, permitidos):
         if isinstance(n, int) and tipos.get(n) in permitidos:
-            return True
+            return n
         if n is not None:
-            avisos.append(f"El modelo señaló un mensaje que no corresponde para «{formato.texto_plano(titulo, 40)}»: "
-                          "quedó sin marca en la conversación.")
-        return False
+            notas["marcas_invalidas"] += 1
+        return None
+
+    def cabe(texto, clave, del_hecho=None):
+        """El texto del modelo si cabe; si no, el del hecho (ya medido para la hoja) antes que
+        cortarlo con "…". Solo lo propio, sin hecho que lo respalde, se recorta."""
+        t = formato.texto_plano(texto)
+        if t and len(t) <= LIMITES[clave]:
+            return t
+        if del_hecho:
+            return formato.texto_plano(del_hecho, LIMITES[clave])
+        if len(t) > LIMITES[clave]:
+            notas["recortados"] += 1
+        return formato.texto_plano(t, LIMITES[clave])
 
     fort = []
     for f in (datos.get("fortalezas") or [])[:3]:
         if not isinstance(f, dict) or not f.get("titulo"):
             continue
-        fort.append({"titulo": formato.texto_plano(f["titulo"], LIMITES["f_titulo"]),
-                     "texto": formato.texto_plano(f.get("texto"), LIMITES["f_texto"]),
-                     "mensaje": f.get("mensaje") if pin_valido(f.get("mensaje"), {"negocio"}, f["titulo"]) else None})
-    oport, usadas = [], set()
+        h = por_id.get(str(f.get("hecho") or ""))
+        h = h if h and h["id"].startswith("F") else None
+        fort.append({"titulo": cabe(f["titulo"], "f_titulo", h and h["titulo"]),
+                     "texto": cabe(f.get("texto"), "f_texto", h and h["texto"]),
+                     "mensaje": h["mensaje"] if h else marca(f.get("mensaje"), {"negocio"})})
+    oport, usadas, citados, remedios = [], set(), set(), set()
     for o in (datos.get("oportunidades") or [])[:3]:
         if not isinstance(o, dict) or not o.get("titulo"):
             continue
-        ventaja = o.get("ventaja") if o.get("ventaja") in ventajas_ids and o.get("ventaja") not in usadas else None
+        h = por_id.get(str(o.get("hecho") or ""))
+        h = h if h and h["id"].startswith("H") and h["id"] not in citados else None
+        if h:
+            citados.add(h["id"])
+            dato, mensaje, propuesta = h["dato"], h["mensaje"], h["ventaja"]
+            # "La oportunidad" es el remedio de De Tu Cel para ese hecho: va el texto curado (el del
+            # modelo salía forzado al comprimirlo: "Respuesta automática con horario y pronta…"),
+            # salvo que otra oportunidad ya lo use.
+            if h["oportunidad"] not in remedios:
+                o = {**o, "oportunidad": h["oportunidad"]}
+        else:  # sin hecho: lo que diga el modelo, verificado después (verificar_datos)
+            dato, mensaje, propuesta = o.get("dato"), marca(o.get("mensaje"), {"negocio", "cliente"}), o.get("ventaja")
+        ventaja = propuesta if propuesta in ventajas_ids and propuesta not in usadas else None
         if not ventaja:  # inválida o repetida: se deduce del texto (sin repetir)
-            deducida = _ventaja_por_texto(o)
+            deducida = _ventaja_por_texto({**o, "dato": dato})
             ventaja = deducida if deducida in ventajas_ids and deducida not in usadas else None
         if ventaja:
             usadas.add(ventaja)
-        oport.append({"titulo": formato.texto_plano(o["titulo"], LIMITES["o_titulo"]),
-                      "dato": formato.texto_plano(o.get("dato"), LIMITES["o_dato"]),
-                      "vimos": formato.texto_plano(o.get("vimos"), LIMITES["o_vimos"]),
-                      "oportunidad": formato.texto_plano(o.get("oportunidad"), LIMITES["o_oportunidad"]),
-                      "mensaje": o.get("mensaje") if pin_valido(o.get("mensaje"), {"negocio", "cliente"}, o["titulo"]) else None,
-                      "ventaja": ventaja})
+        oport.append({"titulo": cabe(o["titulo"], "o_titulo", h and h["titulo"]),
+                      "dato": formato.texto_plano(dato, LIMITES["o_dato"]),
+                      "vimos": cabe(o.get("vimos"), "o_vimos", h and h["vimos"]),
+                      "oportunidad": cabe(o.get("oportunidad"), "o_oportunidad", h and h["oportunidad"]),
+                      "mensaje": mensaje, "ventaja": ventaja})
+        remedios.add(oport[-1]["oportunidad"])
     if len(fort) < 3:
-        avisos.append("Faltaron fortalezas del modelo; se completaron por reglas.")
-        fort += [f for f in respaldo["fortalezas"] if f["titulo"] not in {x["titulo"] for x in fort}][:3 - len(fort)]
+        faltan = [f for f in respaldo["fortalezas"] if f["titulo"] not in {x["titulo"] for x in fort}][:3 - len(fort)]
+        notas["completadas"] += len(faltan)
+        fort += faltan
     if len(oport) < 3:
-        avisos.append("Faltaron oportunidades del modelo; se completaron por reglas.")
         # Sin repetir el tema de una que ya está (misma ventaja o mismo dato).
         datos_usados = {o["dato"].lower() for o in oport}
-        oport += [o for o in respaldo["oportunidades"]
+        faltan = [o for o in respaldo["oportunidades"]
                   if o.get("ventaja") not in usadas and o["dato"].lower() not in datos_usados][:3 - len(oport)]
+        notas["completadas"] += len(faltan)
+        oport += faltan
     titular = datos.get("sintesis_titular") or respaldo["sintesis_titular"]
     texto = datos.get("sintesis_texto") or respaldo["sintesis_texto"]
-    return {"sintesis_titular": titular, "sintesis_texto": texto, "fortalezas": fort, "oportunidades": oport}, avisos
+    return {"sintesis_titular": titular, "sintesis_texto": texto, "fortalezas": fort, "oportunidades": oport}, notas
 
 
 def _segundos_de(dato: str) -> float | None:
@@ -386,8 +533,8 @@ def _segundos_de(dato: str) -> float | None:
 def verificar_datos(oportunidades: list, metricas: dict) -> list:
     """Las etiquetas que afirman un hecho medible solo se quedan si lo medido lo respalda (el
     modelo marcaba "Sin respuesta" a una pregunta que sí contestaron y "Pedido por llamada" sin
-    que dieran teléfono). Si no cuadra, se quita la etiqueta y se avisa al revisor."""
-    avisos = []
+    que dieran teléfono). Si no cuadra, se quita la etiqueta. Devuelve las etiquetas quitadas."""
+    quitadas = []
     for o in oportunidades:
         dato = (o.get("dato") or "").lower()
         falso = False
@@ -399,14 +546,15 @@ def verificar_datos(oportunidades: list, metricas: dict) -> list:
             s = _segundos_de(dato)
             falso = s is None or not any(abs(e["segundos"] - s) <= max(3600, e["segundos"] * 0.1) for e in metricas["esperas"])
         if falso:
-            avisos.append(f"Se quitó la etiqueta «{o['dato']}» de «{o['titulo']}»: no coincide con lo medido en la conversación.")
+            quitadas.append(o["dato"])
             o["dato"] = ""
-    return avisos
+    return quitadas
 
 
 def poner_pines(items: list, hallazgos: dict) -> list:
-    """Un pin por mensaje: v1..v3 para lo que funciona, 1..3 para oportunidades."""
-    avisos = []
+    """Un pin por mensaje: v1..v3 para lo que funciona, 1..3 para oportunidades. Devuelve los
+    hallazgos que tenían mensaje pero no encontraron uno libre (conversaciones muy cortas)."""
+    sin_lugar = []
     for m in items:
         m.pop("pin", None)
 
@@ -427,10 +575,10 @@ def poner_pines(items: list, hallazgos: dict) -> list:
                 continue
             j = libre(h["mensaje"], tipos)
             if j is None:
-                avisos.append(f"El hallazgo {prefijo}{k} quedó sin marca en la conversación (no hay mensaje libre).")
+                sin_lugar.append(f"{prefijo}{k}")
             else:
                 items[j]["pin"] = f"{prefijo}{k}"
-    return avisos
+    return sin_lugar
 
 
 # ── empresa ────────────────────────────────────────────────────────────────────
@@ -509,18 +657,20 @@ def armar_cliente(*, company: dict, thread: list, numero: str, verdict: dict | N
     from app.evaluacion.generador import RAIZ, leer_json
     giro = leer_json(RAIZ / "config" / "industrias" / f"{industria}.json")
     escala = leer_json(RAIZ / "config" / "base.json")["nivel"]["escala"]
-    items, renglones, metricas = construir_conversacion(thread)
+    pais = re.sub(r"\D", "", numero or "")[:-10] or "52"
+    items, renglones, metricas = construir_conversacion(thread, pais=pais[:3])
     if not metricas["mensajes"]:
         raise ValueError("No hay conversación con ese número para evaluar.")
-    nivel, fuente_nivel = nivel_desde(verdict, metricas)
-    respaldo = hallazgos_por_reglas(items, metricas, nivel)
+    hechos = detectar_hechos(items, metricas)
+    nivel, fuente_nivel = nivel_desde(verdict, metricas, hechos)
+    respaldo = hallazgos_por_reglas(items, metricas, nivel, hechos)
     ventajas_ids = {v["id"] for v in giro.get("ventajas", [])}
-    avisos, origen = [], "reglas"
+    origen, notas, quitadas, recortados, sin_ia = "reglas", {"marcas_invalidas": 0, "completadas": 0}, [], 0, False
     hallazgos = respaldo
     if usar_llm:
         try:
             crudo = hallazgos_con_llm(company.get("name") or "la empresa", giro["industria"]["plural"], renglones,
-                                      metricas, verdict, nivel, escala, giro.get("ventajas", []))
+                                      metricas, verdict, nivel, escala, giro.get("ventajas", []), hechos)
             for _intento in range(2):  # mejor una frase completa más corta que una cortada con "…"
                 largos = _excedidos(crudo)
                 if not largos:
@@ -530,27 +680,42 @@ def armar_cliente(*, company: dict, thread: list, numero: str, verdict: dict | N
                 except Exception as exc:
                     log.info("Evaluación: no se pudieron acortar textos (%s)", exc)
                     break
-            hallazgos, avisos = depurar_hallazgos(crudo, items, ventajas_ids, respaldo)
-            avisos += verificar_datos(hallazgos["oportunidades"], metricas)
-            recortados = len(_excedidos(crudo))
-            if recortados:
-                avisos.append(f"{recortados} texto(s) se recortaron con «…» para que quepan: revísalos.")
+            hallazgos, notas = depurar_hallazgos(crudo, items, ventajas_ids, respaldo, hechos)
+            quitadas = verificar_datos(hallazgos["oportunidades"], metricas)
+            recortados = notas["recortados"]
             origen = "llm"
         except Exception as exc:
             log.warning("Evaluación %s: el modelo no generó hallazgos (%s); se usan reglas", company.get("name"), exc)
-            avisos.append("El modelo no respondió; el borrador se armó por reglas.")
-    avisos += poner_pines(items, hallazgos)
+            sin_ia = True
+    sin_lugar = poner_pines(items, hallazgos)
     nombre = company.get("name") or company.get("domain") or "La empresa"
     cliente = {"nombre": nombre, "logoAlt": nombre, "telefono": formato.telefono(numero),
                "nombreBot": formato.texto_plano(whatsapp_name, 40) or nombre}
     logo = bajar_logo(company.get("logo_url"))
     if logo:
         cliente["logo"] = logo
-        # El scraper a veces toma el logo de un cliente o socio que aparece en su sitio
-        # (Gas de Tlalnepantla salió con el de CEMEX, 2026-10-20).
-        avisos.append("Revisa el logo: se tomó automáticamente de su sitio web y puede no ser el suyo.")
-    else:
-        avisos.append("Sin logo (no se encontró o no se pudo descargar): se muestra el nombre.")
+
+    # Avisos para el revisor: pocos, claros y accionables (Rayogas, 2026-10-20: salían 11).
+    avisos = []
+    if metricas["mensajes"] < 5:
+        avisos.append(f"Conversación corta ({metricas['mensajes']} mensajes): hay poco de dónde sacar hallazgos. "
+                      "Si puedes, escríbeles de nuevo antes de enviar.")
+    if fuente_nivel != "clasificacion":
+        avisos.append("El nivel se estimó con los tiempos de respuesta: este número no tiene clasificación en Análisis.")
+    if sin_ia:
+        avisos.append("La IA no respondió: el borrador se armó con los hallazgos detectados.")
+    if notas["completadas"]:
+        avisos.append(f"La IA dejó {notas['completadas']} hallazgo(s) sin redactar; se completaron con los detectados.")
+    if quitadas:
+        avisos.append(f"Se quitaron etiquetas que no coincidían con lo medido: {', '.join('«' + q + '»' for q in quitadas)}.")
+    if sin_lugar or notas["marcas_invalidas"]:
+        avisos.append("Algunos hallazgos no tienen su propio mensaje marcado en la conversación: elígelo en «Se ve en».")
+    if recortados:
+        avisos.append(f"{recortados} texto(s) se recortaron con «…» para que quepan: revísalos.")
+    # El scraper a veces toma el logo de un cliente o socio que aparece en su sitio (Gas de
+    # Tlalnepantla salió con el de CEMEX, 2026-10-20).
+    avisos.append("Revisa el logo: se tomó de su sitio web y a veces es de otra marca." if logo
+                  else "Sin logo (no se encontró o no se pudo descargar): se muestra el nombre.")
     resuelve = {o["ventaja"]: str(k) for k, o in enumerate(hallazgos["oportunidades"], 1) if o.get("ventaja")}
     capa = {
         "industria": industria,
@@ -563,6 +728,10 @@ def armar_cliente(*, company: dict, thread: list, numero: str, verdict: dict | N
         "resuelve": resuelve,
         "conversacion": {"real": items},
     }
+    # Los hechos van al editor: "Partir de un hallazgo detectado" llena una tarjeta con ellos.
+    campos = {"oportunidades": ("id", "tipo", "dato", "mensaje", "titulo", "vimos", "oportunidad", "ventaja"),
+              "fortalezas": ("id", "tipo", "mensaje", "titulo", "texto")}
     info = {"origen": origen, "nivel_fuente": fuente_nivel, "categoria": (verdict or {}).get("category"),
-            "avisos": avisos, "mensajes": metricas["mensajes"]}
+            "avisos": avisos, "mensajes": metricas["mensajes"],
+            "hechos": {lista: [{k: h[k] for k in claves} for h in hechos[lista]] for lista, claves in campos.items()}}
     return capa, info

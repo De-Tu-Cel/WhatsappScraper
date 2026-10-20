@@ -67,8 +67,9 @@ def _resumen(doc: dict, completo: bool = False) -> dict:
         out["escala"] = [n["nombre"] for n in generador.leer_json(generador.RAIZ / "config" / "base.json")["nivel"]["escala"]]
         out["editable"] = _editable(doc["cliente"])
         out["limites"] = dict(armador.LIMITES)
+        # Para elegir "Se ve en": cada mensaje en texto plano y corto (el HTML del chat ya va escapado).
         out["conversacion"] = [{"i": i, "tipo": m.get("tipo"), "hora": m.get("hora", ""), "pin": m.get("pin"),
-                                "texto": m.get("texto") if m.get("tipo") in ("dia", "nota") else None}
+                                "resumen": formato.texto_plano(html.unescape(re.sub(r"<[^>]+>", " ", m.get("texto") or "")), 70)}
                                for i, m in enumerate(doc["cliente"]["conversacion"]["real"])]
     return out
 
@@ -266,6 +267,18 @@ def editar_evaluacion(evaluacion_id: str, edicion: Edicion, x_user_token: Option
         "cliente": capa, "updated_at": datetime.now(timezone.utc), "updated_by": user.get("username")}})
     doc["cliente"] = capa
     return _resumen(doc, completo=True)
+
+
+@router.post("/evaluaciones/{evaluacion_id}/vista-previa", response_class=HTMLResponse)
+def vista_previa(evaluacion_id: str, edicion: Edicion, x_user_token: Optional[str] = Header(None)):
+    """La página con los cambios del editor SIN guardarlos (la vista previa en vivo)."""
+    _usuario(x_user_token)
+    doc = _cargar(MongoDBManager(), evaluacion_id)
+    capa = aplicar_edicion(doc["cliente"], edicion)
+    try:
+        return HTMLResponse(generador.generar_evaluacion(capa), headers={"Cache-Control": "no-store"})
+    except generador.ConfiguracionInvalida as exc:
+        raise HTTPException(422, str(exc))
 
 
 def _html(doc: dict) -> str:

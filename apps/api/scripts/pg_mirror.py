@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Herramienta de la migración Mongo → Postgres (docs/MIGRACION_POSTGRES.md).
 
+    # Todo de un vistazo: cada colección activa, si está igual, y si ya puede avanzar:
+    python scripts/pg_mirror.py check
     # Comparar (solo lee Mongo; no cambia nada en ningún lado):
     python scripts/pg_mirror.py reconcile message_templates
     # Copiar a Postgres lo que falte o difiera, y borrar lo sobrante (carga inicial):
@@ -47,6 +49,63 @@ def _collections(raw_db, spec, use_all):
     return wanted
 
 
+def _check(raw_db, store) -> int:
+    """Solo lee. Usa lo que el backend guarda cada minuto (app/pgmirror/health.py)."""
+    from app.pgmirror import health
+    health.ensure_meta(store)
+    active = health.active_collections(raw_db)
+    print(f"DB_MODES: {os.environ.get('DB_MODES') or '(vacío)'}")
+    if not active:
+        print("Ninguna colección activa: todo está solo en Mongo.")
+        return 0
+    window = health.WAIT_DAYS
+    modes = {c: (m, float(age) / 86400) for c, m, age in store.query(
+        "SELECT collection, mode, extract(epoch FROM now() - since) FROM mongo._modes")}
+    counters = {(c, k): int(n) for c, k, n in store.query(
+        "SELECT collection, key, sum(n) FROM mongo._counters WHERE day > current_date - %s GROUP BY 1, 2", (window,))}
+    fixed = {c: int(n) for c, n in store.query(
+        "SELECT collection, sum(queued) FROM mongo._reconcile_log WHERE kind <> 'initial' "
+        "AND at > now() - make_interval(days => %s) GROUP BY 1", (window,))}
+    last_auto = {c: float(age) / 3600 for c, age in store.query(
+        "SELECT collection, extract(epoch FROM now() - max(at)) FROM mongo._reconcile_log GROUP BY 1")}
+
+    print(f"\n{'COLECCIÓN':28} {'MODO':8} {'DÍAS':>5} {'MONGO':>8} {'POSTGRES':>9}  {'AHORA':6} "
+          f"{'CORREGIDOS':>10} {'SHADOW ok/dif':>14} {'ÚLT.CONC.':>10}  →")
+    all_ok = True
+    for name, mode in sorted(active.items()):
+        result = reconcile(raw_db, store, name)
+        recorded = modes.get(name)
+        days = recorded[1] if recorded and recorded[0] == mode else None
+        ok, diffs = counters.get((name, "shadow_ok"), 0), counters.get((name, "shadow_diffs"), 0)
+        fallbacks = sum(v for (c, k), v in counters.items() if c == name and k.startswith("pg_fallback"))
+        verdict = health.readiness(mode, days, result["in_sync"], fixed.get(name, 0), ok, diffs, fallbacks)
+        all_ok &= result["in_sync"]
+        last = f"hace {last_auto[name]:.1f} h" if name in last_auto else "aún no"
+        print(f"{name:28} {mode:8} {'?' if days is None else f'{days:.1f}':>5} {result['mongo']:>8} "
+              f"{result['mongo'] - result['missing_in_postgres'] + result['extra_in_postgres']:>9}  "
+              f"{'OK' if result['in_sync'] else 'DIF':6} {fixed.get(name, 0):>10} {f'{ok}/{diffs}':>14} {last:>10}  {verdict}")
+    print(f"\n(CORREGIDOS y SHADOW: últimos {window} días. Para avanzar una colección se espera {window} días "
+          "en su modo sin correcciones ni diferencias.)")
+
+    print("\nProcesos del backend:")
+    procs = store.query("SELECT process, extract(epoch FROM now() - updated_at), status FROM mongo._runtime ORDER BY 2")
+    if not procs:
+        print("  ninguno ha reportado todavía (se reporta cada minuto con la versión que trae health.py)")
+    for process, age, status in procs:
+        worker = status.get("worker", {})
+        print(f"  {process}: hace {float(age):.0f} s · pendientes {status.get('pending', 0)} · "
+              f"por conciliar {', '.join(status.get('dirty') or []) or 'ninguna'} · "
+              f"copiados {worker.get('synced', 0)} · errores {worker.get('errors', 0)}")
+
+    if store.query("SELECT to_regclass('mongo._shadow_diffs')")[0][0]:
+        rows = store.query("SELECT at, collection, operation, left(detail, 160) FROM mongo._shadow_diffs "
+                           "WHERE at > now() - make_interval(days => %s) ORDER BY at DESC LIMIT 5", (window,))
+        print(f"\nDiferencias de shadow (últimos {window} días): {'ninguna' if not rows else ''}")
+        for at, collection, operation, detail in rows:
+            print(f"  {at:%Y-%m-%d %H:%M} {collection}.{operation}: {detail}")
+    return 0 if all_ok else 2
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -55,10 +114,13 @@ def main(argv=None):
     rec.add_argument("--all", action="store_true")
     rec.add_argument("--fix", action="store_true", help="copiar/borrar para dejar Postgres igual a Mongo")
     sub.add_parser("status")
+    sub.add_parser("check", help="estado de las colecciones activas y si ya pueden avanzar de modo")
     args = parser.parse_args(argv)
 
     raw_db, store = _connect()
     try:
+        if args.cmd == "check":
+            return _check(raw_db, store)
         if args.cmd == "status":
             for name in _collections(raw_db, None, True):
                 pg = len(store.hashes(name))

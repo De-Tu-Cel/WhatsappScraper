@@ -104,7 +104,7 @@ momento** hasta el final.
 | `message_templates` | 2026-10-20 (72 docs, `[OK]`) | | |
 | `blacklist` | 2026-10-20 (361 docs, `[OK]`) | | |
 
-Revisión diaria mientras estén en `dual` (terminal del contenedor backend): `python scripts/pg_mirror.py reconcile settings,message_templates,blacklist` → las tres en `[OK]`.
+Revisión (terminal del contenedor backend): `python scripts/pg_mirror.py check` → dice si cada una ya puede avanzar.
 
 ### Etapa 2 — Bitácoras e históricos (solo se agregan)
 `instance_health_logs`, `phone_verification_attempts`, `search_ideas`, `classification_comparisons` y sus logs.
@@ -124,10 +124,18 @@ GridFS → `files`; luego Mongo en solo lectura 30 días con un respaldo final, 
 
 Interruptor: variable `DB_MODES` del backend en Coolify, con el modo de cada colección separado por comas (p. ej. `settings=dual,message_templates=dual,blacklist=dual`). Es la única que hay que tocar: `docker-compose.yml` ya la pasa al contenedor junto con `POSTGRES_URL` (el backend solo recibe las variables que ese archivo lista). Una colección que no aparece, o un modo mal escrito, se queda en Mongo. Cambiarla requiere redesplegar el backend, no cambiar código. (`DB_MODE_<COLECCION>` también funciona y gana sobre `DB_MODES`, útil en local.)
 
-1. Agregar `<x>=dual` a `DB_MODES` y redesplegar. Desde ese momento cada escritura se copia sola.
-2. **Carga inicial** (lo que ya existía): `python scripts/pg_mirror.py reconcile <x> --fix` dentro del contenedor del backend (terminal de Coolify; ya tiene `MONGODB_URI` y `POSTGRES_URL`).
-3. **Conciliar** sin `--fix` dos veces: la segunda debe salir `[OK]`. Revisar `GET /api/admin/pgmirror/status` (`dirty` vacío, `errors` en 0).
-4. Unos días en `dual`. Si algo queda "por conciliar", repetir el paso 2.
+**Vigilancia automática** (`app/pgmirror/health.py`, desde 2026-10-20): cada proceso del backend guarda cada minuto sus estadísticas en Postgres y concilia solo cada colección activa cada 6 h (`PGMIRROR_RECONCILE_HOURS`), o antes si quedó "por conciliar". Lo que corrige lo manda a copiar por el mismo SyncWorker (relee de Mongo, nunca pisa algo más nuevo) y lo anota en `mongo._reconcile_log`. Una sola instrucción lo resume todo, en la terminal del contenedor backend:
+
+```sh
+python scripts/pg_mirror.py check
+```
+
+Por cada colección activa: modo, días en ese modo, conteos Mongo/Postgres, si están iguales ahora, documentos corregidos y comparaciones de shadow de los últimos 3 días, y el veredicto (`esperar N días`, `LISTA para shadow`, `LISTA para postgres` o qué revisar).
+
+1. Agregar `<x>=dual` a `DB_MODES` y redesplegar. Desde ese momento cada escritura se copia sola, y al minuto el backend hace la **carga inicial** de lo que ya existía (queda como `initial`, no cuenta como corrección). Ya no hace falta correr `reconcile --fix` a mano (sigue disponible).
+2. Revisar con `check` que la colección salga `OK`.
+3. (sin paso manual: la conciliación es automática)
+4. Tres días en `dual` sin correcciones → `check` dice `LISTA para shadow`. Si hubo correcciones, el espejo en vivo se saltó algo: se investiga antes de avanzar.
 5. `<x>=shadow` en `DB_MODES`: lee de las dos, compara y responde con Mongo. Revisar `shadow_diffs` en el estado y la tabla `mongo._shadow_diffs`. Cada diferencia se entiende y se corrige antes de seguir.
 6. `<x>=postgres` en `DB_MODES`: lee de Postgres, sigue escribiendo en las dos. **Regresar = poner `dual` o quitarla de `DB_MODES` y redesplegar.**
 7. Tras días estables en `postgres`: se construye la tabla normalizada definitiva y Postgres pasa a ser la fuente de verdad (esa parte se diseña colección por colección, empezando por las de la etapa 1).

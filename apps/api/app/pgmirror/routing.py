@@ -1,0 +1,417 @@
+"""Enrutamiento por colección: MongoDBManager.db pasa por aquí.
+
+- Modo `mongo` (o sin POSTGRES_URL): se regresa la colección de pymongo tal cual.
+- `dual`: las escrituras van a Mongo igual que hoy y luego se avisa al
+  SyncWorker qué _id copiar. Las lecturas, a Mongo.
+- `shadow`: como dual, y find_one / count_documents / distinct además consultan
+  Postgres y registran cualquier diferencia (responden con Mongo).
+- `postgres`: como dual, pero find / find_one / count_documents / distinct /
+  estimated_document_count se leen de Postgres. Lo que el traductor no soporta
+  (o si Postgres falla) se lee de Mongo — nunca se adivina.
+Todo lo demás (aggregate, create_index, …) va directo a Mongo.
+"""
+import logging
+import threading
+import time
+
+from app.pgmirror import codec, config, sqlfilter
+
+log = logging.getLogger(__name__)
+MAX_PREQUERY = 1000
+_PG_READ_KWARGS = {"projection", "sort", "skip", "limit", "max_time_ms", "batch_size"}
+
+
+class _Runtime:
+    def __init__(self, raw_db):
+        from app.pgmirror.store import Store
+        from app.pgmirror.sync import SyncWorker
+        self.store = Store(config.postgres_url())
+        self.worker = SyncWorker(raw_db, self.store)
+        self.stats = {}
+        self.stats_lock = threading.Lock()
+
+    def bump(self, collection, key, n=1):
+        with self.stats_lock:
+            bucket = self.stats.setdefault(collection, {})
+            bucket[key] = bucket.get(key, 0) + n
+
+
+_runtime = None
+_runtime_lock = threading.Lock()
+_runtime_failed_at = 0.0
+
+
+def get_runtime(raw_db):
+    global _runtime, _runtime_failed_at
+    if _runtime is not None:
+        return _runtime
+    if time.monotonic() - _runtime_failed_at < 60:
+        return None
+    with _runtime_lock:
+        if _runtime is None:
+            try:
+                _runtime = _Runtime(raw_db)
+            except Exception:
+                _runtime_failed_at = time.monotonic()
+                log.exception("pgmirror unavailable; collections stay on Mongo only (run reconcile later)")
+                return None
+    return _runtime
+
+
+def route_collection(raw_db, name: str):
+    mode = config.collection_mode(name)
+    raw = raw_db[name]
+    if mode == "mongo":
+        return raw
+    rt = get_runtime(raw_db)
+    return raw if rt is None else RoutedCollection(raw, name, mode, rt)
+
+
+class RoutedDatabase:
+    """Se comporta como pymongo.database.Database; las colecciones se enrutan."""
+
+    def __init__(self, raw_db):
+        object.__setattr__(self, "_raw", raw_db)
+
+    def __getattr__(self, name):
+        if name.startswith("_") or hasattr(type(self._raw), name):
+            return getattr(self._raw, name)
+        return route_collection(self._raw, name)
+
+    def __getitem__(self, name):
+        return route_collection(self._raw, name)
+
+    def get_collection(self, name, *args, **kwargs):
+        if args or kwargs:
+            return self._raw.get_collection(name, *args, **kwargs)
+        return route_collection(self._raw, name)
+
+    def __repr__(self):
+        return f"RoutedDatabase({self._raw!r})"
+
+
+class PgCursor:
+    """Cursor mínimo sobre Postgres (sort/skip/limit/iteración). Cualquier otro
+    método del cursor de pymongo hace que esta consulta se resuelva en Mongo."""
+
+    def __init__(self, coll, filter_, projection, sort=None, skip=0, limit=0):
+        self._coll, self._filter, self._projection = coll, filter_, projection
+        self._sort, self._skip, self._limit = sort, skip or 0, limit or 0
+        self._docs = None
+
+    def sort(self, key_or_list, direction=None):
+        self._sort = [(key_or_list, direction or 1)] if isinstance(key_or_list, str) else key_or_list
+        return self
+
+    def skip(self, n):
+        self._skip = n
+        return self
+
+    def limit(self, n):
+        self._limit = n
+        return self
+
+    def batch_size(self, _n):
+        return self
+
+    def max_time_ms(self, _ms):
+        return self
+
+    def _load(self):
+        if self._docs is None:
+            self._docs = self._coll._pg_find(self._filter, self._projection, self._sort, self._skip, self._limit)
+        return self._docs
+
+    def __iter__(self):
+        return iter(self._load())
+
+    def __getattr__(self, name):
+        # Algo que este cursor no conoce: la misma consulta, resuelta en Mongo.
+        self._coll._rt.bump(self._coll._name, "pg_fallback_cursor")
+        cursor = self._coll._raw.find(self._filter, self._projection)
+        if self._sort:
+            cursor = cursor.sort(self._sort)
+        if self._skip:
+            cursor = cursor.skip(self._skip)
+        if self._limit:
+            cursor = cursor.limit(self._limit)
+        return getattr(cursor, name)
+
+
+class RoutedCollection:
+    def __init__(self, raw, name, mode, rt):
+        self._raw, self._name, self._mode, self._rt = raw, name, mode, rt
+
+    def __getattr__(self, attr):
+        return getattr(self._raw, attr)
+
+    def __getitem__(self, key):
+        return self._raw[key]
+
+    def __repr__(self):
+        return f"RoutedCollection({self._name!r}, mode={self._mode!r})"
+
+    # ── Escrituras: Mongo primero, luego copiar esos _id ─────────────────────────
+    def _mirror(self, ids):
+        try:
+            self._rt.worker.enqueue(self._name, list(ids))
+        except Exception:
+            log.exception("pgmirror enqueue failed for %s", self._name)
+
+    def _dirty(self, reason):
+        try:
+            self._rt.worker.mark_dirty(self._name, reason)
+        except Exception:
+            log.exception("pgmirror mark_dirty failed for %s", self._name)
+
+    def _ids_for(self, filter_, **kwargs) -> list:
+        if isinstance(filter_, dict) and list(filter_) == ["_id"] and not isinstance(filter_["_id"], dict):
+            return [filter_["_id"]]
+        try:
+            find_kwargs = {"session": kwargs["session"]} if kwargs.get("session") is not None else {}
+            ids = [d["_id"] for d in self._raw.find(filter_, {"_id": 1}, **find_kwargs).limit(MAX_PREQUERY + 1)]
+        except Exception:
+            self._dirty("pre-query failed")
+            return []
+        if len(ids) > MAX_PREQUERY:
+            self._dirty(f"write touches more than {MAX_PREQUERY} documents")
+            return ids[:MAX_PREQUERY]
+        return ids
+
+    def insert_one(self, document, *args, **kwargs):
+        result = self._raw.insert_one(document, *args, **kwargs)
+        self._mirror([result.inserted_id])
+        return result
+
+    def insert_many(self, documents, *args, **kwargs):
+        documents = list(documents)
+        try:
+            result = self._raw.insert_many(documents, *args, **kwargs)
+        except Exception:
+            # Inserción parcial (p. ej. duplicado a la mitad): copiar lo que sí entró.
+            self._mirror([d.get("_id") for d in documents if isinstance(d, dict)])
+            raise
+        self._mirror(result.inserted_ids)
+        return result
+
+    def _write_by_filter(self, method, filter_, *args, **kwargs):
+        ids = self._ids_for(filter_, **kwargs)
+        result = getattr(self._raw, method)(filter_, *args, **kwargs)
+        upserted = getattr(result, "upserted_id", None)
+        self._mirror(ids + ([upserted] if upserted is not None else []))
+        return result
+
+    def update_one(self, filter, update, *args, **kwargs):
+        return self._write_by_filter("update_one", filter, update, *args, **kwargs)
+
+    def update_many(self, filter, update, *args, **kwargs):
+        return self._write_by_filter("update_many", filter, update, *args, **kwargs)
+
+    def replace_one(self, filter, replacement, *args, **kwargs):
+        return self._write_by_filter("replace_one", filter, replacement, *args, **kwargs)
+
+    def delete_one(self, filter, *args, **kwargs):
+        return self._write_by_filter("delete_one", filter, *args, **kwargs)
+
+    def delete_many(self, filter, *args, **kwargs):
+        return self._write_by_filter("delete_many", filter, *args, **kwargs)
+
+    def _find_and_modify(self, method, filter_, *args, **kwargs):
+        ids = self._ids_for(filter_, **kwargs)
+        doc = getattr(self._raw, method)(filter_, *args, **kwargs)
+        if isinstance(doc, dict) and "_id" in doc:
+            ids.append(doc["_id"])
+        if not ids and kwargs.get("upsert"):
+            ids = self._ids_for(filter_, **kwargs)
+            if not ids:
+                self._dirty(f"{method} upsert without a resolvable _id")
+        self._mirror(ids)
+        return doc
+
+    def find_one_and_update(self, filter, update, *args, **kwargs):
+        return self._find_and_modify("find_one_and_update", filter, update, *args, **kwargs)
+
+    def find_one_and_replace(self, filter, replacement, *args, **kwargs):
+        return self._find_and_modify("find_one_and_replace", filter, replacement, *args, **kwargs)
+
+    def find_one_and_delete(self, filter, *args, **kwargs):
+        return self._find_and_modify("find_one_and_delete", filter, *args, **kwargs)
+
+    def bulk_write(self, requests, *args, **kwargs):
+        try:
+            return self._raw.bulk_write(requests, *args, **kwargs)
+        finally:
+            self._dirty("bulk_write")
+
+    def drop(self, *args, **kwargs):
+        try:
+            return self._raw.drop(*args, **kwargs)
+        finally:
+            self._dirty("drop")
+
+    # ── Lecturas ────────────────────────────────────────────────────────────────
+    def _pg_find(self, filter_, projection, sort, skip, limit):
+        where = sqlfilter.where(filter_)
+        order = sqlfilter.order_by(sort)
+        docs = self._rt.store.query_docs(self._name, where, [], order_by=order, limit=limit or None, skip=skip or 0)
+        return [sqlfilter.apply_projection(d, projection) for d in docs]
+
+    def _fallback(self, op, exc):
+        self._rt.bump(self._name, f"pg_fallback_{op}")
+        if not isinstance(exc, sqlfilter.Unsupported):
+            log.warning("pgmirror %s.%s read fell back to Mongo: %s", self._name, op, exc)
+
+    def find(self, filter=None, *args, **kwargs):
+        if self._mode != "postgres":
+            return self._raw.find(filter, *args, **kwargs)
+        projection = args[0] if args else kwargs.get("projection")
+        if len(args) > 1 or set(kwargs) - _PG_READ_KWARGS:
+            self._rt.bump(self._name, "pg_fallback_find_args")
+            return self._raw.find(filter, *args, **kwargs)
+        try:
+            sqlfilter.where(filter)  # valida que se pueda traducir antes de prometer un cursor
+            return PgCursor(self, filter, projection, kwargs.get("sort"), kwargs.get("skip", 0), kwargs.get("limit", 0))
+        except Exception as exc:
+            self._fallback("find", exc)
+            return self._raw.find(filter, *args, **kwargs)
+
+    def find_one(self, filter=None, *args, **kwargs):
+        if self._mode == "dual":
+            return self._raw.find_one(filter, *args, **kwargs)
+        if self._mode == "shadow":
+            result = self._raw.find_one(filter, *args, **kwargs)
+            self._shadow(lambda: self._compare_find_one(filter, args, kwargs, result))
+            return result
+        if not isinstance(filter, (dict, type(None))) or len(args) > 1 or set(kwargs) - _PG_READ_KWARGS:
+            self._rt.bump(self._name, "pg_fallback_find_one_args")
+            return self._raw.find_one(filter, *args, **kwargs)
+        try:
+            docs = self._pg_find(filter, args[0] if args else kwargs.get("projection"),
+                                 kwargs.get("sort"), kwargs.get("skip", 0), 1)
+            return docs[0] if docs else None
+        except Exception as exc:
+            self._fallback("find_one", exc)
+            return self._raw.find_one(filter, *args, **kwargs)
+
+    def count_documents(self, filter, *args, **kwargs):
+        if self._mode == "dual" or args or kwargs:
+            return self._raw.count_documents(filter, *args, **kwargs)
+        if self._mode == "shadow":
+            result = self._raw.count_documents(filter)
+            self._shadow(lambda: self._compare_value("count_documents", filter, result,
+                                                     lambda: self._rt.store.count(self._name, sqlfilter.where(filter), [])))
+            return result
+        try:
+            return self._rt.store.count(self._name, sqlfilter.where(filter), [])
+        except Exception as exc:
+            self._fallback("count_documents", exc)
+            return self._raw.count_documents(filter)
+
+    def estimated_document_count(self, *args, **kwargs):
+        if self._mode != "postgres" or args or kwargs:
+            return self._raw.estimated_document_count(*args, **kwargs)
+        try:
+            return self._rt.store.count(self._name, sqlfilter.where(None), [])
+        except Exception as exc:
+            self._fallback("estimated_document_count", exc)
+            return self._raw.estimated_document_count()
+
+    def _pg_distinct(self, key, filter_):
+        values, seen = [], set()
+        for doc in self._pg_find(filter_, {key: 1}, None, 0, 0):
+            node = doc
+            for part in key.split("."):
+                node = node.get(part) if isinstance(node, dict) else None
+            for value in (node if isinstance(node, list) else [node]):
+                if value is None and node is None:
+                    continue
+                marker = codec.encode_doc({"v": value})
+                if marker not in seen:
+                    seen.add(marker)
+                    values.append(value)
+        return values
+
+    def distinct(self, key, filter=None, *args, **kwargs):
+        if self._mode == "dual" or args or kwargs:
+            return self._raw.distinct(key, filter, *args, **kwargs)
+        if self._mode == "shadow":
+            result = self._raw.distinct(key, filter)
+            self._shadow(lambda: self._compare_value(
+                f"distinct:{key}", filter, sorted(codec.encode_doc({"v": v}) for v in result),
+                lambda: sorted(codec.encode_doc({"v": v}) for v in self._pg_distinct(key, filter))))
+            return result
+        try:
+            return self._pg_distinct(key, filter)
+        except Exception as exc:
+            self._fallback("distinct", exc)
+            return self._raw.distinct(key, filter)
+
+    # ── Comparación en modo shadow ──────────────────────────────────────────────
+    def _shadow(self, compare):
+        try:
+            compare()
+        except sqlfilter.Unsupported:
+            self._rt.bump(self._name, "shadow_unsupported")
+        except Exception:
+            self._rt.bump(self._name, "shadow_errors")
+            log.exception("pgmirror shadow compare failed for %s", self._name)
+
+    def _settled(self, check) -> bool:
+        """La copia es asíncrona: si no cuadra y hay copias pendientes, espera un
+        momento y vuelve a comparar antes de llamarlo diferencia."""
+        if check():
+            return True
+        if self._rt.worker.pending():
+            self._rt.worker.flush(timeout=0.5)
+            return check()
+        return False
+
+    def _report(self, operation, filter_, detail):
+        self._rt.bump(self._name, "shadow_diffs")
+        self._rt.store.record_diff(self._name, operation, f"filter={filter_!r} {detail}")
+        log.warning("pgmirror shadow diff %s.%s: %s", self._name, operation, detail)
+
+    def _compare_value(self, operation, filter_, mongo_value, pg_value_fn):
+        holder = {}
+
+        def check():
+            holder["pg"] = pg_value_fn()
+            return holder["pg"] == mongo_value
+        if self._settled(check):
+            self._rt.bump(self._name, "shadow_ok")
+        else:
+            self._report(operation, filter_, f"mongo={mongo_value!r} postgres={holder.get('pg')!r}")
+
+    def _compare_find_one(self, filter_, args, kwargs, mongo_doc):
+        projection = args[0] if args else kwargs.get("projection")
+        if mongo_doc is None:
+            return self._compare_value("find_one(none)", filter_, 0,
+                                       lambda: self._rt.store.count(self._name, sqlfilter.where(filter_), []))
+        if "_id" not in mongo_doc:
+            self._rt.bump(self._name, "shadow_unsupported")
+            return
+        # El mismo documento debe existir en Postgres, cumplir el filtro y ser igual.
+        same = {"$and": [filter_ or {}, {"_id": mongo_doc["_id"]}]}
+        holder = {}
+
+        def check():
+            docs = self._pg_find(same, projection, None, 0, 1)
+            holder["pg"] = docs[0] if docs else None
+            return holder["pg"] is not None and codec.doc_hash(holder["pg"]) == codec.doc_hash(mongo_doc)
+        if self._settled(check):
+            self._rt.bump(self._name, "shadow_ok")
+        else:
+            self._report("find_one", filter_, f"_id={mongo_doc['_id']!r} postgres={'missing' if holder.get('pg') is None else 'different'}")
+
+
+def status() -> dict:
+    """Para el panel/endpoint de administración."""
+    rt = _runtime
+    return {
+        "enabled": config.enabled(),
+        "runtime": rt is not None,
+        "pending": rt.worker.pending() if rt else 0,
+        "dirty": sorted(rt.worker.dirty) if rt else [],
+        "worker": dict(rt.worker.stats) if rt else {},
+        "collections": dict(rt.stats) if rt else {},
+    }

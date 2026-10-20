@@ -14,16 +14,6 @@ import requests
 import urllib3
 from bs4 import BeautifulSoup
 from bson import ObjectId
-from pymongo import MongoClient
-from functools import lru_cache
-
-
-@lru_cache(maxsize=1)
-def _standalone_client():
-    import os
-    return MongoClient(os.getenv("MONGODB_URI", "mongodb://localhost:27017/"),
-                       connect=False, maxPoolSize=20, serverSelectionTimeoutMS=5000,
-                       connectTimeoutMS=5000, socketTimeoutMS=8000)
 
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -382,11 +372,12 @@ class WebsiteScraper:
             "Contacto General": ["contacto", "atencion", "informes", "recepcion"],
         }
 
-        # Conexión MongoDB
-        import os
+        # Conexión MongoDB: la misma de toda la app (MongoDBManager). Antes abría
+        # un cliente propio con la base "comercial" por defecto (con una m, distinta
+        # de la real "commercial") y quedaba fuera de la capa de migración a Postgres.
         if db is None:
-            client = _standalone_client()
-            db = client[os.getenv("DATABASE_NAME", "comercial")]
+            from app.database import MongoDBManager
+            db = MongoDBManager().db
         self.companies_col = db["companies"]
         self.contacts_col = db["contacts"]
         self.scraping_runs_col = db["scraping_runs"]

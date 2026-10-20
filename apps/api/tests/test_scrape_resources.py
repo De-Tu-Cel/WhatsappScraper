@@ -215,7 +215,8 @@ def test_indexes_are_non_unique_and_one_failure_does_not_skip_rest():
 def test_scraper_can_reuse_pipeline_database_without_creating_client():
     from app.scraper import WebsiteScraper
     db = MagicMock()
-    with patch('app.scraper.MongoClient') as connect:
+    # Sin `db`, el scraper usa la conexión compartida (MongoDBManager); con `db`, no abre ninguna.
+    with patch('app.database.MongoDBManager') as connect:
         scraper = WebsiteScraper(db=db)
     connect.assert_not_called()
     assert scraper.companies_col is db['companies']

@@ -6605,6 +6605,19 @@ def api_service_check(body: dict, x_user_token: Optional[str] = Header(None)):
     }}
 
 
+@router.get("/admin/pgmirror/status")
+def api_pgmirror_status(x_user_token: Optional[str] = Header(None)):
+    """Estado de la migración a Postgres en ESTE proceso (docs/MIGRACION_POSTGRES.md):
+    modo por colección, copias pendientes, colecciones por conciliar y diferencias
+    encontradas en modo shadow. Nunca expone la URL de Postgres."""
+    _require_admin(x_user_token)
+    from app import pgmirror
+    from app.pgmirror import config as pg_config
+    import os as _os
+    modes = {k[len("DB_MODE_"):].lower(): v for k, v in _os.environ.items() if k.startswith("DB_MODE_")}
+    return {**pgmirror.status(), "modes": modes, "enabled": pg_config.enabled()}
+
+
 @router.get("/admin/instances/metrics")
 def api_instances_metrics(x_user_token: Optional[str] = Header(None), range: str = "week",
                            year: Optional[int] = None, month: Optional[int] = None):

@@ -1,0 +1,36 @@
+"""Interruptores de la migración Mongo → Postgres (docs/MIGRACION_POSTGRES.md).
+
+Sin POSTGRES_URL todo se queda exactamente como hoy (solo Mongo). Cada colección
+se mueve por separado con DB_MODE_<COLECCION> (p. ej. DB_MODE_MESSAGE_TEMPLATES):
+
+  mongo     — como hoy; la capa ni se mete (valor por defecto).
+  dual      — todo sigue en Mongo; cada escritura se copia a Postgres en segundo plano.
+  shadow    — dual + lee también de Postgres, compara y registra diferencias;
+              responde con lo de Mongo.
+  postgres  — dual + lee de Postgres (lo no traducible vuelve a Mongo).
+
+Regresar = poner otra vez `mongo` (o `dual`) y reiniciar el backend.
+"""
+import os
+import re
+
+MODES = ("mongo", "dual", "shadow", "postgres")
+
+
+def postgres_url() -> str:
+    return os.getenv("POSTGRES_URL", "").strip()
+
+
+def enabled() -> bool:
+    return bool(postgres_url())
+
+
+def env_name(collection: str) -> str:
+    return "DB_MODE_" + re.sub(r"[^A-Za-z0-9]", "_", collection).upper()
+
+
+def collection_mode(collection: str) -> str:
+    if not enabled():
+        return "mongo"
+    mode = os.getenv(env_name(collection), "mongo").strip().lower()
+    return mode if mode in MODES else "mongo"

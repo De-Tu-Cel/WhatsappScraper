@@ -34,13 +34,28 @@ jobs:
     defaults:
       run:
         working-directory: apps/api
+    # Postgres desechable para las pruebas de la migración (tests/test_pgmirror.py).
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app_ci_only
+          POSTGRES_DB: commercial
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app -d commercial"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      TEST_POSTGRES_URL: postgresql://app:app_ci_only@127.0.0.1:5432/commercial
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
       - name: Run test suite
         run: python -m pytest tests/ -q
 

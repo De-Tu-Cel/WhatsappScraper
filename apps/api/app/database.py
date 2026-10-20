@@ -456,8 +456,13 @@ def _get_client() -> MongoClient:
 class MongoDBManager:
     def __init__(self):
         self.client = _get_client()
-        self.db = self.client[DATABASE_NAME]
-        self.fs = GridFS(self.db)
+        # raw_db: pymongo puro. db: lo mismo, salvo que la migración a Postgres
+        # (app/pgmirror, docs/MIGRACION_POSTGRES.md) esté activa para alguna
+        # colección — sin POSTGRES_URL es exactamente el mismo objeto.
+        self.raw_db = self.client[DATABASE_NAME]
+        from app.pgmirror import wrap_database
+        self.db = wrap_database(self.raw_db)
+        self.fs = GridFS(self.raw_db)
 
     def get_classifier_settings(self) -> dict:
         """Umbrales configurables del flujo T1/T2 (Settings > Clasificación). Sin

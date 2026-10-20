@@ -161,6 +161,22 @@ def test_the_level_is_the_one_analytics_shows_even_for_a_single_number_company(c
     assert not any("se estimó" in a for a in ev["info"]["avisos"])
 
 
+def test_the_exact_classification_is_shown_and_can_be_changed(client):
+    c, cid = client
+    ev = c.post("/api/evaluaciones", json={"company_id": cid, "usar_llm": False}, headers=H).json()
+    assert ev["editable"]["clasificacion"] == "automatico" and ev["info"]["clasificacion_analisis"] == "automatico"
+    assert {"id": "agente_ia", "nombre": "Agente IA", "nivel": 4} in ev["clasificaciones"]
+    r = c.put(f"/api/evaluaciones/{ev['id']}", json={"clasificacion": "agente_ia"}, headers=H)
+    assert r.status_code == 200 and r.json()["editable"]["nivel"] == 4 and r.json()["editable"]["clasificacion"] == "agente_ia"
+    pagina = c.get(f"/api/evaluaciones/{ev['id']}/html", headers=H).text
+    assert '"nombreHoy":"Agente IA"' in pagina  # bajo "Nivel 4 de 5"; la barra sigue con "Bot de atención"
+    assert c.put(f"/api/evaluaciones/{ev['id']}", json={"clasificacion": "pendiente"}, headers=H).status_code == 422
+    # El editor anterior mandaba solo el nivel: si ya no cae en la clasificación, va el nombre genérico.
+    r = c.put(f"/api/evaluaciones/{ev['id']}", json={"nivel": 2}, headers=H)
+    assert r.json()["editable"]["nivel"] == 2 and r.json()["editable"]["clasificacion"] is None
+    assert '"nombreHoy"' not in c.get(f"/api/evaluaciones/{ev['id']}/html", headers=H).text
+
+
 def test_pdf_download_for_sharing(client, monkeypatch):
     c, cid = client
     ev = c.post("/api/evaluaciones", json={"company_id": cid, "usar_llm": False}, headers=H).json()

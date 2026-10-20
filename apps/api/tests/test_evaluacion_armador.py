@@ -182,6 +182,8 @@ def test_a_short_chat_with_only_an_automatic_reply_is_read_correctly():
     tipos = [h["tipo"] for h in info["hechos"]["oportunidades"]]
     assert tipos[:2] == ["solo_automatico", "privacidad"]
     assert capa["nivel"]["hoy"] == 1  # solo el automático, como "Automático + sin respuesta"
+    assert capa["nivel"]["clasificacion"] == "automatico_sin_respuesta"
+    assert capa["nivel"]["nombreHoy"] == "Automático + sin respuesta"  # bajo "Nivel 1 de 5", el nombre de Análisis
     assert [o["dato"] for o in capa["oportunidades"]] == ["Solo automático", "Trámite al inicio", "Sin pedido en chat"]
     assert capa["cliente"]["telefono"] == "+57 310 238 8245"
     assert [f["titulo"] for f in capa["fortalezas"]][:2] == ["Respuesta en 4 s", "Bienvenida clara"]
@@ -236,6 +238,24 @@ def test_a_cited_fact_keeps_its_curated_remedy_and_is_never_cut(monkeypatch):
     assert capa["fortalezas"][0]["titulo"] == info["hechos"]["fortalezas"][0]["titulo"]
     assert not any("se recortaron" in a for a in info["avisos"])
     generador.generar_evaluacion(capa)
+
+
+def test_the_six_analytics_classifications_and_their_level():
+    # Los mismos nombres que la columna Resultado de Análisis; un bot con IA es "Agente IA".
+    casos = {("bot", True): "agente_ia", ("menu", True): "agente_ia", ("bot", False): "bot", ("hibrido_bot", True): "bot",
+             ("hibrido", False): "bot", ("hibrido_automatico", False): "automatico", ("automatico", False): "automatico",
+             ("automatico_sin_respuesta", False): "automatico_sin_respuesta", ("humano", False): "humano",
+             ("sin_respuesta", False): "sin_respuesta", ("pendiente", False): None, (None, False): None}
+    for (categoria, ia), esperada in casos.items():
+        assert armador.clasificacion_de({"category": categoria, "is_ai": ia}) == esperada, categoria
+    assert {k: v[1] for k, v in armador.CLASIFICACIONES.items()} == {
+        "sin_respuesta": 1, "automatico_sin_respuesta": 1, "humano": 2, "automatico": 3, "bot": 4, "agente_ia": 4}
+    # Sin clasificación: se deduce de la conversación.
+    sin = {"humanos": 0, "automaticos": 0}
+    assert armador.clasificacion_desde(None, {}, sin) == ("sin_respuesta", "reglas")
+    assert armador.clasificacion_desde(None, {}, {**sin, "automaticos": 1}) == ("automatico_sin_respuesta", "reglas")
+    assert armador.clasificacion_desde(None, {}, {"humanos": 2, "automaticos": 1}) == ("automatico", "reglas")
+    assert armador.clasificacion_desde({"category": "bot", "is_ai": True}, {}, sin) == ("agente_ia", "clasificacion")
 
 
 def test_the_page_never_speaks_to_the_business_as_tu(monkeypatch):

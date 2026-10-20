@@ -69,6 +69,11 @@ def _resumen(doc: dict, completo: bool = False) -> dict:
         out["escala"] = [n["nombre"] for n in generador.leer_json(generador.RAIZ / "config" / "base.json")["nivel"]["escala"]]
         out["editable"] = _editable(doc["cliente"])
         out["limites"] = dict(armador.LIMITES)
+        # Las 6 clasificaciones de Análisis con su nivel: el editor elige una y el nivel sale solo.
+        out["clasificaciones"] = [{"id": k, "nombre": n, "nivel": nv} for k, (n, nv) in armador.CLASIFICACIONES.items()]
+        info = out["info"] = dict(out["info"])
+        if "clasificacion_analisis" not in info and info.get("nivel_fuente") == "clasificacion":  # evaluaciones anteriores
+            info["clasificacion_analisis"] = armador.clasificacion_de({"category": info.get("categoria"), "is_ai": info.get("es_ia")})
         # Para elegir "Se ve en": cada mensaje en texto plano y corto (el HTML del chat ya va escapado).
         out["conversacion"] = [{"i": i, "tipo": m.get("tipo"), "hora": m.get("hora", ""), "pin": m.get("pin"),
                                 "resumen": formato.texto_plano(html.unescape(re.sub(r"<[^>]+>", " ", m.get("texto") or "")), 70)}
@@ -84,7 +89,7 @@ def _editable(capa: dict) -> dict:
     return {
         "nombre": capa["cliente"].get("nombre", ""), "nombreBot": capa["cliente"].get("nombreBot", ""),
         "telefono": capa["cliente"].get("telefono", ""), "logo": capa["cliente"].get("logo"),
-        "nivel": capa["nivel"]["hoy"],
+        "nivel": capa["nivel"]["hoy"], "clasificacion": capa["nivel"].get("clasificacion"),
         "sintesis_titular": html.unescape(titular), "sintesis_texto": html.unescape(texto),
         "fortalezas": copy.deepcopy(capa.get("fortalezas", [])),
         "oportunidades": copy.deepcopy(capa.get("oportunidades", [])),
@@ -114,6 +119,7 @@ class Edicion(BaseModel):
     nombreBot: Optional[str] = Field(None, max_length=60)
     telefono: Optional[str] = Field(None, max_length=30)
     nivel: Optional[int] = Field(None, ge=1, le=4)
+    clasificacion: Optional[str] = Field(None, max_length=40)  # una de armador.CLASIFICACIONES; manda sobre "nivel"
     sintesis_titular: Optional[str] = Field(None, max_length=_L["sintesis_titular"])
     sintesis_texto: Optional[str] = Field(None, max_length=_L["sintesis_texto"])
     fortalezas: Optional[list[Fortaleza]] = Field(None, max_length=3)
@@ -146,8 +152,17 @@ def aplicar_edicion(capa: dict, e: Edicion) -> dict:
         if not logo:
             raise HTTPException(422, "No se pudo usar esa URL: debe ser una imagen PNG, JPG o WEBP pública.")
         armador.poner_logo(capa["cliente"], logo)
-    if e.nivel is not None:
+    if e.clasificacion is not None:
+        if e.clasificacion not in armador.CLASIFICACIONES:
+            raise HTTPException(422, "Clasificación desconocida")
+        nombre, nivel = armador.CLASIFICACIONES[e.clasificacion]
+        capa["nivel"].update({"hoy": nivel, "clasificacion": e.clasificacion, "nombreHoy": nombre})
+    elif e.nivel is not None:
         capa["nivel"]["hoy"] = e.nivel
+        # Solo el nivel: si la clasificación guardada ya no cae en él, va el nombre genérico del nivel.
+        if armador.CLASIFICACIONES.get(capa["nivel"].get("clasificacion"), ("", 0))[1] != e.nivel:
+            capa["nivel"].pop("clasificacion", None)
+            capa["nivel"].pop("nombreHoy", None)
     if e.sintesis_titular is not None or e.sintesis_texto is not None:
         actual = _editable(capa)
         capa["nivel"]["sintesis"] = armador.sintesis_html(
@@ -208,15 +223,18 @@ def _veredicto(db, company_id: str, numero: str, entrada: dict) -> dict | None:
     (Rayogas, 2026-10-20: Análisis decía Bot y la evaluación "estimaba" el nivel); entonces vale
     la de la fila de Análisis de ese número, que es la que ve el equipo."""
     try:
-        from app.classification_compare import report_verdict
+        from app.classification_compare import COMPARISONS, report_verdict
         verdict = report_verdict(db, company_id, numero)
         if verdict:
             return verdict
+        empresa = report_verdict(db, company_id)
         if entrada.get("category"):
-            empresa = report_verdict(db, company_id)
             if empresa and empresa.get("category") == entrada["category"]:
                 return empresa  # la misma, con su diagnóstico
             return {"category": entrada["category"], "is_ai": bool(entrada.get("is_ai"))}
+        comparacion = db.db[COMPARISONS].find_one({"company_id": company_id}, {"numbers": 1}) or {}
+        if empresa and not comparacion.get("numbers"):  # sin entradas por número: la de la empresa es la de su número
+            return empresa
     except Exception as exc:
         log.warning("evaluación %s: sin clasificación (%s)", company_id, exc)
     return None

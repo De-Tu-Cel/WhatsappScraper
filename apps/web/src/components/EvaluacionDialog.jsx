@@ -55,13 +55,6 @@ const ANCHO_HOJA = 880
 const ALTO_HOJA = 1124
 const MAX_OPORTUNIDADES = 3 // lo que cabe en la hoja carta (el servidor pide de 1 a 3)
 const QUIEN = { cliente: 'Cliente', negocio: 'Negocio', nota: 'Nota' }
-// Los mismos nombres que la columna Resultado (Timing + IA) de Análisis.
-const CATEGORIA = {
-  sin_respuesta: 'Sin respuesta', automatico_sin_respuesta: 'Automático + sin respuesta', humano: 'Humano',
-  automatico: 'Automático + humano', hibrido_automatico: 'Automático + humano',
-  bot: 'Bot', menu: 'Bot', hibrido: 'Bot', hibrido_bot: 'Bot',
-}
-const nombreCategoria = (info) => (info?.es_ia && ['bot', 'menu'].includes(info?.categoria) ? 'Agente IA' : CATEGORIA[info?.categoria] || info?.categoria)
 const GUIA_KEY = 'evaluacion_guia_oculta'
 // Ámbar y rojo de texto: en los temas claros de la app (data-theme-mode) se oscurecen para leerse.
 const ambar = { color: '#f59e0b', '[data-theme-mode="light"] &': { color: '#b45309' } }
@@ -78,7 +71,7 @@ const AYUDA = {
   empresa: 'Nombre y logo que salen en el encabezado de la hoja. El logo también es la foto de perfil del negocio en el chat.',
   logoUrl: 'Pega la liga directa a la imagen (PNG, JPG o WEBP). Se descarga y revisa al guardar.',
   nombreBot: 'El nombre con el que aparece el negocio arriba del chat, como en su perfil de WhatsApp.',
-  nivel: 'Dónde está hoy su WhatsApp en la escala de 5 niveles. Se elige solo con la clasificación Timing + IA de Análisis (la columna Resultado); puedes cambiarlo si revisaste la conversación. El 5 (bot de pedidos 24/7) es a donde lo lleva De Tu Cel.',
+  nivel: 'Las 6 clasificaciones Timing + IA de Análisis (columna Resultado), agrupadas en los niveles de la escala. Se elige sola con la de Análisis; cámbiala si revisaste la conversación. En la hoja sale «Nivel N de 5» con el nombre exacto de la clasificación, y la barra mantiene los 5 niveles. El 5 (bot de pedidos 24/7) es a donde lo lleva De Tu Cel.',
   diagnostico: 'La frase en negritas bajo la escala: el resumen del canal en una línea.',
   falta: 'Sigue al diagnóstico: qué le hace falta para pasar de “contestar mensajes” a vender por el chat.',
   fortalezas: 'Lo que el negocio ya hace bien. Reconocerlo hace que la evaluación se sienta justa. Cada una se marca con ✓ verde en un mensaje del negocio.',
@@ -113,11 +106,14 @@ async function leer(res) {
 
 function formularioDesde(ev) {
   const e = ev.editable
+  // Evaluaciones anteriores no guardaban la clasificación: la de Análisis si cae en su nivel, o la primera.
+  const delNivel = (ev.clasificaciones || []).filter((c) => c.nivel === e.nivel)
+  const clasificacion = e.clasificacion || (delNivel.find((c) => c.id === ev.info?.clasificacion_analisis) || delNivel[0])?.id || ''
   const pin = (clave) => e.pines?.[clave] ?? ''
   const ventajaDe = (k) => Object.keys(e.resuelve || {}).find((v) => e.resuelve[v] === String(k + 1)) || ''
   return {
     logo: e.logo || null, logoCambio: null, logoUrl: '',
-    nombre: e.nombre, nombreBot: e.nombreBot, telefono: e.telefono, nivel: e.nivel,
+    nombre: e.nombre, nombreBot: e.nombreBot, telefono: e.telefono, nivel: e.nivel, clasificacion,
     sintesis_titular: e.sintesis_titular, sintesis_texto: e.sintesis_texto,
     fortalezas: e.fortalezas.map((f, k) => ({ uid: nuevoUid(), titulo: f.titulo, texto: f.texto, mensaje: pin(`v${k + 1}`) })),
     oportunidades: e.oportunidades.map((o, k) => ({
@@ -140,6 +136,7 @@ function cuerpoDesde(form, { vistaPrevia = false } = {}) {
   const c = form.logoCambio
   return {
     nombre: form.nombre, nombreBot: form.nombreBot, telefono: form.telefono, nivel: Number(form.nivel),
+    ...(form.clasificacion ? { clasificacion: form.clasificacion } : {}),
     sintesis_titular: form.sintesis_titular, sintesis_texto: form.sintesis_texto,
     fortalezas: form.fortalezas.map(({ titulo, texto }) => ({ titulo, texto })),
     oportunidades: form.oportunidades.map(({ titulo, dato, vimos, oportunidad }) => ({ titulo, dato, vimos, oportunidad })),
@@ -481,6 +478,9 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
   const ocupado = !!estado
   // Los mismos topes que el servidor: con ellos la hoja carta siempre cabe.
   const lim = ev?.limites || {}
+  const clasificaciones = ev?.clasificaciones || []
+  const analisis = clasificaciones.find((c) => c.id === ev?.info?.clasificacion_analisis) || null
+  const elegida = clasificaciones.find((c) => c.id === form?.clasificacion) || null
   const hechos = ev?.info?.hechos || { oportunidades: [], fortalezas: [] }
   const mensajes = useMemo(() => (ev?.conversacion || []).filter((m) => m.tipo in QUIEN), [ev])
   // Cada mensaje lleva una sola marca: los que ya usa otro hallazgo salen como ocupados.
@@ -781,39 +781,56 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
               </Seccion>
 
               <Seccion icono={<SpeedIcon />} titulo="Nivel de experiencia" ayuda={AYUDA.nivel}
-                descripcion={ev.info?.nivel_fuente === 'clasificacion'
-                  ? <>Lo eligió Análisis (Timing + IA): <b style={{ color: 'var(--text)' }}>{nombreCategoria(ev.info)}</b>.</>
-                  : 'Este número no tiene clasificación en Análisis: se estimó con los tiempos de respuesta. Revísalo.'}>
-                <Box role="radiogroup" aria-label="Nivel hoy" sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0.75 }}>
-                  {ev.escala.slice(0, 4).map((nombre, k) => {
-                    const activo = Number(form.nivel) === k + 1
-                    const deAnalisis = ev.info?.nivel_analisis === k + 1
+                descripcion={analisis
+                  ? <>Lo eligió Análisis (Timing + IA): <b style={{ color: 'var(--text)' }}>{analisis.nombre}</b>.</>
+                  : 'Este número no tiene clasificación en Análisis: se dedujo de la conversación. Revísala.'}>
+                <Box role="radiogroup" aria-label="Clasificación del canal hoy" sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0.75 }}>
+                  {[1, 2, 3, 4].map((nivel) => {
+                    const color = NIVEL_COLOR[nivel - 1]
+                    const nivelActivo = Number(form.nivel) === nivel
                     return (
-                      <Box key={nombre} component="button" type="button" role="radio" aria-checked={activo} onClick={() => set('nivel', k + 1)}
-                        sx={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', borderRadius: '10px', p: 1, textAlign: 'center',
-                          border: `1px solid ${activo ? NIVEL_COLOR[k] : 'var(--border)'}`,
-                          bgcolor: activo ? `${NIVEL_COLOR[k]}22` : 'var(--bg)', transition: 'border-color .15s, background-color .15s',
-                          '&:hover': { borderColor: NIVEL_COLOR[k] }, '&:focus-visible': { outline: '2px solid var(--accent)', outlineOffset: 2 } }}>
-                        <Box sx={{ mx: 'auto', mb: 0.5, width: 22, height: 22, borderRadius: '50%', display: 'grid', placeItems: 'center',
-                          bgcolor: activo ? NIVEL_COLOR[k] : 'transparent', border: `2px solid ${NIVEL_COLOR[k]}`,
-                          color: activo ? '#fff' : NIVEL_COLOR[k], fontSize: '0.72rem', fontWeight: 800 }}>{k + 1}</Box>
-                        <Typography sx={{ fontSize: '0.66rem', lineHeight: 1.2, fontWeight: activo ? 700 : 500, color: activo ? 'var(--text)' : 'var(--text-muted)' }}>{nombre}</Typography>
-                        {deAnalisis && (
-                          <Typography component="span" sx={{ display: 'inline-block', mt: 0.5, px: 0.75, borderRadius: '999px', fontSize: '0.58rem', fontWeight: 700,
-                            bgcolor: 'rgba(var(--accent-rgb),0.14)', color: 'var(--accent)' }}>Análisis</Typography>
-                        )}
+                      <Box key={nivel} sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, p: 0.75, borderRadius: '10px',
+                        border: `1px solid ${nivelActivo ? color : 'var(--border)'}`, bgcolor: nivelActivo ? `${color}14` : 'transparent', transition: 'border-color .15s, background-color .15s' }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, minHeight: 30 }}>
+                          <Box sx={{ width: 20, height: 20, flexShrink: 0, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: '0.66rem', fontWeight: 800,
+                            border: `2px solid ${color}`, bgcolor: nivelActivo ? color : 'transparent', color: nivelActivo ? '#fff' : color }}>{nivel}</Box>
+                          <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, lineHeight: 1.15, color: nivelActivo ? 'var(--text)' : 'var(--text-muted)' }}>{ev.escala[nivel - 1]}</Typography>
+                        </Box>
+                        {clasificaciones.filter((c) => c.nivel === nivel).map((c) => {
+                          const activa = form.clasificacion === c.id
+                          return (
+                            <Box key={c.id} component="button" type="button" role="radio" aria-checked={activa} aria-label={`${c.nombre}, nivel ${nivel}`}
+                              onClick={() => { setForm((f) => ({ ...f, clasificacion: c.id, nivel: c.nivel })); setCambios(true) }}
+                              sx={{ all: 'unset', boxSizing: 'border-box', cursor: 'pointer', borderRadius: '8px', px: 0.75, py: 0.6, fontSize: '0.68rem', lineHeight: 1.25,
+                                border: `1px solid ${activa ? color : 'var(--border)'}`, bgcolor: activa ? `${color}2e` : 'var(--bg)',
+                                color: activa ? 'var(--text)' : 'var(--text-muted)', fontWeight: activa ? 700 : 500, transition: 'border-color .15s, background-color .15s',
+                                '&:hover': { borderColor: color }, '&:focus-visible': { outline: '2px solid var(--accent)', outlineOffset: 2 } }}>
+                              {c.nombre}
+                              {analisis?.id === c.id && (
+                                <Box component="span" sx={{ display: 'block', width: 'fit-content', mt: 0.4, px: 0.6, borderRadius: '999px', fontSize: '0.56rem', fontWeight: 700,
+                                  bgcolor: 'rgba(var(--accent-rgb),0.14)', color: 'var(--accent)' }}>Análisis</Box>
+                              )}
+                            </Box>
+                          )
+                        })}
                       </Box>
                     )
                   })}
                 </Box>
-                {ev.info?.nivel_analisis && Number(form.nivel) !== ev.info.nivel_analisis && (
+                {elegida && (
+                  <Typography sx={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                    En la hoja: <b style={{ color: 'var(--text)' }}>Nivel {elegida.nivel} de 5 · {elegida.nombre}</b>
+                  </Typography>
+                )}
+                {analisis && form.clasificacion !== analisis.id && (
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, borderRadius: '10px', border: '1px solid rgba(245,158,11,0.35)', bgcolor: 'rgba(245,158,11,0.08)' }}>
                     <WarningAmberIcon sx={{ fontSize: 17, ...ambar }} />
                     <Typography sx={{ flex: 1, fontSize: '0.74rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-                      Lo cambiaste: Análisis lo clasificó en el nivel {ev.info.nivel_analisis} ({ev.escala[ev.info.nivel_analisis - 1]}).
+                      Lo cambiaste: Análisis lo clasificó como {analisis.nombre} (nivel {analisis.nivel}).
                     </Typography>
-                    <Button size="small" onClick={() => set('nivel', ev.info.nivel_analisis)} sx={{ ...botonSx, fontSize: '0.74rem', color: 'var(--accent)', whiteSpace: 'nowrap' }}>
-                      Usar el de Análisis
+                    <Button size="small" onClick={() => { setForm((f) => ({ ...f, clasificacion: analisis.id, nivel: analisis.nivel })); setCambios(true) }}
+                      sx={{ ...botonSx, fontSize: '0.74rem', color: 'var(--accent)', whiteSpace: 'nowrap' }}>
+                      Usar la de Análisis
                     </Button>
                   </Box>
                 )}

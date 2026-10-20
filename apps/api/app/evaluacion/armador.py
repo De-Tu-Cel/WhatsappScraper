@@ -28,6 +28,18 @@ NIVEL_POR_CATEGORIA = {
     "automatico": 3, "hibrido_automatico": 3,
     "hibrido": 4, "hibrido_bot": 4, "bot": 4, "menu": 4,
 }
+# Las clasificaciones Timing + IA de Análisis (columna Resultado), con el nombre que muestra y
+# el nivel de la escala de 5 de la hoja en el que caen. Bajo "Nivel N de 5" la hoja muestra el
+# nombre exacto (nivel.nombreHoy); la barra sigue con los 5 niveles del diseño.
+CLASIFICACIONES = {
+    "sin_respuesta": ("Sin respuesta", 1),
+    "automatico_sin_respuesta": ("Automático + sin respuesta", 1),
+    "humano": ("Humano", 2),
+    "automatico": ("Automático + humano", 3),
+    "bot": ("Bot", 4),
+    "agente_ia": ("Agente IA", 4),
+}
+_MISMA_CLASIFICACION = {"hibrido_automatico": "automatico", "menu": "bot", "hibrido": "bot", "hibrido_bot": "bot"}
 SINTESIS = {
     1: ("Hoy el canal no responde.", "Cada mensaje sin respuesta es un pedido que se pierde."),
     2: ("Hoy el canal depende de que alguien esté disponible.",
@@ -289,16 +301,32 @@ def elegir_hechos(hechos: dict) -> tuple[list, list]:
 
 
 # ── nivel ──────────────────────────────────────────────────────────────────────
-def nivel_desde(verdict: dict | None, metricas: dict, hechos: dict | None = None) -> tuple[int, str]:
-    if verdict and verdict.get("category") in NIVEL_POR_CATEGORIA:
-        return NIVEL_POR_CATEGORIA[verdict["category"]], "clasificacion"
+def clasificacion_de(verdict: dict | None) -> str | None:
+    """La clasificación de Análisis como la muestra su tabla: un bot con IA es "Agente IA"."""
+    categoria = (verdict or {}).get("category")
+    if categoria in ("bot", "menu") and (verdict or {}).get("is_ai"):
+        return "agente_ia"
+    categoria = _MISMA_CLASIFICACION.get(categoria, categoria)
+    return categoria if categoria in CLASIFICACIONES else None
+
+
+def clasificacion_desde(verdict: dict | None, metricas: dict, hechos: dict | None = None) -> tuple[str, str]:
+    """(clasificación, fuente): la de Análisis si la hay; si no, la que se deduce de la conversación."""
+    clave = clasificacion_de(verdict)
+    if clave:
+        return clave, "clasificacion"
     if hechos is None:
         if metricas.get("primera_respuesta_s") is None:
-            return 1, "reglas"
-        return (3 if metricas["primera_respuesta_s"] <= 10 else 2), "reglas"
-    if not hechos["humanos"]:
-        return 1, "reglas"  # nadie contestó, o solo el mensaje automático (como "Automático + sin respuesta")
-    return (3 if hechos["automaticos"] else 2), "reglas"
+            return "sin_respuesta", "reglas"
+        return ("automatico" if metricas["primera_respuesta_s"] <= 10 else "humano"), "reglas"
+    if not hechos["humanos"]:  # nadie contestó, o solo el mensaje automático
+        return ("automatico_sin_respuesta" if hechos["automaticos"] else "sin_respuesta"), "reglas"
+    return ("automatico" if hechos["automaticos"] else "humano"), "reglas"
+
+
+def nivel_desde(verdict: dict | None, metricas: dict, hechos: dict | None = None) -> tuple[int, str]:
+    clave, fuente = clasificacion_desde(verdict, metricas, hechos)
+    return CLASIFICACIONES[clave][1], fuente
 
 
 def sintesis_html(titular: str, texto: str) -> str:
@@ -707,7 +735,8 @@ def armar_cliente(*, company: dict, thread: list, numero: str, verdict: dict | N
     if not metricas["mensajes"]:
         raise ValueError("No hay conversación con ese número para evaluar.")
     hechos = detectar_hechos(items, metricas)
-    nivel, fuente_nivel = nivel_desde(verdict, metricas, hechos)
+    clasificacion, fuente_nivel = clasificacion_desde(verdict, metricas, hechos)
+    nombre_clasificacion, nivel = CLASIFICACIONES[clasificacion]
     respaldo = hallazgos_por_reglas(items, metricas, nivel, hechos)
     ventajas_ids = {v["id"] for v in giro.get("ventajas", [])}
     origen, notas, quitadas, recortados, sin_ia = "reglas", {"marcas_invalidas": 0, "completadas": 0}, [], 0, False
@@ -766,7 +795,8 @@ def armar_cliente(*, company: dict, thread: list, numero: str, verdict: dict | N
         "cliente": cliente,
         "evaluacion": {"fecha": formato.fecha_evaluacion(ahora or datetime.now(timezone.utc)),
                        "periodo": formato.periodo(metricas["inicio"], metricas["fin"])},
-        "nivel": {"hoy": nivel, "sintesis": sintesis_html(hallazgos["sintesis_titular"], hallazgos["sintesis_texto"])},
+        "nivel": {"hoy": nivel, "clasificacion": clasificacion, "nombreHoy": nombre_clasificacion,
+                  "sintesis": sintesis_html(hallazgos["sintesis_titular"], hallazgos["sintesis_texto"])},
         "fortalezas": [{"titulo": f["titulo"], "texto": f["texto"]} for f in hallazgos["fortalezas"]],
         "oportunidades": [{k: o[k] for k in ("titulo", "dato", "vimos", "oportunidad")} for o in hallazgos["oportunidades"]],
         "resuelve": resuelve,
@@ -778,6 +808,7 @@ def armar_cliente(*, company: dict, thread: list, numero: str, verdict: dict | N
     # El editor muestra de qué clasificación salió el nivel y deja volver a ella si se cambia.
     info = {"origen": origen, "nivel_fuente": fuente_nivel, "categoria": (verdict or {}).get("category"),
             "es_ia": bool((verdict or {}).get("is_ai")), "nivel_analisis": nivel if fuente_nivel == "clasificacion" else None,
+            "clasificacion_analisis": clasificacion if fuente_nivel == "clasificacion" else None,
             "avisos": avisos, "mensajes": metricas["mensajes"],
             "hechos": {lista: [{k: h[k] for k in claves} for h in hechos[lista]] for lista, claves in campos.items()}}
     return capa, info

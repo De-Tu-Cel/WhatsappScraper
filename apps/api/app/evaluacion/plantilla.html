@@ -656,7 +656,7 @@ window.EVALUACION = window.EVALUACION || /*__CONFIG__*/null;
   var etqHoy = C.nivel.etiquetaHoy, etqMeta = C.nivel.etiquetaMeta;
   txt('etq-hoy', etqHoy); txt('etq-meta', etqMeta);
   txt('nivel-hoy', 'Nivel ' + nHoy + ' de ' + N); txt('nivel-meta', 'Nivel ' + nMeta + ' de ' + N);
-  txt('nombre-hoy', C.nivel.escala[nHoy-1].nombre); txt('nombre-meta', C.nivel.escala[nMeta-1].nombre);
+  txt('nombre-hoy', C.nivel.nombreHoy || C.nivel.escala[nHoy-1].nombre); txt('nombre-meta', C.nivel.escala[nMeta-1].nombre);
   txt('nivel-titulo', C.nivel.titulo);
   txt('brecha', C.nivel.brecha || ((PALABRAS[nMeta - nHoy] || (nMeta - nHoy) + ' niveles') + ' por avanzar'));
   html('sintesis', C.nivel.sintesis);

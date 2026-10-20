@@ -1,0 +1,78 @@
+{
+  "industria": {
+    "clave": "restaurantes",
+    "plural": "restaurantes",
+    "Plural": "Restaurantes",
+    "accionDemo": "pedir a domicilio"
+  },
+
+  "nivel": {
+    "escala": [
+      { "nombre": "Sin atención", "color": "#EF4444" },
+      { "nombre": "Solo humano", "color": "#F97316" },
+      { "nombre": "Automático + humano", "color": "#F59E0B" },
+      { "nombre": "Bot de atención", "color": "#22C55E" },
+      { "nombre": "Pedidos y reservas 24/7", "color": "#06c9f7" }
+    ]
+  },
+
+  "ventajas": [
+    { "id": "b1", "icono": "reloj", "titulo": "Pedidos a toda hora", "texto": "Tus clientes piden aunque la cocina esté a tope." },
+    { "id": "b2", "icono": "duda", "titulo": "Menú y dudas al momento", "texto": "Platillos, precios, alérgenos y horarios." },
+    { "id": "b3", "icono": "carrito", "titulo": "Pedido y pago en el chat", "texto": "Arma el pedido, elige entrega y paga sin llamar." },
+    { "id": "b4", "icono": "cal", "titulo": "Reservas automáticas", "texto": "Confirma mesa y envía recordatorio." },
+    { "id": "b6", "icono": "dash", "titulo": "Todo en un dashboard", "texto": "Pedidos, platillos estrella y horas pico." },
+    { "id": "b7", "icono": "estrella", "titulo": "Satisfacción medida", "texto": "Encuesta de 1 a 5 estrellas por pedido." },
+    { "id": "b5", "icono": "persona", "titulo": "Supervisión humana real", "texto": "La tecnología atiende y tu equipo acompaña: un asesor entra cuando el cliente lo necesita.", "destacada": true }
+  ],
+
+  "dashboard": {
+    "titulo": "Dashboard De Tu Cel",
+    "nota": "DATOS DE EJEMPLO: reemplázalos por los de un cliente real del giro.",
+    "kpis": [
+      { "valor": "000", "etiqueta": "pedidos por WhatsApp" },
+      { "valor": "$000", "etiqueta": "ticket promedio" },
+      { "valor": "00%", "etiqueta": "tasa de repetición" },
+      { "valor": "00%", "etiqueta": "pedidos cerrados" },
+      { "valor": "0/5", "etiqueta": "satisfacción promedio" }
+    ],
+    "graficas": [
+      { "tipo": "barras", "titulo": "Pedidos por día", "resaltar": "max",
+        "datos": [["Lun",10],["Mar",12],["Mié",14],["Jue",16],["Vie",30],["Sáb",34],["Dom",22]] },
+      { "tipo": "dona", "titulo": "Tipo de entrega",
+        "datos": [["Domicilio",60],["Para recoger",40]] },
+      { "tipo": "apilada", "titulo": "Método de pago", "cifraTexto": "paga con tarjeta",
+        "datos": [["Tarjeta",50],["Efectivo",30],["Transferencia",20]] }
+    ],
+    "lectura": "<b>Lectura estratégica:</b> texto de ejemplo. Escribe aquí qué decisión permite tomar el dashboard."
+  },
+
+  "conversacion": {
+    "demo": [
+      { "tipo": "dia", "texto": "Hoy" },
+      { "tipo": "cliente", "texto": "Hola, ¿todavía hacen envíos? Quiero pedir para cenar", "hora": "11:05 p.m." },
+      { "tipo": "negocio", "texto": "¡Hola! 👋 Soy el asistente de <b>{{cliente.nombreBot}}</b>. Sí, la cocina recibe pedidos hasta las 11:30 p.m.", "hora": "11:05 p.m.", "pin": "b1" },
+      { "tipo": "negocio", "texto": "Te comparto el menú del día. ¿Qué se te antoja?", "hora": "11:05 p.m.", "pin": "b2" },
+      { "tipo": "opciones", "opciones": ["🍔 Hamburguesas", "🍕 Pizzas", "🥗 Ensaladas"] },
+      { "tipo": "cliente", "texto": "🍕 Pizza grande de pepperoni", "hora": "11:06 p.m." },
+      { "tipo": "negocio", "texto": "¿Entrega a domicilio o pasas por ella?", "hora": "11:06 p.m." },
+      { "tipo": "opciones", "opciones": ["A domicilio", "Paso por ella"] },
+      { "tipo": "cliente", "texto": "A domicilio", "hora": "11:06 p.m." },
+      { "tipo": "negocio", "texto": "Total $000. ¿Cómo prefieres pagar?", "hora": "11:07 p.m." },
+      { "tipo": "opciones", "opciones": ["💳 Liga de pago", "💵 Efectivo"] },
+      { "tipo": "cliente", "texto": "💳 Liga de pago", "hora": "11:07 p.m." },
+      { "tipo": "negocio", "texto": "¡Listo! ✅ Pedido #2081 pagado. Llega en 35 min aprox.", "hora": "11:08 p.m.", "pin": "b3" },
+      { "tipo": "nota-ok", "texto": "Pedido registrado en el dashboard", "pin": "b6" },
+      { "tipo": "nota-ok", "texto": "Un asesor revisa si hay cambios en el pedido", "pin": "b5" },
+      { "tipo": "negocio", "texto": "Por cierto, ¿quieres reservar mesa para el fin de semana?", "hora": "11:08 p.m.", "pin": "b4" },
+      { "tipo": "dia", "texto": "Más tarde" },
+      { "tipo": "negocio", "texto": "Tu pedido fue entregado ✅ ¿Cómo calificas tu experiencia del 1 al 5?", "hora": "11:46 p.m.", "pin": "b7" },
+      { "tipo": "opciones", "opciones": ["⭐ 1", "⭐ 2", "⭐ 3", "⭐ 4", "⭐ 5"] },
+      { "tipo": "cliente", "texto": "⭐ 5", "hora": "11:47 p.m." }
+    ]
+  },
+
+  "referencias": {
+    "lista": []
+  }
+}

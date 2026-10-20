@@ -131,3 +131,7 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix="/api")
+
+from app.api.evaluaciones import router as evaluaciones_router  # noqa: E402
+
+app.include_router(evaluaciones_router, prefix="/api")

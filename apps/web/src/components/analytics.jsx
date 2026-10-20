@@ -36,6 +36,8 @@ import StarIcon from '@mui/icons-material/Star'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf'
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome'
+import EvaluacionDialog from './EvaluacionDialog'
 import SendIcon from '@mui/icons-material/Send'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlined'
@@ -647,6 +649,7 @@ export default function Analytics({ onNavigateToConv }) {
   const [sortDir, setSortDir]     = useState('desc')
   const [botBuilderOpen,  setBotBuilderOpen]  = useState(false)
   const [botBuilderRow,   setBotBuilderRow]   = useState(null)
+  const [evalFor,         setEvalFor]         = useState(null)  // { id, name, number } → EvaluacionDialog
   const [gasBotOpen,      setGasBotOpen]      = useState(false)
   const [gasBotRow,       setGasBotRow]       = useState(null)
   const [classificationSettingsOpen, setClassificationSettingsOpen] = useState(false)
@@ -1214,7 +1217,10 @@ export default function Analytics({ onNavigateToConv }) {
       </Box>
 
       {/* Table / states */}
-      <Box ref={tableRegionRef} data-analytics-table-region sx={{ minHeight: 0, minWidth: 0, width: '100%', display: 'flex', flexDirection: 'column', border: '1px solid var(--border)', borderRadius: '14px' }}>
+      {/* Tan ancho como la tabla, no como la ventana: con la ventana angosta la tabla se desplaza
+          de lado y el borde derecho quedaba a media tabla (2026-10-20). fit-content y no
+          max-content: el max-content de una tabla al 100% en Chrome es de un millón de px. */}
+      <Box ref={tableRegionRef} data-analytics-table-region sx={{ minHeight: 0, minWidth: '100%', width: 'fit-content', display: 'flex', flexDirection: 'column', border: '1px solid var(--border)', borderRadius: '14px' }}>
         {loading ? (
           <TableContainer sx={{
             minHeight: 0, overflow: 'visible',
@@ -1588,6 +1594,23 @@ export default function Analytics({ onNavigateToConv }) {
                           )
                         })()}
                       </Box>
+
+                      {/* Evaluación del canal WhatsApp (one-pager para el prospecto) */}
+                      <Box>
+                        {!hasMultiple && (() => {
+                          const noContact = !row.category || (row.category !== 'sin_respuesta' && !row.total_responses)
+                          return (
+                            <Tooltip title={noContact ? t.analytics.noConvRecord : (lang === 'en' ? 'WhatsApp channel evaluation (one-pager)' : 'Evaluación del canal WhatsApp (one-pager)')}>
+                              <span>
+                                <IconButton size="small" disabled={noContact} onClick={() => setEvalFor({ id: row.company_id, name: row.company_name })}
+                                  sx={{ color: 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.65)' } }}>
+                                  <AutoAwesomeIcon sx={{ fontSize: 16 }} />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          )
+                        })()}
+                      </Box>
                       </Box></TableCell>
                     </TableRow>
 
@@ -1769,6 +1792,17 @@ export default function Analytics({ onNavigateToConv }) {
                               </span>
                             </Tooltip>
                           </Box>
+                          {/* Evaluación del canal WhatsApp por número */}
+                          <Box>
+                            <Tooltip title={!replied && n.category !== 'sin_respuesta' ? t.analytics.noReply : `${lang === 'en' ? 'WhatsApp channel evaluation' : 'Evaluación del canal WhatsApp'} ${shortNum}`}>
+                              <span>
+                                <IconButton size="small" disabled={!replied && n.category !== 'sin_respuesta'} onClick={() => setEvalFor({ id: row.company_id, name: row.company_name, number: n.number })}
+                                  sx={{ color: 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.65)' } }}>
+                                  <AutoAwesomeIcon sx={{ fontSize: 16 }} />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </Box>
                           </Box></TableCell>
                         </TableRow>
                       )
@@ -1851,6 +1885,11 @@ export default function Analytics({ onNavigateToConv }) {
       <AndyBotBuilder open={botBuilderOpen} initialData={botBuilderRow} onClose={() => { setBotBuilderOpen(false); setBotBuilderRow(null) }} />
 
       <GasBotModal open={gasBotOpen} initialData={gasBotRow} onClose={() => { setGasBotOpen(false); setGasBotRow(null) }} />
+
+      {evalFor && (
+        <EvaluacionDialog key={`${evalFor.id}_${evalFor.number || ''}`} open onClose={() => setEvalFor(null)}
+          companyId={evalFor.id} companyName={evalFor.name} number={evalFor.number} />
+      )}
 
       {isAdmin && (
         <ClassificationSettingsModal open={classificationSettingsOpen} onClose={() => setClassificationSettingsOpen(false)} />

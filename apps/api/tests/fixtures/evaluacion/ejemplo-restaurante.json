@@ -1,0 +1,48 @@
+{
+  "industria": "restaurantes",
+  "archivoSalida": "ejemplo-restaurante.html",
+
+  "cliente": {
+    "nombre": "Café Ejemplo",
+    "logo": "",
+    "telefono": "+52 00 0000 0000",
+    "nombreBot": "Café Ejemplo pedidos"
+  },
+
+  "evaluacion": {
+    "fecha": "1 de enero de 2027, 10:00 h",
+    "periodo": "del 1 al 5 de enero de 2027"
+  },
+
+  "nivel": {
+    "hoy": 2,
+    "sintesis": "<b>Hoy el canal depende de que alguien conteste.</b> Se vuelve experiencia cuando el cliente pide, paga y reserva en el mismo chat."
+  },
+
+  "fortalezas": [
+    { "titulo": "Trato cercano", "texto": "Respuestas cordiales en horario." },
+    { "titulo": "Menú disponible", "texto": "Comparten el menú en imagen." },
+    { "titulo": "Confirman pedidos", "texto": "Avisan cuando sale el repartidor." }
+  ],
+
+  "oportunidades": [
+    { "titulo": "El menú no responde dudas", "dato": "Sin respuesta", "vimos": "Texto de ejemplo: qué pasó y cuándo.", "oportunidad": "Resolver al momento las dudas del menú." },
+    { "titulo": "Fuera de horario no hay pedidos", "dato": "0 pedidos de noche", "vimos": "Texto de ejemplo.", "oportunidad": "Tomar pedidos las 24 horas." },
+    { "titulo": "El pago se hace por fuera", "dato": "Pago en puerta", "vimos": "Texto de ejemplo.", "oportunidad": "Que pida y pague en la misma conversación." }
+  ],
+
+  "resuelve": { "b1": "2", "b2": "1", "b3": "3" },
+
+  "conversacion": {
+    "real": [
+      { "tipo": "dia", "texto": "Lunes, 1 de enero de 2027" },
+      { "tipo": "cliente", "texto": "Hola, ¿tienen opciones sin gluten?", "hora": "1:10 p.m.", "pin": "1" },
+      { "tipo": "negocio", "texto": "Hola, buenas tardes 😊 Te comparto el menú", "hora": "1:14 p.m.", "pin": "v1" },
+      { "tipo": "nota", "texto": "La duda no se respondió" },
+      { "tipo": "dia", "texto": "Martes, 2 de enero de 2027" },
+      { "tipo": "cliente", "texto": "Quiero pedir una pizza", "hora": "11:02 p.m." },
+      { "tipo": "nota", "texto": "Sin respuesta hasta el día siguiente", "pin": "2" },
+      { "tipo": "negocio", "texto": "Buen día, para pedidos llámanos al 00 0000 0000", "hora": "10:30 a.m.", "pin": "3" }
+    ]
+  }
+}

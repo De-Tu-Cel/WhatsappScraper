@@ -12,6 +12,10 @@
     python scripts/pg_mirror.py reconcile --all
     # Conteos lado a lado:
     python scripts/pg_mirror.py status
+    # Diferencias de shadow ya revisadas (p. ej. falsas, por un comparador corregido): primero
+    # las muestra; con --confirmar las descarta y la colección vuelve a esperar su tiempo limpio:
+    python scripts/pg_mirror.py revisadas instance_daily_verifications,instances
+    python scripts/pg_mirror.py revisadas instance_daily_verifications --confirmar --nota "carrera entre leer e incrementar"
 
 Lee MONGODB_URI, DATABASE_NAME y POSTGRES_URL del entorno. Nunca imprime URIs.
 Mongo solo se lee. No importa app.database (ese módulo crea índices al conectar).
@@ -107,12 +111,51 @@ def _check(raw_db, store) -> int:
               f"copiados {worker.get('synced', 0)} · errores {worker.get('errors', 0)}")
 
     if store.query("SELECT to_regclass('mongo._shadow_diffs')")[0][0]:
-        rows = store.query("SELECT at, collection, operation, left(detail, 160) FROM mongo._shadow_diffs "
-                           "WHERE at > now() - make_interval(secs => %s) ORDER BY at DESC LIMIT 5", (wait * 3600,))
+        # Solo las del modo actual: las de antes de un cambio de modo o de `revisadas` ya se atendieron.
+        rows = store.query("SELECT d.at, d.collection, d.operation, left(d.detail, 160) FROM mongo._shadow_diffs d "
+                           "LEFT JOIN mongo._modes m ON m.collection = d.collection "
+                           "WHERE d.at > now() - make_interval(secs => %s) AND d.at > coalesce(m.since, '-infinity') "
+                           "ORDER BY d.at DESC LIMIT 5", (wait * 3600,))
         print(f"\nDiferencias de shadow (últimas {wait:g} h): {'ninguna' if not rows else ''}")
         for at, collection, operation, detail in rows:
             print(f"  {at:%Y-%m-%d %H:%M} {collection}.{operation}: {detail}")
     return 0 if all_ok else 2
+
+
+def _reviewed(store, names, confirm: bool, note: str) -> int:
+    """Diferencias de shadow ya revisadas. Sin --confirmar solo las muestra. Con --confirmar
+    pone en cero los contadores de shadow de esas colecciones y reinicia su reloj: vuelven a
+    necesitar PGMIRROR_WAIT_HOURS en su modo y MIN_SHADOW_CHECKS comparaciones limpias, ahora
+    con el código nuevo. El detalle se queda en mongo._shadow_diffs y la nota en mongo._reviews."""
+    from app.pgmirror import health
+    health.ensure_meta(store)
+    store.query("CREATE TABLE IF NOT EXISTS mongo._reviews (id bigserial PRIMARY KEY, "
+                "at timestamptz NOT NULL DEFAULT now(), collection text NOT NULL, note text)")
+    has_diffs = store.query("SELECT to_regclass('mongo._shadow_diffs')")[0][0]
+    for name in names:
+        mode = store.query("SELECT mode FROM mongo._modes WHERE collection = %s", (name,))
+        if not mode:
+            print(f"\n{name}: el backend no la tiene registrada; no se hace nada.")
+            continue
+        counts = {k: int(n) for k, n in store.query(
+            "SELECT key, sum(n) FROM mongo._counters WHERE collection = %s "
+            "AND key IN ('shadow_ok', 'shadow_diffs', 'shadow_raced') GROUP BY 1", (name,))}
+        print(f"\n{name} ({mode[0][0]}): {counts.get('shadow_ok', 0)} comparaciones iguales, "
+              f"{counts.get('shadow_diffs', 0)} diferencias")
+        if has_diffs:
+            for at, operation, detail in store.query(
+                    "SELECT at, operation, left(detail, 200) FROM mongo._shadow_diffs WHERE collection = %s "
+                    "ORDER BY at DESC LIMIT 5", (name,)):
+                print(f"  {at:%Y-%m-%d %H:%M} {operation}: {detail}")
+        if confirm:
+            store.query("DELETE FROM mongo._counters WHERE collection = %s "
+                        "AND key IN ('shadow_ok', 'shadow_diffs', 'shadow_raced')", (name,))
+            store.query("UPDATE mongo._modes SET since = now() WHERE collection = %s", (name,))
+            store.query("INSERT INTO mongo._reviews (collection, note) VALUES (%s, %s)", (name, note or None))
+            print("  → descartadas; su reloj empieza de nuevo ahora.")
+    if not confirm:
+        print("\nNo se cambió nada. Si ya se entendió la causa, repite con --confirmar (y --nota \"por qué\").")
+    return 0
 
 
 def main(argv=None):
@@ -124,12 +167,18 @@ def main(argv=None):
     rec.add_argument("--fix", action="store_true", help="copiar/borrar para dejar Postgres igual a Mongo")
     sub.add_parser("status")
     sub.add_parser("check", help="estado de las colecciones activas y si ya pueden avanzar de modo")
+    rev = sub.add_parser("revisadas", help="muestra las diferencias de shadow; con --confirmar las descarta y reinicia el reloj")
+    rev.add_argument("collections", help="nombre o lista separada por comas")
+    rev.add_argument("--confirmar", action="store_true")
+    rev.add_argument("--nota", default="", help="por qué se descartan (queda en mongo._reviews)")
     args = parser.parse_args(argv)
 
     raw_db, store = _connect()
     try:
         if args.cmd == "check":
             return _check(raw_db, store)
+        if args.cmd == "revisadas":
+            return _reviewed(store, [n.strip() for n in args.collections.split(",") if n.strip()], args.confirmar, args.nota)
         if args.cmd == "status":
             for name in _collections(raw_db, None, True):
                 pg = len(store.hashes(name))

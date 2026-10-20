@@ -457,6 +457,41 @@ def test_shadow_compares_in_the_background_and_tolerates_ties(routed, coll_name)
 
 
 @needs_pg
+def test_shadow_does_not_flag_a_write_made_right_after_the_read(routed, coll_name, monkeypatch, store):
+    # Prod 2026-10-20: reserve_verification_slot lee el contador y enseguida hace $inc. Cuando
+    # la sombra comparaba, Postgres ya traía el valor nuevo y la foto de Mongo era la de antes:
+    # 245 "diferencias" con Postgres idéntico a Mongo. Se reproduce reteniendo las comparaciones.
+    raw, db = routed("shadow")
+    col = db[coll_name]
+    col.insert_one({"_id": "verification:2026-10-20:gely", "instance": "gely", "date": "2026-10-20", "count": 0})
+    routing._runtime.worker.flush(10)
+    retenidas = []
+    monkeypatch.setattr(routing._runtime.shadow, "submit", lambda fn: retenidas.append(fn) or True)
+    for _ in range(3):
+        col.find_one({"instance": "gely", "date": "2026-10-20"}, sort=[("count", -1)])
+        list(col.find({"instance": "gely"}))
+        col.count_documents({"count": {"$lt": 2}})
+        col.distinct("count")
+        col.find_one_and_update({"_id": "verification:2026-10-20:gely", "count": {"$lt": 10}}, {"$inc": {"count": 1}})
+    routing._runtime.worker.flush(10)  # Postgres ya tiene count=3; las fotos de Mongo dicen 0, 1 y 2
+    for fn in retenidas:
+        fn()
+    stats = routing._runtime.stats[coll_name]
+    assert stats.get("shadow_diffs", 0) == 0, stats
+    # 11 necesitaron releer Mongo; la 3.ª count_documents ($lt 2 con count=2) ya cuadraba: 0 y 0.
+    assert stats["shadow_ok"] == 12 and stats["shadow_raced"] == 11
+
+    # Una diferencia de verdad (Postgres distinto de Mongo, aun leyendo Mongo otra vez) se sigue reportando.
+    store.upsert(coll_name, [{"_id": "verification:2026-10-20:gely", "instance": "gely", "date": "2026-10-20", "count": 99}])
+    retenidas.clear()
+    col.find_one({"instance": "gely", "date": "2026-10-20"}, sort=[("count", -1)])
+    col.count_documents({"count": 3})
+    for fn in retenidas:
+        fn()
+    assert routing._runtime.stats[coll_name]["shadow_diffs"] == 2
+
+
+@needs_pg
 def test_reconcile_fix_is_the_initial_load_and_is_idempotent(store, coll_name):
     raw = mongomock.MongoClient().db
     raw[coll_name].insert_many([{"i": i} for i in range(1200)])

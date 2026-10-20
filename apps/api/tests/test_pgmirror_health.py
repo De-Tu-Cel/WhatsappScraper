@@ -38,7 +38,7 @@ def _cleanup(names):
     with psycopg.connect(TEST_PG, autocommit=True) as conn:
         for name in names:
             conn.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier("mongo", name)))
-        for table in ("_modes", "_counters", "_reconcile_log"):
+        for table in ("_modes", "_counters", "_reconcile_log", "_shadow_diffs", "_reviews"):
             if conn.execute("SELECT to_regclass(%s)", (f"mongo.{table}",)).fetchone()[0]:
                 conn.execute(sql.SQL("DELETE FROM {} WHERE collection = ANY(%s)").format(sql.Identifier("mongo", table)), (list(names),))
         if conn.execute("SELECT to_regclass('mongo._runtime')").fetchone()[0]:
@@ -206,6 +206,45 @@ def test_check_command_says_when_a_collection_can_advance(env, monkeypatch, caps
     assert cli.main(["check"]) == 0
     line = next(row for row in capsys.readouterr().out.splitlines() if row.startswith(a))
     assert " OK " in line and "LISTA para shadow" in line
+
+
+@needs_pg
+def test_reviewed_shadow_diffs_are_shown_then_discarded_and_the_clock_restarts(env, monkeypatch, capsys):
+    # Prod 2026-10-20: 245 diferencias falsas (comparador corregido) bloqueaban hasta pasado mañana.
+    from app.pgmirror.store import Store
+    raw, rt, _a, b = env
+    raw[b].insert_many([{"i": i} for i in range(3)])
+    rt.monitor.tick()
+    rt.worker.flush(10)
+    rt.store.query("UPDATE mongo._modes SET since = now() - interval '4 days' WHERE collection = %s", (b,))
+    rt.bump(b, "shadow_ok", 30)
+    rt.bump(b, "shadow_diffs", 2)
+    rt.store.record_diff(b, "find_one:contenido", "filter={'instance': 'gely-wa'} mongo=1 postgres=1")
+    rt.monitor.tick()
+    spec = importlib.util.spec_from_file_location("pg_mirror_cli", pathlib.Path(__file__).resolve().parents[1] / "scripts" / "pg_mirror.py")
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    monkeypatch.setattr(cli, "_connect", lambda: (raw, Store(TEST_PG)))
+
+    def linea():
+        cli.main(["check"])
+        out = capsys.readouterr().out
+        return next(row for row in out.splitlines() if row.startswith(b)), out
+    fila, _ = linea()
+    assert "2 diferencias de shadow" in fila
+
+    assert cli.main(["revisadas", b]) == 0  # sin --confirmar: solo muestra
+    out = capsys.readouterr().out
+    assert "30 comparaciones iguales, 2 diferencias" in out and "gely-wa" in out and "No se cambió nada" in out
+    assert "2 diferencias de shadow" in linea()[0]
+
+    assert cli.main(["revisadas", b, "--confirmar", "--nota", "carrera entre leer e incrementar"]) == 0
+    capsys.readouterr()
+    fila, out = linea()
+    assert "esperar" in fila and "diferencias" not in fila  # reloj nuevo, sin las descartadas
+    assert "gely-wa" not in out  # el listado del check ya no las muestra
+    assert rt.store.query("SELECT count(*) FROM mongo._shadow_diffs WHERE collection = %s", (b,))[0][0] == 1  # la evidencia queda
+    assert rt.store.query("SELECT note FROM mongo._reviews WHERE collection = %s", (b,))[0][0] == "carrera entre leer e incrementar"
 
 
 @needs_pg

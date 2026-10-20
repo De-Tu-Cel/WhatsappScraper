@@ -146,6 +146,8 @@ Por cada colección activa: modo, días en ese modo, conteos Mongo/Postgres, si 
 3. (sin paso manual: la conciliación es automática)
 4. 24 h en `dual` sin correcciones (`PGMIRROR_WAIT_HOURS`, se acortó de 3 días el 2026-10-20 para acelerar) → `check` dice `LISTA para shadow`. Si hubo correcciones, el espejo en vivo se saltó algo: se investiga antes de avanzar. `shadow` no cambia lo que ve la app (siempre responde Mongo), así que también se puede encender sin esperar.
 5. `<x>=shadow` en `DB_MODES`: lee de las dos, compara y responde con Mongo. Revisar `shadow_diffs` en el estado y la tabla `mongo._shadow_diffs`. Cada diferencia se entiende y se corrige antes de seguir.
+   - Si no cuadra, antes de llamarlo diferencia se vuelve a leer Mongo en ese momento: la app suele leer un documento y escribirlo enseguida (`reserve_verification_slot`: `find_one` y luego `$inc`; `service_health.record`), y Postgres ya trae lo nuevo. Sin esa relectura, el 2026-10-20 salieron 245 diferencias falsas en `instance_daily_verifications` (y 2 en `instances`, 1 en `service_health`) con Postgres idéntico a Mongo.
+   - Diferencias ya entendidas: `python scripts/pg_mirror.py revisadas <colecciones>` las muestra; con `--confirmar --nota "por qué"` se descartan y la colección vuelve a esperar su tiempo limpio con el código nuevo. El detalle queda en `mongo._shadow_diffs` y la nota en `mongo._reviews`.
 6. `<x>=postgres` en `DB_MODES`: lee de Postgres, sigue escribiendo en las dos. **Regresar = poner `dual` o quitarla de `DB_MODES` y redesplegar.**
 7. Tras días estables en `postgres`: se construye la tabla normalizada definitiva y Postgres pasa a ser la fuente de verdad (esa parte se diseña colección por colección, empezando por las de la etapa 1).
 

@@ -1,0 +1,84 @@
+{
+  "industria": "gaseras",
+  "archivoSalida": "diesgas.html",
+
+  "cliente": {
+    "nombre": "Diesgas",
+    "logo": "assets/clientes/diesgas-logo.webp",
+    "logoAlt": "Diesgas, Seguro y Confiable",
+    "avatar": "assets/clientes/diesgas-avatar.webp",
+    "telefono": "+52 33 1117 1010",
+    "nombreBot": "Diesgas pedidos",
+    "avatarBot": "assets/clientes/diesgas-pedidos-avatar.webp"
+  },
+
+  "evaluacion": {
+    "fecha": "9 de octubre de 2026, 08:55 h",
+    "periodo": "del 10 de agosto al 9 de octubre de 2026"
+  },
+
+  "nivel": {
+    "hoy": 3,
+    "sintesis": "<b>Hoy el canal da servicio: saluda y canaliza.</b> Se vuelve experiencia cuando el cliente resuelve y compra en el mismo chat, a cualquier hora."
+  },
+
+  "fortalezas": [
+    { "titulo": "Respuesta en 3 s", "texto": "Al instante, de día y de noche." },
+    { "titulo": "Menú que orienta", "texto": "Estacionario o servicio técnico." },
+    { "titulo": "Trato amable", "texto": "Cortesía del equipo en horario." }
+  ],
+
+  "oportunidades": [
+    {
+      "titulo": "La duda del tanque estacionario quedó abierta",
+      "dato": "Sin respuesta",
+      "vimos": "La pregunta del 10 de agosto, 11:08 a.m., no tuvo respuesta.",
+      "oportunidad": "Resolver al momento las dudas frecuentes."
+    },
+    {
+      "titulo": "Fuera de horario, el cliente espera",
+      "dato": "14 h de espera",
+      "vimos": "A las 6:51 p.m. solo hubo un aviso; respondieron a las 9:13 a.m. del día siguiente.",
+      "oportunidad": "Atender y tomar pedidos las 24 horas."
+    },
+    {
+      "titulo": "El pedido sale de WhatsApp",
+      "dato": "Pedido por llamada",
+      "vimos": "Para comprar, recibió dos teléfonos: 442 216 1010 y 442 592 9434.",
+      "oportunidad": "Que pida y pague en la misma conversación."
+    }
+  ],
+
+  "resuelve": { "b1": "2", "b2": "1", "b3": "3" },
+
+  "conversacion": {
+    "real": [
+      { "tipo": "dia", "texto": "Lunes, 10 de agosto de 2026" },
+      { "tipo": "cliente", "texto": "Hol", "hora": "11:05 a.m." },
+      { "tipo": "negocio", "texto": "Gracias por comunicarte a Diesgas🔥<br>Te atiende Gaby un gusto🙂<br>En un momento serás atendido <b>Menciona tu nombre y en que puedo ayudarte</b>", "hora": "11:05 a.m.", "pin": "v1" },
+      { "tipo": "cliente", "texto": "Buenas tardes", "hora": "11:06 a.m." },
+      { "tipo": "negocio", "texto": "¡Hola! Gracias por comunicarte a <b>Diesgas</b> 😁 atenderé tus pedidos de Gas LP y brindaré información sobre nuestros servicios.<br><i>¿Que tipo de servicio requieres?</i><br>🔷 Estacionario (lo suministran pipas, se rellena con manguera)<br>🔷 Servicio técnico<br><b>Guarda este número en tus contactos como</b> <i>Diesgas pedidos</i>", "hora": "11:06 a.m.", "pin": "v2" },
+      { "tipo": "negocio", "texto": "Hola buenas tardes, asu", "hora": "11:06 a.m." },
+      { "tipo": "cliente", "texto": "¡Hola! Soy Andrés. Quisiera saber más sobre sus servicios de Gas LP, especialmente para hogares. ¿Me pueden contar un poco?", "hora": "11:06 a.m." },
+      { "tipo": "negocio", "texto": "a sus ordenes!", "hora": "11:06 a.m." },
+      { "tipo": "negocio", "texto": "Hola buenos días, cómo podemos apoyarle?", "hora": "11:06 a.m.", "pin": "v3" },
+      { "tipo": "cliente", "texto": "¡Hola! La verdad estoy interesado en conocer más sobre el servicio de tanque estacionario. ¿Cómo funciona el proceso para obtener uno?", "hora": "11:08 a.m.", "pin": "1" },
+      { "tipo": "nota", "texto": "Sin respuesta en el chat" },
+      { "tipo": "dia", "texto": "Jueves, 8 de octubre de 2026" },
+      { "tipo": "cliente", "texto": "Hola", "hora": "6:51 p.m." },
+      { "tipo": "negocio", "texto": "Gracias por comunicarte a Diesgas🔥<br>Te atiende Gaby un gusto🙂<br>En un momento serás atendido <b>Menciona tu nombre y en que puedo ayudarte</b>", "hora": "6:51 p.m." },
+      { "tipo": "negocio", "texto": "Nos encontramos fuera de nuestro horario de atención ⏰📲<br><i>pronto estaremos de vuelta</i>", "hora": "6:51 p.m.", "pin": "2" },
+      { "tipo": "cliente", "texto": "Richie", "hora": "6:52 p.m." },
+      { "tipo": "nota", "texto": "14 h 21 min después" },
+      { "tipo": "dia", "texto": "Viernes, 9 de octubre de 2026" },
+      { "tipo": "negocio", "texto": "Hola buenos días, como le podemos apoyar?", "hora": "9:13 a.m." },
+      { "tipo": "cliente", "texto": "Hola, buenos días. Ando buscando un proveedor de gas LP para mi departamento. Me pueden ayudar?", "hora": "9:14 a.m." },
+      { "tipo": "negocio", "texto": "Claro, le comparto los teléfonos de pedido <u>442 216 1010</u> y <u>442 592 9434</u>", "hora": "9:15 a.m.", "pin": "3" },
+      { "tipo": "nota", "texto": "El pedido continúa por llamada" }
+    ]
+  },
+
+  "impresion": {
+    "hoy": [0, 9, 10, 11, 14, 16, 17, 20, 21]
+  }
+}

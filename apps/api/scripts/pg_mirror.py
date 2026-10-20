@@ -96,6 +96,25 @@ def _check(raw_db, store) -> int:
     print(f"\n(Para avanzar una colección: {wait:g} h en su modo sin correcciones ni diferencias "
           f"(PGMIRROR_WAIT_HOURS). CORREGIDOS: últimas {wait:g} h; SHADOW: hoy y {window_days} día(s) antes.)")
 
+    # Por qué una colección en shadow junta pocas comparaciones: sin tráfico, o lecturas que no
+    # se comparan (y que en modo postgres también se resolverían en Mongo).
+    motivos = {"shadow_unsupported": "consultas que Postgres no traduce (se quedan en Mongo)",
+               "shadow_skipped_large": "resultados de más de 1000 docs", "shadow_skipped_busy": "cola de comparación llena",
+               "shadow_errors": "errores al comparar"}
+    print("\nLecturas de shadow que no se compararon (no cuentan para avanzar):")
+    sin_comparar = False
+    for name, mode in sorted(active.items()):
+        partes = [f"{counters[(name, k)]} {texto}" for k, texto in motivos.items() if counters.get((name, k))]
+        if mode == "shadow" and partes:
+            sin_comparar = True
+            print(f"  {name}: {', '.join(partes)}")
+    if not sin_comparar:
+        print("  ninguna (las que tienen pocas comparaciones es porque casi no se han leído)")
+    raced = {name: counters.get((name, "shadow_raced"), 0) for name in active if counters.get((name, "shadow_raced"))}
+    if raced:
+        print("Cuadraron al releer Mongo (la app escribió justo después de leer; no es diferencia): "
+              + ", ".join(f"{n} {v}" for n, v in sorted(raced.items())))
+
     print("\nProcesos del backend:")
     procs = store.query("SELECT process, extract(epoch FROM now() - updated_at), status FROM mongo._runtime ORDER BY 2")
     # Reportan cada minuto: los que llevan más de 5 min callados son de un contenedor anterior (redeploy).

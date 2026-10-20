@@ -240,9 +240,14 @@ def test_reviewed_shadow_diffs_are_shown_then_discarded_and_the_clock_restarts(e
 
     assert cli.main(["revisadas", b, "--confirmar", "--nota", "carrera entre leer e incrementar"]) == 0
     capsys.readouterr()
+    rt.bump(b, "shadow_unsupported", 7)
+    rt.bump(b, "shadow_raced", 3)
+    rt.monitor.tick()
     fila, out = linea()
     assert "esperar" in fila and "diferencias" not in fila  # reloj nuevo, sin las descartadas
     assert "gely-wa" not in out  # el listado del check ya no las muestra
+    # Y dice por qué una colección junta pocas comparaciones, y cuántas cuadraron al releer Mongo.
+    assert f"  {b}: 7 consultas que Postgres no traduce" in out and f"{b} 3" in out
     assert rt.store.query("SELECT count(*) FROM mongo._shadow_diffs WHERE collection = %s", (b,))[0][0] == 1  # la evidencia queda
     assert rt.store.query("SELECT note FROM mongo._reviews WHERE collection = %s", (b,))[0][0] == "carrera entre leer e incrementar"
 

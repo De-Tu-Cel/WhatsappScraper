@@ -110,7 +110,9 @@ class Monitor:
     def __init__(self, rt, raw_db, *, start: bool = True):
         self._rt, self._raw_db = rt, raw_db
         self._sent = {}  # (colección, llave) → último valor ya sumado en mongo._counters
-        self._last_dirty_attempt = 0.0
+        # None = nunca: el primer intento es inmediato. (Con 0.0, en una máquina recién
+        # encendida time.monotonic() es menor a 300 y el primer intento se retrasaba.)
+        self._last_dirty_attempt = None
         if start:
             threading.Thread(target=self._run, name="pgmirror-monitor", daemon=True).start()
 
@@ -174,7 +176,8 @@ class Monitor:
             auto_reconcile(self._raw_db, store, self._rt.worker, due, "periodic")
             return
         dirty = sorted(set(self._rt.worker.dirty) & set(active))
-        if dirty and time.monotonic() - self._last_dirty_attempt >= DIRTY_RETRY_SECONDS:
+        if dirty and (self._last_dirty_attempt is None
+                      or time.monotonic() - self._last_dirty_attempt >= DIRTY_RETRY_SECONDS):
             self._last_dirty_attempt = time.monotonic()
             auto_reconcile(self._raw_db, store, self._rt.worker, dirty, "dirty")
 

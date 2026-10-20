@@ -116,18 +116,27 @@ def test_drift_is_repaired_through_the_worker_and_logged_as_a_correction(env, mo
 
 
 @needs_pg
-def test_a_collection_marked_dirty_is_reconciled_soon(env):
+def test_a_collection_marked_dirty_is_reconciled_soon(env, monkeypatch):
     raw, rt, a, _b = env
+    # Máquina recién encendida (como los runners de CI): time.monotonic() aún es chico.
+    clock = {"now": 10.0}
+    monkeypatch.setattr(health.time, "monotonic", lambda: clock["now"])
     raw[a].insert_one({"i": 1})
     rt.monitor.tick()
     rt.worker.flush(10)
     raw[a].insert_one({"i": 2})  # una copia que "falló"
     rt.worker.mark_dirty(a, "prueba")
-    rt.monitor._last_dirty_attempt = 0
-    rt.monitor.tick()
+    rt.monitor.tick()  # el primer intento es inmediato
     rt.worker.flush(10)
     assert a not in rt.worker.dirty and reconcile(raw, rt.store, a)["in_sync"]
     assert _log(rt, a)[-1] == ("dirty", 1, 0, 0, 1)
+    # Los siguientes esperan DIRTY_RETRY_SECONDS entre intentos.
+    rt.worker.mark_dirty(a, "prueba")
+    rt.monitor.tick()
+    assert len(_log(rt, a)) == 2
+    clock["now"] += health.DIRTY_RETRY_SECONDS
+    rt.monitor.tick()
+    assert len(_log(rt, a)) == 3 and a not in rt.worker.dirty
 
 
 @needs_pg

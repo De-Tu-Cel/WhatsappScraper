@@ -64,7 +64,8 @@ momento** hasta el final.
    - `mongo` (por defecto, y siempre sin `POSTGRES_URL`): la colección de pymongo tal cual; la capa ni existe.
    - `dual`: todo va a Mongo igual que hoy; después de cada escritura, un hilo vuelve a leer de Mongo los documentos tocados y los deja iguales en `mongo.<colección>` de Postgres. Si Postgres falla, la app no se entera y la colección queda "por conciliar".
    - `shadow`: dual + `find`/`find_one`/`count_documents`/`distinct` se comparan contra Postgres **en un hilo aparte** (la petición no espera) y las diferencias quedan en `mongo._shadow_diffs` y en el estado. Siempre responde Mongo.
-   - `postgres`: dual + `find`/`find_one`/`count_documents`/`distinct` se leen de Postgres. Lo que el traductor no soporta, o cualquier error de Postgres (también a mitad de un cursor), se resuelve en Mongo: nunca se adivina ni se le muestra un error a la app.
+   - `postgres`: dual + `find`/`find_one`/`count_documents`/`distinct` se leen de Postgres. Lo que el traductor no soporta, o cualquier error de Postgres (también a mitad de un cursor), se resuelve en Mongo: nunca se adivina ni se le muestra un error a la app. Para no leer datos viejos: la copia de cada escritura se hace **en línea, antes de responder** (lo escrito se lee enseguida desde cualquier proceso); si esa copia falla, la colección queda marcada "por conciliar" en `mongo._dirty` y **todos** los procesos leen de Mongo hasta que una conciliación posterior la limpie (~1 min).
+   - Toda copia (en línea, hilo de fondo o conciliación) toma un candado por documento en Postgres antes de leer de Mongo (`Store.replace_from_source`): dos procesos copiando el mismo documento se turnan y nunca queda una versión vieja encima de una nueva.
    Cada tabla espejo (`mongo.<colección>`) guarda el documento en Extended JSON relajado: `doc jsonb` para filtrar y `src` con el texto exacto, porque jsonb reordena las llaves y Mongo/la app conservan ese orden (p. ej. un horario lunes…domingo). `seq` guarda el orden de inserción, el equivalente del orden natural de Mongo. Así no se pierde nada: `ObjectId`, fechas, texto vs. `ObjectId` y el orden de las llaves vuelven iguales. Las tablas normalizadas definitivas se construyen después, colección por colección, a partir de estas.
 
    **Semántica medida contra Mongo 7 real**, no supuesta. El traductor reproduce cómo recorre Mongo las rutas `a.b.c` a través de arreglos de objetos, `null` y campos faltantes, arreglos vacíos, comparaciones por tipo, orden (el arreglo ordena por su menor/mayor elemento, el vacío va antes que `null`) y proyecciones dentro de arreglos. `tests/test_pgmirror_vs_mongo.py` lo compara en cada corrida de CI contra un Mongo 7 de verdad (cientos de filtros, órdenes, proyecciones y `distinct` sobre documentos con formas difíciles).
@@ -103,6 +104,14 @@ momento** hasta el final.
 | `settings` | 2026-10-20 (2 docs, carga + conciliación `[OK]`) | | |
 | `message_templates` | 2026-10-20 (72 docs, `[OK]`) | | |
 | `blacklist` | 2026-10-20 (361 docs, `[OK]`) | | |
+| `warmup_config`, `ai_global_config` | 2026-10-20 (1 doc c/u, carga automática `OK`) | | |
+| `proxies` | 2026-10-20 (20 docs, carga automática `OK`) | | |
+| `app_notifications` | 2026-10-20 (92 docs, carga automática `OK`) | | |
+| `security_counters` | 2026-10-20 (vacía; se copia al primer uso) | | |
+| `social_media` | 2026-10-20 (1 724 docs, carga automática `OK`) | | |
+| `person_contacts` | 2026-10-20 (370 docs, carga automática `OK`) | | |
+
+`stickers` y `evidence` no existen hoy en Mongo; se agregan cuando aparezcan. Primer `check` en producción (2026-10-20): las 10 en `OK`, 0 correcciones, dos procesos del backend reportando, 0 errores.
 
 Revisión (terminal del contenedor backend): `python scripts/pg_mirror.py check` → dice si cada una ya puede avanzar.
 
@@ -124,7 +133,7 @@ GridFS → `files`; luego Mongo en solo lectura 30 días con un respaldo final, 
 
 Interruptor: variable `DB_MODES` del backend en Coolify, con el modo de cada colección separado por comas (p. ej. `settings=dual,message_templates=dual,blacklist=dual`). Es la única que hay que tocar: `docker-compose.yml` ya la pasa al contenedor junto con `POSTGRES_URL` (el backend solo recibe las variables que ese archivo lista). Una colección que no aparece, o un modo mal escrito, se queda en Mongo. Cambiarla requiere redesplegar el backend, no cambiar código. (`DB_MODE_<COLECCION>` también funciona y gana sobre `DB_MODES`, útil en local.)
 
-**Vigilancia automática** (`app/pgmirror/health.py`, desde 2026-10-20): cada proceso del backend guarda cada minuto sus estadísticas en Postgres y concilia solo cada colección activa cada 6 h (`PGMIRROR_RECONCILE_HOURS`), o antes si quedó "por conciliar". Lo que corrige lo manda a copiar por el mismo SyncWorker (relee de Mongo, nunca pisa algo más nuevo) y lo anota en `mongo._reconcile_log`. Una sola instrucción lo resume todo, en la terminal del contenedor backend:
+**Vigilancia automática** (`app/pgmirror/health.py`, desde 2026-10-20): cada proceso del backend guarda cada minuto sus estadísticas en Postgres y concilia solo cada colección activa cada 3 h (`PGMIRROR_RECONCILE_HOURS`), o antes si quedó "por conciliar". Medido sobre la copia real: la carga inicial de `contacts` (75 927 docs) + `companies` tarda ~18 s y la conciliación de rutina de 27 colecciones ~2 s. Lo que corrige lo manda a copiar por el mismo SyncWorker (relee de Mongo, nunca pisa algo más nuevo) y lo anota en `mongo._reconcile_log`. Una sola instrucción lo resume todo, en la terminal del contenedor backend:
 
 ```sh
 python scripts/pg_mirror.py check
@@ -135,7 +144,7 @@ Por cada colección activa: modo, días en ese modo, conteos Mongo/Postgres, si 
 1. Agregar `<x>=dual` a `DB_MODES` y redesplegar. Desde ese momento cada escritura se copia sola, y al minuto el backend hace la **carga inicial** de lo que ya existía (queda como `initial`, no cuenta como corrección). Ya no hace falta correr `reconcile --fix` a mano (sigue disponible).
 2. Revisar con `check` que la colección salga `OK`.
 3. (sin paso manual: la conciliación es automática)
-4. Tres días en `dual` sin correcciones → `check` dice `LISTA para shadow`. Si hubo correcciones, el espejo en vivo se saltó algo: se investiga antes de avanzar.
+4. 24 h en `dual` sin correcciones (`PGMIRROR_WAIT_HOURS`, se acortó de 3 días el 2026-10-20 para acelerar) → `check` dice `LISTA para shadow`. Si hubo correcciones, el espejo en vivo se saltó algo: se investiga antes de avanzar. `shadow` no cambia lo que ve la app (siempre responde Mongo), así que también se puede encender sin esperar.
 5. `<x>=shadow` en `DB_MODES`: lee de las dos, compara y responde con Mongo. Revisar `shadow_diffs` en el estado y la tabla `mongo._shadow_diffs`. Cada diferencia se entiende y se corrige antes de seguir.
 6. `<x>=postgres` en `DB_MODES`: lee de Postgres, sigue escribiendo en las dos. **Regresar = poner `dual` o quitarla de `DB_MODES` y redesplegar.**
 7. Tras días estables en `postgres`: se construye la tabla normalizada definitiva y Postgres pasa a ser la fuente de verdad (esa parte se diseña colección por colección, empezando por las de la etapa 1).

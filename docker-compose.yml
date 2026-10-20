@@ -44,6 +44,9 @@ services:
       # DB_MODES lista el modo de cada colección: settings=dual,message_templates=dual,...
       - POSTGRES_URL=${POSTGRES_URL:-}
       - DB_MODES=${DB_MODES:-}
+      # Opcionales (vacías = 24 h de espera por modo y conciliación cada 3 h).
+      - PGMIRROR_WAIT_HOURS=${PGMIRROR_WAIT_HOURS:-}
+      - PGMIRROR_RECONCILE_HOURS=${PGMIRROR_RECONCILE_HOURS:-}
     expose:
       - "8000"
     depends_on:

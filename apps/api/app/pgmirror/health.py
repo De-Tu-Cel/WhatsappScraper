@@ -6,7 +6,7 @@ Un hilo por proceso del backend, cada minuto:
   regresaron a Mongo…), el estado de este proceso (mongo._runtime) y desde cuándo
   está cada colección en su modo (mongo._modes).
 - Concilia: a cada colección activa (dual/shadow/postgres) le toca una vez cada
-  PGMIRROR_RECONCILE_HOURS horas (6 por defecto; 0 = apagado), y antes si quedó
+  PGMIRROR_RECONCILE_HOURS horas (3 por defecto; 0 = apagado), y antes si quedó
   "por conciliar". Una colección recién agregada a DB_MODES recibe así su carga
   inicial al minuto (queda como kind='initial', no cuenta como error). Compara Mongo contra Postgres y lo que difiere NO lo copia
   directo: manda esos _id al SyncWorker, que relee de Mongo al aplicar, así nunca
@@ -15,7 +15,8 @@ Un hilo por proceso del backend, cada minuto:
   avanzar esa colección. Un solo proceso concilia a la vez (pg_try_advisory_lock).
 
 `python scripts/pg_mirror.py check` lo lee todo y dice qué colección está lista
-para el siguiente modo. Si Postgres falla, este hilo solo lo anota en el log.
+para el siguiente modo (tras PGMIRROR_WAIT_HOURS, 24 por defecto, sin correcciones
+ni diferencias). Si Postgres falla, este hilo solo lo anota en el log.
 """
 import json
 import logging
@@ -46,6 +47,10 @@ _META = [
     "kind text NOT NULL, collection text NOT NULL, mongo integer, postgres integer, missing integer, "
     "different integer, extra integer, queued integer, process text)",
     "CREATE INDEX IF NOT EXISTS _reconcile_log__collection_at ON mongo._reconcile_log (collection, at)",
+    # Colecciones "por conciliar" vistas por TODOS los procesos: en modo postgres sus lecturas
+    # vuelven a Mongo hasta que una conciliación posterior a la marca la borre.
+    "CREATE TABLE IF NOT EXISTS mongo._dirty (collection text PRIMARY KEY, "
+    "since timestamptz NOT NULL DEFAULT now(), reason text)",
 ]
 _meta_ready = set()
 
@@ -58,11 +63,20 @@ def ensure_meta(store):
     _meta_ready.add(id(store))
 
 
-def reconcile_hours() -> float:
+def _hours(env: str, default: float) -> float:
     try:
-        return float(os.getenv("PGMIRROR_RECONCILE_HOURS", "6"))
+        return float(os.getenv(env, "") or default)
     except ValueError:
-        return 6.0
+        return default
+
+
+def reconcile_hours() -> float:
+    return _hours("PGMIRROR_RECONCILE_HOURS", 3)
+
+
+def wait_hours() -> float:
+    """Tiempo mínimo en un modo, sin correcciones ni diferencias, antes de avanzar."""
+    return _hours("PGMIRROR_WAIT_HOURS", 24)
 
 
 def active_collections(raw_db) -> dict:
@@ -83,15 +97,20 @@ def auto_reconcile(raw_db, store, worker, collections, kind: str = "periodic") -
         if not got:
             return results
         for name in collections:
+            started = store.query("SELECT now()")[0][0]
             # Se quita la marca ANTES de revisar: un fallo nuevo durante la revisión la vuelve a poner.
             worker.dirty.discard(name)
             result = reconcile(raw_db, store, name, want_ids=True)
             ids = result.pop("mongo_ids") + store.id_values(name, result.pop("extra_keys"))
             # Tabla vacía: es la carga inicial de una colección recién activada, no un error del espejo.
             kind_here = "initial" if result["postgres_before"] == 0 and ids else kind
+            applied = True
             for i in range(0, len(ids), CHUNK):
                 worker.enqueue(name, ids[i:i + CHUNK])
-                worker.flush(timeout=120)
+                applied &= worker.flush(timeout=120)
+            if applied:
+                # Solo marcas anteriores a esta revisión: una falla nueva sigue contando.
+                store.query("DELETE FROM mongo._dirty WHERE collection = %s AND since <= %s", (name, started))
             store.query(
                 "INSERT INTO mongo._reconcile_log (kind, collection, mongo, postgres, missing, different, extra, queued, process) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
@@ -183,31 +202,31 @@ class Monitor:
 
 
 # ── Lectura para `pg_mirror.py check` ──────────────────────────────────────────
-WAIT_DAYS = 3
 MIN_SHADOW_CHECKS = 20
 
 
-def readiness(mode, days_in_mode, in_sync, fixes, shadow_ok, shadow_diffs, fallbacks) -> str:
+def readiness(mode, hours_in_mode, in_sync, fixes, shadow_ok, shadow_diffs, fallbacks, wait=None) -> str:
+    wait = wait_hours() if wait is None else wait
     if not in_sync:
         return "DIFERENCIAS ahora mismo: revisar, no avanzar"
-    if days_in_mode is None:
+    if hours_in_mode is None:
         return "el backend aún no registra esta colección (se anota cada minuto)"
-    wait = WAIT_DAYS - days_in_mode
+    left = wait - hours_in_mode
     if mode == "dual":
         if fixes:
-            return f"se corrigieron {fixes} docs en {WAIT_DAYS} días: revisar antes de avanzar"
-        return f"esperar {wait:.1f} días más" if wait > 0 else "LISTA para shadow"
+            return f"se corrigieron {fixes} docs en {wait:g} h: revisar antes de avanzar"
+        return f"esperar {left:.1f} h más" if left > 0 else "LISTA para shadow"
     if mode == "shadow":
         if shadow_diffs:
             return f"{shadow_diffs} diferencias de shadow: revisar antes de avanzar"
         if fixes:
-            return f"se corrigieron {fixes} docs en {WAIT_DAYS} días: revisar antes de avanzar"
-        if wait > 0:
-            return f"esperar {wait:.1f} días más"
+            return f"se corrigieron {fixes} docs en {wait:g} h: revisar antes de avanzar"
+        if left > 0:
+            return f"esperar {left:.1f} h más"
         if shadow_ok < MIN_SHADOW_CHECKS:
             return f"solo {shadow_ok} comparaciones: esperar más tráfico"
         return "LISTA para postgres"
     if mode == "postgres":
         extra = f" ({fallbacks} lecturas resueltas en Mongo)" if fallbacks else ""
-        return f"leyendo de Postgres hace {days_in_mode:.1f} días{extra}"
+        return f"leyendo de Postgres hace {hours_in_mode:.1f} h{extra}"
     return ""

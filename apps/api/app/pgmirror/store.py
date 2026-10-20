@@ -14,6 +14,7 @@ Los filtros llegan ya armados con sql.Literal (sqlfilter), así que las consulta
 ejecutan sin parámetros: un '%' dentro de una búsqueda no se confunde con uno.
 """
 import contextlib
+import hashlib
 import logging
 import threading
 
@@ -23,6 +24,12 @@ from app.pgmirror import codec
 
 log = logging.getLogger(__name__)
 SCHEMA = "mongo"
+_LOCK_NAMESPACE = 0x504D  # pg_advisory_xact_lock(int4, int4): espacio propio para los candados por documento
+
+
+def _row_lock(collection: str, key: str) -> int:
+    digest = hashlib.blake2b(f"{collection}\x1f{key}".encode("utf-8"), digest_size=4).digest()
+    return int.from_bytes(digest, "big", signed=True)
 
 
 class Store:
@@ -91,24 +98,53 @@ class Store:
                     sql.Identifier(f"{collection}__seq"[:63]), t))
             self._ready.add(collection)
 
-    def upsert(self, collection: str, docs: list[dict]) -> int:
-        if not docs:
-            return 0
-        self.ensure_table(collection)
+    @staticmethod
+    def _rows(docs):
         rows = []
         for doc in docs:
             key, kind = codec.id_key(doc["_id"])
             text = codec.encode_doc(doc)
             rows.append((key, kind, text, text, codec.doc_hash(doc)))
+        return rows
+
+    def _upsert_sql(self, collection):
         # Solo reescribe la fila si el contenido cambió (texto exacto distinto, orden incluido).
-        stmt = sql.SQL(
+        return sql.SQL(
             "INSERT INTO {} AS t (id, id_type, doc, src, doc_hash, synced_at) VALUES (%s, %s, %s::jsonb, %s, %s, now()) "
             "ON CONFLICT (id) DO UPDATE SET id_type = EXCLUDED.id_type, doc = EXCLUDED.doc, src = EXCLUDED.src, "
             "doc_hash = EXCLUDED.doc_hash, synced_at = now() "
             "WHERE t.src IS DISTINCT FROM EXCLUDED.src").format(self.table(collection))
+
+    def upsert(self, collection: str, docs: list[dict]) -> int:
+        """Escritura directa, sin candados (pruebas y herramientas). La copia en vivo usa replace_from_source."""
+        if not docs:
+            return 0
+        self.ensure_table(collection)
         with self._pool.connection() as conn, conn.cursor() as cur:
-            cur.executemany(stmt, rows)
-        return len(rows)
+            cur.executemany(self._upsert_sql(collection), self._rows(docs))
+        return len(docs)
+
+    def replace_from_source(self, collection: str, ids: list, fetch) -> int:
+        """Deja estas filas iguales a lo que `fetch(ids)` lee de Mongo en ese momento, con un
+        candado por documento (pg_advisory_xact_lock) tomado ANTES de leer. Así, si dos procesos
+        copian el mismo documento a la vez, se turnan y el último en escribir también fue el último
+        en leer: nunca queda una versión vieja encima de una nueva. Lo que ya no existe en Mongo se
+        borra. Devuelve cuántos documentos copió."""
+        if not ids:
+            return 0
+        self.ensure_table(collection)
+        by_key = {codec.id_key(i)[0]: i for i in ids}
+        locks = sorted({_row_lock(collection, key) for key in by_key})
+        with self._pool.connection() as conn, conn.transaction(), conn.cursor() as cur:
+            cur.executemany("SELECT pg_advisory_xact_lock(%s, %s)", [(_LOCK_NAMESPACE, k) for k in locks])
+            docs = fetch(list(by_key.values()))
+            if docs:
+                cur.executemany(self._upsert_sql(collection), self._rows(docs))
+            found = {codec.id_key(d["_id"])[0] for d in docs}
+            gone = [key for key in by_key if key not in found]
+            if gone:
+                cur.execute(sql.SQL("DELETE FROM {} WHERE id = ANY(%s)").format(self.table(collection)), (gone,))
+        return len(docs)
 
     def delete(self, collection: str, keys: list[str]) -> int:
         if not keys:

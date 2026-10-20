@@ -30,6 +30,7 @@ class SyncWorker:
         self._lock = threading.Lock()
         self.dirty: set[str] = set()
         self.stats = Counter()
+        self.on_dirty = None  # callback(colección, motivo): la capa la anota también en Postgres
 
     def enqueue(self, collection: str, ids) -> None:
         ids = [i for i in ids if i is not None]
@@ -39,14 +40,18 @@ class SyncWorker:
         try:
             self._queue.put_nowait((collection, ids))
         except queue.Full:
-            self.dirty.add(collection)
             self.stats["dropped"] += len(ids)
-            log.warning("pgmirror queue full: %s marked for reconcile", collection)
+            self.mark_dirty(collection, "queue full")
 
     def mark_dirty(self, collection: str, reason: str) -> None:
         self.dirty.add(collection)
         self.stats["dirty_marks"] += 1
         log.warning("pgmirror: %s needs reconcile (%s)", collection, reason)
+        if self.on_dirty is not None:
+            try:
+                self.on_dirty(collection, reason)
+            except Exception:
+                log.exception("pgmirror could not record %s as dirty", collection)
 
     def flush(self, timeout: float = 10.0) -> bool:
         """Espera a que la cola se vacíe (pruebas y apagado ordenado)."""
@@ -107,8 +112,8 @@ class SyncWorker:
                 time.sleep(0.2 * attempt)
 
     def sync_ids(self, collection: str, ids) -> None:
+        """Relee esos documentos de Mongo y los deja iguales en Postgres (candado por documento:
+        ver Store.replace_from_source). También lo usa el modo postgres al escribir, en línea."""
         unique = list({codec.id_key(i): i for i in ids}.values())
-        docs = list(self._raw_db[collection].find({"_id": {"$in": unique}}))
-        found = {codec.id_key(d["_id"])[0] for d in docs}
-        self._store.upsert(collection, docs)
-        self._store.delete(collection, [codec.id_key(i)[0] for i in unique if codec.id_key(i)[0] not in found])
+        self._store.replace_from_source(
+            collection, unique, lambda batch: list(self._raw_db[collection].find({"_id": {"$in": batch}})))

@@ -66,17 +66,22 @@ def _log(rt, name):
                           "WHERE collection = %s ORDER BY id", (name,))
 
 
-def test_readiness_rules():
+def test_readiness_rules(monkeypatch):
     r = health.readiness
-    assert r("dual", 1.0, True, 0, 0, 0, 0) == "esperar 2.0 días más"
-    assert r("dual", 3.5, True, 0, 0, 0, 0) == "LISTA para shadow"
-    assert "revisar" in r("dual", 5, True, 2, 0, 0, 0)
-    assert "DIFERENCIAS" in r("dual", 5, False, 0, 0, 0, 0)
+    assert health.wait_hours() == 24 and health.reconcile_hours() == 3
+    assert r("dual", 6.0, True, 0, 0, 0, 0) == "esperar 18.0 h más"
+    assert r("dual", 25, True, 0, 0, 0, 0) == "LISTA para shadow"
+    assert "revisar" in r("dual", 30, True, 2, 0, 0, 0)
+    assert "DIFERENCIAS" in r("dual", 30, False, 0, 0, 0, 0)
     assert r("dual", None, True, 0, 0, 0, 0).startswith("el backend aún no")
-    assert r("shadow", 4, True, 0, 150, 0, 0) == "LISTA para postgres"
-    assert "diferencias de shadow" in r("shadow", 4, True, 0, 150, 1, 0)
-    assert "más tráfico" in r("shadow", 4, True, 0, 5, 0, 0)
+    assert r("shadow", 25, True, 0, 150, 0, 0) == "LISTA para postgres"
+    assert "diferencias de shadow" in r("shadow", 25, True, 0, 150, 1, 0)
+    assert "más tráfico" in r("shadow", 25, True, 0, 5, 0, 0)
     assert "resueltas en Mongo" in r("postgres", 2, True, 0, 0, 0, 3)
+    monkeypatch.setenv("PGMIRROR_WAIT_HOURS", "6")
+    assert r("dual", 7, True, 0, 0, 0, 0) == "LISTA para shadow"
+    monkeypatch.setenv("PGMIRROR_WAIT_HOURS", "")  # vacía (como la pasa docker-compose) = valor por defecto
+    assert health.wait_hours() == 24
 
 
 @needs_pg

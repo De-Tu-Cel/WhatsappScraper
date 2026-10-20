@@ -1,0 +1,90 @@
+{
+  "meta": {
+    "titulo": "Evaluación del canal WhatsApp de {{cliente.nombre}} | De Tu Cel",
+    "descripcion": "Evaluación técnica gratuita del canal WhatsApp de {{cliente.nombre}}, por De Tu Cel.",
+    "ogDescripcion": "Evaluación técnica gratuita por De Tu Cel: así atiende hoy {{cliente.nombre}} y cómo sería la experiencia."
+  },
+
+  "marca": {
+    "logo": "assets/detucel/logo-detucel.png",
+    "logoAlt": "De Tu Cel, Creamos experiencias",
+    "avatar": "assets/detucel/nano-avatar.webp",
+    "web": "https://www.detucel.mx"
+  },
+
+  "encabezado": {
+    "titulo": "Evaluación del canal WhatsApp de {{cliente.nombre}}",
+    "subtitulo": "Evaluación técnica gratuita",
+    "fuente": "Fuente: análisis de canal WhatsApp {{cliente.telefono}}, {{evaluacion.fecha}}."
+  },
+
+  "nivel": {
+    "titulo": "Nivel de experiencia del canal",
+    "etiquetaHoy": "{{cliente.nombre}} hoy",
+    "etiquetaMeta": "Con De Tu Cel",
+    "meta": 5,
+    "escala": [
+      { "nombre": "Sin atención", "color": "#EF4444" },
+      { "nombre": "Solo humano", "color": "#F97316" },
+      { "nombre": "Automático + humano", "color": "#F59E0B" },
+      { "nombre": "Bot de atención", "color": "#22C55E" },
+      { "nombre": "Bot de pedidos 24/7", "color": "#06c9f7" }
+    ]
+  },
+
+  "pestanas": {
+    "hoy": "Así atiende hoy {{cliente.nombre}}",
+    "exp": "Experiencia con De Tu Cel"
+  },
+
+  "titulos": {
+    "hoy": "Identificación de áreas de oportunidad",
+    "exp": "Así se vive la experiencia con De Tu Cel"
+  },
+
+  "guias": {
+    "hoy": "Toca un hallazgo para verlo en la conversación.",
+    "exp": "Toca una ventaja para verla en la demo."
+  },
+
+  "leyendas": {
+    "hoy": "Conversación real: escribimos como un cliente nuevo {{evaluacion.periodo}}.",
+    "exp": "Demo ilustrativa. El asistente se configura con la información, cobertura y precios de {{cliente.nombre}}.",
+    "impresionHoy": "Momentos clave de la conversación real, {{evaluacion.periodo}}.",
+    "impresionExp": "Demo ilustrativa: momentos clave de un pedido. Se configura con la información, cobertura y precios de {{cliente.nombre}}."
+  },
+
+  "textos": {
+    "loQueFunciona": "Lo que ya funciona",
+    "areasOportunidad": "Áreas de oportunidad",
+    "loQueVimos": "Lo que vimos",
+    "oportunidad": "Oportunidad",
+    "subBot": "Asistente virtual, demo De Tu Cel",
+    "introVentajas": "El número en cada ventaja indica qué oportunidad de {{cliente.nombre}} resuelve.",
+    "ariaChatHoy": "Conversación real con el WhatsApp de {{cliente.nombre}}",
+    "ariaChatExp": "Demo de pedido con el asistente de {{cliente.nombre}}"
+  },
+
+  "cta": {
+    "avatar": "assets/detucel/nano.webp",
+    "avatarAlt": "Nano, el asistente de De Tu Cel",
+    "mensaje": "<strong>¡Hola equipo {{cliente.nombre}}! Soy Nano.</strong> Los invito a probar una demo de {{industria.plural}} y {{industria.accionDemo}} como lo haría su cliente, o agenden una sesión con un ejecutivo para revisar juntos esta evaluación.",
+    "botones": [
+      {
+        "texto": "Probar demo de {{industria.plural}}",
+        "whatsapp": "528141648022",
+        "mensaje": "Hola Nano, vengo de la Evaluación del canal WhatsApp de {{cliente.nombre}} y quiero probar la demo de {{industria.plural}}"
+      },
+      {
+        "texto": "Agendar sesión con un ejecutivo",
+        "url": "https://calendar.app.google/mVf6izaMuoYParCRA"
+      }
+    ]
+  },
+
+  "referencias": {
+    "titulo": "{{industria.Plural}} que ya atienden con De Tu Cel",
+    "texto": "Escríbeles por WhatsApp y compruébalo.",
+    "lista": []
+  }
+}

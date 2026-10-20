@@ -1,0 +1,78 @@
+{
+  "industria": {
+    "clave": "gaseras",
+    "plural": "gaseras",
+    "Plural": "Gaseras",
+    "accionDemo": "hacer un pedido de gas"
+  },
+
+  "ventajas": [
+    { "id": "b1", "icono": "reloj", "titulo": "Atención 24/7", "texto": "Tus clientes piden gas también fuera de horario." },
+    { "id": "b2", "icono": "duda", "titulo": "Dudas resueltas", "texto": "Estacionario, cilindro, cobertura y horarios." },
+    { "id": "b3", "icono": "pedido", "titulo": "Pedido en el chat", "texto": "Litros, dirección, horario y pago, sin llamar." },
+    { "id": "b4", "icono": "repite", "titulo": "Clientes que regresan", "texto": "Reconoce el número y recuerda su dirección." },
+    { "id": "b6", "icono": "dash", "titulo": "Todo en un dashboard", "texto": "Pedidos, ingresos y origen en tiempo real." },
+    { "id": "b7", "icono": "estrella", "titulo": "Satisfacción medida", "texto": "Encuesta de 1 a 5 estrellas por pedido." },
+    { "id": "b5", "icono": "persona", "titulo": "Supervisión humana real", "texto": "La tecnología atiende y tu equipo acompaña: un asesor entra cuando el cliente lo necesita.", "destacada": true }
+  ],
+
+  "dashboard": {
+    "titulo": "Dashboard De Tu Cel",
+    "nota": "Datos reales de una gasera cliente, enero a septiembre. Nombre reservado.",
+    "kpis": [
+      { "valor": "1,055", "etiqueta": "pedidos por WhatsApp" },
+      { "valor": "$621", "etiqueta": "ticket promedio" },
+      { "valor": "21.8%", "etiqueta": "tasa de repetición" },
+      { "valor": "88%", "etiqueta": "pedidos cerrados" },
+      { "valor": "5/5", "etiqueta": "satisfacción promedio" }
+    ],
+    "graficas": [
+      { "tipo": "barras", "titulo": "Pedidos por mes", "resaltar": "max",
+        "datos": [["Ene",20],["Feb",24],["Mar",41],["Abr",41],["May",54],["Jun",39],["Jul",368],["Ago",153],["Sep",153]] },
+      { "tipo": "dona", "titulo": "Tipo de contenedor",
+        "datos": [["Estacionario",63],["Cilindro",37]] },
+      { "tipo": "apilada", "titulo": "Método de pago", "cifraTexto": "paga en efectivo",
+        "datos": [["Efectivo",82],["Tarjeta",16],["Transferencia",2]] }
+    ],
+    "lectura": "<b>Lectura estratégica:</b> 63% de los pedidos son de estacionario y 82% se paga en efectivo: la gasera sabe qué promover y qué pago impulsar."
+  },
+
+  "conversacion": {
+    "demo": [
+      { "tipo": "dia", "texto": "Hoy" },
+      { "tipo": "cliente", "texto": "Hola, ¿cómo funciona el tanque estacionario? Quiero pedir gas", "hora": "10:40 p.m." },
+      { "tipo": "negocio", "texto": "¡Hola, Andrés! 👋 Soy el asistente de <b>{{cliente.nombreBot}}</b>. Te reconocí por tu número.", "hora": "10:40 p.m.", "pin": "b4" },
+      { "tipo": "nota-ok", "texto": "Atendido a las 10:40 p.m., fuera de horario", "pin": "b1" },
+      { "tipo": "negocio", "texto": "El estacionario lo surte una pipa en tu domicilio y se rellena con manguera. Tú eliges los litros y el horario. ¿Agendamos un llenado?", "hora": "10:40 p.m.", "pin": "b2" },
+      { "tipo": "opciones", "opciones": ["Sí, agendar llenado", "Hablar con un asesor"] },
+      { "tipo": "cliente", "texto": "Sí, agendar llenado", "hora": "10:41 p.m." },
+      { "tipo": "negocio", "texto": "Tengo registrada tu dirección: Av. Los Pinos 123, Col. Jardines. ¿Entregamos ahí?", "hora": "10:41 p.m." },
+      { "tipo": "cliente", "texto": "Sí, ahí mismo", "hora": "10:41 p.m." },
+      { "tipo": "negocio", "texto": "¿Cuántos litros y en qué horario?", "hora": "10:41 p.m." },
+      { "tipo": "opciones", "opciones": ["200 L, mañana de 9 a 12 h", "300 L, mañana de 12 a 15 h"] },
+      { "tipo": "cliente", "texto": "200 L, mañana de 9 a 12 h", "hora": "10:42 p.m." },
+      { "tipo": "negocio", "texto": "¿Cómo prefieres pagar?", "hora": "10:42 p.m." },
+      { "tipo": "opciones", "opciones": ["💳 Tarjeta", "🏦 Transferencia", "💵 Efectivo"] },
+      { "tipo": "cliente", "texto": "💵 Efectivo contra entrega", "hora": "10:42 p.m." },
+      { "tipo": "negocio", "texto": "¡Listo! ✅ Pedido #1042 confirmado para mañana de 9:00 a 12:00 h.", "hora": "10:42 p.m.", "pin": "b3" },
+      { "tipo": "nota-ok", "texto": "Pedido registrado en el dashboard", "pin": "b6" },
+      { "tipo": "nota-ok", "texto": "Un asesor de {{cliente.nombre}} lo revisa al iniciar el turno", "pin": "b5" },
+      { "tipo": "dia", "texto": "Mañana" },
+      { "tipo": "negocio", "texto": "Tu gas fue entregado ✅ ¿Cómo calificas tu experiencia del 1 al 5?", "hora": "11:20 a.m.", "pin": "b7" },
+      { "tipo": "opciones", "opciones": ["⭐ 1", "⭐ 2", "⭐ 3", "⭐ 4", "⭐ 5"] },
+      { "tipo": "cliente", "texto": "⭐ 5", "hora": "11:21 a.m." },
+      { "tipo": "nota-ok", "texto": "Encuesta registrada: 5 de 5" }
+    ]
+  },
+
+  "impresion": {
+    "exp": [0, 1, 2, 3, 4, 6, 15, 16, 17, 18, 19, 21]
+  },
+
+  "referencias": {
+    "lista": [
+      { "nombre": "Gas Uribe", "logo": "assets/referencias/gas-uribe.webp", "whatsapp": "525549803270" },
+      { "nombre": "Gas Campanita Fresnillo", "logo": "assets/referencias/gas-campanita.webp", "whatsapp": "524939321179" }
+    ]
+  }
+}

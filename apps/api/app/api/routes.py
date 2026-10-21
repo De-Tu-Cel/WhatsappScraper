@@ -1344,6 +1344,25 @@ def api_update_company(company_id: str, req: UpdateCompanyRequest, x_user_token:
 
 # ── Conversations ─────────────────────────────────────────────────────────────
 
+def _guardado_sin_id(db, company_id, direction, body, created):
+    """El mismo mensaje que el webhook ya guardó SIN id de WhatsApp: mismo texto (o casi, si se editó en
+    WhatsApp) a ≤2 min. La sincronización solo lo buscaba por id y lo volvía a guardar con otro número de
+    formato (+52… contra 521…): 57 pares en producción, la mayoría del 2026-10-04 y 10-09."""
+    import difflib
+    from datetime import timedelta
+    texto = " ".join((body or "").split())
+    if not texto or texto == "[media]":
+        return None
+    for m in db.db.message_logs.find(
+            {"company_id": company_id, "direction": direction, "message_id": {"$in": [None, ""]},
+             "created_at": {"$gte": created - timedelta(minutes=2), "$lte": created + timedelta(minutes=2)}},
+            {"message_body": 1, "message_id": 1}):
+        otro = " ".join((m.get("message_body") or "").split())
+        if otro == texto or (min(len(otro), len(texto)) >= 20 and difflib.SequenceMatcher(None, otro, texto).ratio() >= 0.85):
+            return m
+    return None
+
+
 @router.post("/conversations/{company_id}/sync")
 def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks, x_user_token: Optional[str] = Header(None)):
     """Fetch missing messages from Evolution or WAHA and save them to message_logs."""
@@ -1501,6 +1520,12 @@ def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks, x_
                                 {"$set": {"whatsapp_name": public_name,
                                           "whatsapp_name_source": "whatsapp"}},
                             )
+                    continue
+                previo = _guardado_sin_id(db, company_id, "outbound" if from_me else "inbound", body, created)
+                if previo:
+                    # Ya está (del webhook): se le pone su id real para que la próxima vez se reconozca por id.
+                    db.db.message_logs.update_one({"_id": previo["_id"], "message_id": {"$in": [None, ""]}},
+                                                  {"$set": {"message_id": msg_id}})
                     continue
 
                 log_id = db.save_evolution_log(

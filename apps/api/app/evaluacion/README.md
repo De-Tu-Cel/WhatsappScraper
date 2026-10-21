@@ -17,7 +17,9 @@ formato.py                     WhatsApp → HTML seguro, fechas y horas en espa�
 ```
 
 En la app: **Análisis** → botón ✨ de la empresa o del número → *Generar evaluación* → revisar y
-corregir → *Copiar liga*.
+corregir → *Copiar liga*. **Solo para gaseras** (`GIROS_CON_EVALUACION` en `../api/evaluaciones.py`; el
+botón se deshabilita en otros giros, como *Modificar Bot*). `restaurantes.json` viene de la herramienta de
+diseño y está lista (sin cifras de ejemplo), pero no se ofrece.
 
 ## Reglas que no hay que romper
 
@@ -47,5 +49,5 @@ Se cambian `plantilla.html` o los JSON igual que en la herramienta original (`ge
 ## Nuevo giro
 
 Copiar `config/industrias/gaseras.json` (ver el README original: ventajas con `id`, demo con
-`pin`, dashboard y referencias). `armador.industria_de` detecta gaseras; para otros giros la app
-pide elegir la plantilla.
+`pin`, dashboard solo con datos reales de un cliente del giro, y referencias), agregarlo a
+`GIROS_CON_EVALUACION` y a `armador.industria_de`, y habilitar el botón en Análisis.

@@ -195,6 +195,11 @@ def _validar(capa: dict):
         raise HTTPException(422, str(exc))
 
 
+# Giros para los que se arma la evaluación. restaurantes.json existe (viene de la herramienta del equipo
+# de diseño) pero la evaluación es solo para gaseras.
+GIROS_CON_EVALUACION = ["gaseras"]
+
+
 class NuevaEvaluacion(BaseModel):
     company_id: str
     numero: Optional[str] = None
@@ -248,9 +253,15 @@ def crear_evaluacion(req: NuevaEvaluacion, x_user_token: Optional[str] = Header(
     if not company:
         raise HTTPException(404, "Empresa no encontrada")
     industria = req.industria or armador.industria_de(company)
-    if industria not in generador.industrias():
-        raise HTTPException(422, {"code": "industria", "opciones": generador.industrias(),
-                                  "message": "No se detectó el giro de la empresa: elige la plantilla."})
+    if industria not in GIROS_CON_EVALUACION:
+        # La evaluación es solo para gaseras (2026-10-21). Si el giro no se detectó pero sí es gasera,
+        # el revisor lo confirma; cualquier otro giro saldría con la demo y las ventajas del gas.
+        giro = str(company.get("industry") or "").strip()
+        aparece = f" y «{company.get('name') or 'la empresa'}» aparece como «{giro}»" if giro and giro.lower() != "no detectada" else ""
+        raise HTTPException(422, {"code": "industria", "opciones": GIROS_CON_EVALUACION,
+                                  "etiquetas": {k: generador.leer_json(generador.RAIZ / "config" / "industrias" / f"{k}.json")
+                                                ["industria"]["Plural"] for k in GIROS_CON_EVALUACION},
+                                  "message": f"La evaluación es solo para gaseras{aparece}. Si sí es gasera, confírmalo:"})
     entrada = _elegir_numero(db, req.company_id, req.numero)
     numero = entrada["number"]
     from app.report_scope import report_thread_for_number

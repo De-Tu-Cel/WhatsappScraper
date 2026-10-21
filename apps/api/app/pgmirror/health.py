@@ -29,7 +29,7 @@ import threading
 import time
 
 from app.pgmirror import config
-from app.pgmirror.reconcile import reconcile
+from app.pgmirror.reconcile import reconcile, still_different
 from app.pgmirror.store import SORT_INDEXES
 
 log = logging.getLogger(__name__)
@@ -113,7 +113,13 @@ def auto_reconcile(raw_db, store, worker, collections, kind: str = "periodic") -
             # 75 925 de 75 927 en producción el 2026-10-20 salían como "corregidos").
             first = not store.query("SELECT 1 FROM mongo._reconcile_log WHERE collection = %s LIMIT 1", (name,))
             result = reconcile(raw_db, store, name, want_ids=True)
-            ids = result.pop("mongo_ids") + store.id_values(name, result.pop("extra_keys"))
+            mongo_ids, extra_keys = result.pop("mongo_ids"), result.pop("extra_keys")
+            if not first and (mongo_ids or extra_keys):
+                # Lo escrito mientras se revisaba lo copia el espejo en vivo un momento después: con la
+                # cola vacía se vuelven a comparar solo esos _id, y lo que ya cuadra no es una corrección.
+                worker.flush(timeout=30)
+                mongo_ids, extra_keys = still_different(raw_db, store, name, mongo_ids, extra_keys)
+            ids = mongo_ids + store.id_values(name, extra_keys)
             kind_here = "initial" if first else kind
             applied = True
             for i in range(0, len(ids), CHUNK):

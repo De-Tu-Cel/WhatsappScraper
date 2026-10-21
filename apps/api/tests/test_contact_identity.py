@@ -90,6 +90,44 @@ def test_history_sync_enriches_existing_inbound_without_reclassifying_or_overwri
     )
 
 
+def test_history_sync_does_not_save_again_what_the_webhook_saved_without_an_id(monkeypatch):
+    # 57 pares en producción (2026-10-04 y 10-09): el webhook guardó el mensaje sin id de WhatsApp y con el
+    # número como 521…; la sincronización lo buscaba solo por id y lo volvía a guardar.
+    from datetime import datetime
+    from unittest.mock import MagicMock
+    from fastapi import BackgroundTasks
+    from app.api import routes
+    from app.whatsapp_wwebjs import WWebjsClient
+
+    company_id = '6a7633c6ecf84e0f0e0336ad'
+    manager = MagicMock()
+    manager.db.companies.find_one.return_value = {'assigned_instance': 'session'}
+    manager.db.instances.find_one.return_value = {'provider': 'wwebjs'}
+    manager.db.contacts.find.return_value = [{'value': '+525585983497'}]
+    manager.db.message_logs.find_one.return_value = None
+    webhook = {'_id': 'webhook-doc', 'message_body': 'en que  colonia?', 'message_id': None}
+    manager.db.message_logs.find.return_value = [webhook]
+    monkeypatch.setattr(routes, '_require_user', lambda token: {'role': 'agent'})
+    monkeypatch.setattr(routes, 'MongoDBManager', lambda: manager)
+    monkeypatch.setattr(WWebjsClient, 'fetch_messages', lambda *args, **kwargs: [
+        {'id': '3EB002D88CAA9E3C56CDFA', 'fromMe': False, 'body': 'en que colonia?', 'timestamp': 1791557998}])
+    result = routes.api_sync_conversation(company_id, BackgroundTasks(), 'mock')
+    assert result['synced'] == 0
+    manager.save_evolution_log.assert_not_called()
+    consulta = manager.db.message_logs.find.call_args[0][0]
+    assert consulta['company_id'] == company_id and consulta['direction'] == 'inbound'
+    assert consulta['message_id'] == {'$in': [None, '']}
+    assert consulta['created_at']['$lte'] - consulta['created_at']['$gte'] == routes._AuditTimedelta(minutes=4)
+    manager.db.message_logs.update_one.assert_called_once_with(
+        {'_id': 'webhook-doc', 'message_id': {'$in': [None, '']}}, {'$set': {'message_id': '3EB002D88CAA9E3C56CDFA'}})
+    # Un mensaje que de verdad falta sí se guarda.
+    manager.db.message_logs.find.return_value = []
+    manager.db.message_logs.update_one.reset_mock()
+    assert routes.api_sync_conversation(company_id, BackgroundTasks(), 'mock')['synced'] == 1
+    manager.save_evolution_log.assert_called_once()
+    assert manager.save_evolution_log.call_args.kwargs['created_at'] == datetime(2026, 10, 9, 14, 59, 58)
+
+
 def test_sync_with_a_disconnected_line_says_so_instead_of_a_500(monkeypatch):
     # 2026-10-21: Rayogas, Gaservicio y Claro Colombia daban 500 al sincronizar porque su
     # línea (tania-sesion-4) estaba desvinculada. Es un 409 con qué hacer, no un error del servidor.

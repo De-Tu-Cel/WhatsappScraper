@@ -1599,10 +1599,11 @@ export default function Analytics({ onNavigateToConv }) {
                       <Box>
                         {!hasMultiple && (() => {
                           const noContact = !row.category || (row.category !== 'sin_respuesta' && !row.total_responses)
+                          const isGas = isGasIndustry(row.industry)  // la evaluación es solo para gaseras
                           return (
-                            <Tooltip title={noContact ? t.analytics.noConvRecord : (lang === 'en' ? 'WhatsApp channel evaluation (one-pager)' : 'Evaluación del canal WhatsApp (one-pager)')}>
+                            <Tooltip title={!isGas ? t.analytics.notGasIndustry : noContact ? t.analytics.noConvRecord : (lang === 'en' ? 'WhatsApp channel evaluation (one-pager)' : 'Evaluación del canal WhatsApp (one-pager)')}>
                               <span>
-                                <IconButton size="small" disabled={noContact} onClick={() => setEvalFor({ id: row.company_id, name: row.company_name })}
+                                <IconButton size="small" disabled={noContact || !isGas} onClick={() => setEvalFor({ id: row.company_id, name: row.company_name })}
                                   sx={{ color: 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.65)' } }}>
                                   <AutoAwesomeIcon sx={{ fontSize: 16 }} />
                                 </IconButton>
@@ -1794,9 +1795,9 @@ export default function Analytics({ onNavigateToConv }) {
                           </Box>
                           {/* Evaluación del canal WhatsApp por número */}
                           <Box>
-                            <Tooltip title={!replied && n.category !== 'sin_respuesta' ? t.analytics.noReply : `${lang === 'en' ? 'WhatsApp channel evaluation' : 'Evaluación del canal WhatsApp'} ${shortNum}`}>
+                            <Tooltip title={!isGasIndustry(row.industry) ? t.analytics.notGasIndustry : !replied && n.category !== 'sin_respuesta' ? t.analytics.noReply : `${lang === 'en' ? 'WhatsApp channel evaluation' : 'Evaluación del canal WhatsApp'} ${shortNum}`}>
                               <span>
-                                <IconButton size="small" disabled={!replied && n.category !== 'sin_respuesta'} onClick={() => setEvalFor({ id: row.company_id, name: row.company_name, number: n.number })}
+                                <IconButton size="small" disabled={!isGasIndustry(row.industry) || (!replied && n.category !== 'sin_respuesta')} onClick={() => setEvalFor({ id: row.company_id, name: row.company_name, number: n.number })}
                                   sx={{ color: 'rgba(255,255,255,0.35)', '&:hover': { color: 'var(--accent,#6366f1)', bgcolor: 'rgba(var(--accent-rgb,99,102,241),0.1)' }, '&.Mui-disabled': { opacity: 0.3 }, '[data-theme-mode="light"] &:not(.Mui-disabled)': { color: 'rgba(15,23,42,0.65)' } }}>
                                   <AutoAwesomeIcon sx={{ fontSize: 16 }} />
                                 </IconButton>

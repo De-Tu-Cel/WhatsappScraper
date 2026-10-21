@@ -127,15 +127,15 @@ Revisión (terminal del contenedor backend): `python scripts/pg_mirror.py check`
 ### Etapa 5 — Archivos y retiro
 GridFS → `files`; luego Mongo en solo lectura 30 días con un respaldo final, y se apaga.
 
-### Estado en producción (2026-10-21, 14:35 UTC)
+### Estado en producción (2026-10-21, 17:25 UTC)
 Con `PGMIRROR_WAIT_HOURS=2` y solo lo que `check` dio por `LISTA`:
 
 | Modo | Colecciones (desde) |
 |---|---|
-| **postgres** (leen de Postgres), 24 | `settings`, `message_templates`, `warmup_config`, `ai_global_config`, `app_notifications`, `security_counters`, `social_media`, `person_contacts` (10-20 ~17:10) · `proxies`, `classification_comparisons` (10-21 00:41) · `instances`, `instance_daily_verifications`, `service_health` (02:31) · `send_queue_items`, `scrape_jobs`, `scheduled_sends` (02:42) · `users`, `companies`, `blacklist`, `send_queue_state`, `ai_followup_sessions`, `conversation_ai_prefs`, `instance_daily_sends`, `instance_new_contacts_today` (14:29) |
-| **shadow** | el resto de las etapas 1–4. La mayoría junta pocas comparaciones porque casi no se leen (necesitan uso normal de la app). `message_logs`: reloj reiniciado a las 14:13 tras descartar las 951 diferencias del barrido sin orden (`d88152d`); 0 diferencias desde el deploy de los índices. |
+| **postgres** (leen de Postgres), 26 | `settings`, `message_templates`, `warmup_config`, `ai_global_config`, `app_notifications`, `security_counters`, `social_media`, `person_contacts` (10-20 ~17:10) · `proxies`, `classification_comparisons` (10-21 00:41) · `instances`, `instance_daily_verifications`, `service_health` (02:31) · `send_queue_items`, `scrape_jobs`, `scheduled_sends` (02:42) · `users`, `companies`, `blacklist`, `send_queue_state`, `ai_followup_sessions`, `conversation_ai_prefs`, `instance_daily_sends`, `instance_new_contacts_today` (14:29) · `message_logs`, `warmup_sessions` (17:18) |
+| **shadow** | el resto de las etapas 1–4. La mayoría junta pocas comparaciones porque casi no se leen (necesitan uso normal de la app). `contacts` salió LISTA, pero una conciliación a las 17:05 contó como corrección un documento que el espejo en vivo copió un segundo después (carrera, no pérdida; corregido en `10531e9`): espera su ventana limpia. |
 
-Índices de orden desplegados el 10-21 a las 14:01 UTC: 82 de 82 listos. En producción, la "última actividad" de `message_logs` bajó de 4 520 ms a 1.2–1.8 ms y las demás lecturas de `message_logs` a 5–15 ms. El login (`users` por `username` y por `session_token`) devuelve los mismos documentos desde Postgres que desde Mongo.
+Índices de orden desplegados el 10-21 a las 14:01 UTC: 82 de 82 listos. En producción, la "última actividad" de `message_logs` bajó de 4 520 ms a 1.2–1.8 ms y las demás lecturas de `message_logs` a 5–15 ms. El login (`users` por `username` y por `session_token`) devuelve los mismos documentos desde Postgres que desde Mongo. `message_logs` en postgres desde las 17:18: última actividad, conteos y `distinct` iguales a Mongo, sin diferencias, sin lecturas devueltas a Mongo.
 
 Verificado tras cada paso: 0 lecturas resueltas en Mongo, 0 errores, 0 diferencias, WhatsApp sin reinicio (es un recurso aparte, `docs/WWEBJS_RECURSO_APARTE.md`).
 

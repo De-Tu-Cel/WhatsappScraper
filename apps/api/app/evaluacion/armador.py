@@ -256,13 +256,24 @@ def detectar_hechos(items: list, metricas: dict) -> dict:
         oportunidad("sin_precio", "Sin precio", pregunta["i"], "El precio no se compartió",
                     f"Preguntamos el precio a las {items[pregunta['i']]['hora']} y no lo dieron en el chat.",
                     "Dar precio y tomar el pedido al momento.", "b3")
+    # "Cada vez hay que repetir los datos" solo si se vio: pidieron datos en dos días distintos (Gas
+    # Flamazul pidió el nombre en agosto y otra vez en octubre). Con una sola plática no se sabe
+    # (Gas Oriente, 2026-10-21): entonces, al final, se dice lo que falta y no que pasó.
+    piden = [d for d in negocio if _PIDE_DATOS.search(d["texto"])]
+    repite = next((d for d in piden if formato.a_mx(d["dt"]).date() != formato.a_mx(piden[0]["dt"]).date()), None)
+    if repite:
+        fecha = formato.fecha_dia(repite["dt"]).split(", ")[-1].rsplit(" de ", 1)[0]
+        oportunidad("sin_historial", "Datos repetidos", repite["i"], "El cliente repite sus datos",
+                    f"El {fecha} volvieron a pedir los datos que ya habíamos dado.",
+                    "Reconocer el número y recordar su dirección.", "b4")
     oportunidad("sin_cierre", "Sin pedido en chat", negocio[-1]["i"] if negocio else None,
                 "El pedido no se cierra en el chat", "La plática no llegó a tomar el pedido.",
                 "Que pida y pague en la misma conversación.", "b3")
     oportunidad("sin_seguimiento", "Sin seguimiento", None, "No hay seguimiento al cliente",
                 "Después de la plática nadie dio seguimiento.", "Dar seguimiento y medir la satisfacción.", "b7")
-    oportunidad("sin_historial", "Sin historial", None, "El cliente no queda reconocido",
-                "Cada vez hay que repetir los datos.", "Reconocer el número y recordar su dirección.", "b4")
+    if not repite:
+        oportunidad("sin_historial", "Sin historial", None, "El cliente no queda reconocido",
+                    "No hay registro del cliente para su próximo pedido.", "Reconocer el número y recordar su dirección.", "b4")
 
     fo = []
 
@@ -387,6 +398,7 @@ Tu trabajo es REDACTAR, en español de México, tono profesional y cálido. REGL
 - Respeta el máximo de PALABRAS de cada campo: es una hoja impresa y no cabe más. Sin puntos suspensivos.
 - Frases completas: nunca termines en "y", "con", "de" ni a medias. Si no cabe, di menos.
 - Habla del negocio en tercera persona ("su marca", "su chat"); nunca "tú" ni "tu".
+- Nunca escribas números de mensaje ni de renglón ("[14]", "mensaje 10"): el prospecto no los ve. Di el día o la hora.
 Campos:
 - "sintesis_titular": diagnóstico del canal en una frase (máx. {sintesis_titular} palabras).
 - "sintesis_texto": qué le falta para ser una experiencia de compra (máx. {sintesis_texto} palabras).
@@ -493,6 +505,20 @@ def aplicar_acortados(datos: dict, excedidos: dict, cortos: dict) -> int:
 # La hoja habla del negocio en tercera persona ("su marca"). El modelo a veces le habla de tú
 # ("Saluda con tu marca", Rayogas 2026-10-20) aunque el prompt lo pide: ese texto no se usa.
 _SEGUNDA_PERSONA = re.compile(r"\b(?:tú|tu|tus|te|ti|contigo)\b", re.I)
+# Los renglones que ve el modelo van numerados ("[14] Negocio · …") y a veces copiaba el número al texto
+# del prospecto: "con un saludo genérico en el mensaje [14]", "terminó en el mensaje 10" (2026-10-21).
+_REFERENCIA_INTERNA = re.compile(
+    r"\s*,?\s*(?:\b(?:en|del|desde|con|seg[uú]n|como)\s+)?(?:\b(?:el|los)\s+)?\bmensajes?\s*(?:n[uú]m(?:ero)?\.?\s*)?#?\s*\[?\d+\]?"
+    r"(?!\s*(?:d[ií]as?|h\b|horas?|min|s\b|seg|semanas?|veces|litros?|%))"  # "mensaje 2 días después" sí es dato
+    r"|\s*\(?\[\d+\]\)?", re.I)
+
+
+def sin_referencias(texto: str) -> str:
+    """Quita los números internos de mensaje, que el prospecto no ve."""
+    t = re.sub(r"\s*\(\s*\)", "", _REFERENCIA_INTERNA.sub("", texto or ""))
+    if t.count("(") > t.count(")"):
+        t = re.sub(r"\s*\([^()]*$", ".", t)  # "(ver [3])." quedaba "(ver."
+    return re.sub(r"\s+([.,;:])", r"\1", re.sub(r"\s{2,}", " ", t)).strip()
 
 
 def depurar_hallazgos(datos: dict, items: list, ventajas_ids: set, respaldo: dict,
@@ -515,7 +541,7 @@ def depurar_hallazgos(datos: dict, items: list, ventajas_ids: set, respaldo: dic
     def cabe(texto, clave, del_hecho=None):
         """El texto del modelo si cabe y habla del negocio en tercera persona; si no, el del hecho
         (ya medido para la hoja) antes que cortarlo con "…". Solo lo propio se recorta."""
-        t = formato.texto_plano(texto)
+        t = sin_referencias(formato.texto_plano(texto))
         if t and len(t) <= LIMITES[clave] and not (del_hecho and _SEGUNDA_PERSONA.search(t)):
             return t
         if del_hecho:
@@ -578,7 +604,8 @@ def depurar_hallazgos(datos: dict, items: list, ventajas_ids: set, respaldo: dic
                   if o.get("ventaja") not in usadas and o["dato"].lower() not in datos_usados][:3 - len(oport)]
         notas["completadas"] += len(faltan)
         oport += faltan
-    titular, texto = datos.get("sintesis_titular"), datos.get("sintesis_texto")
+    titular, texto = (sin_referencias(t) if isinstance(t, str) else t
+                      for t in (datos.get("sintesis_titular"), datos.get("sintesis_texto")))
     if not titular or _SEGUNDA_PERSONA.search(titular):
         titular = respaldo["sintesis_titular"]
     if not texto or _SEGUNDA_PERSONA.search(texto):

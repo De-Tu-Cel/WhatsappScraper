@@ -291,6 +291,37 @@ def test_a_strength_is_never_listed_twice(monkeypatch):
     assert len(titulos) == len(set(titulos)) and "canal activo" in titulos
 
 
+def test_internal_message_numbers_never_reach_the_page(monkeypatch):
+    # Gas Flamazul y Gas Oriente, 2026-10-21: "…con un saludo genérico en el mensaje [14]",
+    # "La plática terminó en el mensaje 10…": el modelo copiaba la numeración de los renglones.
+    def fake(*_a, **_k):
+        return {"sintesis_titular": "Canal activo [2] sin cierre.", "sintesis_texto": "Falta cerrar el pedido (mensaje 9).",
+                "fortalezas": [{"titulo": "Bienvenida clara", "texto": "Saluda en el mensaje [2].", "hecho": "F1"}],
+                "oportunidades": [{"titulo": "Pedido sin cerrar", "vimos": "La plática terminó en el mensaje 10 sin tomar el pedido.",
+                                   "oportunidad": "Que pida y pague en la misma conversación.", "hecho": "H1"}]}
+    monkeypatch.setattr(armador, "hallazgos_con_llm", fake)
+    capa, _info = _armar()
+    textos = json.dumps({k: capa[k] for k in ("fortalezas", "oportunidades", "nivel")}, ensure_ascii=False)
+    assert not re.search(r"\[\d+\]|mensaje \d+", textos), textos
+    assert armador.sin_referencias("La plática terminó en el mensaje 10 sin tomar el pedido.") == "La plática terminó sin tomar el pedido."
+    assert armador.sin_referencias("Tienen 3 mensajes automáticos a las 10:16 a.m.") == "Tienen 3 mensajes automáticos a las 10:16 a.m."
+
+
+def test_repeated_data_is_only_claimed_when_it_was_seen():
+    # Gas Flamazul pidió el nombre en agosto y otra vez en octubre: «Datos repetidos», con fecha y marca.
+    # Gas Oriente pidió datos en una sola plática: no se puede decir «cada vez» (2026-10-21).
+    dos_dias = _chat(("outbound", "Hola", 0), ("inbound", "¡Gracias por escribir! ¿Me da su nombre completo?", 0.1),
+                     ("outbound", "Hola de nuevo", 60 * 24 * 60), ("inbound", "¡Gracias por escribir! ¿Me da su nombre completo?", 60 * 24 * 60 + 0.1))
+    items, _r, metricas = armador.construir_conversacion(dos_dias)
+    h = next(o for o in armador.detectar_hechos(items, metricas)["oportunidades"] if o["tipo"] == "sin_historial")
+    assert h["dato"] == "Datos repetidos" and h["mensaje"] is not None and "volvieron a pedir" in h["vimos"]
+    assert re.match(r"El \d+ de \w+ volvieron", h["vimos"])
+    una = _chat(("outbound", "Hola", 0), ("inbound", "Indíqueme su dirección y colonia, por favor.", 3))
+    items, _r, metricas = armador.construir_conversacion(una)
+    h = next(o for o in armador.detectar_hechos(items, metricas)["oportunidades"] if o["tipo"] == "sin_historial")
+    assert h["dato"] == "Sin historial" and h["mensaje"] is None and "cada vez" not in h["vimos"].lower()
+
+
 def test_whatsapp_menus_show_as_buttons_under_the_message():
     texto, opciones = armador.separar_opciones("¿En qué te ayudo?\n[Opciones: Ubicación | Horario | Asesor]")
     assert (texto, opciones) == ("¿En qué te ayudo?", ["Ubicación", "Horario", "Asesor"])

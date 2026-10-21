@@ -304,6 +304,23 @@ def _eq(field: str, value, gin: bool = True) -> sql.Composable:
     return exact
 
 
+def _en_lista(field: str, values) -> sql.Composable | None:
+    """$in largo de textos/números/bool en un campo de primer nivel: el valor (o un elemento del arreglo)
+    está en la lista. Lo mismo que la contención de cada valor, pero el campo se lee una vez y Postgres
+    busca en la lista con hash: contacts de 100 empresas tardaba 210 ms (2026-10-21). None si no aplica."""
+    parts = _parts(field)
+    # _id ya va por la llave primaria; None y regex tienen su propia semántica. ObjectId y fechas sí: _eq
+    # también los compara por igualdad del valor (contacts.company_id mezcla texto y ObjectId: 842 → 46 ms).
+    if field == "_id" or len(parts) != 1 or not all(isinstance(v, (str, int, float, ObjectId, datetime)) for v in values):
+        return None
+    for v in values:
+        _check_value(v)
+    x = sql.SQL("(doc -> {})").format(sql.Literal(parts[0]))
+    lista = sql.SQL("ARRAY[{}]::jsonb[]").format(sql.SQL(", ").join(sql.Literal(json.dumps(codec.encode_value(v))) for v in values))
+    return sql.SQL("COALESCE({x} = ANY({l}) OR (jsonb_typeof({x}) = 'array' AND EXISTS ("
+                   "SELECT 1 FROM jsonb_array_elements({x}) AS _in(_e) WHERE _e = ANY({l}))), false)").format(x=x, l=lista)
+
+
 def _cmp(field: str, op: str, value) -> sql.Composable:
     sym = sql.SQL({"$gt": ">", "$gte": ">=", "$lt": "<", "$lte": "<="}[op])
     _check_value(value)
@@ -417,7 +434,10 @@ def _field(field: str, spec) -> sql.Composable:
             if not isinstance(value, (list, tuple)):
                 raise Unsupported(f"{op} sin lista")
             gin = op == "$in" and len(value) <= _GIN_MAX_VALUES
-            any_of = sql.SQL("({})").format(sql.SQL(" OR ").join(_eq(field, v, gin) for v in value)) if value else sql.SQL("false")
+            if len(value) > _GIN_MAX_VALUES and (lista := _en_lista(field, value)) is not None:
+                any_of = lista
+            else:
+                any_of = sql.SQL("({})").format(sql.SQL(" OR ").join(_eq(field, v, gin) for v in value)) if value else sql.SQL("false")
             parts.append(any_of if op == "$in" else sql.SQL("NOT {}").format(any_of))
         elif op == "$exists":
             parts.append(_exists(field) if value else sql.SQL("NOT {}").format(_exists(field)))

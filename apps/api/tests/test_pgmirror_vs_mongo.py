@@ -179,6 +179,25 @@ def test_filters_match_real_mongo(engines):
     assert not mismatches, "\n".join(mismatches[:20])
 
 
+def test_long_in_lists_match_real_mongo(engines):
+    """$in/$nin de más de 20 textos o números: se resuelve leyendo el campo una vez y buscando en la lista
+    con hash (contacts de 100 empresas tardaba 210 ms); debe dar lo mismo que Mongo, arreglos incluidos."""
+    mongo, store, table, docs = engines
+    r = random.Random(9)
+    pool = [v for v in _values(docs) if isinstance(v, (str, int, float, ObjectId, datetime))]  # company_id mezcla texto y ObjectId
+    compared = 0
+    for field in ["n", "s", "mix", "tags", "o", "k", "a"]:
+        for op in ("$in", "$nin"):
+            values = r.sample(pool, 30) + [1, 1.0, "zeta", 10**12, FIXED_OID, str(FIXED_OID)]
+            flt = {field: {op: values}}
+            got = sorted(d["_id"] for d in store.query_docs(table, sqlfilter.where(flt)))
+            assert got == _mongo_ids(mongo, flt), flt
+            compared += 1
+    assert "= ANY(" in sqlfilter.where({"s": {"$in": pool[:25]}}).as_string(None)
+    assert "= ANY(" not in sqlfilter.where({"s": {"$in": pool[:5]}}).as_string(None)  # corta: índice GIN
+    assert compared == 14
+
+
 SORT_FIELDS = ["n", "s", "d", "o", "mix", "k.v", "tags", "_id"]
 
 

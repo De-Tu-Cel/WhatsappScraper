@@ -145,6 +145,12 @@ def _check(raw_db, store) -> int:
             faltan = sorted({unicos[i] for i in unicos if not listos.get(i)})
             print(f"  Índices únicos: {sum(1 for i in unicos if listos.get(i))} de {len(unicos)} listos"
                   + (f" · faltan en: {', '.join(faltan)} (mientras, sus escrituras van por Mongo)" if faltan else ""))
+    from app.pgmirror import archivos
+    if archivos.modo() != "mongo":
+        en_mongo = raw_db["fs.files"].count_documents({})
+        en_pg = store.query("SELECT count(*) FROM mongo._files")[0][0]
+        print(f"\nArchivos (GridFS) en modo {archivos.modo()}: {en_mongo} en Mongo · {en_pg} en Postgres"
+              + ("" if en_mongo == en_pg else " (el vigilante copia lo que falte cada minuto)"))
     huerfanas = [c for (c,) in store.query("SELECT DISTINCT collection FROM mongo._outbox") if c not in primarias]
     if huerfanas:
         print(f"\n¡Bandeja con pendientes de colecciones que ya no están en primary: {', '.join(huerfanas)}! "

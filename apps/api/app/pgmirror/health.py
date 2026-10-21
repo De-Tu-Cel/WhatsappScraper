@@ -32,7 +32,7 @@ import socket
 import threading
 import time
 
-from app.pgmirror import codec, config, primaria
+from app.pgmirror import archivos, codec, config, primaria
 from app.pgmirror.reconcile import reconcile, still_different
 from app.pgmirror.store import SORT_INDEXES
 
@@ -65,6 +65,7 @@ _META = [
     "CREATE TABLE IF NOT EXISTS mongo._dirty (collection text PRIMARY KEY, "
     "since timestamptz NOT NULL DEFAULT now(), reason text)",
     *primaria.OUTBOX_DDL,
+    *archivos.DDL,
 ]
 _meta_ready = set()
 
@@ -235,6 +236,10 @@ class Monitor:
                 self._rt.bump("_bandeja", "copiados_tarde", n)
         self._maybe_reconcile(store, active)
         self._ensure_sort_indexes(store, active)
+        if archivos.modo() != "mongo":
+            a_pg, a_mongo = archivos.sincronizar(self._raw_db, store)
+            if a_pg or a_mongo:
+                log.info("pgmirror files: %d copied to Postgres, %d copied to GridFS", a_pg, a_mongo)
 
     def _ensure_sort_indexes(self, store, active):
         """Mantenimiento de cada colección activa: `doc` sin comprimir (store.ensure_doc_storage) y

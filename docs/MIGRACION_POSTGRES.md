@@ -186,7 +186,7 @@ Desde el 2026-10-21 a las 19:51 UTC **las 44 colecciones leen de Postgres** (41 
    - Orden: primero las colecciones de configuración y catálogos; las colas, cupos y leases al final. **El cambio de modo se hace en horario sin envíos** (de noche): durante el redespliegue conviven unos segundos procesos viejos (escriben en Mongo y copian a Postgres) y nuevos (escriben en Postgres), y dos escrituras al mismo documento en ese momento podrían pisarse.
    - **Regresar**: `<x>=postgres` y redesplegar (Mongo vuelve a mandar). Antes, `check` con la bandeja de esa colección en 0 y la colección `OK`.
 4. **Lo que todavía va a Mongo aunque se lea de Postgres**: los 28 `aggregate` ya se resuelven en SQL (`agregar.py`, detrás de `PGMIRROR_AGGREGATE`: `shadow` para comparar y luego `postgres`) y la proyección con `$slice` ya se traduce. La app no usa `bulk_write` (en primary levanta un error en vez de escribir solo en Mongo).
-5. **Archivos**: GridFS (5 archivos) a una tabla.
+5. **Archivos** (`app/pgmirror/archivos.py`), hecho y por encender: GridFS (5 archivos; subidas, stickers, medios entrantes de WhatsApp) a la tabla `mongo._files`, con su propio interruptor `archivos=<modo>` en `DB_MODES`. En `postgres` se guarda en GridFS y se copia; se lee de Postgres. En `primary` se guarda en Postgres y se copia a GridFS. Los archivos nunca cambian ni se borran: el vigilante copia cada minuto lo que falte de un lado o del otro (la carga inicial de los 5 es eso mismo). `check` muestra los conteos.
 6. **Mongo en solo lectura 30 días** con un respaldo final, y se apaga.
 
 ---

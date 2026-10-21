@@ -127,6 +127,22 @@ Revisión (terminal del contenedor backend): `python scripts/pg_mirror.py check`
 ### Etapa 5 — Archivos y retiro
 GridFS → `files`; luego Mongo en solo lectura 30 días con un respaldo final, y se apaga.
 
+### Estado en producción (2026-10-21, 04:40 UTC)
+Con `PGMIRROR_WAIT_HOURS=2` y solo lo que `check` dio por `LISTA`:
+
+| Modo | Colecciones (desde) |
+|---|---|
+| **postgres** (leen de Postgres) | `settings`, `message_templates`, `warmup_config`, `ai_global_config`, `app_notifications`, `security_counters`, `social_media`, `person_contacts` (10-20 ~17:10) · `proxies`, `classification_comparisons` (10-21 00:41) · `instances`, `instance_daily_verifications`, `service_health` (02:31) · `send_queue_items`, `scrape_jobs`, `scheduled_sends` (02:42) |
+| **shadow** | el resto de las etapas 1–4. La mayoría junta pocas comparaciones porque casi no se leen (necesitan uso normal de la app); `message_logs` además está bloqueada por rendimiento (abajo). |
+
+Verificado tras cada paso: 0 lecturas resueltas en Mongo, 0 errores, 0 diferencias, WhatsApp sin reinicio (es un recurso aparte, `docs/WWEBJS_RECURSO_APARTE.md`).
+
+Diferencias reales que salieron en shadow y se corrigieron en el código:
+- Leer y enseguida escribir (`reserve_verification_slot`, `service_health.record`): la foto de Mongo quedaba vieja. El comparador ahora vuelve a leer Mongo antes de reportar (`b60d2ef`).
+- `find_one` sin orden con varios resultados (barrido "sin respuesta" del clasificador): cada motor devolvía otro documento. Ahora con orden explícito (`d88152d`). Regla para el código nuevo: un `find_one`/`limit` sobre varios documentos lleva `sort`.
+
+**Pendiente antes de pasar a postgres colecciones grandes o muy consultadas (`message_logs`, `contacts`, `companies`):** el `sort` se traduce a una expresión por fila (para respetar el orden de tipos de Mongo) que obliga a leer cada documento completo y no usa índices. Medido en producción: `message_logs.find_one({}, sort created_at desc)` — la "última actividad" que la pantalla de Conversaciones consulta cada 5 s — tarda 4.5 s en Postgres contra 2 ms en Mongo (el límite es 5 s: hubo 15 timeouts del comparador); las demás lecturas de `message_logs`, ~200 ms contra 2–8 ms. Hace falta guardar columnas de orden precalculadas (p. ej. `created_at` normalizado) con índice b-tree y que el traductor las use cuando el campo es simple. Hasta entonces `message_logs` se queda en shadow (la app no se ve afectada: lee de Mongo).
+
 ---
 
 ## 4. Procedimiento por colección (se repite en cada una)

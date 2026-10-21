@@ -21,3 +21,22 @@ def test_failed_delivery_cannot_be_classified_as_no_response(monkeypatch):
     assert queries[0]['status']=={'$ne':'failed'}
     assert db.save_message_analysis.call_count==1
     assert db.save_message_analysis.call_args.args[0]=='sent'
+
+
+def test_reply_lookup_is_deterministic_in_mongo_and_postgres(monkeypatch):
+    # Shadow de message_logs (2026-10-21): sin orden, Mongo y Postgres devolvían cada uno otro
+    # de los entrantes que cumplen (120 diferencias). Solo importa si existe: el primero por fecha.
+    now=datetime.now(timezone.utc).replace(tzinfo=None)
+    logs=MagicMock()
+    sent={'_id':'sent','company_id':'qa-co','to_number':'5213311171010','status':'sent','created_at':now-timedelta(hours=2)}
+    logs.find.side_effect=lambda query,*args,**kw: [sent] if query.get('direction')=='outbound' else []
+    logs.find_one.return_value={'_id':'reply'}
+    db=SimpleNamespace(db=SimpleNamespace(message_logs=logs),save_message_analysis=MagicMock())
+    monkeypatch.setattr(classifier,'MongoDBManager',lambda:db)
+    monkeypatch.setattr(classifier,'_get_thresholds',lambda db:(10,5,1,60))
+    monkeypatch.setattr(classifier,'_sweep_reply_analyses',lambda *args:None)
+    classifier._sweep_pending()
+    call=next(c for c in logs.find_one.call_args_list if c.args and c.args[0].get('direction')=='inbound')
+    assert call.args[0]['from_number']=={'$regex':'3311171010'}
+    assert call.args[1]=={'_id':1} and call.kwargs['sort']==[('created_at',1)]
+    assert db.save_message_analysis.call_count==0  # sí respondió

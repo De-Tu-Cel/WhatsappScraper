@@ -3344,7 +3344,10 @@ def _sweep_pending():
             }
             if _clean10:
                 reply_filter["from_number"] = {"$regex": _clean10}
-            has_reply = db.db.message_logs.find_one(reply_filter)
+            # Solo importa si existe. Con orden explícito el documento es el mismo en Mongo y en
+            # Postgres: sin él cada uno devolvía otro de los que cumplen (120 diferencias de
+            # shadow en message_logs, 2026-10-21; ninguno garantiza el orden natural).
+            has_reply = db.db.message_logs.find_one(reply_filter, {"_id": 1}, sort=[("created_at", 1)])
             if not has_reply:
                 db.save_message_analysis(str(ob["_id"]), {
                     "category":         "sin_respuesta",

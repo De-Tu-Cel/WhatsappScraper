@@ -276,6 +276,21 @@ def test_a_bot_is_never_praised_as_a_person_attending(monkeypatch):
         assert [f["id"] for f in info["hechos"]["fortalezas"]] == [f"F{k}" for k in range(1, len(tipos) + 1)]
 
 
+def test_a_strength_is_never_listed_twice(monkeypatch):
+    # Taboo Restaurant, 2026-10-21: con solo dos hechos positivos la IA puso «Canal activo» dos veces.
+    def fake(*_a, **_k):
+        return {"sintesis_titular": "Hoy el canal responde solo.", "sintesis_texto": "Falta cerrar el pedido en el chat.",
+                "fortalezas": [{"titulo": "Canal activo", "texto": "Su WhatsApp responde mensajes.", "hecho": "F2"},
+                               {"titulo": "Respuesta inmediata", "texto": "Responde en 11 segundos.", "hecho": "F1"},
+                               {"titulo": "canal  ACTIVO", "texto": "Responde en tiempo real.", "hecho": "F2"}],
+                "oportunidades": []}
+    monkeypatch.setattr(armador, "hallazgos_con_llm", fake)
+    capa, _info = _armar(_chat(("outbound", "Hola, ¿hacen envíos?", 0), ("inbound", "Hola, sí. ¿Qué te gustaría pedir?", 0.2)),
+                         {"category": "bot"})
+    titulos = [" ".join(armador.formato.texto_plano(f["titulo"]).lower().split()) for f in capa["fortalezas"]]
+    assert len(titulos) == len(set(titulos)) and "canal activo" in titulos
+
+
 def test_whatsapp_menus_show_as_buttons_under_the_message():
     texto, opciones = armador.separar_opciones("¿En qué te ayudo?\n[Opciones: Ubicación | Horario | Asesor]")
     assert (texto, opciones) == ("¿En qué te ayudo?", ["Ubicación", "Horario", "Asesor"])

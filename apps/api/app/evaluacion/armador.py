@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import re
+import unicodedata
 from datetime import datetime, timezone
 
 from app.evaluacion import formato
@@ -523,14 +524,19 @@ def depurar_hallazgos(datos: dict, items: list, ventajas_ids: set, respaldo: dic
             notas["recortados"] += 1
         return formato.texto_plano(t, LIMITES[clave])
 
+    def mismo_titulo(t):
+        return re.sub(r"\W+", " ", unicodedata.normalize("NFD", t or "").encode("ascii", "ignore").decode()).strip().lower()
+
     fort = []
     for f in (datos.get("fortalezas") or [])[:3]:
         if not isinstance(f, dict) or not f.get("titulo"):
             continue
         h = por_id.get(str(f.get("hecho") or ""))
         h = h if h and h["id"].startswith("F") else None
-        fort.append({"titulo": cabe(f["titulo"], "f_titulo", h and h["titulo"]),
-                     "texto": cabe(f.get("texto"), "f_texto", h and h["texto"]),
+        titulo = cabe(f["titulo"], "f_titulo", h and h["titulo"])
+        if mismo_titulo(titulo) in {mismo_titulo(x["titulo"]) for x in fort}:
+            continue  # con pocos hechos la IA repetía uno tal cual (Taboo, 2026-10-21: «Canal activo» dos veces)
+        fort.append({"titulo": titulo, "texto": cabe(f.get("texto"), "f_texto", h and h["texto"]),
                      "mensaje": h["mensaje"] if h else marca(f.get("mensaje"), {"negocio"})})
     oport, usadas, citados, remedios = [], set(), set(), set()
     for o in (datos.get("oportunidades") or [])[:3]:
@@ -561,7 +567,8 @@ def depurar_hallazgos(datos: dict, items: list, ventajas_ids: set, respaldo: dic
                       "mensaje": mensaje, "ventaja": ventaja})
         remedios.add(oport[-1]["oportunidad"])
     if len(fort) < 3:
-        faltan = [f for f in respaldo["fortalezas"] if f["titulo"] not in {x["titulo"] for x in fort}][:3 - len(fort)]
+        faltan = [f for f in respaldo["fortalezas"]
+                  if mismo_titulo(f["titulo"]) not in {mismo_titulo(x["titulo"]) for x in fort}][:3 - len(fort)]
         notas["completadas"] += len(faltan)
         fort += faltan
     if len(oport) < 3:

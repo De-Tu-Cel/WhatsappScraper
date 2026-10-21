@@ -171,6 +171,7 @@ Medido después en producción, antes de pasar `message_logs`: los `distinct` y 
 Hecho el 2026-10-21: desplegado, medido en producción y `message_logs`, `contacts` y `companies` en postgres.
 
 ### Fase de escrituras: Postgres fuente de verdad (en curso)
+
 Desde el 2026-10-21 a las 19:51 UTC **las 44 colecciones leen de Postgres** (41 existen; las otras 3 entran al crearse). Las escrituras todavía van primero a Mongo y se copian. Lo que falta para que Postgres mande, en orden, con el mismo método de las lecturas (medir antes de cambiar):
 
 1. **Motor de actualizaciones** (`app/pgmirror/actualizar.py`), hecho: aplica en Python lo que la app usa (`$set`, `$unset`, `$inc`, `$push` con `$each`/`$slice`, `$addToSet`, `$pull` con valor o `$in`, `$max`, `$min`, `$setOnInsert`, upserts); lo demás levanta `NoSoportado`. Contra Mongo 7 real (`tests/test_pgmirror_actualizar.py`): 1 500 updates al azar dejan el mismo documento, orden de llaves incluido (Mongo 5+ agrega los campos nuevos en orden lexicográfico), y donde Mongo da error el motor también. En los upserts coincide el contenido: el orden de los campos que salen del filtro **no es determinista ni en Mongo 7** (medido: el mismo upsert dejó «date, instance» y luego «instance, date»).

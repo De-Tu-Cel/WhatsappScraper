@@ -52,3 +52,10 @@ def collection_mode(collection: str) -> str:
     mode = (os.getenv(env_name(collection), "").strip().lower()
             or _parse_modes(os.getenv("DB_MODES", "")).get(collection, "mongo"))
     return mode if mode in MODES else "mongo"  # un valor mal escrito nunca activa nada
+
+
+def aggregate_mode() -> str:
+    """PGMIRROR_AGGREGATE: dónde se resuelven los aggregate() de las colecciones en modo postgres.
+    mongo (por defecto) · shadow (responde Mongo y se compara contra Postgres) · postgres."""
+    mode = os.getenv("PGMIRROR_AGGREGATE", "").strip().lower()
+    return mode if mode in ("mongo", "shadow", "postgres") else "mongo"

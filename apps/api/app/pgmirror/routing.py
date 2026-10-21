@@ -23,7 +23,7 @@ import time
 
 from psycopg import sql
 
-from app.pgmirror import codec, config, sombra_escrituras, sqlfilter
+from app.pgmirror import agregar, codec, config, sombra_escrituras, sqlfilter
 
 log = logging.getLogger(__name__)
 MAX_PREQUERY = 1000
@@ -386,6 +386,18 @@ def _same_result(mongo_rows, pg_rows, sorted_, windowed) -> str | None:
     return "orden-natural" if windowed else "contenido"  # con limit, distinto orden natural = otros documentos
 
 
+def _canon_agregado(filas) -> list:
+    """Para comparar aggregate: sin orden de filas ni de arreglos (un $addToSet no tiene orden; un empate de
+    $sort, tampoco) y al milisegundo, como lo guarda Mongo."""
+    def norm(v):
+        if isinstance(v, dict):
+            return {k: norm(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return sorted((norm(x) for x in v), key=lambda x: codec.encode_doc({"v": x}))
+        return v
+    return sorted(codec.encode_doc({"v": norm(codec.decode_doc(codec.encode_doc({"v": f}))["v"])}) for f in filas)
+
+
 class RoutedCollection:
     def __init__(self, raw, name, mode, rt):
         self._raw, self._name, self._mode, self._rt = raw, name, mode, rt
@@ -708,6 +720,41 @@ class RoutedCollection:
                     seen.add(marker)
                     values.append(value)
         return values
+
+    def aggregate(self, pipeline, *args, **kwargs):
+        """Con PGMIRROR_AGGREGATE (config.aggregate_mode): mongo, shadow o postgres (agregar.py)."""
+        modo = config.aggregate_mode()
+        if self._mode != "postgres" or modo == "mongo" or args or set(kwargs) - {"allowDiskUse"}:
+            return self._raw.aggregate(pipeline, *args, **kwargs)
+        if modo == "shadow":
+            filas = list(self._raw.aggregate(pipeline, **kwargs))
+            esperado = _canon_agregado(filas)  # ahora: la app puede modificar lo que recibe
+            self._shadow(lambda: self._comparar_agregado(pipeline, esperado))
+            return iter(filas)
+        try:
+            self._check_readable()
+            return iter(agregar.ejecutar(self._rt.store, self._name, pipeline))
+        except Exception as exc:
+            self._fallback("aggregate", exc)
+            return self._raw.aggregate(pipeline, **kwargs)
+
+    def _comparar_agregado(self, pipeline, esperado):
+        if not self._rt.pg_readable(self._name):
+            return
+        try:
+            obtenido = _canon_agregado(agregar.ejecutar(self._rt.store, self._name, pipeline))
+        except sqlfilter.Unsupported:
+            self._rt.bump(self._name, "agregado_no_soportado")
+            return
+        if obtenido == esperado:
+            self._rt.bump(self._name, "agregado_ok")
+            return
+        # La app escribe todo el tiempo: antes de llamarlo diferencia, Mongo otra vez.
+        if obtenido == _canon_agregado(list(self._raw.aggregate(pipeline))):
+            self._rt.bump(self._name, "agregado_ok")
+            return
+        self._rt.bump(self._name, "agregado_dif")
+        self._rt.store.record_diff(self._name, "aggregate", f"pipeline={pipeline!r} mongo={len(esperado)} postgres={len(obtenido)} filas")
 
     def distinct(self, key, filter=None, *args, **kwargs):
         if self._mode == "dual" or args or kwargs:

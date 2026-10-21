@@ -11,7 +11,10 @@ La semántica se midió contra Mongo 7 real y se vuelve a comparar en cada corri
 - $gt/$lt…: el valor final o cualquier elemento suyo, y solo del mismo tipo.
 - Orden: un arreglo ordena por su menor elemento (asc) o su mayor (desc), el arreglo
   vacío va antes que null, y sin sort se respeta el orden de inserción (columna seq,
-  el equivalente del orden natural de Mongo).
+  el equivalente del orden natural de Mongo). La llave de orden la calcula una función
+  de Postgres (SORT_KEY_DDL) para que un índice pueda servirla (store.ensure_sort_index).
+- Velocidad: a la condición exacta se le agrega otra NECESARIA que sí usa índices
+  (contención para el índice GIN, llave de orden para los rangos); el resultado no cambia.
 - Proyección a.b: entra en cada elemento-objeto (y arreglo anidado) de un arreglo.
 Cualquier otra cosa (o una regex cuya sintaxis signifique algo distinto en PCRE y en
 Postgres) levanta Unsupported y la capa lee de Mongo: nunca adivina.
@@ -69,9 +72,9 @@ def _has_subdoc(value) -> bool:
 
 # Llaves con las que Extended JSON guarda valores que NO son subdocumentos
 # (ObjectId, fechas, decimales, binarios…; $nulstr es un texto con NUL, ver codec).
-_EJSON_KEYS = sql.SQL(
-    "array['$oid', '$date', '$numberDecimal', '$numberDouble', '$numberLong', '$binary', '$regularExpression', "
-    "'$timestamp', '$minKey', '$maxKey', '$symbol', '$code', '$dbPointer', '$undefined', '$uuid', '$nulstr']")
+_EJSON_ARRAY = ("array['$oid', '$date', '$numberDecimal', '$numberDouble', '$numberLong', '$binary', '$regularExpression', "
+                "'$timestamp', '$minKey', '$maxKey', '$symbol', '$code', '$dbPointer', '$undefined', '$uuid', '$nulstr']")
+_EJSON_KEYS = sql.SQL(_EJSON_ARRAY)
 
 
 def _is_doc(x) -> sql.Composable:
@@ -115,8 +118,145 @@ def _ts(x) -> sql.Composable:
         "ELSE to_timestamp(({x} -> '$date' ->> '$numberLong')::numeric / 1000) END)").format(x=x)
 
 
+# ── Llave de orden ─────────────────────────────────────────────────────────────
+# Una sola llave compuesta por valor, en el orden de tipos de BSON:
+#   (vacío) < null < números < textos < objetos < arreglos < binarios < ObjectId < bool < fechas
+# r = rango del tipo; n = número, bool (0/1) o fecha (ms desde 1970); t = texto u ObjectId (COLLATE "C");
+# k = el valor mismo, solo para los tipos sin llave propia. Al comparar compuestos, Postgres
+# toma NULL como mayor que cualquier valor, igual en ORDER BY, en índices y dentro de las funciones.
+# Las funciones son IMMUTABLE (nunca fallan: un índice que falla bloquearía las escrituras del
+# espejo) para que un índice de expresión sirva el ORDER BY y los rangos. La versión va en el
+# nombre: si la semántica cambia se crea sortkey_v2 con índices nuevos; NUNCA se reemplaza una
+# función existente (sus índices quedarían desordenados).
+SORT_KEY_CHECK = "mongo.sortkey_v1_pick(jsonb, text[], integer)"
+SORT_KEY_DDL = [
+    'CREATE TYPE mongo.sortkey_v1 AS (r integer, n numeric, t text COLLATE "C", k jsonb)',
+    r"""CREATE FUNCTION mongo.sortkey_v1_of(v jsonb) RETURNS mongo.sortkey_v1
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $fn$
+DECLARE
+  o mongo.sortkey_v1;
+  typ text := jsonb_typeof(v);
+  s text;
+  zl integer; y integer; mo integer; era integer; yoe integer; doe integer; days bigint;
+BEGIN
+  IF typ IS NULL OR typ = 'null' THEN
+    o.r := 1;
+  ELSIF typ = 'number' THEN
+    o.r := 2; o.n := v::numeric;
+  ELSIF typ = 'string' THEN
+    o.r := 3; o.t := v #>> '{}';
+  ELSIF typ = 'boolean' THEN
+    o.r := 8; o.n := CASE WHEN v::boolean THEN 1 ELSE 0 END;
+  ELSIF typ = 'array' THEN
+    o.r := 5; o.k := v;
+  ELSIF v ? '$emptyArray' THEN
+    o.r := 0;
+  ELSIF v ? '$oid' THEN
+    o.r := 7; o.t := v ->> '$oid';
+  ELSIF v ? '$date' THEN
+    -- "2026-10-20T12:00:00Z", con .mmm y/o desfase ±HHMM; fuera de 1970-9999, {"$numberLong": ms}.
+    -- Se calcula con aritmética (días desde 1970) y no con ::timestamptz, que depende de la sesión.
+    -- Se valida con ~ y se corta con substr: regexp_match con grupos tardaba ~190 µs por fecha.
+    o.r := 9;
+    s := v ->> '$date';
+    IF jsonb_typeof(v -> '$date') = 'string' THEN
+      IF s ~ '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:?\d\d)$' THEN
+        zl := CASE WHEN right(s, 1) = 'Z' THEN 1 WHEN substr(s, length(s) - 2, 1) = ':' THEN 6 ELSE 5 END;
+        mo := substr(s, 6, 2)::integer;
+        y := substr(s, 1, 4)::integer - CASE WHEN mo <= 2 THEN 1 ELSE 0 END;
+        era := (CASE WHEN y >= 0 THEN y ELSE y - 399 END) / 400;
+        yoe := y - era * 400;
+        doe := yoe * 365 + yoe / 4 - yoe / 100 + (153 * (mo + CASE WHEN mo > 2 THEN -3 ELSE 9 END) + 2) / 5
+               + substr(s, 9, 2)::integer - 1;
+        days := era::bigint * 146097 + doe - 719468;
+        o.n := (((days * 24 + substr(s, 12, 2)::integer) * 60 + substr(s, 15, 2)::integer) * 60
+                + substr(s, 18, 2)::integer) * 1000::numeric
+               + CASE WHEN length(s) - zl > 19 THEN ('0' || substr(s, 20, length(s) - zl - 19))::numeric * 1000 ELSE 0 END
+               - CASE WHEN zl = 1 THEN 0
+                      ELSE (CASE WHEN substr(s, length(s) - zl + 1, 1) = '-' THEN -1 ELSE 1 END)
+                           * (substr(s, length(s) - zl + 2, 2)::integer * 60 + right(s, 2)::integer) * 60000 END;
+      END IF;
+    ELSIF (v -> '$date' ->> '$numberLong') ~ '^-?\d{1,20}$' THEN
+      o.n := (v -> '$date' ->> '$numberLong')::numeric;
+    END IF;
+  ELSIF v ?| array['$numberDecimal', '$numberDouble', '$numberLong'] THEN
+    o.r := 2;
+    s := COALESCE(v ->> '$numberDecimal', v ->> '$numberLong', v ->> '$numberDouble');
+    -- Largo y exponente acotados (Decimal128: 34 dígitos, exponente ±6176): el cast nunca desborda.
+    IF (length(s) <= 64 AND s ~* '^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d{1,4})?$') OR s ~* '^[+-]?inf(inity)?$' THEN
+      o.n := s::numeric;
+    ELSE
+      o.n := '-Infinity'::numeric;  -- NaN: Mongo lo pone antes que cualquier otro número
+    END IF;
+  ELSIF v ? '$binary' THEN
+    o.r := 6; o.k := v;
+  ELSIF v ? '$timestamp' THEN
+    o.r := 10; o.k := v;
+  ELSIF v ? '$regularExpression' THEN
+    o.r := 11; o.k := v;
+  ELSE
+    o.r := 4; o.k := v;
+  END IF;
+  RETURN o;
+END
+$fn$""",
+    # Como Mongo: cada elemento de un arreglo final es candidato (el menor para dir=1, el mayor
+    # para dir=-1), el arreglo vacío ordena antes que null y en una ruta a.b se entra en los
+    # elementos-objeto de los arreglos intermedios (un elemento que no es objeto cuenta como null).
+    r"""CREATE FUNCTION mongo.sortkey_v1_pick(base jsonb, path text[], dir integer) RETURNS mongo.sortkey_v1
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $fn$
+DECLARE
+  v jsonb := base -> path[1];
+  last boolean := cardinality(path) = 1;
+  e jsonb;
+  cand mongo.sortkey_v1;
+  best mongo.sortkey_v1;
+  found boolean := false;
+BEGIN
+  IF NOT last AND jsonb_typeof(v) = 'object' AND NOT (v ?| """ + _EJSON_ARRAY + r""") THEN
+    RETURN mongo.sortkey_v1_pick(v, path[2:], dir);
+  END IF;
+  IF v IS NULL OR jsonb_typeof(v) <> 'array' THEN
+    RETURN mongo.sortkey_v1_of(CASE WHEN last THEN v END);
+  END IF;
+  IF jsonb_array_length(v) = 0 THEN
+    RETURN mongo.sortkey_v1_of(CASE WHEN last THEN '{"$emptyArray": 1}'::jsonb END);
+  END IF;
+  FOR e IN SELECT x FROM jsonb_array_elements(v) AS a(x) LOOP
+    IF last THEN
+      cand := mongo.sortkey_v1_of(e);
+    ELSIF jsonb_typeof(e) = 'object' AND NOT (e ?| """ + _EJSON_ARRAY + r""") THEN
+      cand := mongo.sortkey_v1_pick(e, path[2:], dir);
+    ELSE
+      cand := mongo.sortkey_v1_of(NULL);
+    END IF;
+    IF NOT found OR (dir = 1 AND cand < best) OR (dir <> 1 AND cand > best) THEN
+      best := cand;
+      found := true;
+    END IF;
+  END LOOP;
+  RETURN best;
+END
+$fn$""",
+]
+
+
+def sort_key(field: str, direction: int) -> sql.Composable:
+    """Llave de orden de Mongo de `field` en cada fila. El mismo texto sirve para ORDER BY y para
+    el índice (store.ensure_sort_index): Postgres solo usa el índice si la expresión es idéntica."""
+    return sql.SQL("mongo.sortkey_v1_pick(doc, {}, {})").format(sql.Literal(_parts(field)), sql.Literal(int(direction)))
+
+
+def _value_key(value) -> sql.Composable:
+    """Llave de orden de un valor del filtro (constante: Postgres la calcula una vez al planear)."""
+    return sql.SQL("mongo.sortkey_v1_of({})").format(_jsonb(value))
+
+
 # ── Condiciones ────────────────────────────────────────────────────────────────
-def _eq(field: str, value) -> sql.Composable:
+_GIN_MAX_VALUES = 20  # un $in más largo no agrega la condición para el índice (demasiadas ramas)
+
+
+def _eq(field: str, value, gin: bool = True) -> sql.Composable:
     if isinstance(value, (re.Pattern, Regex)):
         return _regex(field, value, "")
     if field == "_id" and isinstance(value, (ObjectId, str, int)) and not isinstance(value, bool):
@@ -127,6 +267,7 @@ def _eq(field: str, value) -> sql.Composable:
     if _has_subdoc(value):
         # Mongo compara subdocumentos con el orden de sus llaves; jsonb no lo distingue.
         raise Unsupported("igualdad con subdocumento")
+    parts = _parts(field)
     if value is None:
         def terminal(x):
             return sql.SQL("({x} IS NULL OR {x} = 'null'::jsonb OR (jsonb_typeof({x}) = 'array' AND {x} @> '[null]'::jsonb))").format(x=x)
@@ -139,7 +280,16 @@ def _eq(field: str, value) -> sql.Composable:
 
         def terminal(x):
             return sql.SQL("({x} = {v} OR (jsonb_typeof({x}) = 'array' AND {x} @> {arr}))").format(x=x, v=target, arr=as_array)
-    return _walk(sql.SQL("doc"), _parts(field), terminal, missing=value is None)
+    exact = _walk(sql.SQL("doc"), parts, terminal, missing=value is None)
+    if gin and len(parts) == 1 and value is not None and not isinstance(value, (dict, list)):
+        # Necesaria para la igualdad de arriba (valor igual o arreglo que lo contiene) y la única
+        # forma que usa el índice GIN (jsonb_path_ops) de la tabla.
+        encoded = codec.encode_value(value)
+        whole = sql.Literal(json.dumps({parts[0]: encoded}))
+        inside = sql.Literal(json.dumps({parts[0]: [encoded]}))
+        return sql.SQL("({exact} AND (doc @> {whole}::jsonb OR doc @> {inside}::jsonb))").format(
+            exact=exact, whole=whole, inside=inside)
+    return exact
 
 
 def _cmp(field: str, op: str, value) -> sql.Composable:
@@ -170,7 +320,15 @@ def _cmp(field: str, op: str, value) -> sql.Composable:
                 x=x, s=sym, v=sql.Literal(str(value)))
     else:
         raise Unsupported(f"comparación con {type(value).__name__}")
-    return _walk(sql.SQL("doc"), _parts(field), _or_any_element(scalar), missing=False)
+    exact = _walk(sql.SQL("doc"), _parts(field), _or_any_element(scalar), missing=False)
+    # Necesaria y servible por un índice de orden: si algún valor es ≥ v, la llave mayor (la de
+    # sort desc) también lo es; si alguno es ≤ v, la menor (la de sort asc). Va después de la exacta
+    # para que, sin índice, solo se calcule en las filas que ya cumplen.
+    if op in ("$gt", "$gte"):
+        bound = sql.SQL("{} >= {}").format(sort_key(field, -1), _value_key(value))
+    else:
+        bound = sql.SQL("{} <= {}").format(sort_key(field, 1), _value_key(value))
+    return sql.SQL("({} AND {})").format(exact, bound)
 
 
 # Escapes \letra que significan lo mismo en PCRE (Mongo) y en las regex de Postgres.
@@ -242,11 +400,12 @@ def _field(field: str, spec) -> sql.Composable:
         if op == "$eq":
             parts.append(_eq(field, value))
         elif op == "$ne":
-            parts.append(sql.SQL("NOT {}").format(_eq(field, value)))
+            parts.append(sql.SQL("NOT {}").format(_eq(field, value, gin=False)))
         elif op in ("$in", "$nin"):
             if not isinstance(value, (list, tuple)):
                 raise Unsupported(f"{op} sin lista")
-            any_of = sql.SQL("({})").format(sql.SQL(" OR ").join(_eq(field, v) for v in value)) if value else sql.SQL("false")
+            gin = op == "$in" and len(value) <= _GIN_MAX_VALUES
+            any_of = sql.SQL("({})").format(sql.SQL(" OR ").join(_eq(field, v, gin) for v in value)) if value else sql.SQL("false")
             parts.append(any_of if op == "$in" else sql.SQL("NOT {}").format(any_of))
         elif op == "$exists":
             parts.append(_exists(field) if value else sql.SQL("NOT {}").format(_exists(field)))
@@ -287,8 +446,7 @@ def where(filter_: dict | None) -> sql.Composable:
 
 # ── Orden ──────────────────────────────────────────────────────────────────────
 class SortPlan(NamedTuple):
-    lateral: sql.Composable | None  # columnas _s0, _s1… calculadas una vez por fila
-    order: sql.Composable           # cuerpo del ORDER BY
+    order: sql.Composable  # cuerpo del ORDER BY
 
 
 def sort_items(sort) -> list[tuple[str, int]]:
@@ -305,76 +463,12 @@ def sort_items(sort) -> list[tuple[str, int]]:
     return [(f, d) for f, d in items]
 
 
-def _components(k) -> list[sql.Composable]:
-    """Llaves de orden de un valor jsonb en el orden de tipos de BSON:
-    (vacío) < null < números < textos < objetos < arreglos < binarios < ObjectId < bool < fechas."""
-    typ = sql.SQL("jsonb_typeof({})").format(k)
-    is_obj = sql.SQL("jsonb_typeof({}) = 'object'").format(k)
-    rank = sql.SQL(
-        "(CASE WHEN {k} IS NULL OR {t} = 'null' THEN 1 WHEN {t} = 'number' THEN 2 WHEN {t} = 'string' THEN 3 "
-        "WHEN {t} = 'boolean' THEN 8 WHEN {t} = 'array' THEN 5 WHEN {k} ? '$emptyArray' THEN 0 "
-        "WHEN {k} ? '$oid' THEN 7 WHEN {k} ? '$date' THEN 9 "
-        "WHEN {k} ?| array['$numberDecimal', '$numberDouble', '$numberLong'] THEN 2 "
-        "WHEN {k} ? '$binary' THEN 6 WHEN {k} ? '$timestamp' THEN 10 WHEN {k} ? '$regularExpression' THEN 11 "
-        "ELSE 4 END)").format(k=k, t=typ)
-    number = sql.SQL(
-        "(CASE WHEN {t} = 'number' THEN ({k})::numeric "
-        "WHEN {o} AND {k} ? '$numberDecimal' THEN ({k} ->> '$numberDecimal')::numeric "
-        "WHEN {o} AND {k} ? '$numberLong' THEN ({k} ->> '$numberLong')::numeric "
-        "WHEN {o} AND {k} ? '$numberDouble' THEN (CASE {k} ->> '$numberDouble' WHEN 'Infinity' THEN 'Infinity'::numeric "
-        "ELSE '-Infinity'::numeric END) END)").format(k=k, t=typ, o=is_obj)
-    text = sql.SQL("((CASE WHEN {t} = 'string' THEN {k} #>> '{{}}' END) COLLATE \"C\")").format(k=k, t=typ)
-    oid = sql.SQL("((CASE WHEN {o} AND {k} ? '$oid' THEN {k} ->> '$oid' END) COLLATE \"C\")").format(k=k, o=is_obj)
-    boolean = sql.SQL("(CASE WHEN {t} = 'boolean' THEN ({k})::boolean END)").format(k=k, t=typ)
-    date = sql.SQL("(CASE WHEN {o} AND {k} ? '$date' THEN {ts} END)").format(k=k, o=is_obj, ts=_ts(k))
-    return [rank, number, text, oid, boolean, date, k]
-
-
-def _sort_keys(base, parts, depth: int = 0) -> sql.Composable:
-    """SELECT con las llaves de orden de la ruta (como Mongo: cada elemento de un arreglo
-    final cuenta; un elemento intermedio que no es objeto aporta null)."""
-    value = sql.SQL("({} -> {})").format(base, sql.Literal(parts[0]))
-    as_array = sql.SQL("(CASE WHEN jsonb_typeof({v}) = 'array' THEN {v} ELSE '[]'::jsonb END)").format(v=value)
-    t, e = sql.Identifier(f"_st{depth}"), sql.Identifier(f"_se{depth}")
-    if len(parts) == 1:
-        return sql.SQL(
-            "SELECT {e} FROM jsonb_array_elements({arr}) AS {t}({e}) "
-            "UNION ALL SELECT CASE WHEN {v} IS NULL THEN 'null'::jsonb "
-            "WHEN jsonb_typeof({v}) = 'array' THEN '{{\"$emptyArray\": 1}}'::jsonb ELSE {v} END "
-            "WHERE jsonb_array_length({arr}) = 0").format(v=value, arr=as_array, t=t, e=e)
-    return sql.SQL(
-        "SELECT _k FROM ({in_obj}) AS {s1}(_k) WHERE {v_doc} "
-        "UNION ALL SELECT _k FROM jsonb_array_elements({arr}) AS {t}({e}), LATERAL ({in_elem}) AS {s2}(_k) "
-        "WHERE {e_doc} "
-        "UNION ALL SELECT 'null'::jsonb FROM jsonb_array_elements({arr}) AS {t}({e}) WHERE NOT {e_doc} "
-        "UNION ALL SELECT 'null'::jsonb WHERE NOT {v_doc} AND jsonb_array_length({arr}) = 0"
-    ).format(v_doc=_is_doc(value), e_doc=_is_doc(e), arr=as_array, t=t, e=e,
-             s1=sql.Identifier(f"_so{depth}"), s2=sql.Identifier(f"_sa{depth}"),
-             in_obj=_sort_keys(value, parts[1:], depth + 1), in_elem=_sort_keys(e, parts[1:], depth + 1))
-
-
 def sort_plan(sort) -> SortPlan:
-    """ORDER BY equivalente al sort de Mongo. Sin sort: orden de inserción (seq)."""
-    items = sort_items(sort)
-    columns, order = [], []
-    for i, (field, direction) in enumerate(items):
-        parts = _parts(field)
-        word = sql.SQL("ASC" if direction == 1 else "DESC")
-        no_arrays = sql.SQL(" AND ").join(
-            sql.SQL("jsonb_typeof(doc #> {}) IS DISTINCT FROM 'array'").format(sql.Literal(parts[:j + 1]))
-            for j in range(len(parts)))
-        pick = sql.SQL("(SELECT _k FROM ({keys}) AS _ks(_k) ORDER BY {by} LIMIT 1)").format(
-            keys=_sort_keys(sql.SQL("doc"), parts),
-            by=sql.SQL(", ").join(sql.SQL("{} {}").format(c, word) for c in _components(sql.Identifier("_k"))))
-        # Caso común (sin arreglos en la ruta): el valor directo, sin subconsulta. Faltante = null
-        # (en Mongo empatan; un NULL de SQL iría al final).
-        name = sql.Identifier(f"_s{i}")
-        columns.append(sql.SQL("(CASE WHEN {simple} THEN COALESCE(doc #> {path}, 'null'::jsonb) ELSE {pick} END) AS {name}").format(
-            simple=no_arrays, path=sql.Literal(parts), pick=pick, name=name))
-        order.extend(sql.SQL("{} {}").format(c, word) for c in _components(sql.SQL("_sort.{}").format(name)))
+    """ORDER BY equivalente al sort de Mongo. Sin sort (o en empates): orden de inserción (seq)."""
+    order = [sql.SQL("{} {}").format(sort_key(field, direction), sql.SQL("ASC" if direction == 1 else "DESC"))
+             for field, direction in sort_items(sort)]
     order.append(sql.SQL("seq ASC"))
-    lateral = sql.SQL("LATERAL (SELECT {}) AS _sort").format(sql.SQL(", ").join(columns)) if columns else None
-    return SortPlan(lateral, sql.SQL(", ").join(order))
+    return SortPlan(sql.SQL(", ").join(order))
 
 
 # ── Proyección ─────────────────────────────────────────────────────────────────

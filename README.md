@@ -449,7 +449,7 @@ El `docker-compose.yml` levanta frontend (`:3000`), backend (`:8000`) y wwebjs (
 | `EVOLUTION_API_URL` | URL de Evolution API (legacy) | Opcional |
 | `EVOLUTION_API_KEY` | API Key de Evolution (legacy) | Opcional |
 | `SMSFAST_API_KEY` | API Key de SMSFast (números virtuales) | Opcional |
-| `WWEBJS_URL` | URL del microservicio whatsapp-web.js | Necesaria si usas ese provider (default: `http://wwebjs:3001`, hostname de Docker — override a `http://localhost:3002` fuera de compose) |
+| `WWEBJS_URL` | URL del microservicio whatsapp-web.js | Necesaria si usas ese provider (default: `http://detucel-wwebjs:3001`, su alias en la red `coolify`: wwebjs es un recurso aparte, ver `docs/WWEBJS_RECURSO_APARTE.md` — override a `http://localhost:3002` fuera de Docker) |
 | `WWEBJS_API_SECRET` | Secreto compartido entre el backend y `apps/wwebjs` (header `x-api-secret`) | Opcional pero recomendado |
 | `WASENDER_PAT` | Personal Access Token de WasenderAPI — gestión de sesiones | Necesaria si usas ese provider |
 | `WASENDER_BASE_URL` | URL base de WasenderAPI | Opcional (default: `https://www.wasenderapi.com`) |

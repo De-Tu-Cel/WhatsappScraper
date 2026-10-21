@@ -14,6 +14,7 @@ Un hilo por proceso del backend, cada minuto:
   pisa una escritura más nueva. Lo corregido queda en mongo._reconcile_log: si
   aparece algo ahí, el espejo en vivo se saltó algo y hay que revisarlo antes de
   avanzar esa colección. Un solo proceso concilia a la vez (pg_try_advisory_lock).
+- Crea los índices de orden (store.SORT_INDEXES) que falten, sin bloquear las escrituras.
 
 `python scripts/pg_mirror.py check` lo lee todo y dice qué colección está lista
 para el siguiente modo (tras PGMIRROR_WAIT_HOURS, 24 por defecto, sin correcciones
@@ -28,10 +29,12 @@ import time
 
 from app.pgmirror import config
 from app.pgmirror.reconcile import reconcile
+from app.pgmirror.store import SORT_INDEXES
 
 log = logging.getLogger(__name__)
 TICK_SECONDS = 60
 DIRTY_RETRY_SECONDS = 300
+INDEX_RETRY_SECONDS = 3600
 LOCK_KEY = 7340211  # pg_try_advisory_lock de la conciliación automática
 CHUNK = 500
 PROCESS = f"{socket.gethostname()}:{os.getpid()}"
@@ -139,6 +142,7 @@ class Monitor:
         # None = nunca: el primer intento es inmediato. (Con 0.0, en una máquina recién
         # encendida time.monotonic() es menor a 300 y el primer intento se retrasaba.)
         self._last_dirty_attempt = None
+        self._index_failures = {}  # (colección, campo, dirección) → time.monotonic() del último fallo
         if start:
             threading.Thread(target=self._run, name="pgmirror-monitor", daemon=True).start()
 
@@ -161,6 +165,23 @@ class Monitor:
         self._record_counters(store)
         self._record_status(store, active)
         self._maybe_reconcile(store, active)
+        self._ensure_sort_indexes(store, active)
+
+    def _ensure_sort_indexes(self, store, active):
+        """Índices de orden (store.SORT_INDEXES) de cada colección activa; ya listos no cuestan nada.
+        Uno que falla no detiene lo demás y se reintenta en una hora."""
+        for name in sorted(active):
+            for field, direction in SORT_INDEXES:
+                key = (name, field, direction)
+                failed_at = self._index_failures.get(key)
+                if failed_at is not None and time.monotonic() - failed_at < INDEX_RETRY_SECONDS:
+                    continue
+                try:
+                    if not store.ensure_sort_index(name, field, direction):
+                        return  # otro proceso está construyendo: en el siguiente minuto
+                except Exception:
+                    self._index_failures[key] = time.monotonic()
+                    log.exception("pgmirror sort index %s.%s (%s) failed", name, field, direction)
 
     def _record_modes(self, store, active):
         for name, mode in active.items():

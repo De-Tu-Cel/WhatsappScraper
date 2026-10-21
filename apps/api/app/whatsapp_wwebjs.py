@@ -12,6 +12,14 @@ class LineBusy(Exception):
     """La operación no comenzó; la cola persistente puede reintentarlo."""
 
 
+class LineNotConnected(Exception):
+    """La línea no está conectada en wwebjs (pide QR o está caída): hay que volver a vincularla."""
+
+    def __init__(self, session_id: str):
+        super().__init__(f"La línea {session_id} no está conectada")
+        self.session_id = session_id
+
+
 def _check_activity_response(response):
     if response.status_code == 409:
         code = response.json().get('code')
@@ -271,7 +279,10 @@ def fetch_messages(session_id: str, to: str, limit: int = 50) -> list:
         timeout=60,
     )
     if not r.ok:
-        raise Exception(r.json().get("error", r.text))
+        error = r.json().get("error", r.text)
+        if error == "Not connected":
+            raise LineNotConnected(session_id)
+        raise Exception(error)
     return r.json().get("messages") or []
 
 

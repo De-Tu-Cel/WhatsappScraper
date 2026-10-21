@@ -20,16 +20,32 @@ import threading
 
 from psycopg import sql
 
-from app.pgmirror import codec
+from app.pgmirror import codec, sqlfilter
 
 log = logging.getLogger(__name__)
 SCHEMA = "mongo"
 _LOCK_NAMESPACE = 0x504D  # pg_advisory_xact_lock(int4, int4): espacio propio para los candados por documento
+_DDL_LOCK = (0x504E, 1)  # crear las funciones de orden (un proceso a la vez)
+_INDEX_LOCK_KEY = 7340212  # pg_try_advisory_lock: construir índices de orden (uno a la vez entre procesos)
+_INDEX_BUILD_TIMEOUT = "15min"
+
+# Órdenes con índice propio en todas las tablas espejo. created_at es el que la app pide en casi
+# todas las colecciones (la "última actividad" de message_logs cada 5 s, las páginas de
+# companies…): sin índice, ordenar calcula la llave de cada fila de la tabla.
+SORT_INDEXES = [("created_at", -1), ("created_at", 1)]
 
 
 def _row_lock(collection: str, key: str) -> int:
     digest = hashlib.blake2b(f"{collection}\x1f{key}".encode("utf-8"), digest_size=4).digest()
     return int.from_bytes(digest, "big", signed=True)
+
+
+def sort_index_name(collection: str, field: str, direction: int) -> str:
+    name = f"{collection}__sk1_{field}_{'asc' if direction == 1 else 'desc'}"
+    if len(name) > 63:
+        digest = hashlib.blake2b(name.encode("utf-8"), digest_size=6).hexdigest()
+        name = f"{collection[:40]}__sk1_{digest}"
+    return name
 
 
 class Store:
@@ -43,6 +59,8 @@ class Store:
                     "options": f"-c statement_timeout={int(statement_timeout_ms)} -c jit=off"},
         )
         self._ready = set()
+        self._functions_ready = False
+        self._indexes_ready = set()
         self._lock = threading.Lock()
 
     def close(self):
@@ -97,6 +115,59 @@ class Store:
                 conn.execute(sql.SQL("CREATE INDEX IF NOT EXISTS {} ON {} (seq)").format(
                     sql.Identifier(f"{collection}__seq"[:63]), t))
             self._ready.add(collection)
+
+    def ensure_functions(self):
+        """Tipo y funciones de la llave de orden (sqlfilter.SORT_KEY_DDL), una sola vez. Las
+        consultas que ordenan o filtran por rango las usan; las escrituras no las necesitan."""
+        if self._functions_ready:
+            return
+        with self._lock:
+            if self._functions_ready:
+                return
+            with self._pool.connection() as conn, conn.transaction():
+                conn.execute("SELECT pg_advisory_xact_lock(%s, %s)", _DDL_LOCK)
+                conn.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(SCHEMA)))
+                if conn.execute("SELECT to_regprocedure(%s)", (sqlfilter.SORT_KEY_CHECK,)).fetchone()[0] is None:
+                    for statement in sqlfilter.SORT_KEY_DDL:
+                        conn.execute(statement)
+            self._functions_ready = True
+
+    def ensure_sort_index(self, collection: str, field: str, direction: int) -> bool:
+        """Índice de expresión con la llave de orden de `field` (la misma expresión que el ORDER BY
+        de sqlfilter.sort_plan y que los rangos de los filtros). Se construye CONCURRENTLY, así el
+        espejo sigue escribiendo, y un solo proceso a la vez. True si quedó (o ya estaba) listo;
+        False si otro proceso está construyendo uno."""
+        name = sort_index_name(collection, field, direction)
+        if (collection, name) in self._indexes_ready:
+            return True
+        self.ensure_table(collection)
+        self.ensure_functions()
+        with self._pool.connection() as conn:
+            if not conn.execute("SELECT pg_try_advisory_lock(%s)", (_INDEX_LOCK_KEY,)).fetchone()[0]:
+                return False
+            try:
+                state = conn.execute(
+                    "SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = %s AND c.relname = %s",
+                    (SCHEMA, name)).fetchall()
+                if not (state and state[0][0]):
+                    conn.execute(f"SET statement_timeout = '{_INDEX_BUILD_TIMEOUT}'")
+                    try:
+                        if state:
+                            # Inválido = una construcción anterior que se interrumpió (nadie más
+                            # construye: tenemos el candado). Postgres no lo usa; se rehace.
+                            conn.execute(sql.SQL("DROP INDEX CONCURRENTLY IF EXISTS {}").format(sql.Identifier(SCHEMA, name)))
+                        conn.execute(sql.SQL("CREATE INDEX CONCURRENTLY IF NOT EXISTS {} ON {} ({} {}, seq)").format(
+                            sql.Identifier(name), self.table(collection), sqlfilter.sort_key(field, direction),
+                            sql.SQL("ASC" if direction == 1 else "DESC")))
+                        conn.execute(sql.SQL("ANALYZE {}").format(self.table(collection)))
+                    finally:
+                        conn.execute("RESET statement_timeout")
+                    log.info("pgmirror sort index ready: %s.%s", SCHEMA, name)
+            finally:
+                conn.execute("SELECT pg_advisory_unlock(%s)", (_INDEX_LOCK_KEY,))
+        self._indexes_ready.add((collection, name))
+        return True
 
     @staticmethod
     def _rows(docs):
@@ -170,10 +241,9 @@ class Store:
                    plan=None, limit: int | None = None, skip: int = 0) -> list[dict]:
         """`plan`: sqlfilter.SortPlan; sin él, orden de inserción (seq)."""
         self.ensure_table(collection)
-        query = sql.SQL("SELECT COALESCE(src, doc::text) FROM {} ").format(self.table(collection))
-        if plan is not None and plan.lateral is not None:
-            query = query + sql.SQL(", ") + plan.lateral
-        query = query + sql.SQL(" WHERE ") + where + sql.SQL(" ORDER BY ") + (plan.order if plan is not None else sql.SQL("seq"))
+        self.ensure_functions()
+        query = sql.SQL("SELECT COALESCE(src, doc::text) FROM {} WHERE ").format(self.table(collection))
+        query = query + where + sql.SQL(" ORDER BY ") + (plan.order if plan is not None else sql.SQL("seq"))
         if limit:
             query = query + sql.SQL(" LIMIT {}").format(sql.Literal(int(limit)))
         if skip:
@@ -183,6 +253,7 @@ class Store:
 
     def count(self, collection: str, where: sql.Composable, params=None) -> int:
         self.ensure_table(collection)
+        self.ensure_functions()
         query = sql.SQL("SELECT count(*) FROM {} WHERE ").format(self.table(collection)) + where
         with self._pool.connection() as conn:
             return conn.execute(query, params or None).fetchone()[0]

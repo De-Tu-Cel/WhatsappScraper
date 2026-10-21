@@ -6,6 +6,12 @@ WhatsApp. El 2026-10-20 la de gely tardó en volver tras el despliegue de las 21
 propio recurso, desplegar el backend ya no toca WhatsApp; `wwebjs` solo se reinicia cuando se
 despliega a mano.
 
+**Estado: hecho el 2026-10-21 00:34 UTC (18:34 del 20 en México).** Recurso `wwebjs` en Coolify:
+`vjpqgxgak97x5ry8ql7xmvwb`, rama `main`, Auto Deploy apagado, volumen alias
+`vjpqgxgak97x5ry8ql7xmvwb_wwebjs-sessions`. El backend lo usa por `http://detucel-wwebjs:3001` y
+el despliegue siguiente del backend (00:41 UTC) ya no reinició WhatsApp (misma hora de arranque).
+Interrupción del corte: ~1 min; gely-wa, sender666 y tania-sesion-1 volvieron solas.
+
 **Lo que no cambia: las sesiones.** Ningún número se vuelve a vincular. Los perfiles se quedan donde
 están, en el volumen de siempre:
 
@@ -80,6 +86,18 @@ Archivos: `docker-compose.wwebjs.yml` (el recurso nuevo) y, en la rama `wwebjs-c
    - En *Instancias* todas las sesiones en "Conectada"; manda un mensaje de prueba.
    - Luego la rama `wwebjs-corte` se integra también en `dev`.
 
+### Lo que pasó distinto en el corte real (para la próxima vez)
+
+- El recurso principal usa la fuente "Public GitHub": un push a `main` **no** lo despliega solo; se
+  despliega desde el panel (o la API). Por eso antes se hacía "redeploy" a mano.
+- Coolify **sí** quitó el contenedor wwebjs viejo al desplegar el compose sin él (no lo dejó huérfano).
+- Mientras esperaba el candado, Coolify dejó de reiniciar el contenedor nuevo tras varios intentos
+  ("Exited (1)"); hubo que arrancarlo a mano (`docker start`) en cuanto el viejo desapareció.
+- `WWEBJS_URL=http://wwebjs:3001` estaba guardada como variable en Coolify y ganaba sobre el valor
+  del compose: se cambió a `http://detucel-wwebjs:3001`.
+- Los perfiles desvinculados (marco-wa, tania-sesion-3, tania-sesion-4) muestran QR al arrancar y el
+  servicio los cierra solo a los 3 min sin uso: es lo normal, pasaba igual antes.
+
 ## Vuelta atrás
 
 - **Antes del paso 5:** detén el recurso nuevo en Coolify y
@@ -99,5 +117,7 @@ Borrar el recurso wwebjs o su volumen alias sí es seguro: el alias solo apunta 
 
 ## Después
 
-- Desplegar backend o frontend ya no reinicia WhatsApp.
-- Cambios en `apps/wwebjs`: **Deploy manual** del recurso wwebjs, fuera del horario de envíos.
+- Desplegar backend o frontend (Deploy de `whatsapp-scraper-stack`) ya no reinicia WhatsApp.
+- Cambios en `apps/wwebjs`: **Deploy manual** del recurso `wwebjs`, fuera del horario de envíos.
+- Variables de WhatsApp (`WWEBJS_API_SECRET`, `PROXY_*`): ahora viven en el recurso `wwebjs`. Si se
+  cambia `WWEBJS_API_SECRET`, cambiarla en los dos recursos.

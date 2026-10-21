@@ -88,3 +88,26 @@ def test_history_sync_enriches_existing_inbound_without_reclassifying_or_overwri
         {'message_id': 'real-wa-id', 'company_id': company_id, 'direction': 'inbound'},
         {'$set': {'whatsapp_name': 'Gas Uno Puebla', 'whatsapp_name_source': 'whatsapp'}},
     )
+
+
+def test_sync_with_a_disconnected_line_says_so_instead_of_a_500(monkeypatch):
+    # 2026-10-21: Rayogas, Gaservicio y Claro Colombia daban 500 al sincronizar porque su
+    # línea (tania-sesion-4) estaba desvinculada. Es un 409 con qué hacer, no un error del servidor.
+    import pytest
+    from unittest.mock import MagicMock
+    from fastapi import BackgroundTasks, HTTPException
+    from app.api import routes
+    from app import whatsapp_wwebjs
+
+    manager = MagicMock()
+    manager.db.companies.find_one.return_value = {'assigned_instance': 'tania-sesion-4'}
+    manager.db.instances.find_one.return_value = {'provider': 'wwebjs'}
+    manager.db.contacts.find.return_value = [{'value': '+573102388245'}]
+    monkeypatch.setattr(routes, '_require_user', lambda token: {'role': 'agent'})
+    monkeypatch.setattr(routes, 'MongoDBManager', lambda: manager)
+    respuesta = MagicMock(ok=False)
+    respuesta.json.return_value = {'error': 'Not connected'}
+    monkeypatch.setattr(whatsapp_wwebjs._req, 'post', lambda *a, **k: respuesta)
+    with pytest.raises(HTTPException) as err:
+        routes.api_sync_conversation('6acfd2acf4ea4910a610d94a', BackgroundTasks(), 'mock')
+    assert err.value.status_code == 409 and 'tania-sesion-4 no está conectada' in err.value.detail

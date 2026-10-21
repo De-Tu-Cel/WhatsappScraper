@@ -1530,6 +1530,13 @@ def api_sync_conversation(company_id: str, background_tasks: BackgroundTasks, x_
     except HTTPException:
         raise
     except Exception as e:
+        # Línea caída o pidiendo QR: no es un error del servidor (2026-10-21: Rayogas, Gaservicio
+        # y Claro Colombia daban 500 porque su línea, tania-sesion-4, estaba desvinculada).
+        from app.whatsapp_wwebjs import LineNotConnected
+        if isinstance(e, LineNotConnected):
+            raise HTTPException(status_code=409, detail=(
+                f"La línea {e.session_id} no está conectada: vuelve a vincularla en Instancias para "
+                "sincronizar esta conversación."))
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/conversations")

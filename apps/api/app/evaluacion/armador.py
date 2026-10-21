@@ -10,6 +10,7 @@
 Es un BORRADOR: se guarda editable y una persona lo revisa antes de mandarlo al prospecto.
 """
 import base64
+import difflib
 import html
 import io
 import json
@@ -54,6 +55,8 @@ SINTESIS = {
 ESPERA_NOTA_S = 3600          # una espera de 1 h o más se anota en la conversación
 SIN_RESPUESTA_S = 6 * 3600    # sin contestar y volvimos a escribir 6 h después: "Sin respuesta"
 MAX_MENSAJES = 150
+DUPLICADO_S = 5               # el mismo texto del mismo lado en ≤5 s es un mensaje guardado dos veces
+SEGUIMIENTO_DIAS = 2          # sin volver a escribir en tantos días: «nadie dio seguimiento» con fecha
 # Lo que cabe en la hoja carta de la plantilla (caracteres, el tope duro: más que esto se pide
 # acortar y, si no, se recorta) y lo que se le pide al modelo (palabras: las cuenta mucho mejor).
 LIMITES = {"sintesis_titular": 80, "sintesis_texto": 140, "f_titulo": 22, "f_texto": 34,
@@ -105,6 +108,10 @@ def _texto_mensaje(m: dict) -> str:
     return next((etq for clave, etq in _MEDIA if clave in tipo), "Mensaje sin texto") if (tipo or m.get("media_url")) else ""
 
 
+def _casi_igual(a: str, b: str) -> bool:
+    return a == b or (min(len(a), len(b)) >= 20 and difflib.SequenceMatcher(None, a, b).ratio() >= 0.85)
+
+
 # ── conversación real ──────────────────────────────────────────────────────────
 def construir_conversacion(thread: list, pais: str = "52") -> tuple[list, list, dict]:
     """(mensajes para la plantilla, renglones numerados para el LLM, métricas).
@@ -115,6 +122,18 @@ def construir_conversacion(thread: list, pais: str = "52") -> tuple[list, list, 
     ultimo_cliente = None
     msgs = [(m, _fecha(m.get("created_at"))) for m in thread if m.get("status") != "failed"]
     msgs = [(m, _utc(dt)) for m, dt in msgs if dt and _texto_mensaje(m)]
+    # La sincronización de conversaciones volvió a guardar mensajes que el webhook ya tenía (otro id y el
+    # número en otro formato: 71 pares en producción, la mayoría del 2026-10-09). En la hoja salía el chat
+    # de la gasera con todo repetido. Mismo lado y mismo texto con ≤5 s de diferencia = el mismo mensaje.
+    # Casi igual también cuenta: un mensaje editado en WhatsApp quedó con las dos versiones (Gas Oriente).
+    unicos = []
+    for m, dt in msgs:
+        sale, texto = m.get("direction") == "outbound", " ".join(_texto_mensaje(m).split())
+        if any((p.get("direction") == "outbound") == sale and abs((dt - pdt).total_seconds()) <= DUPLICADO_S
+               and _casi_igual(" ".join(_texto_mensaje(p).split()), texto) for p, pdt in unicos[-3:]):
+            continue
+        unicos.append((m, dt))
+    msgs = unicos
     if len(msgs) > MAX_MENSAJES:  # pláticas largas: el principio y el final
         mitad = MAX_MENSAJES // 2
         msgs = msgs[:mitad] + [(None, None)] + msgs[-mitad:]
@@ -189,8 +208,41 @@ _BIENVENIDA = re.compile(r"bienvenid|gracias por (?:comunicarte|escribir|contact
 _PRIVACIDAD = re.compile(r"privacidad|datos personales|tratamiento de (?:tus |sus )?datos|autoriza", re.I)
 _PIDE_DATOS = re.compile(r"\b(?:nombre|direcci[oó]n|domicilio|colonia|correo|municipio|c[oó]digo postal|ubicaci[oó]n)\b", re.I)
 _ZONA = re.compile(r"\b(?:municipio|colonia|zona|cobertura)\b|d[oó]nde (?:se encuentra|est[aá])", re.I)
-_PRECIO = re.compile(r"\$\s?\d|\bprecios?\b|\bcostos?\b|\bpesos\b|\bpor litro\b", re.I)
+_PRECIO = re.compile(r"\$\s?\d|\bprecios?\b|\bcostos?\b|\bpesos\b|\bpor litro\b|\bcu[aá]nto (?:cuesta|sale|cobran|est[aá])", re.I)
+# Que DIERON un precio: una cantidad. «El precio del litro se le da al momento de solicitar» (Gas Oriente,
+# 2026-10-21) no es dar el precio, y salía como fortaleza «Comparte precios».
+_MONTO = re.compile(r"\$\s?\d|\b\d+(?:[.,]\d+)?\s*(?:pesos|mxn)\b|\bpor litro\b[^.]*\d", re.I)
+_PRECIO_PRODUCTO = re.compile(r"litro|\bkg\b|kilo|cilindro|tanque|precio|cuesta", re.I)
 _MENU = re.compile(r"(?m)^\s*(?:\d+[.)]|[🔷🔹▪•*-]|\d️⃣)")
+# Detectores calibrados con las 26 gaseras con respuesta de la copia del 2026-10-19:
+_PLANTILLA = re.compile(r"\*(?:marca|link|liga|enlace|url|nombre|empresa|cliente|negocio|tel[eé]fono)\*|\{\{[^}]{1,30}\}\}|"
+                        r"\[(?:nombre|link|liga|empresa|marca|cliente)\]", re.I)  # Gas Imperial: «Descarga nuestra APP *link*»
+_INACTIVIDAD = re.compile(r"(?:finaliza|cerra|termina)remos (?:la |su |esta )?(?:sesi[oó]n|conversaci[oó]n|plática|chat)|"
+                          r"por inactividad", re.I)  # Rivera Gas: cierra la sesión a los 5 min
+_NO_OFRECE = re.compile(r"\bno (?:contamos|manejamos|tenemos|ofrecemos|llegamos|surtimos|vendemos)\b|"
+                        r"\bs[oó]lo (?:llenamos|manejamos|surtimos|vendemos|damos servicio)\b", re.I)  # Kino Gas
+_OTRA_OPCION = re.compile(r"\b(?:le|te) (?:recomiendo|recomendamos|sugiero|sugerimos)\b|otra opci[oó]n|alternativa|"
+                          r"puede(?:s)? (?:acudir|comunicarse|llamar)", re.I)
+_INTENCION = re.compile(r"se me acab[oó]|necesito (?:gas|un (?:servicio|pedido|llenado))|quiero (?:pedir|gas|un pedido|hacer un pedido)|"
+                        r"ocupo gas|busco (?:un )?proveedor|(?:me|nos) (?:pueden|podr[ií]an) (?:llevar|surtir|traer)|"
+                        r"hacer un pedido|pedir gas|llenar (?:el|mi) tanque", re.I)
+_PEDIDO_TOMADO = re.compile(r"pedido (?:confirmado|registrado|agendado|programado|tomado)|n[uú]mero de pedido|\bfolio\b|"
+                            r"(?:va|vamos|est[aá]) en camino", re.I)  # «queda registrado algún número» no es un pedido
+# Un dato que nosotros dimos: un nombre solo («Antonio Dominguez», «Richie») o un número largo. Mencionar
+# la colonia no es darla («no me sé la colonia exacta», Gas de Tlalnepantla).
+_SALUDO = re.compile(r"^(?:hola+|buen[oa]s?|gracias|ok|va|s[ií]|no|perd[oó]n|disculpa)\b", re.I)
+_DATO_DADO = re.compile(r"^\s*[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){0,3}\s*$|\d{5,}")
+_APLAZA = re.compile(r"lo (?:checo|pienso|reviso|consulto)|te (?:digo|aviso|confirmo)\b|luego (?:te|les) (?:digo|aviso|escribo)|"
+                     r"voy a (?:checar|revisar|pensarlo)|buscar[eé] en otro|seguir[eé] buscando", re.I)
+_VACIAS = {"en", "el", "la", "los", "las", "de", "del", "y", "o", "a", "al", "con", "por", "para", "que", "un", "una", "mi", "me", "su"}
+
+
+def _cita(texto: str, desde: int, palabras: int = 6) -> str:
+    """Lo dicho desde `desde` hasta la coma o el punto, en pocas palabras y sin terminar en «de», «y»…"""
+    frase = re.split(r"[,.;:?!\n]", texto[desde:], maxsplit=1)[0].split()[:palabras]
+    while len(frase) > 1 and frase[-1].lower() in _VACIAS:
+        frase.pop()
+    return formato.texto_plano(" ".join(frase), 40)
 
 
 def _es_automatico(d: dict) -> bool:
@@ -198,9 +250,10 @@ def _es_automatico(d: dict) -> bool:
     return (d["tras_cliente_s"] is not None and d["tras_cliente_s"] <= 10) or bool(_AUTOMATICO.search(d["texto"]))
 
 
-def detectar_hechos(items: list, metricas: dict) -> dict:
+def detectar_hechos(items: list, metricas: dict, ahora: datetime | None = None) -> dict:
     """Hechos de la conversación. Oportunidades en orden de gravedad: {id, tipo, dato, mensaje,
-    titulo, vimos, oportunidad, ventaja}; fortalezas: {id, tipo, mensaje, titulo, texto}."""
+    titulo, vimos, oportunidad, ventaja}; fortalezas: {id, tipo, mensaje, titulo, texto}.
+    `ahora`: fecha de la evaluación, para decir cuántos días pasaron sin seguimiento."""
     por_indice = {d["i"]: d for d in metricas["detalle"]}
     negocio = [d for d in metricas["detalle"] if not d["sale"]]
     cliente = [d for d in metricas["detalle"] if d["sale"]]
@@ -246,12 +299,31 @@ def detectar_hechos(items: list, metricas: dict) -> dict:
         oportunidad("privacidad", "Trámite al inicio", priv["i"], "Un trámite antes de atender",
                     f"A las {items[priv['i']]['hora']}, antes de atender, pidieron autorizar el uso de datos.",
                     "Atender primero; pedir datos solo al pedir.", "b2")
+    cierre = next((d for d in negocio if _INACTIVIDAD.search(d["texto"])), None)
+    if cierre:
+        antes = [x for x in metricas["detalle"] if x["dt"] < cierre["dt"]]
+        minutos = round((cierre["dt"] - antes[-1]["dt"]).total_seconds() / 60) if antes else 0
+        oportunidad("inactividad", "Cierre por inactividad", cierre["i"], "La plática se cierra sola",
+                    f"A las {items[cierre['i']]['hora']} cerraron la plática por inactividad"
+                    f"{f', a los {minutos} min' if minutos >= 1 else ''}.", "Esperar al cliente sin cerrarle la plática.", "b1")
+    plantilla = next(((d, m) for d in negocio for m in [_PLANTILLA.search(d["texto"])] if m), None)
+    if plantilla:
+        d, m = plantilla
+        oportunidad("plantilla", "Mensaje sin llenar", d["i"], "Un mensaje salió a medias",
+                    f"A las {items[d['i']]['hora']} llegó un mensaje con «{m.group(0)}» sin llenar.",
+                    "Respuestas completas, sin plantillas a medias.", "b2")
+    no_hay = next(((d, m) for d in negocio for m in [_NO_OFRECE.search(d["texto"])] if m), None)
+    if no_hay and not any(_OTRA_OPCION.search(d["texto"]) for d in negocio if d["dt"] >= no_hay[0]["dt"]):
+        d, m = no_hay
+        oportunidad("sin_alternativa", "Sin otra opción", d["i"], "Se pierde la venta sin alternativa",
+                    f"A las {items[d['i']]['hora']} respondieron «{_cita(d['texto'], m.start(), 5)}» y no ofrecieron otra opción.",
+                    "Ofrecer otra opción en vez de perder la venta.", "b2")
     pide = next((d for d in humanos if "?" in d["texto"] and _PIDE_DATOS.search(d["texto"])), None)
     if pide:
         oportunidad("pide_datos", "Pide datos primero", pide["i"], "Datos antes de resolver",
                     f"A las {items[pide['i']]['hora']} pidieron datos antes de resolver la duda.",
                     "Reconocer el número y recordar su dirección.", "b4")
-    if any(_PRECIO.search(d["texto"]) for d in cliente) and not any(_PRECIO.search(d["texto"]) for d in negocio):
+    if any(_PRECIO.search(d["texto"]) for d in cliente) and not any(_MONTO.search(d["texto"]) for d in negocio):
         pregunta = next(d for d in cliente if _PRECIO.search(d["texto"]))
         oportunidad("sin_precio", "Sin precio", pregunta["i"], "El precio no se compartió",
                     f"Preguntamos el precio a las {items[pregunta['i']]['hora']} y no lo dieron en el chat.",
@@ -260,17 +332,44 @@ def detectar_hechos(items: list, metricas: dict) -> dict:
     # Flamazul pidió el nombre en agosto y otra vez en octubre). Con una sola plática no se sabe
     # (Gas Oriente, 2026-10-21): entonces, al final, se dice lo que falta y no que pasó.
     piden = [d for d in negocio if _PIDE_DATOS.search(d["texto"])]
-    repite = next((d for d in piden if formato.a_mx(d["dt"]).date() != formato.a_mx(piden[0]["dt"]).date()), None)
+    # …y solo si entre una vez y otra sí dimos el dato (Gas de Tlalnepantla pidió dos días, pero nunca se lo dimos).
+    dimos = next((d for d in cliente if piden and d["dt"] > piden[0]["dt"] and not _SALUDO.search(d["texto"])
+                  and _DATO_DADO.search(d["texto"])), None)
+    repite = next((d for d in piden if dimos and d["dt"] > dimos["dt"]
+                   and formato.a_mx(d["dt"]).date() != formato.a_mx(piden[0]["dt"]).date()), None)
     if repite:
         fecha = formato.fecha_dia(repite["dt"]).split(", ")[-1].rsplit(" de ", 1)[0]
         oportunidad("sin_historial", "Datos repetidos", repite["i"], "El cliente repite sus datos",
                     f"El {fecha} volvieron a pedir los datos que ya habíamos dado.",
                     "Reconocer el número y recordar su dirección.", "b4")
-    oportunidad("sin_cierre", "Sin pedido en chat", negocio[-1]["i"] if negocio else None,
-                "El pedido no se cierra en el chat", "La plática no llegó a tomar el pedido.",
-                "Que pida y pague en la misma conversación.", "b3")
-    oportunidad("sin_seguimiento", "Sin seguimiento", None, "No hay seguimiento al cliente",
-                "Después de la plática nadie dio seguimiento.", "Dar seguimiento y medir la satisfacción.", "b7")
+    # Pedido y seguimiento: con lo que dijimos y la fecha cuando se puede; si el negocio sí tomó el pedido,
+    # no se dice que no.
+    tomado = any(_PEDIDO_TOMADO.search(d["texto"]) for d in negocio)
+    intencion = next(((d, m) for d in cliente for m in [_INTENCION.search(d["texto"])] if m), None)
+    if intencion and not tomado:
+        d, m = intencion
+        oportunidad("sin_cierre", "Sin pedido en chat", d["i"], "El pedido no se cierra en el chat",
+                    f"Dijimos «{_cita(d['texto'], m.start())}» y la plática terminó sin tomar el pedido.",
+                    "Que pida y pague en la misma conversación.", "b3")
+    elif not tomado:
+        oportunidad("sin_cierre", "Sin pedido en chat", negocio[-1]["i"] if negocio else None,
+                    "El pedido no se cierra en el chat", "La plática no llegó a tomar el pedido.",
+                    "Que pida y pague en la misma conversación.", "b3")
+    ultimo = metricas["detalle"][-1] if metricas["detalle"] else None
+    dias = (ahora - ultimo["dt"]).days if ahora and ultimo else 0
+    aplazo = _APLAZA.search(ultimo["texto"]) if ultimo and ultimo["sale"] else None
+    fecha_ultimo = formato.fecha_dia(ultimo["dt"]).split(", ")[-1].rsplit(" de ", 1)[0] if ultimo else ""
+    if dias >= SEGUIMIENTO_DIAS and aplazo:
+        oportunidad("sin_seguimiento", "Sin seguimiento", ultimo["i"], "No hay seguimiento al cliente",
+                    f"El {fecha_ultimo} dijimos «{_cita(ultimo['texto'], aplazo.start())}»; en {dias} días nadie volvió a escribir.",
+                    "Dar seguimiento y medir la satisfacción.", "b7")
+    elif dias >= SEGUIMIENTO_DIAS and ultimo and not ultimo["sale"]:
+        oportunidad("sin_seguimiento", "Sin seguimiento", ultimo["i"], "No hay seguimiento al cliente",
+                    f"Su último mensaje fue el {fecha_ultimo}; en {dias} días no volvieron a escribir.",
+                    "Dar seguimiento y medir la satisfacción.", "b7")
+    else:
+        oportunidad("sin_seguimiento", "Sin seguimiento", None, "No hay seguimiento al cliente",
+                    "Después de la plática nadie dio seguimiento.", "Dar seguimiento y medir la satisfacción.", "b7")
     if not repite:
         oportunidad("sin_historial", "Sin historial", None, "El cliente no queda reconocido",
                     "No hay registro del cliente para su próximo pedido.", "Reconocer el número y recordar su dirección.", "b4")
@@ -294,7 +393,8 @@ def detectar_hechos(items: list, metricas: dict) -> dict:
     zona = next((d for d in humanos if _ZONA.search(d["texto"])), None)
     if zona:
         fortaleza("cobertura", zona["i"], "Verifica cobertura", "Pregunta la zona de entrega.")
-    precio = next((d for d in negocio if _PRECIO.search(d["texto"])), None)
+    precio = next((d for d in negocio if _MONTO.search(d["texto"]) and _PRECIO_PRODUCTO.search(d["texto"])
+                   and not re.search(r"m[ií]nim[ao]", d["texto"], re.I)), None)  # «recarga mínima de 300 pesos» no es el precio
     if precio:
         fortaleza("precio", precio["i"], "Comparte precios", "Da costos en el chat.")
     if humanos:
@@ -416,7 +516,9 @@ def hallazgos_con_llm(empresa, giro, renglones, metricas, verdict, nivel, escala
     hechos = hechos or {"oportunidades": [], "fortalezas": []}
 
     def linea_op(h):
-        donde = f" · mensaje [{h['mensaje']}]" if h["mensaje"] is not None else ""
+        # Los generales (sin mensaje) valen para casi cualquier gasera: que el modelo prefiera los que citan
+        # algo propio (Gas Imperial salía con «Sin pedido en chat» en vez de su mensaje con «*marca*» sin llenar).
+        donde = f" · mensaje [{h['mensaje']}]" if h["mensaje"] is not None else " · GENERAL: úsalo solo si faltan hechos con mensaje"
         return f"{h['id']} · {h['dato']}{donde}: {h['vimos']}"
 
     def linea_fo(h):
@@ -788,7 +890,7 @@ def armar_cliente(*, company: dict, thread: list, numero: str, verdict: dict | N
     items, renglones, metricas = construir_conversacion(thread, pais=pais[:3])
     if not metricas["mensajes"]:
         raise ValueError("No hay conversación con ese número para evaluar.")
-    hechos = detectar_hechos(items, metricas)
+    hechos = detectar_hechos(items, metricas, ahora or datetime.now(timezone.utc))
     clasificacion, fuente_nivel = clasificacion_desde(verdict, metricas, hechos)
     nombre_clasificacion, nivel = CLASIFICACIONES[clasificacion]
     if clasificacion in _SIN_PERSONA:

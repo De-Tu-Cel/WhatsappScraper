@@ -308,18 +308,81 @@ def test_internal_message_numbers_never_reach_the_page(monkeypatch):
 
 
 def test_repeated_data_is_only_claimed_when_it_was_seen():
-    # Gas Flamazul pidió el nombre en agosto y otra vez en octubre: «Datos repetidos», con fecha y marca.
-    # Gas Oriente pidió datos en una sola plática: no se puede decir «cada vez» (2026-10-21).
-    dos_dias = _chat(("outbound", "Hola", 0), ("inbound", "¡Gracias por escribir! ¿Me da su nombre completo?", 0.1),
-                     ("outbound", "Hola de nuevo", 60 * 24 * 60), ("inbound", "¡Gracias por escribir! ¿Me da su nombre completo?", 60 * 24 * 60 + 0.1))
-    items, _r, metricas = armador.construir_conversacion(dos_dias)
+    # Gas Flamazul: le dimos el nombre en agosto y en octubre lo volvió a pedir → «Datos repetidos», con fecha y marca.
+    # Gas de Tlalnepantla pidió datos dos días sin que se los diéramos; Gas Oriente, en una sola plática:
+    # en los dos no se puede decir que «volvieron a pedir los datos que ya habíamos dado» (2026-10-21).
+    dia = 60 * 24
+    pide = "¡Gracias por escribir! Por favor me puede proporcionar su nombre completo."
+    flamazul = _chat(("outbound", "Hola", 0), ("inbound", pide, 0.1), ("outbound", "Antonio Dominguez", 1),
+                     ("outbound", "Hola", 60 * dia), ("inbound", pide, 60 * dia + 0.1))
+    items, _r, metricas = armador.construir_conversacion(flamazul)
     h = next(o for o in armador.detectar_hechos(items, metricas)["oportunidades"] if o["tipo"] == "sin_historial")
     assert h["dato"] == "Datos repetidos" and h["mensaje"] is not None and "volvieron a pedir" in h["vimos"]
     assert re.match(r"El \d+ de \w+ volvieron", h["vimos"])
-    una = _chat(("outbound", "Hola", 0), ("inbound", "Indíqueme su dirección y colonia, por favor.", 3))
-    items, _r, metricas = armador.construir_conversacion(una)
-    h = next(o for o in armador.detectar_hechos(items, metricas)["oportunidades"] if o["tipo"] == "sin_historial")
-    assert h["dato"] == "Sin historial" and h["mensaje"] is None and "cada vez" not in h["vimos"].lower()
+    for chat in (_chat(("outbound", "Hola", 0), ("inbound", pide, 0.1), ("outbound", "No me sé la colonia exacta", 2),
+                       ("inbound", "¿En qué colonia y municipio es?", dia)),
+                 _chat(("outbound", "Hola", 0), ("inbound", "Indíqueme su dirección y colonia, por favor.", 3))):
+        items, _r, metricas = armador.construir_conversacion(chat)
+        h = next(o for o in armador.detectar_hechos(items, metricas)["oportunidades"] if o["tipo"] == "sin_historial")
+        assert h["dato"] == "Sin historial" and h["mensaje"] is None and "cada vez" not in h["vimos"].lower()
+
+
+def test_specific_gas_findings_quote_what_happened():
+    """Calibrados con las 26 gaseras con respuesta (2026-10-21): cada hallazgo cita lo que pasó."""
+    ahora = datetime(2026, 10, 21, 18, 0, tzinfo=timezone.utc)
+
+    def hechos(*mensajes):
+        items, _r, metricas = armador.construir_conversacion(_chat(*mensajes))
+        return {o["tipo"]: o for o in armador.detectar_hechos(items, metricas, ahora)["oportunidades"]}
+    # Gas Oriente: lo que dijimos, y «queda registrado algún número» no es un pedido tomado.
+    h = hechos(("outbound", "Hola", 0), ("inbound", "¡Buen día! ¿En qué podemos ayudarte?", 0.1),
+               ("outbound", "oye, se me acabó el gas en el departamento y busco un proveedor", 1),
+               ("inbound", "La recarga mínima es de 300 pesos y queda registrado algún número que nos indique", 5),
+               ("outbound", "mmm va lo checo y te digo", 7), ("inbound", "Claro, estamos al pendiente", 7.5))
+    assert h["sin_cierre"]["vimos"] == "Dijimos «se me acabó el gas» y la plática terminó sin tomar el pedido."
+    assert re.fullmatch(r"Su último mensaje fue el 1 de octubre; en 20 días no volvieron a escribir\.", h["sin_seguimiento"]["vimos"])
+    # Si el último mensaje es nuestro y lo dejamos para después, se cita.
+    h = hechos(("outbound", "Hola", 0), ("inbound", "Le comparto los teléfonos de pedido 442 216 1010", 1),
+               ("outbound", "ah ok, voy a checar esos números", 2))
+    assert h["sin_seguimiento"]["vimos"].startswith("El 1 de octubre dijimos «voy a checar esos números»; en 20 días")
+    # Kino Gas, Rivera Gas, Gas Imperial.
+    assert "«solo llenamos a tanques estacionarios» y no ofrecieron otra opción" in hechos(
+        ("outbound", "Hola, ¿llenan cilindros?", 0), ("inbound", "solo llenamos a tanques estacionarios", 1))["sin_alternativa"]["vimos"]
+    assert "por inactividad, a los 5 min" in hechos(
+        ("outbound", "Hola", 0), ("inbound", "Indique su ciudad: 1. Obregón 2. Hermosillo", 0.1),
+        ("inbound", "En este momento finalizaremos la sesión por inactividad.", 5.1))["inactividad"]["vimos"]
+    assert "«*link*» sin llenar" in hechos(
+        ("outbound", "Hola", 0), ("inbound", "¡Agradecemos su preferencia! Descarga nuestra APP *link*", 1))["plantilla"]["vimos"]
+    # Si el negocio sí tomó el pedido, no se dice que no.
+    assert "sin_cierre" not in hechos(("outbound", "Quiero pedir gas", 0), ("inbound", "Listo, pedido confirmado, folio 1042", 2))
+    # «El precio se le da al momento» no es dar el precio.
+    items, _r, metricas = armador.construir_conversacion(_chat(
+        ("outbound", "¿Cuánto cuesta el litro?", 0), ("inbound", "El precio del litro se le da al momento de solicitar", 1)))
+    todo = armador.detectar_hechos(items, metricas, ahora)
+    assert "precio" not in [f["tipo"] for f in todo["fortalezas"]] and "sin_precio" in [o["tipo"] for o in todo["oportunidades"]]
+
+
+def test_a_message_saved_twice_shows_once():
+    # La sincronización guardó otra vez mensajes que el webhook ya tenía (otro id, el número en otro formato):
+    # 71 pares en producción, la mayoría del 2026-10-09. En la hoja salía el chat con todo repetido.
+    chat = _chat(("outbound", "Hola", 0), ("inbound", "en que municipio es?", 1), ("inbound", "en que municipio es?", 1.02),
+                 ("inbound", "en que colonia?", 2), ("inbound", "en que colonia?", 2.03), ("inbound", "en que colonia?", 30))
+    items, _r, metricas = armador.construir_conversacion(chat)
+    assert [i["texto"] for i in items if i["tipo"] == "negocio"] == ["en que municipio es?", "en que colonia?", "en que colonia?"]
+    assert metricas["mensajes"] == 4  # el que llegó 28 min después sí es otro mensaje
+    # Gas Oriente editó un mensaje en WhatsApp y quedaron las dos versiones, con 0.3 s de diferencia.
+    lista = "Indíqueme por favor: capacidad de su cilindro, dirección con número y colonia, nombre"
+    items, _r, _m = armador.construir_conversacion(_chat(("outbound", "Hola", 0), ("inbound", lista + ", método de pago", 1),
+                                                       ("inbound", lista, 1.005)))
+    assert len([i for i in items if i["tipo"] == "negocio"]) == 1
+
+
+def test_a_minimum_charge_is_not_a_price():
+    # Gas Oriente: «el precio del litro se le da al momento… la recarga mínima de 300 pesos» salía «Precios claros».
+    for texto, precio in (("El precio del litro se le da al momento; la recarga mínima de 300 pesos", False),
+                         ("Precio por litro de gas LP esta semana: $10.98 pesos", True)):
+        items, _r, metricas = armador.construir_conversacion(_chat(("outbound", "Hola", 0), ("inbound", texto, 1)))
+        assert ("precio" in [f["tipo"] for f in armador.detectar_hechos(items, metricas)["fortalezas"]]) == precio, texto
 
 
 def test_whatsapp_menus_show_as_buttons_under_the_message():

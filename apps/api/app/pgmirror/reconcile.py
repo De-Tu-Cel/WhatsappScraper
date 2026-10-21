@@ -20,6 +20,23 @@ def _copy_fresh(raw_db, store, collection, docs) -> int:
                                      lambda ids: list(raw_db[collection].find({"_id": {"$in": ids}})))
 
 
+def still_different(raw_db, store, collection: str, mongo_ids: list, extra_keys: list) -> tuple[list, list]:
+    """Vuelve a comparar, en este momento, solo esos documentos. reconcile() lee las huellas de
+    Postgres y luego recorre Mongo: lo que la app escribió entre una lectura y otra sale distinto
+    aunque el espejo en vivo lo copie un segundo después (contacts, 2026-10-21: el verificador de
+    WhatsApp escribe uno cada ~30 s). Devuelve (mongo_ids, extra_keys) de lo que sigue sin cuadrar."""
+    ids = {codec.id_key(i)[0]: i for i in mongo_ids}
+    ids.update({codec.id_key(i)[0]: i for i in store.id_values(collection, list(extra_keys))})
+    if not ids:
+        return [], []
+    pg = store.hashes(collection, list(ids))
+    mongo = {codec.id_key(d["_id"])[0]: codec.doc_hash(d)
+             for d in raw_db[collection].find({"_id": {"$in": list(ids.values())}})}
+    left = [key for key in ids if mongo.get(key) != pg.get(key)]
+    extra = set(extra_keys)
+    return [ids[key] for key in left if key not in extra], [key for key in left if key in extra]
+
+
 def reconcile(raw_db, store, collection: str, *, fix: bool = False, samples: int = 5, want_ids: bool = False) -> dict:
     pg_hashes = store.hashes(collection)
     seen = set()

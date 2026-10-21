@@ -121,6 +121,29 @@ def test_drift_is_repaired_through_the_worker_and_logged_as_a_correction(env, mo
 
 
 @needs_pg
+def test_a_write_the_live_mirror_copies_during_the_check_is_not_a_correction(env, monkeypatch):
+    # Producción 2026-10-21: contacts se escribe cada ~30 s; la conciliación vio Mongo ya nuevo y
+    # Postgres un segundo antes de que el espejo en vivo lo copiara, y lo contó como corregido.
+    raw, rt, a, _b = env
+    db = pgmirror.wrap_database(raw)
+    db[a].insert_many([{"i": i} for i in range(5)])
+    rt.worker.flush(10)
+    rt.monitor.tick()
+    raw[a].update_one({"i": 2}, {"$set": {"checked": 1}})  # escrita; su copia en vivo todavía no llega
+    in_flight = raw[a].find_one({"i": 2})["_id"]
+    flush = rt.worker.flush
+
+    def flush_with_the_copy_landing(timeout=None):
+        rt.store.upsert(a, [raw[a].find_one({"_id": in_flight})])  # la copia en vivo llega mientras se vacía la cola
+        return flush(timeout)
+    monkeypatch.setattr(rt.worker, "flush", flush_with_the_copy_landing)
+    monkeypatch.setenv("PGMIRROR_RECONCILE_HOURS", "0.0001")
+    time.sleep(0.5)
+    rt.monitor.tick()
+    assert _log(rt, a)[-1] == ("periodic", 0, 1, 0, 0)  # se vio distinto, pero no se corrigió nada
+
+
+@needs_pg
 def test_live_writes_before_the_first_reconcile_do_not_turn_the_initial_load_into_corrections(env):
     # Producción 2026-10-20: contacts tenía 2 docs copiados en vivo cuando llegó la primera
     # conciliación, y los otros 75 925 salieron como "corregidos".

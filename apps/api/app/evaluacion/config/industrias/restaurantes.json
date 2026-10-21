@@ -26,27 +26,6 @@
     { "id": "b5", "icono": "persona", "titulo": "Supervisión humana real", "texto": "La tecnología atiende y tu equipo acompaña: un asesor entra cuando el cliente lo necesita.", "destacada": true }
   ],
 
-  "dashboard": {
-    "titulo": "Dashboard De Tu Cel",
-    "nota": "DATOS DE EJEMPLO: reemplázalos por los de un cliente real del giro.",
-    "kpis": [
-      { "valor": "000", "etiqueta": "pedidos por WhatsApp" },
-      { "valor": "$000", "etiqueta": "ticket promedio" },
-      { "valor": "00%", "etiqueta": "tasa de repetición" },
-      { "valor": "00%", "etiqueta": "pedidos cerrados" },
-      { "valor": "0/5", "etiqueta": "satisfacción promedio" }
-    ],
-    "graficas": [
-      { "tipo": "barras", "titulo": "Pedidos por día", "resaltar": "max",
-        "datos": [["Lun",10],["Mar",12],["Mié",14],["Jue",16],["Vie",30],["Sáb",34],["Dom",22]] },
-      { "tipo": "dona", "titulo": "Tipo de entrega",
-        "datos": [["Domicilio",60],["Para recoger",40]] },
-      { "tipo": "apilada", "titulo": "Método de pago", "cifraTexto": "paga con tarjeta",
-        "datos": [["Tarjeta",50],["Efectivo",30],["Transferencia",20]] }
-    ],
-    "lectura": "<b>Lectura estratégica:</b> texto de ejemplo. Escribe aquí qué decisión permite tomar el dashboard."
-  },
-
   "conversacion": {
     "demo": [
       { "tipo": "dia", "texto": "Hoy" },
@@ -58,7 +37,7 @@
       { "tipo": "negocio", "texto": "¿Entrega a domicilio o pasas por ella?", "hora": "11:06 p.m." },
       { "tipo": "opciones", "opciones": ["A domicilio", "Paso por ella"] },
       { "tipo": "cliente", "texto": "A domicilio", "hora": "11:06 p.m." },
-      { "tipo": "negocio", "texto": "Total $000. ¿Cómo prefieres pagar?", "hora": "11:07 p.m." },
+      { "tipo": "negocio", "texto": "Total $289. ¿Cómo prefieres pagar?", "hora": "11:07 p.m." },
       { "tipo": "opciones", "opciones": ["💳 Liga de pago", "💵 Efectivo"] },
       { "tipo": "cliente", "texto": "💳 Liga de pago", "hora": "11:07 p.m." },
       { "tipo": "negocio", "texto": "¡Listo! ✅ Pedido #2081 pagado. Llega en 35 min aprox.", "hora": "11:08 p.m.", "pin": "b3" },
@@ -70,6 +49,10 @@
       { "tipo": "opciones", "opciones": ["⭐ 1", "⭐ 2", "⭐ 3", "⭐ 4", "⭐ 5"] },
       { "tipo": "cliente", "texto": "⭐ 5", "hora": "11:47 p.m." }
     ]
+  },
+
+  "impresion": {
+    "exp": [0, 1, 2, 3, 5, 12, 13, 14, 15, 17]
   },
 
   "referencias": {

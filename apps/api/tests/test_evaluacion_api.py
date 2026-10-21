@@ -219,5 +219,12 @@ def test_unknown_industry_asks_which_template(client):
     MongoDBManager().db.companies.update_one({"_id": ObjectId(cid)}, {"$set": {"industry": "Panadería", "name": "Pan Rico"}})
     r = c.post("/api/evaluaciones", json={"company_id": cid, "usar_llm": False}, headers=H)
     assert r.status_code == 422 and r.json()["detail"]["opciones"] == ["gaseras", "restaurantes"]
+    assert r.json()["detail"]["etiquetas"] == {"gaseras": "Gaseras", "restaurantes": "Restaurantes"}
+    assert "Todavía no hay plantilla para «Panadería»" in r.json()["detail"]["message"]
+    # Un restaurante ya no pregunta: "Alimentos y Bebidas" es el giro con más empresas.
+    MongoDBManager().db.companies.update_one({"_id": ObjectId(cid)}, {"$set": {"industry": "Alimentos y Bebidas", "name": "Taquería Los Güeros"}})
+    r = c.post("/api/evaluaciones", json={"company_id": cid, "usar_llm": False}, headers=H)
+    assert r.status_code == 200 and r.json()["industria"] == "restaurantes"
+    MongoDBManager().db.companies.update_one({"_id": ObjectId(cid)}, {"$set": {"industry": "Panadería", "name": "Pan Rico"}})
     r = c.post("/api/evaluaciones", json={"company_id": cid, "usar_llm": False, "industria": "gaseras"}, headers=H)
     assert r.status_code == 200

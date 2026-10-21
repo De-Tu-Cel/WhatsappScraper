@@ -2,7 +2,7 @@
 generar.js (la herramienta original del equipo de diseño) con las mismas entradas.
 
 Las huellas son las de salida/diesgas.html y salida/ejemplo-restaurante.html generadas con
-`node generar.js` (2026-10-20, con ligas largas partidas en la burbuja y el nombre exacto del nivel). Si se cambia plantilla.html o un JSON a propósito, se
+`node generar.js` (2026-10-21: restaurantes sin el dashboard de ejemplo y con el total del demo). Si se cambia plantilla.html o un JSON a propósito, se
 regeneran con node y se actualizan aquí.
 """
 import hashlib
@@ -18,7 +18,7 @@ from app.evaluacion import formato, generador
 FX = Path(__file__).resolve().parent / "fixtures" / "evaluacion"
 NODE_SHA256 = {
     "diesgas": "39e8a041a8442b56",
-    "ejemplo-restaurante": "9244de0008fc1ab8",
+    "ejemplo-restaurante": "58c6a468e3faefd1",
 }
 
 
@@ -30,6 +30,17 @@ def _cfg(name):
 def test_python_generator_matches_generar_js_byte_for_byte(name):
     html = generador.generar_evaluacion(_cfg(name), raices_assets=[FX])
     assert hashlib.sha256(html.encode("utf-8")).hexdigest()[:16] == NODE_SHA256[name]
+
+
+def test_no_industry_template_ships_sample_placeholders():
+    """Lo que ve el prospecto nunca trae cifras o textos de relleno: restaurantes salía con «000 pedidos»,
+    «$000», «0/5» y «DATOS DE EJEMPLO: reemplázalos…» (2026-10-21). Un giro sin datos reales de un
+    cliente no lleva dashboard (la plantilla lo oculta)."""
+    import re
+    relleno = re.compile(r"(?<![\d.,:])\$?0{2,}(?![\d.,:])|(?<!\d)0/5|(?<!\d)0{2}%|de ejemplo|reempl[aá]zal|lorem", re.I)
+    for clave in generador.industrias():
+        texto = (generador.RAIZ / "config" / "industrias" / f"{clave}.json").read_text(encoding="utf-8")
+        assert not relleno.findall(texto), (clave, relleno.findall(texto))
 
 
 def test_html_is_self_contained():

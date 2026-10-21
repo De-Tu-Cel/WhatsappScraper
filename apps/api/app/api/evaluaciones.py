@@ -249,8 +249,15 @@ def crear_evaluacion(req: NuevaEvaluacion, x_user_token: Optional[str] = Header(
         raise HTTPException(404, "Empresa no encontrada")
     industria = req.industria or armador.industria_de(company)
     if industria not in generador.industrias():
+        # Una agencia de autos con la plantilla de gaseras sale con demo de gas: que el revisor lo sepa.
+        giro = str(company.get("industry") or "").strip()
+        sin_plantilla = (f"Todavía no hay plantilla para «{giro}». " if giro and giro.lower() != "no detectada"
+                         else "No se detectó el giro de la empresa. ")
         raise HTTPException(422, {"code": "industria", "opciones": generador.industrias(),
-                                  "message": "No se detectó el giro de la empresa: elige la plantilla."})
+                                  "etiquetas": {k: generador.leer_json(generador.RAIZ / "config" / "industrias" / f"{k}.json")
+                                                ["industria"]["Plural"] for k in generador.industrias()},
+                                  "message": sin_plantilla + "Elige la más parecida: la demo y las ventajas de la "
+                                                             "página serán las de ese giro."})
     entrada = _elegir_numero(db, req.company_id, req.numero)
     numero = entrada["number"]
     from app.report_scope import report_thread_for_number

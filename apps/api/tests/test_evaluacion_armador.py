@@ -258,6 +258,37 @@ def test_the_six_analytics_classifications_and_their_level():
     assert armador.clasificacion_desde({"category": "bot", "is_ai": True}, {}, sin) == ("agente_ia", "clasificacion")
 
 
+def _chat(*mensajes):
+    """[(dirección, texto, minutos desde el inicio)] como filas de get_conversation_thread."""
+    inicio = datetime(2026, 10, 1, 17, 0)
+    return [{"direction": d, "body": t, "created_at": (inicio + timedelta(minutes=m)).isoformat()} for d, t, m in mensajes]
+
+
+def test_a_bot_is_never_praised_as_a_person_attending(monkeypatch):
+    # Taboo Restaurant, 2026-10-21: Análisis decía «Bot» y la página, «Trato personal: una persona atiende».
+    monkeypatch.setattr(armador, "hallazgos_con_llm", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("sin IA")))
+    chat = _chat(("outbound", "Hola, ¿hacen envíos?", 0),
+                 ("inbound", "Puede hablar con el restaurante enviando un WhatsApp al +52 998 410 5991. ¡Muchas gracias!", 1))
+    for categoria, persona in (("bot", False), ("automatico", True), ("humano", True)):
+        _capa, info = _armar(chat, {"category": categoria})
+        tipos = [f["tipo"] for f in info["hechos"]["fortalezas"]]
+        assert ("trato_personal" in tipos) == persona, categoria
+        assert [f["id"] for f in info["hechos"]["fortalezas"]] == [f"F{k}" for k in range(1, len(tipos) + 1)]
+
+
+def test_whatsapp_menus_show_as_buttons_under_the_message():
+    texto, opciones = armador.separar_opciones("¿En qué te ayudo?\n[Opciones: Ubicación | Horario | Asesor]")
+    assert (texto, opciones) == ("¿En qué te ayudo?", ["Ubicación", "Horario", "Asesor"])
+    assert armador.separar_opciones("Sin menú [no es lista]") == ("Sin menú [no es lista]", [])
+    items, _renglones, metricas = armador.construir_conversacion(_chat(
+        ("outbound", "Hola", 0), ("inbound", "\n[Lista: Español | English]", 1), ("inbound", "Bienvenido", 2)))
+    burbujas = [i for i in items if i["tipo"] in ("cliente", "negocio")]
+    assert burbujas[1]["texto"] == "📋 Menú de opciones"
+    assert {"tipo": "opciones", "opciones": ["Español", "English"]} in items
+    assert "[Lista" not in json.dumps(items, ensure_ascii=False)
+    assert all(items[d["i"]]["tipo"] in ("cliente", "negocio") for d in metricas["detalle"])  # los índices siguen apuntando al mensaje
+
+
 def test_the_page_never_speaks_to_the_business_as_tu(monkeypatch):
     # Rayogas, 2026-10-20: "Saluda con tu marca" aunque el prompt pide tercera persona.
     def fake(empresa, giro, renglones, metricas, verdict, nivel, escala, ventajas, hechos):

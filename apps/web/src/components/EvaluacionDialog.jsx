@@ -309,6 +309,7 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
   const [estado, setEstado] = useState('cargando') // 'cargando' | 'generando' | 'guardando' | null
   const [error, setError] = useState('')
   const [industrias, setIndustrias] = useState(null)
+  const [etiquetasGiro, setEtiquetasGiro] = useState({})
   const [industria, setIndustria] = useState('')
   const [vista, setVista] = useState('')
   const [actualizando, setActualizando] = useState(false)
@@ -399,7 +400,7 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       })))
     } catch (e) {
-      if (e.detail?.code === 'industria') { setIndustrias(e.detail.opciones); setError(e.detail.message) }
+      if (e.detail?.code === 'industria') { setIndustrias(e.detail.opciones); setEtiquetasGiro(e.detail.etiquetas || {}); setError(e.detail.message) }
       else setError(e.message)
     } finally {
       setEstado(null)
@@ -669,8 +670,8 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
             {error && <Typography role="alert" sx={{ fontSize: '0.82rem', ...ambar }}>{error}</Typography>}
             {industrias && (
               <Box sx={{ width: 260, textAlign: 'left' }}>
-                <Elegir etiqueta="Plantilla del giro" valor={industria} onChange={setIndustria} renderValue={(v) => (v ? v : tenue('Elige una'))}>
-                  {industrias.map((i) => <MenuItem key={i} value={i}>{i}</MenuItem>)}
+                <Elegir etiqueta="Plantilla del giro" valor={industria} onChange={setIndustria} renderValue={(v) => (v ? etiquetasGiro[v] || v : tenue('Elige una'))}>
+                  {industrias.map((i) => <MenuItem key={i} value={i}>{etiquetasGiro[i] || i}</MenuItem>)}
                 </Elegir>
               </Box>
             )}

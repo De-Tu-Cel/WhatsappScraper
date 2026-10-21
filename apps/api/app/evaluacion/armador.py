@@ -40,6 +40,7 @@ CLASIFICACIONES = {
     "agente_ia": ("Agente IA", 4),
 }
 _MISMA_CLASIFICACION = {"hibrido_automatico": "automatico", "menu": "bot", "hibrido": "bot", "hibrido_bot": "bot"}
+_SIN_PERSONA = {"sin_respuesta", "automatico_sin_respuesta", "bot", "agente_ia"}  # nadie del equipo contesta
 SINTESIS = {
     1: ("Hoy el canal no responde.", "Cada mensaje sin respuesta es un pedido que se pierde."),
     2: ("Hoy el canal depende de que alguien esté disponible.",
@@ -78,6 +79,21 @@ def _fecha(valor) -> datetime | None:
 
 def _utc(dt: datetime) -> datetime:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+# La app guarda los botones y listas de WhatsApp como "texto\n[Opciones: A | B | C]" (routes.py).
+_OPCIONES = re.compile(r"\s*\[(?:Opciones|Lista):\s*([^\]]*)\]\s*$")
+_MAX_OPCIONES = 8
+
+
+def separar_opciones(texto: str) -> tuple[str, list]:
+    """(texto del mensaje, opciones del menú): el menú se pinta como botones bajo el mensaje, como en
+    WhatsApp, y no como «[Opciones: …]» (Taboo Restaurant, 2026-10-21)."""
+    m = _OPCIONES.search(texto or "")
+    if not m:
+        return texto, []
+    opciones = [formato.texto_plano(o, 40) for o in m.group(1).split("|") if o.strip()]
+    return texto[:m.start()].rstrip(), opciones[:_MAX_OPCIONES]
 
 
 def _texto_mensaje(m: dict) -> str:
@@ -124,9 +140,13 @@ def construir_conversacion(thread: list, pais: str = "52") -> tuple[list, list, 
             items.append({"tipo": "dia", "texto": formato.fecha_dia(dt)})
             dia = local
         texto = _texto_mensaje(m)
+        cuerpo, opciones = separar_opciones(texto)
         indice = len(items)
-        items.append({"tipo": "cliente" if sale else "negocio", "texto": formato.whatsapp_a_html(texto),
+        items.append({"tipo": "cliente" if sale else "negocio",
+                      "texto": formato.whatsapp_a_html(cuerpo) if cuerpo.strip() else "📋 Menú de opciones",
                       "hora": formato.hora(dt)})
+        if opciones:
+            items.append({"tipo": "opciones", "opciones": opciones})
         renglones.append(f"[{indice}] {'Cliente (nosotros)' if sale else 'Negocio'} · {formato.fecha_dia(dt)} "
                          f"{formato.hora(dt)}: {formato.texto_plano(texto, 400)}")
         metricas["inicio"] = metricas["inicio"] or dt
@@ -716,11 +736,19 @@ def poner_logo(cliente: dict, logo: str | None) -> None:
             cliente["avatar"] = avatar
 
 
+# "Alimentos y Bebidas" es el giro con más empresas (294 en la copia del 2026-10-19): taquerías,
+# restaurantes, pizzerías… Antes no se detectaba y el revisor tenía que elegir la plantilla.
+_RESTAURANTE = re.compile(r"alimentos y bebidas|restaur|taquer|pizz|marisc|sushi|hamburgues|cafeter|fonda|loncher|"
+                          r"cocina econ|comida|antojitos|pozoler|birrier|cevicher|food", re.I)
+
+
 def industria_de(company: dict) -> str | None:
     from app.classifier import industry_profile
     texto = " ".join(str(company.get(k) or "") for k in ("industry", "name", "main_activity"))
     texto += " " + str((company.get("metadata") or {}).get("maps_category") or "")
-    return "gaseras" if industry_profile(texto) == "gas" else None
+    if industry_profile(texto) == "gas":
+        return "gaseras"
+    return "restaurantes" if _RESTAURANTE.search(texto) else None
 
 
 def armar_cliente(*, company: dict, thread: list, numero: str, verdict: dict | None, industria: str,
@@ -737,6 +765,12 @@ def armar_cliente(*, company: dict, thread: list, numero: str, verdict: dict | N
     hechos = detectar_hechos(items, metricas)
     clasificacion, fuente_nivel = clasificacion_desde(verdict, metricas, hechos)
     nombre_clasificacion, nivel = CLASIFICACIONES[clasificacion]
+    if clasificacion in _SIN_PERSONA:
+        # Análisis dice que no contesta una persona: un bot cuyos mensajes no parecen automáticos no es
+        # «trato personal» (Taboo Restaurant, 2026-10-21: «Nivel 4 · Bot» y «Una persona atiende el chat»).
+        hechos["fortalezas"] = [f for f in hechos["fortalezas"] if f["tipo"] != "trato_personal"]
+        for k, f in enumerate(hechos["fortalezas"], 1):
+            f["id"] = f"F{k}"
     respaldo = hallazgos_por_reglas(items, metricas, nivel, hechos)
     ventajas_ids = {v["id"] for v in giro.get("ventajas", [])}
     origen, notas, quitadas, recortados, sin_ia = "reglas", {"marcas_invalidas": 0, "completadas": 0}, [], 0, False

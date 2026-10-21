@@ -743,19 +743,11 @@ def poner_logo(cliente: dict, logo: str | None) -> None:
             cliente["avatar"] = avatar
 
 
-# "Alimentos y Bebidas" es el giro con más empresas (294 en la copia del 2026-10-19): taquerías,
-# restaurantes, pizzerías… Antes no se detectaba y el revisor tenía que elegir la plantilla.
-_RESTAURANTE = re.compile(r"alimentos y bebidas|restaur|taquer|pizz|marisc|sushi|hamburgues|cafeter|fonda|loncher|"
-                          r"cocina econ|comida|antojitos|pozoler|birrier|cevicher|food", re.I)
-
-
 def industria_de(company: dict) -> str | None:
     from app.classifier import industry_profile
     texto = " ".join(str(company.get(k) or "") for k in ("industry", "name", "main_activity"))
     texto += " " + str((company.get("metadata") or {}).get("maps_category") or "")
-    if industry_profile(texto) == "gas":
-        return "gaseras"
-    return "restaurantes" if _RESTAURANTE.search(texto) else None
+    return "gaseras" if industry_profile(texto) == "gas" else None
 
 
 def armar_cliente(*, company: dict, thread: list, numero: str, verdict: dict | None, industria: str,

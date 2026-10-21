@@ -215,16 +215,14 @@ def test_session_is_required_except_for_the_public_link(client):
 
 
 def test_unknown_industry_asks_which_template(client):
+    # La evaluación es solo para gaseras (2026-10-21): otro giro saldría con la demo del gas.
     c, cid = client
-    MongoDBManager().db.companies.update_one({"_id": ObjectId(cid)}, {"$set": {"industry": "Panadería", "name": "Pan Rico"}})
-    r = c.post("/api/evaluaciones", json={"company_id": cid, "usar_llm": False}, headers=H)
-    assert r.status_code == 422 and r.json()["detail"]["opciones"] == ["gaseras", "restaurantes"]
-    assert r.json()["detail"]["etiquetas"] == {"gaseras": "Gaseras", "restaurantes": "Restaurantes"}
-    assert "Todavía no hay plantilla para «Panadería»" in r.json()["detail"]["message"]
-    # Un restaurante ya no pregunta: "Alimentos y Bebidas" es el giro con más empresas.
     MongoDBManager().db.companies.update_one({"_id": ObjectId(cid)}, {"$set": {"industry": "Alimentos y Bebidas", "name": "Taquería Los Güeros"}})
     r = c.post("/api/evaluaciones", json={"company_id": cid, "usar_llm": False}, headers=H)
-    assert r.status_code == 200 and r.json()["industria"] == "restaurantes"
-    MongoDBManager().db.companies.update_one({"_id": ObjectId(cid)}, {"$set": {"industry": "Panadería", "name": "Pan Rico"}})
+    assert r.status_code == 422 and r.json()["detail"]["opciones"] == ["gaseras"]
+    assert r.json()["detail"]["etiquetas"] == {"gaseras": "Gaseras"}
+    assert "solo para gaseras y «Taquería Los Güeros» aparece como «Alimentos y Bebidas»" in r.json()["detail"]["message"]
+    r = c.post("/api/evaluaciones", json={"company_id": cid, "usar_llm": False, "industria": "restaurantes"}, headers=H)
+    assert r.status_code == 422  # la plantilla existe, pero no se ofrece
     r = c.post("/api/evaluaciones", json={"company_id": cid, "usar_llm": False, "industria": "gaseras"}, headers=H)
     assert r.status_code == 200

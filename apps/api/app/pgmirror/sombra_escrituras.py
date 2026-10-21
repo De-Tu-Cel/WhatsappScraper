@@ -1,0 +1,77 @@
+"""Sombra de escrituras: antes de que Postgres mande, cada update se calcula también con el motor
+(actualizar.py) y se compara contra lo que dejó Mongo (docs/MIGRACION_POSTGRES.md, «Postgres fuente de
+verdad»). Mongo sigue siendo la fuente de verdad: esto solo mide. Se enciende con PGMIRROR_WRITE_SHADOW=1
+y solo en colecciones en modo postgres (ahí el espejo copia antes de responder, así que el «después» de
+Postgres es el de Mongo).
+
+Resultado de cada comparación (contadores por colección en mongo._counters):
+  escritura_ok            el motor dejó lo mismo que Mongo
+  escritura_dif           distinto: queda en mongo._shadow_diffs como «escritura:<método>»
+  escritura_no_soportada  el update usa algo que el motor no hace (seguiría yendo a Mongo)
+  escritura_carrera       no se pudo saber qué documento tocó Mongo (otro proceso escribió a la vez)
+"""
+import os
+
+from app.pgmirror import actualizar, codec
+
+
+def activa() -> bool:
+    return os.getenv("PGMIRROR_WRITE_SHADOW", "").strip().lower() in ("1", "true", "si", "sí", "on")
+
+
+def es_update(update) -> bool:
+    return isinstance(update, dict) and bool(update) and all(isinstance(k, str) and k.startswith("$") for k in update)
+
+
+def _igual(a: dict, b: dict, *, sin_orden: bool = False) -> bool:
+    def norm(v):
+        if isinstance(v, dict):
+            return {k: norm(v[k]) for k in (sorted(v) if sin_orden else v)}
+        if isinstance(v, list):
+            return [norm(x) for x in v]
+        return v
+    a, b = codec.decode_doc(codec.encode_doc(norm(a))), codec.decode_doc(codec.encode_doc(norm(b)))  # al ms, como Mongo
+    return codec.doc_hash(a) == codec.doc_hash(b)
+
+
+def comparar(metodo: str, filtro, update, antes: dict, despues: dict, *, upserted=None, modificados=None,
+             objetivo=None) -> tuple[str, str]:
+    """antes/despues: {llave del _id: documento} de Postgres justo antes de la escritura y justo después de
+    copiarla. `objetivo`: la llave del documento que tocó Mongo cuando se sabe (find_one_and_update).
+    Devuelve (resultado, detalle)."""
+    try:
+        if objetivo is not None:
+            if objetivo not in antes or objetivo not in despues:
+                return "escritura_carrera", "el documento ya no está"
+            esperado = actualizar.aplicar(antes[objetivo], update)
+            if _igual(esperado, despues[objetivo]):
+                return "escritura_ok", ""
+            return "escritura_dif", f"_id {objetivo}: mongo={despues[objetivo]!r} motor={esperado!r}"
+        if upserted is not None:
+            llave = codec.id_key(upserted)[0]
+            esperado = actualizar.documento_de_upsert(filtro, update, upserted)
+            # El orden de los campos que salen del filtro no es determinista ni en Mongo 7.
+            if llave in despues and _igual(esperado, despues[llave], sin_orden=True):
+                return "escritura_ok", ""
+            return "escritura_dif", f"upsert {upserted!r}: mongo={despues.get(llave)!r} motor={esperado!r}"
+        cambiaron = [k for k in antes if k in despues and not _igual(antes[k], despues[k])]
+        if metodo in ("update_one", "find_one_and_update"):
+            if modificados == 0 and not cambiaron:
+                # No-op ($set del mismo valor, $addToSet de uno que ya estaba…): el motor tampoco debe cambiarlo.
+                if any(_igual(actualizar.aplicar(d, update), d) for d in antes.values()):
+                    return "escritura_ok", ""
+                return "escritura_dif", f"Mongo no cambió nada y el motor sí ({len(antes)} candidatos)"
+            if len(cambiaron) != 1:
+                return "escritura_carrera", f"{len(cambiaron)} documentos cambiaron"
+            objetivos = cambiaron
+        else:
+            objetivos = [k for k in antes if k in despues]
+        for k in objetivos:
+            esperado = actualizar.aplicar(antes[k], update)
+            if not _igual(esperado, despues[k]):
+                return "escritura_dif", f"_id {k}: mongo={despues[k]!r} motor={esperado!r}"
+        return "escritura_ok", ""
+    except actualizar.NoSoportado as exc:
+        return "escritura_no_soportada", str(exc)
+    except actualizar.ErrorDeMongo as exc:
+        return "escritura_dif", f"el motor dio error y Mongo no: {exc}"

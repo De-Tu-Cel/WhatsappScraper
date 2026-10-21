@@ -21,7 +21,9 @@ import queue
 import threading
 import time
 
-from app.pgmirror import codec, config, sqlfilter
+from psycopg import sql
+
+from app.pgmirror import codec, config, sombra_escrituras, sqlfilter
 
 log = logging.getLogger(__name__)
 MAX_PREQUERY = 1000
@@ -456,10 +458,50 @@ class RoutedCollection:
 
     def _write_by_filter(self, method, filter_, *args, **kwargs):
         ids = self._ids_for(filter_, **kwargs)
+        update = args[0] if args else kwargs.get("update")
+        antes = self._antes_para_sombra(method, update, ids)
         result = getattr(self._raw, method)(filter_, *args, **kwargs)
         upserted = getattr(result, "upserted_id", None)
         self._mirror(ids + ([upserted] if upserted is not None else []))
+        if antes is not None:
+            self._comparar_escritura(method, filter_, update, antes, ids, upserted=upserted,
+                                     modificados=getattr(result, "modified_count", None))
         return result
+
+    # ── Sombra de escrituras (sombra_escrituras.py): solo mide, nunca cambia la escritura ──
+    def _sombra(self, method, update) -> bool:
+        return (self._mode == "postgres" and method in ("update_one", "update_many", "find_one_and_update")
+                and sombra_escrituras.activa() and sombra_escrituras.es_update(update))
+
+    def _docs_pg(self, ids) -> dict:
+        keys = [codec.id_key(i)[0] for i in ids if i is not None]
+        if not keys:
+            return {}
+        docs = self._rt.store.query_docs(self._name, sql.SQL("id = ANY(%s)"), params=(keys,))
+        return {codec.id_key(d["_id"])[0]: d for d in docs}
+
+    def _antes_para_sombra(self, method, update, ids):
+        if not self._sombra(method, update) or len(ids) >= MAX_PREQUERY or not self._rt.pg_readable(self._name):
+            return None
+        try:
+            return self._docs_pg(ids)
+        except Exception:
+            self._rt.bump(self._name, "escritura_error")
+            return None
+
+    def _comparar_escritura(self, method, filter_, update, antes, ids, **kw):
+        try:
+            if not self._rt.pg_readable(self._name):
+                return  # la copia en vivo falló: Postgres no tiene el «después»
+            despues = self._docs_pg(list(ids) + [kw.get("upserted")])
+            estado, detalle = sombra_escrituras.comparar(method, filter_, update, antes, despues, **kw)
+            self._rt.bump(self._name, estado)
+            if estado == "escritura_dif":
+                self._rt.store.record_diff(self._name, f"escritura:{method}", f"filter={filter_!r} update={update!r} {detalle}")
+                log.warning("pgmirror write shadow diff %s.%s: %s", self._name, method, detalle[:300])
+        except Exception:
+            self._rt.bump(self._name, "escritura_error")
+            log.exception("pgmirror write shadow failed for %s", self._name)
 
     def update_one(self, filter, update, *args, **kwargs):
         return self._write_by_filter("update_one", filter, update, *args, **kwargs)
@@ -485,6 +527,18 @@ class RoutedCollection:
         hides_id = isinstance(projection, dict) and "_id" in projection and not projection["_id"]
         upsert = kwargs.get("upsert", args[3] if method != "find_one_and_delete" and len(args) > 3 else False)
         ids = self._ids_for(filter_, **kwargs) if hides_id else []
+        update = args[0] if args and method == "find_one_and_update" else kwargs.get("update")
+        despues_de_escribir = bool(kwargs.get("return_document", args[4] if len(args) > 4 else False))
+        antes_pg = None
+        if self._sombra(method, update) and (despues_de_escribir or projection) and self._rt.pg_readable(self._name):
+            # El documento que regresa Mongo no sirve de «antes» (es el de después, o viene recortado):
+            # el candidato se lee de Postgres, que en modo postgres está al día.
+            try:
+                sort = kwargs.get("sort", args[2] if len(args) > 2 else None)
+                antes_pg = self._rt.store.query_docs(self._name, sqlfilter.where(filter_),
+                                                     plan=sqlfilter.sort_plan(sort) if sort else None, limit=1)
+            except Exception:
+                antes_pg = None
         doc = getattr(self._raw, method)(filter_, *args, **kwargs)
         if isinstance(doc, dict) and "_id" in doc:
             ids.append(doc["_id"])
@@ -494,6 +548,17 @@ class RoutedCollection:
             if not ids:
                 self._dirty(f"{method} upsert without a resolvable _id")
         self._mirror(ids)
+        if self._sombra(method, update) and isinstance(doc, dict) and "_id" in doc:
+            llave = codec.id_key(doc["_id"])[0]
+            if antes_pg is None and not (despues_de_escribir or projection):
+                antes = {llave: doc}  # ReturnDocument.BEFORE completo: es el «antes» de Mongo mismo
+            elif antes_pg and codec.id_key(antes_pg[0]["_id"])[0] == llave:
+                antes = {llave: antes_pg[0]}
+            else:
+                antes = None  # Mongo eligió otro documento o insertó uno nuevo: no hay con qué comparar
+                self._rt.bump(self._name, "escritura_carrera")
+            if antes is not None:
+                self._comparar_escritura(method, filter_, update, antes, [doc["_id"]], objetivo=llave)
         return doc
 
     def find_one_and_update(self, filter, update, *args, **kwargs):

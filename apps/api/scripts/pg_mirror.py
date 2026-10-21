@@ -115,6 +115,18 @@ def _check(raw_db, store) -> int:
         print("Cuadraron al releer Mongo (la app escribió justo después de leer; no es diferencia): "
               + ", ".join(f"{n} {v}" for n, v in sorted(raced.items())))
 
+    # Sombra de escrituras (PGMIRROR_WRITE_SHADOW=1): el motor de Postgres contra lo que dejó Mongo.
+    escrituras = {}
+    for (name, key), n in counters.items():
+        if key.startswith("escritura_"):
+            escrituras.setdefault(name, {})[key[len("escritura_"):]] = n
+    if escrituras:
+        print("\nSombra de escrituras (ok / dif / no soportadas / carreras / errores):")
+        for name in sorted(escrituras):
+            e = escrituras[name]
+            print(f"  {name:30} {e.get('ok', 0):6} / {e.get('dif', 0)} / {e.get('no_soportada', 0)} / "
+                  f"{e.get('carrera', 0)} / {e.get('error', 0)}")
+
     print("\nProcesos del backend:")
     procs = store.query("SELECT process, extract(epoch FROM now() - updated_at), status FROM mongo._runtime ORDER BY 2")
     # Reportan cada minuto: los que llevan más de 5 min callados son de un contenedor anterior (redeploy).

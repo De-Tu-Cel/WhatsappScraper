@@ -37,6 +37,11 @@ class Unsupported(Exception):
     pass
 
 
+def field_parts(field) -> list[str]:
+    """Partes de una ruta a.b.c; Unsupported si la ruta es ambigua o inválida."""
+    return _parts(field)
+
+
 def _parts(field) -> list[str]:
     if not isinstance(field, str) or not field:
         raise Unsupported(f"campo {field!r}")
@@ -253,7 +258,7 @@ def _value_key(value) -> sql.Composable:
 
 
 # ── Condiciones ────────────────────────────────────────────────────────────────
-_GIN_MAX_VALUES = 20  # un $in más largo no agrega la condición para el índice (demasiadas ramas)
+_GIN_MAX_VALUES = 20  # un $in más largo de ObjectId/fechas no agrega la condición para el índice (demasiadas ramas)
 
 
 def _eq(field: str, value, gin: bool = True) -> sql.Composable:
@@ -281,14 +286,21 @@ def _eq(field: str, value, gin: bool = True) -> sql.Composable:
         def terminal(x):
             return sql.SQL("({x} = {v} OR (jsonb_typeof({x}) = 'array' AND {x} @> {arr}))").format(x=x, v=target, arr=as_array)
     exact = _walk(sql.SQL("doc"), parts, terminal, missing=value is None)
-    if gin and len(parts) == 1 and value is not None and not isinstance(value, (dict, list)):
-        # Necesaria para la igualdad de arriba (valor igual o arreglo que lo contiene) y la única
-        # forma que usa el índice GIN (jsonb_path_ops) de la tabla.
+    if len(parts) == 1 and value is not None and not isinstance(value, (dict, list)):
+        # Valor igual o arreglo que lo contiene como elemento, con contención: la única forma que
+        # usa el índice GIN (jsonb_path_ops) de la tabla.
         encoded = codec.encode_value(value)
-        whole = sql.Literal(json.dumps({parts[0]: encoded}))
-        inside = sql.Literal(json.dumps({parts[0]: [encoded]}))
-        return sql.SQL("({exact} AND (doc @> {whole}::jsonb OR doc @> {inside}::jsonb))").format(
-            exact=exact, whole=whole, inside=inside)
+        contains = sql.SQL("(doc @> {}::jsonb OR doc @> {}::jsonb)").format(
+            sql.Literal(json.dumps({parts[0]: encoded})), sql.Literal(json.dumps({parts[0]: [encoded]})))
+        if not isinstance(encoded, dict):
+            # Texto, número o bool: la contención ES la igualdad de arriba (jsonb compara escalares
+            # igual que `=` y no busca escalares dentro de arreglos anidados), y lee el documento
+            # 2 veces en vez de 5: en message_logs (documentos comprimidos) eso es lo que más cuesta.
+            return contains
+        if gin:
+            # ObjectId, fecha…: {"$oid": …} podría contenerse en un objeto más grande; queda la
+            # exacta y la contención solo como condición necesaria para el índice.
+            return sql.SQL("({} AND {})").format(exact, contains)
     return exact
 
 

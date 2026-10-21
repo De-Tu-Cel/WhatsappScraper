@@ -619,6 +619,17 @@ class RoutedCollection:
             return self._raw.estimated_document_count()
 
     def _pg_distinct(self, key, filter_):
+        if len(sqlfilter.field_parts(key)) == 1:
+            self._check_readable()
+            texts = self._rt.store.distinct_values(self._name, key, sqlfilter.where(filter_))
+            if texts is None:
+                # Mongo agrega null por los documentos sin el campo solo cuando responde desde un
+                # índice de ese campo (depende de su plan). No se adivina: lo resuelve Mongo.
+                raise sqlfilter.Unsupported("distinct con documentos sin el campo")
+            values = [codec.decode_value(t) for t in texts]
+            # Subdocumentos y arreglos anidados: jsonb reordena llaves; esos los arma el camino de abajo.
+            if not any(isinstance(v, (dict, list)) for v in values):
+                return values
         values, seen = [], set()
         for doc in self._pg_find(filter_, {key: 1}, None, 0, 0):
             found = sqlfilter.path_values(doc, key)

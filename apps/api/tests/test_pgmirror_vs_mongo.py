@@ -224,6 +224,21 @@ def test_distinct_matches_real_mongo(engines, field):
     assert sorted(map(repr, seen)) == expected
 
 
+@pytest.mark.parametrize("field", ["n", "s", "mix", "o", "tags", "d"])
+def test_distinct_in_sql_matches_real_mongo(engines, field):
+    """El distinct que calcula Postgres (campo de primer nivel, sin traer los documentos)."""
+    mongo, store, table, _docs = engines
+    flt = {field: {"$exists": True, "$ne": []}}
+    texts = store.distinct_values(table, field, sqlfilter.where(flt))
+    assert texts is not None
+    got = [codec.decode_value(t) for t in texts]
+    assert len(got) == len({sqlfilter.distinct_marker(v) for v in got})  # sin repetidos
+    assert sorted(map(repr, {sqlfilter.distinct_marker(v) for v in got})) == \
+           sorted(map(repr, {sqlfilter.distinct_marker(v) for v in mongo.distinct(field, flt)}))
+    # Si algún documento no aporta valores (sin el campo o []), no se adivina.
+    assert store.distinct_values(table, field, sqlfilter.where({})) is None
+
+
 def test_routed_collection_against_real_mongo(engines, monkeypatch):
     """La capa completa sobre un Mongo real: postgres responde igual, shadow no ve diferencias."""
     mongo, _store, _table, _docs = engines
@@ -246,6 +261,7 @@ def test_routed_collection_against_real_mongo(engines, monkeypatch):
                 lambda c: c.find_one({"s": {"$regex": "^ñ", "$options": "i"}}),
                 lambda c: c.count_documents({"mix": None}),
                 lambda c: sorted(map(repr, {sqlfilter.distinct_marker(v) for v in c.distinct("k.v", {"n": {"$ne": None}})})),
+                lambda c: sorted(map(repr, {sqlfilter.distinct_marker(v) for v in c.distinct("s", {"s": {"$exists": True}})})),
                 lambda c: [d["_id"] for d in c.find({"o": FIXED_OID}).limit(7)],
             ]
             for check in checks:

@@ -1,0 +1,55 @@
+# WhatsApp (wwebjs) como recurso APARTE en Coolify: desplegar el backend o el frontend ya no
+# reinicia las sesiones de WhatsApp (2026-10-20: cada merge las reiniciaba y gely se cayó).
+# Paso a paso, verificación y vuelta atrás: docs/WWEBJS_RECURSO_APARTE.md
+#
+# En Coolify: recurso Docker Compose del mismo repo, rama main, "Docker Compose Location"
+# /docker-compose.wwebjs.yml, con Auto Deploy APAGADO (se despliega a mano solo cuando cambia
+# apps/wwebjs). Variables: WWEBJS_API_SECRET, PROXY_SERVER, PROXY_USERNAME, PROXY_PASSWORD,
+# PROXY_ONLY_SESSIONS (los mismos valores del recurso principal).
+services:
+  wwebjs:
+    # Dar tiempo a Chromium para guardar LocalAuth y recoger sus procesos hijos.
+    init: true
+    stop_grace_period: 30s
+    build:
+      context: ./apps/wwebjs
+      dockerfile: Dockerfile
+    environment:
+      - PORT=3001
+      # El backend vive en el otro recurso: se le encuentra por su alias en la red "coolify".
+      - FASTAPI_URL=${FASTAPI_URL:-http://detucel-backend:8000}
+      - API_SECRET=${WWEBJS_API_SECRET}
+      - PROXY_SERVER=${PROXY_SERVER}
+      - PROXY_USERNAME=${PROXY_USERNAME}
+      - PROXY_PASSWORD=${PROXY_PASSWORD}
+      - PROXY_ONLY_SESSIONS=${PROXY_ONLY_SESSIONS}
+      # Si el volumen montado no trae perfiles, no arranca (storage-entrypoint.sh): sería el
+      # volumen equivocado y nadie debe vincular números ahí.
+      - REQUIRE_EXISTING_SESSIONS=1
+    expose:
+      - "3001"
+    volumes:
+      # Coolify 4.3 renombra todo volumen con nombre a "<uuid de este recurso>_wwebjs-sessions"
+      # (también los "external": solo respeta cifs/nfs). Antes del primer despliegue ese volumen
+      # se crea como ALIAS de la carpeta del volumen de siempre (docs/WWEBJS_RECURSO_APARTE.md):
+      # mismos archivos y mismo candado, no una copia. Borrar el alias no borra las sesiones.
+      # Si se olvida, Docker crea uno vacío y el servicio no arranca (REQUIRE_EXISTING_SESSIONS).
+      - wwebjs_sessions:/app/sessions
+    networks:
+      coolify:
+        aliases:
+          - detucel-wwebjs
+    restart: unless-stopped
+    mem_limit: 6g
+    logging:
+      driver: json-file
+      options:
+        max-size: 100m
+        max-file: "10"
+
+volumes:
+  wwebjs_sessions:
+
+networks:
+  coolify:
+    external: true

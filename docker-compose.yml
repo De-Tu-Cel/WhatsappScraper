@@ -36,7 +36,9 @@ services:
       - ANTHROPIC_ADMIN_API_KEY=${ANTHROPIC_ADMIN_API_KEY:-}
       - ANTHROPIC_WORKSPACE_ID=${ANTHROPIC_WORKSPACE_ID:-}
       - ANTHROPIC_MONTHLY_BUDGET_USD=${ANTHROPIC_MONTHLY_BUDGET_USD:-10}
-      - WWEBJS_URL=http://wwebjs:3001
+      # wwebjs es un recurso aparte en Coolify (docker-compose.wwebjs.yml,
+      # docs/WWEBJS_RECURSO_APARTE.md): se le encuentra por su alias en "coolify".
+      - WWEBJS_URL=${WWEBJS_URL:-http://detucel-wwebjs:3001}
       - WWEBJS_API_SECRET=${WWEBJS_API_SECRET}
       - WARMUP_ENABLED=${WARMUP_ENABLED}
       - OTP_WEBHOOK_SECRET=${OTP_WEBHOOK_SECRET}
@@ -49,8 +51,6 @@ services:
       - PGMIRROR_RECONCILE_HOURS=${PGMIRROR_RECONCILE_HOURS:-}
     expose:
       - "8000"
-    depends_on:
-      - wwebjs
     restart: unless-stopped
     mem_limit: 1.5g
     # A Docker Compose app gets its own project-scoped network by default,
@@ -63,42 +63,35 @@ services:
     # silently lost that connectivity, since nothing in this file declared
     # it. `default` keeps the existing backend/wwebjs/frontend service-name
     # DNS the other two services rely on.
+    # Alias fijo en "coolify": así lo encuentra wwebjs cuando corre como recurso
+    # aparte (docker-compose.wwebjs.yml), donde "backend" no existe.
     networks:
-      - default
-      - coolify
+      default:
+      coolify:
+        aliases:
+          - detucel-backend
     logging:
       driver: json-file
       options:
         max-size: 100m
         max-file: "10"
 
-  # ── wwebjs (WhatsApp personal number — active provider) ───────
-  wwebjs:
-    # Dar tiempo a Chromium para guardar LocalAuth y recoger sus procesos hijos.
+  # ── Ancla del volumen de sesiones de WhatsApp ────────────────
+  # wwebjs corre en su propio recurso (docker-compose.wwebjs.yml) y monta estos mismos
+  # archivos por medio de un volumen alias (docs/WWEBJS_RECURSO_APARTE.md). Para Docker eso
+  # no cuenta como uso: sin este contenedor el volumen original quedaría "sin usar" y una
+  # limpieza de volúmenes lo borraría con todas las sesiones. Solo lectura; no hace nada más.
+  wwebjs-sessions-anchor:
+    image: busybox:1.36.1
     init: true
-    stop_grace_period: 30s
-    build:
-      context: ./apps/wwebjs
-      dockerfile: Dockerfile
-    environment:
-      - PORT=3001
-      - FASTAPI_URL=http://backend:8000
-      - API_SECRET=${WWEBJS_API_SECRET}
-      - PROXY_SERVER=${PROXY_SERVER}
-      - PROXY_USERNAME=${PROXY_USERNAME}
-      - PROXY_PASSWORD=${PROXY_PASSWORD}
-      - PROXY_ONLY_SESSIONS=${PROXY_ONLY_SESSIONS}
+    command: ["tail", "-f", "/dev/null"]
     volumes:
-      - wwebjs_sessions:/app/sessions
+      - wwebjs_sessions:/sessions:ro
     restart: unless-stopped
-    mem_limit: 6g
-    logging:
-      driver: json-file
-      options:
-        max-size: 100m
-        max-file: "10"
+    mem_limit: 16m
 
 volumes:
+  # Coolify lo nombra dpwlknbsbuvups4fy4kahcyk_wwebjs-sessions: el volumen de siempre.
   wwebjs_sessions:
 
 networks:

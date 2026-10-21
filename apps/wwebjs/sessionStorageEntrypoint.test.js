@@ -40,3 +40,32 @@ test('real entrypoint excludes a second owner, forwards SIGTERM and preserves fi
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
+
+test('with REQUIRE_EXISTING_SESSIONS an empty volume refuses to start; one with profiles starts',
+  { skip: process.platform !== 'linux', timeout: 10000 }, async () => {
+    // Recurso aparte en Coolify: un volumen externo mal nombrado se monta vacío.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dummy-storage-required-'))
+    const storage = path.join(root, 'profiles')
+    fs.mkdirSync(storage)
+    fs.writeFileSync(path.join(root, 'index.js'), "process.stdout.write('ready\\n');setInterval(()=>{},1000);")
+    const env = { ...process.env, SESSIONS_PATH: storage, REQUIRE_EXISTING_SESSIONS: '1', EMPTY_STORAGE_PAUSE: '0' }
+    const start = () => spawn('sh', [path.join(__dirname, 'storage-entrypoint.sh')], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    let running
+    try {
+      const empty = start()
+      let err = ''
+      empty.stderr.on('data', (d) => { err += d })
+      const [code] = await once(empty, 'exit')
+      assert.notEqual(code, 0)
+      assert.match(err, /WWEBJS_SESSIONS_VOLUME/)
+      assert.equal(fs.existsSync(path.join(storage, '.service.lock')), false) // ni siquiera tomó el candado
+      fs.mkdirSync(path.join(storage, 'session-gely-wa'))
+      running = start()
+      await once(running.stdout, 'data')
+    } finally {
+      if (running && running.exitCode == null && running.signalCode == null) {
+        const exited = once(running, 'exit'); running.kill('SIGTERM'); await exited
+      }
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })

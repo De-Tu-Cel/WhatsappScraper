@@ -142,8 +142,16 @@ def test_upserts_create_the_same_document_as_real_mongo(coleccion):
     distintos = []
     for i in range(400):
         nuevo_id = ObjectId()
-        filtro = {"_id": nuevo_id, **r.choice([{}, {"k": "v"}, {"k": "v", "a": 1}, {"z": 2, "b": {"$gt": 3}},
-                                                 {"instance": "x", "date": "2026-10-21"}, {"c.d": 1}])}
+        filtro = {"_id": nuevo_id, **r.choice([
+            {}, {"k": "v"}, {"k": "v", "a": 1}, {"z": 2, "b": {"$gt": 3}}, {"instance": "x", "date": "2026-10-21"}, {"c.d": 1},
+            # Formas de la app (reclamos del clasificador, lotes de envío) y lo medido en Mongo 7.
+            {"$or": [{"expires_at": {"$lte": 5}}, {"expires_at": {"$exists": False}}]}, {"notified": {"$ne": True}},
+            {"$or": [{"k": "v"}]}, {"$and": [{"k": "v"}, {"$or": [{"a": 1}]}]}, {"$nor": [{"a": 7}]},
+            {"q": {"$in": [3]}}, {"q": {"$in": [3, 4]}}, {"q": {"$in": [[1, 2]]}}, {"a": {"$eq": 1}},
+            {"a": {"$elemMatch": {"x": 1}}}, {"k": "v", "$and": [{"k": "v"}]},
+        ])}
+        if r.random() < 0.1:
+            filtro["_id"] = {"$in": [nuevo_id]}
         update = {k: v for k, v in _update(r).items()}
         update.setdefault("$set", {})["actualizado"] = datetime(2026, 10, 21, 12, 0, 0, 123456)
         try:

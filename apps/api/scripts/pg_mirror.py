@@ -30,7 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.pgmirror.reconcile import reconcile  # noqa: E402
-from app.pgmirror.store import SORT_INDEXES, Store, sort_index_name  # noqa: E402
+from app.pgmirror.store import SORT_INDEXES, UNICOS, Store, sort_index_name, unique_index_name  # noqa: E402
 
 
 def _connect():
@@ -85,7 +85,9 @@ def _check(raw_db, store) -> int:
         hours = recorded[1] if recorded and recorded[0] == mode else None
         ok, diffs = counters.get((name, "shadow_ok"), 0), counters.get((name, "shadow_diffs"), 0)
         fallbacks = sum(v for (c, k), v in counters.items() if c == name and k.startswith("pg_fallback"))
-        verdict = health.readiness(mode, hours, result["in_sync"], fixed.get(name, 0), ok, diffs, fallbacks, wait)
+        escrituras_col = {k[len("escritura_"):]: v for (c, k), v in counters.items() if c == name and k.startswith("escritura_")}
+        verdict = health.readiness(mode, hours, result["in_sync"], fixed.get(name, 0), ok, diffs, fallbacks, wait,
+                                   escrituras=escrituras_col)
         if name in dirty:
             verdict = "POR CONCILIAR (lecturas en Mongo hasta que se concilie, ~1 min) · " + verdict
         all_ok &= result["in_sync"]
@@ -126,6 +128,27 @@ def _check(raw_db, store) -> int:
             e = escrituras[name]
             print(f"  {name:30} {e.get('ok', 0):6} / {e.get('dif', 0)} / {e.get('no_soportada', 0)} / "
                   f"{e.get('carrera', 0)} / {e.get('error', 0)}")
+
+    # Modo primary: escrituras en Postgres, las que fueron por Mongo y la bandeja de salida.
+    primarias = sorted(n for n, m in active.items() if m == "primary")
+    if primarias:
+        bandeja = dict(store.query("SELECT collection, count(*) FROM mongo._outbox GROUP BY 1"))
+        print("\nModo primary (en Postgres / por Mongo / copias a Mongo pendientes / en bandeja ahora):")
+        for name in primarias:
+            print(f"  {name:30} {counters.get((name, 'primaria_ok'), 0):6} / {counters.get((name, 'primaria_por_mongo'), 0)} / "
+                  f"{counters.get((name, 'copia_a_mongo_pendiente'), 0)} / {bandeja.get(name, 0)}")
+        unicos = {unique_index_name(n, f): n for n in primarias for f, _ in UNICOS.get(n, [])}
+        if unicos:
+            listos = dict(store.query("SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                                      "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'mongo' AND c.relname = ANY(%s)",
+                                      (list(unicos),)))
+            faltan = sorted({unicos[i] for i in unicos if not listos.get(i)})
+            print(f"  Índices únicos: {sum(1 for i in unicos if listos.get(i))} de {len(unicos)} listos"
+                  + (f" · faltan en: {', '.join(faltan)} (mientras, sus escrituras van por Mongo)" if faltan else ""))
+    huerfanas = [c for (c,) in store.query("SELECT DISTINCT collection FROM mongo._outbox") if c not in primarias]
+    if huerfanas:
+        print(f"\n¡Bandeja con pendientes de colecciones que ya no están en primary: {', '.join(huerfanas)}! "
+              "Revisar antes de seguir (ahí Mongo vuelve a mandar).")
 
     print("\nProcesos del backend:")
     procs = store.query("SELECT process, extract(epoch FROM now() - updated_at), status FROM mongo._runtime ORDER BY 2")

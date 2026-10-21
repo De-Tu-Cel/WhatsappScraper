@@ -11,6 +11,12 @@
   en línea, antes de responder (lo que se escribe se lee enseguida, desde cualquier
   proceso). Lo que el traductor no soporta, cualquier error de Postgres (también a
   mitad de un cursor) o una colección "por conciliar" se lee de Mongo — nunca se adivina.
+- `primary`: Postgres es la fuente de verdad (primaria.py). Las escrituras van a Postgres y
+  se copian a Mongo en la misma transacción (si Mongo falla, a la bandeja de salida y el
+  vigilante la repite: la escritura no falla). Las lecturas, como en postgres; lo que no se
+  traduce se lee de la copia de Mongo. Lo que el motor no sabe escribir se hace en Mongo con
+  esos documentos bloqueados en Postgres y el resultado se guarda en Postgres en la misma
+  transacción.
 Cada copia toma un candado por documento en Postgres (Store.replace_from_source): dos
 procesos copiando el mismo documento nunca dejan una versión vieja encima de una nueva.
 Todo lo demás (aggregate, create_index, …) va directo a Mongo.
@@ -21,9 +27,11 @@ import queue
 import threading
 import time
 
+from bson import ObjectId
 from psycopg import sql
+from pymongo import common as pymongo_common
 
-from app.pgmirror import agregar, codec, config, sombra_escrituras, sqlfilter
+from app.pgmirror import actualizar, agregar, codec, config, primaria, sombra_escrituras, sqlfilter
 
 log = logging.getLogger(__name__)
 MAX_PREQUERY = 1000
@@ -401,6 +409,8 @@ def _canon_agregado(filas) -> list:
 class RoutedCollection:
     def __init__(self, raw, name, mode, rt):
         self._raw, self._name, self._mode, self._rt = raw, name, mode, rt
+        self._lee_pg = mode in ("postgres", "primary")
+        self._escritor = None
 
     def __getattr__(self, attr):
         return getattr(self._raw, attr)
@@ -453,12 +463,16 @@ class RoutedCollection:
         return ids
 
     def insert_one(self, document, *args, **kwargs):
+        if self._mode == "primary":
+            return self._primaria("insert_one", None, document, args, kwargs)
         result = self._raw.insert_one(document, *args, **kwargs)
         self._mirror([result.inserted_id])
         return result
 
     def insert_many(self, documents, *args, **kwargs):
         documents = list(documents)
+        if self._mode == "primary":
+            return self._primaria("insert_many", None, documents, args, kwargs)
         try:
             result = self._raw.insert_many(documents, *args, **kwargs)
         except Exception:
@@ -469,6 +483,8 @@ class RoutedCollection:
         return result
 
     def _write_by_filter(self, method, filter_, *args, **kwargs):
+        if self._mode == "primary":
+            return self._primaria_por_filtro(method, filter_, args, kwargs)
         ids = self._ids_for(filter_, **kwargs)
         update = args[0] if args else kwargs.get("update")
         antes = self._antes_para_sombra(method, update, ids)
@@ -531,6 +547,8 @@ class RoutedCollection:
         return self._write_by_filter("delete_many", filter, *args, **kwargs)
 
     def _find_and_modify(self, method, filter_, *args, **kwargs):
+        if self._mode == "primary":
+            return self._primaria_por_filtro(method, filter_, args, kwargs)
         # Toca UN solo documento y lo regresa (antes o después): su _id basta, sin consulta previa
         # (importa en las colas, que reclaman con esto a cada rato). Solo si la proyección oculta
         # el _id hace falta averiguarlo antes.
@@ -583,16 +601,72 @@ class RoutedCollection:
         return self._find_and_modify("find_one_and_delete", filter, *args, **kwargs)
 
     def bulk_write(self, requests, *args, **kwargs):
+        if self._mode == "primary":
+            raise NotImplementedError(f"pgmirror: bulk_write en {self._name} (modo primary) no está soportado")
         try:
             return self._raw.bulk_write(requests, *args, **kwargs)
         finally:
             self._dirty("bulk_write")
 
     def drop(self, *args, **kwargs):
+        if self._mode == "primary":
+            raise NotImplementedError(f"pgmirror: drop de {self._name} (modo primary): hacerlo a mano en ambas bases")
         try:
             return self._raw.drop(*args, **kwargs)
         finally:
             self._dirty("drop")
+
+    # ── Modo primary: Postgres manda (primaria.py) ───────────────────────────────
+    def _primaria_por_filtro(self, method, filter_, args, kwargs):
+        if method.startswith("delete") or method == "find_one_and_delete":
+            return self._primaria(method, filter_, None, args, kwargs)
+        nombre = "update" if method in ("update_one", "update_many", "find_one_and_update") else "replacement"
+        if args:
+            return self._primaria(method, filter_, args[0], args[1:], kwargs)
+        kwargs = dict(kwargs)
+        return self._primaria(method, filter_, kwargs.pop(nombre), (), kwargs)
+
+    def _primaria(self, method, filter_, documento, args, kwargs):
+        """La escritura en Postgres (primaria.Escritor) y su copia a Mongo; lo que el motor no sabe
+        hacer, por Mongo con esos documentos bloqueados en Postgres (Escritor.por_mongo)."""
+        insercion = method.startswith("insert")
+        if method in ("update_one", "update_many", "find_one_and_update"):
+            pymongo_common.validate_ok_for_update(documento)
+        elif method in ("replace_one", "find_one_and_replace"):
+            pymongo_common.validate_ok_for_replace(documento)
+        if not insercion:
+            pymongo_common.validate_is_mapping("filter", filter_)
+        kw = primaria.argumentos(method, args, kwargs)
+        escritor = self._escritor_pg()
+        if primaria.soporta(method, documento, kw) and self._rt.store.unique_ready(self._name):
+            try:
+                resultado = escritor.ejecutar(method, filter_, documento, kw)
+            except (sqlfilter.Unsupported, actualizar.NoSoportado) as exc:
+                log.info("pgmirror primary %s.%s va por Mongo: %s", self._name, method, exc)
+            else:
+                self._rt.bump(self._name, "primaria_ok")
+                return resultado
+        self._rt.bump(self._name, "primaria_por_mongo")
+        if method == "insert_one":
+            nuevos = [documento.setdefault("_id", ObjectId())]
+        elif method == "insert_many":
+            nuevos = [d.setdefault("_id", ObjectId()) for d in documento]
+        else:
+            nuevos = []
+        principal = () if documento is None else (documento,)
+        antes = () if insercion else (filter_,)
+        upsert = bool((kw or {}).get("upsert", kwargs.get("upsert", False)))
+        return escritor.por_mongo(None if insercion else filter_,
+                                  lambda: getattr(self._raw, method)(*antes, *principal, *args, **kwargs),
+                                  upsert=upsert, nuevos=nuevos)
+
+    def _escritor_pg(self):
+        if self._escritor is None:
+            from app.pgmirror.health import ensure_meta
+            ensure_meta(self._rt.store)
+            self._escritor = primaria.Escritor(self._rt.store, self._name, self._raw,
+                                               on_evento=lambda llave, n: self._rt.bump(self._name, llave, n))
+        return self._escritor
 
     # ── Lecturas ────────────────────────────────────────────────────────────────
     def _check_readable(self):
@@ -686,7 +760,7 @@ class RoutedCollection:
             return self._raw.count_documents(filter)
 
     def estimated_document_count(self, *args, **kwargs):
-        if self._mode != "postgres" or args or kwargs:
+        if not self._lee_pg or args or kwargs:
             return self._raw.estimated_document_count(*args, **kwargs)
         try:
             self._check_readable()
@@ -724,7 +798,7 @@ class RoutedCollection:
     def aggregate(self, pipeline, *args, **kwargs):
         """Con PGMIRROR_AGGREGATE (config.aggregate_mode): mongo, shadow o postgres (agregar.py)."""
         modo = config.aggregate_mode()
-        if self._mode != "postgres" or modo == "mongo" or args or set(kwargs) - {"allowDiskUse"}:
+        if not self._lee_pg or modo == "mongo" or args or set(kwargs) - {"allowDiskUse"}:
             return self._raw.aggregate(pipeline, *args, **kwargs)
         if modo == "shadow":
             filas = list(self._raw.aggregate(pipeline, **kwargs))
@@ -739,7 +813,7 @@ class RoutedCollection:
             return self._raw.aggregate(pipeline, **kwargs)
 
     def _comparar_agregado(self, pipeline, esperado):
-        if not self._rt.pg_readable(self._name):
+        if self._mode != "primary" and not self._rt.pg_readable(self._name):
             return
         try:
             obtenido = _canon_agregado(agregar.ejecutar(self._rt.store, self._name, pipeline))

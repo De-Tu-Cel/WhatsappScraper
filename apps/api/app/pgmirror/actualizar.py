@@ -216,23 +216,47 @@ def aplicar(doc: dict, update: dict, *, insertando: bool = False) -> dict:
     return nuevo
 
 
-def documento_de_upsert(filtro: dict, update: dict, _id) -> dict:
-    """El documento que crea un upsert: _id, los campos de igualdad del filtro y el update (con
-    $setOnInsert). Solo filtros de igualdad simple; lo demás no se adivina."""
-    base = {"_id": _id}
-    igualdades = {}
-    for campo, valor in (filtro or {}).items():
+def _igualdades(filtro, salida: dict):
+    """Los campos que Mongo 7 copia del filtro al documento de un upsert (medido): igualdades, $eq,
+    un $in de un solo valor, las cláusulas de $and y un $or de una sola cláusula. $nor, un $or de varias
+    y las demás condiciones no aportan nada. Un campo que sale dos veces es error en Mongo."""
+    if not isinstance(filtro, dict):
+        raise NoSoportado("filtro que no es dict")
+    for campo, valor in filtro.items():
+        if campo in ("$and", "$or", "$nor"):
+            if not isinstance(valor, list) or not valor:
+                raise NoSoportado(f"upsert con {campo} vacío")
+            if campo == "$and" or (campo == "$or" and len(valor) == 1):
+                for clausula in valor:
+                    _igualdades(clausula, salida)
+            continue
         if campo.startswith("$"):
-            raise NoSoportado(f"upsert con {campo}")
+            raise NoSoportado(f"upsert con {campo}")  # $expr es error en Mongo; lo demás no se usa
         if isinstance(valor, dict) and any(k.startswith("$") for k in valor):
             if set(valor) == {"$eq"}:
                 valor = valor["$eq"]
+            elif set(valor) == {"$in"} and isinstance(valor["$in"], list) and len(valor["$in"]) == 1:
+                valor = valor["$in"][0]
+            elif "$eq" in valor or "$in" in valor:
+                raise NoSoportado(f"upsert con {sorted(valor)}")
             else:
-                continue  # condiciones ($gt, $in…) no aportan campos al documento nuevo
-        if campo == "_id":
-            base["_id"] = valor
-            continue
-        igualdades[campo] = valor
+                continue  # condiciones ($gt, $ne, $elemMatch…) no aportan campos al documento nuevo
+        if not isinstance(valor, (type(None), bool, int, float, str, datetime, ObjectId, list)) and not (
+                isinstance(valor, dict) and not any(k.startswith("$") for k in valor)):
+            raise NoSoportado(f"upsert con un {type(valor).__name__} en el filtro")  # regex, Decimal128…
+        if campo in salida:
+            raise ErrorDeMongo(f"cannot infer query fields to set, path '{campo}' is matched twice")
+        salida[campo] = valor
+
+
+def documento_de_upsert(filtro: dict, update: dict, _id) -> dict:
+    """El documento que crea un upsert: _id, los campos de igualdad del filtro y el update (con
+    $setOnInsert). Lo que no se sabe armar igual que Mongo levanta NoSoportado."""
+    base = {"_id": _id}
+    igualdades = {}
+    _igualdades(filtro or {}, igualdades)
+    if "_id" in igualdades:
+        base["_id"] = igualdades.pop("_id")
     # Primero los campos del filtro (orden lexicográfico, medido en Mongo 7) y después el update.
     con_filtro = aplicar(base, {"$set": igualdades}, insertando=True) if igualdades else base
     return aplicar(con_filtro, update, insertando=True)

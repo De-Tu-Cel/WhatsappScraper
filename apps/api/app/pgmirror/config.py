@@ -14,14 +14,17 @@ Modos:
   shadow    — dual + lee también de Postgres, compara y registra diferencias;
               responde con lo de Mongo.
   postgres  — dual + lee de Postgres (lo no traducible vuelve a Mongo).
+  primary   — Postgres es la fuente de verdad: escribe en Postgres y copia a Mongo
+              (primaria.py). Solo después de días de postgres + sombra de escrituras en 0.
 
-Regresar = poner otra vez `mongo` (o `dual`) y reiniciar el backend.
+Regresar = poner otra vez `mongo` (o `dual`) y reiniciar el backend. Desde `primary` se regresa a
+`postgres` (Mongo vuelve a mandar): antes, la bandeja mongo._outbox debe estar vacía.
 """
 import functools
 import os
 import re
 
-MODES = ("mongo", "dual", "shadow", "postgres")
+MODES = ("mongo", "dual", "shadow", "postgres", "primary")
 
 
 def postgres_url() -> str:

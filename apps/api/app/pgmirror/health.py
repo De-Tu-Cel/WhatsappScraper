@@ -15,7 +15,11 @@ Un hilo por proceso del backend, cada minuto:
   aparece algo ahí, el espejo en vivo se saltó algo y hay que revisarlo antes de
   avanzar esa colección. Un solo proceso concilia a la vez (pg_try_advisory_lock).
 - Crea los índices de orden (store.SORT_INDEXES) que falten, sin bloquear las escrituras, y deja
-  `doc` guardado sin comprimir (store.ensure_doc_storage).
+  `doc` guardado sin comprimir (store.ensure_doc_storage). En modo primary, también los índices
+  únicos de Mongo (store.UNICOS).
+- Modo primary (Postgres manda): la conciliación va al revés (Postgres → Mongo, nunca pisa
+  Postgres) y la bandeja de salida (mongo._outbox) se vuelve a copiar a Mongo si una copia en
+  línea no se hizo (proceso caído, Mongo que falló).
 
 `python scripts/pg_mirror.py check` lo lee todo y dice qué colección está lista
 para el siguiente modo (tras PGMIRROR_WAIT_HOURS, 24 por defecto, sin correcciones
@@ -28,7 +32,7 @@ import socket
 import threading
 import time
 
-from app.pgmirror import config
+from app.pgmirror import codec, config, primaria
 from app.pgmirror.reconcile import reconcile, still_different
 from app.pgmirror.store import SORT_INDEXES
 
@@ -37,6 +41,7 @@ TICK_SECONDS = 60
 DIRTY_RETRY_SECONDS = 300
 INDEX_RETRY_SECONDS = 3600
 LOCK_KEY = 7340211  # pg_try_advisory_lock de la conciliación automática
+OUTBOX_LOCK_KEY = 7340213  # pg_try_advisory_lock de la bandeja de salida (un proceso a la vez)
 CHUNK = 500
 PROCESS = f"{socket.gethostname()}:{os.getpid()}"
 
@@ -59,6 +64,7 @@ _META = [
     # vuelven a Mongo hasta que una conciliación posterior a la marca la borre.
     "CREATE TABLE IF NOT EXISTS mongo._dirty (collection text PRIMARY KEY, "
     "since timestamptz NOT NULL DEFAULT now(), reason text)",
+    *primaria.OUTBOX_DDL,
 ]
 _meta_ready = set()
 
@@ -105,6 +111,8 @@ def auto_reconcile(raw_db, store, worker, collections, kind: str = "periodic") -
         if not got:
             return results
         for name in collections:
+            if config.collection_mode(name) == "primary":
+                continue  # ahí manda Postgres: nunca se copia de Mongo encima (reconcile_primary)
             started = store.query("SELECT now()")[0][0]
             # Se quita la marca ANTES de revisar: un fallo nuevo durante la revisión la vuelve a poner.
             worker.dirty.discard(name)
@@ -142,6 +150,55 @@ def auto_reconcile(raw_db, store, worker, collections, kind: str = "periodic") -
     return results
 
 
+def reconcile_primary(raw_db, store, collections) -> list:
+    """Modo primary: compara y deja Mongo igual a Postgres (nunca al revés). Lo recién escrito que
+    todavía no llega a Mongo (copia en línea en camino o en la bandeja) no cuenta como corrección."""
+    ensure_meta(store)
+    results = []
+    with store.advisory_lock(LOCK_KEY) as got:
+        if not got:
+            return results
+        for name in collections:
+            result = reconcile(raw_db, store, name, want_ids=True)  # solo lee
+            mongo_ids, extra_keys = result.pop("mongo_ids"), result.pop("extra_keys")
+            if mongo_ids or extra_keys:
+                time.sleep(1)
+                mongo_ids, extra_keys = still_different(raw_db, store, name, mongo_ids, extra_keys)
+            en_bandeja = {row[0] for row in store.query("SELECT id FROM mongo._outbox WHERE collection = %s", (name,))}
+            ids = [i for i in mongo_ids + store.id_values(name, extra_keys) if codec.id_key(i)[0] not in en_bandeja]
+            for i in range(0, len(ids), CHUNK):
+                primaria.copiar_a_mongo(raw_db[name], store, name, ids[i:i + CHUNK])
+            store.query(
+                "INSERT INTO mongo._reconcile_log (kind, collection, mongo, postgres, missing, different, extra, queued, process) "
+                "VALUES ('primary', %s, %s, %s, %s, %s, %s, %s, %s)",
+                (name, result["mongo"], result["postgres_before"], result["missing_in_postgres"],
+                 result["different"], result["extra_in_postgres"], len(ids), PROCESS))
+            if ids:
+                log.warning("pgmirror reconcile (primary) %s: %d documents in Mongo were behind Postgres and were re-copied",
+                            name, len(ids))
+            results.append(result)
+    return results
+
+
+def drain_outbox(raw_db, store, collections, mayores_a_s: float = 30) -> int:
+    """Copia a Mongo lo que la bandeja tiene de hace más de 30 s, solo de colecciones en primary (si una
+    regresó a postgres, ahí Mongo vuelve a mandar y su bandeja ya no se aplica)."""
+    copied = 0
+    with store.advisory_lock(OUTBOX_LOCK_KEY) as got:
+        if not got:
+            return 0
+        for name, ids in primaria.pendientes(store, mayores_a_s=mayores_a_s).items():
+            if name not in collections:
+                continue
+            try:
+                copied += primaria.copiar_a_mongo(raw_db[name], store, name, ids)
+            except Exception:
+                log.exception("pgmirror outbox: copy to Mongo failed for %s (%d ids); retrying next minute", name, len(ids))
+    if copied:
+        log.warning("pgmirror outbox: %d documents copied to Mongo late (an inline copy had not finished)", copied)
+    return copied
+
+
 class Monitor:
     def __init__(self, rt, raw_db, *, start: bool = True):
         self._rt, self._raw_db = rt, raw_db
@@ -171,6 +228,11 @@ class Monitor:
         self._record_modes(store, active)
         self._record_counters(store)
         self._record_status(store, active)
+        primarias = {name for name, mode in active.items() if mode == "primary"}
+        if primarias:
+            n = drain_outbox(self._raw_db, store, primarias)
+            if n:
+                self._rt.bump("_bandeja", "copiados_tarde", n)
         self._maybe_reconcile(store, active)
         self._ensure_sort_indexes(store, active)
 
@@ -180,6 +242,10 @@ class Monitor:
         detiene lo demás y se reintenta en una hora."""
         for name in sorted(active):
             steps = [((name, "storage"), lambda n=name: store.ensure_doc_storage(n))]
+            if active[name] == "primary":
+                # Solo en primary: con la copia Mongo → Postgres (sin orden entre procesos) un valor que
+                # pasa de un documento a otro podría chocar un momento y marcar la colección por conciliar.
+                steps.append(((name, "unicos"), lambda n=name: store.ensure_unique_indexes(n)))
             steps += [((name, field, direction), lambda n=name, f=field, d=direction: store.ensure_sort_index(n, f, d))
                       for field, direction in SORT_INDEXES]
             for key, step in steps:
@@ -226,13 +292,17 @@ class Monitor:
         if hours <= 0 or not active:
             return
         recent = {row[0] for row in store.query(
-            "SELECT DISTINCT collection FROM mongo._reconcile_log WHERE kind IN ('periodic', 'initial') "
+            "SELECT DISTINCT collection FROM mongo._reconcile_log WHERE kind IN ('periodic', 'initial', 'primary') "
             "AND at > now() - make_interval(secs => %s)", (hours * 3600,))}
+        primarias = {name for name, mode in active.items() if mode == "primary"}
         due = sorted(name for name in active if name not in recent)
         if due:
-            auto_reconcile(self._raw_db, store, self._rt.worker, due, "periodic")
+            if [n for n in due if n not in primarias]:
+                auto_reconcile(self._raw_db, store, self._rt.worker, [n for n in due if n not in primarias], "periodic")
+            if [n for n in due if n in primarias]:
+                reconcile_primary(self._raw_db, store, [n for n in due if n in primarias])
             return
-        dirty = sorted(set(self._rt.worker.dirty) & set(active))
+        dirty = sorted((set(self._rt.worker.dirty) & set(active)) - primarias)
         if dirty and (self._last_dirty_attempt is None
                       or time.monotonic() - self._last_dirty_attempt >= DIRTY_RETRY_SECONDS):
             self._last_dirty_attempt = time.monotonic()
@@ -243,8 +313,16 @@ class Monitor:
 MIN_SHADOW_CHECKS = 20
 
 
-def readiness(mode, hours_in_mode, in_sync, fixes, shadow_ok, shadow_diffs, fallbacks, wait=None) -> str:
+MIN_WRITE_CHECKS = 20
+
+
+def readiness(mode, hours_in_mode, in_sync, fixes, shadow_ok, shadow_diffs, fallbacks, wait=None, escrituras=None) -> str:
     wait = wait_hours() if wait is None else wait
+    if mode == "primary":
+        estado = "Postgres manda" if hours_in_mode is None else f"Postgres manda hace {hours_in_mode:.1f} h"
+        if fixes:
+            estado += f" · {fixes} docs de la copia de Mongo se corrigieron: revisar"
+        return estado + ("" if in_sync else " · la copia de Mongo va atrás ahora mismo (la bandeja la alcanza)")
     if not in_sync:
         return "DIFERENCIAS ahora mismo: revisar, no avanzar"
     if hours_in_mode is None:
@@ -266,5 +344,11 @@ def readiness(mode, hours_in_mode, in_sync, fixes, shadow_ok, shadow_diffs, fall
         return "LISTA para postgres"
     if mode == "postgres":
         extra = f" ({fallbacks} lecturas resueltas en Mongo)" if fallbacks else ""
-        return f"leyendo de Postgres hace {hours_in_mode:.1f} h{extra}"
+        base = f"leyendo de Postgres hace {hours_in_mode:.1f} h{extra}"
+        e = escrituras or {}
+        if e.get("dif"):
+            return f"{base} · {e['dif']} diferencias del motor de escrituras: revisar antes de primary"
+        if fixes or left > 0 or e.get("ok", 0) < MIN_WRITE_CHECKS:
+            return base
+        return f"{base} · LISTA para primary"
     return ""

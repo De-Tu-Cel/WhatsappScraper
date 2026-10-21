@@ -26,8 +26,10 @@ log = logging.getLogger(__name__)
 SCHEMA = "mongo"
 _LOCK_NAMESPACE = 0x504D  # pg_advisory_xact_lock(int4, int4): espacio propio para los candados por documento
 _DDL_LOCK = (0x504E, 1)  # crear las funciones de orden (un proceso a la vez)
-_INDEX_LOCK_KEY = 7340212  # pg_try_advisory_lock: construir índices de orden (uno a la vez entre procesos)
+_INDEX_LOCK_KEY = 7340212  # pg_try_advisory_lock: mantenimiento (índices de orden, forma de guardar doc), uno a la vez
 _INDEX_BUILD_TIMEOUT = "15min"
+_STORAGE_VERSION = 1
+_STORAGE_BATCH = 500
 
 # Órdenes con índice propio en todas las tablas espejo. created_at es el que la app pide en casi
 # todas las colecciones (la "última actividad" de message_logs cada 5 s, las páginas de
@@ -60,7 +62,7 @@ class Store:
         )
         self._ready = set()
         self._functions_ready = False
-        self._indexes_ready = set()
+        self._maintained = set()
         self._lock = threading.Lock()
 
     def close(self):
@@ -138,7 +140,7 @@ class Store:
         espejo sigue escribiendo, y un solo proceso a la vez. True si quedó (o ya estaba) listo;
         False si otro proceso está construyendo uno."""
         name = sort_index_name(collection, field, direction)
-        if (collection, name) in self._indexes_ready:
+        if (collection, name) in self._maintained:
             return True
         self.ensure_table(collection)
         self.ensure_functions()
@@ -166,7 +168,70 @@ class Store:
                     log.info("pgmirror sort index ready: %s.%s", SCHEMA, name)
             finally:
                 conn.execute("SELECT pg_advisory_unlock(%s)", (_INDEX_LOCK_KEY,))
-        self._indexes_ready.add((collection, name))
+        self._maintained.add((collection, name))
+        return True
+
+    def ensure_doc_storage(self, collection: str) -> bool:
+        """Guarda `doc` sin comprimir dentro de la fila (STORAGE MAIN) y reescribe una vez las filas
+        que ya lo tienen comprimido. Cada fila trae el documento dos veces (doc y su texto src): casi
+        todas pasaban de 2 KB y Postgres comprimía las dos, así que cada condición de un filtro
+        descomprimía el documento entero (15 µs por fila en producción). Con MAIN, Postgres comprime
+        y saca de la fila primero `src`, que solo se lee al devolver resultados. La reescritura no
+        cambia el contenido (doc || '{}' es el mismo jsonb) y va en lotes por _id. True si quedó
+        listo; False si otro proceso está en mantenimiento o la tabla estaba ocupada."""
+        if (collection, "storage") in self._maintained:
+            return True
+        self.ensure_table(collection)
+        t = self.table(collection)
+        with self._pool.connection() as conn:
+            if not conn.execute("SELECT pg_try_advisory_lock(%s)", (_INDEX_LOCK_KEY,)).fetchone()[0]:
+                return False
+            try:
+                conn.execute(sql.SQL("CREATE TABLE IF NOT EXISTS {} (collection text PRIMARY KEY, version integer NOT NULL, "
+                                     "done_at timestamptz NOT NULL DEFAULT now())").format(sql.Identifier(SCHEMA, "_storage")))
+                done = conn.execute(sql.SQL("SELECT version FROM {} WHERE collection = %s").format(
+                    sql.Identifier(SCHEMA, "_storage")), (collection,)).fetchone()
+                if not (done and done[0] >= _STORAGE_VERSION):
+                    storage = conn.execute(
+                        "SELECT a.attstorage FROM pg_attribute a WHERE a.attrelid = to_regclass(%s) AND a.attname = 'doc'",
+                        (f'{SCHEMA}."{collection}"',)).fetchone()[0]
+                    if storage != "m":
+                        # Solo cambia el catálogo, pero pide un candado exclusivo: si la tabla está
+                        # ocupada no se espera más de medio segundo (se reintenta en el siguiente minuto).
+                        conn.execute("SET lock_timeout = '500ms'")
+                        try:
+                            conn.execute(sql.SQL("ALTER TABLE {} ALTER COLUMN doc SET STORAGE MAIN").format(t))
+                        except Exception as exc:
+                            if getattr(exc, "sqlstate", None) == "55P03":  # lock_not_available
+                                return False
+                            raise
+                        finally:
+                            conn.execute("RESET lock_timeout")
+                    # Solo las filas con doc comprimido o fuera de la fila (Postgres 17: pg_column_toast_chunk_id).
+                    last, rewritten = "", 0
+                    while True:
+                        rows = conn.execute(sql.SQL(
+                            "UPDATE {t} SET doc = doc || '{{}}'::jsonb, src = src || '' WHERE id IN ("
+                            "SELECT id FROM {t} WHERE id > %s AND (pg_column_compression(doc) IS NOT NULL "
+                            "OR pg_column_toast_chunk_id(doc) IS NOT NULL) ORDER BY id LIMIT %s) "
+                            "RETURNING id").format(t=t), (last, _STORAGE_BATCH)).fetchall()
+                        if not rows:
+                            break
+                        last, rewritten = max(r[0] for r in rows), rewritten + len(rows)
+                    if rewritten:
+                        # Las versiones viejas de las filas reescritas se recorren en cada lectura hasta el VACUUM.
+                        conn.execute(f"SET statement_timeout = '{_INDEX_BUILD_TIMEOUT}'")
+                        try:
+                            conn.execute(sql.SQL("VACUUM (ANALYZE) {}").format(t))
+                        finally:
+                            conn.execute("RESET statement_timeout")
+                    conn.execute(sql.SQL("INSERT INTO {} (collection, version) VALUES (%s, %s) ON CONFLICT (collection) "
+                                         "DO UPDATE SET version = EXCLUDED.version, done_at = now()").format(
+                        sql.Identifier(SCHEMA, "_storage")), (collection, _STORAGE_VERSION))
+                    log.info("pgmirror doc storage ready: %s (%d rows rewritten)", collection, rewritten)
+            finally:
+                conn.execute("SELECT pg_advisory_unlock(%s)", (_INDEX_LOCK_KEY,))
+        self._maintained.add((collection, "storage"))
         return True
 
     @staticmethod

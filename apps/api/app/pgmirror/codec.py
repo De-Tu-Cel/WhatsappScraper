@@ -57,6 +57,11 @@ def decode_doc(data) -> dict:
     return _unwrap_nul(doc) if _NUL_KEY in text else doc
 
 
+def decode_value(text: str):
+    """Un valor suelto en texto JSON (como lo devuelve jsonb) de vuelta al tipo de Python."""
+    return decode_doc('{"v": ' + text + "}")["v"]
+
+
 def encode_value(value):
     """Un valor de filtro con la misma forma que tendría dentro del jsonb."""
     return json.loads(json_util.dumps({"v": value}, json_options=_RELAXED))["v"]

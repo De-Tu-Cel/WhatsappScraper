@@ -251,6 +251,26 @@ class Store:
         with self._pool.connection() as conn:
             return [codec.decode_doc(row[0]) for row in conn.execute(query, params or None).fetchall()]
 
+    def distinct_values(self, collection: str, field: str, where: sql.Composable) -> list[str] | None:
+        """Valores distintos (texto JSON) del campo de primer nivel `field` en las filas que cumplen
+        `where`, en orden de primera aparición; un arreglo cuenta por sus elementos. Se calcula en
+        Postgres: traer los documentos completos a Python tardaba 600-700 ms en message_logs.
+        None si alguna fila no aporta ningún valor (le falta el campo o es []): con esas, el
+        distinct de Mongo depende de su plan (routing._pg_distinct)."""
+        self.ensure_table(collection)
+        self.ensure_functions()
+        query = sql.SQL("WITH m AS MATERIALIZED (SELECT doc -> {} AS v, seq FROM {} WHERE ").format(
+            sql.Literal(field), self.table(collection)) + where + sql.SQL(
+            ") SELECT NULL::text, 0::bigint, 0::bigint WHERE EXISTS (SELECT 1 FROM m WHERE v IS NULL OR v = '[]'::jsonb) "
+            "UNION ALL SELECT e::text, min(seq), min(i) FROM m, jsonb_array_elements("
+            "CASE WHEN jsonb_typeof(v) = 'array' THEN v ELSE jsonb_build_array(v) END) WITH ORDINALITY AS x(e, i) "
+            "WHERE v IS NOT NULL GROUP BY e")
+        with self._pool.connection() as conn:
+            rows = conn.execute(query).fetchall()
+        if any(text is None for text, _seq, _i in rows):
+            return None
+        return [text for text, _seq, _i in sorted(rows, key=lambda r: (r[1], r[2]))]
+
     def count(self, collection: str, where: sql.Composable, params=None) -> int:
         self.ensure_table(collection)
         self.ensure_functions()

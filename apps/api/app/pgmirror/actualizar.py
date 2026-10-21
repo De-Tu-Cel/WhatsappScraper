@@ -36,11 +36,12 @@ OPERADORES = ("$set", "$unset", "$inc", "$push", "$addToSet", "$pull", "$max", "
 _FALTA = object()
 
 
-def _partes(ruta) -> list[str]:
+def _partes(ruta, indices: bool = False) -> list[str]:
     if not isinstance(ruta, str) or not ruta:
         raise NoSoportado(f"ruta {ruta!r}")
     partes = ruta.split(".")
-    if any(not p or p.startswith("$") or p.isdigit() for p in partes):  # posicionales e índices: no se usan
+    # Índices: solo los que salen del posicional `$` ya resuelto (_resolver_posicional).
+    if any(not p or p.startswith("$") or (p.isdigit() and not indices) for p in partes):
         raise NoSoportado(f"ruta {ruta!r}")
     return partes
 
@@ -96,7 +97,7 @@ def _numero(v) -> bool:
 
 
 # ── árbol de cambios ──────────────────────────────────────────────────────────
-def _arbol(update: dict, insertando: bool) -> dict:
+def _arbol(update: dict, insertando: bool, indices: bool = False) -> dict:
     """{campo: subárbol | (operador, valor)}; dos operadores sobre la misma ruta (o una dentro de la
     otra) son un conflicto, como en Mongo."""
     if not isinstance(update, dict) or not update:
@@ -108,7 +109,7 @@ def _arbol(update: dict, insertando: bool) -> dict:
         if not isinstance(campos, dict):
             raise ErrorDeMongo(f"{op} necesita un documento")
         for ruta, valor in campos.items():
-            partes = _partes(ruta)
+            partes = _partes(ruta, indices)
             nodo = raiz
             for p in partes[:-1]:
                 hijo = nodo.setdefault(p, {})
@@ -132,6 +133,9 @@ def _aplicar_en(obj: dict, arbol: dict):
                     continue  # quitar algo de un campo que no existe: no hace nada
                 obj[campo] = {}
                 actual = obj[campo]
+            elif isinstance(actual, list) and cambio and all(k.isdigit() for k in cambio):
+                _aplicar_en_lista(actual, cambio)  # un elemento por su índice (el posicional `$`)
+                continue
             elif not isinstance(actual, dict):
                 if _sin_efecto(cambio, ("$unset", "$nada")):
                     continue  # $unset dentro de algo que no es documento: no hace nada
@@ -167,6 +171,95 @@ def _aplicar_en(obj: dict, arbol: dict):
             if not isinstance(actual, list):
                 raise ErrorDeMongo("$pull sobre algo que no es arreglo")
             obj[campo] = [e for e in actual if not _quitar(e, valor)]
+
+
+def _aplicar_en_lista(lista: list, arbol: dict):
+    for indice, cambio in arbol.items():
+        i = int(indice)
+        if i >= len(lista):
+            raise NoSoportado("índice fuera del arreglo")
+        if isinstance(cambio, dict):
+            if not isinstance(lista[i], dict):
+                raise NoSoportado("ruta dentro de un elemento que no es documento")
+            _aplicar_en(lista[i], cambio)
+        elif cambio[0] == "$set":
+            lista[i] = copy.deepcopy(cambio[1])
+        else:
+            raise NoSoportado(f"{cambio[0]} sobre un elemento de arreglo")
+
+
+def _cumple_elemento(elemento, condicion) -> bool:
+    """¿Este elemento del arreglo es el que el filtro encontró? condicion: (subruta | None, valor)."""
+    sub, valor = condicion
+    if sub is None:
+        return _iguales(elemento, valor)
+    actual = elemento
+    for p in sub.split("."):
+        if not isinstance(actual, dict) or p not in actual:
+            return False
+        actual = actual[p]
+    return _iguales(actual, valor) or (isinstance(actual, list) and any(_iguales(e, valor) for e in actual))
+
+
+def _condicion_posicional(filtro, arreglo: str):
+    """La condición del filtro sobre los elementos de `arreglo`: «arreglo.sub: valor», «arreglo: valor» o
+    «arreglo: {$elemMatch: {sub: valor}}». Más de una, u otro operador: no se adivina."""
+    condiciones = []
+    for campo, valor in (filtro or {}).items():
+        if not isinstance(campo, str):
+            continue
+        if campo.startswith("$"):
+            if any(isinstance(c, dict) and any(k == arreglo or k.startswith(arreglo + ".") for k in c)
+                   for c in (valor if isinstance(valor, list) else [])):
+                raise NoSoportado(f"posicional con {campo}")
+            continue
+        if campo != arreglo and not campo.startswith(arreglo + "."):
+            continue
+        sub = campo[len(arreglo) + 1:] or None
+        if isinstance(valor, dict) and any(k.startswith("$") for k in valor):
+            if set(valor) == {"$eq"}:
+                valor = valor["$eq"]
+            elif sub is None and set(valor) == {"$elemMatch"} and isinstance(valor["$elemMatch"], dict) \
+                    and len(valor["$elemMatch"]) == 1 and not any(k.startswith("$") for k in valor["$elemMatch"]):
+                sub, valor = next(iter(valor["$elemMatch"].items()))
+                if isinstance(valor, dict):
+                    raise NoSoportado("posicional con $elemMatch de operadores")
+            else:
+                raise NoSoportado(f"posicional con {sorted(valor)}")
+        if isinstance(valor, (dict, list)):
+            raise NoSoportado("posicional con un subdocumento o arreglo")
+        condiciones.append((sub, valor))
+    if len(condiciones) != 1:
+        raise NoSoportado("posicional sin una sola condición sobre el arreglo")
+    return condiciones[0]
+
+
+def _resolver_posicional(doc: dict, update: dict, filtro) -> tuple[dict, bool]:
+    """Cambia «arreglo.$» por el índice del primer elemento que encontró el filtro, como Mongo."""
+    if not any(isinstance(c, dict) and any(isinstance(r, str) and ".$" in r for r in c) for c in update.values()):
+        return update, False
+    nuevo = {}
+    for op, campos in update.items():
+        nuevo[op] = {}
+        for ruta, valor in campos.items():
+            if isinstance(ruta, str) and ".$" in ruta:
+                partes = ruta.split(".")
+                if partes.count("$") != 1 or partes.index("$") == 0 or any(p.startswith("$") for p in partes if p != "$"):
+                    raise NoSoportado(f"ruta {ruta!r}")
+                arreglo = ".".join(partes[:partes.index("$")])
+                lista = doc
+                for p in arreglo.split("."):
+                    lista = lista.get(p) if isinstance(lista, dict) else None
+                if not isinstance(lista, list):
+                    raise ErrorDeMongo("The positional operator did not find the match needed from the query.")
+                condicion = _condicion_posicional(filtro, arreglo)
+                indice = next((i for i, e in enumerate(lista) if _cumple_elemento(e, condicion)), None)
+                if indice is None:
+                    raise ErrorDeMongo("The positional operator did not find the match needed from the query.")
+                partes[partes.index("$")] = str(indice)
+                ruta = ".".join(partes)
+            nuevo[op][ruta] = valor
+    return nuevo, True
 
 
 def _sin_efecto(arbol: dict, ops) -> bool:
@@ -205,9 +298,13 @@ def _quitar(elemento, condicion) -> bool:
 
 
 # ── API ───────────────────────────────────────────────────────────────────────
-def aplicar(doc: dict, update: dict, *, insertando: bool = False) -> dict:
-    """El documento como queda tras el update (no modifica `doc`). Un _id no se puede cambiar."""
-    arbol = _arbol(update, insertando)
+def aplicar(doc: dict, update: dict, *, insertando: bool = False, filtro=None) -> dict:
+    """El documento como queda tras el update (no modifica `doc`). Un _id no se puede cambiar.
+    `filtro` solo hace falta para el posicional `$` (qué elemento encontró)."""
+    indices = False
+    if not insertando and isinstance(update, dict):
+        update, indices = _resolver_posicional(doc, update, filtro)
+    arbol = _arbol(update, insertando, indices)
     if "_id" in arbol:
         if not insertando and "_id" in doc:
             raise ErrorDeMongo("el _id no se puede cambiar")

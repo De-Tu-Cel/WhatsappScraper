@@ -195,8 +195,9 @@ def test_filter_translation_matches_mongo(store, coll_name, filter_):
 
 
 def test_untranslatable_filters_are_refused_not_guessed():
-    for bad in ({"tags": {"$size": 2}}, {"$expr": {"$gt": ["$a", "$b"]}}, {"a": {"$elemMatch": {"b": 1}}},
-                {"name": {"$regex": "x", "$options": "m"}}, {"a.0.b": 1}, {"a": {"$not": {"$gt": 1}}},
+    for bad in ({"tags": {"$size": 2}}, {"$expr": {"$gt": ["$a", "$b"]}}, {"$expr": {"$lt": [{"$size": "$a"}, 2]}},
+                {"a": {"$elemMatch": {"b": {"$gt": 1}}}}, {"a": {"$elemMatch": {"b": None}}}, {"a": {"$elemMatch": {"$gt": 1}}},
+                {"name": {"$regex": "x", "$options": "m"}}, {"a.0.b": 1}, {"a": {"$not": re.compile("x")}},
                 # Igualdad con subdocumento: Mongo compara el orden de las llaves, jsonb no.
                 {"loc": {"city": "x", "state": "y"}}, {"loc": {"$in": [{"city": "x"}]}}, {"t": [{"a": 1}]},
                 # Sintaxis que significa otra cosa en Postgres que en PCRE (Mongo):

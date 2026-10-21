@@ -154,6 +154,18 @@ def _filters(docs):
     out += [{"$or": [{"n": {"$gt": 2}}, {"s": None}]}, {"$and": [{"a.b": {"$exists": True}}, {"tags": "zeta"}]},
             {"$nor": [{"mix": None}, {"k.v": 1}]}, {"o": {"$in": [FIXED_OID, str(FIXED_OID)]}},
             {"_id": {"$in": [1, 2, 300]}}, {"_id": {"$gt": 390}}]
+    # $elemMatch con igualdades y $not (classification_compare), $expr del cupo de contactos (daily_cap).
+    escalares = [v for v in pool if isinstance(v, (str, int, float, datetime, ObjectId)) and not isinstance(v, bool)]
+    for v in r.sample(escalares, 12):
+        out += [{"k": {"$elemMatch": {"v": v}}}, {"k": {"$not": {"$elemMatch": {"v": v}}}}, {"a": {"$elemMatch": {"b": v}}},
+                {"k": {"$elemMatch": {"v": v, "w": 1}}}, {"a": {"$elemMatch": {"b.c": v}}}]
+    out += [{"n": {"$not": {"$gt": 2}}}, {"tags": {"$not": {"$in": ["zeta", "Z"]}}}, {"s": {"$not": {"$regex": "^a"}}},
+            {"mix": {"$not": {"$exists": True}}}, {"d": {"$not": {"$lte": datetime(2026, 6, 1)}}}]
+    tam = {"$size": {"$ifNull": ["$tags", []]}}
+    for limite in (0, 1, 2, 3):
+        out += [{"$expr": {"$lt": [tam, limite]}}, {"$expr": {"$gte": [{"$add": [tam, 1]}, limite]}},
+                {"$expr": {"$eq": [{"$add": [tam, {"$size": {"$ifNull": ["$falta", ["x"]]}}]}, limite]}},
+                {"$or": [{"tags": "zeta"}, {"$expr": {"$lt": [{"$add": [tam, {"$size": {"$ifNull": ["$falta", []]}}]}, limite]}}]}]
     return out
 
 

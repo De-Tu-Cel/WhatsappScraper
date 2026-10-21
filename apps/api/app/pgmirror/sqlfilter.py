@@ -261,6 +261,80 @@ def _value_key(value) -> sql.Composable:
 _GIN_MAX_VALUES = 20  # un $in más largo de ObjectId/fechas no agrega la condición para el índice (demasiadas ramas)
 
 
+def _eq_terminal(value):
+    """El valor final es igual (o es un arreglo que lo contiene), como la igualdad de Mongo."""
+    if value is None:
+        def terminal(x):
+            return sql.SQL("({x} IS NULL OR {x} = 'null'::jsonb OR (jsonb_typeof({x}) = 'array' AND {x} @> '[null]'::jsonb))").format(x=x)
+        return terminal
+    if isinstance(value, (dict, list)):
+        target = _jsonb(value)
+        return _or_any_element(lambda x: sql.SQL("{} = {}").format(x, target))
+    target = _jsonb(value)
+    as_array = sql.SQL("{}::jsonb").format(sql.Literal(json.dumps([codec.encode_value(value)])))
+
+    def terminal(x):
+        return sql.SQL("({x} = {v} OR (jsonb_typeof({x}) = 'array' AND {x} @> {arr}))").format(x=x, v=target, arr=as_array)
+    return terminal
+
+
+def _elem_match(field: str, spec) -> sql.Composable:
+    """{campo: {$elemMatch: {sub: valor, …}}} con igualdades: el campo es un arreglo y alguno de sus
+    elementos es un subdocumento que las cumple todas (classification_compare)."""
+    if not isinstance(spec, dict) or not spec or any(not isinstance(k, str) or k.startswith("$") for k in spec):
+        raise Unsupported("$elemMatch con operadores")
+    elem = sql.Identifier("_m")
+    conds = []
+    for sub, value in spec.items():
+        if value is None or isinstance(value, (dict, re.Pattern, Regex)) or _has_subdoc(value):
+            raise Unsupported(f"$elemMatch con {value!r}")
+        _check_value(value)
+        conds.append(_walk(elem, _parts(sub), _eq_terminal(value), missing=False))
+
+    def terminal(x):
+        return sql.SQL("(jsonb_typeof({x}) = 'array' AND EXISTS (SELECT 1 FROM jsonb_array_elements({x}) AS _me(_m) "
+                       "WHERE {es_doc} AND {conds}))").format(x=x, es_doc=_is_doc(elem), conds=sql.SQL(" AND ").join(conds))
+    return _walk(sql.SQL("doc"), _parts(field), terminal, missing=False)
+
+
+_EXPR_CMP = {"$lt": "<", "$lte": "<=", "$gt": ">", "$gte": ">=", "$eq": "=", "$ne": "<>"}
+
+
+def _expr_numero(e) -> sql.Composable:
+    """Expresión numérica de $expr que nunca es null: números, $add de ellas y $size de un arreglo."""
+    if isinstance(e, (int, float)) and not isinstance(e, bool):
+        _check_value(e)
+        return sql.SQL("({}::numeric)").format(sql.Literal(repr(e)))
+    if isinstance(e, dict) and len(e) == 1:
+        op, arg = next(iter(e.items()))
+        if op == "$add" and isinstance(arg, list) and arg:
+            return sql.SQL("({})").format(sql.SQL(" + ").join(_expr_numero(a) for a in arg))
+        if op == "$size":
+            # Como en Mongo, $size de algo que no es arreglo es un error (aquí, de Postgres).
+            return sql.SQL("jsonb_array_length({})").format(_expr_arreglo(arg))
+    raise Unsupported(f"$expr {e!r}")
+
+
+def _expr_arreglo(e) -> sql.Composable:
+    """{$ifNull: ["$campo", [...]]}: el campo (de primer nivel), o ese arreglo si falta o es null."""
+    if isinstance(e, dict) and list(e) == ["$ifNull"] and isinstance(e["$ifNull"], list) and len(e["$ifNull"]) == 2:
+        campo, respaldo = e["$ifNull"]
+        if (isinstance(campo, str) and campo.startswith("$") and not campo.startswith("$$")
+                and len(_parts(campo[1:])) == 1 and isinstance(respaldo, list)):
+            _check_value(respaldo)
+            return sql.SQL("COALESCE(NULLIF(doc -> {}, 'null'::jsonb), {})").format(sql.Literal(campo[1:]), _jsonb(respaldo))
+    raise Unsupported(f"$expr {e!r}")
+
+
+def _expr(spec) -> sql.Composable:
+    """$expr con una comparación de números (el cupo de contactos nuevos de daily_cap)."""
+    if isinstance(spec, dict) and len(spec) == 1:
+        op, args = next(iter(spec.items()))
+        if op in _EXPR_CMP and isinstance(args, list) and len(args) == 2:
+            return sql.SQL("({} {} {})").format(_expr_numero(args[0]), sql.SQL(_EXPR_CMP[op]), _expr_numero(args[1]))
+    raise Unsupported(f"$expr {spec!r}")
+
+
 def _eq(field: str, value, gin: bool = True) -> sql.Composable:
     if isinstance(value, (re.Pattern, Regex)):
         return _regex(field, value, "")
@@ -273,19 +347,7 @@ def _eq(field: str, value, gin: bool = True) -> sql.Composable:
         # Mongo compara subdocumentos con el orden de sus llaves; jsonb no lo distingue.
         raise Unsupported("igualdad con subdocumento")
     parts = _parts(field)
-    if value is None:
-        def terminal(x):
-            return sql.SQL("({x} IS NULL OR {x} = 'null'::jsonb OR (jsonb_typeof({x}) = 'array' AND {x} @> '[null]'::jsonb))").format(x=x)
-    elif isinstance(value, (dict, list)):
-        target = _jsonb(value)
-        terminal = _or_any_element(lambda x: sql.SQL("{} = {}").format(x, target))
-    else:
-        target = _jsonb(value)
-        as_array = sql.SQL("{}::jsonb").format(sql.Literal(json.dumps([codec.encode_value(value)])))
-
-        def terminal(x):
-            return sql.SQL("({x} = {v} OR (jsonb_typeof({x}) = 'array' AND {x} @> {arr}))").format(x=x, v=target, arr=as_array)
-    exact = _walk(sql.SQL("doc"), parts, terminal, missing=value is None)
+    exact = _walk(sql.SQL("doc"), parts, _eq_terminal(value), missing=value is None)
     if len(parts) == 1 and value is not None and not isinstance(value, (dict, list)):
         # Valor igual o arreglo que lo contiene como elemento, con contención: la única forma que
         # usa el índice GIN (jsonb_path_ops) de la tabla.
@@ -448,6 +510,13 @@ def _field(field: str, spec) -> sql.Composable:
         elif op == "$options":
             if "$regex" not in spec:
                 raise Unsupported("$options sin $regex")
+        elif op == "$elemMatch":
+            parts.append(_elem_match(field, value))
+        elif op == "$not":
+            # Incluye los documentos sin el campo, como Mongo (las condiciones de aquí nunca son NULL).
+            if not (isinstance(value, dict) and value and all(isinstance(k, str) and k.startswith("$") for k in value)):
+                raise Unsupported("$not sin operadores")
+            parts.append(sql.SQL("NOT {}").format(_field(field, value)))
         else:
             raise Unsupported(op)
     return sql.SQL("({})").format(sql.SQL(" AND ").join(parts))
@@ -469,6 +538,8 @@ def where(filter_: dict | None) -> sql.Composable:
             parts.append(sql.SQL("NOT ({})" if key == "$nor" else "({})").format(joined))
         elif key == "$comment":
             continue
+        elif key == "$expr":
+            parts.append(_expr(value))
         elif key.startswith("$"):
             raise Unsupported(key)
         else:

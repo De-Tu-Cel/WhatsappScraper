@@ -191,3 +191,37 @@ def test_what_the_app_does_today():
         actualizar.aplicar(hoy, {"$set": {"recipients.0": "x"}})
     assert hoy["recipients"] == ["5215511111111"]  # nunca modifica el original
     _ = timedelta  # (importado para casos futuros con fechas relativas)
+
+
+def test_positional_operator_like_real_mongo(coleccion):
+    """El posicional `$` (classification_compare: numbers.$): el índice sale del filtro, como en Mongo."""
+    r = random.Random(9)
+    distintos, hechos = [], 0
+    for i in range(300):
+        _id = 10_000 + i
+        numeros = [{"number": str(r.randint(1, 4)), "v": r.randint(0, 3), **({"tags": ["a", "b"]} if r.random() < 0.3 else {})}
+                   for _ in range(r.randint(1, 4))]
+        doc = {"_id": _id, "company_id": "x", "numbers": numeros, "tags": r.sample(["a", "b", "c"], r.randint(1, 3))}
+        buscado = str(r.randint(1, 4))
+        filtro, update = r.choice([
+            ({"_id": _id, "numbers.number": buscado}, {"$set": {"numbers.$": {"number": buscado, "v": 9}, "u": 1}}),
+            ({"_id": _id, "numbers.number": buscado}, {"$set": {"numbers.$.v": 7}}),
+            ({"_id": _id, "numbers": {"$elemMatch": {"number": buscado}}}, {"$set": {"numbers.$.nuevo": True}}),
+            ({"_id": _id, "numbers.tags": "b"}, {"$set": {"numbers.$.v": -1}}),
+            ({"_id": _id, "tags": "b"}, {"$set": {"tags.$": "B"}}),
+        ])
+        coleccion.insert_one(doc)
+        antes = coleccion.find_one(filtro)
+        if antes is None:
+            continue  # el filtro no encuentra el documento: no hay nada que comparar
+        try:
+            esperado = actualizar.aplicar(antes, update, filtro=filtro)
+        except actualizar.NoSoportado:
+            continue
+        coleccion.update_one(filtro, update)
+        despues = coleccion.find_one({"_id": _id})
+        hechos += 1
+        if _hash(esperado) != _hash(despues):
+            distintos.append(f"{filtro!r} {update!r}: mongo={despues!r} motor={esperado!r}")
+    assert not distintos, "\n".join(distintos[:10])
+    assert hechos > 150

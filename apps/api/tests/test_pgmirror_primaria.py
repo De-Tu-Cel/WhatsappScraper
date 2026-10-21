@@ -244,6 +244,10 @@ def test_app_patterns(entorno):
         ("update_one", ({"_id": "v1"}, {"$setOnInsert": {"instance": "i", "date": "2026-10-21", "count": 0}}), {"upsert": True}),
         ("insert_one", ({"_id": "cmp", "company_id": "x", "numbers": [{"number": "1", "v": 0}, {"number": "2", "v": 0}]},), {}),
         ("update_one", ({"company_id": "x", "numbers.number": "2"}, {"$set": {"numbers.$": {"number": "2", "v": 9}, "u": 1}}), {}),
+        ("update_one", ({"company_id": "x", "numbers": {"$not": {"$elemMatch": {"number": "3"}}}},
+                        {"$push": {"numbers": {"number": "3", "v": 1}}, "$set": {"u": 2}}), {}),
+        ("update_one", ({"company_id": "x", "numbers": {"$not": {"$elemMatch": {"number": "3"}}}},
+                        {"$push": {"numbers": {"number": "3", "v": 2}}}), {}),  # ya está: no hace nada
         ("insert_one", ({"_id": "cap", "instance": "i", "date": "d", "recipients": ["a"], "companies": []},), {}),
         ("find_one_and_update", ({"instance": "i", "date": "d", "$or": [{"recipients": "b"}, {"$expr": {"$lt": [
             {"$add": [{"$size": {"$ifNull": ["$recipients", []]}}, {"$size": {"$ifNull": ["$companies", []]}}]}, 2]}}]},
@@ -256,6 +260,8 @@ def test_app_patterns(entorno):
         assert _aplicar(coleccion, op) == _aplicar(ref, op), op
     assert _estado(coleccion) == _estado(ref)
     assert reconcile(raw_db, routing._runtime.store, coleccion.name)["in_sync"]
+    # Todas se hacen en Postgres: ninguna necesita a Mongo (así Mongo se puede retirar).
+    assert routing._runtime.stats[coleccion.name].get("primaria_por_mongo", 0) == 0, routing._runtime.stats[coleccion.name]
 
 
 def test_unique_indexes_like_mongo(entorno, monkeypatch):

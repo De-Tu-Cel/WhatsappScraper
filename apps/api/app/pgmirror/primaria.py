@@ -303,6 +303,8 @@ class Escritor:
                 actualizar._arbol(update, False)
             except actualizar.ErrorDeMongo as exc:
                 raise WriteError(str(exc), 40) from exc
+            except actualizar.NoSoportado:
+                pass  # p. ej. el posicional `$`: se valida al aplicarlo, ya con el índice
 
     def update(self, filtro, update, *, multi: bool, upsert: bool = False, sort=None, reemplazo: bool = False):
         self._validar(update, reemplazo)
@@ -321,7 +323,7 @@ class Escritor:
             cambios = []
             for doc in docs:
                 try:
-                    nuevo = self._calcular(doc, update, reemplazo)
+                    nuevo = self._calcular(doc, update, reemplazo, filtro)
                     if codec.encode_doc(nuevo) != codec.encode_doc(doc):
                         if multi and self._con_unicos:
                             with conn.transaction():  # savepoint: un índice único a la mitad no deshace lo anterior
@@ -382,7 +384,7 @@ class Escritor:
                 self._reflejar(conn, [(antes["_id"], None)], copiados)
                 return sqlfilter.apply_projection(antes, projection)
             try:
-                despues = self._calcular(antes, update, reemplazo)
+                despues = self._calcular(antes, update, reemplazo, filtro)
             except WriteError as exc:
                 # findAndModify no es una escritura de lote: pymongo levanta OperationFailure.
                 raise OperationFailure(str(exc), exc.code) from exc
@@ -458,13 +460,13 @@ class Escritor:
 
     # ── documento nuevo ───────────────────────────────────────────────────────
     @staticmethod
-    def _calcular(doc, update, reemplazo):
+    def _calcular(doc, update, reemplazo, filtro=None):
         if reemplazo:
             if "_id" in update and not codec.id_key(update["_id"]) == codec.id_key(doc["_id"]):
                 raise WriteError("After applying the update, the (immutable) field '_id' was found to have been altered", 66)
             return codec.decode_doc(codec.encode_doc({"_id": doc["_id"], **{k: v for k, v in update.items() if k != "_id"}}))
         try:
-            nuevo = actualizar.aplicar(doc, update)
+            nuevo = actualizar.aplicar(doc, update, filtro=filtro)
         except actualizar.ErrorDeMongo as exc:
             raise WriteError(str(exc), 2) from exc
         return codec.decode_doc(codec.encode_doc(nuevo))

@@ -162,6 +162,12 @@ Diferencias reales que salieron en shadow y se corrigieron en el código:
 
 El último es el único que empeora: la igualdad usa el índice GIN aunque el valor coincida con la mitad de la tabla. Es poco y no afecta a los filtros selectivos (empresa, número), que son los que más se usan.
 
+Medido después en producción, antes de pasar `message_logs`: los `distinct` y conteos del dashboard sobre muchos documentos tardaban 200–740 ms en Postgres contra 13–25 ms en Mongo. Tres causas, corregidas:
+
+- `distinct` traía cada documento completo a Python. Ahora, en un campo de primer nivel, lo calcula Postgres (`store.distinct_values`); los subdocumentos, rutas `a.b` y documentos sin el campo siguen como antes.
+- Una igualdad en un campo de primer nivel con texto, número o bool ahora es solo la contención (`@>`), que da exactamente lo mismo: lee el documento 2 veces en vez de 5.
+- **Cada lectura del documento lo descomprimía** (15 µs por fila en el servidor, aunque los documentos miden 1.3 KB en promedio): cada fila trae el documento dos veces (`doc` y su texto exacto `src`), casi todas pasaban de 2 KB y Postgres comprimía las dos. Ahora `doc` se guarda con `STORAGE MAIN` (sin comprimir, dentro de la fila) y Postgres comprime y saca primero `src`, que solo se lee al devolver resultados. El vigilante lo aplica solo a cada colección (`store.ensure_doc_storage`): un cambio de catálogo con candado de máximo 500 ms y una reescritura única, en lotes, de las filas que ya estaban comprimidas o fuera de la fila (`doc || '{}'`, mismo contenido), con `VACUUM` al final; queda anotado en `mongo._storage`. En local, el conteo de enviados bajó de 66 a 20 ms y el `distinct` de empresas de ~600 a 19 ms; el ensayo con la copia real sigue en 0 diferencias.
+
 Siguiente: desplegar; `check` hasta ver los índices listos; medir en producción (solo lectura) las lecturas de `message_logs`; si la shadow sigue sin diferencias, pasar `message_logs`, `contacts` y `companies` a postgres como las demás.
 
 ---

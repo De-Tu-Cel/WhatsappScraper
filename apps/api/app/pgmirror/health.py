@@ -14,7 +14,8 @@ Un hilo por proceso del backend, cada minuto:
   pisa una escritura más nueva. Lo corregido queda en mongo._reconcile_log: si
   aparece algo ahí, el espejo en vivo se saltó algo y hay que revisarlo antes de
   avanzar esa colección. Un solo proceso concilia a la vez (pg_try_advisory_lock).
-- Crea los índices de orden (store.SORT_INDEXES) que falten, sin bloquear las escrituras.
+- Crea los índices de orden (store.SORT_INDEXES) que falten, sin bloquear las escrituras, y deja
+  `doc` guardado sin comprimir (store.ensure_doc_storage).
 
 `python scripts/pg_mirror.py check` lo lee todo y dice qué colección está lista
 para el siguiente modo (tras PGMIRROR_WAIT_HOURS, 24 por defecto, sin correcciones
@@ -168,20 +169,23 @@ class Monitor:
         self._ensure_sort_indexes(store, active)
 
     def _ensure_sort_indexes(self, store, active):
-        """Índices de orden (store.SORT_INDEXES) de cada colección activa; ya listos no cuestan nada.
-        Uno que falla no detiene lo demás y se reintenta en una hora."""
+        """Mantenimiento de cada colección activa: `doc` sin comprimir (store.ensure_doc_storage) y
+        los índices de orden (store.SORT_INDEXES). Lo ya listo no cuesta nada. Un paso que falla no
+        detiene lo demás y se reintenta en una hora."""
         for name in sorted(active):
-            for field, direction in SORT_INDEXES:
-                key = (name, field, direction)
+            steps = [((name, "storage"), lambda n=name: store.ensure_doc_storage(n))]
+            steps += [((name, field, direction), lambda n=name, f=field, d=direction: store.ensure_sort_index(n, f, d))
+                      for field, direction in SORT_INDEXES]
+            for key, step in steps:
                 failed_at = self._index_failures.get(key)
                 if failed_at is not None and time.monotonic() - failed_at < INDEX_RETRY_SECONDS:
                     continue
                 try:
-                    if not store.ensure_sort_index(name, field, direction):
-                        return  # otro proceso está construyendo: en el siguiente minuto
+                    if not step():
+                        return  # otro proceso está en mantenimiento o la tabla estaba ocupada: en el siguiente minuto
                 except Exception:
                     self._index_failures[key] = time.monotonic()
-                    log.exception("pgmirror sort index %s.%s (%s) failed", name, field, direction)
+                    log.exception("pgmirror maintenance %s failed", key)
 
     def _record_modes(self, store, active):
         for name, mode in active.items():

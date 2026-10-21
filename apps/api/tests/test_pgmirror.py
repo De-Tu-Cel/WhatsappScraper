@@ -407,6 +407,26 @@ def test_sort_index_serves_the_order_and_date_ranges(store, coll_name):
 
 
 @needs_pg
+def test_doc_is_stored_uncompressed_without_changing_anything(store, coll_name):
+    # ~1.3 KB por documento: con doc y src en la misma fila pasaban de 2 KB y Postgres comprimía doc.
+    store.upsert(coll_name, [{"_id": i, "texto": f"mensaje {i} " * 110, "n": i} for i in range(40)])
+    table = store.table(coll_name)
+
+    def compressed():
+        return store.query(sql.SQL("SELECT count(*) FILTER (WHERE pg_column_compression(doc) IS NOT NULL) FROM {}").format(table))[0][0]
+    before, hashes = store.query_docs(coll_name, sqlfilter.where({})), store.hashes(coll_name)
+    assert compressed() > 0
+    assert store.ensure_doc_storage(coll_name)
+    assert compressed() == 0
+    assert store.query_docs(coll_name, sqlfilter.where({})) == before  # mismos documentos, mismo orden de inserción
+    assert store.hashes(coll_name) == hashes
+    assert store.ensure_doc_storage(coll_name)  # ya listo: no hace nada
+    store.upsert(coll_name, [{"_id": 99, "texto": "nuevo " * 220}])
+    assert compressed() == 0  # lo nuevo ya entra sin comprimir
+    store.query("DELETE FROM mongo._storage WHERE collection = %s", (coll_name,))
+
+
+@needs_pg
 def test_equality_on_a_field_can_use_the_gin_index(store, coll_name):
     import psycopg
     store.upsert(coll_name, [{"_id": i, "company_id": f"c{i % 50}", "tags": [f"c{i % 7}"]} for i in range(2000)])

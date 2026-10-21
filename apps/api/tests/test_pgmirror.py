@@ -8,14 +8,17 @@ Los resultados "esperados" de las pruebas de semántica (rutas que cruzan arregl
 null, orden, proyecciones) se midieron en Mongo 7 real; tests/test_pgmirror_vs_mongo.py
 los vuelve a comparar contra el motor real cuando hay uno disponible.
 """
+import json
 import os
 import re
 import uuid
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 import mongomock
 import pytest
 from bson import Binary, Int64, ObjectId
+from psycopg import sql
 
 from app import pgmirror
 from app.pgmirror import codec, config, routing, sqlfilter
@@ -328,6 +331,91 @@ def test_without_sort_rows_come_back_in_insertion_order(store, coll_name):
         store.upsert(coll_name, [{"_id": _id, "k": 1}])
     store.upsert(coll_name, [{"_id": ids[3], "k": 2}])  # actualizar no cambia el orden (como Mongo/WiredTiger)
     assert [d["_id"] for d in store.query_docs(coll_name, sqlfilter.where({}))] == [ids[3], ids[0], ids[4], ids[1], ids[2]]
+
+
+@needs_pg
+def test_date_sort_key_is_the_exact_millisecond(store):
+    """La llave de orden de una fecha (aritmética, sin ::timestamptz) = milisegundos desde 1970,
+    como los guarda Mongo, en las dos formas de Extended JSON y con desfase horario."""
+    from datetime import timezone
+    store.ensure_functions()
+    tz = timezone(timedelta(hours=-6))
+    dates = [datetime(1900, 1, 1), datetime(1969, 12, 31, 23, 59, 59, 999000), datetime(1970, 1, 1),
+             datetime(2000, 2, 29, 12), datetime(2000, 3, 1), datetime(2024, 2, 29, 23, 59, 59, 1000),
+             datetime(2026, 10, 20, 12, 0, 0, 789000), datetime(2026, 1, 1, 0, 0, 0, 999),
+             datetime(9999, 12, 31, 23, 59, 59, 999000), datetime(2026, 10, 20, 6, 30, tzinfo=tz),
+             datetime(2026, 1, 1, 0, 0, 0, 5000, tzinfo=timezone(timedelta(hours=5, minutes=30)))]
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    for d in dates:
+        aware = d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+        expected = (aware - epoch) // timedelta(milliseconds=1)
+        encoded = json.dumps(codec.encode_value(d))
+        got = store.query("SELECT (mongo.sortkey_v1_of(%s::jsonb)).n", (encoded,))[0][0]
+        assert got == expected, (d, encoded)
+    # Desfase con dos puntos y fracción de otro largo (no lo produce el codec, pero es ISO válido).
+    assert store.query("""SELECT (mongo.sortkey_v1_of('{"$date": "1970-01-01T05:30:00.5+05:30"}'::jsonb)).n""")[0][0] == Decimal("500")
+
+
+@needs_pg
+def test_sort_key_never_fails(store):
+    """La llave va en índices: si fallara con algún valor, esa fila no se podría escribir en el espejo."""
+    store.ensure_functions()
+    odd = ['{"$date": "basura"}', '{"$date": "2026-13-45T99:99:99Z"}', '{"$date": {"$numberLong": "x"}}',
+           '{"$date": {"$numberLong": "' + "9" * 400 + '"}}', '{"$numberDecimal": "1e999999"}', '{"$numberDecimal": "NaN"}',
+           '{"$numberDecimal": "-Infinity"}', '{"$numberDecimal": "' + "1" * 5000 + '"}', '{"$numberDouble": "NaN"}',
+           '{"$numberLong": "12"}', '{"$oid": 5}', '{"$binary": {"base64": "", "subType": "00"}}', '{"$emptyArray": 1}',
+           '[]', '[[1]]', '{"a": {"b": []}}', '"\\u00f1"', 'true', 'null']
+    for value in odd:
+        store.query("SELECT mongo.sortkey_v1_of(%s::jsonb), mongo.sortkey_v1_pick(jsonb_build_object('a', %s::jsonb), '{a,b}', -1)",
+                    (value, value))
+    # NaN ordena junto con -Infinity, antes que cualquier otro número (como Mongo).
+    nan, minus_inf, one = (store.query("SELECT mongo.sortkey_v1_of(%s::jsonb)::text", (v,))[0][0]
+                           for v in ('{"$numberDecimal": "NaN"}', '{"$numberDouble": "-Infinity"}', '1'))
+    assert nan == minus_inf and store.query("SELECT %s::mongo.sortkey_v1 < %s::mongo.sortkey_v1", (nan, one))[0][0]
+
+
+@needs_pg
+def test_sort_index_serves_the_order_and_date_ranges(store, coll_name):
+    from app.pgmirror.store import sort_index_name
+    base = datetime(2026, 10, 1)
+    docs = [{"_id": i, "created_at": base + timedelta(minutes=(i * 37) % 3000), "k": i % 3} for i in range(3000)]
+    docs[5]["created_at"] = None
+    del docs[6]["created_at"]
+    store.upsert(coll_name, docs)
+    for direction in (-1, 1):
+        assert store.ensure_sort_index(coll_name, "created_at", direction)
+        assert store.ensure_sort_index(coll_name, "created_at", direction)  # ya listo: no hace nada
+    names = {row[0] for row in store.query("SELECT indexname FROM pg_indexes WHERE schemaname = 'mongo' AND tablename = %s", (coll_name,))}
+    assert {sort_index_name(coll_name, "created_at", d) for d in (-1, 1)} <= names
+
+    def plan(filter_, sort, limit):
+        query = (sql.SQL("EXPLAIN SELECT id FROM {} WHERE ").format(store.table(coll_name)) + sqlfilter.where(filter_)
+                 + sql.SQL(" ORDER BY ") + sqlfilter.sort_plan(sort).order + sql.SQL(" LIMIT {}").format(sql.Literal(limit)))
+        return "\n".join(row[0] for row in store.query(query))
+
+    assert sort_index_name(coll_name, "created_at", -1) in plan({}, [("created_at", -1)], 1)
+    assert sort_index_name(coll_name, "created_at", 1) in plan({}, [("created_at", 1)], 1)
+    since = base + timedelta(minutes=2990)
+    assert "Index Cond" in plan({"created_at": {"$gte": since}}, [("created_at", -1)], 50)
+    # Con índice el resultado es el mismo que el de Mongo: fecha desc; null/faltante al final; empates por inserción.
+    by_date = sorted((d for d in docs if d.get("created_at")), key=lambda d: d["created_at"], reverse=True)
+    assert [d["_id"] for d in store.query_docs(coll_name, sqlfilter.where({}), plan=sqlfilter.sort_plan([("created_at", -1)]), limit=3)] == \
+           [d["_id"] for d in by_date[:3]]
+    assert [d["_id"] for d in store.query_docs(coll_name, sqlfilter.where({}), plan=sqlfilter.sort_plan([("created_at", 1)]), limit=2)] == [5, 6]
+    assert sorted(d["_id"] for d in store.query_docs(coll_name, sqlfilter.where({"created_at": {"$gte": since}}))) == \
+           sorted(d["_id"] for d in docs if d.get("created_at") and d["created_at"] >= since)
+
+
+@needs_pg
+def test_equality_on_a_field_can_use_the_gin_index(store, coll_name):
+    import psycopg
+    store.upsert(coll_name, [{"_id": i, "company_id": f"c{i % 50}", "tags": [f"c{i % 7}"]} for i in range(2000)])
+    query = sql.SQL("EXPLAIN SELECT id FROM {} WHERE ").format(store.table(coll_name)) + sqlfilter.where({"company_id": "c7"})
+    with psycopg.connect(TEST_PG, autocommit=True) as conn:
+        conn.execute("SET enable_seqscan = off")
+        assert "__doc_gin" in "\n".join(row[0] for row in conn.execute(query).fetchall())
+    assert len(store.query_docs(coll_name, sqlfilter.where({"company_id": "c7"}))) == 40
+    assert len(store.query_docs(coll_name, sqlfilter.where({"tags": "c3"}))) == len([i for i in range(2000) if i % 7 == 3])
 
 
 # ── Modo dual: cada escritura de Mongo queda igual en Postgres ─────────────────

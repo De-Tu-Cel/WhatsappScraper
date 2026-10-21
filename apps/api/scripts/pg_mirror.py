@@ -30,7 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.pgmirror.reconcile import reconcile  # noqa: E402
-from app.pgmirror.store import Store  # noqa: E402
+from app.pgmirror.store import SORT_INDEXES, Store, sort_index_name  # noqa: E402
 
 
 def _connect():
@@ -128,6 +128,16 @@ def _check(raw_db, store) -> int:
         print(f"  {process}: hace {float(age):.0f} s · pendientes {status.get('pending', 0)} · "
               f"por conciliar {', '.join(status.get('dirty') or []) or 'ninguna'} · "
               f"copiados {worker.get('synced', 0)} · errores {worker.get('errors', 0)}")
+
+    # Los crea el backend (health.py) al minuto de arrancar; uno inválido es una construcción que se cortó.
+    wanted = {sort_index_name(name, f, d): name for name in active for f, d in SORT_INDEXES}
+    built = dict(store.query("SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                             "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'mongo' AND c.relname = ANY(%s)",
+                             (list(wanted),)))
+    missing = sorted({wanted[i] for i in wanted if not built.get(i)})
+    print(f"\nÍndices de orden ({', '.join(f'{f} {d:+d}' for f, d in SORT_INDEXES)}): "
+          f"{sum(1 for i in wanted if built.get(i))} de {len(wanted)} listos"
+          + (f" · faltan en: {', '.join(missing)}" if missing else ""))
 
     if store.query("SELECT to_regclass('mongo._shadow_diffs')")[0][0]:
         # Solo las del modo actual: las de antes de un cambio de modo o de `revisadas` ya se atendieron.

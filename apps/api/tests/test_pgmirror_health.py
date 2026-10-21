@@ -204,8 +204,11 @@ def test_check_command_says_when_a_collection_can_advance(env, monkeypatch, caps
     spec.loader.exec_module(cli)
     monkeypatch.setattr(cli, "_connect", lambda: (raw, Store(TEST_PG)))
     assert cli.main(["check"]) == 0
-    line = next(row for row in capsys.readouterr().out.splitlines() if row.startswith(a))
+    out = capsys.readouterr().out
+    line = next(row for row in out.splitlines() if row.startswith(a))
     assert " OK " in line and "LISTA para shadow" in line
+    # El vigilante también creó los índices de orden de las colecciones activas.
+    assert "Índices de orden (created_at -1, created_at +1): 2 de 2 listos" in out
 
 
 @needs_pg

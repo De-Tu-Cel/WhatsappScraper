@@ -141,7 +141,26 @@ Diferencias reales que salieron en shadow y se corrigieron en el código:
 - Leer y enseguida escribir (`reserve_verification_slot`, `service_health.record`): la foto de Mongo quedaba vieja. El comparador ahora vuelve a leer Mongo antes de reportar (`b60d2ef`).
 - `find_one` sin orden con varios resultados (barrido "sin respuesta" del clasificador): cada motor devolvía otro documento. Ahora con orden explícito (`d88152d`). Regla para el código nuevo: un `find_one`/`limit` sobre varios documentos lleva `sort`.
 
-**Pendiente antes de pasar a postgres colecciones grandes o muy consultadas (`message_logs`, `contacts`, `companies`):** el `sort` se traduce a una expresión por fila (para respetar el orden de tipos de Mongo) que obliga a leer cada documento completo y no usa índices. Medido en producción: `message_logs.find_one({}, sort created_at desc)` — la "última actividad" que la pantalla de Conversaciones consulta cada 5 s — tarda 4.5 s en Postgres contra 2 ms en Mongo (el límite es 5 s: hubo 15 timeouts del comparador); las demás lecturas de `message_logs`, ~200 ms contra 2–8 ms. Hace falta guardar columnas de orden precalculadas (p. ej. `created_at` normalizado) con índice b-tree y que el traductor las use cuando el campo es simple. Hasta entonces `message_logs` se queda en shadow (la app no se ve afectada: lee de Mongo).
+**Rendimiento del traductor (el bloqueo de `message_logs`, `contacts`, `companies`): resuelto en el código; falta desplegar y medir en producción.** El `sort` se traducía a una expresión por fila que releía el documento completo decenas de veces y que ningún índice podía servir: `message_logs.find_one({}, sort created_at desc)` — la "última actividad" que Conversaciones consulta cada 5 s — tardaba 4.5 s en producción contra 2 ms en Mongo (el límite es 5 s: hubo 15 timeouts del comparador). Ahora:
+
+- La llave de orden de Mongo la calcula una función de Postgres (`mongo.sortkey_v1_pick`, definida en `sqlfilter.SORT_KEY_DDL`): un valor compuesto por fila (tipo BSON; número, bool o fecha en ms; texto u ObjectId) con la misma semántica de antes (arreglos, null, tipos mezclados). Nunca falla con ningún valor (va en índices: si fallara, esa fila no se podría escribir) y nunca se reemplaza: si su semántica cambia, se crea `sortkey_v2` con índices nuevos.
+- El backend crea solo (`health.py`, al minuto de arrancar) índices de esa llave para `created_at` ascendente y descendente en todas las tablas espejo (`store.SORT_INDEXES`), con `CREATE INDEX CONCURRENTLY`: no bloquea las escrituras del espejo. `pg_mirror.py check` dice cuántos están listos.
+- Los filtros agregan una condición necesaria que sí usa índices, sin cambiar el resultado: igualdad en un campo de primer nivel → contención `@>` (índice GIN que ya existía); rangos (`$gt`, `$lte`…) → la llave de orden (índice de arriba).
+- Verificado: pruebas contra Mongo 7 real (orden con arreglos y tipos mezclados, 600+ filtros, milisegundos exactos de fechas antes de 1970 y con desfase), ensayo repetido con la copia real (91 335 documentos idénticos de ida y vuelta; **10 019** filtros y **1 012** órdenes con valores reales, **0** diferencias contra Mongo; los mismos 3 `distinct` de la rareza de Mongo de la etapa 0) y el mismo orden exacto que el traductor anterior en las consultas reales de la app.
+- Medido en local con la copia real (6 538 `message_logs`, 76 k `contacts`):
+
+| Consulta | Antes | Ahora, sin índice | Con índice |
+|---|---|---|---|
+| Última actividad (`message_logs`, sort `created_at` desc, 1) | 1 460 ms | 96 ms | 1.5 ms |
+| `message_logs` desde una fecha (50) | 326 ms | 189 ms | 2.3 ms |
+| Página de `companies` (sort `created_at` desc, 25) | 171 ms | 12 ms | 3.6 ms |
+| `contacts` por `created_at` (50) | 577 ms | 196 ms | 2.1 ms |
+| `contacts` con 4 llaves de orden, tabla completa | 2 847 ms | 433 ms | 407 ms |
+| Conteo de entrantes (filtro poco selectivo) | 46 ms | 88 ms | 58 ms |
+
+El último es el único que empeora: la igualdad usa el índice GIN aunque el valor coincida con la mitad de la tabla. Es poco y no afecta a los filtros selectivos (empresa, número), que son los que más se usan.
+
+Siguiente: desplegar; `check` hasta ver los índices listos; medir en producción (solo lectura) las lecturas de `message_logs`; si la shadow sigue sin diferencias, pasar `message_logs`, `contacts` y `companies` a postgres como las demás.
 
 ---
 

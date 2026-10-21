@@ -218,7 +218,10 @@ def test_natural_order_and_skip_limit_match_real_mongo(engines):
 
 
 PROJECTIONS = [{"a.b": 1}, {"a.b": 0}, {"a.b.c": 1}, {"a.b": 1, "a.c": 1}, {"a": 1, "_id": 0}, {"_id": 1}, {"_id": 0},
-               {"k.v": 1}, {"tags": 1, "n": 1}, {"a.b.b": 0}, {"mix": 0, "a.c": 0}, {"a.b.c": 0, "_id": 0}]
+               {"k.v": 1}, {"tags": 1, "n": 1}, {"a.b.b": 0}, {"mix": 0, "a.c": 0}, {"a.b.c": 0, "_id": 0},
+               # $slice (sesiones de calentamiento: el último mensaje)
+               {"tags": {"$slice": -1}, "n": 1}, {"tags": {"$slice": 2}}, {"tags": {"$slice": [1, 1]}, "s": 1},
+               {"mix": {"$slice": [-2, 1]}, "_id": 0, "n": 1}, {"tags": {"$slice": 0}, "_id": 0}]
 
 
 @pytest.mark.parametrize("projection", PROJECTIONS, ids=[repr(p) for p in PROJECTIONS])

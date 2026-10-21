@@ -561,23 +561,61 @@ def check_projection(projection):
         projection = {f: 1 for f in projection}
     if not isinstance(projection, dict):
         raise Unsupported("proyección no es dict")
-    for value in projection.values():
+    for key, value in projection.items():
+        if isinstance(value, dict) and _slice_spec(key, value) is not None:
+            continue
         if not isinstance(value, (bool, int, float)):
             raise Unsupported("proyección con operadores o expresiones")
-    fields = {k: v for k, v in projection.items() if k != "_id"}
+    fields = {k: v for k, v in projection.items() if k != "_id" and not isinstance(v, dict)}
+    if any(isinstance(v, dict) for v in projection.values()) and fields and not all(bool(v) for v in fields.values()):
+        raise Unsupported("proyección que mezcla $slice y excluir")
     if len({bool(v) for v in fields.values()}) > 1:
         raise Unsupported("proyección que mezcla incluir y excluir")
     _projection_tree(fields)
 
 
+def _slice_spec(field, value):
+    """{"$slice": n} o {"$slice": [saltar, cuántos]} sobre un campo de primer nivel; None si no lo es."""
+    if not (isinstance(value, dict) and set(value) == {"$slice"}) or "." in field or field == "_id":
+        if isinstance(value, dict):
+            raise Unsupported(f"proyección con {sorted(value)}")
+        return None
+    spec = value["$slice"]
+    if isinstance(spec, int) and not isinstance(spec, bool):
+        return spec
+    if (isinstance(spec, list) and len(spec) == 2 and all(isinstance(x, int) and not isinstance(x, bool) for x in spec)
+            and spec[1] > 0):
+        return tuple(spec)
+    raise Unsupported(f"$slice {spec!r}")
+
+
+def _rebanar(value, spec):
+    if not isinstance(value, list):
+        return value
+    if isinstance(spec, int):
+        return value[:spec] if spec >= 0 else value[spec:]
+    skip, limit = spec
+    start = skip if skip >= 0 else max(len(value) + skip, 0)
+    return value[start:start + limit]
+
+
 def apply_projection(doc: dict, projection) -> dict:
-    """Proyección de Mongo (incluir/excluir, rutas punteadas que entran en arreglos).
+    """Proyección de Mongo (incluir/excluir, rutas punteadas que entran en arreglos, y $slice de un
+    arreglo de primer nivel: la pantalla de sesiones de calentamiento pide el último mensaje).
     Nunca modifica `doc`."""
     if not projection:
         return doc
     if isinstance(projection, (list, tuple)):
         projection = {f: 1 for f in projection}
     check_projection(projection)
+    slices = {k: _slice_spec(k, v) for k, v in projection.items() if isinstance(v, dict)}
+    if slices:
+        resto = {k: v for k, v in projection.items() if k not in slices}
+        if any(bool(v) for k, v in resto.items() if k != "_id"):
+            out = apply_projection(doc, {**resto, **{k: 1 for k in slices}})  # incluir: los rebanados también entran
+        else:
+            out = {k: v for k, v in doc.items() if not (k == "_id" and not resto.get("_id", 1))}
+        return {k: (_rebanar(v, slices[k]) if k in slices else v) for k, v in out.items()}
     include_id = bool(projection.get("_id", 1))
     fields = {k: v for k, v in projection.items() if k != "_id"}
     if not fields:

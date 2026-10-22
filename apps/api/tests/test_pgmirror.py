@@ -625,8 +625,27 @@ def test_write_shadow_comparator_on_leases():
                            modificados=0)[0] == "escritura_carrera"
     assert sombra.comparar("update_one", {"_id": "singleton"}, crear, {"singleton": lease}, {"singleton": lease},
                            modificados=0)[0] == "escritura_ok"
-    # Lo que sí es una diferencia lo sigue siendo.
+    # Puso holder "b" y quedó "c": lo escribió otro proceso después (carrera).
     assert sombra.comparar("update_one", {"_id": "singleton"}, {"$set": {"holder": "b"}}, {"singleton": lease},
-                           {"singleton": {**lease, "holder": "c"}}, modificados=1)[0] == "escritura_dif"
+                           {"singleton": {**lease, "holder": "c"}}, modificados=1)[0] == "escritura_carrera"
     assert sombra.comparar("update_one", {"_id": "singleton"}, {"$set": {"holder": "b"}}, {"singleton": lease},
                            {"singleton": lease}, modificados=0)[0] == "escritura_dif"
+
+
+def test_write_shadow_comparator_spots_a_later_writer():
+    """Prod 2026-10-22: dos procesos guardan el mismo documento con ms de diferencia. Lo que esta escritura
+    puso ($set) o quitó ($unset) y en Mongo quedó distinto lo cambió otro proceso: carrera, no diferencia."""
+    from app.pgmirror import sombra_escrituras as sombra
+    saldo = {"_id": "balance", "amount": 49.9, "checked_at": datetime(2026, 10, 22, 1, 51, 28, 100000)}
+    escritura = {"$set": {"amount": 49.9, "checked_at": datetime(2026, 10, 22, 1, 51, 28, 591254)}}
+    otro = {**saldo, "checked_at": datetime(2026, 10, 22, 1, 51, 28, 595000)}
+    assert sombra.comparar("update_one", {"_id": "balance"}, escritura, {"balance": saldo}, {"balance": otro},
+                           modificados=1)[0] == "escritura_carrera"
+    proxies = {"_id": "proxies", "migrating_since": datetime(2026, 10, 22, 1, 0)}
+    de_nuevo = {**proxies, "migrating_since": datetime(2026, 10, 22, 2, 1, 57, 179000)}
+    assert sombra.comparar("update_one", {"_id": "proxies"}, {"$unset": {"migrating_since": ""}}, {"proxies": proxies},
+                           {"proxies": de_nuevo}, modificados=1)[0] == "escritura_carrera"
+    # Si lo que esta escritura puso sí quedó, pero el motor calcula otra cosa, es una diferencia de verdad.
+    assert sombra.comparar("update_one", {"_id": "balance"}, {"$set": {"amount": 1}, "$inc": {"n": 1}},
+                           {"balance": saldo}, {"balance": {**saldo, "amount": 1, "n": 2}}, modificados=1)[0] == "escritura_dif"
+

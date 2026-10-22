@@ -17,8 +17,8 @@ from app.evaluacion import formato, generador
 
 FX = Path(__file__).resolve().parent / "fixtures" / "evaluacion"
 NODE_SHA256 = {
-    "diesgas": "39e8a041a8442b56",
-    "ejemplo-restaurante": "58c6a468e3faefd1",
+    "diesgas": "87889211e25bee01",
+    "ejemplo-restaurante": "abf10f4f7f763b7f",
 }
 
 

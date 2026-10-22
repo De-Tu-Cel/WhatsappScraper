@@ -129,6 +129,18 @@ def _check(raw_db, store) -> int:
             print(f"  {name:30} {e.get('ok', 0):6} / {e.get('dif', 0)} / {e.get('no_soportada', 0)} / "
                   f"{e.get('carrera', 0)} / {e.get('error', 0)} / {e.get('sin_candidatos', 0)}")
 
+    # aggregate() resuelto también en Postgres (PGMIRROR_AGGREGATE=shadow) antes de pasarlo a postgres.
+    agregados = {}
+    for (name, key), n in counters.items():
+        if key.startswith("agregado_"):
+            agregados.setdefault(name, {})[key[len("agregado_"):]] = n
+    if agregados:
+        print(f"\naggregate en Postgres, PGMIRROR_AGGREGATE={os.environ.get('PGMIRROR_AGGREGATE') or 'mongo'} "
+              "(iguales / diferentes / no soportados):")
+        for name in sorted(agregados):
+            g = agregados[name]
+            print(f"  {name:30} {g.get('ok', 0):6} / {g.get('dif', 0)} / {g.get('no_soportado', 0)}")
+
     # Modo primary: escrituras en Postgres, las que fueron por Mongo y la bandeja de salida.
     primarias = sorted(n for n, m in active.items() if m == "primary")
     if primarias:

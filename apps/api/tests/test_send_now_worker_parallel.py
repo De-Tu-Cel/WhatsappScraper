@@ -635,18 +635,15 @@ class TestNoInstanceBacksOff:
 
         with (
             patch("app.database.MongoDBManager", return_value=mgr),
-            patch.object(sw, "_user_has_connected_instance", return_value=False),
+            # The preceding test checks the real no-instance sentinel. Here
+            # isolate its handling: one claimed item, then an empty queue.
+            patch.object(sw, "_process_item", return_value=("no_instance_pause", 0, 0)),
             patch("app.send_now_worker.time.sleep") as mock_sleep,
         ):
-            t = threading.Thread(target=sw._partition_worker, args=("nc-user", "nc-user"), daemon=True)
-            t.start()
-            time.sleep(0.05)  # let a couple of loop iterations happen
-        # thread is a daemon and the loop is infinite by design (retries
-        # forever until an instance connects) — we only assert it paced
-        # itself via sleep(15) rather than spinning with zero delay.
-        assert any(c.args and c.args[0] == 15 for c in mock_sleep.call_args_list), (
-            f"expected a 15s pause between retries, got calls: {mock_sleep.call_args_list}"
-        )
+            sw._partition_worker("nc-user", "nc-user")
+        # No daemon or wall-clock wait: patching the shared time.sleep also
+        # mocked the old test's own wait, so it raced the thread scheduler.
+        mock_sleep.assert_any_call(15)
 
 
 # ══════════════════════════════════════════════════════════════════════════

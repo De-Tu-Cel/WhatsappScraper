@@ -84,6 +84,13 @@ def test_readiness_rules(monkeypatch):
     assert health.wait_hours() == 24
 
 
+def test_primary_readiness_rejects_write_comparison_errors():
+    result = health.readiness("postgres", 48, True, 0, 0, 0, 0, wait=24,
+                              escrituras={"ok": 100, "error": 1})
+    assert "LISTA para primary" not in result
+    assert "errores al comparar escrituras" in result
+
+
 @needs_pg
 def test_monitor_does_the_initial_load_by_itself_and_records_modes_and_status(env):
     raw, rt, a, b = env

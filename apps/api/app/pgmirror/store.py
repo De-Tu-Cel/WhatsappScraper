@@ -45,6 +45,7 @@ UNICOS = {
     "contacts": [("value", {"source": "inbound_whatsapp", "type": "whatsapp"})],
     "message_logs": [("message_id", "string")],
     "search_ideas": [("url", None)],
+    "evaluaciones": [("token", None)],
 }
 
 

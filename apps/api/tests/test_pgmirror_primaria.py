@@ -287,6 +287,23 @@ def test_unique_indexes_like_mongo(entorno, monkeypatch):
     assert reconcile(raw_db, store, coleccion.name)["in_sync"]
 
 
+def test_evaluation_tokens_remain_unique_in_postgres(entorno, monkeypatch):
+    raw_db, nueva = entorno
+    coleccion, copia, _ = nueva()
+    monkeypatch.setitem(store_mod.UNICOS, coleccion.name, store_mod.UNICOS["evaluaciones"])
+    copia.create_index("token", unique=True)
+    store = routing._runtime.store
+    assert store.ensure_unique_indexes(coleccion.name)
+    coleccion.insert_one({"_id": 1, "token": "public-link"})
+    with pytest.raises(DuplicateKeyError):
+        coleccion.insert_one({"_id": 2, "token": "public-link"})
+    coleccion.insert_one({"_id": 3, "token": "another-link"})
+    with pytest.raises(DuplicateKeyError):
+        coleccion.update_one({"_id": 3}, {"$set": {"token": "public-link"}})
+    assert coleccion.count_documents({}) == 2
+    assert reconcile(raw_db, store, coleccion.name)["in_sync"]
+
+
 def _hilos(n, fn):
     errores = []
 

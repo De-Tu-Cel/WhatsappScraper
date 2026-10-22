@@ -40,6 +40,24 @@ def _pg_available():
 needs_pg = pytest.mark.skipif(not _pg_available(), reason="sin Postgres de pruebas (docker compose -f migration/docker-compose.yml up -d)")
 
 
+@pytest.mark.parametrize("mode", ["postgres", "primary"])
+def test_primary_never_falls_back_to_a_mongo_only_runtime(monkeypatch, mode):
+    import mongomock.gridfs
+    mongomock.gridfs.enable_gridfs_integration()
+    raw = mongomock.MongoClient().db
+    monkeypatch.setenv("POSTGRES_URL", TEST_PG)
+    monkeypatch.setenv("DB_MODES", f"evaluaciones={mode},archivos={mode}")
+    monkeypatch.setattr(routing, "get_runtime", lambda db: None)
+    if mode == "primary":
+        with pytest.raises(RuntimeError, match="refusing Mongo-only"):
+            routing.route_collection(raw, "evaluaciones")
+        with pytest.raises(RuntimeError, match="refusing GridFS-only"):
+            pgmirror.wrap_gridfs(raw)
+    else:
+        assert routing.route_collection(raw, "evaluaciones") is raw["evaluaciones"]
+        assert pgmirror.wrap_gridfs(raw).__class__.__name__ == "GridFS"
+
+
 def test_ci_never_skips_the_real_engine_tests():
     """En CI (REQUIRE_REAL_ENGINES=1) Postgres y el Mongo 7 de pruebas tienen que estar: si no,
     las pruebas contra los motores reales se saltarían y CI saldría verde sin haberlas corrido."""
@@ -625,8 +643,27 @@ def test_write_shadow_comparator_on_leases():
                            modificados=0)[0] == "escritura_carrera"
     assert sombra.comparar("update_one", {"_id": "singleton"}, crear, {"singleton": lease}, {"singleton": lease},
                            modificados=0)[0] == "escritura_ok"
-    # Lo que sí es una diferencia lo sigue siendo.
+    # Puso holder "b" y quedó "c": lo escribió otro proceso después (carrera).
     assert sombra.comparar("update_one", {"_id": "singleton"}, {"$set": {"holder": "b"}}, {"singleton": lease},
-                           {"singleton": {**lease, "holder": "c"}}, modificados=1)[0] == "escritura_dif"
+                           {"singleton": {**lease, "holder": "c"}}, modificados=1)[0] == "escritura_carrera"
     assert sombra.comparar("update_one", {"_id": "singleton"}, {"$set": {"holder": "b"}}, {"singleton": lease},
                            {"singleton": lease}, modificados=0)[0] == "escritura_dif"
+
+
+def test_write_shadow_comparator_spots_a_later_writer():
+    """Prod 2026-10-22: dos procesos guardan el mismo documento con ms de diferencia. Lo que esta escritura
+    puso ($set) o quitó ($unset) y en Mongo quedó distinto lo cambió otro proceso: carrera, no diferencia."""
+    from app.pgmirror import sombra_escrituras as sombra
+    saldo = {"_id": "balance", "amount": 49.9, "checked_at": datetime(2026, 10, 22, 1, 51, 28, 100000)}
+    escritura = {"$set": {"amount": 49.9, "checked_at": datetime(2026, 10, 22, 1, 51, 28, 591254)}}
+    otro = {**saldo, "checked_at": datetime(2026, 10, 22, 1, 51, 28, 595000)}
+    assert sombra.comparar("update_one", {"_id": "balance"}, escritura, {"balance": saldo}, {"balance": otro},
+                           modificados=1)[0] == "escritura_carrera"
+    proxies = {"_id": "proxies", "migrating_since": datetime(2026, 10, 22, 1, 0)}
+    de_nuevo = {**proxies, "migrating_since": datetime(2026, 10, 22, 2, 1, 57, 179000)}
+    assert sombra.comparar("update_one", {"_id": "proxies"}, {"$unset": {"migrating_since": ""}}, {"proxies": proxies},
+                           {"proxies": de_nuevo}, modificados=1)[0] == "escritura_carrera"
+    # Si lo que esta escritura puso sí quedó, pero el motor calcula otra cosa, es una diferencia de verdad.
+    assert sombra.comparar("update_one", {"_id": "balance"}, {"$set": {"amount": 1}, "$inc": {"n": 1}},
+                           {"balance": saldo}, {"balance": {**saldo, "amount": 1, "n": 2}}, modificados=1)[0] == "escritura_dif"
+

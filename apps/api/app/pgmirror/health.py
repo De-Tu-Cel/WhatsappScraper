@@ -353,6 +353,8 @@ def readiness(mode, hours_in_mode, in_sync, fixes, shadow_ok, shadow_diffs, fall
         e = escrituras or {}
         if e.get("dif"):
             return f"{base} · {e['dif']} diferencias del motor de escrituras: revisar antes de primary"
+        if e.get("error"):
+            return f"{base} · {e['error']} errores al comparar escrituras: revisar antes de primary"
         if fixes or left > 0 or e.get("ok", 0) < MIN_WRITE_CHECKS:
             return base
         return f"{base} · LISTA para primary"

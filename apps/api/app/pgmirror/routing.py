@@ -152,6 +152,8 @@ def route_collection(raw_db, name: str):
     if mode == "mongo":
         return raw
     rt = get_runtime(raw_db)
+    if rt is None and mode == "primary":
+        raise RuntimeError("Postgres primary unavailable; refusing Mongo-only access")
     return raw if rt is None else RoutedCollection(raw, name, mode, rt)
 
 

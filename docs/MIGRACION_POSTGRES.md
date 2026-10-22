@@ -1,8 +1,47 @@
 # Migración de MongoDB a PostgreSQL
 
 Documento vivo: se marca cada paso al completarlo. Objetivo: pasar toda la base a
-PostgreSQL **por etapas, sin pausar la app y pudiendo regresar a Mongo en cualquier
-momento** hasta el final.
+PostgreSQL **por etapas, con cambios coordinados del backend y conservando Mongo
+como copia**. Para regresar a Mongo hay que verificar antes la sincronización y
+que la bandeja de salida esté vacía.
+
+### Operación cuando una colección está en `primary`
+
+- Las correcciones de datos deben pasar por `MongoDBManager.db` / `wrap_database`
+  con la configuración vigente de producción. Escribir directamente en Mongo
+  modifica una copia: la conciliación inversa puede sobrescribir esa corrección.
+- `pg_mirror.py reconcile` sin `--fix` compara sin reparar. Con `--fix` se rechaza
+  el lote completo si contiene una colección en `primary` (también GridFS cuando
+  `archivos=primary`), antes de escribir en ninguna colección.
+- El vigilante concilia desde Postgres hacia Mongo y recupera las copias pendientes
+  de `mongo._outbox`. No cambiar a `postgres` ni retirar Mongo con pendientes.
+- Las API locales que todavía usan configuración solo de Mongo deben permanecer
+  aisladas de producción hasta actualizar su configuración. El modo de cada
+  proceso debe coincidir con el de producción.
+- Que Postgres sea la fuente principal no significa que Mongo ya pueda apagarse:
+  siguen disponibles las rutas de compatibilidad para operaciones no traducidas.
+
+### Corte verificado — 2026-10-22
+
+Se autorizó sustituir la espera fija por comprobaciones y avanzar en tres lotes:
+sesiones/proxies/JID; configuración, catálogos y archivos; y finalmente usuarios,
+empresas, contactos, mensajes, colas, cupos y leases. Los 46 interruptores de
+`DB_MODES` quedaron en `primary` (45 colecciones y `archivos`; 42 colecciones ya
+existen en Mongo). `init_collection` está vacía y no contiene datos de la app.
+
+Se verificaron escrituras temporales y su limpieza en cada colección con datos,
+su copia a Mongo, la igualdad de las 42 colecciones y los cinco archivos, los
+índices únicos y la bandeja de salida vacía. En colecciones vacías no se insertaron
+trabajos ni destinatarios de prueba. Los cambios del backend retiraron los
+procesos anteriores antes de arrancar los nuevos. wwebjs no se reinició y las
+tres sesiones previamente conectadas permanecieron conectadas.
+
+Respaldo previo restaurado en una base local aislada:
+`backups/postgres_20261022_214025.dump` y su manifiesto SHA-256. Respaldos diarios
+habilitados en Coolify, tarea 9, con primera ejecución exitosa. La copia automática
+fuera del VPS sigue pendiente de un destino externo; la copia manual en el PC
+sí se restauró. El detalle de configuración y verificaciones vive en
+`backups/postgres-migration-20261022-checkpoint.json` (fuera de git).
 
 ---
 

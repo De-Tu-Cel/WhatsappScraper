@@ -15,6 +15,7 @@ ejecutan sin parámetros: un '%' dentro de una búsqueda no se confunde con uno.
 """
 import contextlib
 import hashlib
+import json
 import logging
 import threading
 
@@ -35,6 +36,38 @@ _STORAGE_BATCH = 500
 # todas las colecciones (la "última actividad" de message_logs cada 5 s, las páginas de
 # companies…): sin índice, ordenar calcula la llave de cada fila de la tabla.
 SORT_INDEXES = [("created_at", -1), ("created_at", 1)]
+
+# Los índices únicos de Mongo (leídos de producción el 2026-10-21). En modo primary Postgres los hace
+# cumplir: "sparse" = solo documentos con el campo (null cuenta); "string" = solo si el campo es texto;
+# dict = solo documentos que contienen esos valores; None = todos (faltante cuenta como null).
+UNICOS = {
+    "companies": [("domain", "sparse"), ("maps_cid", "sparse")],
+    "contacts": [("value", {"source": "inbound_whatsapp", "type": "whatsapp"})],
+    "message_logs": [("message_id", "string")],
+    "search_ideas": [("url", None)],
+}
+
+
+def unique_index_name(collection: str, field: str) -> str:
+    name = f"{collection}__u_{field}"
+    if len(name) > 63:
+        name = f"{collection[:40]}__u_{hashlib.blake2b(name.encode('utf-8'), digest_size=6).hexdigest()}"
+    return name
+
+
+def _unique_index_sql(collection: str, field: str, cond, table):
+    campo = sql.Literal(field)
+    if cond == "sparse":
+        expr, where = sql.SQL("(doc -> {})").format(campo), sql.SQL(" WHERE doc ? {}").format(campo)
+    elif cond == "string":
+        expr, where = sql.SQL("(doc ->> {})").format(campo), sql.SQL(" WHERE jsonb_typeof(doc -> {}) = 'string'").format(campo)
+    elif isinstance(cond, dict):
+        expr = sql.SQL("(doc -> {})").format(campo)
+        where = sql.SQL(" WHERE doc @> {}::jsonb").format(sql.Literal(json.dumps(cond)))
+    else:
+        expr, where = sql.SQL("(COALESCE(doc -> {}, 'null'::jsonb))").format(campo), sql.SQL("")
+    return sql.SQL("CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS {} ON {} ({})").format(
+        sql.Identifier(unique_index_name(collection, field)), table, expr) + where
 
 
 def _row_lock(collection: str, key: str) -> int:
@@ -170,6 +203,53 @@ class Store:
                 conn.execute("SELECT pg_advisory_unlock(%s)", (_INDEX_LOCK_KEY,))
         self._maintained.add((collection, name))
         return True
+
+    def ensure_unique_indexes(self, collection: str) -> bool:
+        """Los índices únicos de Mongo para esta colección (UNICOS), CONCURRENTLY y uno a la vez entre
+        procesos. True si ya están todos (o no tiene). Un índice que no se puede crear porque los datos ya
+        repiten valores levanta el error: esa colección no puede pasar a primary hasta resolverlo."""
+        declarados = UNICOS.get(collection, [])
+        if not declarados or (collection, "unicos") in self._maintained:
+            return True
+        self.ensure_table(collection)
+        with self._pool.connection() as conn:
+            if not conn.execute("SELECT pg_try_advisory_lock(%s)", (_INDEX_LOCK_KEY,)).fetchone()[0]:
+                return False
+            try:
+                for field, cond in declarados:
+                    name = unique_index_name(collection, field)
+                    state = conn.execute(
+                        "SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                        "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = %s AND c.relname = %s",
+                        (SCHEMA, name)).fetchall()
+                    if state and state[0][0]:
+                        continue
+                    conn.execute(f"SET statement_timeout = '{_INDEX_BUILD_TIMEOUT}'")
+                    try:
+                        if state:
+                            conn.execute(sql.SQL("DROP INDEX CONCURRENTLY IF EXISTS {}").format(sql.Identifier(SCHEMA, name)))
+                        conn.execute(_unique_index_sql(collection, field, cond, self.table(collection)))
+                    finally:
+                        conn.execute("RESET statement_timeout")
+                    log.info("pgmirror unique index ready: %s.%s", SCHEMA, name)
+            finally:
+                conn.execute("SELECT pg_advisory_unlock(%s)", (_INDEX_LOCK_KEY,))
+        self._maintained.add((collection, "unicos"))
+        return True
+
+    def unique_ready(self, collection: str) -> bool:
+        """¿Están los índices únicos de esta colección? (sin ellos, primary no escribe en Postgres)."""
+        declarados = UNICOS.get(collection, [])
+        if not declarados or (collection, "unicos") in self._maintained:
+            return True
+        nombres = [unique_index_name(collection, f) for f, _ in declarados]
+        listos = self.query("SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n "
+                            "ON n.oid = c.relnamespace WHERE n.nspname = %s AND c.relname = ANY(%s) AND i.indisvalid",
+                            (SCHEMA, nombres))[0][0]
+        if listos == len(nombres):
+            self._maintained.add((collection, "unicos"))
+            return True
+        return False
 
     def ensure_doc_storage(self, collection: str) -> bool:
         """Guarda `doc` sin comprimir dentro de la fila (STORAGE MAIN) y reescribe una vez las filas

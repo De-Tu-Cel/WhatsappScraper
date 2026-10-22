@@ -154,6 +154,18 @@ def _filters(docs):
     out += [{"$or": [{"n": {"$gt": 2}}, {"s": None}]}, {"$and": [{"a.b": {"$exists": True}}, {"tags": "zeta"}]},
             {"$nor": [{"mix": None}, {"k.v": 1}]}, {"o": {"$in": [FIXED_OID, str(FIXED_OID)]}},
             {"_id": {"$in": [1, 2, 300]}}, {"_id": {"$gt": 390}}]
+    # $elemMatch con igualdades y $not (classification_compare), $expr del cupo de contactos (daily_cap).
+    escalares = [v for v in pool if isinstance(v, (str, int, float, datetime, ObjectId)) and not isinstance(v, bool)]
+    for v in r.sample(escalares, 12):
+        out += [{"k": {"$elemMatch": {"v": v}}}, {"k": {"$not": {"$elemMatch": {"v": v}}}}, {"a": {"$elemMatch": {"b": v}}},
+                {"k": {"$elemMatch": {"v": v, "w": 1}}}, {"a": {"$elemMatch": {"b.c": v}}}]
+    out += [{"n": {"$not": {"$gt": 2}}}, {"tags": {"$not": {"$in": ["zeta", "Z"]}}}, {"s": {"$not": {"$regex": "^a"}}},
+            {"mix": {"$not": {"$exists": True}}}, {"d": {"$not": {"$lte": datetime(2026, 6, 1)}}}]
+    tam = {"$size": {"$ifNull": ["$tags", []]}}
+    for limite in (0, 1, 2, 3):
+        out += [{"$expr": {"$lt": [tam, limite]}}, {"$expr": {"$gte": [{"$add": [tam, 1]}, limite]}},
+                {"$expr": {"$eq": [{"$add": [tam, {"$size": {"$ifNull": ["$falta", ["x"]]}}]}, limite]}},
+                {"$or": [{"tags": "zeta"}, {"$expr": {"$lt": [{"$add": [tam, {"$size": {"$ifNull": ["$falta", []]}}]}, limite]}}]}]
     return out
 
 
@@ -218,7 +230,10 @@ def test_natural_order_and_skip_limit_match_real_mongo(engines):
 
 
 PROJECTIONS = [{"a.b": 1}, {"a.b": 0}, {"a.b.c": 1}, {"a.b": 1, "a.c": 1}, {"a": 1, "_id": 0}, {"_id": 1}, {"_id": 0},
-               {"k.v": 1}, {"tags": 1, "n": 1}, {"a.b.b": 0}, {"mix": 0, "a.c": 0}, {"a.b.c": 0, "_id": 0}]
+               {"k.v": 1}, {"tags": 1, "n": 1}, {"a.b.b": 0}, {"mix": 0, "a.c": 0}, {"a.b.c": 0, "_id": 0},
+               # $slice (sesiones de calentamiento: el último mensaje)
+               {"tags": {"$slice": -1}, "n": 1}, {"tags": {"$slice": 2}}, {"tags": {"$slice": [1, 1]}, "s": 1},
+               {"mix": {"$slice": [-2, 1]}, "_id": 0, "n": 1}, {"tags": {"$slice": 0}, "_id": 0}]
 
 
 @pytest.mark.parametrize("projection", PROJECTIONS, ids=[repr(p) for p in PROJECTIONS])
@@ -298,3 +313,51 @@ def test_routed_collection_against_real_mongo(engines, monkeypatch):
                 conn.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier("mongo", name)))
             routing._runtime.store.close()
         routing._runtime = None
+
+
+def test_write_shadow_matches_real_mongo(engines, monkeypatch):
+    """Sombra de escrituras: cada update por la capa (modo postgres) se calcula también con el motor y se
+    compara contra lo que dejó Mongo. Con escrituras como las de la app: 0 diferencias; y si el motor se
+    equivocara, la diferencia queda registrada."""
+    from datetime import datetime as _dt
+    from pymongo import ReturnDocument
+    from app.pgmirror import actualizar
+    mongo, _store, _table, _docs = engines
+    raw_db = mongo.database
+    name = f"sombra_{uuid.uuid4().hex[:6]}"
+    monkeypatch.setenv("POSTGRES_URL", TEST_PG)
+    monkeypatch.setenv("PGMIRROR_WRITE_SHADOW", "1")
+    monkeypatch.setenv(config.env_name(name), "postgres")
+    routing._runtime = None
+    try:
+        db = pgmirror.wrap_database(raw_db)
+        c = db[name]
+        c.insert_many([{"_id": i, "instance": "gely-wa", "date": "2026-10-21", "recipients": ["a"], "n": i, "tags": []} for i in range(20)])
+        c.update_one({"_id": 1}, {"$addToSet": {"recipients": "b"}, "$set": {"updated_at": _dt(2026, 10, 21, 12, 0, 0, 123456)}})
+        c.update_one({"_id": 1}, {"$addToSet": {"recipients": "b"}})  # no-op
+        c.update_one({"_id": 2}, {"$pull": {"recipients": {"$in": ["a"]}}, "$inc": {"n": 5}})
+        c.update_many({"n": {"$gte": 15}}, {"$push": {"tags": {"$each": ["x", "y"], "$slice": -1}}, "$unset": {"date": ""}})
+        c.update_one({"instance": "otra", "date": "2026-10-22"}, {"$setOnInsert": {"recipients": []}, "$inc": {"count": 1}}, upsert=True)
+        c.find_one_and_update({"_id": 3}, {"$max": {"seen": _dt(2026, 10, 21)}})
+        c.find_one_and_update({"n": {"$lt": 5}}, {"$set": {"claimed": True}}, sort=[("n", -1)], return_document=ReturnDocument.AFTER)
+        c.update_one({"_id": 4}, {"$rename": {"n": "m"}})  # el motor no lo hace: no soportada, nunca falla la escritura
+        stats = routing._runtime.stats.get(name, {})
+        assert stats.get("escritura_dif", 0) == 0, stats
+        assert stats.get("escritura_ok", 0) == 7 and stats.get("escritura_no_soportada", 0) == 1, stats
+        assert mongo.database[name].find_one({"_id": 4}).get("m") == 4  # la escritura real sí se hizo
+        # Si el motor se equivocara, se registra la diferencia.
+        monkeypatch.setattr(actualizar, "aplicar", lambda doc, update, **k: {**doc, "mal": 1})
+        c.update_one({"_id": 5}, {"$set": {"x": 1}})
+        assert routing._runtime.stats[name].get("escritura_dif") == 1
+    finally:
+        if routing._runtime is not None:
+            import psycopg
+            from psycopg import sql as _sql
+            with psycopg.connect(TEST_PG, autocommit=True) as conn:
+                conn.execute(_sql.SQL("DROP TABLE IF EXISTS {}").format(_sql.Identifier("mongo", name)))
+                for tabla in ("_shadow_diffs", "_counters", "_modes"):  # la diferencia forzada no se queda
+                    if conn.execute("SELECT to_regclass(%s)", (f"mongo.{tabla}",)).fetchone()[0]:
+                        conn.execute(_sql.SQL("DELETE FROM {} WHERE collection = %s").format(_sql.Identifier("mongo", tabla)), (name,))
+            routing._runtime.store.close()
+        routing._runtime = None
+        raw_db.drop_collection(name)

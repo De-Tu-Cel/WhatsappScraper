@@ -195,8 +195,9 @@ def test_filter_translation_matches_mongo(store, coll_name, filter_):
 
 
 def test_untranslatable_filters_are_refused_not_guessed():
-    for bad in ({"tags": {"$size": 2}}, {"$expr": {"$gt": ["$a", "$b"]}}, {"a": {"$elemMatch": {"b": 1}}},
-                {"name": {"$regex": "x", "$options": "m"}}, {"a.0.b": 1}, {"a": {"$not": {"$gt": 1}}},
+    for bad in ({"tags": {"$size": 2}}, {"$expr": {"$gt": ["$a", "$b"]}}, {"$expr": {"$lt": [{"$size": "$a"}, 2]}},
+                {"a": {"$elemMatch": {"b": {"$gt": 1}}}}, {"a": {"$elemMatch": {"b": None}}}, {"a": {"$elemMatch": {"$gt": 1}}},
+                {"name": {"$regex": "x", "$options": "m"}}, {"a.0.b": 1}, {"a": {"$not": re.compile("x")}},
                 # Igualdad con subdocumento: Mongo compara el orden de las llaves, jsonb no.
                 {"loc": {"city": "x", "state": "y"}}, {"loc": {"$in": [{"city": "x"}]}}, {"t": [{"a": 1}]},
                 # Sintaxis que significa otra cosa en Postgres que en PCRE (Mongo):
@@ -303,7 +304,7 @@ def test_projection_shapes_and_never_touches_the_original():
     assert sqlfilter.apply_projection(doc, {"_id": 1}) == {"_id": 1}
     assert sqlfilter.apply_projection(doc, {"_id": 0}) == {"a": 1, "b": {"c": 2, "d": 3}, "e": 4}
     assert doc["b"] == {"c": 2, "d": 3}  # la proyección nunca modifica el original
-    for bad in ({"a": 1, "b": 0}, {"a": 1, "a.b": 1}, {"a": {"$slice": 1}}, {"numbers.$": 1}):
+    for bad in ({"a": 1, "b": 0}, {"a": 1, "a.b": 1}, {"a": {"$elemMatch": {"x": 1}}}, {"numbers.$": 1}):
         with pytest.raises(sqlfilter.Unsupported):
             sqlfilter.apply_projection(doc, bad)
 

@@ -11,6 +11,12 @@
   en línea, antes de responder (lo que se escribe se lee enseguida, desde cualquier
   proceso). Lo que el traductor no soporta, cualquier error de Postgres (también a
   mitad de un cursor) o una colección "por conciliar" se lee de Mongo — nunca se adivina.
+- `primary`: Postgres es la fuente de verdad (primaria.py). Las escrituras van a Postgres y
+  se copian a Mongo en la misma transacción (si Mongo falla, a la bandeja de salida y el
+  vigilante la repite: la escritura no falla). Las lecturas, como en postgres; lo que no se
+  traduce se lee de la copia de Mongo. Lo que el motor no sabe escribir se hace en Mongo con
+  esos documentos bloqueados en Postgres y el resultado se guarda en Postgres en la misma
+  transacción.
 Cada copia toma un candado por documento en Postgres (Store.replace_from_source): dos
 procesos copiando el mismo documento nunca dejan una versión vieja encima de una nueva.
 Todo lo demás (aggregate, create_index, …) va directo a Mongo.
@@ -21,7 +27,11 @@ import queue
 import threading
 import time
 
-from app.pgmirror import codec, config, sqlfilter
+from bson import ObjectId
+from psycopg import sql
+from pymongo import common as pymongo_common
+
+from app.pgmirror import actualizar, agregar, codec, config, primaria, sombra_escrituras, sqlfilter
 
 log = logging.getLogger(__name__)
 MAX_PREQUERY = 1000
@@ -384,9 +394,23 @@ def _same_result(mongo_rows, pg_rows, sorted_, windowed) -> str | None:
     return "orden-natural" if windowed else "contenido"  # con limit, distinto orden natural = otros documentos
 
 
+def _canon_agregado(filas) -> list:
+    """Para comparar aggregate: sin orden de filas ni de arreglos (un $addToSet no tiene orden; un empate de
+    $sort, tampoco) y al milisegundo, como lo guarda Mongo."""
+    def norm(v):
+        if isinstance(v, dict):
+            return {k: norm(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return sorted((norm(x) for x in v), key=lambda x: codec.encode_doc({"v": x}))
+        return v
+    return sorted(codec.encode_doc({"v": norm(codec.decode_doc(codec.encode_doc({"v": f}))["v"])}) for f in filas)
+
+
 class RoutedCollection:
     def __init__(self, raw, name, mode, rt):
         self._raw, self._name, self._mode, self._rt = raw, name, mode, rt
+        self._lee_pg = mode in ("postgres", "primary")
+        self._escritor = None
 
     def __getattr__(self, attr):
         return getattr(self._raw, attr)
@@ -439,12 +463,16 @@ class RoutedCollection:
         return ids
 
     def insert_one(self, document, *args, **kwargs):
+        if self._mode == "primary":
+            return self._primaria("insert_one", None, document, args, kwargs)
         result = self._raw.insert_one(document, *args, **kwargs)
         self._mirror([result.inserted_id])
         return result
 
     def insert_many(self, documents, *args, **kwargs):
         documents = list(documents)
+        if self._mode == "primary":
+            return self._primaria("insert_many", None, documents, args, kwargs)
         try:
             result = self._raw.insert_many(documents, *args, **kwargs)
         except Exception:
@@ -455,11 +483,53 @@ class RoutedCollection:
         return result
 
     def _write_by_filter(self, method, filter_, *args, **kwargs):
+        if self._mode == "primary":
+            return self._primaria_por_filtro(method, filter_, args, kwargs)
         ids = self._ids_for(filter_, **kwargs)
+        update = args[0] if args else kwargs.get("update")
+        antes = self._antes_para_sombra(method, update, ids)
         result = getattr(self._raw, method)(filter_, *args, **kwargs)
         upserted = getattr(result, "upserted_id", None)
         self._mirror(ids + ([upserted] if upserted is not None else []))
+        if antes is not None:
+            self._comparar_escritura(method, filter_, update, antes, ids, upserted=upserted,
+                                     modificados=getattr(result, "modified_count", None))
         return result
+
+    # ── Sombra de escrituras (sombra_escrituras.py): solo mide, nunca cambia la escritura ──
+    def _sombra(self, method, update) -> bool:
+        return (self._mode == "postgres" and method in ("update_one", "update_many", "find_one_and_update")
+                and sombra_escrituras.activa() and sombra_escrituras.es_update(update))
+
+    def _docs_pg(self, ids) -> dict:
+        keys = [codec.id_key(i)[0] for i in ids if i is not None]
+        if not keys:
+            return {}
+        docs = self._rt.store.query_docs(self._name, sql.SQL("id = ANY(%s)"), params=(keys,))
+        return {codec.id_key(d["_id"])[0]: d for d in docs}
+
+    def _antes_para_sombra(self, method, update, ids):
+        if not self._sombra(method, update) or len(ids) >= MAX_PREQUERY or not self._rt.pg_readable(self._name):
+            return None
+        try:
+            return self._docs_pg(ids)
+        except Exception:
+            self._rt.bump(self._name, "escritura_error")
+            return None
+
+    def _comparar_escritura(self, method, filter_, update, antes, ids, **kw):
+        try:
+            if not self._rt.pg_readable(self._name):
+                return  # la copia en vivo falló: Postgres no tiene el «después»
+            despues = self._docs_pg(list(ids) + [kw.get("upserted")])
+            estado, detalle = sombra_escrituras.comparar(method, filter_, update, antes, despues, **kw)
+            self._rt.bump(self._name, estado)
+            if estado == "escritura_dif":
+                self._rt.store.record_diff(self._name, f"escritura:{method}", f"filter={filter_!r} update={update!r} {detalle}")
+                log.warning("pgmirror write shadow diff %s.%s: %s", self._name, method, detalle[:300])
+        except Exception:
+            self._rt.bump(self._name, "escritura_error")
+            log.exception("pgmirror write shadow failed for %s", self._name)
 
     def update_one(self, filter, update, *args, **kwargs):
         return self._write_by_filter("update_one", filter, update, *args, **kwargs)
@@ -477,6 +547,8 @@ class RoutedCollection:
         return self._write_by_filter("delete_many", filter, *args, **kwargs)
 
     def _find_and_modify(self, method, filter_, *args, **kwargs):
+        if self._mode == "primary":
+            return self._primaria_por_filtro(method, filter_, args, kwargs)
         # Toca UN solo documento y lo regresa (antes o después): su _id basta, sin consulta previa
         # (importa en las colas, que reclaman con esto a cada rato). Solo si la proyección oculta
         # el _id hace falta averiguarlo antes.
@@ -485,6 +557,18 @@ class RoutedCollection:
         hides_id = isinstance(projection, dict) and "_id" in projection and not projection["_id"]
         upsert = kwargs.get("upsert", args[3] if method != "find_one_and_delete" and len(args) > 3 else False)
         ids = self._ids_for(filter_, **kwargs) if hides_id else []
+        update = args[0] if args and method == "find_one_and_update" else kwargs.get("update")
+        despues_de_escribir = bool(kwargs.get("return_document", args[4] if len(args) > 4 else False))
+        antes_pg = None
+        if self._sombra(method, update) and (despues_de_escribir or projection) and self._rt.pg_readable(self._name):
+            # El documento que regresa Mongo no sirve de «antes» (es el de después, o viene recortado):
+            # el candidato se lee de Postgres, que en modo postgres está al día.
+            try:
+                sort = kwargs.get("sort", args[2] if len(args) > 2 else None)
+                antes_pg = self._rt.store.query_docs(self._name, sqlfilter.where(filter_),
+                                                     plan=sqlfilter.sort_plan(sort) if sort else None, limit=1)
+            except Exception:
+                antes_pg = None
         doc = getattr(self._raw, method)(filter_, *args, **kwargs)
         if isinstance(doc, dict) and "_id" in doc:
             ids.append(doc["_id"])
@@ -494,6 +578,17 @@ class RoutedCollection:
             if not ids:
                 self._dirty(f"{method} upsert without a resolvable _id")
         self._mirror(ids)
+        if self._sombra(method, update) and isinstance(doc, dict) and "_id" in doc:
+            llave = codec.id_key(doc["_id"])[0]
+            if antes_pg is None and not (despues_de_escribir or projection):
+                antes = {llave: doc}  # ReturnDocument.BEFORE completo: es el «antes» de Mongo mismo
+            elif antes_pg and codec.id_key(antes_pg[0]["_id"])[0] == llave:
+                antes = {llave: antes_pg[0]}
+            else:
+                antes = None  # Mongo eligió otro documento o insertó uno nuevo: no hay con qué comparar
+                self._rt.bump(self._name, "escritura_carrera")
+            if antes is not None:
+                self._comparar_escritura(method, filter_, update, antes, [doc["_id"]], objetivo=llave)
         return doc
 
     def find_one_and_update(self, filter, update, *args, **kwargs):
@@ -506,16 +601,72 @@ class RoutedCollection:
         return self._find_and_modify("find_one_and_delete", filter, *args, **kwargs)
 
     def bulk_write(self, requests, *args, **kwargs):
+        if self._mode == "primary":
+            raise NotImplementedError(f"pgmirror: bulk_write en {self._name} (modo primary) no está soportado")
         try:
             return self._raw.bulk_write(requests, *args, **kwargs)
         finally:
             self._dirty("bulk_write")
 
     def drop(self, *args, **kwargs):
+        if self._mode == "primary":
+            raise NotImplementedError(f"pgmirror: drop de {self._name} (modo primary): hacerlo a mano en ambas bases")
         try:
             return self._raw.drop(*args, **kwargs)
         finally:
             self._dirty("drop")
+
+    # ── Modo primary: Postgres manda (primaria.py) ───────────────────────────────
+    def _primaria_por_filtro(self, method, filter_, args, kwargs):
+        if method.startswith("delete") or method == "find_one_and_delete":
+            return self._primaria(method, filter_, None, args, kwargs)
+        nombre = "update" if method in ("update_one", "update_many", "find_one_and_update") else "replacement"
+        if args:
+            return self._primaria(method, filter_, args[0], args[1:], kwargs)
+        kwargs = dict(kwargs)
+        return self._primaria(method, filter_, kwargs.pop(nombre), (), kwargs)
+
+    def _primaria(self, method, filter_, documento, args, kwargs):
+        """La escritura en Postgres (primaria.Escritor) y su copia a Mongo; lo que el motor no sabe
+        hacer, por Mongo con esos documentos bloqueados en Postgres (Escritor.por_mongo)."""
+        insercion = method.startswith("insert")
+        if method in ("update_one", "update_many", "find_one_and_update"):
+            pymongo_common.validate_ok_for_update(documento)
+        elif method in ("replace_one", "find_one_and_replace"):
+            pymongo_common.validate_ok_for_replace(documento)
+        if not insercion:
+            pymongo_common.validate_is_mapping("filter", filter_)
+        kw = primaria.argumentos(method, args, kwargs)
+        escritor = self._escritor_pg()
+        if primaria.soporta(method, documento, kw) and self._rt.store.unique_ready(self._name):
+            try:
+                resultado = escritor.ejecutar(method, filter_, documento, kw)
+            except (sqlfilter.Unsupported, actualizar.NoSoportado) as exc:
+                log.info("pgmirror primary %s.%s va por Mongo: %s", self._name, method, exc)
+            else:
+                self._rt.bump(self._name, "primaria_ok")
+                return resultado
+        self._rt.bump(self._name, "primaria_por_mongo")
+        if method == "insert_one":
+            nuevos = [documento.setdefault("_id", ObjectId())]
+        elif method == "insert_many":
+            nuevos = [d.setdefault("_id", ObjectId()) for d in documento]
+        else:
+            nuevos = []
+        principal = () if documento is None else (documento,)
+        antes = () if insercion else (filter_,)
+        upsert = bool((kw or {}).get("upsert", kwargs.get("upsert", False)))
+        return escritor.por_mongo(None if insercion else filter_,
+                                  lambda: getattr(self._raw, method)(*antes, *principal, *args, **kwargs),
+                                  upsert=upsert, nuevos=nuevos)
+
+    def _escritor_pg(self):
+        if self._escritor is None:
+            from app.pgmirror.health import ensure_meta
+            ensure_meta(self._rt.store)
+            self._escritor = primaria.Escritor(self._rt.store, self._name, self._raw,
+                                               on_evento=lambda llave, n: self._rt.bump(self._name, llave, n))
+        return self._escritor
 
     # ── Lecturas ────────────────────────────────────────────────────────────────
     def _check_readable(self):
@@ -609,7 +760,7 @@ class RoutedCollection:
             return self._raw.count_documents(filter)
 
     def estimated_document_count(self, *args, **kwargs):
-        if self._mode != "postgres" or args or kwargs:
+        if not self._lee_pg or args or kwargs:
             return self._raw.estimated_document_count(*args, **kwargs)
         try:
             self._check_readable()
@@ -643,6 +794,41 @@ class RoutedCollection:
                     seen.add(marker)
                     values.append(value)
         return values
+
+    def aggregate(self, pipeline, *args, **kwargs):
+        """Con PGMIRROR_AGGREGATE (config.aggregate_mode): mongo, shadow o postgres (agregar.py)."""
+        modo = config.aggregate_mode()
+        if not self._lee_pg or modo == "mongo" or args or set(kwargs) - {"allowDiskUse"}:
+            return self._raw.aggregate(pipeline, *args, **kwargs)
+        if modo == "shadow":
+            filas = list(self._raw.aggregate(pipeline, **kwargs))
+            esperado = _canon_agregado(filas)  # ahora: la app puede modificar lo que recibe
+            self._shadow(lambda: self._comparar_agregado(pipeline, esperado))
+            return iter(filas)
+        try:
+            self._check_readable()
+            return iter(agregar.ejecutar(self._rt.store, self._name, pipeline))
+        except Exception as exc:
+            self._fallback("aggregate", exc)
+            return self._raw.aggregate(pipeline, **kwargs)
+
+    def _comparar_agregado(self, pipeline, esperado):
+        if self._mode != "primary" and not self._rt.pg_readable(self._name):
+            return
+        try:
+            obtenido = _canon_agregado(agregar.ejecutar(self._rt.store, self._name, pipeline))
+        except sqlfilter.Unsupported:
+            self._rt.bump(self._name, "agregado_no_soportado")
+            return
+        if obtenido == esperado:
+            self._rt.bump(self._name, "agregado_ok")
+            return
+        # La app escribe todo el tiempo: antes de llamarlo diferencia, Mongo otra vez.
+        if obtenido == _canon_agregado(list(self._raw.aggregate(pipeline))):
+            self._rt.bump(self._name, "agregado_ok")
+            return
+        self._rt.bump(self._name, "agregado_dif")
+        self._rt.store.record_diff(self._name, "aggregate", f"pipeline={pipeline!r} mongo={len(esperado)} postgres={len(obtenido)} filas")
 
     def distinct(self, key, filter=None, *args, **kwargs):
         if self._mode == "dual" or args or kwargs:

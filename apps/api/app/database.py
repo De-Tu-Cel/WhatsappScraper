@@ -3,7 +3,6 @@ import re
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
 from datetime import datetime, timedelta, timezone
-from gridfs import GridFS
 from config import MONGODB_URI, DATABASE_NAME
 
 # Single MongoClient shared across all requests — pymongo manages the connection pool internally.
@@ -460,9 +459,9 @@ class MongoDBManager:
         # (app/pgmirror, docs/MIGRACION_POSTGRES.md) esté activa para alguna
         # colección — sin POSTGRES_URL es exactamente el mismo objeto.
         self.raw_db = self.client[DATABASE_NAME]
-        from app.pgmirror import wrap_database
+        from app.pgmirror import wrap_database, wrap_gridfs
         self.db = wrap_database(self.raw_db)
-        self.fs = GridFS(self.raw_db)
+        self.fs = wrap_gridfs(self.raw_db)
 
     def get_classifier_settings(self) -> dict:
         """Umbrales configurables del flujo T1/T2 (Settings > Clasificación). Sin

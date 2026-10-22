@@ -49,6 +49,9 @@ services:
       # Opcionales (vacías = 24 h de espera por modo y conciliación cada 3 h).
       - PGMIRROR_WAIT_HOURS=${PGMIRROR_WAIT_HOURS:-}
       - PGMIRROR_RECONCILE_HOURS=${PGMIRROR_RECONCILE_HOURS:-}
+      # Fase de escrituras (vacías = apagadas): 1 = sombra de escrituras; mongo|shadow|postgres = aggregate().
+      - PGMIRROR_WRITE_SHADOW=${PGMIRROR_WRITE_SHADOW:-}
+      - PGMIRROR_AGGREGATE=${PGMIRROR_AGGREGATE:-}
     expose:
       - "8000"
     restart: unless-stopped

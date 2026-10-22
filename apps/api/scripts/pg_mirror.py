@@ -269,8 +269,16 @@ def main(argv=None):
             return 0
         if not args.all and not args.collections:
             sys.exit("Indica la(s) colección(es) o --all.")
+        names = _collections(raw_db, args.collections, args.all)
+        if args.fix:
+            from app.pgmirror import config
+            primary = [name for name in names if config.collection_mode(name) == "primary"
+                       or (name in ("fs.files", "fs.chunks") and config.collection_mode("archivos") == "primary")]
+            if primary:
+                sys.exit("No se permite reconcile --fix desde Mongo sobre primary: " + ", ".join(primary)
+                         + ". Postgres es la fuente de verdad; usa la conciliación inversa del vigilante.")
         all_ok = True
-        for name in _collections(raw_db, args.collections, args.all):
+        for name in names:
             result = reconcile(raw_db, store, name, fix=args.fix)
             all_ok &= result["in_sync"] or args.fix
             flag = "OK " if result["in_sync"] else ("FIX" if args.fix else "DIF")

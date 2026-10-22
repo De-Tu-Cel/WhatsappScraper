@@ -40,6 +40,24 @@ def _pg_available():
 needs_pg = pytest.mark.skipif(not _pg_available(), reason="sin Postgres de pruebas (docker compose -f migration/docker-compose.yml up -d)")
 
 
+@pytest.mark.parametrize("mode", ["postgres", "primary"])
+def test_primary_never_falls_back_to_a_mongo_only_runtime(monkeypatch, mode):
+    import mongomock.gridfs
+    mongomock.gridfs.enable_gridfs_integration()
+    raw = mongomock.MongoClient().db
+    monkeypatch.setenv("POSTGRES_URL", TEST_PG)
+    monkeypatch.setenv("DB_MODES", f"evaluaciones={mode},archivos={mode}")
+    monkeypatch.setattr(routing, "get_runtime", lambda db: None)
+    if mode == "primary":
+        with pytest.raises(RuntimeError, match="refusing Mongo-only"):
+            routing.route_collection(raw, "evaluaciones")
+        with pytest.raises(RuntimeError, match="refusing GridFS-only"):
+            pgmirror.wrap_gridfs(raw)
+    else:
+        assert routing.route_collection(raw, "evaluaciones") is raw["evaluaciones"]
+        assert pgmirror.wrap_gridfs(raw).__class__.__name__ == "GridFS"
+
+
 def test_ci_never_skips_the_real_engine_tests():
     """En CI (REQUIRE_REAL_ENGINES=1) Postgres y el Mongo 7 de pruebas tienen que estar: si no,
     las pruebas contra los motores reales se saltarían y CI saldría verde sin haberlas corrido."""

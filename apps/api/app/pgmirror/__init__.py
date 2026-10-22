@@ -24,6 +24,8 @@ def wrap_gridfs(raw_db):
         return GridFS(raw_db)
     from app.pgmirror.routing import get_runtime
     rt = get_runtime(raw_db)
+    if rt is None and modo == "primary":
+        raise RuntimeError("Postgres primary unavailable; refusing GridFS-only access")
     return GridFS(raw_db) if rt is None else archivos.ArchivosRuteados(raw_db, modo, rt)
 
 

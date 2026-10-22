@@ -123,11 +123,23 @@ def _check(raw_db, store) -> int:
         if key.startswith("escritura_"):
             escrituras.setdefault(name, {})[key[len("escritura_"):]] = n
     if escrituras:
-        print("\nSombra de escrituras (ok / dif / no soportadas / carreras / errores):")
+        print("\nSombra de escrituras (ok / dif / no soportadas / carreras / errores / sin candidatos):")
         for name in sorted(escrituras):
             e = escrituras[name]
             print(f"  {name:30} {e.get('ok', 0):6} / {e.get('dif', 0)} / {e.get('no_soportada', 0)} / "
-                  f"{e.get('carrera', 0)} / {e.get('error', 0)}")
+                  f"{e.get('carrera', 0)} / {e.get('error', 0)} / {e.get('sin_candidatos', 0)}")
+
+    # aggregate() resuelto también en Postgres (PGMIRROR_AGGREGATE=shadow) antes de pasarlo a postgres.
+    agregados = {}
+    for (name, key), n in counters.items():
+        if key.startswith("agregado_"):
+            agregados.setdefault(name, {})[key[len("agregado_"):]] = n
+    if agregados:
+        print(f"\naggregate en Postgres, PGMIRROR_AGGREGATE={os.environ.get('PGMIRROR_AGGREGATE') or 'mongo'} "
+              "(iguales / diferentes / no soportados):")
+        for name in sorted(agregados):
+            g = agregados[name]
+            print(f"  {name:30} {g.get('ok', 0):6} / {g.get('dif', 0)} / {g.get('no_soportado', 0)}")
 
     # Modo primary: escrituras en Postgres, las que fueron por Mongo y la bandeja de salida.
     primarias = sorted(n for n, m in active.items() if m == "primary")
@@ -209,9 +221,10 @@ def _reviewed(store, names, confirm: bool, note: str) -> int:
             continue
         counts = {k: int(n) for k, n in store.query(
             "SELECT key, sum(n) FROM mongo._counters WHERE collection = %s "
-            "AND key IN ('shadow_ok', 'shadow_diffs', 'shadow_raced') GROUP BY 1", (name,))}
+            "AND (key IN ('shadow_ok', 'shadow_diffs', 'shadow_raced') OR key LIKE 'escritura\\_%%') GROUP BY 1", (name,))}
         print(f"\n{name} ({mode[0][0]}): {counts.get('shadow_ok', 0)} comparaciones iguales, "
-              f"{counts.get('shadow_diffs', 0)} diferencias")
+              f"{counts.get('shadow_diffs', 0)} diferencias; escrituras {counts.get('escritura_ok', 0)} iguales, "
+              f"{counts.get('escritura_dif', 0)} diferencias")
         if has_diffs:
             for at, operation, detail in store.query(
                     "SELECT at, operation, left(detail, 200) FROM mongo._shadow_diffs WHERE collection = %s "
@@ -219,7 +232,7 @@ def _reviewed(store, names, confirm: bool, note: str) -> int:
                 print(f"  {at:%Y-%m-%d %H:%M} {operation}: {detail}")
         if confirm:
             store.query("DELETE FROM mongo._counters WHERE collection = %s "
-                        "AND key IN ('shadow_ok', 'shadow_diffs', 'shadow_raced')", (name,))
+                        "AND (key IN ('shadow_ok', 'shadow_diffs', 'shadow_raced') OR key LIKE 'escritura\\_%%')", (name,))
             store.query("UPDATE mongo._modes SET since = now() WHERE collection = %s", (name,))
             store.query("INSERT INTO mongo._reviews (collection, note) VALUES (%s, %s)", (name, note or None))
             print("  → descartadas; su reloj empieza de nuevo ahora.")

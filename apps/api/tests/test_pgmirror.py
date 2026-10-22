@@ -609,3 +609,24 @@ def test_reconcile_fix_is_the_initial_load_and_is_idempotent(store, coll_name):
     assert first["copied"] == 1200 and first["deleted"] == 1
     again = reconcile(raw, store, coll_name)
     assert again["in_sync"] and again["mongo"] == 1200
+
+
+def test_write_shadow_comparator_on_leases():
+    """Medido en prod (2026-10-22) con los leases de envío y calentamiento: tomarlos casi nunca encuentra
+    documento (siguen vigentes), y otro proceso los renueva a cada rato. Nada de eso es una diferencia."""
+    from app.pgmirror import sombra_escrituras as sombra
+    lease = {"_id": "singleton", "holder": "a", "expires_at": datetime(2026, 10, 22, 0, 14, 3, 289000)}
+    tomar = {"_id": "singleton", "expires_at": {"$lte": datetime(2026, 10, 22, 0, 18, 45)}}
+    assert sombra.comparar("update_one", tomar, {"$set": {"holder": "b"}}, {}, {}, modificados=0)[0] == "escritura_sin_candidatos"
+    assert sombra.comparar("update_one", tomar, {"$set": {"holder": "b"}}, {}, {"singleton": lease}, modificados=1)[0] == "escritura_carrera"
+    renovado = {**lease, "expires_at": datetime(2026, 10, 22, 0, 14, 3, 335000)}
+    crear = {"$setOnInsert": {"holder": None, "expires_at": datetime(1, 1, 1)}}
+    assert sombra.comparar("update_one", {"_id": "singleton"}, crear, {"singleton": lease}, {"singleton": renovado},
+                           modificados=0)[0] == "escritura_carrera"
+    assert sombra.comparar("update_one", {"_id": "singleton"}, crear, {"singleton": lease}, {"singleton": lease},
+                           modificados=0)[0] == "escritura_ok"
+    # Lo que sí es una diferencia lo sigue siendo.
+    assert sombra.comparar("update_one", {"_id": "singleton"}, {"$set": {"holder": "b"}}, {"singleton": lease},
+                           {"singleton": {**lease, "holder": "c"}}, modificados=1)[0] == "escritura_dif"
+    assert sombra.comparar("update_one", {"_id": "singleton"}, {"$set": {"holder": "b"}}, {"singleton": lease},
+                           {"singleton": lease}, modificados=0)[0] == "escritura_dif"

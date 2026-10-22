@@ -18,6 +18,7 @@ import CircularProgress from '@mui/material/CircularProgress'
 import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
 import Snackbar from '@mui/material/Snackbar'
+import Skeleton from '@mui/material/Skeleton'
 import ToggleButton from '@mui/material/ToggleButton'
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
 import Menu from '@mui/material/Menu'
@@ -294,6 +295,120 @@ function Tarjeta({ insignia, titulo, extra, children }) {
   )
 }
 
+// ── esqueletos de carga: la misma forma que el editor y la hoja, así nada brinca al llegar ──────
+const esqueletoSx = {
+  '& .MuiSkeleton-root': { bgcolor: 'var(--item-hover)' },
+  '@media (prefers-reduced-motion: reduce)': { '& .MuiSkeleton-root::after': { animation: 'none' } },
+}
+
+function SeccionEsqueleto({ children }) {
+  return (
+    <Box sx={{ p: 2, borderRadius: '14px', border: '1px solid var(--border)', bgcolor: 'var(--surface)', display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
+        <Skeleton variant="rounded" width={30} height={30} sx={{ borderRadius: '9px', flexShrink: 0 }} />
+        <Box sx={{ flex: 1 }}>
+          <Skeleton width="42%" height={18} />
+          <Skeleton width="68%" height={14} />
+        </Box>
+      </Box>
+      {children}
+    </Box>
+  )
+}
+
+function CampoEsqueleto() {
+  return (
+    <Box>
+      <Skeleton width={96} height={14} sx={{ mb: 0.5 }} />
+      <Skeleton variant="rounded" height={36} sx={{ borderRadius: '10px' }} />
+    </Box>
+  )
+}
+
+// La hoja de la vista previa con la forma de la real: encabezado, nivel del canal, pestañas, y el chat
+// junto a los hallazgos. Mismo ancho que la hoja escalada (hasta ANCHO_HOJA), así no brinca al llegar.
+function HojaEsqueleto() {
+  const bloque = (sx) => <Skeleton variant="rounded" sx={{ borderRadius: '10px', height: 'auto', ...sx }} />
+  return (
+    <Box aria-hidden sx={{ width: '100%', maxWidth: ANCHO_HOJA, aspectRatio: `${ANCHO_HOJA} / ${ALTO_HOJA}`, borderRadius: '10px', overflow: 'hidden',
+      border: '1px solid var(--border)', bgcolor: 'var(--card-bg)', boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
+      p: '3% 3.5%', display: 'flex', flexDirection: 'column', gap: '2.2%', ...esqueletoSx }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: '3%' }}>
+        {bloque({ width: '16%', aspectRatio: '5 / 2' })}
+        <Box sx={{ flex: 1 }}><Skeleton width="78%" height={30} /><Skeleton width="60%" height={14} /></Box>
+      </Box>
+      <Box sx={{ p: '2.5%', borderRadius: '12px', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+        <Skeleton width="36%" height={18} />
+        <Box sx={{ display: 'flex', justifyContent: 'space-between' }}><Skeleton width="22%" height={30} /><Skeleton width="22%" height={30} /></Box>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 0.75 }}>
+          {[0, 1, 2, 3, 4].map((i) => <Skeleton key={i} variant="rounded" height={8} sx={{ borderRadius: '4px' }} />)}
+        </Box>
+        <Skeleton width="85%" height={14} />
+      </Box>
+      <Box sx={{ display: 'flex', justifyContent: 'center' }}>{bloque({ width: '58%', aspectRatio: '10 / 1', borderRadius: '999px' })}</Box>
+      <Box sx={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '30% 1fr', gap: '3%' }}>
+        {bloque({ borderRadius: '22px' })}
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: '4%' }}>
+          {bloque({ height: '28%' })}
+          {bloque({ flex: 1 })}
+        </Box>
+      </Box>
+    </Box>
+  )
+}
+
+// Ya hay una evaluación de ese número y se está abriendo: el editor completo y su vista previa.
+function EditorEsqueleto() {
+  return (
+    <Box role="status" aria-busy="true" aria-label="Cargando la evaluación"
+      sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '490px 1fr' }, width: '100%', minHeight: 0, overflow: 'hidden', ...esqueletoSx }}>
+      <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 1.75, overflow: 'hidden', borderRight: { lg: '1px solid var(--border)' } }}>
+        <SeccionEsqueleto>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Skeleton variant="rounded" width={128} height={60} sx={{ borderRadius: '10px', flexShrink: 0 }} />
+            <Skeleton variant="circular" width={44} height={44} sx={{ flexShrink: 0 }} />
+            <Box sx={{ ml: 'auto' }}><Skeleton width={84} height={26} /><Skeleton width={84} height={26} /></Box>
+          </Box>
+          <CampoEsqueleto />
+          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.25 }}><CampoEsqueleto /><CampoEsqueleto /></Box>
+        </SeccionEsqueleto>
+        <SeccionEsqueleto>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0.75 }}>
+            {[0, 1, 2, 3].map((i) => <Skeleton key={i} variant="rounded" height={64} sx={{ borderRadius: '10px' }} />)}
+          </Box>
+        </SeccionEsqueleto>
+        <SeccionEsqueleto>
+          {[0, 1].map((i) => <Skeleton key={i} variant="rounded" height={96} sx={{ borderRadius: '12px' }} />)}
+        </SeccionEsqueleto>
+      </Box>
+      <Box sx={{ display: { xs: 'none', lg: 'flex' }, flexDirection: 'column', minHeight: 0, bgcolor: 'var(--bg)' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1, borderBottom: '1px solid var(--border)' }}>
+          <Box sx={{ flex: 1 }}><Skeleton width={96} height={18} /><Skeleton width={150} height={14} /></Box>
+          <Skeleton variant="rounded" width={76} height={32} sx={{ borderRadius: '10px' }} />
+          <Skeleton variant="rounded" width={76} height={32} sx={{ borderRadius: '10px' }} />
+        </Box>
+        <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden', p: 2, display: 'flex', justifyContent: 'center', alignItems: 'flex-start' }}>
+          <HojaEsqueleto />
+        </Box>
+      </Box>
+    </Box>
+  )
+}
+
+// Todavía no se sabe si ese número ya tiene evaluación: la forma de la pantalla de inicio.
+function InicioEsqueleto() {
+  return (
+    <Box role="status" aria-busy="true" aria-label="Buscando la evaluación de este número"
+      sx={{ m: 'auto', p: 4, width: 'min(520px, 100%)', display: 'flex', flexDirection: 'column', gap: 1.25, alignItems: 'center', ...esqueletoSx }}>
+      <Skeleton variant="rounded" width={64} height={64} sx={{ borderRadius: '18px', mb: 0.75 }} />
+      <Skeleton width="62%" height={26} />
+      <Skeleton width="92%" height={16} />
+      <Skeleton width="78%" height={16} />
+      <Skeleton variant="rounded" width={190} height={40} sx={{ borderRadius: '12px', mt: 1 }} />
+    </Box>
+  )
+}
+
 function Pastilla({ children, sx }) {
   return (
     <Box sx={{ px: 1.1, py: 0.3, borderRadius: '999px', fontSize: '0.7rem', fontWeight: 700, whiteSpace: 'nowrap',
@@ -327,11 +442,13 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
   const [tema, setTema] = useState('light')
   const [escala, setEscala] = useState(0.5)
   const [marco, setMarco] = useState(null) // callback ref: el panel aparece hasta que hay evaluación
+  const [abriendo, setAbriendo] = useState(false) // ya hay una evaluación de este número y se está cargando
   const enviado = useRef('')
 
   const cargarVista = useCallback(async (id) => {
     const res = await authFetch(`/api/evaluaciones/${id}/html`)
     setVista(res.ok ? await res.text() : '')
+    if (!res.ok) setErrorVista('No se pudo cargar la vista previa: cierra y vuelve a abrir')
   }, [])
 
   const mostrar = useCallback(async (data) => {
@@ -348,7 +465,10 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
       try {
         const { items = [] } = await leer(await authFetch(`/api/evaluaciones?company_id=${encodeURIComponent(companyId)}`))
         const previa = items.find((e) => !number || ultimos10(e.numero) === ultimos10(number))
-        if (previa && vigente) await mostrar(await leer(await authFetch(`/api/evaluaciones/${previa.id}`)))
+        if (previa && vigente) {
+          setAbriendo(true)
+          await mostrar(await leer(await authFetch(`/api/evaluaciones/${previa.id}`)))
+        }
       } catch (e) {
         if (vigente) setError(e.message)
       } finally {
@@ -597,7 +717,12 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
             {companyName}{ev?.editable?.telefono ? ` · ${ev.editable.telefono}` : number ? ` · ${number}` : ''}
           </Typography>
         </Box>
-        {ev && (
+        {estado === 'cargando' && abriendo && (
+          <Box aria-hidden sx={{ display: { xs: 'none', md: 'flex' }, alignItems: 'center', gap: 1, ...esqueletoSx }}>
+            {[104, 76, 112, 28, 112, 92].map((ancho, i) => <Skeleton key={i} variant="rounded" width={ancho} height={30} sx={{ borderRadius: '10px' }} />)}
+          </Box>
+        )}
+        {ev && estado !== 'cargando' && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
             <Tooltip {...tooltipProps} title={ev.info?.origen === 'llm'
               ? 'La IA redactó los textos a partir de hechos comprobados en la conversación. Etiquetas, horas y marcas salen de esos hechos, no de la IA.'
@@ -656,7 +781,7 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
 
       {/* Cuerpo */}
       <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
-        {estado === 'cargando' && <Box sx={{ m: 'auto', p: 6 }}><CircularProgress sx={{ color: 'var(--accent)' }} /></Box>}
+        {estado === 'cargando' && (abriendo ? <EditorEsqueleto /> : <InicioEsqueleto />)}
 
         {!ev && estado !== 'cargando' && (
           <Box sx={{ m: 'auto', p: 4, maxWidth: 520, display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'center', textAlign: 'center' }}>
@@ -683,7 +808,7 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
           </Box>
         )}
 
-        {ev && form && (
+        {ev && form && estado !== 'cargando' && (
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '490px 1fr' }, width: '100%', minHeight: 0, overflow: { xs: 'auto', lg: 'hidden' } }}>
             {/* Editor */}
             <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 1.75, overflowY: { lg: 'auto' }, borderRight: { lg: '1px solid var(--border)' },
@@ -969,7 +1094,10 @@ export default function EvaluacionDialog({ open, onClose, companyId, companyName
               <Box ref={setMarco} sx={{ flex: 1, minHeight: 0, overflow: 'auto', p: 2, display: 'flex', justifyContent: 'center', alignItems: 'flex-start',
                 position: 'relative', opacity: estado === 'guardando' ? 0.6 : 1, transition: 'opacity .2s' }}>
                 {/* Aislada del resto de la app: sin allow-same-origin, sus scripts no ven la sesión. */}
-                {modoVista === 'escritorio' ? (
+                {!vista ? (
+                  // Recién generada o abierta: la hoja todavía no llega.
+                  errorVista ? null : <Box role="status" aria-busy="true" aria-label="Cargando la vista previa" sx={{ width: '100%', display: 'flex', justifyContent: 'center' }}><HojaEsqueleto /></Box>
+                ) : modoVista === 'escritorio' ? (
                   <Box sx={{ width: ANCHO_HOJA * escala, height: ALTO_HOJA * escala, flexShrink: 0, borderRadius: '10px', overflow: 'hidden',
                     border: '1px solid var(--border)', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}>
                     <iframe title="Vista previa de la evaluación" srcDoc={vistaHtml} sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"

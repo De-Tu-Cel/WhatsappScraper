@@ -9,6 +9,8 @@ Resultado de cada comparación (contadores por colección en mongo._counters):
   escritura_dif           distinto: queda en mongo._shadow_diffs como «escritura:<método>»
   escritura_no_soportada  el update usa algo que el motor no hace (seguiría yendo a Mongo)
   escritura_carrera       no se pudo saber qué documento tocó Mongo (otro proceso escribió a la vez)
+  escritura_sin_candidatos el filtro no encontró ningún documento y Mongo no cambió nada: no hay qué
+                          comparar (un lease que aún no vence, el de otro proceso…). No cuenta como ok.
 """
 import os
 
@@ -54,9 +56,19 @@ def comparar(metodo: str, filtro, update, antes: dict, despues: dict, *, upserte
             if llave in despues and _igual(esperado, despues[llave], sin_orden=True):
                 return "escritura_ok", ""
             return "escritura_dif", f"upsert {upserted!r}: mongo={despues.get(llave)!r} motor={esperado!r}"
+        if not antes:
+            # Ningún documento cumplía el filtro (en prod, 2026-10-22: los leases de envío y calentamiento
+            # se intentan tomar cada 3 s y casi siempre siguen vigentes): nada que comparar.
+            if not modificados:
+                return "escritura_sin_candidatos", ""
+            return "escritura_carrera", "Mongo tocó un documento que la consulta previa no vio"
         cambiaron = [k for k in antes if k in despues and not _igual(antes[k], despues[k])]
+        if modificados is not None and modificados != len(cambiaron):
+            # Mongo dice cuántos modificó: si cambiaron otros (o más), los cambió otro proceso a la vez
+            # (2026-10-22: un $setOnInsert sin efecto mientras otro proceso renovaba el lease).
+            return "escritura_carrera", f"Mongo modificó {modificados} y cambiaron {len(cambiaron)}"
         if metodo in ("update_one", "find_one_and_update"):
-            if modificados == 0 and not cambiaron:
+            if modificados == 0:
                 # No-op ($set del mismo valor, $addToSet de uno que ya estaba…): el motor tampoco debe cambiarlo.
                 if any(_igual(actualizar.aplicar(d, update), d) for d in antes.values()):
                     return "escritura_ok", ""

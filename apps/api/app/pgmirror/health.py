@@ -94,9 +94,20 @@ def wait_hours() -> float:
     return _hours("PGMIRROR_WAIT_HOURS", 24)
 
 
-def active_collections(raw_db) -> dict:
+def active_collections(raw_db, store=None) -> dict:
     """{colección: modo} de las colecciones que existen en Mongo y no están en modo mongo."""
     modes = {}
+    if config.postgres_only():
+        if store is None:
+            from app.pgmirror.routing import get_runtime
+            runtime = get_runtime(raw_db)
+            if runtime is None:
+                raise RuntimeError('Postgres-only runtime unavailable')
+            store = runtime.store
+        names = {row[0] for row in store.query(
+            "SELECT tablename FROM pg_tables WHERE schemaname='mongo' AND left(tablename,1)<>'_' ")}
+        names.update(config._parse_modes(os.getenv('DB_MODES', '')))
+        return {name: config.collection_mode(name) for name in names if name != 'archivos'}
     for name in raw_db.list_collection_names():
         mode = config.collection_mode(name)
         if mode != "mongo":
@@ -225,18 +236,19 @@ class Monitor:
     def tick(self):
         store = self._rt.store
         ensure_meta(store)
-        active = active_collections(self._raw_db)
+        active = active_collections(self._raw_db, store)
         self._record_modes(store, active)
         self._record_counters(store)
         self._record_status(store, active)
         primarias = {name for name, mode in active.items() if mode == "primary"}
-        if primarias:
+        if primarias and not config.postgres_only():
             n = drain_outbox(self._raw_db, store, primarias)
             if n:
                 self._rt.bump("_bandeja", "copiados_tarde", n)
-        self._maybe_reconcile(store, active)
+        if not config.postgres_only():
+            self._maybe_reconcile(store, active)
         self._ensure_sort_indexes(store, active)
-        if archivos.modo() != "mongo":
+        if archivos.modo() != "mongo" and not config.postgres_only():
             a_pg, a_mongo = archivos.sincronizar(self._raw_db, store)
             if a_pg or a_mongo:
                 log.info("pgmirror files: %d copied to Postgres, %d copied to GridFS", a_pg, a_mongo)

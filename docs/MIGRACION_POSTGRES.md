@@ -292,3 +292,47 @@ python -m pytest tests/test_pgmirror.py tests/test_pgmirror_vs_mongo.py tests/te
 - [ ] ¿Dónde vive Postgres? (mismo servidor en Coolify vs. administrado: Supabase/Neon/RDS). Con ~30 MB de datos, un PostgreSQL 17 en el mismo Coolify sobra; lo importante es activarle respaldos programados.
 - [x] Reglas para fusionar duplicados: hoy no hay duplicados (diagnóstico del 2026-10-19). Se vuelve a correr el diagnóstico justo antes de crear cada `UNIQUE`.
 - [x] Destino de los archivos de GridFS: son 5 archivos (0.01 MB) → tabla con `bytea`, sin S3.
+
+## 8. Retiro de la dependencia de Mongo
+
+`PGMIRROR_POSTGRES_ONLY=1` es un interruptor explícito, apagado por defecto. Exige
+`POSTGRES_URL`, todas las colecciones configuradas en `primary` y una bandeja
+`mongo._outbox` vacía antes de arrancar. Las colecciones nuevas (incluidas
+`stickers` y `evidence`) se enrutan a Postgres sin depender de que existan en Mongo.
+
+En este modo no se copian documentos ni archivos a Mongo, no se concilia con él
+y la vigilancia descubre las tablas desde Postgres. Las operaciones que todavía
+necesiten compatibilidad fallan explícitamente: no pueden leer datos atrasados ni
+escribir solo en Mongo. `pg_mirror.py check` y `status` consultan únicamente Postgres;
+`reconcile` se rechaza. Los índices únicos se crean/verifican antes de escribir.
+
+Antes de activarlo en producción: comprobar igualdad, bandeja vacía, respaldo
+Postgres restaurable y los flujos reales de la app. Mantener el contenedor Mongo
+encendido permite conservar su última copia; **deja de actualizarse** al activar
+el interruptor. No basta con quitar el interruptor para volver a Mongo como base
+principal: primero hay que sincronizarlo desde Postgres y verificarlo. Tampoco
+se permite un `reconcile --fix` de Mongo a Postgres.
+
+Prueba reproducible, con contenedores nuevos y desechables:
+
+```powershell
+python migration/verify_fault_recovery.py
+```
+
+Detiene/reabre los motores de prueba, comprueba recuperación de pendientes desde
+otro proceso y prueba arranque, CRUD, archivos, `stickers`, `evidence`, consultas
+de prospectos y vigilancia con Mongo apagado. No usa las bases locales existentes
+ni servicios de WhatsApp. Guarda el resultado en `backups/migration-real-fault-drill.json`.
+
+Para revisar la interfaz local:
+
+```powershell
+docker compose -f migration/docker-compose.yml up -d
+python migration/local_review_api.py
+```
+
+La API escucha en `127.0.0.1:8000`, usa exclusivamente `ui_review`, ignora los `.env`
+del repositorio y no arranca trabajadores de mensajería. Genera credenciales de
+prueba nuevas al iniciar. No conectar la antigua API local con configuración
+Mongo a producción. El catálogo de prospectos es compartido por diseño; las colas,
+trabajos de scraping y campañas programadas se aíslan por propietario.

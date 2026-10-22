@@ -60,6 +60,7 @@ jobs:
       TEST_MONGO_URL: mongodb://127.0.0.1:27029
       # Sin esto, si un servicio no levanta, las pruebas contra los motores reales se saltarían en silencio.
       REQUIRE_REAL_ENGINES: '1'
+      RUN_MONGO_SEND_TESTS: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

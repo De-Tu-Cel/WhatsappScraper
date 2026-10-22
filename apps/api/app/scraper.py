@@ -1989,7 +1989,8 @@ class WebsiteScraper:
     _ADDRESS_TRAILING_JUNK_RE = re.compile(
         r"\s*(?:Horarios?\s+de\s+atenci[oó]n|Horario|Ver\s+en\s+Google\s+Maps|"
         r"Google\s+Maps|Google\s+Sites|Denunciar\s+abuso|Citas?\s+e?\s*informes|"
-        r"L[uú]nes\s+a\s+|Tel[eé]fono\s*[:\-]|WhatsApp\s*[:\-]|→).*$",
+        r"L[uú]nes\s+a\s+|Tel[eé]fono\s*[:\-]|WhatsApp\s*[:\-]|"
+        r"Correo(?:\s+electr[oó]nico)?\s*[:\-]|E-?mail\s*[:\-]|→).*$",
         re.IGNORECASE | re.DOTALL,
     )
 

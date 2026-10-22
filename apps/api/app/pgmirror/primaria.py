@@ -30,7 +30,7 @@ from pymongo import DeleteOne, ReplaceOne, ReturnDocument
 from pymongo.errors import BulkWriteError, DuplicateKeyError, OperationFailure, WriteError
 from pymongo.results import DeleteResult, InsertManyResult, InsertOneResult, UpdateResult
 
-from app.pgmirror import actualizar, codec, sqlfilter
+from app.pgmirror import actualizar, codec, config, sqlfilter
 from app.pgmirror.store import _LOCK_NAMESPACE, UNICOS, _row_lock
 
 log = logging.getLogger(__name__)
@@ -189,6 +189,8 @@ class Escritor:
         """La copia a Mongo de lo que cambió, ANTES del COMMIT y con el candado por documento: (id, doc) o
         (id, None) si se borró. Si Mongo no responde, a la bandeja (la escritura no falla por eso)."""
         global _mongo_caido_hasta
+        if config.postgres_only():
+            return
         if not cambios:
             return
         _candados(conn, self._col, [codec.id_key(i)[0] for i, _ in cambios])

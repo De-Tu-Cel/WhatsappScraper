@@ -757,8 +757,9 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
             from app.contact_permissions import recipient_key
             import uuid
             actor = get_user_by_token(x_user_token) or {}
+            _ww_operation_key = operation_key('manual', str(actor.get('id') or actor.get('_id')), req.request_id)
             _ww_result = dispatch_once(db,
-                operation_key('manual', str(actor.get('id') or actor.get('_id')), req.request_id),
+                _ww_operation_key,
                 _send_manual_wwebjs, message_body=req.message,
                 fingerprint=operation_key(req.model_dump(exclude={'request_id'})),
                 authorize=dispatch_guard(
@@ -881,6 +882,11 @@ def api_send_message(req: SendMessageRequest, x_user_token: Optional[str] = Head
             if sender:
                 log_doc["sent_by_username"] = sender.get("username", "")
                 log_doc["sent_by_name"]     = sender.get("display_name", "") or sender.get("username", "")
+        if _platform == 'wwebjs':
+            # A replay returns the persisted provider result. Give its history
+            # row the same identity too, even when WhatsApp returned no id.
+            log_doc['_id'] = ObjectId(_ww_operation_key[:24])
+            log_doc['send_operation'] = _ww_operation_key
         log_id = db.insert_message_log(log_doc)
         # Both slots were already claimed atomically above — give them back only
         # if the send they were reserved for ultimately failed (matches
@@ -6159,15 +6165,23 @@ def api_companies_with_numbers(x_user_token: Optional[str] = Header(None)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _scheduled_owner_filter(user):
+    owner_id = str(user.get('id') or user.get('_id') or '')
+    clauses = [{'user_id': owner_id}] if owner_id else []
+    if user.get('username'):
+        clauses.append({'user_id': {'$in': [None, '']},
+                        'created_by_username': user['username']})
+    return {'$or': clauses} if clauses else {'_id': {'$in': []}}
+
+
 @router.get("/admin/scheduled-sends")
 def api_list_scheduled_sends(x_user_token: Optional[str] = Header(None)):
     """List scheduled send campaigns belonging to the current user."""
     user = _require_user(x_user_token)
     try:
         db = MongoDBManager()
-        username = user.get("username", "")
         docs = list(db.db.scheduled_sends.find(
-            {"created_by_username": username},
+            _scheduled_owner_filter(user),
             sort=[("scheduled_at", -1)],
         ))
         return serialize(docs)
@@ -6247,11 +6261,11 @@ def api_create_scheduled_send(body: dict, x_user_token: Optional[str] = Header(N
 @router.get("/admin/scheduled-sends/{job_id}")
 def api_get_scheduled_send(job_id: str, x_user_token: Optional[str] = Header(None)):
     """Get a single scheduled send job (used for live progress polling)."""
-    _require_user(x_user_token)
+    user = _require_user(x_user_token)
     try:
         from bson import ObjectId
         db = MongoDBManager()
-        doc = db.db.scheduled_sends.find_one({"_id": ObjectId(job_id)})
+        doc = db.db.scheduled_sends.find_one({"_id": ObjectId(job_id), **_scheduled_owner_filter(user)})
         if not doc:
             raise HTTPException(status_code=404, detail="Envio programado no encontrado")
         return serialize(doc)
@@ -6264,13 +6278,14 @@ def api_get_scheduled_send(job_id: str, x_user_token: Optional[str] = Header(Non
 @router.put("/admin/scheduled-sends/{job_id}")
 def api_update_scheduled_send(job_id: str, body: dict, x_user_token: Optional[str] = Header(None)):
     """Update a pending scheduled send (name, message, scheduled_at, selected_numbers)."""
-    _require_user(x_user_token)
+    user = _require_user(x_user_token)
     try:
         from bson import ObjectId
         from datetime import datetime, timezone
         db = MongoDBManager()
 
-        doc = db.db.scheduled_sends.find_one({"_id": ObjectId(job_id)}, {"status": 1})
+        owned = {"_id": ObjectId(job_id), **_scheduled_owner_filter(user)}
+        doc = db.db.scheduled_sends.find_one(owned, {"status": 1})
         if not doc:
             raise HTTPException(status_code=404, detail="Envio programado no encontrado")
         if doc.get("status") != "pending":
@@ -6307,10 +6322,10 @@ def api_update_scheduled_send(job_id: str, body: dict, x_user_token: Optional[st
             raise HTTPException(status_code=400, detail="No hay campos para actualizar")
 
         db.db.scheduled_sends.update_one(
-            {"_id": ObjectId(job_id), "status": "pending"},
+            {**owned, "status": "pending"},
             {"$set": update},
         )
-        updated = db.db.scheduled_sends.find_one({"_id": ObjectId(job_id)})
+        updated = db.db.scheduled_sends.find_one(owned)
         return serialize(updated)
     except HTTPException:
         raise
@@ -6321,25 +6336,26 @@ def api_update_scheduled_send(job_id: str, body: dict, x_user_token: Optional[st
 @router.delete("/admin/scheduled-sends/{job_id}")
 def api_cancel_scheduled_send(job_id: str, x_user_token: Optional[str] = Header(None)):
     """Cancel pending/running sends; permanently delete finished ones."""
-    _require_user(x_user_token)
+    user = _require_user(x_user_token)
     try:
         from bson import ObjectId
         from datetime import datetime
         db = MongoDBManager()
 
-        doc = db.db.scheduled_sends.find_one({"_id": ObjectId(job_id)}, {"status": 1})
+        owned = {"_id": ObjectId(job_id), **_scheduled_owner_filter(user)}
+        doc = db.db.scheduled_sends.find_one(owned, {"status": 1})
         if not doc:
             raise HTTPException(status_code=404, detail="Envio programado no encontrado")
 
         status = doc.get("status", "")
         if status in ("pending", "running"):
             db.db.scheduled_sends.update_one(
-                {"_id": ObjectId(job_id)},
+                owned,
                 {"$set": {"status": "cancelled", "cancelled_at": datetime.now()}},
             )
             return {"ok": True, "action": "cancelled"}
         else:
-            db.db.scheduled_sends.delete_one({"_id": ObjectId(job_id)})
+            db.db.scheduled_sends.delete_one(owned)
             return {"ok": True, "action": "deleted"}
     except HTTPException:
         raise

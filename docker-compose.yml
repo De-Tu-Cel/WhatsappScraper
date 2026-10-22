@@ -52,6 +52,7 @@ services:
       # Fase de escrituras (vacías = apagadas): 1 = sombra de escrituras; mongo|shadow|postgres = aggregate().
       - PGMIRROR_WRITE_SHADOW=${PGMIRROR_WRITE_SHADOW:-}
       - PGMIRROR_AGGREGATE=${PGMIRROR_AGGREGATE:-}
+      - PGMIRROR_POSTGRES_ONLY=${PGMIRROR_POSTGRES_ONLY:-}
     expose:
       - "8000"
     restart: unless-stopped

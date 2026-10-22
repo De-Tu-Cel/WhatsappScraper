@@ -35,10 +35,12 @@ from app.pgmirror.store import SORT_INDEXES, UNICOS, Store, sort_index_name, uni
 
 def _connect():
     from pymongo import MongoClient
+    from app.pgmirror import config
     mongo_uri, pg_url = os.environ.get("MONGODB_URI"), os.environ.get("POSTGRES_URL")
-    if not mongo_uri or not pg_url:
+    if (not mongo_uri and not config.postgres_only()) or not pg_url:
         sys.exit("Faltan MONGODB_URI y/o POSTGRES_URL en el entorno.")
-    client = MongoClient(mongo_uri, serverSelectionTimeoutMS=10000, appname="pg-mirror-readonly")
+    client = MongoClient(mongo_uri or 'mongodb://127.0.0.1:1', connect=False,
+                         serverSelectionTimeoutMS=10000, appname="pg-mirror-readonly")
     raw_db = client[os.environ.get("DATABASE_NAME", "commercial")]
     return raw_db, Store(pg_url, statement_timeout_ms=600000)
 
@@ -258,6 +260,18 @@ def main(argv=None):
 
     raw_db, store = _connect()
     try:
+        from app.pgmirror import config
+        if config.postgres_only() and args.cmd in {'check', 'status', 'reconcile'}:
+            if args.cmd == 'reconcile':
+                sys.exit('Mongo reconciliation is disabled in Postgres-only mode.')
+            from app.pgmirror import health, sqlfilter
+            health.ensure_meta(store)
+            for name in sorted(health.active_collections(raw_db, store)):
+                store.ensure_table(name)
+                print(f'{name:34} primary postgres={store.count(name, sqlfilter.where({}))}')
+            pending = store.query('SELECT count(*) FROM mongo._outbox')[0][0]
+            print(f'Postgres-only: Mongo not accessed; pending legacy copies={pending}')
+            return int(bool(pending))
         if args.cmd == "check":
             return _check(raw_db, store)
         if args.cmd == "revisadas":

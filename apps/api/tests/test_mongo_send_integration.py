@@ -185,8 +185,8 @@ def test_receipt_persistence_error_keeps_authoritative_provider_result(mongo):
         client.close()
 
 
-@pytest.fixture
-def api(mongo, monkeypatch):
+@pytest.fixture(params=['mongo', 'primary', 'postgres_only'])
+def api(mongo, monkeypatch, request):
     """Actual API, actual Mongo, HTTP-only fake provider; no app.main/workers."""
     import json
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -198,6 +198,25 @@ def api(mongo, monkeypatch):
     _, wrapped = mongo
     manager = database.MongoDBManager.__new__(database.MongoDBManager)
     manager.db = wrapped.db
+    pg_runtime = None
+    pg_tables = ('instances', 'blacklist', 'contact_permissions', 'companies', 'contacts',
+                 'delivery_receipts', 'jid_map', 'message_logs', 'instance_daily_sends',
+                 'instance_new_contacts_today', 'fake_deliveries', 'ai_followup_sessions',
+                 'conversation_ai_prefs')
+    if request.param != 'mongo':
+        from app import pgmirror
+        from app.pgmirror import routing
+        monkeypatch.setenv('POSTGRES_URL', os.getenv('TEST_POSTGRES_URL',
+            'postgresql://app:app_local_only@127.0.0.1:55432/pgmirror_test'))
+        monkeypatch.setenv('DB_MODES', ','.join(name + '=primary' for name in pg_tables))
+        if request.param == 'postgres_only':
+            monkeypatch.setenv('PGMIRROR_POSTGRES_ONLY', '1')
+        pg_runtime = routing._Runtime(wrapped.db, monitor=False)
+        monkeypatch.setattr(routing, '_runtime', pg_runtime)
+        for name in pg_tables:
+            pg_runtime.store.ensure_table(name)
+            assert pg_runtime.store.ensure_unique_indexes(name)
+        manager.db = pgmirror.wrap_database(wrapped.db)
     class Provider(BaseHTTPRequestHandler):
         def log_message(self, *args): pass
         def do_GET(self):
@@ -205,9 +224,9 @@ def api(mongo, monkeypatch):
             self.wfile.write(b'{"status":"connected"}')
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
-            wrapped.db.fake_deliveries.insert_one({'path': self.path, 'payload': payload})
+            manager.db.fake_deliveries.insert_one({'path': self.path, 'payload': payload})
             self.send_response(200); self.end_headers()
-            self.wfile.write(b'{"success":true,"messageId":"mock-confirmed","typing":{"started":true}}')
+            self.wfile.write(b'{"success":true,"messageId":null,"typing":{"started":true}}')
     server = ThreadingHTTPServer(('127.0.0.1', 0), Provider)
     thread = Thread(target=server.serve_forever, daemon=True); thread.start()
     url = f'http://127.0.0.1:{server.server_port}'
@@ -216,11 +235,60 @@ def api(mongo, monkeypatch):
     for module in (database, pipeline, routes): monkeypatch.setattr(module, 'MongoDBManager', lambda: manager)
     monkeypatch.setattr(auth, 'get_user_by_token', lambda token: {'id': 'qa-user', 'username': 'qa', 'role': token} if token in ('admin', 'agent') else None)
     for line in ('qa-a', 'qa-b'):
-        wrapped.db.instances.insert_one({'name': line, 'provider': 'wwebjs', 'number': '525500000099', 'warmup_mode': True})
+        manager.db.instances.insert_one({'name': line, 'provider': 'wwebjs', 'number': '525500000099', 'warmup_mode': True})
     app = FastAPI(); app.include_router(routes.router, prefix='/api')
     with TestClient(app) as client:
         yield client, manager
     server.shutdown(); server.server_close(); thread.join(3)
+    if pg_runtime:
+        from psycopg import sql
+        for name in pg_tables:
+            pg_runtime.store.query(sql.SQL('DROP TABLE {}').format(sql.Identifier('mongo', name)))
+        pg_runtime.store.close()
+
+
+def test_incoming_webhook_persists_and_schedules_analysis_and_followup(api, monkeypatch):
+    from bson import ObjectId
+    from threading import Event
+    from app import whatsapp_wwebjs, llm, classifier, followup_queue
+    from unittest.mock import MagicMock
+    client, manager = api
+    number = '525500000001'
+    cid = str(manager.db.companies.insert_one({'name': 'Synthetic external business', 'domain': 'qa.example'}).inserted_id)
+    manager.db.contacts.insert_one({'company_id': cid, 'type': 'whatsapp', 'value': '+' + number})
+    manager.db.conversation_ai_prefs.insert_one({'company_id': cid, 'ai_enabled': True})
+    monkeypatch.setattr(whatsapp_wwebjs, 'API_SECRET', 'isolated-webhook-secret')
+    monkeypatch.setattr(whatsapp_wwebjs, 'mark_read', lambda *args: None)
+    monkeypatch.setattr(llm, 'active_provider', lambda: 'anthropic')
+    classified = Event()
+
+    def classify(log_id, company_id, body, received_at):
+        manager.db.message_logs.update_one({'_id': ObjectId(log_id)}, {'$set': {
+            'analysis': {'category': 'humano', 'synthetic_test': True}, 'analysis_status': 'done'}})
+        classified.set()
+
+    monkeypatch.setattr(classifier, 'classify_and_save', classify)
+    enqueue = MagicMock()
+    monkeypatch.setattr(followup_queue, 'enqueue', enqueue)
+    payload = {'event': 'messages.received', 'sessionId': 'qa-a', 'data': {
+        'number': number, 'from': number + '@c.us', 'fromMe': False,
+        'body': 'Synthetic external response', 'messageId': 'qa-inbound-one', 'type': 'chat'}}
+    response = client.post('/api/wwebjs/webhook', headers={'x-api-secret': 'isolated-webhook-secret'}, json=payload)
+    assert response.status_code == 200, response.text
+    assert response.json()['action'] == 'processed'
+    assert classified.wait(5)
+    row = manager.db.message_logs.find_one({'message_id': 'qa-inbound-one'})
+    assert row['company_id'] == cid and row['direction'] == 'inbound'
+    assert row['analysis']['category'] == 'humano'
+    assert row['received_on_instance'] == 'qa-a'
+    enqueue.assert_called_once_with(number, cid, 'Synthetic external response', str(row['_id']))
+
+    # Own registered lines stay excluded, as in the real gely-wa test.
+    payload['data'].update(number='525500000099', messageId='qa-internal')
+    payload['data']['from'] = '525500000099@c.us'
+    response = client.post('/api/wwebjs/webhook', headers={'x-api-secret': 'isolated-webhook-secret'}, json=payload)
+    assert response.json()['action'] == 'ignored_internal'
+    assert manager.db.message_logs.count_documents({'message_id': 'qa-internal'}) == 0
 
 
 def test_real_api_permission_send_replay_and_cross_line_opt_out(api):
@@ -228,16 +296,24 @@ def test_real_api_permission_send_replay_and_cross_line_opt_out(api):
     headers = {'x-user-token': 'admin'}
     body = {'request_id': 'one-operation', 'company_id': '', 'to_number': '525500000001',
             'message': 'Synthetic QA only', 'instance': 'qa-a'}
+    # Current product policy permits first contact, but a persisted opt-out
+    # must deny it until an administrator records renewed consent.
+    from app.contact_permissions import record_inbound_permission
+    record_inbound_permission(manager, body['to_number'], 'No me escribas')
     denied = client.post('/api/send-message', headers=headers, json=body)
     assert denied.status_code == 403, denied.text
     permission = {'number': body['to_number'], 'source': 'recorded_request', 'evidence': 'Synthetic evidence in isolated test'}
     assert client.post('/api/contacts/consent', headers={'x-user-token': 'agent'}, json=permission).status_code == 403
     assert client.post('/api/contacts/consent', headers=headers, json=permission).status_code == 200
+    log_ids = []
     for _ in range(2):
         response = client.post('/api/send-message', headers=headers, json=body)
         assert response.status_code == 200, response.text
         assert response.json()['status'] == 'sent'
+        log_ids.append(response.json()['log_id'])
     assert manager.db.fake_deliveries.count_documents({}) == 1
+    assert manager.db.message_logs.count_documents({'direction': 'outbound'}) == 1
+    assert log_ids[0] == log_ids[1]
     manager.save_evolution_log('inbound', 'unknown', '+5215500000001', 'No me escribas', message_id='mock-opt-out')
     for line in ('qa-a', 'qa-b'):
         response = client.post('/api/send-message', headers=headers,

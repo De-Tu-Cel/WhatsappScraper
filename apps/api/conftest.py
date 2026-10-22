@@ -111,6 +111,7 @@ def no_real_postgres_in_tests(monkeypatch):
     migración, ningún test los hereda. tests/test_pgmirror.py pone su propio
     Postgres desechable (TEST_POSTGRES_URL) dentro de cada prueba."""
     monkeypatch.delenv("POSTGRES_URL", raising=False)
+    monkeypatch.delenv("PGMIRROR_POSTGRES_ONLY", raising=False)
     for key in [k for k in os.environ if k.startswith(("DB_MODE_", "PGMIRROR_WAIT", "PGMIRROR_RECONCILE")) or k == "DB_MODES"]:
         monkeypatch.delenv(key, raising=False)
     if _PGMIRROR_SUITE_MODE:

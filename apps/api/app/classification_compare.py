@@ -611,7 +611,7 @@ def _contacted_numbers(db, company_id: str) -> list:
     fallaron: a ese número no le llegó nada)."""
     from app.classifier import NOT_FAILED
     nums = set()
-    for n in db.db.message_logs.distinct("to_number", {"company_id": company_id, "direction": "outbound", **NOT_FAILED}):
+    for n in db.db.message_logs.distinct("to_number", {"company_id": company_id, "direction": "outbound", "to_number": {"$exists": True, "$ne": None}, **NOT_FAILED}):
         d = "".join(filter(str.isdigit, n or ""))[-10:]
         if len(d) == 10:
             nums.add(d)

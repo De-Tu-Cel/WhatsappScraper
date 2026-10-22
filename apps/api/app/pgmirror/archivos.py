@@ -7,7 +7,9 @@ copiar es solo «el que falte de un lado, al otro» por _id.
   mongo     — GridFS como hoy (sin POSTGRES_URL, igual).
   dual / shadow — se guarda en GridFS y se copia a Postgres; se lee de GridFS.
   postgres  — se guarda en GridFS y se copia a Postgres; se lee de Postgres (si no está, de GridFS).
-  primary   — se guarda en Postgres y se copia a GridFS; se lee de Postgres (si no está, de GridFS).
+  primary   — se guarda y lee en Postgres; un error de lectura no usa la copia atrasada de GridFS.
+
+Con PGMIRROR_POSTGRES_ONLY=1 tampoco se copia a GridFS.
 
 Si la copia falla, la escritura no falla: el vigilante (health.py) copia cada minuto lo que falte de
 un lado o del otro (sincronizar).
@@ -88,6 +90,8 @@ class ArchivosRuteados:
         self._gridfs, self._modo, self._rt = GridFS(raw_db), modo_, rt
 
     def __getattr__(self, attr):
+        if config.postgres_only():
+            raise NotImplementedError(f'GridFS operation {attr} is not available in Postgres-only mode')
         return getattr(self._gridfs, attr)
 
     def put(self, data, **kwargs):
@@ -97,6 +101,8 @@ class ArchivosRuteados:
                   "metadata": kwargs.get("metadata")}
         if self._modo == "primary":
             guardar(self._rt.store, _id, datos, **campos)
+            if config.postgres_only():
+                return _id
             try:
                 self._gridfs.put(datos, _id=_id, **kwargs)
             except Exception:
@@ -112,6 +118,11 @@ class ArchivosRuteados:
         return _id
 
     def get(self, file_id):
+        if self._modo == "primary":
+            archivo = leer(self._rt.store, file_id)
+            if archivo is None:
+                raise NoFile(f"no file in Postgres with _id {file_id!r}")
+            return archivo
         if self._modo in ("postgres", "primary"):
             try:
                 archivo = leer(self._rt.store, file_id)

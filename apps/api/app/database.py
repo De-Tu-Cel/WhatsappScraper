@@ -347,6 +347,10 @@ def _norm_phone(n) -> str:
 def _get_client() -> MongoClient:
     global _mongo_client
     if _mongo_client is None:
+        from app.pgmirror import config as pg_config
+        primary_startup = all(pg_config.collection_mode(name) == 'primary' for name in (
+            'users', 'companies', 'message_logs', 'warmup_sessions', 'contacts',
+            'jid_map', 'phone_verification_attempts', 'search_ideas', 'scrape_jobs'))
         _mongo_client = MongoClient(
             MONGODB_URI,
             serverSelectionTimeoutMS=5000,
@@ -358,8 +362,14 @@ def _get_client() -> MongoClient:
             # Next.js (backendFetch) sin dejar rastro en el log del backend.
             socketTimeoutMS=8000,
             maxPoolSize=50,
-            minPoolSize=2,
+            minPoolSize=0 if primary_startup else 2,
+            connect=not primary_startup,
         )
+        if primary_startup:
+            # Mongo is a compatibility copy. Reopening the manager must not
+            # require that copy to be online before accessing primary data.
+            # PG unique constraints are verified by the primary writer/monitor.
+            return _mongo_client
         _mongo_client.admin.command("ping")
         db = _mongo_client[DATABASE_NAME]
         try:
@@ -592,7 +602,15 @@ class MongoDBManager:
         # Naive-pero-UTC: is_business_hours() asume UTC cuando el datetime no
         # tiene tzinfo. datetime.now() (hora local del servidor) rompía eso.
         log_data["created_at"] = log_data.get("created_at", datetime.now(timezone.utc).replace(tzinfo=None))
-        result = self.db.message_logs.insert_one(log_data)
+        try:
+            result = self.db.message_logs.insert_one(log_data)
+        except DuplicateKeyError:
+            operation = log_data.get('send_operation')
+            if operation and log_data.get('_id'):
+                existing = self.db.message_logs.find_one({'_id': log_data['_id'], 'send_operation': operation})
+                if existing:
+                    return str(existing['_id'])
+            raise
         return str(result.inserted_id)
 
     def insert_evidence(self, evidence_data):
@@ -788,7 +806,10 @@ class MongoDBManager:
         return result
 
     def get_distinct_values(self, field):
-        return sorted([v for v in self.db.companies.distinct(field) if v])
+        # Missing/null values are discarded by this API anyway. Exclude them
+        # in the query so distinct has no Mongo index-plan ambiguity and can
+        # be answered entirely by Postgres.
+        return sorted([v for v in self.db.companies.distinct(field, {field: {"$exists": True, "$ne": None}}) if v])
 
     def list_companies(self, page=1, page_size=10, search=None, industry=None, city=None, has_whatsapp=None, contacted=None):
         from bson import ObjectId
@@ -826,7 +847,7 @@ class MongoDBManager:
             query["has_whatsapp"] = has_whatsapp
 
         # Fetch the full contacted ID set once (used for filter + global stats)
-        all_contacted_ids_str = set(self.db.message_logs.distinct("company_id", {"direction": "outbound", "status": {"$in": ["sent", "delivered", "read"]}}))
+        all_contacted_ids_str = set(self.db.message_logs.distinct("company_id", {"direction": "outbound", "company_id": {"$exists": True, "$ne": None}, "status": {"$in": ["sent", "delivered", "read"]}}))
         _contacted_oids_all = [ObjectId(cid) for cid in all_contacted_ids_str if ObjectId.is_valid(cid)]
 
         # Snapshot of the query BEFORE the contacted filter narrows it — needed

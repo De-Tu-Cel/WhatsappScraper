@@ -21,7 +21,7 @@ from pymongo.errors import BulkWriteError, DuplicateKeyError, OperationFailure
 from pymongo.results import DeleteResult, InsertManyResult, InsertOneResult, UpdateResult
 
 from app import pgmirror
-from app.pgmirror import codec, config, health, primaria, routing
+from app.pgmirror import codec, config, health, primaria, routing, sqlfilter
 from app.pgmirror import store as store_mod
 from app.pgmirror.reconcile import reconcile
 
@@ -380,6 +380,84 @@ def test_outbox_recovers_a_failed_copy(entorno, monkeypatch):
     assert health.drain_outbox(raw_db, store, {coleccion.name}, mayores_a_s=0) == 2
     assert copia.find_one({"_id": 1})["v"] == 2 and copia.find_one({"_id": 2})["v"] == 1
     assert not store.query("SELECT 1 FROM mongo._outbox WHERE collection = %s", (coleccion.name,))
+
+
+def test_primary_read_failure_never_returns_stale_mongo(entorno, monkeypatch):
+    import psycopg
+    _db, nueva = entorno
+    coleccion, copia, _ref = nueva()
+    coleccion.insert_one({"_id": 1, "permission": "revoked"})
+    copia.update_one({"_id": 1}, {"$set": {"permission": "granted"}})
+
+    def unavailable(*args, **kwargs):
+        raise psycopg.OperationalError("isolated PostgreSQL outage")
+
+    monkeypatch.setattr(coleccion._rt.store, "query_docs", unavailable)
+    with pytest.raises(psycopg.OperationalError):
+        coleccion.find_one({"_id": 1})
+    with pytest.raises(psycopg.OperationalError):
+        list(coleccion.find({}))
+
+
+def test_company_metadata_needs_no_mongo_distinct_fallback(entorno):
+    from types import SimpleNamespace
+    from app.database import MongoDBManager
+    _db, nueva = entorno
+    companies, _copy, _ref = nueva()
+    companies.insert_many([{'city': 'Bogota'}, {'city': 'Monterrey'}, {}, {'city': None}, {'city': ''}])
+    manager = MongoDBManager.__new__(MongoDBManager)
+    manager.db = SimpleNamespace(companies=companies)
+    assert manager.get_distinct_values('city') == ['Bogota', 'Monterrey']
+    assert not companies._rt.stats[companies.name].get('pg_fallback_distinct')
+
+
+def test_postgres_only_never_uses_raw_operations_or_copies(entorno, monkeypatch):
+    from unittest.mock import MagicMock
+    _db, nueva = entorno
+    col, _copy, _ref = nueva()
+    monkeypatch.setenv('PGMIRROR_POSTGRES_ONLY', '1')
+    raw = MagicMock()
+    raw.name = col._name
+    col._raw = raw
+    col.insert_one({'_id': 'one', 'n': 1})
+    col.update_one({'_id': 'one'}, {'$inc': {'n': 1}})
+    assert col.find_one({'_id': 'one'})['n'] == 2
+    assert col.count_documents({}) == 1
+    with pytest.raises(NotImplementedError):
+        col.update_one({'_id': 'one'}, {'$mul': {'n': 2}})
+    with pytest.raises(NotImplementedError):
+        col.find({}, hint='mongo-index')
+    with pytest.raises(NotImplementedError):
+        col.drop()
+    with pytest.raises(sqlfilter.Unsupported):
+        col.find_one({'$where': 'return true'})
+    raw.assert_not_called()
+    assert not raw.mock_calls
+    assert col._rt.store.query('SELECT count(*) FROM mongo._outbox WHERE collection=%s', (col.name,))[0][0] == 0
+
+
+def test_pending_copy_survives_new_runtime(entorno, monkeypatch):
+    raw_db, nueva = entorno
+    coleccion, copia, _ref = nueva()
+    original = primaria._escribir_en_mongo
+
+    def unavailable(*args, **kwargs):
+        raise pymongo.errors.ServerSelectionTimeoutError("isolated Mongo outage")
+
+    monkeypatch.setattr(primaria, "_escribir_en_mongo", unavailable)
+    coleccion.insert_one({"_id": "pending", "v": 2})
+    previous = routing._runtime
+    monkeypatch.setattr(primaria, "_escribir_en_mongo", original)
+    # A new runtime has no in-memory state from the writer. Recovery must
+    # discover the committed outbox row, then be safe to repeat.
+    fresh = routing._Runtime(raw_db, monitor=False)
+    try:
+        assert health.drain_outbox(raw_db, fresh.store, {coleccion.name}, mayores_a_s=0) == 1
+        assert health.drain_outbox(raw_db, fresh.store, {coleccion.name}, mayores_a_s=0) == 0
+        assert copia.find_one({"_id": "pending"})["v"] == 2
+        assert previous.store.query("SELECT count(*) FROM mongo._outbox WHERE collection = %s", (coleccion.name,))[0][0] == 0
+    finally:
+        fresh.store.close()
 
 
 def test_failed_commit_puts_mongo_back(entorno, monkeypatch):

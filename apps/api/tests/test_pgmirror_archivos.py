@@ -97,3 +97,20 @@ def test_sync_copies_what_is_missing_on_each_side(entorno):
 def test_without_mode_it_is_plain_gridfs(entorno):
     raw_db, fs, _ids = entorno
     assert type(fs("mongo")) is GridFS
+
+
+def test_primary_files_do_not_hide_postgres_outage_or_missing_data(entorno, monkeypatch):
+    import psycopg
+    raw_db, fs, ids = entorno
+    routes = fs("primary")
+    file_id = GridFS(raw_db).put(b"stale Mongo-only file")
+    ids.append(file_id)
+    with pytest.raises(NoFile):
+        routes.get(file_id)
+
+    def unavailable(*args, **kwargs):
+        raise psycopg.OperationalError("isolated PostgreSQL outage")
+
+    monkeypatch.setattr(archivos, "leer", unavailable)
+    with pytest.raises(psycopg.OperationalError):
+        routes.get(file_id)

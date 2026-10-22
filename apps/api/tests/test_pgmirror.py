@@ -152,6 +152,48 @@ def test_without_postgres_url_the_database_is_untouched(monkeypatch):
     assert config.collection_mode("anything") == "mongo"
 
 
+@pytest.mark.parametrize("variable,value", [
+    ("DB_MODES", "users=primary,archivos=primary"),
+    ("DB_MODE_USERS", "primary"),
+])
+def test_missing_primary_url_rejects_database_and_files(monkeypatch, variable, value):
+    monkeypatch.delenv("POSTGRES_URL", raising=False)
+    monkeypatch.setenv(variable, value)
+    raw = mongomock.MongoClient().db
+    for operation in (lambda: pgmirror.wrap_database(raw), lambda: pgmirror.wrap_gridfs(raw)):
+        with pytest.raises(RuntimeError, match="POSTGRES_URL is required"):
+            operation()
+
+
+def test_explicit_mongo_override_can_disable_primary_without_url(monkeypatch):
+    monkeypatch.setenv("DB_MODES", "users=primary")
+    monkeypatch.setenv("DB_MODE_USERS", "mongo")
+    assert not config.enabled()
+
+
+def test_primary_collection_options_never_expose_raw_mongo(monkeypatch):
+    monkeypatch.setenv('POSTGRES_URL', TEST_PG)
+    monkeypatch.setenv('DB_MODES', 'users=primary')
+    db = pgmirror.wrap_database(mongomock.MongoClient().db)
+    with pytest.raises(NotImplementedError, match='cannot bypass'):
+        db.get_collection('users', codec_options=object())
+
+
+def test_postgres_only_routes_new_collections_and_rejects_legacy_modes(monkeypatch):
+    monkeypatch.setenv('POSTGRES_URL', TEST_PG)
+    monkeypatch.setenv('PGMIRROR_POSTGRES_ONLY', '1')
+    assert config.collection_mode('new_collection') == 'primary'
+    assert config.collection_mode('stickers') == 'primary'
+    assert config.collection_mode('evidence') == 'primary'
+    assert config.aggregate_mode() == 'postgres'
+    monkeypatch.setenv('DB_MODES', 'users=mongo')
+    with pytest.raises(RuntimeError, match='requires primary'):
+        config.collection_mode('users')
+    monkeypatch.delenv('POSTGRES_URL')
+    with pytest.raises(RuntimeError, match='POSTGRES_URL is required'):
+        config.enabled()
+
+
 def test_modes_come_from_one_variable_and_typos_never_activate_anything(monkeypatch):
     monkeypatch.setenv("POSTGRES_URL", "postgresql://x@127.0.0.1:1/x")
     monkeypatch.setenv("DB_MODES", " settings=dual, message_templates=DUAL,blacklist=shadow ,users=postgress,bad")

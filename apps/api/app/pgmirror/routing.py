@@ -91,6 +91,9 @@ class _Runtime:
             ensure_meta(self.store)
         except Exception:
             log.exception("pgmirror could not prepare its tables (will retry on use)")
+        if config.postgres_only() and self.store.query('SELECT count(*) FROM mongo._outbox')[0][0]:
+            self.store.close()
+            raise RuntimeError('Drain the Mongo outbox before enabling Postgres-only mode')
         # Guarda estadísticas en Postgres y concilia solo (health.py).
         self.monitor = Monitor(self, raw_db, start=monitor)
 
@@ -141,7 +144,7 @@ def get_runtime(raw_db):
                 _runtime = _Runtime(raw_db)
             except Exception:
                 _runtime_failed_at = time.monotonic()
-                log.exception("pgmirror unavailable; collections stay on Mongo only (run reconcile later)")
+                log.exception("pgmirror runtime unavailable (primary access will be refused)")
                 return None
     return _runtime
 
@@ -178,6 +181,8 @@ class RoutedDatabase:
         object.__setattr__(self, "_raw", raw_db)
 
     def __getattr__(self, name):
+        if config.postgres_only() and hasattr(type(self._raw), name) and name != 'name':
+            raise NotImplementedError(f'Database operation {name} is unavailable in Postgres-only mode')
         if name.startswith("_") or hasattr(type(self._raw), name):
             return getattr(self._raw, name)
         return route_collection(self._raw, name)
@@ -187,6 +192,8 @@ class RoutedDatabase:
 
     def get_collection(self, name, *args, **kwargs):
         if args or kwargs:
+            if config.collection_mode(name) == 'primary':
+                raise NotImplementedError('Primary collection options cannot bypass Postgres routing')
             return self._raw.get_collection(name, *args, **kwargs)
         return route_collection(self._raw, name)
 
@@ -282,6 +289,7 @@ class PgCursor:
 
     def __getattr__(self, name):
         # Algo que este cursor no conoce: la misma consulta, resuelta en Mongo.
+        self._coll._require_mongo(f'cursor.{name}')
         self._coll._rt.bump(self._coll._name, "pg_fallback_cursor")
         cursor = _mongo_cursor(self._coll, self._filter, self._projection, self._sort, self._skip, self._limit)
         return getattr(cursor, name)
@@ -415,10 +423,19 @@ class RoutedCollection:
         self._escritor = None
 
     def __getattr__(self, attr):
+        if config.postgres_only() and attr not in {'name', 'full_name'}:
+            raise NotImplementedError(f'Collection operation {attr} is unavailable in Postgres-only mode')
         return getattr(self._raw, attr)
 
     def __getitem__(self, key):
+        if config.postgres_only():
+            return route_collection(self._raw.database, self._name + '.' + key)
         return self._raw[key]
+
+    def _require_mongo(self, operation):
+        if config.postgres_only():
+            self._rt.bump(self._name, 'postgres_only_rejected')
+            raise NotImplementedError(f'{self._name}.{operation} needs Mongo compatibility; Postgres-only mode refused it')
 
     def __repr__(self):
         return f"RoutedCollection({self._name!r}, mode={self._mode!r})"
@@ -640,6 +657,8 @@ class RoutedCollection:
             pymongo_common.validate_is_mapping("filter", filter_)
         kw = primaria.argumentos(method, args, kwargs)
         escritor = self._escritor_pg()
+        if config.postgres_only() and not self._rt.store.ensure_unique_indexes(self._name):
+            raise RuntimeError(f'Postgres unique indexes are not ready for {self._name}')
         if primaria.soporta(method, documento, kw) and self._rt.store.unique_ready(self._name):
             try:
                 resultado = escritor.ejecutar(method, filter_, documento, kw)
@@ -648,6 +667,7 @@ class RoutedCollection:
             else:
                 self._rt.bump(self._name, "primaria_ok")
                 return resultado
+        self._require_mongo(method)
         self._rt.bump(self._name, "primaria_por_mongo")
         if method == "insert_one":
             nuevos = [documento.setdefault("_id", ObjectId())]
@@ -684,6 +704,13 @@ class RoutedCollection:
         return [sqlfilter.apply_projection(d, projection) for d in docs]
 
     def _fallback(self, op, exc):
+        if config.postgres_only():
+            self._rt.bump(self._name, 'postgres_only_rejected')
+            raise exc
+        # Mongo can lag after a successful primary write (outbox). A database
+        # outage must not silently return an older permission, lease or receipt.
+        if self._mode == "primary" and not isinstance(exc, sqlfilter.Unsupported):
+            raise exc
         if isinstance(exc, _NotReadable):
             self._rt.bump(self._name, "pg_fallback_dirty")
             return
@@ -705,6 +732,7 @@ class RoutedCollection:
                 return cursor
             return ShadowCursor(self, cursor, filter, projection, kwargs.get("sort"), kwargs.get("skip", 0), kwargs.get("limit", 0))
         if not self._plain_read(filter, args, kwargs):
+            self._require_mongo('find arguments')
             self._rt.bump(self._name, "pg_fallback_find_args")
             return self._raw.find(filter, *args, **kwargs)
         try:
@@ -736,6 +764,7 @@ class RoutedCollection:
                     self._rt.bump(self._name, "shadow_unsupported")
             return result
         if not self._plain_read(filter, args, kwargs):
+            self._require_mongo('find_one arguments')
             self._rt.bump(self._name, "pg_fallback_find_one_args")
             return self._raw.find_one(filter, *args, **kwargs)
         try:
@@ -747,6 +776,7 @@ class RoutedCollection:
 
     def count_documents(self, filter, *args, **kwargs):
         if self._mode == "dual" or args or kwargs:
+            self._require_mongo('count_documents arguments')
             return self._raw.count_documents(filter, *args, **kwargs)
         if self._mode == "shadow":
             result = self._raw.count_documents(filter)
@@ -763,6 +793,7 @@ class RoutedCollection:
 
     def estimated_document_count(self, *args, **kwargs):
         if not self._lee_pg or args or kwargs:
+            self._require_mongo('estimated_document_count arguments')
             return self._raw.estimated_document_count(*args, **kwargs)
         try:
             self._check_readable()
@@ -801,6 +832,7 @@ class RoutedCollection:
         """Con PGMIRROR_AGGREGATE (config.aggregate_mode): mongo, shadow o postgres (agregar.py)."""
         modo = config.aggregate_mode()
         if not self._lee_pg or modo == "mongo" or args or set(kwargs) - {"allowDiskUse"}:
+            self._require_mongo('aggregate arguments')
             return self._raw.aggregate(pipeline, *args, **kwargs)
         if modo == "shadow":
             filas = list(self._raw.aggregate(pipeline, **kwargs))
@@ -834,6 +866,7 @@ class RoutedCollection:
 
     def distinct(self, key, filter=None, *args, **kwargs):
         if self._mode == "dual" or args or kwargs:
+            self._require_mongo('distinct arguments')
             return self._raw.distinct(key, filter, *args, **kwargs)
         if self._mode == "shadow":
             result = self._raw.distinct(key, filter)
